@@ -105,6 +105,7 @@ export const PAUSE_STATE: Readonly<Record<ComputerUsePauseReason, string>> = {
   human_input: "A person is using this computer, so computer use is paused",
   takeover: "A person took over the screen, so computer use is paused",
   private: "A password or other secret field has focus on this computer, so computer use is paused",
+  screen_locked: "The screen is locked, so computer use is paused",
 };
 
 export const PAUSE_NEXT: Readonly<Record<ComputerUsePauseReason, string>> = {
@@ -113,6 +114,7 @@ export const PAUSE_NEXT: Readonly<Record<ComputerUsePauseReason, string>> = {
   takeover:
     "Do not retry now: end your turn or wait for them to hand control back, then observe the screen again before acting.",
   private: "Do not retry now; observe the screen again after the person leaves it.",
+  screen_locked: "Do not retry; wait for the person to unlock the screen and hand control back.",
 };
 
 const pauseMessage = (reason: ComputerUsePauseReason) =>
@@ -122,6 +124,7 @@ export const PAUSE_MESSAGES: Readonly<Record<ComputerUsePauseReason, string>> = 
   human_input: pauseMessage("human_input"),
   takeover: pauseMessage("takeover"),
   private: pauseMessage("private"),
+  screen_locked: pauseMessage("screen_locked"),
 };
 
 export const RECONNECTING =

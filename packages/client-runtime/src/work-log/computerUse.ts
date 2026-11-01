@@ -6,6 +6,9 @@ import {
   replaceComputerUseTypedText,
 } from "@goat/shared/toolActivity";
 import { toolOutputSettle } from "@goat/shared/toolOutput";
+import { resolveGoatMcpShippedToolId } from "@goat/shared/goatMcpToolPresentation";
+import { goatCallTarget } from "@goat/contracts/agentSurface/callArguments";
+import { resolveAgentSurfaceEntry } from "@goat/contracts/agentSurface/resolve";
 
 import type { WorkLogToolLifecycleStatus } from "./presentation.ts";
 
@@ -218,6 +221,36 @@ function inputTarget(input: Record<string, unknown>, appName: string | undefined
   if (pid === undefined) return null;
   const window = label(input.window_id, 12);
   return window === undefined ? `Process ${pid}` : `Process ${pid}, window ${window}`;
+}
+
+export function hasComputerUseHistory(item: OrchestrationV2TurnItem | undefined): boolean {
+  if (item?.type !== "dynamic_tool" || item.toolName === null) return false;
+  if (cuaDriverToolName(item.toolName) !== undefined || item.toolName === "cua_repl.js")
+    return true;
+  const name = item.toolName.toLowerCase();
+  const tool = resolveGoatMcpShippedToolId(name);
+  if (tool === "goat_call") {
+    const envelope = record(item.input);
+    const input =
+      envelope?.server === "goat" && envelope.tool === "goat_call"
+        ? envelope.arguments
+        : item.input;
+    const target = goatCallTarget(input).path;
+    if (typeof target !== "string") return false;
+    const path = resolveAgentSurfaceEntry(target)?.path ?? target;
+    return (
+      path.startsWith("preview.") || path.startsWith("screen.") || path === "surface.screen_run"
+    );
+  }
+  if (
+    tool === "goat_screen_run" ||
+    tool?.startsWith("preview_") ||
+    tool?.startsWith("goat_preview_")
+  )
+    return true;
+  return /^(?:(?:mcp[-_]{1,2})?goat(?:__|[-_.:/ ])|goat-\S+_)?(?:(?:goat_)?screen[._]run|(?:goat_)?preview[._].+)$/u.test(
+    name,
+  );
 }
 
 export function computerUseRun(

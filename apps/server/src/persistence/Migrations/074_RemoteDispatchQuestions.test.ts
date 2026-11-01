@@ -8,7 +8,7 @@ import RemoteDispatchQuestionsMigration from "./074_RemoteDispatchQuestions.ts";
 it.effect("runs again over its own column, as a relocated migration id would", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    yield* runMigrations();
+    yield* runMigrations({ toMigrationInclusive: 74 });
     yield* RemoteDispatchQuestionsMigration;
     const columns = yield* sql<{ readonly name: string }>`PRAGMA table_info(remote_dispatches)`;
     assert.strictEqual(columns.filter((column) => column.name === "pending_request_ids").length, 1);

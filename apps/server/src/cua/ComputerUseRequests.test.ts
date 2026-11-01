@@ -37,6 +37,7 @@ it.effect("an organization denial refuses before approval", () =>
       Effect.gen(function* () {
         const settings = yield* ServerSettings.ServerSettingsService;
         yield* settings.updateSettings({
+          cuaStrictInputGuards: true,
           cuaDeniedApps: ["com.example.Editor"],
           cuaAllowedApps: ["com.example.Editor"],
         });
@@ -59,6 +60,7 @@ it.effect("refuses a denied bundle requested by its executable path before appro
       ({ request }) =>
         Effect.gen(function* () {
           yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+            cuaStrictInputGuards: true,
             cuaDeniedApps: ["com.example.Blocked"],
           });
           assert.deepInclude(yield* request({ apps: ["c:/shared/host.exe"] }), {
@@ -88,6 +90,7 @@ it.effect("an organization-denied bundle is refused when requested by display na
       ({ request }) =>
         Effect.gen(function* () {
           yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+            cuaStrictInputGuards: true,
             cuaDeniedApps: ["com.example.Editor"],
           });
           assert.deepInclude(yield* request({ apps: ["Fancy Editor"] }), {
@@ -114,6 +117,9 @@ it.effect("a protected bundle is refused by its catalog display name", () =>
       supported,
       ({ request }) =>
         Effect.gen(function* () {
+          yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+            cuaStrictInputGuards: true,
+          });
           assert.deepInclude(yield* request({ apps: ["Mac Configuration"] }), {
             kind: "refused",
             code: "app_not_allowed",
@@ -200,6 +206,9 @@ it.effect.each([Option.some(["com.example.Editor"]), Option.none<ReadonlyArray<s
         supported,
         ({ request }) =>
           Effect.gen(function* () {
+            yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+              cuaStrictInputGuards: true,
+            });
             for (const app of [
               "NordPass",
               "me.proton.pass.electron",
@@ -232,6 +241,41 @@ it.effect.each([Option.some(["com.example.Editor"]), Option.none<ReadonlyArray<s
         listing,
       ),
     ),
+);
+
+it.effect("without strict input guards denied and protected apps go to the usual approval", () =>
+  withHarness(({ orchestrator }) =>
+    withRequests(
+      orchestrator,
+      supported,
+      ({ request }) =>
+        Effect.gen(function* () {
+          yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+            cuaDeniedApps: ["com.example.Editor"],
+          });
+          for (const app of [
+            "com.example.Editor",
+            "com.1password.1password",
+            "Mac Configuration",
+          ]) {
+            // A person still approves; GOAT adds no refusal of its own.
+            assert.equal((yield* request({ apps: [app] })).kind, "needs_human");
+          }
+        }),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "person",
+      undefined,
+      [
+        { id: "com.example.Editor", name: "Fancy Editor" },
+        { id: "com.1password.1password", name: "1Password" },
+        { id: "com.apple.systempreferences", name: "Mac Configuration" },
+      ],
+    ),
+  ),
 );
 
 it.effect.each([Option.some(["COM.EXAMPLE.EDITOR"]), Option.none<ReadonlyArray<string>>()])(

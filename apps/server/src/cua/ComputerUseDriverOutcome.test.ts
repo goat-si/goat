@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import { driverExitReason } from "./ComputerUseDriverExit.ts";
 import {
   captureStalled,
+  driverScreenLocked,
   driverOutcomeSafety,
   driverRefused,
   markUnverified,
@@ -28,6 +29,18 @@ const parsed = (line: string) =>
   JSON.parse(line) as {
     result: { structuredContent: Record<string, unknown>; content: Array<{ text: string }> };
   };
+
+it("does not interpret a successful read's terminal-looking data as input", () => {
+  const safety = driverOutcomeSafety("list_apps", {
+    status: "settled",
+    result: {
+      isError: false,
+      structuredContent: { code: "stopped_by_person", safety: { possibleCommit: true } },
+    },
+  });
+  assert.isFalse(safety.possibleCommit);
+  assert.equal(safety.code, "read_completed");
+});
 
 describe("macOS input tool errors after dispatch reach the agent as may-have-acted", () => {
   it("a forwarded write with effect unknown or a tool_call cancellation error exposes possibleCommit true and retryClass never", () => {
@@ -386,6 +399,33 @@ describe("a reply already marked as possibly committed keeps that mark", () => {
     assert.isFalse(driverRefused("select_text", JSON.parse(line)));
     assert.isTrue(driverRefused("select_text", JSON.parse(reply({ code: "unknown_tool" }))));
   });
+});
+
+it("only a typed screen-locked refusal pauses the session", () => {
+  assert.isTrue(
+    driverScreenLocked(JSON.parse(reply({ code: "screen_locked", effect: "refused" }))),
+  );
+  assert.isTrue(driverScreenLocked(JSON.parse(reply({ refusal: { code: "screen_locked" } }))));
+  assert.isFalse(
+    driverScreenLocked(JSON.parse(reply({ code: "screen_locked", effect: "applied" }))),
+  );
+  assert.isFalse(driverScreenLocked(JSON.parse(reply({ code: "other" }))));
+});
+
+it("retains terminal safety when an RPC error and result carry different details", () => {
+  const safety = driverOutcomeSafety("list_apps", {
+    status: "unknown_outcome",
+    error: { code: -32000, data: { code: "other" } },
+    result: {
+      isError: true,
+      structuredContent: {
+        code: "stopped_by_person",
+        safety: { retryClass: "never", possibleCommit: true },
+      },
+    },
+  });
+  assert.equal(safety.retryClass, "never");
+  assert.isTrue(safety.possibleCommit);
 });
 
 it("desktop lease refusals require observing again", () => {

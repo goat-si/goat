@@ -95,6 +95,7 @@ export const makeComputerUseStanding = (deps: {
     threadId: ThreadId,
     apps: ReadonlyArray<string>,
     list: ReadonlyArray<string>,
+    strict: boolean,
   ) {
     const saved = yield* sql<{
       app_key: string;
@@ -105,18 +106,30 @@ export const makeComputerUseStanding = (deps: {
     const always = new Set(list.map(cuaAppKey));
     return apps.every(
       (app) =>
-        !isExcludedCuaApplication(app) &&
+        (!strict || !isExcludedCuaApplication(app)) &&
         (session.has(cuaAppKey(app)) || always.has(cuaAppKey(app))),
     );
   }, Effect.mapError(unavailable));
   const withAllowedSettings = <A>(
-    use: (list: ReadonlyArray<string>, enabled: boolean) => Effect.Effect<A, HandoffError>,
+    use: (
+      list: ReadonlyArray<string>,
+      enabled: boolean,
+      strict: boolean,
+    ) => Effect.Effect<A, HandoffError>,
   ) =>
     Option.isSome(settings)
       ? (settings.value.withStoredSettingsSnapshot ?? settings.value.withSettingsSnapshot)(
-          (snapshot) => use(snapshot.cuaAllowedApps, snapshot.enableCua),
+          (snapshot) =>
+            use(snapshot.cuaAllowedApps, snapshot.enableCua, snapshot.cuaStrictInputGuards),
         ).pipe(Effect.mapError(unavailable))
-      : use([], false);
+      : use([], false, true);
+  // Protected apps (credential stores, GOAT) stay out only under strict input guards.
+  const strictNow = Option.isSome(settings)
+    ? settings.value.getSettings.pipe(
+        Effect.map((current) => current.cuaStrictInputGuards),
+        Effect.mapError(unavailable),
+      )
+    : Effect.succeed(true);
   const validate = Effect.fn("Handoffs.validateComputerUseScope")((
     input: HandoffRespondInput,
     record: Handoff,
@@ -128,13 +141,18 @@ export const makeComputerUseStanding = (deps: {
       !isHandoffPending(record.state) ||
       record.apps === undefined ||
       record.apps.length === 0 ||
-      record.computerUseForeground !== undefined ||
-      record.apps.some(isExcludedCuaApplication)
+      record.computerUseForeground !== undefined
     )
       return Effect.fail(new HandoffError({ reason: "invalid_request" }));
     if (input.computerUseScope === "always" && Option.isNone(settings))
       return Effect.fail(new HandoffError({ reason: "unavailable" }));
-    return Effect.void;
+    const apps = record.apps;
+    if (!apps.some(isExcludedCuaApplication)) return Effect.void;
+    return strictNow.pipe(
+      Effect.flatMap((strict) =>
+        strict ? Effect.fail(new HandoffError({ reason: "invalid_request" })) : Effect.void,
+      ),
+    );
   });
   const clear = Effect.fn("Handoffs.clearComputerUseSessions")(
     (threadId?: ThreadId, cutoff?: number) =>
@@ -183,21 +201,21 @@ export const makeComputerUseStanding = (deps: {
     Effect.mapError((cause) => (isHandoffError(cause) ? cause : unavailable(cause))),
   );
   const auto = Effect.fn("Handoffs.autoComputerUse")((input: CreateInput) => {
-    const attempt = withAllowedSettings((list, enabled) =>
+    const attempt = withAllowedSettings((list, enabled, strict) =>
       Effect.gen(function* () {
         if (!enabled) return yield* new HandoffError({ reason: "unavailable" });
         yield* deps.expirePending(input.requestedBy.threadId);
-        yield* reconcileAllowed(list);
+        yield* reconcileAllowed(list, strict);
         const apps = input.apps;
         if (
           input.target.path !== COMPUTER_USE_GRANT_HANDOFF_PATH ||
           apps === undefined ||
           apps.length === 0 ||
           input.computerUseForeground !== undefined ||
-          apps.some(isExcludedCuaApplication)
+          (strict && apps.some(isExcludedCuaApplication))
         )
           return Option.none();
-        const standing = yield* allowed(input.requestedBy.threadId, apps, list);
+        const standing = yield* allowed(input.requestedBy.threadId, apps, list, strict);
         const appWatermarks = yield* sql<{
           app_key: string;
           sequence: number;
@@ -263,7 +281,7 @@ export const makeComputerUseStanding = (deps: {
               evidence.set(key, entries);
             }
             for (const app of apps) {
-              const already = yield* allowed(input.requestedBy.threadId, [app], list);
+              const already = yield* allowed(input.requestedBy.threadId, [app], list, strict);
               if (already) continue;
               const used = yield* sql<{
                 message_id: string;
@@ -432,6 +450,7 @@ export const makeComputerUseStanding = (deps: {
   });
   const revalidateAgainst = Effect.fn("Handoffs.revalidateComputerUseAgainst")(function* (
     list: ReadonlyArray<string>,
+    strict: boolean,
     threadId?: ThreadId,
     endingHandoffId?: Handoff["handoffId"],
   ) {
@@ -469,7 +488,7 @@ export const makeComputerUseStanding = (deps: {
             ))[0]?.sequence ?? 0);
       if (
         consent > Math.max(watermark[0]?.sequence ?? 0, appCutoff) &&
-        (yield* allowed(grant.threadId, handoff.apps, list))
+        (yield* allowed(grant.threadId, handoff.apps, list, strict))
       )
         continue;
       yield* leases.value.release([grant.handoffId]);
@@ -478,6 +497,7 @@ export const makeComputerUseStanding = (deps: {
   });
   const reconcileAllowed = (
     list: ReadonlyArray<string>,
+    strict: boolean,
     threadId?: ThreadId,
     endingHandoffId?: Handoff["handoffId"],
   ) =>
@@ -485,20 +505,23 @@ export const makeComputerUseStanding = (deps: {
       .withTransaction(
         Effect.gen(function* () {
           yield* syncAllowed(list);
-          yield* revalidateAgainst(list, threadId, endingHandoffId);
+          yield* revalidateAgainst(list, strict, threadId, endingHandoffId);
         }),
       )
       .pipe(Effect.mapError((cause) => (isHandoffError(cause) ? cause : unavailable(cause))));
   const revalidateUnlocked = (threadId?: ThreadId, endingHandoffId?: Handoff["handoffId"]) =>
-    withAllowedSettings((list) => reconcileAllowed(list, threadId, endingHandoffId));
+    withAllowedSettings((list, _enabled, strict) =>
+      reconcileAllowed(list, strict, threadId, endingHandoffId),
+    );
   const revalidate = Effect.fn("Handoffs.revalidateComputerUse")((threadId?: ThreadId) => {
     const effect = revalidateUnlocked(threadId).pipe(lock.withPermits(1));
     return Option.isSome(leases) ? leases.value.serializeAdmission(effect) : effect;
   });
   const observeSettings = Effect.fn("Handoffs.observeComputerUseSettings")((
     list: ReadonlyArray<string>,
+    strict: boolean,
   ) => {
-    const effect = reconcileAllowed(list).pipe(lock.withPermits(1));
+    const effect = reconcileAllowed(list, strict).pipe(lock.withPermits(1));
     return Option.isSome(leases) ? leases.value.serializeAdmission(effect) : effect;
   });
   const invalidate = Effect.fn("Handoffs.invalidateComputerUseEvidence")(() => {

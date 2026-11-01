@@ -831,3 +831,20 @@ it.effect("Connect hub consent requires settings write in the destination enviro
     );
   }),
 );
+
+it.effect("requires thread read scope for computer use history", () =>
+  Effect.gen(function* () {
+    expect(WsRpcGroup.requests.has(WS_METHODS.computerUseHistory)).toBe(true);
+    const denied = yield* RpcAuthorization.authorizeRpcCall(
+      [],
+      WS_METHODS.computerUseHistory,
+      {},
+    ).pipe(Effect.flip);
+    expect(denied._tag).toBe("EnvironmentAuthorizationError");
+    yield* RpcAuthorization.authorizeRpcCall(
+      [AuthOrchestrationReadScope],
+      WS_METHODS.computerUseHistory,
+      {},
+    );
+  }),
+);

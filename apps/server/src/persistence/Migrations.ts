@@ -124,6 +124,7 @@ import Migration0118 from "./Migrations/118_ChannelSessionReceipts.ts";
 import Migration0119 from "./Migrations/119_BrowserSiteNotes.ts";
 import Migration0120 from "./Migrations/120_ComputerUseSessionApprovals.ts";
 import Migration0121 from "./Migrations/121_ComputerUseNamedApprovals.ts";
+import Migration0122 from "./Migrations/122_ComputerUseInputHistory.ts";
 import Migration0111 from "./Migrations/111_NotificationCursorRepair.ts";
 import Migration0113 from "./Migrations/113_McpEvalJournal.ts";
 import Migration0114 from "./Migrations/114_DecisionRoutes.ts";
@@ -255,6 +256,7 @@ export const migrationEntries = [
   [119, "BrowserSiteNotes", Migration0119],
   [120, "ComputerUseSessionApprovals", Migration0120],
   [121, "ComputerUseNamedApprovals", Migration0121],
+  [122, "ComputerUseInputHistory", Migration0122],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

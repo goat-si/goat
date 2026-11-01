@@ -596,6 +596,8 @@ export const admitDesktopInput = (input: {
   readonly windowBounds?: Rect;
   readonly lastClickedTableCell?: number | string;
   readonly dragEndpoints?: ReadonlyArray<DragEndpointGuard>;
+  /** False when the person has not opted into strict input guards; absent means strict. */
+  readonly strict?: boolean;
 }): {
   readonly refused?: ScreenRunError;
   readonly clickedTableCell?: number | string;
@@ -611,6 +613,7 @@ export const admitDesktopInput = (input: {
     lastClickedTableCell,
     dragEndpoints,
   } = input;
+  const guard = input.strict !== false;
   if (method === "type_text" && args.replace === true)
     return {
       refused: fail(
@@ -619,11 +622,12 @@ export const admitDesktopInput = (input: {
       ),
     };
   if (
-    isPasteMenuItem(element) ||
-    dragEndpoints?.some((end) => isPasteMenuItem(end.element)) === true
+    guard &&
+    (isPasteMenuItem(element) ||
+      dragEndpoints?.some((end) => isPasteMenuItem(end.element)) === true)
   )
     return { refused: fail("permission_denied", PASTE_REFUSAL) };
-  if (dragEndpoints !== undefined) {
+  if (guard && dragEndpoints !== undefined) {
     for (const end of dragEndpoints) {
       if (
         end.elementToken !== undefined &&
@@ -639,16 +643,17 @@ export const admitDesktopInput = (input: {
       }
     }
   }
-  if (method === "press_key" || method === "hotkey") {
+  if (guard && (method === "press_key" || method === "hotkey")) {
     const resolved = resolveKeyPress(args);
     if (resolved.key === "v" && resolved.modifiers.has("cmd"))
       return { refused: fail("permission_denied", PASTE_REFUSAL) };
   }
-  if (method === "invoke_menu" && Array.isArray(args.path) && args.path.length > 0) {
+  if (guard && method === "invoke_menu" && Array.isArray(args.path) && args.path.length > 0) {
     const last = typeof args.path.at(-1) === "string" ? String(args.path.at(-1)) : "";
     if (isPasteLabel(last)) return { refused: fail("permission_denied", PASTE_REFUSAL) };
   }
   if (
+    guard &&
     (method === "click" || method === "right_click") &&
     elementToken !== undefined &&
     !hasVisibleClickBounds(placed, windowBounds, element)
@@ -670,8 +675,8 @@ export const admitDesktopInput = (input: {
       : method === "set_value"
         ? addressedCell
         : undefined;
-  if (cellLabel !== undefined) return { refused: nameCellRefusal(cellLabel) };
-  const chatApp = chatAppName(input.appId, input.bundleId);
+  if (guard && cellLabel !== undefined) return { refused: nameCellRefusal(cellLabel) };
+  const chatApp = guard ? chatAppName(input.appId, input.bundleId) : undefined;
   if (chatApp !== undefined) {
     const aimed = ["x", "y", "from_x", "from_y", "to_x", "to_y"].some(
       (key) => key in args || key in (object(args.point) ?? {}),
@@ -758,6 +763,7 @@ export const preflightDesktopBatch = (
         readonly windowBounds?: Rect;
         readonly lastClickedTableCell?: number | string;
         readonly dragEndpoints?: ReadonlyArray<DragEndpointGuard>;
+        readonly strict?: boolean;
       }
     | { readonly ok: false; readonly error: ScreenRunError },
 ): ReadonlyArray<Exit.Exit<ScreenHostDispatchResult, ScreenRunError>> | undefined => {
@@ -787,6 +793,7 @@ export const preflightDesktopBatch = (
       ...(checked.windowBounds === undefined ? {} : { windowBounds: checked.windowBounds }),
       ...(simulatedTableCell === undefined ? {} : { lastClickedTableCell: simulatedTableCell }),
       ...(checked.dragEndpoints === undefined ? {} : { dragEndpoints: checked.dragEndpoints }),
+      ...(checked.strict === undefined ? {} : { strict: checked.strict }),
     });
     if (admission.refused !== undefined) return abortAt(index, admission.refused);
     // Preflight runs before the driver confirms any step's focus move, so a table-cell click in a
@@ -866,6 +873,7 @@ export const buildGuardInput = (
     readonly framesBasis?: Rect;
     readonly windowBounds?: Rect;
     readonly lastClickedTableCell?: number | string;
+    readonly strictInputGuards?: boolean;
   },
   elementToken: string | undefined,
   resolveToken: (el: Record<string, unknown>) => string | undefined,
@@ -896,6 +904,7 @@ export const buildGuardInput = (
         ? {}
         : { lastClickedTableCell: bound.lastClickedTableCell }),
       ...(dragRes.endpoints === undefined ? {} : { dragEndpoints: dragRes.endpoints }),
+      ...(bound.strictInputGuards === undefined ? {} : { strict: bound.strictInputGuards }),
     },
   };
 };

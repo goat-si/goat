@@ -8,7 +8,7 @@ it.effect("retries a timed-out capture hide and forwards a later capture after i
     let visible = false;
     let hideCount = 0;
     const overlay = Object.assign(
-      (command: { readonly op: "show" | "hide" }) =>
+      (command: { readonly op: "show" | "hide" | "status" }) =>
         Effect.sync(() => {
           if (command.op === "show") visible = true;
           if (command.op === "hide" && ++hideCount >= 3) visible = false;

@@ -13,6 +13,7 @@ import {
   admittedCuaApplications,
   cuaDriverCapabilityManifest,
   type CuaDriverListedApp,
+  type CuaRequestableOptions,
 } from "@goat/shared/cuaDriverManifest";
 import type { ToolResult } from "@trycua/cua-driver";
 import * as Deferred from "effect/Deferred";
@@ -150,6 +151,7 @@ export const fixture = Effect.fn(function* (
   const pendingAppRequests = new Set<string>();
   const appReports = yield* Queue.unbounded<DesktopCuaAppsReport>();
   let computerUseEnabled = true;
+  let strictInputGuards = true;
   const requests = yield* Queue.unbounded<DesktopCuaDriverRequest>();
   const reports = yield* Queue.unbounded<DesktopCuaDriverReport>();
   const readiness: DesktopCuaReadinessReport[] = [];
@@ -483,10 +485,15 @@ export const fixture = Effect.fn(function* (
     listApps: async () => listedApps,
     appCatalog: (() => {
       const catalog = makeAppCatalog(async () => new Map());
-      return (listed: ReadonlyArray<CuaDriverListedApp>, hostBundleIds: ReadonlyArray<string>) =>
-        catalog(listed, hostBundleIds);
+      return (
+        listed: ReadonlyArray<CuaDriverListedApp>,
+        hostBundleIds: ReadonlyArray<string>,
+        _platform: NodeJS.Platform,
+        options?: CuaRequestableOptions,
+      ) => catalog(listed, hostBundleIds, options);
     })(),
     computerUseEnabled: async () => computerUseEnabled,
+    strictInputGuards: async () => strictInputGuards,
     readManifest: async (path) => {
       const text = manifests.get(path);
       if (text === undefined) throw new Error("missing manifest");
@@ -683,6 +690,10 @@ export const fixture = Effect.fn(function* (
     setComputerUseEnabled: (enabled: boolean) =>
       Effect.sync(() => {
         computerUseEnabled = enabled;
+      }),
+    setStrictInputGuards: (strict: boolean) =>
+      Effect.sync(() => {
+        strictInputGuards = strict;
       }),
     manifest: () => manifests.get(launches.at(-1)?.manifestPath ?? "") ?? "",
     failAppListing: Effect.sync(() => {

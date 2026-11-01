@@ -469,6 +469,65 @@ describe("release payload filesystem verification", () => {
       }),
     ),
   );
+  // The Cua Driver fork is public (goat-si/goat-cu): release downloads, license sourceUrl and
+  // the driver notice point there, so only the GOAT source repository stays rejected.
+  it("allows the public driver repository and keeps rejecting the GOAT source repository", () => {
+    for (const allowed of [
+      "https://github.com/goat-si/goat-cu/tree/cua-driver-rs-v0.38.0-goat.18",
+      "https://api.github.com/repos/goat-si/goat-cu/releases/latest",
+      "git clone https://github.com/goat-si/goat-cu.git",
+      "https://github.com/goat-si/goat-releases/releases",
+    ])
+      expect(exposureProblems("main.js", allowed)).toEqual([]);
+    for (const rejected of [
+      "https://github.com/goat-si/goat",
+      "https://github.com/goat-si/goat/issues",
+      "https://github.com/goat-si/goat-cu-history",
+      "https://api.github.com/repos/goat-si/goat-cux/releases",
+    ])
+      expect(exposureProblems("main.js", rejected)).toEqual(["main.js: source repository URL"]);
+  });
+  it.effect("accepts the shipped driver links in the build output CI scans", () =>
+    run(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const repo = path.join(import.meta.dirname, "..");
+        const licenses = JSON.parse(
+          yield* fs.readFileString(path.join(repo, "third-party-licenses.config.json")),
+        ) as unknown;
+        const driverSource = JSON.stringify(licenses).match(
+          /https:\/\/github\.com\/goat-si\/goat-cu\/tree\/[^"]+/,
+        )?.[0];
+        expect(driverSource).toBeDefined();
+        const notice = yield* fs.readFileString(
+          path.join(repo, "apps/desktop/src/cua/notices/node-runtime-NOTICE.md"),
+        );
+        const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-s1-test-" });
+        const web = path.join(root, "apps/web/dist");
+        const server = path.join(root, "apps/server/dist");
+        const desktop = path.join(root, "apps/desktop/dist-electron");
+        for (const dir of [web, server, desktop]) yield* fs.makeDirectory(dir, { recursive: true });
+        yield* fs.writeFileString(
+          path.join(web, "third-party-licenses.json"),
+          JSON.stringify([{ name: "cua-driver", sourceUrl: driverSource }]),
+        );
+        yield* fs.writeFileString(path.join(server, "notice.txt"), notice);
+        yield* fs.writeFileString(
+          path.join(desktop, "main.cjs"),
+          `"https://github.com/goat-si/goat-cu/releases/download/cua-driver-rs-v0.38.0-goat.18/x.zip"`,
+        );
+        expect(yield* scanBuildLinks([web, server, desktop])).toEqual([]);
+        yield* fs.writeFileString(
+          path.join(desktop, "leak.cjs"),
+          `"https://github.com/goat-si/goat-cu-history/commit/1"`,
+        );
+        expect(yield* scanBuildLinks([web, server, desktop])).toEqual([
+          `${path.join(desktop, "leak.cjs")}: source repository URL`,
+        ]);
+      }),
+    ),
+  );
   it.effect("hashes only distributables in builder reports and fails on exposure", () =>
     run(
       Effect.gen(function* () {

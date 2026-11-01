@@ -1,4 +1,6 @@
 import * as Schema from "effect/Schema";
+import { ComputerUseLeaseCallOutcome } from "./computerUseLeaseHistory.ts";
+export { ComputerUseLeaseCallOutcome } from "./computerUseLeaseHistory.ts";
 import * as SchemaAST from "effect/SchemaAST";
 import * as SchemaParser from "effect/SchemaParser";
 import * as SchemaTransformation from "effect/SchemaTransformation";
@@ -258,11 +260,7 @@ export const ComputerUseDriverEndReason = Schema.Literals([
 ]);
 export type ComputerUseDriverEndReason = typeof ComputerUseDriverEndReason.Type;
 
-/**
- * Proxy -> server: the driver this connection started ended without the proxy stopping it, or
- * answered its first handshake (`ended: false`). The server counts the host's consecutive endings
- * so agents and Settings stop calling computer use available while every connection fails.
- */
+// The host counts unexpected driver endings until a successful first handshake.
 export const ComputerUseLeaseDriverEnded = Schema.Struct({
   // A fact about the host's helper, not one control: thread-mode proxies report it as well.
   driverEnded: Schema.Union([
@@ -275,7 +273,20 @@ export const ComputerUseLeaseDriverEnded = Schema.Struct({
 });
 export type ComputerUseLeaseDriverEnded = typeof ComputerUseLeaseDriverEnded.Type;
 
+export const ComputerUseLeasePersonStop = Schema.Struct({
+  controlId: TrimmedNonEmptyString,
+  personStop: Schema.Literal("person_esc"),
+});
+
+export const ComputerUseLeaseScreenLocked = Schema.Struct({
+  controlId: TrimmedNonEmptyString,
+  screenLocked: Schema.Literal(true),
+});
+
 export const ComputerUseLeaseReport = Schema.Union([
+  ComputerUseLeasePersonStop,
+  ComputerUseLeaseScreenLocked,
+  ComputerUseLeaseCallOutcome,
   ComputerUseLeaseTarget,
   ComputerUseLeaseHumanInput,
   ComputerUseLeaseAgentInput,
@@ -552,7 +563,12 @@ export type ComputerUseControlEnd = typeof ComputerUseControlEnd.Type;
  * Why the agent waits: a person's own input reached the shared desktop, they took over, or a
  * secret field has focus (private) until it loses it.
  */
-export const ComputerUsePauseReason = Schema.Literals(["human_input", "takeover", "private"]);
+export const ComputerUsePauseReason = Schema.Literals([
+  "human_input",
+  "takeover",
+  "private",
+  "screen_locked",
+]);
 export type ComputerUsePauseReason = typeof ComputerUsePauseReason.Type;
 
 export const ComputerUseForegroundGrant = Schema.Struct({
@@ -597,6 +613,7 @@ export const ComputerUseLeaseUpdate = Schema.Union([
      * the pointer would take it from that thread.
      */
     shared: Schema.optionalKey(Schema.Literal(true)),
+    strictInputGuards: Schema.optionalKey(Schema.Literal(false)),
   }),
   Schema.Struct({
     state: Schema.Literal("paused"),
@@ -659,6 +676,7 @@ export const ComputerUseRefusalDetail = Schema.Literals([
   "desktop_capture_off",
   "waiting_for_human",
   "private_mode",
+  "screen_locked",
   ...ComputerUseControlEnd.literals,
   "lost",
   /**
@@ -716,6 +734,8 @@ export const computerUseRefusalReason = (
       return "userStoppedSession";
     case "waiting_for_human":
       return "userIntervened";
+    case "screen_locked":
+      return "screenLocked";
     case "automation_not_allowed":
       return "permissionsNotGranted";
     case "automation_pending":
@@ -822,6 +842,7 @@ export const ComputerUseCallAdmission = Schema.Union([
           Schema.isGreaterThanOrEqualTo(0),
           Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER),
         ),
+        strictInputGuards: Schema.optionalKey(Schema.Literal(false)),
       }),
     ),
   }),
@@ -974,22 +995,5 @@ export const ComputerUseRequestResult = Schema.Union([
 ]);
 export type ComputerUseRequestResult = typeof ComputerUseRequestResult.Type;
 
-/**
- * Providers whose agent process runs on this host and can spawn the driver's
- * stdio MCP server. Cloud providers run elsewhere, and the driver would
- * operate this host's desktop on their behalf; Muse only accepts HTTP session
- * servers. See ADR-0022 for the per-adapter table. Clients read it to say why
- * `@computer` cannot run before a turn is sent.
- */
-export const COMPUTER_USE_PROVIDER_DRIVERS: ReadonlySet<string> = new Set([
-  "claudeAgent",
-  "codex",
-  "cursor",
-  "fx",
-  "grok",
-  "antigravity",
-  "acpRegistry",
-  "opencode",
-  "pi",
-]);
+export { COMPUTER_USE_PROVIDER_DRIVERS } from "./computerUseProviders.ts";
 export * from "./cuaPrimitives.ts";

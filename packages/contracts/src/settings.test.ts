@@ -57,6 +57,10 @@ it("defaults blocked browser hosts to empty and normalizes valid writes", () => 
   }
 });
 
+it("defaults strict computer-use input guards off for existing settings", () => {
+  expect(decodeServerSettings({}).cuaStrictInputGuards).toBe(false);
+});
+
 describe("Connect hub standing consent", () => {
   it("defaults off and preserves an explicit Boolean policy", () => {
     expect(decodeServerSettings({}).hub.connectDevicesHubProxy).toBe(false);

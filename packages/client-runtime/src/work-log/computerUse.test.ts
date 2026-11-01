@@ -8,6 +8,7 @@ import {
   computerUseObservedTarget,
   computerUseResult,
   computerUseRun,
+  hasComputerUseHistory,
   computerUseRunStatus,
   computerUseCatalogApp,
   computerUseAppName,
@@ -17,8 +18,54 @@ import {
 import { toolCallLines } from "./itemDetail.ts";
 import { toolItemForDisplay } from "./presentation.ts";
 
-const call = (toolName: string, input: unknown) =>
+const call = (toolName: string | null, input: unknown) =>
   ({ type: "dynamic_tool", toolName, input }) as unknown as OrchestrationV2TurnItem;
+
+describe("hasComputerUseHistory", () => {
+  it.each([
+    ["cua-driver.click", {}, true],
+    ["mcp__cua-driver__get_window_state", {}, true],
+    ["cua_repl.js", {}, true],
+    ["goat_screen_run", {}, true],
+    ["goat.screen.run", {}, true],
+    ["mcp__goat__screen_run", {}, true],
+    ["mcp__goat__goat_screen_run", {}, true],
+    ["mcp__t3-code__goat_screen_run", {}, true],
+    ["mcp__t3_code__goat_screen_run", {}, true],
+    ["mcp__t3code__goat_screen_run", {}, true],
+    ["t3-code.goat_screen_run", {}, true],
+    ["t3_code/goat_screen_run", {}, true],
+    ["t3code:goat_screen_run", {}, true],
+    ["t3-code-thread_1_goat_screen_run", {}, true],
+    [
+      "goat_call",
+      { server: "goat", tool: "goat_call", arguments: { path: "preview.click", args: {} } },
+      true,
+    ],
+    ["goat-thread_1_goat_screen_run", {}, true],
+    ["goat.preview_click", {}, true],
+    ["goat.preview.click", {}, true],
+    ["mcp__goat__goat_preview_upload", {}, true],
+    ["goat_preview_back", {}, true],
+    ["goat_preview_forward", {}, true],
+    ["goat_preview_reload", {}, true],
+    ["goat_preview_scroll_collect", {}, true],
+    ["goat.preview_snapshot", {}, true],
+    ["goat_preview_future_action", {}, true],
+    ["goat_call", { path: "preview.upload" }, true],
+    ["mcp__goat__goat_call", { path: "preview.scroll_collect" }, true],
+    ["goat.goat_call", { path: "screen.run" }, true],
+    ["goat_call", { path: "surface.screen_run" }, true],
+    ["goat_call", { path: "goat_screen_run" }, true],
+    ["goat_call", { name: "goat_preview_back" }, true],
+    ["goat_call", { resource: "preview", verb: "upload" }, true],
+    ["mcp__weather__preview_click", {}, false],
+    ["goat_call", { path: "thread.read" }, false],
+    [null, {}, false],
+  ])("recognizes history availability for %s", (name, input, expected) => {
+    expect(hasComputerUseHistory(call(name, input))).toBe(expected);
+  });
+});
 
 describe("computerUseRun", () => {
   it("recognizes cua-driver calls under every provider's naming", () => {

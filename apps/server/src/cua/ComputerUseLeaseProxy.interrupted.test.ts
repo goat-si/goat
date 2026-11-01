@@ -1,6 +1,7 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import { terminalReplyState } from "./ComputerUseTerminal.ts";
 import * as TestClock from "effect/testing/TestClock";
 
 import {
@@ -55,7 +56,7 @@ describe("ComputerUseLeaseProxy answers for calls a pause or Stop cut off", () =
         assert.deepEqual(answer.result.structuredContent, {
           effect: "unverifiable",
           safety: unknownWriteSafety,
-          code: "interrupted",
+          code: "stopped_by_person",
           detail: "stopped",
         });
         const text = answer.result.content[0]?.text ?? "";
@@ -200,3 +201,102 @@ describe("ComputerUseLeaseProxy and a driver that stops answering", () => {
       }),
   );
 });
+
+it.effect.each(["stopped_by_person", "screen_locked"])(
+  "a received read retains terminal evidence during %s verification cutoff",
+  (reason) =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined));
+      const h = yield* makeHarness({
+        personStop: true,
+        screenshots: {
+          scrub: (line) => line,
+          admit: (reply) =>
+            Deferred.succeed(entered, undefined).pipe(
+              Effect.andThen(Deferred.await(release)),
+              Effect.as(reply.line),
+            ),
+        },
+      });
+      yield* h.push(active());
+      yield* h.driverStarted;
+      yield* h.send(call(1701, "list_apps"));
+      assert.equal((yield* h.nextToDriver).id, 1701);
+      yield* h.reply(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1701,
+          result: {
+            isError: true,
+            content: [],
+            structuredContent: {
+              code: "stopped_by_person",
+              safety: {
+                possibleCommit: true,
+                retryClass: "never",
+                writeStatus: "may_have_applied",
+                code: "write_indeterminate",
+              },
+            },
+          },
+        }),
+      );
+      yield* Deferred.await(entered);
+      if (reason === "stopped_by_person") {
+        yield* h.escape;
+        yield* h.escapeReported;
+      } else yield* h.push({ state: "paused", controlId: CONTROL, reason: "screen_locked" });
+      yield* h.killed;
+      const answer = yield* h.nextToProvider;
+      const state = terminalReplyState(answer.result);
+      assert.equal(state.reason, "stopped_by_person");
+      assert.isTrue(state.possibleCommit);
+    }),
+);
+
+it.effect("a received terminal read survives completed verification", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined));
+    const h = yield* makeHarness({
+      screenshots: {
+        scrub: (line) => line,
+        admit: (reply) =>
+          Deferred.succeed(entered, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.as(reply.line),
+          ),
+      },
+    });
+    yield* h.push(active());
+    yield* h.driverStarted;
+    yield* h.send(call(1702, "list_apps"));
+    yield* h.nextToDriver;
+    yield* h.reply(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1702,
+        result: {
+          isError: true,
+          content: [],
+          structuredContent: {
+            code: "stopped_by_person",
+            safety: {
+              possibleCommit: true,
+              retryClass: "never",
+              writeStatus: "committed",
+              code: "write_committed",
+            },
+          },
+        },
+      }),
+    );
+    yield* Deferred.await(entered);
+    yield* Deferred.succeed(release, undefined);
+    const answer = yield* h.nextToProvider;
+    assert.isTrue(terminalReplyState(answer.result).possibleCommit);
+  }),
+);

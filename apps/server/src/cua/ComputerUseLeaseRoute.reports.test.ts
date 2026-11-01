@@ -20,6 +20,7 @@ import * as LeaseRoute from "./ComputerUseLeaseRoute.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import * as ComputerUsePrimitiveChannel from "./ComputerUsePrimitiveChannel.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import * as Handoffs from "../handoffs/Handoffs.ts";
 import { makeTestBrowserOriginGrants as makeBrowserOriginGrants } from "../preview/BrowserOriginGrants.testkit.ts";
 import { BrowserOriginGrants } from "../preview/BrowserOriginGrantsLayer.ts";
 
@@ -31,6 +32,93 @@ const outcomes = {
 } as const;
 
 describe("ComputerUseLeaseRoute reports", () => {
+  it.effect("a physical Escape ends browser claims without an approval handoff", () =>
+    Effect.gen(function* () {
+      const grants = yield* makeBrowserOriginGrants({
+        environmentId: EnvironmentId.make("environment:test"),
+        supported: () => true,
+        publish: () => Effect.void,
+        bind: (input) =>
+          Effect.succeed({
+            targetId: "target-1",
+            tabId: "tab",
+            title: "Site",
+            url: input.origin,
+            driverGeneration: 1,
+          }),
+      });
+      const claim = yield* grants.claim({
+        threadId,
+        pid: 42,
+        windowId: 7,
+        origin: "https://example.test",
+        windowTitle: "Browser",
+      });
+      if (claim.agentResult.status !== "attached") return assert.fail("expected attached");
+      const registry = yield* McpSessionRegistry.McpSessionRegistry.pipe(
+        Effect.provide(
+          Layer.mock(McpSessionRegistry.McpSessionRegistry)({
+            resolve: () =>
+              Effect.succeed({
+                environmentId: EnvironmentId.make("environment:test"),
+                capabilities: new Set<never>(),
+                issuedAt: 0,
+                requestNamespace: "test",
+                client: undefined,
+                thread: {
+                  threadId,
+                  providerSessionId: "session:test",
+                  providerInstanceId: ProviderInstanceId.make("codex"),
+                },
+              }),
+          }),
+        ),
+      );
+      const leases = yield* ComputerUseLeases.ComputerUseLeases.pipe(
+        Effect.provide(
+          Layer.mock(ComputerUseLeases.ComputerUseLeases)({
+            proxy: undefined,
+            stopAllIfCurrent: () => Effect.succeed(true),
+            grants: Effect.succeed([]),
+            release: () => Effect.void,
+          }),
+        ),
+      );
+      const handoffs = yield* Handoffs.Handoffs.pipe(
+        Effect.provide(
+          Layer.mock(Handoffs.Handoffs)({ stopComputerUseSessions: () => Effect.succeed([]) }),
+        ),
+      );
+      const channel = yield* ComputerUsePrimitiveChannel.ComputerUsePrimitiveChannel.pipe(
+        Effect.provide(
+          Layer.mock(ComputerUsePrimitiveChannel.ComputerUsePrimitiveChannel)({
+            authenticate: () => Effect.succeed("generation"),
+          }),
+        ),
+      );
+      const services = Context.make(McpSessionRegistry.McpSessionRegistry, registry).pipe(
+        Context.add(BrowserOriginGrants, { ...grants, setDriverCapability: () => Effect.void }),
+        Context.add(ComputerUseLeases.ComputerUseLeases, leases),
+        Context.add(Handoffs.Handoffs, handoffs),
+        Context.add(ComputerUsePrimitiveChannel.ComputerUsePrimitiveChannel, channel),
+      );
+      const { handler, dispose } = HttpRouter.toWebHandler(reportLayer, { disableLogger: true });
+      const response = yield* Effect.promise(() =>
+        handler(
+          new Request("http://goat.test" + COMPUTER_USE_LEASE_ROUTE, {
+            method: "POST",
+            headers: { authorization: "Bearer good", "x-goat-proxy-channel": "test" },
+            body: JSON.stringify({ controlId: "control:one", personStop: "person_esc" }),
+          }),
+          services,
+        ),
+      );
+      yield* Effect.promise(() => dispose());
+      assert.equal(response.status, 204);
+      assert.deepEqual(yield* grants.claimsFor(threadId), []);
+      assert.equal(yield* grants.endReason(threadId, claim.agentResult.claim.claimId), "stopped");
+    }),
+  );
   it.effect("ends only the credential thread's matching claim from an origin change report", () =>
     Effect.gen(function* () {
       const grants = yield* makeBrowserOriginGrants({
@@ -117,16 +205,21 @@ describe("ComputerUseLeaseRoute reports", () => {
   );
   it.effect("bearer-only primitive GET and ready, cutoff, and reply POSTs are refused", () =>
     Effect.gen(function* () {
+      let lockedControl = "";
       const services = Context.make(McpSessionRegistry.McpSessionRegistry, {
         resolve: (token: string) =>
           Effect.succeed(token === "good" ? { thread: { threadId } } : undefined),
       } as unknown as McpSessionRegistry.McpSessionRegistry["Service"]).pipe(
-        Context.add(
-          ComputerUseLeases.ComputerUseLeases,
-          {} as unknown as ComputerUseLeases.ComputerUseLeases["Service"],
-        ),
+        Context.add(ComputerUseLeases.ComputerUseLeases, {
+          screenLocked: (_thread: ThreadId, controlId: string) =>
+            Effect.sync(() => {
+              lockedControl = controlId;
+              return true;
+            }),
+        } as unknown as ComputerUseLeases.ComputerUseLeases["Service"]),
         Context.add(ComputerUsePrimitiveChannel.ComputerUsePrimitiveChannel, {
-          authenticate: () => Effect.void,
+          authenticate: (input: { proxyChannelToken: string }) =>
+            Effect.succeed(input.proxyChannelToken === "fixture-secret" ? "generation" : undefined),
         } as unknown as ComputerUsePrimitiveChannel.ComputerUsePrimitiveChannel["Service"]),
         Context.add(
           ServerSettings.ServerSettingsService,
@@ -145,6 +238,34 @@ describe("ComputerUseLeaseRoute reports", () => {
           services,
         );
         assert.equal(get.status, 401);
+        const forgedStop = await handler(
+          new Request(`http://goat.test${COMPUTER_USE_LEASE_ROUTE}`, {
+            method: "POST",
+            headers: { authorization: "Bearer good" },
+            body: JSON.stringify({ controlId: "one", personStop: "person_esc" }),
+          }),
+          services,
+        );
+        assert.equal(forgedStop.status, 401);
+        const forgedLock = await handler(
+          new Request(`http://goat.test${COMPUTER_USE_LEASE_ROUTE}`, {
+            method: "POST",
+            headers: { authorization: "Bearer good" },
+            body: JSON.stringify({ controlId: "one", screenLocked: true }),
+          }),
+          services,
+        );
+        assert.equal(forgedLock.status, 401);
+        const validLock = await handler(
+          new Request(`http://goat.test${COMPUTER_USE_LEASE_ROUTE}`, {
+            method: "POST",
+            headers: { authorization: "Bearer good", "x-goat-proxy-channel": "fixture-secret" },
+            body: JSON.stringify({ controlId: "one", screenLocked: true }),
+          }),
+          services,
+        );
+        assert.equal(validLock.status, 204);
+        assert.equal(lockedControl, "one");
         for (const [path, body] of [
           [
             "primitive-control-ready",

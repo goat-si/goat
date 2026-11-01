@@ -42,14 +42,16 @@ use an app you installed later, turn computer use off and on again.
 
 These limits keep agents away from places they never need. They do not stop an
 agent from typing into an app it may use, so give agents work you would let
-them do at that keyboard.
+them do at that keyboard. With **Strict input guards** off, an agent can still ask
+for password managers and the other protected apps below, and you can approve
+them, but computer use itself still does not control them.
 
 Computer use also blocks System Settings, login and security prompts, and Screen
-Time. Full access started by a bot, channel, schedule, webhook, or another
-environment cannot control Terminal or iTerm. An organization can block more
-apps by adding their bundle IDs to `cuaDeniedApps` in the environment's
-`userdata/settings.json`; only a person can change this setting. Input without
-an identifiable target is refused; specify an app window to continue.
+Time. With **Strict input guards** on, full access started by a bot, channel,
+schedule, webhook, or another environment cannot control Terminal or iTerm, an
+organization can block more apps by adding their bundle IDs to `cuaDeniedApps`
+in the environment's `userdata/settings.json`, and input without an
+identifiable target is refused; only a person can change these settings.
 
 ## Ask an agent to work across the browser and apps
 
@@ -151,17 +153,26 @@ answers, or while it is off in **System Settings > Privacy & Security >
 Automation**, the agent stops that action and tells you, naming the app when it
 can.
 
-Your pointer stays where you put it. By default agents never move it: they
-click through an element's accessibility action, the keyboard, or a background
-click that shows only their own cursor, and a call that would move your pointer
-does not run. If an app ignores background clicks, the agent tells you. To let
-full access agents move your pointer for such apps, turn on **Let agents move my
-pointer** under **Settings > Integrations > Computer use > Advanced**.
+By default GOAT adds no input checks of its own: agents click by element, key
+or point, bring a window forward when a background click does not land, and keep
+going after a step whose effect they could not confirm. What macOS, Windows,
+Linux or the driver refuses still comes back to the agent, and the limits below
+still apply.
+
+To have GOAT check input before it is sent, turn on **Strict input guards** under
+**Settings > Integrations > Computer use > Advanced**. With it on, a call that
+would move your pointer does not run unless **Let agents move my pointer** is
+also on, sending in a chat app needs the agent to say it is sending, paste,
+renaming a list item by typing and clicks outside the window are refused,
+foreground is used only after element and keyboard tries, approved-app lists,
+`cuaDeniedApps` and the remote-origin Terminal block apply, and a failed step
+stops the steps after it.
 
 **Stop** on a thread stops its computer use at once, even in the middle of an
 action sequence. Pause, takeover and private mode also revoke foreground
 control. After pause or Stop, a full-access thread gets foreground control
-automatically only on its next turn.
+automatically only on its next turn. On a Mac with Input Monitoring allowed for
+GOAT Computer Use, press **Esc** to stop all active computer-use sessions on that Mac.
 
 Full access skips app and foreground approvals. Everything else on this page still
 applies to it: password managers and GOAT's own windows stay off limits, a
@@ -177,6 +188,14 @@ automatically.
 
 ## Watching agents
 
+Open thread details on web and choose **Show input history**, or open the thread
+actions menu in the mobile header and choose **Computer use history**. History
+shows the apps or browser hosts the agent used, its actions and their outcomes.
+You can also open it from a computer-use or browser action in the thread.
+History is kept for 30 days. Typing is recorded as a length unless you enable
+**Keep typed text** in computer-use settings and GOAT confirms it reached a
+normal browser field. Desktop typing is never kept as text.
+
 While agents use the built-in browser or this computer, GOAT shows them in a
 stack at the right of the window, one tile each, with what the agent works on,
 its thread and whether the agent or you are in control. Browser tiles show a
@@ -191,7 +210,9 @@ in full access. **Stop all**
 at the top of the stack stops every agent on this computer, including approved
 work that runs on its own. While a page asks for a password, a one-time code or
 a passkey, its tile reads **Private (paused)** and agents can neither see nor
-use the page until you leave that field.
+use the page until you leave that field. If the screen locks, computer use pauses
+and the computer-use card reads **Screen locked**. Unlock the screen and choose **Hand back**
+to continue.
 
 The GOAT menu bar or taskbar menu offers the same stops, per app or all at
 once; its **Stop All Computer Use** also stops agents in browser tabs, like
@@ -255,7 +276,10 @@ On a Mac, GOAT needs **Accessibility** and **Screen Recording**. When you turn
 computer use on from the desktop app on that Mac, GOAT walks you through both
 and then checks that they work: it restarts computer use, has it read and
 capture one of GOAT's own windows, and shows which check failed if one did. Keep
-a GOAT window visible and the Mac unlocked while it checks.
+a GOAT window visible and the Mac unlocked while it checks. **Input Monitoring**
+is optional: allow GOAT Computer Use in **System Settings → Privacy & Security →
+Input Monitoring** to stop active computer-use sessions by pressing Esc. Without it, use **Stop**
+in GOAT.
 After GOAT, its helper or the Mac restarts, updates or wakes, the check may need
 to run again. In the GOAT desktop app on that Mac, choose **Run check** when it is
 available.

@@ -21,6 +21,54 @@ const layer = it.layer(
 );
 
 layer("ComputerUsePrimitiveChannel with real leases", (it) => {
+  it.effect("Stop all settles an in-flight read with a terminal result", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* runMigrations();
+        const leases = yield* ComputerUseLeases.ComputerUseLeases;
+        const channel = yield* PrimitiveChannel.make;
+        const threadId = ThreadId.make("thread-channel-terminal-stop");
+        const control = yield* leases.control(threadId, Option.none());
+        const authority = {
+          threadId,
+          attachmentGeneration: "attachment:stop",
+          proxyChannelToken: "channel:stop",
+        };
+        yield* channel.issue({ ...authority, controlId: control.controlId, expiresAt: 60000 });
+        const registration = yield* channel.registerStream({
+          ...authority,
+          proxyInstanceId: "proxy:stop",
+          kind: "thread",
+        });
+        if (registration.status !== "registered") return assert.fail("expected registration");
+        assert.isTrue(
+          yield* channel.reportControlReady({
+            ...authority,
+            registrationId: registration.registrationId,
+            controlId: control.controlId,
+            connectionId: "driver:stop",
+            driverGeneration: 1,
+          }),
+        );
+        const waiter = yield* channel
+          .request({
+            threadId,
+            runId: "run:stop",
+            turnId: "turn:stop",
+            callId: 1,
+            deadlineMillis: 30000,
+            tool: "list_apps",
+            args: {},
+          })
+          .pipe(Effect.forkChild);
+        yield* Stream.runHead(registration.requests);
+        yield* leases.stopAll;
+        const result = yield* Fiber.join(waiter);
+        assert.include(JSON.stringify(result), '"code":"stopped_by_person"');
+        assert.include(JSON.stringify(result), '"retryClass":"never"');
+      }),
+    ),
+  );
   it.effect.each(["stop", "stopAll"] as const)(
     "turning computer use off after %s closes the thread's proxy registration",
     (how) =>

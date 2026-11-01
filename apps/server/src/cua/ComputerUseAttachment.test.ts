@@ -58,6 +58,7 @@ const fakeLeases = (input: {
   const everyApp: Array<boolean> = [];
   const nonPerson: Array<boolean | undefined> = [];
   const service = ComputerUseLeases.ComputerUseLeases.of({
+    ownsControl: () => Effect.die("unused"),
     active: () => Effect.succeed(Option.fromNullishOr(input.grant)),
     holder: () => Effect.succeed(Option.fromNullishOr(input.holder)),
     channelOrigin: () => Effect.die("unused"),

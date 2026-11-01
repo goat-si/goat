@@ -157,11 +157,12 @@ describe("computer use skill text", () => {
     expect(guidance).not.toContain("the person's own keyboard or pointer where GOAT can detect it");
   });
 
-  it("puts the element token and the keyboard before foreground, which takes the person's cursor", () => {
+  it("offers element, keyboard and point clicks in the background and keeps foreground order to strict mode", () => {
     const guidance = builtInSkillSections(["computer-use"], "darwin").join("\n");
-    expect(guidance).toContain("never as the retry for a point click");
+    expect(guidance).not.toContain("never as the retry for a point click");
+    expect(guidance).toContain("With strict input guards on, GOAT refuses foreground");
     expect(guidance).toContain("`token_first`");
-    expect(guidance).toContain("then the keyboard (`press_key` Return opens a selected row");
+    expect(guidance).toContain("the keyboard (`press_key` Return opens a selected row");
   });
 
   it("fits every section into one Codex context entry on every host", () => {
@@ -174,7 +175,7 @@ describe("computer use skill text", () => {
     const mac = builtInSkillSections(["computer-use"], "darwin").join("\n");
     expect(mac).toContain('os="macOS"');
     expect(mac).not.toContain('os="Windows"');
-    expect(builtInSkillSections(["computer-use"], "freebsd")).toHaveLength(3);
+    expect(builtInSkillSections(["computer-use"], "freebsd")).toHaveLength(4);
   });
 
   it("contains no identifier from another vendor's computer use skill", () => {
@@ -201,7 +202,9 @@ describe("computer use skill text", () => {
       expect(guide).toContain('await Promise.all(["7", "+", "2", "="].map((k) => app.click(k)))');
       expect(guide).toMatch(/for`? loop, sends each alone/);
       expect(guide).toContain("individual driver call");
-      expect(guide).toMatch(/after a failed step,\s+later group members are not run/);
+      expect(guide).toMatch(
+        /with strict input guards on,\s+later group members are not run after a failed step/,
+      );
     }
   });
 

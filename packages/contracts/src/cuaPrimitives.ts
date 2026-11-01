@@ -132,6 +132,9 @@ export const ComputerUsePrimitiveControlReady = strictPrimitive(
 );
 export type ComputerUsePrimitiveControlReady = typeof ComputerUsePrimitiveControlReady.Type;
 export const ComputerUsePrimitiveControlCutoff = strictPrimitive(
-  Schema.Struct(primitiveControlReport),
+  Schema.Struct({
+    ...primitiveControlReport,
+    terminal: Schema.optionalKey(Schema.Literals(["stopped_by_person", "screen_locked"])),
+  }),
 );
 export type ComputerUsePrimitiveControlCutoff = typeof ComputerUsePrimitiveControlCutoff.Type;

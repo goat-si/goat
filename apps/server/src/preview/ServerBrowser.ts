@@ -1,3 +1,4 @@
+import * as ServerBrowserLimits from "./serverBrowserLimits.ts";
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off globalTimers:off - Playwright callbacks run outside the Effect runtime.
 // Screencasts ignore emulated device scale; real 2x keeps captures sharp.
 // --disable-gpu uses cheaper software compositing while preserving SwiftShader WebGL.
@@ -89,10 +90,13 @@ import {
   tabOwner,
   type ServerBrowserSessionView,
 } from "./ServerBrowserSessions.ts";
-import { pointBefore } from "./ServerBrowserPointer.ts";
+import { pointBefore, sleepUntil, tabKey } from "./ServerBrowserPointer.ts";
 import * as ServerBrowserScreen from "./ServerBrowserScreen.ts";
 import { guardedHistoryNavigation } from "./ServerBrowserHistory.ts";
 import { guardedNavigate, resolveNavigationUrl } from "./ServerBrowserNavigate.ts";
+import { makeBrowserHistorySupport } from "./BrowserHistoryRecordAction.ts";
+import { browserHistoryTarget } from "./BrowserHistoryTarget.ts";
+import { recordBrowserTypedAction } from "./BrowserInputRetention.ts";
 import * as ViewerInput from "./ServerBrowserViewerInput.ts";
 import { fixedViewportSize, viewportSettingsEqual } from "./ServerBrowserViewport.ts";
 import { makeRendering, UNATTACHED_FILL_VIEWPORT } from "./ServerBrowserRendering.ts";
@@ -102,7 +106,6 @@ import { recordCopies, recordFrameCopies, takeCopiedText } from "./ServerBrowser
 import * as PreviewUpload from "./PreviewUpload.ts";
 import { makeContextPreparer, startBrowserWatchers } from "./popupWatchers.ts";
 import { closePopupOnAbort, inspectPopup, type AdoptedPage } from "./popupAdmission.ts";
-import { pushBounded } from "./boundedBuffer.ts";
 import { pageRead } from "./pageRead.ts";
 import { attachNetworkTracker } from "./networkTracker.ts";
 import { FENCED_ALLOWED_OPERATIONS, READ_OPERATIONS } from "./readOperations.ts";
@@ -125,10 +128,10 @@ import {
 import * as ServerBrowserSecretFill from "./ServerBrowserSecretFill.ts";
 import { checkOpenBlocked, makeBlockedTabFence, type BlockedTabRun } from "./blockedTabFence.ts";
 
-const SERVER_HOST_CLIENT_ID = SERVER_BROWSER_AUTOMATION_CLIENT_ID;
 const decodeLogsInput = Schema.decodeUnknownSync(PreviewAutomationLogsInput);
+const SERVER_HOST_CLIENT_ID = SERVER_BROWSER_AUTOMATION_CLIENT_ID;
+const RECORDING_SCREENCAST = { format: "jpeg", quality: 90, everyNthFrame: 1 } as const;
 const RENDER_SCALE = 2;
-// Chromium allows three unacked frames, so 100 ms pacing caps viewers near 30 fps.
 const SCREENCAST_ACK_PACE_MS = 100;
 const SCREENCAST_SETTLE_MS = 200;
 const SCREENCAST_MOTION_FRAMES = 4;
@@ -137,17 +140,14 @@ const SCREENCAST_MOTION_QUALITY = 50;
 const HOST_RECONNECT_DELAY = "1 second";
 const DESKTOP_ATTACH_TIMEOUT = "10 seconds";
 const VIEWER_OUTPUT_LIMIT = 64;
-const RECORDING_SCREENCAST = { format: "jpeg", quality: 90, everyNthFrame: 1 } as const;
+
+// Chromium allows three unacked frames, so 100 ms pacing caps viewers near 30 fps.
 const decodeViewportSetting = Schema.decodeUnknownSync(PreviewViewportSettingSchema);
 const AGENT_CURSOR_MOVE_MS = 160;
 const AGENT_CURSOR_CLICK_LEAD_MS = 40;
 
-const sleepUntil = (deadline: number) =>
-  new Promise<void>((resolve) => setTimeout(resolve, Math.max(0, deadline - Date.now())));
-
 const NAVIGATION_TIMEOUT_MS = 15_000;
 const VIEWER_NAVIGATION_OPTIONS = { waitUntil: "commit", timeout: NAVIGATION_TIMEOUT_MS } as const;
-const ACTION_TIMELINE_LIMIT = 50;
 
 export class ServerBrowserTabNotFoundError extends Schema.TaggedError<ServerBrowserTabNotFoundError>()(
   "ServerBrowserTabNotFoundError",
@@ -339,17 +339,6 @@ interface ServerDownload {
   readonly completedAt: string;
 }
 
-const AGENT_TAB_LIMIT = 8;
-const SERVER_TAB_LIMIT = 32;
-const AGENT_TAB_IDLE_MS = 30 * 60 * 1000;
-const IDLE_SWEEP_INTERVAL = "1 minute";
-
-const DOWNLOAD_LIMIT = 20;
-const ABORTED_NAVIGATION_DOWNLOAD_WAIT_MS = 5_000;
-const DOWNLOAD_MAX_BYTES = 1024 * 1024 * 1024;
-
-const tabKey = (threadId: string, tabId: string) => `${threadId}\u0000${tabId}`;
-
 const make = Effect.gen(function* () {
   const config = yield* ServerConfig.ServerConfig;
   const host = { platform: yield* HostProcess.Platform, arch: yield* HostProcess.Architecture };
@@ -361,7 +350,7 @@ const make = Effect.gen(function* () {
   const secretFill = yield* ServerBrowserSecretFill.make;
   const activity = yield* PreviewAgentActivity.PreviewAgentActivity;
   const agentTurns = yield* activity.changes;
-  const runFork = Effect.runForkWith(yield* Effect.context<never>());
+  const { runFork, recordAction, keepTypedText } = yield* makeBrowserHistorySupport;
   const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
   const { applyOpenRendering, applyRendering, applySetting, broadcastViewport, layoutSize } =
     makeRendering(runPromise);
@@ -798,7 +787,7 @@ const make = Effect.gen(function* () {
             if (tab.abortedNavigation?.generation !== navigationGeneration) return;
             tab.abortedNavigation = null;
             if (!tab.closing) settleAbortedNavigation(tab, navigationGeneration, url, undefined);
-          }, ABORTED_NAVIGATION_DOWNLOAD_WAIT_MS),
+          }, ServerBrowserLimits.ABORTED_NAVIGATION_DOWNLOAD_WAIT_MS),
         };
         return;
       }
@@ -919,7 +908,7 @@ const make = Effect.gen(function* () {
         (target) => download.saveAs(target),
       );
       const { size } = await NodeFSP.stat(path);
-      if (tab.closing || size > DOWNLOAD_MAX_BYTES) {
+      if (tab.closing || size > ServerBrowserLimits.DOWNLOAD_MAX_BYTES) {
         await NodeFSP.rm(path, { force: true });
         return;
       }
@@ -932,7 +921,10 @@ const make = Effect.gen(function* () {
         completedAt: new Date().toISOString(),
       };
       tab.downloads.push(saved);
-      for (const evicted of tab.downloads.splice(0, tab.downloads.length - DOWNLOAD_LIMIT)) {
+      for (const evicted of tab.downloads.splice(
+        0,
+        tab.downloads.length - ServerBrowserLimits.DOWNLOAD_LIMIT,
+      )) {
         await NodeFSP.rm(evicted.path, { force: true }).catch(constVoid);
       }
       offered = { id, fileName: saved.fileName };
@@ -1179,17 +1171,17 @@ const make = Effect.gen(function* () {
   const atTabLimit = (agentSessionId: string) => {
     const opening = [...pendingTabs.entries()].filter(([key]) => !tabs.has(key));
     return (
-      tabs.size + opening.length >= SERVER_TAB_LIMIT ||
+      tabs.size + opening.length >= ServerBrowserLimits.SERVER_TAB_LIMIT ||
       [...tabs.values()].filter((tab) => tab.control.agentId === agentSessionId).length +
         opening.filter(([, pending]) => pending.agentId === agentSessionId).length >=
-        AGENT_TAB_LIMIT
+        ServerBrowserLimits.AGENT_TAB_LIMIT
     );
   };
 
   const assertTabCapacity = (agentSessionId: string) => {
     if (atTabLimit(agentSessionId))
       throw new BrowserControlInterrupted(
-        `Too many server browser tabs are open (${AGENT_TAB_LIMIT} per agent session, ${SERVER_TAB_LIMIT} per server). Close one with goat_call {path:"preview.close"} or reuse one from goat_call {path:"preview.status"} tabs.`,
+        `Too many server browser tabs are open (${ServerBrowserLimits.AGENT_TAB_LIMIT} per agent session, ${ServerBrowserLimits.SERVER_TAB_LIMIT} per server). Close one with goat_call {path:"preview.close"} or reuse one from goat_call {path:"preview.status"} tabs.`,
         "tabLimit",
       );
   };
@@ -1244,7 +1236,7 @@ const make = Effect.gen(function* () {
   // Desktop browsing bypasses streamed viewers and server input tracking,
   // so these idle signals only apply to headless tabs.
   const closeIdleAgentTabs = () => {
-    const cutoff = Date.now() - AGENT_TAB_IDLE_MS;
+    const cutoff = Date.now() - ServerBrowserLimits.AGENT_TAB_IDLE_MS;
     for (const tab of tabs.values()) {
       if (
         tab.control.agentId !== null &&
@@ -1591,31 +1583,6 @@ const make = Effect.gen(function* () {
       }
     };
 
-  const recordAction = <A>(tab: ServerTab, action: string, run: () => Promise<A>): Promise<A> => {
-    const event: {
-      -readonly [K in keyof PreviewAutomationActionEvent]: PreviewAutomationActionEvent[K];
-    } = {
-      id: NodeCrypto.randomUUID(),
-      action,
-      status: "running",
-      startedAt: new Date().toISOString(),
-    };
-    pushBounded(tab.actionTimeline, event, ACTION_TIMELINE_LIMIT);
-    return run().then(
-      (result) => {
-        event.status = "succeeded";
-        event.completedAt = new Date().toISOString();
-        return result;
-      },
-      (cause: unknown) => {
-        event.status = "failed";
-        event.completedAt = new Date().toISOString();
-        event.error = tab.diagnostics.firstLine(cause);
-        throw cause;
-      },
-    );
-  };
-
   const requireTab = async (request: PreviewAutomationRequest) => {
     SessionControl.requireAgentSession(request);
     const owned = [...tabs.values()].filter(
@@ -1691,7 +1658,6 @@ const make = Effect.gen(function* () {
               : "The requested server preview tab does not exist.",
           );
         }
-        // Reusing another session's tab requires explicit tabId; reading it grants no implicit takeover.
         const existing =
           found && (request.tabIdExplicit || found.control.agentId === request.agentSessionId)
             ? found
@@ -1731,25 +1697,29 @@ const make = Effect.gen(function* () {
                 'A browser dialog is pending. Read goat_call {path:"preview.status"} and use goat_call {path:"preview.dialog"} first.',
                 "dialogPending",
               );
-            if (existing) {
-              if (url) {
-                tab.control.dispatchGate()();
-                navigationSent = true;
-                await guardedNavigate(
-                  tab,
-                  url,
-                  "load",
-                  navigationTimeout,
-                  tabActionGate(tab, request, blockedTabs, deadlineMs, actionSignal, url).channel,
-                );
+            const loading = async () => {
+              if (existing) {
+                if (url) {
+                  tab.control.dispatchGate()();
+                  navigationSent = true;
+                  await guardedNavigate(
+                    tab,
+                    url,
+                    "load",
+                    navigationTimeout,
+                    tabActionGate(tab, request, blockedTabs, deadlineMs, actionSignal, url).channel,
+                  );
+                }
+              } else {
+                await (tab.initialNavigation ?? Promise.resolve()).catch((cause: unknown) => {
+                  throw unloadedOpen(tab.tabId, cause);
+                });
+                navigationSent = tab.initialNavigationSent;
               }
-            } else {
-              await (tab.initialNavigation ?? Promise.resolve()).catch((cause: unknown) => {
-                throw unloadedOpen(tab.tabId, cause);
-              });
-              navigationSent = tab.initialNavigationSent;
-            }
-            actionSignal.throwIfAborted();
+              actionSignal.throwIfAborted();
+            };
+            if (url) await recordAction(tab, "navigate", loading, { url });
+            else if (!existing) await loading();
             const reveal = open.open ?? open.show;
             if (reveal !== false) {
               await runPromise(
@@ -1867,7 +1837,13 @@ const make = Effect.gen(function* () {
     if (request.operation === "dialog") {
       tab.control.assertNoHumanControl();
       const channel = tabActionGate(tab, request, blockedTabs, deadlineMs, operationSignal).channel;
-      await resolveDialog(tab, input as PreviewAutomationDialogInput, channel);
+      const dialog = input as PreviewAutomationDialogInput;
+      await recordAction(
+        tab,
+        "dialog",
+        () => resolveDialog(tab, dialog, channel),
+        dialog.promptText === undefined ? {} : { typedText: dialog.promptText },
+      );
       return statusWithTitle(tab, request.agentSessionId);
     }
     const agentSessionId = request.agentSessionId!;
@@ -1965,15 +1941,20 @@ const make = Effect.gen(function* () {
         });
       case "navigate": {
         const navigateInput = input as PreviewAutomationNavigateInput;
-        await blockedTabs.assertTab(tab, request.runId, resolveNavigationUrl(navigateInput));
-        await recordAction(tab, "navigate", () =>
-          guardedNavigate(
-            tab,
-            resolveNavigationUrl(navigateInput),
-            navigateInput.readiness ?? "load",
-            navigateInput.timeoutMs ?? request.timeoutMs,
-            actionGate(resolveNavigationUrl(navigateInput)).channel,
-          ),
+        const destination = resolveNavigationUrl(navigateInput);
+        await blockedTabs.assertTab(tab, request.runId, destination);
+        await recordAction(
+          tab,
+          "navigate",
+          () =>
+            guardedNavigate(
+              tab,
+              destination,
+              navigateInput.readiness ?? "load",
+              navigateInput.timeoutMs ?? request.timeoutMs,
+              actionGate(destination).channel,
+            ),
+          { url: destination },
         );
         return statusWithTitle(tab, request.agentSessionId);
       }
@@ -2054,8 +2035,15 @@ const make = Effect.gen(function* () {
         );
       case "click": {
         const clickInput = input as PreviewAutomationClickInput;
-        const { effect, evidence, pressesCompleted } = await recordAction(tab, "click", () =>
-          ServerBrowserPage.click(tab.page, clickInput, pointerFor(tab), actionGate()),
+        const gate = actionGate();
+        const targetLabel = secretFill.historySafe(tab, request.threadId)
+          ? await browserHistoryTarget(tab.page, clickInput, gate.channel)
+          : undefined;
+        const { effect, evidence, pressesCompleted } = await recordAction(
+          tab,
+          "click",
+          () => ServerBrowserPage.click(tab.page, clickInput, pointerFor(tab), gate),
+          targetLabel === undefined ? {} : { targetLabel: tab.diagnostics.mask(targetLabel) },
         );
         return {
           effect,
@@ -2093,13 +2081,22 @@ const make = Effect.gen(function* () {
         return recordAction(tab, "upload", () =>
           uploadFiles(tab, input as PreviewAutomationUploadInput, actionGate()),
         );
-      case "type":
-        return recordAction(tab, "type", async () => {
-          const gate = actionGate();
-          const aimed = input as PreviewAutomationTypeInput;
-          const timed = await pointBefore(tab.page, aimed, pointerFor(tab), gate);
-          return ServerBrowserPage.type(tab.page, timed, gate);
-        });
+      case "type": {
+        const aimed = input as PreviewAutomationTypeInput;
+        const gate = actionGate();
+        return recordBrowserTypedAction(
+          tab,
+          aimed.text,
+          gate.channel,
+          keepTypedText,
+          () => secretFill.historySafe(tab, request.threadId),
+          recordAction,
+          async (onHistoryFocus) => {
+            const timed = await pointBefore(tab.page, aimed, pointerFor(tab), gate);
+            return ServerBrowserPage.type(tab.page, timed, gate, { onHistoryFocus });
+          },
+        );
+      }
       case "press":
         return recordAction(tab, "press", () =>
           ServerBrowserPage.press(tab.page, input as PreviewAutomationPressInput, actionGate()),
@@ -2109,11 +2106,13 @@ const make = Effect.gen(function* () {
           ServerBrowserPage.scroll(tab.page, input as PreviewAutomationScrollInput, actionGate()),
         );
       case "evaluate":
-        return ServerBrowserPage.evaluate(
-          tab,
-          input as PreviewAutomationEvaluateInput,
-          request.timeoutMs,
-          actionGate(),
+        return recordAction(tab, "evaluate", () =>
+          ServerBrowserPage.evaluate(
+            tab,
+            input as PreviewAutomationEvaluateInput,
+            request.timeoutMs,
+            actionGate(),
+          ),
         );
       case "waitFor":
         return ServerBrowserPage.waitFor(tab.page, waitInput(request, deadlineMs), signal).then(
@@ -2622,7 +2621,7 @@ const make = Effect.gen(function* () {
     Effect.forkScoped,
   );
   yield* Effect.sync(closeIdleAgentTabs).pipe(
-    Effect.repeat(Schedule.spaced(IDLE_SWEEP_INTERVAL)),
+    Effect.repeat(Schedule.spaced(ServerBrowserLimits.IDLE_SWEEP_INTERVAL)),
     Effect.forkScoped,
   );
   const environmentId = yield* environment.getEnvironmentId;

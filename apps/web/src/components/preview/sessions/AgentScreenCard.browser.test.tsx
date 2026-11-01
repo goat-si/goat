@@ -631,6 +631,15 @@ it("keeps the large view's stream for the person typing a secret, and no picture
   await expect.element(screen.getByTestId("session-frame")).not.toBeInTheDocument();
 });
 
+it("shows a screen-locked session until control resumes", async () => {
+  setup([]);
+  const desk = desktopApp({ status: "paused", reason: "screenLocked" });
+  await using screen = await render(cardView(desk).element);
+  await expect.element(screen.getByText("Screen locked")).toBeVisible();
+  await screen.rerender(cardView(desktopApp()).element);
+  await expect.element(screen.getByText("Screen locked")).not.toBeInTheDocument();
+});
+
 it("shows a desktop thread's live frames, drops them in private mode, and keeps the last one dimmed when stopped", async () => {
   setup([]);
   const desk = desktopApp({

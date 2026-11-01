@@ -356,3 +356,12 @@ function buttonStartingWith(label: string) {
   if (!result) throw new Error(`Missing button: ${label}`);
   return result;
 }
+
+it("lets a person enable confirmed browser text retention", async () => {
+  act(() => render(<SettingsEnvironmentAgentBehaviorRouteScreen />));
+  await act(async () => button("Keep typed text").click());
+  expect(mocks.updateSettings).toHaveBeenCalledExactlyOnceWith({
+    environmentId: "local",
+    input: { patch: { computerUseKeepTypedText: true } },
+  });
+});

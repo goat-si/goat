@@ -75,10 +75,13 @@ it.effect("077 DDL and accounting rollback together then ledger restart preserve
 );
 it.effect("077 refuses an incompatible prerelease ledger before modifying memory", () =>
   Effect.gen(function* () {
-    yield* runMigrations();
+    yield* runMigrations({ toMigrationInclusive: 84 });
     const sql = yield* SqlClient.SqlClient;
     yield* sql`UPDATE effect_sql_migrations SET migration_id=178 WHERE name='MemoryReportLifecycle'`;
-    assert.strictEqual((yield* runMigrations().pipe(Effect.exit))._tag, "Failure");
+    assert.strictEqual(
+      (yield* runMigrations({ toMigrationInclusive: 84 }).pipe(Effect.exit))._tag,
+      "Failure",
+    );
     assert.strictEqual(
       (yield* sql`SELECT 1 FROM effect_sql_migrations WHERE name='MemoryReportLifecycle' AND migration_id=178`)
         .length,
@@ -150,7 +153,7 @@ it.effect("077 classifies only matching durable guards and leaves legacy attempt
       yield* sql`INSERT INTO memory_compact_receipts(space,operation_id,operation_digest,hub_sequence,receipt_json,compact_json) VALUES (${space},${op},${record.receipt.operationDigest},1,${yield* encodeReceipt(canonical.receipt)},json_set(${yield* encodeCompact(canonical)},${path},${value}))`;
       yield* sql`INSERT INTO memory_report_outbox(report_id,space,memory_id,operation_id,resolution_id,resolving_environment_id,outcome,state,created_at) VALUES (${rid},${space},${memory},${op},${resolutionId},'A','resolved','pending',0)`;
     }
-    yield* runMigrations();
+    yield* runMigrations({ toMigrationInclusive: 84 });
     assert.deepStrictEqual(
       yield* sql`SELECT report_kind,report_approved FROM memory_report_outbox WHERE report_id IN (${"c".repeat(64)},${"d".repeat(64)},${"e".repeat(64)})`,
       Array.from({ length: 3 }, () => ({ report_kind: "unknown", report_approved: 0 })),

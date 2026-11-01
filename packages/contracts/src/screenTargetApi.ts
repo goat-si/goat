@@ -3,12 +3,12 @@
  * A thread gets it with its first result, after a reset, a new provider session or a version
  * change, and when a surface first becomes available; it names only the surfaces the turn has.
  */
-export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/31";
+export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/32";
 
 const HEADER = `// goat_screen_run cell API, contract ${SCREEN_TARGET_CONTRACT_VERSION}. Await every call, alone or in one Promise.all; the cell's return value comes back as JSON.
 // At most 4 calls wait for answers at once (pendingCalls); one more throws pending_limit with nothing sent, so await some before starting more.
 // Every target, tab or app, goes: observe, confirm it is the right target, act, observe the effect, check the task, then hand back or finish.
-// An app input answers unverifiable when it went out and no proof of its effect was found: that is a success, so carry on and observe when you need to see the result. Never resend an input. Stop from the person ends the cell at once.`;
+// An app input answers unverifiable when it went out and no proof of its effect was found: that is a success, so carry on and observe when you need to see the result. Observe before sending the same input again. Stop from the person ends the cell at once.`;
 
 const COMMON = `type ElementHandle = { readonly elementHandle: string }; // a copy is refused
 type Target = ElementHandle | number | string | { window: [x: number, y: number] } | [x: number, y: number] | { role?: string; name: string } | { id: string };
@@ -18,7 +18,7 @@ type Target = ElementHandle | number | string | { window: [x: number, y: number]
 // macOS app points stay usable after input until the window moves or resizes (after input that changed content, observe before using old points); tab [x, y] survive clicks and end on any other input, the next observe() or screenshot(), or a new page.
 // Linux and Windows apps take points only in click: [x, y] pixels of a screenshot whose window position the driver proved (otherwise unsupported, nothing sent). They stay usable after input until the window moves, resizes or changes scale (stale_reference: take a new screenshot); other app actions there use element numbers from observe().
 type Done = { ok: true; verdict: "confirmed" | "unverifiable" | "suspected_noop"; note?: string; warnings?: string[]; result?: { debug: { value?: unknown; evidence: string[] } } };
-// suspected_noop: input was sent but its effect was not seen; observe before retrying, never blindly resend.
+// suspected_noop: input was sent but its effect was not seen; later inputs still run; observe when the next step depends on it.
 // warnings: driver notes that may change what you should believe, including focus restoration and disabled actions.
 // Set screen.debug = true for diagnostic details on every input in this cell, or pass verify: true on supported app inputs to read evidence and include details for that call.
 type ReadTime = { ms?: number; phases?: { driverMs: number; parseMs: number; renderMs: number; bridgeMs: number } };
@@ -30,12 +30,13 @@ type Shot = { imageRef: string; pixelWidth: number; pixelHeight: number; omitted
 // An option, query or tab condition key a method below does not take is refused unsent (invalid_argument), naming the keys it takes.
 // Diagnostic value includes observed evidence and window reports when available; read other elements with observe().
 // confirmed: the effect is proven. unverifiable: the input was sent and no proof of its effect was found; it may already have taken effect,
-// so never resend it. Nothing waits on it: go on with the next step and observe when you need the result. A refused or failed call, in any call form, throws
+// so observe before sending it again. Nothing waits on it: go on with the next step and observe when you need the result. A refused or failed call, in any call form, throws
 // ScreenError { code, message, nothingSent, effectStarted?, nextStep?, safety?, refused?, detail? };
-// after nothingSent the cell goes on as before. A failed write that may have landed refuses the cell's
-// later input, but observe, read, status, waitFor and verify still run.
+// after nothingSent the cell goes on as before. Only with strict input guards on (Settings > Computer use) does GOAT
+// refuse on its own: a failed write that may have landed stops later input, and chat sends without { send: true },
+// chat point clicks, paste and table name cells are refused unsent.
 // nothingSent speaks for its own call only: a cell that ends on it after an earlier input went out keeps
-// that input's safety, and its nextStep names the input; read again in a new cell and never resend it.
+// that input's safety, and its nextStep names the input; read again before sending it again.
 // Pass { send: true } only on the final action that submits or sends a message after the person confirmed;
 // keep it off while typing a draft or pressing Enter to search, and never press cmd+v unless this cell copied the clipboard content itself.
 // Diff text uses + added, ~ changed and - removed rows; unchanged rows keep their numbers. Tab focus changes use focus [N] or focus none.
@@ -87,7 +88,7 @@ const APP = `// App Condition: { role?, name?, value?, enabled?, selected? } | {
 // Steps already decided in one app window: start them together and await once, so they reach the app as
 // one GOAT-side group; each member is an individual driver call, in order: await Promise.all(["7", "+", "2", "="].map((k) => app.click(k)));
 // An await on each call, as in a for loop, sends each alone. Each gets its own result, and
-// after a failed step, later group members are not run: read every result; a step went
+// with strict input guards on, later group members are not run after a failed step: read every result; a step went
 // unsent only when its own result says nothingSent.
 // observe() also lists the app's other windows on screen as otherWindows: [{ window_id, title }]; one an input
 // opened (a chat, a document) is read by binding it: screen.app({ bundle_id, window_id }).

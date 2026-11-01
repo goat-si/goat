@@ -115,6 +115,7 @@ const fixture = Effect.fnUntraced(function* (
   >(Option.none());
   const unused = Effect.die("unused");
   const leases = ComputerUseLeases.ComputerUseLeases.of({
+    ownsControl: () => Effect.die("unused"),
     blocked: () => unused,
     blockedTurns: unused,
     active: () => unused,
@@ -584,6 +585,14 @@ describe("DesktopFrames", () => {
     assert.equal(reason(frameGate(entry, { ...detects, frames: false })), "unsupported");
     const { target: _target, ...unnamed } = control;
     assert.equal(reason(frameGate({ control: unnamed, state: active }, detects)), "windowUnknown");
+  });
+
+  it("scopes the captured window to the approved apps only under strict input guards", () => {
+    const entry = { control, state: active };
+    assert.deepInclude(frameGate(entry, detects, true), { apps: ["com.apple.calculator"] });
+    const loose = frameGate(entry, detects, false);
+    assert.equal(loose._tag, "open");
+    if (loose._tag === "open") assert.isUndefined(loose.apps);
   });
 
   it("asks for the widest and most frequent viewer, never past the limits, and only for open gates", () => {

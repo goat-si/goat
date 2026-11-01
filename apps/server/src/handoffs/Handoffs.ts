@@ -50,7 +50,9 @@ import { makeComputerUseStanding, type CreateInput } from "./computerUseStanding
 import { startComputerUseSettingsObserver } from "./computerUseSettingsObserver.ts";
 import { makeHandoffClientLabel } from "./handoffClientLabel.ts";
 import { targetKey } from "./targetKey.ts";
+import * as PersonStop from "./computerUsePersonStop.ts";
 import { storeName, matchesArgs } from "./handoffDigest.ts";
+import { decodeAddress, unavailable } from "./handoffDecode.ts";
 import { SshProgressBinding } from "./sshProgressBinding.ts";
 export { SshProgressBinding } from "./sshProgressBinding.ts";
 
@@ -71,11 +73,6 @@ const decodeHandoff = Schema.decodeUnknownEffect(
   Schema.fromJsonString(Schema.toCodecJson(Handoff)),
 );
 const decodeRunStatus = Schema.decodeUnknownEffect(Schema.NullOr(OrchestrationV2RunStatus));
-const decodeAddress = Schema.decodeUnknownEffect(
-  Schema.Struct({ threadId: Handoff.fields.requestedBy.fields.threadId, handoffId: TurnItemId }),
-);
-const unavailable = (cause: unknown) => new HandoffError({ reason: "unavailable", cause });
-
 type Continuations = Effect.Success<ReturnType<typeof makeComputerUseContinuations>>;
 
 export class Handoffs extends Context.Service<
@@ -119,6 +116,9 @@ export class Handoffs extends Context.Service<
     readonly respond: (
       input: HandoffRespondInput,
       sessionId: AuthSessionId,
+    ) => Effect.Effect<Handoff, HandoffError | EnvironmentAuthorizationError>;
+    readonly cancelComputerUseByPerson: (
+      input: HandoffReadInput,
     ) => Effect.Effect<Handoff, HandoffError | EnvironmentAuthorizationError>;
     readonly answerSecret: (
       input: SecretRequestAnswerInput,
@@ -394,11 +394,10 @@ const make = Effect.gen(function* () {
   const respondLocked = Effect.fn("Handoffs.respondLocked")(
     function* (
       input: HandoffRespondInput,
-      sessionId: AuthSessionId,
+      sessionId: AuthSessionId | undefined,
       foregroundEpoch: number | undefined,
     ) {
-      const label = yield* clientLabel(input, sessionId);
-      const record = yield* read(input);
+      const { label, record } = yield* PersonStop.resolve({ input, sessionId, read, clientLabel });
       const isGrant = record.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH;
       const pendingGrant = isGrant && isHandoffPending(record.state);
       yield* standing.validate(input, record);
@@ -433,18 +432,17 @@ const make = Effect.gen(function* () {
         const namespace = isProviderContinuationPath(record.target.path)
           ? { namespace: record.target.path }
           : {};
+        const approvedBySessionId = yield* PersonStop.session(sessionId);
         yield* savePrivate(
           input.handoffId,
-          { ...payload, ...namespace, approvedBySessionId: sessionId },
+          { ...payload, ...namespace, approvedBySessionId },
           true,
         );
       }
       const endsApproved = isGrant && input.action === "cancelled" && record.state === "completed";
       if (endsApproved || (pendingGrant && input.action !== "opened"))
         yield* standing.end(input.threadId, input.handoffId, endsApproved);
-      // Record the end before the transition so the wake reactor sees it.
-      if (endsApproved)
-        yield* savePrivate(input.handoffId, { version: 1, kind: "computer_use_ended" }, true);
+      yield* PersonStop.markPersonStopped(input, record, savePrivate);
       const retire = standing.end(input.threadId, input.handoffId, false);
       const result = yield* transition(
         input,
@@ -925,6 +923,8 @@ const make = Effect.gen(function* () {
     read,
     open,
     respond,
+    cancelComputerUseByPerson: (input) =>
+      respondLocked({ ...input, action: "cancelled" }, undefined, undefined),
     sweep: withAdmission(sweepUnlocked.pipe(lock.withPermits(1))),
     holdExpiry: expiryHolds.hold,
     matchesArgs: (handoff, args) => matchesArgs(key, handoff, args),

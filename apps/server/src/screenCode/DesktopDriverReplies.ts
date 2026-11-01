@@ -4,6 +4,12 @@ import * as Schema from "effect/Schema";
 import type { ComputerUsePrimitiveReply, ScreenRunError } from "@goat/contracts";
 import { ComputerUseRefusalDetail, ComputerUseRefusalReason } from "@goat/contracts";
 import { driverOutcomeSafety } from "../cua/ComputerUseDriverOutcome.ts";
+import {
+  replaceWithTerminal,
+  terminalErrorState,
+  terminalReplyState,
+  terminalFailure,
+} from "../cua/ComputerUseTerminal.ts";
 import type { ScreenHostDispatchResult } from "./ScreenHostBridge.ts";
 
 const isRefusalReason = Schema.is(ComputerUseRefusalReason);
@@ -73,17 +79,56 @@ export const driverFailureNextStep = (
 ) => {
   const structured = object(object(reply.result)?.structuredContent);
   const code = string(object(structured?.refusal)?.code) ?? string(structured?.code);
-  return possibleCommit && (code === "desktop_busy" || code === "desktop_lease_unavailable")
+  return possibleCommit &&
+    replaceWithTerminal(error).reason === undefined &&
+    (code === "desktop_busy" || code === "desktop_lease_unavailable")
     ? "Earlier input may have landed. Observe before acting; never resend it."
     : error.nextStep;
 };
 const classifyDriverError = (reply: ComputerUsePrimitiveReply): ScreenRunError | undefined => {
-  if (reply.status === "unknown_outcome")
-    return { ...fail("unknown_outcome"), effectStarted: true };
   const result = object(reply.result);
   const structured = object(result?.structuredContent);
-  const said = refusalText(result, structured);
-  const driverCode = string(object(structured?.refusal)?.code) ?? string(structured?.code);
+  const nested = string(object(structured?.refusal)?.code);
+  const outer = string(structured?.code);
+  const terminal = (code: string | undefined) =>
+    code === "stopped_by_person" || code === "screen_locked" ? code : undefined;
+  const rpc = terminalErrorState(reply.error);
+  const state = replaceWithTerminal(
+    terminalReplyState(reply.result, reply.status),
+    rpc,
+    terminal(nested),
+    terminal(outer),
+  );
+  const merged = state.reason;
+  const driverCode = merged ?? nested ?? outer;
+  const safety = state.possibleCommit
+    ? terminalFailure(state, "list_apps", {}, true)?.safety
+    : undefined;
+  const said =
+    merged !== undefined && merged !== (nested ?? outer)
+      ? undefined
+      : refusalText(result, structured);
+  if (
+    (reply.status === "unknown_outcome" ||
+      reply.status === "not_started" ||
+      result?.isError === true ||
+      reply.error !== undefined) &&
+    (driverCode === "stopped_by_person" || driverCode === "screen_locked")
+  )
+    return {
+      ...fail(
+        driverCode,
+        said ??
+          (driverCode === "screen_locked"
+            ? "The screen is locked; stop until the person unlocks it."
+            : "The person stopped computer use; do not retry this turn."),
+      ),
+      effectStarted: reply.status === "unknown_outcome" || state.possibleCommit,
+      ...(safety === undefined ? {} : { safety }),
+      ...refusalOf(structured),
+    };
+  if (reply.status === "unknown_outcome")
+    return { ...fail("unknown_outcome"), effectStarted: true };
   // GOAT's proxy refused a call this driver cannot take as asked; its words say what to do.
   if (
     structured?.detail === "outside_manifest" &&

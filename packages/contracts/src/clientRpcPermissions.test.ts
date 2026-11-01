@@ -253,6 +253,12 @@ it("guards standing consent without changing provider-only permissions", () => {
   ).toEqual(["settings:write", "providers:manage"]);
 });
 
+it("guards computer use history with thread read authority", () => {
+  expect(clientRpcRequiredScopes(WS_METHODS.computerUseHistory, {})).toEqual([
+    "orchestration:read",
+  ]);
+});
+
 it("requires settings authority only when a person widens browser access", () => {
   expect(clientRpcRequiredScopes(WS_METHODS.browserClaimsClaim, {})).toEqual([
     "orchestration:operate",

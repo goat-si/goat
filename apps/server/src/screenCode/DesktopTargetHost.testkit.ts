@@ -145,6 +145,7 @@ export const fixture = (
   // Launch arguments depend on the platform; tests pin macOS so they read the same on every runner.
   platform: NodeJS.Platform = "darwin",
   driverVersion?: string,
+  strictInputGuards?: () => boolean,
 ) => {
   const sent: Array<{
     tool: string;
@@ -233,6 +234,7 @@ export const fixture = (
       ...(labelTarget ? { labelTarget } : {}),
       platform,
       ...(driverVersion === undefined ? {} : { driverVersion }),
+      ...(strictInputGuards === undefined ? {} : { strictInputGuards }),
     }),
     sent,
     channel,

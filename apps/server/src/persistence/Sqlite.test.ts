@@ -13,6 +13,7 @@ import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as TestClock from "effect/testing/TestClock";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
@@ -410,5 +411,25 @@ it.effect("does not receipt a failed worker migration and reopens safely", () =>
         Math.max(...migrationManifest.map(([id]) => id)),
       );
     }).pipe(Effect.provide(SqlitePersistence.layerFromPath(filename)));
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("prunes expired computer use history when the database opens", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const dir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-history-prune-" });
+    const dbPath = path.join(dir, "state.sqlite");
+    yield* Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`INSERT INTO computer_use_input_history
+        (thread_id, recorded_at, target_kind, tab_host, method, verdict)
+        VALUES ('thread:a', 0, 'tab', 'example.test', 'click', 'sent')`;
+    }).pipe(Effect.provide(SqlitePersistence.layerFromPath(dbPath)));
+    yield* TestClock.adjust("31 days");
+    yield* Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      assert.deepEqual(yield* sql`SELECT id FROM computer_use_input_history`, []);
+    }).pipe(Effect.provide(SqlitePersistence.layerFromPath(dbPath)));
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );

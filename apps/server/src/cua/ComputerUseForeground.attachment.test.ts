@@ -33,6 +33,7 @@ const layer = ComputerUseLeases.layer.pipe(
       foregroundDatabase,
       NodeServices.layer,
       ServerSettings.ServerSettingsService.layerTest({
+        cuaStrictInputGuards: true,
         enableCua: true,
       }),
       DesktopTelemetryReceiver.layerTest({

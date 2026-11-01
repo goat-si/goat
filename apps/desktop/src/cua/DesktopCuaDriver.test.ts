@@ -96,6 +96,31 @@ describe("DesktopCuaDriver", () => {
       }).pipe(Effect.scoped),
   );
 
+  it.effect("lists protected apps for requests only without strict input guards", () =>
+    Effect.gen(function* () {
+      const test = yield* fixture({ platform: "darwin", helper: { granted: true } });
+      yield* test.listApps([
+        { bundle_id: "com.example.Editor", name: "Editor" },
+        { bundle_id: "com.apple.Passwords", name: "Passwords" },
+        { bundle_id: HELPER_ID, name: "GOAT Computer Use" },
+      ]);
+      yield* test.requestApps("strict");
+      assert.deepInclude(yield* test.nextApps, {
+        apps: ["com.example.Editor"],
+        catalog: [{ id: "com.example.Editor", name: "Editor" }],
+      });
+      yield* test.setStrictInputGuards(false);
+      yield* test.requestApps("loose");
+      assert.deepInclude(yield* test.nextApps, {
+        apps: ["com.apple.Passwords", "com.example.Editor"],
+        catalog: [
+          { id: "com.example.Editor", name: "Editor" },
+          { id: "com.apple.Passwords", name: "Passwords" },
+        ],
+      });
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("starts an updated helper after the running generation is restarted", () =>
     Effect.scoped(
       Effect.gen(function* () {

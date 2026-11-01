@@ -35,7 +35,7 @@ layer("055_OrchestrationV2 application event source", (it) => {
         )
       `;
 
-      yield* runMigrations();
+      yield* runMigrations({ toMigrationInclusive: 55 });
 
       const events = yield* sql<{
         readonly aggregate_kind: string;

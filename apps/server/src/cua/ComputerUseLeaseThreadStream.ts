@@ -20,6 +20,13 @@ import { PER_SIGNAL_READ } from "./ComputerUseLeaseQueries.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import { watchClaimChanges } from "./ComputerUseLeaseClaimChanges.ts";
 
+/** The person's strict-guards choice; an unreadable setting keeps the guards. */
+export const readStrictGuards = (settings: ServerSettings.ServerSettingsService["Service"]) =>
+  settings.getSettings.pipe(
+    Effect.map((value) => value.cuaStrictInputGuards === true),
+    Effect.orElseSucceed(() => true),
+  );
+
 export const threadLeaseUpdates = (input: {
   readonly threadId: ThreadId;
   readonly token: string;
@@ -84,6 +91,7 @@ export const threadLeaseUpdates = (input: {
           Effect.orElseSucceed(() => false),
         );
         const enabled = yield* readEnabled;
+        const strictGuards = yield* readStrictGuards(settings);
         const current = Option.getOrUndefined(yield* leases.currentControl(input.threadId));
         const value = !enabled
           ? { _tag: "ended" as const, reason: "disabled" as const }
@@ -176,6 +184,7 @@ export const threadLeaseUpdates = (input: {
                     ? {}
                     : { interruptions: value.interruptions }),
                   ...(value.shared === true ? { shared: true } : {}),
+                  ...(strictGuards ? {} : { strictInputGuards: false as const }),
                   ...(browserClaimVersion === 0 ? {} : { browserClaimVersion }),
                   ...(browserClaimBindings.length === 0 ? {} : { browserClaimBindings }),
                   ...(browserClaims.length === 0 ? {} : { browserClaims }),

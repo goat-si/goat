@@ -191,6 +191,35 @@ describe("cuaDriverManifest", () => {
     expect(CUA_DRIVER_ALLOWED_TOOLS.filter((tool) => !offered.has(tool))).toEqual([]);
   });
 
+  it("lists protected apps only without strict input guards, and never GOAT itself", () => {
+    const listed = [
+      { bundle_id: "com.example.Editor", name: "Editor" },
+      { bundle_id: "com.apple.Passwords", name: "Passwords", executable: "/opt/vault" },
+      { name: "1Password", executable: "C:\\Apps\\1Password.exe" },
+      { bundle_id: "com.trycua.driver", name: "Cua Driver" },
+      { name: "cua-driver", executable: "/usr/local/bin/cua-driver" },
+      { bundle_id: "codes.t3.host-test", name: "GOAT" },
+    ];
+    const host = ["codes.t3.host-test"];
+    expect(cuaRequestableApps(listed, host)).toEqual(["com.example.Editor"]);
+    expect(cuaRequestableApps(listed, host, { includeProtected: true })).toEqual([
+      "/opt/vault",
+      "1Password",
+      "C:\\Apps\\1Password.exe",
+      "com.apple.Passwords",
+      "com.example.Editor",
+    ]);
+    expect(cuaRequestableCatalog(listed, host, { includeProtected: true })).toEqual([
+      { id: "com.example.Editor", name: "Editor" },
+      { id: "com.apple.Passwords", name: "Passwords", executables: ["/opt/vault"] },
+      {
+        id: "C:\\Apps\\1Password.exe",
+        name: "1Password",
+        executables: ["C:\\Apps\\1Password.exe"],
+      },
+    ]);
+  });
+
   it("retains every attested identity when a best-effort listing loses the bundle id", () => {
     const apps = cuaRequestableApps(
       [{ name: " Editor.exe ", executable: " C:\\Apps\\Editor.exe " }],
@@ -769,9 +798,9 @@ describe("cuaDriverManifest app listing", () => {
 
 describe("request-time listing on standalone servers (#1561)", () => {
   it("names the apps a request may ask for, from the same listing the manifest uses, without GOAT or credential stores", async () => {
-    const names = await listCuaRequestableApplications({
+    const input = {
       binaryPath: "/nonexistent/cua-driver",
-      platform: "darwin",
+      platform: "darwin" as const,
       environment: {},
       hostBundleIds: ["si.goat.server"],
       listApplications: async () => [
@@ -780,8 +809,14 @@ describe("request-time listing on standalone servers (#1561)", () => {
         { bundle_id: "com.1password.1password", name: "1Password" },
         { bundle_id: null, name: "python3" },
       ],
-    });
-    expect(names).toEqual(["com.apple.TextEdit", "python3"]);
+    };
+    expect(await listCuaRequestableApplications(input)).toEqual(["com.apple.TextEdit", "python3"]);
+    // Without strict input guards the credential store is listed too; GOAT never is.
+    expect(await listCuaRequestableApplications({ ...input, includeProtected: true })).toEqual([
+      "com.1password.1password",
+      "com.apple.TextEdit",
+      "python3",
+    ]);
   });
 });
 

@@ -4,9 +4,17 @@
  *
  * @module ComputerUseRpcHandlers
  */
-import { type AuthSessionId, type ThreadId, WS_METHODS } from "@goat/contracts";
+import {
+  type AuthSessionId,
+  type ThreadId,
+  type ComputerUseHistoryInput,
+  ComputerUseHistoryError,
+  WS_METHODS,
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as SqlClient from "effect/sql/SqlClient";
+import { makeComputerUseHistory } from "./ComputerUseHistory.ts";
 
 import * as Handoffs from "../handoffs/Handoffs.ts";
 import { BrowserOriginGrants } from "../preview/BrowserOriginGrantsLayer.ts";
@@ -23,7 +31,7 @@ import * as CuaDriver from "./CuaDriver.ts";
 const endGrants = Effect.fn("ComputerUse.endGrants")(function* (
   leases: ComputerUseLeases.ComputerUseLeases["Service"],
   handoffs: Handoffs.Handoffs["Service"],
-  sessionId: AuthSessionId,
+  sessionId: AuthSessionId | undefined,
   which: (grant: ComputerUseLeases.ComputerUseLease) => boolean,
 ) {
   const ended = new Set<ThreadId>();
@@ -40,20 +48,20 @@ const endGrants = Effect.fn("ComputerUse.endGrants")(function* (
   // Released first, so they hold no app and admit no newer control even if ending them fails.
   yield* leases.release(picked.map((grant) => grant.handoffId));
   for (const grant of picked) {
-    yield* handoffs
-      .respond(
-        { threadId: grant.threadId, handoffId: grant.handoffId, action: "cancelled" },
-        sessionId,
-      )
-      .pipe(
-        Effect.tap(() => Effect.sync(() => ended.add(grant.threadId))),
-        Effect.catchCause((cause) =>
-          Effect.logWarning("Stop could not end a computer use admission", {
-            handoffId: grant.handoffId,
-            cause,
-          }).pipe(Effect.andThen(Effect.sync(() => void (failed += 1)))),
-        ),
-      );
+    const input = { threadId: grant.threadId, handoffId: grant.handoffId };
+    yield* (
+      sessionId === undefined
+        ? handoffs.cancelComputerUseByPerson(input)
+        : handoffs.respond({ ...input, action: "cancelled" }, sessionId)
+    ).pipe(
+      Effect.tap(() => Effect.sync(() => ended.add(grant.threadId))),
+      Effect.catchCause((cause) =>
+        Effect.logWarning("Stop could not end a computer use admission", {
+          handoffId: grant.handoffId,
+          cause,
+        }).pipe(Effect.andThen(Effect.sync(() => void (failed += 1)))),
+      ),
+    );
   }
   return { ended, failed };
 });
@@ -101,9 +109,27 @@ export const stopComputerUse = Effect.fn("ComputerUse.stop")(function* (
   return { stopped: stopped || ended.size > 0, failed };
 });
 
+export const stopComputerUseFromHelper = Effect.fn("ComputerUse.stopFromHelper")(function* (
+  leases: Option.Option<ComputerUseLeases.ComputerUseLeases["Service"]>,
+  handoffs: Handoffs.Handoffs["Service"],
+  threadId: ThreadId,
+  controlId: string,
+  claims: Option.Option<BrowserOriginGrants["Service"]> = Option.none(),
+) {
+  if (Option.isNone(leases) || leases.value.stopAllIfCurrent === undefined)
+    return { stopped: false, failed: 0 };
+  const stopped = yield* leases.value.stopAllIfCurrent(threadId, controlId);
+  if (!stopped) return { stopped: false, failed: 0 };
+  if (Option.isSome(claims)) yield* claims.value.stop();
+  yield* handoffs.stopComputerUseSessions();
+  const { failed } = yield* endGrants(leases.value, handoffs, undefined, () => true);
+  return { stopped: true, failed };
+}, Effect.uninterruptible);
+
 export const makeComputerUseRpcHandlers = Effect.fn("ComputerUse.rpcHandlers")(function* (
   sessionId: AuthSessionId,
 ) {
+  const historySql = yield* Effect.serviceOption(SqlClient.SqlClient);
   const driver = yield* Effect.serviceOption(CuaDriver.CuaDriver);
   const leases = yield* Effect.serviceOption(ComputerUseLeases.ComputerUseLeases);
   const handoffs = yield* Handoffs.Handoffs;
@@ -114,6 +140,30 @@ export const makeComputerUseRpcHandlers = Effect.fn("ComputerUse.rpcHandlers")(f
   );
 
   return {
+    [WS_METHODS.computerUseHistory]: (input: ComputerUseHistoryInput) => {
+      if (Option.isNone(historySql))
+        return Effect.fail(
+          new ComputerUseHistoryError({ message: "History storage is unavailable." }),
+        );
+      return makeComputerUseHistory.pipe(
+        Effect.provideService(SqlClient.SqlClient, historySql.value),
+        Effect.flatMap((history) => history.listForThread(input.threadId, input)),
+        Effect.map((entries) => {
+          const last = entries.at(-1);
+          return {
+            entries,
+            nextCursor:
+              last !== undefined && entries.length === (input.limit ?? 100)
+                ? { recordedAt: last.recordedAt, id: last.id, orderSeq: last.orderSeq }
+                : null,
+          };
+        }),
+        Effect.mapError(
+          (cause) =>
+            new ComputerUseHistoryError({ message: "Could not read computer use history.", cause }),
+        ),
+      );
+    },
     [WS_METHODS.computerUseStatusChanges]: (_input: {}) =>
       ComputerUseStatusChanges.statusChanges(receiver, connections),
     [WS_METHODS.serverCheckComputerUse]: (_input: {}) =>

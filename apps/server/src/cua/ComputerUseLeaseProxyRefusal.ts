@@ -82,7 +82,7 @@ interface ProxyCallCheck {
   readonly message: Envelope;
   readonly claimPid?: number | undefined;
   readonly finished: () => LeaseEnd | undefined;
-  readonly paused: () => "human_input" | "takeover" | "private" | undefined;
+  readonly paused: () => import("@goat/contracts").ComputerUsePauseReason | undefined;
   readonly idle: () => boolean;
   readonly apps: () => ReadonlySet<string> | undefined;
   readonly listed: ReadonlyMap<number, ListedApp>;
@@ -92,6 +92,8 @@ interface ProxyCallCheck {
   /** Refuses arguments that would write a capture to a file. */
   readonly toFile: () => string | undefined;
   readonly tokenFirstRefuses: () => boolean;
+  /** False when the person has not opted into strict input guards: GOAT's own guards stand down. */
+  readonly strict: () => boolean;
   readonly foreground: () => ReadonlyArray<ComputerUseForegroundGrant>;
   readonly listApps: Effect.Effect<void>;
   /** macOS: an Apple Events route's refusal names its app, so its pid is listed before it runs. */
@@ -108,8 +110,12 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
     args: input.message.params?.arguments,
   });
   const initialTime = yield* Clock.currentTimeMillis;
+  // Read at each decision: a strict update can land while this admission waits on a listing.
+  const guarded = () => input.strict();
   const initiallyDenied =
-    foregroundRequired && !input.foreground().some((grant) => grant.expiresAtMillis > initialTime);
+    guarded() &&
+    foregroundRequired &&
+    !input.foreground().some((grant) => grant.expiresAtMillis > initialTime);
   const batch = batchAppScope(input.message.params?.name, input.message.params?.arguments);
   const unresolvedBatch = () =>
     batch?.apps.find(
@@ -122,7 +128,7 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
             ),
         ),
     );
-  const judge = () =>
+  const judgeScope = () =>
     scopeVerdict({
       name: input.message.params?.name,
       args:
@@ -131,6 +137,7 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
       appOf: (pid) => input.listed.get(pid),
       bundleIds: input.host.bundleIds,
     });
+  const judge = (): ScopeVerdict => (guarded() ? judgeScope() : { _tag: "allow" });
   // A pid allowed only by the binary it ran when last listed may run another one of the same name
   // now. A host that reads it (Linux) must read the same binary, a failed read refuses; elsewhere
   // only a listing taken for this call confirms it.
@@ -176,30 +183,45 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
   const finished = input.finished();
   const paused = input.paused();
   if (finished !== undefined)
-    return refusal(input.id, input.message.method, finished, LEASE_END_MESSAGES[finished]);
+    return refusal("none", input.id, input.message.method, finished, LEASE_END_MESSAGES[finished]);
   if (paused !== undefined)
-    return refusal(input.id, input.message.method, pausedDetail(paused), PAUSE_MESSAGES[paused]);
+    return refusal(
+      "none",
+      input.id,
+      input.message.method,
+      pausedDetail(paused),
+      PAUSE_MESSAGES[paused],
+    );
   if (input.idle())
     return refusal(
+      "none",
       input.id,
       input.message.method,
       "control_idle",
       "This thread's turn has ended. Computer use is idle until its next turn.",
     );
   if (input.message.params?.name === "get_desktop_state")
-    return refusal(input.id, input.message.method, "desktop_capture_off", DESKTOP_CAPTURE_OFF);
+    return refusal(
+      "none",
+      input.id,
+      input.message.method,
+      "desktop_capture_off",
+      DESKTOP_CAPTURE_OFF,
+    );
   if (toFile !== undefined)
-    return refusal(input.id, input.message.method, "desktop_capture_off", toFile);
+    return refusal("none", input.id, input.message.method, "desktop_capture_off", toFile);
   if (initiallyDenied && verdict._tag === "resolve")
     return refusal(
+      "none",
       input.id,
       input.message.method,
       "foreground_not_approved",
       FOREGROUND_NOT_APPROVED,
     );
-  const missing = verdict._tag === "allow" ? unresolvedBatch() : undefined;
+  const missing = guarded() && verdict._tag === "allow" ? unresolvedBatch() : undefined;
   if (missing !== undefined)
     return refusal(
+      "none",
       input.id,
       input.message.method,
       "app_not_allowed",
@@ -208,6 +230,7 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
     );
   if (verdict._tag === "resolve")
     return refusal(
+      "none",
       input.id,
       input.message.method,
       "app_not_allowed",
@@ -218,6 +241,7 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
     );
   if (verdict._tag === "refuse")
     return refusal(
+      "none",
       input.id,
       input.message.method,
       verdict.reason,
@@ -225,12 +249,17 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
       verdict.app,
     );
   if (input.shared() && takesScreen(input.message.params?.name, input.message.params?.arguments))
-    return refusal(input.id, input.message.method, "screen_shared", SCREEN_SHARED);
-  if (input.tokenFirstRefuses())
-    return refusal(input.id, input.message.method, "token_first", TOKEN_FIRST_MESSAGE);
+    return refusal("none", input.id, input.message.method, "screen_shared", SCREEN_SHARED);
+  if (guarded() && input.tokenFirstRefuses())
+    return refusal("none", input.id, input.message.method, "token_first", TOKEN_FIRST_MESSAGE);
   const now = yield* Clock.currentTimeMillis;
-  if (foregroundRequired && !input.foreground().some((grant) => grant.expiresAtMillis > now))
+  if (
+    guarded() &&
+    foregroundRequired &&
+    !input.foreground().some((grant) => grant.expiresAtMillis > now)
+  )
     return refusal(
+      "none",
       input.id,
       input.message.method,
       "foreground_not_approved",
@@ -255,9 +284,15 @@ const listAutomationTarget = Effect.fn("ComputerUseLeaseProxy.listAutomationTarg
   yield* input.listApps;
   const finished = input.finished();
   if (finished !== undefined)
-    return refusal(input.id, input.message.method, finished, LEASE_END_MESSAGES[finished]);
+    return refusal("none", input.id, input.message.method, finished, LEASE_END_MESSAGES[finished]);
   const paused = input.paused();
   if (paused !== undefined)
-    return refusal(input.id, input.message.method, pausedDetail(paused), PAUSE_MESSAGES[paused]);
+    return refusal(
+      "none",
+      input.id,
+      input.message.method,
+      pausedDetail(paused),
+      PAUSE_MESSAGES[paused],
+    );
   return undefined;
 });

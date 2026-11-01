@@ -5,11 +5,11 @@
  *
  * A window is captured only while a viewer watches its session and the session's control is
  * active: not paused for a person's input, a takeover or a secret field, not idle between turns,
- * not ended. The window is the one the agent's latest admitted call named, and its app must be
- * one the control approved; the helper checks the owning app against the apps sent with it. Every
- * frame is checked again when it arrives, against the control as it is then and the apps it was
- * captured under, so a frame captured before a pause, a Stop or a narrowed grant never reaches a
- * viewer. Frames are capped at 480 px wide and 256 KiB, and the server passes at most one per
+ * not ended. The window is the one the agent's latest admitted call named, and under strict input
+ * guards its app must be one the control approved; the helper checks the owning app against the
+ * apps sent with it. Every frame is checked again when it arrives, against the control as it is
+ * then and the apps it was captured under, so a frame captured before a pause, a Stop or a
+ * narrowed grant never reaches a viewer. Frames are capped at 480 px wide and 256 KiB, and the server passes at most one per
  * requested interval (500 ms at the least) whatever the desktop sends.
  *
  * @module DesktopFrames
@@ -35,6 +35,8 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
+import { readStrictGuards } from "../cua/ComputerUseLeaseThreadStream.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
 import { PER_SIGNAL_READ } from "../cua/ComputerUseLeaseQueries.ts";
 import * as LinuxFrameSource from "../cua/linuxFrames/LinuxFrameSource.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
@@ -91,6 +93,7 @@ const closed = (reason: PreviewSessionNoPicture): FrameGate => ({ _tag: "closed"
 export function frameGate(
   entry: Entry | undefined,
   detection: ComputerUseLeases.ComputerUseDetection,
+  strict = true,
 ): FrameGate {
   if (entry === undefined || entry.state._tag === "ended") return closed("stopped");
   if (entry.state._tag === "paused")
@@ -103,7 +106,8 @@ export function frameGate(
   return {
     _tag: "open",
     ...target,
-    apps: entry.state.apps,
+    // Without strict input guards the agent's calls are not held to the approved apps either.
+    apps: strict ? entry.state.apps : undefined,
     wakeAt: entry.state.wakeAt,
     ...(cursor === undefined ? {} : { cursor }),
     ...(cursorReport === undefined
@@ -228,6 +232,7 @@ const make = Effect.gen(function* () {
   // A Linux server that runs the driver itself captures the same targets (#1370), unless a
   // desktop host's helper already does.
   const linux = yield* Effect.serviceOption(LinuxFrameSource.LinuxFrameSource);
+  const settings = yield* Effect.serviceOption(ServerSettingsService);
   const viewers = new Map<string, Set<Viewer>>();
   const frameSeq = new Map<string, number>();
   const nextFrameAt = new Map<string, number>();
@@ -258,7 +263,8 @@ const make = Effect.gen(function* () {
     const entry = (yield* leases.value.sessions).find(
       ({ control }) => DESKTOP_PREFIX + control.controlId === key,
     );
-    return frameGate(entry, detection);
+    const strict = Option.isSome(settings) ? yield* readStrictGuards(settings.value) : true;
+    return frameGate(entry, detection, strict);
   });
 
   const reconcile = mutex

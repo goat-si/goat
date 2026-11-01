@@ -60,7 +60,7 @@ const makeProxyPointBasis = (
     if (current() !== child) return notSent();
     return wanted.every((tool) => acceptsInput(tools, tool, "snapshot_id"))
       ? undefined
-      : refusal(id, message.method, "outside_manifest", POINT_BASIS_UNSUPPORTED);
+      : refusal("none", id, message.method, "outside_manifest", POINT_BASIS_UNSUPPORTED);
   });
 
 /** The batch scope, then the point-basis check: the proxy's admission of a call's arguments. */

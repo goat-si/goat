@@ -4,10 +4,15 @@ import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
 import { instanceId, threadId, withHarness } from "../handoffs/Handoffs.testkit.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { stopAllComputerUse, stopComputerUse } from "./ComputerUseRpcHandlers.ts";
+import {
+  stopAllComputerUse,
+  stopComputerUse,
+  stopComputerUseFromHelper,
+} from "./ComputerUseRpcHandlers.ts";
 import { applyPatch } from "./ComputerUseSettings.ts";
 import {
   requestWithHandoffs,
@@ -42,6 +47,7 @@ it.effect.each(["session", "named"] as const)("organization denial precedes %s a
             sessionId,
           );
           yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+            cuaStrictInputGuards: true,
             cuaDeniedApps: ["com.example.Editor"],
           });
           assert.deepInclude(yield* request({ apps: ["com.example.Editor"] }), {
@@ -97,7 +103,7 @@ it.effect.each([
   ),
 );
 
-it.effect.each(["end", "stop all", "disable"] as const)(
+it.effect.each(["end", "stop all", "person esc", "disable"] as const)(
   "old mention cannot restore an approval after %s",
   (termination) =>
     withHarness(({ orchestrator }) =>
@@ -133,6 +139,28 @@ it.effect.each(["end", "stop all", "disable"] as const)(
               );
             if (termination === "stop all")
               yield* stopAllComputerUse(Option.some(leases), handoffs, sessionId);
+            if (termination === "person esc") {
+              const control = yield* leases.control(threadId, yield* leases.active(threadId));
+              let stops = 0;
+              const observed = {
+                ...handoffs,
+                stopComputerUseSessions: (
+                  ...args: Parameters<typeof handoffs.stopComputerUseSessions>
+                ) => {
+                  stops += 1;
+                  return handoffs.stopComputerUseSessions(...args);
+                },
+              };
+              assert.isTrue(
+                (yield* stopComputerUseFromHelper(
+                  Option.some(leases),
+                  observed,
+                  threadId,
+                  control.controlId,
+                )).stopped,
+              );
+              assert.equal(stops, 1);
+            }
             if (termination === "disable") {
               const settings = yield* ServerSettings.ServerSettingsService;
               yield* handoffs.withComputerUseToggle(
@@ -161,6 +189,60 @@ it.effect.each(["end", "stop all", "disable"] as const)(
         );
       }),
     ),
+);
+
+it.effect("a delayed Escape after turn end revokes session approval", () =>
+  withHarness(({ orchestrator, worker }) =>
+    withRequests(orchestrator, supported, ({ request, handoffs, leases }) =>
+      Effect.gen(function* () {
+        const first = yield* request({ apps: ["com.example.Editor"] });
+        if (first.kind !== "needs_human") return assert.fail("expected approval");
+        yield* handoffs.respond(
+          {
+            threadId,
+            handoffId: first.handoff.handoffId,
+            action: "completed",
+            computerUseScope: "session",
+          },
+          sessionId,
+        );
+        const control = yield* leases.control(threadId, yield* leases.active(threadId));
+        const gate = yield* Deferred.make<void>();
+        const report = yield* Deferred.await(gate).pipe(
+          Effect.andThen(
+            stopComputerUseFromHelper(Option.some(leases), handoffs, threadId, control.controlId),
+          ),
+          Effect.forkChild,
+        );
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`UPDATE orchestration_v2_projection_runs SET status = 'completed' WHERE thread_id = ${threadId}`;
+        assert.isTrue(yield* leases.turnEnded(threadId));
+        yield* Deferred.succeed(gate, undefined);
+        assert.isTrue((yield* Fiber.join(report)).stopped);
+        yield* orchestrator.dispatch({
+          type: "message.dispatch",
+          commandId: CommandId.make("continue-after-esc"),
+          threadId,
+          messageId: MessageId.make("message:continue-after-esc"),
+          text: "Continue",
+          attachments: [],
+          dispatchMode: { type: "start_immediately" },
+          createdBy: "user",
+          creationSource: "web",
+        });
+        yield* worker.drain();
+        assert.equal((yield* request({ apps: ["com.example.Editor"] })).kind, "needs_human");
+        assert.isFalse(
+          (yield* stopComputerUseFromHelper(
+            Option.some(leases),
+            handoffs,
+            threadId,
+            control.controlId,
+          )).stopped,
+        );
+      }),
+    ),
+  ),
 );
 
 it.effect("a person's named app receives a session admission after a prior approval", () =>
@@ -299,6 +381,9 @@ it.effect("a named denied app is refused after a person's approval", () =>
       });
       yield* withRequests(orchestrator, supported, ({ request, handoffs }) =>
         Effect.gen(function* () {
+          yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+            cuaStrictInputGuards: true,
+          });
           const first = yield* request({ apps: ["com.example.Other"] });
           if (first.kind !== "needs_human") return assert.fail("expected approval");
           yield* handoffs.respond(

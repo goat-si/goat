@@ -247,11 +247,24 @@ const quietRead = Effect.fn("DesktopEvidence.quietRead")(function* (
     { ...call, deadlineMillis },
     context,
     connectionGeneration,
-  ).pipe(Effect.timeoutOption(effective), Effect.option);
-  const reply = Option.isSome(sent) ? Option.getOrUndefined(sent.value) : undefined;
+  ).pipe(
+    Effect.timeoutOption(effective),
+    Effect.catchIf(
+      (error) =>
+        error.code !== "user_interacting" &&
+        error.code !== "screen_locked" &&
+        error.code !== "stopped_by_person",
+      () => Effect.succeedNone,
+    ),
+  );
+  const reply = Option.getOrUndefined(sent);
   if (!reply) return undefined;
   const error = driverError(reply);
-  if (error?.code === "user_interacting" || error?.code === "screen_locked")
+  if (
+    error?.code === "user_interacting" ||
+    error?.code === "screen_locked" ||
+    error?.code === "stopped_by_person"
+  )
     return yield* Effect.fail(error);
   if (error !== undefined) return undefined;
   return driverValue(reply);
@@ -376,6 +389,7 @@ export const runInputWithEvidence = Effect.fn("DesktopEvidence.runInputWithEvide
   if (
     sent._tag === "Failure" &&
     (sent.failure.code === "screen_locked" ||
+      sent.failure.code === "stopped_by_person" ||
       sent.failure.code === "user_interacting" ||
       !(intent === "close" && sent.failure.effectStarted === true))
   )
@@ -499,7 +513,7 @@ export const finishCellTracker = Effect.fn("DesktopEvidence.finishCellTracker")(
   context: ScreenHostContext,
   options: { readonly skipEndRead?: boolean; readonly cellDeadlineMillis?: number } | undefined,
   send: SendFn,
-): Effect.fn.Return<CellWindowsOutcome> {
+): Effect.fn.Return<CellWindowsOutcome, ScreenRunError> {
   if (!entry) return {};
   if (options?.skipEndRead === true) return entry.tracker.finish();
   const endByPid = new Map<number, ReadonlyArray<WindowEntry> | undefined>();
@@ -526,12 +540,18 @@ export const finishCellTracker = Effect.fn("DesktopEvidence.finishCellTracker")(
       },
       context,
       entry.connectionGeneration,
-    ).pipe(Effect.timeoutOption(remain), Effect.option);
-    const reply = Option.isSome(sent) ? Option.getOrUndefined(sent.value) : undefined;
-    endByPid.set(
-      pid,
-      reply && !driverError(reply) ? parseWindowList(driverValue(reply), pid) : undefined,
+    ).pipe(
+      Effect.timeoutOption(remain),
+      Effect.catchIf(
+        (error) => error.code !== "stopped_by_person" && error.code !== "screen_locked",
+        () => Effect.succeedNone,
+      ),
     );
+    const reply = Option.getOrUndefined(sent);
+    const error = reply === undefined ? undefined : driverError(reply);
+    if (error?.code === "stopped_by_person" || error?.code === "screen_locked")
+      return yield* Effect.fail(error);
+    endByPid.set(pid, reply && !error ? parseWindowList(driverValue(reply), pid) : undefined);
   }
   return entry.tracker.finish(endByPid);
 });
