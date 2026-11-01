@@ -175,7 +175,7 @@ export interface DesktopTargetHost extends ScreenHostDispatcher {
   readonly finishCell?: (
     context: ScreenHostContext,
     options?: { readonly skipEndRead?: boolean; readonly cellDeadlineMillis?: number },
-  ) => Effect.Effect<CellWindowsOutcome>;
+  ) => Effect.Effect<CellWindowsOutcome, ScreenRunError>;
 }
 
 export const createDesktopTargetHost = (deps: {

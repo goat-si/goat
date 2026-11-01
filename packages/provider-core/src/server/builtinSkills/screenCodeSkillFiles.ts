@@ -21,6 +21,7 @@ For each error follow its \`nextStep\`. Delivery below concerns the failing call
 - \`screen_locked\`: screen is locked; depends: read effectStarted and the receipt, as for user_interacting; wait for the person to unlock it, then observe.
 - \`user_intervened\`: explicit takeover interrupted control; depends: read effectStarted and the receipt; wait for the person, then observe again.
 - \`stopped\`: the person stopped computer use; depends: read effectStarted and the receipt; stop for this turn.
+- \`stopped_by_person\`: the person pressed Esc or used Stop while this call ran; depends: an input already sent may have landed, so read effectStarted and the receipt; do not retry and do not continue computer use in this turn.
 - \`deadline\`: the call or cell ran out of time; depends: read effectStarted and the receipt; observe again, never replay a possibly sent input.
 - \`resource_exhausted\`: a runtime resource was exhausted; depends: read effectStarted and the receipt; observe again before a smaller cell.
 - \`runtime_unavailable\`: the screen runtime could not start or is unavailable; depends: read effectStarted and the receipt; stop and report the runtime problem.

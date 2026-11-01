@@ -398,6 +398,7 @@ export const ScreenRunError = Schema.Struct({
     "user_interacting",
     "screen_locked",
     "blocked_url",
+    "stopped_by_person",
     "user_intervened",
     "stopped",
     "deadline",

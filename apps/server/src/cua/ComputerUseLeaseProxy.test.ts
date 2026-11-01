@@ -164,7 +164,7 @@ describe("ComputerUseLeaseProxy", () => {
     Effect.gen(function* () {
       let visible = false;
       const overlay = Object.assign(
-        (command: { readonly op: "show" | "hide" }) =>
+        (command: { readonly op: "show" | "hide" | "status" }) =>
           Effect.sync(() => {
             if (command.op === "show") visible = true;
           }),

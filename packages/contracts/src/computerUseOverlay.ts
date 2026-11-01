@@ -33,6 +33,7 @@ export const ComputerUseOverlayHideReason = Schema.Literals([
   "human_input",
   "takeover",
   "private",
+  "screen_locked",
   "ended",
 ]);
 export type ComputerUseOverlayHideReason = typeof ComputerUseOverlayHideReason.Type;
@@ -82,11 +83,13 @@ export const AgentCursorEvent = Schema.Union([
 export type AgentCursorEvent = typeof AgentCursorEvent.Type;
 
 export const ComputerUseOverlayCommand = Schema.Union([
+  Schema.Struct({ op: Schema.Literal("status"), message: Schema.Literal("screen locked") }),
   Schema.Struct({
     op: Schema.Literal("show"),
     identity: AgentCursorOwner,
     pid: Schema.Int,
     windowId: Schema.Int,
+    escEnabled: Schema.optionalKey(Schema.Boolean),
     point: Schema.optionalKey(ComputerUseOverlayPoint),
     phase: Schema.Literals(["moving", "acting", "thinking", "resting"]),
   }),
@@ -100,6 +103,7 @@ export const ComputerUseOverlayCommand = Schema.Union([
     op: Schema.Literal("show"),
     pid: Schema.Int,
     windowId: Schema.Int,
+    escEnabled: Schema.optionalKey(Schema.Boolean),
     /** Absent when the call named an element, a zoomed region or a window not yet seen. */
     point: Schema.optionalKey(ComputerUseOverlayPoint),
     /** Direct driver calls retain their original marker. */

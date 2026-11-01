@@ -20,14 +20,13 @@ import {
   CommandId,
   RunId,
   SCREEN_TARGET_CONTRACT_VERSION,
-  screenTargetApi,
-  ScreenRunError as ScreenRunErrorSchema,
   ScreenTargetRef,
   ThreadId,
 } from "@goat/contracts";
 import type { McpThreadInvocationScope } from "../mcp/McpInvocationContext.ts";
 import { ComputerUsePrimitiveChannel } from "../cua/ComputerUsePrimitiveChannel.ts";
 import { ComputerUseLeases } from "../cua/ComputerUseLeases.ts";
+import type { ComputerUseTerminalReason } from "../cua/ComputerUseTerminal.ts";
 import type { ScreenCursorPhases } from "../cua/ScreenCursorPhases.ts";
 import { ScreenCursorPhases as CursorPhases } from "../cua/ScreenCursorPhases.ts";
 import { ScreenCursorPublisher, type ScreenCursorRoute } from "../cua/ScreenCursorPublisher.ts";
@@ -37,11 +36,26 @@ import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import * as ServerBrowser from "../preview/ServerBrowser.ts";
 import * as SiteNotes from "../preview/SiteNotes.ts";
 import { createDesktopTargetHost, type DesktopTargetHost } from "./DesktopTargetHost.ts";
+import { collectCellWindows as collectWindows } from "./ScreenCellWindowCollection.ts";
+import {
+  finishCellResponse,
+  makeCellAuthority,
+  watchCellTerminals,
+  screenRunFailure as fail,
+} from "./ScreenCellAuthority.ts";
 import { recordScreenCellRow, type ScreenCellFailure } from "./ScreenCellRowRecord.ts";
 import { makePreviewTargetHost } from "./PreviewTargetHost.ts";
-import { cellErrorSafety, cellResultSafety } from "./ScreenActionOutcome.ts";
+import {
+  appendCellNotices,
+  cellFailureBase,
+  cellResultSafety,
+  cellTerminalError,
+  completionCellError,
+  latchCellTerminal,
+} from "./ScreenActionOutcome.ts";
 import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
 import { ScreenHostBridge, type ScreenHostDispatcher } from "./ScreenHostBridge.ts";
+import { makeScreenApiTeacher } from "./ScreenApiTeaching.ts";
 import {
   followStrictInputGuards,
   makeStrictInputGuards,
@@ -52,11 +66,8 @@ import { ServerSettingsService } from "../serverSettings.ts";
 import { screenRunLimits, screenBytes } from "./ScreenRunLimits.ts";
 import { resolveScreenRuntimeAsset, screenRuntimeLayout } from "./ScreenRuntimeAsset.ts";
 import { createScreenRunSupervisor, type ScreenRunSupervisor } from "./ScreenRunSupervisor.ts";
-const isScreenRunErrorSchema = Schema.is(ScreenRunErrorSchema);
-
 const isScreenTargetRef = Schema.is(ScreenTargetRef);
 const OPEN_RUN = new Set(["preparing", "queued", "starting", "running", "waiting"]);
-
 export interface ScreenRunInput {
   readonly runId: string;
   readonly turnId: string;
@@ -68,13 +79,6 @@ export interface ScreenRunInput {
   readonly limits?: Partial<ScreenRunLimits>;
   readonly bindingHints?: ScreenBindingHints;
 }
-
-const fail = (code: ScreenRunError["code"]): ScreenRunError => ({
-  code,
-  effectStarted: false,
-  nextStep: "Refresh the screen run and retry if appropriate.",
-});
-
 export class ScreenRunService extends Context.Service<
   ScreenRunService,
   {
@@ -103,6 +107,7 @@ export class ScreenRunService extends Context.Service<
       readonly threadId?: string;
       readonly tabId?: string;
       readonly controlId?: string;
+      readonly terminal?: ComputerUseTerminalReason;
     }) => Effect.Effect<void>;
     readonly controlChanged: (input: {
       readonly kind:
@@ -118,6 +123,7 @@ export class ScreenRunService extends Context.Service<
       readonly threadId?: string;
       readonly tabId?: string;
       readonly controlId?: string;
+      readonly terminal?: ComputerUseTerminalReason;
     }) => Effect.Effect<{ readonly cleanupFailures: number }>;
     readonly journalSnapshot: (input: {
       readonly runId: string;
@@ -140,12 +146,10 @@ export class ScreenRunService extends Context.Service<
   static readonly layerWithRuntime = (options: ScreenRuntimeOptions) =>
     Layer.effect(this, make(options));
 }
-
 type PreviewTargetHost =
   ReturnType<typeof makePreviewTargetHost> extends Effect.Effect<infer A, infer _E, infer _R>
     ? A
     : never;
-
 export function layerWithTabHost() {
   return Layer.effect(
     ScreenRunService,
@@ -182,7 +186,6 @@ export function layerWithTabHost() {
     }),
   );
 }
-
 interface ScreenRuntimeOptions {
   readonly primitiveChannel?: ComputerUsePrimitiveChannel["Service"];
   readonly leases?: ComputerUseLeases["Service"];
@@ -199,7 +202,6 @@ interface ScreenRuntimeOptions {
   /** The person's strict-guards choice shared with the desktop host; refreshed each cell. */
   readonly strictInputGuards?: StrictInputGuards;
 }
-
 const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntimeOptions = {}) {
   const invocation = options.invocation ?? (yield* resolveSelfInvocation());
   const siteNotes = Option.getOrUndefined(yield* Effect.serviceOption(SiteNotes.SiteNotes));
@@ -357,53 +359,14 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
   });
   const turns = new Map<string, { threadId: string; environmentId: string }>();
   yield* Effect.addFinalizer(() => Effect.sync(() => supervisor?.dispose()));
-  // What each thread was last given of the cell API; the oldest thread drops out first.
-  const taught = new Map<
-    string,
-    { version: string; session: string; app: boolean; tab: boolean }
-  >();
-  /** The API bundle a result carries, when the thread lacks this version or a surface it now has. */
-  const apiFor = (
-    invocation: McpThreadInvocationScope,
-    availability: ScreenRunResult["availability"],
-    reset: boolean,
-  ): string | undefined => {
-    const threadId = invocation.thread.threadId;
-    const has = (kind: "app" | "tab") =>
-      availability.some((surface) => surface.kind === kind && surface.available);
-    const now = { app: has("app"), tab: has("tab") };
-    const before = taught.get(threadId);
-    const session = invocation.thread.providerSessionId;
-    if (
-      !reset &&
-      before !== undefined &&
-      before.version === SCREEN_TARGET_CONTRACT_VERSION &&
-      before.session === session &&
-      (before.app || !now.app) &&
-      (before.tab || !now.tab)
-    )
-      return undefined;
-    // The bundle names what the turn has now; the record keeps what this session was already given.
-    const given =
-      before !== undefined &&
-      before.session === session &&
-      before.version === SCREEN_TARGET_CONTRACT_VERSION;
-    taught.delete(threadId);
-    taught.set(threadId, {
-      version: SCREEN_TARGET_CONTRACT_VERSION,
-      session,
-      app: now.app || (given && !reset && before?.app === true),
-      tab: now.tab || (given && !reset && before?.tab === true),
-    });
-    if (taught.size > 1024) {
-      const oldest = taught.keys().next().value;
-      if (oldest !== undefined) taught.delete(oldest);
-    }
-    return screenTargetApi(now);
-  };
+  const apiFor = makeScreenApiTeacher();
   const closingTurns = new Set<string>();
   const endedRuns = new Set<string>();
-  const activeCells = new Map<string, string>();
+  const activeCells = makeCellAuthority(options.leases);
+  const { terminals: cellTerminals, evidence: cellEvidence } = watchCellTerminals(
+    bridge,
+    activeCells,
+  );
   const cleanupJournal = new Map<string, ScreenJournalEntry[]>();
   const turnKey = (runId: string, turnId: string) => `${runId}\u0000${turnId}`;
   const recordCleanupFailure = (runId: string, turnId: string, tabId?: string) => {
@@ -499,6 +462,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
     threadId?: string;
     tabId?: string;
     controlId?: string;
+    terminal?: ComputerUseTerminalReason;
   }) => {
     // A hand back or resume restores authority; the generation check already refuses stale input.
     if (change.kind === "handBack" || change.kind === "resume") return;
@@ -507,9 +471,11 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
       const [runId, turnId] = id.split("\u0000");
       if (!runId || !turnId) continue;
       const cellId = activeCells.get(id);
+      if (!activeCells.matches(id, change.controlId)) continue;
       const cut = cutsCell(change, runId, turnId, cellId);
       if (cut && cellId) {
-        bridge.cutCellNow(runId, turnId, cellId, change.kind ?? "stopped");
+        latchCellTerminal(cellTerminals, id, change.terminal);
+        bridge.cutCellNow(runId, turnId, cellId, change.terminal ?? change.kind ?? "stopped");
         supervisor?.cutCellNow(runId, turnId, cellId);
       }
       for (const [targetId, route] of routes) {
@@ -578,8 +544,8 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
         });
       if (input.bindingHints) options.tabHost?.setBindingHints(input, input.bindingHints);
       // Stop fences the tracked cell, so a second cell must never replace the one still running.
-      if (activeCells.has(id)) return yield* Effect.fail(fail("pending_limit"));
-      activeCells.set(id, cellId);
+      if (!(yield* activeCells.begin(id, cellId, input.threadId)))
+        return yield* Effect.fail(fail("pending_limit"));
       // A child's WASM memory cannot shrink, so a lower cap needs a fresh child.
       const liveWasmBytes = running.threadWasmBytes(input.threadId);
       if (liveWasmBytes !== undefined && cellLimits.turnWasmBytes < liveWasmBytes)
@@ -600,15 +566,13 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
         limits: cellLimits,
         ...(input.bindingHints ? { bindingHints: input.bindingHints } : {}),
       };
-      const collectCellWindows = (skipEndRead: boolean) => {
-        const finish = options.desktopHost?.finishCell;
-        return finish
-          ? finish(cellContext, {
-              skipEndRead,
-              cellDeadlineMillis: cellDeadlineMillis ?? startedAt + cellLimits.cellWallMs,
-            })
-          : Effect.succeed({});
-      };
+      const collectCellWindows = (skipEndRead: boolean) =>
+        collectWindows(
+          options.desktopHost,
+          cellContext,
+          cellDeadlineMillis ?? startedAt + cellLimits.cellWallMs,
+          skipEndRead,
+        );
       return yield* running
         .runCell(
           {
@@ -628,21 +592,32 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
               collectCellWindows(
                 (cause.endedBy ?? cause.code) === "wall_limit" ||
                   (cause.endedBy ?? cause.code) === "stopped",
+              ).pipe(
+                Effect.mapError((error) =>
+                  cellTerminalError(
+                    error,
+                    cause.journal ?? cause.receipts ?? [],
+                    cellTerminals.get(id),
+                  ),
+                ),
               ),
               (cellWindows) => {
                 failed = {
                   code: cause.endedBy ?? cause.code,
                   receipts: cause.journal ?? cause.receipts ?? [],
                 };
+                const terminal = cellFailureBase(cellTerminals.get(id), cause);
+                const base = terminal ?? fail(cause.code);
                 return Effect.fail({
-                  ...fail(cause.code),
+                  ...base,
                   ...(cause.startupFailed
                     ? { message: "The screen runtime did not start; nothing ran. Retry the cell." }
                     : {}),
                   cellId,
-                  ...cellErrorSafety(
-                    { effectStarted: cause.effectStarted === true },
+                  ...cellTerminalError(
+                    { ...base, effectStarted: cause.effectStarted === true },
                     cause.receipts ?? [],
+                    cellTerminals.get(id),
                   ),
                   ...(cause.receipts === undefined ? {} : { receipts: cause.receipts.slice(-16) }),
                   ...(cause.code === "wall_limit"
@@ -659,23 +634,30 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
           ),
           Effect.flatMap((result) =>
             Effect.flatMap(
-              collectCellWindows(result.status === "deadline" || result.status === "stopped"),
+              collectCellWindows(result.status === "deadline" || result.status === "stopped").pipe(
+                Effect.mapError((error) =>
+                  cellTerminalError(
+                    error,
+                    result.journal.map((entry) => entry.receipt),
+                    cellTerminals.get(id),
+                  ),
+                ),
+              ),
               (cellWindows) => {
                 const notices = cleanupJournal.get(id) ?? [];
                 cleanupJournal.delete(id);
-                const journal = [
-                  ...result.journal,
-                  ...notices.map((entry, index) => ({
-                    ...entry,
-                    sequence: result.journal.length + index + 1,
-                  })),
-                ].slice(-64);
+                const journal = appendCellNotices(result.journal, notices);
                 const classified = cellResultSafety(result);
-                if (classified.error && isScreenRunErrorSchema(classified.error)) {
-                  const receipts = journal.map((entry) => entry.receipt);
-                  failed = { code: classified.error.code, receipts };
+                const receipts = journal.map((entry) => entry.receipt);
+                const merged = completionCellError(
+                  classified.error,
+                  receipts,
+                  cellTerminals.get(id),
+                );
+                if (merged !== undefined) {
+                  failed = { code: merged.code, receipts };
                   return Effect.fail({
-                    ...classified.error,
+                    ...merged,
                     cellId,
                     receipts: receipts.slice(-16),
                     ...cellWindows,
@@ -724,11 +706,16 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
           Effect.ensuring(
             options.primitiveChannel?.cancel(input.runId, input.turnId) ?? Effect.void,
           ),
-          Effect.ensuring(
-            Effect.sync(() => {
-              if (activeCells.get(id) === cellId) activeCells.delete(id);
-            }),
-          ),
+          finishCellResponse({
+            id,
+            cellId,
+            cells: activeCells,
+            terminals: cellTerminals,
+            evidence: cellEvidence,
+            onFinished: () => {
+              if (closingTurns.has(id)) turns.delete(id);
+            },
+          }),
         );
     }),
     cutCell: Effect.fn("ScreenRunService.cutCell")(function* (input: {
@@ -797,7 +784,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
         deliveries.delete(targetId);
       }
       options.desktopHost?.finishTurn(input.runId, input.turnId);
-      turns.delete(turnKey(input.runId, input.turnId));
+      if (activeCells.get(id) === undefined) turns.delete(id);
       const failed = outcomes.filter((outcome) => outcome.status === "failed");
       for (const outcome of failed) recordCleanupFailure(input.runId, input.turnId, outcome.tabId);
       if (cleanup && !Exit.isSuccess(cleanup)) recordCleanupFailure(input.runId, input.turnId);
@@ -816,6 +803,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
       threadId?: string;
       tabId?: string;
       controlId?: string;
+      terminal?: ComputerUseTerminalReason;
     }) {
       fenceNow(input);
     }),
@@ -833,6 +821,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
       threadId?: string;
       tabId?: string;
       controlId?: string;
+      terminal?: ComputerUseTerminalReason;
     }) {
       if (input.kind === "resume" || input.kind === "handBack") return { cleanupFailures: 0 };
       let cleanupFailures = 0;
@@ -841,6 +830,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
         const [runId, turnId] = id.split("\u0000");
         if (!runId || !turnId) continue;
         const cellId = activeCells.get(id);
+        if (!activeCells.matches(id, input.controlId)) continue;
         const cut = cutsCell(input, runId, turnId, cellId);
         // With no cell running, a cutoff ends the turn's hold on the screen; values stay.
         const releases = cut || cellId === undefined;
@@ -860,7 +850,8 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
         )
           continue;
         if (cut && cellId) {
-          yield* bridge.cutCell(runId, turnId, cellId, input.kind);
+          latchCellTerminal(cellTerminals, id, input.terminal);
+          yield* bridge.cutCell(runId, turnId, cellId, input.terminal ?? input.kind);
           if (options.primitiveChannel) yield* options.primitiveChannel.cancel(runId, turnId);
         }
         if (releases)

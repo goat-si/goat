@@ -10,7 +10,68 @@ const work = (id: number) => call(id, "type_text", { pid: 42, window_id: 7, text
 const detail = (answer: { result?: { structuredContent?: Record<string, unknown> } }) =>
   answer.result?.structuredContent?.detail;
 
+it.effect.each(["same control", "different control"])(
+  "a lock reaches only unfinished calls of the %s",
+  (scope) =>
+    Effect.gen(function* () {
+      const gate = yield* Deferred.make<void>();
+      const entered = yield* Deferred.make<void>();
+      const h = yield* threadHarness({
+        reservation: (request) =>
+          request.action === "reserve"
+            ? Deferred.succeed(entered, undefined).pipe(
+                Effect.andThen(Deferred.await(gate)),
+                Effect.as({ status: "refused", detail: "reconnecting" }),
+              )
+            : Effect.succeed({ status: "released" }),
+      });
+      yield* Effect.addFinalizer(() => Deferred.succeed(gate, undefined));
+      yield* h.push(snapshot("A"));
+      yield* h.started;
+      yield* h.applied;
+      yield* h.send(work(975));
+      yield* Deferred.await(entered);
+      yield* h.push({ state: "transport_lost" });
+      yield* h.push({
+        ...snapshot(scope === "same control" ? "A" : "B"),
+        state: "paused",
+        reason: "screen_locked",
+      });
+      yield* Deferred.succeed(gate, undefined);
+      const answer = yield* h.next;
+      if (scope === "same control")
+        assert.include(JSON.stringify(answer), '"code":"screen_locked"');
+      else assert.notInclude(JSON.stringify(answer), '"code":"screen_locked"');
+    }),
+);
+
+it.effect("a request before any control does not inherit a person's stop", () =>
+  Effect.gen(function* () {
+    const h = yield* threadHarness();
+    yield* h.send(work(975));
+    const answer = yield* h.next;
+    assert.notEqual(answer.result?.structuredContent?.code, "stopped_by_person");
+  }),
+);
+
 describe("thread lease proxy across a dropped lease stream", () => {
+  it.effect("reconnect cannot replace a person's stopped control with a retry hint", () =>
+    Effect.gen(function* () {
+      const h = yield* threadHarness();
+      yield* h.push(snapshot("A"));
+      yield* h.started;
+      yield* h.applied;
+      yield* h.push({ state: "control-ended", controlId: "A", reason: "stopped" });
+      yield* h.closed;
+      yield* h.push({ state: "reconnecting" });
+      yield* h.send(work(900));
+      const answer = yield* h.next;
+      assert.include(JSON.stringify(answer), '"code":"stopped_by_person"');
+      assert.notInclude(JSON.stringify(answer), "Try again");
+      yield* h.send(call("goat-proxy:reserved", "list_apps"));
+      assert.include(JSON.stringify(yield* h.next), '"code":"stopped_by_person"');
+    }),
+  );
   it.effect("a call already being admitted when the stream drops never reaches the driver", () =>
     Effect.gen(function* () {
       const gate = yield* Deferred.make<void>();
@@ -193,3 +254,254 @@ describe("thread lease proxy across a dropped lease stream", () => {
       }),
   );
 });
+
+it.effect("round7 duplicate-id producer must not make a known lock retryable", () =>
+  Effect.gen(function* () {
+    const gate = yield* Deferred.make<void>();
+    const entered = yield* Deferred.make<void>();
+    const h = yield* threadHarness({
+      reservation: (request) =>
+        request.action === "reserve"
+          ? Deferred.succeed(entered, undefined).pipe(
+              Effect.andThen(Deferred.await(gate)),
+              Effect.as({ status: "refused", detail: "reconnecting" }),
+            )
+          : Effect.succeed({ status: "released" }),
+    });
+    yield* Effect.addFinalizer(() => Deferred.succeed(gate, undefined));
+    yield* h.push(snapshot("A"));
+    yield* h.started;
+    yield* h.applied;
+    yield* h.send(work(973));
+    yield* Deferred.await(entered);
+    yield* h.push({ ...snapshot("A"), state: "paused", reason: "screen_locked" });
+    yield* h.applied;
+    yield* h.send(work(973));
+    const answer = yield* h.next;
+    assert.equal(answer.result?.structuredContent?.code, "screen_locked");
+  }),
+);
+it.effect("round7 reserved-id producer preserves an already known lock", () =>
+  Effect.gen(function* () {
+    const h = yield* threadHarness();
+    yield* h.push(snapshot("A"));
+    yield* h.started;
+    yield* h.applied;
+    yield* h.push({ ...snapshot("A"), state: "paused", reason: "screen_locked" });
+    yield* h.applied;
+    yield* h.send(call("goat-proxy:reserved-lock", "list_apps"));
+    const answer = yield* h.next;
+    assert.equal(answer.result?.structuredContent?.code, "screen_locked");
+  }),
+);
+it.effect("round7 screen lock stays terminal after reconnect window expires", () =>
+  Effect.gen(function* () {
+    const h = yield* threadHarness();
+    yield* h.push(snapshot("A"));
+    yield* h.started;
+    yield* h.applied;
+    yield* h.push({ ...snapshot("A"), state: "paused", reason: "screen_locked" });
+    yield* h.applied;
+    yield* h.push({ state: "reconnecting" });
+    yield* h.push({ state: "transport_lost" });
+    yield* h.send(work(970));
+    const answer = yield* h.next;
+    assert.equal(answer.result?.structuredContent?.code, "screen_locked");
+  }),
+);
+
+it.effect("a known lock survives a second reconnect after transport loss", () =>
+  Effect.gen(function* () {
+    const h = yield* threadHarness();
+    yield* h.push(snapshot("A"));
+    yield* h.started;
+    yield* h.applied;
+    yield* h.push({ ...snapshot("A"), state: "paused", reason: "screen_locked" });
+    yield* h.applied;
+    yield* h.push({ state: "transport_lost" });
+    yield* h.push({ state: "reconnecting" });
+    yield* h.send(work(974));
+    const answer = yield* h.next;
+    assert.equal(answer.result?.structuredContent?.code, "screen_locked");
+  }),
+);
+it.effect("round7 new control does not inherit predecessor stop while native closure waits", () =>
+  Effect.gen(function* () {
+    const killGate = yield* Deferred.make<void>();
+    const h = yield* threadHarness({ killGate });
+    yield* Effect.addFinalizer(() => Deferred.succeed(killGate, undefined));
+    yield* h.push(snapshot("A"));
+    const a = yield* h.started;
+    yield* h.applied;
+    yield* h.push({ state: "control-ended", controlId: "A", reason: "stopped" });
+    yield* Deferred.await(a.killed);
+    yield* h.push(snapshot("B"));
+    yield* h.send(work(971));
+    const answer = yield* h.next;
+    assert.notEqual(answer.result?.structuredContent?.code, "stopped_by_person");
+  }),
+);
+
+it.effect("round8 admission overlapping missed screen lock stays terminal", () =>
+  Effect.gen(function* () {
+    const gate = yield* Deferred.make<void>();
+    const entered = yield* Deferred.make<void>();
+    const h = yield* threadHarness({
+      reservation: (r) =>
+        r.action === "reserve"
+          ? Deferred.succeed(entered, undefined).pipe(
+              Effect.andThen(Deferred.await(gate)),
+              Effect.as({ status: "admitted", reservationId: "probe" }),
+            )
+          : Effect.succeed(
+              r.action === "validate"
+                ? {
+                    status: "admitted",
+                    reservationId: r.reservationId,
+                    permissions: { validUntilMillis: 3600000 },
+                  }
+                : { status: "released" },
+            ),
+    });
+    yield* Effect.addFinalizer(() => Deferred.succeed(gate, undefined));
+    yield* h.push(snapshot("A"));
+    yield* h.started;
+    yield* h.applied;
+    yield* h.send(work(980));
+    yield* Deferred.await(entered);
+    yield* h.push({ ...snapshot("A"), interruptions: { count: 1, last: "screen_locked" } });
+    yield* h.started;
+    yield* h.applied;
+    yield* Deferred.succeed(gate, undefined);
+    const answer = yield* h.next;
+    assert.equal(answer.result?.structuredContent?.code, "screen_locked");
+  }),
+);
+it.effect("round8 stop after resumed missed lock reports person stop", () =>
+  Effect.gen(function* () {
+    const h = yield* threadHarness();
+    yield* h.push(snapshot("A"));
+    yield* h.started;
+    yield* h.applied;
+    yield* h.push({ state: "reconnecting" });
+    yield* h.push({ ...snapshot("A"), interruptions: { count: 1, last: "screen_locked" } });
+    yield* h.started;
+    yield* h.applied;
+    yield* h.push({ state: "control-ended", controlId: "A", reason: "stopped" });
+    yield* h.closed;
+    yield* h.send(work(981));
+    const answer = yield* h.next;
+    assert.equal(answer.result?.structuredContent?.code, "stopped_by_person");
+  }),
+);
+
+it.effect.each(["idle", "stop", "narrow"])(
+  "round9 an old admission retains a missed lock through successor %s",
+  (after) =>
+    Effect.gen(function* () {
+      const gate = yield* Deferred.make<void>();
+      const entered = yield* Deferred.make<void>();
+      const h = yield* threadHarness({
+        reservation: (r) =>
+          r.action === "reserve"
+            ? Deferred.succeed(entered, undefined).pipe(
+                Effect.andThen(Deferred.await(gate)),
+                Effect.as({ status: "admitted", reservationId: "probe-r9" }),
+              )
+            : Effect.succeed(
+                r.action === "validate"
+                  ? {
+                      status: "admitted",
+                      reservationId: r.reservationId,
+                      permissions: { validUntilMillis: 3600000 },
+                    }
+                  : { status: "released" },
+              ),
+      });
+      yield* Effect.addFinalizer(() => Deferred.succeed(gate, undefined));
+      yield* h.push(snapshot("A"));
+      yield* h.started;
+      yield* h.applied;
+      yield* h.send(work(990));
+      yield* Deferred.await(entered);
+      yield* h.push({ ...snapshot("A"), interruptions: { count: 1, last: "screen_locked" } });
+      yield* h.started;
+      yield* h.applied;
+      if (after === "idle") {
+        yield* h.push({ ...snapshot("A"), state: "idle" });
+        yield* h.applied;
+      } else if (after === "narrow") {
+        yield* h.push({
+          ...snapshot("A"),
+          apps: [],
+          interruptions: { count: 1, last: "screen_locked" },
+        });
+        yield* h.started;
+        yield* h.applied;
+      } else {
+        yield* h.push({ state: "control-ended", controlId: "A", reason: "stopped" });
+        yield* h.applied;
+      }
+      yield* Deferred.succeed(gate, undefined);
+      const answer = yield* h.next;
+      assert.equal(
+        answer.result?.structuredContent?.code,
+        after === "stop" ? "stopped_by_person" : "screen_locked",
+      );
+      assert.include(JSON.stringify(answer), '"retryClass":"never"');
+    }),
+);
+
+it.effect.each([
+  "current context then stop",
+  "transport lost then stop",
+  "replacement then stop",
+  "other control then stop",
+])("Stop reaches an unfinished call after %s", (after) =>
+  Effect.gen(function* () {
+    const gate = yield* Deferred.make<void>();
+    const entered = yield* Deferred.make<void>();
+    const h = yield* threadHarness({
+      reservation: (r) =>
+        r.action === "reserve"
+          ? Deferred.succeed(entered, undefined).pipe(
+              Effect.andThen(Deferred.await(gate)),
+              Effect.as({ status: "admitted", reservationId: "probe-r9" }),
+            )
+          : Effect.succeed(
+              r.action === "validate"
+                ? {
+                    status: "admitted",
+                    reservationId: r.reservationId,
+                    permissions: { validUntilMillis: 3600000 },
+                  }
+                : { status: "released" },
+            ),
+    });
+    yield* Effect.addFinalizer(() => Deferred.succeed(gate, undefined));
+    yield* h.push(snapshot("A"));
+    yield* h.started;
+    yield* h.applied;
+    yield* h.send(work(990));
+    yield* Deferred.await(entered);
+    yield* h.push({ ...snapshot("A"), interruptions: { count: 1, last: "screen_locked" } });
+    yield* h.started;
+    yield* h.applied;
+    if (after !== "current context then stop") yield* h.push({ state: "transport_lost" });
+    if (after === "replacement then stop") {
+      yield* h.push(snapshot("A"));
+    }
+    if (after === "other control then stop") yield* h.push(snapshot("B"));
+    yield* h.push({ state: "control-ended", controlId: "A", reason: "stopped" });
+    yield* Deferred.succeed(gate, undefined);
+    const answer = yield* h.next;
+    assert.equal(answer.result?.structuredContent?.code, "stopped_by_person");
+    assert.include(JSON.stringify(answer), '"retryClass":"never"');
+    if (after === "other control then stop") {
+      const b = yield* h.started;
+      yield* h.applied;
+      yield* h.send(work(991));
+      assert.equal(JSON.parse(yield* Queue.take(b.sent)).id, 991);
+    }
+  }),
+);

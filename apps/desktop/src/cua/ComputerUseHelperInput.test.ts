@@ -7,13 +7,12 @@ import { assert, describe, it } from "@effect/vitest";
 import { helperDir, macWithSwift, runSwiftChecks } from "./ComputerUseHelperSwift.testkit.ts";
 
 describe("computer use helper input reports (Swift)", () => {
-  it("reads nothing of an input event but its type and driver eventSourceUserData tag: no position, button, key or other field", () => {
+  it("reads only the key code and driver tag needed to detect Escape", () => {
     const source = NodeFS.readFileSync(NodePath.join(helperDir, "HumanInput.swift"), "utf8");
     assert.match(source, /event\.getIntegerValueField\(\.eventSourceUserData\)/);
-    const withoutAllowedUserDataRead = source.replaceAll(
-      "event.getIntegerValueField(.eventSourceUserData)",
-      "",
-    );
+    const withoutAllowedUserDataRead = source
+      .replaceAll("event.getIntegerValueField(.eventSourceUserData)", "")
+      .replaceAll("event.getIntegerValueField(.keyboardEventKeycode)", "");
     // Every CGEvent accessor that could reveal where or what a person clicked or typed.
     for (const accessor of [
       /\.location\b/,

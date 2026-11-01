@@ -157,6 +157,11 @@ const makeAgentCursorReports = Effect.fn("agentCursorReports.make")(function* (
  * and waits until the current helper (when it draws one) has drawn it. The agent can turn the
  * on-screen cursor off; hides still reach the helper, which interrupts its work on a pause or end.
  */
+const hasPost = (
+  draw: (command: ComputerUseOverlayCommand) => Effect.Effect<void>,
+): draw is typeof draw & { readonly post: typeof draw } =>
+  "post" in draw && typeof draw.post === "function";
+
 export const makeOverlayDrawer = Effect.fn("agentCursorReports.makeOverlayDrawer")(function* (
   send: ((cursor: ComputerUseAgentCursor | null) => Effect.Effect<boolean>) | undefined,
   sink: () => ((command: ComputerUseOverlayCommand) => Effect.Effect<void>) | undefined,
@@ -190,6 +195,12 @@ export const makeOverlayDrawer = Effect.fn("agentCursorReports.makeOverlayDrawer
           else yield* draw(toDraw);
         }
       }
+    }),
+    screenLocked: Effect.fn("ComputerUseLeaseProxy.overlayScreenLocked")(function* () {
+      if (!enabled || state.shown?.op !== "show") return;
+      const draw = sink();
+      if (draw !== undefined && hasPost(draw))
+        yield* draw.post({ op: "status", message: "screen locked" });
     }),
     view: () => ({ enabled, visible: enabled && state.shown?.op === "show" }),
     /** Whether the next draw of this scoped cursor event would take it over the current owner. */

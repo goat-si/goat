@@ -23,6 +23,7 @@ import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
 import {
   DriverError,
   NotStarted,
+  UnknownOutcome,
   call as bindCallOf,
   context,
   fixture,
@@ -395,6 +396,26 @@ const launchCall = (args: Record<string, unknown>): ScreenHostCall => ({
   args: [{ bundle_id: "org.example.Editor", bind: true, ...args }],
   deadlineMillis: 60_000,
 });
+
+it.effect.each(["stopped_by_person", "screen_locked"] as const)(
+  "a %s during launch verification preserves the terminal guidance",
+  (code) =>
+    Effect.gen(function* () {
+      const { host } = fixture({
+        launch_app: launched([]),
+        list_windows: new UnknownOutcome({ code }, "The person stopped computer use."),
+      });
+      const pending = yield* host
+        .invoke(launchCall({}), context)
+        .pipe(Effect.flip, Effect.forkChild);
+      yield* TestClock.adjust("1 second");
+      const error = yield* Fiber.join(pending);
+      expect(error.code).toBe(code);
+      expect(error.safety?.possibleCommit).toBe(true);
+      expect(error.safety?.retryClass).toBe("never");
+      expect(error.nextStep).not.toContain("screen.discover()");
+    }),
+);
 
 it.effect("a launch waits for the first window on the driver that launched it", () =>
   Effect.gen(function* () {
