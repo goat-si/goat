@@ -66,6 +66,17 @@ export const driverError = (reply: ComputerUsePrimitiveReply): ScreenRunError | 
   const evidence = driverEvidence(object(object(reply.result)?.structuredContent));
   return error === undefined || evidence.length === 0 ? error : { ...error, evidence };
 };
+export const driverFailureNextStep = (
+  reply: ComputerUsePrimitiveReply,
+  error: ScreenRunError,
+  possibleCommit: boolean,
+) => {
+  const structured = object(object(reply.result)?.structuredContent);
+  const code = string(object(structured?.refusal)?.code) ?? string(structured?.code);
+  return possibleCommit && (code === "desktop_busy" || code === "desktop_lease_unavailable")
+    ? "Earlier input may have landed. Observe before acting; never resend it."
+    : error.nextStep;
+};
 const classifyDriverError = (reply: ComputerUsePrimitiveReply): ScreenRunError | undefined => {
   if (reply.status === "unknown_outcome")
     return { ...fail("unknown_outcome"), effectStarted: true };
@@ -122,6 +133,16 @@ const classifyDriverError = (reply: ComputerUsePrimitiveReply): ScreenRunError |
       : structured.effect === "refused")
   ) {
     const code = string(object(structured.refusal)?.code) ?? string(structured.code);
+    if (code === "desktop_busy" || code === "desktop_lease_unavailable")
+      return {
+        ...fail(
+          "unavailable",
+          code === "desktop_busy"
+            ? "Another driver session is using the desktop input; nothing was sent. Wait a moment, observe again, then act."
+            : `${said ?? "The desktop input lease could not be checked"}; nothing was sent. Wait a moment, observe again, then act.`,
+        ),
+        ...refusalOf(structured),
+      };
     if (
       code === "window_geometry_changed" ||
       code === "capture_frame_mismatch" ||

@@ -43,7 +43,7 @@ const run = (selectText: unknown, call: string) => {
         await app.observe();
         screen.debug = true;
         try { return { done: await ${call} }; }
-        catch (e) { return { caught: { code: e.code, nothingSent: e.nothingSent, message: e.message, detail: e.detail, possibleCommit: e.safety?.possibleCommit } }; }`,
+        catch (e) { return { caught: { code: e.code, nothingSent: e.nothingSent, message: e.message, detail: e.detail, possibleCommit: e.safety?.possibleCommit, effectStarted: e.effectStarted, nextStep: e.nextStep } }; }`,
     });
     return { result, sent: base.sent.filter((each) => each.tool === "select_text") };
   }).pipe(
@@ -217,5 +217,42 @@ it.live("an answer that may have changed the selection is never called unsupport
     expect(marked.result.value).toMatchObject({
       caught: { code: "unknown_outcome", nothingSent: false, possibleCommit: true },
     });
+  }),
+);
+
+it.live("a busy selectText is refused without sending input", () =>
+  Effect.gen(function* () {
+    const { result, sent } = yield* run(
+      new DriverError({
+        effect: "refused",
+        code: "desktop_busy",
+        status: "refused",
+        refusal: { code: "desktop_busy", message: "desktop input is busy" },
+      }),
+      "app.selectText(1, 'world')",
+    );
+    expect(result.value).toMatchObject({
+      caught: { code: "unavailable", nothingSent: true, possibleCommit: false },
+    });
+    expect(sent).toHaveLength(1);
+  }),
+);
+
+it.live("busy selectText with earlier possible commit never says nothing was sent", () =>
+  Effect.gen(function* () {
+    const { result } = yield* run(
+      new DriverError({
+        effect: "refused",
+        code: "desktop_busy",
+        status: "refused",
+        refusal: { code: "desktop_busy", message: "busy" },
+        safety: { possibleCommit: true },
+      }),
+      "app.selectText(1, 'world')",
+    );
+    const caught = (result.value as { caught: { effectStarted: boolean; nextStep: string } })
+      .caught;
+    expect(caught.effectStarted).toBe(true);
+    expect(caught.nextStep).not.toMatch(/nothing was sent/i);
   }),
 );
