@@ -34,8 +34,8 @@ it("a cell whose earlier write committed may have committed as a whole, so it is
   expect(
     cellResultSafety(result([receipt("observe", true), receipt("click", false)])).error,
   ).not.toHaveProperty("safety");
-  // Reading a tab's status or page text commits nothing either.
+  // Read-only cells explicitly report that no write can have committed.
   expect(
     cellResultSafety(result([receipt("tab_status", true), receipt("read_page", true)])).error,
-  ).not.toHaveProperty("safety");
+  ).toMatchObject({ safety: { possibleCommit: false, code: "read_indeterminate" } });
 });
