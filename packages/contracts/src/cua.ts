@@ -1,4 +1,6 @@
 import * as Schema from "effect/Schema";
+import { ComputerUseLeaseCallOutcome } from "./computerUseLeaseHistory.ts";
+export { ComputerUseLeaseCallOutcome } from "./computerUseLeaseHistory.ts";
 import * as SchemaAST from "effect/SchemaAST";
 import * as SchemaParser from "effect/SchemaParser";
 import * as SchemaTransformation from "effect/SchemaTransformation";
@@ -258,11 +260,7 @@ export const ComputerUseDriverEndReason = Schema.Literals([
 ]);
 export type ComputerUseDriverEndReason = typeof ComputerUseDriverEndReason.Type;
 
-/**
- * Proxy -> server: the driver this connection started ended without the proxy stopping it, or
- * answered its first handshake (`ended: false`). The server counts the host's consecutive endings
- * so agents and Settings stop calling computer use available while every connection fails.
- */
+// The host counts unexpected driver endings until a successful first handshake.
 export const ComputerUseLeaseDriverEnded = Schema.Struct({
   // A fact about the host's helper, not one control: thread-mode proxies report it as well.
   driverEnded: Schema.Union([
@@ -288,6 +286,7 @@ export const ComputerUseLeaseScreenLocked = Schema.Struct({
 export const ComputerUseLeaseReport = Schema.Union([
   ComputerUseLeasePersonStop,
   ComputerUseLeaseScreenLocked,
+  ComputerUseLeaseCallOutcome,
   ComputerUseLeaseTarget,
   ComputerUseLeaseHumanInput,
   ComputerUseLeaseAgentInput,

@@ -79,6 +79,7 @@ export const terminalSink = (
   terminal: (() => ComputerUseTerminalReason | undefined) & { readonly release?: () => void },
   dispatched: () => boolean,
 ): ReplySink => ({
+  ...sink,
   terminal,
   ...(terminal.release === undefined ? {} : { release: terminal.release }),
   answer: (line, status, context) =>

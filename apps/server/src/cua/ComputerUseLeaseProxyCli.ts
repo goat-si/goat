@@ -513,6 +513,9 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
           true,
         ),
       ),
+    onCallOutcome: (outcome: import("@goat/contracts").ComputerUseLeaseCallOutcome) =>
+      Effect.promise(() => report(url, authorization, outcome)),
+
     onAgentInput: (
       agentInput: Parameters<NonNullable<LeaseProxyOptions<never, never>["onAgentInput"]>>[0],
     ) => Effect.promise(() => report(url, authorization, { controlId, agentInput })),

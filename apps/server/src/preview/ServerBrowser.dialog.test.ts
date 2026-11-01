@@ -22,6 +22,7 @@ import * as Manager from "./Manager.ts";
 import * as PreviewBrowser from "./PreviewBrowser.ts";
 import { unusedPreviewBrowser } from "./PreviewBrowser.testkit.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as PreviewAgentActivity from "./PreviewAgentActivity.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -116,6 +117,7 @@ const scope = {
 const layer = ServerBrowser.layer.pipe(
   Layer.provideMerge(
     Layer.mergeAll(
+      SqlitePersistence.layerMemory,
       Broker.layer,
       Manager.layer,
       Layer.succeed(ServerEnvironment.ServerEnvironment, {

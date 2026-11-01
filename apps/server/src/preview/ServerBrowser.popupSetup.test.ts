@@ -1,3 +1,4 @@
+import * as SqlitePersistence from "../persistence/Sqlite.ts";
 // @effect-diagnostics nodeBuiltinImport:off - local HTTP fixture for Chromium navigation.
 import * as NodeHttp from "node:http";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -99,6 +100,7 @@ const scope = {
 const layer = ServerBrowser.layer.pipe(
   Layer.provideMerge(
     Layer.mergeAll(
+      SqlitePersistence.layerMemory,
       ServerSettings.layerTest(),
       Manager.layer,
       Broker.layer,

@@ -38,7 +38,13 @@ import {
 
 type Reports<EU, ED> = Pick<
   LeaseProxyOptions<EU, ED>,
-  "onTarget" | "onCursor" | "onHumanInput" | "onAgentInput" | "onPersonStop" | "onScreenLocked"
+  | "onTarget"
+  | "onCursor"
+  | "onHumanInput"
+  | "onAgentInput"
+  | "onPersonStop"
+  | "onScreenLocked"
+  | "onCallOutcome"
 >;
 type ThreadProxyOptions<EU, ED> = Omit<
   LeaseProxyOptions<EU, ED>,

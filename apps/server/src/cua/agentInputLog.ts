@@ -40,6 +40,9 @@ const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
   "set_agent_cursor_theme",
 ]);
 
+export const isHistoryRead = (tool: string, args?: unknown) =>
+  READ_ONLY_TOOLS.has(tool) || readsMenuBarExtras(tool, args);
+
 /** Act through accessibility, window management or a signal; no keyboard or pointer events. */
 const SEMANTIC_TOOLS: ReadonlySet<string> = new Set([
   "invoke_menu",

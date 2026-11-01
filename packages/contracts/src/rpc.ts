@@ -1,3 +1,4 @@
+import { WsComputerUseHistoryRpc, WsComputerUseStatusChangesRpc } from "./computerUseHistoryRpc.ts";
 import {
   HandoffReadInput,
   HandoffRespondInput,
@@ -629,6 +630,7 @@ export const WS_METHODS = {
   serverProbe: "server.probe",
   serverCheckComputerUse: "server.checkComputerUse",
   computerUseStatusChanges: "computerUse.statusChanges",
+  computerUseHistory: "computerUse.history",
   computerUseStop: "computerUse.stop",
   computerUseStopAll: "computerUse.stopAll",
   computerUseRemoveAllowedApp: "computerUse.removeAllowedApp",
@@ -819,18 +821,6 @@ const WsServerCheckComputerUseRpc = Rpc.make(WS_METHODS.serverCheckComputerUse, 
   error: EnvironmentAuthorizationError,
 });
 
-const WsComputerUseStatusChangesRpc = Rpc.make(WS_METHODS.computerUseStatusChanges, {
-  payload: Schema.Struct({}),
-  success: Schema.Struct({ revision: NonNegativeInt }),
-  error: EnvironmentAuthorizationError,
-  stream: true,
-});
-
-/**
- * The apps running on this host that computer use could reach, with names and icons, for the
- * composer's @ list and the icons beside an agent's calls. Empty when computer use is off or the
- * host cannot list them; asking grants nothing.
- */
 const WsComputerUseAppsRpc = Rpc.make(WS_METHODS.computerUseApps, {
   payload: Schema.Struct({}),
   success: Schema.Struct({ apps: Schema.Array(ComputerUseApp) }),
@@ -2505,6 +2495,7 @@ export const WsCoreServerRpcGroup = RpcGroup.make(
   WsServerProbeRpc,
   WsServerCheckComputerUseRpc,
   WsComputerUseStatusChangesRpc,
+  WsComputerUseHistoryRpc,
   WsComputerUseStopRpc,
   WsComputerUseStopAllRpc,
   WsComputerUseRemoveAllowedAppRpc,

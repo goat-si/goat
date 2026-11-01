@@ -1,3 +1,4 @@
+import { makeActionChannel } from "./actionChannel.ts";
 import { it } from "@effect/vitest";
 import {
   SecretRef,
@@ -765,6 +766,22 @@ it.effect("a blocked cut while resolving a secret target stops further CDP comma
     });
   }),
 );
+it.live("never permits history text retention on a secret-fill target", () => {
+  const { tab } = makeTab();
+  return withFill(async (fill) => {
+    await fill.fill(tab, fillRequest, later(), record, checkBlocked);
+    const channel = makeActionChannel({
+      cdp: tab.cdp,
+      page: tab.page,
+      signal: new AbortController().signal,
+      controlGeneration: () => {},
+      isFenced: () => false,
+      blockedFrame: () => false,
+    });
+    expect(await fill.historyField(tab, threadId, channel)).toBeUndefined();
+    expect(fill.historySafe(tab, threadId)).toBe(false);
+  });
+});
 
 it.live("a focused non-password field refuses before consuming or typing the secret", () => {
   const { tab, field } = makeTab({ notPassword: true });

@@ -39,6 +39,10 @@
       "types": "./src/cloudMachines.ts",
       "default": "./src/cloudMachines.ts"
     },
+    "./computer-use-history": {
+      "types": "./src/computerUseHistory.ts",
+      "default": "./src/computerUseHistory.ts"
+    },
     "./computer-use-linux-setup": {
       "types": "./src/computerUseLinuxSetup.ts",
       "default": "./src/computerUseLinuxSetup.ts"
@@ -318,6 +322,10 @@
     "./state/deviceHubAccess": {
       "types": "./src/state/deviceHubAccess.ts",
       "default": "./src/state/deviceHubAccess.ts"
+    },
+    "./state/computer-use-history": {
+      "types": "./src/state/computerUseHistory.ts",
+      "default": "./src/state/computerUseHistory.ts"
     },
     "./state/preview": {
       "types": "./src/state/preview.ts",

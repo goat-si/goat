@@ -1,5 +1,6 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import {
   type ComputerUsePauseReason,
   type ComputerUseCallReservation,
@@ -31,6 +32,11 @@ import * as ComputerUsePrimitiveChannel from "./ComputerUsePrimitiveChannel.ts";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import type { McpThreadInvocationScope } from "../mcp/McpInvocationContext.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import { runMigrations } from "../persistence/Migrations.ts";
+
+const historyDatabase = Layer.effectDiscard(runMigrations()).pipe(
+  Layer.provideMerge(NodeSqliteClient.layer({ filename: ":memory:" })),
+);
 
 const threadId = ThreadId.make("thread:bot");
 const controlId = "control:one";
@@ -42,6 +48,7 @@ const fixture = Effect.fnUntraced(function* () {
   const paused = yield* Ref.make<ComputerUsePauseReason | undefined>(undefined);
   const signals = yield* PubSub.unbounded<void>();
   const leases = ComputerUseLeases.ComputerUseLeases.of({
+    ownsControl: () => Effect.die("unused"),
     blocked: () => Effect.die("unused"),
     blockedTurns: Effect.die("unused"),
     active: () => Effect.succeed(Option.none()),
@@ -772,6 +779,7 @@ describe("computer use lease route", () => {
     ([movePointer, refused]) =>
       Effect.gen(function* () {
         const received: Array<ComputerUseCallReservation> = [];
+        let nextTicket = 0;
         const invocation: McpThreadInvocationScope = {
           environmentId: EnvironmentId.make("environment:test"),
           capabilities: new Set<never>(),
@@ -791,6 +799,7 @@ describe("computer use lease route", () => {
                 ...(movePointer === undefined ? {} : { cuaMovePointer: movePointer }),
                 cuaDeniedApps: ["com.example.Blocked"],
               }),
+              historyDatabase,
               Layer.mock(McpSessionRegistry.McpSessionRegistry)({
                 resolve: (token) => Effect.succeed(token === "fixture" ? invocation : undefined),
               }),
@@ -801,7 +810,11 @@ describe("computer use lease route", () => {
                 callReservation: (_owner, call) =>
                   Effect.sync(() => {
                     received.push(call);
-                    return { status: "admitted", reservationId: "reservation:test" } as const;
+                    return {
+                      status: "admitted",
+                      reservationId:
+                        ++nextTicket === 1 ? "reservation:test" : `reservation:test:${nextTicket}`,
+                    } as const;
                   }),
               }),
             ),

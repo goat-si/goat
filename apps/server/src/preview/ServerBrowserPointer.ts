@@ -1,4 +1,4 @@
-// @effect-diagnostics globalDate:off - Playwright waits run outside the Effect runtime.
+// @effect-diagnostics globalDate:off globalTimers:off - Playwright waits run outside the Effect runtime.
 import type { Page } from "playwright-core";
 import { abortable, actionCall } from "./actionReadiness.ts";
 
@@ -62,3 +62,8 @@ export const pointBefore = async <Input extends TargetInput>(
     await pointer(point, "move");
   return { ...input, timeoutMs: Math.max(1, ends - Date.now()) };
 };
+
+export const sleepUntil = (deadline: number) =>
+  new Promise<void>((resolve) => setTimeout(resolve, Math.max(0, deadline - Date.now())));
+
+export const tabKey = (threadId: string, tabId: string) => `${threadId}\u0000${tabId}`;

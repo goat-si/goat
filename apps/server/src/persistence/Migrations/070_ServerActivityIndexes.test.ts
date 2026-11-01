@@ -40,15 +40,17 @@ it.effect("upgrades schema 61 and maintains indexed background roster flags", ()
       name: string;
     }>`SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE '%_activity_idx'`;
     assert.strictEqual(indexes.length, 6);
-    yield* runMigrations();
-    assert.deepStrictEqual(yield* runMigrations(), []);
+    yield* runMigrations({ toMigrationInclusive: 70 });
+    assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 70 }), []);
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
 
 it.effect(
-  "migrates the packaged launch fixture through every GOAT migration and preserves its thread",
+  "migrates the packaged launch fixture through the manifest head and preserves its thread",
   () =>
     Effect.gen(function* () {
+      const latestMigration = migrationManifest.at(-1)?.[0];
+      if (latestMigration === undefined) return yield* Effect.die("Migration manifest is empty");
       const fs = yield* FileSystem.FileSystem;
       const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-release-fixture-" });
       const dbPath = `${directory}/statev2.sqlite`;
@@ -61,10 +63,10 @@ it.effect(
       yield* Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
         assert.deepStrictEqual(
-          yield* runMigrations(),
+          yield* runMigrations({ toMigrationInclusive: latestMigration }),
           migrationManifest.filter(([id]) => id > 69),
         );
-        assert.deepStrictEqual(yield* runMigrations(), []);
+        assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: latestMigration }), []);
         const recorded = yield* sql<{ migration_id: number; name: string }>`
         SELECT migration_id, name FROM effect_sql_migrations ORDER BY migration_id`;
         assert.deepStrictEqual(

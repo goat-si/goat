@@ -4,9 +4,17 @@
  *
  * @module ComputerUseRpcHandlers
  */
-import { type AuthSessionId, type ThreadId, WS_METHODS } from "@goat/contracts";
+import {
+  type AuthSessionId,
+  type ThreadId,
+  type ComputerUseHistoryInput,
+  ComputerUseHistoryError,
+  WS_METHODS,
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as SqlClient from "effect/sql/SqlClient";
+import { makeComputerUseHistory } from "./ComputerUseHistory.ts";
 
 import * as Handoffs from "../handoffs/Handoffs.ts";
 import { BrowserOriginGrants } from "../preview/BrowserOriginGrantsLayer.ts";
@@ -121,6 +129,7 @@ export const stopComputerUseFromHelper = Effect.fn("ComputerUse.stopFromHelper")
 export const makeComputerUseRpcHandlers = Effect.fn("ComputerUse.rpcHandlers")(function* (
   sessionId: AuthSessionId,
 ) {
+  const historySql = yield* Effect.serviceOption(SqlClient.SqlClient);
   const driver = yield* Effect.serviceOption(CuaDriver.CuaDriver);
   const leases = yield* Effect.serviceOption(ComputerUseLeases.ComputerUseLeases);
   const handoffs = yield* Handoffs.Handoffs;
@@ -131,6 +140,30 @@ export const makeComputerUseRpcHandlers = Effect.fn("ComputerUse.rpcHandlers")(f
   );
 
   return {
+    [WS_METHODS.computerUseHistory]: (input: ComputerUseHistoryInput) => {
+      if (Option.isNone(historySql))
+        return Effect.fail(
+          new ComputerUseHistoryError({ message: "History storage is unavailable." }),
+        );
+      return makeComputerUseHistory.pipe(
+        Effect.provideService(SqlClient.SqlClient, historySql.value),
+        Effect.flatMap((history) => history.listForThread(input.threadId, input)),
+        Effect.map((entries) => {
+          const last = entries.at(-1);
+          return {
+            entries,
+            nextCursor:
+              last !== undefined && entries.length === (input.limit ?? 100)
+                ? { recordedAt: last.recordedAt, id: last.id, orderSeq: last.orderSeq }
+                : null,
+          };
+        }),
+        Effect.mapError(
+          (cause) =>
+            new ComputerUseHistoryError({ message: "Could not read computer use history.", cause }),
+        ),
+      );
+    },
     [WS_METHODS.computerUseStatusChanges]: (_input: {}) =>
       ComputerUseStatusChanges.statusChanges(receiver, connections),
     [WS_METHODS.serverCheckComputerUse]: (_input: {}) =>

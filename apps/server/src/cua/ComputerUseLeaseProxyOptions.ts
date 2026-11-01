@@ -7,6 +7,7 @@
 // @effect-diagnostics preferSchemaOverJson:off -- Driver JSON-RPC responses remain opaque at this boundary.
 import type {
   ComputerUseAgentCursor,
+  ComputerUseLeaseCallOutcome,
   ComputerUseCallAdmission,
   ComputerUseCallReservation,
   ComputerUseHumanInputSource,
@@ -98,6 +99,10 @@ export interface ReplySink {
     | import("./ComputerUseTerminal.ts").ComputerUseTerminalReason
     | undefined) & { readonly release?: () => void };
   readonly release?: () => void;
+  readonly captureTarget?: () => void;
+  readonly setReservation?: (reservationId: string) => void;
+  readonly recordOutcome?: (line: string, status?: "unknown_outcome") => Effect.Effect<void>;
+
   readonly answer: (
     line: string,
     status?: ComputerUsePrimitiveReply["status"],
@@ -530,6 +535,7 @@ export interface LeaseProxyOptions<EU, ED> {
   readonly onPersonStop?: () => Effect.Effect<boolean>;
   readonly onScreenLocked?: () => Effect.Effect<unknown>;
   readonly onAgentInput?: (report: AgentInputReport) => Effect.Effect<unknown>;
+  readonly onCallOutcome?: (report: ComputerUseLeaseCallOutcome) => Effect.Effect<unknown>;
 }
 
 export const reservedProviderRequest = (
