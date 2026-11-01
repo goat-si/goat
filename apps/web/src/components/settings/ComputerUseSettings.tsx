@@ -23,6 +23,10 @@ export function useComputerUseHost(environmentId: EnvironmentId, local: boolean)
     environmentId,
     (settings) => settings.disabledBuiltInSkills,
   );
+  const strictInputGuards = useEnvironmentSettings(
+    environmentId,
+    (settings) => settings.cuaStrictInputGuards,
+  );
   const movePointer = useEnvironmentSettings(environmentId, (settings) => settings.cuaMovePointer);
   const allowedApps = useEnvironmentSettings(environmentId, (settings) => settings.cuaAllowedApps);
   const canConfigure = useAtomValue(serverEnvironment.updateSettings.permissionAtom(environmentId));
@@ -80,6 +84,7 @@ export function useComputerUseHost(environmentId: EnvironmentId, local: boolean)
     enabled,
     disabledSkills,
     movePointer,
+    strictInputGuards,
     allowedApps,
     canConfigure,
     status: query.data,
@@ -185,6 +190,7 @@ function ComputerUseControls({
         localCheck={host.localCheck}
         disabledSkills={host.disabledSkills}
         movePointer={host.movePointer}
+        strictInputGuards={host.strictInputGuards}
         save={host.save}
         bridge={{
           checkGrants,

@@ -33,11 +33,13 @@ const ADVANCED_TARGETS: ReadonlySet<string> = new Set([
   "computer-use-skill",
   "screen-code-skill",
   "computer-use-move-pointer",
+  "computer-use-strict-input-guards",
 ]);
 
 export interface ComputerUseSettingsPatch {
   readonly enableCua?: boolean;
   readonly disabledBuiltInSkills?: ReadonlyArray<string>;
+  readonly cuaStrictInputGuards?: boolean;
   readonly cuaMovePointer?: "never" | "allowed";
   readonly cuaAllowedApps?: ReadonlyArray<string>;
 }
@@ -199,6 +201,7 @@ export function ComputerUsePanel({
   localCheck,
   disabledSkills,
   movePointer,
+  strictInputGuards,
   save,
   bridge,
 }: {
@@ -214,6 +217,7 @@ export function ComputerUsePanel({
   localCheck: boolean;
   disabledSkills: ReadonlyArray<string>;
   movePointer: "never" | "allowed";
+  strictInputGuards: boolean;
   save: (patch: ComputerUseSettingsPatch) => Promise<string | null>;
   bridge: Omit<ComputerUseSetupActions, "save"> & {
     readonly reveal?: (() => Promise<void>) | undefined;
@@ -341,6 +345,15 @@ export function ComputerUsePanel({
               checked={movePointer === "allowed"}
               canConfigure={canConfigure}
               onChange={(checked) => save({ cuaMovePointer: checked ? "allowed" : "never" })}
+            />
+            <SettingSwitchRow
+              {...searchableSetting("computer-use-strict-input-guards")}
+              settingKey="cuaStrictInputGuards"
+              description="Require additional checks and confirmations for computer input."
+              label="Strict input guards"
+              checked={strictInputGuards}
+              canConfigure={canConfigure}
+              onChange={(checked) => save({ cuaStrictInputGuards: checked })}
             />
             <BuiltInSkillRows
               disabledSkills={disabledSkills}
@@ -472,7 +485,7 @@ function SettingSwitchRow({
 }: {
   id: string;
   title: string;
-  settingKey: "disabledBuiltInSkills" | "cuaMovePointer";
+  settingKey: "disabledBuiltInSkills" | "cuaMovePointer" | "cuaStrictInputGuards";
   description: string;
   label: string;
   checked: boolean;

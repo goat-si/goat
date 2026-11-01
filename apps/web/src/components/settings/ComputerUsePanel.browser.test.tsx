@@ -129,6 +129,7 @@ function Harness({ f }: { f: Fixture }) {
       localCheck={f.localCheck}
       disabledSkills={f.disabledSkills}
       movePointer={f.movePointer}
+      strictInputGuards={false}
       save={f.save}
       bridge={{ checkGrants: f.checkGrants, verify: f.verify, openGuide: f.openGuide }}
     />

@@ -627,6 +627,14 @@ function ServerSettingsDetail(props: {
                       disabled={disabledFor("enableCua")}
                       onValueChange={(value) => write({ enableCua: value })}
                     />
+                    <SettingsSwitchRow
+                      icon="desktopcomputer"
+                      label="Strict input guards"
+                      subtitle="Require additional checks and confirmations for computer input."
+                      value={uniform("cuaStrictInputGuards")}
+                      disabled={disabledFor("cuaStrictInputGuards")}
+                      onValueChange={(value) => write({ cuaStrictInputGuards: value })}
+                    />
                     {!projectSelected ? (
                       <AllowedApps
                         targets={displayTargets}
