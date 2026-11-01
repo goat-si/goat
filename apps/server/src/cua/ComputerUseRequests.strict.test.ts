@@ -1,6 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import { CommandId, MessageId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 
 import { threadId, withHarness } from "../handoffs/Handoffs.testkit.ts";
 import { sessionId, supported, withRequests } from "./ComputerUseRequests.testkit.ts";
@@ -32,4 +33,30 @@ it.effect("without strict input guards a named protected app follows the person'
       );
     }),
   ),
+);
+
+// Hosts list apps without the protected ones; that listing is not a refusal of GOAT's own.
+it.effect(
+  "without strict input guards a protected app the listing leaves out still goes to approval",
+  () =>
+    withHarness(({ orchestrator }) =>
+      withRequests(
+        orchestrator,
+        supported,
+        ({ request }) =>
+          Effect.gen(function* () {
+            for (const app of [
+              "com.1password.1password",
+              "com.apple.keychainaccess",
+              "com.apple.systempreferences",
+            ])
+              assert.equal((yield* request({ apps: [app] })).kind, "needs_human");
+            assert.equal((yield* request({ apps: ["com.example.Missing"] })).kind, "refused");
+          }),
+        undefined,
+        undefined,
+        undefined,
+        Option.some(["com.example.Editor"]),
+      ),
+    ),
 );
