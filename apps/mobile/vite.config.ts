@@ -5,6 +5,7 @@ import "vite-plus/test/config";
 
 const reactTests = [
   "src/features/pull-requests/usePullRequestList.test.tsx",
+  "src/features/threads/new-task-flow-provider.test.tsx",
   "src/features/threads/git/GitBranchesSheet.occupancy.test.tsx",
   "src/components/ui/SplitButton.android.test.tsx",
   "src/components/ProjectFavicon.test.tsx",
