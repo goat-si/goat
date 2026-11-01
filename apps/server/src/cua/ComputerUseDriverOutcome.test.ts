@@ -427,3 +427,22 @@ it("retains terminal safety when an RPC error and result carry different details
   assert.equal(safety.retryClass, "never");
   assert.isTrue(safety.possibleCommit);
 });
+
+it("desktop lease refusals require observing again", () => {
+  for (const code of ["desktop_busy", "desktop_lease_unavailable"]) {
+    assert.deepInclude(
+      driverOutcomeSafety("click", {
+        result: {
+          isError: true,
+          structuredContent: {
+            effect: "refused",
+            status: "refused",
+            code,
+            refusal: { code, message: "busy" },
+          },
+        },
+      }),
+      { possibleCommit: false, retryClass: "new_key", code: "write_refused_reobserve" },
+    );
+  }
+});

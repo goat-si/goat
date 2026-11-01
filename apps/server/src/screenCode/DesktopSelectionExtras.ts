@@ -7,8 +7,15 @@ import * as Effect from "effect/Effect";
 import type { ComputerUsePrimitiveReply, ScreenHostCall, ScreenRunError } from "@goat/contracts";
 import { classifyActionOutcome } from "@goat/shared/actionOutcomeSafety";
 import { driverOutcomeSafety } from "../cua/ComputerUseDriverOutcome.ts";
+import { replaceWithTerminal } from "../cua/ComputerUseTerminal.ts";
 import { isReadOnlyCall } from "../cua/ComputerUseLeaseMessages.ts";
-import { driverError, driverResult, driverValue, fail } from "./DesktopDriverReplies.ts";
+import {
+  driverError,
+  driverFailureNextStep,
+  driverResult,
+  driverValue,
+  fail,
+} from "./DesktopDriverReplies.ts";
 import type { BoundWindow } from "./DesktopTargetHost.ts";
 import type { ScreenHostContext, ScreenHostDispatchResult } from "./ScreenHostBridge.ts";
 
@@ -99,8 +106,9 @@ const driverFailure = (
     error.effectStarted ||
     computed.possibleCommit ||
     object(structured?.safety)?.possibleCommit === true;
+  const terminal = replaceWithTerminal(error, computed);
   const safety =
-    mayHaveRun && !isReadOnlyCall(tool, args)
+    mayHaveRun && terminal.reason === undefined && !isReadOnlyCall(tool, args)
       ? classifyActionOutcome({ effect: "write", status: "indeterminate", dispatched: true })
       : computed;
   return {
@@ -111,6 +119,12 @@ const driverFailure = (
     error.code !== "screen_locked"
       ? { code: "unknown_outcome" as const }
       : {}),
+    nextStep: driverFailureNextStep(
+      reply,
+      denied ? { ...error, nextStep: said || error.nextStep } : error,
+      safety.possibleCommit,
+    ),
+
     safety,
     effectStarted: safety.possibleCommit,
   };

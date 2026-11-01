@@ -26,7 +26,13 @@ import type {
   ScreenHostDispatchResult,
 } from "./ScreenHostBridge.ts";
 import { dispatchInTurn } from "./ScreenBatchGroups.ts";
-import { driverError, driverResult, driverValue, fail } from "./DesktopDriverReplies.ts";
+import {
+  driverError,
+  driverFailureNextStep,
+  driverResult,
+  driverValue,
+  fail,
+} from "./DesktopDriverReplies.ts";
 import { ScreenObservations } from "./ScreenObservations.ts";
 import { makeBindWindow, makeLaunch } from "./DesktopLaunch.ts";
 import {
@@ -259,7 +265,12 @@ export const createDesktopTargetHost = (deps: {
     const safety = driverOutcomeSafety(tool, reply);
     const error = driverError(reply);
     if (error) {
-      return yield* Effect.fail({ ...error, safety, effectStarted: safety.possibleCommit });
+      return yield* Effect.fail({
+        ...error,
+        nextStep: driverFailureNextStep(reply, error, safety.possibleCommit),
+        safety,
+        effectStarted: safety.possibleCommit,
+      });
     }
     return reply;
   });

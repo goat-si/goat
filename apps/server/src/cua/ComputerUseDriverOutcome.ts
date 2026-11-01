@@ -235,7 +235,9 @@ function classifiedSafety(
   }
   if (
     screenLocked ||
-    (refusalCode === "user_interacting" &&
+    ((refusalCode === "user_interacting" ||
+      refusalCode === "desktop_busy" ||
+      refusalCode === "desktop_lease_unavailable") &&
       (structured.effect === undefined || structured.effect === "refused") &&
       (failed || structured.effect === "refused" || structured.status === "refused"))
   )

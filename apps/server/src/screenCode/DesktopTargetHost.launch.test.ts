@@ -21,6 +21,7 @@ import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
 import { ScreenRunService } from "./ScreenRunService.ts";
 import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
 import {
+  DriverError,
   NotStarted,
   UnknownOutcome,
   call as bindCallOf,
@@ -683,3 +684,30 @@ it.live(
     });
   },
 );
+
+it.live.each([
+  ["screen.launch", "await screen.launch({bundle_id: 'org.example.Editor'})"],
+  ["screen.app", "await screen.app({bundle_id: 'org.example.Editor'})"],
+])("%s reports a busy launch as unsent", ([_name, expression]) => {
+  const { host, sent } = fixture({
+    list_apps: { apps: [installed] },
+    launch_app: new DriverError({
+      effect: "refused",
+      code: "desktop_busy",
+      status: "refused",
+      refusal: { code: "desktop_busy", message: "desktop input is busy" },
+    }),
+  });
+  return Effect.gen(function* () {
+    const result = yield* cell(
+      host,
+      `try { ${expression}; } catch (e) { return { code: e.code, effectStarted: e.effectStarted, possibleCommit: e.safety?.possibleCommit }; }`,
+    );
+    expect(result.value).toEqual({
+      code: "unavailable",
+      effectStarted: false,
+      possibleCommit: false,
+    });
+    expect(tools(sent).filter((tool) => tool === "launch_app")).toHaveLength(1);
+  });
+});
