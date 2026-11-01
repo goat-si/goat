@@ -79,7 +79,9 @@ export const driverFailureNextStep = (
 ) => {
   const structured = object(object(reply.result)?.structuredContent);
   const code = string(object(structured?.refusal)?.code) ?? string(structured?.code);
-  return possibleCommit && (code === "desktop_busy" || code === "desktop_lease_unavailable")
+  return possibleCommit &&
+    replaceWithTerminal(error).reason === undefined &&
+    (code === "desktop_busy" || code === "desktop_lease_unavailable")
     ? "Earlier input may have landed. Observe before acting; never resend it."
     : error.nextStep;
 };

@@ -1,5 +1,6 @@
 import * as Effect from "effect/Effect";
 import type { ComputerUsePrimitiveReply } from "@goat/contracts";
+import { driverError, driverFailureNextStep } from "../screenCode/DesktopDriverReplies.ts";
 import { admitDriverReplyScreenshots } from "./ComputerUseDriverReply.ts";
 import { primitiveReplySink } from "./ComputerUseLeaseProxyOptions.ts";
 import {
@@ -54,4 +55,38 @@ export const imageCompact = (input: {
       }),
     ).answer(admitDriverReplyScreenshots(line), "settled");
     return replaceWithTerminal(terminalReplyState(answer?.result, answer?.status));
+  });
+
+export const busyTerminalNextStep = (input: {
+  readonly possible: boolean;
+  readonly reasons: readonly ComputerUseTerminalReason[];
+}) =>
+  Effect.sync(() => {
+    const reason = replaceWithTerminal("none", ...input.reasons).reason;
+    const reply: ComputerUsePrimitiveReply = {
+      state: "primitive-reply",
+      requestId: "request",
+      registrationId: "registration",
+      controlId: "control",
+      connectionGeneration: "g",
+      runId: "run",
+      turnId: "turn",
+      callId: 1,
+      status: "settled",
+      error: { code: -32000, data: { code: reason, safety: { possibleCommit: input.possible } } },
+      result: {
+        isError: true,
+        structuredContent: {
+          code: "desktop_busy",
+          effect: "refused",
+          safety: { possibleCommit: input.possible },
+        },
+      },
+    };
+    const error = driverError(reply);
+    if (error === undefined) throw new Error("Expected terminal error");
+    const nextStep = driverFailureNextStep(reply, error, input.possible);
+    if (nextStep !== error.nextStep)
+      throw new Error("Busy refusal replaced the terminal instruction");
+    return replaceWithTerminal(error);
   });
