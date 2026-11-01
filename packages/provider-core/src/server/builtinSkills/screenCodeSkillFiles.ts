@@ -12,8 +12,8 @@ For each error follow its \`nextStep\`. Delivery below concerns the failing call
 - \`invalid_argument\`: invalid call or options; nothing sent for preflight refusals; fix the argument and observe again.
 - \`unsupported\`: the target cannot perform the requested operation; depends: read effectStarted and the receipt; use a supported screen action after observing.
 - \`unavailable\`: surface or target is unavailable; depends: read effectStarted and the receipt; observe again when available or ask the person.
-- \`target_missing\`: target or window not found; depends: read effectStarted and the receipt (a launch may have started); use screen.discover() and rebind with screen.app({ bundle_id, window_id }).
-- \`target_ambiguous\`: more than one target matches; depends: read effectStarted and the receipt; discover and rebind with screen.app({ bundle_id, window_id }).
+- \`target_missing\`: target, element or window not found; depends: read effectStarted and the receipt (a launch may have started); follow nextStep: for an app, screen.discover() and rebind with screen.app({ bundle_id, window_id }); for a tab element, observe and use its number, wait for it with waitFor({ target }), or narrow the selector.
+- \`target_ambiguous\`: more than one target or element matches; depends: read effectStarted and the receipt; follow nextStep: for an app, discover and rebind with screen.app({ bundle_id, window_id }); for a tab element, use its number from observe() or a narrower selector.
 - \`stale_reference\`: observation, point, or target reference expired; usually nothing sent, but a launch that already went out keeps this code: read effectStarted and the receipt; observe again, or for a target its \`nextStep\` names why (an earlier turn, another run, a control change, lost permission, a replaced window) and the exact \`screen.app({ bundle_id, window_id })\` call; when the person took control, wait until they hand it back.
 - \`blocked_url\`: the person blocked this browser host for agents; depends: a tab that was opened before its redirect reached the host carries effectStarted true; do not try another route to it, tell the person.
 - \`permission_denied\`: authority or desktop permission refused; depends: a refusal before dispatch sent nothing, but a refusal seen after an input went out keeps this code with effectStarted true; read the receipt, observe, and ask the person to grant the required permission.
@@ -31,7 +31,7 @@ For each error follow its \`nextStep\`. Delivery below concerns the failing call
 - \`call_limit\`: cell call budget exhausted; depends: read effectStarted and the receipt; observe again in a shorter new cell.
 - \`pending_limit\`: too many simultaneous pending calls; nothing sent for the rejected call; await earlier calls and inspect their receipts before continuing.
 - \`output_limit\`: output exceeded its budget; depends: read effectStarted and the receipt; observe again with less output.
-- \`text_limit\`: text output exceeded its budget; depends: read effectStarted and the receipt; observe again with a narrower read.
+- \`text_limit\`: a call's arguments exceeded their byte budget; nothing sent for the rejected call; pass smaller arguments, for example shorter text in several calls.
 - \`tree_limit\`: tree output exceeded its budget; depends: read effectStarted and the receipt; observe again with a narrower read.
 - \`image_limit\`: image budget exceeded; depends: read effectStarted and the receipt; observe again without a screenshot when possible.
 - \`live_children_limit\`: too many live screen runtimes; nothing sent for the refused start; stop and report the resource limit.
