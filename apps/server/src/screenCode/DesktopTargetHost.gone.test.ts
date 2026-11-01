@@ -126,7 +126,7 @@ it.effect(
       const observed = (yield* host.observe(call("get_window_state", {}, ref), context))
         .value as ScreenObservation;
       const elementRef = observed.elements.find((each) => each.index === 1)?.ref;
-      if (elementRef === undefined) throw new Error("The observed window must have [1]");
+      expect(elementRef).toBeDefined();
       const fiber = yield* host
         .invoke(
           {
