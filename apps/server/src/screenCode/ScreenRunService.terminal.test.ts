@@ -20,6 +20,8 @@ import { finishCellResponse, makeCellAuthority } from "./ScreenCellAuthority.ts"
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
 import { ScreenRunService } from "./ScreenRunService.ts";
 import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
+import { harness, active, CONTROL } from "../cua/ComputerUseLeaseProxy.testkit.ts";
+import { driverError } from "./DesktopDriverReplies.ts";
 import { fixture as desktopFixture } from "./DesktopTargetHost.testkit.ts";
 
 const invocation = {
@@ -581,4 +583,91 @@ it.effect("a late terminal result retains cell window evidence", () =>
     expect(answer._tag).toBe("Failure");
     if (answer._tag === "Failure") expect(answer.failure.windowsOpenedUnverified).toBe(true);
   }),
+);
+
+it.live.each([false, true])(
+  "screen.run preserves terminal image evidence with huge metadata=%s",
+  (huge) =>
+    Effect.gen(function* () {
+      const expiry = "2099-01-01T00:00:00.000Z";
+      const h = yield* harness({ expiresAt: expiry });
+      yield* h.push(active(expiry));
+      yield* h.applied;
+      const driver = yield* h.driverStarted;
+      const service = yield* ScreenRunService.pipe(
+        Effect.provide(
+          ScreenRunService.layerWithRuntime({
+            invocation: {
+              command: process.execPath,
+              entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+            },
+            assetResolver: () => resolveScreenRuntimeAsset("dev"),
+            dispatcher: {
+              availability: () => Effect.succeed([{ kind: "app", available: true }]),
+              dispatch: (call) =>
+                Effect.gen(function* () {
+                  yield* h.sendPrimitive({
+                    state: "primitive-request",
+                    requestId: "req",
+                    registrationId: "reg",
+                    controlId: CONTROL,
+                    connectionGeneration: driver.connectionId,
+                    runId: call.runId,
+                    turnId: call.turnId,
+                    callId: call.callId,
+                    deadlineMillis: call.deadlineMillis,
+                    tool: "list_apps",
+                    args: {},
+                  });
+                  const sent = yield* h.nextToDriver;
+                  yield* h.reply(
+                    JSON.stringify({
+                      jsonrpc: "2.0",
+                      id: sent.id,
+                      result: {
+                        isError: true,
+                        structuredContent: {
+                          code: "stopped_by_person",
+                          safety: { possibleCommit: true, retryClass: "never" },
+                          screenshot_width: 1,
+                          screenshot_height: 1,
+                          padding: huge ? "x".repeat(1024 * 1024) : "",
+                        },
+                        content: [
+                          {
+                            type: "image",
+                            mimeType: "image/png",
+                            data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGP4DwQACfsD/fteaysAAAAASUVORK5CYII=",
+                          },
+                        ],
+                      },
+                    }),
+                  );
+                  const received = yield* h.primitiveReply;
+                  const error = driverError(received);
+                  if (error) return yield* Effect.fail(error);
+                  return { category: "confirmed" as const, evidence: ["fixture"], value: {} };
+                }),
+            },
+          }).pipe(Layer.provide(NodeServices.layer)),
+        ),
+      );
+      const answer = yield* service
+        .runCell({
+          runId: "r",
+          turnId: "t",
+          threadId: "thread",
+          environmentId: "env",
+          invocation,
+          source: "return await screen.list_apps();",
+        })
+        .pipe(Effect.result);
+      expect(answer._tag).toBe("Failure");
+      if (answer._tag === "Failure") {
+        expect(answer.failure.code).toBe("stopped_by_person");
+        expect(answer.failure.effectStarted).toBe(true);
+        expect(answer.failure.safety?.possibleCommit).toBe(true);
+        expect(answer.failure.safety?.retryClass).toBe("never");
+      }
+    }),
 );

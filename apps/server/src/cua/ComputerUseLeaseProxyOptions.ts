@@ -246,6 +246,12 @@ export const primitiveReplySink = (
             ...(textState === undefined ? {} : { structuredContent: textState }),
             content: content.filter((part) => record(part)?.type !== "image"),
           };
+    const terminal = replaceWithTerminal(
+      terminalReplyState(rawResult, status),
+      terminalReplyState(strippedResult, status),
+      terminalErrorState(envelope?.error),
+      context?.terminalState?.() ?? "none",
+    );
     const bounded = (value: unknown, maxBytes: number) => {
       if (value === undefined) return undefined;
       const encoded = JSON.stringify(value);
@@ -271,11 +277,6 @@ export const primitiveReplySink = (
       64 * 1024,
     );
     const hops = hopTimes(primitiveHops.get(request), answeredAt);
-    const terminal = replaceWithTerminal(
-      terminalReplyState(rawResult, status),
-      terminalErrorState(envelope?.error),
-      context?.terminalState?.() ?? "none",
-    );
     const failure = terminalFailure(terminal, request.tool, request.args, terminal.possibleCommit);
     return yield* (
       reply?.({

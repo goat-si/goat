@@ -63,6 +63,7 @@ import { refuseProxyCall } from "./ComputerUseLeaseProxyRefusal.ts";
 import { staleGeneration } from "./ComputerUseLeaseProxyPrimitive.ts";
 import { proxyCallAdmission } from "./ComputerUseLeaseCallPermissions.ts";
 import { narrowBatch } from "./ComputerUseBatchIdentity.ts";
+import { imageCompact } from "./ComputerUseTerminal.imageMatrix.testkit.ts";
 import { guestCompletion } from "./ComputerUseTerminal.guestMatrix.testkit.ts";
 import { preDispatchSites } from "./ComputerUseTerminal.preDispatch.testkit.ts";
 import { screenRunLimits } from "../screenCode/ScreenRunLimits.ts";
@@ -866,6 +867,7 @@ const sites: ReadonlyArray<{
   { name: "ComputerUseLeaseProxy.offScreenForRequest", run: offScreen },
   { name: "ComputerUseLeaseProxyBrowserClaims.refuseReply", run: claims },
   { name: "ComputerUseLeaseProxyOptions.primitiveReplySink", run: compact },
+  { name: "ComputerUseLeaseProxyOptions.restoredOversizedImage", run: imageCompact },
   { name: "ComputerUsePrimitiveChannel.replyAndSettle", run: channel },
   {
     name: "ComputerUseDriverOutcome.driverOutcomeSafety",
