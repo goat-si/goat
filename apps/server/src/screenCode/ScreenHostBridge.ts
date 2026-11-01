@@ -100,6 +100,7 @@ interface CellState {
   retainedBytes: number;
   // Counted apart from the journal so a full journal cannot hide an input whose effect may have started.
   effectsStarted: number;
+  writesStarted: number;
   /** The first call that failed after its write may have landed; the cell's later input does not run. */
   haltedBy?: number;
   firstFailure?: { callId: number; code: ScreenRunError["code"]; mayHaveSent: boolean };
@@ -202,6 +203,7 @@ export class ScreenHostBridge {
         truncated: [],
         retainedBytes: 0,
         effectsStarted: 0,
+        writesStarted: 0,
         batches: new BatchGroups(),
       };
       this.cells.set(id, state);
@@ -500,6 +502,7 @@ export class ScreenHostBridge {
         if (state.closed || state.cutoff.signal.aborted) return false;
         callDispatched = true;
         state.effectsStarted++;
+        if (!isScreenRead(call.method)) state.writesStarted++;
         settle(
           "unknown_outcome",
           "dispatched",
@@ -648,7 +651,10 @@ export class ScreenHostBridge {
       ),
     );
     if (ownFailure) {
-      if (callDispatched && !ownFailure.effectStarted) state.effectsStarted--;
+      if (callDispatched && !ownFailure.effectStarted) {
+        state.effectsStarted--;
+        if (!isScreenRead(call.method)) state.writesStarted--;
+      }
       return refused(call, { ...ownFailure, callId: call.callId });
     }
     if (state.closed) {
@@ -671,7 +677,10 @@ export class ScreenHostBridge {
       });
     }
     if (result._tag === "Failure") {
-      if (callDispatched && !result.failure.effectStarted) state.effectsStarted--;
+      if (callDispatched && !result.failure.effectStarted) {
+        state.effectsStarted--;
+        if (!isScreenRead(call.method)) state.writesStarted--;
+      }
       const safety = screenFailureSafety(call, result.failure);
       state.firstFailure ??= firstScreenFailure(call.callId, result.failure, safety);
       settle(
@@ -814,6 +823,7 @@ export class ScreenHostBridge {
       journal: state?.journal ?? [],
       truncated: state?.truncated ?? [],
       effectsStarted: state?.effectsStarted ?? 0,
+      writesStarted: state?.writesStarted ?? 0,
       firstFailure: state?.firstFailure,
     };
   }

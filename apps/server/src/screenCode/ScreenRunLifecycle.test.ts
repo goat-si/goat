@@ -496,7 +496,8 @@ it.live.each([
         changed?.({ kind: changeKind, threadId: "thread", tabId: "tab" });
         const outcome = yield* Fiber.join(running);
         expect(outcome._tag).toBe("Failure");
-        if (outcome._tag === "Failure") expect(outcome.failure.code).toBe("unknown_outcome");
+        if (outcome._tag === "Failure")
+          expect(outcome.failure).toMatchObject({ code: "stopped", effectStarted: false });
         yield* Deferred.succeed(held, undefined);
         expect(clicks).toBe(0);
         const stale = yield* service
@@ -578,7 +579,8 @@ it.live("desktop private authority notification cuts an active screen cell", () 
       notify?.({ kind: "private", threadId: "thread" as ThreadId, controlId: "control" });
       const outcome = yield* Fiber.join(running);
       expect(outcome._tag).toBe("Failure");
-      if (outcome._tag === "Failure") expect(outcome.failure.code).toBe("unknown_outcome");
+      if (outcome._tag === "Failure")
+        expect(outcome.failure).toMatchObject({ code: "stopped", effectStarted: false });
       yield* Deferred.succeed(held, undefined);
       yield* service.finishTurn({
         runId: "run",
@@ -888,7 +890,12 @@ it.live.each(["new message", "turn end"] as const)(
         });
         const outcome = yield* Fiber.join(running);
         expect(outcome._tag).toBe("Failure");
-        if (outcome._tag === "Failure") expect(outcome.failure.code).toBe("unknown_outcome");
+        if (outcome._tag === "Failure")
+          expect(outcome.failure).toMatchObject({
+            code: "stopped",
+            effectStarted: false,
+            safety: { possibleCommit: false },
+          });
         yield* Deferred.succeed(held, undefined);
         const stale = yield* screen
           .runCell({
@@ -960,7 +967,7 @@ it.live("a held cell deadline preserves unknown input receipts through the servi
           threadId: "thread",
           environmentId: "env",
           invocation: context.invocation,
-          source: "return await screen.list_apps();",
+          source: "return await screen.launch_app({bundle_id: 'org.example.Editor'});",
         })
         .pipe(Effect.result, Effect.forkChild);
       yield* Deferred.await(offered);

@@ -897,9 +897,9 @@ it.live("interrupting the run fiber cuts its exact child and discards the cell",
   }),
 );
 
-it.live.each([false, true])(
-  "rejects an oversized screen frame before newline or child EOF, keeping what ended it for the row (effect dispatched: %s)",
-  (effectDispatched) =>
+it.live.each(["none", "list_apps", "launch_app"] as const)(
+  "rejects an oversized screen frame before newline or child EOF, keeping what ended it for the row (call: %s)",
+  (method) =>
     Effect.gen(function* () {
       const child = NodeChildProcess.spawn(
         process.execPath,
@@ -909,8 +909,8 @@ it.live.each([false, true])(
       require('node:readline').createInterface({ input: process.stdin }).on('line', (line) => {
         const frame = JSON.parse(line);
         if (frame.t === 'boot') process.stdout.write(JSON.stringify({t:'ready'}) + '\\n');
-        if (frame.t === 'cell' && ${effectDispatched}) process.stdout.write(JSON.stringify({
-          t: 'call', runId: 'r', turnId: 't', cellId: frame.cellId, callId: 1, method: 'list_apps', args: {}, deadlineMillis: frame.deadlineMillis
+        if (frame.t === 'cell' && ${method !== "none"}) process.stdout.write(JSON.stringify({
+          t: 'call', runId: 'r', turnId: 't', cellId: frame.cellId, callId: 1, method: '${method}', args: {}, deadlineMillis: frame.deadlineMillis
         }) + '\\n');
         else if (frame.t === 'cell' || frame.t === 'reply') process.stdout.write(Buffer.alloc(256 * 1024 + 1, 32));
       });
@@ -958,15 +958,17 @@ it.live.each([false, true])(
         const result = yield* Fiber.join(running);
         expect(result._tag).toBe("Failure");
         if (result._tag === "Failure") {
-          expect(result.failure.code).toBe(effectDispatched ? "unknown_outcome" : "output_limit");
-          expect(result.failure.effectStarted).toBe(effectDispatched);
-          expect(result.failure.receipts).toHaveLength(effectDispatched ? 1 : 0);
+          expect(result.failure.code).toBe(
+            method === "launch_app" ? "unknown_outcome" : "output_limit",
+          );
+          expect(result.failure.effectStarted).toBe(method === "launch_app");
+          expect(result.failure.receipts).toHaveLength(method === "none" ? 0 : 1);
           // The agent hears unknown_outcome; the cell's timeline row still knows the frame ended it.
           expect(result.failure.endedBy).toBe("output_limit");
           expect(result.failure.journal).toEqual(result.failure.receipts);
         }
         expect(closedBeforeEof).toBe(true);
-        expect(dispatched).toBe(effectDispatched ? 1 : 0);
+        expect(dispatched).toBe(method === "none" ? 0 : 1);
       }).pipe(Effect.ensuring(Effect.sync(supervisor.dispose)));
     }),
 );
