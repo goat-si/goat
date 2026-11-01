@@ -43,7 +43,7 @@ it.effect("adds the channel ledger to a database at schema 65 and keeps existing
 it.effect("runs again over its own schema, as a relocated migration id would", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    yield* runMigrations();
+    yield* runMigrations({ toMigrationInclusive: 73 });
     yield* sql`INSERT INTO channel_runtime_state (key, value_json, updated_at)
       VALUES ('kept', '{}', 'now')`;
     yield* ChannelLedgerMigration;
@@ -55,7 +55,7 @@ it.effect("runs again over its own schema, as a relocated migration id would", (
 it.effect("rejects a second input with the same scoped idempotency key", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    yield* runMigrations();
+    yield* runMigrations({ toMigrationInclusive: 73 });
     yield* sql`INSERT INTO channel_conversations
       (conversation_id, owner_id, kind, connection_id, conversation_key, last_activity_at)
       VALUES ('conv', 'owner', 'slack', 'slack-1', 'T1:C1:1', 'now')`;

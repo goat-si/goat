@@ -25,6 +25,12 @@ export const COMPUTER_USE_SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["computer use input guards confirmations advanced"],
   },
   {
+    id: "computer-use-keep-typed-text",
+    title: "Keep typed text",
+    to: "/settings/integrations",
+    searchTerms: ["computer use browser input history typed text retention privacy advanced"],
+  },
+  {
     id: "computer-use-skill",
     title: "Computer Use skill",
     to: "/settings/integrations",

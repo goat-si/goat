@@ -9,6 +9,7 @@ export type CuaMovePointer = typeof CuaMovePointer.Type;
 export const CuaSettingsFields = {
   cuaStrictInputGuards: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   enableCua: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  computerUseKeepTypedText: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   /**
    * Built-in skills the person switched off; every other one loads with its capability. Plain
    * names, so a settings file written by a build with more skills still decodes here.
@@ -36,6 +37,7 @@ export const CuaSettingsFields = {
 export const CuaSettingsPatchFields = {
   cuaStrictInputGuards: Schema.optionalKey(Schema.Boolean),
   enableCua: Schema.optionalKey(Schema.Boolean),
+  computerUseKeepTypedText: Schema.optionalKey(Schema.Boolean),
   disabledBuiltInSkills: Schema.optionalKey(Schema.Array(Schema.String)),
   cuaFullAccessAutoAdmit: Schema.optionalKey(Schema.Boolean),
   cuaMovePointer: Schema.optionalKey(CuaMovePointer),

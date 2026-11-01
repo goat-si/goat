@@ -34,6 +34,7 @@ const ADVANCED_TARGETS: ReadonlySet<string> = new Set([
   "screen-code-skill",
   "computer-use-move-pointer",
   "computer-use-strict-input-guards",
+  "computer-use-keep-typed-text",
 ]);
 
 export interface ComputerUseSettingsPatch {
@@ -41,6 +42,7 @@ export interface ComputerUseSettingsPatch {
   readonly disabledBuiltInSkills?: ReadonlyArray<string>;
   readonly cuaStrictInputGuards?: boolean;
   readonly cuaMovePointer?: "never" | "allowed";
+  readonly computerUseKeepTypedText?: boolean;
   readonly cuaAllowedApps?: ReadonlyArray<string>;
 }
 
@@ -202,6 +204,7 @@ export function ComputerUsePanel({
   disabledSkills,
   movePointer,
   strictInputGuards,
+  keepTypedText,
   save,
   bridge,
 }: {
@@ -218,6 +221,7 @@ export function ComputerUsePanel({
   disabledSkills: ReadonlyArray<string>;
   movePointer: "never" | "allowed";
   strictInputGuards: boolean;
+  keepTypedText: boolean;
   save: (patch: ComputerUseSettingsPatch) => Promise<string | null>;
   bridge: Omit<ComputerUseSetupActions, "save"> & {
     readonly reveal?: (() => Promise<void>) | undefined;
@@ -355,6 +359,15 @@ export function ComputerUsePanel({
               canConfigure={canConfigure}
               onChange={(checked) => save({ cuaStrictInputGuards: checked })}
             />
+            <SettingSwitchRow
+              {...searchableSetting("computer-use-keep-typed-text")}
+              settingKey="computerUseKeepTypedText"
+              description="Keep text only when GOAT confirms it reached a normal browser field. Desktop typing and protected fields stay redacted."
+              label="Keep typed text"
+              checked={keepTypedText}
+              canConfigure={canConfigure}
+              onChange={(checked) => save({ computerUseKeepTypedText: checked })}
+            />
             <BuiltInSkillRows
               disabledSkills={disabledSkills}
               canConfigure={canConfigure}
@@ -485,7 +498,11 @@ function SettingSwitchRow({
 }: {
   id: string;
   title: string;
-  settingKey: "disabledBuiltInSkills" | "cuaMovePointer" | "cuaStrictInputGuards";
+  settingKey:
+    | "disabledBuiltInSkills"
+    | "cuaMovePointer"
+    | "cuaStrictInputGuards"
+    | "computerUseKeepTypedText";
   description: string;
   label: string;
   checked: boolean;

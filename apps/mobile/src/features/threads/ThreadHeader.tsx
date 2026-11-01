@@ -1,4 +1,6 @@
 import { useMemo } from "react";
+import { EnvironmentId, ThreadId } from "@goat/contracts";
+import { useThreadHistoryMenu } from "./useThreadHistoryMenu";
 import { AppBar } from "../../components/ui/AppBar";
 import { ScreenHeaderButton } from "../../components/ui/ScreenHeaderButton";
 import type { AppBarAction } from "../../components/ui/AppBar.types";
@@ -24,6 +26,44 @@ export function ThreadHeader(
     useAdaptiveWorkspaceLayout();
   const { onOpenTerminal, onMergeBack } = props.gitControls;
   const native = useThreadHeaderOptions(props);
+  const history = useThreadHistoryMenu(
+    EnvironmentId.make(props.gitControls.environmentId),
+    ThreadId.make(props.gitControls.threadId),
+  );
+  const historyActions = props.draft ? [] : history.actions;
+  const historyMenu = {
+    title: "Thread actions",
+    icon: "ellipsis" as const,
+    items: historyActions.map((action) => ({
+      ...action,
+      onPress: () => history.select(action.id),
+    })),
+  };
+  const options = {
+    ...native.options,
+    unstable_headerRightItems: () => [
+      ...native.rightHeaderItems,
+      ...(historyActions.length
+        ? [
+            {
+              accessibilityLabel: "Thread actions",
+              icon: { name: "ellipsis", type: "sfSymbol" as const },
+              identifier: "thread-actions",
+              label: "Thread actions",
+              menu: {
+                title: "Thread actions",
+                items: historyMenu.items.map((item) => ({
+                  label: item.title,
+                  onPress: item.onPress,
+                  type: "action" as const,
+                })),
+              },
+              type: "menu" as const,
+            },
+          ]
+        : []),
+    ],
+  };
   const androidHeaderActions = useMemo<ReadonlyArray<AppBarAction>>(() => {
     const actions: AppBarAction[] = [];
     if (props.onReturnToThread) {
@@ -85,8 +125,9 @@ export function ThreadHeader(
         title={props.title}
         subtitle={props.subtitle}
         sidebar={native.sidebar}
-        options={native.options}
-        optionsVersion={native.optionsVersion}
+        options={options}
+        optionsVersion={[native.optionsVersion, historyActions.length, history.select]}
+        menus={historyActions.length ? [historyMenu] : []}
         trailing={
           props.fileInspectorSupported && props.hasThreadCwd ? (
             <ScreenHeaderButton
@@ -107,6 +148,7 @@ export function ThreadHeader(
         compact={composerKeyboardActive}
       />
       {native.fallback}
+      {history.dialog}
     </>
   );
 }

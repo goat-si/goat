@@ -1,0 +1,51 @@
+import { useAtomValue } from "@effect/atom-react";
+import { createComputerUseHistoryCommand } from "@goat/client-runtime/state/computer-use-history";
+import type {
+  ComputerUseHistoryCursor,
+  EnvironmentId,
+  ThreadId,
+  OrchestrationV2TurnItem,
+} from "@goat/contracts";
+import { computerUseRun, hasComputerUseHistory } from "@goat/client-runtime/work-log/computer-use";
+import { View } from "react-native";
+import { connectionAtomRuntime } from "../../connection/runtime";
+import { useAtomCommand } from "../../state/use-atom-command";
+import { ThreadComputerUseHistoryView } from "./ThreadComputerUseHistoryView";
+
+const command = createComputerUseHistoryCommand(connectionAtomRuntime);
+
+export function ThreadComputerUseHistory(props: {
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+}) {
+  const canRead = useAtomValue(command.permissionAtom(props.environmentId));
+  const request = useAtomCommand(command, { reportFailure: false });
+  const load = async (before: typeof ComputerUseHistoryCursor.Type | null) => {
+    const result = await request({
+      environmentId: props.environmentId,
+      input: { threadId: props.threadId, limit: 30, ...(before === null ? {} : { before }) },
+    });
+    if (result._tag === "Failure") throw new Error("Could not load input history.");
+    return result.value;
+  };
+  return (
+    <ThreadComputerUseHistoryView
+      key={JSON.stringify([props.environmentId, props.threadId])}
+      canRead={canRead}
+      load={load}
+    />
+  );
+}
+
+export function ThreadComputerUseHistoryForItem(props: {
+  readonly environmentId: EnvironmentId;
+  readonly threadId: ThreadId;
+  readonly item: OrchestrationV2TurnItem;
+}) {
+  if (!hasComputerUseHistory(props.item) || computerUseRun(props.item)) return null;
+  return (
+    <View className="ml-7 pb-1.5">
+      <ThreadComputerUseHistory environmentId={props.environmentId} threadId={props.threadId} />
+    </View>
+  );
+}

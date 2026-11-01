@@ -130,6 +130,7 @@ function Harness({ f }: { f: Fixture }) {
       disabledSkills={f.disabledSkills}
       movePointer={f.movePointer}
       strictInputGuards={false}
+      keepTypedText={false}
       save={f.save}
       bridge={{ checkGrants: f.checkGrants, verify: f.verify, openGuide: f.openGuide }}
     />
@@ -610,4 +611,13 @@ it("on the Windows desktop that runs the host, Run check proves capture with no 
   await screen.getByRole("button", { name: "Run check" }).click();
   await vi.waitFor(() => expect(f.verify).toHaveBeenCalledOnce());
   expect(f.calls).toEqual(['save:{"enableCua":true}', "verify"]);
+});
+
+it("lets a person enable retention of confirmed browser typing", async () => {
+  const f = setup({ enabled: true });
+  state.searchTargetId = "computer-use-keep-typed-text";
+  await using screen = await render(panel(f));
+  await expect.element(screen.getByRole("switch", { name: "Keep typed text" })).toBeInTheDocument();
+  await clickSwitch("Keep typed text");
+  expect(f.save).toHaveBeenLastCalledWith({ computerUseKeepTypedText: true });
 });

@@ -7,6 +7,7 @@
 // @effect-diagnostics preferSchemaOverJson:off -- Driver JSON-RPC responses remain opaque at this boundary.
 import type {
   ComputerUseAgentCursor,
+  ComputerUseLeaseCallOutcome,
   ComputerUseCallAdmission,
   ComputerUseCallReservation,
   ComputerUseHumanInputSource,
@@ -76,6 +77,9 @@ export const beginHops = (primitive: ComputerUsePrimitiveRequest | undefined) =>
   });
 
 export interface ReplySink {
+  readonly captureTarget?: () => void;
+  readonly setReservation?: (reservationId: string) => void;
+  readonly recordOutcome?: (line: string, status?: "unknown_outcome") => Effect.Effect<void>;
   readonly answer: (
     line: string,
     status?: ComputerUsePrimitiveReply["status"],
@@ -453,6 +457,7 @@ export interface LeaseProxyOptions<EU, ED> {
    * report has answered, so the server knows the call before any helper can see its events.
    */
   readonly onAgentInput?: (report: AgentInputReport) => Effect.Effect<unknown>;
+  readonly onCallOutcome?: (report: ComputerUseLeaseCallOutcome) => Effect.Effect<unknown>;
 }
 
 export const reservedProviderRequest = (

@@ -7,6 +7,7 @@ export function useThreadHeaderOptions(
   return {
     options: { contentStyle: { backgroundColor: props.headerColor } },
     // Android renders header actions as children, not native item factories.
+    rightHeaderItems: [],
     optionsVersion: [],
     sidebar: true,
     fallback: null,

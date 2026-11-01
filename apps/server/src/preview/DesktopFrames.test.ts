@@ -115,6 +115,7 @@ const fixture = Effect.fnUntraced(function* (
   >(Option.none());
   const unused = Effect.die("unused");
   const leases = ComputerUseLeases.ComputerUseLeases.of({
+    ownsControl: () => Effect.die("unused"),
     blocked: () => unused,
     blockedTurns: unused,
     active: () => unused,

@@ -62,6 +62,7 @@ export const SETTINGS_ACCESS = {
   agentToolListing: agent,
   enableDeviceSupport: person("It turns on control of phones and simulators on this machine."),
   enableCua: path("computer_use.update"),
+  computerUseKeepTypedText: person("It stores typed text in the computer use history."),
   disabledBuiltInSkills: agent,
   cuaFullAccessAutoAdmit: person(GRANTS_AGENTS),
   cuaMovePointer: person(GRANTS_AGENTS),

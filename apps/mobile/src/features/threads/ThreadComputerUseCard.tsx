@@ -12,6 +12,7 @@ import { View } from "react-native";
 
 import { AppText as Text } from "../../components/ui/AppText";
 import { useTurnItemDetail } from "../../state/queries";
+import { ThreadComputerUseHistory } from "./ThreadComputerUseHistory";
 
 const STATUS_CLASS = {
   running: "text-foreground-muted",
@@ -65,6 +66,11 @@ export function ThreadComputerUseCard(props: {
         )}
       </View>
       {note === null ? null : <Text className="text-xs text-foreground-muted">{note}</Text>}
+      <ThreadComputerUseHistory
+        key={`${props.environmentId}:${props.row.sourceThreadId}`}
+        environmentId={props.environmentId}
+        threadId={props.row.sourceThreadId}
+      />
     </View>
   );
 }
