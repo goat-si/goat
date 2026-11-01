@@ -219,3 +219,21 @@ it.live("an answer that may have changed the selection is never called unsupport
     });
   }),
 );
+
+it.live("a busy selectText is refused without sending input", () =>
+  Effect.gen(function* () {
+    const { result, sent } = yield* run(
+      new DriverError({
+        effect: "refused",
+        code: "desktop_busy",
+        status: "refused",
+        refusal: { code: "desktop_busy", message: "desktop input is busy" },
+      }),
+      "app.selectText(1, 'world')",
+    );
+    expect(result.value).toMatchObject({
+      caught: { code: "unavailable", nothingSent: true, possibleCommit: false },
+    });
+    expect(sent).toHaveLength(1);
+  }),
+);

@@ -725,3 +725,51 @@ it.live("a refused window group does not stop the next window's group", () => {
     yield* finish;
   }).pipe(Effect.provide(cellService(host)));
 });
+
+it.live("a busy batch member stops later inputs without invalidating the target", () => {
+  let clicked = 0;
+  const { host, sent } = fixture({
+    click: () =>
+      ++clicked === 1
+        ? new DriverError({
+            effect: "refused",
+            code: "desktop_busy",
+            status: "refused",
+            refusal: { code: "desktop_busy", message: "desktop input is busy" },
+          })
+        : { effect: "confirmed" },
+  });
+  return Effect.gen(function* () {
+    const result = yield* runCell(
+      `${BIND} ${clicks(2)} const settled = await Promise.allSettled(clicks); const again = await app.click('Apply'); return [settled.map(r => r.status === 'fulfilled' ? r.value.verdict : [r.reason.code, r.reason.nothingSent, r.reason.safety?.possibleCommit]), again.verdict];`,
+    );
+    expect(result.value).toEqual([
+      [
+        ["unavailable", true, false],
+        ["not_run", true, false],
+      ],
+      "confirmed",
+    ]);
+    expect(sent.filter((entry) => entry.tool === "click")).toHaveLength(2);
+    yield* finish;
+  }).pipe(Effect.provide(cellService(host)));
+});
+
+it.live("a busy menu invocation leaves the target usable", () => {
+  const { host, sent } = fixture({
+    invoke_menu: new DriverError({
+      effect: "refused",
+      code: "desktop_busy",
+      status: "refused",
+      refusal: { code: "desktop_busy", message: "desktop input is busy" },
+    }),
+  });
+  return Effect.gen(function* () {
+    const result = yield* runCell(
+      `${BIND} let failure; try { await app.menu(['File', 'Save']); } catch (e) { failure = [e.code, e.effectStarted, e.safety?.possibleCommit]; } const again = await app.click('Apply'); return [failure, again.verdict];`,
+    );
+    expect(result.value).toEqual([["unavailable", false, false], "confirmed"]);
+    expect(sent.filter((entry) => entry.tool === "invoke_menu")).toHaveLength(1);
+    yield* finish;
+  }).pipe(Effect.provide(cellService(host)));
+});
