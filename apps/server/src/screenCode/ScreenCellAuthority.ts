@@ -2,13 +2,25 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { ThreadId } from "@goat/contracts";
 import type { ComputerUseLeases } from "../cua/ComputerUseLeases.ts";
-import type { ComputerUseTerminalReason } from "../cua/ComputerUseTerminal.ts";
+import {
+  replaceWithTerminal,
+  type ComputerUseTerminalReason,
+  type ComputerUseTerminalState,
+} from "../cua/ComputerUseTerminal.ts";
 import type { ScreenHostBridge } from "./ScreenHostBridge.ts";
 import {
   cellTerminalError,
   completionCellError,
   latchCellTerminal,
 } from "./ScreenActionOutcome.ts";
+
+export const screenRunFailure = (
+  code: import("@goat/contracts").ScreenRunError["code"],
+): import("@goat/contracts").ScreenRunError => ({
+  code,
+  effectStarted: false,
+  nextStep: "Refresh the screen run and retry if appropriate.",
+});
 
 export const makeCellAuthority = (leases: ComputerUseLeases["Service"] | undefined) => {
   const cells = new Map<string, { cellId: string; controlId?: string }>();
@@ -41,11 +53,15 @@ export const watchCellTerminals = (
   cells: ReturnType<typeof makeCellAuthority>,
 ) => {
   const terminals = new Map<string, ComputerUseTerminalReason>();
-  bridge.terminalObserver = (context, reason) => {
+  const evidence = new Map<string, ComputerUseTerminalState>();
+  bridge.terminalObserver = (context, reason, error) => {
     const id = `${context.runId}\u0000${context.turnId}`;
-    if (cells.get(id) === context.cellId) latchCellTerminal(terminals, id, reason);
+    if (cells.get(id) === context.cellId) {
+      latchCellTerminal(terminals, id, reason);
+      evidence.set(id, replaceWithTerminal(evidence.get(id) ?? "none", error));
+    }
   };
-  return terminals;
+  return { terminals, evidence };
 };
 
 export const finishCellResponse =
@@ -54,6 +70,7 @@ export const finishCellResponse =
     readonly cellId: string;
     readonly cells: ReturnType<typeof makeCellAuthority>;
     readonly terminals: Map<string, ComputerUseTerminalReason>;
+    readonly evidence?: Map<string, ComputerUseTerminalState>;
     readonly onFinished?: () => void;
   }) =>
   <R>(
@@ -69,6 +86,7 @@ export const finishCellResponse =
       consumed = true;
       if (options.cells.get(options.id) === options.cellId) options.cells.delete(options.id);
       options.terminals.delete(options.id);
+      options.evidence?.delete(options.id);
       options.onFinished?.();
     };
     return work.pipe(
@@ -76,16 +94,36 @@ export const finishCellResponse =
       Effect.flatMap((outcome) =>
         Effect.suspend(() => {
           const terminal = options.terminals.get(options.id);
+          const evidence = options.evidence?.get(options.id);
           const response = (() => {
             if (outcome._tag === "Failure")
               return Effect.fail(
                 terminal === undefined
                   ? outcome.failure
-                  : cellTerminalError(outcome.failure, outcome.failure.receipts ?? [], terminal),
+                  : cellTerminalError(
+                      {
+                        ...outcome.failure,
+                        effectStarted: replaceWithTerminal(outcome.failure, evidence)
+                          .possibleCommit,
+                      },
+                      outcome.failure.receipts ?? [],
+                      terminal,
+                    ),
               );
             if (terminal === undefined) return Effect.succeed(outcome.success);
             const receipts = outcome.success.journal.map((entry) => entry.receipt);
-            const error = completionCellError(outcome.success.error, receipts, terminal);
+            const previous = outcome.success.error;
+            const merged = replaceWithTerminal(previous ?? "none", evidence);
+            const error = completionCellError(
+              merged.possibleCommit
+                ? {
+                    ...(previous ?? { code: "stopped", nextStep: "Stopped." }),
+                    effectStarted: merged.possibleCommit,
+                  }
+                : previous,
+              receipts,
+              terminal,
+            );
             return error === undefined
               ? Effect.succeed(outcome.success)
               : Effect.fail({

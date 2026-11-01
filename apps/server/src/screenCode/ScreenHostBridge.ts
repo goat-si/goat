@@ -97,7 +97,11 @@ export class ScreenHostBridge {
   private readonly fencedTurns = new Set<string>();
   private readonly targetGates = new Map<string, Semaphore.Semaphore>();
   private dispatcher: ScreenHostDispatcher | undefined;
-  terminalObserver?: (context: ScreenHostContext, reason: ComputerUseTerminalReason) => void;
+  terminalObserver?: (
+    context: ScreenHostContext,
+    reason: ComputerUseTerminalReason,
+    error: ScreenRunError,
+  ) => void;
   private readonly cursorPhases: ScreenCursorPhases | undefined;
   private readonly staleTargetStep:
     | ((targetId: string, reason?: string) => string | undefined)
@@ -379,7 +383,7 @@ export class ScreenHostBridge {
     });
     const failCell = (error: ScreenRunError) => {
       if (error.code === "stopped_by_person" || error.code === "screen_locked")
-        this.terminalObserver?.(context, error.code);
+        this.terminalObserver?.(context, error.code, error);
       const safety =
         callTerminalError(error, undefined, call, error.effectStarted)?.safety ??
         screenFailureSafety(call, error);

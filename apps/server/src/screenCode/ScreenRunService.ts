@@ -42,6 +42,7 @@ import {
   finishCellResponse,
   makeCellAuthority,
   watchCellTerminals,
+  screenRunFailure as fail,
 } from "./ScreenCellAuthority.ts";
 import { recordScreenCellRow, type ScreenCellFailure } from "./ScreenCellRowRecord.ts";
 import { makePreviewTargetHost } from "./PreviewTargetHost.ts";
@@ -71,11 +72,6 @@ export interface ScreenRunInput {
   readonly limits?: Partial<ScreenRunLimits>;
   readonly bindingHints?: ScreenBindingHints;
 }
-const fail = (code: ScreenRunError["code"]): ScreenRunError => ({
-  code,
-  effectStarted: false,
-  nextStep: "Refresh the screen run and retry if appropriate.",
-});
 export class ScreenRunService extends Context.Service<
   ScreenRunService,
   {
@@ -391,7 +387,10 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
   const closingTurns = new Set<string>();
   const endedRuns = new Set<string>();
   const activeCells = makeCellAuthority(options.leases);
-  const cellTerminals = watchCellTerminals(bridge, activeCells);
+  const { terminals: cellTerminals, evidence: cellEvidence } = watchCellTerminals(
+    bridge,
+    activeCells,
+  );
   const cleanupJournal = new Map<string, ScreenJournalEntry[]>();
   const turnKey = (runId: string, turnId: string) => `${runId}\u0000${turnId}`;
   const recordCleanupFailure = (runId: string, turnId: string, tabId?: string) => {
@@ -735,6 +734,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
             cellId,
             cells: activeCells,
             terminals: cellTerminals,
+            evidence: cellEvidence,
             onFinished: () => {
               if (closingTurns.has(id)) turns.delete(id);
             },
