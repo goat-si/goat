@@ -108,6 +108,16 @@ export const cellErrorSafety = <
   receipts: readonly ScreenEffectReceipt[],
 ): E => {
   if (
+    error.safety === undefined &&
+    error.effectStarted !== true &&
+    receipts.some((receipt) => receipt.dispatched) &&
+    receipts.every((receipt) => isScreenRead(receipt.method) && !receipt.safety?.possibleCommit)
+  )
+    return {
+      ...error,
+      safety: classifyActionOutcome({ effect: "read", status: "indeterminate", dispatched: true }),
+    };
+  if (
     error.safety?.possibleCommit === true ||
     (error.effectStarted !== true && !receipts.some((receipt) => receipt.safety?.possibleCommit))
   )
