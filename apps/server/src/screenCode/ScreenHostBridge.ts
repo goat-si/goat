@@ -1,6 +1,7 @@
 // @effect-diagnostics schemaSyncInEffect:off preferSchemaOverJson:off - Frames are bounded before decode; JSON size is measured for the pipe.
 import { imageReceipt, settleOmittedImages } from "./ScreenImageReceipts.ts";
 import { replyTargetId } from "./ScreenHostReplyTarget.ts";
+import { failure, FAILED_CATEGORIES, notRun, refused } from "./ScreenHostReplies.ts";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -109,30 +110,6 @@ interface CellState {
   readonly batches: BatchGroups;
 }
 
-const failure = (code: ScreenRunError["code"], callId?: number): ScreenRunError => ({
-  code,
-  ...(callId === undefined ? {} : { callId }),
-  effectStarted: false,
-  nextStep: "Refresh the screen target and retry if appropriate.",
-});
-const refused = (call: ScreenHostCall, error: ScreenRunError): ScreenHostReply => ({
-  t: "reply",
-  runId: call.runId,
-  cellId: call.cellId,
-  callId: call.callId,
-  outcome: "error",
-  error,
-});
-/** Results that did not do what was asked; a write that answers one fails its call. */
-const FAILED_CATEGORIES: ReadonlySet<ScreenEffectReceipt["category"]> = new Set([
-  "partial",
-  "suspected_noop",
-  "refused",
-]);
-const notRun = (callId: number, haltedBy: number): ScreenRunError => ({
-  ...failure("not_run", callId),
-  nextStep: `Call ${haltedBy} in this cell failed, so this call did not run. Observe in a new cell before acting again.`,
-});
 const imageSize = (image: ScreenImage) => Buffer.from(image.bytes, "base64").byteLength;
 // A tab wait's deadline answer must still reach the cell process before the cell ends.
 const WAIT_REPLY_RESERVE_MS = 100;
