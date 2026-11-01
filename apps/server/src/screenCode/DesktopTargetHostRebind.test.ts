@@ -44,6 +44,7 @@ it.effect(
     Effect.gen(function* () {
       for (const [reason, expected] of [
         ["turn_ended", "The target was bound in an earlier turn."],
+        ["different_run", "The target was bound in a different run."],
         ["takeover", "The person took control (takeover). Wait until they hand it back, then:"],
         ["stopped", "The control changed (stopped)."],
         ["permission_denied", "Permission was lost."],
@@ -57,14 +58,24 @@ it.effect(
         const ref = first.value as ScreenTargetRef;
         const bridge = new ScreenHostBridge(undefined, host.staleTargetStep);
         bridge.setDispatcher(host);
-        const nextContext = reason === "turn_ended" ? { ...context, turnId: "later" } : context;
-        if (reason !== "turn_ended") {
+        const nextContext =
+          reason === "turn_ended"
+            ? { ...context, turnId: "later" }
+            : reason === "different_run"
+              ? { ...context, runId: "later-run", turnId: "later" }
+              : context;
+        if (reason === "turn_ended") host.finishTurn(context.runId, context.turnId);
+        else if (reason !== "different_run") {
           bridge.invalidateTargetNow(context.runId, context.turnId, ref.id, reason);
           host.invalidateTarget(ref.id, reason);
-        } else host.finishTurn(context.runId, context.turnId);
+        }
         const before = sent.length;
         const result = yield* bridge.handle(
-          { ...call("get_window_state", {}, ref), turnId: nextContext.turnId },
+          {
+            ...call("get_window_state", {}, ref),
+            runId: nextContext.runId,
+            turnId: nextContext.turnId,
+          },
           nextContext,
         );
         expect(result && "error" in result ? result.error : undefined).toMatchObject({
@@ -150,7 +161,7 @@ it.effect(
       expect(sent).toHaveLength(before);
     }),
 );
-it.effect("binding the same window again keeps its target and takes the window's new frame", () =>
+it.effect("binding an unmoved window again keeps its target; a moved one gets a new target", () =>
   Effect.sync(() => {
     const targets = new Map<string, BoundWindow>();
     const labels: string[] = [];
@@ -175,9 +186,14 @@ it.effect("binding the same window again keeps its target and takes the window's
       controlId: "control:1",
     });
     const first = bind(listing(0), context);
-    const again = bind(listing(250), context);
+    const again = bind(listing(0), context);
     expect(again).toEqual(first);
-    expect(targets.get(first.id)?.windowBounds).toMatchObject({ x: 250, y: 10 });
     expect(labels).toEqual([first.id, first.id]);
+    // Frames, window points and screenshots of the old rectangle must not carry over.
+    const moved = bind(listing(250), context);
+    expect(moved.id).not.toBe(first.id);
+    expect(targets.has(first.id)).toBe(false);
+    expect(targets.get(moved.id)?.windowBounds).toMatchObject({ x: 250, y: 10 });
+    expect(targets.get(moved.id)?.framesBasis).toBeUndefined();
   }),
 );

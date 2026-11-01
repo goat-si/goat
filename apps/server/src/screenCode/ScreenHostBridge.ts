@@ -375,10 +375,10 @@ export class ScreenHostBridge {
       const why =
         call.targetRef.environmentId !== context.environmentId
           ? "different_environment"
-          : call.targetRef.turnId !== context.turnId
-            ? "turn_ended"
-            : call.targetRef.runId !== context.runId
-              ? "different_run"
+          : call.targetRef.runId !== context.runId
+            ? "different_run"
+            : call.targetRef.turnId !== context.turnId
+              ? "turn_ended"
               : this.invalidTargets.get(turn)?.get(call.targetRef.id);
       const nextStep =
         call.targetRef.kind === "app" ? this.staleTargetStep?.(call.targetRef.id, why) : undefined;
