@@ -90,6 +90,17 @@ function usePriorityHolds() {
 }
 
 /**
+ * The React Compiler memoizes on the values a callback reads and drops unread entries from a
+ * dependency list, so the version that marks an expired grace must be read to rebuild the list.
+ */
+function observeInbox(
+  threads: Parameters<typeof threadListInboxReturns.observe>[0],
+  _expiredGraceVersion: number,
+) {
+  return threadListInboxReturns.observe(threads);
+}
+
+/**
  * Home's and the thread sidebar's thread list. Its result is one value a screen only reads:
  * built inline, the list's inputs stayed open to mutation across the screen's other hooks, so
  * the React Compiler cached none of it and every render of the screen re-rendered every row.
@@ -142,8 +153,7 @@ export function useThreadListV2(input: {
     threadListInboxReturns.getSnapshot,
   );
   const inbox = useMemo(
-    () => threadListInboxReturns.observe(workingShelfEnabled ? threads : null),
-    // oxlint-disable-next-line react/memo-dependencies -- the version signals an expired grace
+    () => observeInbox(workingShelfEnabled ? threads : null, inboxVersion),
     [threads, workingShelfEnabled, inboxVersion],
   );
   // Older settled threads load in pages; the shelf lists them only as far as they are loaded.
