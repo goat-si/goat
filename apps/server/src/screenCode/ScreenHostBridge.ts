@@ -1,4 +1,5 @@
 // @effect-diagnostics schemaSyncInEffect:off preferSchemaOverJson:off - Frames are bounded before decode; JSON size is measured for the pipe.
+import { imageReceipt, settleOmittedImages } from "./ScreenImageReceipts.ts";
 import { replyTargetId } from "./ScreenHostReplyTarget.ts";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
@@ -767,16 +768,21 @@ export class ScreenHostBridge {
       failCell(error);
       return refused(call, { ...error, safety: screenFailureSafety(call, error) });
     }
-    const evidence = result.success.evidence ?? [];
+    const omitted =
+      metadata &&
+      state.metadata.some((item) => item.callId === call.callId && item.omitted) &&
+      isScreenRead(call.method);
+    const receipt = omitted ? imageReceipt(call.method) : result.success;
+    const evidence = receipt.evidence ?? [];
     const withEffect = applyObservedEffect(state, call, result.success, admittedIndex, value);
     if (Buffer.byteLength(JSON.stringify(withEffect) ?? "") <= context.limits.returnBytes)
       value = withEffect;
     settle(
-      result.success.category,
+      receipt.category,
       "settled",
       undefined,
       evidence,
-      result.success.safety,
+      receipt.safety,
       result.success.outcome ? { outcome: result.success.outcome } : {},
     );
     return {
@@ -785,7 +791,7 @@ export class ScreenHostBridge {
       cellId: call.cellId,
       callId: call.callId,
       outcome: "ok" as const,
-      category: result.success.category,
+      category: receipt.category,
       ...(result.success.warnings?.length ? { warnings: result.success.warnings } : {}),
       ...(evidence.length
         ? { evidence: evidence.slice(0, 16).map((line) => line.slice(0, 200)) }
@@ -810,7 +816,7 @@ export class ScreenHostBridge {
     return {
       images: state?.images ?? [],
       imageMetadata: state?.metadata ?? [],
-      journal: state?.journal ?? [],
+      journal: settleOmittedImages(state?.journal ?? [], state?.metadata ?? []),
       truncated: state?.truncated ?? [],
       effectsStarted: state?.effectsStarted ?? 0,
       firstFailure: state?.firstFailure,
