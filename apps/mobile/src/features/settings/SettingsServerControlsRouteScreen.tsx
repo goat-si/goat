@@ -630,7 +630,7 @@ function ServerSettingsDetail(props: {
                     <SettingsSwitchRow
                       icon="desktopcomputer"
                       label="Strict input guards"
-                      subtitle="Require additional checks and confirmations for computer input."
+                      subtitle="Off by default. On adds GOAT's own checks before computer input is sent."
                       value={uniform("cuaStrictInputGuards")}
                       disabled={disabledFor("cuaStrictInputGuards")}
                       onValueChange={(value) => write({ cuaStrictInputGuards: value })}
