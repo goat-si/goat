@@ -5,12 +5,70 @@ export const SCREEN_CODE_SKILL_FILE = "SKILL.md";
 
 export function screenCodeSkillFiles(): Readonly<Record<string, string>> {
   return {
+    "references/errors.md": `# Screen errors and receipts
+
+For each error follow its \`nextStep\`. Delivery below concerns the failing call; an earlier call in the same cell may have landed even when this call sent nothing. Check \`effectStarted\`, \`safety\`, and every receipt before deciding. Never replay input that may have landed; observe in a new cell.
+
+- \`invalid_argument\`: invalid call or options; nothing sent for preflight refusals; fix the argument and observe again.
+- \`unsupported\`: the target cannot perform the requested operation; depends: read effectStarted and the receipt; use a supported screen action after observing.
+- \`unavailable\`: surface or target is unavailable; depends: read effectStarted and the receipt; observe again when available or ask the person.
+- \`target_missing\`: target or window not found; depends: read effectStarted and the receipt (a launch may have started); use screen.discover() and rebind with screen.app({ bundle_id, window_id }).
+- \`target_ambiguous\`: more than one target matches; depends: read effectStarted and the receipt; discover and rebind with screen.app({ bundle_id, window_id }).
+- \`stale_reference\`: observation, point, or target reference expired; nothing sent for the refused call; observe again or rebind with screen.app({ bundle_id, window_id }) as directed.
+- \`permission_denied\`: authority or desktop permission refused; nothing sent for that refusal; ask the person to grant the required permission.
+- \`user_interacting\`: the person is using the target; nothing sent for the refused call; wait for the indicated delay and observe again.
+- \`screen_locked\`: screen is locked; nothing sent for the refused call; wait for the person to unlock it.
+- \`user_intervened\`: explicit takeover interrupted control; depends: read effectStarted and the receipt; wait for the person, then observe again.
+- \`stopped\`: the person stopped computer use; depends: read effectStarted and the receipt; stop for this turn.
+- \`deadline\`: the call or cell ran out of time; depends: read effectStarted and the receipt; observe again, never replay a possibly sent input.
+- \`resource_exhausted\`: a runtime resource was exhausted; depends: read effectStarted and the receipt; observe again before a smaller cell.
+- \`runtime_unavailable\`: the screen runtime could not start or is unavailable; depends: read effectStarted and the receipt; stop and report the runtime problem.
+- \`downstream_failure\`: the target or its host failed; depends: read effectStarted and the receipt; observe again before deciding what remains.
+- \`unknown_outcome\`: a dispatched operation's result is unknown; may have landed; observe again and never resend it.
+- \`source_limit\`: cell source exceeds its limit; nothing sent by that rejected cell; shorten it and observe again if needed.
+- \`wall_limit\`: cell wall-time limit reached; depends: read effectStarted and the receipt; observe again before continuing.
+- \`call_limit\`: cell call budget exhausted; depends: read effectStarted and the receipt; observe again in a shorter new cell.
+- \`pending_limit\`: too many simultaneous pending calls; nothing sent for the rejected call; await earlier calls and inspect their receipts before continuing.
+- \`output_limit\`: output exceeded its budget; depends: read effectStarted and the receipt; observe again with less output.
+- \`text_limit\`: text output exceeded its budget; depends: read effectStarted and the receipt; observe again with a narrower read.
+- \`tree_limit\`: tree output exceeded its budget; depends: read effectStarted and the receipt; observe again with a narrower read.
+- \`image_limit\`: image budget exceeded; depends: read effectStarted and the receipt; observe again without a screenshot when possible.
+- \`live_children_limit\`: too many live screen runtimes; nothing sent for the refused start; stop and report the resource limit.
+- \`stale_run\`: the call belongs to an expired run or turn; depends: read effectStarted and the receipt; stop and bind again in the active turn.
+- \`stale_target\`: the binding belongs to an old target or turn; nothing sent for the refused call; rebind with screen.app({ bundle_id, window_id }) and observe again.
+- \`paused\`: control is paused; depends: read effectStarted and the receipt; wait for the person, then observe again.
+- \`private\`: a private surface or field is unavailable; nothing sent for the refused call; ask the person to handle it.
+- \`cleanup_failed\`: cleanup could not finish; depends: read effectStarted and the receipt; ask the person to inspect the affected target.
+- \`context_reset\`: the cell context was reset and saved bindings or values were lost; depends: read effectStarted and the receipt; bind again and observe again.
+- \`not_run\`: an earlier call failed and this call was not dispatched; nothing sent for this call; inspect the first failure and observe again in a new cell.
+
+A cell error may say \`First failure: call N ... (nothing sent)\` or \`(may have landed)\`. This identifies the first failed call, not proof that other calls did nothing. Read the journal and never replay earlier input that may have landed.
+
+Receipt categories: \`confirmed\` proves an effect; \`unverifiable\` means input was sent without proof of its effect; \`suspected_noop\` means sent but the effect was not seen, so observe before considering a retry; \`refused\` means that call was not sent; \`unknown_outcome\` means it may have landed; \`partial\` means part may have landed. Do not blindly resend any sent or uncertain input.
+
+Read evidence: \`read:completed\` records a completed read; \`read:cut\` records a cut or incomplete read. \`read:filtered\`, \`read:incomplete_search\`, and \`read:degraded\` describe limited evidence when present; filtered, incomplete or degraded reads cannot establish that an omitted item is absent. Check the observation's scope, completeness, truncation and warnings.
+`,
+    "references/workflows.md": `# Screen workflows
+
+- Large window: \`await app.observe({ depth: 2 })\` maps the tree. Use a current row in \`await app.observe({ within: n })\`, or search with \`await app.observe({ query: { name: "Settings" } })\`. Check completeness; a missed item in an incomplete search proves nothing.
+- Dialogs and sheets: inspect the observation's scope for the sheet and act on its current rows. Check \`otherWindows\` and the input's \`windows.opened\`; bind an opened window with \`await screen.app({ bundle_id, window_id })\` and observe it. If \`window_gone\` gives alternatives, inspect them or call \`await screen.discover()\` and rebind.
+- Menus: \`await app.menu(["File", "Open"])\`; observe the result before the next decision.
+- Chat: observe the message field's accessibility id, then \`await app.type(text, { id })\`. Check the draft and recipient; only after the person confirms, use \`await app.press("Enter", { id }, { send: true })\`. Never resend if the outcome is unverifiable. In KakaoTalk, open a chat with \`await app.click(n, { count: 2 })\`; opening it marks messages read.
+- Waiting: \`await app.waitFor({ role: "AXStaticText", value: "Ready" })\` or \`await app.waitFor({ window: "gone" })\`; inspect \`met\`. There is no wait for an element to be gone. Do not use sleep loops.
+- Handles: \`const obs = await app.observe(); const field = obs.ref(n);\` holds an element across awaits. Pass \`field\` as the target; a replacing observation invalidates it.
+- Decided steps: \`await Promise.all(["7", "+", "2", "="].map((k) => app.click(k)))\` groups already decided inputs in order. Read every result; later group members do not run after a failure. Do not batch decisions that depend on earlier results.
+
+Avoid resending after \`unverifiable\`; observe instead. Do not act on an old number after a newer observation: use the latest rows. Prefer an observed element to a point click. Never use foreground as a retry for a point click.
+`,
     [SCREEN_CODE_SKILL_FILE]: `---
 name: screen-code
 description: Run bounded JavaScript cells against available GOAT screen targets.
 ---
 
 ${SCREEN_CODE_SKILL_CORE}
+
+See references/errors.md for errors, receipts and recovery.
+See references/workflows.md for common screen workflows.
 
 The computer-use skill installed next to this one describes the driver's own tools, which a screen turn does not have; use the screen API.
 
