@@ -82,6 +82,31 @@ export const terminalSink = (
   ...sink,
   terminal,
   ...(terminal.release === undefined ? {} : { release: terminal.release }),
+  ...(sink.recordOutcome === undefined
+    ? {}
+    : {
+        recordOutcome: (line, status) => {
+          const result = finalTerminalLine(
+            line,
+            status,
+            message,
+            replaceWithTerminal(
+              terminal(),
+              dispatched() &&
+                !isReadOnlyCall(
+                  typeof message.params?.name === "string" ? message.params.name : undefined,
+                  message.params?.arguments,
+                ),
+            ),
+          );
+          return (
+            sink.recordOutcome?.(
+              result.line,
+              result.status === "unknown_outcome" ? "unknown_outcome" : undefined,
+            ) ?? Effect.void
+          );
+        },
+      }),
   answer: (line, status, context) =>
     Effect.suspend(() => {
       const finalContext = {
