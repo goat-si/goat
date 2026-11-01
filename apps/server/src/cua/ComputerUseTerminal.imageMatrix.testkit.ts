@@ -1,3 +1,4 @@
+// @effect-diagnostics preferSchemaOverJson:off -- Fixtures exercise raw JSON transport frames.
 import * as Effect from "effect/Effect";
 import type { ComputerUsePrimitiveReply } from "@goat/contracts";
 import { driverError, driverFailureNextStep } from "../screenCode/DesktopDriverReplies.ts";

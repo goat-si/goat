@@ -1,3 +1,4 @@
+// @effect-diagnostics preferSchemaOverJson:off -- Fixtures exercise raw JSON transport frames.
 import * as Effect from "effect/Effect";
 import * as Queue from "effect/Queue";
 import type { ComputerUseLeaseCallOutcome } from "@goat/contracts";
