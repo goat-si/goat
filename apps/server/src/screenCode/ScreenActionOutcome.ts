@@ -15,6 +15,7 @@ import {
   terminalFailure,
   replaceWithTerminal,
   type ComputerUseTerminalReason,
+  type ComputerUseTerminalState,
 } from "../cua/ComputerUseTerminal.ts";
 
 const reads = new Set<ScreenHostCall["method"]>([
@@ -234,17 +235,19 @@ export const completionCellError = (
   candidate: unknown,
   receipts: readonly ScreenEffectReceipt[],
   reason: ComputerUseTerminalReason | undefined,
+  retained?: ComputerUseTerminalState,
 ): ScreenRunError | undefined => {
   const error = isScreenRunError(candidate) ? candidate : undefined;
-  if (error === undefined && reason === undefined) return undefined;
+  const terminal = replaceWithTerminal(error ?? "none", retained, reason);
+  if (error === undefined && terminal.reason === undefined) return undefined;
   return cellTerminalError(
     error ?? {
       code: "stopped",
-      effectStarted: false,
+      effectStarted: terminal.possibleCommit,
       nextStep: "Refresh the screen run and retry if appropriate.",
     },
     receipts,
-    reason,
+    terminal.reason,
   );
 };
 

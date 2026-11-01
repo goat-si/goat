@@ -114,16 +114,7 @@ export const finishCellResponse =
             const receipts = outcome.success.journal.map((entry) => entry.receipt);
             const previous = outcome.success.error;
             const merged = replaceWithTerminal(previous ?? "none", evidence);
-            const error = completionCellError(
-              merged.possibleCommit
-                ? {
-                    ...(previous ?? { code: "stopped", nextStep: "Stopped." }),
-                    effectStarted: merged.possibleCommit,
-                  }
-                : previous,
-              receipts,
-              terminal,
-            );
+            const error = completionCellError(previous, receipts, terminal, merged);
             return error === undefined
               ? Effect.succeed(outcome.success)
               : Effect.fail({

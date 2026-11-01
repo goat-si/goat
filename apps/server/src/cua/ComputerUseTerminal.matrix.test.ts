@@ -63,6 +63,7 @@ import { refuseProxyCall } from "./ComputerUseLeaseProxyRefusal.ts";
 import { staleGeneration } from "./ComputerUseLeaseProxyPrimitive.ts";
 import { proxyCallAdmission } from "./ComputerUseLeaseCallPermissions.ts";
 import { narrowBatch } from "./ComputerUseBatchIdentity.ts";
+import { guestCompletion } from "./ComputerUseTerminal.guestMatrix.testkit.ts";
 import { preDispatchSites } from "./ComputerUseTerminal.preDispatch.testkit.ts";
 import { screenRunLimits } from "../screenCode/ScreenRunLimits.ts";
 
@@ -952,6 +953,7 @@ const sites: ReadonlyArray<{
   },
   { name: "ScreenCellAuthority.finishCellResponse", run: completion },
   { name: "ScreenCellAuthority.retainedEvidence", run: completionEvidence },
+  { name: "ScreenCellAuthority.guestRetainedEvidence", run: guestCompletion },
 ];
 const orders: ReadonlyArray<{
   readonly name: string;
