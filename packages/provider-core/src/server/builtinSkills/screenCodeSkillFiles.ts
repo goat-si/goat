@@ -14,7 +14,8 @@ For each error follow its \`nextStep\`. Delivery below concerns the failing call
 - \`unavailable\`: surface or target is unavailable; depends: read effectStarted and the receipt; observe again when available or ask the person.
 - \`target_missing\`: target or window not found; depends: read effectStarted and the receipt (a launch may have started); use screen.discover() and rebind with screen.app({ bundle_id, window_id }).
 - \`target_ambiguous\`: more than one target matches; depends: read effectStarted and the receipt; discover and rebind with screen.app({ bundle_id, window_id }).
-- \`stale_reference\`: observation, point, or target reference expired; nothing sent for the refused call; observe again or rebind with screen.app({ bundle_id, window_id }) as directed.
+- \`stale_reference\`: observation, point, or target reference expired; nothing sent for the refused call; observe again, or for a target its \`nextStep\` names why (an earlier turn, another run, a control change, lost permission, a replaced window) and the exact \`screen.app({ bundle_id, window_id })\` call; when the person took control, wait until they hand it back.
+- \`blocked_url\`: the person blocked this browser host for agents; nothing sent for the refused call; do not try another route to it, tell the person.
 - \`permission_denied\`: authority or desktop permission refused; nothing sent for that refusal; ask the person to grant the required permission.
 - \`user_interacting\`: the person is using the target; nothing sent for the refused call; wait for the indicated delay and observe again.
 - \`screen_locked\`: screen is locked; nothing sent for the refused call; wait for the person to unlock it.
@@ -46,7 +47,7 @@ A cell error may say \`First failure: call N ... (nothing sent)\` or \`(may have
 
 Receipt categories: \`confirmed\` proves an effect; \`unverifiable\` means input was sent without proof of its effect; \`suspected_noop\` means sent but the effect was not seen, so observe before considering a retry; \`refused\` means that call was not sent; \`unknown_outcome\` means it may have landed; \`partial\` means part may have landed. Do not blindly resend any sent or uncertain input.
 
-Read evidence: \`read:completed\` records a completed read; \`read:cut\` records a cut or incomplete read. This version does not emit separate \`read:filtered\`, \`read:incomplete_search\`, or \`read:degraded\` receipt labels. Filtered, incomplete or degraded reads cannot establish that an omitted item is absent. Check the observation's scope, completeness, truncation and warnings.
+Read evidence: \`read:completed\` (\`confirmed\`) means the read returned everything it asked for. Otherwise the read is \`unverifiable\` and says why: \`read:cut\` (cut by its budget or the driver's walk), \`read:filtered\` (filtered by the driver, so text under elements was not searched), \`read:incomplete_search\` (a query that could not search everything), \`read:degraded\` (the accessibility read degraded) or \`read:image_omitted\` (the screenshot was not returned). A read receipt never counts as a possible write. Such reads cannot establish that an omitted item is absent. Check the observation's scope, completeness, truncation and warnings.
 `,
     "references/workflows.md": `# Screen workflows
 
@@ -54,7 +55,7 @@ Read evidence: \`read:completed\` records a completed read; \`read:cut\` records
 - Dialogs and sheets: inspect the observation's scope for the sheet and act on its current rows. Check \`otherWindows\` and the input's \`windows.opened\`; bind an opened window with \`await screen.app({ bundle_id, window_id })\` and observe it. If \`window_gone\` gives alternatives, inspect them or call \`await screen.discover()\` and rebind.
 - Menus: \`await app.menu(["File", "Open"])\`; observe the result before the next decision.
 - Chat: observe the message field's accessibility id, then \`await app.type(text, { id })\`. Check the draft and recipient; only after the person confirms, use \`await app.press("Enter", { id }, { send: true })\`. Never resend if the outcome is unverifiable. In KakaoTalk, open a chat with \`await app.click(n, { count: 2 })\`; opening it marks messages read.
-- Waiting: \`await app.waitFor({ role: "AXStaticText", value: "Ready" })\` or \`await app.waitFor({ window: "gone" })\`; inspect \`met\`. There is no wait for an element to be gone. Do not use sleep loops.
+- Waiting: \`await app.waitFor({ role: "AXStaticText", value: "Ready" })\` or \`await app.waitFor({ window: "gone" })\`; inspect \`met\`. \`await app.waitFor({ gone: true, name: "Loading" })\` waits for an element to disappear; it is met only when a complete check finds no match, otherwise \`reason\` is \`still_present\` or \`incomplete_read\` (always on Windows), and it takes role and name only. Do not use sleep loops.
 - Handles: \`const obs = await app.observe(); const field = obs.ref(n);\` holds an element across awaits. Pass \`field\` as the target; a replacing observation invalidates it.
 - Decided steps: \`await Promise.all(["7", "+", "2", "="].map((k) => app.click(k)))\` groups already decided inputs in order. Read every result; later group members do not run after a failure. Do not batch decisions that depend on earlier results.
 
