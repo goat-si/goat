@@ -448,6 +448,21 @@ const completion: Driver = (input) =>
     if (outcome._tag !== "Failure") return yield* Effect.die("expected terminal failure");
     return replaceWithTerminal(outcome.failure);
   });
+const completionEvidence: Driver = (input) =>
+  Effect.gen(function* () {
+    const cells = makeCellAuthority(undefined);
+    const terminals = new Map<string, ComputerUseTerminalReason>();
+    const evidence = new Map([["run", merged(input)]]);
+    yield* cells.begin("run", "cell", "thread");
+    const reason = sourceState(input).reason;
+    if (reason !== undefined) terminals.set("run", reason);
+    const outcome = yield* Effect.fail(errorOf({ ...input, possible: false })).pipe(
+      finishCellResponse({ id: "run", cellId: "cell", cells, terminals, evidence }),
+      Effect.result,
+    );
+    if (outcome._tag !== "Failure") return yield* Effect.die("expected terminal failure");
+    return replaceWithTerminal(outcome.failure);
+  });
 const unsentBase: Parameters<typeof unsentCallRefusal>[2] = {
   pending: undefined,
   finished: undefined,
@@ -936,6 +951,7 @@ const sites: ReadonlyArray<{
     ),
   },
   { name: "ScreenCellAuthority.finishCellResponse", run: completion },
+  { name: "ScreenCellAuthority.retainedEvidence", run: completionEvidence },
 ];
 const orders: ReadonlyArray<{
   readonly name: string;
