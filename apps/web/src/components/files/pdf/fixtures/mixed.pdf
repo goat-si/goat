@@ -1,0 +1,62 @@
+%PDF-1.7
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R 5 0 R 7 0 R] /Count 3 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 600 800] /Resources << /Font << /F1 9 0 R >> >> /Contents 4 0 R /Annots [10 0 R 11 0 R] >>
+endobj
+4 0 obj
+<< /Length 71 >>
+stream
+BT /F1 18 Tf 30 750 Td (First page. Search needle twice: needle.) Tj ET
+endstream
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 1000 500] /Resources << /Font << /F1 9 0 R >> >> /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 63 >>
+stream
+BT /F1 18 Tf 30 450 Td (Landscape page: remote PDF link.) Tj ET
+endstream
+endobj
+7 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 400 1000] /Resources << /Font << /F1 9 0 R >> >> /Contents 8 0 R >>
+endobj
+8 0 obj
+<< /Length 66 >>
+stream
+BT /F1 18 Tf 30 950 Td (Final page needle across all pages.) Tj ET
+endstream
+endobj
+9 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>
+endobj
+10 0 obj
+<< /Type /Annot /Subtype /Link /Rect [30 700 180 725] /A << /S /URI /URI (https://example.com/) >> >>
+endobj
+11 0 obj
+<< /Type /Annot /Subtype /Link /Rect [200 700 350 725] /Dest [7 0 R /Fit] >>
+endobj
+xref
+0 12
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000127 00000 n 
+0000000277 00000 n 
+0000000398 00000 n 
+0000000525 00000 n 
+0000000638 00000 n 
+0000000765 00000 n 
+0000000881 00000 n 
+0000000951 00000 n 
+0000001069 00000 n 
+trailer
+<< /Size 12 /Root 1 0 R >>
+startxref
+1162
+%%EOF

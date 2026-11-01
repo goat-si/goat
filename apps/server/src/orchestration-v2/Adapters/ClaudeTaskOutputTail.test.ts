@@ -1,0 +1,154 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { assert, describe, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import * as Queue from "effect/Queue";
+
+import { claudeTaskOutputRoot, tailClaudeTaskOutput } from "./ClaudeTaskOutputTail.ts";
+
+const SESSION_ID = "0c91bb28-9e89-4889-bd22-3de9880233d3";
+const TASK_ID = "bk6xreeye";
+
+const makeTaskFile = Effect.gen(function* () {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "claude-task-output-" });
+  const tasks = path.join(root, "-private-tmp-project", SESSION_ID, "tasks");
+  return { root, tasks, file: path.join(tasks, `${TASK_ID}.output`) };
+});
+
+// TestClock cannot interleave with real filesystem I/O; use the live clock.
+describe("tailClaudeTaskOutput", () => {
+  it.live("follows a file that appears after the task starts, across split characters", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const { root, tasks, file } = yield* makeTaskFile;
+        const chunks = yield* Queue.unbounded<string>();
+        yield* tailClaudeTaskOutput({
+          root,
+          sessionId: SESSION_ID,
+          taskId: TASK_ID,
+          stop: yield* Deferred.make<void>(),
+          onChunk: (chunk) => Queue.offer(chunks, chunk),
+        }).pipe(Effect.forkScoped);
+
+        yield* fileSystem.makeDirectory(tasks, { recursive: true });
+        // Split the two-byte é across writes.
+        const encoded = new TextEncoder().encode("café 1\n");
+        yield* fileSystem.writeFile(file, encoded.subarray(0, 4));
+        assert.equal(yield* Queue.take(chunks), "caf");
+
+        yield* fileSystem.writeFile(file, encoded);
+        assert.equal(yield* Queue.take(chunks), "é 1\n");
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.live("skips ahead when the command writes faster than it is read", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const { root, tasks, file } = yield* makeTaskFile;
+        yield* fileSystem.makeDirectory(tasks, { recursive: true });
+        yield* fileSystem.writeFileString(file, "start\n");
+        const chunks = yield* Queue.unbounded<string>();
+        yield* tailClaudeTaskOutput({
+          root,
+          sessionId: SESSION_ID,
+          taskId: TASK_ID,
+          stop: yield* Deferred.make<void>(),
+          onChunk: (chunk) => Queue.offer(chunks, chunk),
+        }).pipe(Effect.forkScoped);
+        assert.equal(yield* Queue.take(chunks), "start\n");
+
+        yield* fileSystem.writeFileString(file, `start\n${"y\n".repeat(1_000_000)}end\n`);
+        const flooded = yield* Queue.take(chunks);
+        assert.isAtMost(flooded.length, 256 * 1024 + 1);
+        assert.isTrue(flooded.startsWith("\n"));
+        assert.isTrue(flooded.endsWith("y\nend\n"));
+      }),
+    ).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.live("reads what was written last when the tool result stops it", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const { root, tasks, file } = yield* makeTaskFile;
+        yield* fileSystem.makeDirectory(tasks, { recursive: true });
+        yield* fileSystem.writeFileString(file, "one\n");
+        const chunks: Array<string> = [];
+        const stop = yield* Deferred.make<void>();
+        const first = yield* Deferred.make<void>();
+        const fiber = yield* tailClaudeTaskOutput({
+          root,
+          sessionId: SESSION_ID,
+          taskId: TASK_ID,
+          stop,
+          onChunk: (chunk) =>
+            Effect.sync(() => chunks.push(chunk)).pipe(
+              Effect.andThen(Deferred.succeed(first, undefined)),
+            ),
+        }).pipe(Effect.forkScoped);
+        yield* Deferred.await(first);
+        yield* fileSystem.writeFileString(file, "one\ntwo\n");
+        yield* Deferred.succeed(stop, undefined);
+        yield* Fiber.join(fiber);
+        assert.deepEqual(chunks, ["one\n", "two\n"]);
+      }).pipe(Effect.provide(NodeServices.layer)),
+    ),
+  );
+});
+
+describe("claudeTaskOutputRoot", () => {
+  it.effect("finds Claude Code's root with a uid and on Windows, which has none", () =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const temp = "C:\\Users\\Jane Doe\\AppData\\Local\\Temp";
+      assert.equal(claudeTaskOutputRoot({}, path, { uid: 501 }), path.join("/tmp", "claude-501"));
+      assert.equal(
+        claudeTaskOutputRoot({ CLAUDE_CODE_TMPDIR: "/scratch" }, path, { uid: 501 }),
+        path.join("/scratch", "claude-501"),
+      );
+      assert.equal(
+        claudeTaskOutputRoot({ TEMP: temp, TMP: "C:\\Other" }, path, { uid: undefined }),
+        path.join(temp, "claude"),
+      );
+      assert.equal(
+        claudeTaskOutputRoot({ TMP: temp }, path, { uid: undefined }),
+        path.join(temp, "claude"),
+      );
+      assert.equal(
+        claudeTaskOutputRoot({ CLAUDE_CODE_TMPDIR: "D:\\claude-tmp", TEMP: temp }, path, {
+          uid: undefined,
+        }),
+        path.join("D:\\claude-tmp", "claude"),
+      );
+      assert.isUndefined(claudeTaskOutputRoot({}, path, { uid: undefined }));
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+});
+
+it.effect("resolves Linux temp variables per launch cwd and preserves the macOS fallback", () =>
+  Effect.gen(function* () {
+    const path = yield* Path.Path;
+    const root = (
+      environment: Record<string, string>,
+      platform: NodeJS.Platform,
+      cwd: string | null = null,
+    ) => claudeTaskOutputRoot(environment, path, { uid: 501, platform, cwd });
+    assert.equal(root({ TMPDIR: "/custom" }, "linux"), "/custom/claude-501");
+    assert.equal(root({ TMP: "/other" }, "linux"), "/other/claude-501");
+    assert.equal(root({ TEMP: "/temp" }, "linux"), "/temp/claude-501");
+    assert.equal(root({ TMPDIR: "/custom" }, "darwin"), "/tmp/claude-501");
+    assert.equal(root({ TMPDIR: "../tmp" }, "linux", "/work/project"), "/work/tmp/claude-501");
+    assert.equal(
+      root({ CLAUDE_CODE_TMPDIR: "../override", TMPDIR: "/custom" }, "darwin", "/work/project"),
+      "/work/override/claude-501",
+    );
+  }).pipe(Effect.provide(NodeServices.layer)),
+);

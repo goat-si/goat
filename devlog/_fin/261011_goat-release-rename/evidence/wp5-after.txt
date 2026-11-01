@@ -1,0 +1,13 @@
+juns-MacBook-Pro.local
+total 0
+drwx------    7 jun  staff   224 Oct 11 07:59 .
+drwxr-xr-x@ 155 jun  staff  4960 Oct 11 08:01 ..
+total 112
+drwxr-xr-x  4 jun  staff    128 Oct 11 07:04 .
+drwxr-xr-x  3 jun  staff     96 Oct 10 22:40 ..
+-rwx------  1 jun  staff   9722 Oct 11 07:04 run-t3.sh
+-rw-r--r--  1 jun  staff  41005 Oct 11 05:33 server.log
+0.0.45-nightly.20261010.6
+1e7a97871348d904c856589f25c0c5ffd9caf117e1d719d32acca93aeeab8ddb  /Users/jun/.t3/ssh-launch/0d73bce7088860f3/run-t3.sh
+0
+goat-si/goat/releases/download'

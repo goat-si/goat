@@ -1,0 +1,216 @@
+/**
+ * One preview surface for an agent driving a browser tab or a desktop app (D6, #1135). Both kinds
+ * share this schema and the same controls, so web, desktop and mobile render one panel.
+ *
+ * @module previewSession
+ */
+import * as Schema from "effect/Schema";
+
+import { EnvironmentId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { ComputerUseOverlayPoint, AgentCursorSnapshot } from "./computerUseOverlay.ts";
+import { ComputerUseRefusalReason } from "./computerUseProtocol.ts";
+
+export const PreviewSessionKind = Schema.Literals(["browser", "desktop"]);
+export type PreviewSessionKind = typeof PreviewSessionKind.Type;
+
+export const PreviewSessionPlatform = Schema.Literals(["mac", "windows", "linux"]);
+export type PreviewSessionPlatform = typeof PreviewSessionPlatform.Type;
+
+/** Keep the original cursor field decodable by older clients; detailed phases live in cursorState. */
+const PreviewSessionLegacyCursor = Schema.Struct({
+  windowId: Schema.Int,
+  point: ComputerUseOverlayPoint,
+  phase: Schema.Literals(["acting", "resting"]),
+});
+
+export const PreviewSessionTarget = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("browser"),
+    tabId: TrimmedNonEmptyString,
+    url: Schema.String,
+    title: Schema.String,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("desktop"),
+    /** Filled in once the helper reports the window an agent last acted on. */
+    bundleId: Schema.optionalKey(TrimmedNonEmptyString),
+    pid: Schema.optionalKey(Schema.Int),
+    windowId: Schema.optionalKey(Schema.Int),
+    title: Schema.String,
+    /** Where the agent's cursor is on that window, while the helper draws it there. */
+    cursor: Schema.optionalKey(PreviewSessionLegacyCursor),
+    cursorState: Schema.optionalKey(AgentCursorSnapshot),
+    motionSupport: Schema.optionalKey(Schema.Literals(["supported", "unsupported"])),
+  }),
+]);
+export type PreviewSessionTarget = typeof PreviewSessionTarget.Type;
+
+/** private: a password, one-time code or passkey prompt has focus; nobody but its person sees it. */
+export const PreviewSessionOwner = Schema.Literals(["agent", "human", "private"]);
+export type PreviewSessionOwner = typeof PreviewSessionOwner.Type;
+
+export const PreviewSessionStatus = Schema.Literals([
+  "idle",
+  "observing",
+  "acting",
+  "waiting-for-human",
+  "paused",
+  "stopped",
+  "error",
+  "permission-needed",
+]);
+export type PreviewSessionStatus = typeof PreviewSessionStatus.Type;
+
+export const PreviewSessionLease = Schema.Struct({
+  threadId: ThreadId,
+  expiresAt: Schema.String,
+  /** The apps the agent may control; absent for the whole screen or a browser tab. */
+  scope: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
+});
+export type PreviewSessionLease = typeof PreviewSessionLease.Type;
+
+export const PreviewSessionControl = Schema.Literals([
+  "takeover",
+  "handBack",
+  "requestHandoff",
+  "stop",
+  "stopAll",
+]);
+export type PreviewSessionControl = typeof PreviewSessionControl.Type;
+
+export const PreviewSessionCapabilities = Schema.Struct({
+  /** Controls a person can use on this session now, in the order clients show them. */
+  controls: Schema.Array(PreviewSessionControl),
+  /** Whether a live picture exists: the browser stream, or desktop frames once the helper sends them. */
+  frames: Schema.Boolean,
+  /** Whether a secret field pauses the agent here; false where the host cannot detect one yet. */
+  privateMode: Schema.Boolean,
+  /** Whether a person's own input pauses the agent here; false where the host cannot detect it. */
+  humanInput: Schema.Boolean,
+});
+export type PreviewSessionCapabilities = typeof PreviewSessionCapabilities.Type;
+
+export const PreviewSession = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  kind: PreviewSessionKind,
+  environmentId: EnvironmentId,
+  host: Schema.String,
+  platform: PreviewSessionPlatform,
+  /** The thread whose agent drives it. */
+  threadId: Schema.optionalKey(ThreadId),
+  target: PreviewSessionTarget,
+  owner: PreviewSessionOwner,
+  status: PreviewSessionStatus,
+  /** Why the agent cannot act now, when it cannot. */
+  reason: Schema.optionalKey(ComputerUseRefusalReason),
+  /** What the agent said it needs from a person, after requestHandoff. */
+  handoffReason: Schema.optionalKey(Schema.String),
+  lease: Schema.optionalKey(PreviewSessionLease),
+  /** An asset id for the latest frame; clients load it lazily. */
+  lastFrame: Schema.optionalKey(TrimmedNonEmptyString),
+  capabilities: PreviewSessionCapabilities,
+});
+export type PreviewSession = typeof PreviewSession.Type;
+
+export const PreviewSessionsSnapshot = Schema.Struct({
+  sessions: Schema.Array(PreviewSession),
+});
+export type PreviewSessionsSnapshot = typeof PreviewSessionsSnapshot.Type;
+
+/**
+ * Limits on a desktop session's live picture (#1370): a tile's thumbnail at most 2 frames a
+ * second and 480 px wide (D11, #1327), so nobody receives full-resolution pixels of a window.
+ */
+export const PREVIEW_SESSION_FRAME_LIMITS = {
+  maxWidth: 480,
+  minIntervalMs: 500,
+  /** One JPEG; a larger frame is dropped as captureFailed. */
+  maxBytes: 256 * 1024,
+} as const;
+
+/**
+ * Why a desktop session shows no live picture. windowUnknown: no agent call has named a window
+ * yet. unsupported: this host's helper cannot capture one window by itself. appNotApproved: the
+ * window belongs to an app outside the control's approved apps.
+ */
+export const PreviewSessionNoPicture = Schema.Literals([
+  "screenRecordingNotGranted",
+  "windowUnknown",
+  "windowGone",
+  "appNotApproved",
+  "private",
+  "paused",
+  "stopped",
+  "unsupported",
+  "captureFailed",
+]);
+export type PreviewSessionNoPicture = typeof PreviewSessionNoPicture.Type;
+
+/** A viewer's request for a desktop session's frames: the same knobs a browser thumbnail uses. */
+export const PreviewSessionFramesInput = Schema.Struct({
+  sessionId: TrimmedNonEmptyString,
+  maxWidth: Schema.Int.check(
+    Schema.isBetween({ minimum: 16, maximum: PREVIEW_SESSION_FRAME_LIMITS.maxWidth }),
+  ),
+  frameIntervalMs: Schema.Int.check(
+    Schema.isGreaterThanOrEqualTo(PREVIEW_SESSION_FRAME_LIMITS.minIntervalMs),
+  ),
+});
+export type PreviewSessionFramesInput = typeof PreviewSessionFramesInput.Type;
+
+export const PreviewSessionFrameEvent = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("frame"),
+    seq: Schema.Int,
+    width: Schema.Int,
+    height: Schema.Int,
+    mime: Schema.Literal("image/jpeg"),
+    /** Base64. */
+    data: Schema.String,
+    /**
+     * When the server took the frame from the capturing helper, epoch ms on the server's clock: the
+     * capture happened no later. Absent from servers that pair no cursor with their frames.
+     */
+    capturedAt: Schema.optionalKey(Schema.Number),
+    /**
+     * How old the pixels were when the server sent them, ms, so a viewer on another clock can tell
+     * a picture that keeps arriving late from a live one. Absent when the capture time is unknown.
+     */
+    ageMs: Schema.optionalKey(Schema.Number),
+    /**
+     * The agent's cursor as it was at capturedAt, so a viewer draws the cursor these pixels go
+     * with, never a newer one from the session list. Absent when no cursor was drawn then.
+     */
+    cursor: Schema.optionalKey(PreviewSessionLegacyCursor),
+    cursorState: Schema.optionalKey(AgentCursorSnapshot),
+  }),
+  Schema.Struct({ type: Schema.Literal("unavailable"), reason: PreviewSessionNoPicture }),
+]);
+export type PreviewSessionFrameEvent = typeof PreviewSessionFrameEvent.Type;
+
+export const PreviewSessionControlInput = Schema.Struct({
+  /** Ignored for stopAll, which acts on every session on the host. */
+  sessionId: Schema.optionalKey(TrimmedNonEmptyString),
+  control: PreviewSessionControl,
+  reason: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(500))),
+});
+export type PreviewSessionControlInput = typeof PreviewSessionControlInput.Type;
+
+export const PreviewSessionControlResult = Schema.Struct({
+  applied: Schema.Boolean,
+  /** Why a control did nothing: the session is gone, or the control does not fit it now. */
+  reason: Schema.optionalKey(Schema.Literals(["not_found", "unsupported", "not_allowed"])),
+});
+export type PreviewSessionControlResult = typeof PreviewSessionControlResult.Type;
+
+/** The chip every client shows for a session, so the words match everywhere. */
+export const previewSessionChip = (session: Pick<PreviewSession, "owner" | "status">) => {
+  if (session.owner === "private") return "Private (paused)" as const;
+  if (session.status === "permission-needed") return "Permission needed" as const;
+  if (session.status === "stopped") return "Stopped" as const;
+  // An agent's request outranks who holds the screen: the person still has a step to finish.
+  if (session.status === "waiting-for-human") return "Waiting for you" as const;
+  if (session.owner === "human") return "You're controlling" as const;
+  if (session.status === "paused") return "Waiting for you" as const;
+  return "Agent controlling" as const;
+};

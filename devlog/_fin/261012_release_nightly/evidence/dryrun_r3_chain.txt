@@ -1,0 +1,50 @@
+# Dry run r3 (unsigned, local, 2026-10-12): CLI darwin-arm64 build, payload scan, assemble, publish/prune --dry-run
+
+## CLI build log tail
+/var/folders/h7/f1j0n8vj6ggcy9wprpxkfdsc0000gn/T/t3-cli-archive-JepUM3/goat-0.1.0-nightly.20261012.1-darwin-arm64/goat: replacing existing signature
+[03:41:30.364] INFO (#1): [cli-archive] Signed ad hoc (no T3CODE_CLI_MAC_SIGN_IDENTITY).
+[03:41:35.142] INFO (#1): [cli-archive] Wrote /tmp/goat-dryrun/r3/cli/release/goat-0.1.0-nightly.20261012.1-darwin-arm64.tar.gz (80025512 bytes).
+[03:41:40.609] INFO (#1): [cli-smoke] goat-0.1.0-nightly.20261012.1-darwin-arm64: --version passed and serve answered on 47700.
+cli-ok seconds=19
+
+## assemble + publish/prune dry run
+[03:42:12.422] INFO (#1): Release assets verified; SHA256SUMS written and re-read.
+assemble-exit=0
+LICENSE-T3CODE.txt
+SHA256SUMS
+THIRD_PARTY_NOTICES.md
+goat-0.1.0-nightly.20261012.1-darwin-arm64.tar.gz
+install.ps1
+install.sh
+935d8f2af0c703f9c39517ee57cc4930b19d02d533be930b63f0e82f93614b43  LICENSE-T3CODE.txt
+757c02c13cefc4bfa9fa616c145f4a080dfa1b51b5d5548a3703dc42e185cf9f  THIRD_PARTY_NOTICES.md
+6568480b6ba95037dc80d6c2ffb00a91dd7826fdccd09af58072355eec2609e0  goat-0.1.0-nightly.20261012.1-darwin-arm64.tar.gz
+615901622577e1fc95b70352629d97c94ad690b2555caae7a6c306f3aea10e4b  install.ps1
+3982715a0881371eda32499db157b0297d0daedc4f78a56d519bce6f75c5bb79  install.sh
+== publish dry run (read-only)
+Would create draft v0.1.0-nightly.20261012.1, verify 6 assets, sync repository files, recheck supersession, and publish.
+GOAT 0.1.0-nightly.20261012.1
+
+UTC date: 2026-10-11
+
+| Platform | File |
+| --- | --- |
+| cli | `goat-0.1.0-nightly.20261012.1-darwin-arm64.tar.gz` |
+| other | `LICENSE-T3CODE.txt` |
+| other | `SHA256SUMS` |
+| other | `THIRD_PARTY_NOTICES.md` |
+| other | `install.ps1` |
+| other | `install.sh` |
+
+macOS: signed and notarized (Developer ID, team U9ATA49N28). Windows and Linux: unsigned in this stage — verify downloads with SHA256SUMS.
+
+publish-exit=0
+== prune dry run (read-only)
+prune-exit=0
+
+## mac arm64/x64 assemble (fail-closed for unsigned DMGs, r2)
+[03:42:15.996] ERROR (#1): ReleaseVerificationError: missing DMG finalization transform: GOAT-0.1.0-nightly.20261012.1-arm64.dmg
+missing DMG finalization transform: GOAT-0.1.0-nightly.20261012.1-x64.dmg
+expected one mac report: desktop-mac-arm64
+expected one mac report: desktop-mac-x64
+assemble-exit=1

@@ -1,0 +1,40 @@
+{
+  "gate": "listing",
+  "taskSetVersion": 2,
+  "projectId": "mcp:9d035b05-1f76-4a63-9152-b545e1cb0fa6",
+  "pairs": 10,
+  "baselineArm": "claude-full",
+  "arms": [
+    {
+      "id": "claude-full",
+      "modelSelection": {
+        "instanceId": "claudeAgent",
+        "model": "claude-opus-4-8"
+      },
+      "listing": {
+        "mode": "full"
+      },
+      "forbidTools": [],
+      "forbidItemTypes": ["command_execution", "file_change"]
+    }
+  ],
+  "fixtureModel": {
+    "instanceId": "codex",
+    "model": "gpt-6-luna"
+  },
+  "reviewModels": [
+    {
+      "instanceId": "codex",
+      "model": "gpt-6-luna"
+    },
+    {
+      "instanceId": "codex",
+      "model": "command-code/deepseek-deepseek-v4.1-flash-fast"
+    },
+    {
+      "instanceId": "codex",
+      "model": "anthropic/claude-sonnet-5-5"
+    }
+  ],
+  "values": {}
+}

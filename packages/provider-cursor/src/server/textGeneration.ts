@@ -1,0 +1,289 @@
+import {
+  withMemoryExecution,
+  type MemoryGenerationRunnerContext,
+} from "@goat/provider-core/server/memoryGenerationRunner";
+import { ProviderDriverKind } from "@goat/contracts";
+import * as Stream from "effect/Stream";
+import * as FileSystem from "effect/FileSystem";
+
+import type { AgentOptions, RunResult } from "@cursor/sdk";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+
+import { type ProviderSetupError, TextGenerationError } from "@goat/contracts";
+import type { CursorSettings } from "../settings.ts";
+
+import * as TextGenerationOperations from "@goat/provider-core/server/textGenerationOperations";
+import { MemoryGenerationRunnerError } from "@goat/provider-core/server/memoryGenerationRunner";
+import { cursorSdkModelSelection } from "./sdkModel.ts";
+import type { CursorAuth } from "./auth.ts";
+import * as CursorSdk from "./CursorSdk.ts";
+import * as HostProcess from "@goat/shared/HostProcess";
+
+const CURSOR_TIMEOUT_MS = 180_000;
+
+const isTextGenerationError = Schema.is(TextGenerationError);
+
+function cursorSdkResultDetail(result: RunResult): string {
+  switch (result.status) {
+    case "cancelled":
+      return "Cursor SDK request was cancelled.";
+    case "error":
+      return "Cursor SDK request finished with an error.";
+    case "finished":
+      return "Cursor SDK returned empty output.";
+  }
+}
+
+// Sandboxing fails without cursorsandbox or after a process-wide unsupported result.
+function cursorSandboxUnsupported(cause: unknown): boolean {
+  const seen = new Set<object>();
+  let current = cause;
+  while (typeof current === "object" && current !== null && !seen.has(current)) {
+    seen.add(current);
+    if (current instanceof Error && current.message.includes("sandboxing is not supported")) {
+      return true;
+    }
+    current = Reflect.get(current, "cause");
+  }
+  return false;
+}
+
+export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(function* (
+  cursorSettings: CursorSettings,
+  environment?: NodeJS.ProcessEnv,
+  resolveApiKey?: Effect.Effect<string, ProviderSetupError>,
+  withAccess?: CursorAuth["withAccess"],
+  memoryRunnerContext?: MemoryGenerationRunnerContext,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const { Agent, SqliteLocalAgentStore } = yield* CursorSdk.CursorSdk;
+  const resolvedEnvironment = environment ?? process.env;
+
+  const resolveCursorApiKey = Effect.fn("CursorTextGeneration.resolveCursorApiKey")(function* (
+    operation: TextGenerationOperations.Operation,
+  ) {
+    if (!cursorSettings.enabled) {
+      return yield* new TextGenerationError({
+        operation,
+        detail: "Cursor is disabled in GOAT settings.",
+      });
+    }
+
+    const apiKey = resolveApiKey
+      ? yield* resolveApiKey
+      : resolvedEnvironment.CURSOR_API_KEY?.trim();
+    if (!apiKey) {
+      return yield* new TextGenerationError({
+        operation,
+        detail: "Sign in with Cursor or add CURSOR_API_KEY in provider settings.",
+      });
+    }
+
+    return apiKey;
+  });
+
+  // Ignores `cwd`: the agent runs in an empty temp directory, away from the project.
+  const runCursorSelected = Effect.fn("CursorTextGeneration.runCursorJson")(
+    function* <S extends Schema.Top>(input: TextGenerationOperations.Request<S>) {
+      const { operation, prompt, modelSelection } = input;
+      const isMemory = TextGenerationOperations.isMemoryOperation(operation);
+      const apiKey = yield* resolveCursorApiKey(operation);
+      // sandbox.json expands writable paths independently of settingSources; the public API cannot override it.
+      if (yield* fs.exists(`${yield* HostProcess.HomeDirectory}/.cursor/sandbox.json`)) {
+        return yield* new TextGenerationError({
+          operation,
+          detail:
+            "Cursor text generation cannot enforce workspace isolation with a custom ~/.cursor/sandbox.json. Use another text-generation provider.",
+          // Typed so memory pauses this model: the policy refuses every request.
+          cause: new MemoryGenerationRunnerError({ code: "unavailable" }),
+        });
+      }
+      const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "goat-cursor-text-" });
+      const selectedModel = cursorSdkModelSelection(modelSelection);
+      // The SDK keeps SQLite handles open after `agent.close()` and only releases
+      // them from a store the caller disposes. Its state lives outside `cwd` so the
+      // agent's workspace stays empty.
+      const stateRoot = yield* fs.makeTempDirectoryScoped({ prefix: "goat-cursor-text-state-" });
+      const store = yield* Effect.acquireRelease(
+        Effect.tryPromise(() => SqliteLocalAgentStore.open({ workspaceRef: cwd, stateRoot })),
+        (store) => Effect.tryPromise(() => store.dispose()).pipe(Effect.ignore({ log: true })),
+      );
+      const agentOptions = {
+        apiKey,
+        mode: "plan",
+        model: selectedModel,
+        ...(isMemory ? { tools: [], disallowedTools: ["mcp", "task"], mcpServers: {} } : {}),
+        local: {
+          cwd,
+          store,
+          autoReview: false,
+          sandboxOptions: { enabled: true },
+          settingSources: [],
+          // Memory helpers never resume a saved agent or retry through a different tool policy.
+          enableAgentRetries: !isMemory,
+        },
+      } satisfies AgentOptions;
+      const createCursorAgent = (sandboxEnabled: boolean) =>
+        Effect.tryPromise((signal) =>
+          Agent.create(
+            sandboxEnabled
+              ? agentOptions
+              : {
+                  ...agentOptions,
+                  local: {
+                    ...agentOptions.local,
+                    sandboxOptions: { enabled: false },
+                  },
+                },
+          ).then((agent) => {
+            if (signal.aborted) agent.close();
+            return agent;
+          }),
+        ).pipe(
+          Effect.mapError(
+            (cause) =>
+              new TextGenerationError({
+                operation,
+                detail: isMemory
+                  ? "Cursor could not create an isolated text generation agent."
+                  : "Cursor SDK text generation failed.",
+                cause,
+              }),
+          ),
+        );
+
+      const request = Effect.gen(function* () {
+        // Empty cwd and setting sources isolate the run from user projects even if sandboxing fails.
+        const agent = yield* Effect.acquireRelease(
+          createCursorAgent(true).pipe(
+            Effect.catchIf(cursorSandboxUnsupported, () =>
+              isMemory
+                ? Effect.fail(
+                    new TextGenerationError({
+                      operation,
+                      detail: "Cursor memory generation requires its isolated sandbox.",
+                      // Typed so memory pauses this model: the sandbox is missing on every try.
+                      cause: new MemoryGenerationRunnerError({ code: "unavailable" }),
+                    }),
+                  )
+                : createCursorAgent(false),
+            ),
+          ),
+          (agent) =>
+            Effect.tryPromise(() => agent[Symbol.asyncDispose]()).pipe(
+              Effect.timeout("5 seconds"),
+              Effect.ignore({ log: true }),
+            ),
+          { interruptible: true },
+        );
+        const run = yield* Effect.tryPromise((signal) =>
+          agent.send(prompt).then((run) => {
+            if (signal.aborted) void run.cancel().catch(() => undefined);
+            return run;
+          }),
+        );
+        yield* Effect.addFinalizer(() =>
+          run.status === "running"
+            ? Effect.tryPromise(() => run.cancel()).pipe(
+                Effect.timeout("5 seconds"),
+                Effect.ignore({ log: true }),
+              )
+            : Effect.void,
+        );
+        const wait = Effect.tryPromise(() => run.wait());
+        if (!isMemory) return yield* wait;
+        // tools: [] enforces denial in the SDK. Any observed tool activity invalidates the result,
+        // including a successful JSON answer after an unexpected tool or user-input event.
+        const noTools = Stream.fromAsyncIterable(
+          run.stream(),
+          (cause) =>
+            new TextGenerationError({
+              operation,
+              detail: "Cursor memory generation stream failed.",
+              cause,
+            }),
+        ).pipe(
+          Stream.runForEach((message) =>
+            message.type === "tool_call" ||
+            message.type === "request" ||
+            message.type === "task" ||
+            (message.type === "assistant" &&
+              message.message.content.some((block) => block.type === "tool_use"))
+              ? Effect.fail(
+                  new TextGenerationError({
+                    operation,
+                    detail: "Cursor memory generation attempted tools or user input.",
+                  }),
+                )
+              : Effect.void,
+          ),
+        );
+        const [result] = yield* Effect.all([wait, noTools], { concurrency: "unbounded" });
+        return result;
+      }).pipe(Effect.scoped);
+      const promptResult = yield* request.pipe(
+        Effect.timeoutOption(CURSOR_TIMEOUT_MS),
+        Effect.flatMap(
+          Option.match({
+            onNone: () =>
+              Effect.fail(
+                new TextGenerationError({
+                  operation,
+                  detail: "Cursor SDK request timed out.",
+                }),
+              ),
+            onSome: (value) => Effect.succeed(value),
+          }),
+        ),
+      );
+
+      const rawResult = promptResult.result?.trim() ?? "";
+      if (promptResult.status !== "finished" || !rawResult) {
+        return yield* new TextGenerationError({
+          operation,
+          detail: cursorSdkResultDetail(promptResult),
+        });
+      }
+
+      const result = yield* TextGenerationOperations.decodeJsonReply(
+        input,
+        "Cursor SDK",
+        rawResult,
+      );
+      return { result, effectiveModel: selectedModel.id };
+    },
+    (effect, input) => {
+      const { operation } = input;
+      return effect.pipe(
+        Effect.scoped,
+        (effect) => (withAccess ? withAccess(effect) : effect),
+        Effect.scoped,
+        Effect.mapError((cause) =>
+          isTextGenerationError(cause)
+            ? cause
+            : new TextGenerationError({
+                operation,
+                detail: "Cursor SDK text generation failed.",
+                cause,
+              }),
+        ),
+      );
+    },
+  );
+
+  return TextGenerationOperations.fromRunner(
+    "CursorTextGeneration",
+    TextGenerationOperations.withoutInvestigation("Cursor", (request) =>
+      runCursorSelected(request).pipe(Effect.map((selected) => selected.result)),
+    ),
+    {
+      memoryRunner: withMemoryExecution(
+        memoryRunnerContext,
+        ProviderDriverKind.make("cursor"),
+        runCursorSelected,
+      ),
+    },
+  );
+});

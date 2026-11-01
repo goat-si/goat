@@ -1,0 +1,19 @@
+---
+import Base from "../../../layouts/Base.astro";
+import { guide } from "../../../lib/links";
+import { userGuides } from "../../../lib/userGuides";
+import "../../../styles/userDocs.css";
+
+const guides = await userGuides();
+---
+
+<Base locale="en" path="/docs/user/" title="User guides | GOAT" description="Install GOAT, connect your machines, and work with coding agents from any device." localized={false}>
+  <section class="container page-head docs-index" aria-labelledby="guides-title">
+    <h1 id="guides-title">User guides</h1>
+    <p class="lede">Install GOAT, connect your machines, and work with coding agents from any device.</p>
+    <p><a class="text-link" href={guide("install")}>Start with installation</a></p>
+    <ul class="guide-list">
+      {guides.map(({ entry, title }) => <li><a href={guide(entry.id)}>{title}</a></li>)}
+    </ul>
+  </section>
+</Base>

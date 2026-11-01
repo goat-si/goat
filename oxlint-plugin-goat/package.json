@@ -1,0 +1,19 @@
+{
+  "name": "@goat/oxlint-plugin-goat",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vp test run --config ../vite.config.ts --dir .",
+    "update-code-budgets": "node update-code-budgets.ts"
+  },
+  "dependencies": {
+    "@effect/platform-node": "catalog:",
+    "@oxlint/plugins": "^1.63.0",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}

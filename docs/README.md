@@ -1,0 +1,81 @@
+# GOAT docs
+
+## Using GOAT
+
+- [Install GOAT](./user/install.md)
+- [Messages and context](./user/composer.md)
+- [Working with threads](./user/thread-sidebar.md)
+- [Permission modes](./user/permission-modes.md)
+- [Terminal history](./user/terminal.md)
+- [Source control](./user/source-control.md)
+- [Project settings](./user/project-settings.md)
+- [Appearance and themes](./user/appearance.md)
+- [Keyboard shortcuts](./user/keybindings.md)
+- [SnapShots](./user/snap-shot.md)
+- [Visual replies](./user/html-renders.md)
+- [Import browser sessions](./user/browser-import.md)
+- [Use GOAT as your default browser](./user/default-browser.md)
+- [Devices](./user/devices.md)
+- [Computer use](./user/computer-use.md)
+- [Usage and limits](./user/usage.md)
+- [Product usage data](./user/telemetry.md)
+- [Remote access](./user/remote-access.md)
+- [Guest links](./user/guest-links.md)
+- [GOAT Connect troubleshooting](./user/goat-connect-troubleshooting.md)
+- [Outside agents (MCP)](./user/outside-agents.md)
+- [Fleet goals](./user/fleet-goals.md)
+- [Hub](./user/hub.md)
+- [Slack](./user/slack.md)
+- [Running in the background](./user/background-service.md)
+- [Updating GOAT](./user/updating.md)
+- Provider guides: [Codex](./user/providers-codex.md) · [Claude](./user/providers-claude.md) · [OpenCode](./user/providers-opencode.md) · [Antigravity](./user/providers-antigravity.md) · [Pi](./user/providers-pi.md) · [Muse Code](./user/providers-muse.md) · [fx](./user/providers-fx.md)
+
+---
+
+## Working on GOAT
+
+Start with the [development runbook](./operations/development.md) and
+[contribution policy](../CONTRIBUTING.md).
+
+Internal notes preserve architectural decisions, constraints, and implementation traps that the
+source alone does not explain. Most code changes do not need an internal documentation update. Follow the
+[documentation rules](../AGENTS.md#documentation) before adding one.
+
+- [Architecture overview](./internals/overview.md)
+- [Glossary](./internals/glossary.md)
+- [Connection runtime](./internals/connection-runtime.md)
+- [SSH reconnect](./internals/ssh-reconnect.md)
+- [SSH hardening references](./internals/ssh-hardening-references.md)
+- [Providers](./internals/providers.md)
+- [Adding a provider](./internals/adding-a-provider.md)
+- [Pull request file revisions](./internals/pull-request-file-revisions.md)
+- [Model classification](./internals/model-manifest.md)
+- [Remote environments](./internals/remote.md)
+- [Channels and the GOAT bot](./internals/channels.md)
+- [Server updates](./internals/server-updates.md)
+- [Remote updates](./internals/remote-updates.md)
+- [Release channels](./internals/release-channels.md)
+- [Resource telemetry](./internals/resource-telemetry.md)
+- [Product analytics](./internals/product-analytics.md)
+- [Environment auth](./internals/environment-auth.md)
+- [GOAT Connect](./internals/goat-connect.md)
+- [Assistant citations](./internals/assistant-citations.md)
+- [Mobile navigation](./internals/mobile-navigation.md)
+- [Mobile development lifecycle](./internals/mobile-development.md)
+- [Terminal runtime](./internals/terminal-runtime.md)
+- [Devices](./internals/devices.md)
+- [Agent surface (proposal)](./internals/agent-surface.md)
+- [Voice input](./internals/voice-input.md)
+
+### Runbooks
+
+- [Development and local builds](./operations/development.md)
+- [Testing policy](./operations/testing.md)
+- [Code budgets](./operations/code-quality.md)
+- [Merging pull requests](./operations/merging.md)
+- [Development discipline](./operations/discipline.md)
+- [GOAT Connect setup](./operations/connect-setup.md)
+- [Release](./operations/release.md)
+- [Observability](./operations/observability.md)
+- [Relay observability](./operations/relay-observability.md)
+- [Mobile app store screenshots](./operations/mobile-app-store-screenshots.md)

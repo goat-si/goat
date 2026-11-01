@@ -1,0 +1,88 @@
+import {
+  COMPUTER_USE_GRANT_HANDOFF_PATH,
+  HandoffError,
+  PREVIEW_HANDOFF_PATH,
+  endsWithItsRun,
+  isHandoffPending,
+  type Handoff,
+  type HandoffActor,
+  type HandoffState,
+  type OrchestrationV2TurnItem,
+} from "@goat/contracts";
+import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+
+export const itemHandoff = (item: OrchestrationV2TurnItem) =>
+  item.type === "human_handoff" || item.type === "secret_request" ? item.handoff : undefined;
+
+/** Expiry wins a race with a late answer; a terminal decision is immutable. */
+export function transitionHandoff(
+  record: Handoff,
+  state: HandoffState,
+  actor: HandoffActor,
+  now: DateTime.Utc,
+  runEnded: boolean,
+  computerUseScope?: "session" | "always",
+) {
+  if (
+    computerUseScope !== undefined &&
+    (record.target.path !== COMPUTER_USE_GRANT_HANDOFF_PATH ||
+      record.apps === undefined ||
+      record.apps.length === 0 ||
+      record.computerUseForeground !== undefined ||
+      state !== "completed" ||
+      actor.type !== "client")
+  )
+    return Effect.fail(new HandoffError({ reason: "invalid_request" }));
+  if (!isHandoffPending(record.state)) {
+    // The one exception: a person ends an approved computer use admission before its expiry.
+    if (
+      record.state === "completed" &&
+      state === "cancelled" &&
+      record.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH &&
+      (actor.type === "client" ||
+        (actor.type === "server" && record.computerUseScope !== undefined)) &&
+      (record.expiresAt === null ||
+        DateTime.toEpochMillis(record.expiresAt) > DateTime.toEpochMillis(now))
+    )
+      return Effect.succeed({
+        ...record,
+        state,
+        actor,
+        resolvedAt: now,
+        ...(actor.type === "client" ? { resolvedBy: actor.label } : {}),
+      });
+    return record.state === state
+      ? Effect.succeed(record)
+      : Effect.fail(
+          new HandoffError({ reason: record.state === "expired" ? "expired" : "conflict" }),
+        );
+  }
+  // A person stopped the screen a request was for: that end stands even when it is written late.
+  const screenStop =
+    record.target.path === PREVIEW_HANDOFF_PATH && state === "cancelled" && actor.type === "agent";
+  const expired =
+    !screenStop &&
+    ((record.expiresAt !== null &&
+      DateTime.toEpochMillis(record.expiresAt) <= DateTime.toEpochMillis(now)) ||
+      (endsWithItsRun(record) && runEnded));
+  const next = expired ? "expired" : state;
+  if (next === "pending" || (next === "expired" && !expired))
+    return Effect.fail(new HandoffError({ reason: "conflict" }));
+  if ((next === "opened" || next === "completed" || next === "declined") && actor.type !== "client")
+    return Effect.fail(new HandoffError({ reason: "conflict" }));
+  if (next === record.state) return Effect.succeed(record);
+  const resolved = !isHandoffPending(next);
+  return Effect.succeed({
+    ...record,
+    state: next,
+    actor: expired ? { type: "server" as const } : actor,
+    ...(next === "completed" && computerUseScope !== undefined ? { computerUseScope } : {}),
+    ...(resolved
+      ? {
+          resolvedAt: now,
+          ...(!expired && actor.type === "client" ? { resolvedBy: actor.label } : {}),
+        }
+      : {}),
+  });
+}

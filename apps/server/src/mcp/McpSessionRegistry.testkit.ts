@@ -1,0 +1,33 @@
+import { EnvironmentId } from "@goat/contracts";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+
+import * as McpSessionRegistry from "./McpSessionRegistry.ts";
+
+export const layer = Layer.succeed(
+  McpSessionRegistry.McpSessionRegistry,
+  McpSessionRegistry.McpSessionRegistry.of({
+    issue: ({ threadId, providerInstanceId }) =>
+      Effect.succeed({
+        config: {
+          grantedScopes: [],
+          environmentId: EnvironmentId.make("environment:mcp-test"),
+          threadId,
+          providerSessionId: `mcp-test:${threadId}`,
+          providerInstanceId,
+          endpoint: "http://127.0.0.1/mcp",
+          authorizationHeader: `Bearer mcp-test:${threadId}`,
+          browserToolsAvailable: true,
+        },
+      }),
+    // @effect-diagnostics-next-line effectSucceedWithVoid:off - This optional result requires undefined, not the wider void type.
+    resolve: () => Effect.succeed(undefined),
+    currentMemoryPolicy: () => Effect.undefined,
+    touch: () => Effect.void,
+    revokeProviderSession: () => Effect.void,
+    revokeThread: () => Effect.void,
+    revokeAll: Effect.void,
+    subscribeChanges: Effect.die("unused"),
+    inspect: () => Effect.undefined,
+  }),
+);

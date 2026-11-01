@@ -1,0 +1,68 @@
+@import "tailwindcss";
+
+@theme inline {
+  --font-sans: var(--goat-font-sans);
+  --font-mono: var(--goat-font-mono);
+  --color-background: var(--goat-background);
+  --color-foreground: var(--goat-foreground);
+  --color-popover: var(--goat-popover);
+  --color-popover-foreground: var(--goat-popover-foreground);
+  --color-primary: var(--goat-primary);
+  --color-primary-foreground: var(--goat-primary-foreground);
+  --color-muted: var(--goat-muted);
+  --color-muted-foreground: var(--goat-muted-foreground);
+  --color-accent: var(--goat-accent);
+  --color-accent-foreground: var(--goat-accent-foreground);
+  --color-border: var(--goat-border);
+  --color-input: var(--goat-input);
+  --color-ring: var(--goat-ring);
+  --radius-sm: calc(var(--goat-radius) - 4px);
+  --radius-md: calc(var(--goat-radius) - 2px);
+  --radius-lg: var(--goat-radius);
+  --radius-xl: calc(var(--goat-radius) + 4px);
+  --radius-2xl: calc(var(--goat-radius) + 8px);
+}
+
+:host {
+  --goat-font-sans:
+    "DM Sans Variable", "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui,
+    sans-serif;
+  --goat-font-mono:
+    "SF Mono", "SFMono-Regular", "JetBrains Mono", Consolas, "Liberation Mono", Menlo, monospace;
+  --goat-radius: 0.625rem;
+  --goat-background: white;
+  --goat-foreground: oklch(0.269 0 0);
+  --goat-popover: white;
+  --goat-popover-foreground: oklch(0.269 0 0);
+  --goat-primary: oklch(0.488 0.217 264);
+  --goat-primary-foreground: white;
+  --goat-muted: rgb(0 0 0 / 4%);
+  --goat-muted-foreground: oklch(0.556 0 0);
+  --goat-accent: rgb(0 0 0 / 4%);
+  --goat-accent-foreground: oklch(0.269 0 0);
+  --goat-border: rgb(0 0 0 / 8%);
+  --goat-input: rgb(0 0 0 / 10%);
+  --goat-ring: oklch(0.488 0.217 264);
+  color: var(--goat-foreground);
+  font-family: var(--goat-font-sans);
+}
+
+* {
+  box-sizing: border-box;
+  border-color: var(--goat-border);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--goat-ring) 72%, transparent);
+  outline-offset: -2px;
+}

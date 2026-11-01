@@ -1,0 +1,19 @@
+## SSH dispatch launch receipt (goat_ssh_thread_launch result, local GOAT server)
+{"host":"juns-macbook-pro","cwd":"/Users/jun/tmp","projectId":"mcp:b43194df-4ebd-44b3-9a7b-c522678f06b8","projectCreated":false,"threadId":"mcp:63af9cdf-89f1-4f09-810d-e9dda6c30fa4","workspaceStrategy":{"type":"root"},"runtimeMode":"full-access","remoteServerKind":"managed","notes":["The thread lives in the T3 environment on juns-macbook-pro. Connect to juns-macbook-pro (Settings → Connections → SSH) to watch it; goat_thread_read here only sees this environment."]}
+## remote thread tool-call items
+[{"type":"command_execution","title":"Workspace ready","status":"completed"},{"type":"reasoning","title":null,"status":"completed"},{"type":"dynamic_tool","title":null,"status":"completed"},{"type":"command_execution","title":null,"status":"completed"},{"type":"reasoning","title":null,"status":"completed"},{"type":"checkpoint","title":null,"status":"completed"}]
+## pingdotgg checks
+$ grep -c pingdotgg /tmp/goat-wp5/prepare-*.txt /tmp/goat-wp5c/*.txt /tmp/goat-wp5c/source-server.log
+/tmp/goat-wp5/prepare-missing.txt:0
+/tmp/goat-wp5/prepare-upload.txt:0
+/tmp/goat-wp5c/launch.txt:0
+/tmp/goat-wp5c/probe.txt:0
+/tmp/goat-wp5c/remote-info.txt:0
+/tmp/goat-wp5c/remote-process.txt:0
+/tmp/goat-wp5c/source-server.log:0
+$ ssh juns-macbook-pro 'grep -rIl pingdotgg ~/.goat/ssh-launch ~/.goat/userdata/logs 2>/dev/null | wc -l'
+       1
+## ~/.t3 files modified since run start (07:57 KST)
+count= 0
+## interpretation
+The single ~/.goat hit is ~/.goat/userdata/logs/server.trace.ndjson: a GET of https://raw.githubusercontent.com/pingdotgg/t3code/main/apps/server/src/provider/model-manifest.json (apps/server/src/provider/ModelManifest.ts:40), the upstream model catalog kept by decision A1. No release index, release download or SHA256SUMS request to pingdotgg occurred: the runtime came from the local upload (prepare-upload.txt) and the GOAT runner's base URL is goat-si/goat (wp5-after.txt).

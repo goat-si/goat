@@ -1,0 +1,20 @@
+{
+  "note": "Scenario evidence over H1's sanitized 2026-10-21 fleet projection. Digests, instance id, uptime, applied settings values, and wiring are synthetic test inputs, not live captures. P4 and P5 remain unavailable in the observed legacy fleet.",
+  "homeInstanceId": "fixture-home-instance",
+  "catalogDigest": "fixture-catalog-digest",
+  "settingsDigest": "fixture-settings-digest",
+  "settingsRecord": {
+    "linkId": "lnk_781ccea3cdb84745",
+    "fetchedAt": "2026-10-21T00:00:00.000Z",
+    "document": {
+      "version": 1,
+      "home": { "name": "fixture-home", "version": "2.89.0" },
+      "settings": {
+        "fastMode": null,
+        "multiAgentMode": null,
+        "webSearchSidecarEnabled": true,
+        "subagentDefaults": null
+      }
+    }
+  }
+}

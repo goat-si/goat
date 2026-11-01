@@ -1,0 +1,158 @@
+import "vite-plus/test/config";
+// Adopts legacy T3 env names before anything reads the environment.
+import "@goat/contracts/adoptLegacyEnv";
+import { defineConfig, mergeConfig } from "vite-plus";
+
+import baseConfig from "../../vite.config.ts";
+import { resolveBuildCommit, resolveBuildCommitTime } from "../../scripts/lib/build-commit-time.ts";
+import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
+import { resolveSeaBuildTarget } from "../../scripts/lib/sea-build-target.ts";
+import { readUserGuides } from "../../scripts/lib/user-guides.ts";
+import * as HostProcess from "@goat/shared/HostProcess";
+import rootPackageJson from "../../package.json" with { type: "json" };
+import packageJson from "./package.json" with { type: "json" };
+import { WeightedShardSequencer } from "./src/testUtils/weightedShardSequencer.ts";
+
+// NSIS install time tracks file count, not bytes.
+import {
+  isExternalCliDependency,
+  shouldBundleCliDependency,
+} from "../../scripts/lib/cli-external-packages.ts";
+
+export { shouldBundleCliDependency };
+
+const repoEnv = loadRepoEnv();
+const cliBuildChannel = /^[^-+]+-(?:nightly|preview)\./.test(packageJson.version)
+  ? "nightly"
+  : "latest";
+// Official release workflows set the telemetry channel; local builds and forks use "dev".
+const TELEMETRY_CHANNELS = ["stable", "nightly", "preview", "dev"];
+const telemetryChannel = process.env.GOAT_TELEMETRY_CHANNEL?.trim() || "dev";
+if (!TELEMETRY_CHANNELS.includes(telemetryChannel)) {
+  throw new Error(
+    `GOAT_TELEMETRY_CHANNEL must be one of ${TELEMETRY_CHANNELS.join(", ")}, got "${telemetryChannel}".`,
+  );
+}
+
+const buildCommitTime = resolveBuildCommitTime(import.meta.dirname);
+
+// tsdown SEA needs one chunk (sourcemaps count) and Node >=25.7, so package separately.
+const packMode = process.env.GOAT_PACK_EXE;
+const packExecutable = packMode === "1" || packMode === "bundle";
+const SEA_TARGETS = {
+  "darwin-arm64": { platform: "darwin", arch: "arm64" },
+  "darwin-x64": { platform: "darwin", arch: "x64" },
+  "linux-x64": { platform: "linux", arch: "x64" },
+  "win-arm64": { platform: "win", arch: "arm64" },
+  "win-x64": { platform: "win", arch: "x64" },
+} as const;
+const { target: packExecutableTarget, injectLinuxArm64 } = resolveSeaBuildTarget({
+  target: process.env.GOAT_PACK_EXE_TARGET,
+  platform: HostProcess.Platform.defaultValue(),
+  arch: HostProcess.Architecture.defaultValue(),
+});
+if (packMode === "1" && injectLinuxArm64) {
+  throw new Error("Use `node apps/server/scripts/cli.ts build-exe` for Linux ARM64 injection.");
+}
+if (packMode === "bundle" && !injectLinuxArm64) {
+  throw new Error("GOAT_PACK_EXE=bundle is only supported for native Linux ARM64 builds.");
+}
+const seaTarget = injectLinuxArm64 ? undefined : packExecutableTarget;
+if (seaTarget && !Object.hasOwn(SEA_TARGETS, seaTarget)) {
+  throw new Error(
+    `GOAT_PACK_EXE_TARGET must be one of ${Object.keys(SEA_TARGETS).join(", ")}, got "${packExecutableTarget}".`,
+  );
+}
+const packExecutableTargets = seaTarget
+  ? [
+      {
+        ...SEA_TARGETS[seaTarget as keyof typeof SEA_TARGETS],
+        // Exact pin: cross-target builds download this version's binary from nodejs.org.
+        nodeVersion: rootPackageJson.engines.node,
+      },
+    ]
+  : undefined;
+
+// The root config's `projects` route repo-root runs to package configs,
+// including this one. Inheriting them would make this config a container.
+const { projects: _rootTestProjects, ...baseTestConfig } = baseConfig.test ?? {};
+// Workspace cache configuration is invalid on a package config.
+const { run: _rootRunConfig, ...basePackageConfig } = baseConfig;
+
+export default mergeConfig(
+  { ...basePackageConfig, test: baseTestConfig },
+  defineConfig({
+    run: {
+      tasks: {
+        build: {
+          command: "node scripts/cli.ts build",
+          dependsOn: ["@goat/web#build"],
+          cache: false,
+        },
+      },
+    },
+    pack: {
+      // SEA embeds one entry; expose the history worker as a hidden subcommand.
+      entry: packExecutable ? ["src/bin.ts"] : ["src/bin.ts", "src/claude-history-worker.ts"],
+      outDir: packExecutable ? "dist-exe" : "dist",
+      sourcemap: !packExecutable,
+      clean: true,
+      ...(packExecutable ? { outputOptions: { codeSplitting: false } } : {}),
+      ...(packMode === "1"
+        ? {
+            exe: {
+              fileName: "goat",
+              outDir: "dist-exe",
+              ...(packExecutableTargets ? { targets: packExecutableTargets } : {}),
+              // Node SEA useCodeCache breaks import(), which the server needs.
+              seaConfig: { useCodeCache: false },
+            },
+          }
+        : {}),
+      deps: {
+        // alwaysBundle=false has no opinion; neverBundle must retain transitive native acceleration.
+        alwaysBundle: shouldBundleCliDependency,
+        neverBundle: (id: string) => isExternalCliDependency(id),
+        onlyBundle: false,
+      },
+      banner: {
+        js: "#!/usr/bin/env node\n",
+      },
+      define: {
+        __GOAT_BUILD_CHANNEL__: JSON.stringify(cliBuildChannel),
+        __GOAT_BUILD_COMMIT_TIME__: JSON.stringify(buildCommitTime),
+        __GOAT_BUILD_COMMIT__: JSON.stringify(resolveBuildCommit(import.meta.dirname) ?? ""),
+        __GOAT_USER_DOCS__: JSON.stringify(readUserGuides(`${import.meta.dirname}/../..`)),
+        __GOAT_TELEMETRY_CHANNEL__: JSON.stringify(telemetryChannel),
+        __GOAT_BUILD_HOSTED_APP_URL__: JSON.stringify(repoEnv.GOAT_HOSTED_APP_URL?.trim() ?? ""),
+        __GOAT_BUILD_RELAY_URL__: JSON.stringify(repoEnv.GOAT_RELAY_URL?.trim() ?? ""),
+        __GOAT_BUILD_CLERK_PUBLISHABLE_KEY__: JSON.stringify(
+          repoEnv.GOAT_CLERK_PUBLISHABLE_KEY?.trim() ?? "",
+        ),
+        __GOAT_BUILD_CLERK_CLI_OAUTH_CLIENT_ID__: JSON.stringify(
+          repoEnv.GOAT_CLERK_CLI_OAUTH_CLIENT_ID?.trim() ?? "",
+        ),
+        __GOAT_BUILD_RELAY_CLIENT_OTLP_TRACES_URL__: JSON.stringify(
+          repoEnv.GOAT_RELAY_CLIENT_OTLP_TRACES_URL?.trim() ?? "",
+        ),
+        __GOAT_BUILD_RELAY_CLIENT_OTLP_TRACES_DATASET__: JSON.stringify(
+          repoEnv.GOAT_RELAY_CLIENT_OTLP_TRACES_DATASET?.trim() ?? "",
+        ),
+        __GOAT_BUILD_RELAY_CLIENT_OTLP_TRACES_TOKEN__: JSON.stringify(
+          repoEnv.GOAT_RELAY_CLIENT_OTLP_TRACES_TOKEN?.trim() ?? "",
+        ),
+      },
+    },
+    test: {
+      // Parallel sqlite/git/worktree/orchestration tests introduce load-sensitive flakes.
+      fileParallelism: false,
+      sequence: { sequencer: WeightedShardSequencer },
+      setupFiles: [
+        "./src/testUtils/gitConfig.setup.ts",
+        "./src/testUtils/managedServiceEnv.setup.ts",
+      ],
+      hookTimeout: 120_000,
+      testTimeout: 120_000,
+    },
+  }),
+);

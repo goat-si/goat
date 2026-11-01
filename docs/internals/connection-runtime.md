@@ -1,0 +1,136 @@
+# Connection runtime
+
+Web, the desktop renderer, and mobile share one connection owner per environment
+in `packages/client-runtime`. Platform code supplies storage, credentials, network
+signals, and application lifecycle events. React views consume the runtime.
+Keeping retries and session lifetime here prevents competing reconnect loops when
+several views need the same environment.
+
+## One transport retry owner
+
+The [supervisor](../../packages/client-runtime/src/connection/supervisor.ts) owns
+transport retry policy; resolving an endpoint and opening an RPC session are single
+attempts. Transient failures retry with jittered exponential backoff, capped at
+five minutes, that resets only after a connection stays up. Without jitter, every
+client of a restarted server reconnects in the same second; with a short cap, a
+client that can never connect retries all day. Offline states and authentication
+failures wait for a wakeup instead of spending attempts on unchanged conditions.
+
+Foregrounding, an explicit retry, and an offline report probe the established
+session. A long mobile background or desktop sleep uses a short probe instead
+of discarding a live socket. With a probe-capable host, a fresh credential-free
+descriptor request can distinguish a silent socket from an unreachable host;
+inbound frames keep a slow but live socket open. Remote routes allow for packet
+loss before declaring silence, and ordinary web foreground probes retain their
+busy-host allowance. GOAT also retains its longer local-server silence budget.
+A confirmed dead socket is replaced even while the network reports offline.
+
+Foregrounding wakes a pending retry immediately. A long resume also replaces a
+stalled establishment attempt, retaining GOAT's attempt fencing and preparation
+budgets. Desktop resume still closes SSH forwards that stop answering during
+ssh's keepalive window; mobile foreground handoffs use the ordinary probe.
+
+SSH connections classify their failures before they reach this loop, so a
+sleeping host retries quietly and a rejected key waits for the user. See
+[SSH reconnect](ssh-reconnect.md).
+
+The [registry](../../packages/client-runtime/src/connection/registry.ts) scopes
+connections by environment. An involuntary disconnect retains the registration
+and cached data. Explicit removal closes the scope and clears credentials,
+projections, and platform-owned state such as drafts. Cloud-account changes apply
+to relay registrations; they must not discard directly paired environments.
+
+## HTTP authorization
+
+RPC sessions authenticate at socket upgrade, while HTTP requests need current
+credentials from the
+[authorization service](../../packages/client-runtime/src/authorization/service.ts).
+Replacing a healthy socket for HTTP renewal would interrupt conversations and
+change the transport generation without a transport failure. Credential expiry
+does not close the socket, and refresh failure belongs to the HTTP operation.
+
+Session listings must retain unrevoked connected sessions after credential expiry
+so an open connection does not disappear from connection management. This does
+not extend the credential's lifetime. New HTTP requests and socket upgrades still
+require valid credentials.
+
+## Transport health and data freshness are separate
+
+A socket opening is insufficient evidence that the environment is usable. The
+[RPC session](../../packages/client-runtime/src/rpc/session.ts) waits for the
+initial server configuration before becoming ready. Shell and thread data then
+have their own synchronization state. A failed shell subscription can coexist
+with a healthy connection; labeling that state "reconnecting" promises a
+transport retry that will never happen.
+
+Cached projections remain readable offline. They must neither imply a live
+connection nor overwrite newer live data during a reconnect. Loading and
+resuming snapshots belongs to the shared state services, so every view agrees
+on which data is current.
+
+Shell snapshots can leave rows out when the client asks. Servers that advertise
+`shellThreadFamilies` leave out idle subagent children: a child stays while it
+has a live or queued run, a pending request or background work, a subagent
+child of its own, or a thread it launched on the same machine, so badge,
+working and launch-fold walks never meet a gap. Servers that also advertise
+`shellOlderSettled` keep only the 25 newest settled top-level threads (and any
+tied with the 25th, pinned, snoozed, live, above a kept child, or the launcher
+of a kept thread); the snapshot's `olderSettled` names that cut and counts
+the rest per project. Left-out rows load on demand and merge behind shell rows
+([thread families](../../packages/client-runtime/src/state/threadFamilies.ts)):
+the family a thread view or a queued message mounts holds every active thread
+sharing the thread's root, so it also brings back an old settled thread opened by
+link; the Settled shelf reads pages below the cut; searches return the rows of
+older matches. A missing shell row therefore does not prove a thread is gone:
+code that deletes data or a worktree on absence must check the family or the
+server first.
+
+The Settled count is local Settled rows, minus local rows below the cut, plus the
+server's counts
+([older settled threads](../../packages/client-runtime/src/state/olderSettledThreads.ts)).
+The counts are re-read when a removal or an old row's arrival or change could
+move them, so archiving any thread costs one small read. A shelf lists an older
+row only above the highest page frontier of the environments that can still
+load, so the merged list stays a correct prefix while a page loads. An
+environment with no snapshot this session, or a failed page, holds no one back.
+On-demand reads wait for the session's first authoritative snapshot
+(`generation > 0`), and each is keyed by generation. A resume that skips that
+snapshot must still bump `generation` once verified, and may reuse a cached
+snapshot only when its omissions match what the session asks for.
+
+[Thread detail](../../packages/client-runtime/src/state/threads.ts) separates
+subscription lifetime from cache lifetime. Mounted consumers share one live
+stream, which stops when the last consumer unmounts; hidden mounted routes still
+count. A registry-local cache retains state and its replay cursor for five idle
+minutes so back navigation can resume without another snapshot download.
+
+The desktop app adds one consumer: a
+[keep-alive](../../apps/web/src/state/threads.ts) mounts every thread whose
+session is starting or running, in each enabled environment. Opening a running
+thread then needs no replay. The shell and detail streams are independent, so
+the shell can report a stop before the detail loads or catches up. A stopped
+thread stays mounted until its own stream is live and shows the stop, and the
+stream then closes and saves the settled state.
+Web and mobile do not keep threads alive.
+
+Retain state and cursor together only after an update finishes. Cancellation must
+not advance the cached cursor beyond the applied data, and an old scope must not
+overwrite its successor's cache. Preserve pagination data on reuse, but clear
+canceled loading state.
+
+The [RPC boundary](../../packages/client-runtime/src/rpc/client.ts) resolves
+requests against the current session at execution time. Durable subscriptions
+follow replacement sessions. After a transport failure they wait for the
+supervisor; an expected domain failure may resubscribe on the same healthy
+session. Reconnection does not automatically replay mutations, whose retry and
+idempotency rules belong to the operation.
+
+## The saved connection catalog stays at schema version 1
+
+Add new catalog state as optional keys, as `githubRoutingPermissions`, `disabledEnvironmentIds`
+and `hub` were added, and never raise `schemaVersion`. A mobile build that cannot decode the
+catalog deletes it and falls back to the legacy key
+([catalog-store.ts](../../apps/mobile/src/connection/catalog-store.ts)), so one write of a newer
+version followed by an over-the-air rollback would forget every saved server. Older builds that
+rewrite the catalog drop keys they do not know; anything stored there, such as the phone's hub,
+needs a fallback for its key disappearing.

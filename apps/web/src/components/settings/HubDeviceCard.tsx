@@ -1,0 +1,398 @@
+import { settlePromise } from "@goat/client-runtime/state/runtime";
+import {
+  AuthAccessWriteScope,
+  AuthEnvironmentMaintainScope,
+  AuthHubProxyScope,
+  AuthStandardClientScopes,
+  type AdvertisedEndpoint,
+  type AuthEnvironmentScope,
+  type AuthPairingCredentialResult,
+  type DesktopServerExposureState,
+  type EnvironmentId,
+} from "@goat/contracts";
+import * as Cause from "effect/Cause";
+import * as DateTime from "effect/DateTime";
+import { useEffect, useRef, useState } from "react";
+import { createServerPairingCredential } from "~/environments/primary";
+import { readEnvironmentScope } from "~/state/session";
+import { QrCodeIcon } from "~/components/solar";
+import { Button } from "../ui/button";
+import {
+  Dialog,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogPanel,
+  DialogPopup,
+  DialogTitle,
+  DialogTrigger,
+} from "../ui/dialog";
+import { QRCodeSvg } from "../ui/qr-code";
+import { Spinner } from "../ui/spinner";
+import { Switch } from "../ui/switch";
+import {
+  buildHubPhoneQrPayload,
+  isTailscaleHttpsEndpoint,
+  missingTailscaleEndpointDescription,
+  selectHubPhoneQrTarget,
+  type HubPhoneQrTarget,
+} from "./ConnectionsSettings.logic";
+import { finishConnectFlowResume, peekConnectFlowResume } from "./connectFlowResume";
+import {
+  type ConnectReachabilityActions,
+  ConnectReachabilityNotice,
+  connectReachabilityStep,
+} from "./ConnectReachabilityNotice";
+import { searchableSetting } from "./settingsSearch";
+import { SettingsRow, SettingsSection } from "./settingsLayout";
+import { useDeadlinePassed } from "../../hooks/useDeadline";
+import { heldOrGranted } from "./hubAccessScopes";
+
+type HubDeviceCardProps = {
+  readonly primaryEnvironmentId: EnvironmentId | null;
+  readonly isDesktop: boolean;
+  readonly canWriteAccess: boolean;
+  readonly canManageLocalBackend: boolean;
+  readonly delegatableScopes: ReadonlyArray<AuthEnvironmentScope>;
+  readonly endpoints: ReadonlyArray<AdvertisedEndpoint>;
+  /** Null outside the desktop app or while it loads. */
+  readonly exposureState: DesktopServerExposureState | null;
+  readonly connectActions: ConnectReachabilityActions & {
+    readonly onTurnOffTailscaleHttps: () => void;
+  };
+  readonly isNetworkAccessPending: boolean;
+  readonly networkAccessError: string | null;
+  readonly onPairingLinkCreated: (created: AuthPairingCredentialResult) => void;
+};
+
+type IssuedPhoneQr = {
+  readonly result: AuthPairingCredentialResult;
+  readonly target: HubPhoneQrTarget;
+  /** Null where this computer cannot grant hub access, so the dialog says nothing about it. */
+  readonly hubAccess: boolean | null;
+};
+
+function HubPhoneQrView({ issued }: { readonly issued: IssuedPhoneQr }) {
+  const expired = useDeadlinePassed(DateTime.toEpochMillis(issued.result.expiresAt));
+  if (expired) {
+    return <p role="status">This QR has expired. Close this dialog and show a new QR.</p>;
+  }
+  return (
+    <div className="space-y-3">
+      <p className="break-all text-xs text-muted-foreground">{issued.target.endpointOrigin}</p>
+      {issued.target.kind !== "tailscale-https" ? (
+        <p className="text-xs text-muted-foreground">
+          {issued.target.kind === "tailnet"
+            ? "Keep your phone connected to the same tailnet."
+            : "Keep your phone on the same local network."}
+        </p>
+      ) : null}
+      <div className="flex justify-center">
+        <QRCodeSvg
+          value={buildHubPhoneQrPayload(issued.target, issued.result.credential)}
+          size={240}
+          level="M"
+          marginSize={4}
+          title="Scan to pair the GOAT app"
+        />
+      </div>
+      {issued.hubAccess === null ? null : (
+        <p className="text-xs text-muted-foreground">
+          {issued.hubAccess
+            ? "This QR also opens the hub's devices."
+            : "This QR opens only this computer. To add hub devices later, pair again."}
+        </p>
+      )}
+    </div>
+  );
+}
+
+export function HubDeviceCard({
+  primaryEnvironmentId,
+  isDesktop,
+  canWriteAccess,
+  canManageLocalBackend,
+  delegatableScopes,
+  endpoints,
+  exposureState,
+  connectActions,
+  isNetworkAccessPending,
+  networkAccessError,
+  onPairingLinkCreated,
+}: HubDeviceCardProps) {
+  const [dialogOpen, setDialogOpen] = useState(false);
+  // A relaunch for Network access or Tailscale HTTPS reopens the dialog; it stays open, showing
+  // loading state, until the user closes it, so a remount while state loads keeps it.
+  const [resuming, setResuming] = useState(
+    () => isDesktop && peekConnectFlowResume() === "phone-qr",
+  );
+  const [isCreating, setIsCreating] = useState(false);
+  const [issued, setIssued] = useState<IssuedPhoneQr | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  // Shown before any QR exists; on by default because reaching the fleet is what a hub phone is for.
+  const [hubAccess, setHubAccess] = useState(true);
+  const creatingRef = useRef(false);
+  const mountedRef = useRef(false);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+  const target = selectHubPhoneQrTarget(endpoints);
+  const tailscaleHttpsEndpoint = endpoints.find(isTailscaleHttpsEndpoint) ?? null;
+  const showTailscaleRow = isDesktop && canManageLocalBackend;
+  const exposure = showTailscaleRow ? exposureState : null;
+  const open = dialogOpen || resuming;
+  const canGrantHubAccess = delegatableScopes.includes(AuthHubProxyScope);
+  const standardScopes = AuthStandardClientScopes.filter((scope) =>
+    delegatableScopes.includes(scope),
+  );
+  const scopes =
+    canGrantHubAccess && hubAccess ? [...standardScopes, AuthHubProxyScope] : standardScopes;
+  const allowed =
+    isDesktop &&
+    canManageLocalBackend &&
+    primaryEnvironmentId !== null &&
+    canWriteAccess &&
+    standardScopes.length > 0;
+  const unavailable = isNetworkAccessPending || networkAccessError !== null;
+  const issuedTargetIsCurrent =
+    issued !== null &&
+    target !== null &&
+    issued.target.endpointOrigin === target.endpointOrigin &&
+    issued.target.kind === target.kind;
+
+  async function issueCredential(selected: HubPhoneQrTarget) {
+    if (
+      !allowed ||
+      unavailable ||
+      creatingRef.current ||
+      primaryEnvironmentId === null ||
+      !readEnvironmentScope(primaryEnvironmentId, AuthAccessWriteScope) ||
+      !readEnvironmentScope(primaryEnvironmentId, AuthEnvironmentMaintainScope) ||
+      !scopes.every((scope) =>
+        heldOrGranted(scope, (held) => readEnvironmentScope(primaryEnvironmentId, held)),
+      )
+    )
+      return;
+    creatingRef.current = true;
+    setIsCreating(true);
+    setError(null);
+    const settled = await settlePromise(() =>
+      createServerPairingCredential({
+        label: "Phone",
+        scopes,
+      }),
+    );
+    creatingRef.current = false;
+    if (!mountedRef.current) return;
+    setIsCreating(false);
+    if (settled._tag === "Failure") {
+      const cause = Cause.squash(settled.cause);
+      setError(cause instanceof Error ? cause.message : "Could not create a phone QR.");
+      return;
+    }
+    onPairingLinkCreated(settled.value);
+    finishConnectFlowResume("phone-qr");
+    setIssued({
+      result: settled.value,
+      target: selected,
+      hubAccess: canGrantHubAccess ? scopes.includes(AuthHubProxyScope) : null,
+    });
+  }
+
+  function changeOpen(next: boolean) {
+    if (creatingRef.current) return;
+    setDialogOpen(next);
+    if (!next && resuming) {
+      setResuming(false);
+      finishConnectFlowResume("phone-qr");
+    }
+    setIssued(null);
+    setError(null);
+    if (next) setHubAccess(true);
+    // With a hub access choice to make, the QR waits for Create phone QR.
+    if (next && target?.kind === "tailscale-https" && !canGrantHubAccess)
+      void issueCredential(target);
+  }
+
+  // The saved setting drives the switch, so a Serve that stopped answering can still be turned off.
+  const serveOn = exposure?.tailscaleServeEnabled ?? false;
+  const tailscaleRow = showTailscaleRow ? (
+    <SettingsRow
+      title={searchableSetting("tailscale-https").title}
+      description={
+        tailscaleHttpsEndpoint?.status === "available"
+          ? tailscaleHttpsEndpoint.httpBaseUrl
+          : serveOn
+            ? "Tailscale HTTPS is on, but Tailscale is not answering."
+            : tailscaleHttpsEndpoint
+              ? "Use Tailscale Serve to expose this backend through a MagicDNS HTTPS URL."
+              : missingTailscaleEndpointDescription(exposureState)
+      }
+      control={
+        tailscaleHttpsEndpoint || serveOn ? (
+          <Switch
+            checked={serveOn || tailscaleHttpsEndpoint?.status === "available"}
+            disabled={isNetworkAccessPending}
+            onCheckedChange={(checked) => {
+              if (!checked) connectActions.onTurnOffTailscaleHttps();
+              else if (tailscaleHttpsEndpoint)
+                connectActions.onTurnOnTailscaleHttps(tailscaleHttpsEndpoint);
+            }}
+            aria-label="Enable Tailscale HTTPS"
+          />
+        ) : connectReachabilityStep(exposure, null) === "network-access" ? (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={isNetworkAccessPending}
+            onClick={connectActions.onTurnOnNetworkAccess}
+          >
+            Turn on Network access
+          </Button>
+        ) : null
+      }
+    />
+  ) : null;
+
+  const phoneDescription = !isDesktop ? (
+    <>
+      To use this server as a hub, run <code>goat serve --tailscale-serve</code> on the server.{" "}
+      Create a pairing link under Authorized clients.
+    </>
+  ) : primaryEnvironmentId === null ? (
+    "Connect an environment to pair your phone."
+  ) : !canManageLocalBackend ? (
+    "Phone QR needs access to this device’s network settings. Create a link under Authorized clients."
+  ) : !allowed ? (
+    "This connection cannot create pairing links."
+  ) : (
+    "Scan a QR with your phone to pair the GOAT app."
+  );
+
+  return (
+    <SettingsSection {...searchableSetting("hub-device")}>
+      {tailscaleRow}
+      <SettingsRow
+        title="Phone pairing"
+        description={phoneDescription}
+        status={networkAccessError ? <span role="alert">{networkAccessError}</span> : undefined}
+        control={
+          isDesktop ? (
+            <Dialog open={open} onOpenChange={changeOpen}>
+              <DialogTrigger
+                render={<Button size="sm" variant="outline" disabled={!allowed || unavailable} />}
+              >
+                <QrCodeIcon aria-hidden />
+                Show phone QR
+              </DialogTrigger>
+              <DialogPopup showCloseButton={!isCreating}>
+                <DialogHeader>
+                  <DialogTitle>Pair your phone</DialogTitle>
+                  <DialogDescription>
+                    Scan with the GOAT app on your phone: Connect hub → Scan QR code.
+                  </DialogDescription>
+                </DialogHeader>
+                <DialogPanel>
+                  {isNetworkAccessPending ? (
+                    <p role="status">
+                      <Spinner size="sm" /> Checking network settings…
+                    </p>
+                  ) : networkAccessError !== null ? (
+                    <p role="status">
+                      Could not read network settings. Close this dialog and try again.
+                    </p>
+                  ) : !allowed ? (
+                    <p role="status">This connection cannot create pairing links.</p>
+                  ) : isCreating ? (
+                    <p role="status">
+                      <Spinner size="sm" /> Creating phone QR…
+                    </p>
+                  ) : issued ? (
+                    issuedTargetIsCurrent ? (
+                      <HubPhoneQrView issued={issued} />
+                    ) : (
+                      <p role="status">
+                        The network address changed. Close this dialog and show a new QR.
+                      </p>
+                    )
+                  ) : (
+                    <div className="space-y-3">
+                      {canGrantHubAccess ? (
+                        <label className="flex items-start justify-between gap-3">
+                          <span className="min-w-0">
+                            <span className="block text-sm font-medium text-foreground">
+                              Also open hub devices
+                            </span>
+                            <span className="block text-xs text-muted-foreground">
+                              This phone can open threads on the machines this hub lists, within
+                              what the hub allows. Revoke it anytime under Authorized clients.
+                            </span>
+                          </span>
+                          <Switch
+                            checked={hubAccess}
+                            onCheckedChange={(checked) => setHubAccess(checked)}
+                            aria-label="Also open hub devices"
+                          />
+                        </label>
+                      ) : null}
+                      {target?.kind !== "tailscale-https" ? (
+                        connectReachabilityStep(exposure, tailscaleHttpsEndpoint) !== null ? (
+                          <ConnectReachabilityNotice
+                            flow="phone-qr"
+                            state={exposure}
+                            tailscaleHttpsEndpoint={tailscaleHttpsEndpoint}
+                            onBeforeAction={() => changeOpen(false)}
+                            actions={connectActions}
+                          />
+                        ) : (
+                          <p className="text-sm text-muted-foreground">
+                            Start Tailscale on this computer and your phone for a secure HTTPS
+                            address.
+                          </p>
+                        )
+                      ) : null}
+                      {target?.kind === "tailnet" || target?.kind === "lan" ? (
+                        <>
+                          <p className="break-all text-xs text-muted-foreground">
+                            {target.endpointOrigin}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {target.kind === "tailnet"
+                              ? "Your phone must be on the same tailnet."
+                              : "Your phone must be on the same local network. This address will not work away from it."}
+                          </p>
+                          <Button onClick={() => void issueCredential(target)}>
+                            {target.kind === "tailnet"
+                              ? "Use tailnet address"
+                              : "Use local network"}
+                          </Button>
+                        </>
+                      ) : target?.kind === "tailscale-https" ? (
+                        <Button onClick={() => void issueCredential(target)}>
+                          Create phone QR
+                        </Button>
+                      ) : exposure?.mode === "local-only" ? null : (
+                        <p className="text-xs text-muted-foreground">
+                          No reachable address is available yet.
+                        </p>
+                      )}
+                    </div>
+                  )}
+                  {error ? <p role="alert">Could not create a phone QR. {error}</p> : null}
+                </DialogPanel>
+                <DialogFooter>
+                  <Button variant="outline" disabled={isCreating} onClick={() => changeOpen(false)}>
+                    Done
+                  </Button>
+                </DialogFooter>
+              </DialogPopup>
+            </Dialog>
+          ) : undefined
+        }
+      />
+    </SettingsSection>
+  );
+}

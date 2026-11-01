@@ -1,0 +1,8 @@
+would run: mkdir -p /Users/jun/.cache/goat-probe/runner-dryrun
+would download actions-runner-osx-arm64-2.338.0.tar.gz, check sha256 df4cebda25c86a886ed204e49fee63f5c2e7cec5f447b5c98440a826bbdf9df2, and unpack into /Users/jun/.cache/goat-probe/runner-dryrun
+would fetch a registration token with: gh api -X POST repos/goat-si/goat/actions/runners/registration-token
+would run: ./config.sh --url https://github.com/goat-si/goat --name goat-mac-studio --labels goat,mac-studio --work _work --unattended --replace (token via ACTIONS_RUNNER_INPUT_TOKEN)
+would run: ./svc.sh install
+would run: ./svc.sh start
+would run: ./svc.sh status
+install-runner: done. Labels: self-hosted, macOS, ARM64, goat, mac-studio.

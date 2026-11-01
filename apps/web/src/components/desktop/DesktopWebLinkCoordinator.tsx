@@ -1,0 +1,251 @@
+import { scopeProjectRef, scopeThreadRef } from "@goat/client-runtime/environment";
+import {
+  isAtomCommandInterrupted,
+  squashAtomCommandFailure,
+} from "@goat/client-runtime/state/runtime";
+import type { EnvironmentId, ScopedThreadRef } from "@goat/contracts";
+import { sourceControlClients } from "@goat/client-runtime/source-control-clients";
+import { readPairingAppLink } from "@goat/shared/mobilePairingLink";
+import { promptLinkAppPath } from "@goat/shared/promptLinks";
+import { resolveRemotePairingTarget } from "@goat/shared/remote";
+import { useRouter } from "@tanstack/react-router";
+import * as Effect from "effect/Effect";
+import { Atom, AtomRegistry } from "effect/reactivity";
+import * as Stream from "effect/Stream";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
+
+import { openFileInPreview, openUrlInPreview } from "../../browser/openFileInPreview";
+import { isPreviewAvailableFor } from "../../browser/previewRuntime";
+import { useComposerDraftStore } from "../../composerDraftStore";
+import { requestConfirmDialog } from "../../confirmDialog";
+import { environmentCatalog } from "../../connection/catalog";
+import { connectPairing } from "../../connection/onboarding";
+import { useNewThreadHandler } from "../../hooks/useHandleNewThread";
+import { useScratchProject } from "../../hooks/useScratchProject";
+import { useClientSettings } from "../../hooks/useSettings";
+import { useOpenChangeRequestLink } from "../../lib/openPullRequestLink";
+import { isLocalEnvironmentDisabled } from "../../localEnvironment";
+import { selectActiveRightPanelSurface, useRightPanelStore } from "../../rightPanelStore";
+import { appAtomRegistry } from "../../rpc/atomRegistry";
+import { resolveThreadRouteTarget } from "../../threadRoutes";
+import { assetEnvironment } from "../../state/assets";
+import { useEnvironmentHttpBaseUrl, usePrimaryEnvironment } from "../../state/environments";
+import { previewEnvironment } from "../../state/preview";
+import { allReachableShellsLiveAtom } from "../../state/shell";
+import { useAtomCommand } from "../../state/use-atom-command";
+import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
+import { stackedThreadToast, toastManager } from "../ui/toast";
+import { isPairingLinkSpent, markPairingLinkSpent } from "./spentPairingLinks";
+
+/** A link handed over by the OS is a plain click: nothing about it asks for the browser. */
+const externalClick = {
+  preventDefault() {},
+  stopPropagation() {},
+  metaKey: false,
+  ctrlKey: false,
+};
+
+// With Local off the catalog holds only saved environments, loaded before it reports ready,
+// so a ready empty catalog has nothing left to discover.
+const projectDiscoverySettledAtom = Atom.make((get) => {
+  if (get(allReachableShellsLiveAtom)) return true;
+  const catalog = get(environmentCatalog.catalogValueAtom);
+  return catalog.isReady && catalog.entries.size === 0 && isLocalEnvironmentDisabled();
+}).pipe(Atom.withLabel("web-desktop-link-project-discovery-settled"));
+
+/** Resolves once every reachable environment has reported its projects or settled offline. */
+const projectsSettled = (): Promise<void> =>
+  Effect.runPromise(
+    AtomRegistry.toStream(appAtomRegistry, projectDiscoverySettledAtom).pipe(
+      Stream.filter((settled) => settled),
+      Stream.runHead,
+      Effect.asVoid,
+    ),
+  );
+
+/**
+ * HTML files are served by this machine's environment, so only its threads can
+ * take them.
+ */
+function threadShowingBrowser(
+  routeParams: Record<string, string | undefined>,
+  fileEnvironmentId: EnvironmentId | null,
+): ScopedThreadRef | null {
+  const target = resolveThreadRouteTarget(routeParams);
+  if (target === null) return null;
+  let threadRef = target.kind === "server" ? target.threadRef : null;
+  if (target.kind === "draft") {
+    const session = useComposerDraftStore.getState().getDraftSession(target.draftId);
+    if (!session || session.promotedTo) return null;
+    threadRef = scopeThreadRef(session.environmentId, session.threadId);
+  }
+  if (threadRef === null || !isPreviewAvailableFor(threadRef.environmentId)) return null;
+  if (fileEnvironmentId !== null && threadRef.environmentId !== fileEnvironmentId) return null;
+  const surface = selectActiveRightPanelSurface(
+    useRightPanelStore.getState().byThreadKey,
+    threadRef,
+  );
+  return surface?.kind === "preview" ? threadRef : null;
+}
+
+export function DesktopWebLinkCoordinator() {
+  const router = useRouter();
+  const primaryEnvironment = usePrimaryEnvironment();
+  const openPullRequestsInApp = useClientSettings((settings) => settings.pullRequestLinksOpenInApp);
+  const openChangeRequest = useOpenChangeRequestLink();
+  const { scratchEnvironmentId, openScratchProject } = useScratchProject();
+  const openThread = useNewThreadHandler();
+  const openPreview = useAtomCommand(previewEnvironment.open, { reportFailure: false });
+  const createAssetUrl = useAtomQueryRunner(assetEnvironment.createUrl, {
+    reportFailure: false,
+    refresh: true,
+  });
+  const connectPairingEnvironment = useAtomCommand(connectPairing, { reportFailure: false });
+  const httpBaseUrl = useEnvironmentHttpBaseUrl(primaryEnvironment?.environmentId ?? null);
+  const queueRef = useRef(Promise.resolve());
+  const webLinks = window.desktopBridge?.webLinks;
+  // A sync IPC read; the setting only changes across a relaunch.
+  const [localEnvironmentDisabled] = useState(isLocalEnvironmentDisabled);
+  // Without the local environment there is no primary to wait for; links use saved environments.
+  const ready =
+    webLinks !== undefined &&
+    (localEnvironmentDisabled ||
+      (primaryEnvironment?.connection.phase === "connected" &&
+        primaryEnvironment.serverConfig !== null));
+
+  const reportFailure = (url: string, description = url) =>
+    toastManager.add(
+      stackedThreadToast({ type: "error", title: "Could not open the link", description }),
+    );
+
+  const reportPairingFailure = (error: unknown) =>
+    toastManager.add(
+      stackedThreadToast({
+        type: "error",
+        title: "Could not add backend",
+        description: error instanceof Error ? error.message : "Failed to add backend.",
+      }),
+    );
+
+  // Any page can open a pairing link, so the user confirms the host before its one-time token is spent.
+  const pairFromLink = async (pairingUrl: string) => {
+    // A repeated click would only ask again and then fail on the spent token.
+    if (isPairingLinkSpent(pairingUrl)) return;
+    // The origin keeps the scheme visible, so a plain HTTP server is not mistaken for HTTPS.
+    let origin: string;
+    try {
+      origin = new URL(resolveRemotePairingTarget({ pairingUrl }).httpBaseUrl).origin;
+    } catch (error) {
+      reportPairingFailure(error);
+      return;
+    }
+    const confirmed = (await requestConfirmDialog(`Add the device at ${origin}?`)) ?? false;
+    if (!confirmed) return;
+    const result = await connectPairingEnvironment({ pairingUrl });
+    if (result._tag === "Failure") {
+      if (!isAtomCommandInterrupted(result)) reportPairingFailure(squashAtomCommandFailure(result));
+      return;
+    }
+    markPairingLinkSpent(pairingUrl);
+    toastManager.add({
+      type: "success",
+      title: "Device added",
+      description: "This device is saved and will reconnect when GOAT starts.",
+    });
+  };
+
+  const startThread = async (url: string): Promise<ScopedThreadRef | null> => {
+    const environmentId = scratchEnvironmentId(primaryEnvironment?.environmentId ?? null);
+    if (environmentId === null) {
+      reportFailure(url);
+      return null;
+    }
+    const project = await openScratchProject(environmentId, "Could not open the link");
+    if (!project) return null;
+    const opened = await openThread(scopeProjectRef(project.environmentId, project.id));
+    if (!opened) {
+      reportFailure(url);
+      return null;
+    }
+    const threadRef = scopeThreadRef(project.environmentId, opened.threadId);
+    useRightPanelStore.getState().requestMaximize(threadRef);
+    return threadRef;
+  };
+
+  const openLink = useEffectEvent(async (url: string) => {
+    const pairingUrl = readPairingAppLink(url);
+    if (pairingUrl !== null) {
+      await pairFromLink(pairingUrl);
+      return;
+    }
+    const appPath = promptLinkAppPath(url);
+    if (appPath !== null) {
+      await router.navigate({ href: appPath });
+      return;
+    }
+    if (openChangeRequest(externalClick, url)) return;
+    const isFile = url.startsWith("file:");
+    // Only this machine's environment serves files, so fail before starting a thread.
+    if (isFile && httpBaseUrl === null) {
+      reportFailure(url);
+      return;
+    }
+    const routeParams = router.state.matches.at(-1)?.params ?? {};
+    const threadRef =
+      threadShowingBrowser(
+        routeParams,
+        isFile ? (primaryEnvironment?.environmentId ?? null) : null,
+      ) ?? (await startThread(url));
+    if (threadRef === null) return;
+    const result = isFile
+      ? httpBaseUrl === null
+        ? null
+        : await openFileInPreview({
+            threadRef,
+            filePath: decodeURIComponent(new URL(url).pathname),
+            workspaceRoot: undefined,
+            httpBaseUrl,
+            createAssetUrl,
+            openPreview,
+          })
+      : await openUrlInPreview({ threadRef, url, openPreview });
+    if (result === null) {
+      reportFailure(url);
+      return;
+    }
+    if (result._tag === "Failure") {
+      const error = squashAtomCommandFailure(result);
+      reportFailure(url, error instanceof Error ? error.message : url);
+    }
+  });
+
+  const receiveLink = useEffectEvent((url: string) => {
+    // A connected server publishes its config before its project snapshot, so a PR link
+    // delivered at launch would miss its project and fall through to the browser. Hold PR
+    // links, and only those, until discovery settles; an ordinary link never waits for it.
+    // With Local off, discovery settles on the saved environments, or at once when none are saved.
+    const hold =
+      openPullRequestsInApp && sourceControlClients.parseChangeRequestUrl(url) !== null
+        ? projectsSettled()
+        : Promise.resolve();
+    void hold.then(() => {
+      queueRef.current = queueRef.current.then(() => openLink(url)).catch(() => undefined);
+    });
+  });
+
+  useEffect(() => {
+    if (!ready || webLinks === undefined) return;
+    let subscribed = true;
+    const unsubscribe = webLinks.onOpen(receiveLink);
+    queueMicrotask(() => {
+      if (subscribed) void webLinks.setReady(true).catch(() => undefined);
+    });
+    return () => {
+      subscribed = false;
+      void webLinks.setReady(false).catch(() => undefined);
+      unsubscribe();
+    };
+  }, [ready, webLinks]);
+
+  return null;
+}

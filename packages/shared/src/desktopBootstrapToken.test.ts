@@ -1,0 +1,66 @@
+import { describe, expect, it } from "vite-plus/test";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- the test checks the independently specified wire prefix.
+import * as NodeCrypto from "node:crypto";
+
+import {
+  DESKTOP_BOOTSTRAP_TOKEN_WINDOW_MS,
+  currentDesktopBootstrapToken,
+  isValidDesktopBootstrapToken,
+} from "./desktopBootstrapToken.ts";
+
+const SECRET = "desktop-secret";
+const WINDOW = DESKTOP_BOOTSTRAP_TOKEN_WINDOW_MS;
+
+describe("desktop bootstrap token", () => {
+  it("rotates every window and stays accepted for one more", () => {
+    const issuedAt = 10 * WINDOW + 1;
+    const token = currentDesktopBootstrapToken(SECRET, issuedAt);
+
+    expect(currentDesktopBootstrapToken(SECRET, issuedAt + WINDOW)).not.toBe(token);
+    expect(isValidDesktopBootstrapToken(SECRET, token, issuedAt)).toBe(true);
+    expect(isValidDesktopBootstrapToken(SECRET, token, issuedAt + WINDOW)).toBe(true);
+    expect(isValidDesktopBootstrapToken(SECRET, token, issuedAt + 2 * WINDOW)).toBe(false);
+  });
+
+  it("accepts a token from a desktop clock slightly ahead of the backend", () => {
+    const desktopNow = 10 * WINDOW + 500;
+    const backendNow = 10 * WINDOW - 500;
+
+    expect(
+      isValidDesktopBootstrapToken(
+        SECRET,
+        currentDesktopBootstrapToken(SECRET, desktopNow),
+        backendNow,
+      ),
+    ).toBe(true);
+    expect(
+      isValidDesktopBootstrapToken(
+        SECRET,
+        currentDesktopBootstrapToken(SECRET, desktopNow + WINDOW),
+        backendNow,
+      ),
+    ).toBe(false);
+  });
+
+  it("rejects tokens derived from another secret", () => {
+    const token = currentDesktopBootstrapToken("other-secret", WINDOW);
+
+    expect(isValidDesktopBootstrapToken(SECRET, token, WINDOW)).toBe(false);
+    expect(isValidDesktopBootstrapToken(SECRET, "short", WINDOW)).toBe(false);
+  });
+});
+
+it("keeps accepting the token bytes issued before the rename", () => {
+  const legacyToken = "5d78c2ca298011b8e4d1864d152fadd3bc83a0d5432d55cc7e97767a14fa6b02";
+  expect(currentDesktopBootstrapToken(SECRET, 10 * WINDOW)).not.toBe(legacyToken);
+  expect(isValidDesktopBootstrapToken(SECRET, legacyToken, 10 * WINDOW)).toBe(true);
+});
+
+it("issues tokens with the GOAT prefix", () => {
+  const goatToken = NodeCrypto.createHmac("sha256", SECRET)
+    .update(`goat-desktop-bootstrap:${10}`)
+    .digest("hex");
+  expect(currentDesktopBootstrapToken(SECRET, 10 * WINDOW)).toBe(goatToken);
+  expect(isValidDesktopBootstrapToken(SECRET, goatToken, 10 * WINDOW)).toBe(true);
+  expect(isValidDesktopBootstrapToken(SECRET, goatToken, 12 * WINDOW)).toBe(false);
+});

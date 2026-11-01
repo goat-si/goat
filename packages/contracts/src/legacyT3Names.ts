@@ -1,0 +1,338 @@
+/**
+ * T3 spellings GOAT still reads for compatibility with existing data and older peers. `scripts/goat-rename.ts`
+ * never rewrites this file, so compatibility code that imports from here survives every
+ * rerun of the rename. Plan: devlog/_fin/261013_remove-t3-internals/000_plan.md.
+ *
+ * Dependency-free on purpose: contracts and shared both import it.
+ */
+
+/** Checked-in project file used by builds before the GOAT rename. */
+export const LEGACY_PROJECT_FILE_NAME = "t3.json";
+
+type Env = Record<string, string | undefined>;
+
+/** Home directory (`~/.t3`, a worktree's `.t3`) that builds before the GOAT rename created. */
+export const LEGACY_HOME_DIR_NAME = ".t3";
+
+const LEGACY_ENV = /^(VITE_|EXPO_PUBLIC_)?(T3CODE_|T3_CODE_|T3_)([A-Z0-9_]*[A-Z0-9])$/;
+const GOAT_ENV = /^(VITE_|EXPO_PUBLIC_)?GOAT_([A-Z0-9_]*[A-Z0-9])$/;
+
+/** GOAT names whose legacy spelling was not `T3CODE_<same rest>`. */
+const LEGACY_ENV_EXCEPTIONS: Readonly<Record<string, string>> = {
+  GOAT_MCP_URL: "T3_MCP_URL",
+  GOAT_MCP_BEARER_TOKEN: "T3_MCP_BEARER_TOKEN",
+  GOAT_MCP_AUTHORIZATION: "T3_CODE_MCP_AUTHORIZATION",
+  GOAT_PI_RUNTIME_MODE: "T3_PI_RUNTIME_MODE",
+  GOAT_PI_MCP_EXTENSION_PATH: "T3_PI_MCP_EXTENSION_PATH",
+  GOAT_ACP_MCP_ENDPOINT: "T3_ACP_MCP_ENDPOINT",
+  GOAT_ACP_MCP_AUTHORIZATION: "T3_ACP_MCP_AUTHORIZATION",
+  GOAT_ACP_MCP_NODE: "T3_ACP_MCP_NODE",
+  GOAT_ACP_MCP_ENTRYPOINT: "T3_ACP_MCP_ENTRYPOINT",
+  GOAT_ACP_CGROUP_WRAPPER: "T3_ACP_CGROUP_WRAPPER",
+  GOAT_SERVICE_LAUNCHER_CONTEXT: "T3_SERVICE_LAUNCHER_CONTEXT",
+  GOAT_BOOT_SERVICE_UNIT: "T3_BOOT_SERVICE_UNIT",
+  GOAT_SSH_AUTH_SECRET: "T3_SSH_AUTH_SECRET",
+  GOAT_DEV_REMOTE_SERVER_ENTRY_PATH: "T3CODE_DEV_REMOTE_T3_SERVER_ENTRY_PATH",
+};
+const GOAT_BY_LEGACY: Readonly<Record<string, string>> = Object.fromEntries(
+  Object.entries(LEGACY_ENV_EXCEPTIONS).map(([goat, legacy]) => [legacy, goat]),
+);
+
+/** The GOAT name for a legacy env name, or undefined when the name has no GOAT alias. */
+export const goatEnvName = (name: string): string | undefined => {
+  const exception = GOAT_BY_LEGACY[name];
+  if (exception !== undefined) return exception;
+  const match = LEGACY_ENV.exec(name);
+  return match === null ? undefined : `${match[1] ?? ""}GOAT_${match[3]}`;
+};
+
+/** The name builds before the GOAT rename read for a GOAT env name. */
+export const legacyEnvName = (name: string): string | undefined => {
+  const exception = LEGACY_ENV_EXCEPTIONS[name];
+  if (exception !== undefined) return exception;
+  const match = GOAT_ENV.exec(name);
+  return match === null ? undefined : `${match[1] ?? ""}T3CODE_${match[2]}`;
+};
+
+/** `T3CODE_` wins over `T3_CODE_` and `T3_` when several legacy names map to one GOAT name. */
+const legacyRank = (name: string) =>
+  /^(?:VITE_|EXPO_PUBLIC_)?T3CODE_/.test(name)
+    ? 0
+    : /^(?:VITE_|EXPO_PUBLIC_)?T3_CODE_/.test(name)
+      ? 1
+      : 2;
+
+/**
+ * Copies each legacy value into its GOAT name when the GOAT name is unset, in place.
+ * Call it on every env source before reading: process entry points, env files, and
+ * login-shell hydration. Legacy names stay, so child processes of older builds still
+ * find them.
+ */
+export const adoptLegacyEnv = <E extends Env>(env: E): E => {
+  const legacy = Object.keys(env)
+    .filter((name) => env[name] !== undefined && goatEnvName(name) !== undefined)
+    .sort((a, b) => legacyRank(a) - legacyRank(b));
+  const mutable: Env = env;
+  for (const name of legacy) {
+    const goat = goatEnvName(name)!;
+    if (mutable[goat] === undefined) mutable[goat] = mutable[name];
+  }
+  return env;
+};
+
+/** A copy of `env` with legacy values adopted under their GOAT names. */
+export const withLegacyEnvAliases = <E extends Env>(env: E): E => adoptLegacyEnv({ ...env });
+
+/**
+ * `adoptLegacyEnv`, then removes the legacy names it understood, in place. For processes
+ * whose children all run this same build (server, desktop, dev runner): code that deletes a
+ * GOAT name to unset it for a child then cannot be undone by an inherited legacy name.
+ */
+export const normalizeLegacyEnv = <E extends Env>(env: E): E => {
+  adoptLegacyEnv(env);
+  const mutable: Env = env;
+  for (const name of Object.keys(env)) {
+    if (goatEnvName(name) !== undefined) delete mutable[name];
+  }
+  return env;
+};
+
+/** Server-owned env names, current or legacy (relay keys included), that a terminal must not inherit. */
+export const isOwnedEnvName = (name: string): boolean =>
+  name.startsWith("GOAT_") || name.startsWith("T3CODE_") || goatEnvName(name) !== undefined;
+
+/**
+ * A copy of `env` that also carries the legacy name of every GOAT name it sets, with the GOAT
+ * value, so an older child cannot pick a stale legacy value this build already overrode. Use
+ * it for env handed to a process that may run an older build: retained service versions, SSH
+ * helpers, user project scripts, provider bridges.
+ */
+export const withLegacyEnvNames = <E extends Env>(env: E): E => {
+  const result: Env = { ...env };
+  for (const [name, value] of Object.entries(env)) {
+    const legacy = legacyEnvName(name);
+    if (legacy !== undefined && value !== undefined) result[legacy] = value;
+  }
+  return result as E;
+};
+
+/** Server-local identifiers accepted from existing browsers and worktrees. */
+export const LEGACY_SESSION_COOKIE_NAME = "t3_session";
+export const LEGACY_DEV_SESSION_COOKIE_PREFIX = "t3_dev_session_";
+export const LEGACY_WORKTREE_BRANCH_PREFIX = "t3";
+export const LEGACY_WORKTREE_LONG_BRANCH_PREFIX = "t3code";
+export const LEGACY_MANAGED_WORKTREE_PATH = "/.t3/worktrees/";
+
+/** Persisted theme ids, including appearance hints from older builds. */
+export const LEGACY_THEME_ID_ALIASES: Readonly<Record<string, string>> = {
+  "t3-chat": "goat-chat",
+  "t3-chat-light": "goat-chat-light",
+  "t3-chat-dark": "goat-chat-dark",
+  "t3-code": "goat-code",
+  "t3-code-light": "goat-code-light",
+  "t3-code-dark": "goat-code-dark",
+  "t3-grove": "grove",
+  "t3-ocean": "ocean",
+  "t3-ember": "ember",
+  "t3-iris": "iris",
+};
+
+/** Literal SSH runner metadata older clients inspect without sourcing the script. */
+export const LEGACY_SSH_ARCHIVE_VERSION_KEY = "T3_ARCHIVE_VERSION";
+export const LEGACY_SSH_NODE_SCRIPT_PATH_KEY = "T3_NODE_SCRIPT_PATH";
+
+/** Peer-visible vocabulary: readers accept both forever; writers use the GOAT spelling. */
+const LEGACY_THREAD_LINK_PROTOCOL = "t3-thread";
+export const GOAT_THREAD_LINK_PROTOCOL = "goat-thread";
+export const THREAD_LINK_PROTOCOLS = [
+  LEGACY_THREAD_LINK_PROTOCOL,
+  GOAT_THREAD_LINK_PROTOCOL,
+] as const;
+const LEGACY_CONTEXT_LINK_PROTOCOL = "t3-context";
+export const GOAT_CONTEXT_LINK_PROTOCOL = "goat-context";
+export const CONTEXT_LINK_PROTOCOLS = [
+  LEGACY_CONTEXT_LINK_PROTOCOL,
+  GOAT_CONTEXT_LINK_PROTOCOL,
+] as const;
+const LEGACY_CITATION_LINK_PROTOCOL = "t3-citation";
+export const GOAT_CITATION_LINK_PROTOCOL = "goat-citation";
+export const CITATION_LINK_PROTOCOLS = [
+  LEGACY_CITATION_LINK_PROTOCOL,
+  GOAT_CITATION_LINK_PROTOCOL,
+] as const;
+export const LEGACY_CONTEXT_ENVELOPE_TAG = "t3_context";
+export const GOAT_CONTEXT_ENVELOPE_TAG = "goat_context";
+export const LEGACY_CONTEXT_CLIPBOARD_ATTRIBUTE = "data-t3-context-fragment";
+export const GOAT_CONTEXT_CLIPBOARD_ATTRIBUTE = "data-goat-context-fragment";
+const LEGACY_CONTEXT_CLIPBOARD_MIME = "application/x-t3-context-fragment+json";
+export const GOAT_CONTEXT_CLIPBOARD_MIME = "application/x-goat-context-fragment+json";
+/**
+ * Native iOS clipboard type, read by T3ComposerEditorModule.swift without a TypeScript import.
+ * @public
+ */
+export const LEGACY_CONTEXT_CLIPBOARD_UTI = "app.t3.context-fragment";
+export const GOAT_CONTEXT_CLIPBOARD_UTI = "app.goat.context-fragment";
+export const CONTEXT_CLIPBOARD_MIMES = [
+  `web ${LEGACY_CONTEXT_CLIPBOARD_MIME}`,
+  LEGACY_CONTEXT_CLIPBOARD_MIME,
+  `web ${GOAT_CONTEXT_CLIPBOARD_MIME}`,
+  GOAT_CONTEXT_CLIPBOARD_MIME,
+] as const;
+export const LEGACY_MCP_APP_OUTPUT_KEY = "t3McpApp";
+export const GOAT_MCP_APP_OUTPUT_KEY = "goatMcpApp";
+export const LEGACY_MCP_APP_RECEIVE_GLOBAL = "__t3McpAppReceive";
+export const GOAT_MCP_APP_RECEIVE_GLOBAL = "__goatMcpAppReceive";
+export const LEGACY_SESSION_LOAD_READY_KEY = "t3SessionLoadReady";
+export const GOAT_SESSION_LOAD_READY_KEY = "goatSessionLoadReady";
+export const LEGACY_ENVIRONMENT_BOOTSTRAP_TOKEN_TYPE =
+  "urn:t3:params:oauth:token-type:environment-bootstrap";
+export const GOAT_ENVIRONMENT_BOOTSTRAP_TOKEN_TYPE =
+  "urn:goat:params:oauth:token-type:environment-bootstrap";
+export const LEGACY_DESKTOP_BOOTSTRAP_HOME_KEY = "t3Home";
+export const GOAT_DESKTOP_BOOTSTRAP_HOME_KEY = "goatHome";
+export const LEGACY_DESKTOP_BOOTSTRAP_HMAC_PREFIX = "t3-desktop-bootstrap:";
+export const GOAT_DESKTOP_BOOTSTRAP_HMAC_PREFIX = "goat-desktop-bootstrap:";
+export const LEGACY_ENVIRONMENT_PATH = "/.well-known/t3/environment";
+export const GOAT_ENVIRONMENT_PATH = "/.well-known/goat/environment";
+export const LEGACY_ACTIVITY_PATH = "/.well-known/t3/activity";
+export const GOAT_ACTIVITY_PATH = "/.well-known/goat/activity";
+export const LEGACY_ORCHESTRATION_PROTOCOL_HEADER = "x-t3-orchestration-protocol";
+export const GOAT_ORCHESTRATION_PROTOCOL_HEADER = "x-goat-orchestration-protocol";
+/**
+ * Persisted V1 checkpoint namespace in repositories shared with older runtimes (structure/server.md).
+ * @public
+ */
+export const LEGACY_CHECKPOINT_REFS_PREFIX = "refs/t3/checkpoints";
+export const GOAT_CHECKPOINT_REFS_PREFIX = "refs/goat/checkpoints";
+export const LEGACY_ORCHESTRATION_CHECKPOINT_REFS_PREFIX = "refs/t3/orchestration-v2/checkpoints";
+export const GOAT_ORCHESTRATION_CHECKPOINT_REFS_PREFIX = "refs/goat/orchestration-v2/checkpoints";
+/**
+ * Older runtimes' persisted refresh checkpoint; retained by the D17 compatibility contract.
+ * @public
+ */
+export const LEGACY_PRE_REFRESH_REF = "refs/t3code/pre-refresh";
+export const GOAT_PRE_REFRESH_REF = "refs/goat/pre-refresh";
+/**
+ * Legacy ref namespace in existing repositories, including checkpoints read by older runtimes.
+ * @public
+ */
+export const LEGACY_REFS_ROOT = "refs/t3";
+export const GOAT_REFS_ROOT = "refs/goat";
+
+/**
+ * Preview cookies stay in their original Electron partitions: Electron cannot copy a partition, so
+ * a rename would sign users out of every previewed site. Frozen through the first stable release
+ * (ADR-0014, "Frozen legacy identities").
+ */
+export const LEGACY_PREVIEW_PARTITION_PREFIX = "persist:t3code-preview-";
+
+/** Local IPC addresses accepted across independently updated CLI and desktop builds. */
+export const LEGACY_DESKTOP_APP_PIPE_PREFIX = "t3code-app-";
+export const LEGACY_DESKTOP_APP_SOCKET_DIRECTORY_PREFIX = "t3code-";
+
+/** Existing WSL installs are reused in place; fresh installs use GOAT names. */
+export const LEGACY_WSL_RUNTIME_PATH = ".t3/wsl-runtime";
+export const LEGACY_WSL_RUNTIME_READY_MARKER = ".t3code-wsl-runtime-ready";
+export const LEGACY_WSL_RUNTIME_SELECTED_MARKER = ".t3code-wsl-runtime-selected";
+export const LEGACY_WSL_SERVER_TREE_MARKER = "t3code-wsl-server-tree.json";
+
+/**
+ * Boot service identities installed before the GOAT rename. `goat service` migrates a legacy
+ * unit only when it serves the same GOAT home, because upstream T3 Code installs the same names.
+ */
+export const LEGACY_BOOT_SERVICE_UNIT_FILE = "t3code.service";
+export const LEGACY_BOOT_SERVICE_LAUNCHD_LABEL = "com.t3tools.t3code.service";
+
+/**
+ * AppArmor profile written by `browser setup` before the GOAT rename. It still allows the
+ * sandbox until a root setup run replaces it with the GOAT profile.
+ */
+export const LEGACY_APPARMOR_PROFILE_NAME = "t3-chrome-headless-shell";
+
+/** Client storage namespaces used before the GOAT rename. */
+export const legacyStorageKey = (key: string): string | undefined => {
+  if (key === "goat:chatgpt-sharing-welcome:v1") return "t3:chatgpt-sharing-welcome:v1";
+  if (key === "goat.backgroundActivity.clientId") return "t3.backgroundActivity.clientId";
+  if (key.startsWith("goat:")) return `t3code:${key.slice(5)}`;
+  if (key.startsWith("goat.")) return `t3code.${key.slice(5)}`;
+  return undefined;
+};
+
+/** File URIs in persisted mobile drafts still point into these directories. */
+export const LEGACY_ATTACHMENT_DOWNLOAD_DIRECTORY = "t3-attachment-downloads";
+export const LEGACY_COMPOSER_PASTE_DIRECTORY = "t3-composer-paste";
+export const LEGACY_COMPOSER_PREVIEW_DIRECTORY = "t3-composer-previews";
+export const LEGACY_MOBILE_DATABASE_NAME = "t3code-client.db";
+
+/** Canonicalize enumerated browser keys before reading through the migration adapter. */
+export const goatStorageKey = (key: string): string => {
+  if (key === "t3:chatgpt-sharing-welcome:v1") return "goat:chatgpt-sharing-welcome:v1";
+  if (key === "t3.backgroundActivity.clientId") return "goat.backgroundActivity.clientId";
+  if (key.startsWith("t3code:")) return `goat:${key.slice(7)}`;
+  if (key.startsWith("t3code.")) return `goat.${key.slice(7)}`;
+  return key;
+};
+
+/** V1 desktop profile keys: merge existing data without sharing a running-install identity. */
+export const LEGACY_DESKTOP_PROMPT_STASH_KEY = "t3code:prompt-stash:v2";
+export const LEGACY_DESKTOP_COMPOSER_DRAFTS_KEY = "t3code:composer-drafts:v1";
+export const LEGACY_DESKTOP_BACKGROUND_ACTIVITY_CLIENT_ID_KEY = "t3.backgroundActivity.clientId";
+export const LEGACY_DESKTOP_SNAP_SHOT_SETUP_RESUME_KEY = "t3code:snap-shot-setup-resume:v1";
+
+/** Native helper names retained for older resource directories and development builds. */
+export const LEGACY_RESOURCE_MONITOR_BINARY_NAME = "t3-resource-monitor";
+export const LEGACY_BROWSER_SECRET_BINARY_NAME = "t3-browser-secret";
+
+/**
+ * Electron's initial `app.name` in packaged desktop builds before the staged package became
+ * `goat`. Those builds created a safeStorage key under it before setting the GOAT runtime name.
+ */
+export const LEGACY_PACKAGED_RUNTIME_NAME = "t3code";
+
+/**
+ * Electron runtime identity before D13. The runtime name keys the safeStorage key (macOS Keychain
+ * item and Linux keyring entry `<name> <stage> Safe Storage`); the renderer scheme keys every
+ * origin-scoped store. The desktop copies both forward on first launch and leaves the originals
+ * for rollback. The schemes stay registered as OS link handlers for existing links.
+ */
+export const LEGACY_DESKTOP_RUNTIME_APP_BASE_NAME = "T3 Code";
+export const LEGACY_DESKTOP_RENDERER_SCHEME = "t3code";
+export const LEGACY_DESKTOP_DEV_RENDERER_SCHEME = "t3code-dev";
+
+/**
+ * Saved pages listen only for legacy shortcuts, so clients keep sending them. A page sends
+ * legacy events only to a client that has not sent goat/ shortcuts, which older clients do not.
+ */
+export const LEGACY_HTML_SHORTCUTS_METHOD = "t3/notifications/shortcuts";
+export const LEGACY_HTML_KEY_DOWN_METHOD = "t3/notifications/keydown";
+export const LEGACY_HTML_OPEN_IMAGE_METHOD = "t3/notifications/open-image";
+
+/** Independent measurement scripts can attach to an app running an older JS bundle. */
+export const LEGACY_RENDER_COUNTER_GLOBALS = {
+  open: "__t3RenderCounterOpen",
+  reload: "__t3RenderCounterReload",
+  start: "__t3RenderCounterStart",
+  stop: "__t3RenderCounterStop",
+} as const;
+export const LEGACY_RENDER_COUNTER_HOOK = "__t3RenderCounter";
+export const LEGACY_MOBILE_INSPECTOR_APP_PREFIX = "com.t3tools.t3code";
+export const LEGACY_MOBILE_DEVELOPMENT_SCHEME = "t3code-dev";
+
+/** Preserve the device image cache until its reader supports looking up a previous key. */
+export const LEGACY_ATTACHMENT_CACHE_PREFIX = "t3-attachment:";
+
+/**
+ * Saved connection routes and profiles name the disabled Connect stack with this literal. The encrypted
+ * desktop catalog decodes the whole list with one schema, so a new spelling would make older builds and
+ * sibling channels drop every saved environment. A future GOAT Connect adds its own kind beside it.
+ */
+export const LEGACY_CONNECT_ROUTE_KIND = "t3-connect" as const;
+
+/**
+ * Upstream's hosted web app. Share links copied before GOAT dropped the hosted app default point here;
+ * they are still read as in-app links, and nothing new is written to this origin.
+ */
+export const LEGACY_HOSTED_APP_ORIGIN = "https://app.t3.codes";
+
+/** Relay client ids that cached mobile relay tokens recorded before the GOAT names. */
+export const LEGACY_RELAY_CLIENT_IDS = { mobile: "t3-mobile", web: "t3-web" } as const;

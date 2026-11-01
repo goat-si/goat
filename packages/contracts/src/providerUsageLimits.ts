@@ -1,0 +1,234 @@
+import * as Schema from "effect/Schema";
+
+import {
+  ForwardCompatibleArray,
+  IsoDateTime,
+  NonNegativeInt,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
+import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
+import { QuotaSource, QuotaWindowKind, type QuotaWindow } from "./quotaPool.ts";
+import { UsageLimitSourceId } from "./usageLimitSourceId.ts";
+
+/** Stable per-provider ids let sparse updates merge with full probes. */
+export const ServerProviderUsageWindow = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  kind: Schema.Literals(["session", "weekly", "monthly", "other"]),
+  label: TrimmedNonEmptyString,
+  usedPercent: Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 100 })),
+  resetsAt: Schema.optional(IsoDateTime),
+  windowDurationMins: Schema.optional(NonNegativeInt),
+  quotaKind: Schema.optional(QuotaWindowKind),
+  source: Schema.optional(QuotaSource),
+  scopeModel: Schema.optional(TrimmedNonEmptyString),
+  /** The producer's own verdict for this window; false wins over a full percentage. */
+  exhausted: Schema.optional(Schema.Boolean),
+  observedAt: Schema.optional(IsoDateTime),
+});
+export type ServerProviderUsageWindow = typeof ServerProviderUsageWindow.Type;
+
+export const quotaWindowToUsageWindow = (window: QuotaWindow) => {
+  // Legacy surfaces require a percentage; a missing reading must never appear as 0%.
+  if (window.usedPercent === undefined) return undefined;
+  return {
+    id: window.id,
+    kind:
+      window.kind === "burst_5h"
+        ? "session"
+        : window.kind === "weekly" || window.kind === "monthly"
+          ? window.kind
+          : "other",
+    label: window.label,
+    usedPercent: window.usedPercent,
+    ...(window.resetsAt === undefined ? {} : { resetsAt: window.resetsAt }),
+    ...(window.windowSeconds === undefined
+      ? {}
+      : { windowDurationMins: Math.ceil(window.windowSeconds / 60) }),
+    quotaKind: window.kind,
+    source: window.source,
+    ...(window.scopeModel === undefined ? {} : { scopeModel: window.scopeModel }),
+    ...(window.exhausted === undefined ? {} : { exhausted: window.exhausted }),
+    observedAt: window.observedAt,
+  } satisfies ServerProviderUsageWindow;
+};
+
+/** Whether every eligible pool account is blocked, optionally for one model scope; it has no percentage. */
+export const ServerProviderUsageAvailability = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  label: TrimmedNonEmptyString,
+  exhausted: Schema.Boolean,
+  scopeModel: Schema.optional(TrimmedNonEmptyString),
+  resetsAt: Schema.optional(IsoDateTime),
+  observedAt: Schema.optional(IsoDateTime),
+});
+export type ServerProviderUsageAvailability = typeof ServerProviderUsageAvailability.Type;
+
+export const quotaWindowToAvailability = (window: QuotaWindow) => {
+  if (window.usedPercent !== undefined) return undefined;
+  if (window.id !== "availability" && !window.id.startsWith("availability:")) return undefined;
+  return {
+    id: window.id,
+    label: window.label,
+    exhausted: window.exhausted === true,
+    ...(window.scopeModel === undefined ? {} : { scopeModel: window.scopeModel }),
+    ...(window.resetsAt === undefined ? {} : { resetsAt: window.resetsAt }),
+    observedAt: window.observedAt,
+  } satisfies ServerProviderUsageAvailability;
+};
+
+export const ServerProviderResetCredits = Schema.Struct({
+  availableCount: NonNegativeInt,
+  nextExpiresAt: Schema.optional(IsoDateTime),
+  /** Pins hub redemption to the displayed credit, including retries from another client. */
+  nextCreditId: Schema.optional(TrimmedNonEmptyString),
+});
+export type ServerProviderResetCredits = typeof ServerProviderResetCredits.Type;
+
+/** Clear bars for unavailable accounts; retain last good bars after a failed probe. */
+export const ServerProviderUsageLimits = Schema.Struct({
+  checkedAt: IsoDateTime,
+  windows: ForwardCompatibleArray(ServerProviderUsageWindow),
+  // Routed windows belong to this pool, not the instance's local sign-in.
+  quotaPool: Schema.optional(
+    Schema.Struct({
+      provider: TrimmedNonEmptyString,
+      homeId: TrimmedNonEmptyString,
+      /** Distinct pool accounts for this provider, and how many of them are available. */
+      accounts: Schema.optional(
+        Schema.Struct({ available: NonNegativeInt, total: NonNegativeInt }),
+      ),
+    }),
+  ),
+  // Present on every OpenCodex-routed report, including one whose pool could not be read.
+  quotaPoolRoute: Schema.optional(
+    Schema.Struct({
+      provider: TrimmedNonEmptyString,
+      /** Reported by OpenCodex when its pool could not be read. */
+      openCodexVersion: Schema.optional(TrimmedNonEmptyString),
+    }),
+  ),
+  availability: Schema.optional(ForwardCompatibleArray(ServerProviderUsageAvailability)),
+  /** A routed instance's own login as its native probe saw it; the pool row never carries credits. */
+  localAccount: Schema.optional(
+    Schema.Struct({
+      checkedAt: IsoDateTime,
+      windows: ForwardCompatibleArray(ServerProviderUsageWindow),
+      resetCredits: Schema.optional(ServerProviderResetCredits),
+      credentialFingerprint: Schema.optional(TrimmedNonEmptyString),
+      /** False when the instance's driver cannot redeem credits on this route. */
+      redeemable: Schema.Boolean,
+    }),
+  ),
+  credentialFingerprint: Schema.optional(TrimmedNonEmptyString),
+  resetCredits: Schema.optional(ServerProviderResetCredits),
+  externalUsage: Schema.optional(
+    Schema.Struct({
+      label: TrimmedNonEmptyString,
+      url: TrimmedNonEmptyString,
+    }),
+  ),
+  unavailable: Schema.optional(
+    Schema.Struct({
+      reason: Schema.Literals(["unsupported", "probeFailed"]),
+      message: Schema.optional(TrimmedNonEmptyString),
+    }),
+  ),
+});
+export type ServerProviderUsageLimits = typeof ServerProviderUsageLimits.Type;
+
+/** Partial updates merge windows by id; omitted windows remain unchanged. */
+export const ProviderUsageLimitsUpdate = Schema.Struct({
+  windows: Schema.Array(ServerProviderUsageWindow),
+});
+export type ProviderUsageLimitsUpdate = typeof ProviderUsageLimitsUpdate.Type;
+
+export const UsageLimitSourceAccount = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  driver: ProviderDriverKind,
+  email: Schema.optional(TrimmedNonEmptyString),
+  plan: Schema.optional(TrimmedNonEmptyString),
+  workspaceId: Schema.optional(TrimmedNonEmptyString),
+  label: Schema.optional(TrimmedNonEmptyString),
+  /** OpenCodex's routing state; paused and reauth accounts are shown but not counted. */
+  state: Schema.optional(
+    Schema.Literals(["available", "exhausted", "paused", "reauth", "unknown"]),
+  ),
+  observedAt: Schema.optional(IsoDateTime),
+  usageLimits: ServerProviderUsageLimits,
+});
+export type UsageLimitSourceAccount = typeof UsageLimitSourceAccount.Type;
+
+export const UsageLimitSourceSnapshot = Schema.Struct({
+  id: UsageLimitSourceId,
+  kind: Schema.Literals(["cliproxy", "opencodex"]),
+  label: TrimmedNonEmptyString,
+  checkedAt: IsoDateTime,
+  /** The OpenCodex Home whose newest snapshot decides membership and state. */
+  homeId: Schema.optional(TrimmedNonEmptyString),
+  accounts: ForwardCompatibleArray(UsageLimitSourceAccount),
+  error: Schema.optional(TrimmedNonEmptyString),
+});
+export type UsageLimitSourceSnapshot = typeof UsageLimitSourceSnapshot.Type;
+
+export const UsageLimitSourceSnapshots = ForwardCompatibleArray(UsageLimitSourceSnapshot);
+export type UsageLimitSourceSnapshots = typeof UsageLimitSourceSnapshots.Type;
+
+export const UsageLimitSourceConsumeResetCreditInput = Schema.Struct({
+  sourceId: UsageLimitSourceId,
+  accountId: TrimmedNonEmptyString,
+  creditId: TrimmedNonEmptyString,
+});
+export type UsageLimitSourceConsumeResetCreditInput =
+  typeof UsageLimitSourceConsumeResetCreditInput.Type;
+
+export const ProviderConsumeResetCreditInput = Schema.Union([
+  Schema.Struct({ instanceId: ProviderInstanceId }),
+  UsageLimitSourceConsumeResetCreditInput,
+]);
+export type ProviderConsumeResetCreditInput = typeof ProviderConsumeResetCreditInput.Type;
+
+export class UsageLimitSourceError extends Schema.TaggedError<UsageLimitSourceError>()(
+  "UsageLimitSourceError",
+  { detail: Schema.String },
+) {
+  override get message(): string {
+    return this.detail;
+  }
+}
+
+export const ProviderConsumeResetCreditOutcome = Schema.Literals([
+  "reset",
+  "nothingToReset",
+  "noCredit",
+  "alreadyRedeemed",
+]);
+export type ProviderConsumeResetCreditOutcome = typeof ProviderConsumeResetCreditOutcome.Type;
+
+export const ProviderConsumeResetCreditResult = Schema.Struct({
+  outcome: ProviderConsumeResetCreditOutcome,
+  warning: Schema.optional(TrimmedNonEmptyString),
+});
+export type ProviderConsumeResetCreditResult = typeof ProviderConsumeResetCreditResult.Type;
+
+export const UsageLimitsReport = Schema.Struct({
+  createdAt: IsoDateTime,
+  accounts: Schema.Array(
+    Schema.Struct({
+      id: TrimmedNonEmptyString,
+      driver: ProviderDriverKind,
+      label: TrimmedNonEmptyString,
+      plan: Schema.optional(TrimmedNonEmptyString),
+      email: Schema.optional(TrimmedNonEmptyString),
+      sourceLabel: Schema.optional(TrimmedNonEmptyString),
+      instanceId: Schema.optional(ProviderInstanceId),
+      resetCreditInput: Schema.optional(ProviderConsumeResetCreditInput),
+      /** False when credits are shown but this row cannot redeem them. */
+      redeemable: Schema.optional(Schema.Boolean),
+      displayName: Schema.optional(Schema.String),
+      accentColor: Schema.optional(Schema.String),
+      limits: ServerProviderUsageLimits,
+    }),
+  ),
+  notices: Schema.Array(Schema.String),
+});
+export type UsageLimitsReport = typeof UsageLimitsReport.Type;

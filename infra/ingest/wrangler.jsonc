@@ -1,0 +1,36 @@
+// GOAT's product analytics ingest. Deploy from this directory with `vp run deploy` after
+// `vp run migrate`; see README.md. The account is the one that owns the trygoat.ai zone.
+{
+  "name": "goat-ingest",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-10-01",
+  // Only the custom domain serves the Worker: no workers.dev URL and no preview URLs.
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [{ "pattern": "ingest.trygoat.ai", "custom_domain": true }],
+  // Invocation logs would record request metadata the ingest promises not to keep.
+  "observability": { "enabled": false },
+  "triggers": { "crons": ["17 */6 * * *"] },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "goat-ingest",
+      "database_id": "fd38d89e-4309-4110-8710-e8fecd540774",
+      "migrations_dir": "migrations",
+    },
+  ],
+  // Approximate and per Cloudflare location. A server with a full buffer sends 50 batches
+  // back to back, and several servers can share one address.
+  "ratelimits": [
+    { "name": "RATE_LIMITER", "namespace_id": "1001", "simple": { "limit": 60, "period": 60 } },
+  ],
+  "vars": {
+    // Public project keys, comma separated. Not secrets; they let the ingest refuse stray traffic.
+    "ACCEPTED_KEYS": "goat_public_ingest_v1",
+    "RETENTION_DAYS": "180",
+    "DAILY_BATCH_BUDGET": "20000",
+    // Storage cost (store.ts rowStorageCost) per UTC day; 180 days of it stays under
+    // the Free plan's 500 MB per database.
+    "DAILY_BYTE_BUDGET": "2400000",
+  },
+}

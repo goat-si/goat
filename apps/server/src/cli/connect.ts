@@ -1,0 +1,786 @@
+import { prepareCliLinkIntent, installApprovedCliLink } from "../cloud/CliLinkApproval.ts";
+import {
+  AuthRelayReadScope,
+  AuthRelayWriteScope,
+  EnvironmentHttpApi,
+  formatConnectReachable,
+  type AuthEnvironmentScope,
+  type EnvironmentConnectReachability,
+  type RelayClientInstallProgressEvent,
+  type RelayClientInstallProgressStage,
+} from "@goat/contracts";
+import { RelayOkResponse } from "@goat/contracts/relay";
+import * as HostProcess from "@goat/shared/HostProcess";
+import * as RelayClient from "@goat/shared/relayClient";
+import { withRelayClientTracing } from "@goat/shared/relayTracing";
+import * as Cause from "effect/Cause";
+import { Command, Flag, GlobalFlag, Prompt } from "effect/cli";
+import * as Clock from "effect/Clock";
+import * as Config from "effect/Config";
+import * as Console from "effect/Console";
+import * as Crypto from "effect/Crypto";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as FileSystem from "effect/FileSystem";
+import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
+import * as HttpApiClient from "effect/http-api/HttpApiClient";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as References from "effect/References";
+
+import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
+import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import * as BootService from "../cloud/bootService.ts";
+import * as CliState from "../cloud/CliState.ts";
+import * as CliTokenManager from "../cloud/CliTokenManager.ts";
+import {
+  CLOUD_LINK_REVOKED,
+  CLOUD_LINKED_USER_ID,
+  isAgentActivityPublishingEnabledValue,
+  PUBLISH_AGENT_ACTIVITY_SECRET,
+  RELAY_URL_SECRET,
+} from "../cloud/config.ts";
+import { formatReachabilityFailure } from "../cloud/ConnectReachability.ts";
+import { relayUrlConfig } from "../cloud/publicConfig.ts";
+import { filterRelayResponse } from "../cloud/relayResponse.ts";
+import * as RelayTracing from "../cloud/relayTracing.ts";
+import * as ServerConfig from "../config.ts";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as ExternalLauncher from "../process/externalLauncher.ts";
+import { readPersistedServerRuntimeState } from "../serverRuntimeState.ts";
+import { projectLocationFlags, resolveCliAuthConfig } from "./config.ts";
+import { resolveCliCommand } from "./invocation.ts";
+import * as CliService from "./service.ts";
+
+const jsonFlag = Flag.Boolean("json").pipe(
+  Flag.withDescription("Emit JSON instead of human-readable output."),
+  Flag.withDefault(false),
+);
+
+const headlessFlag = Flag.Boolean("headless").pipe(
+  Flag.withDescription("Unsupported in Connect beta; use a local browser approval."),
+  Flag.withDefault(false),
+);
+
+// A remote shell cannot complete the supported local-browser approval flow.
+const headlessSessionConfig = Config.all({
+  sshConnection: Config.String("SSH_CONNECTION").pipe(Config.option),
+  sshTty: Config.String("SSH_TTY").pipe(Config.option),
+}).pipe(
+  Config.map(({ sshConnection, sshTty }) => Option.isSome(sshConnection) || Option.isSome(sshTty)),
+);
+
+const authorizeCli = Effect.fn("cloud.cli.authorize")(function* (options: {
+  readonly headless: boolean;
+}) {
+  if (options.headless || (yield* headlessSessionConfig))
+    return yield* new CliTokenManager.CloudCliAuthorizationUnsupportedError({});
+  const target = yield* prepareCliLinkIntent(true);
+  const tokens = yield* CliTokenManager.CloudCliTokenManager;
+  const approved = yield* tokens.approveLink(target.intent);
+  return approved.token.identity ?? null;
+});
+
+function bytesToString(value: Uint8Array): string {
+  return new TextDecoder().decode(value);
+}
+
+function stringToBytes(value: string): Uint8Array {
+  return new TextEncoder().encode(value);
+}
+
+interface CloudCliStatus {
+  readonly desired: boolean;
+  readonly authenticated: boolean;
+  readonly linked: boolean;
+  readonly revoked: boolean;
+  readonly cloudUserId: string | null;
+  readonly relayUrl: string | null;
+  readonly publishAgentActivity: boolean;
+  readonly relayClient: RelayClient.RelayClientStatus;
+  readonly linkMode: CliState.CliDesiredLinkMode;
+  /** `null` when no server answered the live check, or none ran because no tunnel is wanted. */
+  readonly reachability: EnvironmentConnectReachability | null;
+}
+
+function formatRelayClientStatus(executable: RelayClient.RelayClientStatus): ReadonlyArray<string> {
+  switch (executable.status) {
+    case "available": {
+      const source =
+        executable.source === "path"
+          ? "PATH"
+          : executable.source === "managed"
+            ? "managed install"
+            : "configured override";
+      return [
+        `  Relay client: available via ${source}`,
+        `    Path: ${executable.executablePath}`,
+        `    Version: ${executable.version}`,
+      ];
+    }
+    case "missing":
+      return ["  Relay client: not installed"];
+    case "unsupported":
+      return [
+        `  Relay client: unsupported on ${executable.platform}-${executable.arch}`,
+        `    Managed version: ${executable.version}`,
+      ];
+  }
+}
+
+function formatCloudStatus(status: CloudCliStatus, options?: { readonly json?: boolean }): string {
+  if (options?.json) {
+    return JSON.stringify(status, null, 2);
+  }
+
+  const provisioned = status.revoked
+    ? "removed from GOAT Connect"
+    : status.linked
+      ? "provisioned"
+      : status.desired && status.authenticated
+        ? "pending server startup"
+        : "not provisioned";
+  const nextStep = !status.authenticated
+    ? "Run `goat connect link` to authorize and enable GOAT Connect."
+    : status.revoked
+      ? "Run `goat connect link` to link this environment again."
+      : !status.desired
+        ? "Run `goat connect link` to enable GOAT Connect."
+        : !status.linked
+          ? "Start GOAT to provision the environment link and launch its managed tunnel."
+          : undefined;
+
+  return [
+    "GOAT Connect",
+    `  Exposure: ${status.desired ? "enabled" : "disabled"}`,
+    `  Authorization: ${status.authenticated ? "stored credential" : "missing"}`,
+    `  Environment link: ${provisioned}`,
+    `  Relay: ${status.relayUrl ?? "not provisioned"}`,
+    `  Publish agent activity: ${status.publishAgentActivity ? "enabled" : "disabled"}`,
+    ...formatRelayClientStatus(status.relayClient),
+    ...(!status.desired || status.linkMode !== "managed"
+      ? []
+      : status.reachability === null
+        ? [
+            "",
+            "No running server answered, so reachability was not checked. Check the background service with `goat service status`.",
+          ]
+        : status.reachability.status === "reachable"
+          ? [
+              "",
+              `✓ Other devices can reach this machine · ${formatConnectReachable(status.reachability)}`,
+            ]
+          : ["", formatReachabilityFailure(status.reachability)]),
+    ...(nextStep ? ["", `Next: ${nextStep}`] : []),
+  ].join("\n");
+}
+
+const CLOUD_CLI_LIVE_SERVER_TIMEOUT = Duration.seconds(5);
+
+const confirmRelayClientInstall = (version: string) =>
+  Prompt.run(
+    Prompt.Confirm({
+      message: `The GOAT relay client is required for GOAT Connect. Download and install version ${version}?`,
+      initial: false,
+    }),
+  );
+
+function relayClientInstallProgressMessage(stage: RelayClientInstallProgressStage): string {
+  switch (stage) {
+    case "checking":
+      return "Checking existing installation";
+    case "waiting_for_lock":
+      return "Waiting for installation lock";
+    case "downloading":
+      return "Downloading";
+    case "verifying":
+      return "Verifying download";
+    case "installing":
+      return "Installing";
+    case "validating":
+      return "Validating executable";
+    case "activating":
+      return "Activating installation";
+  }
+}
+
+const reportRelayClientInstallProgress = (event: RelayClientInstallProgressEvent) =>
+  event.type === "progress"
+    ? Console.log(`Relay client: ${relayClientInstallProgressMessage(event.stage)}...`)
+    : Effect.void;
+
+export const acquireRelayClientForLink = Effect.fn("cloud.cli.acquire_relay_client_for_link")(
+  function* <ConfirmError, ConfirmContext>(
+    relayClient: RelayClient.RelayClient["Service"],
+    confirmInstall: (version: string) => Effect.Effect<boolean, ConfirmError, ConfirmContext>,
+    reportProgress: (event: RelayClientInstallProgressEvent) => Effect.Effect<void>,
+  ) {
+    const executable = yield* relayClient.resolve;
+    if (executable.status === "available") {
+      return Option.some(executable);
+    }
+    if (executable.status === "unsupported") {
+      return Option.some(yield* relayClient.installWithProgress(reportProgress));
+    }
+    if (!(yield* confirmInstall(executable.version))) {
+      return Option.none();
+    }
+    return Option.some(yield* relayClient.installWithProgress(reportProgress));
+  },
+);
+
+const withCloudCliSessionToken = <A, E, R>(
+  environmentAuth: EnvironmentAuth.EnvironmentAuth["Service"],
+  scope: AuthEnvironmentScope,
+  run: (token: string) => Effect.Effect<A, E, R>,
+) =>
+  Effect.acquireUseRelease(
+    environmentAuth.issueSession({
+      scopes: [scope],
+      subject: "cloud-cli",
+      label: "goat connect cli",
+    }),
+    (issued) => run(issued.token),
+    (issued) => environmentAuth.revokeSession(issued.sessionId).pipe(Effect.ignore({ log: true })),
+  );
+
+type LiveCloudActionResult =
+  | { readonly status: "not-running" }
+  | { readonly status: "succeeded" }
+  | { readonly status: "failed"; readonly cause: Cause.Cause<unknown> };
+
+const runLiveCloudUnlink = Effect.fn("cloud.cli.run_live_unlink")(function* () {
+  const config = yield* ServerConfig.ServerConfig;
+  const runtimeState = yield* readPersistedServerRuntimeState(config.serverRuntimeStatePath);
+  if (Option.isNone(runtimeState)) {
+    return { status: "not-running" } satisfies LiveCloudActionResult;
+  }
+
+  const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
+  const result = yield* Effect.exit(
+    withCloudCliSessionToken(environmentAuth, AuthRelayWriteScope, (token) =>
+      HttpApiClient.make(EnvironmentHttpApi, {
+        baseUrl: runtimeState.value.origin,
+      }).pipe(
+        Effect.flatMap((client) =>
+          client.connect.unlink({ headers: { authorization: `Bearer ${token}` } }),
+        ),
+        Effect.timeout(CLOUD_CLI_LIVE_SERVER_TIMEOUT),
+      ),
+    ),
+  );
+  return Exit.isSuccess(result)
+    ? ({ status: "succeeded" } satisfies LiveCloudActionResult)
+    : ({ status: "failed", cause: result.cause } satisfies LiveCloudActionResult);
+});
+
+// One check probes the endpoint, the tunnel edge, and Tailscale, each with its own timeout.
+const CLOUD_CLI_REACHABILITY_TIMEOUT = Duration.seconds(30);
+const CLOUD_CLI_REACHABILITY_WAIT = Duration.seconds(60);
+const CLOUD_CLI_REACHABILITY_RETRY = Duration.seconds(5);
+
+/** Asks the running server to check GOAT Connect now. `null` when no server answers. */
+const checkLiveReachability = Effect.fn("cloud.cli.check_live_reachability")(function* () {
+  const config = yield* ServerConfig.ServerConfig;
+  const runtimeState = yield* readPersistedServerRuntimeState(config.serverRuntimeStatePath);
+  if (Option.isNone(runtimeState)) return null;
+  const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
+  return yield* withCloudCliSessionToken(environmentAuth, AuthRelayReadScope, (token) =>
+    HttpApiClient.make(EnvironmentHttpApi, { baseUrl: runtimeState.value.origin }).pipe(
+      Effect.flatMap((client) =>
+        client.connect.checkReachability({ headers: { authorization: `Bearer ${token}` } }),
+      ),
+      Effect.timeout(CLOUD_CLI_REACHABILITY_TIMEOUT),
+    ),
+  ).pipe(Effect.orElseSucceed(() => null));
+});
+
+function formatAlertBox(text: string): string {
+  const lines = text.split("\n");
+  const width = Math.max(...lines.map((line) => line.length));
+  const color = process.stdout.isTTY === true && !process.env.NO_COLOR;
+  const red = (line: string) => (color ? `\x1b[1;31m${line}\x1b[0m` : line);
+  return [
+    `┌${"─".repeat(width + 2)}┐`,
+    ...lines.map((line) => `│ ${line.padEnd(width)} │`),
+    `└${"─".repeat(width + 2)}┘`,
+  ]
+    .map(red)
+    .join("\n");
+}
+
+/**
+ * Waits for the server that `goat connect` just started to prove other devices
+ * can reach it, so a broken tunnel fails setup instead of looking green.
+ */
+const waitForReachability = Effect.fn("cloud.cli.wait_for_reachability")(function* () {
+  yield* Console.log("\nChecking that other devices can reach this machine...");
+  const deadline =
+    (yield* Clock.currentTimeMillis) + Duration.toMillis(CLOUD_CLI_REACHABILITY_WAIT);
+  let last: EnvironmentConnectReachability | null = null;
+  while (true) {
+    last = (yield* checkLiveReachability()) ?? last;
+    if (last?.status === "reachable") {
+      yield* Console.log(
+        `✓ Other devices can reach this machine · ${formatConnectReachable(last)}`,
+      );
+      return;
+    }
+    if ((yield* Clock.currentTimeMillis) >= deadline) break;
+    yield* Effect.sleep(CLOUD_CLI_REACHABILITY_RETRY);
+  }
+  yield* Console.error(
+    formatAlertBox(
+      last === null
+        ? "✕ Could not check GOAT Connect\n  The GOAT server on this machine did not answer.\n  Fix: run `goat service status`, then `goat connect status`."
+        : formatReachabilityFailure(last),
+    ),
+  );
+  yield* Effect.sync(() => {
+    process.exitCode = 1;
+  });
+});
+
+type RelayUnlinkResult =
+  | { readonly status: "not-authenticated" }
+  | { readonly status: "revoked" }
+  | { readonly status: "not-linked" };
+
+type CloudDisconnectOperation = "live-server-unlink" | "relay-environment-unlink";
+
+const logCloudDisconnectFailure = (
+  operation: CloudDisconnectOperation,
+  clearAuthorization: boolean,
+  cause: Cause.Cause<unknown>,
+) =>
+  Effect.logWarning("GOAT Connect disconnect operation failed.").pipe(
+    Effect.annotateLogs({
+      operation,
+      clearAuthorization,
+      cause: Cause.pretty(cause),
+    }),
+  );
+
+const unlinkRelayEnvironment = Effect.fn("cloud.cli.unlink_relay_environment")(function* (
+  token: Option.Option<CliTokenManager.PersistedToken>,
+) {
+  if (Option.isNone(token)) {
+    return { status: "not-authenticated" } satisfies RelayUnlinkResult;
+  }
+
+  const environment = yield* ServerEnvironment.ServerEnvironmentIdentity;
+  const environmentId = yield* environment.getEnvironmentId;
+  const relayUrl = yield* relayUrlConfig;
+  const httpClient = yield* HttpClient.HttpClient;
+  const response = yield* HttpClientRequest.delete(
+    `${relayUrl}/v1/client/environment-links/${encodeURIComponent(environmentId)}`,
+  ).pipe(
+    HttpClientRequest.bearerToken(token.value.accessToken),
+    httpClient.execute,
+    Effect.flatMap(filterRelayResponse),
+    Effect.flatMap(HttpClientResponse.schemaBodyJson(RelayOkResponse)),
+    withRelayClientTracing,
+  );
+  return response.ok
+    ? ({ status: "revoked" } satisfies RelayUnlinkResult)
+    : ({ status: "not-linked" } satisfies RelayUnlinkResult);
+});
+
+/**
+ * Prints the local disconnect outcome, then whether the relay record was revoked.
+ * A missing CLI login or a failed relay DELETE leaves that record registered, so
+ * those outcomes warn to deregister it from the GOAT Connect account page.
+ */
+const reportCloudDisconnectResults = Effect.fn("cloud.cli.report_disconnect_results")(
+  function* (input: {
+    readonly clearAuthorization: boolean;
+    readonly liveResult: LiveCloudActionResult;
+    readonly relayResult: Exit.Exit<RelayUnlinkResult, unknown>;
+  }) {
+    if (input.liveResult.status === "failed") {
+      yield* logCloudDisconnectFailure(
+        "live-server-unlink",
+        input.clearAuthorization,
+        input.liveResult.cause,
+      );
+      yield* Console.warn(
+        "GOAT Connect local cleanup is pending. The running server has not confirmed credential withdrawal.\nReconnect or restart that server to finish cleanup.",
+      );
+    } else if (input.liveResult.status === "succeeded") {
+      yield* Console.log(
+        "GOAT Connect is disabled locally; its local grants and sessions were revoked.",
+      );
+    }
+
+    if (Exit.isFailure(input.relayResult)) {
+      yield* logCloudDisconnectFailure(
+        "relay-environment-unlink",
+        input.clearAuthorization,
+        input.relayResult.cause,
+      );
+      yield* Console.warn(
+        input.clearAuthorization
+          ? "Remote revocation pending. The stored CLI authorization was removed locally.\nRetry: goat connect login, then goat connect unlink; or withdraw the environment from the hosted account page."
+          : "Could not revoke the relay-side environment record yet.\nRun `goat connect unlink` again when the relay is reachable, or deregister it from the GOAT Connect page of your GOAT account.",
+      );
+    } else if (input.relayResult.value.status === "not-authenticated") {
+      yield* Console.warn(
+        "Remote revocation pending.\nRetry: goat connect login, then goat connect unlink; or withdraw the environment from the hosted account page.",
+      );
+    } else if (input.relayResult.value.status === "revoked") {
+      yield* Console.log("Revoked the relay-side environment record.");
+    }
+  },
+);
+
+export const disconnectCloud = Effect.fn("cloud.cli.disconnect")(function* (options: {
+  readonly clearAuthorization: boolean;
+}) {
+  yield* CliState.setCliDesiredCloudLink(false);
+  const tokens = yield* CliTokenManager.CloudCliTokenManager;
+  const credential = yield* Effect.exit(tokens.getExisting.pipe(Effect.timeout("5 seconds")));
+  const auth = yield* EnvironmentAuth.EnvironmentAuth;
+  const trustWithdrawal = yield* Effect.exit(auth.setCloudLinkTrust(null));
+  if (options.clearAuthorization) yield* tokens.clear;
+  const liveResult = yield* runLiveCloudUnlink();
+  // Keep the persisted link until the trusted server confirms local credential withdrawal.
+  if (liveResult.status === "succeeded") yield* CliState.clearPersistedCloudLink;
+  else {
+    const secrets = yield* ServerSecretStore.ServerSecretStore;
+    yield* secrets.set("cloud-connect-withdrawal-pending", stringToBytes("pending"));
+    yield* Console.warn(
+      "Local GOAT Connect sessions are unconfirmed. Start or reconnect the trusted server to finish credential withdrawal before relinking.",
+    );
+  }
+  const relayResult: Exit.Exit<RelayUnlinkResult, unknown> = Exit.isFailure(credential)
+    ? Exit.failCause(credential.cause)
+    : yield* Effect.exit(
+        unlinkRelayEnvironment(credential.value).pipe(Effect.timeout("5 seconds")),
+      );
+
+  yield* reportCloudDisconnectResults({
+    clearAuthorization: options.clearAuthorization,
+    liveResult,
+    relayResult,
+  });
+
+  if (Exit.isFailure(trustWithdrawal)) {
+    yield* Console.warn(
+      "Local pending Connect grants could not be withdrawn. Retry goat connect unlink.",
+    );
+    return yield* Effect.failCause(trustWithdrawal.cause);
+  }
+  if (options.clearAuthorization) {
+    yield* Console.log(
+      "Signed out of GOAT Connect locally.\nThe background service is managed separately with `goat service`.",
+    );
+  }
+});
+
+const runCloudCommand = Effect.fn("cloud.cli.run_cloud_command")(function* <A, E>(
+  flags: { readonly baseDir: Option.Option<string> },
+  run: Effect.Effect<
+    A,
+    E,
+    | ServerSecretStore.ServerSecretStore
+    | CliTokenManager.CloudCliTokenManager
+    | RelayClient.RelayClient
+    | EnvironmentAuth.EnvironmentAuth
+    | BootService.BootService
+    | Crypto.Crypto
+    | FileSystem.FileSystem
+    | HttpClient.HttpClient
+    | Prompt.Environment
+    | ServerConfig.ServerConfig
+    | ServerEnvironment.ServerEnvironmentIdentity
+  >,
+  options?: {
+    readonly quietLogs?: boolean;
+  },
+) {
+  const logLevel = yield* GlobalFlag.LogLevel;
+  const config = yield* resolveCliAuthConfig(flags, logLevel);
+  const minimumLogLevel = options?.quietLogs ? "Error" : config.logLevel;
+  const layerRuntime = Layer.mergeAll(
+    ServerSecretStore.layer,
+    CliTokenManager.layer.pipe(
+      Layer.provide(ServerSecretStore.layer),
+      Layer.provide(ExternalLauncher.layer),
+    ),
+    RelayClient.layerCloudflared({ baseDir: config.baseDir }),
+    EnvironmentAuth.layerRuntime,
+    CliService.layer(config),
+    RelayTracing.layerHeadlessRelayClient,
+  ).pipe(
+    Layer.provideMerge(FetchHttpClient.layer),
+    Layer.provideMerge(ServerConfig.layer(config)),
+    Layer.provide(Layer.succeed(References.MinimumLogLevel, minimumLogLevel)),
+  );
+  return yield* run.pipe(Effect.provide(layerRuntime));
+});
+
+const connectedAs = (identity: string | null): string => (identity ? ` as ${identity}` : "");
+
+function formatRelayClientReady(version: string): string {
+  return `✓ Relay client ready · cloudflared ${version}`;
+}
+
+const linkEnvironmentForConnect = Effect.fn("cloud.cli.link_environment")(function* (options: {
+  readonly headless: boolean;
+  readonly publishOnly?: boolean;
+}) {
+  if (options.headless || (yield* headlessSessionConfig))
+    return yield* new CliTokenManager.CloudCliAuthorizationUnsupportedError({});
+  const publishOnly = options.publishOnly ?? false;
+  if (publishOnly) {
+    yield* Console.error(
+      "Publishing agent activity is unavailable in the reachability-only Connect beta.",
+    );
+    return null;
+  }
+  if (!publishOnly) {
+    const relayClient = yield* RelayClient.RelayClient;
+    const installed = yield* acquireRelayClientForLink(
+      relayClient,
+      confirmRelayClientInstall,
+      reportRelayClientInstallProgress,
+    );
+    if (Option.isNone(installed)) {
+      yield* Console.log("GOAT Connect setup cancelled. The relay client was not installed.");
+      return null;
+    }
+    yield* Console.log(formatRelayClientReady(installed.value.version));
+  }
+
+  const target = yield* prepareCliLinkIntent(!publishOnly);
+  const tokens = yield* CliTokenManager.CloudCliTokenManager;
+  const approved = yield* tokens.approveLink(target.intent);
+  const identity = yield* installApprovedCliLink(target.intent, approved, target.origin);
+  yield* CliState.setCliDesiredCloudLink(true, publishOnly ? "publish_only" : "managed");
+  return { identity } as const;
+});
+
+const connectLoginCommand = Command.make("login", {
+  ...projectLocationFlags,
+  headless: headlessFlag,
+}).pipe(
+  Command.withDescription("Authorize the GOAT Connect CLI without enabling remote access."),
+  Command.withHandler((flags) =>
+    runCloudCommand(
+      flags,
+      Effect.gen(function* () {
+        yield* Console.log("GOAT Connect\n");
+        const identity = yield* authorizeCli(flags);
+        yield* Console.log(`✓ Signed in${connectedAs(identity)}`);
+      }),
+    ),
+  ),
+);
+
+const connectLinkCommand = Command.make("link", {
+  ...projectLocationFlags,
+  headless: headlessFlag,
+  publishOnly: Flag.Boolean("publish-only").pipe(
+    Flag.withDescription(
+      "Link to publish agent activity only, with no managed tunnel. Reach this environment out of band (e.g. Tailscale).",
+    ),
+    Flag.withDefault(false),
+  ),
+}).pipe(
+  Command.withDescription("Approve and link this environment to GOAT Connect."),
+  Command.withHandler((flags) =>
+    runCloudCommand(
+      flags,
+      Effect.gen(function* () {
+        yield* Console.log("GOAT Connect\n");
+        const linked = yield* linkEnvironmentForConnect(flags);
+        if (linked) {
+          const serveCommand = yield* resolveCliCommand("serve");
+          yield* Console.log(
+            flags.publishOnly
+              ? `✓ Authorized${connectedAs(linked.identity)}\n\nNext\n  Start GOAT to publish agent activity (no managed tunnel).`
+              : `✓ Authorized${connectedAs(linked.identity)}\n\nNext\n  Start the server with \`${serveCommand}\` to make this machine reachable.`,
+          );
+        }
+      }),
+    ),
+  ),
+);
+
+const connectStatusCommand = Command.make("status", {
+  ...projectLocationFlags,
+  json: jsonFlag,
+}).pipe(
+  Command.withDescription(
+    "Show GOAT Connect setup and check that other devices can reach this machine.",
+  ),
+  Command.withHandler((flags) =>
+    runCloudCommand(
+      flags,
+      Effect.gen(function* () {
+        const secrets = yield* ServerSecretStore.ServerSecretStore;
+        const relayClient = yield* RelayClient.RelayClient;
+        const tokens = yield* CliTokenManager.CloudCliTokenManager;
+        const [
+          desired,
+          authenticated,
+          cloudUserId,
+          relayUrl,
+          publishAgentActivity,
+          revoked,
+          executable,
+          linkMode,
+        ] = yield* Effect.all(
+          [
+            CliState.readCliDesiredCloudLink,
+            tokens.hasCredential,
+            secrets.get(CLOUD_LINKED_USER_ID),
+            secrets.get(RELAY_URL_SECRET),
+            secrets.get(PUBLISH_AGENT_ACTIVITY_SECRET),
+            secrets.get(CLOUD_LINK_REVOKED),
+            relayClient.resolve,
+            CliState.readCliDesiredLinkMode,
+          ],
+          { concurrency: "unbounded" },
+        );
+        // A publish-only link has no tunnel for other devices to reach.
+        const reachability =
+          desired && linkMode === "managed" ? yield* checkLiveReachability() : null;
+        const status: CloudCliStatus = {
+          desired,
+          authenticated,
+          linked: Option.isSome(cloudUserId),
+          revoked: Option.isSome(cloudUserId) && Option.isSome(revoked),
+          cloudUserId: Option.isSome(cloudUserId) ? bytesToString(cloudUserId.value) : null,
+          relayUrl: Option.isSome(relayUrl) ? bytesToString(relayUrl.value) : null,
+          publishAgentActivity: isAgentActivityPublishingEnabledValue(
+            Option.isSome(publishAgentActivity) ? bytesToString(publishAgentActivity.value) : null,
+          ),
+          relayClient: executable,
+          linkMode,
+          reachability,
+        };
+        yield* Console.log(formatCloudStatus(status, { json: flags.json }));
+      }),
+      {
+        quietLogs: flags.json,
+      },
+    ),
+  ),
+);
+
+const connectPublishCommand = Command.make("publish", {
+  ...projectLocationFlags,
+  disable: Flag.Boolean("disable").pipe(
+    Flag.withDescription("Stop publishing agent activity to your mobile clients."),
+    Flag.withDefault(false),
+  ),
+}).pipe(
+  Command.withDescription(
+    "Toggle publishing agent activity (push notifications and Live Activities) to your mobile clients.",
+  ),
+  Command.withHandler((flags) =>
+    runCloudCommand(
+      flags,
+      Effect.gen(function* () {
+        const secrets = yield* ServerSecretStore.ServerSecretStore;
+        const enabled = !flags.disable;
+        yield* secrets.set(PUBLISH_AGENT_ACTIVITY_SECRET, stringToBytes("false"));
+        if (!enabled) {
+          // Cancel unprovisioned publish-only links too, or the next start will recreate them.
+          // Managed links also serve the tunnel and must survive.
+          const linkedNow = Option.isSome(yield* secrets.get(CLOUD_LINKED_USER_ID));
+          if (!linkedNow && (yield* CliState.readCliDesiredLinkMode) === "publish_only") {
+            yield* CliState.setCliDesiredCloudLink(false);
+            yield* Console.log("Cancelled the pending publish-only GOAT Connect link.");
+          }
+          yield* Console.log("Publishing agent activity disabled.");
+          return;
+        }
+
+        yield* Console.error(
+          "Publishing agent activity is unavailable in the reachability-only Connect beta.",
+        );
+      }),
+    ),
+  ),
+);
+
+const connectUnlinkCommand = Command.make("unlink", {
+  ...projectLocationFlags,
+}).pipe(
+  Command.withDescription("Disable GOAT Connect while retaining the stored authorization."),
+  Command.withHandler((flags) =>
+    runCloudCommand(flags, disconnectCloud({ clearAuthorization: false })),
+  ),
+);
+
+const connectLogoutCommand = Command.make("logout", {
+  ...projectLocationFlags,
+}).pipe(
+  Command.withDescription("Disable GOAT Connect and clear the stored CLI authorization."),
+  Command.withHandler((flags) =>
+    runCloudCommand(flags, disconnectCloud({ clearAuthorization: true })),
+  ),
+);
+
+const reportServiceOnboarding = Effect.fn("cli.connect.report_service_onboarding")(function* (
+  outcome: CliService.ServiceOnboardingOutcome,
+) {
+  if (outcome === "pending") {
+    yield* Console.log(
+      "\nBackground service restarting\n\nThe server resumes the approved GOAT Connect link once it is back. Check the log above if it does not come back.",
+    );
+    return;
+  }
+  if (outcome === "ready") {
+    const platform = yield* HostProcess.Platform;
+    yield* Console.log(
+      platform === "darwin"
+        ? "\n✓ Background service ready\n\nGOAT is set to run while you are logged in to this Mac. The server resumes the approved GOAT Connect link on startup."
+        : "\n✓ Background service ready\n\nGOAT is set to keep running after you log out. The server resumes the approved GOAT Connect link on startup.",
+    );
+    return;
+  }
+  const serveCommand = yield* resolveCliCommand("serve");
+  yield* Console.log(
+    `\nNext\n  Start the server with \`${serveCommand}\` to make this machine reachable.\n  It checks that other devices can reach this machine when it starts.`,
+  );
+});
+
+export const connectCommand = Command.make("connect", {
+  ...projectLocationFlags,
+  headless: headlessFlag,
+}).pipe(
+  Command.withDescription("Set up GOAT Connect for this machine."),
+  Command.withHandler((flags) =>
+    runCloudCommand(
+      flags,
+      Effect.gen(function* () {
+        yield* Console.log("GOAT Connect\n");
+        const linked = yield* linkEnvironmentForConnect(flags);
+        if (!linked) {
+          return;
+        }
+        yield* Console.log(`✓ Authorized${connectedAs(linked.identity)}`);
+
+        const outcome = yield* CliService.recoverServiceOnboardingOffer(
+          CliService.offerServiceDuringOnboarding,
+        );
+        yield* reportServiceOnboarding(outcome);
+        if (outcome !== "skipped") {
+          yield* waitForReachability();
+        }
+      }),
+    ),
+  ),
+  Command.withSubcommands([
+    connectLoginCommand,
+    connectLinkCommand,
+    connectPublishCommand,
+    connectStatusCommand,
+    connectUnlinkCommand,
+    connectLogoutCommand,
+  ]),
+);

@@ -1,0 +1,282 @@
+# Usage and limits
+
+Open **Usage** from the icon rail on the left (the sidebar on narrow windows) or the
+command palette, or press `mod+u` on web and desktop when the terminal is not focused.
+Customize `usage.open` in
+**Settings → Keybindings**.
+
+On mobile, choose **Usage** in the workspace navigation.
+
+## Understand your usage
+
+**Usage** combines Codex, Claude Code, Grok Build, OpenCode, Antigravity, Pi, Muse Code, and Cursor history
+from your connected environments. It shows token use, cache savings, model breakdowns, and estimated API-equivalent
+cost, split by token type and by speed. These estimates are not your subscription bill.
+**Premium** is what Fast and Ultrafast requests cost above standard rates. Cost that cannot be
+split, such as a provider-reported cost for a model without public rates, shows as **Other**.
+Select a model under **Breakdown** to see its trend, cache hit rate, and cost per million tokens.
+
+Totals depend on the history available on each server. Grok turns without a saved completed-turn
+record are missing from the totals.
+
+OpenCode reads its SQLite database and older JSON history. Antigravity reads local conversation
+databases, including GOAT-managed profiles. Set `OPENCODE_DATA_DIR` or `ANTIGRAVITY_DATA_DIR` on the
+server to read a different data directory; comma-separated paths read multiple directories.
+
+Cursor reads account usage from Cursor's dashboard API using the CLI login saved on the server.
+This includes headless GOAT sessions and desktop usage across machines; the same account counts
+once across connected environments. Without an accessible CLI login, GOAT shows a
+notice instead of incomplete local totals. GOAT does not estimate missing tokens from conversation text.
+On macOS, choose **Enable Cursor usage** on Usage to allow GOAT to read your existing CLI login
+from Keychain. You can turn it off in **Settings → Providers → Usage providers**. macOS may ask
+you to allow access on the server Mac.
+
+Usage includes each configured account's history, including disabled accounts. Custom homes follow
+the account's home setting or its `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, or `GROK_HOME` environment
+variable. Pi reads `~/.pi/agent/sessions`, or the `sessions` directory under
+`PI_CODING_AGENT_DIR`. Set `PI_CODING_AGENT_SESSION_DIR` to read a different session directory.
+To include sessions saved through `--session-dir` or Pi's `sessionDir` setting, set this environment
+variable to the same directory. Pi includes recorded tool and summary costs under `Tools/summaries`.
+Muse Code reads native session history, including child sessions, from the home reported by the
+configured Muse CLI. Its environment settings, including `XDG_DATA_HOME`, apply. Models without
+known prices still contribute tokens and appear as unpriced; set custom prices to estimate their cost.
+Use absolute paths or `~/` paths in the account's environment settings; relative environment paths
+depend on each project's working directory and cannot be reliably discovered by Usage. Accounts
+sharing a history directory count once.
+
+The server saves its first hostname in `<GOAT home>/usage-host-id`, so a recreated container keeps
+its usage identity when GOAT home is persisted. Set `GOAT_HOST_ID` to choose the identity
+explicitly.
+
+When your app and server support different providers, usage totals may cover only the providers
+your app understands. Update the app to include newly supported providers.
+
+On web and desktop, use the environment dropdown to filter costs, tokens, and limits. All
+environments are selected by default. The dropdown shows which environments are still scanning;
+results appear as each one responds, and figures still updating are dimmed. Cursor shows its last
+saved totals first, then updates them when Cursor's API responds.
+
+If recent work is missing or a new model shows no cost, refresh to rescan session history and
+update model pricing.
+
+## Set custom model prices
+
+On web or desktop, open the environment dropdown on **Usage**, then choose **Model prices** to add,
+edit, or reset a model's estimated price. **Apply to** starts with your current Usage filter;
+choose all environments or select individual destinations. Enter the exact model ID and USD
+rates per million input and output tokens. You can enter any model ID, including models
+without public pricing. When a model on **Usage** has no known price, select it under
+**Breakdown** and choose **Set price** to open this table with that model added.
+
+Cache read and cache write rates are optional and use the input rate when blank. Enter `0` for
+tokens that are free. Saved prices replace automatic pricing for all of that environment's
+history and are shared with clients connected to it. When environments have different prices,
+cells show **Mixed**. Edit rates directly in the table, then choose **Save changes** to apply all
+edited rows. Untouched cells keep each environment's rate. Select one environment to inspect its
+prices. **Reset to automatic** marks a model's override for removal when you save; you can undo
+it before saving.
+
+To count one model as another, such as a preview model under its released name, enter the target
+model ID under **Map to**. The mapped model no longer appears on **Usage**: its tokens and cost
+move to the target model and use the target's price. Clear **Map to** or reset the row to show
+the model on its own again.
+
+Each destination reports whether the change saved. Offline or unavailable environments are
+marked **Not saved**. Reconnect them and choose **Retry failed saves** to finish the same change
+without writing again to environments that already saved. Changes are not queued after you close
+the dialog.
+
+## Track subscription limits
+
+**Usage → Limits** shows each provider's subscription accounts and how much quota each has left.
+The line beside the provider name tells you whether you can work right now, such as "3 of 4 ready"
+or "All active accounts blocked · next frees in 1h 9m". Every number is quota left.
+
+Accounts are grouped by where GOAT learned of them, so a hub's accounts and the logins on your own
+machines never mix:
+
+- **Shared pool**: accounts an OpenCodex Home pools. OpenCodex names them by plan and a short label
+  such as `p61e549`, never by email. When GOAT cannot read the pool, for example because OpenCodex is
+  too old to report it, the group says why instead of listing accounts.
+- **Direct login**: providers signed in on a GOAT environment, labeled with that environment.
+- **Proxy**: accounts a CLIProxyAPI hub reports.
+
+Each group has one row per account with its status (Ready, Blocked and when it frees, No reading,
+Paused, or Sign in again) and how much is left in each window with the time until it resets. Column
+headers show how much the whole group has left. Ready accounts with the most quota left come first,
+then blocked accounts by which frees soonest. A reading older than five minutes counts as no reading
+until Limits refreshes. Codex and Claude accounts with banked reset credits show **Use reset** in
+their row. Claude resets are not available when the server runs on macOS, where Claude keeps its
+login in the Keychain. On mobile, tap a row for the account's plan, where it is signed in, and its
+reset time.
+
+The same account signed in on more than one environment, or reported by a hub as well, appears once
+and names its other paths. Filter with the environment dropdown to see what a single machine has.
+
+When a Claude or Codex account has no overall weekly quota left, its pooled session contribution
+shows 0% left. The next refill depends on both reset times: an exhausted session must also reset,
+and a partly spent session may only regain its unused portion when the week resets. Missing or
+stale reset times have no refill estimate; refresh Limits for a new reading. Claude's
+model-specific weekly allowances keep their reported values.
+
+Opening Limits checks the selected connected environments automatically. Each client waits at
+least five minutes between automatic checks of an environment, including after a failed check.
+If a window still looks stale, refresh Limits to re-check every provider and hub.
+
+Pick `/usage-limits` from the composer's command menu, or send it as a message, to check the
+current model's limits without leaving the conversation. The result opens above the composer and
+closes when you dismiss it or send your next message. It uses the same snapshot as **Usage → Limits**, so it does not run the agent or refresh
+anything. The command is offered only for providers that appear under **Usage → Limits**.
+
+OpenCode Go reports its session, weekly, and monthly allowance when OpenCode runs locally in
+the environment. GOAT cannot report limits for external OpenCode servers because their credentials
+belong to the remote server. Limits need an OpenCode Go API key, or an OpenCode Console connected
+in OpenCode with an API key. A Console browser sign-in alone does not report them. You can also add
+your Go API key as `OPENCODE_API_KEY` in the OpenCode instance's **Environment variables**, then
+refresh provider status. Cursor reports
+its monthly allowance, including separate Auto and API usage, using the CLI login or
+`CURSOR_AUTH_TOKEN`. On macOS, this includes the default Keychain login after you enable Cursor
+usage. Keychain login is used for limits only with Cursor's default API endpoint. If you configure
+a custom Cursor endpoint, use an explicit token or file-based CLI login for limits.
+
+Grok reports the remaining subscription allowance and reset time for its current billing period
+after signing in with `grok login`. Explicit `XAI_API_KEY` connections and custom authentication
+or endpoint configurations do not report subscription limits.
+
+API-key accounts may not report subscription limits. This also applies to Claude connections
+using a proxy through `ANTHROPIC_AUTH_TOKEN`.
+
+## Fall back to another model at a limit
+
+A fallback chain moves work to the next model when a usage limit stops it, instead of waiting
+for the reset. Each move leaves a notice on the thread saying which model it left, why, and when
+that limit resets, and the thread is asked to continue where it left off. A move to another
+provider, such as Codex to Claude Code, carries the conversation over as a handoff. When no step
+is left, the thread waits for its reset as before, with **Resume at reset** and auto-resume if you
+turned them on.
+
+Chains are off until you create one. Ask an agent with full access to call
+`goat_call {path:"fallback_chain.set"}`, or add them under `fleet` in the environment's `settings.json`.
+This chain tries two Claude accounts routed through Codex, then GPT, then the Claude Code CLI:
+
+```json
+{
+  "fleet": {
+    "fallbackChains": {
+      "claude-opus": {
+        "steps": [
+          { "instanceId": "codex", "model": "anthropic/claude-opus-5-5" },
+          { "instanceId": "codex", "model": "anthropic2/claude-opus-5-5" },
+          { "instanceId": "codex", "model": "gpt-6.1-sol" },
+          { "instanceId": "claudeAgent", "model": "claude-opus-5-5" }
+        ],
+        "on": ["usage_limit"],
+        "cooldownMs": 900000,
+        "scope": "goals_and_threads"
+      }
+    },
+    "defaultFallbackChain": "claude-opus"
+  }
+}
+```
+
+- `scope` decides what the chain moves. `"goals"`, the default, applies it to fleet goals only.
+  `"goals_and_threads"` also moves your ordinary threads whose model is one of the steps.
+- `on` lists what triggers a move: `usage_limit` (the default), `provider_error`,
+  `transport_error`, or `unavailable`. `unavailable` includes a provider refusing the model for
+  your account, such as a plan that does not include it. Ordinary threads move only on usage limits.
+- A step that just failed is skipped for `cooldownMs` (15 minutes by default), and so is a step on
+  another provider whose account reports an exhausted window. `maxHops` caps how many moves one
+  piece of work makes; by default it can try every step once.
+- `defaultFallbackChain` is the chain goals use when they name none.
+
+Each step names a provider and model already set up in this environment. GOAT never changes
+provider sign-ins or Codex configuration to move work.
+
+## Set fleet limits
+
+Limits under `fleet` cap how much goal work each machine takes. They count running and queued
+threads, your own included, but never refuse a thread you start yourself. `hosts` keys are SSH
+aliases, with `local` for this machine:
+
+```json
+{
+  "fleet": {
+    "maxRunningThreads": 12,
+    "hosts": {
+      "local": { "maxThreads": 4 },
+      "lidge-ai": { "maxThreads": 6 },
+      "mini": { "allowGoals": false }
+    }
+  }
+}
+```
+
+The `scheduler.status` path shows each machine's threads against these limits, its quota per
+provider, why it would refuse goal work now, the models cooling down after a failure, and recent
+placement decisions.
+
+## Machines under heavy load
+
+Each machine watches its own load, CPU, memory, disk space, and whether GOAT itself stalls. A
+machine that stays busy for three minutes is under heavy load, and it counts as normal again only
+after five quiet minutes. A single GOAT stall while a build or test runs is recorded but changes
+nothing; three stalls of 2.5 seconds within ten minutes mean heavy load, and two of five seconds,
+or one of fifteen, mean overloaded. Fleet telemetry shows an alert for it. Agents that started work
+there see one status line per machine in their thread, updated in place as the level changes, and
+an overloaded machine wakes them so they stop adding work to it. An agent launching onto a busy
+machine is told where else to go, and goals do not place work on an overloaded one.
+
+Thresholds and behavior live under `fleet.pressure`; these are the defaults:
+
+```json
+{
+  "fleet": {
+    "pressure": {
+      "elevatedLoadPerCore": 1.5,
+      "criticalLoadPerCore": 3,
+      "elevatedCpuPercent": 90,
+      "criticalEventLoopDelayMs": 5000,
+      "sustainMs": 180000,
+      "recoverMs": 300000,
+      "notifyCooldownMs": 2700000,
+      "elevatedDelivery": "notice",
+      "criticalDelivery": "wake",
+      "admission": "warn"
+    }
+  }
+}
+```
+
+Memory and disk thresholds are `elevatedMemoryFreePercent` (10), `criticalMemoryFreePercent` (5),
+`elevatedDiskFreeGiB` (10), and `criticalDiskFreeGiB` (2). Set `admission` to `"block"` to refuse
+agent launches onto an overloaded machine, a delivery to `"off"` to silence that level, or
+`enabled` to `false` to turn this off.
+
+## Connect a CLIProxyAPI hub
+
+To see pooled accounts, open **Settings → Providers → Usage providers → Add CLIProxyAPI hub**. Choose the
+environment that will connect to the hub and enter its URL and management key.
+
+The accounts appear under **Usage → Limits**. Codex accounts show banked reset credits; select an
+account and choose **Use reset** to redeem one. No hub plugin is required.
+
+This connection supplies usage information; configure
+the provider separately to send agent requests through the hub. Remove the hub from the same
+settings section when you no longer need it.
+
+## Subscription usage widget
+
+Add **Subscription usage** from your iOS or Android widget gallery to see remaining Codex and
+Claude quotas. Tap it to open **Usage → Limits**; on Android this works while GOAT is running in
+the background, otherwise open the app from the launcher. On iOS, use **Edit Widget** to choose
+Session, Weekly, or both for each provider. Reopen GOAT to refresh expired readings.
+
+## Keyboard shortcuts
+
+On web and desktop, open Usage from the command palette. While on Usage,
+press `C`, `T`, or `L` for Cost, Tokens, or Limits while not typing in a field.
+Use `Ctrl+Shift+1/2/3/4` (`Cmd+Shift+1/2/3/4` on macOS) for the past
+24 hours, 7 days, 30 days, or 90 days. Period shortcuts do nothing on Limits.
+Press `Escape` to return to the previous page. Customize these shortcuts in
+**Settings → Keybindings**.

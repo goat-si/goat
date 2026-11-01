@@ -1,0 +1,305 @@
+import {
+  ClaudeCloudSettings,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  TextGenerationError,
+  type ServerProvider,
+} from "@goat/contracts";
+import * as Effect from "effect/Effect";
+import * as Equal from "effect/Equal";
+import * as FileSystem from "effect/FileSystem";
+import * as DateTime from "effect/DateTime";
+import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
+import * as SqlClient from "effect/sql/SqlClient";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import * as HostProcess from "@goat/shared/HostProcess";
+import * as PtyAdapter from "@goat/shared/PtyAdapter";
+import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
+import type { ProviderDriver } from "@goat/provider-core/server/driver";
+import { ProviderDriverError } from "@goat/provider-core/server/errors";
+import { collectUint8StreamText } from "@goat/provider-core/server/collectStreamText";
+import { makeManagedServerProvider } from "@goat/provider-core/server/managedProvider";
+import { withInstanceIdentity } from "@goat/provider-core/server/instanceIdentity";
+import {
+  ClaudeCloudCli,
+  ClaudeCloudError,
+  cloudRunHistory,
+  makeClaudeCloudAdapter,
+} from "@goat/provider-claude-cloud/server";
+import { resolveClaudeCloudLogin } from "./ClaudeCloudLogin.ts";
+import * as PullRequests from "../../pullRequest/PullRequestService.ts";
+import * as Projection from "../../orchestration-v2/ProjectionStore.ts";
+import * as ProjectStore from "../../orchestration-v2/ProjectStore.ts";
+import { MainCheckoutUnknownError, makeClaudeCloudFolderTrust } from "./ClaudeCloudFolderTrust.ts";
+
+const DRIVER = ProviderDriverKind.make("claudeCloud");
+const decodeSettings = Schema.decodeSync(ClaudeCloudSettings);
+export type ClaudeCloudDriverEnv =
+  | ProviderHost.ProviderHost
+  | Path.Path
+  | FileSystem.FileSystem
+  | ChildProcessSpawner.ChildProcessSpawner
+  | PtyAdapter.PtyAdapter
+  | PullRequests.PullRequestService
+  | Projection.ProjectionStoreV2
+  | ProjectStore.ProjectStoreV2
+  | SqlClient.SqlClient;
+
+export const ClaudeCloudDriver: ProviderDriver<ClaudeCloudSettings, ClaudeCloudDriverEnv> = {
+  driverKind: DRIVER,
+  metadata: {
+    displayName: "Claude Cloud",
+    supportsMultipleInstances: true,
+    hasDefaultInstance: true,
+  },
+  configSchema: ClaudeCloudSettings,
+  defaultConfig: () => decodeSettings({}),
+  create: ({ instanceId, displayName, accentColor, enabled, config }) =>
+    Effect.gen(function* () {
+      const host = yield* ProviderHost.ProviderHost;
+      const pullRequests = yield* PullRequests.PullRequestService;
+      const projection = yield* Projection.ProjectionStoreV2;
+      const projectStore = yield* ProjectStore.ProjectStoreV2;
+      const sql = yield* SqlClient.SqlClient;
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const path = yield* Path.Path;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const pty = yield* PtyAdapter.PtyAdapter;
+      const processEnvironment = yield* HostProcess.Environment;
+      const homeDirectory = yield* HostProcess.HomeDirectory;
+      const platform = yield* HostProcess.Platform;
+      const operations = yield* Effect.gen(function* () {
+        return yield* ClaudeCloudCli.ClaudeCloudCli;
+      }).pipe(
+        Effect.provide(ClaudeCloudCli.layer),
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Effect.provideService(PtyAdapter.PtyAdapter, pty),
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, path),
+      );
+      const resolveLogin = resolveClaudeCloudLogin(config.sourceInstanceId).pipe(
+        Effect.provideService(ProviderHost.ProviderHost, host),
+        Effect.provideService(Path.Path, path),
+        Effect.provideService(HostProcess.Environment, processEnvironment),
+        Effect.provideService(HostProcess.HomeDirectory, homeDirectory),
+        Effect.provideService(HostProcess.Platform, platform),
+      );
+      const stamp = withInstanceIdentity({
+        instanceId,
+        driverKind: DRIVER,
+        displayName,
+        accentColor,
+        continuationGroupKey: `claudeCloud:${instanceId}:${config.sourceInstanceId}`,
+      });
+      const base = (status: ServerProvider["status"], message?: string): ServerProvider =>
+        stamp({
+          executionLocation: "cloud",
+          authSourceInstanceId: ProviderInstanceId.make(config.sourceInstanceId),
+          enabled,
+          installed: false,
+          version: null,
+          status,
+          auth: { status: "unknown" },
+          checkedAt: "1970-01-01T00:00:00.000Z",
+          models: [
+            {
+              slug: "cloud-default",
+              name: "Cloud default",
+              isCustom: false,
+              isDefault: true,
+              capabilities: null,
+            },
+          ],
+          slashCommands: [],
+          skills: [],
+          supportedRuntimeModes: ["approval-required"],
+          supportsConversationRollback: false,
+          supportsTextGeneration: false,
+          reportsContextWindow: false,
+          showInteractionModeToggle: false,
+          setup: { canAuthenticate: false, canInstall: false },
+          ...(message ? { message } : {}),
+        });
+      // Environment-owned, empty of project source. Keep HOME/config/env from the sibling.
+      const controlCwd = path.join(
+        host.paths.providerStatusCacheDir,
+        "claude-cloud-control",
+        encodeURIComponent(instanceId),
+      );
+      const resolveControlCwd = fileSystem.makeDirectory(controlCwd, { recursive: true }).pipe(
+        Effect.as(controlCwd),
+        Effect.mapError(
+          () =>
+            new ClaudeCloudError({
+              detail:
+                "Could not prepare the environment-owned Claude control directory. No prompt was sent.",
+              outcome: "rejected",
+            }),
+        ),
+      );
+      const check = Effect.gen(function* () {
+        if (!enabled) return base("disabled");
+        const login = yield* resolveLogin;
+        const result = yield* operations.readiness(login, yield* resolveControlCwd);
+        return {
+          ...base("ready"),
+          installed: true,
+          version: result.version,
+          auth: { status: "authenticated" as const, type: "claude.ai" },
+          checkedAt: DateTime.formatIso(yield* DateTime.now),
+          message:
+            "Claude Cloud starts tasks from the project folder. Local changes may be included. GOAT follows each run for up to two hours by reading the session, which runs a small paid model turn per check, and by watching for a session-linked GitHub PR.",
+        };
+      }).pipe(Effect.catch((cause) => Effect.succeed(base("error", cause.detail))));
+      const snapshot = yield* makeManagedServerProvider({
+        resolveMaintenance: () =>
+          Effect.succeed({ provider: DRIVER, packageName: null, update: null }),
+        getSettings: host.settings.get,
+        streamSettings: host.settings.changes,
+        haveSettingsChanged: (previous, next) => !Equal.equals(previous, next),
+        initialSnapshot: () => Effect.succeed(base(enabled ? "warning" : "disabled")),
+        checkProvider: check,
+      }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ProviderDriverError({
+              driver: DRIVER,
+              instanceId,
+              detail: "Could not build Claude Cloud readiness.",
+              cause,
+            }),
+        ),
+      );
+      // Null only when Git says the folder is outside any repository; anything else fails, so an
+      // unknown trust root never authorizes an answer.
+      const mainCheckout = (cwd: string) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const child = yield* spawner.spawn(
+              ChildProcess.make(
+                "git",
+                ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+                { cwd, shell: false, stdin: "ignore" },
+              ),
+            );
+            const [code, output, errors] = yield* Effect.all(
+              [
+                child.exitCode,
+                collectUint8StreamText({ stream: child.stdout, maxBytes: 4096 }),
+                collectUint8StreamText({ stream: child.stderr, maxBytes: 4096 }),
+              ],
+              { concurrency: "unbounded" },
+            );
+            const commonDir = output.text.trim();
+            if (Number(code) === 0 && path.basename(commonDir) === ".git")
+              return path.dirname(commonDir);
+            if (Number(code) === 128 && /not a git repository/i.test(errors.text)) return null;
+            return yield* new MainCheckoutUnknownError({});
+          }),
+        ).pipe(
+          Effect.timeout("5 seconds"),
+          Effect.mapError((cause) => new MainCheckoutUnknownError({ cause })),
+        );
+      const folderTrust = yield* makeClaudeCloudFolderTrust({
+        instanceId,
+        sql,
+        projects: projectStore,
+        projection,
+        fileSystem,
+        path,
+        resolveLogin,
+        cli: operations,
+        mainCheckout,
+      });
+      const orchestrationAdapter = yield* makeClaudeCloudAdapter({
+        instanceId,
+        resolveLogin,
+        resolveControlCwd,
+        resolveReadRoot: Effect.succeed(
+          path.join(
+            host.paths.providerStatusCacheDir,
+            "claude-cloud-reads",
+            encodeURIComponent(instanceId),
+          ),
+        ),
+        folderTrust: folderTrust.policy,
+        runHistory: (input) =>
+          projection.getThreadRecords(input.threadId, ["runs", "messages"]).pipe(
+            Effect.mapError(() => undefined),
+            Effect.flatMap((records) => {
+              const history = cloudRunHistory(records, input.runId);
+              return history ? Effect.succeed(history) : Effect.fail(undefined);
+            }),
+            Effect.mapError(
+              () =>
+                new ClaudeCloudError({
+                  detail: "Could not read the run's messages to follow its reply.",
+                  outcome: "uncertain",
+                }),
+            ),
+          ),
+        observe: (input) =>
+          pullRequests.findCloudSessionPullRequest(input).pipe(
+            Effect.mapError(
+              () =>
+                new ClaudeCloudError({
+                  detail: "Cannot observe GitHub PRs for this project's persisted source.",
+                  outcome: "uncertain",
+                }),
+            ),
+          ),
+        runStartedAt: (input) =>
+          projection.getThreadRecords(input.threadId, ["runs"]).pipe(
+            Effect.mapError(
+              () =>
+                new ClaudeCloudError({
+                  detail: "Could not read the persisted cloud observation deadline.",
+                  outcome: "uncertain",
+                }),
+            ),
+            Effect.flatMap((records) => {
+              const run = records.runs.find((item) => item.id === input.runId);
+              return run?.startedAt
+                ? Effect.succeed(run.startedAt)
+                : Effect.fail(
+                    new ClaudeCloudError({
+                      detail:
+                        "The persisted run has no observation start time; the deadline will not be reset.",
+                      outcome: "uncertain",
+                    }),
+                  );
+            }),
+          ),
+      }).pipe(Effect.provideService(ClaudeCloudCli.ClaudeCloudCli, operations));
+      const unsupportedText = (operation: string) =>
+        Effect.fail(
+          new TextGenerationError({
+            operation,
+            detail:
+              "Choose a local provider for text generation; Claude Cloud submits coding sessions.",
+          }),
+        );
+      return {
+        instanceId,
+        driverKind: DRIVER,
+        displayName,
+        accentColor,
+        enabled,
+        continuationIdentity: {
+          driverKind: DRIVER,
+          continuationKey: `claudeCloud:${instanceId}:${config.sourceInstanceId}`,
+        },
+        snapshot,
+        orchestrationAdapter,
+        folderTrust: folderTrust.capability,
+        textGeneration: {
+          generateCommitMessage: () => unsupportedText("commitMessage"),
+          generatePrContent: () => unsupportedText("prContent"),
+          generateBranchName: () => unsupportedText("branchName"),
+          generateThreadTitle: () => unsupportedText("threadTitle"),
+          generateReviewGuide: () => unsupportedText("reviewGuide"),
+        },
+      };
+    }),
+};

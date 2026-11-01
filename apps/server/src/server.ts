@@ -1,0 +1,1339 @@
+import * as AuxiliarySqlite from "./storage/AuxiliarySqlite.ts";
+import * as VoiceTranscription from "./voiceTranscription.ts";
+import * as HostPressureMonitor from "./fleet/pressure/HostPressureMonitor.ts";
+import * as DecisionLayers from "./goatclaw/DecisionLayers.ts";
+import * as PermissionProfiles from "./goatclaw/PermissionProfiles.ts";
+// @effect-diagnostics nodeBuiltinImport:off - the closed import factory requires a synchronous UUID callback.
+import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
+import { desiredLinkReconcileStartup } from "./cloud/DesiredLinkReconcile.ts";
+import * as NotesLayers from "./notes/NotesLayers.ts";
+import * as HomeRequests from "./provider/CodexHomeRequests.ts";
+import * as CodexRoutes from "./provider/CodexRouteService.ts";
+import * as HomeRoute from "./provider/OpenCodexRoute.ts";
+import * as ProviderOnboarding from "./provider/ProviderOnboarding.ts";
+import * as CloudProviderAutoSetup from "./provider/CloudProviderAutoSetup.ts";
+import * as ProviderSettings from "./provider/ProviderSettings.ts";
+import * as SshDeviceAdd from "./sshRemote/SshDeviceAdd.ts";
+import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventLoggers";
+import type * as Crypto from "effect/Crypto";
+import type * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import * as ChannelLayers from "./channels/ChannelLayers.ts";
+import * as CloudAgentService from "./cloudAgents/CloudAgentService.ts";
+import * as CloudFolderTrust from "./cloudAgents/CloudFolderTrust.ts";
+import * as ConnectionCatalogBroker from "./connections/ConnectionCatalogBroker.ts";
+import * as GoalLayers from "./fleet/goals/GoalLayers.ts";
+import * as FleetHealth from "./fleet/health/layer.ts";
+import * as HandoffExpiry from "./handoffs/HandoffExpiry.ts";
+import * as HubDown from "./hub/HubDown.ts";
+import * as HubNodeRepository from "./hubNodes/HubNodeRepository.ts";
+import * as HubNodes from "./hubNodes/HubNodes.ts";
+import * as LinkedHosts from "./linkedHosts/LinkedHosts.ts";
+import * as HostThreadsMcpService from "./mcp/HostThreadsMcpService.ts";
+import * as LaunchWatchService from "./mcp/LaunchWatchService.ts";
+import * as ThreadReplicaService from "./mcp/ThreadReplicaService.ts";
+import * as OrchestratorMcpService from "./mcp/OrchestratorMcpService.ts";
+import * as ThreadLaunchMcpService from "./mcp/ThreadLaunchMcpService.ts";
+import * as PullRequestSyncReactor from "./orchestration-v2/PullRequestSyncReactor.ts";
+import * as PullRequestWatchReactor from "./orchestration-v2/PullRequestWatchReactor.ts";
+import * as DatabaseStorage from "./persistence/DatabaseStorage.ts";
+import * as ThreadArchiveGate from "./orchestration-v2/ThreadArchiveGate.ts";
+import * as ThreadHistoryArchive from "./orchestration-v2/ThreadHistoryArchive.ts";
+import * as ThreadHistoryArchiveLabels from "./orchestration-v2/ThreadHistoryArchiveLabels.ts";
+import * as ProviderDiagnosisRouting from "./provider/ProviderDiagnosisRouting.ts";
+import * as ProviderHostSync from "./provider/ProviderHostSync.ts";
+import * as RemoteDispatchCoordinator from "./remoteReports/RemoteDispatchCoordinator.ts";
+import * as RemoteLaunchCatalog from "./remoteReports/RemoteLaunchCatalog.ts";
+import * as RemoteReportService from "./remoteReports/RemoteReportService.ts";
+import * as RuntimeAdmission from "./runtimeAdmission.ts";
+import * as RuntimeControl from "./runtimeControl.ts";
+import * as RuntimeDrain from "./runtimeDrain.ts";
+import * as RuntimeIdentity from "./runtimeIdentity.ts";
+import * as SshHostSetup from "./sshRemote/SshHostSetup.ts";
+import * as SshRemoteDispatchLive from "./sshRemote/SshRemoteDispatchLive.ts";
+import * as GoatclawFleetSync from "./goatclaw/FleetSync.ts";
+import * as SshWorkspaceSync from "./sshRemote/SshWorkspaceSync.ts";
+import * as StorageCleanup from "./storageCleanup.ts";
+import * as WorktreeCheckoutHealth from "./vcs/WorktreeCheckoutHealth.ts";
+import * as ObservedCheckService from "./threadResults/ObservedCheckService.ts";
+import * as ThreadResultService from "./threadResults/ThreadResultService.ts";
+import * as ScreenCodeLayers from "./screenCode/ScreenCodeLayers.ts";
+import * as SiteNotes from "./preview/SiteNotes.ts";
+// Effect wraps this raw Node HTTP server after its startup and write-error guards attach.
+import * as NodeHttp from "node:http";
+
+import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { EnvironmentHttpApi, type RepositoryIdentity } from "@goat/contracts";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import { FetchHttpClient, HttpRouter, HttpServer } from "effect/http";
+import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Stream from "effect/Stream";
+
+import * as AcpRegistrySupport from "@goat/provider-acp-registry/server/AcpRegistrySupport";
+import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
+import * as ProviderLatestVersions from "@goat/provider-core/server/ProviderLatestVersions";
+import * as CursorAccountReader from "@goat/provider-cursor/server/CursorAccountReader";
+import * as CursorKeychain from "@goat/provider-cursor/server/CursorKeychain";
+import * as CursorUsageAccounts from "@goat/provider-cursor/server/CursorUsageAccounts";
+import * as OpenCodeRuntime from "@goat/provider-opencode/server/OpenCodeRuntime";
+import * as OpenCodeServerLedger from "@goat/provider-opencode/server/OpenCodeServerLedger";
+import * as NetService from "@goat/shared/Net";
+import * as RelayClient from "@goat/shared/relayClient";
+import * as ProviderHostLive from "./provider/ProviderHostLive.ts";
+import * as DocumentText from "./provider/DocumentText.ts";
+import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
+import * as CheckpointStore from "./checkpointing/CheckpointStore.ts";
+import * as SourceControlBuiltInDrivers from "./sourceControl/builtInDrivers.ts";
+import { BUILT_IN_SOURCE_CONTROL_DRIVER_LIST } from "./sourceControl/sourceControlDefinitions.ts";
+import * as TextGeneration from "./textGeneration/TextGeneration.ts";
+import * as AcpSessionService from "./provider/AcpSessionService.ts";
+import * as ProviderInstanceRegistryHydration from "./provider/ProviderInstanceRegistryHydration.ts";
+import * as ProjectSettingsOverrideSweep from "./provider/ProjectSettingsOverrideSweep.ts";
+import * as TerminalManager from "./terminal/Manager.ts";
+import * as McpHttpServer from "./mcp/McpHttpServer.ts";
+import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
+import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
+import * as DeviceService from "./device/DeviceService.ts";
+import * as DeviceHubProxy from "./device/DeviceHubProxy.ts";
+import * as PreviewManager from "./preview/Manager.ts";
+import * as PortScanner from "./preview/PortScanner.ts";
+import * as ServerBrowser from "./preview/ServerBrowser.ts";
+import * as PreviewAgentActivity from "./preview/PreviewAgentActivity.ts";
+import * as DesktopBrowserChannel from "./preview/DesktopBrowserChannel.ts";
+import * as ServerBrowserStream from "./preview/ServerBrowserStream.ts";
+import * as ProcessRunner from "./processRunner.ts";
+import * as GitManager from "./git/GitManager.ts";
+import * as EnvironmentTheme from "./environmentTheme.ts";
+import * as Keybindings from "./keybindings.ts";
+import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
+import * as ServerOwnership from "./serverOwnership.ts";
+import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
+import * as ServerSettings from "./serverSettings.ts";
+import * as ProjectEnrichmentService from "./project/ProjectEnrichmentService.ts";
+import * as NativeAppIconResolver from "./assets/NativeAppIconResolver.ts";
+import * as AntigravityInstallation from "./provider/AntigravityInstallation.ts";
+import * as CodexInstallation from "./provider/CodexInstallation.ts";
+import * as ProviderInstanceRegistry from "./provider/ProviderInstanceRegistry.ts";
+import * as ProviderAdapterRegistry from "./orchestration-v2/ProviderAdapterRegistry.ts";
+import * as ProviderRegistry from "./provider/ProviderRegistry.ts";
+import * as ProviderUsageLimitsIngestion from "./provider/ProviderUsageLimitsIngestion.ts";
+import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
+import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
+import * as GoatProjectFileLoader from "./project/GoatProjectFileLoader.ts";
+import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
+import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
+import * as KnownWorkspaces from "./workspace/KnownWorkspaces.ts";
+import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
+import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
+import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
+import * as VcsDriverRegistry from "./vcs/VcsDriverRegistry.ts";
+import * as VcsProjectConfig from "./vcs/VcsProjectConfig.ts";
+import * as VcsProcess from "./vcs/VcsProcess.ts";
+import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
+import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
+import * as ProjectCloneTracker from "./project/ProjectCloneTracker.ts";
+import * as GitWorkflowService from "./git/GitWorkflowService.ts";
+import * as ReviewService from "./review/ReviewService.ts";
+import * as SourceControlProviderRegistry from "./sourceControl/SourceControlProviderRegistry.ts";
+import * as PullRequestReadCache from "./pullRequest/PullRequestReadCache.ts";
+import * as SourceControlRateLimit from "@goat/source-control-core/server/SourceControlRateLimit";
+import { disableTailscaleServe, ensureTailscaleServe } from "@goat/tailscale";
+import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
+import * as AuthHttp from "./auth/http.ts";
+import * as McpOAuth from "./auth/McpOAuth.ts";
+import * as McpOAuthHttp from "./auth/mcpOAuthHttp.ts";
+import * as ReplayMarkers from "./auth/replayMarkers.ts";
+import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
+import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
+import * as HostPowerMonitor from "./background/HostPowerMonitor.ts";
+import * as ServerAutoUpdate from "./cloud/autoUpdate.ts";
+import * as CloudCliTokenManager from "./cloud/CliTokenManager.ts";
+import * as CloudLink from "./cloud/CloudLink.ts";
+import {
+  CLOUD_ENDPOINT_RUNTIME_CONFIG,
+  decodeRuntimeConfig,
+  RELAY_URL_SECRET,
+} from "./cloud/config.ts";
+import * as ConnectReachability from "./cloud/ConnectReachability.ts";
+import * as CloudHttp from "./cloud/http.ts";
+import * as CloudManagedEndpointRuntime from "./cloud/ManagedEndpointRuntime.ts";
+import * as RelayTracing from "./cloud/relayTracing.ts";
+import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
+import * as SshRuntimeAutoUpdate from "./cloud/sshRuntimeAutoUpdate.ts";
+import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
+import { layerCommandReadiness } from "./commandReadiness.ts";
+import * as PendingAttachmentSweep from "./assets/PendingAttachmentSweep.ts";
+import * as ServerConfig from "./config.ts";
+import * as CuaDriver from "./cua/CuaDriver.ts";
+import * as LinuxFrameSource from "./cua/linuxFrames/LinuxFrameSource.ts";
+import * as LinuxHelperHost from "./cua/linuxHelperHost/LinuxHelperHost.ts";
+import * as LinuxHelperReport from "./cua/linuxHelperHost/LinuxHelperReport.ts";
+import * as ComputerUseLeases from "./cua/ComputerUseLeases.ts";
+import * as ComputerUseTurnEnd from "./cua/ComputerUseTurnEnd.ts";
+import * as ComputerUseAgentConnections from "./cua/ComputerUseAgentConnections.ts";
+import * as ComputerUseLeaseRoute from "./cua/ComputerUseLeaseRoute.ts";
+import * as DesktopAppUpdate from "./desktopUpdate/DesktopAppUpdate.ts";
+import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
+import * as StrayProcesses from "./diagnostics/StrayProcesses.ts";
+import * as StorageReclaim from "./storage/StorageReclaim.ts";
+import * as StorageConsent from "./storage/StorageConsent.ts";
+import * as LocalGoatServers from "./storage/localGoatServers.ts";
+import * as WorktreeInventoryService from "./mcp/WorktreeInventoryService.ts";
+import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
+import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
+import * as DirectEndpoints from "./environment/DirectEndpoints.ts";
+import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
+import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
+import * as FleetFallback from "./fleet/resources/Fallback.ts";
+import * as FleetPressure from "./fleet/pressure/PressureNudger.ts";
+import * as FleetPlacement from "./fleet/resources/Placement.ts";
+import * as ServerHttp from "./http.ts";
+import * as RuntimeSessionRoute from "./runtimeSessionRoute.ts";
+import { withUntracedRequests } from "./http.ts";
+import {
+  guardHttpResponseWriteErrors,
+  rejectRequestsUntilServing,
+} from "./httpResponseErrorGuard.ts";
+import * as HubProxyHttp from "./hubProxy/http.ts";
+import * as HubProxyNodes from "./hubProxy/HubProxyNodes.ts";
+import * as HubProxySessions from "./hubProxy/HubProxySessions.ts";
+import * as MaintenanceAudit from "./maintenance/MaintenanceAudit.ts";
+import * as EventLoopMonitor from "./observability/EventLoopMonitor.ts";
+import * as HeapSnapshot from "./observability/HeapSnapshot.ts";
+import * as Observability from "./observability/Observability.ts";
+import * as CloudTaskSource from "./orchestration-v2/CloudTaskSourceService.ts";
+import * as EventStoreV2 from "./orchestration-v2/EventStore.ts";
+import * as OrchestrationHttp from "./orchestration-v2/http.ts";
+import * as IdleCompactionService from "./orchestration-v2/IdleCompactionService.ts";
+import * as ProjectionMaintenance from "./orchestration-v2/ProjectionMaintenance.ts";
+import * as ProjectionStoreV2 from "./orchestration-v2/ProjectionStore.ts";
+import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
+import * as ProviderEventIngestor from "./orchestration-v2/ProviderEventIngestor.ts";
+import * as RunFinalizationService from "./orchestration-v2/RunFinalizationService.ts";
+import * as RuntimeLayer from "./orchestration-v2/runtimeLayer.ts";
+import * as ThreadPullRequestService from "./orchestration-v2/ThreadPullRequestService.ts";
+import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
+import * as ThreadSettlementService from "./orchestration-v2/ThreadSettlementService.ts";
+import * as GuestHttp from "./guest/http.ts";
+import { fixPath } from "./os-jank.ts";
+import * as PullRequestFilesViewed from "./persistence/PullRequestFilesViewed.ts";
+import * as PullRequestReviewGuides from "./persistence/PullRequestReviewGuides.ts";
+import * as SqlitePersistence from "./persistence/Sqlite.ts";
+import * as PersistenceRecoveryOwner from "./persistence/PersistenceRecoveryOwner.ts";
+import * as PreviewSessions from "./preview/PreviewSessions.ts";
+import * as BrowserOriginGrants from "./preview/BrowserOriginGrantsLayer.ts";
+import * as BrowserClaimManifestModule from "./preview/BrowserClaimManifest.ts";
+import * as BrowserClaimBindModule from "./preview/BrowserClaimBind.ts";
+import * as AgentScopeLive from "./process/agentScope.ts";
+import * as ExternalLauncher from "./process/externalLauncher.ts";
+import { makePersistedServerRuntimeState } from "./serverRuntimeState.ts";
+import { acceptsPrivateNetworkConnection, loopbackUrlHostForAddress } from "./startupAccess.ts";
+import * as ProjectHttp from "./project/http.ts";
+import * as WorktreeSetupTracker from "./project/WorktreeSetupTracker.ts";
+import * as CodexManagedTokenBroker from "./provider/CodexManagedTokenBroker.ts";
+import * as AntigravityUsage from "./provider/Drivers/AntigravityUsage.ts";
+import { MuseUsageHome } from "@goat/provider-muse/server";
+import * as EventNdjsonLogger from "./provider/EventNdjsonLogger.ts";
+import * as ModelManifest from "./provider/ModelManifest.ts";
+import * as ProviderDiagnosisService from "./provider/ProviderDiagnosisService.ts";
+import * as ResetCreditCoordinator from "./provider/resetCreditCoordinator.ts";
+import * as PullRequestHttp from "./pullRequest/http.ts";
+import * as PullRequestProviderRegistry from "./pullRequest/PullRequestProviderRegistry.ts";
+import * as PullRequestReviewGuideService from "./pullRequest/PullRequestReviewGuideService.ts";
+import * as PullRequestService from "./pullRequest/PullRequestService.ts";
+import * as HeldHooksWaker from "./relay/HeldHooksWaker.ts";
+import * as DesktopTelemetryReceiver from "./resourceTelemetry/DesktopTelemetryReceiver.ts";
+import * as HostResources from "./resourceTelemetry/HostResources.ts";
+import * as NativeTelemetryClient from "./resourceTelemetry/NativeTelemetryClient.ts";
+import * as ProcessGroupMetrics from "./resourceTelemetry/ProcessGroupMetrics.ts";
+import * as ResourceAttribution from "./resourceTelemetry/ResourceAttribution.ts";
+import * as ResourceMonitorBinary from "./resourceTelemetry/ResourceMonitorBinary.ts";
+import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
+import * as RelayDeliveryProof from "./scheduledTasks/RelayDeliveryProof.ts";
+import {
+  relayHookBaseUrl,
+  ScheduledTaskWebhookOrigin,
+} from "./scheduledTasks/ScheduledTaskService.ts";
+import * as WebhookRoute from "./scheduledTasks/webhookRoute.ts";
+import * as AutomationHold from "./automationHold.ts";
+import * as ServerActivation from "./serverActivation.ts";
+import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
+import { makeMemoryApplicationLayers } from "./memory/MemoryApplicationLayers.ts";
+
+export { MemorySourceReadBinding, provideScreenPrimitives } from "./ServerPublicApi.ts";
+import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
+import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
+import * as DelegatedTaskAnalytics from "./telemetry/DelegatedTaskAnalytics.ts";
+import * as NodePtyAdapter from "./terminal/NodePtyAdapter.ts";
+import * as CodexUsageHistory from "./usage/CodexUsageHistory.ts";
+import * as UsageService from "./usage/UsageService.ts";
+import * as Ws from "./ws.ts";
+
+// Escaped MCP handoff provenance can exceed find-my-way's 100-character segment default.
+const HTTP_ROUTER_CONFIG = {
+  maxParamLength: 512,
+} as const;
+
+// Skip Effect's default 20 s grace; WebSocket scope finalizers already close connections gracefully.
+const HTTP_PREEMPTIVE_SHUTDOWN_GRACE_MS = 0;
+const layerResourceAttribution = ResourceAttribution.layer;
+const layerApplicationObservability = EventLoopMonitor.layer.pipe(
+  Layer.provideMerge(Observability.layer),
+  Layer.provideMerge(layerResourceAttribution),
+);
+
+// Share rotation state so driver loggers cannot race.
+const layerProviderEventLoggers = Layer.effect(
+  ProviderEventLoggers.ProviderEventLoggers,
+  Effect.gen(function* () {
+    const { providerEventLogPath } = yield* ServerConfig.ServerConfig;
+    const attribution = yield* ResourceAttribution.ResourceAttribution;
+    const store = yield* EventNdjsonLogger.makeEventNdjsonLogStore(providerEventLogPath, {
+      attribution,
+    }).pipe(
+      Effect.catch((error) =>
+        Effect.logWarning(error.message, { error }).pipe(
+          Effect.annotateLogs({ scope: "provider-observability" }),
+          Effect.as(undefined),
+        ),
+      ),
+    );
+    if (!store) return ProviderEventLoggers.NoOpProviderEventLoggers;
+    yield* Effect.addFinalizer(() => store.close());
+    return { native: store.logger("native"), canonical: store.logger("canonical") };
+  }),
+);
+const layerPtyAdapter = NodePtyAdapter.layer;
+
+export const layerServerSettings = ServerSettings.layer.pipe(
+  Layer.provide(ServerSecretStore.layer),
+  Layer.provide(ServerEnvironment.layerIdentity),
+  Layer.provideMerge(SqlitePersistence.layerConfig),
+);
+const layerNativeTelemetry = NativeTelemetryClient.layer.pipe(
+  Layer.provide(ResourceMonitorBinary.layer),
+);
+const layerDesktopTelemetryReceiver = DesktopTelemetryReceiver.layer.pipe(
+  Layer.provideMerge(layerServerSettings),
+);
+const layerResourceTelemetry = ResourceTelemetry.layer.pipe(
+  Layer.provideMerge(layerNativeTelemetry),
+  Layer.provideMerge(layerDesktopTelemetryReceiver),
+);
+const layerHostPowerMonitor = HostPowerMonitor.layer.pipe(
+  Layer.provide(layerDesktopTelemetryReceiver),
+);
+
+// One self-healing instance for the fleet tools and the goal controller: one host monitor and one
+// move lock. It gets the power monitor background policy uses, so suspend and resume reach it.
+const layerFleetHealth = FleetHealth.layer.pipe(Layer.provide(layerHostPowerMonitor));
+
+// Notices to orchestrating threads and launch advice; reads the monitor host status exposes.
+const layerPressureAdmission = FleetPressure.layerAdmission.pipe(
+  Layer.provide(HostPressureMonitor.layer),
+);
+const layerFleetPressure = FleetPressure.layer.pipe(
+  Layer.provide(layerFleetHealth),
+  Layer.provideMerge(layerPressureAdmission),
+);
+const layerThreadReplicas = ThreadReplicaService.layer.pipe(Layer.provide(layerPressureAdmission));
+const layerLaunchWatches = LaunchWatchService.layer.pipe(
+  Layer.provideMerge(layerThreadReplicas),
+  Layer.provide(layerPressureAdmission),
+);
+
+// Reuses DesktopTelemetryReceiverLayerLive: a fresh receiver layer here
+// would open a second reader on the desktop telemetry fd.
+const layerDesktopAppUpdate = DesktopAppUpdate.layer.pipe(
+  Layer.provide(layerDesktopTelemetryReceiver),
+);
+const layerBackground = BackgroundPolicy.layer.pipe(
+  Layer.provide(layerHostPowerMonitor),
+  Layer.provideMerge(layerServerSettings),
+);
+const layerUsage = UsageService.layer.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      AntigravityUsage.layer,
+      MuseUsageHome.layer,
+      CodexUsageHistory.layer,
+      CursorUsageAccounts.layer.pipe(
+        Layer.provide(CursorAccountReader.layer.pipe(Layer.provide(CursorKeychain.layer))),
+      ),
+    ).pipe(
+      Layer.provide(
+        ProviderHostLive.layer.pipe(
+          Layer.provide(ServerSecretStore.layer),
+          Layer.provide(ServerEnvironment.layerIdentity),
+        ),
+      ),
+    ),
+  ),
+  Layer.provide(layerServerSettings),
+);
+const layerResourceDiagnostics = Layer.mergeAll(
+  HostResources.layer,
+  layerResourceTelemetry,
+  ProcessDiagnostics.layer.pipe(Layer.provide(layerResourceTelemetry)),
+  ProcessResourceMonitor.layer.pipe(Layer.provide(layerResourceTelemetry)),
+  ProcessGroupMetrics.layer.pipe(Layer.provide(layerResourceTelemetry)),
+);
+const layerRelayClient = Layer.unwrap(
+  Effect.gen(function* () {
+    const config = yield* ServerConfig.ServerConfig;
+    return RelayClient.layerCloudflared({ baseDir: config.baseDir });
+  }),
+);
+const layerHttpServer = Layer.unwrap(
+  Effect.gen(function* () {
+    const config = yield* ServerConfig.ServerConfig;
+    return NodeHttpServer.layer(
+      () => {
+        const server = rejectRequestsUntilServing(
+          guardHttpResponseWriteErrors(NodeHttp.createServer()),
+        );
+        if (config.privateNetworkOnly) {
+          server.on("connection", (socket) => {
+            if (!acceptsPrivateNetworkConnection(socket)) {
+              socket.destroy();
+            }
+          });
+        }
+        return server;
+      },
+      {
+        host: config.host ?? "127.0.0.1",
+        port: config.port,
+        gracefulShutdownTimeout: HTTP_PREEMPTIVE_SHUTDOWN_GRACE_MS,
+        // Context takeover stays enabled (ws default) so the compression
+        // window is shared across frames — that also makes small frames cheap
+        // to compress, so no size threshold is set (ws only honors
+        // `threshold` when context takeover is disabled).
+        websocket: { perMessageDeflate: true },
+      },
+    );
+  }),
+);
+const layerPlatformServices = DocumentText.layer.pipe(Layer.provideMerge(NodeServices.layer));
+export const layerPersistence = Layer.empty.pipe(Layer.provideMerge(SqlitePersistence.layerConfig));
+const layerVcsDriverRegistry = VcsDriverRegistry.layer.pipe(Layer.provide(VcsProjectConfig.layer));
+const layerSourceControlProviderRegistry = SourceControlProviderRegistry.layer.pipe(
+  Layer.provideMerge(SourceControlBuiltInDrivers.layer),
+  Layer.provideMerge(GitVcsDriver.layer),
+  Layer.provideMerge(layerVcsDriverRegistry),
+);
+
+export const layerRepositoryIdentityResolver = Layer.effect(
+  RepositoryIdentityResolver.RepositoryIdentityResolver,
+  Effect.gen(function* () {
+    const registry = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
+    return yield* RepositoryIdentityResolver.make({
+      refine: Effect.fn(function* (identity: RepositoryIdentity) {
+        for (const { kind } of BUILT_IN_SOURCE_CONTROL_DRIVER_LIST) {
+          const provider = yield* registry.get(kind);
+          if (provider.refineRepositoryIdentity === undefined) continue;
+          const refined = yield* provider.refineRepositoryIdentity({
+            identity,
+            resolveContext: (input) =>
+              registry.resolveHandle(input).pipe(Effect.map((handle) => handle.context)),
+          });
+          if (refined !== identity) return refined;
+        }
+        return identity;
+      }),
+    });
+  }),
+).pipe(Layer.provide(layerSourceControlProviderRegistry), Layer.provide(ProcessRunner.layer));
+
+const layerPullRequestService = PullRequestService.layer.pipe(
+  Layer.provide(PullRequestProviderRegistry.layer),
+  Layer.provide(PullRequestFilesViewed.layer),
+  Layer.provide(PullRequestReadCache.layer),
+  Layer.provide(layerSourceControlProviderRegistry),
+  Layer.provide(SourceControlRateLimit.layer),
+);
+
+export const layerTextGeneration = TextGeneration.layer.pipe(
+  Layer.provide(layerSourceControlProviderRegistry),
+);
+
+const layerGitManager = GitManager.layer.pipe(
+  Layer.provide(Layer.merge(ProjectionStoreV2.layer, ProjectStore.layer)),
+  Layer.provideMerge(RuntimeLayer.layerProjectSetupScriptRunner),
+  Layer.provideMerge(WorktreeSetupTracker.layer),
+  Layer.provideMerge(GitVcsDriver.layer),
+  Layer.provideMerge(layerSourceControlProviderRegistry),
+  Layer.provideMerge(layerTextGeneration),
+);
+
+const layerGit = Layer.empty.pipe(
+  Layer.provideMerge(layerGitManager),
+  Layer.provideMerge(GitVcsDriver.layer),
+);
+
+const layerGitWorkflow = GitWorkflowService.layer.pipe(
+  Layer.provideMerge(layerVcsDriverRegistry),
+  Layer.provideMerge(layerGit),
+);
+
+const layerSourceControlRepositoryService = SourceControlRepositoryService.layer.pipe(
+  Layer.provideMerge(GitVcsDriver.layer),
+  Layer.provideMerge(layerSourceControlProviderRegistry),
+);
+
+const layerProjectCloneTracker = ProjectCloneTracker.layer.pipe(
+  Layer.provide(layerSourceControlRepositoryService),
+);
+
+const layerKnownWorkspaces = KnownWorkspaces.layer.pipe(
+  Layer.provide(ProjectStore.layer),
+  Layer.provide(GitVcsDriver.layer),
+);
+
+const layerReview = ReviewService.layer.pipe(
+  Layer.provideMerge(layerKnownWorkspaces),
+  Layer.provideMerge(GitVcsDriver.layer),
+  Layer.provideMerge(layerVcsDriverRegistry),
+);
+
+const layerVcs = Layer.empty.pipe(
+  Layer.provideMerge(VcsProjectConfig.layer),
+  Layer.provideMerge(layerVcsDriverRegistry),
+  Layer.provideMerge(VcsProvisioningService.layer.pipe(Layer.provide(layerVcsDriverRegistry))),
+  Layer.provideMerge(layerGitWorkflow),
+  Layer.provideMerge(layerReview),
+  Layer.provideMerge(layerSourceControlRepositoryService),
+  Layer.provideMerge(layerProjectCloneTracker),
+  Layer.provideMerge(
+    VcsStatusBroadcaster.layer.pipe(
+      Layer.provide(layerGitWorkflow),
+      Layer.provide(VcsStatusBroadcaster.layerAutomaticFetchInterval),
+      // The orchestration runtime also consumes the broadcaster (run
+      // finalization), so the policy cannot read the store from the runtime's
+      // output.
+      Layer.provide(
+        VcsStatusBroadcaster.layerAutoPullPolicy.pipe(Layer.provide(ProjectStore.layer)),
+      ),
+    ),
+  ),
+);
+
+const layerCheckpointStore = CheckpointStore.layer.pipe(Layer.provide(layerVcsDriverRegistry));
+
+const layerPortScanner = PortScanner.layer.pipe(Layer.provide(ProcessRunner.layer));
+
+const layerTerminal = TerminalManager.layer.pipe(
+  Layer.provide(layerPtyAdapter),
+  Layer.provide(layerPortScanner),
+  Layer.provide(layerNativeTelemetry),
+);
+
+const layerPreview = Layer.empty.pipe(
+  Layer.provideMerge(PreviewManager.layer),
+  Layer.provideMerge(layerPortScanner),
+);
+
+const layerDevice = DeviceService.layer.pipe(
+  Layer.provide(layerServerSettings),
+  Layer.provide(ProcessRunner.layer),
+  Layer.provide(NetService.layer),
+);
+
+// One proxy session service for the /hub/nodes routes and the hubProxy RPCs, so unenrolling or
+// removing a node ends every socket open to it. It reads the runtime's one HubNodes, and the same
+// SshRemoteDispatch layer reference as the MCP tools, so the proxy shares their tunnel manager.
+const layerHubProxy = HubProxySessions.layer.pipe(
+  Layer.provideMerge(HubProxyNodes.layerFromHubNodes),
+  Layer.provide(SshRemoteDispatchLive.layer),
+);
+
+const layerWorkspaceEntries = WorkspaceEntries.layer.pipe(Layer.provide(WorkspacePaths.layer));
+
+const layerWorkspaceFileSystem = WorkspaceFileSystem.layer.pipe(
+  Layer.provide(WorkspacePaths.layer),
+  Layer.provide(layerWorkspaceEntries),
+  Layer.provide(layerKnownWorkspaces),
+);
+
+const layerWorkspace = Layer.mergeAll(
+  WorkspacePaths.layer,
+  layerWorkspaceEntries,
+  layerWorkspaceFileSystem,
+);
+
+const layerProjectFaviconResolver = ProjectFaviconResolver.layer.pipe(
+  Layer.provide(WorkspacePaths.layer),
+  Layer.provide(GoatProjectFileLoader.layer),
+);
+
+const memoryApplicationLayers = makeMemoryApplicationLayers({
+  layerPersistence,
+  layerRepositoryIdentityResolver,
+  layerServerSettings,
+  layerTextGeneration,
+});
+export const {
+  layerMemorySourceReadBinding,
+  layerMemorySourceReadService,
+  layerMemoryHubServices,
+  layerMemoryHubRoutes,
+  layerMemoryHubStarted,
+  layerMemoryDefaultStarted,
+  layerMemorySyncStarted,
+  layerMemorySyncRuntime,
+  layerMemoryImport,
+  layerMemorySnapshot,
+  provideMemorySnapshot,
+  layerMemoryToolkits,
+} = memoryApplicationLayers;
+const {
+  layerMemoryService,
+  layerMemoryStarted,
+  layerMemoryHub,
+  layerRegisteredMemoryHub,
+  layerMemorySync,
+  layerProviderMemoryImport,
+  layerMemorySnapshotWithDependencies,
+} = memoryApplicationLayers;
+
+const layerServerEnvironment = ServerEnvironment.layer.pipe(
+  Layer.provide(layerProviderMemoryImport),
+  Layer.provide(layerRegisteredMemoryHub),
+  Layer.provide(layerServerSettings),
+  Layer.provide(ServerSecretStore.layer),
+);
+
+const layerBrowserOriginGrants = Layer.provide(
+  BrowserOriginGrants.layer,
+  Layer.mergeAll(
+    layerServerEnvironment,
+    BrowserClaimManifestModule.layer,
+    BrowserClaimBindModule.layer,
+  ),
+);
+const layerCuaDriver = CuaDriver.layer.pipe(
+  Layer.provide(layerBrowserOriginGrants),
+  Layer.provide(BrowserClaimManifestModule.layer),
+  Layer.provide(layerDesktopTelemetryReceiver),
+  Layer.provide(layerServerSettings),
+  Layer.provide(LinuxHelperReport.layer),
+);
+const layerLinuxFrameSource = LinuxFrameSource.layer.pipe(Layer.provide(layerCuaDriver));
+// A standalone Linux server's own computer use helper (#1223), beside the driver daemon.
+const layerLinuxHelperHost = LinuxHelperHost.layer.pipe(
+  Layer.provide(layerCuaDriver),
+  Layer.provide(LinuxHelperReport.layer),
+);
+
+const layerAuth = EnvironmentAuth.layer.pipe(
+  Layer.provideMerge(layerPersistence),
+  Layer.provide(layerServerEnvironment),
+  Layer.provide(ServerSecretStore.layer),
+);
+
+const layerCloudManagedEndpointRuntime = Layer.mergeAll(
+  layerRelayClient,
+  CloudManagedEndpointRuntime.layer.pipe(
+    Layer.provide(ServerEnvironment.layerIdentity),
+    Layer.provide(ServerSecretStore.layer),
+    Layer.provide(layerRelayClient),
+  ),
+);
+
+const layerScheduledTaskWebhookOrigin = Layer.effect(
+  ScheduledTaskWebhookOrigin,
+  Effect.gen(function* () {
+    const secrets = yield* ServerSecretStore.ServerSecretStore;
+    return Effect.gen(function* () {
+      if (!isGoatConnectEnabled())
+        return { relayHookBaseUrl: null, unavailableReason: "relay_not_linked" as const };
+      const secretsRead = yield* Effect.all([
+        secrets.get(RELAY_URL_SECRET),
+        secrets.get(CLOUD_ENDPOINT_RUNTIME_CONFIG),
+      ]).pipe(Effect.option);
+      // A failed read says nothing about the link, so it reports no reason.
+      if (Option.isNone(secretsRead)) return { relayHookBaseUrl: null };
+      const [relayUrl, tunnelConfig] = secretsRead.value;
+      if (Option.isNone(relayUrl)) {
+        return { relayHookBaseUrl: null, unavailableReason: "relay_not_linked" as const };
+      }
+      if (Option.isNone(tunnelConfig)) {
+        return {
+          relayHookBaseUrl: null,
+          unavailableReason: "managed_tunnel_not_configured" as const,
+        };
+      }
+      const config = decodeRuntimeConfig(new TextDecoder().decode(tunnelConfig.value));
+      const base = relayHookBaseUrl({
+        relayUrl: new TextDecoder().decode(relayUrl.value),
+        tunnelName: Option.isSome(config) ? config.value.tunnelName : undefined,
+      });
+      return base === null
+        ? { relayHookBaseUrl: null, unavailableReason: "managed_tunnel_unrecognized" as const }
+        : { relayHookBaseUrl: base };
+    });
+  }),
+);
+
+const layerOrchestrationV2Runtime = RuntimeLayer.layerProduction.pipe(
+  Layer.provide(layerScheduledTaskWebhookOrigin),
+  Layer.provide(ProviderEventIngestor.layerAnalytics),
+  Layer.provide(layerCheckpointStore),
+  Layer.provide(layerGitWorkflow),
+  Layer.provide(
+    RunFinalizationService.layerObserver.pipe(
+      Layer.provide(ProjectionStoreV2.layer),
+      Layer.provide(layerPullRequestService),
+      Layer.provide(RuntimeLayer.layerProjectService),
+    ),
+  ),
+);
+
+const layerOrchestrationApplication = CheckpointDiffQuery.layer.pipe(
+  Layer.provideMerge(layerCheckpointStore),
+  Layer.provideMerge(layerOrchestrationV2Runtime),
+);
+
+const layerThreadSettlementWorker = Layer.effectDiscard(
+  ThreadSettlementService.make.pipe(Effect.flatMap((service) => service.start())),
+).pipe(Layer.provide(layerPullRequestService), Layer.provide(ProjectionStoreV2.layer));
+
+const layerObservedCheckWorker = Layer.effectDiscard(
+  ObservedCheckService.make.pipe(Effect.flatMap((service) => service.start())),
+).pipe(Layer.provide(ProjectionStoreV2.layer), Layer.provide(RuntimeLayer.layerProjectService));
+const layerIdleCompactionWorker = Layer.effectDiscard(
+  IdleCompactionService.make.pipe(Effect.flatMap((service) => service.start())),
+).pipe(Layer.provide(ProjectionStoreV2.layer));
+
+const layerThreadPullRequestWorker = Layer.effectDiscard(
+  ThreadPullRequestService.make.pipe(Effect.flatMap((service) => service.start())),
+).pipe(Layer.provide(layerPullRequestService));
+
+const layerProviderInstallationRefresh = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const antigravity = yield* AntigravityInstallation.AntigravityInstallation;
+    const codex = yield* CodexInstallation.CodexInstallation;
+    const instances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
+    const providers = yield* ProviderRegistry.ProviderRegistry;
+    yield* Stream.merge(
+      antigravity.changes.pipe(
+        Stream.changesWith((a, b) => a.installedVersion === b.installedVersion),
+        Stream.drop(1),
+      ),
+      codex.changes.pipe(
+        Stream.changesWith((a, b) => a.installedVersion === b.installedVersion),
+        Stream.drop(1),
+      ),
+    ).pipe(
+      Stream.runForEach((state) =>
+        instances.listInstances.pipe(
+          Effect.flatMap((entries) =>
+            Effect.forEach(
+              entries.filter((instance) => instance.driverKind === state.driver),
+              (instance) => providers.refreshInstance(instance.instanceId),
+              { discard: true },
+            ),
+          ),
+        ),
+      ),
+      Effect.forkScoped,
+    );
+  }),
+);
+
+const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
+  layerMemoryStarted,
+  layerMemorySync,
+  layerProviderMemoryImport,
+  AgentAwarenessRelay.layer,
+  HeldHooksWaker.layer,
+  layerThreadSettlementWorker,
+  layerObservedCheckWorker,
+  layerIdleCompactionWorker,
+  ComputerUseTurnEnd.layer,
+  StorageCleanup.layer.pipe(Layer.provide(ProjectionStoreV2.layer)),
+  WorktreeCheckoutHealth.layer.pipe(Layer.provide(ProcessRunner.layer)),
+  DatabaseStorage.layer.pipe(
+    Layer.provide(ProjectionMaintenance.layer),
+    Layer.provide(ThreadHistoryArchive.layer),
+    Layer.provide(
+      Layer.merge(EventStoreV2.layerFromOrchestrationEventStore, ProjectionStoreV2.layer),
+    ),
+  ),
+  ThreadHistoryArchiveLabels.layer.pipe(Layer.provide(ThreadHistoryArchive.layer)),
+  StrayProcesses.layer.pipe(Layer.provide(ProcessRunner.layer)),
+  StorageConsent.layer,
+  StorageReclaim.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        WorktreeInventoryService.layer,
+        LocalGoatServers.layer.pipe(Layer.provide(ProcessRunner.layer)),
+        ProcessRunner.layer,
+        HostResources.layer,
+        ThreadHistoryArchive.layer,
+      ),
+    ),
+  ),
+  HostPressureMonitor.layer,
+  layerThreadPullRequestWorker,
+  DelegatedTaskAnalytics.layer,
+  Layer.effectDiscard(
+    Effect.gen(function* () {
+      const service = yield* PullRequestSyncReactor.PullRequestSyncReactor;
+      yield* service.start();
+    }),
+  ).pipe(
+    Layer.provideMerge(PullRequestSyncReactor.layer),
+    Layer.provide(layerPullRequestService),
+    Layer.provide(ProjectionStoreV2.layer),
+  ),
+  Layer.effectDiscard(
+    Effect.gen(function* () {
+      const service = yield* PullRequestWatchReactor.PullRequestWatchReactor;
+      yield* service.start();
+    }),
+  ).pipe(
+    Layer.provide(PullRequestWatchReactor.layer),
+    Layer.provide(layerPullRequestService),
+    Layer.provide(ProjectionStoreV2.layer),
+  ),
+  ProviderUsageLimitsIngestion.layer,
+  layerProviderInstallationRefresh,
+  CloudFolderTrust.layer,
+  ReplayMarkers.layer,
+  Layer.effectDiscard(ProjectSettingsOverrideSweep.sweep),
+).pipe(
+  Layer.provideMerge(Layer.merge(AuxiliarySqlite.layer, layerMemoryHub)),
+  // GOAT bot and channel input sit on top of orchestration and are shared by WS and MCP.
+  // Same EventSink layer reference as orchestration, so memoization shares one instance.
+  // Remote channel workers reach other machines through the same SshRemoteDispatch layer
+  // reference the MCP tools use, so both share one tunnel manager and session cache.
+  Layer.provideMerge(
+    ChannelLayers.layer.pipe(
+      Layer.provide(RuntimeLayer.layerEventSink),
+      Layer.provide(SshRemoteDispatchLive.layer),
+      Layer.provide(Layer.merge(layerMemoryService, layerMemorySync)),
+    ),
+  ),
+  Layer.provideMerge(layerHubProxy),
+  Layer.provideMerge(
+    HubNodes.layer.pipe(
+      Layer.provide(HubNodeRepository.layer),
+      Layer.provide(SshRemoteDispatchLive.layer),
+    ),
+  ),
+  // One cloud machine service for WS, MCP and both SshRemoteDispatch builds, so the
+  // per-alias readiness lock and SSH cache invalidation span every caller.
+  Layer.provideMerge(SshRemoteDispatchLive.layerCloudMachines),
+  // Hosts linked over HTTPS, for the same SshRemoteDispatch builds and the MCP link tools.
+  Layer.provideMerge(LinkedHosts.layer),
+  Layer.provideMerge(
+    DecisionLayers.layer.pipe(
+      // The decision feed follows committed events through the shared sink.
+      Layer.provide(RuntimeLayer.layerEventSink),
+      Layer.provide(
+        OrchestratorMcpService.layer.pipe(
+          Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
+        ),
+      ),
+      Layer.provide(ThreadResultService.layer),
+      Layer.provide(RemoteDispatchCoordinator.layer),
+      Layer.provide(layerLaunchWatches),
+      // The first build of the thread services, which layer memoization shares with every
+      // later caller and the MCP tools, so goatclaw fleet sync must be here, not further up.
+      Layer.provideMerge(GoatclawFleetSync.layer),
+      Layer.provide(SshRemoteDispatchLive.layer),
+      Layer.provideMerge(layerOrchestrationApplication),
+    ),
+  ),
+  Layer.provideMerge(
+    RuntimeDrain.layer.pipe(
+      // One instance, shared with the auto-update scheduler, so arbitration sees its target.
+      Layer.provide(SshRuntimeAutoUpdate.layerArbiter),
+      Layer.provideMerge(SshRuntimeAutoUpdate.layer),
+      Layer.provide(ProjectionStoreV2.layer),
+      Layer.provide(RuntimeDrain.layerShutdown),
+      Layer.provideMerge(RuntimeAdmission.layer),
+      Layer.provideMerge(RuntimeIdentity.layer),
+    ),
+  ),
+  ScreenCodeLayers.provideScreenPrimitivesAfter(RuntimeLayer.layerEventInfrastructure),
+  // pipe takes at most 20 steps, so the Cua Driver and cloud auto setup join this merge.
+  Layer.provideMerge(
+    Layer.mergeAll(
+      ProjectStore.layer,
+      ThreadSearch.layer,
+      layerCuaDriver,
+      layerLinuxFrameSource,
+      ComputerUseAgentConnections.layer,
+      ComputerUseLeases.layer.pipe(
+        Layer.provide(Layer.merge(layerCuaDriver, layerDesktopTelemetryReceiver)),
+        Layer.provide(layerLinuxFrameSource),
+        Layer.provide(layerLinuxHelperHost),
+      ),
+      CloudProviderAutoSetup.layer,
+    ),
+  ),
+  Layer.provideMerge(layerServerSettings),
+  Layer.provideMerge(layerSourceControlProviderRegistry),
+  Layer.provideMerge(layerGit),
+  Layer.provideMerge(layerVcs),
+  Layer.provideMerge(Layer.mergeAll(layerTerminal, layerPreview, layerDevice, SiteNotes.layer)),
+  Layer.provideMerge(layerPersistence),
+  Layer.provideMerge(Layer.mergeAll(Keybindings.layer, EnvironmentTheme.layer)),
+  Layer.provideMerge(Layer.merge(ProviderRegistry.layer, UsageLimitSources.layer)),
+  (application) =>
+    provideMemorySnapshot(
+      application,
+      ProviderInstanceRegistryHydration.layerWithProviderHome.pipe(
+        Layer.provide(
+          layerPullRequestService.pipe(Layer.provide(RuntimeLayer.layerProjectService)),
+        ),
+        Layer.provide(ProjectionStoreV2.layer),
+        // Stateless reads over the database; Claude Cloud checks folders against projects.
+        Layer.provide(ProjectStore.layer),
+      ),
+      layerMemorySnapshotWithDependencies,
+    ),
+  Layer.provideMerge(
+    Layer.mergeAll(
+      AntigravityInstallation.AntigravityInstallation.layer,
+      CodexInstallation.CodexInstallation.layer,
+    ),
+  ),
+);
+
+const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
+  Layer.provideMerge(layerPtyAdapter),
+  Layer.provideMerge(AcpRegistrySupport.layerFromHost.pipe(Layer.provide(ProviderHostLive.layer))),
+  Layer.provideMerge(
+    Layer.mergeAll(
+      layerProviderEventLoggers,
+      ModelManifest.layerModelCatalog.pipe(Layer.provideMerge(ModelManifest.layer)),
+      ResetCreditCoordinator.layer,
+      ProviderLatestVersions.layer,
+      McpProviderSessions.layer,
+    ),
+  ),
+  Layer.provideMerge(
+    OpenCodeRuntime.layer.pipe(
+      Layer.provide(
+        Layer.unwrap(
+          Effect.gen(function* () {
+            const config = yield* ServerConfig.ServerConfig;
+            return OpenCodeServerLedger.layer({ stateDir: config.stateDir });
+          }),
+        ),
+      ),
+    ),
+  ),
+  Layer.provideMerge(layerWorkspace),
+  Layer.provideMerge(ProjectEnrichmentService.layer),
+  Layer.provideMerge(Layer.mergeAll(NativeAppIconResolver.layer, layerProjectFaviconResolver)),
+  Layer.provideMerge(Layer.mergeAll(layerRepositoryIdentityResolver, layerBrowserOriginGrants)),
+  Layer.provideMerge(CodexManagedTokenBroker.layer),
+  Layer.provideMerge(layerServerEnvironment),
+  Layer.provideMerge(layerAuth),
+  Layer.provideMerge(ServerSecretStore.layer),
+  Layer.provideMerge(
+    Layer.mergeAll(
+      CloudCliTokenManager.layer.pipe(
+        Layer.provide(ServerSecretStore.layer),
+        Layer.provide(ExternalLauncher.layer),
+      ),
+      layerCloudManagedEndpointRuntime,
+    ),
+  ),
+);
+
+const layerRuntimeDependencies = layerRuntimeCoreDependencies.pipe(
+  Layer.provideMerge(layerUsage),
+  Layer.provideMerge(layerBackground),
+  Layer.provideMerge(layerResourceDiagnostics),
+  Layer.provideMerge(TraceDiagnostics.layer),
+  Layer.provideMerge(AnalyticsService.layer),
+  Layer.provideMerge(ExternalLauncher.layer),
+  Layer.provideMerge(RemoteOpenTargets.layer),
+  Layer.provideMerge(DirectEndpoints.layer),
+  Layer.provideMerge(RuntimeControl.layer),
+  Layer.provideMerge(ServerLifecycleEvents.layer),
+  Layer.provide(NetService.layer),
+);
+
+const layerSshWorkspace = SshWorkspaceSync.layer.pipe(
+  Layer.provide(layerOrchestrationV2Runtime),
+  Layer.provide(GitVcsDriver.layer),
+  Layer.provide(RuntimeLayer.layerProjectService),
+);
+const layerNotes = NotesLayers.layer.pipe(
+  Layer.provide(RuntimeLayer.layerEventSink),
+  Layer.provide(
+    HostThreadsMcpService.layer.pipe(
+      Layer.provide(
+        OrchestratorMcpService.layer.pipe(
+          Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
+        ),
+      ),
+      Layer.provide(ThreadResultService.layer),
+    ),
+  ),
+  Layer.provide(ThreadResultService.layer),
+);
+const layerMakeRoutes = Layer.mergeAll(
+  Layer.effectDiscard(
+    Effect.gen(function* () {
+      const autoUpdate = yield* ServerAutoUpdate.ServerAutoUpdate;
+      yield* ServerActivation.forkParked(autoUpdate.run);
+    }).pipe(Effect.provide(ServerAutoUpdate.layer)),
+  ),
+  Layer.mergeAll(
+    HttpApiBuilder.layer(EnvironmentHttpApi).pipe(
+      Layer.provide(AuthHttp.layer),
+      Layer.provide(McpOAuthHttp.layer.pipe(Layer.provide(McpOAuth.layer))),
+      Layer.provide(CloudHttp.layer),
+      Layer.provide(OrchestrationHttp.layer),
+      Layer.provide(PullRequestHttp.layer),
+      Layer.provide(ProjectHttp.layer),
+      Layer.provide(VoiceTranscription.layer),
+      Layer.provide(ServerHttp.layerServerEnvironmentHttpApi),
+      Layer.provide(WebhookRoute.layer.pipe(Layer.provide(RelayDeliveryProof.layer))),
+      Layer.provide(AuthHttp.layerAuthenticatedAuth),
+    ),
+    ServerHttp.layerRuntimeDrainRoute,
+    RuntimeSessionRoute.layer,
+    ServerHttp.layerOtlpTracesProxyRoute,
+    ServerHttp.layerAssetRoute,
+    ServerHttp.layerAttachmentUploadRoute,
+    GuestHttp.layer,
+    DeviceHubProxy.layer,
+    HubProxyHttp.layer,
+    ServerBrowserStream.routeLayer,
+    ServerHttp.layerStaticAndDevRoute,
+    Ws.layer.pipe(Layer.provide(PreviewSessions.layer)),
+  ),
+  Layer.mergeAll(
+    McpHttpServer.layer.pipe(Layer.provide(Layer.mergeAll(layerFleetHealth, layerFleetPressure))),
+    ComputerUseLeaseRoute.layer,
+    layerMemoryToolkits,
+    McpHttpServer.layerProviderToolkit.pipe(
+      Layer.provide(PermissionProfiles.layer),
+      Layer.provide(AcpSessionService.layer),
+    ),
+    HandoffExpiry.layer,
+    // Fleet goals act through the same launch, watch and dispatch services as these tools.
+    McpHttpServer.layerFleetToolkit.pipe(
+      Layer.provide(
+        GoalLayers.layer.pipe(Layer.provide(HubDown.layer), Layer.provideMerge(layerFleetHealth)),
+      ),
+    ),
+  ).pipe(
+    Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
+    Layer.provide(McpOAuth.layerMcpClientAuthenticator),
+  ),
+).pipe(
+  // One instance for the goat_host_status tool and the server.getHostStatus RPC; fleet
+  // placement reads the same one.
+  Layer.provide(
+    Layer.mergeAll(layerNotes, FleetPlacement.layer, FleetFallback.layerChains).pipe(
+      Layer.provideMerge(
+        McpHttpServer.layerHostStatusService.pipe(
+          Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
+        ),
+      ),
+    ),
+  ),
+  Layer.provide(CloudTaskSource.layer.pipe(Layer.provide(GitVcsDriver.layer))),
+  Layer.provide(RemoteLaunchCatalog.layerWithoutDependencies),
+  // One launch-watch store and one dispatch coordinator for the MCP tools, host
+  // status, and the remote-launch catalog: they all follow runs and wake launchers.
+  // The coordinator re-arms watches after a relayed send, so the store comes after it.
+  Layer.provide(layerSshWorkspace),
+  // SshHostSetup routes approvals of agent-requested provider syncs to ProviderHostSync.
+  Layer.provide(
+    SshDeviceAdd.layer.pipe(
+      Layer.provideMerge(
+        SshHostSetup.layer.pipe(
+          Layer.provide(Layer.mergeAll(MaintenanceAudit.layer, PermissionProfiles.layer)),
+          Layer.provideMerge(
+            ProviderHostSync.layer.pipe(
+              Layer.provide(
+                ProviderDiagnosisService.layer.pipe(Layer.provide(ProviderHostLive.layer)),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  ),
+  Layer.provide(
+    Layer.mergeAll(
+      HomeRequests.layer.pipe(Layer.provideMerge(CodexRoutes.layer)),
+      ProviderOnboarding.layer,
+      ProviderSettings.layer.pipe(Layer.provide(PermissionProfiles.layer)),
+    ),
+  ),
+  Layer.provide(
+    Layer.mergeAll(
+      ProviderDiagnosisRouting.layer,
+      // Cloud launches read readiness from the provider × host matrix.
+      CloudAgentService.layer.pipe(
+        Layer.provide(ProviderHostSync.layer),
+        Layer.provide(
+          ThreadLaunchMcpService.layer.pipe(
+            Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
+            Layer.provide(CloudTaskSource.layer.pipe(Layer.provide(GitVcsDriver.layer))),
+            Layer.provide(RemoteReportService.layer),
+          ),
+        ),
+      ),
+    ).pipe(
+      Layer.provide(ProviderDiagnosisService.layer.pipe(Layer.provide(ProviderHostLive.layer))),
+      Layer.provide(
+        HostThreadsMcpService.layer.pipe(
+          Layer.provide(
+            OrchestratorMcpService.layer.pipe(
+              Layer.provide(ProviderAdapterRegistry.layerFromProviderInstanceRegistry),
+            ),
+          ),
+          Layer.provide(ThreadResultService.layer),
+        ),
+      ),
+    ),
+  ),
+  Layer.provide(RemoteDispatchCoordinator.layer),
+  Layer.provide(layerLaunchWatches),
+  Layer.provide(Layer.merge(SshRemoteDispatchLive.layer, PreviewSessions.layerHandoffs)),
+  Layer.provide(
+    PullRequestReviewGuideService.layer.pipe(Layer.provide(PullRequestReviewGuides.layer)),
+  ),
+  // Share the service so HTTP/WS clients single-flight reads and invalidate each other's cached patches.
+  Layer.provide(layerPullRequestService),
+  // The same activity instance RunExecutionService reports to, by layer memoization.
+  Layer.provide(
+    ServerBrowser.layer.pipe(
+      Layer.provide(Layer.merge(DesktopBrowserChannel.layer, PreviewAgentActivity.layer)),
+      ScreenCodeLayers.withScreenCode,
+    ),
+  ),
+  Layer.provide(PreviewAutomationBroker.layer),
+  Layer.provide(ConnectionCatalogBroker.layer),
+  Layer.provide(
+    ServerSelfUpdate.layer.pipe(
+      Layer.provide(layerDesktopAppUpdate),
+      Layer.provide(ProjectionStoreV2.layer),
+      Layer.provide(RuntimeAdmission.layer),
+    ),
+  ),
+  Layer.provide(layerCommandReadiness),
+  Layer.provide(ServerHttp.layerBrowserApiCors),
+  Layer.provide(ServerHttp.layerHttpCompression),
+);
+
+const layerMakeServer = Layer.unwrap(
+  Effect.gen(function* () {
+    const config = yield* ServerConfig.ServerConfig;
+    // Before anything opens the database: one server per GOAT home.
+    const ownership = yield* ServerOwnership.acquireServerOwnership(config.serverRuntimeStatePath);
+    const activation = yield* Deferred.make<void>();
+    const awaitActivation = Deferred.await(activation);
+    const layerActivation = Layer.succeed(ServerActivation.ServerActivation, awaitActivation);
+    // One hold for the whole server, read where automation starts; see AutomationHold.
+    const layerAutomationHold = Layer.succeed(
+      AutomationHold.AutomationHold,
+      yield* AutomationHold.makeFromStateDir(config.stateDir),
+    );
+    // One slot for the whole server: every projection store reads through it, and the archive
+    // service fills it once it has loaded which threads are archived.
+    const layerArchiveGate = Layer.succeed(
+      ThreadArchiveGate.ThreadArchiveGate,
+      ThreadArchiveGate.makeThreadArchiveGateSlot(),
+    );
+    const runtimeStateParked = yield* Deferred.make<void>();
+    const tailscaleParked = yield* Deferred.make<void>();
+    const cloudLinkParked = yield* Deferred.make<void>();
+    const routesReady = yield* Deferred.make<void>();
+    const layerLauncher = ServiceLauncherClient.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.effect(
+            ServiceLauncherClient.ServiceLauncherPort,
+            Effect.map(HttpServer.HttpServer, (server) =>
+              typeof server.address === "string" || !("port" in server.address)
+                ? undefined
+                : server.address.port,
+            ),
+          ),
+          Layer.effect(
+            ServiceLauncherClient.ServiceLauncherHost,
+            Effect.map(HttpServer.HttpServer, (server) =>
+              typeof server.address !== "string" &&
+              "hostname" in server.address &&
+              typeof server.address.hostname === "string"
+                ? server.address.hostname
+                : undefined,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    yield* fixPath({ shellEnvironmentPrepared: config.shellEnvironmentPrepared });
+
+    const layerHttpListening = Layer.effectDiscard(
+      Effect.gen(function* () {
+        yield* HttpServer.HttpServer;
+        const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
+        yield* startup.markHttpListening;
+      }),
+    );
+    const layerRuntimeState = Layer.effectDiscard(
+      Effect.gen(function* () {
+        yield* Deferred.succeed(runtimeStateParked, undefined).pipe(Effect.orDie);
+        yield* awaitActivation;
+        const server = yield* HttpServer.HttpServer;
+        const address = server.address;
+        if (typeof address === "string" || !("port" in address)) {
+          return;
+        }
+
+        const launcher = yield* ServiceLauncherClient.ServiceLauncherClient;
+        const state = yield* makePersistedServerRuntimeState({
+          config,
+          instanceId: (yield* RuntimeIdentity.RuntimeIdentity).instanceId,
+          port: address.port,
+          serviceManaged: launcher.managed,
+        });
+        yield* ownership
+          .publish(state)
+          .pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("Failed to persist server runtime state", { cause }),
+            ),
+          );
+      }),
+    );
+    const layerTailscaleServe = config.tailscaleServeEnabled
+      ? Layer.effectDiscard(
+          Effect.acquireRelease(
+            Effect.gen(function* () {
+              yield* Deferred.succeed(tailscaleParked, undefined).pipe(Effect.orDie);
+              yield* awaitActivation;
+              const server = yield* HttpServer.HttpServer;
+              const address = server.address;
+              if (typeof address === "string" || !("port" in address)) {
+                return null;
+              }
+
+              const localPort = address.port;
+              return yield* ensureTailscaleServe({
+                localPort,
+                servePort: config.tailscaleServePort,
+                localHost: loopbackUrlHostForAddress(address),
+              }).pipe(
+                Effect.as({ localPort, servePort: config.tailscaleServePort }),
+                Effect.tap(() =>
+                  Effect.logInfo("Tailscale Serve configured", {
+                    localPort,
+                    servePort: config.tailscaleServePort,
+                  }),
+                ),
+                Effect.catch((cause) =>
+                  Effect.logWarning("Failed to configure Tailscale Serve", {
+                    cause,
+                    localPort,
+                    servePort: config.tailscaleServePort,
+                  }).pipe(Effect.as(null)),
+                ),
+              );
+            }),
+            (configured) =>
+              configured
+                ? disableTailscaleServe({ servePort: configured.servePort }).pipe(
+                    Effect.tap(() =>
+                      Effect.logInfo("Tailscale Serve disabled", {
+                        servePort: configured.servePort,
+                      }),
+                    ),
+                    Effect.catch((cause) =>
+                      Effect.logWarning("Failed to disable Tailscale Serve", {
+                        cause,
+                        servePort: configured.servePort,
+                      }),
+                    ),
+                  )
+                : Effect.void,
+          ),
+        )
+      : Layer.empty;
+    const cloudLinkStartup = desiredLinkReconcileStartup(cloudLinkParked);
+
+    const layerRuntimeServices = ServerRuntimeStartup.layerWithOptions({
+      activate: Deferred.succeed(activation, undefined).pipe(Effect.asVoid),
+      abort: (error) => Deferred.die(activation, error).pipe(Effect.asVoid),
+      awaitAuxiliaryParked: Effect.all(
+        [
+          Deferred.await(runtimeStateParked),
+          ...cloudLinkStartup.awaitParked,
+          Deferred.await(routesReady),
+          ...(config.tailscaleServeEnabled ? [Deferred.await(tailscaleParked)] : []),
+        ],
+        { concurrency: "unbounded" },
+      ).pipe(Effect.asVoid),
+    }).pipe(Layer.provideMerge(layerRuntimeDependencies), Layer.provide(layerLauncher));
+
+    const layerRoutes = HttpRouter.serve(layerMakeRoutes.pipe(Layer.provide(layerLauncher)), {
+      disableLogger: !config.logWebSocketEvents,
+      routerConfig: HTTP_ROUTER_CONFIG,
+    }).pipe(
+      withUntracedRequests,
+      Layer.tap(() => Deferred.succeed(routesReady, undefined).pipe(Effect.orDie)),
+    );
+    const layerServerApplication = Layer.mergeAll(
+      layerRoutes,
+      layerHttpListening,
+      layerRuntimeState.pipe(Layer.provide(layerLauncher)),
+      layerTailscaleServe,
+      cloudLinkStartup.layer,
+      HeapSnapshot.layer,
+    );
+
+    return layerServerApplication.pipe(
+      Layer.provide(CloudLink.layer.pipe(Layer.provideMerge(ConnectReachability.layer))),
+      Layer.provideMerge(layerRuntimeServices),
+      Layer.provideMerge(McpSessionRegistry.layer.pipe(Layer.provide(layerServerEnvironment))),
+      Layer.provide(layerActivation),
+      Layer.provide(layerAutomationHold),
+      Layer.provide(layerArchiveGate),
+      Layer.provideMerge(RelayTracing.layerServerRelayBroker),
+      Layer.provideMerge(layerHttpServer),
+      Layer.provide(
+        HttpRouter.layer.pipe(
+          Layer.provide(Layer.succeed(HttpRouter.RouterConfig, HTTP_ROUTER_CONFIG)),
+        ),
+      ),
+      Layer.provide(layerApplicationObservability),
+      Layer.provide(HomeRoute.layer),
+      Layer.provideMerge(FetchHttpClient.layer),
+      Layer.provide(VcsProcess.layer),
+      Layer.provideMerge(AgentScopeLive.layer),
+      Layer.provideMerge(layerPlatformServices),
+      Layer.provideMerge(PendingAttachmentSweep.layer),
+    );
+  }),
+).pipe(Layer.provide(ProcessRunner.layer), Layer.provide(CodexRoutes.layerState));
+
+// Keep explicit CLI requirements: inference widens this memory/provider graph to any.
+export const runServer: Effect.Effect<
+  never,
+  Layer.Error<typeof layerMakeServer> | PersistenceRecoveryOwner.FatalPersistenceError,
+  | FileSystem.FileSystem
+  | Path.Path
+  | ChildProcessSpawner.ChildProcessSpawner
+  | Crypto.Crypto
+  | ServerConfig.ServerConfig
+> = PersistenceRecoveryOwner.run(Layer.launch(layerMakeServer));

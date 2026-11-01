@@ -1,0 +1,884 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- run ids need node:crypto.
+import * as NodeCrypto from "node:crypto";
+
+import { type AgentSurfaceResult, settlementOf } from "@goat/contracts/agentSurface/envelope";
+import {
+  EVAL_LIMITS,
+  type EvalInput,
+  type EvalOperation,
+  type EvalResult,
+  type EvalStepRef,
+} from "@goat/contracts/agentSurface/eval";
+import { isKeyedWrite } from "@goat/contracts/agentSurface/resolve";
+import * as Clock from "effect/Clock";
+import * as Data from "effect/Data";
+import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import * as SqlClient from "effect/sql/SqlClient";
+
+import type * as Profiles from "../../../goatclaw/PermissionProfiles.ts";
+import type * as ThreadManagement from "../../../orchestration-v2/ThreadManagementService.ts";
+import { McpInvocationContext } from "../../McpInvocationContext.ts";
+import * as McpToolAccess from "../../McpToolAccess.ts";
+import type { HandoffReader } from "../../operations/handoffReads.ts";
+import type { HostConditions } from "../../toolAvailability.ts";
+import {
+  argumentsDigest,
+  derivedStepRequestId,
+  type EvalAdmission,
+  KEY_LIFETIME_HOURS,
+  principalOf,
+} from "../../ToolAdmission.ts";
+import type { ToolDispatch } from "../../ToolDispatch.ts";
+import { storedEnvelope } from "./dispatchEnvelope.ts";
+import { type EvalJournal, makeEvalJournal, type RunRow } from "./evalJournal.ts";
+import { makeEvalPlan } from "./evalPlan.ts";
+import {
+  analyzeProgram,
+  type CallSite,
+  type Expr,
+  explicitKey,
+  type Json,
+  type Node,
+  type Program,
+  ProgramRefusal,
+  readProgram,
+} from "./evalParser.ts";
+
+type Envelope = AgentSurfaceResult;
+type ErrorEnvelope = Extract<Envelope, { readonly status: "error" }>;
+type Halting = ErrorEnvelope | Extract<Envelope, { readonly status: "needs_human" }>;
+
+/**
+ * Stops the program at a step. Only a catchable halt is a value inside try: needs_human,
+ * unknown_outcome and the run's own limits always stop it.
+ */
+class EvalHalt extends Data.TaggedError("EvalHalt")<{
+  readonly result: Halting;
+  readonly at: string;
+  readonly catchable: boolean;
+}> {}
+
+export interface EvalRunnerOptions<R> {
+  /** Runs one call exactly as goat_call does, so every target keeps its own checks (D6). */
+  readonly invoke: (
+    path: string,
+    args: Readonly<Record<string, unknown>>,
+  ) => Effect.Effect<Envelope, never, R>;
+  readonly dispatch: ToolDispatch["Service"];
+  readonly permissions: Profiles.PermissionProfiles["Service"];
+  readonly admission: EvalAdmission;
+  readonly readHandoff: HandoffReader;
+  readonly hostConditions?: Effect.Effect<HostConditions>;
+  /**
+   * goat_call's operation handle for a recorded result recovered without sending the call again;
+   * the mount passes the same function goat_call uses.
+   */
+  readonly withOperation?: (
+    entry: CallSite["entry"],
+    result: Envelope,
+  ) => Effect.Effect<Envelope, never, R>;
+}
+
+const failure = (
+  code: ErrorEnvelope["error"]["code"],
+  reason: string,
+  message: string,
+  details?: unknown,
+): ErrorEnvelope => ({
+  status: "error",
+  error: {
+    code,
+    reason,
+    message,
+    retryable: false,
+    ...(details === undefined ? {} : { details }),
+  },
+});
+const halt = (result: Halting, at: string, catchable = false) =>
+  new EvalHalt({ result, at, catchable });
+const refused = (code: ErrorEnvelope["error"]["code"], reason: string, message: string) =>
+  failure(code, reason, message) satisfies EvalResult;
+
+const UnknownJson = Schema.fromJsonString(Schema.Unknown);
+const toJson = Schema.encodeSync(UnknownJson);
+const fromJson = Schema.decodeSync(UnknownJson);
+
+/**
+ * Programs compose JSON, so images and other non-text blocks a call returns are dropped before
+ * they are journaled or counted; the tool called directly still returns them.
+ */
+const textOnly = (envelope: Envelope): Envelope => {
+  if (envelope.meta?.content === undefined) return envelope;
+  const { content: _content, ...meta } = envelope.meta;
+  const { meta: _meta, ...rest } = envelope;
+  return Object.keys(meta).length === 0 ? rest : { ...rest, meta };
+};
+
+/** JSON with finite numbers only: what the journal stores is what a resumed run reads back. */
+const isFiniteJson = (value: unknown): boolean =>
+  value === null ||
+  typeof value === "string" ||
+  typeof value === "boolean" ||
+  (typeof value === "number" && Number.isFinite(value)) ||
+  (Array.isArray(value) && value.every(isFiniteJson)) ||
+  (typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.getPrototypeOf(value) === Object.prototype &&
+    Object.values(value as object).every(isFiniteJson));
+const bytesOf = (value: unknown) => Buffer.byteLength(toJson(value ?? null), "utf8");
+const isRecord = (value: unknown): value is Readonly<Record<string, Json>> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+const truthy = (value: Json) => value !== false && value !== null;
+const sameJson = (a: Json, b: Json): boolean => {
+  if (Array.isArray(a) && Array.isArray(b))
+    return a.length === b.length && a.every((item, index) => sameJson(item, b[index] as Json));
+  if (isRecord(a) && isRecord(b)) {
+    const keys = Object.keys(a);
+    return (
+      keys.length === Object.keys(b).length &&
+      keys.every((key) => Object.hasOwn(b, key) && sameJson(a[key] as Json, b[key] as Json))
+    );
+  }
+  return a === b;
+};
+const keyOf = (value: Json) =>
+  typeof value === "string" || (typeof value === "number" && Number.isInteger(value))
+    ? value
+    : undefined;
+
+// Writes that require a key may have posted for others to see, so the stop repeats their caution.
+const KEY_REQUIRED_CAUTION =
+  " Absence from a truncated read is not proof it did not happen. Never resend with a new key. Tell the user if the outcome cannot be confirmed.";
+
+const unknownOutcome = (
+  path: string,
+  reconcile: string | undefined,
+  from?: ErrorEnvelope,
+  keyRequired = false,
+) =>
+  failure(
+    "unknown_outcome",
+    from?.error.reason ?? "outcome_unknown",
+    `${path} may have run, so this run will not call it again.${reconcile === undefined ? "" : ` Read ${reconcile} to see whether it happened.`}${keyRequired ? KEY_REQUIRED_CAUTION : ""} Put the remaining work in a new program.`,
+    reconcile === undefined ? undefined : { reconcile },
+  );
+
+/**
+ * goat_eval's runner (docs/internals/agent-surface.md#composition-goat_eval). The mount passes
+ * goat_call's own function as invoke, so a program adds no authority: every call runs the
+ * target's checks, and its journal answers a retry only for a caller that still holds each
+ * step's grant.
+ */
+export const makeEvalRunner = <R>(options: EvalRunnerOptions<R>) => {
+  const { invoke, permissions, admission, readHandoff } = options;
+  const withOperation = options.withOperation ?? ((_entry, result) => Effect.succeed(result));
+  const plan = makeEvalPlan(
+    options.dispatch,
+    permissions,
+    options.hostConditions ?? Effect.succeed({}),
+  );
+
+  const run = Effect.fn("AgentSurface.eval")(function* (input: EvalInput) {
+    const scope = yield* McpInvocationContext;
+    const principal = principalOf(scope);
+    if (principal === undefined)
+      return refused(
+        "unauthenticated",
+        "eval_caller_required",
+        "goat_eval runs for a thread or a signed-in client.",
+      );
+    const parsed = attempt(() =>
+      input.program === undefined ? undefined : readProgram(input.program),
+    );
+    if (parsed !== undefined && "status" in parsed) return parsed;
+    if (input.dryRun === true) {
+      if (parsed === undefined)
+        return refused("invalid_request", "eval_program_required", "dryRun needs a program.");
+      const analyzed = attempt(() => analyzeProgram(parsed, Object.keys(input.bindings ?? {})));
+      if ("status" in analyzed) return analyzed;
+      return yield* plan(analyzed);
+    }
+    const database = yield* Effect.serviceOption(SqlClient.SqlClient);
+    if (Option.isNone(database))
+      return refused("internal", "storage_failed", "goat_eval needs this server's database.");
+    const journal = makeEvalJournal(database.value, admission.bootId);
+    const started = yield* Clock.currentTimeMillis;
+    const storageRefusal = (cause: unknown) =>
+      Effect.logError("goat_eval could not open its run", { cause }).pipe(
+        Effect.as(
+          refused(
+            "internal",
+            "storage_failed",
+            "GOAT could not record this run, so it did not run.",
+          ),
+        ),
+      );
+    // Looking up and hashing stay interruptible and inside the deadline; no claim exists yet.
+    const prepared = yield* prepare(journal, input, parsed, principal).pipe(
+      Effect.timeoutOrElse({
+        duration: EVAL_LIMITS.timeoutMs,
+        orElse: () =>
+          Effect.succeed(
+            refused(
+              "timeout",
+              "eval_timeout",
+              "GOAT could not open this run in time; nothing ran.",
+            ),
+          ),
+      }),
+      Effect.catchCause(storageRefusal),
+    );
+    if ("status" in prepared) return prepared;
+    // A claim, once taken, is always settled: interrupting the call or a defect halts the run,
+    // so a later resume is not refused as in progress until the server restarts.
+    return yield* Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const claimId = NodeCrypto.randomUUID();
+        const claimed = yield* take(journal, prepared, claimId).pipe(Effect.result);
+        if (claimed._tag === "Failure") return yield* storageRefusal(claimed.failure);
+        if (!claimed.success)
+          return refused(
+            "conflict",
+            "in_progress",
+            `Run ${prepared.evalRunId} is still running. Call again for its result once it ends.`,
+          );
+        const opened: Opened = { ...prepared, claimId };
+        const elapsed = (yield* Clock.currentTimeMillis) - started;
+        return yield* restore(
+          execute(journal, opened, Math.max(0, EVAL_LIMITS.timeoutMs - elapsed)),
+        ).pipe(
+          Effect.onExit((exit) =>
+            exit._tag === "Success"
+              ? Effect.void
+              : journal
+                  .settleRun(opened.evalRunId, claimId, "halted")
+                  .pipe(Effect.catchCause(() => journal.abandonRun(claimId))),
+          ),
+        );
+      }),
+    );
+  });
+
+  interface Prepared {
+    readonly evalRunId: string;
+    readonly environmentId: string;
+    readonly principal: string;
+    readonly existing: RunRow | undefined;
+    readonly clientRequestId: string | null;
+    readonly node: Node;
+    readonly digest: string;
+    readonly program: Program;
+    readonly bindings: Readonly<Record<string, Json>>;
+  }
+  interface Opened extends Prepared {
+    readonly claimId: string;
+  }
+
+  /** Takes the run for this call: creates it, or claims a stored one nobody is running. */
+  const take = (journal: EvalJournal, prepared: Prepared, claimId: string) =>
+    prepared.existing !== undefined
+      ? journal.claimRun(prepared.existing, claimId)
+      : journal.createRun({
+          evalRunId: prepared.evalRunId,
+          environmentId: prepared.environmentId,
+          principal: prepared.principal,
+          clientRequestId: prepared.clientRequestId,
+          programDigest: prepared.digest,
+          programJson: toJson(prepared.node),
+          bindingsJson: toJson(prepared.bindings),
+          claimId,
+        });
+
+  const prepare = Effect.fnUntraced(function* (
+    journal: EvalJournal,
+    input: EvalInput,
+    parsed: Node | undefined,
+    principal: string,
+  ) {
+    const scope = yield* McpInvocationContext;
+    if (input.bindings !== undefined && !isFiniteJson(input.bindings))
+      return refused(
+        "invalid_request",
+        "eval_bindings",
+        "bindings must be JSON values, and every number finite.",
+      );
+    const stored =
+      input.resume ??
+      (input.clientRequestId === undefined
+        ? undefined
+        : runIdFor(scope.environmentId, principal, input.clientRequestId));
+    const existing =
+      stored === undefined
+        ? undefined
+        : yield* journal.findRun(stored, scope.environmentId, principal);
+    if (input.resume !== undefined && existing === undefined)
+      return refused(
+        "not_found",
+        "eval_run_not_found",
+        `No run ${input.resume} of yours exists here; it may have expired.`,
+      );
+    const node =
+      parsed ?? (existing === undefined ? undefined : (fromJson(existing.program_json) as Node));
+    if (node === undefined)
+      return refused(
+        "invalid_request",
+        "eval_program_required",
+        "Pass a program, or resume a run.",
+      );
+    const bindings = (input.bindings ??
+      (input.program === undefined && existing !== undefined
+        ? fromJson(existing.bindings_json)
+        : {})) as Readonly<Record<string, Json>>;
+    const analyzed = attempt(() => analyzeProgram(node, Object.keys(bindings)));
+    if ("status" in analyzed) return analyzed;
+    const digest = yield* argumentsDigest({ program: node, bindings });
+    if (existing !== undefined) {
+      if (existing.program_digest !== digest)
+        return input.resume !== undefined
+          ? refused(
+              "conflict",
+              "eval_program_changed",
+              `Run ${existing.eval_run_id} ran another program or bindings. Resume it with the same program, or omit program.`,
+            )
+          : refused(
+              "conflict",
+              "idempotency_mismatch",
+              `clientRequestId ${input.clientRequestId} already named another program. Use a new clientRequestId for a different program.`,
+            );
+    }
+    const evalRunId = stored ?? `evr_${NodeCrypto.randomUUID().replaceAll("-", "")}`;
+    return {
+      evalRunId: existing?.eval_run_id ?? evalRunId,
+      environmentId: scope.environmentId,
+      principal,
+      existing,
+      clientRequestId: input.clientRequestId ?? null,
+      node,
+      digest,
+      program: analyzed,
+      bindings,
+    } satisfies Prepared;
+  });
+
+  const execute = Effect.fnUntraced(function* (
+    journal: EvalJournal,
+    opened: Opened,
+    timeoutMs: number,
+  ) {
+    const state = {
+      calls: 0,
+      bytes: 0,
+      live: 0,
+      restored: 0,
+      inflightWrite: undefined as
+        | {
+            readonly at: string;
+            readonly path: string;
+            readonly reconcile: string | undefined;
+            readonly keyRequired: boolean;
+          }
+        | undefined,
+      completed: [] as Array<EvalStepRef>,
+      operations: [] as Array<EvalOperation>,
+    };
+    const { evalRunId, claimId } = opened;
+    const stored = <A, E, R2>(effect: Effect.Effect<A, E, R2>, at: string) =>
+      effect.pipe(
+        Effect.tapError((error) => Effect.logError("goat_eval journal write failed", { error })),
+        Effect.mapError(() =>
+          halt(
+            failure(
+              "internal",
+              "storage_failed",
+              "GOAT could not record this step, so the run stopped.",
+            ),
+            at,
+          ),
+        ),
+      );
+    const account = (value: unknown, at: string) => {
+      state.bytes += bytesOf(value);
+      return state.bytes > EVAL_LIMITS.resultBytes
+        ? Effect.fail(
+            halt(
+              failure(
+                "resource_exhausted",
+                "eval_result_limit",
+                `Step results passed ${EVAL_LIMITS.resultBytes} bytes. Pick fewer fields or split the program.`,
+              ),
+              at,
+            ),
+          )
+        : Effect.void;
+    };
+
+    /** Taken as a result arrives, before any write that could stop the run. */
+    const collect = (envelope: Envelope, entry: CallSite["entry"], at: string) => {
+      const operation = envelope.meta?.operation;
+      if (operation !== undefined) state.operations.push({ step: at, path: entry.path, operation });
+    };
+
+    /** The caller must still hold the grant a recorded step ran under (D3). */
+    const authorize = Effect.fnUntraced(function* (
+      site: CallSite["entry"],
+      args: Readonly<Record<string, unknown>>,
+      grantJson: string,
+      at: string,
+    ) {
+      const lost = () =>
+        halt(
+          failure(
+            "permission_denied",
+            "grant_lost",
+            `This caller no longer holds the grant ${site.path} ran under, so GOAT does not return its recorded result.`,
+          ),
+          at,
+        );
+      const covered = yield* admission
+        .covers(args, grantJson)
+        .pipe(Effect.orElseSucceed(() => false));
+      if (!covered) return yield* lost();
+      yield* McpToolAccess.requireDeclaredCapability(
+        permissions,
+        site.name,
+        site.effect,
+        args,
+      ).pipe(Effect.mapError(lost));
+    });
+
+    const step = Effect.fnUntraced(function* (
+      expr: Extract<Expr, { readonly t: "call" }>,
+      args: Readonly<Record<string, unknown>>,
+      frames: string,
+      caught: boolean,
+    ) {
+      const { entry } = expr;
+      const at = `${expr.site}${frames}`;
+      if ("clientRequestId" in args && isKeyedWrite(entry)) {
+        const refusal = explicitKey(entry.path);
+        return yield* halt(failure(refusal.code, refusal.reason, refusal.message), at);
+      }
+      state.calls += 1;
+      if (state.calls > EVAL_LIMITS.calls)
+        return yield* halt(
+          failure(
+            "resource_exhausted",
+            "eval_call_limit",
+            `The run reached ${EVAL_LIMITS.calls} calls. Split the work into several programs.`,
+          ),
+          at,
+        );
+      const digest = yield* stored(argumentsDigest(args), at);
+      const requestId = isKeyedWrite(entry)
+        ? derivedStepRequestId(evalRunId, at, entry.path, digest)
+        : null;
+      const sent = requestId === null ? args : { ...args, clientRequestId: requestId };
+      const reconcile = "reconcile" in entry ? entry.reconcile : undefined;
+      const record = yield* stored(journal.readStep(evalRunId, at), at);
+      let envelope: Envelope | undefined;
+      let restored = false;
+      const featureRecheck = ["workspace", "terminal"].includes(entry.resource);
+      if (record !== undefined) {
+        if (record.path !== entry.path || record.args_digest !== digest)
+          return yield* halt(
+            failure(
+              "conflict",
+              "eval_step_changed",
+              `Step ${at} ran ${record.path} with other arguments before, so this run cannot continue. Start a new program.`,
+            ),
+            at,
+          );
+        if (
+          featureRecheck &&
+          entry.effect !== "read" &&
+          !DateTime.isLessThan(
+            yield* DateTime.now,
+            DateTime.add(DateTime.makeUnsafe(record.created_at), { hours: KEY_LIFETIME_HOURS }),
+          )
+        )
+          return yield* halt(unknownOutcome(entry.path, reconcile), at);
+        if (!featureRecheck && record.state === "completed" && record.result_json !== null) {
+          yield* authorize(entry, args, record.grant_json, at);
+          envelope = fromJson(record.result_json) as Envelope;
+          collect(envelope, entry, at);
+          restored = true;
+        } else if (!featureRecheck && entry.effect !== "read") {
+          const settledUnknown = (from?: ErrorEnvelope) =>
+            stored(journal.settleStep(evalRunId, at, "unknown", null), at).pipe(
+              Effect.andThen(
+                Effect.fail(
+                  halt(
+                    unknownOutcome(
+                      entry.path,
+                      reconcile,
+                      from,
+                      "keyRequired" in entry && entry.keyRequired === true,
+                    ),
+                    at,
+                  ),
+                ),
+              ),
+            );
+          if (requestId === null) return yield* settledUnknown();
+          const outcome = yield* stored(admission.keyedOutcome(entry.path, requestId, args), at);
+          const created = DateTime.makeUnsafe(record.created_at);
+          const withinKeyLife = DateTime.isLessThan(
+            yield* DateTime.now,
+            DateTime.add(created, { hours: KEY_LIFETIME_HOURS }),
+          );
+          switch (outcome.kind) {
+            case "replay":
+              envelope = yield* withOperation(
+                entry,
+                textOnly(
+                  storedEnvelope(entry.name, args, entry.effect, outcome.result, outcome.failure),
+                ),
+              );
+              collect(envelope, entry, at);
+              yield* stored(journal.settleStep(evalRunId, at, "completed", toJson(envelope)), at);
+              restored = true;
+              break;
+            case "grant_lost":
+              return yield* halt(
+                failure(
+                  "permission_denied",
+                  "grant_lost",
+                  `This caller no longer holds the grant ${entry.path} ran under, so GOAT does not return its recorded result.`,
+                ),
+                at,
+              );
+            case "in_progress":
+              return yield* halt(
+                failure(
+                  "conflict",
+                  "in_progress",
+                  `${entry.path} is still running. Resume once it ends.`,
+                ),
+                at,
+              );
+            case "absent":
+              // The key was first used by this step, so within its life no reservation means nothing ran.
+              if (!withinKeyLife) return yield* settledUnknown();
+              break;
+            case "unknown":
+              return yield* settledUnknown();
+          }
+        }
+      }
+      if (envelope === undefined) {
+        const grantJson = yield* admission
+          .grantFor(args)
+          .pipe(
+            Effect.mapError((error) =>
+              halt(
+                failure(
+                  "permission_denied",
+                  "grant_unresolved",
+                  error instanceof Error
+                    ? error.message
+                    : `GOAT could not resolve this caller's grant for ${entry.path}.`,
+                ),
+                at,
+              ),
+            ),
+          );
+        yield* stored(
+          journal.reserveStep({
+            evalRunId,
+            coord: at,
+            path: entry.path,
+            effect: entry.effect,
+            argsDigest: digest,
+            requestId,
+            grantJson,
+            claimId,
+          }),
+          at,
+        );
+        if (entry.effect !== "read")
+          state.inflightWrite = {
+            at,
+            path: entry.path,
+            reconcile,
+            keyRequired: "keyRequired" in entry && entry.keyRequired === true,
+          };
+        const answered = yield* invoke(entry.path, sent).pipe(
+          Effect.map(textOnly),
+          Effect.onInterrupt(() =>
+            journal
+              .settleStep(evalRunId, at, entry.effect === "read" ? "released" : "unknown", null)
+              .pipe(Effect.ignoreCause),
+          ),
+        );
+        state.inflightWrite = undefined;
+        state.live += 1;
+        collect(answered, entry, at);
+        let settlement: "completed" | "released" | "unknown" =
+          answered.status === "error" ? settlementOf(answered) : "completed";
+        // A read changes nothing, so an unsettled one is simply asked again.
+        if (entry.effect === "read" && settlement === "unknown") settlement = "released";
+        if (answered.status === "error" && settlement === "unknown") {
+          yield* stored(journal.settleStep(evalRunId, at, "unknown", null), at);
+          return yield* halt(
+            unknownOutcome(
+              entry.path,
+              reconcile,
+              answered,
+              "keyRequired" in entry && entry.keyRequired === true,
+            ),
+            at,
+          );
+        }
+        // What control flow consumes is kept, so a resumed run takes the same branch.
+        if (caught) settlement = "completed";
+        yield* stored(
+          journal.settleStep(
+            evalRunId,
+            at,
+            settlement,
+            settlement === "completed" ? toJson(answered) : null,
+          ),
+          at,
+        );
+        envelope = answered;
+        if (settlement === "completed") state.completed.push({ step: at, path: entry.path });
+      } else {
+        state.restored += 1;
+        state.completed.push({ step: at, path: entry.path });
+      }
+      yield* account(envelope, at);
+      if (envelope.status === "ok") return (envelope.value ?? null) as Json;
+      if (envelope.status === "needs_human") {
+        if (!restored) return yield* halt(envelope, at);
+        // The person's action finishes this step through the handoff; it never runs again.
+        const read = yield* readHandoff(envelope.handoff.handoffId);
+        if (read.status !== "ok") return yield* halt(read, at);
+        return yield* halt(
+          failure(
+            "failed_precondition",
+            "eval_handoff_settled",
+            `The handoff for ${entry.path} is settled; this run does not call it again. Put the remaining work in a new program.`,
+            { handoff: read },
+          ),
+          at,
+        );
+      }
+      return yield* halt(envelope, at, envelope.error.code !== "unknown_outcome");
+    });
+
+    const evaluate = (
+      expr: Expr,
+      env: ReadonlyMap<string, Json>,
+      frames: string,
+      caught: boolean,
+    ): Effect.Effect<
+      Json,
+      EvalHalt,
+      R | McpInvocationContext | ThreadManagement.ThreadManagementService
+    > => {
+      const go = (inner: Expr, scope = env, innerFrames = frames, innerCaught = caught) =>
+        evaluate(inner, scope, innerFrames, innerCaught);
+      const all = (items: ReadonlyArray<Expr>) => Effect.forEach(items, (item) => go(item));
+      const typeError = (message: string, at: string) =>
+        Effect.fail(halt(failure("invalid_request", "eval_type", message), at));
+      switch (expr.t) {
+        case "lit":
+          return Effect.succeed(expr.v);
+        case "var":
+          return Effect.succeed(env.get(expr.name) ?? null);
+        case "vec":
+          return all(expr.items);
+        case "seq":
+          return all(expr.items);
+        case "obj":
+          return Effect.map(
+            Effect.forEach(expr.entries, ([key, value]) =>
+              Effect.map(go(value), (v) => [key, v] as const),
+            ),
+            (entries) => Object.fromEntries(entries) as Json,
+          );
+        case "call":
+          return Effect.flatMap(go(expr.args), (args) =>
+            isRecord(args)
+              ? step(expr, args, frames, caught)
+              : typeError(`${expr.entry.path} takes a map of arguments.`, `${expr.site}${frames}`),
+          );
+        case "let":
+          return Effect.gen(function* () {
+            const scope = new Map(env);
+            for (const [name, value] of expr.binds) scope.set(name, yield* go(value, scope));
+            let last: Json = null;
+            for (const item of expr.body) last = yield* go(item, scope);
+            return last;
+          });
+        case "get":
+          return Effect.gen(function* () {
+            let current = yield* go(expr.target);
+            for (const keyExpr of expr.keys) {
+              const key = keyOf(yield* go(keyExpr));
+              current =
+                key === undefined
+                  ? null
+                  : Array.isArray(current) && typeof key === "number"
+                    ? ((current as ReadonlyArray<Json>)[key] ?? null)
+                    : isRecord(current) && typeof key === "string"
+                      ? Object.hasOwn(current, key)
+                        ? (current[key] ?? null)
+                        : null
+                      : null;
+            }
+            return current;
+          });
+        case "pick":
+          return Effect.gen(function* () {
+            const target = yield* go(expr.target);
+            const keys = (yield* all(expr.keys)).flatMap((key) =>
+              typeof key === "string" ? [key] : [],
+            );
+            const pick = (value: Json): Json =>
+              isRecord(value)
+                ? Object.fromEntries(
+                    keys
+                      .filter((key) => Object.hasOwn(value, key))
+                      .map((key) => [key, value[key] as Json]),
+                  )
+                : null;
+            return Array.isArray(target) ? (target as ReadonlyArray<Json>).map(pick) : pick(target);
+          });
+        case "map":
+        case "filter":
+          return Effect.gen(function* () {
+            const coll = yield* go(expr.coll);
+            if (!Array.isArray(coll))
+              return yield* typeError(`${expr.t} needs a list.`, `${expr.site}${frames}`);
+            const items = coll as ReadonlyArray<Json>;
+            if (expr.t === "map" && items.length > EVAL_LIMITS.mapWidth)
+              return yield* halt(
+                failure(
+                  "resource_exhausted",
+                  "eval_map_limit",
+                  `map visits at most ${EVAL_LIMITS.mapWidth} elements; this list has ${items.length}. Filter or slice it first.`,
+                ),
+                `${expr.site}${frames}`,
+              );
+            const out: Array<Json> = [];
+            for (const [index, item] of items.entries()) {
+              const scope = new Map(env).set(expr.name, item);
+              // A call inside map is keyed by the element too, so a changed list never reuses a step.
+              const at = `${expr.site}${frames}`;
+              // The same digest as arguments, so key order never changes an element's steps.
+              const element = (yield* stored(argumentsDigest(item), at)).slice(0, 12);
+              const value = yield* go(
+                expr.body,
+                scope,
+                `${frames}@${expr.site}[${index}:${element}]`,
+              );
+              if (expr.t === "map") out.push(value);
+              else if (truthy(value)) out.push(item);
+            }
+            return out;
+          });
+        case "if":
+          return Effect.flatMap(go(expr.c), (c) =>
+            truthy(c) ? go(expr.a) : expr.b === undefined ? Effect.succeed(null) : go(expr.b),
+          );
+        case "eq":
+          return Effect.flatMap(go(expr.a), (a) => Effect.map(go(expr.b), (b) => sameJson(a, b)));
+        case "not":
+          return Effect.map(go(expr.x), (x) => !truthy(x));
+        case "try":
+          return go(expr.body, env, frames, true).pipe(
+            Effect.map((value): Json => ({ status: "ok", value })),
+            Effect.catchTags({
+              EvalHalt: (stopped) =>
+                stopped.catchable
+                  ? Effect.succeed(stopped.result as unknown as Json)
+                  : Effect.fail(stopped),
+            }),
+          );
+      }
+    };
+
+    const runInfo = () => ({ evalRunId, operations: state.operations });
+    const outcome = yield* evaluate(
+      opened.program.root,
+      new Map(Object.entries(opened.bindings)),
+      "",
+      false,
+    ).pipe(
+      Effect.tap((value) => account(value, "run")),
+      Effect.timeoutOrElse({
+        duration: timeoutMs,
+        orElse: () =>
+          Effect.fail(
+            state.inflightWrite === undefined
+              ? halt(
+                  failure(
+                    "timeout",
+                    "eval_timeout",
+                    `The run passed ${EVAL_LIMITS.timeoutMs / 1000} s. Resume it to continue.`,
+                  ),
+                  "run",
+                )
+              : halt(
+                  unknownOutcome(
+                    state.inflightWrite.path,
+                    state.inflightWrite.reconcile,
+                    undefined,
+                    state.inflightWrite.keyRequired,
+                  ),
+                  state.inflightWrite.at,
+                ),
+          ),
+      }),
+      Effect.result,
+    );
+    const settled = outcome._tag === "Success" ? "completed" : "halted";
+    yield* journal
+      .settleRun(evalRunId, claimId, settled)
+      .pipe(
+        Effect.catchCause((cause) =>
+          Effect.logError("goat_eval could not record its run's end", { cause }).pipe(
+            Effect.andThen(journal.abandonRun(claimId)),
+          ),
+        ),
+      );
+    if (outcome._tag === "Success")
+      return {
+        status: "ok",
+        value: outcome.success,
+        ...runInfo(),
+        steps: { live: state.live, restored: state.restored },
+      } satisfies EvalResult;
+    const { at } = outcome.failure;
+    // Each step's own meta stays with its journal record; the run reports its handles itself.
+    const { meta: _meta, ...result } = outcome.failure.result;
+    return {
+      ...result,
+      ...runInfo(),
+      haltedAt: at,
+      completedSteps: state.completed,
+    } satisfies EvalResult;
+  });
+
+  return { run };
+};
+
+const runIdFor = (environmentId: string, principal: string, clientRequestId: string) =>
+  `evr_${NodeCrypto.createHash("sha256")
+    .update(`${environmentId}\0${principal}\0${clientRequestId}`)
+    .digest("hex")
+    .slice(0, 32)}`;
+
+/** A program refused before anything ran, as a result; any other throw is a bug and stays one. */
+const attempt = <A>(read: () => A): A | ErrorEnvelope => {
+  try {
+    return read();
+  } catch (error) {
+    if (error instanceof ProgramRefusal) return failure(error.code, error.reason, error.message);
+    throw error;
+  }
+};

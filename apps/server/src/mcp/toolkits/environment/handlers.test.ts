@@ -1,0 +1,199 @@
+import { expect, it } from "@effect/vitest";
+import {
+  DEFAULT_SERVER_SETTINGS,
+  EnvironmentId,
+  ProviderInstanceId,
+  ThreadId,
+  type OrchestrationV2ThreadShell,
+} from "@goat/contracts";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
+import * as Stream from "effect/Stream";
+import * as AutomationHold from "../../../automationHold.ts";
+import * as Environment from "../../../environment/ServerEnvironment.ts";
+import * as ThreadCommandExecutor from "../../../orchestration-v2/ThreadCommandExecutor.ts";
+import * as ThreadManagement from "../../../orchestration-v2/ThreadManagementService.ts";
+import * as Settings from "../../../serverSettings.ts";
+import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import { liveThreadShell } from "../../McpToolAccess.testkit.ts";
+import * as McpToolAccess from "../../McpToolAccess.ts";
+import * as EnvironmentHandlers from "./handlers.ts";
+import { EnvironmentToolkit } from "./tools.ts";
+
+const environmentId = EnvironmentId.make("environment:preferences");
+const threadId = ThreadId.make("thread:preferences");
+
+it.effect("refuses a preferences update when the caller's turn ends while it waits", () =>
+  Effect.gen(function* () {
+    const caller = yield* Ref.make<OrchestrationV2ThreadShell>(liveThreadShell(threadId));
+    const updates = yield* Ref.make(0);
+    const checked = yield* Deferred.make<void>();
+    const layerDependencies = Layer.mergeAll(
+      ThreadCommandExecutor.layer,
+      Layer.succeed(McpInvocationContext.McpInvocationContext, {
+        environmentId,
+        requestNamespace: "provider:preferences",
+        thread: {
+          threadId,
+          providerSessionId: "provider:preferences",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+        },
+        client: undefined,
+        capabilities: new Set(["orchestration" as const]),
+        issuedAt: 0,
+      }),
+      Layer.mock(ThreadManagement.ThreadManagementService)({
+        getThreadShell: () =>
+          Ref.get(caller).pipe(Effect.tap(() => Deferred.succeed(checked, undefined))),
+      }),
+      Layer.mock(Environment.ServerEnvironment)({
+        getDescriptor: Effect.succeed({
+          environmentId,
+          label: "Test",
+          platform: { os: "linux", arch: "x64" },
+          serverVersion: "0.0.0",
+          capabilities: { repositoryIdentity: false },
+        }),
+      }),
+      Layer.mock(Settings.ServerSettingsService)({
+        getSettings: Effect.succeed(DEFAULT_SERVER_SETTINGS),
+        updateSettings: () =>
+          Ref.update(updates, (count) => count + 1).pipe(Effect.as(DEFAULT_SERVER_SETTINGS)),
+      }),
+    );
+    yield* Effect.gen(function* () {
+      const toolkit = yield* EnvironmentToolkit;
+      const executor = yield* ThreadCommandExecutor.ThreadCommandExecutor;
+      const held = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const holder = yield* executor
+        .withLock(
+          threadId,
+          Deferred.succeed(held, undefined).pipe(Effect.andThen(Deferred.await(release))),
+        )
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(held);
+      const update = yield* toolkit
+        .handle("goat_environment_preferences_update", { newWorktreesStartFromOrigin: true })
+        .pipe(Stream.unwrap, Stream.runCollect, Effect.forkChild);
+      yield* Deferred.await(checked);
+      yield* Ref.update(caller, (shell) => ({ ...shell, activeRunId: null }));
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(holder);
+      const result = yield* Fiber.join(update);
+      expect(result.at(-1)?.result).toMatchObject({ code: "parent_not_active" });
+      expect(yield* Ref.get(updates)).toBe(0);
+    }).pipe(
+      Effect.provide(
+        McpToolAccess.HandlersLayer.layer(EnvironmentHandlers.layer).pipe(
+          Layer.provideMerge(layerDependencies),
+        ),
+      ),
+    );
+  }),
+);
+
+it.effect("tells agents that a copied state's automation is held", () =>
+  Effect.gen(function* () {
+    const hold = yield* AutomationHold.makeInMemory({
+      reason: "channel-copy",
+      heldAt: "2026-10-25T00:00:00.000Z",
+    });
+    const layerDependencies = Layer.mergeAll(
+      ThreadCommandExecutor.layer,
+      Layer.succeed(McpInvocationContext.McpInvocationContext, {
+        environmentId,
+        requestNamespace: "client:read",
+        thread: undefined,
+        client: { sessionId: "client:read", label: "Test", access: "read-only" as const },
+        capabilities: new Set(["orchestration" as const]),
+        issuedAt: 0,
+      }),
+      Layer.mock(ThreadManagement.ThreadManagementService)({}),
+      Layer.mock(Environment.ServerEnvironment)({
+        getDescriptor: Effect.succeed({
+          environmentId,
+          label: "Test",
+          platform: { os: "linux", arch: "x64" },
+          serverVersion: "0.0.0",
+          capabilities: { repositoryIdentity: false },
+        }),
+      }),
+      Layer.mock(Settings.ServerSettingsService)({
+        getSettings: Effect.succeed(DEFAULT_SERVER_SETTINGS),
+      }),
+    );
+    const read = Effect.gen(function* () {
+      const toolkit = yield* EnvironmentToolkit;
+      const results = yield* toolkit
+        .handle("goat_environment_read", {})
+        .pipe(Stream.unwrap, Stream.runCollect);
+      return results.at(-1)?.result;
+    }).pipe(
+      Effect.provide(
+        McpToolAccess.HandlersLayer.layer(EnvironmentHandlers.layer).pipe(
+          Layer.provideMerge(layerDependencies),
+        ),
+      ),
+      Effect.provideService(AutomationHold.AutomationHold, hold),
+    );
+    expect(yield* read).toMatchObject({ automationHold: { reason: "channel-copy" } });
+    yield* hold.release;
+    expect(yield* read).toMatchObject({ automationHold: null });
+  }),
+);
+
+it.effect(
+  "MCP exposes hub standing consent to full-access callers and denies read-only or ownerless callers",
+  () =>
+    Effect.gen(function* () {
+      for (const mode of ["full-access", "read-only", undefined] as const) {
+        const dependencies = Layer.mergeAll(
+          ThreadCommandExecutor.layer,
+          Settings.layerTest(),
+          Layer.succeed(McpInvocationContext.McpInvocationContext, {
+            environmentId,
+            requestNamespace: "client:hub",
+            thread: undefined,
+            client:
+              mode === undefined
+                ? undefined
+                : { sessionId: "client:hub", label: "Test", access: mode },
+            capabilities: new Set(["orchestration" as const]),
+            issuedAt: 0,
+          }),
+          Layer.mock(ThreadManagement.ThreadManagementService)({}),
+          Layer.mock(Environment.ServerEnvironment)({
+            getDescriptor: Effect.succeed({
+              environmentId,
+              label: "Hub",
+              platform: { os: "linux", arch: "x64" },
+              serverVersion: "0.0.0",
+              capabilities: { repositoryIdentity: false },
+            }),
+          }),
+        );
+        const result = yield* Effect.gen(function* () {
+          const toolkit = yield* EnvironmentToolkit;
+          const results = yield* toolkit
+            .handle("goat_environment_preferences_update", {
+              hub: { enabled: true, connectDevicesHubProxy: true },
+            })
+            .pipe(Stream.unwrap, Stream.runCollect);
+          return results.at(-1)?.result;
+        }).pipe(
+          Effect.provide(
+            McpToolAccess.HandlersLayer.layer(EnvironmentHandlers.layer).pipe(
+              Layer.provideMerge(dependencies),
+            ),
+          ),
+        );
+        if (mode === "full-access")
+          expect(result).toMatchObject({ hub: { enabled: true, connectDevicesHubProxy: true } });
+        else expect(result).toHaveProperty("code");
+      }
+    }),
+);

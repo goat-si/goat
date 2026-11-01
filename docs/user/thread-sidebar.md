@@ -1,0 +1,446 @@
+# Working with threads
+
+Use a new thread for a separate task. Choose **New worktree** when its code changes
+need a separate branch and working directory.
+
+## Start a thread
+
+On web and desktop, a new thread keeps the current project and carries your model
+and mode selections, unless the destination project has its own model default.
+Its workspace starts from the project's configured default, which falls back to
+**Local**. Starting a new thread also resets an empty draft's workspace selection.
+A draft with text or attachments stays saved with its selection. To continue in
+an existing worktree, use **New thread in this worktree** from the branch toolbar.
+
+On mobile, when you pick a project that is on more than one machine, the thread
+starts on a connected one if any is connected. **Settings → Thread behavior → Use last
+project** reuses the current or last project for new threads. Turn it off to choose a
+project each time. Shared content stays available if you cancel project selection.
+
+When you change a new thread's project, GOAT stays in the current environment
+if that project exists there. Otherwise it selects an environment that has it.
+
+### Start without a project
+
+A thread does not need a project. To start one without a project, click **or
+start without a project** under a new thread's heading, pick **No project** from
+the project menu in that heading or from **New thread in...** in the command
+palette, or press `mod+alt+n`. On mobile, pick **No project** from the project
+list. It starts on your current machine; before sending, pick another machine
+from the machine menu to move it there. To move a draft into a project, pick the
+project in the heading.
+
+Each thread without a project works in its own folder in the `scratch` folder of the
+server's GOAT home (`~/.goat/scratch` for `goat serve` and SSH hosts, and
+`~/.goat/desktop/scratch` for the desktop app), named after its date, the first words
+of its first message, and a short id, like
+`2026-09-25-convert-these-pngs-to-webp-a1b2c3d4`. Deleting a thread keeps its
+folder, so the files the agent wrote stay until you delete them. Branch, worktree, and diff controls stay hidden because
+these folders are not Git repositories. This is unavailable when the data
+directory itself sits inside a Git checkout.
+
+When the work grows into something real, pick **Turn into project** from the
+thread's menu. The thread's folder becomes a project where it is, so nothing
+moves and the agent keeps working in the same place. Other threads in that folder
+move with it. Rename the project in its settings, and use **Initialize Git** to
+get branch and diff controls.
+
+### Start in the background
+
+In a desktop browser or the desktop app, press `Cmd+Enter` on macOS or `Ctrl+Enter`
+on Windows and Linux to start a new thread and immediately open another draft. The
+next draft uses the project's workspace default, which falls back to **Local**.
+Choose **New worktree** again when the next task needs a separate checkout, or set
+it as the project's default.
+
+To send the same prompt to several models on web or desktop, **Shift-click** models
+in a new thread's model picker to add or remove them. A regular click returns to a
+single model. Choose a base branch and send. Each selection starts a separate thread
+and worktree while you stay in the new thread composer. This requires a Git project.
+
+## Pin and reorder threads
+
+Pin a thread from its menu to keep it above your active work.
+
+The GOAT Bot row shows its latest message or task update. A blue dot means the bot has
+sent something since you last opened it; the number badge counts tasks awaiting your
+response. If the connected server does not track visits yet, the row shows its last
+activity time and waiting count until that server is updated.
+
+On web and desktop, unpinning, settling, snoozing, and archiving a thread each show
+a notification with **Undo** for five seconds. Undo restores the thread's previous
+state, including its pinned position, and reopens an archived thread you were
+viewing. Discarding an unsent draft from the sidebar works the same way: Undo brings
+back its text and attachments. `mod+z` triggers the most recent Undo, even from the composer; see
+[Keybindings](./keybindings.md#commands-with-special-behavior).
+
+On web and desktop, you can also drag files from your computer onto any thread row:
+the thread opens and the files are attached in its composer, ready for
+your next message. The same per-message file limits apply as when attaching
+files directly; see [Attach files](./composer.md#attach-files).
+
+On web and desktop, pinning or unpinning a thread keeps the sidebar at your current
+scroll position instead of following the thread to its new place in the list.
+
+Pinning does not prevent automatic settlement. Settling a thread removes its pin.
+
+On web and desktop, drag a thread between sections to change its state. Drag a thread up into
+the pinned section to pin it at the spot you drop it; drag a pinned thread down into the active
+list to unpin it. Dragging a thread onto the **Settled** header settles it, and dragging a settled
+thread into the active list un-settles it. A snoozed thread can be dragged out of the snoozed
+shelf, which wakes it, but threads cannot be dragged into the shelf because snoozing needs a wake
+time. Dragging a pinned thread out of the pinned section does not ask for unpin confirmation.
+Threads in **Priority** cannot be dragged or used as drop targets.
+Pinned and active boundary labels appear only while dragging, without moving the rows. The
+other rows slide aside to show where the thread will land. When you cross into another section,
+the dragged thread shows the action the drop performs, with its icon: **Pin**, **Unpin**,
+**Settle**, **Un-settle**, or **Wake**. Its status and hover actions hide during the drag. A pinned
+thread keeps its pin only while it stays in the pinned section; once it leaves, the badge takes
+over. Reordering within the same section shows no badge. When there are no pins, drag to the top
+edge to pin a thread. Section labels stay readable for the whole drag, and the section the
+thread is over takes the accent color. Section labels also
+identify empty sections and a collapsed settled shelf.
+
+Drag within the pinned or active section to change its order. Other rows slide aside to show the
+spot where the thread will land. Drops into either section keep the position you choose. On
+mobile, open a thread's menu and choose **Arrange threads**. Drag a handle within or between
+**Pinned** and **Active** to reorder, pin, or unpin. Drop onto the **Settled** divider to
+settle a thread. The dragged card shows the action before you release it. Expand **Snoozed**
+or **Settled** to drag a parked thread back into either live section. Each drop saves; close the sheet to return to the thread list.
+**Move up** and **Move down** are also available in the thread menu. The server
+saves the order, so it survives a refresh and appears on your other connected devices.
+
+On web and desktop, the list also animates section changes made with thread actions such as
+**Pin**, **Settle**, and **Snooze**. These transitions respect your system's reduced-motion
+preference. While dragging, rows follow the insertion gap without replaying a second transition
+after the drop.
+
+New threads appear above the active threads you have arranged. Settling clears a thread's active
+position, so using **Un-settle** returns it to the top. Pinning and snoozing preserve its active
+position until you move it again. Thread activity does not change the order. The settled shelf
+continues to use settlement time.
+
+If dragging is unavailable for one environment, update the GOAT server running in that
+environment. Pinned and active reordering require server support. Threads from older servers keep
+their default order until the server is updated.
+
+To generate a fresh title from the conversation, open a thread's menu and choose
+**Regenerate title**. The action is unavailable while title generation is in progress
+or when the connected environment needs a server update.
+
+To change how titles are written, add **Thread title instructions** in **Settings → General →
+Text generation**, such as a length limit or an identifier to put first. They apply to new and
+regenerated titles. Select a project to give it its own instructions.
+
+Agents connected through GOAT can use the same server-owned metadata workflow to
+rename a thread, regenerate its title, or link and unlink a pull request. These changes
+appear on web, desktop, and mobile without requiring the originating browser to remain
+open.
+
+### Follow Priority in Activity
+
+On web and desktop, the sidebar opens in **Activity**, with **Priority** at the top. Choose
+the bell to switch between Activity and **Projects**; the sidebar remembers your choice on that
+device. Priority holds threads
+with work in progress, pending approvals or answers, unread completions, or an unacknowledged
+return from snooze. A delegated task needing approval or an answer brings its parent here too,
+and the parent row shows **Approval** or **Input**.
+Pinned and settled threads can appear in Priority; when they no longer need attention, they
+return to their previous section.
+Within each group (requests, work in progress, unread), the thread you last sent a message to
+comes first, so an older thread you just prompted moves above newer ones.
+
+A thread you read stays in Priority while you keep Activity open, so rows do not move while you
+work through them. Switch away from Activity and back to move read threads out. Settling a thread
+clears an unacknowledged wake and moves the row right away. Unsettling moves it right away too.
+An archived thread stays in the list while a delegated task still needs an approval or an answer,
+and the parent row shows that request.
+
+Choose **Mark all as read** from Priority's menu to acknowledge unread completions and
+unacknowledged wakes on connections you can change. Those rows leave Priority. Work in progress
+and pending requests stay. The activity bell shows the same count as Priority.
+
+When Priority holds threads you already read, or unread completions and wakes on connections you
+can change, **Clear read threads** appears beside its menu. It marks those unread threads read and
+moves all of them out of Priority at once. Work in progress, pending requests, and unread threads
+on connections you cannot change stay. Nothing is archived or deleted.
+
+On mobile, **Priority** leads the thread list on the home screen and in the iPad sidebar, and holds
+the same threads. A thread you read stays there while the list is open; choose **Clear read
+threads** or **Mark all as read** from the menu beside **Priority** to move read threads out.
+
+### Answer waiting decisions
+
+Open **Decisions** at the top of the thread sidebar, or search for it in the command palette,
+to answer agent questions, approve or reject tool requests, and choose an option for decisions
+agents asked for, from every connected environment. Requests from subagent threads and launched
+threads are included, with the agent that started them; archived threads are not. Threads keep
+their place in Priority.
+
+A question or decision from a thread another agent started goes to that agent first. While it is
+working on it, Decisions lists the request as being handled and does not count it as waiting on
+you; you can still answer it. It counts as yours once that agent hands it to you or ends its turn
+without answering. Approvals always come straight to you, and an unanswered request never counts
+as approval.
+
+Decisions starts with the oldest request and moves to the next one after each answer. **Skip**
+sends a request to the end of the queue for this visit. The sidebar counts requests waiting on
+you; with servers that cannot report them yet, it counts waiting threads instead.
+
+Use **Go to thread** for more context or to
+[attach files to an answer](./question-attachments.md). A request whose provider session cannot
+resume stays listed with answering turned off.
+
+For durable requests with a recommendation and an expiry, open **Settings → Decision Inbox**.
+It includes pending thread requests from the selected environments and decisions from threads
+those environments launched on connected or linked hosts. Remote rows show their host; unavailable
+hosts and incomplete lists are reported so a partial list is not mistaken for an empty inbox. Choose an option and explain your
+answer; the asking host delivers the result to its thread. Person-only questions must be answered
+from a client connected to the asking host; linked hosts cannot forward approvals. Expired requests never choose an option automatically.
+Mobile shows this list read-only; use web or desktop to answer durable requests. Complex thread
+questions can still be answered in their asking thread.
+
+### See everything running
+
+On web and desktop, GOAT opens on **Fleet** each time it starts, including after an update; a
+link to a thread still opens that thread, and **Home** at the top of the rail opens the global
+agent. **Fleet** in the rail beside the thread sidebar shows how many threads are
+running or need you across every connected machine; hover it for a count per machine. Open it,
+or search for it in the command palette, for a graph of your machines and the agents working on
+each, and a list of those threads grouped by machine; select a machine to show only its threads.
+The list keeps threads in the order they started, so rows stay put while they work. A thread
+leaves once it finishes and stays while it needs an approval or answer; open finished threads
+from the sidebar. Only top-level threads count: subagents are part of their parent's work, and
+archived threads do not count. Work an environment started on an SSH host you are not connected
+to appears as last reported by that environment.
+Subagents a provider starts itself, such as Codex agents and Claude Code tasks, appear as a
+**+N** beside their thread while they work; hover it to see each one and what it is doing.
+The machine count includes only GOAT servers that answer. Machines the page shows without
+counting, such as an unreachable server, a stopped Boat machine, or an SSH host another machine
+reported, are listed behind the **+N** beside the count.
+
+On mobile, **Fleet** is the first tab of **Usage**, and Usage opens on it, once the phone reaches
+more than one machine or is connected to a hub. It shows the same counts and lists the running
+threads by machine; tap a thread to open it, or a machine that is not connected to open
+Connections. Its graph shows up to six machines (five on narrower phones) and three agents on
+each, with the rest as **+N**; tap a machine to show only its threads, or an agent to open its
+thread.
+
+A machine in the graph turns amber, orange, or red as it gets busier, and a machine near its
+limit catches fire. Heat comes from the same reading as **Settings → Connections → Hosts**: CPU
+use, load per core, memory, and the fullest provider quota window; hover a machine to see which
+one is high. A machine that stopped answering shows no heat until it reports again.
+
+At the top, **Fleet telemetry** shows CPU, memory, and load for each machine over the last ten
+minutes, provider quota, runs started and finished in the last hour, and alerts for machines that
+are reconnecting, unreachable, under heavy load, or on a different GOAT version. It uses the same reading as the
+graph's heat, refreshed every 15 seconds while the page is open. A machine shows "No metrics"
+when no connected machine reports on it. Collapse the panel to a one-line summary; it stays
+collapsed until you open it again.
+
+Alerts say how long a problem has lasted and offer one next step. A connection that takes more
+than 30 seconds offers **Retry**. A connected machine that stops answering for 10 seconds says
+so, with the likely cause: CPU load, or a state database whose thread history is over that
+machine's history budget. History over budget offers **Compact**, which runs that machine's
+history cleanup now; on databases created before online space reclamation, the file shrinks
+after `goat doctor` runs there. Hover a machine to see its history and memory against their
+budgets and how many idle threads are archived; an archived thread comes back when you open it.
+A memory store over its 100 MiB budget links to **Settings → Memory**. GOAT servers left
+behind by test runs, whose launcher exited and whose home is deleted or temporary, appear as one
+item with **Clean up**; it stops only those processes, never a server with a real home. When
+there are more than three alerts, **+N more** opens the rest with their actions.
+
+Below the list, **Connections** shows your saved machines with the same controls as
+**Settings → Connections**: switch one off, check its routes and permissions, remove it, or pair
+another with **Add device**.
+
+### From the menu bar or taskbar
+
+The desktop app puts a GOAT icon in the macOS menu bar, the Windows notification area, or the
+Linux panel. Its menu lists the threads that need you, the threads running, and your pinned
+threads across connected machines, the same way Fleet counts them; choose one to open it.
+**New Thread** starts one the way the new-thread shortcut does, **Open GOAT** brings the window
+back, and **Quit GOAT** quits the app.
+
+While an agent on this computer uses Computer Use, the menu starts with **Computer Use** and the
+icon shows a small dot. Its submenu stops one app for every thread using it, the whole screen, or
+everything. Stopping ends GOAT's permission and leaves the app open; a thread that holds several
+apps loses all of them, and asks again on its next turn unless it is in full access. Only this
+computer's agents are listed. On Linux some panels leave out the app icons, and the menu updates
+while it is open.
+
+On Windows and Linux, closing the window keeps GOAT running behind the icon; quit from its menu.
+On Linux this needs a panel that shows the icon: GNOME shows it only while the AppIndicator
+extension is on (Ubuntu ships it), and without one closing the window quits as before. On Windows
+the icon may start in the hidden-icons area until you drag it to the taskbar.
+
+### Choose what the rail shows
+
+On web and desktop, select **+** at the bottom of the rail to show or hide its items and move
+them up or down. Home and Settings always stay. Until you choose, the rail adjusts to your setup:
+Hub appears on a machine that is a hub, and **Add provider** while your main machine has no
+working provider. An
+item you turn on stays on whatever changes later, and **Reset to defaults** returns to the
+automatic choice. **Add provider** opens the same setup as **Settings → Providers**. Hidden pages
+stay reachable from the command palette or Settings.
+
+### Working threads
+
+Threads that are working or waiting on work they will resume from sit in **Priority**, with a
+spinner on their row. With **Working section** on, in **Settings → Beta** on web and desktop or
+**Settings → Threads** on mobile, the active list is ordered by when each thread last came back to
+you, so you cannot drag or move threads within it. Your saved order returns when you turn it off.
+
+## Settle finished work
+
+Choose **Settle thread** from its menu to move finished work out of the active list
+without deleting the conversation. **Un-settle thread** restores it to active work
+and prevents automatic settlement until new activity resumes the usual rules.
+Manually settling an idle thread dismisses unanswered async questions without
+sending an answer or restarting the agent. Settling also closes the thread's
+terminals that wait at an idle prompt, and keeps their output. A terminal that
+runs a command, such as a dev server, stays open.
+
+To reclaim disk space from settled work, turn on **Run in the thread's worktree when the
+thread settles** for one of the project's actions, for example `cargo clean`. It runs each time
+a thread in its own worktree settles, manually or automatically, even if a terminal there still
+runs a command such as a dev server. Threads in the project's main checkout skip it. Its terminal
+closes when the command succeeds and stays open when it fails.
+
+On web and desktop, press a thread's **Settle** button and drag up or down to
+settle every thread in that section between it and the one you release on.
+The **Un-settle** and **Wake** buttons work the same way in their sections.
+Press `Escape` while dragging to cancel.
+
+By default, environments settle inactive threads after three days and settle
+threads whose pull request merged. A closed pull request can also settle an idle
+thread. An empty thread's inactivity counts from when it was created.
+Work in progress, pending questions or approvals, and background work the agent
+is waiting on prevent automatic settlement. An open pull request does not prevent inactivity
+settlement unless you turn on **Keep threads with a PR** in **Settings → General**,
+but an old closed or merged pull request does not settle work you
+resumed after it closed. Only your own messages count as resuming. A turn that
+finished background work or a pull request watch starts on its own does not.
+
+To keep one thread out of the settled shelf no matter how long it sits idle, open its menu,
+choose **Auto-settle behavior**, and pick **Disabled**. The current option is checked. Pick
+**Enabled** to return to the usual rules. Manual settle, snooze, and archive still work while it
+is disabled.
+
+Change these rules in **Settings → General** on web and desktop, or **Settings → Thread behavior** on mobile.
+They continue to run when your apps are closed. On web and desktop, choose an environment at the
+top to change only its rules, or **All environments** to update connected environments together.
+Mixed values show where the selected environments disagree. Mobile applies these
+rules to connected environments that support shared settings. Offline environments
+and older servers keep their previous values. Changing a rule does not reopen
+already settled threads.
+
+## Link a pull request
+
+The server finds the PR for each unsettled thread's saved branch, even when your
+apps are closed. Settled threads keep their saved links. Update the server if
+automatic branch links do not appear.
+
+On web and desktop, right-click a pull request link in a thread and choose
+**Link to thread** to select a different PR. Use **Unlink from thread** on the
+same link to return to the branch PR, if one exists.
+The linked pull request participates in automatic settlement.
+
+## Find and reference work
+
+On web and desktop, open the command palette with `Cmd/Ctrl+K` to search threads
+across connected environments by title, branch, pull request, or project.
+Threads you open often or recently rank higher, and for three weeks the thread
+you last picked for a query ranks higher when you type that query again.
+Threads whose messages contain all your words appear below, under **In
+messages**, and open at the matching message. Message search needs at least
+one word of three or more letters, or two for Chinese, Japanese, and Korean.
+On mobile, the thread list search also lists message matches and opens them at
+the matching message; on an iPad with a keyboard, `Cmd+K` opens the same
+palette.
+
+Use **Settings → Keybindings** to find or customize shortcuts for searching files
+and copying a thread reference. The shortcut copies the thread's pull request
+link when available, otherwise a thread chip that can be pasted into a composer.
+The thread menu also offers a separate **Thread ID** copy. See [keybindings](./keybindings.md)
+for custom configuration.
+
+## Inspect agent work
+
+**Limited** means the provider stopped on a usage or rate limit. The conversation
+keeps the provider's explanation. Retry after the limit resets, or switch to
+another provider instance.
+On web and desktop, press **Resume** in an empty composer to continue a limited
+or interrupted turn manually.
+Queued messages stay saved while the limit blocks the thread. They run after
+the continuation finishes. If the queue was held by a restart, resume it then.
+
+When the provider reports a reset time, choose **Resume at reset** to schedule a
+continuation. You can cancel it from the thread. Enable **Resume after
+usage limits** in **Settings → General** on web and desktop, or **Settings → Thread
+behavior** on mobile, to schedule limit stops by default.
+The environment must be running when the reset arrives; it resumes overdue
+continuations after a restart. Stopping the thread, sending a new message,
+archiving, or settling it prevents a pending continuation from starting.
+
+Choose **Snooze until reset** to hide the thread until its allowance returns.
+Snooze and auto-resume are independent: snooze alone wakes the thread without
+sending a message; enabling both wakes and continues it. **Wake now** cancels
+the snooze. Enable **Snooze until limits reset** in thread behavior settings to
+snooze limit stops by default. Providers without a reset time offer manual
+retry and the normal snooze choices.
+
+Subagents never get their own rows in the sidebar, whether they are queued, running, or
+finished, on this machine or a connected one. On web and desktop, follow them under
+**Lineage** in the thread details, which counts the ones still running; open one there to read
+it, or choose **Promote to thread** from its menu to make it a regular thread. While a subagent
+is open, it shows beneath the thread that started it until you navigate away.
+
+On mobile, open a subagent from its conversation card or **Agents**. On iOS
+layouts with an inspector, its thread opens beside the parent. Maximize it to
+fill the screen; close the full-screen view to return to the parent and inspector.
+
+Stop ends the thread's current turn. Subagents it delegated in the background keep
+working and report back when they finish; a subagent the turn was waiting on stops
+with it. To stop a background subagent, use its stop button under **Lineage** in the
+thread details, or ask the agent to cancel it.
+
+Subagent threads started by the agent can't take messages; message the parent
+thread instead. When such a subagent needs an approval or an answer, the parent
+thread asks for it.
+
+A thread an agent launched sends its questions to the thread that launched it.
+That agent may answer itself or ask you; its answer shows which thread answered
+and why. You can still answer in the asking thread, and the first answer counts.
+Approvals always wait for you.
+
+On web and desktop, threads an agent launched (with thread launch, create threads, or an SSH
+launch) fold under the thread that launched them, as one line such as **8 threads · 5 running**.
+Choose it to list them as ordinary rows; the sidebar remembers that per thread, and opening a
+launched thread expands its group. While the group is folded, a launched thread that is working
+keeps its launcher in **Priority**, and one waiting for an approval or an answer shows on the
+launcher row. The group counts once in Priority and on the activity bell. A launched thread you
+pinned, one whose launcher is archived, deleted, or on a machine this app is not connected to,
+one still working under a snoozed launcher, and finished work you have not settled under a settled
+launcher keep their own rows. Search lists launched threads
+like any other. In **Projects**, a thread folds only under a launcher in the same project.
+
+Expand a tool call in the conversation to see its full command and output.
+Summaries shorten shell wrappers and can still describe the latest call after it
+finishes; the call's own result shows its status.
+
+## Snooze until later
+
+To change the choices in the snooze menu, open **Settings → General → Snooze options**.
+Each option is a duration, such as 3 hours, or a time on a day, such as 9:00 PM
+tomorrow. A weekday means the next one after today. Menus list the options soonest
+first and hide a today option after its time passes. Saved with **All environments**
+selected, the options apply to every connected environment, and the mobile app uses them too.
+
+Choose **Snooze → Custom…** from a thread's menu to pick a date and time in your
+local time zone, or a duration in minutes, hours, or days. Durations start when
+you confirm; one day means 24 hours. On web and desktop, you can also snooze
+several selected threads together. Choose **Wake thread** to bring a thread back early.
+A snoozed thread keeps working and stays hidden until its wake time, even while
+its agent wakes itself for background work. It comes back early only when it needs
+an approval or answer from you, when a run fails, or when you send it a message.

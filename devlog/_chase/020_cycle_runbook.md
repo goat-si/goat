@@ -1,0 +1,122 @@
+# 020 — 사이클 절차
+
+> T3 축의 절차다. Cua Driver 축은 [20_cua_cycle_runbook](./20_cua_cycle_runbook.md).
+
+한 사이클은 스캔, 분류, 머지, 해결, 검증, 랜딩, 기록 순서로 돈다. 사이클 이름은 스캔한 날짜의
+`YYMMDD`이고, 카드 `10.NNN_t3_chase_cycle_<YYMMDD>.md` 하나가 그 사이클을 대표한다.
+
+## 0. 준비 (checkout마다 한 번)
+
+```bash
+git remote add upstream https://github.com/pingdotgg/t3code.git
+git config remote.upstream.tagopt --no-tags # upstream nightly 태그가 수천 개다
+```
+
+## 1. 스캔
+
+```bash
+devlog/_chase/scan.sh --commits --names > /tmp/goat-chase-<YYMMDD>.txt
+```
+
+`upstream main`과 `origin`을 fetch한 뒤 기준선, trial merge 충돌 파일, 양쪽이 추가한 마이그레이션
+id와 겹침, upstream workflow 변경, `goat_*` 짝이 없는 upstream `t3_*` 도구, upstream이 추가한 `t3_*`
+줄, 커밋별 분류를 출력한다. 대상 브랜치는 마지막 인자로 바꾼다 (`scan.sh --no-fetch dev`). 출력
+전문은 커밋하지 않고 사이클 카드에 요약한다. `--names`는 임시 detached worktree의 upstream tip에 현재
+rename 규칙을 적용한 뒤 `--check`로 규칙 밖 이름의 총수와 앞부분을 출력하고 worktree를 제거한다.
+기본 스캔은 이 전처리를 하지 않는다. 전체 upstream 트리를 검사하므로 이전 사이클부터 남은 이름도 보인다.
+
+## 2. 분류
+
+`--commits` 출력의 upstream 커밋은 다음 중 하나 이상에 속한다.
+
+| 분류      | 조건                    | 처리                                                             |
+| --------- | ----------------------- | ---------------------------------------------------------------- |
+| clean     | `shared=0 t3=0 conf=[]` | 카드 없이 머지로 흡수                                            |
+| shared    | `shared>0`, `conf=[]`   | 겹친 파일의 [010](./010_fork_delta.md) 영역에서 의미 충돌만 확인 |
+| conflict  | `conf=[...]`            | 010 정책으로 해결. 정책 밖이면 카드                              |
+| rename    | `t3>0`                  | `goat_*`로 바꾸는 작업을 카드로 묶음                             |
+| migration | 마이그레이션 id 겹침    | `⛔` 카드. 결정 전 머지 금지                                     |
+| workflow  | upstream workflow 변경  | push 전에 goat-si/goat에서 비활성화                              |
+
+## 3. 머지
+
+upstream과 GOAT는 T3↔GOAT 이름이 달라 그대로 머지하면 이름 차이가 충돌로 나온다. 머지 전에 양쪽 upstream 트리에
+같은 이름 규칙을 적용하고(rename 전처리), 그 둘과 dev를 3-way 머지한다.
+1번의 `scan.sh --names`가 보고한 규칙 밖 이름을 먼저 분류한다. upstream 전처리 결과에 남은 이름은
+머지 결과에서 처리해야 하며, CI의 `goat-scope` 이름 검사는 최종 GOAT 트리에서 exit 0이어야 한다.
+
+```bash
+UP=<스캔한 upstream SHA>
+BASE=$(git merge-base origin/dev "$UP")
+git switch -c chase/t3-<YYMMDD> origin/dev
+for side in base:"$BASE" up:"$UP"; do
+  name=${side%%:*}; sha=${side#*:}
+  GOAT_WORKTREE_SETUP=0 git -c core.hooksPath=/dev/null worktree add --detach "../chase-rename-$name" "$sha"
+  node scripts/goat-rename.ts --apply --root "../chase-rename-$name"
+  git -c core.hooksPath=/dev/null -C "../chase-rename-$name" commit --no-verify -qam "chore(rename): [script] upstream $name $(git rev-parse --short "$sha")"
+done
+node scripts/goat-rename.ts --check --root ../chase-rename-up --limit 100000 > /tmp/goat-chase-<YYMMDD>-names.txt
+git merge-recursive "$(git -C ../chase-rename-base rev-parse HEAD)" -- HEAD "$(git -C ../chase-rename-up rev-parse HEAD)"
+# 충돌을 4번대로 푼 뒤, 해결된 트리에 부모 HEAD와 upstream SHA를 단 진짜 merge commit을 남긴다.
+git add -A -- . ':!.goat' ':!.t3'
+MERGED=$(git commit-tree "$(git write-tree)" -p HEAD -p "$UP" -m "chase(t3): merge upstream main $(git rev-parse --short "$UP")")
+git reset -q --soft "$MERGED"
+```
+
+`--check --root ../chase-rename-up`의 출력은 규칙이 아직 모르는 upstream의 새 T3 이름이다. 사이클 카드에 요약한다. 규칙 밖에서 손으로
+고친 줄(보이는 문구의 일회성 수정 등)을 upstream이 다시 건드리면 이 목록에 다시 나온다. 임시 worktree는 랜딩 뒤 지운다.
+
+## 4. 해결
+
+- 충돌 파일은 사이클 카드의 충돌 표에 적은 정책대로 푼다.
+- 이름 누수: `git diff <merge-base> HEAD -- apps packages ':!*.md' | rg '^\+.*\bt3_[a-z]+_[a-z]'`의
+  결과가 legacy alias나 legacy 렌더링 테스트가 아니면 `goat_*`로 바꾼다.
+- 이름 정리: `node scripts/goat-rename.ts --apply`(멱등)를 다시 돌리고 `--check`가 0줄이 될 때까지 남은 T3 이름을 처리한다.
+  반복될 이름이면 `scripts/lib/goat-rename/rules-*.ts`에 규칙을 더하고, 한 번뿐인 줄은 손으로 고친다. 남겨야 하는 이름은
+  이유를 적은 KEEP 규칙이나 `goat-rename: legacy` 표시로 남긴다. 저장되거나 다른 버전이 읽는 이름(저장 키, wire id, env)은
+  `packages/contracts/src/legacyT3Names.ts`에 옛 이름을 두고 둘 다 읽게 한다.
+- 규칙 위치: 보이는 문구는 `rules-visible.ts`, upstream 서비스를 가리키는 문장의 hold는 `rules-external.ts`의
+  `connectServicePhrases`, 한 곳씩 바꾸는 GOAT 이름은 `rules-leftovers.ts`, 메타와 테스트 제목은 `rules-meta.ts`다
+  ([10.014](./10.014_t3_chase_rename_leftovers.md)). hold는 줄 전체가 아니라 이름을 둘러싼 단어로 맞춘다. upstream이 같은
+  문장을 다르게 쓰면 줄 단위 hold는 빠진다.
+- 옛 이름을 일부러 확인하는 테스트(부정 단언, legacy 입력)가 `--apply`로 뒤집히지 않았는지 본다:
+  `git diff -U0 -- '*.test.*' | rg '^\+.*(not\.|legacy)'`. GOAT 전용 파일이면 그 줄에 `goat-rename: legacy`를 단다.
+- 이름 길이가 바뀌므로 `--apply` 뒤 바뀐 파일에 `vp fmt`를 돌린다.
+- `rules-meta.test.ts`의 제목 표 테스트가 실패하면 upstream이 그 테스트 제목을 바꾼 것이다. `TEST_TITLES` 행을 고친다.
+- `apps/marketing`은 GOAT 사이트 lane이 다시 쓰는 중이라 예외로 둔다. 그 lane이 랜딩하면 예외와 이 줄을 다시 본다.
+- 마이그레이션: `Migrations.ts`의 id가 중복 없이 단조 증가하고 결정 카드의 선택이 반영됐는지 본다.
+- Node 고정: 루트 `package.json` `engines.node`는 GOAT의 정확한 버전을 유지한다. upstream이 Node를 올리면 사이클 카드에 적고
+  올릴지 정한다. 올릴 때는 그 값만 바꾸고 SEA·워크플로에 버전 사본을 다시 만들지 않는다. 서버 `apps/server/package.json` `engines.node`와
+  `packages/shared/src/nodeSqliteClient.ts`의 `NODE_SQLITE_RUNTIME_RANGE`는 GOAT 값 `^24.16.0 || >=26.1.0`를 유지한다
+  ([010 `node-pin`](./010_fork_delta.md)). 데스크톱 Electron이 Node를 바꾸면 그 버전이 서버 범위 안인지 확인한다.
+
+## 5. 검증
+
+- 로컬: 루트 `engines.node`의 Node로 돌린다 (`vp env exec node -v`). 시스템 Node가 다르면 `node:sqlite` 검사가 서버 테스트를 멈춘다.
+  충돌 파일의 focused test (`vp test run <files>`)와 바뀐 패키지 typecheck. `node scripts/goat-rename.ts --check`가 exit 0.
+  chase PR은 `--admin`으로 랜딩하므로 CI의 이름 검사에만 기대지 않는다. `vp run check:changed`도
+  변경 파일 선택과 무관하게 같은 이름 검사를 실행한다.
+- 정본: 머지 head에서 손으로 돌린 goat-ci 전체 실행(`gh workflow run goat-ci.yml --ref <branch>`)의 이름 검사(`goat-scope`), check, typecheck, test, build와 `goat-ci-result`가 모두 green. cancelled는 pass가 아니다.
+
+## 6. 랜딩
+
+`chase/t3-<YYMMDD>`를 dev에 merge commit 또는 fast-forward로 넣는다. squash merge는 upstream parent를
+잃어 merge-base가 전진하지 않으므로 쓰지 않는다. 수동 선별 사이클은 아래 절의 랜딩을 따른다.
+
+## 7. 기록
+
+- [000](./000_baseline.md): 새 reviewed-through(`git merge-base origin/dev upstream/main`)와 사이클 로그 행.
+- 닫힌 카드는 `_fin/10/`으로 옮기고 MOC를 갱신한다.
+- 새 GOAT 분기가 생겼으면 [010](./010_fork_delta.md)에 영역을 추가한다.
+
+## 수동 선별 사이클
+
+사용자가 일괄 머지 대신 커밋별 선별을 정한 사이클(첫 사례 [10.017](./_fin/10/10.017_t3_chase_cycle_261028.md))은 위 3-7번 대신 이렇게 돈다.
+
+- 범위: 시작점은 `scan.sh`의 merge-base가 아니라 MOC의 reviewed-through(내용 기준)다. 끝점은 스캔한 upstream SHA로 고정한다.
+- 분류: 커밋마다 take(`cherry-pick -x`), adapt(의미만 GOAT 코드에 재구현), skip을 이유와 함께 카드 표에 적는다. UI 레이아웃·스타일·디자인 토큰은 따라가지 않고 그 의미만 adapt한다. 010 영역과 부딪히면 GOAT 동작을 지킨다.
+- 작업 단위: take/adapt를 주제 묶음으로 나눠 묶음마다 브랜치를 만들고 독립 리뷰를 받는다. 같은 파일을 건드리는 묶음의 순서는 카드에 적는다.
+- 랜딩: 묶음마다 PR을 따로 머지하지 않는다. 묶음 브랜치를 순서대로 하나의 `chase/t3-<YYMMDD>-combined` 브랜치에 합치고(충돌은 손으로 풀고 양쪽 동작을 지킨다), 그 PR 하나만 CI를 돌려 squash로 머지한다. 묶음 PR을 열었다면 CI를 돌리지 않고 합친 PR을 가리키며 닫는다. 261028에서 묶음 PR 40여 개가 CI 큐와 재리뷰를 끝없이 반복해 이렇게 정했다(사용자 결정).
+- 검증: 로컬 전체 스위트는 돌리지 않는다. 묶음 브랜치는 정적 검사(`goat-rename --check` 0, `vp fmt`, `vp lint`)와 독립 리뷰, 합친 PR은 goat-ci가 정본이다. 묶음 브랜치에 dev를 다시 합치거나 rebase하는 것은 실제 충돌이 났을 때만 한다.
+- 이름: 가져온 커밋이 더한 T3 이름은 규칙으로 덮거나 이유를 적고 남긴다. upstream 시뮬레이션에서 가져온 몫의 잔재가 늘지 않아야 한다.
+- 기록: 카드에 PR 목록을 적고, 모든 묶음이 랜딩하거나 남은 이유가 적히면 MOC와 [000](./000_baseline.md)의 내용 기준 reviewed-through를 끝점으로 옮긴다. merge-base는 그대로이므로 다음 일괄 머지 사이클은 이미 가져온 커밋을 다시 만나고, 그 카드가 이 표를 보고 충돌을 푼다.

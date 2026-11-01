@@ -1,0 +1,950 @@
+import { assert, describe, it } from "@effect/vitest";
+import type { ChannelReceptionInput } from "@goat/contracts";
+import { MessageId, ProjectId, ProviderInstanceId, ThreadId } from "@goat/contracts";
+import * as Effect from "effect/Effect";
+import * as DateTime from "effect/DateTime";
+import * as Layer from "effect/Layer";
+import * as SqlClient from "effect/sql/SqlClient";
+
+import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import * as ServerSettings from "../serverSettings.ts";
+import * as ChannelChildWork from "./ChannelChildWork.ts";
+import * as ChannelDispatcher from "./ChannelDispatcher.ts";
+import * as ChannelGateway from "./ChannelGateway.ts";
+import * as ChannelLedger from "./ChannelLedger.ts";
+import * as ChannelReceptionService from "./ChannelReceptionService.ts";
+import * as ChannelRuntime from "./ChannelRuntime.ts";
+import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
+import {
+  GOAT_BOT_DISPATCH_RULE,
+  GOAT_BOT_READ_ONLY_RULE,
+  GOAT_BOT_ROUTING_RULE,
+  GOAT_BOT_SUPERVISOR_RULE,
+} from "./channelWorkerBrief.ts";
+import { taskIdFor, turnSteerIdsFor } from "./channelIds.ts";
+import { commitTransition } from "./channelTaskWrites.ts";
+import { receptionDecisionChannels } from "./testkit/channelReceptionHarness.ts";
+import {
+  botMessages,
+  defaultScript,
+  goatInput,
+  linkSlackUser,
+  makeHarness,
+  modelSelection,
+  onlyTask,
+  ownerId,
+  projectId,
+  rpcContext,
+  scratchProjectId,
+  setupBot,
+  slackContext,
+  slackInput,
+} from "./testkit/ChannelHarness.ts";
+
+const botModel = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-6-luna" } as const;
+
+/** "look:" asks GOAT Bot to take a turn itself; everything else follows the default script. */
+const turnScript = (input: ChannelReceptionInput) => {
+  const text = input.inputText ?? "";
+  if (input.mode === "input" && text.startsWith("also:")) {
+    const running = input.tasks.find((task) => task.status === "running");
+    return Effect.succeed({
+      replyText: "Passing that on.",
+      action: { type: "follow_up" as const, taskId: running?.taskId ?? ("task:none" as never) },
+    });
+  }
+  if (input.mode === "input" && text.startsWith("look:")) {
+    return Effect.succeed({
+      replyText: "On it.",
+      action: {
+        type: "run_turn" as const,
+        title: "Look into it",
+        instruction: text.slice(5).trim(),
+      },
+    });
+  }
+  return defaultScript(input);
+};
+
+const harnessWith = (
+  goatBotModelSelection: typeof botModel | null,
+  defaultRuntimeMode: "full-access" | "approval-required" = "full-access",
+  goatclawEnabled = false,
+) => {
+  const harness = makeHarness({
+    botWorkspace: true,
+    channelsLayer: receptionDecisionChannels,
+    settingsLayer: ServerSettings.layerTest({
+      textGenerationModelSelection: modelSelection,
+      defaultRuntimeMode,
+      goatBotModelSelection,
+      goatclaw: { enabled: goatclawEnabled },
+    }).pipe(Layer.orDie),
+  });
+  harness.script.current = turnScript;
+  return harness;
+};
+
+const boundProfile = (threadId: string) =>
+  SqlClient.SqlClient.pipe(
+    Effect.flatMap(
+      (sql) =>
+        sql<{
+          profile_id: string;
+        }>`SELECT profile_id FROM goatclaw_thread_profiles WHERE thread_id = ${threadId}`,
+    ),
+    Effect.map((rows) => rows[0]?.profile_id ?? null),
+  );
+
+/** Starts one turn and lets its worker report in, so the turn is running. */
+const runningTurn = Effect.gen(function* () {
+  yield* setupBot;
+  const gateway = yield* ChannelGateway.ChannelGateway;
+  const runtime = yield* ChannelRuntime.ChannelRuntime;
+  const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+  yield* gateway.ingest(goatInput("look: why is the disk full?", "s1"), rpcContext);
+  yield* runtime.drain;
+  yield* reports.reconcile(runtime.ownerToken);
+  const turn = yield* onlyTask;
+  assert.strictEqual(turn.status, "running");
+  return { gateway, runtime, reports, turn };
+});
+
+describe("reception-created GOAT Bot turns", () => {
+  it.effect(
+    "acknowledges first, then runs in its own workspace on its model with full access",
+    () => {
+      // The new-thread default is for people's threads; it does not narrow the bot.
+      const harness = harnessWith(botModel, "approval-required");
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        yield* gateway.ingest(goatInput("look: why is the disk full?", "t1"), rpcContext);
+        yield* runtime.drain;
+
+        const task = yield* onlyTask;
+        assert.strictEqual(task.kind, "turn");
+        const launch = harness.world.launches[0]!;
+        assert.strictEqual(launch.projectId, scratchProjectId);
+        assert.deepStrictEqual(launch.modelSelection, botModel);
+        assert.strictEqual(launch.runtimeMode, "full-access");
+        assert.deepStrictEqual(launch.workspaceStrategy, { type: "root" });
+        assert.include(launch.initialMessage?.text ?? "", "You are GOAT Bot handling this message");
+        // Read-only is the prompt's promise now that the sandbox allows everything.
+        assert.include(launch.initialMessage?.text ?? "", GOAT_BOT_READ_ONLY_RULE);
+        assert.include(launch.initialMessage?.text ?? "", 'goat_call {path:"task.create"}');
+        assert.include(launch.initialMessage?.text ?? "", GOAT_BOT_ROUTING_RULE);
+        assert.include(launch.initialMessage?.text ?? "", GOAT_BOT_DISPATCH_RULE);
+        assert.include(
+          (launch.initialMessage?.text ?? "").replaceAll("\\", "/"),
+          "goat-bot/scratch",
+        );
+        assert.include(
+          (launch.initialMessage?.text ?? "").replaceAll("\\", "/"),
+          "goat-bot/artifacts",
+        );
+        assert.notInclude(launch.initialMessage?.text ?? "", GOAT_BOT_SUPERVISOR_RULE);
+        // The acknowledgement was committed with the input, before the turn could run.
+        const texts = (yield* botMessages).messages.map((message) => message.text);
+        assert.include(texts, "On it.");
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect("never runs a turn above what a linked Slack person may do", () => {
+    const harness = harnessWith(botModel);
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* linkSlackUser();
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      yield* gateway.ingest(slackInput("look: why is the disk full?", "Ev1"), {
+        ...slackContext,
+        runtimeModeCeiling: "full-access",
+      });
+      yield* runtime.drain;
+      const launch = harness.world.launches[0]!;
+      assert.strictEqual((yield* onlyTask).kind, "turn");
+      // The link was made at auto-accept-edits.
+      assert.strictEqual(launch.runtimeMode, "auto-accept-edits");
+      assert.include(launch.initialMessage?.text ?? "", GOAT_BOT_READ_ONLY_RULE);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect(
+    "fronts the supervisor with goatclaw on and binds the owner's turn to its profile",
+    () => {
+      const harness = harnessWith(botModel, "full-access", true);
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        yield* gateway.ingest(goatInput("look: land the green PRs", "g1"), rpcContext);
+        yield* runtime.drain;
+        const launch = harness.world.launches[0]!;
+        const text = launch.initialMessage?.text ?? "";
+        assert.include(text, GOAT_BOT_READ_ONLY_RULE);
+        assert.include(text, GOAT_BOT_SUPERVISOR_RULE);
+        assert.isBelow(
+          text.indexOf(GOAT_BOT_READ_ONLY_RULE),
+          text.indexOf(GOAT_BOT_SUPERVISOR_RULE),
+        );
+        assert.strictEqual(yield* boundProfile(launch.threadId ?? "missing"), "owner");
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect("keeps a Slack person linked below full access on the default profile", () => {
+    const harness = harnessWith(botModel, "full-access", true);
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* linkSlackUser();
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      yield* gateway.ingest(slackInput("look: land the green PRs", "Ev9"), {
+        ...slackContext,
+        runtimeModeCeiling: "full-access",
+      });
+      yield* runtime.drain;
+      const launch = harness.world.launches[0]!;
+      assert.strictEqual(launch.runtimeMode, "auto-accept-edits");
+      assert.include(launch.initialMessage?.text ?? "", GOAT_BOT_SUPERVISOR_RULE);
+      assert.isNull(yield* boundProfile(launch.threadId ?? "missing"));
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect(
+    "does not bind owner after a Slack grant is lowered between intake and dispatch",
+    () => {
+      const harness = harnessWith(botModel, "full-access", true);
+      return Effect.gen(function* () {
+        yield* setupBot;
+        yield* linkSlackUser();
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`UPDATE channel_identities SET runtime_mode_ceiling = 'full-access' WHERE connection_id = 'slack-1' AND external_actor_id = 'U1'`;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const reception = yield* ChannelReceptionService.ChannelReceptionService;
+        const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+        const now = DateTime.formatIso(yield* DateTime.now);
+        yield* ledger.claimOwnership({ token: "supervisor-downgrade", now, staleBefore: now });
+        const input = yield* gateway.ingest(
+          slackInput("look: check the build", "lower-before-dispatch"),
+          { ...slackContext, runtimeModeCeiling: "full-access" },
+        );
+        yield* reception.receive(input.inputId, "supervisor-downgrade");
+        const task = yield* onlyTask;
+        assert.strictEqual(task.requester.runtimeModeCeiling, "full-access");
+        yield* sql`UPDATE channel_identities SET runtime_mode_ceiling = 'auto-accept-edits' WHERE connection_id = 'slack-1' AND external_actor_id = 'U1'`;
+        yield* dispatcher.dispatch(task.taskId, "supervisor-downgrade");
+        assert.lengthOf(harness.world.launches, 1);
+        const launch = harness.world.launches[0]!;
+        assert.strictEqual(launch.runtimeMode, "auto-accept-edits");
+        assert.isNull(yield* boundProfile(launch.threadId ?? "missing"));
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect("follows the new-thread default when no bot model is chosen", () => {
+    const harness = harnessWith(null);
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      yield* gateway.ingest(goatInput("look: what changed today?", "t2"), rpcContext);
+      yield* runtime.drain;
+      const chosen = harness.world.launches[0]!.modelSelection;
+      assert.strictEqual(chosen.instanceId, modelSelection.instanceId);
+      assert.strictEqual(chosen.model, modelSelection.model);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("delivers the turn's own answer as written", () => {
+    const harness = harnessWith(botModel);
+    const reworded: Array<string> = [];
+    harness.script.current = (input) => {
+      if (input.mode === "task_event") reworded.push(input.taskEvent?.summary ?? "");
+      return turnScript(input);
+    };
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      yield* gateway.ingest(goatInput("look: why is the disk full?", "t3"), rpcContext);
+      yield* runtime.drain;
+      const task = yield* onlyTask;
+      harness.world.setStatus(
+        task.worker!.threadId,
+        1,
+        "completed",
+        "Docker images take 41 GB; prune them to free it.",
+      );
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* runtime.drain;
+      const texts = (yield* botMessages).messages.map((message) => message.text);
+      assert.isTrue(texts.some((text) => text.startsWith("Docker images take 41 GB")));
+      assert.isFalse(texts.some((text) => text.startsWith("Done: Look into it")));
+      assert.deepStrictEqual(reworded, []);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect.each([1_500, 4_500])(
+    "delivers a %i-character turn answer whole, without rewording",
+    (length) => {
+      const opening =
+        "Docker images take 41 GB, which is why the disk is full.\n\nI did not run the prune, so nothing has been deleted yet.\n\nLargest folders: ";
+      const answer = (opening + "/var/lib/docker ".repeat(length)).slice(0, length - 1) + ".";
+      const harness = harnessWith(botModel);
+      const reworded: Array<string> = [];
+      harness.script.current = (input) => {
+        if (input.mode === "task_event") reworded.push(input.taskEvent?.summary ?? "");
+        return turnScript(input);
+      };
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+        yield* gateway.ingest(goatInput("look: why is the disk full?", "t3"), rpcContext);
+        yield* runtime.drain;
+        const task = yield* onlyTask;
+        harness.world.setStatus(task.worker!.threadId, 1, "completed", answer);
+        yield* reports.reconcile(runtime.ownerToken);
+        yield* runtime.drain;
+        assert.lengthOf(answer, length);
+        const texts = (yield* botMessages).messages.map((message) => message.text);
+        assert.include(texts, answer);
+        assert.deepStrictEqual(reworded, []);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect("records a follow-up with its reply, then steers the running run once", () => {
+    const harness = harnessWith(botModel);
+    return Effect.gen(function* () {
+      const { gateway, runtime, turn } = yield* runningTurn;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const followUp = goatInput("also: check /var/log too", "s2");
+      yield* gateway.ingest(followUp, rpcContext);
+      yield* gateway.ingest(followUp, rpcContext);
+      // Reception only: the follow-up is recorded with its reply before anything is sent.
+      const pending = yield* ledger.listPendingForwards(10);
+      assert.lengthOf(pending, 0);
+      yield* runtime.drain;
+
+      const page = yield* ledger.listTasks({ ownerId, limit: 10 });
+      assert.lengthOf(page.tasks, 1);
+      const sends = harness.world.sends.filter((send) => send.text.includes("/var/log"));
+      assert.lengthOf(sends, 1);
+      assert.strictEqual(sends[0]!.threadId, turn.worker!.threadId);
+      // Into this task's own run by id, never whichever run the session happens to be running.
+      assert.strictEqual(sends[0]!.mode, "steer");
+      assert.strictEqual(sends[0]!.targetRunId, turn.worker!.runId);
+      // It joined the running run: no second run on the thread.
+      assert.lengthOf(harness.world.runs.get(turn.worker!.threadId)!, 1);
+      const texts = (yield* botMessages).messages.map((message) => message.text);
+      assert.include(texts, "Passing that on.");
+      // The message id comes from the input, so a resend after a restart lands on the same message.
+      const entry = (yield* ledger.readConversationTail(turn.conversationId, 5)).find(
+        (candidate) => candidate.text === "also: check /var/log too",
+      );
+      const ids = turnSteerIdsFor(entry!.inputId);
+      assert.strictEqual(sends[0]!.messageId, ids.messageId);
+      assert.strictEqual(harness.world.steered.get(ids.messageId), turn.worker!.runId);
+      assert.isUndefined((yield* ledger.getTask(turn.taskId))!.pendingAnswerMessageId);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("replays a follow-up recorded before a crash, sending it once", () => {
+    const harness = harnessWith(botModel);
+    return Effect.gen(function* () {
+      const { gateway, turn } = yield* runningTurn;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+      const reception = yield* ChannelReceptionService.ChannelReceptionService;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      yield* gateway.ingest(goatInput("also: and the swap file", "c1"), rpcContext);
+      // Reception commits; the process "dies" before the forward loop runs.
+      const [input] = yield* ledger.listPendingInputs(10);
+      yield* reception.receive(input!, runtime.ownerToken);
+      const [pending] = yield* ledger.listPendingForwards(10);
+      assert.strictEqual(pending!.event.type, "task.followup.received");
+      // The send went out but the process died before completing the forward; recovery finds
+      // the run the recorded steer joined and sends nothing again.
+      yield* dispatcher.forward(pending!, runtime.ownerToken);
+      yield* dispatcher.forward(pending!, runtime.ownerToken);
+      const sends = harness.world.sends.filter((send) => send.text.includes("swap file"));
+      assert.lengthOf(sends, 1);
+      assert.lengthOf(harness.world.runs.get(turn.worker!.threadId)!, 1);
+      assert.lengthOf(yield* ledger.listPendingForwards(10), 0);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("keeps the task open when the run ends just before the follow-up is sent", () => {
+    const harness = harnessWith(botModel);
+    return Effect.gen(function* () {
+      const { gateway, reports, runtime, turn } = yield* runningTurn;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+      const reception = yield* ChannelReceptionService.ChannelReceptionService;
+      const threadId = turn.worker!.threadId;
+      yield* gateway.ingest(goatInput("also: and /tmp", "f1"), rpcContext);
+      const [input] = yield* ledger.listPendingInputs(10);
+      yield* reception.receive(input!, runtime.ownerToken);
+      // The first run finishes before the follow-up reaches it.
+      harness.world.setStatus(threadId, 1, "completed", "Docker images take 41 GB.");
+      yield* reports.reconcile(runtime.ownerToken);
+      assert.strictEqual((yield* ledger.getTask(turn.taskId))!.task.status, "running");
+
+      const [pending] = yield* ledger.listPendingForwards(10);
+      yield* dispatcher.forward(pending!, runtime.ownerToken);
+      // It started the worker's next run, and the task now waits on that run.
+      const runs = harness.world.runs.get(threadId)!;
+      assert.lengthOf(runs, 2);
+      assert.strictEqual((yield* ledger.getTask(turn.taskId))!.task.worker!.runId, runs[1]!.id);
+      yield* reports.reconcile(runtime.ownerToken);
+      assert.strictEqual((yield* ledger.getTask(turn.taskId))!.task.status, "running");
+
+      harness.world.setStatus(threadId, 2, "completed", "Docker takes 41 GB and /tmp 3 GB.");
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* runtime.drain;
+      const done = (yield* ledger.getTask(turn.taskId))!.task;
+      assert.strictEqual(done.status, "completed");
+      const texts = (yield* botMessages).messages.map((message) => message.text);
+      assert.include(texts, "Docker takes 41 GB and /tmp 3 GB.");
+      assert.notInclude(texts.join("\n"), "Docker images take 41 GB.");
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("does not pass on a follow-up to work that is not running", () => {
+    const harness = harnessWith(botModel);
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      yield* gateway.ingest(goatInput("also: anything else", "z1"), rpcContext);
+      yield* runtime.drain;
+      assert.lengthOf(harness.world.sends, 0);
+      const texts = (yield* botMessages).messages.map((message) => message.text);
+      assert.isTrue(texts.some((text) => text.startsWith("That work isn't running anymore")));
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("starts a new turn when the earlier one has finished", () => {
+    const harness = harnessWith(botModel);
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+      yield* gateway.ingest(goatInput("look: first question", "n1"), rpcContext);
+      yield* runtime.drain;
+      const first = yield* onlyTask;
+      harness.world.setStatus(first.worker!.threadId, 1, "completed", "First answer.");
+      yield* reports.reconcile(runtime.ownerToken);
+      yield* runtime.drain;
+      yield* gateway.ingest(goatInput("look: second question", "n2"), rpcContext);
+      yield* runtime.drain;
+      const page = yield* ledger.listTasks({ ownerId, limit: 10 });
+      assert.lengthOf(page.tasks, 2);
+      assert.lengthOf(
+        harness.world.sends.filter((send) => send.mode === "steer"),
+        0,
+      );
+    }).pipe(Effect.provide(harness.layer));
+  });
+});
+
+const followUpInput = (pending: ChannelLedger.ChannelPendingEvent) => {
+  if (pending.event.type !== "task.followup.received") throw new Error("not a follow-up");
+  return pending.event.payload.inputId;
+};
+
+describe("GOAT Bot follow-ups under failure", () => {
+  /** Records follow-ups through reception only, as if the forward loop has not run yet. */
+  const record = (texts: ReadonlyArray<string>) =>
+    Effect.gen(function* () {
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const reception = yield* ChannelReceptionService.ChannelReceptionService;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      for (const [index, text] of texts.entries()) {
+        yield* gateway.ingest(goatInput(text, "rec-" + index + "-" + text), rpcContext);
+        const [input] = yield* ledger.listPendingInputs(10);
+        yield* reception.receive(input!, runtime.ownerToken);
+      }
+      return yield* ledger.listPendingForwards(10);
+    });
+
+  it.effect("never lets a later follow-up overtake one still waiting, nor the task settle", () => {
+    const harness = harnessWith(botModel);
+    return Effect.gen(function* () {
+      const { reports, runtime, turn } = yield* runningTurn;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+      const threadId = turn.worker!.threadId;
+      const [first, second] = yield* record(["also: first addition", "also: second addition"]);
+      assert.strictEqual(first!.event.type, "task.followup.received");
+      const firstInput = followUpInput(first!);
+      const firstIds = turnSteerIdsFor(firstInput);
+      // The first send fails without a definite answer (a dropped connection, say).
+      harness.world.sendFailures.set(firstIds.messageId, new Error("connection reset"));
+
+      yield* dispatcher.forward(second!, runtime.ownerToken);
+      assert.lengthOf(harness.world.sends, 0);
+      yield* dispatcher.forward(first!, runtime.ownerToken);
+      assert.lengthOf(yield* ledger.listPendingForwards(10), 2);
+
+      // The run ends meanwhile; neither follow-up has reached it, so the task stays open.
+      harness.world.setStatus(threadId, 1, "completed", "Old answer.");
+      yield* reports.reconcile(runtime.ownerToken);
+      assert.strictEqual((yield* ledger.getTask(turn.taskId))!.task.status, "running");
+
+      harness.world.sendFailures.clear();
+      yield* dispatcher.forward(second!, runtime.ownerToken);
+      assert.isFalse(harness.world.sends.some((send) => send.text.includes("second")));
+      yield* dispatcher.forward(first!, runtime.ownerToken);
+      // The first lands as the next run; the second's fence still holds the task.
+      assert.isDefined((yield* ledger.getTask(turn.taskId))!.pendingAnswerMessageId);
+      yield* dispatcher.forward(second!, runtime.ownerToken);
+      const order = harness.world.sends
+        .filter((send) => send.text.includes("addition"))
+        .map((send) => (send.text.includes("first") ? "first" : "second"));
+      // The unanswered steer replays under its own ids before it may queue as the next run.
+      assert.deepStrictEqual(order, ["first", "first", "first", "second"]);
+      const task = yield* ledger.getTask(turn.taskId);
+      assert.isUndefined(task!.pendingAnswerMessageId);
+      assert.lengthOf(yield* ledger.listPendingForwards(10), 0);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("tries once more, queued under new ids, after a definite rejection", () => {
+    const harness = harnessWith(botModel);
+    return Effect.gen(function* () {
+      const { runtime, turn } = yield* runningTurn;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+      const [pending] = yield* record(["also: one more thing"]);
+      const inputId = followUpInput(pending!);
+      harness.world.sendFailures.set(turnSteerIdsFor(inputId).messageId, {
+        _tag: "OrchestratorCommandRejectedError",
+      });
+      yield* dispatcher.forward(pending!, runtime.ownerToken);
+      const queued = harness.world.sends.find((send) => send.mode === "queue");
+      assert.strictEqual(queued?.messageId, turnSteerIdsFor(inputId, "queued").messageId);
+      const task = (yield* ledger.getTask(turn.taskId))!;
+      const queuedRun = harness.world.runs
+        .get(turn.worker!.threadId)!
+        .find((run) => run.userMessageId === queued!.messageId);
+      assert.strictEqual(task.task.worker!.runId, queuedRun!.id);
+      assert.isUndefined(task.pendingAnswerMessageId);
+      assert.lengthOf(yield* ledger.listPendingForwards(10), 0);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("a turn asked for while another runs becomes its own task", () => {
+    const harness = harnessWith(botModel);
+    return Effect.gen(function* () {
+      const { gateway, reports, runtime, turn } = yield* runningTurn;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      let ended = false;
+      harness.script.current = (input) => {
+        if ((input.inputText ?? "").startsWith("look: and the swap") && !ended) {
+          ended = true;
+          // The running turn finishes while this message is being read.
+          harness.world.setStatus(turn.worker!.threadId, 1, "completed", "Done looking.");
+          return reports
+            .reconcile(runtime.ownerToken)
+            .pipe(Effect.orDie, Effect.andThen(turnScript(input)));
+        }
+        return turnScript(input);
+      };
+      yield* gateway.ingest(goatInput("look: and the swap file?", "j1"), rpcContext);
+      yield* runtime.drain;
+      yield* runtime.drain;
+      const page = yield* ledger.listTasks({ ownerId, limit: 10 });
+      assert.lengthOf(page.tasks, 2);
+      assert.isTrue(page.tasks.some((task) => task.instruction.includes("swap file")));
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("drops a follow-up whose work was stopped before it was sent", () => {
+    const harness = harnessWith(botModel);
+    return Effect.gen(function* () {
+      const { runtime, turn } = yield* runningTurn;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+      const [pending] = yield* record(["also: keep going"]);
+      const stored = (yield* ledger.getTask(turn.taskId))!;
+      yield* commitTransition(
+        ledger,
+        stored,
+        { type: "task.cancelled", payload: { reason: "Stopped by the person." } },
+        { owner: runtime.ownerToken },
+      );
+      yield* dispatcher.forward(pending!, runtime.ownerToken);
+      assert.isFalse(harness.world.sends.some((send) => send.text.includes("keep going")));
+      assert.lengthOf(harness.world.runs.get(turn.worker!.threadId)!, 1);
+      assert.lengthOf(yield* ledger.listPendingForwards(10), 0);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("asks about each follow-up the worker refused, one after another", () => {
+    const harness = harnessWith(botModel);
+    return Effect.gen(function* () {
+      const { runtime, turn } = yield* runningTurn;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+      const forwards = yield* record(["also: first refused", "also: second refused"]);
+      const rejection = { _tag: "OrchestratorCommandRejectedError" };
+      for (const pending of forwards) {
+        const inputId = followUpInput(pending);
+        harness.world.sendFailures.set(turnSteerIdsFor(inputId).messageId, rejection);
+        harness.world.sendFailures.set(turnSteerIdsFor(inputId, "queued").messageId, rejection);
+      }
+      for (const pending of forwards) yield* dispatcher.forward(pending, runtime.ownerToken);
+      const task = (yield* ledger.getTask(turn.taskId))!.task;
+      assert.strictEqual(task.status, "waiting_input");
+      assert.lengthOf(task.openQuestions, 2);
+      assert.include(task.openQuestions[0]!.text, "first refused");
+      assert.include(task.openQuestions[1]!.text, "second refused");
+      assert.lengthOf(yield* ledger.listPendingForwards(10), 0);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("does not restart a worker a person stopped after a follow-up was recorded", () => {
+    const harness = harnessWith(botModel);
+    return Effect.gen(function* () {
+      const { reports, runtime, turn } = yield* runningTurn;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+      const threadId = turn.worker!.threadId;
+      const [pending] = yield* record(["also: keep digging"]);
+      // The person stops the run in GOAT before the follow-up is sent.
+      harness.world.setStatus(threadId, 1, "cancelled");
+      yield* reports.reconcile(runtime.ownerToken);
+      assert.strictEqual((yield* ledger.getTask(turn.taskId))!.task.status, "running");
+      yield* dispatcher.forward(pending!, runtime.ownerToken);
+      assert.isFalse(harness.world.sends.some((send) => send.text.includes("keep digging")));
+      assert.lengthOf(harness.world.runs.get(threadId)!, 1);
+      yield* reports.reconcile(runtime.ownerToken);
+      assert.strictEqual((yield* ledger.getTask(turn.taskId))!.task.status, "cancelled");
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect(
+    "binds the same run when the send was accepted but the process died before binding",
+    () => {
+      const harness = harnessWith(botModel);
+      return Effect.gen(function* () {
+        const { reports, runtime, turn } = yield* runningTurn;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+        const threads = yield* ThreadManagement.ThreadManagementService;
+        const threadId = turn.worker!.threadId;
+        const [pending] = yield* record(["also: and the cache"]);
+        const ids = turnSteerIdsFor(followUpInput(pending!), "queued");
+        harness.world.setStatus(threadId, 1, "completed", "First answer.");
+        // The earlier process recorded and sent it (starting the next run), then died before binding.
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`INSERT INTO channel_bot_session_runs
+          (thread_id, message_id, task_id, task_generation, kind, created_at)
+          VALUES (${threadId}, ${ids.messageId}, ${turn.taskId}, ${turn.generation}, 'followup',
+            '2026-10-12T00:00:00.000Z')`;
+        yield* threads.sendToThread({
+          projectId: ProjectId.make(turn.target!.projectId),
+          commandId: ids.commandId,
+          threadId,
+          messageId: ids.messageId,
+          text: "Follow-up from Owner: also: and the cache",
+          attachments: [],
+          mode: "queue",
+          createdBy: "user",
+          creationSource: "server",
+        });
+        // Reconciliation in between binds the run the follow-up started and lifts its fence.
+        yield* reports.reconcile(runtime.ownerToken);
+        yield* dispatcher.forward(pending!, runtime.ownerToken);
+        const runs = harness.world.runs.get(threadId)!;
+        assert.lengthOf(runs, 2);
+        const task = (yield* ledger.getTask(turn.taskId))!;
+        assert.strictEqual(task.task.worker!.runId, runs[1]!.id);
+        assert.isUndefined(task.pendingAnswerMessageId);
+        assert.strictEqual(task.task.status, "running");
+        assert.lengthOf(yield* ledger.listPendingForwards(10), 0);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect(
+    "creates and dispatches multiple independent coding tasks from one reception pass",
+    () => {
+      const harness = harnessWith(botModel);
+      harness.script.current = (input) => {
+        if (input.mode === "input" && input.inputText?.startsWith("multi:")) {
+          return Effect.succeed({
+            replyText: "Starting all three tasks.",
+            action: {
+              type: "create_task" as const,
+              title: "Fix PR #1718",
+              instruction: "Check CI and merge PR #1718.",
+              additionalTasks: [
+                { title: "Audit browser card", instruction: "Inspect browser card parity." },
+                { title: "Sync Aside notes", instruction: "Update Aside parity docs." },
+              ],
+            },
+          });
+        }
+        return turnScript(input);
+      };
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const ingested = yield* gateway.ingest(
+          goatInput("multi: fix PR, audit card, sync notes", "m1"),
+          rpcContext,
+        );
+        yield* runtime.drain;
+
+        const page = yield* ledger.listTasks({ ownerId, limit: 10 });
+        assert.lengthOf(page.tasks, 3);
+        assert.deepStrictEqual(
+          page.tasks.map((task) => task.taskId).toSorted(),
+          [
+            taskIdFor(ingested.inputId, 0),
+            taskIdFor(ingested.inputId, 1),
+            taskIdFor(ingested.inputId, 2),
+          ].toSorted(),
+        );
+        assert.lengthOf(harness.world.launches, 3);
+        assert.deepStrictEqual(harness.world.launches.map((launch) => launch.title).toSorted(), [
+          "Audit browser card",
+          "Fix PR #1718",
+          "Sync Aside notes",
+        ]);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect(
+    "holds a completed turn open while its recorded child work runs, then settles when the child finishes",
+    () => {
+      const harness = harnessWith(botModel);
+      return Effect.gen(function* () {
+        const { runtime, reports, turn } = yield* runningTurn;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const childWork = yield* ChannelChildWork.ChannelChildWork;
+        const workerThreadId = turn.worker!.threadId;
+
+        // An unclaimed reservation ("reserved") never holds completion forever.
+        const unclaimed = yield* childWork.admit({
+          callerThreadId: workerThreadId,
+          callerRunId: turn.worker!.runId,
+          surface: "delegate_local",
+          prompt: "abandoned before claim",
+          destinationKey: "codex/gpt-6-luna",
+        });
+        assert.strictEqual(unclaimed._tag, "admitted");
+
+        const admission = yield* childWork.admit({
+          callerThreadId: workerThreadId,
+          callerRunId: turn.worker!.runId,
+          surface: "thread_launch",
+          prompt: "implement the fix in a worktree",
+          destinationKey: "codex/gpt-6.1-sol",
+        });
+        if (admission._tag !== "admitted") return yield* Effect.die("expected admission");
+        const childThreadId = ThreadId.make("thread:bot-child-1");
+        harness.world.addRun(childThreadId, MessageId.make("msg:bot-child-1"));
+        yield* Effect.scoped(childWork.claimLaunch(admission.record, { threadId: childThreadId }));
+        yield* childWork.markBound(admission.record, { threadId: childThreadId });
+
+        // The bot's initial turn finishes after launching the child thread, while the child is still running.
+        harness.world.setStatus(
+          workerThreadId,
+          1,
+          "completed",
+          "Started the coding thread and finished the check.",
+        );
+        yield* reports.reconcile(runtime.ownerToken);
+        const held = yield* ledger.getTask(turn.taskId);
+        assert.strictEqual(held?.task.status, "running");
+        assert.strictEqual(held?.completionHold, "background");
+
+        // Once the child thread completes, runtime.drain reconciles childWork and settles the turn.
+        harness.world.background.add(childThreadId);
+        harness.world.setStatus(childThreadId, 1, "completed", "Fix landed.");
+        yield* runtime.drain;
+        // While the child still has background work, neither childWork nor the parent turn settles.
+        assert.strictEqual((yield* ledger.getTask(turn.taskId))?.task.status, "running");
+        harness.world.background.delete(childThreadId);
+        yield* runtime.drain;
+        const settled = yield* ledger.getTask(turn.taskId);
+        assert.strictEqual(settled?.task.status, "completed");
+        assert.isUndefined(settled?.completionHold);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect(
+    "narrates a turn's running progress report by default while honoring explicit milestone:false",
+    () => {
+      const harness = harnessWith(botModel);
+      return Effect.gen(function* () {
+        const { gateway, runtime, reports, turn } = yield* runningTurn;
+        const workerThreadId = turn.worker!.threadId;
+        yield* reports.report(
+          {
+            taskId: turn.taskId,
+            generation: turn.generation,
+            eventId: "turn-progress-default" as never,
+            status: "running",
+            summary: "Checking disk usage now; I will report back shortly.",
+          },
+          workerThreadId,
+        );
+        yield* reports.report(
+          {
+            taskId: turn.taskId,
+            generation: turn.generation,
+            eventId: "turn-progress-quiet" as never,
+            status: "running",
+            summary: "Internal step that stays quiet.",
+            milestone: false,
+          },
+          workerThreadId,
+        );
+        yield* runtime.drain;
+        const texts = (yield* botMessages).messages.map((message) => message.text);
+        assert.include(texts, "Checking disk usage now; I will report back shortly.");
+        assert.notInclude(texts, "Internal step that stays quiet.");
+
+        // A non-turn coding task's unmarked running report still stays silent.
+        yield* gateway.ingest(goatInput("do: fix the build", "work-quiet-check"), rpcContext);
+        yield* runtime.drain;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const workTask = (yield* ledger.listTasks({ ownerId, limit: 10 })).tasks.find(
+          (candidate) => candidate.kind !== "turn",
+        )!;
+        yield* reports.report(
+          {
+            taskId: workTask.taskId,
+            generation: workTask.generation,
+            eventId: "work-progress-unmarked" as never,
+            status: "running",
+            summary: "Routine worker step that stays silent.",
+          },
+          workTask.worker!.threadId,
+        );
+        yield* runtime.drain;
+        const afterTexts = (yield* botMessages).messages.map((message) => message.text);
+        assert.notInclude(afterTexts, "Routine worker step that stays silent.");
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect(
+    "fans out additionalTasks on a fresh or joined run_turn and refuses unauthorized joined extras",
+    () => {
+      const harness = harnessWith(botModel);
+      harness.script.current = (input) => {
+        if (input.mode === "input" && input.inputText?.startsWith("hybrid:")) {
+          return Effect.succeed({
+            replyText: "Checking disk and starting the coding task.",
+            action: {
+              type: "run_turn" as const,
+              title: "Inspect disk",
+              instruction: "Check disk usage.",
+              additionalTasks: [
+                { title: "Rotate logs", instruction: "Add log rotation.", projectId },
+              ],
+            },
+          });
+        }
+        if (input.mode === "input" && input.inputText?.startsWith("hybrid-join:")) {
+          return Effect.succeed({
+            replyText: "Steering turn and starting the extra fix.",
+            action: {
+              type: "run_turn" as const,
+              title: "Also check /tmp",
+              instruction: "Check /tmp too.",
+              additionalTasks: [
+                { title: "Prune cache", instruction: "Prune build cache.", projectId },
+              ],
+            },
+          });
+        }
+        return turnScript(input);
+      };
+      return Effect.gen(function* () {
+        yield* setupBot;
+        yield* linkSlackUser();
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const reports = yield* ChannelWorkerReports.ChannelWorkerReports;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+
+        // 1. Fresh hybrid run_turn + additionalTasks creates index 0 (turn) and index 1 (coding task).
+        const first = yield* gateway.ingest(
+          goatInput("hybrid: check disk and rotate logs", "h1"),
+          rpcContext,
+        );
+        yield* runtime.drain;
+        yield* reports.reconcile(runtime.ownerToken);
+
+        const afterFirst = (yield* ledger.listTasks({ ownerId, limit: 10 })).tasks;
+        assert.lengthOf(afterFirst, 2);
+        const turnTask = (yield* ledger.getTask(taskIdFor(first.inputId, 0)))!.task;
+        const extraTask = (yield* ledger.getTask(taskIdFor(first.inputId, 1)))!.task;
+        assert.strictEqual(turnTask.kind, "turn");
+        assert.isUndefined(extraTask.kind);
+        assert.strictEqual(extraTask.title, "Rotate logs");
+
+        // 2. A second run_turn while the turn runs is its own task, queued as its own run in the
+        // same session, never steered into the running one.
+        const second = yield* gateway.ingest(
+          goatInput("hybrid-join: also /tmp and prune cache", "h2"),
+          rpcContext,
+        );
+        yield* runtime.drain;
+        const secondTurn = (yield* ledger.getTask(taskIdFor(second.inputId, 0)))?.task;
+        assert.strictEqual(secondTurn?.kind, "turn");
+        assert.strictEqual(secondTurn?.worker?.threadId, turnTask.worker?.threadId);
+        assert.notStrictEqual(secondTurn?.worker?.runId, turnTask.worker?.runId);
+        const joinedExtra = (yield* ledger.getTask(taskIdFor(second.inputId, 1)))?.task;
+        assert.strictEqual(joinedExtra?.title, "Prune cache");
+        const queued = harness.world.sends.filter((send) => send.text.includes("Check /tmp too."));
+        assert.deepStrictEqual(
+          queued.map((send) => send.mode),
+          ["queue"],
+        );
+
+        // 3. A lower-ceiling caller in the same conversation never runs on the full-access session.
+        // The two coding tasks finish first so the per-person cap leaves room for this turn.
+        for (const extra of [extraTask, joinedExtra!]) {
+          const worker = (yield* ledger.getTask(extra.taskId))!.task.worker!;
+          harness.world.setStatus(worker.threadId, 1, "completed", "Done.");
+        }
+        yield* reports.reconcile(runtime.ownerToken);
+        yield* runtime.drain;
+        const unauth = yield* gateway.ingest(goatInput("look: lowered ceiling", "h3"), {
+          ...rpcContext,
+          runtimeModeCeiling: "approval-required",
+        });
+        yield* runtime.drain;
+        const lowered = (yield* ledger.getTask(taskIdFor(unauth.inputId, 0)))?.task;
+        assert.isDefined(lowered?.worker);
+        assert.notStrictEqual(lowered?.worker?.threadId, turnTask.worker?.threadId);
+        const loweredLaunch = harness.world.launches.find(
+          (launch) => launch.threadId === lowered?.worker?.threadId,
+        );
+        assert.strictEqual(loweredLaunch?.runtimeMode, "approval-required");
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+});

@@ -1,0 +1,99 @@
+name: goat-ci
+
+# goat fork CI. Runs only on the EPYC self-hosted runners; every upstream workflow is disabled.
+on:
+  push:
+    branches: [main, "goat/**"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: goat-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    name: goat-${{ matrix.task }}
+    runs-on: [self-hosted, linux, x64, goat, epyc]
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        task: [check, typecheck, test, build]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      # The runner's .env gives each goat runner its own HOME, so Vite+, Node, pnpm and Electron
+      # caches stay on the persistent disk without sharing state with other runners.
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: false
+          run-install: true
+
+      - name: Toolchain
+        run: |
+          echo "HOME=$HOME"
+          test "$HOME" = "/opt/actions-runner/$RUNNER_NAME/_home"
+          test -w "$HOME"
+          command -v vp
+          command -v vpr
+          node --version
+
+      - name: Ensure Electron runtime is installed
+        run: vp run --filter @t3tools/desktop ensure:electron
+
+      - name: Check
+        if: matrix.task == 'check'
+        run: vp check
+
+      - name: Typecheck
+        if: matrix.task == 'typecheck'
+        run: vpr typecheck
+
+      # Narrower than upstream ci.yml: the packages goat changes, not the full server/desktop suites.
+      - name: Test
+        if: matrix.task == 'test'
+        run: |
+          vp run --filter @t3tools/ssh test
+          vp run --filter @t3tools/web test
+
+      - name: Test build scripts
+        if: matrix.task == 'test'
+        working-directory: scripts
+        run: vp test run build-desktop-artifact.test.ts
+
+      - name: Build desktop pipeline
+        if: matrix.task == 'build'
+        run: |
+          command -v cc
+          pkg-config --exists libsecret-1
+          vp run build:desktop
+          node apps/desktop/scripts/verify-preload-bundle.mjs
+          for p in apps/desktop/dist-electron apps/server/dist apps/web/dist native/browser-secret/build/x64/t3-browser-secret; do
+            test -e "$p" || { echo "missing build output: $p" >&2; exit 1; }
+          done
+
+      - name: Upload build output
+        if: matrix.task == 'build'
+        uses: actions/upload-artifact@v4
+        with:
+          name: goat-desktop-build
+          path: |
+            apps/desktop/dist-electron
+            apps/server/dist
+            apps/web/dist
+            native/browser-secret/build/x64/t3-browser-secret
+          if-no-files-found: error
+          retention-days: 3

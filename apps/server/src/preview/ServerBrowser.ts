@@ -1,0 +1,2697 @@
+// @effect-diagnostics nodeBuiltinImport:off globalDate:off globalTimers:off - Playwright callbacks run outside the Effect runtime.
+// Screencasts ignore emulated device scale; real 2x keeps captures sharp.
+// --disable-gpu uses cheaper software compositing while preserving SwiftShader WebGL.
+import {
+  DEFAULT_BROWSER_RECORDING_FRAME_RATE,
+  FILL_PREVIEW_VIEWPORT,
+  INCOGNITO_BROWSER_PROFILE_ID,
+  PREVIEW_AUTOMATION_SERVER_OPERATIONS,
+  PreviewAutomationLogsInput,
+  PreviewClearProfileError,
+  PreviewViewportSetting as PreviewViewportSettingSchema,
+  PROVIDER_SEND_TURN_MAX_FILE_BYTES,
+  SERVER_BROWSER_AUTOMATION_CLIENT_ID,
+  ThreadId,
+  type PreviewAppearancePreference,
+  type PreviewAutomationActionEvent,
+  type PreviewAutomationClickInput,
+  type PreviewAutomationConsoleEntry,
+  type PreviewAutomationDialogInput,
+  type PreviewAutomationDragInput,
+  type PreviewAutomationEvaluateInput,
+  type PreviewAutomationFetchInput,
+  type PreviewAutomationHoverInput,
+  type PreviewAutomationNavigateInput,
+  type PreviewAutomationNetworkEntry,
+  type PreviewAutomationOpenInput,
+  type PreviewAutomationPressInput,
+  type PreviewAutomationReloadInput,
+  type PreviewAutomationRequest,
+  type PreviewAutomationResizeInput,
+  type PreviewAutomationScrollCollectInput,
+  type PreviewAutomationScrollInput,
+  type PreviewAutomationSelectInput,
+  type PreviewAutomationSetColorSchemeInput,
+  type PreviewAutomationSnapshotInput,
+  type PreviewAutomationStatus,
+  type PreviewAutomationTypeInput,
+  type PreviewAutomationUploadInput,
+  type PreviewEvent,
+  type PreviewNavStatus,
+  type PreviewReportProfilesInput,
+  type PreviewSessionSnapshot,
+  type PreviewTabSession,
+  type PreviewViewportSetting,
+} from "@goat/contracts";
+import * as HostProcess from "@goat/shared/HostProcess";
+import { normalizePreviewUrl } from "@goat/shared/preview";
+import { resolvePreviewViewport } from "@goat/shared/previewViewport";
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import { constVoid } from "effect/Function";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Queue from "effect/Queue";
+import * as Schedule from "effect/Schedule";
+import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
+import * as PubSub from "effect/PubSub";
+import * as Stream from "effect/Stream";
+import type * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import * as NodeCrypto from "node:crypto";
+import * as NodeFSP from "node:fs/promises";
+import * as NodePath from "node:path";
+import type { CDPSession, Dialog, Download, FileChooser, Frame, Page } from "playwright-core";
+
+import { PENDING_ATTACHMENT_THREAD_SEGMENT } from "../attachmentStore.ts";
+import { resolveRootCliCommand } from "../cli/invocation.ts";
+import * as ServerConfig from "../config.ts";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as PreviewAutomationBroker from "../mcp/PreviewAutomationBroker.ts";
+import * as DesktopBrowserChannel from "./DesktopBrowserChannel.ts";
+import * as PreviewAgentActivity from "./PreviewAgentActivity.ts";
+import * as PreviewManager from "./Manager.ts";
+import { installPdfDocumentNavigation, isPdfAssetUrl } from "./PdfDocumentNavigation.ts";
+import * as PreviewBrowser from "./PreviewBrowser.ts";
+import * as ServerBrowserReadiness from "./serverBrowserReadiness.ts";
+import * as PreviewBrowserHost from "./PreviewBrowserHost.ts";
+import { presentAsChrome, ServerBrowserContexts } from "./ServerBrowserContexts.ts";
+import { ServerBrowserDiagnostics } from "./ServerBrowserDiagnostics.ts";
+import * as ServerBrowserPage from "./ServerBrowserPage.ts";
+import { unloadedOpen } from "./unloadedOpen.ts";
+import * as AgentTabState from "./agentTabState.ts";
+import { answerBy, answerCall, queueCaptureBy, waitInput, withCaptureLock } from "./CaptureLock.ts";
+import { recordingEncoderScript } from "./ServerBrowserRecordingScript.ts";
+import {
+  browserSessionView,
+  markUsed,
+  tabOwner,
+  type ServerBrowserSessionView,
+} from "./ServerBrowserSessions.ts";
+import { pointBefore } from "./ServerBrowserPointer.ts";
+import * as ServerBrowserScreen from "./ServerBrowserScreen.ts";
+import { guardedHistoryNavigation } from "./ServerBrowserHistory.ts";
+import { guardedNavigate, resolveNavigationUrl } from "./ServerBrowserNavigate.ts";
+import * as ViewerInput from "./ServerBrowserViewerInput.ts";
+import { fixedViewportSize, viewportSettingsEqual } from "./ServerBrowserViewport.ts";
+import { makeRendering, UNATTACHED_FILL_VIEWPORT } from "./ServerBrowserRendering.ts";
+import { inputFence } from "./PreviewInputFence.ts";
+import { PopupNavigationRequests } from "./PopupNavigationRequests.ts";
+import { recordCopies, recordFrameCopies, takeCopiedText } from "./ServerBrowserClipboard.ts";
+import * as PreviewUpload from "./PreviewUpload.ts";
+import { makeContextPreparer, startBrowserWatchers } from "./popupWatchers.ts";
+import { closePopupOnAbort, inspectPopup, type AdoptedPage } from "./popupAdmission.ts";
+import { pushBounded } from "./boundedBuffer.ts";
+import { pageRead } from "./pageRead.ts";
+import { attachNetworkTracker } from "./networkTracker.ts";
+import { FENCED_ALLOWED_OPERATIONS, READ_OPERATIONS } from "./readOperations.ts";
+import { inPageFetch, resolveFetchUrl } from "./inPageFetch.ts";
+import { artifactFileName, publishArtifact, publishFetchedBody } from "./browserArtifacts.ts";
+import { collectWhileScrolling } from "./scrollCollector.ts";
+import { initialTabChannel, secretBlockedGate, tabActionGate } from "./tabActionGate.ts";
+import { makeOpenRunSignals } from "./openRunSignals.ts";
+import { BrowserControlInterrupted, SessionControl } from "./SessionControl.ts";
+import {
+  assertReusable,
+  assertStoreUsed,
+  dialogStatus,
+  hostedTwice,
+  openInSession,
+  SessionProfiles,
+  tabSession,
+  type RequestedSession,
+} from "./sessionMode.ts";
+import * as ServerBrowserSecretFill from "./ServerBrowserSecretFill.ts";
+import { checkOpenBlocked, makeBlockedTabFence, type BlockedTabRun } from "./blockedTabFence.ts";
+
+const SERVER_HOST_CLIENT_ID = SERVER_BROWSER_AUTOMATION_CLIENT_ID;
+const decodeLogsInput = Schema.decodeUnknownSync(PreviewAutomationLogsInput);
+const RENDER_SCALE = 2;
+// Chromium allows three unacked frames, so 100 ms pacing caps viewers near 30 fps.
+const SCREENCAST_ACK_PACE_MS = 100;
+const SCREENCAST_SETTLE_MS = 200;
+const SCREENCAST_MOTION_FRAMES = 4;
+const SCREENCAST_MOTION_WINDOW_MS = 300;
+const SCREENCAST_MOTION_QUALITY = 50;
+const HOST_RECONNECT_DELAY = "1 second";
+const DESKTOP_ATTACH_TIMEOUT = "10 seconds";
+const VIEWER_OUTPUT_LIMIT = 64;
+const RECORDING_SCREENCAST = { format: "jpeg", quality: 90, everyNthFrame: 1 } as const;
+const decodeViewportSetting = Schema.decodeUnknownSync(PreviewViewportSettingSchema);
+const AGENT_CURSOR_MOVE_MS = 160;
+const AGENT_CURSOR_CLICK_LEAD_MS = 40;
+
+const sleepUntil = (deadline: number) =>
+  new Promise<void>((resolve) => setTimeout(resolve, Math.max(0, deadline - Date.now())));
+
+const NAVIGATION_TIMEOUT_MS = 15_000;
+const VIEWER_NAVIGATION_OPTIONS = { waitUntil: "commit", timeout: NAVIGATION_TIMEOUT_MS } as const;
+const ACTION_TIMELINE_LIMIT = 50;
+
+export class ServerBrowserTabNotFoundError extends Schema.TaggedError<ServerBrowserTabNotFoundError>()(
+  "ServerBrowserTabNotFoundError",
+  { threadId: Schema.String, tabId: Schema.String },
+) {
+  override get message(): string {
+    return "The server preview tab does not exist.";
+  }
+}
+
+const isTabNotFound = Schema.is(ServerBrowserTabNotFoundError);
+const isHostSetupError = Schema.is(
+  Schema.Union([
+    PreviewBrowserHost.PreviewBrowserSandboxError,
+    PreviewBrowserHost.PreviewBrowserLibrariesError,
+    PreviewBrowserHost.PreviewBrowserRootError,
+  ]),
+);
+
+export class ServerBrowserLaunchError extends Schema.TaggedError<ServerBrowserLaunchError>()(
+  "ServerBrowserLaunchError",
+  { cause: Schema.Defect() },
+) {
+  override get message(): string {
+    return "The server preview browser could not start.";
+  }
+}
+
+import type { ServerBrowserViewerOutput } from "./ServerBrowserViewerOutput.ts";
+export type { ServerBrowserViewerOutput };
+
+export interface ServerBrowserViewer {
+  readonly output: Queue.Dequeue<ServerBrowserViewerOutput>;
+  readonly input: (message: unknown) => Effect.Effect<void>;
+}
+
+export type ProfileReporter = (input: PreviewReportProfilesInput) => Effect.Effect<void>;
+
+export class ServerBrowser extends Context.Service<
+  ServerBrowser,
+  {
+    readonly attachViewer: (input: {
+      readonly threadId: string;
+      readonly tabId: string;
+      readonly maxWidth: number;
+      readonly maxHeight: number;
+      readonly quality: number;
+      readonly canOperate: boolean;
+    }) => Effect.Effect<
+      ServerBrowserViewer,
+      ServerBrowserTabNotFoundError | ServerBrowserLaunchError,
+      Scope.Scope
+    >;
+
+    readonly answerFileChooser: (input: {
+      readonly threadId: string;
+      readonly tabId: string;
+      readonly chooserId: string;
+      readonly files: ReadonlyArray<{
+        readonly name: string;
+        readonly mimeType: string;
+        readonly buffer: Buffer;
+      }>;
+    }) => Effect.Effect<boolean>;
+    readonly openDownload: (input: {
+      readonly threadId: string;
+      readonly tabId: string;
+      readonly downloadId: string;
+    }) => Effect.Effect<Option.Option<{ readonly path: string; readonly fileName: string }>>;
+
+    readonly clearProfile: (profileId: string) => Effect.Effect<void, PreviewClearProfileError>;
+
+    readonly profileReporter: Effect.Effect<ProfileReporter, never, Scope.Scope>;
+
+    /** Every tab with its control state, for the preview session list. */
+    readonly sessions: Effect.Effect<ReadonlyArray<ServerBrowserSessionView>>;
+    /** Wakes after a tab opens, closes or changes owner, privacy or stop. */
+    readonly sessionChanges: Stream.Stream<void>;
+    /** The kill switch for browser tabs: stops agents on every tab now, reading nothing first. */
+    readonly stopAllAgents: Effect.Effect<void>;
+    /** A person's stop or hand back of agent control on one tab; false when it is gone. */
+    readonly controlSession: (input: {
+      readonly threadId: string;
+      readonly tabId: string;
+      readonly control: "stop" | "handBack";
+    }) => Effect.Effect<boolean>;
+  } & ServerBrowserScreen.SurfaceService
+>()("goat/preview/ServerBrowser") {}
+
+interface ViewerState {
+  readonly id: string;
+  readonly canOperate: boolean;
+  readonly pressedKeys: Map<string, { key: string; code: string }>;
+  readonly pressedButtons: Map<"left" | "middle" | "right", { x: number; y: number }>;
+  readonly push: (output: ServerBrowserViewerOutput) => void;
+  readonly pause: () => Promise<void>;
+  readonly resume: () => Promise<void>;
+  scrolledAt: number;
+
+  requestedSize: { width: number; height: number; order: number } | null;
+}
+
+interface EncoderWindow {
+  __goatRecorder: {
+    cursor(x: number, y: number, click: boolean): void;
+    frame(data: string, width: number): Promise<boolean>;
+    stop(): Promise<{ mimeType: string | null; count: number; bytes: number }>;
+    chunk(index: number): Promise<string>;
+  };
+}
+
+interface Recording {
+  readonly encoder: Page;
+  readonly session: CDPSession;
+  readonly startedAt: string;
+  readonly framesInFlight: Set<Promise<void>>;
+}
+
+interface ServerTab {
+  readonly threadId: ThreadId;
+  readonly tabId: string;
+  readonly page: Page;
+  readonly cdp: CDPSession;
+  readonly frameSessions: Map<Frame, CDPSession>;
+  readonly createdAt: number;
+  usedAt: number;
+  readonly viewers: Set<ViewerState>;
+  readonly consoleEntries: Array<PreviewAutomationConsoleEntry>;
+  readonly networkEntries: Array<PreviewAutomationNetworkEntry>;
+  readonly diagnostics: ServerBrowserDiagnostics;
+  readonly actionTimeline: Array<PreviewAutomationActionEvent>;
+  readonly control: SessionControl;
+  agentOperating: boolean;
+  /** Whose input last reached this tab, and so whose popups it opens. */
+  readonly popups: AgentTabState.PopupAttribution;
+  fileChooserIntercepted: boolean;
+  readonly onFileChooser: (chooser: FileChooser) => void;
+
+  readonly isolatedContext: boolean;
+  /** The sign-in mode and store the tab was opened with; it never changes. */
+  readonly session: PreviewTabSession;
+
+  readonly desktop: { readonly close: () => Promise<void> } | null;
+  readonly profileId: string | undefined;
+  readonly openerTabId: string | undefined;
+
+  readonly downloads: Array<ServerDownload>;
+  fileChooser: {
+    readonly id: string;
+    readonly chooser: FileChooser;
+    readonly accept: string;
+    readonly offeredTo: string | null;
+  } | null;
+  dialog: Dialog | null;
+  setting: PreviewViewportSetting;
+  colorScheme: PreviewAppearancePreference;
+  zoomFactor: number;
+  /** Last usable CSS size measured on the desktop. */
+  desktopViewport: { readonly width: number; readonly height: number } | null;
+  desktopViewportRead: Promise<ServerTab["desktopViewport"]>;
+  /** A read queued behind `desktopViewportRead`, shared by every caller that waits for it. */
+  desktopViewportNext: Promise<ServerTab["desktopViewport"]> | null;
+  loading: boolean;
+  closing: boolean;
+  recording: Recording | null;
+  initialNavigation: Promise<void> | null;
+  initialNavigationSent: boolean;
+  navigationGeneration: number;
+  /** Moves on every main-frame navigation, same-document routes and reloads included. */
+  documentGeneration: number;
+
+  abortedNavigation: {
+    readonly url: string;
+    readonly generation: number;
+    readonly timer: ReturnType<typeof setTimeout>;
+  } | null;
+
+  recordingStart: Promise<Recording> | null;
+  captureLock: Promise<void>;
+  capturing: number;
+}
+
+interface ServerDownload {
+  readonly id: string;
+  readonly fileName: string;
+  readonly path: string;
+  readonly sizeBytes: number;
+  readonly url: string;
+  readonly completedAt: string;
+}
+
+const AGENT_TAB_LIMIT = 8;
+const SERVER_TAB_LIMIT = 32;
+const AGENT_TAB_IDLE_MS = 30 * 60 * 1000;
+const IDLE_SWEEP_INTERVAL = "1 minute";
+
+const DOWNLOAD_LIMIT = 20;
+const ABORTED_NAVIGATION_DOWNLOAD_WAIT_MS = 5_000;
+const DOWNLOAD_MAX_BYTES = 1024 * 1024 * 1024;
+
+const tabKey = (threadId: string, tabId: string) => `${threadId}\u0000${tabId}`;
+
+const make = Effect.gen(function* () {
+  const config = yield* ServerConfig.ServerConfig;
+  const host = { platform: yield* HostProcess.Platform, arch: yield* HostProcess.Architecture };
+  const manager = yield* PreviewManager.PreviewManager;
+  const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
+  const environment = yield* ServerEnvironment.ServerEnvironment;
+  const previewBrowser = yield* PreviewBrowser.PreviewBrowser;
+  const desktopChannel = yield* DesktopBrowserChannel.DesktopBrowserChannel;
+  const secretFill = yield* ServerBrowserSecretFill.make;
+  const activity = yield* PreviewAgentActivity.PreviewAgentActivity;
+  const agentTurns = yield* activity.changes;
+  const runFork = Effect.runForkWith(yield* Effect.context<never>());
+  const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
+  const { applyOpenRendering, applyRendering, applySetting, broadcastViewport, layoutSize } =
+    makeRendering(runPromise);
+  const blockedTabs = yield* makeBlockedTabFence();
+  const openRuns = makeOpenRunSignals();
+  const launchServices = yield* Effect.context<ChildProcessSpawner.ChildProcessSpawner>();
+  const setupCommand = yield* resolveRootCliCommand(PreviewBrowserHost.SETUP_SUBCOMMAND);
+  const readReadiness = yield* ServerBrowserReadiness.makeReadinessReader;
+
+  const tabs = new Map<string, ServerTab>();
+  const screen = ServerBrowserScreen.makeSurface<ServerTab>(
+    (threadId, tabId) => tabs.get(tabKey(threadId, tabId)),
+    (key, cursor) => runFork(desktopChannel.cursorState?.(key, cursor) ?? Effect.void),
+    (tab, pointer) => {
+      if (tab.desktop)
+        runFork(desktopChannel.pointer({ threadId: tab.threadId, tabId: tab.tabId }, pointer));
+      void tab.recording?.encoder
+        ?.evaluate(
+          ([px, py, click]) =>
+            (globalThis as unknown as EncoderWindow).__goatRecorder?.cursor(px, py, click),
+          [pointer.x, pointer.y, pointer.phase === "click"] as const,
+        )
+        .catch(constVoid);
+    },
+  );
+  const sessionChanges = yield* PubSub.sliding<void>(1);
+  const pendingTabs = new Map<
+    string,
+    { readonly agentId: string | null; promise?: Promise<ServerTab> }
+  >();
+
+  const closedPendingTabs = new Set<string>();
+  const adoptedPages = new Map<string, AdoptedPage>();
+  const popupNavigation = new PopupNavigationRequests(
+    (context) => {
+      const runs = new Map<string, BlockedTabRun>();
+      for (const tab of tabs.values()) {
+        if (tab.page.context() !== context) continue;
+        const run = blockedTabs.capture(tab.threadId);
+        if (run) runs.set(tab.threadId, run);
+      }
+      return runs;
+    },
+    (context, visit) => {
+      // Before Chromium exposes a popup's frame, fence active tabs in its context; the opener is not yet identifiable.
+      for (const tab of tabs.values()) {
+        if (tab.page.context() !== context) continue;
+        const run = visit.runs.get(tab.threadId);
+        if (run) blockedTabs.observe(tab, visit.url, run);
+      }
+    },
+  );
+  const closedPopups = new AgentTabState.ClosedPopups();
+  const closedSessions = new Set<string>();
+  let hostConnectionId: string | null = null;
+  let viewerResizeOrder = 0;
+  const profiles = new SessionProfiles();
+
+  const contexts = new ServerBrowserContexts({
+    profilesDir: NodePath.join(config.stateDir, "server-browser", "profiles"),
+    executable: () => runPromise(previewBrowser.executable),
+    // Playwright's launch error drops Chrome's own output; its sandbox note survives.
+    diagnose: (executable, cause) =>
+      Effect.runPromiseWith(launchServices)(
+        PreviewBrowserHost.diagnoseLaunchFailure({
+          executable,
+          setupCommand,
+          output: /sandboxing failed/i.test(String(cause))
+            ? PreviewBrowserHost.NO_SANDBOX_SIGNATURE
+            : "",
+        }),
+      ),
+    onContextClose: (context) => {
+      for (const tab of tabs.values()) {
+        if (tab.page.context() === context) dropTab(tab, true);
+      }
+    },
+  });
+
+  const updateFileChooserInterception = (tab: ServerTab) => {
+    // Only agents and streamed controllers can answer intercepted uploads; native desktop views use the OS picker.
+    const intercept = !tab.desktop || tab.agentOperating || tab.control.controller !== null;
+    if (intercept === tab.fileChooserIntercepted) return;
+    tab.fileChooserIntercepted = intercept;
+    if (intercept) tab.page.on("filechooser", tab.onFileChooser);
+    else tab.page.off("filechooser", tab.onFileChooser);
+  };
+
+  const broadcastControl = (tab: ServerTab) => {
+    updateFileChooserInterception(tab);
+    for (const viewer of tab.viewers)
+      viewer.push({
+        _tag: "control",
+        canOperate: viewer.canOperate,
+        ...ServerBrowserScreen.viewerControl(tab.control, viewer.id),
+        dialog: dialogStatus(tab.dialog),
+      });
+  };
+
+  const resolveDialog = async (
+    tab: ServerTab,
+    input: PreviewAutomationDialogInput,
+    channel?: import("./actionChannel.ts").ActionChannel,
+  ) => {
+    const dialog = tab.dialog;
+    if (!dialog)
+      throw new ServerBrowserPage.ServerBrowserOperationError(
+        "PreviewAutomationExecutionError",
+        "No dialog is pending.",
+        { beforeInput: true },
+      );
+    const answer = () => (input.accept ? dialog.accept(input.promptText) : dialog.dismiss());
+    await (channel ? channel.call(answer) : answer());
+    if (tab.dialog === dialog) tab.dialog = null;
+    ServerBrowserPage.invalidateRefs(tab.page);
+    broadcastControl(tab);
+  };
+  const report = (tab: ServerTab, navStatus: PreviewNavStatus) => {
+    void tab.cdp
+      .send("Page.getNavigationHistory")
+      .catch(() => null)
+      .then((history) => {
+        const index = history?.currentIndex ?? 0;
+        const count = history?.entries.length ?? 0;
+        runFork(
+          manager
+            .reportStatus({
+              threadId: tab.threadId,
+              tabId: tab.tabId,
+              serverControlled: true,
+              navStatus,
+              canGoBack: index > 0,
+              canGoForward: index < count - 1,
+            })
+            .pipe(Effect.ignore),
+        );
+      });
+  };
+
+  const reportLoaded = async (tab: ServerTab) => {
+    const url = tab.page.url();
+    // Chromium's error page loads after `requestfailed` and must not clear LoadFailed.
+    if (url === "about:blank" || url.startsWith("chrome-error://")) return;
+    const title = (await tab.page.title().catch(() => "")).slice(0, 512);
+    if (tab.loading || tab.page.url() !== url) return;
+    report(tab, { _tag: "Success", url: url.slice(0, 2048), title });
+  };
+
+  const reportLiveTabs = () => {
+    PubSub.publishUnsafe(sessionChanges, undefined);
+    const connectionId = hostConnectionId;
+    if (connectionId === null) return;
+    runFork(
+      environment.getEnvironmentId.pipe(
+        Effect.flatMap((environmentId) =>
+          broker.focusHost({
+            clientId: SERVER_HOST_CLIENT_ID,
+            environmentId,
+            connectionId,
+            focused: true,
+            liveTabs: [...tabs.values()].map((tab) => ({
+              threadId: tab.threadId,
+              tabId: tab.tabId,
+              visible: tab.viewers.size > 0,
+            })),
+          }),
+        ),
+      ),
+    );
+  };
+
+  const sessionOpen = (tab: ServerTab) => !closedSessions.has(tabKey(tab.threadId, tab.tabId));
+
+  const dropTab = (tab: ServerTab, closeSession: boolean) => {
+    const key = tabKey(tab.threadId, tab.tabId);
+    if (tabs.get(key) !== tab) return;
+    tab.closing = true;
+    blockedTabs.drop(tab.threadId, tab.tabId);
+    screen.notify({ kind: "stop", reason: "tabClosed", threadId: tab.threadId, tabId: tab.tabId });
+    tabs.delete(key);
+    if (tab.openerTabId) closedPopups.record(tab.threadId, tab.tabId, tab.openerTabId);
+    tab.diagnostics.dispose();
+    clearAbortedNavigation(tab);
+    // A desktop page outlives the connection unless its session closed with it.
+    const end = tab.desktop && !closeSession && sessionOpen(tab) ? "reconnect" : "gone";
+    for (const viewer of tab.viewers) viewer.push({ _tag: end });
+    void tab.control.close().catch(constVoid);
+    if (tab.desktop) void tab.desktop.close().catch(constVoid);
+    else void tab.page.close().catch(constVoid);
+    if (tab.isolatedContext) void tab.page.context().close().catch(constVoid);
+    void tab.recording?.encoder.close().catch(constVoid);
+    reportLiveTabs();
+    if (closeSession) {
+      runFork(manager.close({ threadId: tab.threadId, tabId: tab.tabId }).pipe(Effect.ignore));
+    }
+  };
+
+  const desktopRenders = (snapshot: PreviewSessionSnapshot) =>
+    desktopChannel.available
+      ? runPromise(
+          desktopChannel.awaitAttached(
+            { threadId: snapshot.threadId, tabId: snapshot.tabId },
+            DESKTOP_ATTACH_TIMEOUT,
+          ),
+        )
+      : Promise.resolve(false);
+
+  const connectDesktop = async (snapshot: PreviewSessionSnapshot) => {
+    const scope = await runPromise(Scope.make());
+    try {
+      const endpoint = await runPromise(
+        desktopChannel
+          .endpoint({ threadId: snapshot.threadId, tabId: snapshot.tabId })
+          .pipe(Scope.provide(scope)),
+      );
+      const connected = await contexts.connectDesktopPage(endpoint);
+      return {
+        page: connected.page,
+        close: async () => {
+          await connected.browser.close().catch(constVoid);
+          await runPromise(Scope.close(scope, Exit.void));
+        },
+      };
+    } catch (cause) {
+      await runPromise(Scope.close(scope, Exit.void));
+      throw cause;
+    }
+  };
+
+  const createTab = async (snapshot: PreviewSessionSnapshot): Promise<ServerTab> => {
+    const adopted = adoptedPages.get(tabKey(snapshot.threadId, snapshot.tabId));
+    const openSignal = adopted
+      ? adopted.signal
+      : openRuns.signal(snapshot.threadId, snapshot.automationOwner);
+    openSignal?.throwIfAborted();
+    adoptedPages.delete(tabKey(snapshot.threadId, snapshot.tabId));
+    const desktop =
+      adopted === undefined && snapshot.serverRendered !== true && (await desktopRenders(snapshot))
+        ? await connectDesktop(snapshot)
+        : null;
+    if (adopted === undefined) assertStoreUsed(snapshot, desktop, profiles);
+    // Otherwise a desktop that attaches late shows its own page, and the agent drives another.
+    if (adopted === undefined && desktop === null && desktopChannel.available) {
+      await runPromise(
+        manager
+          .markServerRendered({ threadId: ThreadId.make(snapshot.threadId), tabId: snapshot.tabId })
+          .pipe(Effect.ignore),
+      );
+    }
+    const isolatedContext =
+      adopted === undefined &&
+      desktop === null &&
+      ((snapshot.automationOwner !== undefined && snapshot.profileId === undefined) ||
+        snapshot.profileId === INCOGNITO_BROWSER_PROFILE_ID);
+    const context =
+      adopted?.page.context() ??
+      desktop?.page.context() ??
+      (await contexts.contextFor(
+        snapshot.profileId ?? "default",
+        isolatedContext ? tabKey(snapshot.threadId, snapshot.tabId) : undefined,
+      ));
+    openSignal?.throwIfAborted();
+    if (adopted?.page.isClosed()) throw new Error("The popup closed before it opened.");
+    popupNavigation.watch(context);
+    if (!desktop) await prepareContext(context);
+    openSignal?.throwIfAborted();
+    const page = adopted?.page ?? desktop?.page ?? (await context.newPage());
+    openSignal?.throwIfAborted();
+    attachNetworkTracker(page);
+    const cdp = await context.newCDPSession(page);
+    openSignal?.throwIfAborted();
+    await installPdfDocumentNavigation(cdp, openSignal);
+    openSignal?.throwIfAborted();
+    // A popup's first request went out before it became a tab; everything after presents as
+    // Chrome, a desktop page too, whose Electron UA would name the app.
+    await presentAsChrome(cdp, host, openSignal);
+    openSignal?.throwIfAborted();
+    if (!desktop) await recordCopies(cdp, openSignal);
+    openSignal?.throwIfAborted();
+    page.setDefaultTimeout(NAVIGATION_TIMEOUT_MS);
+    page.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT_MS);
+    const control = new SessionControl(snapshot.automationOwner ?? null, () =>
+      ServerBrowserPage.invalidateRefs(page),
+    );
+    control.onDispatchCut(inputFence(cdp));
+    const diagnostics = new ServerBrowserDiagnostics(
+      page,
+      secretFill.maskText(snapshot.threadId, page),
+    );
+    let pendingFileChooserOffer = Promise.resolve();
+    const tab: ServerTab = {
+      threadId: ThreadId.make(snapshot.threadId),
+      tabId: snapshot.tabId,
+      page,
+      cdp,
+      frameSessions: new Map(),
+      createdAt: Date.now(),
+      usedAt: Date.now(),
+      viewers: new Set(),
+      consoleEntries: diagnostics.consoleEntries,
+      networkEntries: diagnostics.networkEntries,
+      diagnostics,
+      actionTimeline: [],
+      control,
+      agentOperating: false,
+      popups: new AgentTabState.PopupAttribution(),
+      fileChooserIntercepted: false,
+      onFileChooser: (chooser) => {
+        pendingFileChooserOffer = pendingFileChooserOffer
+          .then(() => offerFileChooser(tab, chooser))
+          .catch(constVoid);
+      },
+      isolatedContext,
+      session:
+        (adopted && tabs.get(tabKey(snapshot.threadId, adopted.openerTabId))?.session) ??
+        tabSession({ isolatedContext, profileId: snapshot.profileId, desktop }),
+      desktop: desktop === null ? null : { close: desktop.close },
+      profileId: snapshot.profileId,
+      openerTabId: adopted?.openerTabId,
+      downloads: [],
+      fileChooser: null,
+      dialog: null,
+      setting: snapshot.viewport ?? FILL_PREVIEW_VIEWPORT,
+      colorScheme: "system",
+      zoomFactor: 1,
+      desktopViewport: null,
+      desktopViewportRead: Promise.resolve(null),
+      desktopViewportNext: null,
+      loading: false,
+      closing: false,
+      recording: null,
+      recordingStart: null,
+      initialNavigation: null,
+      initialNavigationSent: false,
+      navigationGeneration: 0,
+      documentGeneration: 0,
+      abortedNavigation: null,
+      captureLock: Promise.resolve(),
+      capturing: 0,
+    };
+    if (!desktop) {
+      openSignal?.throwIfAborted();
+      await page.setViewportSize(fixedViewportSize(tab.setting) ?? UNATTACHED_FILL_VIEWPORT);
+      openSignal?.throwIfAborted();
+    }
+    await applyOpenRendering(tab, snapshot, blockedTabs, openSignal);
+    const observeNavigation = (url: string, run?: BlockedTabRun) => {
+      blockedTabs.observe(tab, url, run);
+      const opener = tab.openerTabId && tabs.get(tabKey(tab.threadId, tab.openerTabId));
+      if (opener) blockedTabs.observe(opener, url, run);
+    };
+    if (desktop) {
+      // The desktop resizes and zooms its webview itself; viewers map input with the new size.
+      const remeasure = () => {
+        if (tab.viewers.size > 0) return broadcastViewport(tab).catch(constVoid);
+      };
+      cdp.on("Page.frameResized", remeasure);
+      // A read a navigation broke has a fresh page to measure.
+      cdp.on("Page.loadEventFired", remeasure);
+      // Closing a dialog resizes nothing, and the host can close it without us.
+      cdp.on("Page.javascriptDialogClosed", () => {
+        tab.dialog = null;
+        return remeasure();
+      });
+      openSignal?.throwIfAborted();
+      await cdp.send("Page.enable");
+    }
+    const isMainNavigation = (request: { isNavigationRequest(): boolean; frame(): unknown }) =>
+      request.isNavigationRequest() && request.frame() === page.mainFrame();
+    const navigationGenerations = new WeakMap<object, number>();
+    page.on("request", (request) => {
+      if (request.isNavigationRequest()) {
+        for (let hop: typeof request | null = request; hop; hop = hop.redirectedFrom())
+          observeNavigation(hop.url());
+      }
+      if (!isMainNavigation(request)) return;
+      navigationGenerations.set(request, ++tab.navigationGeneration);
+      tab.documentGeneration++;
+      clearAbortedNavigation(tab);
+      tab.loading = true;
+      report(tab, {
+        _tag: "Loading",
+        url: ServerBrowserPage.withoutDataPayload(request.url()).slice(0, 2048),
+        title: "",
+      });
+    });
+    if (adopted) {
+      for (const visit of adopted.visits) observeNavigation(visit.url, visit.run);
+      for (const visit of popupNavigation.take(page)) {
+        const run = visit.runs.get(tab.threadId);
+        if (run) observeNavigation(visit.url, run);
+      }
+    }
+    popupNavigation.track(page);
+    page.on("load", () => {
+      tab.loading = false;
+      void reportLoaded(tab);
+    });
+    let setupSignal = adopted?.signal;
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) observeNavigation(page.url());
+      if (frame === page.mainFrame()) tab.documentGeneration++;
+      const open = tab.fileChooser;
+      if (open) {
+        void isFileChooserCurrent(open.chooser).then((current) => {
+          if (!current && tab.fileChooser?.chooser === open.chooser) closeFileChooser(tab);
+        });
+      }
+      // Same-document navigations (SPA routes) fire no load event.
+      if (frame === page.mainFrame() && !tab.loading) void reportLoaded(tab);
+      if (!desktop)
+        void recordFrameCopies(tab, frame, setupSignal, () => setupSignal).catch(constVoid);
+    });
+    // An adopted popup's frames may have loaded before the tab listened.
+    if (adopted)
+      for (const frame of page.frames())
+        void recordFrameCopies(tab, frame, setupSignal, () => setupSignal).catch(constVoid);
+    page.on("requestfailed", (request) => {
+      const errorText = request.failure()?.errorText ?? "";
+
+      if (!isMainNavigation(request)) return;
+      // Newer navigations own status; untracked initial popup requests yield to any tracked navigation.
+      const generation = navigationGenerations.get(request) ?? 0;
+      if (generation !== tab.navigationGeneration) return;
+      // An aborted navigation is usually a download; its `download` event settles the status.
+      if (errorText.includes("ERR_ABORTED")) {
+        const url = request.url();
+        const navigationGeneration = tab.navigationGeneration;
+        clearAbortedNavigation(tab);
+        tab.abortedNavigation = {
+          url,
+          generation: navigationGeneration,
+          timer: setTimeout(() => {
+            if (tab.abortedNavigation?.generation !== navigationGeneration) return;
+            tab.abortedNavigation = null;
+            if (!tab.closing) settleAbortedNavigation(tab, navigationGeneration, url, undefined);
+          }, ABORTED_NAVIGATION_DOWNLOAD_WAIT_MS),
+        };
+        return;
+      }
+      tab.loading = false;
+      const { code, description } = ServerBrowserPage.parseNetError(errorText);
+      report(tab, {
+        _tag: "LoadFailed",
+        url: ServerBrowserPage.withoutDataPayload(request.url()).slice(0, 2048),
+        title: "",
+        code,
+        description,
+      });
+    });
+    page.on("dialog", (dialog) => {
+      tab.dialog = dialog;
+      broadcastControl(tab);
+    });
+    page.on("download", (download) => void saveDownload(tab, download));
+    openSignal?.throwIfAborted();
+    updateFileChooserInterception(tab);
+    // Popups become tabs and keep `window.opener`, so sign-in popups can report back.
+    page.on("popup", (popup) => void adoptPopup(tab, popup));
+    void startBrowserWatchers(tab, () => Date.now(), adopted?.signal)
+      .finally(() => adopted?.release())
+      .catch(constVoid);
+    openSignal?.throwIfAborted();
+    setupSignal = undefined;
+    // Playwright cannot reload a crashed page, so it must leave the tab list.
+    const key = tabKey(tab.threadId, tab.tabId);
+    if (closedPendingTabs.delete(key)) {
+      diagnostics.dispose();
+      await control.close().catch(constVoid);
+      if (desktop) await desktop.close().catch(constVoid);
+      else await page.close().catch(constVoid);
+      if (isolatedContext) await context.close().catch(constVoid);
+      throw new ServerBrowserTabNotFoundError({ threadId: tab.threadId, tabId: tab.tabId });
+    }
+    page.on("close", () => dropTab(tab, true));
+    page.on("crash", () => dropTab(tab, true));
+    tabs.set(key, tab);
+    tab.control.onChange(ServerBrowserScreen.authorityReporter(tab, screen.notify));
+    tab.control.onChange(() => (broadcastControl(tab), reportLiveTabs()));
+    reportLiveTabs();
+    // Existing desktop and popup PDFs can start loading before interception attaches.
+    if (
+      snapshot.navStatus._tag === "Loading" &&
+      ((!adopted && !desktop) || isPdfAssetUrl(snapshot.navStatus.url))
+    ) {
+      const options = { waitUntil: "commit", timeout: NAVIGATION_TIMEOUT_MS } as const;
+      const initialUrl = snapshot.navStatus.url;
+      const activeRun = blockedTabs.capture(tab.threadId);
+      const initialChannel = initialTabChannel(
+        tab,
+        blockedTabs,
+        activeRun?.runId,
+        initialUrl,
+        openSignal,
+      );
+      const initial = () => {
+        tab.initialNavigationSent = true;
+        return (desktop || adopted) && page.url() === initialUrl
+          ? page.reload(options)
+          : page.goto(initialUrl, options);
+      };
+      tab.initialNavigation = Promise.resolve()
+        .then(() => (tab.control.agentId !== null ? initialChannel.call(initial) : initial()))
+        .then(constVoid, (cause: unknown) => {
+          throw ServerBrowserPage.toOperationError(cause, NAVIGATION_TIMEOUT_MS);
+        });
+
+      if (tab.control.agentId !== null) tab.control.track(tab.initialNavigation);
+      else void tab.initialNavigation.catch(constVoid);
+    }
+    return tab;
+  };
+
+  const clearAbortedNavigation = (tab: ServerTab) => {
+    if (tab.abortedNavigation !== null) clearTimeout(tab.abortedNavigation.timer);
+    tab.abortedNavigation = null;
+  };
+
+  const settleAbortedNavigation = (
+    tab: ServerTab,
+    generation: number,
+    url: string,
+    offered: { readonly id: string; readonly fileName: string } | undefined,
+  ) => {
+    if (tab.navigationGeneration !== generation) return;
+    tab.loading = false;
+    if (tab.page.url() !== "about:blank") {
+      void reportLoaded(tab);
+      return;
+    }
+    report(tab, {
+      _tag: "LoadFailed",
+      url: ServerBrowserPage.withoutDataPayload(url).slice(0, 2048),
+      title: "",
+      code: -3,
+      description: "ERR_ABORTED",
+      ...(offered === undefined ? {} : { download: offered }),
+    });
+  };
+
+  const saveDownload = async (tab: ServerTab, download: Download) => {
+    const id = NodeCrypto.randomUUID();
+    let path: string | undefined;
+    const navigation =
+      download.url() === tab.abortedNavigation?.url ? tab.abortedNavigation.generation : null;
+    if (navigation !== null) clearAbortedNavigation(tab);
+    let offered: { readonly id: string; readonly fileName: string } | undefined;
+    try {
+      if (await download.failure()) return;
+      // A saved download outlives its tab until storage cleanup, like a screenshot.
+      const suggestedName = download.suggestedFilename();
+      path = await publishArtifact(
+        config.browserArtifactsDir,
+        artifactFileName("download", download.url(), { suggestedName }),
+        (target) => download.saveAs(target),
+      );
+      const { size } = await NodeFSP.stat(path);
+      if (tab.closing || size > DOWNLOAD_MAX_BYTES) {
+        await NodeFSP.rm(path, { force: true });
+        return;
+      }
+      const saved: ServerDownload = {
+        id,
+        fileName: suggestedName.slice(0, 255) || "download",
+        path,
+        sizeBytes: size,
+        url: ServerBrowserPage.withoutDataPayload(download.url()).slice(0, 2048),
+        completedAt: new Date().toISOString(),
+      };
+      tab.downloads.push(saved);
+      for (const evicted of tab.downloads.splice(0, tab.downloads.length - DOWNLOAD_LIMIT)) {
+        await NodeFSP.rm(evicted.path, { force: true }).catch(constVoid);
+      }
+      offered = { id, fileName: saved.fileName };
+      const shownInTab =
+        navigation === tab.navigationGeneration && tab.page.url() === "about:blank";
+      if (shownInTab) return;
+      const controller = [...tab.viewers].find((viewer) => viewer.id === tab.control.controller);
+      controller?.push({
+        _tag: "download",
+        id,
+        fileName: saved.fileName,
+        sizeBytes: saved.sizeBytes,
+      });
+    } catch (cause) {
+      if (path !== undefined) await NodeFSP.rm(path, { force: true }).catch(constVoid);
+      runFork(Effect.logWarning("server preview download failed", { cause }));
+    } finally {
+      if (navigation !== null && !tab.closing) {
+        settleAbortedNavigation(tab, navigation, download.url(), offered);
+      }
+      // saveAs copies the artifact; cached profile contexts otherwise retain the original.
+      await download.delete().catch(constVoid);
+    }
+  };
+
+  const fileChooserMessage = (tab: ServerTab): ServerBrowserViewerOutput | null =>
+    tab.fileChooser
+      ? {
+          _tag: "fileChooser",
+          id: tab.fileChooser.id,
+          multiple: tab.fileChooser.chooser.isMultiple(),
+          accept: tab.fileChooser.accept,
+        }
+      : null;
+
+  // Not isConnected: upload helpers often click an input never added to the page. The handle's
+  // context is destroyed with its document, so a replaced document rejects.
+  const isFileChooserCurrent = (chooser: FileChooser) =>
+    chooser
+      .element()
+      .evaluate(
+        (element) =>
+          element.ownerDocument === (globalThis as unknown as { document: unknown }).document,
+      )
+      .catch(() => false);
+
+  const offerFileChooser = async (tab: ServerTab, chooser: FileChooser) => {
+    const previous = tab.fileChooser;
+    const accept =
+      (await chooser
+        .element()
+        .getAttribute("accept")
+        .catch(() => null)) ?? "";
+    if (!(await isFileChooserCurrent(chooser))) return;
+    if (previous) closeFileChooser(tab);
+    tab.fileChooser = {
+      id: NodeCrypto.randomUUID(),
+      chooser,
+      accept: accept.slice(0, 1024),
+      offeredTo: null,
+    };
+    pushFileChooser(tab);
+  };
+
+  const pushFileChooser = (tab: ServerTab) => {
+    const open = tab.fileChooser;
+    const controller = [...tab.viewers].find((viewer) => viewer.id === tab.control.controller);
+    if (!open || !controller) return;
+    if (open.offeredTo !== controller.id) {
+      tab.fileChooser = { ...open, id: NodeCrypto.randomUUID(), offeredTo: controller.id };
+      if (open.offeredTo !== null)
+        for (const viewer of tab.viewers) viewer.push({ _tag: "fileChooserClosed", id: open.id });
+    }
+    const message = fileChooserMessage(tab);
+    if (message) controller.push(message);
+  };
+
+  const closeFileChooser = (tab: ServerTab) => {
+    const open = tab.fileChooser;
+    if (!open) return;
+    tab.fileChooser = null;
+    for (const viewer of tab.viewers) viewer.push({ _tag: "fileChooserClosed", id: open.id });
+  };
+
+  const setChooserFiles = async (
+    input: Parameters<ServerBrowser["Service"]["answerFileChooser"]>[0],
+  ) => {
+    const tab = tabs.get(tabKey(input.threadId, input.tabId));
+    const open = tab?.fileChooser;
+    if (
+      !tab ||
+      !open ||
+      open.id !== input.chooserId ||
+      open.offeredTo === null ||
+      open.offeredTo !== tab.control.controller
+    )
+      return false;
+    if (input.files.length > 0) {
+      await open.chooser.setFiles(
+        open.chooser.isMultiple() ? [...input.files] : input.files.slice(0, 1),
+      );
+    }
+    if (tab.fileChooser === open) closeFileChooser(tab);
+    return true;
+  };
+  const uploadFiles = async (
+    tab: ServerTab,
+    input: PreviewAutomationUploadInput,
+    gate: ServerBrowserPage.DispatchGate,
+  ) => {
+    await PreviewUpload.validatePaths(input.paths);
+    if (await PreviewUpload.setInputFiles(tab.page, tab.cdp, input, gate)) return undefined;
+    const open = tab.fileChooser;
+    if (!open)
+      throw new ServerBrowserPage.ServerBrowserOperationError(
+        "PreviewAutomationExecutionError",
+        "No file picker is open. Click the page's upload control first, or pass the file input's locator.",
+      );
+    if (input.paths.length > 1 && !open.chooser.isMultiple())
+      throw new ServerBrowserPage.ServerBrowserOperationError(
+        "PreviewAutomationExecutionError",
+        "This file picker accepts one file.",
+      );
+    if (input.paths.length > 0) {
+      const channel = gate.channel;
+      if (!channel) throw new Error("An action channel is required for upload.");
+      const element = await channel.call(() => open.chooser.element());
+      try {
+        await PreviewUpload.uploadInto(tab.cdp, element, input.paths, gate);
+      } finally {
+        if (!gate.signal?.aborted) void channel.dispose(element).catch(constVoid);
+      }
+    } else await gate();
+    if (tab.fileChooser === open) closeFileChooser(tab);
+    return undefined;
+  };
+
+  const answerFileChooser: ServerBrowser["Service"]["answerFileChooser"] = (input) =>
+    Effect.promise(() => setChooserFiles(input).catch(() => false));
+
+  const openDownload: ServerBrowser["Service"]["openDownload"] = (input) =>
+    Effect.sync(() => {
+      const download = tabs
+        .get(tabKey(input.threadId, input.tabId))
+        ?.downloads.find((candidate) => candidate.id === input.downloadId);
+      return download === undefined
+        ? Option.none()
+        : Option.some({ path: download.path, fileName: download.fileName });
+    });
+
+  const prepareContext = makeContextPreparer();
+
+  const adoptPopup = async (opener: ServerTab, popup: Page) => {
+    const { agentId, visits, refused, signal, releaseOrigin, close } = await inspectPopup(
+      opener,
+      popup,
+      blockedTabs,
+      popupNavigation,
+      atTabLimit,
+      () => Date.now(),
+    );
+    if (refused) return;
+    const release = closePopupOnAbort(popup, signal, releaseOrigin, close);
+    if (signal?.aborted) return release();
+    const url = popup.url();
+    const controller = [...opener.viewers].find(
+      (viewer) => viewer.id === opener.control.controller,
+    );
+    await runPromise(
+      openTab({
+        threadId: opener.threadId,
+        ...(/^https?:/i.test(url) ? { url } : {}),
+        runtime: "server",
+        ...(opener.profileId === undefined ? {} : { profileId: opener.profileId }),
+        ...(opener.session.store === "server" ? { serverRendered: true as const } : {}),
+        ...(agentId === null ? {} : { automationOwner: agentId, reveal: false }),
+        beforePublish: (snapshot) =>
+          adoptedPages.set(tabKey(snapshot.threadId, snapshot.tabId), {
+            page: popup,
+            openerTabId: opener.tabId,
+            ...(signal ? { signal } : {}),
+            release,
+            close,
+            visits,
+          }),
+      }),
+    ).then(
+      (snapshot) => {
+        if (agentId === null) controller?.push({ _tag: "popup", tabId: snapshot.tabId });
+      },
+      async () => {
+        release();
+        await close().catch(constVoid);
+      },
+    );
+  };
+
+  const ensureTab = (snapshot: PreviewSessionSnapshot): Promise<ServerTab> => {
+    const key = tabKey(snapshot.threadId, snapshot.tabId);
+    const pending = pendingTabs.get(key);
+    if (pending?.promise) return pending.promise;
+    const existing = tabs.get(key);
+    if (existing) return Promise.resolve(existing);
+    const adopted = adoptedPages.get(key);
+    const opening = createTab(snapshot)
+      .catch(async (cause: unknown) => {
+        adopted?.release();
+        if (adopted?.signal?.aborted) {
+          adoptedPages.delete(key);
+          await adopted.close().catch(constVoid);
+          await runPromise(
+            manager.close({ threadId: ThreadId.make(snapshot.threadId), tabId: snapshot.tabId }),
+          ).catch(constVoid);
+        }
+        runFork(
+          Effect.logWarning(
+            isHostSetupError(cause) ? cause.message : "server preview tab failed to start",
+            { cause },
+          ),
+        );
+        throw cause;
+      })
+      .finally(() => {
+        pendingTabs.delete(key);
+        closedPendingTabs.delete(key);
+      });
+    pendingTabs.set(key, { agentId: snapshot.automationOwner ?? null, promise: opening });
+    return opening;
+  };
+  const findTab = Effect.fn("ServerBrowser.findTab")(function* (threadId: string, tabId: string) {
+    const existing = tabs.get(tabKey(threadId, tabId));
+    if (existing) return existing;
+    const { sessions } = yield* manager.list({ threadId: ThreadId.make(threadId) });
+    const snapshot = sessions.find(
+      (session) => session.tabId === tabId && session.runtime === "server",
+    );
+    if (!snapshot) return yield* new ServerBrowserTabNotFoundError({ threadId, tabId });
+    return yield* Effect.tryPromise({
+      try: () => ensureTab(snapshot),
+      catch: (cause) => (isTabNotFound(cause) ? cause : new ServerBrowserLaunchError({ cause })),
+    });
+  });
+
+  const atTabLimit = (agentSessionId: string) => {
+    const opening = [...pendingTabs.entries()].filter(([key]) => !tabs.has(key));
+    return (
+      tabs.size + opening.length >= SERVER_TAB_LIMIT ||
+      [...tabs.values()].filter((tab) => tab.control.agentId === agentSessionId).length +
+        opening.filter(([, pending]) => pending.agentId === agentSessionId).length >=
+        AGENT_TAB_LIMIT
+    );
+  };
+
+  const assertTabCapacity = (agentSessionId: string) => {
+    if (atTabLimit(agentSessionId))
+      throw new BrowserControlInterrupted(
+        `Too many server browser tabs are open (${AGENT_TAB_LIMIT} per agent session, ${SERVER_TAB_LIMIT} per server). Close one with goat_call {path:"preview.close"} or reuse one from goat_call {path:"preview.status"} tabs.`,
+        "tabLimit",
+      );
+  };
+
+  // A Playwright launch must settle before its capacity can be released.
+  const openTab = Effect.fn("ServerBrowser.openTab")(function* (
+    input: Parameters<typeof manager.open>[0],
+  ) {
+    let key: string = NodeCrypto.randomUUID();
+    const reservation = { agentId: input.automationOwner ?? null };
+    return yield* Effect.acquireUseRelease(
+      Effect.try({
+        try: () => {
+          if (input.automationOwner !== undefined) assertTabCapacity(input.automationOwner);
+          pendingTabs.set(key, reservation);
+        },
+        catch: ServerBrowserPage.toOperationError,
+      }),
+      () =>
+        manager
+          .open({
+            ...input,
+            beforePublish: (snapshot) => {
+              pendingTabs.delete(key);
+              key = tabKey(snapshot.threadId, snapshot.tabId);
+              pendingTabs.set(key, reservation);
+              input.beforePublish?.(snapshot);
+            },
+          })
+          .pipe(
+            Effect.flatMap((snapshot) =>
+              Effect.tryPromise({
+                try: () => ensureTab(snapshot),
+                catch: ServerBrowserPage.toOperationError,
+              }).pipe(
+                Effect.as(snapshot),
+                Effect.onError(() =>
+                  manager
+                    .close({ threadId: ThreadId.make(snapshot.threadId), tabId: snapshot.tabId })
+                    .pipe(Effect.ignore),
+                ),
+              ),
+            ),
+          ),
+      () =>
+        Effect.sync(() => {
+          pendingTabs.delete(key);
+        }),
+    );
+  }, Effect.uninterruptible);
+
+  // Desktop browsing bypasses streamed viewers and server input tracking,
+  // so these idle signals only apply to headless tabs.
+  const closeIdleAgentTabs = () => {
+    const cutoff = Date.now() - AGENT_TAB_IDLE_MS;
+    for (const tab of tabs.values()) {
+      if (
+        tab.control.agentId !== null &&
+        tab.desktop === null &&
+        tab.viewers.size === 0 &&
+        tab.control.handoffReason === null &&
+        tab.usedAt < cutoff
+      )
+        dropTab(tab, true);
+    }
+  };
+
+  const latestThreadTab = (threadId: string, agentSessionId?: string) => {
+    const threadTabs = [...tabs.values()].filter((tab) => tab.threadId === threadId);
+    return (
+      threadTabs
+        .filter((tab) => tab.control.agentId === agentSessionId)
+        .sort((left, right) => right.createdAt - left.createdAt)[0] ??
+      threadTabs.sort(
+        (left, right) =>
+          Number(right.viewers.size > 0) - Number(left.viewers.size > 0) ||
+          right.usedAt - left.usedAt,
+      )[0]
+    );
+  };
+
+  // Agent recordings encode here, so they need the client's Browser recording frame rate. The
+  // last report outlives the client, which lets agents record while no client is connected.
+  let recordingFrameRate = DEFAULT_BROWSER_RECORDING_FRAME_RATE;
+
+  const profileReporter: ServerBrowser["Service"]["profileReporter"] = Effect.acquireRelease(
+    Effect.sync(() => profiles.connect()),
+    (client) => Effect.sync(() => profiles.disconnect(client)),
+  ).pipe(
+    Effect.map(
+      (client): ProfileReporter =>
+        (input) =>
+          Effect.sync(() => {
+            if (input.recordingFrameRate !== undefined)
+              recordingFrameRate = input.recordingFrameRate;
+            profiles.report(client, input);
+          }),
+    ),
+  );
+
+  /** A new agent tab in exactly the requested session, closing idle tabs first. */
+  const openSessionTab = (
+    request: {
+      readonly threadId: string;
+      readonly agentSessionId: string;
+      readonly runId?: string | undefined;
+    },
+    url: string | undefined,
+    session: RequestedSession,
+    runSignal?: AbortSignal,
+  ) => {
+    runSignal?.throwIfAborted();
+    closeIdleAgentTabs();
+    return openRuns.track(request.threadId, request.agentSessionId, runSignal, () =>
+      openInSession(
+        {
+          profiles,
+          contexts,
+          desktopAvailable: desktopChannel.available,
+          open: (fields) =>
+            runPromise(
+              openTab({
+                threadId: ThreadId.make(request.threadId),
+                ...(url ? { url } : {}),
+                runtime: "server",
+                reveal: false,
+                automationOwner: request.agentSessionId,
+                ...fields,
+              }),
+            ),
+          ensureTab,
+          hostedElsewhere: (snapshot) => runPromise(desktopChannel.isAttached(snapshot)),
+          discard: async (snapshot, tab) => {
+            if (tab) return dropTab(tab, true);
+            blockedTabs.drop(snapshot.threadId, snapshot.tabId);
+            const key = { threadId: ThreadId.make(snapshot.threadId), tabId: snapshot.tabId };
+            await runPromise(manager.close(key)).catch(constVoid);
+          },
+        },
+        session,
+      ),
+    );
+  };
+
+  const statusWithTitle = async (
+    tab: ServerTab | undefined,
+    agentSessionId?: string,
+  ): Promise<PreviewAutomationStatus> => {
+    if (!tab) {
+      return {
+        available: false,
+        browser: await readReadiness(),
+        visible: false,
+        tabId: null,
+        url: null,
+        title: null,
+        loading: false,
+        ...profiles.status(),
+      };
+    }
+    const url = tab.page.url();
+    const viewport = tab.desktop ? await layoutSize(tab) : tab.page.viewportSize();
+    const status = {
+      available: true,
+      visible: tab.viewers.size > 0,
+      tabId: tab.tabId,
+      url: url === "about:blank" ? null : url,
+      title: null,
+      loading: tab.loading,
+      documentGeneration: tab.documentGeneration,
+      control: {
+        owner: tabOwner(tab),
+        ownedByCaller: tab.control.agentId === agentSessionId,
+        generation: tab.control.generation,
+        ...(tab.control.handoffReason === null ? {} : { waitingForPerson: true as const }),
+      },
+      dialog: dialogStatus(tab.dialog),
+      fileChooser: tab.fileChooser
+        ? { multiple: tab.fileChooser.chooser.isMultiple(), accept: tab.fileChooser.accept }
+        : null,
+      viewportSetting: tab.setting,
+      ...(viewport ? { viewport } : {}),
+      tabs: [...tabs.values()]
+        .filter((candidate) => candidate.threadId === tab.threadId)
+        .map((candidate) => ({
+          tabId: candidate.tabId,
+          url: candidate.page.url() === "about:blank" ? null : candidate.page.url(),
+          ...(candidate.openerTabId === undefined ? {} : { openerTabId: candidate.openerTabId }),
+          owner: tabOwner(candidate),
+          ownedByCaller: candidate.control.agentId === agentSessionId,
+          visible: candidate.viewers.size > 0,
+          ...(candidate.profileId === undefined ? {} : { profileId: candidate.profileId }),
+          session: candidate.session,
+        })),
+      ...profiles.status(),
+      session: tab.session,
+      downloads: tab.downloads.map(({ fileName, path, sizeBytes, url, completedAt }) => ({
+        fileName,
+        path,
+        sizeBytes,
+        url,
+        completedAt,
+      })),
+    };
+    if (status.url === null || tab.dialog) return status;
+    return { ...status, title: (await tab.page.title().catch(() => "")) || null };
+  };
+
+  const startRecording = (
+    tab: ServerTab,
+    channel: import("./actionChannel.ts").ActionChannel,
+    deadlineMs?: number,
+  ): Promise<Recording> => {
+    const { run, answer } = queueCaptureBy(deadlineMs)(tab, async () => {
+      if (tab.recording) return tab.recording;
+      secretFill.assertPixels(tab, tab.threadId);
+      const encoder = await channel.call(() => contexts.scratchPage());
+      let session: CDPSession | null = null;
+      try {
+        await channel.call(() => encoder.evaluate(recordingEncoderScript(recordingFrameRate)));
+        // Seed idle pages before returning so an immediate stop has a frame to encode.
+        const firstFrame = await ServerBrowserPage.captureViewport(tab.cdp, {
+          format: "jpeg",
+          quality: RECORDING_SCREENCAST.quality,
+        });
+        await channel.call(() =>
+          encoder.evaluate(
+            ([data, width]) =>
+              (globalThis as unknown as EncoderWindow).__goatRecorder.frame(data, width),
+            [firstFrame, tab.page.viewportSize()?.width ?? UNATTACHED_FILL_VIEWPORT.width] as const,
+          ),
+        );
+        const opened = await channel.newCDPSession(tab.page);
+        session = opened;
+        const framesInFlight = new Set<Promise<void>>();
+        opened.on("Page.screencastFrame", (frame) => {
+          // A private tab records nothing; the frame still releases Chromium.
+          if (tab.control.isPrivate)
+            return void opened
+              .send("Page.screencastFrameAck", { sessionId: frame.sessionId })
+              .catch(constVoid);
+          const cssWidth = tab.page.viewportSize()?.width ?? frame.metadata.deviceWidth;
+          const delivered: Promise<void> = Promise.resolve()
+            .then(() =>
+              channel.call(() =>
+                encoder.evaluate(
+                  ([data, width]) =>
+                    (globalThis as unknown as EncoderWindow).__goatRecorder.frame(data, width),
+                  [frame.data, cssWidth] as const,
+                ),
+              ),
+            )
+            .then(async (accepted) => {
+              if (!accepted) await opened.send("Page.stopScreencast");
+            })
+            .catch(constVoid)
+            .finally(() => {
+              framesInFlight.delete(delivered);
+              void opened
+                .send("Page.screencastFrameAck", { sessionId: frame.sessionId })
+                .catch(constVoid);
+            });
+          framesInFlight.add(delivered);
+        });
+        await channel.sendFor(opened)("Page.startScreencast", RECORDING_SCREENCAST);
+        if (tab.closing) throw new Error("The tab closed while the recording started.");
+        const recording: Recording = {
+          encoder,
+          session: opened,
+          startedAt: new Date().toISOString(),
+          framesInFlight,
+        };
+        tab.recording = recording;
+        return recording;
+      } catch (cause) {
+        await encoder.close().catch(constVoid);
+        await session?.detach().catch(constVoid);
+        throw cause;
+      }
+    });
+    // A stop waits for the real start, which can outlive its caller's deadline.
+    const started = run.finally(() => {
+      if (tab.recordingStart === started) tab.recordingStart = null;
+    });
+    (tab.recordingStart = started).catch(constVoid);
+    return answer;
+  };
+
+  // Scaled captures repaint every screencast; pause them to avoid leaking that frame. The
+  // deadline covers the pause, the capture and the resume, as the caller sees them.
+  const withScreencastsPaused = <A>(
+    tab: ServerTab,
+    capture: () => Promise<A>,
+    deadlineMs?: number,
+  ): Promise<A> =>
+    withCaptureLock(
+      tab,
+      async () => {
+        tab.capturing += 1;
+        const recording = tab.recording;
+        try {
+          await Promise.all([
+            ...[...tab.viewers].map((viewer) => viewer.pause()),
+            recording?.session.send("Page.stopScreencast").catch(constVoid),
+          ]);
+          return await capture();
+        } finally {
+          tab.capturing -= 1;
+
+          await Promise.all([
+            ...[...tab.viewers].map((viewer) => viewer.resume()),
+            recording && tab.recording === recording
+              ? recording.session
+                  .send("Page.startScreencast", RECORDING_SCREENCAST)
+                  .catch(constVoid)
+              : undefined,
+          ]);
+        }
+      },
+      deadlineMs,
+    );
+
+  const stopRecording = (tab: ServerTab) =>
+    withCaptureLock(tab, async () => {
+      const recording = tab.recording;
+      if (!recording) {
+        throw new ServerBrowserPage.ServerBrowserOperationError(
+          "PreviewAutomationRecordingNotActiveError",
+          "No recording is active for this tab.",
+        );
+      }
+      let mimeType: string | null;
+      const chunks: Array<Buffer> = [];
+      try {
+        await recording.session.send("Page.stopScreencast").catch(constVoid);
+        await Promise.all(recording.framesInFlight);
+        await recording.session.detach().catch(constVoid);
+        const stopped = await recording.encoder.evaluate(() =>
+          (globalThis as unknown as EncoderWindow).__goatRecorder.stop(),
+        );
+        mimeType = stopped.mimeType;
+        // Checked before the transfer so an oversized video never lands in this process.
+        if (stopped.bytes > PROVIDER_SEND_TURN_MAX_FILE_BYTES) {
+          throw new ServerBrowserPage.ServerBrowserOperationError(
+            "PreviewAutomationRecordingTooLargeError",
+            "The recording is larger than the attachment limit.",
+          );
+        }
+        for (let index = 0; index < stopped.count; index += 1) {
+          const chunk = await recording.encoder.evaluate(
+            (chunkIndex) =>
+              (globalThis as unknown as EncoderWindow).__goatRecorder.chunk(chunkIndex),
+            index,
+          );
+          chunks.push(Buffer.from(chunk, "base64"));
+        }
+      } finally {
+        await recording.encoder.close().catch(constVoid);
+        tab.recording = null;
+      }
+      const data = Buffer.concat(chunks);
+      if (!mimeType || data.byteLength === 0) {
+        throw new ServerBrowserPage.ServerBrowserOperationError(
+          "PreviewAutomationExecutionError",
+          "The recording captured no frames.",
+        );
+      }
+
+      const extension = mimeType.startsWith("video/mp4") ? "mp4" : "webm";
+      const pendingId = `${PENDING_ATTACHMENT_THREAD_SEGMENT}-${NodeCrypto.randomUUID()}-${extension}`;
+      const path = NodePath.join(config.attachmentsDir, `${pendingId}.${extension}`);
+      await NodeFSP.mkdir(config.attachmentsDir, { recursive: true });
+      await NodeFSP.writeFile(path, data);
+      return {
+        id: pendingId,
+        tabId: tab.tabId,
+        path,
+        mimeType: mimeType.split(";")[0]!,
+        sizeBytes: data.byteLength,
+        createdAt: new Date().toISOString(),
+        uploadedAttachmentId: pendingId,
+      };
+    });
+
+  const pointerFor =
+    (tab: ServerTab): ServerBrowserPage.PointerReporter =>
+    async ({ x, y }, phase) => {
+      const encoder = tab.recording?.encoder;
+
+      // Read-only checks, before drawing and after the move: a Stop then neither draws nor sends.
+      tab.control.assertAgentMayDispatch();
+      if (tab.viewers.size === 0 && !encoder && !tab.desktop) return screen.notePointer(tab, x, y);
+      screen.showPointer(tab, x, y, "move");
+      await sleepUntil(Date.now() + AGENT_CURSOR_MOVE_MS);
+      tab.control.assertAgentMayDispatch();
+      if (phase === "click") {
+        screen.showPointer(tab, x, y, "click");
+        await sleepUntil(Date.now() + AGENT_CURSOR_CLICK_LEAD_MS);
+      }
+    };
+
+  const recordAction = <A>(tab: ServerTab, action: string, run: () => Promise<A>): Promise<A> => {
+    const event: {
+      -readonly [K in keyof PreviewAutomationActionEvent]: PreviewAutomationActionEvent[K];
+    } = {
+      id: NodeCrypto.randomUUID(),
+      action,
+      status: "running",
+      startedAt: new Date().toISOString(),
+    };
+    pushBounded(tab.actionTimeline, event, ACTION_TIMELINE_LIMIT);
+    return run().then(
+      (result) => {
+        event.status = "succeeded";
+        event.completedAt = new Date().toISOString();
+        return result;
+      },
+      (cause: unknown) => {
+        event.status = "failed";
+        event.completedAt = new Date().toISOString();
+        event.error = tab.diagnostics.firstLine(cause);
+        throw cause;
+      },
+    );
+  };
+
+  const requireTab = async (request: PreviewAutomationRequest) => {
+    SessionControl.requireAgentSession(request);
+    const owned = [...tabs.values()].filter(
+      (tab) => tab.threadId === request.threadId && tab.control.agentId === request.agentSessionId,
+    );
+    if (!request.tabIdExplicit && owned.length > 1)
+      throw new BrowserControlInterrupted(AgentTabState.tabChoice(owned), "tabRequired");
+    const tab =
+      request.tabId === undefined
+        ? latestThreadTab(request.threadId, request.agentSessionId)
+        : await runPromise(
+            findTab(request.threadId, request.tabId).pipe(Effect.orElseSucceed(constVoid)),
+          );
+    if (!tab) throw closedPopups.notFound(request.threadId, request.tabId, tabs);
+    return tab;
+  };
+
+  const runOperation = async (
+    request: PreviewAutomationRequest,
+    deadlineMs: number,
+  ): Promise<unknown> => {
+    const runSignal = blockedTabs.runSignal(request.threadId, request.runId);
+    if (!FENCED_ALLOWED_OPERATIONS.has(request.operation)) runSignal?.throwIfAborted();
+    const input = request.input;
+    switch (request.operation) {
+      case "status":
+        return ServerBrowserScreen.checkedAround(
+          request.tabId === undefined
+            ? latestThreadTab(request.threadId, request.agentSessionId)
+            : tabs.get(tabKey(request.threadId, request.tabId)),
+          request,
+          (tab) => statusWithTitle(tab, request.agentSessionId),
+        );
+      case "open": {
+        SessionControl.requireAgentSession(request);
+        const open = input as PreviewAutomationOpenInput;
+        const url = open.url === undefined ? undefined : normalizePreviewUrl(open.url);
+        const reuse = open.reuseExistingTab ?? true;
+        if (
+          reuse &&
+          !request.tabIdExplicit &&
+          [...tabs.values()].filter(
+            (tab) =>
+              tab.threadId === request.threadId && tab.control.agentId === request.agentSessionId,
+          ).length > 1
+        )
+          throw new BrowserControlInterrupted(
+            "Multiple tabs are open. Pass tabId or reuseExistingTab=false.",
+            "tabRequired",
+          );
+
+        const found =
+          reuse && request.tabId !== undefined
+            ? await runPromise(
+                findTab(request.threadId, request.tabId).pipe(
+                  Effect.catchTags({
+                    ServerBrowserTabNotFoundError: () => Effect.void,
+                  }),
+                ),
+              )
+            : undefined;
+        if (reuse && request.tabIdExplicit && !found) {
+          const { sessions } = await runPromise(
+            manager.list({ threadId: ThreadId.make(request.threadId) }),
+          );
+          const desktop = sessions.some(
+            (session) => session.tabId === request.tabId && session.runtime !== "server",
+          );
+          throw new ServerBrowserPage.ServerBrowserOperationError(
+            desktop ? "PreviewAutomationExecutionError" : "PreviewAutomationTabNotFoundError",
+            desktop
+              ? "This tab belongs to the desktop runtime. This environment's server browser cannot control desktop tabs. Omit tabId to open a server tab instead."
+              : "The requested server preview tab does not exist.",
+          );
+        }
+        // Reusing another session's tab requires explicit tabId; reading it grants no implicit takeover.
+        const existing =
+          found && (request.tabIdExplicit || found.control.agentId === request.agentSessionId)
+            ? found
+            : undefined;
+        const tabSignal = existing ? blockedTabs.signal(existing, request.runId) : undefined;
+        const openSignal = AbortSignal.any([
+          ...(runSignal ? [runSignal] : []),
+          ...(tabSignal ? [tabSignal] : []),
+        ]);
+        openSignal.throwIfAborted();
+        if (existing) await blockedTabs.assertTab(existing, request.runId, url);
+        else if (url) await blockedTabs.assertUrl(url);
+        openSignal.throwIfAborted();
+        const navigationTimeout = Math.min(request.timeoutMs, NAVIGATION_TIMEOUT_MS);
+        if (existing) assertReusable(existing.session, open, profiles);
+        const tab =
+          existing ?? (await openSessionTab(request, url, profiles.resolve(open), openSignal));
+        if (existing?.dialog)
+          throw new BrowserControlInterrupted(
+            'A browser dialog is pending. Read goat_call {path:"preview.status"} and use goat_call {path:"preview.dialog"} first.',
+            "dialogPending",
+          );
+        return tab.control.agent(
+          request.agentSessionId,
+          async (signal) => {
+            const actionSignal = AbortSignal.any([signal, openSignal]);
+            actionSignal.throwIfAborted();
+            let navigationSent = !existing && url !== undefined && tab.initialNavigationSent;
+            if (navigationSent) tab.control.dispatchGate()();
+            await checkOpenBlocked(
+              () => blockedTabs.assertTab(tab, request.runId, url),
+              navigationSent,
+            );
+            actionSignal.throwIfAborted();
+            if (tab.dialog)
+              throw new BrowserControlInterrupted(
+                'A browser dialog is pending. Read goat_call {path:"preview.status"} and use goat_call {path:"preview.dialog"} first.',
+                "dialogPending",
+              );
+            if (existing) {
+              if (url) {
+                tab.control.dispatchGate()();
+                navigationSent = true;
+                await guardedNavigate(
+                  tab,
+                  url,
+                  "load",
+                  navigationTimeout,
+                  tabActionGate(tab, request, blockedTabs, deadlineMs, actionSignal, url).channel,
+                );
+              }
+            } else {
+              await (tab.initialNavigation ?? Promise.resolve()).catch((cause: unknown) => {
+                throw unloadedOpen(tab.tabId, cause);
+              });
+              navigationSent = tab.initialNavigationSent;
+            }
+            actionSignal.throwIfAborted();
+            const reveal = open.open ?? open.show;
+            if (reveal !== false) {
+              await runPromise(
+                manager.requestReveal({
+                  threadId: tab.threadId,
+                  tabId: tab.tabId,
+                  force: reveal === true,
+                }),
+              );
+            }
+            if (!existing && url) {
+              await tab.page
+                .waitForLoadState("load", { timeout: navigationTimeout })
+                .catch(constVoid);
+            }
+            await checkOpenBlocked(
+              () => blockedTabs.assertTab(tab, request.runId, url),
+              navigationSent,
+            );
+            return statusWithTitle(tab, request.agentSessionId);
+          },
+          deadlineMs,
+        );
+      }
+      case "recordingStop": {
+        if (
+          !request.tabIdExplicit &&
+          [...tabs.values()].filter(
+            (candidate) =>
+              candidate.threadId === request.threadId &&
+              candidate.control.agentId === request.agentSessionId,
+          ).length > 1
+        )
+          throw new BrowserControlInterrupted(
+            'Multiple tabs belong to this agent session. Pass a tabId from goat_call {path:"preview.open"} or goat_call {path:"preview.status"} tabs.',
+            "tabRequired",
+          );
+        const recordings = [...tabs.values()].filter(
+          (candidate) =>
+            candidate.threadId === request.threadId &&
+            candidate.control.agentMayAct(request.agentSessionId ?? "") &&
+            (candidate.recording || candidate.recordingStart),
+        );
+        const targetTabId =
+          request.tabId ?? latestThreadTab(request.threadId, request.agentSessionId)?.tabId;
+        const tab =
+          recordings.find((candidate) => candidate.tabId === targetTabId) ??
+          (!request.tabIdExplicit && recordings.length === 1 ? recordings[0] : undefined);
+        if (!tab) {
+          throw new ServerBrowserPage.ServerBrowserOperationError(
+            "PreviewAutomationRecordingNotActiveError",
+            "No recording is active for this thread.",
+          );
+        }
+        // A stop cannot act twice (a retry finds no recording), and dropping a late one would
+        // leave capture running: only its answer is bounded, so the queue moves on.
+        const stop = () => answerBy(stopRecording(tab), deadlineMs);
+        return tab.control.agent(request.agentSessionId ?? "", stop);
+      }
+    }
+    if (request.operation === "claim") {
+      SessionControl.requireAgentSession(request);
+      const tab = request.tabId && (await runPromise(findTab(request.threadId, request.tabId)));
+      if (!tab) throw closedPopups.notFound(request.threadId, request.tabId, tabs);
+      const tabSignal = blockedTabs.signal(tab, request.runId);
+      return blockedTabs.assertTab(tab, request.runId).then(() => {
+        runSignal?.throwIfAborted();
+        tabSignal?.throwIfAborted();
+        return {};
+      });
+    }
+    const tab = await requireTab(request);
+    const tabSignal = blockedTabs.signal(tab, request.runId);
+    const operationSignal = AbortSignal.any([
+      ...(runSignal ? [runSignal] : []),
+      ...(tabSignal ? [tabSignal] : []),
+    ]);
+    if (!FENCED_ALLOWED_OPERATIONS.has(request.operation)) operationSignal.throwIfAborted();
+    const mutating = !READ_OPERATIONS.has(request.operation);
+    if (!FENCED_ALLOWED_OPERATIONS.has(request.operation))
+      await blockedTabs.assertTab(tab, request.runId);
+    if (!FENCED_ALLOWED_OPERATIONS.has(request.operation)) operationSignal.throwIfAborted();
+    ServerBrowserScreen.assertScreenExpectation(tab, request);
+    if (mutating && !tab.control.agentMayAct(request.agentSessionId ?? ""))
+      throw new BrowserControlInterrupted(
+        "This tab belongs to another agent session. You can read it, but open your own tab to act.",
+        "agentMismatch",
+      );
+    if (request.operation === "fillSecret") {
+      const gate = secretBlockedGate(tab, request.runId, blockedTabs, operationSignal);
+      return secretFill.fill(tab, request, deadlineMs, recordAction, gate, (run) =>
+        AgentTabState.attributeSecretFill(
+          tab,
+          { agentId: request.agentSessionId ?? "", signal: operationSignal, runSignal },
+          Date.now,
+          run,
+        ),
+      );
+    }
+    // Closing must unblock an action waiting on a dialog, without queueing behind it.
+    if (request.operation === "close") {
+      if (tab.control.agentId !== request.agentSessionId)
+        throw new BrowserControlInterrupted(
+          "Only the agent session that opened this tab can close it.",
+          "agentMismatch",
+        );
+      tab.control.assertNoHumanControl();
+      ServerBrowserScreen.refusePrivateClose(tab);
+      void tab.control.close().catch(constVoid);
+      await runPromise(manager.close({ threadId: tab.threadId, tabId: tab.tabId }));
+      dropTab(tab, false);
+      return {};
+    }
+    // Resolve dialogs outside the queue, with ownership checked, to unblock waiting clicks.
+    if (request.operation === "dialog") {
+      tab.control.assertNoHumanControl();
+      const channel = tabActionGate(tab, request, blockedTabs, deadlineMs, operationSignal).channel;
+      await resolveDialog(tab, input as PreviewAutomationDialogInput, channel);
+      return statusWithTitle(tab, request.agentSessionId);
+    }
+    const agentSessionId = request.agentSessionId!;
+    // A read the caller cannot run under control right now (another agent's tab,
+    // or any tab a human drives, its own included) observes instead of queueing.
+    if (READ_OPERATIONS.has(request.operation) && !tab.control.agentCanActNow(agentSessionId)) {
+      return tab.control.observe(async () => {
+        await blockedTabs.assertTab(tab, request.runId);
+        operationSignal.throwIfAborted();
+        if (tab.dialog)
+          throw new BrowserControlInterrupted(
+            'A browser dialog is pending. Read goat_call {path:"preview.status"}.',
+            "dialogPending",
+          );
+        return executeTabOperation(tab, request, deadlineMs, operationSignal, true);
+      });
+    }
+    return tab.control.agent(
+      agentSessionId,
+      async (signal) => {
+        await blockedTabs.assertTab(tab, request.runId);
+        operationSignal.throwIfAborted();
+        if (tab.dialog)
+          throw new BrowserControlInterrupted(
+            'A browser dialog is pending. Read goat_call {path:"preview.status"} and use goat_call {path:"preview.dialog"} first.',
+            "dialogPending",
+          );
+        const generation = tab.control.generation;
+        const attribution = {
+          agentId: agentSessionId,
+          at: Date.now(),
+          generation,
+          authority: tab.control.authority,
+          signal: operationSignal,
+          runSignal,
+        };
+        tab.agentOperating = !READ_OPERATIONS.has(request.operation);
+        if (tab.agentOperating) tab.popups.lastInput = attribution;
+        updateFileChooserInterception(tab);
+        try {
+          return await executeTabOperation(
+            tab,
+            request,
+            deadlineMs,
+            AbortSignal.any([signal, operationSignal]),
+          );
+        } finally {
+          if (tab.agentOperating) tab.popups.lastInput = { ...attribution, at: Date.now() };
+          tab.agentOperating = false;
+          updateFileChooserInterception(tab);
+          if (generation !== tab.control.generation) ServerBrowserPage.invalidateRefs(tab.page);
+        }
+      },
+      // A wait dequeued after its deadline says it never started, never that its condition failed.
+      request.operation === "waitFor" ? undefined : deadlineMs,
+    );
+  };
+
+  const executeTabOperation = async (
+    tab: ServerTab,
+    request: PreviewAutomationRequest,
+    deadlineMs: number,
+    signal?: AbortSignal,
+    observe = false,
+  ) => {
+    signal?.throwIfAborted();
+    const input = request.input;
+    await secretFill.guard(tab, request);
+    signal?.throwIfAborted();
+    ServerBrowserScreen.assertScreenExpectation(tab, request);
+    const actionGate = (destination?: string) =>
+      tabActionGate(
+        tab,
+        request,
+        blockedTabs,
+        deadlineMs,
+        signal ?? new AbortController().signal,
+        destination,
+        observe,
+      );
+    switch (request.operation) {
+      case "back":
+      case "forward":
+      case "reload":
+        return guardedHistoryNavigation({
+          tab,
+          operation: request.operation,
+          agentSessionId: request.agentSessionId!,
+          reload: input as PreviewAutomationReloadInput,
+          timeoutMs: request.timeoutMs,
+          recordAction,
+          status: (current) => statusWithTitle(current, request.agentSessionId),
+          assertDestination: (url) => blockedTabs.assertTab(tab, request.runId, url),
+          channelFor: (destination) => actionGate(destination).channel,
+        });
+      case "navigate": {
+        const navigateInput = input as PreviewAutomationNavigateInput;
+        await blockedTabs.assertTab(tab, request.runId, resolveNavigationUrl(navigateInput));
+        await recordAction(tab, "navigate", () =>
+          guardedNavigate(
+            tab,
+            resolveNavigationUrl(navigateInput),
+            navigateInput.readiness ?? "load",
+            navigateInput.timeoutMs ?? request.timeoutMs,
+            actionGate(resolveNavigationUrl(navigateInput)).channel,
+          ),
+        );
+        return statusWithTitle(tab, request.agentSessionId);
+      }
+      case "resize": {
+        const setting = resolvePreviewViewport(input as PreviewAutomationResizeInput);
+        const gate = actionGate();
+        await gate();
+        await runPromise(
+          manager.resize({ threadId: tab.threadId, tabId: tab.tabId, viewport: setting }),
+        );
+        const sized = await AgentTabState.measuredResize(tab, UNATTACHED_FILL_VIEWPORT, () =>
+          applySetting(tab, setting, gate.channel),
+        );
+        return { tabId: tab.tabId, setting, ...sized(setting) };
+      }
+      case "setColorScheme": {
+        const { colorScheme } = input as PreviewAutomationSetColorSchemeInput;
+        const gate = actionGate();
+        await gate();
+        const snapshot = await runPromise(
+          manager.adjust({ threadId: tab.threadId, tabId: tab.tabId, colorScheme }),
+        );
+        await applyRendering(tab, snapshot, gate.channel);
+        return { tabId: tab.tabId, colorScheme };
+      }
+      case "read":
+        return pageRead(
+          tab.page,
+          tab.cdp,
+          tab.control,
+          input as import("@goat/contracts").PreviewAutomationReadInput,
+          (text) => tab.diagnostics.mask(text),
+          actionGate().channel,
+        ).then(ServerBrowserScreen.recheck(tab, request));
+      case "snapshot": {
+        return withScreencastsPaused(
+          tab,
+          () =>
+            ServerBrowserPage.snapshot({
+              ...tab,
+              renderScale: tab.desktop ? "display" : RENDER_SCALE,
+              ...(input as PreviewAutomationSnapshotInput),
+              agentSessionId: request.agentSessionId,
+              actionChannel: actionGate().channel,
+              captureImage: (input as { readonly captureImage?: boolean }).captureImage !== false,
+              timeoutMs: deadlineMs - performance.now(),
+            }),
+          deadlineMs,
+        ).then(ServerBrowserScreen.recheck(tab, request));
+      }
+      case "logs":
+        return tab.diagnostics.readMasked(decodeLogsInput(input));
+      case "signInState":
+        return secretFill.signInState(tab, tab.threadId);
+      case "fetch": {
+        const fetchInput = input as PreviewAutomationFetchInput;
+        const destination = resolveFetchUrl(fetchInput.url, tab.page.url());
+        await blockedTabs.assertTab(tab, request.runId, destination);
+        return inPageFetch(
+          tab.page,
+          tab.control,
+          {
+            ...fetchInput,
+            timeoutMs: fetchInput.timeoutMs ?? request.timeoutMs,
+            deadline: deadlineMs,
+          },
+          actionGate(destination),
+        );
+      }
+      case "scrollCollect":
+        return recordAction(tab, "scrollCollect", () =>
+          collectWhileScrolling(
+            tab.page,
+            tab.control,
+            actionGate(),
+            input as PreviewAutomationScrollCollectInput,
+          ),
+        );
+      case "click": {
+        const clickInput = input as PreviewAutomationClickInput;
+        const { effect, evidence, pressesCompleted } = await recordAction(tab, "click", () =>
+          ServerBrowserPage.click(tab.page, clickInput, pointerFor(tab), actionGate()),
+        );
+        return {
+          effect,
+          evidence,
+          url: tab.page.url(),
+          ...(pressesCompleted === undefined ? {} : { pressesCompleted }),
+        };
+      }
+      case "hover":
+        return recordAction(tab, "hover", () =>
+          ServerBrowserPage.hover(
+            tab.page,
+            input as PreviewAutomationHoverInput,
+            pointerFor(tab),
+            actionGate(),
+          ),
+        );
+      case "select":
+        return recordAction(tab, "select", async () => {
+          const gate = actionGate();
+          const aimed = input as PreviewAutomationSelectInput;
+          const timed = await pointBefore(tab.page, aimed, pointerFor(tab), gate);
+          return ServerBrowserPage.select(tab.page, timed, gate);
+        });
+      case "drag":
+        return recordAction(tab, "drag", () =>
+          ServerBrowserPage.drag(
+            tab.page,
+            input as PreviewAutomationDragInput,
+            pointerFor(tab),
+            actionGate(),
+          ),
+        );
+      case "upload":
+        return recordAction(tab, "upload", () =>
+          uploadFiles(tab, input as PreviewAutomationUploadInput, actionGate()),
+        );
+      case "type":
+        return recordAction(tab, "type", async () => {
+          const gate = actionGate();
+          const aimed = input as PreviewAutomationTypeInput;
+          const timed = await pointBefore(tab.page, aimed, pointerFor(tab), gate);
+          return ServerBrowserPage.type(tab.page, timed, gate);
+        });
+      case "press":
+        return recordAction(tab, "press", () =>
+          ServerBrowserPage.press(tab.page, input as PreviewAutomationPressInput, actionGate()),
+        );
+      case "scroll":
+        return recordAction(tab, "scroll", () =>
+          ServerBrowserPage.scroll(tab.page, input as PreviewAutomationScrollInput, actionGate()),
+        );
+      case "evaluate":
+        return ServerBrowserPage.evaluate(
+          tab,
+          input as PreviewAutomationEvaluateInput,
+          request.timeoutMs,
+          actionGate(),
+        );
+      case "waitFor":
+        return ServerBrowserPage.waitFor(tab.page, waitInput(request, deadlineMs), signal).then(
+          ServerBrowserScreen.recheck(tab, request),
+        );
+      case "recordingStart": {
+        const recording = await startRecording(tab, actionGate().channel, deadlineMs);
+        return { tabId: tab.tabId, recording: true, startedAt: recording.startedAt };
+      }
+    }
+  };
+
+  const handleRequest = (connectionId: string, request: PreviewAutomationRequest) =>
+    Effect.tryPromise({
+      try: () => {
+        ServerBrowserScreen.assertScreenConnection(request, connectionId);
+        return answerCall(request, (deadlineMs) =>
+          runOperation(request, deadlineMs)
+            // After every observation around the operation let the result through.
+            .then((result) =>
+              request.operation === "fetch"
+                ? publishFetchedBody(
+                    config.browserArtifactsDir,
+                    result,
+                    () => performance.now() >= deadlineMs,
+                  )
+                : result,
+            )
+            .finally(() => markUsed(tabs.values(), request, Date.now())),
+        );
+      },
+      catch: ServerBrowserPage.toOperationError,
+    }).pipe(
+      Effect.match({
+        onSuccess: (result) => ({ ok: true as const, result }),
+        onFailure: (error) => ({
+          ok: false as const,
+          error: {
+            _tag: error.tag,
+            message: error.message,
+            ...(error.detail === undefined ? {} : { detail: error.detail }),
+          },
+        }),
+      }),
+      Effect.map(secretFill.mask(request)),
+      Effect.flatMap((outcome) =>
+        broker.respond({
+          clientId: SERVER_HOST_CLIENT_ID,
+          connectionId,
+          requestId: request.requestId,
+          ...outcome,
+        }),
+      ),
+      Effect.ignore,
+    );
+
+  const mirrorManagerEvent = (event: PreviewEvent) =>
+    Effect.promise(async () => {
+      if (event.type === "opened" && event.snapshot.runtime === "server") {
+        const key = tabKey(event.snapshot.threadId, event.snapshot.tabId);
+        if (event.snapshot.automationOwner === undefined || pendingTabs.has(key) || tabs.has(key))
+          await ensureTab(event.snapshot).catch(constVoid);
+        return;
+      }
+      const key = tabKey(event.threadId, event.tabId);
+      const tab = tabs.get(key);
+      if (event.type === "closed" && !tab && pendingTabs.has(key)) closedPendingTabs.add(key);
+      if (!tab) return;
+      if (event.type === "closed") {
+        closedSessions.add(key);
+        dropTab(tab, false);
+        closedSessions.delete(key);
+        return;
+      }
+      if (event.type === "resized") {
+        await tab.control
+          .system(async () => {
+            if (
+              !viewportSettingsEqual(event.snapshot.viewport ?? FILL_PREVIEW_VIEWPORT, tab.setting)
+            ) {
+              await applySetting(tab, event.snapshot.viewport ?? FILL_PREVIEW_VIEWPORT);
+            }
+            await applyRendering(tab, event.snapshot);
+            const request = event.request;
+            if (request?.clear === "cookies") await tab.cdp.send("Network.clearBrowserCookies");
+            if (request?.clear === "cache") await tab.cdp.send("Network.clearBrowserCache");
+            if (request?.hardReload) await tab.cdp.send("Page.reload", { ignoreCache: true });
+          })
+          .catch((cause: unknown) =>
+            runFork(Effect.logWarning("server preview could not apply a tab setting", { cause })),
+          );
+      }
+    });
+
+  const dispatchViewerInput = async (
+    tab: ServerTab,
+    session: CDPSession,
+    viewer: ViewerState,
+    raw: unknown,
+  ) => {
+    const message = ViewerInput.asRecord(raw);
+    if (!message) return;
+    const modifiers = ViewerInput.modifiersOf(message);
+    switch (message.type) {
+      case "mouse": {
+        const action = message.action;
+        const type =
+          action === "down" ? "mousePressed" : action === "up" ? "mouseReleased" : "mouseMoved";
+        const button = ["none", "left", "middle", "right"].includes(String(message.button))
+          ? (message.button as "none" | "left" | "middle" | "right")
+          : "none";
+        await session.send("Input.dispatchMouseEvent", {
+          type,
+          x: ViewerInput.num(message.x),
+          y: ViewerInput.num(message.y),
+          button,
+          buttons: ViewerInput.num(message.buttons),
+          clickCount: ViewerInput.num(message.clickCount, type === "mouseMoved" ? 0 : 1),
+          modifiers,
+        });
+        if (button !== "none") {
+          if (action === "down")
+            viewer.pressedButtons.set(button, {
+              x: ViewerInput.num(message.x),
+              y: ViewerInput.num(message.y),
+            });
+          else if (action === "up") viewer.pressedButtons.delete(button);
+        }
+        return;
+      }
+      case "wheel":
+        viewer.scrolledAt = Date.now();
+        await session.send("Input.dispatchMouseEvent", {
+          type: "mouseWheel",
+          x: ViewerInput.num(message.x),
+          y: ViewerInput.num(message.y),
+          deltaX: ViewerInput.num(message.deltaX),
+          deltaY: ViewerInput.num(message.deltaY),
+          modifiers,
+        });
+        return;
+      case "key": {
+        const key = typeof message.key === "string" ? message.key : "";
+        const code = typeof message.code === "string" ? message.code : "";
+        const text = typeof message.text === "string" ? message.text : undefined;
+        if (message.action === "up") {
+          await session.send("Input.dispatchKeyEvent", { type: "keyUp", key, code, modifiers });
+          viewer.pressedKeys.delete(code || key);
+          return;
+        }
+        const command = ViewerInput.editingCommand(key, modifiers);
+        const copying =
+          !tab.desktop && (command?.commands[0] === "copy" || command?.commands[0] === "cut");
+
+        if (copying) await takeCopiedText(tab);
+        await session.send("Input.dispatchKeyEvent", {
+          type: text ? "keyDown" : "rawKeyDown",
+          key,
+          code,
+          modifiers,
+          ...(text ? { text, unmodifiedText: text } : {}),
+          ...command,
+          windowsVirtualKeyCode: ViewerInput.num(
+            message.keyCode,
+            key.length === 1 ? key.toUpperCase().charCodeAt(0) : 0,
+          ),
+        });
+        viewer.pressedKeys.set(code || key, { key, code });
+        if (copying) {
+          const copied = await takeCopiedText(tab);
+          if (copied) viewer.push({ _tag: "clipboard", text: copied });
+        }
+        return;
+      }
+      case "text":
+        if (typeof message.text === "string" && message.text.length > 0) {
+          await session.send("Input.insertText", { text: message.text.slice(0, 10_000) });
+        }
+        return;
+      case "resize": {
+        const width = Math.min(Math.round(ViewerInput.num(message.width)), 3840);
+        const height = Math.min(Math.round(ViewerInput.num(message.height)), 2160);
+        if (width < 100 || height < 100) return;
+        viewer.requestedSize = { width, height, order: ++viewerResizeOrder };
+        if (tab.setting._tag !== "fill" || tab.desktop) return;
+        const current = tab.page.viewportSize();
+        if (current?.width === width && current.height === height) return;
+        await tab.page.setViewportSize({ width, height });
+        await broadcastViewport(tab);
+        return;
+      }
+      case "viewport": {
+        const setting = decodeViewportSetting(message.setting);
+        await runPromise(
+          manager.resize({ threadId: tab.threadId, tabId: tab.tabId, viewport: setting }),
+        );
+        await applySetting(tab, setting);
+        return;
+      }
+      // A stalled navigation must not block a corrected URL or further viewer input.
+      case "navigate":
+        if (typeof message.url === "string") {
+          const url = normalizePreviewUrl(message.url);
+          tab.control.trackUntilHandoff(tab.page.goto(url, VIEWER_NAVIGATION_OPTIONS));
+        }
+        return;
+      case "history":
+        tab.control.trackUntilHandoff(
+          ViewerInput.num(message.delta) < 0
+            ? tab.page.goBack(VIEWER_NAVIGATION_OPTIONS)
+            : tab.page.goForward(VIEWER_NAVIGATION_OPTIONS),
+        );
+        return;
+      case "reload":
+        if (message.ignoreCache === true) {
+          await session.send("Page.reload", { ignoreCache: true });
+          return;
+        }
+        tab.control.trackUntilHandoff(tab.page.reload(VIEWER_NAVIGATION_OPTIONS));
+        return;
+      case "probe": {
+        const x = ViewerInput.num(message.x);
+        const y = ViewerInput.num(message.y);
+        const result = await session.send("Runtime.evaluate", {
+          expression: `(${ViewerInput.EDITABLE_AT_POINT_SCRIPT})(${x}, ${y})`,
+          returnByValue: true,
+        });
+        viewer.push({ _tag: "probe", x, y, editable: result.result.value === true });
+        return;
+      }
+    }
+  };
+
+  const attachViewer: ServerBrowser["Service"]["attachViewer"] = Effect.fn(
+    "ServerBrowser.attachViewer",
+  )(function* (input) {
+    const tab = yield* findTab(input.threadId, input.tabId);
+    const output = yield* Queue.make<ServerBrowserViewerOutput>({
+      capacity: VIEWER_OUTPUT_LIMIT,
+      strategy: "dropping",
+    });
+    const session = yield* Effect.acquireRelease(
+      Effect.tryPromise({
+        try: () => tab.page.context().newCDPSession(tab.page),
+        catch: (cause) => new ServerBrowserLaunchError({ cause }),
+      }),
+      (session) =>
+        Effect.promise(() =>
+          session
+            .send("Page.stopScreencast")
+            .catch(constVoid)
+            .then(() => session.detach())
+            .catch(constVoid),
+        ),
+    );
+    const quality = Math.min(100, Math.max(1, Math.round(input.quality)));
+    // Chromium may drop the final frame during a burst; send a still when it settles.
+    let framesInFlight = 0;
+    let mayHaveDropped = false;
+    let motion = false;
+    const recentFrames: Array<number> = [];
+    let screencastParams = Promise.resolve();
+    let screencastScale = 1;
+    const startScreencast = (scale: number) => {
+      screencastScale = scale;
+      screencastParams = screencastParams.then(async () => {
+        if (tab.capturing > 0) return;
+        await session.send("Page.stopScreencast").catch(constVoid);
+        await session
+          .send("Page.startScreencast", {
+            format: "jpeg",
+            quality: screencastScale < 1 ? Math.min(quality, SCREENCAST_MOTION_QUALITY) : quality,
+            maxWidth: Math.max(1, Math.round(input.maxWidth * screencastScale)),
+            maxHeight: Math.max(1, Math.round(input.maxHeight * screencastScale)),
+          })
+          .catch(constVoid);
+      });
+      return screencastParams;
+    };
+    const viewer: ViewerState = {
+      id: NodeCrypto.randomUUID(),
+      canOperate: input.canOperate,
+      pressedKeys: new Map(),
+      pressedButtons: new Map(),
+      push: (next) => {
+        // While private only the person who controls the tab sees it.
+        if (next._tag === "frame" && tab.control.isPrivate && tab.control.controller !== viewer.id)
+          return void runFork(next.ack);
+        // Dropped frames must still release Chromium.
+        if (Queue.offerUnsafe(output, next)) return;
+        if (next._tag === "frame") runFork(next.ack);
+        // State a stalled viewer cannot miss compacts its backlog. It runs
+        // synchronously so an older compaction can never land after a newer one.
+        else if (["gone", "reconnect", "control", "viewport", "fileChooser"].includes(next._tag)) {
+          const dropped = Effect.runSyncExit(Queue.clear(output));
+          if (dropped._tag === "Failure") return;
+          const items = [...dropped.value, next];
+          // Without its latest size and control the viewer cannot map input at all.
+          const state = (["control", "viewport"] as const).flatMap(
+            (tag) => items.findLast((item) => item._tag === tag) ?? [],
+          );
+          // Everything else is one-time; if it no longer fits, the oldest goes first.
+          const rest = items.filter(
+            (item) => item._tag !== "frame" && item._tag !== "control" && item._tag !== "viewport",
+          );
+          for (const item of [...rest.slice(state.length - VIEWER_OUTPUT_LIMIT), ...state])
+            Queue.offerUnsafe(output, item);
+          for (const item of dropped.value) if (item._tag === "frame") runFork(item.ack);
+        }
+      },
+      pause: () => {
+        screencastParams = screencastParams.then(() =>
+          session.send("Page.stopScreencast").then(constVoid, constVoid),
+        );
+        return screencastParams;
+      },
+      resume: () => startScreencast(screencastScale),
+      scrolledAt: 0,
+      requestedSize: null,
+    };
+    yield* Effect.acquireRelease(
+      Effect.sync(() => {
+        tab.viewers.add(viewer);
+        reportLiveTabs();
+      }),
+      () =>
+        Effect.promise(async () => {
+          await tab.control.disconnect(viewer.id, () =>
+            ViewerInput.releaseViewerInput(viewer, session),
+          );
+          tab.viewers.delete(viewer);
+          broadcastControl(tab);
+          reportLiveTabs();
+        }),
+    );
+    if (input.canOperate && tab.control.agentId === null && tab.control.controller === null) {
+      yield* Effect.promise(() => tab.control.take(viewer.id));
+    }
+    broadcastControl(tab);
+    pushFileChooser(tab);
+    const pushStill = async () => {
+      const data = await withCaptureLock(tab, () =>
+        ServerBrowserPage.captureViewport(session, { format: "jpeg", quality }),
+      ).catch(() => null);
+      if (data) viewer.push({ _tag: "frame", data: Buffer.from(data, "base64"), ack: Effect.void });
+      if (data) screen.framed(tab, viewer);
+    };
+    let settleTimer: ReturnType<typeof setTimeout> | null = null;
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        if (settleTimer !== null) clearTimeout(settleTimer);
+      }),
+    );
+    let screencastStarted = false;
+    session.on("Page.screencastFrame", (frame) => {
+      screencastStarted = true;
+      if (framesInFlight > 0) mayHaveDropped = true;
+      framesInFlight += 1;
+      const arrivedAt = Date.now();
+      recentFrames.push(arrivedAt);
+      while (recentFrames[0]! < arrivedAt - SCREENCAST_MOTION_WINDOW_MS) recentFrames.shift();
+      if (
+        !motion &&
+        recentFrames.length >= SCREENCAST_MOTION_FRAMES &&
+        arrivedAt - viewer.scrolledAt < SCREENCAST_MOTION_WINDOW_MS
+      ) {
+        motion = true;
+        void startScreencast(0.5);
+      } else if (motion && arrivedAt - viewer.scrolledAt > SCREENCAST_SETTLE_MS) {
+        motion = false;
+        recentFrames.length = 0;
+        void startScreencast(1);
+      }
+      if (settleTimer !== null) clearTimeout(settleTimer);
+      settleTimer = setTimeout(() => {
+        settleTimer = null;
+        if (!motion && !mayHaveDropped) return;
+        mayHaveDropped = false;
+        if (motion) {
+          motion = false;
+          recentFrames.length = 0;
+          void startScreencast(1);
+        }
+        void pushStill();
+      }, SCREENCAST_SETTLE_MS);
+      viewer.push({
+        _tag: "frame",
+        data: Buffer.from(frame.data, "base64"),
+        ack: Effect.promise(() =>
+          sleepUntil(arrivedAt + SCREENCAST_ACK_PACE_MS).then(() => {
+            framesInFlight -= 1;
+            return session
+              .send("Page.screencastFrameAck", { sessionId: frame.sessionId })
+              .catch(constVoid);
+          }),
+        ),
+      });
+      screen.framed(tab, viewer);
+    });
+    void broadcastViewport(tab).catch(constVoid);
+    yield* Effect.promise(() => startScreencast(1));
+    // An idle page does not repaint for a new screencast, so the viewer
+    // starts from a still unless a live frame beat it.
+    if (!screencastStarted) yield* Effect.promise(pushStill);
+    return {
+      output,
+      input: (raw: unknown) =>
+        Effect.promise(async () => {
+          if (!viewer.canOperate) return;
+          const message = ViewerInput.asRecord(raw);
+          if (!message) return;
+          try {
+            if (message.type === "takeControl") {
+              const taking = tab.control.take(viewer.id);
+              broadcastControl(tab);
+              await taking;
+              pushFileChooser(tab);
+            } else if (message.type === "releaseControl") {
+              const releasing = tab.control.release(viewer.id, () =>
+                ViewerInput.releaseViewerInput(viewer, session),
+              );
+              broadcastControl(tab);
+              await releasing;
+            } else if (
+              message.type === "dialog" &&
+              tab.control.controller === viewer.id &&
+              typeof message.accept === "boolean"
+            ) {
+              await resolveDialog(tab, {
+                accept: message.accept,
+                ...(typeof message.promptText === "string"
+                  ? { promptText: message.promptText }
+                  : {}),
+              });
+            } else {
+              const dispatch = () => dispatchViewerInput(tab, session, viewer, message);
+              if (
+                message.type === "mouse" &&
+                message.action === "move" &&
+                message.button === "none" &&
+                message.buttons === 0
+              ) {
+                await tab.control.humanLatest(
+                  viewer.id,
+                  `hover:${ViewerInput.modifiersOf(message)}`,
+                  dispatch,
+                );
+              } else {
+                await tab.control.human(viewer.id, dispatch);
+              }
+            }
+          } catch {
+            broadcastControl(tab);
+          }
+        }),
+    } satisfies ServerBrowserViewer;
+  });
+
+  yield* manager.events.pipe(Stream.runForEach(mirrorManagerEvent), Effect.forkScoped);
+  if (
+    !PreviewBrowserHost.sandboxDisabled(yield* HostProcess.Environment) &&
+    (yield* PreviewBrowserHost.sandboxBlocked)
+  ) {
+    yield* Effect.logWarning(
+      `This host blocks the sandbox GOAT's browser runs in, so browser tabs and HTML previews will not start. Run \`${setupCommand}\` once to allow it.`,
+    );
+  }
+
+  yield* desktopChannel.detached.pipe(
+    Stream.runForEach((key) =>
+      Effect.sync(() => {
+        const tab = tabs.get(tabKey(key.threadId, key.tabId));
+        if (tab?.desktop) dropTab(tab, false);
+      }),
+    ),
+    Effect.forkScoped,
+  );
+  // An older desktop app ignores serverRendered and hosts the tab itself, with its own sign-ins.
+  yield* desktopChannel.attached.pipe(
+    Stream.runForEach((key) =>
+      Effect.promise(async () => {
+        const id = tabKey(key.threadId, key.tabId);
+        const tab = tabs.get(id) ?? (await pendingTabs.get(id)?.promise?.catch(() => undefined));
+        if (tab && hostedTwice(tab)) dropTab(tab, true);
+      }),
+    ),
+    Effect.forkScoped,
+  );
+  // The desktop keeps the tabs an agent uses focused until its turn ends, not just per command.
+  yield* Stream.fromSubscription(agentTurns).pipe(
+    Stream.runForEach((change) => desktopChannel.turn(change.threadId, change.active)),
+    Effect.forkScoped,
+  );
+  // Reconnect returned pages immediately so all clients keep receiving URL and title changes.
+  yield* desktopChannel.attached.pipe(
+    Stream.runForEach((key) =>
+      Effect.gen(function* () {
+        if (tabs.has(tabKey(key.threadId, key.tabId))) return;
+        const { sessions } = yield* manager.list({ threadId: ThreadId.make(key.threadId) });
+        const snapshot = sessions.find(
+          (session) => session.tabId === key.tabId && session.runtime === "server",
+        );
+        if (snapshot) yield* Effect.promise(() => ensureTab(snapshot).catch(constVoid));
+      }).pipe(Effect.ignore),
+    ),
+    Effect.forkScoped,
+  );
+  yield* Effect.sync(closeIdleAgentTabs).pipe(
+    Effect.repeat(Schedule.spaced(IDLE_SWEEP_INTERVAL)),
+    Effect.forkScoped,
+  );
+  const environmentId = yield* environment.getEnvironmentId;
+  const hostSession = broker
+    .connect(
+      {
+        clientId: SERVER_HOST_CLIENT_ID,
+        environmentId,
+        supportedOperations: [...PREVIEW_AUTOMATION_SERVER_OPERATIONS],
+        supportedFeatures: ["snapshotOptions"],
+      },
+      { preferred: true, inProcess: true },
+    )
+    .pipe(
+      Effect.flatMap((events) =>
+        events.pipe(
+          Stream.runForEach((event) => {
+            if (event.type === "connected") {
+              hostConnectionId = event.connectionId;
+              return Effect.sync(reportLiveTabs);
+            }
+            return handleRequest(event.connectionId, event.request).pipe(
+              Effect.forkScoped,
+              Effect.asVoid,
+            );
+          }),
+        ),
+      ),
+    );
+  // The broker disconnects timed-out hosts, including slow first installs. Reconnect.
+  yield* hostSession.pipe(
+    Effect.exit,
+    Effect.andThen(Effect.sleep(HOST_RECONNECT_DELAY)),
+    Effect.forever,
+    Effect.forkScoped,
+  );
+  yield* Effect.addFinalizer(() =>
+    Effect.promise(async () => {
+      await contexts.close();
+    }),
+  );
+
+  const clearProfile = (profileId: string) =>
+    Effect.tryPromise({
+      try: () => contexts.clearProfile(profileId),
+      catch: (cause) => new PreviewClearProfileError({ profileId, cause }),
+    });
+
+  return ServerBrowser.of({
+    attachViewer,
+    clearProfile,
+    profileReporter,
+    openDownload,
+    answerFileChooser,
+    sessions: Effect.promise(() => Promise.all([...tabs.values()].map(browserSessionView))),
+    sessionChanges: Stream.fromPubSub(sessionChanges),
+    ...screen.service,
+    stopAllAgents: Effect.sync(() => {
+      for (const tab of tabs.values()) tab.control.stopAgents();
+    }),
+    controlSession: (input) =>
+      Effect.sync(() => {
+        const tab = tabs.get(tabKey(input.threadId, input.tabId));
+        if (!tab) return false;
+        if (input.control === "stop") tab.control.stopAgents();
+        else tab.control.resumeAgents();
+        return true;
+      }),
+  });
+});
+
+export const layer = Layer.effect(ServerBrowser, make);

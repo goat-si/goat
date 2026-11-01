@@ -1,0 +1,816 @@
+// @effect-diagnostics nodeBuiltinImport:off - Archive digests hash file bytes in place; WebCrypto rejects views over possibly shared buffers.
+import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
+import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
+import * as Stream from "effect/Stream";
+import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
+import * as NodeCrypto from "node:crypto";
+
+import {
+  CLI_RELEASE_CHECKSUMS_FILE,
+  cliArchiveFileName,
+  cliArchivePlatformKey,
+  cliArchiveTarCommand,
+  cliReleaseDownloadBaseUrl,
+  parseChecksums,
+} from "@goat/shared/cliRelease";
+
+import * as HostProcess from "@goat/shared/HostProcess";
+
+import * as ProcessRunner from "../processRunner.ts";
+import { isExactServiceVersion, parseServiceState, SERVICE_STATE_FILE } from "./serviceProtocol.ts";
+
+const PINNED_RUNTIME_DIR = "runtime";
+const PINNED_RUNTIME_INSTALL_TIMEOUT = Duration.minutes(10);
+const PINNED_RUNTIME_DOWNLOAD_STALL_TIMEOUT = Duration.minutes(1);
+const PINNED_RUNTIME_ARCHIVE_FILE = "t3-runtime-archive";
+/** Written beside the sentinel, which the launcher reads as a bare version and must not change. */
+const PINNED_RUNTIME_RECORD_FILE = ".install-record";
+const PinnedRuntimeInstallRecord = Schema.fromJsonString(
+  Schema.Struct({
+    version: Schema.String,
+    archiveSha256: Schema.String,
+    entrySha256: Schema.String,
+  }),
+);
+const decodeInstallRecord = Schema.decodeUnknownOption(PinnedRuntimeInstallRecord);
+const encodeInstallRecord = Schema.encodeSync(PinnedRuntimeInstallRecord);
+// Boot-service setup and remote update can construct separate layers. Serialize
+// the complete install transaction across every caller in this process.
+const pinnedRuntimeInstallLock = Semaphore.makeUnsafe(1);
+
+export interface PinnedRuntimePaths {
+  readonly versionDir: string;
+  readonly entryPath: string;
+  readonly sentinelPath: string;
+}
+
+export function pinnedRuntimeCommand(paths: PinnedRuntimePaths): {
+  readonly command: string;
+  readonly args: ReadonlyArray<string>;
+} {
+  return { command: paths.entryPath, args: [] };
+}
+
+export function pinnedRuntimeVersionsDir(path: Path.Path, baseDir: string): string {
+  return path.join(baseDir, PINNED_RUNTIME_DIR, "goat", "versions");
+}
+
+export function pinnedRuntimePaths(
+  path: Path.Path,
+  baseDir: string,
+  version: string,
+  platform: NodeJS.Platform,
+): PinnedRuntimePaths {
+  const versionDir = path.join(pinnedRuntimeVersionsDir(path, baseDir), version);
+  return {
+    versionDir,
+    entryPath: path.join(versionDir, platform === "win32" ? "goat.exe" : "goat"),
+    sentinelPath: path.join(versionDir, ".install-complete"),
+  };
+}
+
+export class PinnedRuntimeInstallError extends Schema.TaggedError<PinnedRuntimeInstallError>()(
+  "PinnedRuntimeInstallError",
+  {
+    step: Schema.String,
+    exitCode: Schema.optional(Schema.Number),
+    stdoutLength: Schema.optional(Schema.Number),
+    stderrLength: Schema.optional(Schema.Number),
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    return this.exitCode === undefined
+      ? `Pinned runtime install failed while ${this.step}.`
+      : `Pinned runtime install failed while ${this.step} (exit code ${this.exitCode}).`;
+  }
+}
+
+export class PinnedRuntimePreflightBlockedError extends Schema.TaggedError<PinnedRuntimePreflightBlockedError>()(
+  "PinnedRuntimePreflightBlockedError",
+  {
+    version: Schema.String,
+    reason: Schema.String,
+  },
+) {
+  override get message(): string {
+    return this.reason;
+  }
+}
+
+export type PinnedRuntimeProgress =
+  | { readonly stage: "download"; readonly received: number; readonly total: number | undefined }
+  | { readonly stage: "verify" | "extract" | "validate" | "cached" };
+
+/** Tar writes the executable before native packages; only a validated install gets a sentinel. */
+
+interface PinnedRuntimeInstallInput {
+  readonly baseDir: string;
+  readonly version: string;
+  readonly fs: FileSystem.FileSystem;
+  readonly path: Path.Path;
+  readonly runner: ProcessRunner.ProcessRunner["Service"];
+  readonly validate: (
+    paths: PinnedRuntimePaths,
+  ) => Effect.Effect<void, PinnedRuntimeInstallError | PinnedRuntimePreflightBlockedError>;
+  readonly platform: NodeJS.Platform;
+  readonly arch: string;
+  readonly httpClient: HttpClient.HttpClient;
+  readonly releaseBaseUrl?: string | undefined;
+  readonly onProgress?: (progress: PinnedRuntimeProgress) => void;
+  /**
+   * Reuse an existing install only when its executable still matches the digest recorded when
+   * it was installed from a checksum-verified archive; otherwise reinstall. Server updates set
+   * this because they run the cached build unattended. Only safe for a version that is not
+   * running, since a mismatch removes its directory.
+   */
+  readonly verifyCachedInstall?: boolean | undefined;
+}
+
+const sha256Hex = (bytes: Uint8Array, step: string) =>
+  Effect.try({
+    try: () => NodeCrypto.createHash("sha256").update(bytes).digest("hex"),
+    catch: (cause) => new PinnedRuntimeInstallError({ step, cause }),
+  });
+
+const fileSha256 = (fs: FileSystem.FileSystem, filePath: string, step: string) =>
+  fs.readFile(filePath).pipe(
+    Effect.mapError((cause) => new PinnedRuntimeInstallError({ step, cause })),
+    Effect.flatMap((bytes) => sha256Hex(bytes, step)),
+  );
+
+/** Whether the cached executable is byte-identical to what the verified archive installed. */
+const cachedInstallMatchesRecord = (input: PinnedRuntimeInstallInput, paths: PinnedRuntimePaths) =>
+  Effect.gen(function* () {
+    const recorded = yield* input.fs
+      .readFileString(input.path.join(paths.versionDir, PINNED_RUNTIME_RECORD_FILE))
+      .pipe(Effect.option);
+    if (Option.isNone(recorded)) return false;
+    const record = decodeInstallRecord(recorded.value);
+    if (Option.isNone(record) || record.value.version !== input.version) return false;
+    const actual = yield* fileSha256(
+      input.fs,
+      paths.entryPath,
+      "checking the cached pinned runtime",
+    ).pipe(Effect.option);
+    return Option.isSome(actual) && actual.value === record.value.entrySha256;
+  });
+
+const fetchReleaseAsset = Effect.fn("cloud.pinned_runtime.fetch_release_asset")(function* (
+  httpClient: HttpClient.HttpClient,
+  url: string,
+  step: string,
+  onProgress?: (progress: PinnedRuntimeProgress) => void,
+) {
+  // Bound stalls while holding the install lock, but allow transfers that keep
+  // receiving bytes to finish regardless of their total duration.
+  return yield* httpClient.execute(HttpClientRequest.get(url)).pipe(
+    Effect.flatMap(HttpClientResponse.filterStatusOk),
+    Effect.timeout(PINNED_RUNTIME_DOWNLOAD_STALL_TIMEOUT),
+    Effect.flatMap(
+      Effect.fn(function* (response) {
+        const length = Number(response.headers["content-length"]);
+        const total = Number.isFinite(length) && length > 0 ? length : undefined;
+        let received = 0;
+        onProgress?.({ stage: "download", received, total });
+        const chunks = yield* response.stream.pipe(
+          Stream.timeoutOrElse({
+            duration: PINNED_RUNTIME_DOWNLOAD_STALL_TIMEOUT,
+            orElse: () => Stream.fail(new Cause.TimeoutError()),
+          }),
+          Stream.tap((chunk) =>
+            Effect.sync(() => {
+              received += chunk.byteLength;
+              onProgress?.({ stage: "download", received, total });
+            }),
+          ),
+          Stream.runCollect,
+        );
+        if (total === undefined && received > 0) {
+          onProgress?.({ stage: "download", received, total: received });
+        }
+        const bytes = new Uint8Array(received);
+        let offset = 0;
+        for (const chunk of chunks) {
+          bytes.set(chunk, offset);
+          offset += chunk.byteLength;
+        }
+        return bytes;
+      }),
+    ),
+    Effect.mapError(
+      (cause) =>
+        new PinnedRuntimeInstallError({
+          step: cause._tag === "TimeoutError" ? `${step} (timed out)` : step,
+          cause,
+        }),
+    ),
+  );
+});
+
+const installFromArchive = Effect.fn("cloud.pinned_runtime.install_archive")(function* (
+  input: PinnedRuntimeInstallInput,
+  stagingDir: string,
+) {
+  const { fs, path } = input;
+  const platformKey = cliArchivePlatformKey(input.platform, input.arch);
+  if (platformKey === undefined) {
+    return yield* new PinnedRuntimeInstallError({
+      step: `selecting a GOAT release archive for ${input.platform}-${input.arch}`,
+    });
+  }
+  const httpClient = input.httpClient;
+  const baseUrl = cliReleaseDownloadBaseUrl(input.version, input.releaseBaseUrl);
+  const fileName = cliArchiveFileName(input.version, platformKey);
+
+  input.onProgress?.({ stage: "download", received: 0, total: undefined });
+  const checksums = parseChecksums(
+    new TextDecoder().decode(
+      yield* fetchReleaseAsset(
+        httpClient,
+        `${baseUrl}/${CLI_RELEASE_CHECKSUMS_FILE}`,
+        "downloading the GOAT release checksums",
+      ),
+    ),
+  );
+  const expected = checksums.get(fileName);
+  if (expected === undefined) {
+    return yield* new PinnedRuntimeInstallError({
+      step: `finding ${fileName} in the GOAT release checksums`,
+    });
+  }
+  const archive = yield* fetchReleaseAsset(
+    httpClient,
+    `${baseUrl}/${fileName}`,
+    "downloading the GOAT release archive",
+    input.onProgress,
+  );
+  input.onProgress?.({ stage: "verify" });
+  const digest = yield* sha256Hex(archive, "verifying the GOAT release archive");
+  if (digest !== expected) {
+    return yield* new PinnedRuntimeInstallError({
+      step: "verifying the GOAT release archive checksum",
+    });
+  }
+
+  const archivePath = path.join(stagingDir, PINNED_RUNTIME_ARCHIVE_FILE);
+  yield* fs
+    .writeFile(archivePath, archive)
+    .pipe(
+      Effect.mapError(
+        (cause) =>
+          new PinnedRuntimeInstallError({ step: "writing the GOAT release archive", cause }),
+      ),
+    );
+  input.onProgress?.({ stage: "extract" });
+  const extractStep = "extracting the GOAT release archive";
+  // Strip the archive's stem directory so the executable lands at <versionDir>/goat.
+  yield* input.runner
+    .run({
+      command: cliArchiveTarCommand(input.platform, process.env),
+      args: ["-xf", archivePath, "-C", stagingDir, "--strip-components=1"],
+      timeout: PINNED_RUNTIME_INSTALL_TIMEOUT,
+    })
+    .pipe(
+      Effect.mapError((cause) => new PinnedRuntimeInstallError({ step: extractStep, cause })),
+      Effect.filterOrFail(
+        (result) => result.code === 0,
+        (result) =>
+          new PinnedRuntimeInstallError({
+            step: extractStep,
+            exitCode: Number(result.code),
+            stdoutLength: result.stdout.length,
+            stderrLength: result.stderr.length,
+          }),
+      ),
+    );
+  yield* fs.remove(archivePath, { force: true }).pipe(Effect.ignore);
+  return expected;
+});
+
+const installPinnedRuntime = Effect.fn("cloud.pinned_runtime.ensure_installed")(function* (
+  input: PinnedRuntimeInstallInput,
+) {
+  const { fs } = input;
+  const paths = pinnedRuntimePaths(input.path, input.baseDir, input.version, input.platform);
+  const [versionDirExists, entryExists, sentinel] = yield* Effect.all([
+    fs.exists(paths.versionDir),
+    fs.exists(paths.entryPath),
+    fs.readFileString(paths.sentinelPath).pipe(Effect.option),
+  ]).pipe(
+    Effect.mapError(
+      (cause) => new PinnedRuntimeInstallError({ step: "checking the pinned runtime", cause }),
+    ),
+  );
+  let alreadyPinned =
+    entryExists && Option.isSome(sentinel) && sentinel.value.trim() === input.version;
+  if (alreadyPinned && input.verifyCachedInstall === true) {
+    alreadyPinned = yield* cachedInstallMatchesRecord(input, paths);
+    if (!alreadyPinned) {
+      yield* Effect.logWarning("Cached pinned runtime is unverified or changed; reinstalling.", {
+        version: input.version,
+      });
+    }
+  }
+  if (alreadyPinned) {
+    input.onProgress?.({ stage: "cached" });
+    yield* input.validate(paths);
+    return paths;
+  }
+  if (versionDirExists) {
+    yield* fs.remove(paths.versionDir, { recursive: true, force: true }).pipe(
+      Effect.mapError(
+        (cause) =>
+          new PinnedRuntimeInstallError({
+            step: "removing an incomplete pinned runtime",
+            cause,
+          }),
+      ),
+    );
+  }
+
+  const versionsDir = input.path.dirname(paths.versionDir);
+  yield* fs.makeDirectory(versionsDir, { recursive: true }).pipe(
+    Effect.mapError(
+      (cause) =>
+        new PinnedRuntimeInstallError({
+          step: "preparing the pinned runtime directory",
+          cause,
+        }),
+    ),
+  );
+  const stagingDir = yield* fs
+    .makeTempDirectory({
+      directory: versionsDir,
+      prefix: ".staging-",
+    })
+    .pipe(
+      Effect.mapError(
+        (cause) =>
+          new PinnedRuntimeInstallError({
+            step: "preparing the pinned runtime directory",
+            cause,
+          }),
+      ),
+    );
+  const stagingPaths: PinnedRuntimePaths = {
+    versionDir: stagingDir,
+    entryPath: input.path.join(stagingDir, input.path.relative(paths.versionDir, paths.entryPath)),
+    sentinelPath: input.path.join(stagingDir, ".install-complete"),
+  };
+
+  return yield* Effect.gen(function* () {
+    const archiveSha256 = yield* installFromArchive(input, stagingDir);
+
+    input.onProgress?.({ stage: "validate" });
+    yield* input.validate(stagingPaths);
+    const entrySha256 = yield* fileSha256(
+      fs,
+      stagingPaths.entryPath,
+      "recording the installed executable digest",
+    );
+    yield* fs
+      .writeFileString(
+        input.path.join(stagingDir, PINNED_RUNTIME_RECORD_FILE),
+        encodeInstallRecord({ version: input.version, archiveSha256, entrySha256 }) + "\n",
+      )
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new PinnedRuntimeInstallError({ step: "recording the verified install", cause }),
+        ),
+      );
+    yield* fs
+      .writeFileString(stagingPaths.sentinelPath, `${input.version}\n`)
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new PinnedRuntimeInstallError({ step: "recording the completed install", cause }),
+        ),
+      );
+    const published = yield* fs.rename(stagingDir, paths.versionDir).pipe(
+      Effect.as(true),
+      Effect.catch((cause) =>
+        Effect.all([
+          fs.exists(paths.entryPath),
+          fs.readFileString(paths.sentinelPath).pipe(Effect.option),
+        ]).pipe(
+          Effect.mapError(
+            (checkCause) =>
+              new PinnedRuntimeInstallError({
+                step: "checking a concurrently published pinned runtime",
+                cause: checkCause,
+              }),
+          ),
+          Effect.flatMap(([publishedEntryExists, publishedSentinel]) =>
+            publishedEntryExists &&
+            Option.isSome(publishedSentinel) &&
+            publishedSentinel.value.trim() === input.version
+              ? Effect.succeed(false)
+              : Effect.fail(
+                  new PinnedRuntimeInstallError({
+                    step: "publishing the pinned runtime",
+                    cause,
+                  }),
+                ),
+          ),
+        ),
+      ),
+    );
+    if (!published) yield* input.validate(paths);
+    return paths;
+  }).pipe(
+    Effect.ensuring(fs.remove(stagingDir, { recursive: true, force: true }).pipe(Effect.ignore)),
+  );
+});
+
+export const ensurePinnedRuntimeInstalled = (input: PinnedRuntimeInstallInput) =>
+  pinnedRuntimeInstallLock.withPermit(installPinnedRuntime(input));
+
+export const PINNED_RUNTIME_PRUNED_PREFIX = ".pruned-";
+/**
+ * Another process may have just published a runtime it has not yet pointed anything at: an
+ * update, a downgrade, or the install script between unpacking and linking. The install lock only
+ * covers this process, so recently completed runtimes are left for a later prune.
+ */
+const PINNED_RUNTIME_PRUNE_GRACE = Duration.hours(1);
+/**
+ * One `goat` launcher path per line, appended by the install scripts and by any prune that finds a
+ * launcher on PATH. A service does not see the installer's `GOAT_INSTALL_BIN_DIR` or the
+ * interactive PATH, so this is how it finds a custom one, including installs that predate the file.
+ */
+const PINNED_RUNTIME_LAUNCHERS_FILE = "launchers";
+
+export function launcherOwnsVersionsDir(
+  path: Path.Path,
+  versionsDir: string,
+  candidate: string,
+): boolean {
+  const relative = path.relative(versionsDir, path.resolve(candidate));
+  return relative.length > 0 && !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
+/** The executable a `goat.cmd` shim written by the install script or `goat update` runs. */
+export const windowsShimTarget = (contents: string) => /^"([^"]+)"/m.exec(contents)?.[1];
+
+/** Where the `goat` launchers written by the install scripts and `goat update` point. */
+const shellLauncherTargets = Effect.fn("cloud.pinned_runtime.shell_launcher_targets")(function* (
+  baseDir: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const platform = yield* HostProcess.Platform;
+  const environment = yield* HostProcess.Environment;
+  const home = yield* HostProcess.HomeDirectory;
+  const launcherName = platform === "win32" ? "goat.cmd" : "goat";
+  const launchersFile = path.join(baseDir, PINNED_RUNTIME_DIR, PINNED_RUNTIME_LAUNCHERS_FILE);
+  const recorded = (yield* fs.readFileString(launchersFile).pipe(Effect.orElseSucceed(() => "")))
+    .split(/\r?\n/)
+    .filter((launcher) => launcher.trim().length > 0);
+  const found = [
+    environment["GOAT_INSTALL_BIN_DIR"] || path.join(home, ".local", "bin"),
+    ...(environment["PATH"] ?? environment["Path"] ?? "").split(platform === "win32" ? ";" : ":"),
+  ]
+    .filter((directory) => path.isAbsolute(directory))
+    .map((directory) => path.join(directory, launcherName));
+  const versionsDir = pinnedRuntimeVersionsDir(path, baseDir);
+  const realVersionsDir = yield* fs
+    .realPath(versionsDir)
+    .pipe(Effect.orElseSucceed(() => versionsDir));
+  const unrecorded: Array<string> = [];
+  const targets: Array<string> = [];
+  for (const launcher of [...recorded, ...found]) {
+    const target =
+      platform === "win32"
+        ? yield* fs.readFileString(launcher).pipe(
+            Effect.map(windowsShimTarget),
+            Effect.orElseSucceed(() => undefined),
+          )
+        : // Fully resolved, through chained links and a symlinked GOAT home alike.
+          yield* fs.realPath(launcher).pipe(Effect.orElseSucceed(() => undefined));
+    if (target === undefined) continue;
+    targets.push(target);
+    if (
+      (launcherOwnsVersionsDir(path, versionsDir, target) ||
+        launcherOwnsVersionsDir(path, realVersionsDir, target)) &&
+      !recorded.includes(launcher) &&
+      !unrecorded.includes(launcher)
+    ) {
+      unrecorded.push(launcher);
+    }
+  }
+  if (unrecorded.length > 0) {
+    yield* fs
+      .writeFileString(launchersFile, unrecorded.map((launcher) => `${launcher}\n`).join(""), {
+        flag: "a",
+      })
+      .pipe(Effect.ignore);
+  }
+  return targets;
+});
+
+/**
+ * Resolved executables rather than command lines: a server started through the `goat` symlink
+ * shows up as `goat serve`, possibly from another GOAT home that runs this home's runtimes. Windows
+ * has no symlink launcher, and its `goat.cmd` shim runs the absolute path, so command lines do there.
+ */
+const runningExecutables = Effect.fn("cloud.pinned_runtime.running_executables")(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const runner = yield* ProcessRunner.ProcessRunner;
+  const platform = yield* HostProcess.Platform;
+  if (platform === "linux") {
+    const pids = yield* fs.readDirectory("/proc").pipe(Effect.option);
+    if (Option.isNone(pids)) return Option.none<string>();
+    const executables: Array<string> = [];
+    for (const pid of pids.value) {
+      if (!/^\d+$/.test(pid)) continue;
+      // Unreadable ones belong to other users or are this user's non-dumpable daemons (systemd
+      // --user, ssh-agent). Neither runs a GOAT runtime, and bailing on them would never prune.
+      const executable = yield* fs.readLink(`/proc/${pid}/exe`).pipe(Effect.option);
+      if (Option.isSome(executable)) executables.push(executable.value);
+    }
+    return executables.length === 0 ? Option.none<string>() : Option.some(executables.join("\n"));
+  }
+  const result = yield* runner
+    .run({
+      ...(platform === "win32"
+        ? {
+            command: "powershell.exe",
+            args: [
+              "-NoProfile",
+              "-NonInteractive",
+              "-Command",
+              "Get-CimInstance Win32_Process | Select-Object -ExpandProperty CommandLine",
+            ],
+          }
+        : { command: "lsof", args: ["-nP", "-w", "-d", "txt", "-F", "n"] }),
+      timeout: Duration.seconds(10),
+      maxOutputBytes: 16 * 1024 * 1024,
+    })
+    .pipe(Effect.option);
+  return Option.isSome(result) && result.value.code === 0 && result.value.stdout.length > 0
+    ? Option.some(result.value.stdout)
+    : Option.none<string>();
+});
+
+/**
+ * Read-only: the completed runtimes nothing can start again, by the rules prunePinnedRuntimes
+ * documents, plus renamed leftovers of an interrupted prune. Null `unused` means the check
+ * could not decide (unreadable service state, no process list), so nothing counts as unused.
+ */
+const findUnusedRuntimes = Effect.fn("cloud.pinned_runtime.find_unused")(function* (input: {
+  readonly baseDir: string;
+  readonly keep: ReadonlyArray<string>;
+  readonly references: ReadonlyArray<string>;
+}) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const versionsDir = pinnedRuntimeVersionsDir(path, input.baseDir);
+  const entries = yield* fs.readDirectory(versionsDir).pipe(Effect.orElseSucceed(() => []));
+  // An interrupted prune has already renamed its runtime out of the way.
+  const pruned = new Set(
+    entries
+      .filter((entry) => entry.startsWith(PINNED_RUNTIME_PRUNED_PREFIX))
+      .map((entry) => path.join(versionsDir, entry)),
+  );
+
+  const settledBefore =
+    (yield* Clock.currentTimeMillis) - Duration.toMillis(PINNED_RUNTIME_PRUNE_GRACE);
+  const completed: Array<{ readonly version: string; readonly completedAt: number }> = [];
+  for (const version of entries) {
+    if (!isExactServiceVersion(version)) continue;
+    const versionDir = path.join(versionsDir, version);
+    const sentinelPath = path.join(versionDir, ".install-complete");
+    const isLink = yield* fs.readLink(versionDir).pipe(Effect.isSuccess);
+    const sentinel = yield* fs.readFileString(sentinelPath).pipe(Effect.option);
+    const completedAt = yield* fs.stat(sentinelPath).pipe(
+      Effect.map((info) => Option.getOrUndefined(info.mtime)?.getTime()),
+      Effect.orElseSucceed(() => undefined),
+    );
+    if (
+      !isLink &&
+      Option.isSome(sentinel) &&
+      sentinel.value.trim() === version &&
+      completedAt !== undefined &&
+      completedAt < settledBefore
+    ) {
+      completed.push({ version, completedAt });
+    }
+  }
+  const undecided = { versionsDir, pruned, completed, unused: null };
+  if (completed.length === 0) return { ...undecided, unused: [] as ReadonlyArray<string> };
+
+  const keep = new Set(input.keep);
+  const stateText = yield* fs
+    .readFileString(path.join(input.baseDir, PINNED_RUNTIME_DIR, SERVICE_STATE_FILE))
+    .pipe(
+      Effect.asSome,
+      Effect.catch((error) =>
+        Effect.succeed(error.reason._tag === "NotFound" ? Option.none<string>() : undefined),
+      ),
+    );
+  // State this version cannot read may reference runtimes in ways it does not know.
+  if (stateText === undefined) return undecided;
+  if (Option.isSome(stateText)) {
+    const state = parseServiceState(stateText.value);
+    if (state === undefined) return undecided;
+    keep.add(state.activeVersion);
+    if (state.update !== undefined) {
+      keep.add(state.update.fromVersion);
+      keep.add(state.update.targetVersion);
+    }
+  }
+  const executables = yield* runningExecutables();
+  // Without a process list, a runtime in use would look unused.
+  if (Option.isNone(executables)) return undecided;
+  const platform = yield* HostProcess.Platform;
+  // Windows paths are case-insensitive, and shims and process lists need not agree on case.
+  const foldCase = (value: string) => (platform === "win32" ? value.toLowerCase() : value);
+  const references = [
+    executables.value,
+    ...(yield* shellLauncherTargets(input.baseDir)),
+    ...input.references,
+  ].map(foldCase);
+  // Process executables are resolved, so they name the real path of a symlinked GOAT home.
+  const realVersionsDir = yield* fs
+    .realPath(versionsDir)
+    .pipe(Effect.orElseSucceed(() => versionsDir));
+
+  const unused: Array<string> = [];
+  for (const { version } of completed) {
+    const versionDir = path.join(versionsDir, version);
+    const prefixes = [versionDir, path.join(realVersionsDir, version)].map((dir) =>
+      foldCase(dir + path.sep),
+    );
+    if (
+      keep.has(version) ||
+      references.some((reference) => prefixes.some((prefix) => reference.includes(prefix)))
+    ) {
+      continue;
+    }
+    unused.push(version);
+  }
+  return { ...undecided, unused: unused as ReadonlyArray<string> };
+});
+
+/**
+ * Renaming first means an interrupted removal never leaves a partial tree that still carries
+ * its sentinel and would pass for a complete install.
+ */
+const renameForRemoval = Effect.fn("cloud.pinned_runtime.rename_for_removal")(function* (
+  versionsDir: string,
+  version: string,
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const target = path.join(versionsDir, `${PINNED_RUNTIME_PRUNED_PREFIX}${version}`);
+  yield* fs.remove(target, { recursive: true, force: true });
+  yield* fs.rename(path.join(versionsDir, version), target);
+  return target;
+});
+
+const selectUnusedRuntimes = Effect.fn("cloud.pinned_runtime.select_unused")(function* (input: {
+  readonly baseDir: string;
+  readonly keep: ReadonlyArray<string>;
+  readonly references: ReadonlyArray<string>;
+}) {
+  const found = yield* findUnusedRuntimes(input);
+  const pruned = new Set(found.pruned);
+  for (const version of found.unused ?? []) {
+    yield* renameForRemoval(found.versionsDir, version).pipe(
+      Effect.tap((target) => Effect.sync(() => pruned.add(target))),
+      Effect.catch((cause) =>
+        Effect.logWarning("Could not remove an unused GOAT runtime.", { version, cause }),
+      ),
+    );
+  }
+  return pruned;
+});
+
+export interface PinnedRuntimeVersion {
+  readonly version: string;
+  readonly directory: string;
+  readonly completedAt: number;
+  /** Nothing can start it again: no service state, running process or launcher refers to it. */
+  readonly unused: boolean;
+}
+
+/**
+ * Completed runtimes in this GOAT home and whether each is unused, without changing anything.
+ * `decided` is false when the check could not tell, and then nothing is unused.
+ */
+export const listPinnedRuntimes = Effect.fn("cloud.pinned_runtime.list")(function* (input: {
+  readonly baseDir: string;
+  readonly keep: ReadonlyArray<string>;
+}) {
+  const path = yield* Path.Path;
+  const found = yield* findUnusedRuntimes({ ...input, references: [] });
+  const unused = new Set(found.unused ?? []);
+  return {
+    decided: found.unused !== null,
+    runtimes: found.completed.map(({ version, completedAt }): PinnedRuntimeVersion => ({
+      version,
+      directory: path.join(found.versionsDir, version),
+      completedAt,
+      unused: unused.has(version),
+    })),
+  };
+});
+
+/**
+ * Removes one runtime a person chose, only if it is still unused under the install lock. Unlike
+ * prunePinnedRuntimes it never touches other runtimes or an earlier prune's leftovers.
+ * Null when it was removed, otherwise why it stayed: in use, reached through a link below the
+ * GOAT home (which could lead outside it), or an earlier removal's leftover in the way.
+ */
+export const removeUnusedPinnedRuntime = Effect.fn("cloud.pinned_runtime.remove_one")(
+  function* (input: {
+    readonly baseDir: string;
+    readonly keep: ReadonlyArray<string>;
+    readonly version: string;
+  }) {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const renamed = yield* pinnedRuntimeInstallLock.withPermit(
+      Effect.gen(function* () {
+        const found = yield* findUnusedRuntimes({ ...input, references: [] });
+        if (!(found.unused ?? []).includes(input.version))
+          return { kept: "it is in use now" } as const;
+        const versionDir = path.join(found.versionsDir, input.version);
+        if (!(yield* reachedWithoutLinks(input.baseDir, versionDir)))
+          return { kept: "it is reached through a link inside the GOAT home" } as const;
+        const target = path.join(
+          found.versionsDir,
+          `${PINNED_RUNTIME_PRUNED_PREFIX}${input.version}`,
+        );
+        if (yield* fs.exists(target).pipe(Effect.orElseSucceed(() => true)))
+          return { kept: "an earlier removal left " + target + " in the way" } as const;
+        yield* fs.rename(versionDir, target);
+        return { target, kept: null } as const;
+      }),
+    );
+    if (renamed.kept !== null) return renamed.kept;
+    yield* fs.remove(renamed.target, { recursive: true, force: true });
+    return null;
+  },
+);
+
+/**
+ * Whether a folder below the GOAT home resolves to that same place under the real home: no link
+ * between the home and the folder. Links above the home (macOS /var) do not matter.
+ */
+export const reachedWithoutLinks = Effect.fn("cloud.pinned_runtime.reached_without_links")(
+  function* (baseDir: string, folder: string) {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const realHome = yield* fs.realPath(baseDir).pipe(Effect.orElseSucceed(() => null));
+    const realFolder = yield* fs.realPath(folder).pipe(Effect.orElseSucceed(() => null));
+    if (realHome === null || realFolder === null) return false;
+    const relative = path.relative(path.resolve(baseDir), path.resolve(folder));
+    return (
+      relative !== "" &&
+      !relative.startsWith("..") &&
+      !path.isAbsolute(relative) &&
+      realFolder === path.join(realHome, relative)
+    );
+  },
+);
+
+/**
+ * Keep runtimes named by callers, service state, running processes, launchers, or references,
+ * and anything published within an hour. Only prune completed runtimes; leave staging
+ * directories, symlinks, and unexpected entries untouched.
+ */
+export const prunePinnedRuntimes = Effect.fn("cloud.pinned_runtime.prune")(function* (input: {
+  readonly baseDir: string;
+  readonly keep: ReadonlyArray<string>;
+  readonly references?: ReadonlyArray<string>;
+}) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  // Only selection and the renames race an install; deleting renamed trees can take a while.
+  const pruned = yield* pinnedRuntimeInstallLock.withPermit(
+    selectUnusedRuntimes({ ...input, references: input.references ?? [] }),
+  );
+  const removed: Array<string> = [];
+  for (const target of pruned) {
+    yield* fs.remove(target, { recursive: true, force: true }).pipe(
+      Effect.andThen(
+        Effect.sync(() =>
+          removed.push(path.basename(target).slice(PINNED_RUNTIME_PRUNED_PREFIX.length)),
+        ),
+      ),
+      Effect.catch((cause) =>
+        Effect.logWarning("Could not remove an unused GOAT runtime.", { target, cause }),
+      ),
+    );
+  }
+  return removed;
+});

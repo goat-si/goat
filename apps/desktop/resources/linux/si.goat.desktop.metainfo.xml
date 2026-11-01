@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>si.goat.desktop</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>GOAT</name>
+  <summary>Desktop GUI for coding agents</summary>
+  <developer id="si.goat">
+    <name>GOAT</name>
+  </developer>
+  <description>
+    <p>
+      GOAT is an open-source desktop app for coding agents. Work with your
+      existing agent subscriptions, review code changes, and run commands in
+      your projects.
+    </p>
+    <p>
+      Connect from desktop, web, or mobile to continue working remotely.
+    </p>
+  </description>
+  <!-- Earlier packages shipped this component as com.t3tools.t3code. -->
+  <replaces>
+    <id>com.t3tools.t3code</id>
+  </replaces>
+  <!-- The desktop entry keeps its pre-rename name (ADR-0014); the icon and binary follow the
+       Electron executable name. -->
+  <launchable type="desktop-id">t3code.desktop</launchable>
+  <icon type="stock">goat-desktop</icon>
+  <provides>
+    <binary>goat-desktop</binary>
+  </provides>
+  <categories>
+    <category>Development</category>
+  </categories>
+  <!-- Releases repository URLs: shipped artifacts do not link the source repository (D-10). -->
+  <url type="homepage">https://github.com/goat-si/goat-releases</url>
+  <url type="bugtracker">https://github.com/goat-si/goat-releases/issues</url>
+</component>

@@ -1,0 +1,36 @@
+HEAD 852ebfb51a2190e32bd572830c9f1aa8e0ab8588
+       0
+version 0.0.45
+b5e72f3c4d265f45b6e65e983e237eb7f339406c639cf6668675a7a4477fd780  /Users/jun/Developer/new/700_projects/t3code-lanes/goat-release-rename/.t3/runtime/archives/goat-0.0.45-darwin-arm64.tar.gz
+goat-0.0.45-darwin-arm64/
+goat-0.0.45-darwin-arm64/node_modules/
+goat-0.0.45-darwin-arm64/goat
+goat-0.0.45-darwin-arm64/resource-monitor/
+goat-0.0.45-darwin-arm64/client/
+goat-0.0.45-darwin-arm64/client/favicon-16x16.png
+goat-0.0.45-darwin-arm64/client/favicon.ico
+goat-0.0.45-darwin-arm64/client/index.html
+binary b73d8f7a39fab3edc6504438c614ffa472ceb9d8bf8b033002682d084d262bcd
+node:internal/modules/cjs/loader:1569
+  const err = new Error(message);
+              ^
+
+Error: Cannot find module '@cursor/sdk'
+Require stack:
+- /private/tmp/goat-wp5/x/goat-0.0.45-darwin-arm64/goat
+    at Module._resolveFilename (node:internal/modules/cjs/loader:1569:15)
+    at wrapResolveFilename (node:internal/modules/cjs/loader:1123:27)
+    at defaultResolveImplForCJSLoading (node:internal/modules/cjs/loader:1147:10)
+    at resolveForCJSWithHooks (node:internal/modules/cjs/loader:1174:12)
+    at Module._load (node:internal/modules/cjs/loader:1346:5)
+    at wrapModuleLoad (node:internal/modules/cjs/loader:261:19)
+    at Module.require (node:internal/modules/cjs/loader:1679:12)
+    at require (node:internal/modules/helpers:196:16)
+    at file:///private/tmp/goat-wp5/x/goat-0.0.45-darwin-arm64/goat:288332:137
+    at file:///private/tmp/goat-wp5/x/goat-0.0.45-darwin-arm64/goat:68:23 {
+  code: 'MODULE_NOT_FOUND',
+  requireStack: [ '/private/tmp/goat-wp5/x/goat-0.0.45-darwin-arm64/goat' ]
+}
+
+Node.js v26.8.2
+goat v0.0.45

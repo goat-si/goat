@@ -1,0 +1,37 @@
+#!/usr/bin/env sh
+# Every workflow in a pushed tip must be disabled on goat-si/goat or pass the goat CI guard.
+remote_url=$(printf '%s' "$2" | tr '[:upper:]' '[:lower:]')
+case "$remote_url" in *goat-si/goat*) ;; *) exit 0 ;; esac
+if [ "${GOAT_SKIP_WORKFLOW_GUARD:-}" = "1" ]; then
+  echo "goat pre-push: workflow guard skipped; Actions must already be disabled" >&2
+  exit 0
+fi
+
+zero=0000000000000000000000000000000000000000
+loaded=0
+status=0
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ "$local_sha" = "$zero" ] && continue
+  if [ "$loaded" -eq 0 ]; then
+    if ! command -v node >/dev/null 2>&1; then
+      echo "goat pre-push: node is unavailable; refusing to push" >&2
+      exit 1
+    fi
+    if ! root=$(git rev-parse --show-toplevel); then
+      echo "goat pre-push: cannot determine repository root; refusing to push" >&2
+      exit 1
+    fi
+    if ! disabled=$(gh api --paginate "repos/goat-si/goat/actions/workflows?per_page=100" --jq '.workflows[] | select(.state=="disabled_manually") | .path'); then
+      echo "goat pre-push: could not read workflow states from GitHub; refusing to push" >&2
+      exit 1
+    fi
+    loaded=1
+  fi
+  if ! GOAT_DISABLED_WORKFLOWS="$disabled" node "$root/.vite-hooks/goat-workflow-guard.mjs" "$local_sha" "$local_ref"; then
+    status=1
+  fi
+done
+if [ "$status" -ne 0 ]; then
+  echo "goat pre-push: disable Actions (gh api -X PUT repos/goat-si/goat/actions/permissions -F enabled=false), push, disable the new workflows, then re-enable Actions." >&2
+fi
+exit "$status"

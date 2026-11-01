@@ -1,0 +1,28 @@
+#!/usr/bin/env sh
+# goat fork guard: never push a workflow that could run on GitHub-hosted runners.
+# Every workflow file in a pushed tip must be goat-ci.yml or already disabled on goat-si/goat.
+# To bring in a new workflow: disable Actions, push, disable the new workflow, re-enable Actions.
+case "$2" in *goat-si/goat*) ;; *) exit 0 ;; esac
+[ "${GOAT_SKIP_WORKFLOW_GUARD:-}" = "1" ] && { echo "goat pre-push: workflow guard skipped; Actions must already be disabled" >&2; exit 0; }
+zero=0000000000000000000000000000000000000000
+disabled=$(gh api --paginate "repos/goat-si/goat/actions/workflows?per_page=100" --jq '.workflows[] | select(.state=="disabled_manually") | .path') || {
+  echo "goat pre-push: could not read workflow states from GitHub; refusing to push" >&2
+  exit 1
+}
+status=0
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ "$local_sha" = "$zero" ] && continue
+  for f in $(git ls-tree -r --name-only "$local_sha" -- .github/workflows); do
+    case "$f" in *.yml|*.yaml) ;; *) continue ;; esac
+    [ "$f" = ".github/workflows/goat-ci.yml" ] && continue
+    if ! printf '%s\n' "$disabled" | grep -qxF "$f"; then
+      echo "goat pre-push: $f in $local_ref is not disabled on goat-si/goat" >&2
+      status=1
+    fi
+  done
+done
+if [ "$status" -ne 0 ]; then
+  echo "goat pre-push: disable Actions (gh api -X PUT repos/goat-si/goat/actions/permissions -F enabled=false), push, disable the new workflows, then re-enable Actions." >&2
+fi
+exit "$status"
+

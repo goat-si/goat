@@ -1,0 +1,20 @@
+# One page of a pull request's full commit messages, with the head they were read against, so a
+# moving head resets the scan instead of mixing pages from two heads.
+query CloudSessionCommits($owner: String!, $name: String!, $number: Int!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      headRefOid
+      commits(first: 100, after: $after) {
+        nodes {
+          commit {
+            message
+          }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+      }
+    }
+  }
+}

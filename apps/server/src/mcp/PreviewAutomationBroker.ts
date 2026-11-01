@@ -1,0 +1,858 @@
+import {
+  PREVIEW_AUTOMATION_V1_OPERATIONS,
+  PreviewAutomationClientDisconnectedError,
+  PreviewAutomationClosedPopup,
+  PreviewAutomationControlInterruptedError,
+  PreviewAutomationControlReason,
+  PreviewAutomationExecutionError,
+  PreviewAutomationReadError,
+  PreviewAutomationReadFailure,
+  SERVER_BROWSER_AUTOMATION_CLIENT_ID,
+  PreviewAutomationInvalidSelectorError,
+  PreviewAutomationMalformedResponseError,
+  PreviewAutomationNoAvailableHostError,
+  PreviewAutomationRemoteUnavailableError,
+  PreviewAutomationRecordingTransferError,
+  PreviewAutomationRecordingDesktopUpdateRequiredError,
+  PreviewAutomationRecordingTooLargeError,
+  PreviewAutomationRecordingDeadlineExpiredError,
+  PreviewAutomationRequestQueueClosedError,
+  PreviewAutomationResultTooLargeError,
+  PreviewAutomationTabNotFoundError,
+  PreviewAutomationTargetNotEditableError,
+  PreviewAutomationTimeoutError,
+  PreviewAutomationUnsupportedClientError,
+  PreviewTabId,
+  type PreviewAutomationError,
+  type PreviewAutomationOperation,
+  type PreviewAutomationHost,
+  type PreviewAutomationHostFocus,
+  type PreviewAutomationResponse,
+  type PreviewAutomationStreamEvent,
+} from "@goat/contracts";
+import * as Context from "effect/Context";
+import type * as Cause from "effect/Cause";
+import * as Crypto from "effect/Crypto";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Queue from "effect/Queue";
+import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
+import * as SynchronizedRef from "effect/SynchronizedRef";
+
+import * as McpInvocationContext from "./McpInvocationContext.ts";
+import * as BoundPreviewTabs from "../screenCode/BoundPreviewTabs.ts";
+
+const HOST_RESPONSE_GRACE_MS = 1_000;
+
+export interface PreviewAutomationInvokeInput {
+  readonly scope: McpInvocationContext.McpThreadInvocationScope;
+  readonly runId?: string;
+  readonly operation: PreviewAutomationOperation;
+  readonly input: unknown;
+  readonly tabId?: PreviewTabId;
+  readonly exact?: BoundPreviewTabs.ExactPreviewTab;
+  /** Code-mode new-tab creation cannot select an older host without the exact expectation gate. */
+  readonly serverHostOnly?: boolean;
+  readonly timeoutMs?: number;
+  /** Background metadata reads must not change the agent's current tab. */
+  readonly updateCurrentTab?: boolean;
+  readonly onTargetTab?: (tabId: PreviewTabId | undefined) => void;
+}
+
+export interface PreviewAutomationConnectOptions {
+  readonly preferred?: boolean;
+  /** Only the server's own browser may fill secrets: other hosts never get the operation. */
+  readonly inProcess?: boolean;
+}
+
+export class PreviewAutomationBroker extends Context.Service<
+  PreviewAutomationBroker,
+  {
+    readonly connect: (
+      host: PreviewAutomationHost,
+      options?: PreviewAutomationConnectOptions,
+    ) => Effect.Effect<Stream.Stream<PreviewAutomationStreamEvent>>;
+    readonly focusHost: (host: PreviewAutomationHostFocus) => Effect.Effect<void>;
+    readonly respond: (
+      response: PreviewAutomationResponse,
+    ) => Effect.Effect<void, PreviewAutomationError>;
+    readonly invoke: <A = unknown>(
+      request: PreviewAutomationInvokeInput,
+    ) => Effect.Effect<A, PreviewAutomationError>;
+    readonly listBoundTabs: BoundPreviewTabs.ListBoundTabs;
+    readonly canOpenTab: BoundPreviewTabs.CanOpenTab;
+  }
+>()("goat/mcp/PreviewAutomationBroker") {}
+
+interface ClientConnection {
+  readonly clientId: string;
+  readonly connectionId: string;
+  readonly environmentId: PreviewAutomationHost["environmentId"];
+  readonly supportedOperations: ReadonlySet<PreviewAutomationOperation>;
+  readonly supportedFeatures: ReadonlySet<string>;
+  readonly focused: boolean;
+  readonly preferred: boolean;
+  readonly inProcess: boolean;
+  readonly liveTabs: NonNullable<PreviewAutomationHostFocus["liveTabs"]>;
+  readonly focusOrder: number;
+  readonly queue: Queue.Queue<PreviewAutomationStreamEvent, Cause.Done>;
+}
+
+interface PendingRequest {
+  readonly queue: ClientConnection["queue"];
+  readonly deferred: Deferred.Deferred<unknown, PreviewAutomationError>;
+  readonly context: PreviewAutomationRequestErrorContext;
+}
+
+/** A lease belongs to this exact connectionId/queue; replacing the host invalidates it. */
+interface HostAssignment {
+  readonly clientId: ClientConnection["clientId"];
+  readonly connectionId: ClientConnection["connectionId"];
+  readonly queue: ClientConnection["queue"];
+  readonly tabId?: PreviewTabId;
+  readonly tabSequence?: number;
+}
+
+interface PreviewAutomationRequestErrorContext {
+  readonly operation: PreviewAutomationOperation;
+  readonly environmentId: McpInvocationContext.McpInvocationScope["environmentId"];
+  readonly threadId: McpInvocationContext.McpThreadCaller["threadId"];
+  readonly providerSessionId: string;
+  readonly providerInstanceId: McpInvocationContext.McpThreadCaller["providerInstanceId"];
+  readonly clientId: string;
+  readonly connectionId: ClientConnection["connectionId"];
+  readonly requestId: string;
+  readonly tabId?: PreviewTabId;
+  readonly timeoutMs: number;
+  readonly selectorKind?: "locator" | "selector";
+  readonly selectorLength?: number;
+}
+
+interface BrokerState {
+  readonly clients: ReadonlyMap<string, ClientConnection>;
+  readonly assignments: ReadonlyMap<string, HostAssignment>;
+  readonly pending: ReadonlyMap<string, PendingRequest>;
+  readonly requestSequence: number;
+  readonly focusSequence: number;
+}
+
+const removeConnectionFromState = (
+  current: BrokerState,
+  clientId: string,
+  queue: ClientConnection["queue"],
+): { readonly state: BrokerState; readonly disconnected: ReadonlyArray<PendingRequest> } => {
+  const clients = new Map(current.clients);
+  const assignments = new Map(current.assignments);
+  const pending = new Map(current.pending);
+  const disconnected: PendingRequest[] = [];
+  if (current.clients.get(clientId)?.queue === queue) clients.delete(clientId);
+  for (const [assignmentKey, assignment] of assignments) {
+    if (assignment.queue === queue) assignments.delete(assignmentKey);
+  }
+  for (const [requestId, entry] of pending) {
+    if (entry.queue !== queue) continue;
+    pending.delete(requestId);
+    disconnected.push(entry);
+  }
+  return {
+    state: { ...current, clients, assignments, pending },
+    disconnected,
+  };
+};
+
+const selectorDiagnosticsFromInput = (
+  input: unknown,
+): Pick<PreviewAutomationRequestErrorContext, "selectorKind" | "selectorLength"> => {
+  if (typeof input !== "object" || input === null) return {};
+  if ("locator" in input && typeof input.locator === "string") {
+    return { selectorKind: "locator", selectorLength: input.locator.length };
+  }
+  if ("selector" in input && typeof input.selector === "string") {
+    return { selectorKind: "selector", selectorLength: input.selector.length };
+  }
+  return {};
+};
+
+/** Codex/OpenCode share sessions across threads; include thread id to isolate tabs and ownership. */
+const hostAssignmentKey = (scope: McpInvocationContext.McpThreadInvocationScope): string =>
+  `${scope.environmentId}\u0000${scope.thread.providerSessionId}\u0000${scope.thread.threadId}`;
+
+const isPreviewTabId = Schema.is(PreviewTabId);
+const decodeControlReason = Schema.decodeUnknownOption(PreviewAutomationControlReason);
+const decodeClosedPopup = Schema.decodeUnknownOption(PreviewAutomationClosedPopup);
+
+const readResultTabId = (result: unknown): PreviewTabId | null | undefined => {
+  if (typeof result !== "object" || result === null || !("tabId" in result)) return undefined;
+  const tabId = result.tabId;
+  return tabId === null || isPreviewTabId(tabId) ? tabId : undefined;
+};
+
+const supportsOperation = (
+  connection: ClientConnection,
+  operation: PreviewAutomationOperation,
+): boolean =>
+  connection.supportedOperations.has(operation) &&
+  // Only the server browser keeps secrets out of the client and opens tabs in a chosen session.
+  ((operation !== "fillSecret" && operation !== "open" && operation !== "claim") ||
+    connection.inProcess);
+
+const supportsRequest = (
+  connection: ClientConnection,
+  request: PreviewAutomationInvokeInput,
+): boolean => {
+  const input = request.input;
+  return (
+    supportsOperation(connection, request.operation) &&
+    (request.operation !== "snapshot" ||
+      typeof input !== "object" ||
+      input === null ||
+      !["scope", "interactiveOnly", "diff", "annotate"].some((key) => key in input) ||
+      connection.supportedFeatures.has("snapshotOptions"))
+  );
+};
+
+type RemoteDetailKind = "null" | "array" | "object" | "string" | "number" | "boolean";
+
+function remoteDetailKind(detail: unknown): RemoteDetailKind {
+  if (detail === null) return "null";
+  if (Array.isArray(detail)) return "array";
+  switch (typeof detail) {
+    case "string":
+      return "string";
+    case "number":
+      return "number";
+    case "boolean":
+      return "boolean";
+    default:
+      return "object";
+  }
+}
+
+const readRemoteTimeoutMs = (detail: unknown): number | undefined => {
+  if (typeof detail !== "object" || detail === null || !("timeoutMs" in detail)) return undefined;
+  const timeoutMs = detail.timeoutMs;
+  return typeof timeoutMs === "number" && Number.isInteger(timeoutMs) && timeoutMs > 0
+    ? timeoutMs
+    : undefined;
+};
+
+const MAX_REASON_CHARS = 500;
+const isReadFailure = Schema.is(PreviewAutomationReadFailure);
+
+type SecretFailure = "no_candidate" | "not_permitted" | "unavailable";
+const isSecretFailure = (value: unknown): value is SecretFailure =>
+  value === "no_candidate" || value === "not_permitted" || value === "unavailable";
+/** The server browser names why a secret fill could not use its secretRef. */
+const secretFailureOf = (detail: unknown): { readonly secretFailure?: SecretFailure } => {
+  const value =
+    typeof detail === "object" && detail !== null && "secretFailure" in detail
+      ? detail.secretFailure
+      : undefined;
+  return isSecretFailure(value) ? { secretFailure: value } : {};
+};
+
+type FetchFailure = "cors" | "csp" | "dns" | "network";
+/** The server browser names why a tab's fetch got no readable response. */
+const fetchFailureOf = (detail: unknown): { readonly fetchFailure?: FetchFailure } => {
+  const value =
+    typeof detail === "object" && detail !== null && "fetchFailure" in detail
+      ? detail.fetchFailure
+      : undefined;
+  return value === "cors" || value === "csp" || value === "dns" || value === "network"
+    ? { fetchFailure: value }
+    : {};
+};
+
+/** The server browser names the tab an open made whose page never connected. */
+const openFailureOf = (detail: unknown) => {
+  if (typeof detail !== "object" || detail === null) return {};
+  const tabId = "openedTabId" in detail ? detail.openedTabId : undefined;
+  const loadError = "loadError" in detail ? detail.loadError : undefined;
+  return typeof tabId === "string" &&
+    tabId.length > 0 &&
+    typeof loadError === "string" &&
+    /^ERR_[A-Z0-9_]{1,76}$/.test(loadError)
+    ? { unloadedTab: { tabId: PreviewTabId.make(tabId), loadError } }
+    : {};
+};
+
+const classifyResponseError = (
+  context: PreviewAutomationRequestErrorContext,
+  error: NonNullable<PreviewAutomationResponse["error"]>,
+): PreviewAutomationError => {
+  // A host that refused before any input left says so in its detail; the classifier reads it.
+  const hostDetail = error.detail;
+  const notSent =
+    typeof hostDetail === "object" &&
+    hostDetail !== null &&
+    "beforeInput" in hostDetail &&
+    hostDetail.beforeInput === true
+      ? { dispatched: false }
+      : {};
+  const remoteDiagnostics = {
+    remoteTag: error._tag,
+    remoteMessageLength: error.message.length,
+    ...(error.detail === undefined ? {} : { remoteDetailKind: remoteDetailKind(error.detail) }),
+    cause: error,
+  };
+  switch (error._tag) {
+    case "PreviewAutomationReadError": {
+      const reason =
+        typeof error.detail === "object" && error.detail !== null && "reason" in error.detail
+          ? error.detail.reason
+          : undefined;
+      if (isReadFailure(reason)) return new PreviewAutomationReadError({ reason });
+      return new PreviewAutomationMalformedResponseError(context);
+    }
+    case "PreviewAutomationRecordingDesktopUpdateRequiredError":
+      return new PreviewAutomationRecordingDesktopUpdateRequiredError({
+        threadId: context.threadId,
+        cause: error,
+      });
+    case "PreviewAutomationRecordingTooLargeError":
+      return new PreviewAutomationRecordingTooLargeError({
+        threadId: context.threadId,
+        cause: error,
+      });
+    case "PreviewAutomationRecordingDeadlineExpiredError":
+      return new PreviewAutomationRecordingDeadlineExpiredError({
+        threadId: context.threadId,
+        cause: error,
+      });
+    case "PreviewAutomationRecordingTransferError":
+      return new PreviewAutomationRecordingTransferError({
+        threadId: context.threadId,
+        cause: error,
+      });
+    case "PreviewAutomationNoAvailableHostError":
+      return new PreviewAutomationNoAvailableHostError({
+        ...context,
+        ...remoteDiagnostics,
+      });
+    case "PreviewAutomationUnsupportedClientError":
+      return new PreviewAutomationUnsupportedClientError({
+        ...context,
+        ...remoteDiagnostics,
+      });
+    case "PreviewAutomationTabNotFoundError": {
+      const detail = error.detail;
+      const closedPopup = decodeClosedPopup(
+        typeof detail === "object" && detail !== null && "closedPopup" in detail
+          ? detail.closedPopup
+          : undefined,
+      );
+      return new PreviewAutomationTabNotFoundError({
+        ...context,
+        ...remoteDiagnostics,
+        ...(Option.isSome(closedPopup) ? { closedPopup: closedPopup.value } : {}),
+      });
+    }
+    case "PreviewAutomationTimeoutError": {
+      const remoteTimeoutMs = readRemoteTimeoutMs(error.detail);
+      const interceptedBy =
+        typeof error.detail === "object" &&
+        error.detail !== null &&
+        "interceptedBy" in error.detail &&
+        typeof error.detail.interceptedBy === "string"
+          ? error.detail.interceptedBy.slice(0, 300)
+          : undefined;
+      return new PreviewAutomationTimeoutError({
+        ...context,
+        ...remoteDiagnostics,
+        ...notSent,
+        ...(interceptedBy ? { interceptedBy } : {}),
+        ...(remoteTimeoutMs === undefined
+          ? {}
+          : { timeoutMs: Math.min(context.timeoutMs, remoteTimeoutMs) }),
+      });
+    }
+    case "PreviewAutomationControlInterruptedError": {
+      // A bare reason, or {reason, beforeInput} when GOAT refused before any input left.
+      const detail = error.detail;
+      const object = typeof detail === "object" && detail !== null ? detail : undefined;
+      const reason = decodeControlReason(object && "reason" in object ? object.reason : detail);
+      const sent =
+        object && "beforeInput" in object && object.beforeInput === false
+          ? { dispatched: true }
+          : {};
+      return new PreviewAutomationControlInterruptedError({
+        ...context,
+        ...remoteDiagnostics,
+        ...(Option.isSome(reason) ? { reason: reason.value } : {}),
+        ...notSent,
+        ...sent,
+      });
+    }
+    case "PreviewAutomationInvalidSelectorError": {
+      const staleRef =
+        typeof error.detail === "object" &&
+        error.detail !== null &&
+        "staleRef" in error.detail &&
+        error.detail.staleRef === true;
+      const noMatch =
+        typeof error.detail === "object" &&
+        error.detail !== null &&
+        "noMatch" in error.detail &&
+        error.detail.noMatch === true;
+      const matchCount =
+        typeof error.detail === "object" && error.detail !== null && "matchCount" in error.detail
+          ? error.detail.matchCount
+          : undefined;
+      return new PreviewAutomationInvalidSelectorError({
+        ...context,
+        ...remoteDiagnostics,
+        ...(staleRef ? { staleRef } : {}),
+        ...(noMatch ? { noMatch } : {}),
+        ...(Number.isSafeInteger(matchCount) && Number(matchCount) >= 2
+          ? { matchCount: Number(matchCount) }
+          : {}),
+      });
+    }
+    case "PreviewAutomationTargetNotEditableError": {
+      const detail =
+        typeof error.detail === "object" && error.detail !== null ? error.detail : undefined;
+      const remoteSelectorKind =
+        detail &&
+        "selectorKind" in detail &&
+        (detail.selectorKind === "focused-element" ||
+          detail.selectorKind === "locator" ||
+          detail.selectorKind === "selector")
+          ? detail.selectorKind
+          : undefined;
+      const remoteSelectorLength =
+        detail &&
+        "selectorLength" in detail &&
+        typeof detail.selectorLength === "number" &&
+        Number.isInteger(detail.selectorLength) &&
+        detail.selectorLength >= 0
+          ? detail.selectorLength
+          : undefined;
+      return new PreviewAutomationTargetNotEditableError({
+        ...context,
+        ...remoteDiagnostics,
+        ...(remoteSelectorKind === undefined && context.selectorKind === undefined
+          ? {}
+          : { selectorKind: remoteSelectorKind ?? context.selectorKind }),
+        ...(remoteSelectorLength === undefined && context.selectorLength === undefined
+          ? {}
+          : { selectorLength: remoteSelectorLength ?? context.selectorLength }),
+      });
+    }
+    case "PreviewAutomationResultTooLargeError": {
+      const detail =
+        typeof error.detail === "object" && error.detail !== null ? error.detail : undefined;
+      const maximumBytes =
+        detail &&
+        "maximumBytes" in detail &&
+        typeof detail.maximumBytes === "number" &&
+        Number.isInteger(detail.maximumBytes) &&
+        detail.maximumBytes > 0
+          ? detail.maximumBytes
+          : undefined;
+      return new PreviewAutomationResultTooLargeError({
+        ...context,
+        ...remoteDiagnostics,
+        ...(maximumBytes === undefined ? {} : { maximumBytes }),
+      });
+    }
+    case "PreviewAutomationUnavailableError":
+      return new PreviewAutomationRemoteUnavailableError({
+        ...context,
+        ...remoteDiagnostics,
+      });
+    default:
+      return new PreviewAutomationExecutionError({
+        ...context,
+        ...remoteDiagnostics,
+        ...notSent,
+        ...(context.clientId === SERVER_BROWSER_AUTOMATION_CLIENT_ID
+          ? {
+              reason: error.message.slice(0, MAX_REASON_CHARS),
+              ...secretFailureOf(hostDetail),
+              ...fetchFailureOf(hostDetail),
+              ...openFailureOf(hostDetail),
+            }
+          : {}),
+      });
+  }
+};
+
+export const make = Effect.gen(function* PreviewAutomationBrokerMake() {
+  const crypto = yield* Crypto.Crypto;
+  const state = yield* SynchronizedRef.make<BrokerState>({
+    clients: new Map(),
+    assignments: new Map(),
+    pending: new Map(),
+    requestSequence: 0,
+    focusSequence: 0,
+  });
+
+  const closeConnection = Effect.fn("PreviewAutomationBroker.closeConnection")(function* (
+    queue: ClientConnection["queue"],
+    disconnected: ReadonlyArray<PendingRequest>,
+    completeStream = false,
+  ) {
+    if (completeStream) {
+      // Close the evicted generation's RPC stream so a responsive desktop can re-register.
+      yield* Queue.clear(queue);
+      yield* Queue.end(queue);
+    } else {
+      // Replaced registrations must not reconnect and displace their successor.
+      yield* Queue.shutdown(queue);
+    }
+    yield* Effect.forEach(
+      disconnected,
+      ({ deferred, context }) =>
+        Deferred.fail(deferred, new PreviewAutomationClientDisconnectedError(context)),
+      { discard: true },
+    );
+  });
+
+  const disconnect = Effect.fn("PreviewAutomationBroker.disconnect")(function* (
+    clientId: string,
+    queue: ClientConnection["queue"],
+    completeStream = false,
+  ) {
+    yield* SynchronizedRef.modifyEffect(state, (current) => {
+      if (current.clients.get(clientId)?.queue !== queue) {
+        return Effect.succeed([undefined, current] as const);
+      }
+      const removed = removeConnectionFromState(current, clientId, queue);
+      return closeConnection(queue, removed.disconnected, completeStream).pipe(
+        Effect.as([undefined, removed.state] as const),
+      );
+    });
+  });
+
+  const acquireConnection = Effect.fn("PreviewAutomationBroker.acquireConnection")(function* (
+    host: PreviewAutomationHost,
+    options: PreviewAutomationConnectOptions | undefined,
+  ) {
+    const clientId = host.clientId;
+    const queue = yield* Queue.unbounded<PreviewAutomationStreamEvent, Cause.Done>();
+    const connectionId = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
+    yield* Queue.offer(queue, { type: "connected", connectionId });
+    const connection: ClientConnection = {
+      clientId,
+      connectionId,
+      environmentId: host.environmentId,
+      supportedOperations: new Set(host.supportedOperations ?? PREVIEW_AUTOMATION_V1_OPERATIONS),
+      supportedFeatures: new Set(host.supportedFeatures ?? []),
+      focused: false,
+      preferred: options?.preferred ?? false,
+      inProcess: options?.inProcess ?? false,
+      liveTabs: [],
+      focusOrder: 0,
+      queue,
+    };
+    const registration = yield* SynchronizedRef.modify(state, (current) => {
+      const previousConnection = current.clients.get(clientId);
+      const removed = previousConnection
+        ? removeConnectionFromState(current, clientId, previousConnection.queue)
+        : { state: current, disconnected: [] };
+      const clients = new Map(removed.state.clients);
+      const focusSequence = removed.state.focusSequence + 1;
+      const registeredConnection = { ...connection, focusOrder: focusSequence };
+      clients.set(clientId, registeredConnection);
+      return [
+        {
+          previousConnection,
+          disconnected: removed.disconnected,
+          registeredConnection,
+        },
+        { ...removed.state, clients, focusSequence },
+      ] as const;
+    });
+    if (registration.previousConnection) {
+      yield* closeConnection(registration.previousConnection.queue, registration.disconnected);
+    }
+    return registration.registeredConnection;
+  });
+
+  const connect: PreviewAutomationBroker["Service"]["connect"] = Effect.fn(
+    "PreviewAutomationBroker.connect",
+  )((host, options) =>
+    Effect.succeed(
+      Stream.unwrap(
+        Effect.acquireRelease(acquireConnection(host, options), (connection) =>
+          disconnect(connection.clientId, connection.queue),
+        ).pipe(Effect.map((connection) => Stream.fromQueue(connection.queue))),
+      ),
+    ),
+  );
+
+  const focusHost: PreviewAutomationBroker["Service"]["focusHost"] = Effect.fn(
+    "PreviewAutomationBroker.focusHost",
+  )(function* (host) {
+    yield* SynchronizedRef.update(state, (current) => {
+      const currentHost = current.clients.get(host.clientId);
+      if (
+        !currentHost ||
+        currentHost.environmentId !== host.environmentId ||
+        currentHost.connectionId !== host.connectionId
+      ) {
+        return current;
+      }
+      const clients = new Map(current.clients);
+      const focusSequence = host.focused ? current.focusSequence + 1 : current.focusSequence;
+      clients.set(host.clientId, {
+        ...currentHost,
+        focused: host.focused,
+        liveTabs: host.liveTabs ?? currentHost.liveTabs,
+        focusOrder: host.focused ? focusSequence : currentHost.focusOrder,
+      });
+      return { ...current, clients, focusSequence };
+    });
+  });
+
+  const respond: PreviewAutomationBroker["Service"]["respond"] = Effect.fn(
+    "PreviewAutomationBroker.respond",
+  )(function* (response) {
+    const pending = yield* SynchronizedRef.modify(state, (current) => {
+      const entry = current.pending.get(response.requestId);
+      if (
+        !entry ||
+        entry.context.clientId !== response.clientId ||
+        entry.context.connectionId !== response.connectionId
+      ) {
+        return [undefined, current] as const;
+      }
+      const next = new Map(current.pending);
+      next.delete(response.requestId);
+      return [entry, { ...current, pending: next }] as const;
+    });
+    if (!pending) return;
+    if (response.ok) {
+      yield* Deferred.succeed(pending.deferred, response.result);
+    } else {
+      yield* Deferred.fail(
+        pending.deferred,
+        response.error
+          ? classifyResponseError(pending.context, response.error)
+          : new PreviewAutomationMalformedResponseError(pending.context),
+      );
+    }
+  });
+
+  const invoke = Effect.fn("PreviewAutomationBroker.invoke")(function* <A = unknown>(
+    input: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0],
+  ): Effect.fn.Return<A, PreviewAutomationError> {
+    const deferred = yield* Deferred.make<unknown, PreviewAutomationError>();
+    const route = yield* SynchronizedRef.modify(state, (current) => {
+      const assignments = new Map(
+        Array.from(current.assignments).filter(([, assignment]) => {
+          const connection = current.clients.get(assignment.clientId);
+          return (
+            connection?.connectionId === assignment.connectionId &&
+            connection.queue === assignment.queue
+          );
+        }),
+      );
+      const assignmentKey = hostAssignmentKey(input.scope);
+      const assigned = assignments.get(assignmentKey);
+      const assignedConnection = assigned ? current.clients.get(assigned.clientId) : undefined;
+      const hasLiveAssignment = assignedConnection?.environmentId === input.scope.environmentId;
+      // Pin interactions to one desktop runtime so cookie/DOM state cannot jump between hosts.
+      const ownsTargetTab = (host: ClientConnection, visibleOnly = false) =>
+        host.liveTabs.some(
+          (tab) =>
+            tab.threadId === input.scope.thread.threadId &&
+            (!visibleOnly || tab.visible === true) &&
+            (input.tabId === undefined || tab.tabId === input.tabId),
+        );
+      const screen = BoundPreviewTabs.screenConnection(current.clients, input, (host) =>
+        supportsRequest(host, input),
+      );
+      const connection = screen
+        ? screen.connection
+        : hasLiveAssignment && supportsRequest(assignedConnection, input)
+          ? assignedConnection
+          : hasLiveAssignment
+            ? undefined
+            : Array.from(current.clients.values())
+                .filter(
+                  (host) =>
+                    host.environmentId === input.scope.environmentId &&
+                    supportsRequest(host, input),
+                )
+                .sort(
+                  (left, right) =>
+                    Number(input.tabId !== undefined && ownsTargetTab(right)) -
+                      Number(input.tabId !== undefined && ownsTargetTab(left)) ||
+                    Number(right.preferred) - Number(left.preferred) ||
+                    Number(ownsTargetTab(right, true)) - Number(ownsTargetTab(left, true)) ||
+                    Number(ownsTargetTab(right)) - Number(ownsTargetTab(left)) ||
+                    Number(right.focused) - Number(left.focused) ||
+                    right.focusOrder - left.focusOrder,
+                )[0];
+      if (!connection) {
+        if (!hasLiveAssignment) assignments.delete(assignmentKey);
+        return [undefined, { ...current, assignments }] as const;
+      }
+      // First open may install Chromium for ten minutes; keep it alive without replaying effects.
+      const timeoutMs =
+        input.timeoutMs ?? (input.operation === "open" && connection.preferred ? 660_000 : 15_000);
+      const canReuseAssignedTab =
+        assigned !== undefined &&
+        assigned.connectionId === connection.connectionId &&
+        assigned.queue === connection.queue;
+      const assignmentsToUpdate = input.updateCurrentTab === false ? undefined : assignments;
+      assignmentsToUpdate?.set(assignmentKey, {
+        clientId: connection.clientId,
+        connectionId: connection.connectionId,
+        queue: connection.queue,
+        ...(canReuseAssignedTab && assigned.tabId !== undefined ? { tabId: assigned.tabId } : {}),
+        ...(canReuseAssignedTab && assigned.tabSequence !== undefined
+          ? { tabSequence: assigned.tabSequence }
+          : {}),
+      });
+
+      const requestSequence = current.requestSequence;
+      const requestId = `preview-${requestSequence}`;
+      const tabId =
+        input.exact?.tabId ?? input.tabId ?? (canReuseAssignedTab ? assigned.tabId : undefined);
+      const selectorDiagnostics = selectorDiagnosticsFromInput(input.input);
+      const context: PreviewAutomationRequestErrorContext = {
+        operation: input.operation,
+        environmentId: input.scope.environmentId,
+        threadId: input.scope.thread.threadId,
+        providerSessionId: input.scope.thread.providerSessionId,
+        providerInstanceId: input.scope.thread.providerInstanceId,
+        clientId: connection.clientId,
+        connectionId: connection.connectionId,
+        requestId,
+        ...(tabId === undefined ? {} : { tabId }),
+        timeoutMs,
+        ...selectorDiagnostics,
+      };
+      const pending = new Map(current.pending);
+      pending.set(requestId, { queue: connection.queue, deferred, context });
+      return [
+        { connection, requestId, requestContext: context, requestSequence },
+        { ...current, assignments, pending, requestSequence: current.requestSequence + 1 },
+      ] as const;
+    });
+    if (!route) {
+      return yield* new PreviewAutomationNoAvailableHostError({
+        operation: input.operation,
+        environmentId: input.scope.environmentId,
+        threadId: input.scope.thread.threadId,
+        providerSessionId: input.scope.thread.providerSessionId,
+        providerInstanceId: input.scope.thread.providerInstanceId,
+      });
+    }
+    const { connection, requestId, requestContext, requestSequence } = route;
+    const { timeoutMs } = requestContext;
+    input.onTargetTab?.(requestContext.tabId);
+    const removePending = SynchronizedRef.update(state, (next) => {
+      if (!next.pending.has(requestId)) return next;
+      const pending = new Map(next.pending);
+      pending.delete(requestId);
+      return { ...next, pending };
+    });
+    const awaitResponse = Effect.fn("PreviewAutomationBroker.awaitResponse")(function* () {
+      const runId = input.runId ?? input.scope.thread.runId;
+      const offered = yield* SynchronizedRef.modifyEffect(state, (current) => {
+        // Serialize generation checks and offers with queue closure; routes can outlive eviction.
+        if (
+          current.clients.get(connection.clientId)?.queue !== connection.queue ||
+          !current.pending.has(requestId)
+        ) {
+          return Effect.succeed([false, current] as const);
+        }
+        return Queue.offer(connection.queue, {
+          type: "request",
+          connectionId: connection.connectionId,
+          request: {
+            requestId,
+            threadId: input.scope.thread.threadId,
+            tabId: requestContext.tabId,
+            tabIdExplicit: input.tabId !== undefined || input.exact !== undefined,
+            ...BoundPreviewTabs.screenExpectationOf(input.exact),
+            agentSessionId: hostAssignmentKey(input.scope),
+            ...(runId === undefined ? {} : { runId }),
+            operation: input.operation,
+            input: input.input,
+            timeoutMs,
+          },
+        }).pipe(Effect.map((offered) => [offered, current] as const));
+      });
+      if (!offered) {
+        const completion = yield* Deferred.poll(deferred);
+        if (Option.isSome(completion)) {
+          return (yield* completion.value) as A;
+        }
+        return yield* new PreviewAutomationRequestQueueClosedError(requestContext);
+      }
+      // The browser timer starts on delivery; allow its timeout response before evicting the host.
+      const responseTimeoutMs =
+        input.updateCurrentTab === false ? timeoutMs : timeoutMs + HOST_RESPONSE_GRACE_MS;
+      const result = yield* Deferred.await(deferred).pipe(Effect.timeoutOption(responseTimeoutMs));
+      return yield* Option.match(result, {
+        // The enclosing operation owns the span for this inline handler.
+        onNone: Effect.fnUntraced(function* () {
+          // Never replay possibly applied actions; slow metadata reads must not evict the host.
+          if (input.updateCurrentTab !== false) {
+            yield* disconnect(connection.clientId, connection.queue, true);
+          }
+          return yield* new PreviewAutomationTimeoutError(requestContext);
+        }),
+        onSome: (value) => Effect.succeed(value as A),
+      });
+    });
+    const result = yield* awaitResponse().pipe(Effect.ensuring(removePending));
+    if (input.updateCurrentTab === false) return result;
+    const responseTabId = readResultTabId(result);
+    const resultTabId = responseTabId === undefined ? input.tabId : responseTabId;
+    if (resultTabId === undefined) return result;
+    const assignmentKey = hostAssignmentKey(input.scope);
+    yield* SynchronizedRef.update(state, (current) => {
+      const assignment = current.assignments.get(assignmentKey);
+      if (
+        !assignment ||
+        assignment.connectionId !== connection.connectionId ||
+        assignment.queue !== connection.queue ||
+        (assignment.tabSequence ?? -1) > requestSequence
+      ) {
+        return current;
+      }
+      const assignments = new Map(current.assignments);
+      if (resultTabId === null) {
+        const { tabId: _tabId, ...withoutTabId } = assignment;
+        assignments.set(assignmentKey, { ...withoutTabId, tabSequence: requestSequence });
+      } else {
+        assignments.set(assignmentKey, {
+          ...assignment,
+          ...(resultTabId === undefined ? {} : { tabId: resultTabId }),
+          tabSequence: requestSequence,
+        });
+      }
+      return { ...current, assignments };
+    });
+    return result;
+  });
+
+  const listBoundTabs = BoundPreviewTabs.makeListBoundTabs({
+    hosts: Effect.map(SynchronizedRef.get(state), (current) => current.clients),
+    supports: supportsOperation,
+    invoke,
+  });
+  const canOpenTab = BoundPreviewTabs.makeCanOpenTab({
+    hosts: Effect.map(SynchronizedRef.get(state), (current) => current.clients),
+    supports: supportsOperation,
+  });
+
+  return PreviewAutomationBroker.of({
+    connect,
+    focusHost,
+    respond,
+    invoke,
+    listBoundTabs,
+    canOpenTab,
+  });
+}).pipe(Effect.withSpan("PreviewAutomationBroker.make"));
+
+export const layer = Layer.effect(PreviewAutomationBroker, make);

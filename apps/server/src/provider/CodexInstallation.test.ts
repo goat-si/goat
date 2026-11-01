@@ -1,0 +1,890 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as ModelManifest from "./ModelManifest.ts";
+import { expect, it } from "@effect/vitest";
+import * as HostProcess from "@goat/shared/HostProcess";
+import * as Crypto from "effect/Crypto";
+import * as Cause from "effect/Cause";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Hex from "effect/encoding/Hex";
+import * as FileSystem from "effect/FileSystem";
+import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
+import * as PlatformError from "effect/PlatformError";
+import * as Exit from "effect/Exit";
+import * as Queue from "effect/Queue";
+import * as Scope from "effect/Scope";
+import * as Sink from "effect/Sink";
+import * as Stream from "effect/Stream";
+import { HttpClient, HttpClientError, HttpClientRequest, HttpClientResponse } from "effect/http";
+import * as TestClock from "effect/testing/TestClock";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import * as CodexInstallation from "./CodexInstallation.ts";
+
+const archive = Buffer.from(
+  "H4sIAAAAAAAC/+3W0W6DIBQGYB/FcD0sKNSkD7J7aom6tmAQtzXL3n3QZM3qdWVt+n8XoCckJp78wLY3q8bu9Ge2HBbUUp7nYD4H8s9zrNdSsCxnWQLT6JULn8ye09K9h/u2/c0/jSM9xqGzo0+bf3Gdf15WQiD/Kdy61/CA+z8dlO9Wrv2387+c5Z9VZY38p7BY0+Gh8t/sVauLt9Ga9Pnnop7ln1e4/6fxRQ7qZCf/qt3YW0M2OX/JyfvljbCCy3XBSaiGH9VqH4tKuaZbC6qG4aDpTrmP3sQV2nh3Gmxvzqsud0vyjaABAAAAAAAAAAAAAAAk8gOq19rvACgAAA==",
+  "base64",
+);
+const asset = {
+  version: "0.156.1",
+  target: "aarch64-apple-darwin",
+  url: "https://github.com/openai/codex/releases/download/test/package.tar.gz",
+  archiveBytes: archive.length,
+};
+const makeHarness = Effect.fn("test.makeCodexInstallation")(function* (
+  input: {
+    options?: Partial<CodexInstallation.CodexInstallationOptions>;
+    manifestCurrent?: Effect.Effect<ModelManifest.ModelManifestData>;
+    body?: Stream.Stream<Uint8Array, HttpClientError.HttpClientError>;
+    downloadStatus?: number;
+    baseDir?: string;
+    local?: { version: string; appServerFails?: boolean; versionFails?: boolean };
+    platform?: NodeJS.Platform;
+    spawner?: ChildProcessSpawner.ChildProcessSpawner["Service"];
+    runtimeRenameFailures?: number;
+  } = {},
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const baseDir =
+    input.baseDir ?? (yield* fs.makeTempDirectoryScoped({ prefix: "goat-codex-install-test-" }));
+  const localDirectory = `${baseDir}/local`;
+  const localBinaryPath = `${localDirectory}/codex${input.platform === "win32" ? ".exe" : ""}`;
+  const probeLog = `${baseDir}/local-probes.txt`;
+  if (input.local) {
+    yield* fs.makeDirectory(localDirectory, { recursive: true });
+    yield* fs.writeFileString(
+      localBinaryPath,
+      `#!/bin/sh\nprintf '%s\\n' "$*" >> '${probeLog}'\ncase "$1" in\n--version) ${input.local.versionFails ? "exit 1" : `printf '%s\\n' 'codex-cli ${input.local.version}'`};;\napp-server) exit ${input.local.appServerFails ? "1" : "0"};;\nesac\n`,
+      { mode: 0o755 },
+    );
+  }
+  let downloads = 0;
+  const crypto = yield* Crypto.Crypto;
+  const sha256 = Hex.encode(yield* crypto.digest("SHA-256", archive).pipe(Effect.orDie));
+  let runtimeRenameFailures = input.runtimeRenameFailures ?? 0;
+  const failedRenames = yield* Queue.unbounded<void>();
+  const lockingFs: FileSystem.FileSystem = {
+    ...fs,
+    // Suspended so each retry of the same effect is a fresh attempt, like the real rename.
+    rename: (from, to) =>
+      Effect.suspend(() =>
+        /[/\\]runtime$/u.test(from) && runtimeRenameFailures-- > 0
+          ? Queue.offer(failedRenames, undefined).pipe(
+              Effect.andThen(
+                Effect.fail(
+                  PlatformError.systemError({
+                    _tag: "PermissionDenied",
+                    module: "FileSystem",
+                    method: "rename",
+                    pathOrDescriptor: from,
+                  }),
+                ),
+              ),
+            )
+          : fs.rename(from, to),
+      ),
+  };
+  const spawner = input.spawner ?? (yield* ChildProcessSpawner.ChildProcessSpawner);
+  const installation = yield* CodexInstallation.makeCodexInstallation({
+    baseDir,
+    releaseAsset: { ...asset, sha256 },
+    validate: () => Effect.void,
+    ...input.options,
+  }).pipe(
+    Effect.provideService(ModelManifest.ModelManifest, {
+      current: input.manifestCurrent ?? Effect.succeed(ModelManifest.BUNDLED_MODEL_MANIFEST),
+      refresh: Effect.succeed(ModelManifest.BUNDLED_MODEL_MANIFEST),
+      forceRefresh: Effect.succeed(ModelManifest.BUNDLED_MODEL_MANIFEST),
+      refreshInBackground: Effect.void,
+    }),
+    Effect.provideService(HostProcess.Platform, input.platform ?? "darwin"),
+    Effect.provideService(HostProcess.Architecture, "arm64"),
+    Effect.provideService(HostProcess.Environment, {
+      PATH: input.local ? localDirectory : "",
+      SystemRoot: "C:\\Windows",
+    }),
+    Effect.provideService(FileSystem.FileSystem, lockingFs),
+    Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+    Effect.provideService(
+      HttpClient.HttpClient,
+      HttpClient.make((request) =>
+        Effect.sync(() => {
+          downloads++;
+          return Object.defineProperty(
+            HttpClientResponse.fromWeb(
+              request,
+              new Response(null, { status: input.downloadStatus ?? 200 }),
+            ),
+            "stream",
+            {
+              value: input.body ?? Stream.succeed(archive),
+            },
+          );
+        }),
+      ),
+    ),
+  );
+  return {
+    installation,
+    fs,
+    baseDir,
+    localBinaryPath,
+    probeLog,
+    failedRenames,
+    downloads: () => downloads,
+  };
+});
+const terminalState = (installation: CodexInstallation.CodexInstallation["Service"]) =>
+  installation.changes.pipe(
+    Stream.filter((state) => ["succeeded", "failed", "cancelled"].includes(state.phase)),
+    Stream.runHead,
+    Effect.map(Option.getOrThrow),
+  );
+
+const startupInfo = JSON.stringify({
+  appServerVersion: "different-from-cli-version",
+  configRequirements: { requirements: null },
+});
+const startupFailure = JSON.stringify({ error: { code: -32600, message: "fixture config error" } });
+
+function startupProbeFixture(
+  input: {
+    version?: string;
+    stdout?: string | Uint8Array;
+    stderr?: string;
+    code?: number;
+    beforeVersion?: Effect.Effect<void>;
+    beforeHelp?: Effect.Effect<void>;
+    beforeStartup?: Effect.Effect<void>;
+    startupExit?: Effect.Effect<ChildProcessSpawner.ExitCode>;
+    finalized?: Effect.Effect<void>;
+    failSpawn?: boolean;
+  } = {},
+) {
+  const calls: ReadonlyArray<string>[] = [];
+  const spawner = ChildProcessSpawner.make((command) =>
+    Effect.gen(function* () {
+      if (!ChildProcess.isStandardCommand(command)) return yield* Effect.die("Unexpected pipe");
+      calls.push(command.args);
+      const version = command.args[0] === "--version";
+      const startup = command.args.includes("--print-startup-config");
+      if (version && input.beforeVersion) yield* input.beforeVersion;
+      if (command.args.includes("--help") && input.beforeHelp) yield* input.beforeHelp;
+      if (startup) {
+        if (input.finalized) yield* Effect.addFinalizer(() => input.finalized!);
+        if (input.beforeStartup) yield* input.beforeStartup;
+        if (input.failSpawn)
+          return yield* PlatformError.badArgument({
+            module: "ChildProcessSpawner",
+            method: "spawn",
+            description: "secret-sentinel must not escape",
+          });
+      }
+      const stdout = version
+        ? `codex-cli ${input.version ?? "0.164.0"}\n`
+        : startup
+          ? (input.stdout ?? startupInfo)
+          : "";
+      return ChildProcessSpawner.makeHandle({
+        pid: ChildProcessSpawner.ProcessId(4242),
+        exitCode: startup
+          ? (input.startupExit ?? Effect.succeed(ChildProcessSpawner.ExitCode(input.code ?? 0)))
+          : Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+        isRunning: Effect.succeed(false),
+        kill: () => Effect.void,
+        unref: Effect.succeed(Effect.void),
+        stdin: Sink.drain,
+        stdout: Stream.succeed(
+          typeof stdout === "string" ? new TextEncoder().encode(stdout) : stdout,
+        ),
+        stderr: Stream.encodeText(Stream.succeed(startup ? (input.stderr ?? "") : "")),
+        all: Stream.empty,
+        getInputFd: () => Sink.drain,
+        getOutputFd: () => Stream.empty,
+      });
+    }),
+  );
+  return { spawner, calls };
+}
+
+it.effect.each([true, false])(
+  "refreshes diagnostics on the same service and binary after configuration changes (initially healthy: %s)",
+  (healthy) =>
+    Effect.gen(function* () {
+      const output = { stdout: healthy ? startupInfo : startupFailure, code: healthy ? 0 : 1 };
+      const fixture = startupProbeFixture(output);
+      const h = yield* makeHarness({ local: { version: "0.164.0" }, spawner: fixture.spawner });
+      const original = yield* h.fs.stat(h.localBinaryPath);
+      const before = yield* h.installation.resolve();
+      expect(before.startupWarning === undefined).toBe(healthy);
+      output.stdout = healthy ? startupFailure : startupInfo;
+      output.code = healthy ? 1 : 0;
+      const after = yield* h.installation.resolve();
+      expect(after.source).toBe("local");
+      expect(after.startupWarning === undefined).toBe(!healthy);
+      const afterStat = yield* h.fs.stat(h.localBinaryPath);
+      expect([afterStat.size, afterStat.ino, afterStat.mtime]).toEqual([
+        original.size,
+        original.ino,
+        original.mtime,
+      ]);
+      expect(fixture.calls.filter((args) => args[0] === "--version")).toHaveLength(1);
+      expect(fixture.calls.filter((args) => args.includes("--print-startup-config"))).toHaveLength(
+        3,
+      );
+      expect(h.downloads()).toBe(0);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect.each(["0.156.0", "0.163.0", "0.164.0", "0.165.0", "1.0.0"])(
+  "gates startup diagnostics while retaining CLI version %s",
+  (version) =>
+    Effect.gen(function* () {
+      const fixture = startupProbeFixture({ version });
+      const h = yield* makeHarness({ local: { version }, spawner: fixture.spawner });
+      const executable = yield* h.installation.resolve();
+      expect(executable).toMatchObject({ source: "local", version });
+      expect(executable).not.toHaveProperty("startupWarning");
+      expect(fixture.calls).toEqual([
+        ["--version"],
+        ...(version === "0.156.0" || version === "0.163.0"
+          ? [["app-server", "--help"]]
+          : [
+              ["app-server", "--print-startup-config"],
+              ["app-server", "--print-startup-config"],
+            ]),
+      ]);
+      expect(h.downloads()).toBe(0);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect.each(["0.164.0-alpha.1", "0.164.0-rc.1", "0.165.0-alpha.1", "unknown"])(
+  "does not assume prerelease or unknown Codex %s supports startup diagnostics",
+  (version) =>
+    Effect.gen(function* () {
+      const fixture = startupProbeFixture({ version });
+      const h = yield* makeHarness({ local: { version }, spawner: fixture.spawner });
+      expect((yield* h.installation.state).installedVersion).toBeNull();
+      expect(fixture.calls).toEqual([["--version"]]);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect.each([
+  {
+    name: "structured validation failure",
+    code: 1,
+    stdout:
+      '{"error":{"code":-32600,"message":"secret-sentinel","data":{"path":"/private/config"}}}',
+    warning: "configuration validation failed",
+  },
+  { name: "missing JSON", stdout: "", warning: "invalid response" },
+  { name: "malformed JSON", stdout: "secret-sentinel", warning: "invalid response" },
+  { name: "truncated JSON", stdout: '{"appServerVersion":', warning: "invalid response" },
+  { name: "invalid shape", stdout: '{"appServerVersion":"0.164.0"}', warning: "invalid response" },
+  {
+    name: "invalid error shape",
+    code: 1,
+    stdout: '{"error":{"code":"secret-sentinel","message":"bad"}}',
+    warning: "invalid response",
+  },
+  {
+    name: "ambiguous invalid error",
+    stdout: '{"appServerVersion":"0.164.0","configRequirements":{},"error":null}',
+    warning: "invalid response",
+  },
+  {
+    name: "invalid requirements",
+    stdout: '{"appServerVersion":"0.164.0","configRequirements":null}',
+    warning: "invalid response",
+  },
+  { name: "nonzero success envelope", code: 1, stdout: startupInfo, warning: "invalid response" },
+  {
+    name: "zero error envelope",
+    code: 0,
+    stdout: '{"error":{"code":-32600,"message":"secret-sentinel"}}',
+    warning: "invalid response",
+  },
+  { name: "oversized JSON", stdout: startupInfo + " ".repeat(65_536), warning: "invalid response" },
+  { name: "invalid UTF-8", stdout: new Uint8Array([0xff, 0xfe]), warning: "invalid response" },
+  {
+    name: "unsupported flag",
+    code: 2,
+    stdout: "",
+    stderr: "error: unexpected argument '--print-startup-config' found\nsecret-sentinel",
+    warning: "does not support",
+  },
+  { name: "spawn failure", failSpawn: true, warning: "could not complete" },
+])("retains local Codex after $name without publishing raw diagnostics", (fixtureInput) =>
+  Effect.gen(function* () {
+    const fixture = startupProbeFixture(fixtureInput);
+    const h = yield* makeHarness({ local: { version: "0.164.0" }, spawner: fixture.spawner });
+    const executable = yield* h.installation.resolve();
+    expect(executable).toMatchObject({
+      source: "local",
+      version: "0.164.0",
+      startupWarning: expect.stringContaining(fixtureInput.warning),
+    });
+    expect(JSON.stringify(executable)).not.toContain("secret-sentinel");
+    expect(JSON.stringify(executable)).not.toContain("/private/config");
+    expect((yield* h.installation.start).source).toBe("local");
+    expect(yield* h.installation.acquire().pipe(Effect.scoped)).toMatchObject({
+      source: "local",
+      version: "0.164.0",
+    });
+    expect(h.downloads()).toBe(0);
+    expect(fixture.calls).toEqual([
+      ["--version"],
+      ["app-server", "--print-startup-config"],
+      ["app-server", "--print-startup-config"],
+      ["app-server", "--print-startup-config"],
+    ]);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect.each(["version", "legacy-help"] as const)(
+  "keeps the existing missing-installation result on %s timeout",
+  (stage) =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const wait = Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never));
+      const fixture = startupProbeFixture({
+        version: "0.163.0",
+        ...(stage === "version" ? { beforeVersion: wait } : { beforeHelp: wait }),
+      });
+      const fiber = yield* makeHarness({
+        local: { version: "0.163.0" },
+        spawner: fixture.spawner,
+      }).pipe(Effect.forkScoped);
+      yield* Deferred.await(started);
+      yield* TestClock.adjust("5 seconds");
+      const h = yield* Fiber.join(fiber);
+      expect((yield* h.installation.state).installedVersion).toBeNull();
+      expect(fixture.calls).toHaveLength(stage === "version" ? 1 : 2);
+      expect(h.downloads()).toBe(0);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("shares the five-second budget and retains the candidate on diagnostic timeout", () =>
+  Effect.gen(function* () {
+    let blocked = true;
+    const versionStarted = yield* Deferred.make<void>();
+    const versionRelease = yield* Deferred.make<void>();
+    const startupStarted = yield* Deferred.make<void>();
+    const finalized = yield* Deferred.make<void>();
+    const fixture = startupProbeFixture({
+      beforeVersion: Deferred.succeed(versionStarted, undefined).pipe(
+        Effect.andThen(Deferred.await(versionRelease)),
+      ),
+      beforeStartup: Deferred.succeed(startupStarted, undefined).pipe(Effect.asVoid),
+      startupExit: Effect.suspend(() =>
+        blocked ? Effect.never : Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+      ),
+      finalized: Deferred.succeed(finalized, undefined).pipe(Effect.asVoid),
+    });
+    const fiber = yield* makeHarness({
+      local: { version: "0.164.0" },
+      spawner: fixture.spawner,
+    }).pipe(Effect.forkScoped);
+    yield* Deferred.await(versionStarted);
+    yield* TestClock.adjust("4 seconds");
+    yield* Deferred.succeed(versionRelease, undefined);
+    yield* Deferred.await(startupStarted);
+    yield* TestClock.adjust("1 second");
+    const h = yield* Fiber.join(fiber);
+    yield* Deferred.await(finalized);
+    expect(fixture.calls).toHaveLength(2);
+    expect((yield* h.installation.state).source).toBe("local");
+    blocked = false;
+    expect(yield* h.installation.resolve()).not.toHaveProperty("startupWarning");
+    expect(fixture.calls).toHaveLength(3);
+    expect(h.downloads()).toBe(0);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("recovers a diagnostic timeout on the same service and unchanged binary", () =>
+  Effect.gen(function* () {
+    let blocked = false;
+    const started = yield* Deferred.make<void>();
+    const finalized = yield* Deferred.make<void>();
+    const fixture = startupProbeFixture({
+      startupExit: Effect.suspend(() =>
+        blocked
+          ? Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never))
+          : Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+      ),
+      finalized: Effect.suspend(() =>
+        blocked ? Deferred.succeed(finalized, undefined).pipe(Effect.asVoid) : Effect.void,
+      ),
+    });
+    const h = yield* makeHarness({ local: { version: "0.164.0" }, spawner: fixture.spawner });
+    const original = yield* h.fs.stat(h.localBinaryPath);
+    blocked = true;
+    expect((yield* h.installation.acquire().pipe(Effect.scoped)).source).toBe("local");
+    expect(fixture.calls).toHaveLength(2);
+    const fiber = yield* h.installation.resolve().pipe(Effect.forkScoped);
+    yield* Deferred.await(started);
+    yield* TestClock.adjust("5 seconds");
+    expect(yield* Fiber.join(fiber)).toMatchObject({
+      source: "local",
+      startupWarning: expect.stringContaining("timed out"),
+    });
+    yield* Deferred.await(finalized);
+    blocked = false;
+    const recovered = yield* h.installation.resolve();
+    expect(recovered.source).toBe("local");
+    expect(recovered).not.toHaveProperty("startupWarning");
+    const after = yield* h.fs.stat(h.localBinaryPath);
+    expect([after.size, after.ino, after.mtime]).toEqual([
+      original.size,
+      original.ino,
+      original.mtime,
+    ]);
+    expect(fixture.calls.filter((args) => args[0] === "--version")).toHaveLength(1);
+    expect(fixture.calls.filter((args) => args.includes("--print-startup-config"))).toHaveLength(3);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("propagates external diagnostic cancellation and finalizes the child", () =>
+  Effect.gen(function* () {
+    const started = yield* Deferred.make<void>();
+    const finalized = yield* Deferred.make<void>();
+    const fixture = startupProbeFixture({
+      beforeStartup: Deferred.succeed(started, undefined).pipe(Effect.asVoid),
+      startupExit: Effect.never,
+      finalized: Deferred.succeed(finalized, undefined).pipe(Effect.asVoid),
+    });
+    const fiber = yield* makeHarness({
+      local: { version: "0.164.0" },
+      spawner: fixture.spawner,
+    }).pipe(Effect.forkScoped);
+    yield* Deferred.await(started);
+    yield* Fiber.interrupt(fiber);
+    yield* Deferred.await(finalized);
+    const exit = yield* Fiber.await(fiber);
+    expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true);
+    expect(fixture.calls).toHaveLength(2);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect.each(["0.156.0", "0.156.1", "0.156.2", "0.157.0"])(
+  "reuses installed Codex %s without downloading or taking ownership of it",
+  (version) =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness({ local: { version } });
+      expect(yield* h.installation.start).toMatchObject({
+        source: "local",
+        phase: "succeeded",
+        installedVersion: version,
+        executablePath: h.localBinaryPath,
+        canRemove: false,
+      });
+      expect(yield* h.installation.resolve()).toMatchObject({
+        source: "local",
+        executablePath: h.localBinaryPath,
+        managedVersionDirectory: null,
+        version,
+      });
+      yield* h.installation.acquire().pipe(Effect.scoped);
+      expect(h.downloads()).toBe(0);
+      expect(yield* h.fs.exists(h.installation.managedDirectory)).toBe(false);
+      expect((yield* h.fs.readFileString(h.probeLog)).trim().split("\n")).toEqual([
+        "--version",
+        "app-server --help",
+      ]);
+      yield* h.installation.remove();
+      expect(yield* h.fs.exists(h.localBinaryPath)).toBe(true);
+      expect((yield* h.installation.state).source).toBe("local");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+it.effect.each([
+  { version: "0.128.9" },
+  { version: "0.145.0" },
+  { version: "0.155.1" },
+  { version: "0.155.9" },
+  { version: "0.156.1-alpha.1" },
+  { version: "unknown" },
+  { version: "0.156.1", appServerFails: true },
+  { version: "0.156.1", versionFails: true },
+])("downloads the pinned release when the local CLI is unsupported or broken: %j", (local) =>
+  Effect.gen(function* () {
+    const h = yield* makeHarness({ local });
+    expect((yield* h.installation.state).installedVersion).toBeNull();
+    yield* h.installation.start;
+    const installed = yield* terminalState(h.installation);
+    expect(installed.phase).toBe("succeeded");
+    const executable = yield* h.installation.resolve();
+    expect(executable.source).toBe("managed");
+    expect(installed.executablePath).toBe(executable.executablePath);
+    expect(h.downloads()).toBe(1);
+    expect(yield* h.fs.exists(h.localBinaryPath)).toBe(true);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+const compileNative = Effect.fn("test.compileNative")(function* (
+  executablePath: string,
+  source: string,
+) {
+  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const compiler = yield* spawner.spawn(
+    ChildProcess.make("cc", ["-x", "c", "-", "-o", executablePath], {
+      stdin: Stream.make(new TextEncoder().encode(source)),
+      stdout: "inherit",
+      stderr: "inherit",
+    }),
+  );
+  expect(yield* compiler.exitCode).toBe(0);
+}, Effect.scoped);
+
+it.effect("rechecks compatibility after the local executable is replaced", () =>
+  Effect.gen(function* () {
+    const h = yield* makeHarness({ local: { version: "0.156.1" } });
+    expect((yield* h.installation.resolve()).source).toBe("local");
+    yield* h.fs.remove(h.localBinaryPath);
+    yield* h.fs.writeFileString(h.localBinaryPath, "#!/bin/sh\nprintf 'codex-cli 0.128.9\\n'\n", {
+      mode: 0o755,
+    });
+    yield* h.installation.start;
+    expect((yield* terminalState(h.installation)).phase).toBe("succeeded");
+    expect((yield* h.installation.resolve()).source).toBe("managed");
+    expect(h.downloads()).toBe(1);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("rechecks a cached local executable when the shared manifest policy changes", () =>
+  Effect.gen(function* () {
+    let manifest = ModelManifest.BUNDLED_MODEL_MANIFEST;
+    const h = yield* makeHarness({
+      local: { version: "0.156.0" },
+      manifestCurrent: Effect.sync(() => manifest),
+    });
+    expect((yield* h.installation.resolve()).source).toBe("local");
+    manifest = {
+      ...manifest,
+      compatibility: [
+        {
+          driver: "codex",
+          t3CodeRange: ">=0.0.42",
+          ranges: [
+            { range: ">=0.156.1", status: "supported" },
+            { range: "<0.156.1", status: "broken" },
+          ],
+        },
+      ],
+    };
+    yield* h.installation.start;
+    expect((yield* terminalState(h.installation)).phase).toBe("succeeded");
+    expect((yield* h.installation.resolve()).source).toBe("managed");
+    expect(h.downloads()).toBe(1);
+    expect((yield* h.fs.readFileString(h.probeLog)).trim().split("\n")).toEqual([
+      "--version",
+      "app-server --help",
+    ]);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("uses bundled Codex compatibility when the remote manifest omits its policy", () =>
+  Effect.gen(function* () {
+    const h = yield* makeHarness({
+      local: { version: "0.156.0" },
+      manifestCurrent: Effect.succeed({
+        ...ModelManifest.BUNDLED_MODEL_MANIFEST,
+        compatibility: [],
+      }),
+    });
+    expect((yield* h.installation.start).source).toBe("local");
+    expect(h.downloads()).toBe(0);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect.each([
+  { kind: "script", name: "volta-shim" },
+  { kind: "native", name: "volta-shim" },
+  { kind: "native", name: "mise" },
+  { kind: "native", name: "aqua-proxy" },
+])("preserves the invoked name of $kind $name launcher symlinks", ({ kind, name }) =>
+  Effect.gen(function* () {
+    const h = yield* makeHarness({ local: { version: "0.156.1" } });
+    const launcher = `${h.baseDir}/${name}`;
+    if (kind === "native") {
+      const payload = `${h.baseDir}/codex.js`;
+      yield* h.fs.rename(h.localBinaryPath, payload);
+      yield* compileNative(
+        launcher,
+        `#include <string.h>
+#include <unistd.h>
+int main(int argc, char **argv) {
+  const char *name = strrchr(argv[0], '/');
+  if (strcmp(name ? name + 1 : argv[0], "codex") != 0) return 1;
+  execv(${JSON.stringify(payload)}, argv);
+  return 1;
+}
+`,
+      );
+    } else {
+      yield* h.fs.writeFileString(
+        launcher,
+        '#!/bin/sh\ncase "$0" in */codex) ;; *) exit 1;; esac\ncase "$1" in --version) printf "codex-cli 0.156.1\\n";; app-server) exit 0;; esac\n',
+        { mode: 0o755 },
+      );
+      yield* h.fs.remove(h.localBinaryPath);
+    }
+    yield* h.fs.symlink(launcher, h.localBinaryPath);
+    expect(yield* h.installation.start).toMatchObject({ source: "local", phase: "succeeded" });
+    expect((yield* h.installation.resolve()).executablePath).toBe(h.localBinaryPath);
+    expect(h.downloads()).toBe(0);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect(
+  "installs the complete verified package in tools/codex/version and survives a restart",
+  () =>
+    Effect.gen(function* () {
+      const { installation, fs, baseDir } = yield* makeHarness();
+      yield* installation.start;
+      expect((yield* terminalState(installation)).phase).toBe("succeeded");
+      const executable = yield* installation.resolve();
+      expect(executable.executablePath).toBe(`${baseDir}/tools/codex/0.156.1/bin/codex`);
+      expect(
+        yield* fs.readFileString(`${executable.managedVersionDirectory}/bin/codex-code-mode-host`),
+      ).toBe("host");
+      expect(yield* fs.readFileString(`${executable.managedVersionDirectory}/codex-path/rg`)).toBe(
+        "rg",
+      );
+      const restarted = yield* makeHarness({ baseDir });
+      expect((yield* restarted.installation.resolve()).version).toBe("0.156.1");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("requires an update before running an older activated managed installation", () =>
+  Effect.gen(function* () {
+    const first = yield* makeHarness();
+    yield* first.installation.start;
+    yield* terminalState(first.installation);
+    const executable = yield* first.installation.resolve();
+    const oldDirectory = `${first.installation.managedDirectory}/0.155.1`;
+    yield* first.fs.rename(executable.managedVersionDirectory!, oldDirectory);
+    for (const name of ["codex-package.json", ".install-complete.json"]) {
+      const file = `${oldDirectory}/${name}`;
+      yield* first.fs.writeFileString(
+        file,
+        (yield* first.fs.readFileString(file)).replaceAll("0.156.1", "0.155.1"),
+      );
+    }
+    yield* first.fs.writeFileString(
+      `${first.installation.managedDirectory}/active.json`,
+      '{"version":"0.155.1"}',
+    );
+    const restarted = yield* makeHarness({ baseDir: first.baseDir });
+    expect((yield* Effect.flip(restarted.installation.resolve())).detail).toContain(
+      "outside the supported range",
+    );
+    yield* restarted.installation.start;
+    expect((yield* terminalState(restarted.installation)).phase).toBe("succeeded");
+    expect((yield* restarted.installation.resolve()).version).toBe("0.156.1");
+    expect(restarted.downloads()).toBe(1);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("rejects corrupted downloads without publishing a runtime", () =>
+  Effect.gen(function* () {
+    const { installation, fs } = yield* makeHarness({
+      options: { releaseAsset: { ...asset, sha256: "0".repeat(64) } },
+    });
+    yield* installation.start;
+    const state = yield* terminalState(installation);
+    expect(state.phase).toBe("failed");
+    expect(state.message).toContain("SHA-256");
+    expect(yield* fs.exists(`${installation.managedDirectory}/active.json`)).toBe(false);
+    expect(yield* fs.exists(`${installation.managedDirectory}/0.156.1`)).toBe(false);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect.each(["interrupted body", "HTTP 404"] as const)(
+  "reports a download failure for %s without blaming disk access",
+  (failure) =>
+    Effect.gen(function* () {
+      const request = HttpClientRequest.get(asset.url);
+      const response = HttpClientResponse.fromWeb(request, new Response(null));
+      const h = yield* makeHarness(
+        failure === "HTTP 404"
+          ? { downloadStatus: 404 }
+          : {
+              body: Stream.concat(
+                Stream.succeed(archive.subarray(0, 10)),
+                Stream.fail(
+                  new HttpClientError.HttpClientError({
+                    reason: new HttpClientError.DecodeError({
+                      request,
+                      response,
+                      cause: new TypeError("terminated"),
+                    }),
+                  }),
+                ),
+              ),
+            },
+      );
+      yield* h.installation.start;
+      expect(yield* terminalState(h.installation)).toMatchObject({
+        phase: "failed",
+        message:
+          failure === "HTTP 404"
+            ? "The Codex download server returned HTTP 404. Try again later."
+            : "The Codex download was interrupted. Check your internet connection, then retry installation.",
+      });
+      expect(h.downloads()).toBe(1);
+      expect(yield* h.fs.readDirectory(h.installation.managedDirectory)).toEqual([]);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect(
+  "preserves the filesystem failure message when installation cannot create its directory",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-codex-install-test-" });
+      const baseDir = `${directory}/not-a-directory`;
+      yield* fs.writeFileString(baseDir, "existing file");
+      const h = yield* makeHarness({ baseDir });
+      yield* h.installation.start;
+      expect(yield* terminalState(h.installation)).toMatchObject({
+        phase: "failed",
+        message: "Could not install Codex. Check disk space and directory access, then try again.",
+      });
+      expect(h.downloads()).toBe(0);
+      expect(yield* fs.readFileString(baseDir)).toBe("existing file");
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("reports a download timeout and cleans the staging directory", () =>
+  Effect.gen(function* () {
+    const started = yield* Deferred.make<void>();
+    const stall = Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never));
+    const h = yield* makeHarness({
+      body: Stream.concat(Stream.succeed(archive.subarray(0, 10)), Stream.fromEffect(stall)),
+    });
+    yield* h.installation.start;
+    yield* Deferred.await(started);
+    yield* TestClock.adjust("45 minutes");
+    expect(yield* terminalState(h.installation)).toMatchObject({
+      phase: "failed",
+      message: "The Codex download timed out. Retry installation.",
+    });
+    expect(h.downloads()).toBe(1);
+    expect(yield* h.fs.readDirectory(h.installation.managedDirectory)).toEqual([]);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("cancels an in-flight download and cleans the staging directory", () =>
+  Effect.gen(function* () {
+    const downloading = yield* Deferred.make<void>();
+    const body = Stream.fromEffect(
+      Deferred.succeed(downloading, undefined).pipe(Effect.andThen(Effect.never)),
+    );
+    const { installation, fs } = yield* makeHarness({ body });
+    const started = yield* installation.start;
+    yield* Deferred.await(downloading);
+    expect((yield* installation.cancel(started.operationId!)).phase).toBe("cancelled");
+    expect(
+      (yield* fs.readDirectory(installation.managedDirectory)).filter((name) =>
+        name.startsWith(".install-"),
+      ),
+    ).toEqual([]);
+    expect(yield* fs.exists(`${installation.managedDirectory}/active.json`)).toBe(false);
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("protects active process leases and removes the runtime after release", () =>
+  Effect.gen(function* () {
+    const { installation, fs } = yield* makeHarness();
+    yield* installation.start;
+    yield* terminalState(installation);
+    const leaseScope = yield* Scope.make();
+    yield* installation.acquire().pipe(Effect.provideService(Scope.Scope, leaseScope));
+    expect((yield* Effect.flip(installation.remove())).detail).toContain("Stop Codex sessions");
+    yield* Scope.close(leaseScope, Exit.void);
+    yield* installation.remove();
+    expect(yield* fs.exists(installation.managedDirectory)).toBe(false);
+    expect((yield* installation.state).installedVersion).toBeNull();
+    expect((yield* installation.state).executablePath).toBeNull();
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect.each([true, false])(
+  "managed-only acquisition ignores Codex on PATH and keeps its lease (managed release installed: %s)",
+  (hasManaged) =>
+    Effect.gen(function* () {
+      const seed = yield* makeHarness();
+      if (hasManaged) {
+        yield* seed.installation.start;
+        expect((yield* terminalState(seed.installation)).phase).toBe("succeeded");
+      }
+      const h = yield* makeHarness({ baseDir: seed.baseDir, local: { version: "0.164.0" } });
+      const probes = h.fs
+        .exists(h.probeLog)
+        .pipe(
+          Effect.flatMap((exists) =>
+            exists ? h.fs.readFileString(h.probeLog) : Effect.succeed(""),
+          ),
+        );
+      const probesBefore = yield* probes;
+      const selected = yield* h.installation.resolve({ managedOnly: true }).pipe(Effect.result);
+      expect(selected._tag).toBe(hasManaged ? "Success" : "Failure");
+      const leaseScope = yield* Scope.make();
+      const acquired = yield* h.installation
+        .acquire({ managedOnly: true })
+        .pipe(Effect.provideService(Scope.Scope, leaseScope), Effect.result);
+      expect(acquired._tag).toBe(hasManaged ? "Success" : "Failure");
+      if (acquired._tag === "Success") {
+        expect(acquired.success.source).toBe("managed");
+        expect((yield* Effect.flip(h.installation.remove())).detail).toContain(
+          "Stop Codex sessions",
+        );
+      }
+      expect(yield* probes).toBe(probesBefore);
+      expect(h.downloads()).toBe(0);
+      yield* Scope.close(leaseScope, Exit.void);
+      if (hasManaged) yield* h.installation.remove();
+      expect(yield* h.fs.exists(h.localBinaryPath)).toBe(true);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("keeps an activated runtime when a later update fails verification", () =>
+  Effect.gen(function* () {
+    const first = yield* makeHarness();
+    yield* first.installation.start;
+    yield* terminalState(first.installation);
+    const update = yield* makeHarness({
+      baseDir: first.baseDir,
+      options: { releaseAsset: { ...asset, version: "0.156.2", sha256: "0".repeat(64) } },
+    });
+    expect((yield* update.installation.state).executablePath).toBe(
+      (yield* first.installation.resolve()).executablePath,
+    );
+    yield* update.installation.start;
+    expect((yield* terminalState(update.installation)).phase).toBe("failed");
+    expect((yield* update.installation.resolve()).version).toBe("0.156.1");
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+// Stands in for Windows' bsdtar: CRLF listings, and extraction writes the Windows layout.
+
+it.effect(
+  "installs and runs the pinned managed release for a managed-only start when Codex is on PATH",
+  () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness({ local: { version: "0.164.0" } });
+      // The default start keeps reusing a supported PATH Codex.
+      expect((yield* h.installation.start).source).toBe("local");
+      expect((yield* h.installation.resolve({ managedOnly: true }).pipe(Effect.result))._tag).toBe(
+        "Failure",
+      );
+      yield* h.installation.startManagedOnly;
+      const finished = yield* terminalState(h.installation);
+      expect(finished.phase).toBe("succeeded");
+      expect(finished.source).toBe("managed");
+      expect(h.downloads()).toBe(1);
+      const managed = yield* h.installation.resolve({ managedOnly: true });
+      expect(managed.source).toBe("managed");
+      expect(managed.executablePath).not.toBe(h.localBinaryPath);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);

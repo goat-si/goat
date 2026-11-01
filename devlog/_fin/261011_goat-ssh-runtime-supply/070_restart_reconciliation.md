@@ -1,0 +1,29 @@
+# 070 — wp6: restart reconciliation
+
+## Why
+
+User (2026-10-11): when the app is turned off and on (restart/update), the app itself must reset the remote server or refresh the runtime. Live evidence: a server from the previous GOAT build (no identity file, descriptor without protocol fields) was refused and needed a manual ssh kill; protocol-compatible reuse keeps an older owned server forever.
+User decision: refresh an older owned server to the app version only when it has no running turns.
+
+## Scope
+
+- S1 Server activity signal (apps/server, contracts): service over projections, busy = preparing/starting/running/waiting/runnable queued work and live background subagents/work; loopback-only GET /.well-known/t3/activity -> {activity, serverVersion, pid}; optional descriptor capabilities.sshActivity; `goat __ssh-helper activity --port P [--pid N] --shell` -> idle|busy|unknown, exit 0, <=1.5s. Mapped IPv4 loopback accepted; non-loopback 403.
+- R1 Legacy adoption (packages/ssh launch only, ALLOW_OWNED_UPGRADE=1; never pairing/MCP/keepExistingRunner/server dispatch): reconstruct the expected invocation from the retained run-t3.sh (strict single assignment; archive exact equality; node one argv0 token + decoded entry + exact tail), managed marker, live recorded pid/port; install+verify requested runtime first; at the switch boundary re-verify the snapshot, persist reconstructed identity, shared verifier, existing stop/wait/start. Any mismatch keeps the current refusal message.
+- R2 Idle-only refresh: RemoteT3RunnerOptions.refreshOwnedRuntimeOnFirstConnection set only by the packaged desktop archive runner; consumed once per target per SshEnvironmentManager lifetime under the target lock; prepare selects the requested runtime when a compatible live OWNED server is older (semver); launch queries activity (idle -> owned replacement with re-query before kill; busy/unknown -> reuse unchanged). Launch output/log records refresh decision.
+- Local agents' MCP after restart: investigation (Dewey) — cold restart reissues and injects fresh MCP config for every provider on open/resume; reported 405 came from the old t3-code build, method-level cause unreproduced. Disposition: live check after app restart that an existing thread's next turn can call goat tools; no code change unless it fails.
+
+## Non-goals / residuals
+
+Admission lease blocking new turns between idle check and kill (residual race window, re-query right before kill); cross-desktop owner identity; servers older than the activity capability are reused for R2 (unknown).
+
+## Verification
+
+Whole packages/ssh suite (CI lesson: runnerProcess.test.ts), apps/desktop src/ssh, apps/server focused (sshHelper, http, ProjectionStore, ServerEnvironment), contracts; tsc ssh/server/contracts/desktop/client-runtime; independent gpt-6.1-sol review PASS; rebuild V=0.0.45 DMG, reinstall, live on juns-macbook-pro: (1) R2 idle refresh after app restart replaces an older owned server (simulate older by a harness-launched 0.0.45 vs requested refresh with the app's runtime; or explicit version stamp), (2) busy -> reuse, (3) R1 adoption of a legacy-shaped server (restore backed-up pre-cycle-4 runner state), (4) local thread next-turn goat tool after app restart. Push branch + dev with goat-ci green.
+
+## Amendments after audit 01a129e4 (Harvey)
+
+1. R1 ownership: archive mode only. Adopt only when ps reports the process UID == id -u of the SSH account, the full command equals exactly "$HOME/.goat/runtime/goat/versions/<v>/goat serve --host 127.0.0.1 --port <recorded port> --base-dir $HOME/.goat" (<v> strict release grammar, no control chars/whitespace in any recorded value), ownership files are regular files (not symlinks), the process start identity (ps -o lstart=) is recorded at the first check and re-verified with uid+command immediately before signalling. Node-mode legacy servers are never adopted (dev only; refusal + kill hint). Refusal cases: other UID, arbitrary argv0, non-GOAT path, stale/reused PID (start time change), changed runner, symlinked files, control chars. Residual stated: same-account writable metadata and the final check-to-kill window prevent an absolute guarantee.
+2. R2 trigger: the first successful desktop ensure per resolved target key per desktop main-process SshEnvironmentManager lifetime (renderer reload is not a restart). A reuse decision (busy/unknown/equal/newer) or successful refresh consumes it; a failed preparation/connection keeps it. Enabled saved SSH environments reconnect automatically at startup (client-runtime registry.start -> desktop ensure), so no user action is needed; disabled environments refresh on their first connect.
+3. Secondary clients: test matrix — server dispatch (keepExistingRunner), pairing and MCP issuance both standalone and with a supplied prepared runtime never adopt/refresh. Desktop ensure may refresh before pairing. A second packaged desktop on the same SSH account is the declared cross-desktop residual.
+4. Activity coverage: tests require busy after root completion while each recorded background category (nodes, subagents, command/tool items, provider turns, background roster, pending runtime requests) is active, idle after its terminal event. Unreported detached processes are outside projection visibility. Re-query before kill narrows, not closes, the admission race.
+5. Live R2 proof: build an activity-capable archive consistently stamped 0.0.44 (executable --version, descriptor, archive name, sha256, completion marker) into a separate archive dir, launch it on juns-macbook-pro as an owned server via harness, then restart the packaged 0.0.45 GOAT app and show it refreshes automatically to 0.0.45 when idle (pid/version before/after), and reuses when busy (a running turn on the remote). R1 live: restore the backed-up pre-cycle-4 runner/state shape only after confirming the recorded PID matches the intended fixture.

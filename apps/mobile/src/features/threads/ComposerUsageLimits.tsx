@@ -1,0 +1,115 @@
+import type { EnvironmentId, UsageLimitsReport } from "@goat/contracts";
+import { availabilityText } from "@goat/shared/usageLimitsOpenCodex";
+import { Pressable, ScrollView, View } from "react-native";
+
+import { SymbolView } from "../../components/ui/AppSymbol";
+import { AppText as Text } from "../../components/ui/AppText";
+import { AccountLimits, ResetCredits } from "../usage/UsageLimitsSection";
+
+const DRIVER_LABEL: Partial<Record<string, string>> = { codex: "Codex", claudeAgent: "Claude" };
+
+export function ComposerUsageLimits({
+  report,
+  environmentId,
+  maxHeight,
+  onClose,
+}: {
+  readonly report: UsageLimitsReport;
+  readonly environmentId: EnvironmentId;
+  readonly maxHeight: number;
+  readonly onClose: () => void;
+}) {
+  const now = Date.parse(report.createdAt);
+  const close = (
+    <Pressable
+      accessibilityLabel="Dismiss usage limits"
+      accessibilityRole="button"
+      hitSlop={12}
+      onPress={onClose}
+      className="-me-1 p-1 active:opacity-60"
+    >
+      <SymbolView name="xmark" size={14} tintColorClassName="accent-icon-muted" type="monochrome" />
+    </Pressable>
+  );
+  return (
+    <View className="overflow-hidden rounded-[20px] border-continuous bg-card">
+      <ScrollView bounces={false} showsVerticalScrollIndicator={false} style={{ maxHeight }}>
+        {report.accounts.map((account, index) => {
+          const resetCreditInput =
+            account.redeemable === false
+              ? undefined
+              : (account.resetCreditInput ??
+                (account.instanceId ? { instanceId: account.instanceId } : undefined));
+          const credits = account.limits.resetCredits;
+          const blocks = (account.limits.availability ?? []).filter((block) => block.exhausted);
+          const driverLabel = DRIVER_LABEL[account.driver] ?? String(account.driver);
+          return (
+            <AccountLimits
+              key={account.id}
+              dense
+              first={index === 0}
+              driver={account.driver}
+              label={driverLabel}
+              instanceLabel={
+                account.instanceId
+                  ? account.displayName?.trim() ||
+                    (String(account.instanceId) !== String(account.driver)
+                      ? account.instanceId
+                      : driverLabel)
+                  : account.label
+              }
+              detail={account.plan}
+              limits={account.limits}
+              now={now}
+              trailing={index === 0 ? close : undefined}
+              footer={
+                blocks.length === 0 && credits === undefined ? undefined : (
+                  <>
+                    {blocks.map((block) => (
+                      <Text key={block.id} className="text-xs text-foreground-muted">
+                        {availabilityText(block, now)}
+                      </Text>
+                    ))}
+                    {credits === undefined ? null : resetCreditInput ? (
+                      <ResetCredits
+                        dense
+                        environmentId={environmentId}
+                        input={resetCreditInput}
+                        credits={credits}
+                        now={now}
+                      />
+                    ) : (
+                      <Text className="text-xs text-foreground-muted">
+                        {credits.availableCount === 1
+                          ? "1 reset credit banked"
+                          : `${credits.availableCount} reset credits banked`}
+                      </Text>
+                    )}
+                  </>
+                )
+              }
+            />
+          );
+        })}
+        {report.accounts.length === 0 ? (
+          <View className="flex-row items-center gap-3 px-4 pt-3">
+            <Text className="min-w-0 flex-1 text-base text-foreground">Usage limits</Text>
+            {close}
+          </View>
+        ) : null}
+        {report.notices.map((notice) => (
+          <Text
+            key={notice}
+            className={
+              report.accounts.length === 0
+                ? "px-4 py-3 text-xs text-foreground-muted"
+                : "border-t border-border-subtle px-4 py-3 text-xs text-foreground-muted"
+            }
+          >
+            {notice}
+          </Text>
+        ))}
+      </ScrollView>
+    </View>
+  );
+}

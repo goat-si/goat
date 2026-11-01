@@ -1,0 +1,5 @@
+{"ok":true,"alias":"juns-macbook-pro","runner":{"archiveVersion":"0.0.45","archiveDirectory":"/Users/jun/Developer/new/700_projects/t3code-lanes/goat-release-rename/.t3/runtime/archives","keepExistingRunner":true},"target":{"alias":"juns-macbook-pro","hostname":"juns-macbook-pro","username":"jun","port":22},"stateKey":"3d2a436bc21e2dc4"}
+0.0.45
+b73d8f7a39fab3edc6504438c614ffa472ceb9d8bf8b033002682d084d262bcd  /Users/jun/.goat/runtime/goat/versions/0.0.45/goat
+goat v0.0.45
+binary b73d8f7a39fab3edc6504438c614ffa472ceb9d8bf8b033002682d084d262bcd

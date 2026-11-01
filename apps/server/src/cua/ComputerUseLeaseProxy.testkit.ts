@@ -1,0 +1,604 @@
+// @effect-diagnostics preferSchemaOverJson:off -- The fake driver speaks raw JSON-RPC lines.
+/** The lease proxy over in-memory stdio, lease stream and drivers, for its tests. */
+import {
+  type AgentCursorLeaseUpdate,
+  type ComputerUseAgentCursor,
+  type ComputerUseHumanInputSource,
+  type ComputerUseCallReservation,
+  type ComputerUseCallAdmission,
+  TurnItemId,
+  type ComputerUseLeaseUpdate,
+  type ComputerUseOverlayCommand,
+  type ComputerUsePrimitiveRequest,
+  type ComputerUsePrimitiveReply,
+  computerUseRefusalReason,
+} from "@goat/contracts";
+import type * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
+import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Queue from "effect/Queue";
+import * as Stream from "effect/Stream";
+
+import type { NamedWindow } from "./x11WindowPlacement.ts";
+import { makeHelperInputFeed } from "./agentInputReports.ts";
+import { runLeaseProxy } from "./ComputerUseLeaseProxy.ts";
+import { parse } from "./ComputerUseLeaseProtocol.ts";
+import { LEASE_END_MESSAGES, MAY_HAVE_ACTED, READ_CUT_OFF } from "./ComputerUseLeaseMessages.ts";
+import type { AgentInputReport } from "./agentInputReports.ts";
+import type { LeaseProxyOptions } from "./ComputerUseLeaseProxyOptions.ts";
+
+export const CONTROL = "control:one";
+export const call = (id: number | string, name: string, args: object = {}) =>
+  JSON.stringify({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } });
+export const active = (
+  expiresAt = "1970-01-01T00:30:00.000Z",
+  apps?: ReadonlyArray<string>,
+): Extract<ComputerUseLeaseUpdate, { state: "active" }> => ({
+  state: "active",
+  controlId: CONTROL,
+  expiresAt,
+  ...(apps === undefined ? {} : { apps }),
+});
+
+export const foregroundActive = (expiresAt = "1970-01-01T00:30:00.000Z") => ({
+  ...active(expiresAt),
+  foreground: [
+    {
+      handoffId: TurnItemId.make("handoff:foreground"),
+      purpose: "Check the build status",
+      target: "desktop" as const,
+      expiresAtMillis: DateTime.toEpochMillis(DateTime.makeUnsafe(expiresAt)),
+    },
+  ],
+});
+
+export interface FakeDriver {
+  readonly toDriver: Queue.Queue<string>;
+  readonly fromDriver: Queue.Queue<string, Cause.Done>;
+  readonly killed: Deferred.Deferred<void>;
+  readonly closed: Deferred.Deferred<void>;
+  readonly observed: Deferred.Deferred<"reading" | "closed">;
+}
+
+/** A proxy over in-memory stdio, lease stream and drivers, on the TestClock (epoch 0). */
+export const harness = Effect.fn(function* (
+  options: {
+    readonly controlId?: string;
+    readonly leaseUpdates?: Stream.Stream<ComputerUseLeaseUpdate>;
+    readonly expiresAt?: string;
+    /** Stands in for `cua-driver revoke`; defaults to recording and returning at once. */
+    readonly revoke?: (sessions: ReadonlyArray<string>) => Effect.Effect<void>;
+    /**
+     * Gives each driver an overlay channel; draws and sends land in `log` in order. With a gate,
+     * every "show" signals `entered` and then waits for `gate`, like a helper slow to draw.
+     */
+    readonly overlay?: boolean | ((command: ComputerUseOverlayCommand) => Effect.Effect<void>);
+    /** Pids whose windows are not on GOAT's screen; with it, the proxy checks every window. */
+    readonly elsewhere?: ReadonlySet<number>;
+    /** Holds every placement answer until it is done, as a slow X server would. */
+    readonly placementGate?: Deferred.Deferred<void>;
+    /** What each reply's images may show, as the Linux proxy decides (#1677). */
+    readonly screenshots?: LeaseProxyOptions<never, never>["screenshots"];
+    /** Answers each window report; reports land in `targets`. */
+    readonly onTarget?: (target: { pid: number; windowId: number }) => boolean;
+    readonly reservation?: (
+      call: ComputerUseCallReservation,
+    ) => Effect.Effect<ComputerUseCallAdmission>;
+    readonly kill?: Effect.Effect<void> | ((index: number) => Effect.Effect<void>);
+    readonly acquire?: (index: number) => Effect.Effect<void>;
+    readonly restartFailure?: string;
+    /** Records each cursor the proxy reports for the preview in `cursors`. */
+    readonly cursors?: boolean;
+    /** The exit code each driver reports once its output ends; unknown by default. */
+    readonly exitCode?: number;
+    /** Holds every window report until it is done, as a slow server would. */
+    readonly targetGate?: Deferred.Deferred<void>;
+    /**
+     * Gives each driver a helper input feed (`hid`); reports to the server land in `people`,
+     * answered with `acceptHuman` (true by default), and input call reports in `agentCalls`.
+     */
+    readonly humanInput?: boolean;
+    readonly onHumanInput?: (
+      events: ReadonlyArray<{
+        readonly source: ComputerUseHumanInputSource;
+        readonly at: number;
+      }>,
+    ) => Effect.Effect<boolean>;
+    readonly onAgentInput?: (report: AgentInputReport) => Effect.Effect<void>;
+    readonly onBrowserClaimReport?: LeaseProxyOptions<never, never>["onBrowserClaimReport"];
+    /** The driver's manifest stamp, read at each child start and before idle calls (#1416). */
+    readonly manifestStamp?: () => string | undefined;
+    /** Holds the first driver's kill open until done, as a child slow to stop would. */
+    readonly firstKillGate?: Deferred.Deferred<void>;
+    readonly acceptHuman?: () => boolean;
+    /** Holds every report of a person's input until it is done, as a slow server would. */
+    readonly humanGate?: Deferred.Deferred<void>;
+    /** How long each report of a person's input takes, on the TestClock, as a slow server's. */
+    readonly reportDelay?: number;
+    /** Holds every start report until it is done, as a slow server would. */
+    readonly agentInputGate?: Deferred.Deferred<void>;
+    readonly driverCutoffGate?: Deferred.Deferred<void>;
+    readonly primitiveCancelled?: (requestId: string) => boolean;
+    /** Runs after each lease update is applied, under the proxy's lifecycle lock. */
+    readonly afterApplied?: (update: ComputerUseLeaseUpdate) => Effect.Effect<void>;
+    /** Decorates each line for the provider, as the CLI's app guide does. */
+    readonly guide?: (line: string, reply?: { readonly tool?: string | undefined }) => string;
+    /** The helper draws the agent cursor, so the proxy answers the cursor tools. */
+    readonly answersCursorTools?: boolean;
+    /** Stands in for the thread proxy's reconnecting state. */
+    readonly transportHeld?: () => boolean;
+    /** Receives the hook the thread proxy calls when the lease stream drops. */
+    readonly onTransportDropReceiver?: (drop: () => void) => void;
+    /** The app macOS asks for Automation consent on this host's behalf. */
+    readonly automationHolder?: "helper" | "app";
+    /** Feeds the proxy the host's cursor events, offered with `cursor`. */
+    readonly cursorEvents?: boolean;
+    readonly autoAppListing?: boolean;
+    readonly autoListedApps?: ReadonlyArray<{
+      readonly pid: number;
+      readonly bundle_id: string;
+      readonly name: string;
+    }>;
+    readonly autoToolListing?: boolean;
+  } = {},
+) {
+  const input = yield* Queue.unbounded<string, Cause.Done>();
+  const cursorEvents = yield* Queue.unbounded<AgentCursorLeaseUpdate>();
+  const primitiveInput = yield* Queue.unbounded<ComputerUsePrimitiveRequest, Cause.Done>();
+  const primitiveOutput = yield* Queue.unbounded<ComputerUsePrimitiveReply>();
+  const driverStarted = yield* Queue.unbounded<{
+    readonly connectionId: string;
+    readonly generation: number;
+  }>();
+  const driverCutoff = yield* Queue.unbounded<{
+    readonly connectionId: string;
+    readonly generation: number;
+  }>();
+  const output = yield* Queue.unbounded<string>();
+  const updates = yield* Queue.unbounded<ComputerUseLeaseUpdate, Cause.Done | string>();
+  const drivers: Array<FakeDriver> = [];
+  const cursors: Array<ComputerUseAgentCursor | null> = [];
+  const started = yield* Queue.unbounded<FakeDriver>();
+  const dispatched = yield* Queue.unbounded<{ index: number; line: string }>();
+  const revokeCalled = yield* Deferred.make<void>();
+  const revoked: Array<ReadonlyArray<string>> = [];
+  const log: Array<string> = [];
+  const checking = yield* Queue.unbounded<ReadonlyArray<NamedWindow>>();
+  const targets = yield* Queue.unbounded<{ pid: number; windowId: number }>();
+  const people = yield* Queue.unbounded<ComputerUseHumanInputSource>();
+  const humanBatches: Array<{ readonly at: number; readonly sources: ReadonlyArray<string> }> = [];
+  const taken = yield* Queue.unbounded<string>();
+  const applied = yield* Queue.unbounded<string>();
+  const agentCalls = yield* Queue.unbounded<string>();
+  const hidFeeds: Array<Effect.Success<ReturnType<typeof makeHelperInputFeed>>> = [];
+  const reservations: Array<ComputerUseCallReservation> = [];
+  const cancelListeners = new Set<(requestId: string) => void>();
+  const reservationEvents = yield* Queue.unbounded<ComputerUseCallReservation>();
+  const validationEvents = yield* Queue.unbounded<ComputerUseCallReservation>();
+  const proxy = yield* runLeaseProxy({
+    ...(options.onBrowserClaimReport === undefined
+      ? {}
+      : { onBrowserClaimReport: options.onBrowserClaimReport }),
+    connectionId: "proxy:test",
+    reservation: (call) =>
+      Effect.sync(() => void reservations.push(call)).pipe(
+        Effect.andThen(
+          Queue.offer(call.action === "validate" ? validationEvents : reservationEvents, call),
+        ),
+        Effect.andThen(
+          options.reservation?.(call) ??
+            Effect.succeed<ComputerUseCallAdmission>(
+              call.action === "reserve"
+                ? { status: "admitted", reservationId: `ticket:${call.callId}` }
+                : call.action === "validate"
+                  ? {
+                      status: "admitted",
+                      reservationId: call.reservationId,
+                      permissions: { validUntilMillis: 1_800_000 },
+                    }
+                  : { status: "released" },
+            ),
+        ),
+      ),
+    controlId: options.controlId ?? CONTROL,
+    ...(options.answersCursorTools ? { answersCursorTools: true } : {}),
+    ...(options.transportHeld === undefined ? {} : { transportHeld: options.transportHeld }),
+    ...(options.onTransportDropReceiver === undefined
+      ? {}
+      : { onTransportDropReceiver: options.onTransportDropReceiver }),
+    ...(options.automationHolder === undefined
+      ? {}
+      : { automationHolder: options.automationHolder }),
+    ...(options.cursorEvents ? { cursorEvents: Stream.fromQueue(cursorEvents) } : {}),
+    expiresAt: DateTime.makeUnsafe(options.expiresAt ?? "1970-01-01T00:30:00.000Z"),
+    bundleIds: true,
+    input: Stream.fromQueue(input),
+    primitiveRequests: Stream.fromQueue(primitiveInput),
+    ...(options.primitiveCancelled === undefined
+      ? {}
+      : { primitiveCancelled: options.primitiveCancelled }),
+    primitiveReply: (reply) => Queue.offer(primitiveOutput, reply).pipe(Effect.asVoid),
+    subscribePrimitiveCancels: (listener) => {
+      cancelListeners.add(listener);
+      return () => void cancelListeners.delete(listener);
+    },
+    onDriverStarted: (current) => Queue.offer(driverStarted, current).pipe(Effect.asVoid),
+    onDriverCutoff: (current) =>
+      Queue.offer(driverCutoff, current).pipe(
+        Effect.andThen(
+          options.driverCutoffGate === undefined
+            ? Effect.void
+            : Deferred.await(options.driverCutoffGate),
+        ),
+        Effect.asVoid,
+      ),
+    output: (line, reply) =>
+      Queue.offer(output, options.guide?.(line, reply) ?? line).pipe(Effect.asVoid),
+    ...(options.cursors
+      ? {
+          onCursor: (cursor: ComputerUseAgentCursor | null) =>
+            Effect.sync(() => cursors.push(cursor)).pipe(Effect.as(true)),
+        }
+      : {}),
+    ...(options.onTarget === undefined
+      ? {}
+      : {
+          onTarget: (target: { pid: number; windowId: number }) =>
+            Queue.offer(targets, target).pipe(
+              Effect.andThen(
+                options.targetGate === undefined ? Effect.void : Deferred.await(options.targetGate),
+              ),
+              Effect.as(options.onTarget?.(target) ?? true),
+            ),
+        }),
+    ...(options.humanInput
+      ? {
+          onHumanInput: (
+            events: ReadonlyArray<{ source: ComputerUseHumanInputSource; at: number }>,
+          ) =>
+            Clock.currentTimeMillis.pipe(
+              Effect.map(
+                (at) => void humanBatches.push({ at, sources: events.map((e) => e.source) }),
+              ),
+              Effect.andThen(
+                options.reportDelay === undefined ? Effect.void : Effect.sleep(options.reportDelay),
+              ),
+              Effect.andThen(
+                Queue.offerAll(
+                  people,
+                  events.map((event) => event.source),
+                ),
+              ),
+              Effect.andThen(
+                options.humanGate === undefined ? Effect.void : Deferred.await(options.humanGate),
+              ),
+              Effect.andThen(
+                options.onHumanInput?.(events) ?? Effect.succeed(options.acceptHuman?.() ?? true),
+              ),
+            ),
+          onAgentInput: (report: AgentInputReport) =>
+            Queue.offer(agentCalls, report.state + " " + report.call).pipe(
+              Effect.andThen(
+                report.state === "start" && options.agentInputGate !== undefined
+                  ? Deferred.await(options.agentInputGate)
+                  : Effect.void,
+              ),
+              Effect.andThen(options.onAgentInput?.(report) ?? Effect.void),
+            ),
+        }
+      : {}),
+    // Each update is marked taken as the proxy pulls it, and applied once the proxy has acted.
+    leaseUpdates: (options.leaseUpdates ?? Stream.fromQueue(updates)).pipe(
+      Stream.tap((update) => Queue.offer(taken, update.state)),
+    ),
+    onLeaseUpdateApplied: (update) =>
+      Queue.offer(applied, update.state).pipe(
+        Effect.andThen(options.afterApplied?.(update) ?? Effect.void),
+      ),
+    startDriver: Effect.gen(function* () {
+      if (drivers.length > 0 && options.restartFailure !== undefined)
+        return yield* Effect.fail(options.restartFailure);
+      const driver: FakeDriver = {
+        toDriver: yield* Queue.unbounded<string>(),
+        fromDriver: yield* Queue.unbounded<string, Cause.Done>(),
+        killed: yield* Deferred.make<void>(),
+        closed: yield* Deferred.make<void>(),
+        observed: yield* Deferred.make<"reading" | "closed">(),
+      };
+      const index = drivers.length;
+      drivers.push(driver);
+      yield* Effect.addFinalizer(() =>
+        Deferred.succeed(driver.closed, undefined).pipe(
+          Effect.andThen(Deferred.succeed(driver.observed, "closed")),
+        ),
+      );
+      yield* Queue.offer(started, driver);
+      // The CLI's own feed (ComputerUseLeaseProxyCli.ts).
+      const hid = yield* makeHelperInputFeed();
+      hidFeeds.push(hid);
+      yield* options.acquire?.(index) ?? Effect.void;
+      return {
+        ...(options.humanInput ? { humanInput: hid.events } : {}),
+        send: (line: string) =>
+          Effect.suspend(() => {
+            const request = parse(line);
+            if (
+              options.autoAppListing === true &&
+              typeof request?.id === "string" &&
+              request.id.startsWith("goat-proxy:apps:")
+            )
+              return Queue.offer(
+                driver.fromDriver,
+                JSON.stringify({
+                  jsonrpc: "2.0",
+                  id: request.id,
+                  result: {
+                    structuredContent: {
+                      apps:
+                        options.autoListedApps ??
+                        [1, 4, 5, 6, 7, 8, 10, 42, 900].map((pid) => ({
+                          pid,
+                          bundle_id: pid === 42 ? "com.apple.calculator" : `com.example.app${pid}`,
+                          name: `App ${pid}`,
+                        })),
+                    },
+                  },
+                }),
+              ).pipe(Effect.asVoid);
+            if (
+              options.autoAppListing === true &&
+              options.autoToolListing !== false &&
+              typeof request?.id === "string" &&
+              request.id.startsWith("goat-proxy:tools:")
+            )
+              return Queue.offer(
+                driver.fromDriver,
+                JSON.stringify({
+                  jsonrpc: "2.0",
+                  id: request.id,
+                  result: {
+                    tools: ["run_script", "run_steps"].map((name) => ({
+                      name,
+                      inputSchema: {
+                        type: "object",
+                        properties: { app_scope: { type: "object" } },
+                      },
+                    })),
+                  },
+                }),
+              ).pipe(Effect.asVoid);
+            if (typeof request?.params?.name === "string") log.push("send " + request.params.name);
+            return Queue.offer(dispatched, { index, line }).pipe(
+              Effect.andThen(Queue.offer(driver.toDriver, line)),
+              Effect.asVoid,
+            );
+          }),
+        lines: Stream.unwrap(
+          Deferred.succeed(driver.observed, "reading").pipe(
+            Effect.as(Stream.fromQueue(driver.fromDriver)),
+          ),
+        ),
+        ...(options.exitCode === undefined ? {} : { exitCode: Effect.succeed(options.exitCode) }),
+        kill: Deferred.succeed(driver.killed, undefined).pipe(
+          Effect.andThen(
+            typeof options.kill === "function"
+              ? options.kill(index)
+              : (options.kill ?? Effect.void),
+          ),
+          Effect.andThen(
+            driver === drivers[0] && options.firstKillGate !== undefined
+              ? Deferred.await(options.firstKillGate)
+              : Effect.void,
+          ),
+          Effect.andThen(Queue.end(driver.fromDriver)),
+        ),
+        ...(options.overlay
+          ? {
+              overlay: Object.assign(
+                (command: ComputerUseOverlayCommand) =>
+                  (typeof options.overlay === "function"
+                    ? options.overlay(command)
+                    : Effect.void
+                  ).pipe(
+                    Effect.andThen(
+                      Effect.sync(() => void log.push("draw " + JSON.stringify(command))),
+                    ),
+                  ),
+                typeof options.overlay === "function" &&
+                  "captureHideConfirmed" in options.overlay &&
+                  typeof options.overlay.captureHideConfirmed === "function"
+                  ? { captureHideConfirmed: options.overlay.captureHideConfirmed }
+                  : {},
+              ),
+            }
+          : {}),
+      };
+    }),
+    ...(options.screenshots === undefined ? {} : { screenshots: options.screenshots }),
+    ...(options.elsewhere === undefined
+      ? {}
+      : {
+          placement: (windows: ReadonlyArray<NamedWindow>) =>
+            Queue.offer(checking, windows).pipe(
+              Effect.andThen(
+                options.placementGate === undefined
+                  ? Effect.void
+                  : Deferred.await(options.placementGate),
+              ),
+              Effect.as(
+                windows.some((window) => options.elsewhere?.has(window.pid))
+                  ? ("other" as const)
+                  : ("same" as const),
+              ),
+            ),
+        }),
+    ...(options.manifestStamp === undefined ? {} : { manifestStamp: options.manifestStamp }),
+    revokeSessions: (sessions) =>
+      Effect.sync(() => void revoked.push(sessions)).pipe(
+        Effect.andThen(Deferred.succeed(revokeCalled, undefined)),
+        Effect.andThen(options.revoke?.(sessions) ?? Effect.void),
+      ),
+  }).pipe(Effect.scoped, Effect.forkChild);
+  const first = yield* Queue.take(started);
+  const current = () => drivers.at(-1) ?? first;
+  const json = (line: string) => JSON.parse(line) as Record<string, unknown>;
+  return {
+    send: (line: string) => Queue.offer(input, line),
+    cursor: (update: AgentCursorLeaseUpdate) => Queue.offer(cursorEvents, update),
+    sendPrimitive: (request: ComputerUsePrimitiveRequest) => Queue.offer(primitiveInput, request),
+    /** The server cancels a screen call, as when its cell ends without the call's answer. */
+    cancelPrimitive: (requestId: string) =>
+      Effect.sync(() => {
+        for (const listener of cancelListeners) listener(requestId);
+      }),
+    primitiveReply: Queue.take(primitiveOutput),
+    driverStarted: Queue.take(driverStarted),
+    driverCutoff: Queue.take(driverCutoff),
+    close: Queue.end(input),
+    push: (update: ComputerUseLeaseUpdate) => Queue.offer(updates, update),
+    failLeaseStream: Queue.fail(updates, "connection reset"),
+    reply: (line: string) => Queue.offer(current().fromDriver, line),
+    /** The driver's output ends without the proxy killing it, as when the helper restarts. */
+    driverExits: Effect.suspend(() => Queue.end(current().fromDriver)),
+    nextToDriver: Effect.suspend(() => Queue.take(current().toDriver)).pipe(Effect.map(json)),
+    nextToProvider: Queue.take(output).pipe(Effect.map(json)),
+    providerQueued: Queue.size(output),
+    driverQueued: Effect.suspend(() => Queue.size(current().toDriver)),
+    killed: Effect.suspend(() => Deferred.await(first.killed)),
+    isKilled: Effect.suspend(() => Deferred.isDone(first.killed)),
+    restarted: Queue.take(started),
+    drivers,
+    cursors,
+    nextDispatch: Queue.take(dispatched).pipe(
+      Effect.map(({ index, line }) => ({ index, message: json(line) })),
+    ),
+    /** The state of the next lease update the proxy pulled, before acting on it. */
+    taken: Queue.take(taken),
+    /** The state of the next lease update the proxy finished applying. */
+    applied: Queue.take(applied),
+    appliedQueued: Queue.size(applied),
+    /** Driver children started and not killed. */
+    liveDrivers: Effect.suspend(() =>
+      Effect.forEach(drivers, (driver) => Deferred.isDone(driver.killed)).pipe(
+        Effect.map((killed) => killed.filter((done) => !done).length),
+      ),
+    ),
+    /** Driver children started and not yet taken with restarted. */
+    startedQueued: Queue.size(started),
+    revokeCalled: Deferred.await(revokeCalled),
+    /** The windows of the next placement check, once it has started. */
+    checking: Queue.take(checking),
+    /** The next window the proxy reported to the server. */
+    reported: Queue.take(targets),
+    reportedQueued: Queue.size(targets),
+    /** The helper saw a keyboard or pointer event `ageMs` ago. */
+    hid: (source: ComputerUseHumanInputSource, ageMs = 0) =>
+      Effect.suspend(() => {
+        const feed = hidFeeds.at(-1);
+        if (feed === undefined) return Effect.void;
+        return Clock.currentTimeMillis.pipe(
+          Effect.map((now) => feed.offer({ source, at: now - ageMs })),
+        );
+      }),
+    /** The next person's input the proxy reported to the server. */
+    person: Queue.take(people),
+    /** How many events each report of a person's input carried, in order. */
+    humanBatches: Effect.sync(() => [...humanBatches]),
+    /** The next input call start or end the proxy told the server about, as "start 1". */
+    agentCall: Queue.take(agentCalls),
+    agentCallsQueued: Queue.size(agentCalls),
+    reservations,
+    nextReservation: Queue.take(reservationEvents),
+    nextValidation: Queue.take(validationEvents),
+    revoked,
+    log,
+    proxy,
+  };
+});
+
+export const unknownWriteSafety = {
+  possibleCommit: true,
+  retryClass: "never",
+  writeStatus: "may_have_applied",
+  code: "write_indeterminate",
+} as const;
+export const terminalRefusalSafety = {
+  possibleCommit: false,
+  retryClass: "never",
+  writeStatus: "not_started",
+  code: "write_refused_terminal",
+} as const;
+export const reobserveRefusalSafety = {
+  possibleCommit: false,
+  retryClass: "new_key",
+  writeStatus: "not_started",
+  code: "write_refused_reobserve",
+} as const;
+export const fixInputRefusalSafety = {
+  possibleCommit: false,
+  retryClass: "fix_input",
+  writeStatus: "rejected_before_commit",
+  code: "write_refused_fix_input",
+} as const;
+
+/** A refused call; read marks the refusal of a read that already ran. */
+export const refusedCall = (id: number, reason: keyof typeof LEASE_END_MESSAGES, read = false) => ({
+  jsonrpc: "2.0",
+  id,
+  result: {
+    content: [{ type: "text", text: LEASE_END_MESSAGES[reason] }],
+    structuredContent: {
+      refused: computerUseRefusalReason(reason),
+      detail: reason,
+      // Only a call on another display may be sent again, after a fresh look.
+      safety: read
+        ? {
+            ...reobserveRefusalSafety,
+            writeStatus: "not_applicable",
+            code: "read_failed_pre_dispatch",
+          }
+        : reason === "wrong_display"
+          ? reobserveRefusalSafety
+          : terminalRefusalSafety,
+    },
+    isError: true,
+  },
+});
+
+/** A call the driver already had when the control ended: it may have acted, so no refusal. */
+export const cutOffCall = (id: number, reason: keyof typeof LEASE_END_MESSAGES, read = false) => ({
+  jsonrpc: "2.0",
+  id,
+  result: {
+    content: [
+      {
+        type: "text",
+        text: `${read ? READ_CUT_OFF : MAY_HAVE_ACTED} ${LEASE_END_MESSAGES[reason]}`,
+      },
+    ],
+    structuredContent: read
+      ? {
+          code: "interrupted",
+          detail: reason,
+          safety: {
+            possibleCommit: false,
+            retryClass: "same_key",
+            writeStatus: "not_applicable",
+            code: "read_indeterminate",
+          },
+        }
+      : { effect: "unverifiable", code: "interrupted", detail: reason, safety: unknownWriteSafety },
+    isError: true,
+  },
+});
+
+export interface ToolAnswer {
+  readonly id: unknown;
+  readonly result: {
+    readonly content: ReadonlyArray<{ readonly text: string }>;
+    readonly structuredContent: Record<string, unknown>;
+    readonly isError: boolean;
+  };
+}

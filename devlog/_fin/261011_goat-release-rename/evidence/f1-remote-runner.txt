@@ -1,0 +1,10 @@
+juns-MacBook-Pro.local
+juns-MacBook-Pro.local
+total 112
+drwxr-xr-x  4 jun  staff    128 Oct 11 05:47 .
+drwxr-xr-x  3 jun  staff     96 Oct 10 22:40 ..
+-rwx------  1 jun  staff   9722 Oct 11 05:47 run-t3.sh
+-rw-r--r--  1 jun  staff  41005 Oct 11 05:33 server.log
+0.0.45-nightly.20261010.6
+153:T3_ARCHIVE_VERSION='0.0.45-nightly.20261010.7'
+160:T3_RELEASE_BASE_URL='https://github.com/pingdotgg/t3code/releases/download'

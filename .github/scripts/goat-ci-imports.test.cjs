@@ -1,0 +1,289 @@
+"use strict";
+
+const { describe, it, before, after } = require("node:test");
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const {
+  specifiersOf,
+  resolveExport,
+  buildImportGraph,
+  dependents,
+  mentionsOf,
+} = require("./goat-ci-imports.cjs");
+
+describe("specifiersOf", () => {
+  it("reads every runtime import form", () => {
+    const source = [
+      'import a from "./a.ts";',
+      "import {",
+      "  b,",
+      "  c,",
+      '} from "@goat/shared/b";',
+      'import * as ns from "../ns.ts";',
+      'import "./side-effect.ts";',
+      'import { type T, value } from "./mixed.ts";',
+      'export * from "./star.ts";',
+      'export { x } from "./named.ts";',
+      'const lazy = await import("./lazy.ts");',
+      "const literal = await import(\x60./template.ts\x60);",
+      'const cjs = require("./cjs.cjs");',
+      'vi.mock("./mocked.ts", () => ({}));',
+      'const actual = await vi.importActual("./actual.ts");',
+      'const helper = new URL("../../helper.ts", import.meta.url);',
+    ].join("\n");
+    assert.deepEqual(
+      new Set(specifiersOf(source)),
+      new Set([
+        "./a.ts",
+        "@goat/shared/b",
+        "../ns.ts",
+        "./side-effect.ts",
+        "./mixed.ts",
+        "./star.ts",
+        "./named.ts",
+        "./lazy.ts",
+        "./template.ts",
+        "./cjs.cjs",
+        "./mocked.ts",
+        "./actual.ts",
+        "../../helper.ts",
+      ]),
+    );
+  });
+
+  it("skips type-only imports and re-exports, which never run", () => {
+    const source = [
+      'import type { A } from "./a.ts";',
+      'export type { B } from "./b.ts";',
+      'import typeHelpers from "./typeHelpers.ts";',
+    ].join("\n");
+    assert.deepEqual(specifiersOf(source), ["./typeHelpers.ts"]);
+  });
+
+  it("skips dynamic imports it cannot read", () => {
+    assert.deepEqual(
+      specifiersOf("await import(modulePath);\nawait import(\x60./\x24{name}.ts\x60);"),
+      [],
+    );
+  });
+});
+
+describe("resolveExport", () => {
+  const manifest = {
+    exports: {
+      ".": { types: "./src/index.ts", import: "./src/index.ts" },
+      "./settings": { types: "./src/settings.ts", default: "./src/settings.ts" },
+      "./server/*": { import: "./src/server/*.ts" },
+    },
+  };
+
+  it("reads named subpaths and patterns", () => {
+    assert.equal(resolveExport(manifest, "."), "./src/index.ts");
+    assert.equal(resolveExport(manifest, "./settings"), "./src/settings.ts");
+    assert.equal(resolveExport(manifest, "./server/cloud"), "./src/server/cloud.ts");
+  });
+
+  it("returns nothing for a subpath the package does not export", () => {
+    assert.equal(resolveExport(manifest, "./missing"), undefined);
+  });
+
+  it("handles string exports and packages without exports", () => {
+    assert.equal(resolveExport({ exports: "./src/main.ts" }, "."), "./src/main.ts");
+    assert.equal(resolveExport({ main: "./lib/index.js" }, "."), "./lib/index.js");
+    assert.equal(resolveExport({}, "./deep/file"), "./deep/file");
+  });
+});
+
+describe("buildImportGraph", () => {
+  let root;
+  let graph;
+  const write = (file, text = "") => {
+    fs.mkdirSync(path.join(root, path.dirname(file)), { recursive: true });
+    fs.writeFileSync(path.join(root, file), text);
+  };
+
+  before(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "ci-imports-"));
+    write(
+      "packages/lib/package.json",
+      JSON.stringify({
+        name: "@goat/lib",
+        exports: { ".": { import: "./src/index.ts" }, "./util/*": { import: "./src/util/*.ts" } },
+      }),
+    );
+    write("packages/lib/src/index.ts", 'export * from "./core.ts";');
+    write("packages/lib/src/core.ts");
+    write("packages/lib/src/util/strings.ts");
+    write(
+      "packages/opaque/package.json",
+      JSON.stringify({ name: "@goat/opaque", exports: { ".": "./src/index.ts" } }),
+    );
+    write("packages/opaque/src/index.ts");
+    write("packages/opaque/src/hidden.ts");
+    write("apps/server/package.json", JSON.stringify({ name: "goat" }));
+    write("apps/server/src/feature/index.ts", 'import { core } from "@goat/lib";');
+    write("apps/server/src/feature.test.ts", 'import { feature } from "./feature";');
+    write("apps/server/src/util.test.ts", 'import { s } from "@goat/lib/util/strings";');
+    write("apps/server/src/esm.ts");
+    write("apps/server/src/esm.test.ts", 'import "./esm.js";');
+    write("apps/server/src/opaque.test.ts", 'import { deep } from "@goat/opaque/not-exported";');
+    write("apps/server/src/spawn.test.ts", 'spawn("node", [path.join(dir, "cli/helper.ts")]);');
+    write("apps/server/src/cli/helper.ts", 'import "../helperDep.ts";');
+    write("apps/server/src/helperDep.ts");
+    write("apps/server/src/loaded.ts", 'import "./loadedDep.ts";');
+    write("apps/server/src/loadedDep.ts");
+    write("apps/server/src/main.ts", 'import "./core/deep.ts";');
+    write("apps/server/src/core/deep.ts");
+    write(
+      "apps/server/src/provider/extract.ts",
+      'const entry = new URL(dev ? "../main.ts" : "./main.mjs", import.meta.url);',
+    );
+    write("apps/server/src/upload.ts", 'import "./provider/extract.ts";');
+    write("apps/server/src/app.ts", 'import "./upload.ts";');
+    write("apps/server/src/upload.test.ts", 'import "./upload.ts";');
+    write("apps/server/src/main.test.ts", 'spawn("node", ["src/main.ts"]);');
+    write("apps/server/src/runner.test.ts", 'spawn("node", ["src/tools/runner.ts"]);');
+    write("apps/server/src/tools/runner.ts", 'spawn("node", ["src/tools/runnerEntry.ts"]);');
+    write("apps/server/src/tools/runnerEntry.ts", 'import "./runnerLeaf.ts";');
+    write("apps/server/src/tools/runnerLeaf.ts");
+    write("apps/server/src/cycle.test.ts", 'import "./cycle/a.ts";');
+    write("apps/server/src/cycle/a.ts", 'import "./b.ts";\nspawn("node", ["src/cycle/entry.ts"]);');
+    write("apps/server/src/cycle/b.ts", 'import "./a.ts";');
+    write("apps/server/src/cycle/entry.ts", 'import "./leaf.ts";');
+    write("apps/server/src/cycle/leaf.ts");
+    write(
+      "apps/server/src/mixed/a.ts",
+      'import "./shared.test.ts";\nspawn("node", ["src/mixed/entry.ts"]);',
+    );
+    write("apps/server/src/mixed/shared.test.ts", 'import "./a.ts";');
+    write("apps/server/src/mixed/runner.test.ts", 'import "./a.ts";');
+    write("apps/server/src/mixed/entry.ts", 'import "./leaf.ts";');
+    write("apps/server/src/mixed/leaf.ts");
+    write("apps/server/src/typed/tool.ts", 'spawn("node", ["src/typed/entry.ts"]);');
+    write("apps/server/src/typed/tool.test.ts", 'import "./tool.ts";');
+    write("apps/server/src/typed/entry.ts", 'import "./leaf.ts";');
+    write("apps/server/src/typed/leaf.ts");
+    write("apps/server/src/typed/consumer.ts", 'import type { Helper } from "./tool.ts";');
+    write("apps/server/src/named/default.test.ts", 'import type from "./runtime.ts";\ntype();');
+    write("apps/server/src/named/runtime.ts", 'import "./leaf.ts";');
+    write("apps/server/src/named/leaf.ts");
+    write(
+      "apps/server/src/named/alias.test.ts",
+      'export type Result = {}\nspawn("node", ["src/named/aliasEntry.ts"])\nimport { x } from "./other.ts";',
+    );
+    write("apps/server/src/named/aliasEntry.ts", 'import "./aliasLeaf.ts";');
+    write("apps/server/src/named/aliasLeaf.ts");
+    write(
+      "apps/server/src/lone/a.ts",
+      'import "./lone.test.ts";\nspawn("node", ["src/lone/entry.ts"]);',
+    );
+    write("apps/server/src/lone/lone.test.ts", 'import "./a.ts";');
+    write("apps/server/src/lone/entry.ts", 'import "./leaf.ts";');
+    write("apps/server/src/lone/leaf.ts");
+    write("apps/server/src/ws.ts");
+    write("apps/server/src/nested/deep.ts");
+    write(
+      "apps/server/src/loader.fixture.mjs",
+      'const app = (name) => import(root + "/src/" + name + ".ts");\nawait app("loaded");\nawait app("ws");\nawait app("nested/deep");',
+    );
+    write(
+      "apps/server/src/loader.test.ts",
+      'const fixture = new URL("./loader.fixture.mjs", import.meta.url);',
+    );
+    write("apps/server/src/prose.ts");
+    write(
+      "apps/server/src/prose.test.ts",
+      '// The old "prose.ts" check moved.\n/* see "prose.ts" */\nexport const url = "https://example.com/prose.ts";',
+    );
+    write("apps/server/vite.config.ts", 'export default { build: { entry: "src/entry.ts" } };');
+    write("apps/server/src/entry.ts", 'import "./esm.ts";');
+    write("apps/server/src/config.test.ts", 'const config = "apps/server/vite.config.ts";');
+    write("apps/web/src/lib/thing.ts");
+    write("apps/web/src/thing.test.ts", 'import { thing } from "~/lib/thing";');
+    write("apps/server/node_modules/ignored/index.ts", 'import "../../src/esm.ts";');
+    graph = buildImportGraph(root);
+  });
+
+  after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const reaches = (changed, test) => dependents(graph, [changed]).has(test);
+
+  it("follows directory imports, re-exports and package exports", () => {
+    assert.ok(reaches("packages/lib/src/core.ts", "apps/server/src/feature.test.ts"));
+    assert.ok(reaches("packages/lib/src/util/strings.ts", "apps/server/src/util.test.ts"));
+    assert.ok(!reaches("packages/lib/src/util/strings.ts", "apps/server/src/feature.test.ts"));
+  });
+
+  it("maps a .js specifier to its TypeScript source", () => {
+    assert.ok(reaches("apps/server/src/esm.ts", "apps/server/src/esm.test.ts"));
+  });
+
+  it("treats an import it cannot pin to a file as an import of the whole package", () => {
+    assert.ok(graph.importers.has("package:packages/opaque"));
+    assert.ok(reaches("packages/opaque/src/hidden.ts", "apps/server/src/opaque.test.ts"));
+  });
+
+  it("resolves the root Vite alias", () => {
+    assert.ok(reaches("apps/web/src/lib/thing.ts", "apps/web/src/thing.test.ts"));
+  });
+
+  it("skips installed dependencies", () => {
+    assert.ok(![...graph.sources.keys()].some((file) => file.includes("node_modules")));
+  });
+
+  it("follows a file that a test names only by path, apart from imports", () => {
+    assert.ok(reaches("apps/server/src/cli/helper.ts", "apps/server/src/spawn.test.ts"));
+    assert.ok(
+      !dependents(graph, ["apps/server/src/cli/helper.ts"], { importsOnly: true }).has(
+        "apps/server/src/spawn.test.ts",
+      ),
+    );
+    assert.deepEqual(mentionsOf(graph, "apps/server/src/cli/helper.ts"), [
+      "apps/server/src/spawn.test.ts",
+    ]);
+  });
+
+  it("follows a module that a loader imports by name", () => {
+    assert.ok(reaches("apps/server/src/loaded.ts", "apps/server/src/loader.test.ts"));
+    assert.ok(reaches("apps/server/src/ws.ts", "apps/server/src/loader.test.ts"));
+    assert.ok(reaches("apps/server/src/nested/deep.ts", "apps/server/src/loader.test.ts"));
+    assert.ok(reaches("apps/server/src/loadedDep.ts", "apps/server/src/loader.test.ts"));
+  });
+
+  it("follows a change through the imports of a file a test spawns", () => {
+    assert.ok(reaches("apps/server/src/helperDep.ts", "apps/server/src/spawn.test.ts"));
+    assert.ok(reaches("apps/server/src/core/deep.ts", "apps/server/src/main.test.ts"));
+    assert.ok(reaches("apps/server/src/tools/runnerLeaf.ts", "apps/server/src/runner.test.ts"));
+  });
+
+  it("follows names from test helpers that import each other", () => {
+    assert.ok(reaches("apps/server/src/cycle/leaf.ts", "apps/server/src/cycle.test.ts"));
+    assert.ok(reaches("apps/server/src/mixed/leaf.ts", "apps/server/src/mixed/runner.test.ts"));
+    assert.ok(reaches("apps/server/src/lone/leaf.ts", "apps/server/src/lone/lone.test.ts"));
+  });
+
+  it("does not let a type-only import keep a test helper out of test code", () => {
+    assert.ok(reaches("apps/server/src/typed/leaf.ts", "apps/server/src/typed/tool.test.ts"));
+    assert.ok(reaches("apps/server/src/named/leaf.ts", "apps/server/src/named/default.test.ts"));
+    assert.ok(reaches("apps/server/src/named/aliasLeaf.ts", "apps/server/src/named/alias.test.ts"));
+  });
+
+  it("does not spread a change through a production module that names the server entry", () => {
+    assert.ok(!reaches("apps/server/src/core/deep.ts", "apps/server/src/upload.test.ts"));
+    assert.deepEqual(mentionsOf(graph, "apps/server/src/main.ts").sort(), [
+      "apps/server/src/main.test.ts",
+      "apps/server/src/provider/extract.ts",
+    ]);
+  });
+
+  it("ignores file names in comments", () => {
+    assert.ok(!reaches("apps/server/src/prose.ts", "apps/server/src/prose.test.ts"));
+  });
+
+  it("does not connect files through a config that names a build entry", () => {
+    assert.ok(reaches("apps/server/src/esm.ts", "apps/server/vite.config.ts"));
+    assert.ok(!reaches("apps/server/src/esm.ts", "apps/server/src/config.test.ts"));
+  });
+});

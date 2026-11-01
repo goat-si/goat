@@ -1,0 +1,44 @@
+name: Close outside pull requests
+
+# goat does not take outside pull requests yet. A pull request from a fork is
+# closed with a short note unless its author is an owner, member, or
+# collaborator with write access. A pull request whose branch lives in this
+# repository is never closed: only people with write access can push there.
+# pull_request_target runs this file from the base branch with a write token,
+# so it must never check out or run code from the pull request.
+on:
+  pull_request_target:
+    types: [opened, reopened]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  close:
+    name: Close outside pull request
+    if: >-
+      github.event.pull_request.head.repo.full_name != github.repository &&
+      github.event.pull_request.author_association != 'OWNER' &&
+      github.event.pull_request.author_association != 'MEMBER' &&
+      github.event.pull_request.author_association != 'COLLABORATOR'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Comment and close unless the author has write access
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+        run: |
+          if ! permission="$(gh api "repos/$GH_REPO/collaborators/$AUTHOR/permission" --jq .permission)"; then
+            echo "::warning::Could not read the permission of $AUTHOR; leaving #$PR_NUMBER open."
+            exit 0
+          fi
+          case "$permission" in
+            admin|maintain|write)
+              echo "$AUTHOR has $permission access; leaving #$PR_NUMBER open."
+              exit 0
+              ;;
+          esac
+          gh pr close "$PR_NUMBER" --comment "Thanks for your interest in goat. We are not accepting outside pull requests right now, so this one has been closed automatically. Please open an issue instead."

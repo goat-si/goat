@@ -1,0 +1,13 @@
+{"time":"2026-10-22T13:37:12.100Z","delayMaxMs":2950,"utilization":0.31,"cpuUserMs":600,"cpuSystemMs":260,"majorPageFaults":0,"minorPageFaults":900,"involuntaryContextSwitches":3800,"rssMb":488}
+{"time":"2026-10-22T13:46:40.137Z","delayMaxMs":2310,"utilization":0.22,"cpuUserMs":641,"cpuSystemMs":277,"majorPageFaults":0,"minorPageFaults":1013,"involuntaryContextSwitches":3897,"rssMb":503}
+{"time":"2026-10-22T13:53:05.174Z","delayMaxMs":2620,"utilization":0.44,"cpuUserMs":682,"cpuSystemMs":294,"majorPageFaults":0,"minorPageFaults":1126,"involuntaryContextSwitches":3994,"rssMb":497}
+{"time":"2026-10-22T14:04:30.211Z","delayMaxMs":3410,"utilization":0.38,"cpuUserMs":723,"cpuSystemMs":311,"majorPageFaults":0,"minorPageFaults":1239,"involuntaryContextSwitches":4091,"rssMb":512}
+{"time":"2026-10-22T14:11:55.248Z","delayMaxMs":2240,"utilization":0.27,"cpuUserMs":764,"cpuSystemMs":328,"majorPageFaults":0,"minorPageFaults":1352,"involuntaryContextSwitches":4188,"rssMb":491}
+{"time":"2026-10-22T14:22:18.285Z","delayMaxMs":2780,"utilization":0.49,"cpuUserMs":805,"cpuSystemMs":345,"majorPageFaults":0,"minorPageFaults":1465,"involuntaryContextSwitches":4285,"rssMb":520}
+{"time":"2026-10-22T14:29:02.322Z","delayMaxMs":2450,"utilization":0.24,"cpuUserMs":846,"cpuSystemMs":362,"majorPageFaults":0,"minorPageFaults":1578,"involuntaryContextSwitches":4382,"rssMb":506}
+{"time":"2026-10-22T14:41:47.359Z","delayMaxMs":3600,"utilization":0.41,"cpuUserMs":887,"cpuSystemMs":379,"majorPageFaults":0,"minorPageFaults":1691,"involuntaryContextSwitches":4479,"rssMb":534}
+{"time":"2026-10-22T14:48:10.396Z","delayMaxMs":2350,"utilization":0.33,"cpuUserMs":928,"cpuSystemMs":396,"majorPageFaults":0,"minorPageFaults":1804,"involuntaryContextSwitches":4576,"rssMb":499}
+{"time":"2026-10-22T14:58:33.433Z","delayMaxMs":2560,"utilization":0.29,"cpuUserMs":969,"cpuSystemMs":413,"majorPageFaults":0,"minorPageFaults":1917,"involuntaryContextSwitches":4673,"rssMb":515}
+{"time":"2026-10-22T15:09:21.470Z","delayMaxMs":2910,"utilization":0.46,"cpuUserMs":1010,"cpuSystemMs":430,"majorPageFaults":0,"minorPageFaults":2030,"involuntaryContextSwitches":4770,"rssMb":527}
+{"time":"2026-10-22T15:16:44.507Z","delayMaxMs":2270,"utilization":0.21,"cpuUserMs":1051,"cpuSystemMs":447,"majorPageFaults":0,"minorPageFaults":2143,"involuntaryContextSwitches":4867,"rssMb":502}
+{"time":"2026-10-22T15:25:50.544Z","delayMaxMs":2680,"utilization":0.36,"cpuUserMs":1092,"cpuSystemMs":464,"majorPageFaults":0,"minorPageFaults":2256,"involuntaryContextSwitches":4964,"rssMb":511}

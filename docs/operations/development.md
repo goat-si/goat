@@ -1,0 +1,439 @@
+# Development
+
+## First checkout
+
+Install `vp` using the [root README](../../README.md#install-vp). The checkout pins the exact Node 26
+release in the root `package.json` `engines.node`, and `vp` installs and uses it in its default managed mode.
+CI and the standalone `goat` executable use the same version, so change it there and nowhere else. The server's
+own `engines.node` stays wider because the desktop app runs it on Electron's Node 24. Bun is optional.
+
+When `vp env current` reports `Mode system_first`, `vp` runs the `node` on `PATH` instead. If that is
+another major or older than the pin, `vp run dev` and `vp test` stop with a message naming the pinned release.
+Run `vp env on node` to let `vp` manage Node again, or prefix one command with
+`vp env exec --node <pinned version> --`. From the repository root:
+
+```sh
+vp i
+vp run dev
+```
+
+Open the pairing URL printed by the dev runner. The bare origin does not authenticate
+a new browser.
+
+Prefer a container? See [Dev container](../internals/devcontainer.md) for VS Code and Codespaces setup.
+
+## Worktrees
+
+A new worktree sets itself up. When `git worktree add` creates a checkout, the
+`.vite-hooks/post-checkout` hook runs `node scripts/setup-worktree.ts` in it, whether GOAT, Codex,
+or an agent ran git. Setup installs dependencies, links the main checkout's env files, and warms the
+web dependency cache, so the command returns with a ready worktree, usually within a minute.
+When `vp` is not on `PATH`, setup installs with `pnpm install --frozen-lockfile`, then
+`npx vite-plus`, and prints which tool it ran.
+
+Git reads the hook from the checkout that runs `git worktree add`, so that checkout needs one
+`vp i` first. Set `GOAT_WORKTREE_SETUP=0` to skip setup for a throwaway checkout. For a worktree
+created without the hook, run `node scripts/setup-worktree.ts` from its root.
+
+Agents running in GOAT use GOAT-managed worktrees for extra checkouts: `worktree.handoff`
+for the current thread (check `worktree.status` first), `thread.launch` with
+`workspaceStrategy:{type:"worktree"}` for a separate thread, or `task.create` with
+`isolation:"worktree"` for a bounded child lane. Do not create ad-hoc worktrees or clones for lanes,
+or ask children to create them; a shell-created checkout does not bind a GOAT thread.
+
+For humans or when GOAT is unavailable, create worktrees with
+`node scripts/worktree-add.ts <worktrees-directory>/goat/<name> -b <branch> origin/dev`.
+Use GOAT's configured worktrees directory, which defaults to `<GOAT home>/worktrees`
+(normally `~/.goat/desktop/worktrees` for the desktop app). Placing a checkout there does not
+bind it to a thread; use `thread.launch` with `workspaceStrategy:{type:"existing_worktree",worktreePath:"<absolute-path>",branch:"<branch>"}` when GOAT is available.
+When GOAT is checked out as a submodule with `extensions.worktreeConfig` on, a plain
+`git worktree add` inherits the submodule's `core.worktree`: the new worktree resolves to the git
+directory, the hook finds no setup script there, and `git status` reports the git directory's
+files. The script gives the new worktree its own `core.worktree` before checking out and running
+the hook, as GOAT does for its thread worktrees, and runs a plain `git worktree add` everywhere else.
+
+GOAT's own thread worktrees skip the hook: GOAT sets `GOAT_WORKTREE_SETUP=0` because it runs the
+same script as the `goat.json` setup action, with its output in the launch view. They also leave
+`.repos/` out through sparse checkout, which cut a Windows checkout from 29,631 files to 7,797.
+Read the references from the main checkout, or run `git sparse-checkout disable` in the worktree;
+`vpr sync:repos` does that itself before syncing.
+
+## Choosing a dev process
+
+Use `vp run dev` for server and web, or `vp run dev:desktop` for the Electron client.
+`dev:server` and `dev:web` start those processes separately.
+See the [mobile README](../../apps/mobile/README.md) for native builds and Metro.
+
+Flags go directly after the task name, for example `vp run dev --home-dir /tmp/goat-dev`.
+Add `--browser` to open a browser automatically.
+
+### State and ports
+
+Linked worktrees default to their own `.goat/userdata` (one created earlier keeps `.t3`), even when `GOAT_HOME` is set.
+The main checkout defaults to `~/.goat/dev` (`~/.t3/dev` while only that exists). An explicit `--home-dir` wins in both cases.
+The first start in a worktree seeds its empty database from a read-only copy of
+`~/.goat/userdata` (`~/.t3/userdata` when that database is absent) if the source is at most
+500 MiB. Larger sources warn and dev starts with an empty database. `--no-seed` or
+`GOAT_DEV_SEED=0` skips seeding. To copy a larger source, run `vp run migrate-dev-db` with dev
+stopped. It may use substantial disk space before pruning.
+Never run a development server against the live `~/.goat/userdata` or `~/.t3/userdata`.
+See [test data](../../AGENTS.md#test-data) for copying a consistent database snapshot.
+
+An unsigned `vp run dev:desktop` build has a different code identity in each worktree and after each launcher rebuild, so macOS asks for the login keychain password whenever it reads the shared `GOAT Dev Safe Storage` item, and a build started from a terminal or agent may have no keyring access at all. To start without the OS key store, for example for automated UI checks, set `GOAT_DEV_INSECURE_SECRET_STORAGE=1` with an isolated home (a worktree default or `--home-dir <path>` outside `~/.goat` and `~/.t3`). GOAT's own secret storage then leaves the macOS Keychain and Linux Secret Service alone: it saves secrets as development-plaintext blobs and skips the startup key migration and sibling-key recovery. Importing cookies from another browser still reads that browser's key from the OS key store, and only when you start the import.
+
+Secrets saved through the keychain before you set the flag stay on disk but do not open; unset the flag to read them. With the flag on, enter the connections again: GOAT copies the unreadable catalog to a `connection-catalog.unreadable-<hash>.backup.json` file before it saves the new one. One case blocks saving: a saved-environment registry from builds before the connection catalog cannot be migrated while the flag is on. Start once without the flag so the catalog is created, then turn the flag back on and enter the connections again. Packaged builds and default homes ignore the flag and refuse to read development-plaintext blobs.
+
+Read ports from the `[dev-runner]` output. Worktrees derive stable preferences from their paths,
+but occupied ports can shift them. `GOAT_PORT_OFFSET` or `GOAT_DEV_INSTANCE` can select a
+different preference when needed.
+
+### Remote machines
+
+A dev server runs on a copy of your data and reads your real home directory, so hub nodes,
+OpenCodex links and `~/.ssh/config` would point it at your real machines. It therefore refuses
+SSH to any other machine. Hub connections, remote dispatch, host status and host setup fail with
+a message naming `GOAT_DEV_SSH`. Git that the server or its agents run cannot use SSH remotes,
+HTTPS remotes still work, and automatic project pulls are off. To test remote features, start it
+with `GOAT_DEV_SSH=on vp run dev` (or `dev:desktop`); the server logs a warning and the web
+sidebar shows an "SSH on" badge. The rule applies to any server with a dev URL, which every
+`vp run dev*` mode and the desktop dev backend pass. It covers SSH only: linked HTTPS hosts and
+cloud machines need copied `secrets`, and an agent that runs `ssh` itself is not stopped.
+
+### Replay provider
+
+`vp run dev` registers `Replay (dev)`, a local ACP agent at
+[dev-replay-agent.ts](../../apps/server/scripts/dev-replay-agent.ts). It plays recorded
+ACP transcripts with simulated streaming, so the real adapter, orchestration, and UI run
+without a paid model. Each scenario is a model, and each prompt plays the next recorded turn.
+The server writes it only into settings that resolve, through any links, inside the checkout,
+such as a worktree's `.goat`, so a dev server on another home, the live home included, never
+gets it. A server started without dev mode does not load it even when settings hold it. Bundled
+servers, including desktop dev, skip it because they have no agent script. Dev servers add it
+back on start, so turn it off in Settings instead of removing it.
+To add a scenario, point a `SCENARIOS` entry at a generic ACP replay fixture
+(`registry_transcript.ndjson`) or a file in [dev-replay](../../apps/server/scripts/dev-replay).
+The agent replays session updates, permission requests, and questions. It drops session setup
+and vendor frames, so Grok and fx recordings lose their vendor-only behavior.
+
+### Sharing and remote debugging
+
+`vp run dev --share` publishes the web port over the machine's tailnet and prints a pairing URL
+for that origin. Give the tester the complete URL, including its token. The dev runner removes
+its mapping on exit.
+
+Leave `VITE_HTTP_URL` and `VITE_WS_URL` unset. Vite proxies the backend through the browser's
+origin so the same build works over localhost and remote connections.
+
+Shared runs enable bundled dev to avoid a network round trip for each import level.
+`GOAT_BUNDLED_DEV=0` opts out when debugging bundler differences. Two reload traps matter
+when changing this setup:
+
+- The web entry must dynamically import the app so React refresh initializes before application
+  chunks. Static imports can work on first load and fail after a route split.
+- Bundled dev rebuilds Tailwind through watched files. Its ordinary Vite hot-update hook expects
+  a server/module graph that Rolldown does not provide.
+- The app and its routes are lazy chunks, built on first request. A plugin pre-bundles the
+  startup chain when the server starts. Renaming or moving a startup route or the app entry
+  silently drops it from that list.
+
+The workarounds live in the [web entry](../../apps/web/src/bootstrap.ts),
+[Tailwind plugin](../../apps/web/vite/tailwind.ts), and
+[startup warmup](../../apps/web/vite/warmBundledDev.ts).
+
+`vp run dev --share --built` skips the Vite dev server. It runs `vp build --watch` for the web
+app, and the backend serves `apps/web/dist` on the same tailnet URL and pairing flow. Use it when
+someone tests over a slow link or only needs to use the app: loads are production size, and the
+first load does not wait for dev bundling. There is no HMR. After an edit, wait for the
+`built in` line (about 6 s), then reload. Until the first build exists, the URL shows a page that
+reloads by itself. The license manifest is not generated in this mode. `--built` requires
+`--share` and the `dev` mode.
+
+#### Reusable dev credential
+
+Use this only on a hostname where you trust every service. Browsers send cookies to all ports
+on that hostname. Any service you visit there can receive the reusable admin credential,
+including services unrelated to GOAT. If you run untrusted services on that hostname, keep
+normal per-environment pairing instead.
+
+To use one browser profile across web dev worktrees on the same hostname, generate one fixed
+value once:
+
+```sh
+openssl rand -hex 32
+```
+
+Put that value in the main checkout's gitignored `.env`:
+
+```dotenv
+GOAT_DEV_AUTH_TOKEN=<the value generated above>
+```
+
+[Worktree setup](#worktrees) links that file to each worktree's `.env`. The dev runner reads repository env files at startup. `.env.local` and inherited process
+environment values override `.env`, so no per-worktree export is needed after setup.
+
+For a manual worktree or launcher without that link, export the same fixed value instead:
+
+```sh
+export GOAT_DEV_AUTH_TOKEN="<the value generated above>"
+```
+
+Do not generate a new value at startup. Start or restart `vp run dev --share` after configuration,
+then open its printed startup pairing URL once per browser profile on that hostname. Later web dev
+servers on the same hostname accept the shared cookie across ports. The cookie expires after 30
+days. Reload an old tab if its URL now serves a replacement environment.
+
+The token and startup pairing URLs are reusable administrative secrets. Never put them in a
+commit, pull request, or public output. Every server still seeds its own auth database record at
+startup and keeps its own SQLite data, signing key, and revocation state. Desktop and non-dev
+servers ignore the value. See [environment authentication](../internals/environment-auth.md#reusable-dev-credential)
+for the security model.
+
+## Checks
+
+`vp run check:changed` runs CI's fast checks for your branch's changes: format and lint of the
+changed files, `knip:check` when code or a manifest changes, the generated GraphQL checks, typecheck
+of the affected packages and their dependents, and the test files beside the changed files. It maps
+files to packages with [ci-changes.cjs](../../.github/scripts/ci-changes.cjs), as CI does. It
+compares against the merge base with `origin/dev`, or with a ref you pass. A pull request's CI run
+is quick too: the whole-repository check and typecheck plus the same tests beside the changes. The
+full test suites and the jobs the summary lists run with the `ci:full` label, a manual `goat-ci`
+run, and the full runs on `dev`, so a local pass does not promise a green full run.
+
+The steps run side by side, so a run takes about as long as its slowest step, usually knip's
+exports pass at about 10 s. When the files are exactly those of the last passing run, it prints that
+run's summary instead of running again. Any change to a file, the install, or a generated file runs
+the checks again.
+
+While you iterate, run single checks:
+
+```sh
+vp test run <files>
+vp lint <files>
+vp run --filter <package> typecheck
+```
+
+In `apps/web`, a test that renders React or touches the DOM is named `*.browser.test.{ts,tsx}`
+and runs in headless Chromium with the React Compiler on, like the app. There is no jsdom; other
+`*.test.ts` files run in Node.
+Install that browser once before running the browser suite locally, as CI does:
+`node apps/web/node_modules/playwright/cli.js install --only-shell chromium`.
+
+TypeScript workspaces typecheck with `tsc`. The `typescript` catalog entry is
+`@tsc-rs/typescript`, the tsc-rs drop-in, with Effect diagnostics, quick fixes, and
+refactors built in. VS Code uses it through `js/ts.tsdk.path` in `.vscode/settings.json`.
+
+Use `vp run lint:mobile` for native mobile changes. CI owns the full suite; see
+[goat-ci.yml](../../.github/workflows/goat-ci.yml) for its current jobs.
+
+### Responsiveness report
+
+Run `node apps/server/scripts/bench-server-responsiveness.ts --output-dir /tmp/goat-responsiveness`
+from the checkout with dependencies installed. `--threads` (default 32) controls generated history;
+`--rounds` (default 20) controls bounded cohorts of thread creation, search, projection reads,
+settlement and attachment uploads. Each run creates its own temporary HOME, GOAT home and database,
+prepares a turn through the existing Codex replay harness, then starts the normal server and drives
+authenticated WebSocket RPCs and signed HTTP uploads over loopback. It removes its fixture on exit.
+
+The command prints a latency table and writes `summary.json`. Target event-loop percentiles use a
+10 ms histogram, including that sampling interval. SQL evidence is the existing bounded slow-SQL
+ring, and trace volume counts retained files over the server's lifetime. Missing telemetry is
+explicit. This is a report, with no acceptance thresholds or CI gate; its closed-loop workload,
+small corpus and replay during preparation do not establish production capacity or recovery.
+Windows calibration and large generated-state trials remain separate work.
+
+### Windows hosts
+
+Use Git Bash for shell scripts and POSIX-shell test suites such as `packages/ssh`.
+In agent shells launched on Windows, plain `bash` on `PATH` can resolve to the WSL launcher in
+`System32`, which cannot read GOAT worktrees because their `.git` file points at a Windows
+`C:/...` `gitdir`. Put Git's `usr\bin` ahead of `System32` on `PATH`, or invoke
+`C:\Program Files\Git\bin\bash.exe` directly on a script file.
+
+On Windows, `vp i` logs `[WARN] Failed to create bin at ...\node_modules\.bin\vitest`.
+The warning is harmless; run tests through `vp test`.
+Run a package's tests from the repo root (`vp test run packages/ssh/src/<file>.test.ts`) or
+through its `test` script. A plain `vp test` inside a package without its own Vite config skips
+the root timeouts, and slow SSH fixtures then fail at vitest's 5 second default.
+
+### Unused code
+
+`vp run knip:check` checks unused files and dependencies across the repo, then
+unused runtime exports in `apps/server`, `apps/desktop`, `apps/web`, and every internal package under
+`packages/`. CI enforces both checks.
+Exported types and Effect schemas are allowed without consumers. The schema preprocessor
+recognizes schema types, including aliases and schema classes; functions that create or decode
+schemas remain checked. Canonical Effect service construction APIs stay exported with an explicit
+`@public` annotation, which Knip recognizes. Completely unused files remain checked too.
+Named exports in web UI component modules are kept as complete component sets. Knip ignores
+unused exports in `apps/web/src/components/ui/*.tsx`, while still reporting an entire unused file.
+Use `vp run knip --workspace apps/web` to audit one workspace, including exports,
+or `vp run knip:production --workspace apps/web` to find code kept alive only by tests.
+The full export audit still has findings and is not a repo-wide CI gate. Extend the
+export check's workspace selectors as more workspaces become clean. Review callers before
+deleting code; production mode can also report development scripts and test fixtures.
+Runtime-discovered entrypoints and dependency exceptions belong in [knip.jsonc](../../knip.jsonc).
+
+## Build cache
+
+Rust, C and C++ builds go through kache, a content-addressed build cache shared by every
+checkout on the machine. Without it, each worktree compiles the native crates under `native/`
+into its own `target/`, and a handful of lanes fill the disk.
+
+```sh
+kache init     # once per machine: sets rustc-wrapper in ~/.cargo/config.toml and C/C++ shims
+kache doctor   # before native builds; report a failure instead of building without the cache
+kache clean    # after heavy Rust work: removes old target/ folders (preview with --dry-run)
+```
+
+The build scripts (`build:resource-monitor`, `test:resource-monitor`, the desktop artifact and
+dev runtime builds) start `cargo` with the caller's environment, so Cargo's `rustc-wrapper` or
+an exported `RUSTC_WRAPPER=kache` applies to them. Nothing in the repository names kache, and a
+machine without it builds normally.
+
+Remove the large outputs you created when you finish: `target/` folders, `node_modules` of
+temporary worktrees, captures. `goat storage` lists what GOAT's own folders hold.
+
+## Desktop artifacts
+
+Local artifact builds are unsigned by default and write to `release/`:
+
+```sh
+vp run dist:desktop:dmg
+vp run dist:desktop:linux
+vp run dist:desktop:win
+```
+
+DMGs default to the host architecture. Use `--arch` to choose another target and `--keep-stage`
+to retain packaging files for inspection. Run `vp run dist:desktop:artifact --help` for other
+options.
+
+### Linux AppImage prerequisites
+
+Build on Linux because the browser-secret helper links against the host's libsecret. Install
+Rust, C/C++ build tools, libsecret development headers, pkg-config, and ImageMagick.
+
+Ubuntu and Debian:
+
+```sh
+sudo apt-get update
+sudo apt-get install cargo rustc build-essential libsecret-1-dev pkg-config imagemagick
+```
+
+Fedora:
+
+```sh
+sudo dnf install rust cargo gcc gcc-c++ make libsecret-devel pkgconf-pkg-config ImageMagick
+```
+
+Arch Linux:
+
+```sh
+sudo pacman -S rust base-devel libsecret pkgconf imagemagick
+```
+
+The C toolchain, pkg-config, and libsecret headers are also needed for Linux desktop development.
+
+### macOS DMG prerequisites
+
+Install the Xcode Command Line Tools with `xcode-select --install` and install Rust.
+For a cross-architecture or universal build, add the requested Rust targets:
+
+```sh
+rustup target add aarch64-apple-darwin x86_64-apple-darwin
+```
+
+### macOS computer use helper
+
+On a Mac, computer use runs Cua Driver under `GOAT Computer Use.app` so its permissions belong
+to the helper, not to GOAT or your terminal. To try it from a dev checkout, build it and point the
+dev app at it:
+
+```sh
+node scripts/build-computer-use-helper.ts --channel dev
+GOAT_CUA_HELPER_PATH="$PWD/apps/desktop/.computer-use-helper/GOAT Computer Use.app" vp run dev
+```
+
+The script signs with the keychain's Developer ID Application identity and pins the helper's
+designated requirement to its bundle id and team, so a rebuild keeps its Accessibility and
+Screen Recording grants. Signing needs the login keychain of the signed-in user: over SSH or
+from an agent session that cannot use it (`errSecInternalComponent`), the build stops and says
+so. Run it from Terminal on the Mac and allow codesign to use the key.
+
+`--ad-hoc` signs a throwaway dev build without a certificate. Each ad-hoc build gets a new code
+hash, so its grants stop applying after a rebuild and System Settings adds another
+"GOAT Computer Use" row to both lists; remove the old rows before allowing the new build. Only
+`--channel dev` may be ad-hoc: stable and nightly helpers verify that GOAT.app, signed by the
+same team, launched them, unless the GOAT.app they ship in is unsigned too (below).
+
+A signed macOS package always carries the Developer ID helper in `GOAT.app/Contents/Helpers`.
+An unsigned one keeps computer use off unless built with an ad-hoc helper:
+
+```sh
+node scripts/build-desktop-artifact.ts --platform mac --target zip --computer-use-helper
+```
+
+That helper serves any parent, sits inside an ad-hoc GOAT.app and is never notarized. It has the
+same row problem as `--ad-hoc` and prints the same warning. Either
+way, electron-builder leaves the helper's signature alone, and the build fails when the embedded
+helper's code hash differs from the one built, when a signed GOAT.app and its helper carry
+different teams, or when an unsigned one carries any team.
+
+### Windows computer use helper
+
+On Windows, computer use runs Cua Driver under `GOAT Computer Use.exe`, which checks that the
+session has a usable desktop, runs only the driver files whose SHA-256 it was built with, and
+ends the driver with itself. Build it on Windows (the C# compiler ships with Windows) and point
+the dev app at the folder:
+
+```powershell
+node scripts/build-computer-use-helper-windows.ts --channel dev
+$env:GOAT_CUA_HELPER_PATH = "$PWD\apps\desktop\.computer-use-helper\computer-use-helper"; vp run dev
+```
+
+Start the dev app from the signed-in desktop. A shell reached over SSH or a service runs in
+Session 0, where the helper reports that there is no desktop and the driver refuses to start.
+Stable and nightly helpers must be signed (`--sign-thumbprint`) and serve only the GOAT
+executable installed two folders above them and signed by the same publisher.
+
+### Linux computer use helper
+
+On Linux, computer use runs Cua Driver under `goat-computer-use`, a Node helper
+(`apps/server/src/cua/linuxHelper`) that speaks the computer use protocol on stdio and owns the
+driver as its child. Build it, then run the live check, which starts its own Xvfb display,
+D-Bus session, AT-SPI bus and fixture window and stops each by the pid it started:
+
+```sh
+node scripts/build-computer-use-helper-linux.ts
+node scripts/computer-use-linux-smoke.ts --helper apps/server/.computer-use-helper-linux/goat-computer-use --evidence /tmp/gcu-linux
+```
+
+The check needs `Xvfb` (`--xvfb <path>` when it is not on `PATH`), the `xcompmgr` compositing
+manager (`--compositor <path>`), `dbus-daemon`, at-spi2-core, python3 with GTK 3 introspection
+and `xdotool`. On Ubuntu: `sudo apt-get install -y xvfb xcompmgr xdotool at-spi2-core gir1.2-gtk-3.0`.
+Without a writable `/dev/uinput` and an X server that accepts new input devices, which Xvfb is
+not, background keys and pixel clicks are refused with `backgroundUnavailable`; AT-SPI clicks and
+value writes still run in the background.
+goat-ci runs this check as `smoke-linux-computer-use` on a hosted Ubuntu runner, in full runs and
+on pull requests that change the Linux helper or its build and smoke scripts.
+
+### Windows installer prerequisites
+
+Install Rust, Python 3, and Visual Studio Build Tools with **Desktop development with C++**.
+Include the Windows SDK and the MSVC build tools and Spectre-mitigated libraries for the target
+architecture. Add its Rust target:
+
+```powershell
+rustup target add x86_64-pc-windows-msvc
+# For an ARM64 installer:
+rustup target add aarch64-pc-windows-msvc
+```
+
+NSIS is downloaded by electron-builder. WSL support additionally needs the Linux CLI archive
+passed as `--wsl-runtime`; see the
+[release runbook](./release.md#windows-payload-topology-and-update-validation).
+
+### Signing and passkeys
+
+Add `--signed` after configuring the platform credentials in the
+[release runbook](./release.md). macOS passkeys need a signed, provisioned app; follow the
+[Connect setup](./connect-setup.md#desktop-passkeys) for local signing and renderer HMR.

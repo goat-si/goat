@@ -1,0 +1,111 @@
+---
+import { messages, type Locale } from "../i18n";
+import Base from "../layouts/Base.astro";
+import { LINKS } from "../lib/links";
+import { localePath, withBase } from "../lib/paths";
+
+type Focus = "legal" | "privacy" | "terms" | "security";
+
+interface Props {
+  locale: Locale;
+  focus?: Focus;
+}
+
+const { locale, focus = "legal" } = Astro.props;
+const t = messages(locale);
+const l = t.legal;
+const titles: Record<Focus, string> = {
+  legal: l.title,
+  privacy: t.meta.privacyTitle,
+  terms: t.meta.termsTitle,
+  security: t.meta.securityTitle,
+};
+const paths: Record<Focus, string> = {
+  legal: "/legal/",
+  privacy: "/privacy-policy/",
+  terms: "/terms-of-service/",
+  security: "/security-policy/",
+};
+const policy = focus === "legal" ? undefined : l[focus];
+const policyLinks = (["privacy", "terms", "security"] as const).map((key) => ({
+  title: titles[key],
+  href: localePath(locale, paths[key]),
+}));
+---
+
+<Base
+  locale={locale}
+  path={paths[focus]}
+  title={`${titles[focus]} | GOAT`}
+  description={t.meta.legalDescription}
+>
+  <article class="page-head container prose" aria-labelledby="legal-title">
+    <h1 id="legal-title">{titles[focus]}</h1>
+    <p class="lede">{policy?.lede ?? l.lede}</p>
+    <p>{l.updated}</p>
+    <nav class="inline-links" aria-label={l.policyLinks}>
+      {
+        policyLinks.map((link) => (
+          <a class="text-link" href={link.href}>{link.title}</a>
+        ))
+      }
+    </nav>
+
+    <section aria-labelledby="account-deletion">
+      <h2 id="account-deletion">{t.accountDeletion.title}</h2>
+      <p><a class="text-link" href={localePath(locale, "/account/delete/")}>{t.accountDeletion.action}</a></p>
+    </section>
+
+    <section aria-labelledby="operator">
+      <h2 id="operator">{l.operatorTitle}</h2>
+      <p>{l.operator}</p>
+      <p><a class="text-link" href="mailto:pos090001@gmail.com">pos090001@gmail.com</a></p>
+    </section>
+
+    {
+      policy?.sections.map((section) => (
+        <section aria-labelledby={section.id}>
+          <h2 id={section.id}>{section.title}</h2>
+          {section.paragraphs.map((paragraph) => <p>{paragraph}</p>)}
+        </section>
+      ))
+    }
+
+    {
+      focus === "privacy" && (
+        <>
+          <section aria-labelledby="this-site">
+            <h2 id="this-site">{l.siteTitle}</h2>
+            {l.site.map((paragraph) => <p>{paragraph}</p>)}
+            <p><a class="text-link" href={LINKS.githubPrivacy}>{l.githubPrivacy}</a></p>
+          </section>
+
+          <section aria-labelledby="usage-data">
+            <h2 id="usage-data">{l.usageTitle}</h2>
+            {l.usage.map((paragraph) => <p>{paragraph}</p>)}
+            <p><a class="text-link" href={l.usageGuideHref}>{l.usageGuide}</a></p>
+          </section>
+        </>
+      )
+    }
+
+    {
+      focus === "security" && (
+        <p><a class="text-link" href={withBase(".well-known/security.txt")}>security.txt</a></p>
+      )
+    }
+
+    {
+      focus === "legal" && (
+        <section aria-labelledby="license">
+          <h2 id="license">{l.licenseTitle}</h2>
+          <p>{l.license}</p>
+          <p class="inline-links">
+            <a class="text-link" href={LINKS.license}>{l.licenseLink}</a>
+            <a class="text-link" href={l.noticesHref}>{l.noticesLink}</a>
+          </p>
+        </section>
+      )
+    }
+  </article>
+</Base>

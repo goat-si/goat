@@ -1,0 +1,13 @@
+{
+  "keyAndPassword": "deploy@build.example: Permission denied (publickey,password,keyboard-interactive).\r\n",
+  "jumpAuthenticatedDestinationDenied": "Authenticated to bastion.example ([192.0.2.1]:22) using \"publickey\".\r\ndeploy@build.example: Permission denied (publickey,password).\r\n",
+  "passwordOnly": "deploy@build.example: Permission denied (password,keyboard-interactive).\r\n",
+  "partial": "Authenticated with partial success.\r\nAuthentications that can continue: password\r\ndeploy@build.example: Permission denied (password).\r\n",
+  "unknownKey": "No ED25519 host key is known for build.example and you have requested strict checking.\r\nHost key verification failed.\r\n",
+  "changedKey": "@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@\r\n@ WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! @\r\nHost key verification failed.\r\n",
+  "refused": "ssh: connect to host build.example port 22: Connection refused\r\n",
+  "dns": "ssh: Could not resolve hostname build.example: nodename nor servname provided, or not known\r\n",
+  "proxy": "failed to connect to local Tailscaled: dial unix /var/run/tailscaled.socket: connect: no such file or directory\r\nConnection closed by UNKNOWN port 65535\r\n",
+  "tailscalePolicy": "tailscale: tailnet policy does not permit you to SSH as user \"ubuntu\"\nConnection closed by 100.84.150.71 port 22\n",
+  "jumpDenied": "jump@bastion.example: Permission denied (publickey).\r\nConnection closed by UNKNOWN port 65535\r\n"
+}

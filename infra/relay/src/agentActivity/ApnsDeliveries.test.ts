@@ -1,0 +1,1308 @@
+import { createPostgresFixture } from "../accounts/test/PostgresFixture.ts";
+import { postgresPolicyLayer } from "../accounts/test/PolicyPostgresLayers.ts";
+import { AccountLifecycle } from "../accounts/AccountLifecycle.ts";
+import { DeliveryAuthorization } from "./DeliveryAuthorization.ts";
+import { Devices } from "./Devices.ts";
+import * as DateTime from "effect/DateTime";
+import * as ApnsDeliveryQueueConsumer from "./ApnsDeliveryQueueConsumer.ts";
+import type * as Cloudflare from "alchemy/Cloudflare";
+import { EnvironmentId, ThreadId } from "@goat/contracts";
+import type {
+  RelayAgentActivityAggregateState,
+  RelayAgentActivityState,
+} from "@goat/contracts/relay";
+import { describe, expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import { HttpClientRequest, HttpClientResponse } from "effect/http";
+
+import {
+  makeApnsDeliveryJobPayload,
+  signApnsDeliveryJob,
+  type SignedApnsDeliveryJob,
+} from "./apnsDeliveryJobs.ts";
+import * as DeliveryAttempts from "./DeliveryAttempts.ts";
+import * as LiveActivities from "./LiveActivities.ts";
+import * as ApnsDeliveries from "./ApnsDeliveries.ts";
+
+import {
+  config,
+  signingConfig,
+  state,
+  aggregate,
+  enabledPreferences,
+  disabledPreferences,
+  notificationsDisabledPreferences,
+  target,
+  layerFor,
+} from "./ApnsDeliveries.testkit.ts";
+
+describe("ApnsDeliveries", () => {
+  it.effect("does not queue a duplicate remote start while a start is already queued", () => {
+    const attempts: Array<DeliveryAttempts.DeliveryAttemptInput> = [];
+    const queuedJobs: Array<SignedApnsDeliveryJob> = [];
+
+    return Effect.gen(function* () {
+      const deliveries = yield* ApnsDeliveries.ApnsDeliveries;
+      const result = yield* deliveries.sendForTarget({
+        target: {
+          ...target,
+          activity_push_token: null,
+          remote_start_queued_at: "1970-01-01T00:00:03.000Z",
+          remote_started_at: null,
+          ended_at: null,
+        },
+        aggregate,
+        nowMs: 5_000,
+      });
+
+      expect(result).toBeNull();
+      expect(queuedJobs).toEqual([]);
+      expect(attempts).toEqual([]);
+    }).pipe(Effect.provide(layerFor({ attempts, queuedJobs })));
+  });
+
+  it.effect("queues bounded Live Activity aggregate payloads", () => {
+    const attempts: Array<DeliveryAttempts.DeliveryAttemptInput> = [];
+    const queuedJobs: Array<SignedApnsDeliveryJob> = [];
+    const longTitle = "x".repeat(300);
+    const inputAggregate: RelayAgentActivityAggregateState = {
+      ...aggregate,
+      title: longTitle,
+      subtitle: longTitle,
+      activities: [0, 1, 2, 3, 4, 5].map((index) =>
+        Object.assign({}, aggregate.activities[0]!, {
+          projectTitle: longTitle,
+          threadTitle: longTitle,
+          modelTitle: longTitle,
+          status: longTitle,
+          threadId: `thread-${index}` as RelayAgentActivityState["threadId"],
+          deepLink: "https://example.test/not-an-app-link",
+        }),
+      ),
+    };
+
+    return Effect.gen(function* () {
+      const deliveries = yield* ApnsDeliveries.ApnsDeliveries;
+      yield* deliveries.sendForTarget({
+        target,
+        aggregate: inputAggregate,
+        nowMs: 10_000,
+      });
+
+      const payloadAggregate = queuedJobs[0]?.payload.aggregate;
+      expect(payloadAggregate?.title.length).toBeLessThanOrEqual(120);
+      expect(payloadAggregate?.subtitle.length).toBeLessThanOrEqual(120);
+      expect(payloadAggregate?.activities).toHaveLength(5);
+      expect(payloadAggregate?.activities[0]?.projectTitle.length).toBeLessThanOrEqual(120);
+      expect(payloadAggregate?.activities[0]?.status.length).toBeLessThanOrEqual(40);
+      expect(payloadAggregate?.activities[0]?.deepLink).toBe("/");
+      expect(attempts).toEqual([]);
+    }).pipe(Effect.provide(layerFor({ attempts, queuedJobs })));
+  });
+
+  it.effect.each([
+    {
+      label: "connecting becomes working",
+      previousRows: [{ ...aggregate.activities[0]!, phase: "starting", status: "Connecting" }],
+    },
+    {
+      label: "input resumes working",
+      previousRows: [{ ...aggregate.activities[0]!, phase: "waiting_for_input", status: "Input" }],
+    },
+    {
+      label: "a settled terminal row leaves",
+      previousRows: [
+        aggregate.activities[0]!,
+        {
+          ...aggregate.activities[0]!,
+          threadId: ThreadId.make("finished"),
+          phase: "completed",
+          status: "Done",
+        },
+      ],
+    },
+    {
+      label: "the same thread id moves to another environment",
+      previousRows: [
+        { ...aggregate.activities[0]!, environmentId: EnvironmentId.make("other-env") },
+      ],
+    },
+  ] as const)("queues an update inside the throttle window when $label", ({ previousRows }) => {
+    const attempts: Array<DeliveryAttempts.DeliveryAttemptInput> = [];
+    const queuedJobs: Array<SignedApnsDeliveryJob> = [];
+    const previousAggregate: RelayAgentActivityAggregateState = {
+      ...aggregate,
+      activities: previousRows,
+    };
+
+    return Effect.gen(function* () {
+      const deliveries = yield* ApnsDeliveries.ApnsDeliveries;
+      const result = yield* deliveries.sendForTarget({
+        target: {
+          ...target,
+          last_aggregate_json: JSON.stringify(previousAggregate),
+          last_live_activity_delivery_at: "1970-01-01T00:00:04.000Z",
+        },
+        aggregate,
+        nowMs: 5_000,
+      });
+
+      expect(result?.kind).toBe("live_activity_update");
+      expect(queuedJobs).toMatchObject([{ payload: { kind: "live_activity_update", aggregate } }]);
+      expect(queuedJobs[0]?.payload.alert ?? null).toBeNull();
+      expect(attempts).toEqual([]);
+    }).pipe(Effect.provide(layerFor({ attempts, queuedJobs })));
+  });
+
+  it.effect.each([
+    { label: "inside", nowMs: 5_000, queued: false },
+    { label: "after", nowMs: 19_000, queued: true },
+  ])("throttles timestamp-only updates $label the window", ({ nowMs, queued }) => {
+    const attempts: Array<DeliveryAttempts.DeliveryAttemptInput> = [];
+    const queuedJobs: Array<SignedApnsDeliveryJob> = [];
+    const changedAggregate: RelayAgentActivityAggregateState = {
+      ...aggregate,
+      updatedAt: "1970-01-01T00:00:04.000Z",
+      activities: [{ ...aggregate.activities[0]!, updatedAt: "1970-01-01T00:00:04.000Z" }],
+    };
+    const previousAggregateJson = JSON.stringify(aggregate);
+
+    return Effect.gen(function* () {
+      const deliveries = yield* ApnsDeliveries.ApnsDeliveries;
+      const result = yield* deliveries.sendForTarget({
+        target: {
+          ...target,
+          last_aggregate_json: previousAggregateJson,
+          last_live_activity_delivery_at: "1970-01-01T00:00:04.000Z",
+        },
+        aggregate: changedAggregate,
+        nowMs,
+      });
+
+      expect(result?.kind ?? null).toBe(queued ? "live_activity_update" : null);
+      expect(queuedJobs).toHaveLength(queued ? 1 : 0);
+    }).pipe(Effect.provide(layerFor({ attempts, queuedJobs })));
+  });
+
+  it.effect(
+    "queues an alert while ending an active Live Activity when only Live Activities are disabled",
+    () => {
+      const attempts: Array<DeliveryAttempts.DeliveryAttemptInput> = [];
+      const queuedJobs: Array<SignedApnsDeliveryJob> = [];
+      const inputAggregate: RelayAgentActivityAggregateState = {
+        ...aggregate,
+        activities: [
+          {
+            ...aggregate.activities[0]!,
+            phase: "waiting_for_input",
+            status: "Input",
+          },
+        ],
+      };
+
+      return Effect.gen(function* () {
+        const deliveries = yield* ApnsDeliveries.ApnsDeliveries;
+        const result = yield* deliveries.sendForTarget({
+          target: {
+            ...target,
+            push_token: "apns-device-token",
+            preferences_json: disabledPreferences,
+          },
+          aggregate: inputAggregate,
+          nowMs: 5_000,
+        });
+
+        expect(result?.kind).toBe("live_activity_end");
+        expect(queuedJobs).toMatchObject([
+          {
+            payload: {
+              kind: "live_activity_end",
+              target: {
+                token: "activity-token",
+              },
+            },
+          },
+          {
+            payload: {
+              kind: "push_notification",
+              target: {
+                token: "apns-device-token",
+              },
+              notification: {
+                title: "Thread",
+                body: "Input: Project",
+                environmentId: "env",
+                threadId: "thread",
+                deepLink: "/",
+                phase: "waiting_for_input",
+                updatedAt: state.updatedAt,
+              },
+            },
+          },
+        ]);
+        expect(attempts).toEqual([]);
+      }).pipe(Effect.provide(layerFor({ attempts, queuedJobs })));
+    },
+  );
+
+  it.effect("does not queue alert pushes when notification permission is disabled", () => {
+    const attempts: Array<DeliveryAttempts.DeliveryAttemptInput> = [];
+    const queuedJobs: Array<SignedApnsDeliveryJob> = [];
+    const inputAggregate: RelayAgentActivityAggregateState = {
+      ...aggregate,
+      activities: [
+        {
+          ...aggregate.activities[0]!,
+          phase: "waiting_for_input",
+          status: "Input",
+        },
+      ],
+    };
+
+    return Effect.gen(function* () {
+      const deliveries = yield* ApnsDeliveries.ApnsDeliveries;
+      const result = yield* deliveries.sendForTarget({
+        target: {
+          ...target,
+          push_token: "apns-device-token",
+          preferences_json: notificationsDisabledPreferences,
+        },
+        aggregate: inputAggregate,
+        nowMs: 5_000,
+      });
+
+      expect(result?.kind).toBe("live_activity_end");
+      expect(queuedJobs).toMatchObject([
+        {
+          payload: {
+            kind: "live_activity_end",
+            target: {
+              token: "activity-token",
+            },
+          },
+        },
+      ]);
+      expect(attempts).toEqual([]);
+    }).pipe(Effect.provide(layerFor({ attempts, queuedJobs })));
+  });
+
+  it.effect(
+    "queues a push notification for approval and input states when no Live Activity delivery is available",
+    () => {
+      const attempts: Array<DeliveryAttempts.DeliveryAttemptInput> = [];
+      const queuedJobs: Array<SignedApnsDeliveryJob> = [];
+      const inputAggregate: RelayAgentActivityAggregateState = {
+        ...aggregate,
+        activities: [
+          {
+            ...aggregate.activities[0]!,
+            phase: "waiting_for_input",
+            status: "Input",
+          },
+        ],
+      };
+
+      return Effect.gen(function* () {
+        const deliveries = yield* ApnsDeliveries.ApnsDeliveries;
+        const result = yield* deliveries.sendForTarget({
+          target: {
+            ...target,
+            push_token: "apns-device-token",
+            push_to_start_token: null,
+            activity_push_token: null,
+            remote_started_at: null,
+          },
+          aggregate: inputAggregate,
+          nowMs: 5_000,
+        });
+
+        expect(result?.kind).toBe("push_notification");
+        expect(result?.ok).toBe(true);
+        expect(queuedJobs).toMatchObject([
+          {
+            payload: {
+              kind: "push_notification",
+              target: {
+                token: "apns-device-token",
+              },
+              notification: {
+                title: "Thread",
+                body: "Input: Project",
+                environmentId: "env",
+                threadId: "thread",
+                deepLink: "/",
+              },
+            },
+          },
+        ]);
+        expect(attempts).toEqual([]);
+      }).pipe(Effect.provide(layerFor({ attempts, queuedJobs })));
+    },
+  );
+
+  it.effect("queues bounded alert notification payloads", () => {
+    const attempts: Array<DeliveryAttempts.DeliveryAttemptInput> = [];
+    const queuedJobs: Array<SignedApnsDeliveryJob> = [];
+    const longTitle = "x".repeat(300);
+    const inputAggregate: RelayAgentActivityAggregateState = {
+      ...aggregate,
+      activities: [
+        {
+          ...aggregate.activities[0]!,
+          projectTitle: longTitle,
+          threadTitle: longTitle,
+          phase: "waiting_for_input",
+          status: "Input",
+          deepLink: "https://example.test/not-an-app-link",
+        },
+      ],
+    };
+
+    return Effect.gen(function* () {
+      const deliveries = yield* ApnsDeliveries.ApnsDeliveries;
+      yield* deliveries.sendForTarget({
+        target: {
+          ...target,
+          push_token: "apns-device-token",
+          push_to_start_token: null,
+          activity_push_token: null,
+          remote_started_at: null,
+        },
+        aggregate: inputAggregate,
+        nowMs: 5_000,
+      });
+
+      const notification = queuedJobs[0]?.payload.notification;
+      expect(notification?.title.length).toBeLessThanOrEqual(120);
+      expect(notification?.body.length).toBeLessThanOrEqual(120);
+      expect(notification?.deepLink).toBe("/");
+      expect(attempts).toEqual([]);
+    }).pipe(Effect.provide(layerFor({ attempts, queuedJobs })));
+  });
+
+  it.effect.each([
+    { phase: "running", updatedAt: state.updatedAt, disabled: false, sends: false },
+    { phase: "completed", updatedAt: state.updatedAt, disabled: false, sends: false },
+    { phase: "completed", updatedAt: "1969-12-31T23:44:00.000Z", disabled: false, sends: true },
+    { phase: "running", updatedAt: state.updatedAt, disabled: true, sends: true },
+  ] as const)(
+    "rechecks a queued contentless end: $phase at $updatedAt, disabled=$disabled",
+    ({ phase, updatedAt, disabled, sends }) => {
+      const requests: HttpClientRequest.HttpClientRequest[] = [];
+      const signedEnd = signApnsDeliveryJob({
+        secret: config.apnsDeliveryJobSigningSecret,
+        payload: makeApnsDeliveryJobPayload({
+          accountEpoch: 1,
+          kind: "live_activity_end",
+          userId: target.user_id,
+          deviceId: target.device_id,
+          token: "activity-token",
+          aggregate: null,
+          createdAt: state.updatedAt,
+          expiresAt: "1970-01-01T00:10:00.000Z",
+          jobId: "job-end-1",
+        }),
+      });
+      return Effect.gen(function* () {
+        const deliveries = yield* ApnsDeliveries.ApnsDeliveries;
+        const result = yield* deliveries.processSignedJob(signedEnd);
+        expect(result.ok).toBe(true);
+        expect(requests).toHaveLength(sends ? 1 : 0);
+        if (sends) {
+          const request = requests[0]!;
+          expect(request.url).toBe("https://api.sandbox.push.apple.com/3/device/activity-token");
+          expect(request.body._tag).toBe("Uint8Array");
+          if (request.body._tag === "Uint8Array") {
+            const { aps } = JSON.parse(new TextDecoder().decode(request.body.body));
+            expect(aps.event).toBe("end");
+            expect(aps.alert).toBeUndefined();
+            expect(aps.sound).toBeUndefined();
+          }
+        }
+      }).pipe(
+        Effect.provide(
+          layerFor({
+            attempts: [],
+            config: signingConfig,
+            currentTargets: [
+              { ...target, preferences_json: disabled ? disabledPreferences : enabledPreferences },
+            ],
+            activityStates: [{ ...state, phase, updatedAt }],
+            execute: (request) =>
+              Effect.sync(() => {
+                requests.push(request);
+                return HttpClientResponse.fromWeb(request, new Response("", { status: 200 }));
+              }),
+          }),
+        ),
+      );
+    },
+  );
+
+  it.effect("skips a queued start when the user no longer has live work", () => {
+    const attempts: Array<DeliveryAttempts.DeliveryAttemptInput> = [];
+    const clearedStarts: Array<
+      Parameters<LiveActivities.LiveActivities["Service"]["clearStartQueued"]>[0]
+    > = [];
+    const payload = makeApnsDeliveryJobPayload({
+      accountEpoch: 1,
+      kind: "live_activity_start",
+      userId: target.user_id,
+      deviceId: target.device_id,
+      token: target.push_to_start_token ?? "start-token",
+      aggregate,
+      createdAt: "1970-01-01T00:00:00.000Z",
+      expiresAt: "1970-01-01T00:10:00.000Z",
+      jobId: "job-start-1",
+    });
+    const signed = signApnsDeliveryJob({
+      secret: config.apnsDeliveryJobSigningSecret,
+      payload,
+    });
+
+    return Effect.gen(function* () {
+      const deliveries = yield* ApnsDeliveries.ApnsDeliveries;
+      const result = yield* deliveries.processSignedJob(signed);
+
+      expect(result).toMatchObject({
+        kind: "live_activity_start",
+        ok: true,
+        apnsStatus: null,
+      });
+      expect(attempts).toMatchObject([
+        {
+          kind: "live_activity_start",
+          sourceJobId: "job-start-1",
+          apnsReason: "Stale APNs start job skipped.",
+        },
+      ]);
+      expect(clearedStarts).toMatchObject([{ userId: target.user_id, deviceId: target.device_id }]);
+    }).pipe(Effect.provide(layerFor({ attempts, clearedStarts, activityStates: [] })));
+  });
+
+  it.effect("processes signed push notification jobs through APNs and records attempts", () => {
+    const attempts: Array<DeliveryAttempts.DeliveryAttemptInput> = [];
+    const payload = makeApnsDeliveryJobPayload({
+      accountEpoch: 1,
+      kind: "push_notification",
+      userId: target.user_id,
+      deviceId: target.device_id,
+      token: "apns-device-token",
+      aggregate: null,
+      notification: {
+        title: "Thread",
+        body: "Input: Project",
+        environmentId: "env",
+        threadId: "thread",
+        deepLink: "/",
+      },
+      createdAt: "1970-01-01T00:00:00.000Z",
+      expiresAt: "1970-01-01T00:10:00.000Z",
+      jobId: "job-push-1",
+    });
+    const signed = signApnsDeliveryJob({
+      secret: config.apnsDeliveryJobSigningSecret,
+      payload,
+    });
+    const execute = (request: HttpClientRequest.HttpClientRequest) =>
+      Effect.succeed(HttpClientResponse.fromWeb(request, new Response("", { status: 200 })));
+
+    return Effect.gen(function* () {
+      const deliveries = yield* ApnsDeliveries.ApnsDeliveries;
+      const result = yield* deliveries.processSignedJob(signed);
+
+      expect(result.kind).toBe("push_notification");
+      expect(result.ok).toBe(true);
+      expect(result.apnsStatus).toBe(200);
+      expect(attempts).toMatchObject([
+        {
+          kind: "push_notification",
+          sourceJobId: "job-push-1",
+          token: "apns-device-token",
+          environmentId: "env",
+          threadId: "thread",
+          deviceId: target.device_id,
+          apnsStatus: 200,
+        },
+      ]);
+    }).pipe(
+      Effect.provide(
+        layerFor({
+          attempts,
+          currentTargets: [
+            {
+              ...target,
+              push_token: "apns-device-token",
+            },
+          ],
+          config: signingConfig,
+          execute,
+        }),
+      ),
+    );
+  });
+
+  it.effect("skips duplicate signed queue jobs before calling APNs", () => {
+    const attempts: Array<DeliveryAttempts.DeliveryAttemptInput> = [];
+    let executeCount = 0;
+    const payload = makeApnsDeliveryJobPayload({
+      accountEpoch: 1,
+      kind: "push_notification",
+      userId: target.user_id,
+      deviceId: target.device_id,
+      token: "apns-device-token",
+      aggregate: null,
+      notification: {
+        title: "Thread",
+        body: "Input: Project",
+        environmentId: "env",
+        threadId: "thread",
+        deepLink: "/",
+      },
+      createdAt: "1970-01-01T00:00:00.000Z",
+      expiresAt: "1970-01-01T00:10:00.000Z",
+      jobId: "job-push-duplicate",
+    });
+    const signed = signApnsDeliveryJob({
+      secret: config.apnsDeliveryJobSigningSecret,
+      payload,
+    });
+    const execute = (request: HttpClientRequest.HttpClientRequest) =>
+      Effect.sync(() => {
+        executeCount += 1;
+        return HttpClientResponse.fromWeb(request, new Response("", { status: 200 }));
+      });
+
+    return Effect.gen(function* () {
+      const deliveries = yield* ApnsDeliveries.ApnsDeliveries;
+      const result = yield* deliveries.processSignedJob(signed);
+
+      expect(result).toMatchObject({
+        kind: "push_notification",
+        ok: true,
+        apnsStatus: null,
+        apnsReason: "Duplicate APNs delivery job skipped.",
+      });
+      expect(executeCount).toBe(0);
+      expect(attempts).toEqual([]);
+    }).pipe(
+      Effect.provide(
+        layerFor({
+          attempts,
+          sourceJobClaims: new Map([["job-push-duplicate", "completed"]]),
+          config: signingConfig,
+          execute,
+        }),
+      ),
+    );
+  });
+
+  it.effect(
+    "returns a stale result for unauthorized signed jobs without sending or recording",
+    () => {
+      const attempts: Array<DeliveryAttempts.DeliveryAttemptInput> = [];
+      let sends = 0;
+      const payload = makeApnsDeliveryJobPayload({
+        accountEpoch: 1,
+        kind: "live_activity_update",
+        userId: target.user_id,
+        deviceId: target.device_id,
+        token: "old-epoch-token",
+        aggregate,
+        createdAt: "1970-01-01T00:00:00.000Z",
+        expiresAt: "1970-01-01T00:10:00.000Z",
+        jobId: "old-epoch-job",
+      });
+      const signed = signApnsDeliveryJob({ secret: config.apnsDeliveryJobSigningSecret, payload });
+      return Effect.gen(function* () {
+        const deliveries = yield* ApnsDeliveries.ApnsDeliveries;
+        expect(yield* deliveries.processSignedJob(signed)).toEqual({
+          deviceId: target.device_id,
+          kind: "live_activity_update",
+          ok: true,
+          apnsStatus: null,
+          apnsReason: "Stale APNs delivery job skipped.",
+          apnsId: null,
+        });
+        expect(sends).toBe(0);
+        expect(attempts).toEqual([]);
+      }).pipe(
+        Effect.provide(
+          layerFor({
+            attempts,
+            authorization: { eligible: () => Effect.succeed(false), result: (effect) => effect },
+            execute: (request) =>
+              Effect.sync(() => {
+                sends++;
+                return HttpClientResponse.fromWeb(request, new Response("", { status: 200 }));
+              }),
+          }),
+        ),
+      );
+    },
+  );
+
+  it.effect("skips stale signed Live Activity jobs when the registered token changed", () => {
+    const attempts: Array<DeliveryAttempts.DeliveryAttemptInput> = [];
+    let executeCount = 0;
+    const payload = makeApnsDeliveryJobPayload({
+      accountEpoch: 1,
+      kind: "live_activity_update",
+      userId: target.user_id,
+      deviceId: target.device_id,
+      token: "stale-activity-token",
+      aggregate,
+      createdAt: "1970-01-01T00:00:00.000Z",
+      expiresAt: "1970-01-01T00:10:00.000Z",
+      jobId: "job-update-stale-token",
+    });
+    const signed = signApnsDeliveryJob({
+      secret: config.apnsDeliveryJobSigningSecret,
+      payload,
+    });
+    const execute = (request: HttpClientRequest.HttpClientRequest) =>
+      Effect.sync(() => {
+        executeCount += 1;
+        return HttpClientResponse.fromWeb(request, new Response("", { status: 200 }));
+      });
+
+    return Effect.gen(function* () {
+      const deliveries = yield* ApnsDeliveries.ApnsDeliveries;
+      const result = yield* deliveries.processSignedJob(signed);
+
+      expect(result).toMatchObject({
+        kind: "live_activity_update",
+        ok: true,
+        apnsStatus: null,
+        apnsReason: "Stale APNs delivery job skipped.",
+      });
+      expect(executeCount).toBe(0);
+      expect(attempts).toMatchObject([
+        {
+          kind: "live_activity_update",
+          sourceJobId: "job-update-stale-token",
+          token: "stale-activity-token",
+          apnsReason: "Stale APNs delivery job skipped.",
+        },
+      ]);
+    }).pipe(
+      Effect.provide(
+        layerFor({
+          attempts,
+          config: signingConfig,
+          execute,
+        }),
+      ),
+    );
+  });
+
+  it.effect("skips a queued Done Live Activity update after the thread resumes working", () => {
+    const attempts: Array<DeliveryAttempts.DeliveryAttemptInput> = [];
+    let executeCount = 0;
+    const completedAt = "1970-01-01T00:00:01.000Z";
+    const completedAggregate: RelayAgentActivityAggregateState = {
+      ...aggregate,
+      activeCount: 0,
+      updatedAt: completedAt,
+      activities: [
+        {
+          ...aggregate.activities[0]!,
+          phase: "completed",
+          status: "Done",
+          updatedAt: completedAt,
+        },
+      ],
+    };
+    const payload = makeApnsDeliveryJobPayload({
+      accountEpoch: 1,
+      kind: "live_activity_update",
+      userId: target.user_id,
+      deviceId: target.device_id,
+      token: target.activity_push_token ?? "activity-token",
+      aggregate: completedAggregate,
+      alert: { title: "Thread", body: "Done: Project" },
+      createdAt: completedAt,
+      expiresAt: "1970-01-01T00:10:00.000Z",
+      jobId: "job-update-superseded-by-running",
+    });
+    const signed = signApnsDeliveryJob({
+      secret: config.apnsDeliveryJobSigningSecret,
+      payload,
+    });
+    const execute = (request: HttpClientRequest.HttpClientRequest) =>
+      Effect.sync(() => {
+        executeCount += 1;
+        return HttpClientResponse.fromWeb(request, new Response("", { status: 200 }));
+      });
+
+    return Effect.gen(function* () {
+      const deliveries = yield* ApnsDeliveries.ApnsDeliveries;
+      const result = yield* deliveries.processSignedJob(signed);
+
+      expect(result).toMatchObject({
+        kind: "live_activity_update",
+        ok: true,
+        apnsStatus: null,
+        apnsReason: "Stale APNs delivery job skipped.",
+      });
+      expect(executeCount).toBe(0);
+      expect(attempts).toMatchObject([
+        {
+          sourceJobId: "job-update-superseded-by-running",
+          apnsReason: "Stale agent activity state skipped.",
+        },
+      ]);
+    }).pipe(
+      Effect.provide(
+        layerFor({
+          attempts,
+          activityStates: [
+            {
+              ...state,
+              phase: "running",
+              headline: "Running",
+              updatedAt: "1970-01-01T00:00:02.000Z",
+            },
+          ],
+          config: signingConfig,
+          execute,
+        }),
+      ),
+    );
+  });
+
+  it.effect("retries signed queue jobs that are already claimed but not completed", () => {
+    const attempts: Array<DeliveryAttempts.DeliveryAttemptInput> = [];
+    let executeCount = 0;
+    const payload = makeApnsDeliveryJobPayload({
+      accountEpoch: 1,
+      kind: "push_notification",
+      userId: target.user_id,
+      deviceId: target.device_id,
+      token: "apns-device-token",
+      aggregate: null,
+      notification: {
+        title: "Thread",
+        body: "Input: Project",
+        environmentId: "env",
+        threadId: "thread",
+        deepLink: "/",
+      },
+      createdAt: "1970-01-01T00:00:00.000Z",
+      expiresAt: "1970-01-01T00:10:00.000Z",
+      jobId: "job-push-in-flight",
+    });
+    const signed = signApnsDeliveryJob({
+      secret: config.apnsDeliveryJobSigningSecret,
+      payload,
+    });
+    const execute = (request: HttpClientRequest.HttpClientRequest) =>
+      Effect.sync(() => {
+        executeCount += 1;
+        return HttpClientResponse.fromWeb(request, new Response("", { status: 200 }));
+      });
+
+    return Effect.gen(function* () {
+      const deliveries = yield* ApnsDeliveries.ApnsDeliveries;
+      const result = yield* Effect.exit(deliveries.processSignedJob(signed));
+
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure") {
+        expect(result.cause.toString()).toContain("ApnsDeliveryJobClaimInFlight");
+      }
+      expect(executeCount).toBe(0);
+      expect(attempts).toEqual([]);
+    }).pipe(
+      Effect.provide(
+        layerFor({
+          attempts,
+          sourceJobClaims: new Map([["job-push-in-flight", "in_flight"]]),
+          config: signingConfig,
+          execute,
+        }),
+      ),
+    );
+  });
+
+  it.effect("invalidates dead device push tokens after permanent APNs alert failures", () => {
+    const attempts: Array<DeliveryAttempts.DeliveryAttemptInput> = [];
+    const invalidatedTokens: Array<
+      Parameters<LiveActivities.LiveActivities["Service"]["invalidateDeliveryToken"]>[0]
+    > = [];
+    const payload = makeApnsDeliveryJobPayload({
+      accountEpoch: 1,
+      kind: "push_notification",
+      userId: target.user_id,
+      deviceId: target.device_id,
+      token: "apns-device-token",
+      aggregate: null,
+      notification: {
+        title: "Thread",
+        body: "Failed: Project",
+        environmentId: "env",
+        threadId: "thread",
+        deepLink: "/",
+      },
+      createdAt: "1970-01-01T00:00:00.000Z",
+      expiresAt: "1970-01-01T00:10:00.000Z",
+      jobId: "job-push-bad-token",
+    });
+    const signed = signApnsDeliveryJob({
+      secret: config.apnsDeliveryJobSigningSecret,
+      payload,
+    });
+    const execute = (request: HttpClientRequest.HttpClientRequest) =>
+      Effect.succeed(
+        HttpClientResponse.fromWeb(
+          request,
+          Response.json({ reason: "BadDeviceToken" }, { status: 400 }),
+        ),
+      );
+
+    return Effect.gen(function* () {
+      const deliveries = yield* ApnsDeliveries.ApnsDeliveries;
+      const result = yield* deliveries.processSignedJob(signed);
+
+      expect(result.kind).toBe("push_notification");
+      expect(result.ok).toBe(false);
+      expect(result.apnsStatus).toBe(400);
+      expect(result.apnsReason).toBe("BadDeviceToken");
+      expect(invalidatedTokens).toMatchObject([
+        {
+          userId: target.user_id,
+          deviceId: target.device_id,
+          kind: "push_notification",
+        },
+      ]);
+    }).pipe(
+      Effect.provide(
+        layerFor({
+          attempts,
+          invalidatedTokens,
+          currentTargets: [
+            {
+              ...target,
+              push_token: "apns-device-token",
+            },
+          ],
+          config: signingConfig,
+          execute,
+        }),
+      ),
+    );
+  });
+
+  it.effect("clears queued start state when a start job fails in APNs", () => {
+    const attempts: Array<DeliveryAttempts.DeliveryAttemptInput> = [];
+    const clearedStarts: Array<
+      Parameters<LiveActivities.LiveActivities["Service"]["clearStartQueued"]>[0]
+    > = [];
+    const payload = makeApnsDeliveryJobPayload({
+      accountEpoch: 1,
+      kind: "live_activity_start",
+      userId: target.user_id,
+      deviceId: target.device_id,
+      token: target.push_to_start_token ?? "start-token",
+      aggregate,
+      createdAt: "1970-01-01T00:00:00.000Z",
+      expiresAt: "1970-01-01T00:10:00.000Z",
+      jobId: "job-start-1",
+    });
+    const signed = signApnsDeliveryJob({
+      secret: config.apnsDeliveryJobSigningSecret,
+      payload,
+    });
+
+    return Effect.gen(function* () {
+      const deliveries = yield* ApnsDeliveries.ApnsDeliveries;
+      const result = yield* deliveries.processSignedJob(signed);
+
+      expect(result.kind).toBe("live_activity_start");
+      expect(result.ok).toBe(false);
+      expect(clearedStarts).toEqual([
+        {
+          userId: target.user_id,
+          deviceId: target.device_id,
+        },
+      ]);
+    }).pipe(
+      Effect.provide(
+        layerFor({
+          attempts,
+          clearedStarts,
+          activityStates: [{ ...state, updatedAt: "9999-01-01T00:00:00.000Z" }],
+        }),
+      ),
+    );
+  });
+
+  it.effect("invalidates dead Live Activity tokens after APNs unregisters them", () => {
+    const attempts: Array<DeliveryAttempts.DeliveryAttemptInput> = [];
+    const invalidatedTokens: Array<
+      Parameters<LiveActivities.LiveActivities["Service"]["invalidateDeliveryToken"]>[0]
+    > = [];
+    const payload = makeApnsDeliveryJobPayload({
+      accountEpoch: 1,
+      kind: "live_activity_update",
+      userId: target.user_id,
+      deviceId: target.device_id,
+      token: target.activity_push_token ?? "activity-token",
+      aggregate,
+      createdAt: "1970-01-01T00:00:00.000Z",
+      expiresAt: "1970-01-01T00:10:00.000Z",
+      jobId: "job-update-unregistered",
+    });
+    const signed = signApnsDeliveryJob({
+      secret: config.apnsDeliveryJobSigningSecret,
+      payload,
+    });
+    const execute = (request: HttpClientRequest.HttpClientRequest) =>
+      Effect.succeed(
+        HttpClientResponse.fromWeb(
+          request,
+          Response.json({ reason: "Unregistered" }, { status: 410 }),
+        ),
+      );
+
+    return Effect.gen(function* () {
+      const deliveries = yield* ApnsDeliveries.ApnsDeliveries;
+      const result = yield* deliveries.processSignedJob(signed);
+
+      expect(result.kind).toBe("live_activity_update");
+      expect(result.ok).toBe(false);
+      expect(result.apnsStatus).toBe(410);
+      expect(result.apnsReason).toBe("Unregistered");
+      expect(invalidatedTokens).toMatchObject([
+        {
+          userId: target.user_id,
+          deviceId: target.device_id,
+          kind: "live_activity_update",
+        },
+      ]);
+    }).pipe(
+      Effect.provide(layerFor({ attempts, invalidatedTokens, config: signingConfig, execute })),
+    );
+  });
+});
+
+describe("live activity alert decisions", () => {
+  const preferences = {
+    liveActivitiesEnabled: true,
+    notificationsEnabled: true,
+    notifyOnApproval: true,
+    notifyOnInput: true,
+    notifyOnCompletion: true,
+    notifyOnFailure: true,
+  };
+
+  const attentionRow = {
+    ...aggregate.activities[0]!,
+    threadId: "thread-2" as RelayAgentActivityState["threadId"],
+    threadTitle: "Blocked thread",
+    phase: "waiting_for_approval" as const,
+    status: "Approval",
+  };
+
+  it("alerts when a thread newly enters an attention phase", () => {
+    const alert = ApnsDeliveries.alertForAttentionTransition({
+      previousAggregate: aggregate,
+      nextAggregate: {
+        ...aggregate,
+        activeCount: 2,
+        activities: [...aggregate.activities, attentionRow],
+      },
+      preferences,
+    });
+    expect(alert).toEqual({ title: "Blocked thread", body: "Approval: Project" });
+  });
+
+  it("stays silent without a delivered baseline so replays cannot buzz", () => {
+    expect(
+      ApnsDeliveries.alertForAttentionTransition({
+        previousAggregate: null,
+        nextAggregate: { ...aggregate, activities: [attentionRow] },
+        preferences,
+      }),
+    ).toBeNull();
+  });
+
+  it("alerts when a previously active thread finishes mid-flight", () => {
+    const doneRow = {
+      ...aggregate.activities[0]!,
+      phase: "completed" as const,
+      status: "Done",
+    };
+    const next = {
+      ...aggregate,
+      activeCount: 0,
+      activities: [attentionRow, doneRow],
+    };
+    expect(
+      ApnsDeliveries.alertForNewlyTerminal({
+        previousAggregate: aggregate,
+        nextAggregate: next,
+        preferences,
+        nowMs: 0,
+      }),
+    ).toEqual({ title: "Thread", body: "Done: Project" });
+    expect(
+      ApnsDeliveries.alertForNewlyTerminal({
+        previousAggregate: aggregate,
+        nextAggregate: next,
+        preferences: { ...preferences, notifyOnCompletion: false },
+        nowMs: 0,
+      }),
+    ).toBeNull();
+    expect(
+      ApnsDeliveries.alertForNewlyTerminal({
+        previousAggregate: null,
+        nextAggregate: next,
+        preferences,
+        nowMs: 0,
+      }),
+    ).toBeNull();
+    expect(
+      ApnsDeliveries.alertForNewlyTerminal({
+        previousAggregate: next,
+        nextAggregate: next,
+        preferences,
+        nowMs: 0,
+      }),
+    ).toBeNull();
+    expect(
+      ApnsDeliveries.alertForNewlyTerminal({
+        previousAggregate: { ...aggregate, activities: [attentionRow] },
+        nextAggregate: next,
+        preferences,
+        nowMs: 0,
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("fast completion delivery", () => {
+  it.effect("keeps a completion alert when work finishes before running delivery", () => {
+    const queuedJobs: SignedApnsDeliveryJob[] = [];
+    const old = {
+      ...aggregate,
+      activeCount: 0,
+      activities: [
+        {
+          ...aggregate.activities[0]!,
+          threadId: "old" as RelayAgentActivityState["threadId"],
+          phase: "completed" as const,
+        },
+      ],
+    };
+    const device = { ...target, last_aggregate_json: JSON.stringify(old) };
+    const done = {
+      ...aggregate,
+      activeCount: 0,
+      activities: [{ ...aggregate.activities[0]!, phase: "completed" as const }],
+    };
+    return Effect.gen(function* () {
+      const d = yield* ApnsDeliveries.ApnsDeliveries;
+      yield* d.sendForTarget({ target: device, aggregate, nowMs: 0 });
+      yield* d.sendForTarget({ target: device, aggregate: done, nowMs: 0 });
+      expect(
+        queuedJobs.some((x) => x.payload.alert !== null && x.payload.alert !== undefined),
+      ).toBe(true);
+    }).pipe(Effect.provide(layerFor({ attempts: [], queuedJobs, currentTargets: [device] })));
+  });
+  it.effect("replays a newly visible completion without alerting", () => {
+    const queuedJobs: SignedApnsDeliveryJob[] = [];
+    const done = {
+      ...aggregate,
+      activeCount: 0,
+      activities: [{ ...aggregate.activities[0]!, phase: "completed" as const }],
+    };
+    const previous = {
+      ...aggregate,
+      activities: [
+        { ...aggregate.activities[0]!, threadId: "other" as RelayAgentActivityState["threadId"] },
+      ],
+    };
+    const device = { ...target, last_aggregate_json: JSON.stringify(previous) };
+    return Effect.gen(function* () {
+      const deliveries = yield* ApnsDeliveries.ApnsDeliveries;
+      yield* deliveries.sendForTarget({
+        target: device,
+        aggregate: done,
+        nowMs: 0,
+        replay: true,
+      });
+      expect(queuedJobs).toHaveLength(1);
+      expect(queuedJobs[0]?.payload.alert).toBeUndefined();
+    }).pipe(Effect.provide(layerFor({ attempts: [], queuedJobs })));
+  });
+});
+
+describe("signed APNs registration metadata", () => {
+  it.effect.each(
+    (["live_activity_update", "push_notification"] as const).flatMap((kind) =>
+      (["bundle", "environment", "legacy"] as const).map((changed) => ({ kind, changed })),
+    ),
+  )("routes $kind using current registration with $changed job metadata", ({ kind, changed }) => {
+    const attempts: DeliveryAttempts.DeliveryAttemptInput[] = [];
+    const requests: HttpClientRequest.HttpClientRequest[] = [];
+    const payload = makeApnsDeliveryJobPayload({
+      accountEpoch: 1,
+      kind,
+      userId: target.user_id,
+      deviceId: target.device_id,
+      token: "unchanged-token",
+      ...(changed === "legacy"
+        ? {}
+        : { bundleId: "com.t3tools.t3code.dev", apsEnvironment: "sandbox" as const }),
+      aggregate: kind === "live_activity_update" ? aggregate : null,
+      ...(kind === "push_notification"
+        ? {
+            notification: {
+              title: "Thread",
+              body: "Input: Project",
+              environmentId: "env",
+              threadId: "thread",
+              deepLink: "/",
+            },
+          }
+        : {}),
+      createdAt: "1970-01-01T00:00:00.000Z",
+      expiresAt: "1970-01-01T00:10:00.000Z",
+      jobId: `metadata-${kind}-${changed}`,
+    });
+    const signed = signApnsDeliveryJob({
+      secret: config.apnsDeliveryJobSigningSecret,
+      payload,
+    });
+    return Effect.gen(function* () {
+      const deliveries = yield* ApnsDeliveries.ApnsDeliveries;
+      const result = yield* deliveries.processSignedJob(signed);
+      expect(result.ok).toBe(true);
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.url).toBe(
+        `${changed === "environment" ? "https://api.push.apple.com" : "https://api.sandbox.push.apple.com"}/3/device/unchanged-token`,
+      );
+      expect(requests[0]?.headers["apns-topic"]).toBe(
+        `${changed === "bundle" ? "com.t3tools.t3code.preview" : "com.t3tools.t3code.dev"}${kind === "live_activity_update" ? ".push-type.liveactivity" : ""}`,
+      );
+    }).pipe(
+      Effect.provide(
+        layerFor({
+          attempts,
+          config: signingConfig,
+          currentTargets: [
+            {
+              ...target,
+              push_token: "unchanged-token",
+              activity_push_token: "unchanged-token",
+              bundle_id:
+                changed === "bundle" ? "com.t3tools.t3code.preview" : "com.t3tools.t3code.dev",
+              aps_environment: changed === "environment" ? "production" : "sandbox",
+            },
+          ],
+          execute: (request) =>
+            Effect.sync(() => {
+              requests.push(request);
+              return HttpClientResponse.fromWeb(request, new Response("", { status: 200 }));
+            }),
+        }),
+      ),
+    );
+  });
+});
+
+it.live(
+  "the actual APNs consumer acknowledges old signed and legacy jobs but retries a PG outage",
+  () =>
+    Effect.gen(function* () {
+      using pg = createPostgresFixture();
+      pg.migrate();
+      pg.query(
+        "INSERT INTO relay_account_access(user_id,status,account_epoch) VALUES ('owner','allowed',1)",
+      );
+      yield* Effect.gen(function* () {
+        const lifecycle = yield* AccountLifecycle;
+        const devices = yield* Devices;
+        const authorization = yield* DeliveryAuthorization;
+        const registration = {
+          deviceId: "phone",
+          label: "Fixture",
+          platform: "ios" as const,
+          iosMajorVersion: 18,
+          pushToken: "same-token",
+          preferences: {
+            notificationsEnabled: true,
+            liveActivitiesEnabled: true,
+            notifyOnApproval: true,
+            notifyOnInput: true,
+            notifyOnCompletion: true,
+            notifyOnFailure: true,
+          },
+        };
+        yield* devices.register({ userId: "owner", registration });
+        const now = yield* DateTime.now;
+        const payload = makeApnsDeliveryJobPayload({
+          accountEpoch: 1,
+          kind: "push_notification",
+          userId: "owner",
+          deviceId: "phone",
+          token: "same-token",
+          aggregate: null,
+          notification: {
+            title: "Fixture",
+            body: "Ready",
+            environmentId: "env",
+            threadId: "thread",
+            deepLink: "/",
+          },
+          createdAt: DateTime.formatIso(now),
+          expiresAt: DateTime.formatIso(DateTime.add(now, { minutes: 5 })),
+          jobId: "old-epoch-job",
+        });
+        const job = signApnsDeliveryJob({ secret: config.apnsDeliveryJobSigningSecret, payload });
+        const suspend = yield* lifecycle.request({
+          userId: "owner",
+          kind: "suspend",
+          idempotencyKey: "suspend",
+        });
+        yield* lifecycle.resume(suspend.id);
+        yield* lifecycle.request({ userId: "owner", kind: "allow", idempotencyKey: "allow" });
+        yield* devices.register({ userId: "owner", registration });
+        const outcomes: string[] = [];
+        let sends = 0;
+        const layer = layerFor({
+          authorization,
+          attempts: [],
+          execute: (request) =>
+            Effect.sync(() => {
+              sends++;
+              return HttpClientResponse.fromWeb(request, new Response("", { status: 200 }));
+            }),
+        });
+        const message = (id: string, body: unknown): Cloudflare.Queues.Message<unknown> => ({
+          id,
+          body,
+          timestamp: DateTime.toDateUtc(now),
+          attempts: 1,
+          ack: () => {
+            outcomes.push(`${id}:ack`);
+          },
+          retry: () => {
+            outcomes.push(`${id}:retry`);
+          },
+        });
+        yield* ApnsDeliveryQueueConsumer.processMessage(message("old", job)).pipe(
+          Effect.provide(layer),
+        );
+        yield* ApnsDeliveryQueueConsumer.processMessage(
+          message("legacy", { ...job, payload: { ...job.payload, version: 1 } }),
+        ).pipe(Effect.provide(layer));
+        pg.query("ALTER TABLE relay_account_access RENAME TO fixture_unavailable_access");
+        yield* ApnsDeliveryQueueConsumer.processMessage(message("outage", job)).pipe(
+          Effect.provide(layer),
+        );
+        expect(outcomes).toEqual(["old:ack", "legacy:ack", "outage:retry"]);
+        expect(sends).toBe(0);
+      }).pipe(Effect.provide(postgresPolicyLayer(pg)));
+    }),
+);

@@ -1,0 +1,106 @@
+import { DEFAULT_SERVER_SETTINGS, EnvironmentId, ProjectId } from "@goat/contracts";
+import { LEGACY_PROJECT_FILE_NAME } from "@goat/contracts/legacyT3Names";
+import { resolveProjectSettings } from "@goat/shared/projectSettings";
+import { describe, expect, it } from "vite-plus/test";
+
+import { settingInheritanceLayers } from "./SettingInheritance";
+
+const environmentId = EnvironmentId.make("laptop");
+const projectId = ProjectId.make("project");
+
+describe("worktree cleanup inheritance", () => {
+  it("distinguishes project and environment worktree cleanup policies", () => {
+    const settings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      worktreeCleanup: {
+        mode: "custom" as const,
+        rules: DEFAULT_SERVER_SETTINGS.storageCleanup,
+      },
+      projectSettingsOverrides: {
+        [projectId]: { worktreeCleanup: { mode: "off" as const } },
+      },
+    };
+    const layers = settingInheritanceLayers(
+      {
+        environmentId,
+        label: "Laptop",
+        projectId,
+        ...resolveProjectSettings(settings, projectId),
+      },
+      settings,
+      "worktreeCleanup",
+    );
+    expect(layers.map((layer) => [layer.key, layer.value, layer.effective])).toEqual([
+      ["project", "Off", true],
+      ["environment", "Custom", false],
+      ["built-in", "Not set", false],
+    ]);
+  });
+});
+
+describe("settingInheritanceLayers", () => {
+  it.each(["goat.json", LEGACY_PROJECT_FILE_NAME])(
+    "shows %s as the file-backed layer",
+    (projectFileName) => {
+      const file = { defaultThreadEnvMode: "worktree" as const };
+      const fromFile = settingInheritanceLayers(
+        {
+          environmentId,
+          label: "Laptop",
+          projectId,
+          projectFileName,
+          ...resolveProjectSettings(DEFAULT_SERVER_SETTINGS, projectId, null, file),
+        },
+        DEFAULT_SERVER_SETTINGS,
+        "defaultThreadEnvMode",
+      );
+      expect(fromFile.map((layer) => [layer.label, layer.value, layer.effective])).toEqual([
+        ["Project", "Inherits", false],
+        ["Laptop", "Inherits", false],
+        [projectFileName, "New worktree", true],
+        ["Default", "Local", false],
+      ]);
+      const settings = { ...DEFAULT_SERVER_SETTINGS, defaultThreadEnvMode: "local" as const };
+      const fromEnvironment = settingInheritanceLayers(
+        {
+          environmentId,
+          label: "Laptop",
+          projectId,
+          ...resolveProjectSettings(settings, projectId, null, file),
+        },
+        settings,
+        "defaultThreadEnvMode",
+      );
+      expect(fromEnvironment.map((layer) => [layer.value, layer.effective])).toEqual([
+        ["Inherits", false],
+        ["Local", true],
+        ["Inherits", false],
+        ["Local", false],
+      ]);
+    },
+  );
+  it("identifies the background activity profile supplied by each layer", () => {
+    const settings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      backgroundActivity: {
+        schemaVersion: 1 as const,
+        profile: "performance" as const,
+        overrides: {},
+      },
+    };
+    const layers = settingInheritanceLayers(
+      {
+        environmentId,
+        label: "Laptop",
+        projectId: null,
+        ...resolveProjectSettings(settings, projectId),
+      },
+      settings,
+      "backgroundActivity",
+    );
+    expect(layers.map((layer) => [layer.key, layer.value, layer.effective])).toEqual([
+      ["environment", "Performance", true],
+      ["built-in", "Balanced", false],
+    ]);
+  });
+});

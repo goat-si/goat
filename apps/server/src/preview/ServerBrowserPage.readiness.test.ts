@@ -1,0 +1,322 @@
+import { chromium, type Locator, type Page } from "playwright-core";
+import { expect, it, vi } from "vite-plus/test";
+import { requireMatch } from "./actionReadiness.ts";
+import { chromiumInstalled } from "./PreviewChromium.fixture.ts";
+import { testActionPage as ServerBrowserPage } from "./actionChannel.testkit.ts";
+
+const fixture = async (run: (page: Page) => Promise<void>, args: ReadonlyArray<string> = []) => {
+  expect(chromiumInstalled).toBe(true);
+  const browser = await chromium.launch({ headless: true, args: [...args] });
+  try {
+    const page = await (await browser.newContext()).newPage();
+    await run(page);
+  } finally {
+    await browser.close();
+  }
+};
+
+/** Marks the moment an action found its target not ready and began to wait for it. */
+const barrier = () => {
+  const waiting = Promise.withResolvers<void>();
+  return {
+    readiness: { onWaiting: () => waiting.resolve() },
+    reached: (action: Promise<unknown>) =>
+      Promise.race([
+        waiting.promise.then(() => "waiting" as const),
+        action.then(
+          () => "settled" as const,
+          () => "settled" as const,
+        ),
+      ]),
+  };
+};
+
+const stopGate = () => {
+  const gate = Object.assign(
+    () => {
+      if (gate.stopped) throw new Error("stopped");
+    },
+    { stopped: false },
+  );
+  return gate;
+};
+
+it.each([
+  ["a disabled input", '<input id="f" disabled>', "f.disabled = false"],
+  ["a read-only input", '<input id="f" readonly>', "f.readOnly = false"],
+  ["a disabled textarea", '<textarea id="f" disabled></textarea>', "f.disabled = false"],
+])("types into %s once the page makes it writable", (_name, html, enable) =>
+  fixture(async (page) => {
+    await page.setContent(html);
+    const { readiness, reached } = barrier();
+    const typing = ServerBrowserPage.type(
+      page,
+      { locator: "#f", text: "hello" },
+      undefined,
+      readiness,
+    );
+    expect(await reached(typing)).toBe("waiting");
+    await page.evaluate(enable);
+    await typing;
+    expect(await page.inputValue("#f")).toBe("hello");
+  }),
+);
+
+it("types into the focused field once it stops being read-only", () =>
+  fixture(async (page) => {
+    await page.setContent('<input id="f" readonly>');
+    await page.focus("#f");
+    const { readiness, reached } = barrier();
+    const typing = ServerBrowserPage.type(page, { text: "hello" }, undefined, readiness);
+    expect(await reached(typing)).toBe("waiting");
+    await page.evaluate("f.readOnly = false");
+    await typing;
+    expect(await page.inputValue("#f")).toBe("hello");
+  }));
+
+it("names a field that stayed disabled and never types into it later", () =>
+  fixture(async (page) => {
+    await page.setContent('<input id="f" disabled>');
+    await expect(
+      ServerBrowserPage.type(page, { locator: "#f", text: "late", timeoutMs: 300 }),
+    ).rejects.toMatchObject({
+      tag: "PreviewAutomationTargetNotEditableError",
+      message: expect.stringContaining("stayed disabled or read-only"),
+    });
+    await page.evaluate("f.disabled = false");
+    expect(await page.inputValue("#f")).toBe("");
+  }));
+
+it("sends no input once the request's deadline has passed, even to a ready field", () =>
+  fixture(async (page) => {
+    await page.setContent('<input id="f">');
+    const expiredGate = Object.assign(() => {}, { deadline: 0 });
+    await expect(
+      ServerBrowserPage.type(page, { locator: "#f", text: "late" }, expiredGate),
+    ).rejects.toMatchObject({
+      tag: "PreviewAutomationTimeoutError",
+      detail: { beforeInput: true },
+    });
+    await expect(
+      ServerBrowserPage.select(page, { locator: "#f", values: [] }, expiredGate),
+    ).rejects.toMatchObject({
+      tag: "PreviewAutomationTimeoutError",
+      detail: { beforeInput: true },
+    });
+    expect(await page.inputValue("#f")).toBe("");
+  }));
+
+it("never clicks a moving target after its deadline, even once it settles", () =>
+  fixture(async (page) => {
+    await page.setContent(
+      `<style>@keyframes slide{from{margin-left:0}to{margin-left:200px}}button{animation:slide .6s linear}</style><button onclick="window.clicks=(window.clicks??0)+1">Go</button>`,
+    );
+    await expect(
+      ServerBrowserPage.click(page, { locator: "button", timeoutMs: 150 }),
+    ).rejects.toBeDefined();
+    await page.waitForFunction("document.getAnimations().length === 0");
+    expect(await page.evaluate("window.clicks ?? 0")).toBe(0);
+  }));
+
+it.each([
+  [
+    "a CSS animation",
+    `<style>@keyframes slide{from{margin-left:0}to{margin-left:200px}}button{animation:slide 1.4s linear}</style><button>Go</button>`,
+  ],
+  [
+    "page script",
+    `<button style="position:relative">Go</button><script>const start = performance.now();
+      const step = (now) => { if (now - start < 1400) { document.querySelector("button").style.left = (now - start) / 7 + "px"; requestAnimationFrame(step); } };
+      requestAnimationFrame(step);</script>`,
+  ],
+])("clicks a ready button once %s stops moving it, within the request's time", (_, html) =>
+  fixture(async (page) => {
+    await page.setContent(html);
+    await page.evaluate(
+      `document.querySelector("button").onclick = () => { window.clicks = (window.clicks ?? 0) + 1 }`,
+    );
+    await ServerBrowserPage.click(page, { locator: "button", timeoutMs: 5_000 });
+    expect(await page.evaluate("window.clicks ?? 0")).toBe(1);
+  }),
+);
+
+it("types into the field that had focus, even when the page moves focus while it waits", () =>
+  fixture(async (page) => {
+    await page.setContent('<input id="a" readonly><input id="b">');
+    await page.focus("#a");
+    const { readiness, reached } = barrier();
+    const typing = ServerBrowserPage.type(page, { text: "hello" }, undefined, readiness);
+    expect(await reached(typing)).toBe("waiting");
+    await page.evaluate("b.focus(); a.readOnly = false");
+    await typing;
+    expect(await page.evaluate("[a.value, b.value]")).toEqual(["hello", ""]);
+  }));
+
+it("types nothing when Stop arrives while it waits for the field", () =>
+  fixture(async (page) => {
+    await page.setContent('<input id="f" disabled>');
+    const gate = stopGate();
+    const { readiness, reached } = barrier();
+    const typing = ServerBrowserPage.type(page, { locator: "#f", text: "x" }, gate, readiness);
+    expect(await reached(typing)).toBe("waiting");
+    gate.stopped = true;
+    await page.evaluate("f.disabled = false");
+    await expect(typing).rejects.toThrow("stopped");
+    expect(await page.inputValue("#f")).toBe("");
+  }));
+
+it.each([
+  ["a visible select", '<select id="s"><option value="a">A</option></select>'],
+  ["a hidden native select", '<select id="s" hidden><option value="a">A</option></select>'],
+])("selects an option the page adds to %s after the action began", (_name, html) =>
+  fixture(async (page) => {
+    await page.setContent(html);
+    const { readiness, reached } = barrier();
+    const selecting = ServerBrowserPage.select(
+      page,
+      { locator: "#s", values: ["b"] },
+      undefined,
+      readiness,
+    );
+    expect(await reached(selecting)).toBe("waiting");
+    await page.evaluate("s.add(new Option('B', 'b'))");
+    expect(await selecting).toEqual({ selected: ["b"] });
+  }),
+);
+
+it("waits for a select inside a disabled fieldset instead of changing it", () =>
+  fixture(async (page) => {
+    await page.setContent(
+      '<fieldset id="box" disabled><select id="s"><option value="a">A</option><option value="b">B</option></select></fieldset>',
+    );
+    const { readiness, reached } = barrier();
+    const selecting = ServerBrowserPage.select(
+      page,
+      { locator: "#s", values: ["b"] },
+      undefined,
+      readiness,
+    );
+    expect(await reached(selecting)).toBe("waiting");
+    expect(await page.evaluate("s.value")).toBe("a");
+    await page.evaluate("box.disabled = false");
+    expect(await selecting).toEqual({ selected: ["b"] });
+  }));
+
+it("waits for a late option inside a cross-origin frame", () =>
+  fixture(
+    async (page) => {
+      await page.route("https://parent.test/**", (route) =>
+        route.fulfill({
+          contentType: "text/html",
+          body: '<iframe src="https://child.test/"></iframe>',
+        }),
+      );
+      await page.route("https://child.test/**", (route) =>
+        route.fulfill({
+          contentType: "text/html",
+          body: '<select id="s"><option value="a">A</option></select>',
+        }),
+      );
+      await page.goto("https://parent.test/");
+      const child = page.frameLocator("iframe").locator("#s");
+      await child.waitFor({ state: "attached" });
+      const { readiness, reached } = barrier();
+      const selecting = ServerBrowserPage.select(
+        page,
+        { locator: "iframe >> internal:control=enter-frame >> #s", values: ["b"] },
+        undefined,
+        readiness,
+      );
+      expect(await reached(selecting)).toBe("waiting");
+      await child.evaluate((select) =>
+        (select as unknown as { add(option: unknown): void }).add(
+          new (
+            globalThis as unknown as { Option: new (label: string, value: string) => unknown }
+          ).Option("B", "b"),
+        ),
+      );
+      expect(await selecting).toEqual({ selected: ["b"] });
+    },
+    ["--site-per-process"],
+  ));
+
+it("says it waited when the option never appears, and selects nothing", () =>
+  fixture(async (page) => {
+    await page.setContent('<select id="s"><option value="a">A</option></select>');
+    await expect(
+      ServerBrowserPage.select(page, { locator: "#s", values: ["z"], timeoutMs: 300 }),
+    ).rejects.toThrow('still has no option "z"');
+    expect(await page.evaluate("s.value")).toBe("a");
+  }));
+it("answers a timeout, not a missing target, when the deadline ends before the page loaded", () =>
+  fixture(async (page) => {
+    const release = Promise.withResolvers<void>();
+    await page.route("https://held.test/**", async (route) => {
+      await release.promise;
+      await route.abort();
+    });
+    try {
+      await page.setContent('<img src="https://held.test/slow.png">', {
+        waitUntil: "domcontentloaded",
+      });
+      const refused = await ServerBrowserPage.type(page, {
+        selector: "input",
+        text: "goat",
+        timeoutMs: 300,
+      }).catch((cause: unknown) => ServerBrowserPage.toOperationError(cause));
+      expect(refused).toMatchObject({ tag: "PreviewAutomationTimeoutError" });
+    } finally {
+      release.resolve();
+    }
+  }));
+
+it("leaves none of its waits running once the target appears before the page loads", async () => {
+  let running = 0;
+  const track = <A>(work: Promise<A>) => {
+    running++;
+    return work.finally(() => running--);
+  };
+  const neverLoads = new Promise<void>(() => {});
+  // The page never loads: a short timeout runs out at once, a long one outlasts the test.
+  const timedOut = () => Object.assign(new Error("timed out"), { name: "TimeoutError" });
+  const target = {
+    count: async () => 0,
+    first: () => ({ waitFor: () => track(Promise.resolve()) }),
+    page: () => ({
+      waitForLoadState: (_state: string, options: { timeout: number }) =>
+        track(options.timeout <= 1 ? Promise.reject(timedOut()) : neverLoads),
+      evaluate: () => track(Promise.resolve(false)),
+    }),
+  };
+  await requireMatch(target as unknown as Locator, 5_000);
+  expect(running).toBe(0);
+});
+it("never starts a look for the target with time that the load-state read already used", async () => {
+  vi.useFakeTimers({ toFake: ["performance"] });
+  try {
+    const looks: Array<number> = [];
+    const timedOut = () => Object.assign(new Error("timed out"), { name: "TimeoutError" });
+    // Reading the page's load state takes 200 ms of a 100 ms budget.
+    const slowRead = async () => {
+      vi.advanceTimersByTime(200);
+      throw timedOut();
+    };
+    const target = {
+      count: async () => 0,
+      first: () => ({
+        waitFor: async ({ timeout }: { timeout: number }) => {
+          looks.push(timeout);
+          throw timedOut();
+        },
+      }),
+      page: () => ({ waitForLoadState: slowRead, evaluate: slowRead }),
+    };
+    const refused = await requireMatch(target as unknown as Locator, 100).catch(
+      (cause: unknown) => cause,
+    );
+    expect(refused).toMatchObject({ tag: "PreviewAutomationTimeoutError" });
+    expect(looks).toEqual([]);
+  } finally {
+    vi.useRealTimers();
+  }
+});

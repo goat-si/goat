@@ -1,0 +1,49 @@
+/* Text layer geometry adapted from pdfjs-dist/web/pdf_viewer.css.
+ * Copyright 2012 Mozilla Foundation. Apache-2.0; see PDFJS-ASSET-NOTICES.
+ */
+/* The positioning contract for pdf.js TextLayer. Scope it to this viewer so
+   its transparent text never changes the app's ordinary text or selection. */
+[data-pdf-page] .textLayer {
+  position: absolute;
+  inset: 0;
+  overflow: clip;
+  line-height: 1;
+  text-align: initial;
+  transform-origin: 0 0;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  caret-color: CanvasText;
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+  z-index: 1;
+}
+[data-pdf-page] .textLayer :is(span, br) {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0 0;
+}
+[data-pdf-page] .textLayer > :not(.markedContent),
+[data-pdf-page] .textLayer .markedContent span:not(.markedContent) {
+  z-index: 1;
+  --font-height: 0;
+  --scale-x: 1;
+  --rotate: 0deg;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+[data-pdf-page] .textLayer .markedContent {
+  display: contents;
+}
+[data-pdf-page] .textLayer ::selection {
+  background: color-mix(in srgb, var(--primary) 35%, transparent);
+}
+[data-pdf-page] .textLayer mark {
+  color: transparent;
+  background: color-mix(in srgb, var(--warning) 45%, transparent);
+}
+[data-pdf-page] .textLayer mark[data-selected="true"] {
+  background: color-mix(in srgb, var(--primary) 55%, transparent);
+}

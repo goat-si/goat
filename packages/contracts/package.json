@@ -1,0 +1,98 @@
+{
+  "name": "@goat/contracts",
+  "version": "0.1.2",
+  "private": true,
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    },
+    "./settings": {
+      "types": "./src/settings.ts",
+      "import": "./src/settings.ts"
+    },
+    "./relayErrors": {
+      "types": "./src/relayErrors.ts",
+      "import": "./src/relayErrors.ts"
+    },
+    "./relay": {
+      "types": "./src/relay.ts",
+      "import": "./src/relay.ts"
+    },
+    "./legacyT3Names": {
+      "types": "./src/legacyT3Names.ts",
+      "import": "./src/legacyT3Names.ts"
+    },
+    "./adoptLegacyEnv": {
+      "types": "./src/adoptLegacyEnv.ts",
+      "import": "./src/adoptLegacyEnv.ts"
+    },
+    "./agentSurface": {
+      "types": "./src/agentSurface/registry.ts",
+      "import": "./src/agentSurface/registry.ts"
+    },
+    "./agentSurface/html": {
+      "types": "./src/agentSurface/html.ts",
+      "import": "./src/agentSurface/html.ts"
+    },
+    "./agentSurface/llms": {
+      "types": "./src/agentSurface/llms.ts",
+      "import": "./src/agentSurface/llms.ts"
+    },
+    "./agentSurface/envelope": {
+      "types": "./src/agentSurface/envelope.ts",
+      "import": "./src/agentSurface/envelope.ts"
+    },
+    "./agentSurface/eval": {
+      "types": "./src/agentSurface/eval.ts",
+      "import": "./src/agentSurface/eval.ts"
+    },
+    "./agentSurface/operation": {
+      "types": "./src/agentSurface/operation.ts",
+      "import": "./src/agentSurface/operation.ts"
+    },
+    "./agentSurface/resolve": {
+      "types": "./src/agentSurface/resolve.ts",
+      "import": "./src/agentSurface/resolve.ts"
+    },
+    "./agentSurface/signature": {
+      "types": "./src/agentSurface/signature.ts",
+      "import": "./src/agentSurface/signature.ts"
+    },
+    "./agentSurface/callText": {
+      "types": "./src/agentSurface/callText.ts",
+      "import": "./src/agentSurface/callText.ts"
+    },
+    "./agentSurface/callArguments": {
+      "types": "./src/agentSurface/callArguments.ts",
+      "import": "./src/agentSurface/callArguments.ts"
+    },
+    "./agentSurface/hosts": {
+      "types": "./src/agentSurface/hosts.ts",
+      "import": "./src/agentSurface/hosts.ts"
+    },
+    "./agentSurface/listing": {
+      "types": "./src/agentSurface/listing.ts",
+      "import": "./src/agentSurface/listing.ts"
+    },
+    "./connectAssurance": {
+      "types": "./src/connectAssurance.ts",
+      "import": "./src/connectAssurance.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vp test run --config ../../vite.config.ts --dir ."
+  },
+  "dependencies": {
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}

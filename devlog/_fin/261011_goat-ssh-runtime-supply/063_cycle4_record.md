@@ -1,0 +1,6 @@
+# 063 — Cycle 4 (wp4: item 3 protocol-compatible reuse)
+
+Committed b32fe81d1: SSH_RUNTIME_PROTOCOL_VERSION=1 in shared, environment descriptor + server-runtime.json fields, `goat __ssh-helper protocol`, launch reuses a live server or retained runtime with the same protocol and upgrades only on mismatch; cached archive selection requires installed; retained runner sha256 chain. Ownership: launch persists the spawned server identity (`$STATE_DIR/identity`); stop and upgrade verify managed marker + port + base dir + identity before signaling; legacy/unverified processes preserved with a clear error; parent-shell Node discovery kept.
+Review 01a1290b: FAIL x4 (substring ownership bypass; node dev stop; upgrade without command verification; base-dir; node path escaping; runner replacement identity loss; shim argv0; parent node discovery) -> PASS round 5. Receipt after commit: ssh 298, contracts 10, shared 27, server 84, desktop 50; tsc 6 packages.
+Residual: same-user forged state/command or PID-reuse races can impersonate ownership (tunnel.ts:882 node identity suffix); one unconfirmed PID-lookup flake at tunnel.test.ts:4397 in a combined reviewer run (isolated reruns and both receipts green).
+Next: wp5 (050) build V=0.0.45, replace app, live scenarios on juns-macbook-pro, push.

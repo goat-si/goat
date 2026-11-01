@@ -1,0 +1,632 @@
+name: goat-ci
+
+# goat fork CI; every upstream workflow is disabled. Trusted runs (a manual run, or a pull request
+# from a branch of this repository) run on the EPYC self-hosted runners, which hosted concurrency on
+# the free plan cannot match. A pull request from a fork runs on GitHub-hosted ubuntu-24.04, so fork
+# code never reaches EPYC (#426); close-outside-prs.yml closes those pull requests anyway. Each ci
+# matrix entry names its pool: the heavy tasks take the epyc runners, and the short Node-only tasks
+# (HOSTED_TASKS in goat-ci-scope.cjs) take ubuntu-24.04 so they never queue behind server shards.
+# test-windows takes hosted windows-2025 for any run, so Windows-only failures show up (#1385).
+# goat-scope, goat-screenshot-gate and goat-ci-result take the two
+# runners labelled epyc-light instead, which carry no epyc label, so a busy matrix never makes a
+# short gate job wait for a runner. The pre-push guard pins these expressions. EPYC runners persist
+# between jobs, so no step may change the machine: a step that needs sudo or a throwaway VM runs on
+# hosted runners only.
+#
+# A pull request, draft or ready, gets a quick run: the goat-scope job reads the diff
+# (.github/scripts/goat-ci-scope.cjs) and hands ci check, typecheck, and test-changed, the test files
+# selected by check:changed: changed, companion, and importing tests (directly or through
+# testkit/fixture files), plus special suites. Production chains belong to broader lanes.
+# Selected server tests past one shard's estimated time run as related test-server shards instead.
+# The full suite runs on request.
+# Labels widen a run as soon as they are added: ci:full (everything), ci:affected (what the changes
+# reach through the workspace and import graphs), ci:server (the full server suite), ci:memory (the
+# memory growth suite), ci:windows (the Windows tests, which a change under WINDOWS_SUITES in
+# goat-ci-scope.cjs also adds). Nothing runs on push, so merging into dev starts no CI. Run the workflow by
+# hand for a lane of any branch (gh workflow run goat-ci.yml --ref <branch>, lane all by default);
+# a successful lane=all run on dev marks its commit green for goat-nightly's schedule.
+# goat-ci-result is the one check to read: it fails when any selected task failed or was
+# cancelled, and its notice says whether the run was quick and how to start the full one.
+# A pull request run's name ends in " (#<number>)", or " (#<number>, ignored event)" for an ignored
+# event; .github/scripts/goat-ci-result-mirror.cjs finds the pull request's real runs by it.
+run-name: >-
+  ${{ github.event_name == 'workflow_dispatch' && format('goat-ci {0} on {1}', inputs.lane, github.ref_name) || format((github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != '') && '{0} (#{1})' || '{0} (#{1}, ignored event)', github.event.pull_request.title, github.event.pull_request.number) }}
+on:
+  pull_request:
+    branches: [dev, "goat/**"]
+    # labeled lets a ci:* label start its run without a re-run. A draft gets the same quick run as
+    # a ready pull request, so leaving draft starts nothing. edited counts only when the base
+    # changed: retargeting onto dev or goat/** puts the checks on the new base, and a title or body
+    # edit runs no CI.
+    types: [opened, synchronize, reopened, labeled, edited]
+  workflow_dispatch:
+    inputs:
+      lane:
+        description: all (default), server (full server suite), memory-growth, windows (Windows tests), or quick (check and typecheck)
+        type: choice
+        default: all
+        options: [all, server, memory-growth, windows, quick]
+
+permissions:
+  contents: read
+  # The screenshot-gate task reads the PR, its files, and its label events.
+  issues: read
+  pull-requests: read
+
+# A pull request run supersedes the previous run of its ref. A manual run is evidence about one
+# commit, so it gets a group of its own (the run id): a merge into dev or a second dispatch cannot
+# cancel it, and it cancels nothing. A label other than ci:*, or an edit that keeps the base, is an
+# ignored event. Its run takes a group of its own per pull request, superseding the previous ignored
+# run: a group holds one pending run, and a newcomer would cancel a real run pending there. A missing
+# changes.base is null, and null != '' is false in GitHub's loose equality.
+concurrency:
+  group: >-
+    goat-ci-${{ github.event_name == 'workflow_dispatch' && github.run_id || format((github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != '') && '{0}' || '{0}-ignored', github.ref) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# An ignored event skips every task, and a real one skips republish. GitHub does not evaluate a
+# skipped job's name, so its check carries the raw name expression, which no required check matches.
+# .github/scripts/goat-ci-trigger.test.cjs evaluates these expressions per event.
+jobs:
+  scope:
+    name: ${{ (github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != '') && 'goat-scope' || 'goat-ci (event ignored)' }}
+    # Outside pull requests are closed (close-outside-prs.yml), so a fork's run would only spend minutes.
+    if: (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != '')
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","goat","epyc-light"]') || 'ubuntu-24.04' }}
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.scope.outputs.matrix }}
+      server_files: ${{ steps.scope.outputs.server_files }}
+      changed_tests: ${{ steps.scope.outputs.changed_tests }}
+      changed_node_tests: ${{ steps.scope.outputs.changed_node_tests }}
+      note: ${{ steps.scope.outputs.note }}
+    steps:
+      # The PR merge commit and its first parent (the base) are all the diff needs; the sources
+      # carry the workspace and import graphs.
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 2
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: false
+          # The scope script only needs Node.
+          run-install: false
+
+      # Source names are a whole-tree gate, independent of the affected-file matrix and lane.
+      - name: Check upstream name recurrence
+        run: node scripts/goat-rename.ts --check --limit 200
+
+      - name: Select tasks
+        id: scope
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          INPUT_LANE: ${{ inputs.lane }}
+        run: node .github/scripts/goat-ci-scope.cjs
+
+  ci:
+    name: ${{ (github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != '') && format('goat-{0}', matrix.title) || 'goat-ci (event ignored)' }}
+    needs: scope
+    runs-on: ${{ matrix.runner == 'windows' && 'windows-2025' || matrix.runner == 'epyc' && (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","goat","epyc"]') || 'ubuntu-24.04' }}
+    timeout-minutes: ${{ matrix.task == 'test-memory-growth' && 90 || matrix.task == 'test-windows' && 30 || 60 }}
+    strategy:
+      fail-fast: false
+      # Tasks: check, typecheck, test, test-ssh, test-desktop, test-contracts, test-client-runtime,
+      # test-mobile, test-shared, test-ingest, test-memory-growth, test-windows,
+      # smoke-linux-computer-use, build, and test-server in
+      # duration-balanced shards (apps/server runs one file at a time): four for the whole suite, or
+      # one to four for the related files goat-scope picked. A quick run has check, typecheck,
+      # test-changed, and related server shards when its server tests outgrow one job. Each entry
+      # carries its job title.
+      matrix: ${{ fromJSON(needs.scope.outputs.matrix) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      # Hosted runners start empty, so the Actions cache keeps the pnpm store between runs. Each EPYC
+      # runner keeps its store in its own persistent HOME instead.
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: ${{ runner.environment == 'github-hosted' }}
+          run-install: true
+
+      # The EPYC runners' .env gives each runner its own HOME, so Vite+, Node, pnpm, Electron and
+      # Playwright caches persist without two concurrent jobs sharing them. The runners are Ubuntu
+      # 26.04, which Playwright 1.60 does not recognize, so they install and launch its 24.04 build.
+      # Steps the Windows job runs set shell: bash (Git Bash there), since its default is PowerShell.
+      - name: Toolchain
+        shell: bash
+        run: |
+          if [ "$RUNNER_ENVIRONMENT" = self-hosted ]; then
+            echo "HOME=$HOME"
+            # The runners share one host, so its load explains a slow job.
+            echo "nproc=$(nproc) loadavg=$(cut -d' ' -f1-3 /proc/loadavg)"
+            test "$HOME" = "/opt/actions-runner/$RUNNER_NAME/_home"
+            test -w "$HOME"
+            echo "PLAYWRIGHT_HOST_PLATFORM_OVERRIDE=ubuntu24.04-x64" >> "$GITHUB_ENV"
+          fi
+          command -v vp
+          command -v vpr
+          node --version
+
+      - name: Ensure Electron runtime is installed
+        if: matrix.task == 'check' || matrix.task == 'typecheck' || matrix.task == 'test' || matrix.task == 'test-changed' || matrix.task == 'test-desktop' || matrix.task == 'build'
+        run: vp run --filter @goat/desktop ensure:electron
+
+      # The desktop build and its tests compile the native libsecret helper. EPYC carries the headers;
+      # only a hosted runner installs them.
+      - name: Install libsecret headers
+        if: matrix.task == 'test-desktop' || matrix.task == 'test-changed' || matrix.task == 'build'
+        run: |
+          if pkg-config --exists libsecret-1; then exit 0; fi
+          if [ "$RUNNER_ENVIRONMENT" = self-hosted ]; then
+            echo "::error::libsecret-1 headers are missing on $RUNNER_NAME"
+            exit 1
+          fi
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libsecret-1-dev
+
+      # Tests get a temp directory of their own, so the shared /tmp tmpfs never collects their
+      # leftovers and the guard at the end sees only this job's. Each test file also fails when it
+      # leaves goat-* entries behind (packages/shared/src/testing/testTempSandbox.ts).
+      - name: Isolate test temp directory
+        if: startsWith(matrix.task, 'test')
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            # Node reads TEMP and TMP there, so they get the Windows form of the directory.
+            dir=$(mktemp -d "$(cygpath -u "$RUNNER_TEMP")/goat-ci-XXXXXXXX")
+            native=$(cygpath -w "$dir")
+            printf '%s=%s\n' TMPDIR "$native" TEMP "$native" TMP "$native" >> "$GITHUB_ENV"
+          else
+            dir=$(mktemp -d "${TMPDIR:-/tmp}/goat-ci-XXXXXXXX")
+            echo "TMPDIR=$dir" >> "$GITHUB_ENV"
+          fi
+          echo "GOAT_CI_TMPDIR=$dir" >> "$GITHUB_ENV"
+          echo "GOAT_TEST_TMP_GUARD=fail" >> "$GITHUB_ENV"
+
+      # SshWorkspaceSync's real-sshd test runs sshd with UsePAM no, which refuses a locked account
+      # even for a public key. The hosted runner user's password is locked, and that VM is discarded
+      # after the job. An EPYC runner's account persists, so it is never changed here.
+      - name: Unlock the runner account for the test sshd
+        if: (matrix.task == 'test-server' || matrix.task == 'test-changed') && runner.environment == 'github-hosted'
+        run: |
+          sudo passwd -S "$USER"
+          sudo usermod -p '*' "$USER"
+
+      - name: Check
+        if: matrix.task == 'check'
+        run: vp check
+
+      # Every pull request selects check, so a change to the agent surface registries, or to a file
+      # or symbol the audit page cites, fails here until `pnpm agent-surface:audit` rewrites it.
+      # It reads source text and loads the registries, a few seconds.
+      - name: Check agent surface audit
+        if: matrix.task == 'check'
+        run: vp run agent-surface:check
+
+      # What GOAT injects into each harness's context must stay within the context diet's budget
+      # under the default tool listing; it builds the /mcp catalog in process, a few seconds.
+      - name: Check agent context budget
+        if: matrix.task == 'check'
+        run: vp run agent-surface:context-budget-check
+
+      # `check:changed` runs the same knip check before every push, so an unused file, export or
+      # dependency that reaches dev fails it on every branch, whatever that branch changed.
+      - name: Check unused code
+        if: matrix.task == 'check'
+        run: vp run knip:check
+
+      - name: Typecheck
+        if: matrix.task == 'typecheck'
+        run: vpr typecheck
+
+      # Web browser tests and the server's browser integration tests run in Playwright's headless
+      # Chromium. On a hosted runner --with-deps installs its system libraries through sudo. EPYC has
+      # no sudo for jobs and keeps the browser in its persistent HOME, so the install downloads only
+      # when this Playwright version's shell is missing, and a missing system library fails the step.
+      - name: Install Chromium headless shell
+        if: matrix.task == 'test' || matrix.task == 'test-server' || matrix.task == 'test-changed' || matrix.task == 'build'
+        env:
+          TASK: ${{ matrix.task }}
+        run: |
+          # The changed tests may be web or server browser tests, so that task installs both.
+          case "$TASK" in
+            test|build) clis=(apps/web/node_modules/playwright/cli.js) ;;
+            test-server) clis=(apps/server/node_modules/playwright-core/cli.js) ;;
+            *) clis=(apps/web/node_modules/playwright/cli.js apps/server/node_modules/playwright-core/cli.js) ;;
+          esac
+          deps=--with-deps
+          if [ "$RUNNER_ENVIRONMENT" = self-hosted ]; then deps=; fi
+          for cli in "${clis[@]}"; do node "$cli" install $deps --only-shell chromium; done
+          # Older revisions stay in a persistent HOME after an upgrade; check the newest.
+          browser=$(find "$HOME/.cache/ms-playwright" -path '*chromium_headless_shell-*' -name chrome-headless-shell -type f | sort -V | tail -1)
+          test -n "$browser"
+          if ldd "$browser" | grep '=> not found'; then
+            echo "::error::Chromium headless shell is missing system libraries on $RUNNER_NAME"
+            exit 1
+          fi
+
+      - name: PostgreSQL prerequisite for relay tests
+        if: matrix.task == 'test-relay' || (matrix.task == 'test-changed' && contains(needs.scope.outputs.changed_tests, 'infra/relay/'))
+        run: |
+          if ! command -v pg_config >/dev/null; then
+            if [ "$RUNNER_ENVIRONMENT" = self-hosted ]; then
+              echo "::error::Relay tests require pre-provisioned PostgreSQL binaries on $RUNNER_NAME (pg_config, initdb, postgres, pg_ctl, psql)"
+              exit 1
+            fi
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq postgresql
+          fi
+          node infra/relay/scripts/test-postgres.ts check
+
+      - name: Test relay
+        if: matrix.task == 'test-relay'
+        env:
+          ALCHEMY_TEST_DEV: "true"
+        run: vp run --filter goat-relay test
+
+      # web stays here. The other suites are their own matrix tasks so a
+      # slow server shard does not block them. `check` above is still the aggregate.
+      - name: Test
+        if: matrix.task == 'test'
+        # Logs each failed browser request with Chromium's network error, the evidence #1719 lacks.
+        env:
+          VITEST_PW_DEBUG: "1"
+        run: vp run --filter @goat/web test
+
+      # Changed, companion, and importing tests (directly or through testkit/fixture files), plus
+      # special suites, as check:changed runs them: from the repository root,
+      # whose Vitest config hands each file to its package's config. CI script tests use node:test.
+      # A selected file that no Vitest project collects fails here, so a quick run cannot pass
+      # without running a test it chose.
+      - name: Test changed files
+        if: matrix.task == 'test-changed'
+        env:
+          ALCHEMY_TEST_DEV: "true"
+          CHANGED_TESTS: ${{ needs.scope.outputs.changed_tests }}
+          CHANGED_NODE_TESTS: ${{ needs.scope.outputs.changed_node_tests }}
+          VITEST_PW_DEBUG: "1"
+        run: |
+          mapfile -t files < <(node -e 'for (const file of JSON.parse(process.env.CHANGED_TESTS || "[]")) console.log(file)')
+          mapfile -t node_files < <(node -e 'for (const file of JSON.parse(process.env.CHANGED_NODE_TESTS || "[]")) console.log(file)')
+          test "$(( ${#files[@]} + ${#node_files[@]} ))" -gt 0
+          if [ "${#files[@]}" -gt 0 ]; then
+            echo "${#files[@]} changed Vitest files"
+            listed="$RUNNER_TEMP/changed-tests-listed.json"
+            vp test list --filesOnly --json="$listed" "${files[@]}"
+            LISTED="$listed" node -e '
+              const path = require("node:path");
+              const listed = new Set(require(process.env.LISTED).map((entry) => path.relative(process.cwd(), entry.file)));
+              const missing = JSON.parse(process.env.CHANGED_TESTS).filter((file) => !listed.has(file));
+              for (const file of missing) console.log("::error file=" + file + "::no Vitest project collects this changed test file");
+              process.exit(missing.length > 0 ? 1 : 0);
+            '
+            vp test run "${files[@]}"
+          fi
+          if [ "${#node_files[@]}" -gt 0 ]; then
+            echo "${#node_files[@]} changed node:test files"
+            node --test "${node_files[@]}"
+          fi
+
+      # The ssh tests start real shells, servers and sshd, and several wait a fixed
+      # 2 seconds for a process to stop. Two workers leave a 4-vCPU hosted runner room for them.
+      # The suite mostly waits, and with two workers the shared EPYC host ran it about twice as
+      # slowly as a hosted runner, near the job timeout; its 192 cores take eight.
+      - name: Test ssh
+        if: matrix.task == 'test-ssh'
+        env:
+          VITEST_MAX_WORKERS: ${{ runner.environment == 'self-hosted' && '8' || '2' }}
+        run: vp run --filter @goat/ssh test
+
+      - name: Test provider core
+        if: matrix.task == 'test'
+        run: |
+          vp run --filter @goat/provider-core test
+          vp test run --config vite.config.ts packages/provider-opencode/src/server/textGeneration.test.ts packages/provider-opencode/src/server/memoryIsolation.test.ts packages/provider-cursor/src/server/textGeneration.test.ts packages/provider-grok/src/server/acpSupport.test.ts packages/provider-cursor/src/server/adapter.test.ts packages/provider-cursor/src/server/memoryRecovery.test.ts packages/provider-acp/src/server/coreRuntimeEvents.test.ts packages/provider-acp/src/server/sessionConfig.test.ts packages/provider-opencode/src/server/adapter.test.ts packages/provider-opencode/src/server/v2/OpenCode2Client.test.ts packages/provider-opencode/src/server/mcpRouting.test.ts
+
+      - name: Test desktop
+        if: matrix.task == 'test-desktop'
+        run: vp run --filter @goat/desktop test
+
+      - name: Test contracts
+        if: matrix.task == 'test-contracts'
+        run: vp run --filter @goat/contracts test
+
+      - name: Test client runtime
+        if: matrix.task == 'test-client-runtime'
+        run: vp run --filter @goat/client-runtime test
+
+      - name: Test shared
+        if: matrix.task == 'test-shared'
+        run: vp run --filter @goat/shared test
+
+      - name: Test ingest
+        if: matrix.task == 'test-ingest'
+        run: vp run --filter @goat/ingest test
+
+      - name: Test mobile
+        if: matrix.task == 'test-mobile'
+        run: vp test run --root apps/mobile --config vite.config.ts
+
+      - name: Linux computer use smoke
+        # The helper built from this commit against a GTK fixture on its own Xvfb display, bus and
+        # AT-SPI bus, all stopped by pid. It installs packages, so goat-scope keeps it hosted.
+        if: matrix.task == 'smoke-linux-computer-use'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb xcompmgr xdotool at-spi2-core dbus gir1.2-gtk-3.0 python3-gi
+          node scripts/build-computer-use-helper-linux.ts --out "$RUNNER_TEMP/goat-computer-use"
+          node scripts/computer-use-linux-smoke.ts --helper "$RUNNER_TEMP/goat-computer-use/goat-computer-use" --evidence "$RUNNER_TEMP/goat-computer-use-evidence"
+
+      - name: Test server
+        if: matrix.task == 'test-server' && !matrix.related
+        run: vp run --filter goat test --shard ${{ matrix.shard }}/${{ matrix.shard_count }}
+
+      # goat-scope picked these files through the import graph, or took them from a quick run's
+      # selection; its job summary says which. Shard count never exceeds the file count, so no
+      # shard runs empty.
+      - name: Test related server files
+        if: matrix.task == 'test-server' && matrix.related
+        working-directory: apps/server
+        env:
+          SERVER_FILES: ${{ needs.scope.outputs.server_files }}
+        run: |
+          mapfile -t files < <(node -e 'for (const file of JSON.parse(process.env.SERVER_FILES)) console.log(file)')
+          test "${#files[@]}" -gt 0
+          echo "${#files[@]} related server test files, shard ${{ matrix.shard }}/${{ matrix.shard_count }}"
+          vp test run --shard ${{ matrix.shard }}/${{ matrix.shard_count }} "${files[@]}"
+
+      - name: Test memory growth
+        if: matrix.task == 'test-memory-growth'
+        working-directory: apps/server
+        env:
+          GOAT_MEMORY_GROWTH: "1"
+        run: vp test run src/memory/MemoryImport.growth.test.ts src/memory/MemoryReceive.growth.test.ts
+
+      # The path and process sensitive suites only (WINDOWS_SUITES in goat-ci-scope.cjs), from the
+      # repository root so each file runs under its package's config. No browser or full server suite.
+      - name: Test Windows
+        if: matrix.task == 'test-windows'
+        shell: bash
+        run: |
+          mapfile -t suites < <(node -p 'require("./.github/scripts/goat-ci-scope.cjs").WINDOWS_SUITES.join("\n")' | tr -d '\r')
+          test "${#suites[@]}" -gt 0
+          vp test run "${suites[@]}"
+
+      # Upstream merges must not bring back 0.0.x or split the four release manifests.
+      - name: Check release version
+        if: matrix.task == 'test'
+        run: node scripts/check-release-version.ts
+
+      - name: Test build scripts
+        if: matrix.task == 'test'
+        working-directory: scripts
+        run: >-
+          vp test run build-desktop-artifact.test.ts check-release-version.test.ts
+          resolve-nightly-release.test.ts goat-workflow-guard.test.ts goat-workflow-guard-matrix.test.ts
+          lib/release-notices.test.ts
+          lib/release-version.test.ts vendored-gitlinks.test.ts install-goat-server.test.ts
+          pr-assets.test.ts merge-pr.test.ts
+          lib/desktop-launch-fixture.test.ts
+          smoke-desktop-app.test.ts
+
+      - name: Test CI scripts
+        if: matrix.task == 'test'
+        run: >-
+          node --test .github/scripts/pr-screenshot-gate.test.cjs .github/scripts/goat-ci-scope.test.cjs
+          .github/scripts/goat-ci-imports.test.cjs .github/scripts/goat-rename-gate.test.cjs
+          .github/scripts/release-train.test.cjs .github/scripts/goat-ci-trigger.test.cjs
+          .github/scripts/goat-ci-result-mirror.test.cjs
+
+      # Plain shell, so the check still runs when a runner's node cannot load TypeScript.
+      # A leftover goat-test-* sandbox means a test worker died before its file finished.
+      - name: Check for leaked temp files
+        if: always() && env.GOAT_CI_TMPDIR != ''
+        shell: bash
+        run: |
+          dir="$GOAT_CI_TMPDIR"
+          # Windows ends Vitest workers without running exit handlers, and a file whose tests are
+          # all skipped never runs afterAll, so its sandbox stays. An empty sandbox leaked nothing.
+          if [ "$RUNNER_OS" = Windows ]; then
+            find "$dir" -mindepth 1 -maxdepth 1 -name 'goat-test-*' -type d -empty -delete
+          fi
+          leaked=$({ find "$dir" -mindepth 1 -maxdepth 1 -name 'goat-*'; find "$dir" -mindepth 2 -maxdepth 2 -path "$dir/goat-test-*/goat-*"; } | sed "s#^$dir/##" | sort)
+          rm -rf "$GOAT_CI_TMPDIR"
+          if [ -z "$leaked" ]; then
+            echo "No goat-* temp entries left in $dir."
+            exit 0
+          fi
+          echo "This job left $(printf '%s\n' "$leaked" | wc -l) goat-* temp entries in $dir:" >&2
+          printf '%s\n' "$leaked" | sed -E 's#^.*/##; s/[A-Za-z0-9]{6}$/*/' | sort | uniq -c | sort -rn >&2
+          printf '  %s\n' $leaked >&2
+          exit 1
+
+      - name: Build desktop pipeline
+        if: matrix.task == 'build'
+        run: |
+          command -v cc
+          pkg-config --exists libsecret-1
+          vp run build:desktop
+          node apps/desktop/scripts/verify-preload-bundle.mjs
+          for p in apps/desktop/dist-electron apps/server/dist apps/web/dist native/browser-secret/build/x64/goat-browser-secret; do
+            test -e "$p" || { echo "missing build output: $p" >&2; exit 1; }
+          done
+
+      - name: Boot built web client
+        if: matrix.task == 'build'
+        run: node apps/web/scripts/verify-built-boot.ts
+
+      # The release verifier's source-repository link rule, so a bundled link fails here, not the nightly.
+      - name: Check bundled links
+        if: matrix.task == 'build'
+        run: >-
+          node scripts/verify-release-artifacts.ts links --dir apps/web/dist --dir apps/server/dist
+          --dir apps/desktop/dist-electron
+
+  screenshot-gate:
+    name: ${{ (github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != '') && 'goat-screenshot-gate' || 'goat-ci (event ignored)' }}
+    # It reads the pull request, so a manual run has nothing to inspect.
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && (github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != '')
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","goat","epyc-light"]') || 'ubuntu-24.04' }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+      checks: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: false
+          # The screenshot gate only needs Node; skip the dependency install.
+          run-install: false
+
+      - name: Toolchain
+        run: |
+          command -v vp
+          command -v vpr
+          node --version
+
+      # Advisory until GOAT_SCREENSHOT_GATE is "enforce". The script reads the live
+      # PR, so re-running only this job picks up a new screenshot or waiver label.
+      # See docs/operations/pr-screenshot-gate.md.
+      - name: PR screenshot gate
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GOAT_SCREENSHOT_GATE: ${{ vars.GOAT_SCREENSHOT_GATE }}
+        run: node .github/scripts/pr-screenshot-gate.cjs
+
+  connect-auth-postgres:
+    name: Connect auth PostgreSQL boundaries
+    needs: scope
+    if: needs.scope.result == 'success'
+    runs-on: ubuntu-24.04
+    env:
+      CONNECT_TEST_DATABASE_URL: postgres://connect_test@127.0.0.1:6543/connect_test
+    steps:
+      - uses: actions/checkout@v6
+      - uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+      - name: Start an isolated PostgreSQL cluster on the disposable runner
+        run: |
+          pg_bin="$(pg_config --bindir)"
+          "$pg_bin/initdb" -D "$RUNNER_TEMP/connect-pg" -U connect_test --auth=trust
+          "$pg_bin/pg_ctl" -D "$RUNNER_TEMP/connect-pg" -l "$RUNNER_TEMP/connect-pg.log" -o "-h 127.0.0.1 -p 6543 -k $RUNNER_TEMP" -w start
+          "$pg_bin/createdb" -h 127.0.0.1 -p 6543 -U connect_test connect_test
+      - run: vp test run --config infra/relay/postgres.vite.config.ts
+      - name: Stop the cluster owned by this job
+        if: always()
+        run: '"$(pg_config --bindir)/pg_ctl" -D "$RUNNER_TEMP/connect-pg" -m immediate stop'
+
+  result:
+    name: ${{ (github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != '') && 'goat-ci-result' || 'goat-ci (event ignored)' }}
+    needs: [scope, ci, screenshot-gate, connect-auth-postgres]
+    # Runs when a task failed too, so the failure lands on this check; a superseded run stays cancelled.
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != '') }}
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","goat","epyc-light"]') || 'ubuntu-24.04' }}
+    timeout-minutes: 5
+    steps:
+      - name: Require every selected task
+        env:
+          SCOPE: ${{ needs.scope.result }}
+          CI: ${{ needs.ci.result }}
+          CONNECT_AUTH_POSTGRES: ${{ needs.connect-auth-postgres.result }}
+          SCREENSHOT_GATE: ${{ needs.screenshot-gate.result }}
+          # From goat-scope: whether this was a quick run and how to start the full one.
+          NOTE: ${{ needs.scope.outputs.note }}
+        run: |
+          echo "goat-scope: $SCOPE, ci: $CI, goat-screenshot-gate: $SCREENSHOT_GATE"
+          if [ -n "$NOTE" ]; then
+            echo "::notice title=goat-ci scope::$NOTE"
+            printf '%s\n' "$NOTE" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          test "$SCOPE" = success || { echo "::error::goat-scope did not succeed ($SCOPE)"; exit 1; }
+          test "$CI" = success || { echo "::error::a selected ci task did not succeed ($CI)"; exit 1; }
+          test "$CONNECT_AUTH_POSTGRES" = success || { echo "::error::Connect PostgreSQL boundaries failed ($CONNECT_AUTH_POSTGRES)"; exit 1; }
+          case "$SCREENSHOT_GATE" in
+            success | skipped) ;;
+            *) echo "::error::goat-screenshot-gate did not succeed ($SCREENSHOT_GATE)"; exit 1 ;;
+          esac
+
+  # GitHub reads a required check from the newest goat-ci suite on the head commit, and an ignored
+  # event creates one (#1672). So that run reports goat-ci-result too: it waits for the newest real
+  # run of the pull request on the same head and repeats its goat-ci-result, failing unless it
+  # succeeded. Waiting can take as long as that run, queue time included, so it holds a hosted
+  # runner, never an EPYC one, for up to the hosted job limit.
+  republish:
+    name: ${{ !((github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != '')) && 'goat-ci-result' || 'goat-ci-result (real run)' }}
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && !((github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != ''))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            /.github/scripts/
+          sparse-checkout-cone-mode: false
+
+      - name: Republish the real goat-ci-result
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: node .github/scripts/goat-ci-result-mirror.cjs
+
+  # A re-run stays in its run's original suite, so an ignored event's republished goat-ci-result in a
+  # newer suite would keep the first verdict (#1691). On a re-run attempt this job re-runs that
+  # ignored run, cancelling it first while it still runs, so it repeats this attempt's verdict. It is
+  # the only goat-ci job that may write to Actions, and it reports nothing as goat-ci-result itself.
+  refresh-republished:
+    name: goat-ci republish refresh
+    needs: [result]
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && github.run_attempt > 1 && github.event.pull_request.head.repo.full_name == github.repository && (github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != '') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            /.github/scripts/
+          sparse-checkout-cone-mode: false
+
+      - name: Re-run the ignored run that republished an earlier verdict
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: node .github/scripts/goat-ci-rerun-republish.cjs

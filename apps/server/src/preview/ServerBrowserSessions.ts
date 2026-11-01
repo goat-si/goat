@@ -1,0 +1,67 @@
+/**
+ * What the preview session list reads from one server browser tab.
+ *
+ * @module ServerBrowserSessions
+ */
+import type { PreviewAutomationRequest, ThreadId } from "@goat/contracts";
+import type { Page } from "playwright-core";
+
+import type { SessionControl } from "./SessionControl.ts";
+
+export interface ServerBrowserSessionView {
+  readonly threadId: ThreadId;
+  readonly tabId: string;
+  readonly url: string;
+  readonly title: string;
+  /** The agent session that opened it, or null for a person's tab. */
+  readonly agentId: string | null;
+  readonly humanControls: boolean;
+  readonly private: boolean;
+  readonly agentStopped: boolean;
+  /** What the agent asked a person to do here, while the tab waits for them. */
+  readonly handoffReason: string | null;
+}
+
+export const browserSessionView = async (tab: {
+  readonly threadId: ThreadId;
+  readonly tabId: string;
+  readonly page: Page;
+  readonly control: SessionControl;
+}): Promise<ServerBrowserSessionView> => ({
+  threadId: tab.threadId,
+  tabId: tab.tabId,
+  url: tab.page.url(),
+  title: await tab.page.title().catch(() => ""),
+  agentId: tab.control.agentId,
+  humanControls: tab.control.controller !== null,
+  private: tab.control.isPrivate,
+  agentStopped: tab.control.isAgentStopped,
+  handoffReason: tab.control.handoffReason,
+});
+
+export const tabOwner = (tab: {
+  readonly control: { readonly controller: string | null; readonly agentId: string | null };
+}) =>
+  tab.control.controller !== null
+    ? ("human" as const)
+    : tab.control.agentId !== null
+      ? ("agent" as const)
+      : ("unclaimed" as const);
+
+export const markUsed = (
+  tabs: Iterable<{
+    readonly threadId: string;
+    readonly tabId: string;
+    readonly control: { readonly agentId: string | null };
+    usedAt: number;
+  }>,
+  request: PreviewAutomationRequest,
+  now: number,
+) => {
+  for (const tab of tabs)
+    if (
+      tab.threadId === request.threadId &&
+      (tab.control.agentId === request.agentSessionId || tab.tabId === request.tabId)
+    )
+      tab.usedAt = now;
+};

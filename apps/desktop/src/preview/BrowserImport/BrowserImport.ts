@@ -1,0 +1,459 @@
+import type {
+  BrowserImportInput,
+  BrowserImportResult,
+  BrowserImportSource,
+  BrowserImportUnavailableReason,
+} from "@goat/contracts";
+import { BrowserImportFailureReason } from "@goat/contracts";
+import * as Clock from "effect/Clock";
+import * as Context from "effect/Context";
+import type { Session } from "electron";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
+import { ChildProcessSpawner } from "effect/process";
+
+import * as HostProcess from "@goat/shared/HostProcess";
+
+import * as BrowserSession from "../BrowserSession.ts";
+import { ChromiumCookieReadError, readChromiumCookies } from "./ChromiumCookies.ts";
+import type { CookieReadResult } from "./CookieDatabase.ts";
+import { FirefoxCookieReadError, readFirefoxCookies } from "./FirefoxCookies.ts";
+import { readSafariCookies, safariAccessDenied, SafariCookieReadError } from "./SafariCookies.ts";
+import {
+  BROWSER_IMPORT_SOURCES,
+  resolveCookieDatabase,
+  isSourceInstalled,
+  isSourceRunning,
+  listSourceProfiles,
+  sourcePathContext,
+  type BrowserImportPathContext,
+  type BrowserImportSourceDefinition,
+} from "./Sources.ts";
+
+export class BrowserImportFailedError extends Schema.TaggedError<BrowserImportFailedError>()(
+  "BrowserImportFailedError",
+  {
+    sourceId: Schema.String,
+    reason: BrowserImportFailureReason,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  // IPC preserves only the message; the renderer needs its reason token for user-facing copy.
+  override get message(): string {
+    return `Importing cookies from ${this.sourceId} failed: ${this.reason}.`;
+  }
+}
+
+export class BrowserCookieWriteError extends Schema.TaggedError<BrowserCookieWriteError>()(
+  "BrowserCookieWriteError",
+  {
+    url: Schema.String,
+    name: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {
+  override get message(): string {
+    return `Could not write imported cookie ${this.name} for ${this.url}.`;
+  }
+}
+
+export class BrowserImport extends Context.Service<
+  BrowserImport,
+  {
+    readonly listSources: Effect.Effect<ReadonlyArray<BrowserImportSource>>;
+    readonly importCookies: (input: {
+      readonly input: BrowserImportInput;
+      readonly scope: string;
+      readonly persistent: boolean;
+      readonly namespace?: BrowserSession.BrowserSessionPartitionNamespace;
+    }) => Effect.Effect<BrowserImportResult, BrowserImportFailedError>;
+  }
+>()("@goat/desktop/preview/BrowserImport/BrowserImport") {}
+
+const unavailableReason = Effect.fn("BrowserImport.unavailableReason")(function* (
+  definition: BrowserImportSourceDefinition,
+  context: BrowserImportPathContext,
+): Effect.fn.Return<
+  BrowserImportUnavailableReason | undefined,
+  never,
+  FileSystem.FileSystem | ChildProcessSpawner.ChildProcessSpawner
+> {
+  if (!definition.platforms.includes(context.platform)) return "unsupportedPlatform";
+  if (!(yield* isSourceInstalled(definition, context))) return "notInstalled";
+  if (yield* isSourceRunning(definition, context)) return "browserRunning";
+  // TCC permits stat without Full Disk Access, so a listed Safari jar may still be unreadable.
+  if (definition.engine === "safari") {
+    const jar = yield* resolveCookieDatabase(definition, context, ".");
+    if (jar !== undefined && (yield* safariAccessDenied(jar))) return "needsFullDiskAccess";
+  }
+  return undefined;
+});
+
+const cookieHost = (url: string): string => {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return url;
+  }
+};
+
+export const writeCookies = Effect.fn("BrowserImport.writeCookies")(function* (
+  session: { readonly cookies: Pick<Session["cookies"], "set" | "flushStore"> },
+  read: CookieReadResult,
+) {
+  let imported = 0;
+  let skipped = read.undecryptable;
+  const skippedDomains = new Set(read.undecryptableHosts);
+  for (const cookie of read.cookies) {
+    const written = yield* Effect.tryPromise({
+      try: () =>
+        session.cookies.set({
+          url: cookie.url,
+          name: cookie.name,
+          value: cookie.value,
+          // Electron widens any supplied domain; omit it for host-only cookies.
+          ...(cookie.domain === undefined ? {} : { domain: cookie.domain }),
+          path: cookie.path,
+          secure: cookie.secure,
+          httpOnly: cookie.httpOnly,
+          sameSite: cookie.sameSite,
+          ...(cookie.expirationDate === undefined ? {} : { expirationDate: cookie.expirationDate }),
+        }),
+      catch: (cause) => new BrowserCookieWriteError({ url: cookie.url, name: cookie.name, cause }),
+    }).pipe(
+      Effect.as(true),
+      Effect.tapError((error) => Effect.logDebug(error.message, { cause: error.cause })),
+      Effect.catchTags({ BrowserCookieWriteError: () => Effect.succeed(false) }),
+    );
+    if (written) {
+      imported += 1;
+    } else {
+      skipped += 1;
+      skippedDomains.add(cookieHost(cookie.url));
+    }
+  }
+  // Cookie writes settle in memory; flush to disk before reporting a durable import.
+  if (imported > 0) {
+    yield* Effect.tryPromise(() => session.cookies.flushStore()).pipe(
+      Effect.tapError((error) =>
+        Effect.logWarning("Imported cookies could not be flushed to disk", { cause: error.cause }),
+      ),
+      Effect.ignore,
+    );
+  }
+  return { imported, skipped, skippedDomains: [...skippedDomains].slice(0, 20) };
+});
+
+type RefreshCookie = {
+  readonly domain?: string;
+  readonly hostOnly?: boolean;
+  readonly name: string;
+  readonly path?: string;
+  readonly secure?: boolean;
+  readonly httpOnly?: boolean;
+  readonly sameSite: "unspecified" | "no_restriction" | "lax" | "strict";
+};
+
+type RefreshSession = {
+  readonly cookies: {
+    readonly get: (filter: Electron.CookiesGetFilter) => Promise<ReadonlyArray<RefreshCookie>>;
+    readonly set: Session["cookies"]["set"];
+    readonly flushStore: Session["cookies"]["flushStore"];
+  };
+};
+
+const matchesOrigin = (host: string, hostOnly: boolean, secure: boolean, origin: URL) => {
+  const domain = host.replace(/^\./, "").toLowerCase();
+  return (
+    (!secure || origin.protocol === "https:") &&
+    (origin.hostname === domain || (!hostOnly && origin.hostname.endsWith(`.${domain}`)))
+  );
+};
+
+/** Unreadable hosts are bare names, so a parent domain counts as a chosen site's cookie. */
+export const refreshHasUnreadableCookies = (
+  read: CookieReadResult,
+  origins: ReadonlyArray<string>,
+): boolean =>
+  read.undecryptableHosts.some((host) =>
+    origins.some((origin) => matchesOrigin(host, false, false, new URL(origin))),
+  );
+
+export const refreshCookies = Effect.fn("BrowserImport.refreshCookies")(function* (
+  session: RefreshSession,
+  read: CookieReadResult,
+  originStrings: ReadonlyArray<string>,
+) {
+  const origins = [...new Set(originStrings)].map((origin) => new URL(origin));
+  const nowSeconds = (yield* Clock.currentTimeMillis) / 1000;
+  const chosen = read.cookies.filter(
+    (cookie) =>
+      (cookie.expirationDate === undefined || cookie.expirationDate > nowSeconds) &&
+      origins.some((origin) =>
+        matchesOrigin(
+          cookie.domain ?? new URL(cookie.url).hostname,
+          cookie.domain === undefined,
+          cookie.secure,
+          origin,
+        ),
+      ),
+  );
+  const sharedDomains = new Set<string>();
+  const existing = yield* Effect.tryPromise(() => session.cookies.get({}));
+  for (const cookie of existing) {
+    const domain = cookie.domain;
+    if (!domain) continue;
+    if (
+      !origins.some((origin) =>
+        matchesOrigin(domain, cookie.hostOnly === true, cookie.secure === true, origin),
+      )
+    )
+      continue;
+    const host = domain.replace(/^\./, "");
+    const url = `${cookie.secure ? "https" : "http"}://${host}${cookie.path ?? "/"}`;
+    yield* Effect.tryPromise(() =>
+      session.cookies.set({
+        url,
+        name: cookie.name,
+        value: "",
+        path: cookie.path ?? "/",
+        expirationDate: 1,
+        ...(cookie.hostOnly ? {} : { domain: cookie.domain }),
+        secure: cookie.secure === true,
+        httpOnly: cookie.httpOnly === true,
+        sameSite: cookie.sameSite,
+      }),
+    );
+    if (!cookie.hostOnly) sharedDomains.add(host);
+  }
+  const counts = origins.map((origin) => ({ origin: origin.origin, imported: 0, skipped: 0 }));
+  let imported = 0;
+  let skipped = 0;
+  const skippedDomains = new Set<string>();
+  for (const cookie of chosen) {
+    const matching = origins
+      .map((origin, index) => ({ origin, index }))
+      .filter(({ origin }) =>
+        matchesOrigin(
+          cookie.domain ?? new URL(cookie.url).hostname,
+          cookie.domain === undefined,
+          cookie.secure,
+          origin,
+        ),
+      );
+    const success = yield* Effect.tryPromise(() =>
+      session.cookies.set({
+        url: cookie.url,
+        name: cookie.name,
+        value: cookie.value,
+        path: cookie.path,
+        ...(cookie.domain === undefined ? {} : { domain: cookie.domain }),
+        secure: cookie.secure,
+        httpOnly: cookie.httpOnly,
+        sameSite: cookie.sameSite,
+        ...(cookie.expirationDate === undefined ? {} : { expirationDate: cookie.expirationDate }),
+      }),
+    ).pipe(
+      Effect.as(true),
+      Effect.orElseSucceed(() => false),
+    );
+    if (success) imported++;
+    else {
+      skipped++;
+      skippedDomains.add(cookieHost(cookie.url));
+    }
+    for (const { index } of matching) {
+      const count = counts[index];
+      if (count) {
+        if (success) count.imported++;
+        else count.skipped++;
+      }
+    }
+    const domain = cookie.domain?.replace(/^\./, "");
+    if (success && domain) sharedDomains.add(domain);
+  }
+  yield* Effect.tryPromise(() => session.cookies.flushStore());
+  return {
+    imported,
+    skipped,
+    skippedDomains: [...skippedDomains],
+    origins: counts,
+    sharedDomains: [...sharedDomains],
+  };
+});
+
+/** @public */
+export const make = Effect.gen(function* BrowserImportMake() {
+  const browserSession = yield* BrowserSession.BrowserSession;
+  const platform = yield* HostProcess.Platform;
+  const executablePath = yield* HostProcess.ExecutablePath;
+  const platformServices = yield* Effect.context<
+    FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
+  >();
+  const pathContext = yield* sourcePathContext;
+
+  const listSources: Effect.Effect<ReadonlyArray<BrowserImportSource>> = Effect.forEach(
+    BROWSER_IMPORT_SOURCES,
+    Effect.fnUntraced(function* (definition) {
+      const unavailable = yield* unavailableReason(definition, pathContext);
+      return {
+        id: definition.id,
+        name: definition.name,
+        ...(platform === "win32" && definition.engine === "chromium"
+          ? { refreshUnavailable: "appBoundEncryption" as const }
+          : {}),
+        profiles:
+          unavailable === undefined ? yield* listSourceProfiles(definition, pathContext) : [],
+        ...(unavailable === undefined ? {} : { unavailable }),
+      } satisfies BrowserImportSource;
+    }),
+  ).pipe(Effect.provide(platformServices));
+
+  const importCookies = Effect.fn("BrowserImport.importCookies")(function* (input: {
+    readonly input: BrowserImportInput;
+    readonly scope: string;
+    readonly persistent: boolean;
+    readonly namespace?: BrowserSession.BrowserSessionPartitionNamespace;
+  }) {
+    const definition = BROWSER_IMPORT_SOURCES.find(
+      (candidate) => candidate.id === input.input.sourceId,
+    );
+    if (!definition) {
+      return yield* new BrowserImportFailedError({
+        sourceId: input.input.sourceId,
+        reason: "unknownSource",
+      });
+    }
+
+    if (
+      input.input.origins !== undefined &&
+      platform === "win32" &&
+      definition.engine === "chromium"
+    ) {
+      return yield* new BrowserImportFailedError({
+        sourceId: definition.id,
+        reason: "appBoundEncryption",
+      });
+    }
+    const blocked = yield* unavailableReason(definition, pathContext).pipe(
+      Effect.provide(platformServices),
+    );
+    if (blocked !== undefined) {
+      return yield* new BrowserImportFailedError({ sourceId: definition.id, reason: blocked });
+    }
+
+    if (platform === "darwin" && definition.engine === "chromium") {
+      // macOS attributes Keychain prompts and ACL grants to the executable, which differs in dev and packaged builds.
+      yield* Effect.logInfo("Reading browser cookie key from the keychain", {
+        sourceId: definition.id,
+        executablePath,
+      });
+    }
+
+    // IPC profile paths must match the source's listing to prevent traversal outside browser user-data.
+    const sourceProfiles = yield* listSourceProfiles(definition, pathContext).pipe(
+      Effect.provide(platformServices),
+    );
+    const requestedProfile = sourceProfiles.find(
+      (profile) => profile.directory === input.input.sourceProfileDirectory,
+    );
+    if (requestedProfile === undefined) {
+      return yield* new BrowserImportFailedError({
+        sourceId: definition.id,
+        reason: "unknownSourceProfile",
+      });
+    }
+
+    // Re-resolve listed paths because Chromium jars may be under Network/.
+    const databasePath = yield* resolveCookieDatabase(
+      definition,
+      pathContext,
+      requestedProfile.directory,
+    ).pipe(Effect.provide(platformServices));
+    if (databasePath === undefined) {
+      return yield* new BrowserImportFailedError({ sourceId: definition.id, reason: "readFailed" });
+    }
+
+    const userDataDirectory = definition.userDataDirectory(pathContext);
+    const read: Effect.Effect<
+      CookieReadResult,
+      ChromiumCookieReadError | FirefoxCookieReadError | SafariCookieReadError,
+      FileSystem.FileSystem | Path.Path | Scope.Scope | ChildProcessSpawner.ChildProcessSpawner
+    > =
+      definition.engine === "safari"
+        ? readSafariCookies(databasePath).pipe(
+            Effect.map((cookies) => ({ cookies, undecryptable: 0, undecryptableHosts: [] })),
+          )
+        : definition.engine === "firefox"
+          ? readFirefoxCookies(databasePath).pipe(
+              Effect.map((cookies) => ({ cookies, undecryptable: 0, undecryptableHosts: [] })),
+            )
+          : readChromiumCookies({
+              cookieDatabasePath: databasePath,
+              keychainService: definition.keychainService,
+              keychainAccount: definition.keychainAccount,
+              linuxSecretApplication: definition.linuxSecretApplication,
+              ...(platform === "win32" && userDataDirectory !== undefined
+                ? {
+                    windowsLocalStatePath: pathContext.path.join(userDataDirectory, "Local State"),
+                  }
+                : {}),
+              platform,
+            });
+
+    const result = yield* read.pipe(
+      Effect.scoped,
+      Effect.provide(platformServices),
+      Effect.catchTags({
+        ChromiumCookieReadError: (cause) =>
+          Effect.fail(
+            new BrowserImportFailedError({ sourceId: definition.id, reason: cause.reason, cause }),
+          ),
+        FirefoxCookieReadError: (cause) =>
+          Effect.fail(
+            new BrowserImportFailedError({ sourceId: definition.id, reason: "readFailed", cause }),
+          ),
+        SafariCookieReadError: (cause) =>
+          Effect.fail(
+            new BrowserImportFailedError({ sourceId: definition.id, reason: cause.reason, cause }),
+          ),
+      }),
+    );
+
+    const session = yield* browserSession
+      .getSession(input.scope, input.persistent, input.namespace)
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new BrowserImportFailedError({
+              sourceId: definition.id,
+              reason: "sessionUnavailable",
+              cause,
+            }),
+        ),
+      );
+
+    if (input.input.origins !== undefined) {
+      if (refreshHasUnreadableCookies(result, input.input.origins))
+        return yield* new BrowserImportFailedError({
+          sourceId: definition.id,
+          reason: "readFailed",
+        });
+      return yield* refreshCookies(session, result, input.input.origins).pipe(
+        Effect.mapError(
+          (cause) =>
+            new BrowserImportFailedError({ sourceId: definition.id, reason: "readFailed", cause }),
+        ),
+      );
+    }
+    return yield* writeCookies(session, result);
+  });
+
+  return BrowserImport.of({ listSources, importCookies });
+});
+
+export const layer = Layer.effect(BrowserImport, make);

@@ -1,0 +1,172 @@
+import * as NodeModule from "node:module";
+import * as NodeURL from "node:url";
+import { defineConfig, normalizePath } from "vite-plus";
+import "vite-plus/test/config";
+
+const reactTests = [
+  "src/features/pull-requests/usePullRequestList.test.tsx",
+  "src/features/threads/git/GitBranchesSheet.occupancy.test.tsx",
+  "src/components/ui/SplitButton.android.test.tsx",
+  "src/components/ProjectFavicon.test.tsx",
+  "src/features/files/useFileTreeEntries.test.tsx",
+  "src/features/files/ZipArchiveView.test.tsx",
+  "src/lib/clock.test.ts",
+  "src/lib/useNotificationPermissionStatus.test.tsx",
+  "src/components/VideoPreviewModal.ios.test.tsx",
+  "src/widgets/useSubscriptionUsage.test.tsx",
+  "src/features/threads/use-visible-second-clock.test.tsx",
+  "src/features/threads/thread-settings-session.test.tsx",
+  "src/features/threads/useThreadListV2.test.tsx",
+  "src/features/threads/use-thread-list-v2-launch-groups.test.tsx",
+  "src/components/MediaVideoPlayer.test.tsx",
+  "src/features/cloud/CloudAuthProvider.disabled.test.tsx",
+  "src/features/cloud/AccountDeletionSection.test.tsx",
+  "src/features/cloud/CloudAuthProvider.test.ts",
+  "src/features/connection/ConnectionsNewRouteScreen.test.tsx",
+  "src/features/decisions/DecisionDurableCard.test.tsx",
+  "src/features/decisions/useDecisionInbox.test.tsx",
+  "src/features/goat-bot/GoatBotBubble.test.tsx",
+  "src/features/goat-bot/GoatBotDayStamp.test.tsx",
+  "src/features/goat-bot/GoatBotScreen.appearance.test.tsx",
+  "src/features/goat-bot/GoatBotScreen.memory.test.tsx",
+  "src/features/goat-bot/GoatBotTimelineRow.test.tsx",
+  "src/features/goat-bot/MobileGoatBotHomeWorker.test.tsx",
+  "src/features/goat-bot/useMobileGoatBotHomeSettings.test.tsx",
+  "src/features/goat-bot/useMobileGoatBotSession.test.tsx",
+  "src/features/goat-bot/useReplying.test.tsx",
+  "src/features/settings/MemorySyncDiagnostics.test.tsx",
+  "src/features/settings/SettingsDecisionInboxRouteScreen.test.tsx",
+  "src/features/settings/SettingsMemoryRouteScreen.test.tsx",
+  "src/features/threads/AgentMessageFold.test.tsx",
+  "src/features/threads/HumanHandoffCard.test.tsx",
+  "src/features/threads/SubagentRow.memory.test.tsx",
+  "src/features/threads/ThreadHeader.memory.test.tsx",
+  "src/features/threads/thread-settings-sheet-state.test.ts",
+  "src/features/threads/ThreadMarkdownImage.test.tsx",
+  "src/lib/visible-animations.test.tsx",
+
+  "src/components/ui/Dialog.android.test.tsx",
+  "src/features/settings/SettingsHubNodesRouteScreen.test.tsx",
+  "src/features/notes/NoteConflictRouteScreen.test.tsx",
+  "src/features/notes/NoteLinkedThread.test.tsx",
+  "src/features/notes/NoteRouteScreen.test.tsx",
+  "src/features/notes/NoteStartWorkRouteScreen.test.tsx",
+  "src/features/settings/ProjectActionsSettings.test.tsx",
+  "src/features/projects/AddProjectScreen.test.ts",
+  "src/lib/useMediaVideoPlayback.test.tsx",
+  "src/features/pull-requests/usePullRequestEnvironmentFallback.test.tsx",
+  "src/lib/filePreview.test.ts",
+  "src/features/threads/thread-inspector-navigation.test.tsx",
+  "src/features/diffs/nativeReviewDiffSurface.test.tsx",
+  "src/features/pull-requests/usePullRequestDiff.test.tsx",
+  "src/features/pull-requests/guide/useReviewGuide.test.tsx",
+  "src/features/settings/SettingsServerControlsRouteScreen.test.tsx",
+  "src/features/settings/computerUse/AllowedApps.test.tsx",
+  "src/features/settings/components/BranchNamingSettings.test.tsx",
+  "src/features/settings/components/SettingsDragHandle.test.tsx",
+  "src/features/threads/ThreadMarkdownImage.test.tsx",
+  "src/features/threads/UsageLimitRecoveryCard.test.tsx",
+  "src/native/NativeHeaderToolbar.test.tsx",
+  "src/native/V5StackHeader.ios.test.tsx",
+  "src/features/diagnostics/ThreadStreamsSection.test.tsx",
+  "src/native/GoatComposerEditor.ios.test.tsx",
+  "src/native/useRestingTopOffset.test.tsx",
+  "src/native/useRetryingImageSource.test.tsx",
+  "src/state/queries.debounce.test.tsx",
+  "src/state/use-selected-thread-git-actions.test.tsx",
+  "src/state/use-selected-thread-git-state.test.tsx",
+  "src/features/terminal/useTerminalExitNavigation.test.tsx",
+];
+
+const sourceRoot = `${normalizePath(NodeURL.fileURLToPath(new URL("./src", import.meta.url)))}/`;
+// Their tests vary Platform.OS or __DEV__, which production inlining would erase.
+const devCompiledSources = [
+  "/lib/useNotificationPermissionStatus.ts",
+  "/features/connection/ConnectionsNewRouteScreen.tsx",
+];
+const require = NodeModule.createRequire(import.meta.url);
+const babel: {
+  transformAsync: (
+    code: string,
+    options: Record<string, unknown>,
+  ) => Promise<{ code?: string | null; map?: object | null } | null>;
+} = require("@babel/core");
+const babelConfig = require("./babel.config.js")({ cache: () => {} });
+
+export default defineConfig({
+  test: {
+    hookTimeout: 60_000,
+    testTimeout: 60_000,
+    projects: [
+      {
+        extends: true,
+        test: {
+          name: "unit",
+          include: ["**/*.test.{ts,tsx,mjs}"],
+          exclude: ["**/node_modules/**", ...reactTests],
+          setupFiles: [
+            "../../packages/shared/src/testing/longTempDir.ts",
+            "../../packages/shared/src/testing/providerEnv.ts",
+            "../../packages/shared/src/testing/gitEnv.setup.ts",
+          ],
+          globalSetup: [
+            "../../scripts/lib/node-runtime.ts",
+            "../../packages/shared/src/testing/gitConfigGuard.ts",
+          ],
+        },
+      },
+      {
+        extends: true,
+        plugins: [
+          {
+            name: "mobile-release-react-compiler",
+            enforce: "pre",
+            async transform(code, id) {
+              if (
+                !normalizePath(id).startsWith(sourceRoot) ||
+                !/\.tsx?$/.test(id) ||
+                /\.test\.tsx?$/.test(id)
+              ) {
+                return;
+              }
+              const result = await babel.transformAsync(code, {
+                ...babelConfig,
+                presets: babelConfig.presets.map(([name, options]: [string, object]) => [
+                  require.resolve(name),
+                  // Vite runs in Node; inline Babel helpers instead of Metro runtime imports.
+                  { ...options, enableBabelRuntime: false },
+                ]),
+                filename: id,
+                babelrc: false,
+                configFile: false,
+                sourceMaps: true,
+                caller: {
+                  name: "metro",
+                  bundler: "metro",
+                  platform: "ios",
+                  isDev: devCompiledSources.some((source) => normalizePath(id).endsWith(source)),
+                  isServer: false,
+                  isNodeModule: false,
+                  supportsStaticESM: true,
+                  supportsReactCompiler: true,
+                },
+              });
+              if (result?.code) return { code: result.code, map: result.map };
+            },
+          },
+        ],
+        test: {
+          name: "react",
+          include: reactTests,
+          // Native components mock React Native and render through react-dom in these tests.
+          environment: "jsdom",
+          setupFiles: [
+            "../../packages/shared/src/testing/providerEnv.ts",
+            "../../packages/shared/src/testing/gitEnv.setup.ts",
+          ],
+          globalSetup: ["../../scripts/lib/node-runtime.ts"],
+        },
+      },
+    ],
+  },
+});

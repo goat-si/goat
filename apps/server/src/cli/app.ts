@@ -1,0 +1,305 @@
+// @effect-diagnostics globalTimers:off -- The Node socket client owns its response deadline and clears it on every completion path.
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- Socket ownership validation needs lstat to reject symlinks.
+import * as NodeFSP from "node:fs/promises";
+import * as NodeNet from "node:net";
+import * as NodeOS from "node:os";
+
+import {
+  DESKTOP_APP_ACTIVATION_PROTOCOL_VERSION,
+  DesktopAppActivationErrorCode,
+  DesktopAppActivationResponse,
+  type DesktopAppActivationPlatform,
+  type DesktopAppActivationRequest,
+} from "@goat/contracts";
+import {
+  resolveDesktopAppControlAddresses,
+  type DesktopAppControlAddress,
+} from "@goat/shared/desktopAppControl";
+import * as HostProcess from "@goat/shared/HostProcess";
+import * as Config from "effect/Config";
+import * as Console from "effect/Console";
+import * as Crypto from "effect/Crypto";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
+import { Argument, Command } from "effect/cli";
+import { LEGACY_HOME_DIR_NAME } from "@goat/contracts/legacyT3Names";
+
+import { expandHomePath, resolveBaseDir } from "../os-jank.ts";
+import { baseDirFlag } from "./config.ts";
+
+const CLI_RESPONSE_TIMEOUT_MS = 17_000;
+const MAX_RESPONSE_BYTES = 64 * 1024;
+const isDesktopAppActivationResponse = Schema.is(DesktopAppActivationResponse);
+
+export class DesktopAppSshUnsupportedError extends Schema.TaggedError<DesktopAppSshUnsupportedError>()(
+  "DesktopAppSshUnsupportedError",
+  {},
+) {
+  override get message(): string {
+    return "`goat app` only controls a desktop app on the same machine. It cannot run over SSH.";
+  }
+}
+
+export class DesktopAppPlatformUnsupportedError extends Schema.TaggedError<DesktopAppPlatformUnsupportedError>()(
+  "DesktopAppPlatformUnsupportedError",
+  { platform: Schema.String },
+) {
+  override get message(): string {
+    return `\`goat app\` is not supported on ${this.platform}.`;
+  }
+}
+
+export class DesktopAppUnreachableError extends Schema.TaggedError<DesktopAppUnreachableError>()(
+  "DesktopAppUnreachableError",
+  {
+    candidateAddresses: Schema.Array(Schema.String),
+    requestId: Schema.String,
+    workspaceRoot: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {
+  override get message(): string {
+    return "Could not reach the GOAT desktop app. Start or update the desktop app on this machine, then run `goat app` again. A running GOAT server is not enough.";
+  }
+}
+
+export class DesktopAppRequestFailedError extends Schema.TaggedError<DesktopAppRequestFailedError>()(
+  "DesktopAppRequestFailedError",
+  {
+    code: DesktopAppActivationErrorCode,
+    requestId: Schema.String,
+    workspaceRoot: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {
+  override get message(): string {
+    return `GOAT could not open ${this.workspaceRoot} (${this.code}).`;
+  }
+}
+
+function isDesktopPlatform(platform: NodeJS.Platform): platform is DesktopAppActivationPlatform {
+  return platform === "darwin" || platform === "linux" || platform === "win32";
+}
+
+async function sendDesktopAppActivationRequest(input: {
+  readonly address: DesktopAppControlAddress;
+  readonly fallbackAddresses?: ReadonlyArray<DesktopAppControlAddress>;
+  readonly userId: number | undefined;
+  readonly request: DesktopAppActivationRequest;
+  readonly timeoutMs?: number;
+}): Promise<DesktopAppActivationResponse> {
+  if (input.address.directory !== null) {
+    let stat;
+    try {
+      stat = await NodeFSP.lstat(input.address.directory);
+    } catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code === "ENOENT" && input.fallbackAddresses?.length) {
+        return sendDesktopAppActivationRequest({
+          ...input,
+          address: input.fallbackAddresses[0] as DesktopAppControlAddress,
+          fallbackAddresses: input.fallbackAddresses.slice(1),
+        });
+      }
+      throw cause;
+    }
+    if (
+      !stat.isDirectory() ||
+      input.userId === undefined ||
+      stat.uid !== input.userId ||
+      (stat.mode & 0o077) !== 0
+    ) {
+      throw new Error("The desktop app socket directory is not private or owned by this user.");
+    }
+  }
+  return new Promise((resolve, reject) => {
+    const socket = NodeNet.createConnection(input.address.address);
+    socket.setEncoding("utf8");
+    let buffer = "";
+    let settled = false;
+    let connected = false;
+
+    const finish = (
+      result:
+        | { readonly type: "success"; readonly response: DesktopAppActivationResponse }
+        | { readonly type: "failure"; readonly error: Error },
+    ) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      socket.destroy();
+      if (result.type === "success") resolve(result.response);
+      else reject(result.error);
+    };
+
+    const timeout = setTimeout(() => {
+      finish({
+        type: "failure",
+        error: new Error("The desktop app did not respond in time."),
+      });
+    }, input.timeoutMs ?? CLI_RESPONSE_TIMEOUT_MS);
+
+    socket.once("connect", () => {
+      connected = true;
+      socket.write(`${JSON.stringify(input.request)}\n`);
+    });
+    socket.on("data", (chunk) => {
+      buffer += chunk;
+      if (Buffer.byteLength(buffer, "utf8") > MAX_RESPONSE_BYTES) {
+        finish({ type: "failure", error: new Error("The desktop app response is too large.") });
+        return;
+      }
+      const newline = buffer.indexOf("\n");
+      if (newline === -1) return;
+
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(buffer.slice(0, newline));
+      } catch {
+        finish({
+          type: "failure",
+          error: new Error("The desktop app response is not valid JSON."),
+        });
+        return;
+      }
+      if (!isDesktopAppActivationResponse(parsed)) {
+        finish({ type: "failure", error: new Error("The desktop app response is invalid.") });
+        return;
+      }
+      if (parsed.requestId !== input.request.requestId) {
+        finish({
+          type: "failure",
+          error: new Error("The desktop app response did not match this request."),
+        });
+        return;
+      }
+      finish({ type: "success", response: parsed });
+    });
+    socket.once("error", (error: NodeJS.ErrnoException) => {
+      if (
+        !settled &&
+        !connected &&
+        input.fallbackAddresses?.[0] !== undefined &&
+        (error.code === "ENOENT" || error.code === "ECONNREFUSED")
+      ) {
+        settled = true;
+        clearTimeout(timeout);
+        socket.destroy();
+        resolve(
+          sendDesktopAppActivationRequest({
+            address: input.fallbackAddresses[0],
+            fallbackAddresses: input.fallbackAddresses.slice(1),
+            userId: input.userId,
+            request: input.request,
+            ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
+          }),
+        );
+        return;
+      }
+      finish({ type: "failure", error });
+    });
+    socket.once("end", () => {
+      finish({ type: "failure", error: new Error("The desktop app closed the connection.") });
+    });
+  });
+}
+
+const appEnvironment = Config.all({
+  goatHome: Config.String("GOAT_HOME").pipe(Config.option, Config.map(Option.getOrUndefined)),
+  sshConnection: Config.String("SSH_CONNECTION").pipe(Config.option),
+  sshTty: Config.String("SSH_TTY").pipe(Config.option),
+  // A thread shell's TMPDIR is the thread's own; the desktop listens under the machine's (#1206).
+  systemTemporaryDirectory: Config.String("GOAT_SYSTEM_TMPDIR").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
+});
+
+const runAppCommand = Effect.fn("cli.app")(function* (flags: {
+  readonly baseDir: Option.Option<string>;
+  readonly workspaceRoot: Option.Option<string>;
+}) {
+  const environment = yield* appEnvironment;
+  const hostPlatform = yield* HostProcess.Platform;
+  if (Option.isSome(environment.sshConnection) || Option.isSome(environment.sshTty)) {
+    return yield* new DesktopAppSshUnsupportedError({});
+  }
+  if (!isDesktopPlatform(hostPlatform)) {
+    return yield* new DesktopAppPlatformUnsupportedError({ platform: hostPlatform });
+  }
+
+  const path = yield* Path.Path;
+  const configuredBaseDir = Option.getOrUndefined(flags.baseDir) ?? environment.goatHome;
+  const baseDir = yield* resolveBaseDir(configuredBaseDir);
+  const allowDefaultSearch = Option.isNone(flags.baseDir) && !environment.goatHome?.trim();
+  const rawWorkspaceRoot =
+    Option.getOrUndefined(flags.workspaceRoot) ?? (yield* HostProcess.WorkingDirectory);
+  const workspaceRoot = path.resolve(yield* expandHomePath(rawWorkspaceRoot));
+  const userId = yield* HostProcess.UserId;
+  const resolveAddresses = (stateDir: string) =>
+    resolveDesktopAppControlAddresses({
+      stateDir,
+      platform: hostPlatform,
+      tempDir: environment.systemTemporaryDirectory || NodeOS.tmpdir(),
+      userId,
+      joinPath: path.join,
+    });
+  const crypto = yield* Crypto.Crypto;
+  const requestId = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
+  const request: DesktopAppActivationRequest = {
+    version: DESKTOP_APP_ACTIVATION_PROTOCOL_VERSION,
+    requestId,
+    type: "open-workspace",
+    workspaceRoot,
+    platform: hostPlatform,
+  };
+  const homeDirectory = yield* HostProcess.HomeDirectory;
+  // A desktop started before the GOAT rename may still run on the legacy home.
+  const defaultHomes = [...new Set([baseDir, path.join(homeDirectory, LEGACY_HOME_DIR_NAME)])];
+  const stateDirectories = allowDefaultSearch
+    ? [
+        path.join(homeDirectory, ".goat", "desktop", "userdata"),
+        ...defaultHomes.flatMap((home) => [path.join(home, "userdata"), path.join(home, "dev")]),
+      ]
+    : [path.join(baseDir, "userdata")];
+  const [address, ...fallbackAddresses] = stateDirectories.flatMap(resolveAddresses);
+
+  const response = yield* Effect.tryPromise({
+    try: () =>
+      sendDesktopAppActivationRequest({
+        address: address!,
+        fallbackAddresses,
+        userId,
+        request,
+      }),
+    catch: (cause) =>
+      new DesktopAppUnreachableError({
+        candidateAddresses: [address!, ...fallbackAddresses].map((candidate) => candidate.address),
+        requestId: request.requestId,
+        workspaceRoot,
+        cause,
+      }),
+  });
+  if (!response.ok) {
+    return yield* new DesktopAppRequestFailedError({
+      code: response.code,
+      requestId: response.requestId,
+      workspaceRoot,
+      cause: response,
+    });
+  }
+
+  yield* Console.log(`Opened ${workspaceRoot} in GOAT.`);
+});
+
+export const appCommand = Command.make("app", {
+  baseDir: baseDirFlag,
+  workspaceRoot: Argument.String("path").pipe(
+    Argument.withDescription("Project directory. Default: current directory."),
+    Argument.optional,
+  ),
+}).pipe(
+  Command.withDescription("Open a project in the running GOAT desktop app."),
+  Command.withHandler(runAppCommand),
+);

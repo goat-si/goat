@@ -1,0 +1,224 @@
+{
+  "home": {
+    "version": "2.89.0",
+    "config": {
+      "port": 10100,
+      "runtimeRole": "standalone"
+    },
+    "health": {
+      "service": "opencodex",
+      "version": "2.89.0",
+      "port": 10100
+    },
+    "ready": {
+      "service": "opencodex",
+      "version": "2.89.0",
+      "port": 10100,
+      "status": "ready",
+      "protocol": 1,
+      "minimumClientProtocol": 1,
+      "features": []
+    },
+    "status": {
+      "schemaVersion": 1,
+      "runtimeRole": "standalone"
+    },
+    "link": {
+      "role": "home",
+      "listener": {
+        "state": "listening",
+        "port": 10200
+      },
+      "links": [
+        {
+          "id": "lnk_51d15fa48b90b40e",
+          "alias": "macmini-ts",
+          "tunnelPort": 54958,
+          "state": "connected",
+          "direction": "hub-initiated",
+          "since": "2026-10-21T00:00:00.000Z",
+          "reason": null
+        },
+        {
+          "id": "lnk_107d479405ab56be",
+          "alias": "lidge-ts",
+          "tunnelPort": 42255,
+          "state": "connected",
+          "direction": "hub-initiated",
+          "since": "2026-10-21T00:00:00.000Z",
+          "reason": null
+        },
+        {
+          "id": "lnk_781ccea3cdb84745",
+          "alias": "mac-studio",
+          "tunnelPort": 54365,
+          "state": "connected",
+          "direction": "hub-initiated",
+          "since": "2026-10-21T00:00:00.000Z",
+          "reason": null
+        },
+        {
+          "id": "lnk_ac30f40bb6167a49",
+          "alias": "mini",
+          "tunnelPort": 52889,
+          "state": "connected",
+          "direction": "hub-initiated",
+          "since": "2026-10-21T00:00:00.000Z",
+          "reason": null
+        },
+        {
+          "id": "lnk_9cd79877777a0603",
+          "alias": "clisu-oracle",
+          "tunnelPort": 40847,
+          "state": "connected",
+          "direction": "hub-initiated",
+          "since": "2026-10-21T00:00:00.000Z",
+          "reason": null
+        }
+      ],
+      "child": null
+    },
+    "connect": {
+      "state": "disconnected",
+      "catalog": "missing",
+      "token": "missing"
+    },
+    "service": "OpenCodex service: serving (launchd)",
+    "childSettingsApplied": false
+  },
+  "macmini-ts": {
+    "version": "2.83.0",
+    "config": {
+      "port": 10100,
+      "runtimeRole": "client",
+      "client": {
+        "transport": "link"
+      }
+    },
+    "health": {
+      "service": "opencodex",
+      "version": "2.83.0",
+      "port": 10100,
+      "role": "client"
+    },
+    "ready": {
+      "service": "opencodex",
+      "version": "2.83.0",
+      "port": 10100,
+      "status": "ready",
+      "protocol": 1,
+      "minimumClientProtocol": 1,
+      "features": []
+    },
+    "status": {
+      "schemaVersion": 1,
+      "runtimeRole": "client"
+    },
+    "link": {
+      "role": "child",
+      "listener": {
+        "state": "listening",
+        "port": 10200
+      },
+      "links": [],
+      "child": null
+    },
+    "connect": {
+      "state": "disconnected",
+      "catalog": "missing",
+      "token": "missing"
+    },
+    "service": "OpenCodex service: serving (launchd)",
+    "childSettingsApplied": false
+  },
+  "lidge-ts": {
+    "version": "2.83.0",
+    "config": {
+      "port": 10100,
+      "runtimeRole": "client",
+      "client": {
+        "transport": "link"
+      }
+    },
+    "health": {
+      "service": "opencodex",
+      "version": "2.83.0",
+      "port": 10100,
+      "role": "client"
+    },
+    "ready": {
+      "service": "opencodex",
+      "version": "2.83.0",
+      "port": 10100,
+      "status": "ready",
+      "protocol": 1,
+      "minimumClientProtocol": 1,
+      "features": []
+    },
+    "status": {
+      "schemaVersion": 1,
+      "runtimeRole": "client"
+    },
+    "link": {
+      "role": "child",
+      "listener": {
+        "state": "listening",
+        "port": 10200
+      },
+      "links": [],
+      "child": null
+    },
+    "connect": {
+      "state": "disconnected",
+      "catalog": "missing",
+      "token": "missing"
+    },
+    "service": "OpenCodex service: serving (launchd)",
+    "childSettingsApplied": false
+  },
+  "mac-studio": {
+    "version": "2.86.0",
+    "config": {
+      "port": 10100,
+      "runtimeRole": "client",
+      "client": {
+        "transport": "link"
+      }
+    },
+    "health": {
+      "service": "opencodex",
+      "version": "2.86.0",
+      "port": 10100,
+      "role": "client"
+    },
+    "ready": {
+      "service": "opencodex",
+      "version": "2.86.0",
+      "port": 10100,
+      "status": "ready",
+      "protocol": 1,
+      "minimumClientProtocol": 1,
+      "features": []
+    },
+    "status": {
+      "schemaVersion": 1,
+      "runtimeRole": "client"
+    },
+    "link": {
+      "role": "child",
+      "listener": {
+        "state": "listening",
+        "port": 10200
+      },
+      "links": [],
+      "child": null
+    },
+    "connect": {
+      "state": "disconnected",
+      "catalog": "missing",
+      "token": "missing"
+    },
+    "service": "OpenCodex service: serving (launchd)",
+    "childSettingsApplied": true
+  }
+}

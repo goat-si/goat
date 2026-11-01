@@ -1,0 +1,254 @@
+1221.11	src/tunnel.test.ts (325 tests) 
+31.941	reconciles the cached forward after pairing fails during the first ensure 
+28.145	manager consumes its startup decision once: failure 
+26.784	manager consumes its startup decision once: idle 
+24.784	manager consumes its startup decision once: busy 
+24.5	manager consumes its startup decision once: unknown 
+22.654	rolls back a failed legacy runner publication and retries; partial=false 
+22.422	rolls back a failed legacy runner publication and retries; partial=true 
+21.076	does not restart an existing managed server after runtime preparation 
+16.967	cached manager auth pins its compatible release across resolver changes and rechecks both MCP attempts 
+16.332	checks an old Node entry before publishing an upgrade; missing identity=false 
+15.229	disconnect stops an old-entry Node server after reconnecting with a new entry; shim=true 
+15.163	shutdown stops an old-entry Node server after reconnecting with a new entry; shim=true 
+14.221	shutdown stops an old-entry Node server after reconnecting with a new entry; shim=false 
+14.078	adopts only verified legacy archives; mode=archive unknown=false 
+14.043	disconnect stops an old-entry Node server after reconnecting with a new entry; shim=false 
+13.871	adopts only verified legacy archives; mode=archive unknown=true 
+13.19	startup refresh respects activity idle,busy 
+12.281	startup refresh respects activity idle 
+12.129	refreshes only an older numeric prerelease 
+11.215	preserves ordinary runner, launch and pairing script bytes 
+11.137	audit legacy refusal: start time changes before kill 
+10.994	legacy replacement refuses a race/failure before kill 
+10.516	accepts own not-running tokens and exact legacy fallback for launch 
+10.502	public bundle launch preserves the install-before-switch boundary 
+9.874	validates and publishes the requested runtime before stopping its verified owned PID 
+9.693	public bundle retained-bundle-bypass preserves the install-before-switch boundary 
+9.672	startup refresh respects activity unknown 
+9.668	startup refresh respects activity busy 
+9.648	startup refresh respects activity garbage 
+9.493	keep-existing ignores a newer unavailable release and leaves the older runtime untouched 
+9.213	verifies, publishes, stops, then starts on a successful upgrade 
+8.692	checks an old Node entry before publishing an upgrade; missing identity=true 
+8.671	disconnect verifies ownership through runtime command before stopping 
+8.668	reuses older compatible launch; live=true 
+8.637	startup reuses an equal/newer release 1.10.0 
+8.614	shutdown verifies ownership through runtime command before stopping 
+8.589	disconnect verifies ownership through descriptor without PID identity before stopping 
+8.55	accepts own not-running tokens and exact legacy fallback for mcp 
+8.537	startup reuses an equal/newer release 2.0.0 
+8.531	disconnect verifies ownership through unrelated PID before stopping 
+8.48	shutdown verifies ownership through unrelated PID before stopping 
+8.45	shutdown verifies ownership through unknown descriptor before stopping 
+8.401	disconnect verifies ownership through unknown descriptor before stopping 
+8.381	warm mcp uses the retained runner even without a keep flag 
+8.345	startup reuses an equal/newer release 1.2.3-preview.alpha 
+8.336	startup reuses an equal/newer release 1.2.3-preview.20260911.4 
+8.321	startup reuses an equal/newer release 1.2.3-preview-z 
+8.31	shutdown verifies ownership through descriptor without PID identity before stopping 
+8.29	reuses an exact live legacy descriptor for launch 
+8.289	acquires exact launch for dormant incompatible metadata { ssh: 1 } 
+8.151	secondary keepExistingRunner vetoes startup refresh; prepared=false 
+8.053	acquires exact launch for dormant incompatible metadata { ssh: 99, orchestration: 2 } 
+8.032	reuses older compatible launch; live=false 
+7.527	identical runner retains managed PID even with its default descriptor 
+7.259	accepts own not-running tokens and exact legacy fallback for pairing 
+7.189	secondary mcp vetoes startup refresh; prepared=false 
+7.18	warm pairing uses the retained runner even without a keep flag 
+7.059	runs explicit matching Node launch with an ambient upstream home 
+7.05	acquires exact launch for dormant incompatible metadata { missingCommand: true } 
+6.896	reuses older compatible mcp; live=true 
+6.845	reuses an exact live legacy descriptor for mcp 
+6.773	cold-mirror manager pins the installed archive before cached auth when .install-complete disappears 
+6.671	cold-mirror manager pins the installed archive before cached auth when goat disappears 
+6.634	acquires exact mcp for dormant incompatible metadata { ssh: 1 } 
+6.599	acquires exact mcp for dormant incompatible metadata { ssh: 99, orchestration: 2 } 
+6.543	reuses older compatible mcp; live=false 
+6.366	src/tunnel.mcpSession.test.ts (6 tests) 
+6.36	installs once when several launches race, and reclaims stale locks 
+6.164	public bundle mcp preserves the install-before-switch boundary 
+6.056	cold mcp verifies and publishes before issuing credentials 
+5.836	secondary pairing vetoes startup refresh; prepared=false 
+5.765	reuses older compatible pairing; live=true 
+5.739	runs explicit matching Node mcp with an ambient upstream home 
+5.721	reuses an exact live legacy descriptor for pairing 
+5.72	secondary mcp vetoes startup refresh; prepared=true 
+5.715	acquires exact mcp for dormant incompatible metadata { missingCommand: true } 
+5.521	acquires exact pairing for dormant incompatible metadata { ssh: 99, orchestration: 2 } 
+5.481	reuses older compatible pairing; live=false 
+5.471	acquires exact pairing for dormant incompatible metadata { ssh: 1 } 
+5.019	audit legacy refusal: start time changes 
+4.954	cold pairing verifies and publishes before issuing credentials 
+4.937	a nested auth runner publishes the real shell PID as install-lock owner 
+4.704	runs explicit matching Node pairing with an ambient upstream home 
+4.567	acquires exact pairing for dormant incompatible metadata { missingCommand: true } 
+4.403	secondary pairing vetoes startup refresh; prepared=true 
+3.88	preserves an unverifiable legacy server: wrong port 
+3.795	preserves an unverifiable legacy server: wrong base dir 
+3.785	preserves an unverifiable legacy server: prefix command 
+3.784	audit legacy refusal: arbitrary argv0 
+3.771	preserves incompatible external identity before launch 
+3.769	preserves an unverifiable legacy server: suffix command 
+3.757	audit legacy refusal: changed runner 
+3.732	audit legacy refusal: non-GOAT path 
+3.699	preserves an unverifiable legacy server: external 
+3.69	preserves incompatible shared server for launch 
+3.681	preserves an unverifiable legacy server: dead pid 
+3.672	preserves an unverifiable legacy server: wrong version 
+3.655	preserves incompatible missing record identity before launch 
+3.644	adopts only verified legacy archives; mode=node unknown=false 
+3.636	preserves incompatible shared server for pairing 
+3.609	preserves incompatible shared server for mcp 
+3.6	preserves incompatible external identity before pairing 
+3.596	preserves incompatible missing record identity before mcp 
+3.594	owning launch preserves an unknown server: descriptor 404 
+3.591	preserves incompatible external identity before mcp 
+3.59	audit legacy refusal: other UID 
+3.581	owning launch preserves an unknown server: stale metadata 
+3.57	legacy replacement refuses a race/failure before publication 
+3.561	preserves incompatible missing record identity before pairing 
+3.547	audit legacy refusal: control pid 
+3.539	preserves incompatible different PID identity before launch 
+3.533	preserves incompatible nonloopback identity before launch 
+3.53	audit legacy refusal: symlink port 
+3.513	audit legacy refusal: extra newline 
+3.509	preserves an unverifiable legacy server: absent marker 
+3.509	audit legacy refusal: control port 
+3.508	preserves incompatible broken record identity before launch 
+3.504	preserves an unverifiable legacy server: conflicting identity 
+3.491	audit legacy refusal: symlink managed 
+3.485	preserves an unverifiable legacy server: duplicate assignment 
+3.468	preserves incompatible nonloopback identity before mcp 
+3.461	audit legacy refusal: symlink run-t3.sh 
+3.461	audit legacy refusal: symlink pid 
+3.443	audit legacy refusal: control version 
+3.432	preserves incompatible broken record identity before mcp 
+3.428	preserves incompatible different PID identity before mcp 
+3.419	preserves an unverifiable legacy server: malformed assignment 
+3.41	secondary mcp cannot adopt legacy ownership; prepared=false 
+3.404	secondary keepExistingRunner cannot adopt legacy ownership; prepared=false 
+3.402	preserves incompatible nonloopback identity before pairing 
+3.376	preserves incompatible different PID identity before pairing 
+3.371	preserves incompatible broken record identity before pairing 
+3.367	secondary pairing cannot adopt legacy ownership; prepared=false 
+3.248	public bundle candidate-version preserves the install-before-switch boundary 
+3.222	src/runnerProcess.test.ts (4 tests) 
+2.932	public bundle cache-write-failure preserves the install-before-switch boundary 
+2.839	public bundle corrupt-bundle preserves the install-before-switch boundary 
+2.809	public bundle upload-failure preserves the install-before-switch boundary 
+2.693	rejects malformed Node mcp tokens: { …(1) } 
+2.678	a Node dev runner succeeds without matching an archive version 
+2.65	confirms the stop result for a timeout server 
+2.648	rejects malformed Node pairing tokens: { …(1) } 
+2.638	rejects malformed Node launch tokens: { …(1) } 
+2.595	rejects malformed Node mcp tokens: { …(1) } 
+2.588	rejects malformed Node pairing tokens: { …(1) } 
+2.558	rejects malformed Node launch tokens: { …(1) } 
+2.389	legacy replacement refuses a race/failure candidate validation 
+2.33	refuses same-version retained runner replacement before launch 
+2.304	rejects explicit protocol mismatch at the exact requested launch 
+2.296	rejects malformed own tokens before launch: 1.2.3-01 1 2 0 0 
+2.288	rejects selected .install-complete disappearance before launch 
+2.28	rejects selected goat disappearance before launch 
+2.278	rejects malformed own tokens before launch: 1.2.3 1 2 garbage garbage 
+2.278	rejects malformed own tokens before launch: 1.2.3 1 2 0 1234 
+2.258	rejects malformed own tokens before launch: 1.2.3 01 2 0 0 
+2.251	rejects malformed own tokens before mcp: 1.2.3 1 2 0 1234 
+2.24	rejects explicit protocol mismatch at the exact requested pairing 
+2.238	rejects malformed own tokens before mcp: 1.2.3-01 1 2 0 0 
+2.231	rejects selected .install-complete disappearance before mcp 
+2.231	rejects malformed own tokens before launch: 1.2.3 1 -2 0 0 
+2.222	rejects malformed own tokens before launch: 1.2.3 0 2 0 0 
+2.219	rejects malformed own tokens before launch: unknown 1 2 0 0 
+2.215	rejects malformed own tokens before mcp: 1.2.3 01 2 0 0 
+2.215	refuses same-version retained runner replacement before mcp 
+2.209	rejects malformed own tokens before mcp: 1.2.3 1 -2 0 0 
+2.202	refuses same-version retained runner replacement before pairing 
+2.199	rejects malformed own tokens before pairing: 1.2.3 1 2 0 1234 
+2.185	rejects selected goat disappearance before pairing 
+2.174	rejects malformed own tokens before mcp: 1.2.3 1 2 garbage garbage 
+2.171	rejects explicit protocol mismatch at the exact requested mcp 
+2.161	rejects selected goat disappearance before mcp 
+2.154	rejects malformed own tokens before mcp: 1.2.3 0 2 0 0 
+2.131	rejects malformed own tokens before pairing: 1.2.3 1 2 garbage garbage 
+2.13	rejects malformed own tokens before pairing: unknown 1 2 0 0 
+2.12	rejects selected .install-complete disappearance before pairing 
+2.115	rejects malformed own tokens before pairing: 1.2.3 1 -2 0 0 
+2.115	rejects malformed own tokens before mcp: unknown 1 2 0 0 
+2.114	rejects malformed own tokens before pairing: 1.2.3 0 2 0 0 
+2.111	rejects malformed own tokens before pairing: 1.2.3-01 1 2 0 0 
+2.097	rejects malformed own tokens before pairing: 1.2.3 01 2 0 0 
+2.069	preserves literal shell PIDs through every nested script builder 
+1.993	rejects malformed archive live tokens before launch: live 1.2.3 1 2 garbage garbage 
+1.988	adopts only verified legacy archives; mode=node unknown=true 
+1.981	refuses a legacy Node invocation with wrong duplicate 
+1.975	refuses a legacy Node invocation with wrong script 
+1.973	rejects malformed archive live tokens before pairing: live unknown 1 2 0 1234 
+1.967	refuses a legacy Node invocation with wrong malformed 
+1.966	refuses a legacy Node invocation with wrong prefix 
+1.963	refuses a legacy Node invocation with wrong suffix 
+1.962	legacy acquisition failure preserves all running-server files 
+1.958	refuses a legacy Node invocation with wrong base dir 
+1.954	rejects malformed archive live tokens before launch: live unknown 1 2 0 1234 
+1.93	rejects malformed archive live tokens before pairing: live 1.2.3 1 2 garbage garbage 
+1.925	rejects malformed archive live tokens before mcp: live 1.2.3 1 2 garbage garbage 
+1.87	broken-executable preserves the live server (default descriptor=true) 
+1.84	rejects malformed archive live tokens before mcp: live unknown 1 2 0 1234 
+1.767	wrong-version preserves the live server (default descriptor=false) 
+1.763	TERM during candidate validation removes the candidate and preserves the old server 
+1.695	wrong-version preserves the live server (default descriptor=true) 
+1.692	missing-release preserves the live server (default descriptor=false) 
+1.681	broken-executable preserves the live server (default descriptor=false) 
+1.676	bad-checksum preserves the live server (default descriptor=false) 
+1.644	bad-checksum preserves the live server (default descriptor=true) 
+1.629	missing-release preserves the live server (default descriptor=true) 
+1.624	rejects malformed Node pairing tokens: { ownTokens: 'unknown 1 2 0 0' } 
+1.623	rejects malformed Node mcp tokens: { …(1) } 
+1.616	cold mcp refuses wrong-version without publishing or issuing credentials 
+1.593	rejects a same-version wrong archive without replacing the broken-marker runtime 
+1.589	rejects malformed Node pairing tokens: { …(1) } 
+1.562	rejects malformed Node mcp tokens: { ownTokens: 'unknown 1 2 0 0' } 
+1.558	disconnect follows leaveRemoteServerRunning=false 
+1.553	shutdown follows leaveRemoteServerRunning=true 
+1.552	rejects malformed Node launch tokens: { ownTokens: 'unknown 1 2 0 0' } 
+1.547	rejects malformed Node launch tokens: { …(1) } 
+1.544	cold pairing refuses wrong-version without publishing or issuing credentials 
+1.541	cold mcp refuses bad-checksum without publishing or issuing credentials 
+1.522	cold mcp refuses broken-executable without publishing or issuing credentials 
+1.521	cold pairing refuses missing-release without publishing or issuing credentials 
+1.503	shutdown follows leaveRemoteServerRunning=false 
+1.489	cold pairing refuses bad-checksum without publishing or issuing credentials 
+1.484	cold mcp refuses missing-release without publishing or issuing credentials 
+1.459	disconnect follows leaveRemoteServerRunning=true 
+1.457	cold pairing refuses broken-executable without publishing or issuing credentials 
+1.173	retries an older CLI without the ceiling and decodes its pretty JSON 
+1.147	issues one session with the remote default when no ceiling is requested 
+1.112	reports the ceiling as applied when the remote CLI accepts it 
+1.11	secondary pairing cannot adopt legacy ownership; prepared=true 
+1.091	secondary mcp cannot adopt legacy ownership; prepared=true 
+1.086	retains the installed runner even when keepExistingRunner is false 
+1.085	installs once when two uploads race 
+1.071	rechecks selected bytes before retrying a rejected ceiling 
+0.774	rejects changed selected bytes before publishing or issuing auth 
+0.774	refuses an owned upgrade with identity changes after publication despite matching protocol metadata 
+0.739	retained installs or preserves the selected runtime without writing bundle bytes 
+0.716	keeps a retained GOAT runner off upstream data despite an ambient T3 home 
+0.679	inserts dollar metacharacters literally in nested quoted runner paths 
+0.419	bundle installs or preserves the selected runtime without writing bundle bytes 
+0.405	cache installs or preserves the selected runtime without writing bundle bytes 
+0.4	wrong-bundle-platform installs or preserves the selected runtime without writing bundle bytes 
+0.4	gh installs or preserves the selected runtime without writing bundle bytes 
+0.399	blank-bundle installs or preserves the selected runtime without writing bundle bytes 
+0.398	wrong-bundle-version installs or preserves the selected runtime without writing bundle bytes 
+0.385	bundle-only installs or preserves the selected runtime without writing bundle bytes 
+0.354	confirms the stop result for a graceful server 
+0.353	ready installs or preserves the selected runtime without writing bundle bytes 
+0.344	refuses an owned upgrade with stale PID despite matching protocol metadata 
+0.339	refuses an owned upgrade with missing identity despite matching protocol metadata 
+0.304	uploads GOAT beside same-version upstream and repairs a marker-only cache 
+0.249	src/runtimeArchiveGh.test.ts (23 tests) 
+0.073	src/runtimeArchive.test.ts (11 tests) 
+0.043	src/config.test.ts (3 tests) 
+0.038	src/command.test.ts (8 tests) 
+0.022	src/auth.test.ts (3 tests) 

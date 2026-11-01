@@ -1,0 +1,21 @@
+import { describe, expect, it } from "vite-plus/test";
+
+import { canLinkChangeRequest } from "./usePullRequestLinking";
+import { sourceControlClients } from "@goat/client-runtime/source-control-clients";
+
+describe("canLinkChangeRequest (#9435 / #9440)", () => {
+  const nonGitProject = { id: "scratch-project" } as never;
+  const link = sourceControlClients.parseChangeRequestUrl(
+    "https://github.com/goat-si/goat/pull/15111",
+  )!.link;
+
+  it("links a pasted pull request URL when the server tracks links on the thread, even with no matching project", () => {
+    expect(canLinkChangeRequest("multiple", [nonGitProject], link)).toBe(true);
+    expect(canLinkChangeRequest("multiple", [], link)).toBe(true);
+  });
+
+  it("still requires a matching project in single-link mode, where the link needs a projectId", () => {
+    expect(canLinkChangeRequest("single", [nonGitProject], link)).toBe(false);
+    expect(canLinkChangeRequest("single", [], link)).toBe(false);
+  });
+});

@@ -1,0 +1,37 @@
+## desktop dev app (new build, worktree .t3) SSH ensure
+log: ssh.remoteServer.launch.ready remotePort 3774; ssh.tunnel.ready (dev-runner session output 09:22)
+## dispatch via app server 127.0.0.1:14633
+{"host":"juns-macbook-pro","cwd":"/Users/jun/tmp","projectId":"mcp:b43194df-4ebd-44b3-9a7b-c522678f06b8","projectCreated":false,"threadId":"mcp:4442efe7-5c4d-4dfc-8acd-951679e27b89","workspaceStrategy":{"type":"root"},"runtimeMode":"full-access","remoteServerKind":"managed","notes":["The thread lives in the T3 environment on juns-macbook-pro. Connect to juns-macbook-pro (Settings → Connections → SSH) to watch it; goat_thread_read here only sees this environment."]}
+{"waits":[{"threadId":"mcp:4442efe7-5c4d-4dfc-8acd-951679e27b89","runId":"run:thread:mcp%3A4442efe7-5c4d-4dfc-8acd-951679e27b89:ordinal:1","status":"completed","timedOut":false}],"thread":{"status":"completed","providerInstanceId":"codex","model":"claude-opus-5-5","runtimeMode":"full-access"}}
+I'll run the five read-only commands and read the thread configuration.
+명령 5개는 승인 없이 실행됐고 모두 exit 0으로 끝났습니다. 한 가지 짚을 점은, hostname이 `juns-MacBook-Pro.local`이라서 원격 SSH 호스트가 아니라 로컬 MacBook에서 실행된 것으로 보입니다. 원격 런타임을 확인하려던 것이었다면 이 결과로는 확인되지 않습니다.
+
+**명령 결과 원문**
+```
+juns-MacBook-Pro.local
+jun
+/Users/jun/tmp
+ProductName:		macOS
+ProductVersion:		27.2
+BuildVersion:		26B5091g
+Sun Oct 11 09:24:26 KST 2026
+```
+
+**`goat_thread_configuration` 결과 원문**
+```json
+{"threadId":"mcp:4442efe7-5c4d-4dfc-8acd-951679e27b89","modelSelection":{"instanceId":"codex","model":"claude-opus-5-5"},"runtimeMode":"full-access","interactionMode":"default"}
+```
+- **provider:** 응답에 `provider` 필드는 없고, `instanceId`가 `codex`입니다.
+- **model:** `claude-opus-5-5`로, 요구한 모델과 일치합니다.
+- **runtimeMode:** `full-access`이고, interactionMode는 `default`입니다.
+
+**사용 가능한 MCP 도구 namespace**
+도구 이름은 모두 `custom_mcp__<server>__<tool>` 형식입니다. 아래 도구 수는 이번 턴 도구 목록에 노출된 것을 센 것이고, 각 도구를 실제로 호출해 본 것은 아닙니다.
+- **`goat`:** 약 80개입니다.
+  - 스레드: `goat_thread_configuration`, `goat_thread_launch`, `goat_thread_read`, `goat_thread_send` 등
+  - SSH: `goat_ssh_host_list`, `goat_ssh_browse`, `goat_ssh_thread_launch`
+  - 그 외: `delegate_task`, `task_status`, `orchestrator_capabilities`, `preview_*`, `device_*`, `html_preview`/`html_render`, 스케줄과 PR 도구
+- **`codex_apps`:** 하위 namespace는 `chatgpt_space___*`, `codex_document_control___*`, `github___*`, `google_drive___*`, `hotline___*`, `pets___*`, `plugin_management___*`, `safety_settings___*`, `search_service___web_run`, `sites___*`, `slack___*`입니다.
+- **나머지 MCP 서버:**
+## claude
+local default claude -p and CLAUDE_CONFIG_DIR copy both: Failed to authenticate: OAuth session expired and could not be refreshed (keychain expiresAt=0); SSH session keychain read exit 36

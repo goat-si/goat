@@ -1,0 +1,322 @@
+import { expect, it } from "@effect/vitest";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import {
+  PreviewTabId,
+  type EnvironmentId,
+  type ProviderInstanceId,
+  type ThreadId,
+} from "@goat/contracts";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as NodeURL from "node:url";
+import type { PreviewAutomationBroker } from "../mcp/PreviewAutomationBroker.ts";
+import { makePreviewTargetHost } from "./PreviewTargetHost.ts";
+import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
+import { ScreenRunService } from "./ScreenRunService.ts";
+import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
+
+const invocation = {
+  environmentId: "env" as EnvironmentId,
+  capabilities: new Set(["preview" as const]),
+  issuedAt: 0,
+  requestNamespace: "test",
+  client: undefined,
+  thread: {
+    threadId: "thread" as ThreadId,
+    providerSessionId: "s",
+    providerInstanceId: "p" as ProviderInstanceId,
+  },
+  reauthorize: () => Effect.void,
+};
+
+it.live("a cell drags between two screenshot points and wheels at one, for a map", () => {
+  const tab = {
+    environmentId: "env",
+    browserInstanceId: "server-browser",
+    connectionId: "connection",
+    threadId: "thread",
+    tabId: PreviewTabId.make("map"),
+    title: "Map",
+    url: "https://map.test/",
+    owner: "unclaimed" as const,
+    ownedByCaller: false,
+    controlGeneration: 0,
+  };
+  const inputs: Array<[string, unknown]> = [];
+  const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+    listBoundTabs: () => Effect.succeed([tab]),
+    invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) =>
+      Effect.sync(() => {
+        if (request.operation === "drag" || request.operation === "scroll")
+          inputs.push([request.operation, request.input]);
+        return (
+          request.operation === "status"
+            ? { tabId: tab.tabId, url: tab.url, control: { owner: "unclaimed", generation: 0 } }
+            : request.operation === "snapshot"
+              ? {
+                  url: tab.url,
+                  title: "Map",
+                  loading: false,
+                  accessibilityTree: "- region Map",
+                  treeComplete: true,
+                  refGeneration: "1",
+                  screenshot: {
+                    mimeType: "image/png",
+                    data: "AQID",
+                    width: 200,
+                    height: 100,
+                    region: { kind: "viewport", x: 0, y: 0, width: 400, height: 200 },
+                    scale: 0.5,
+                  },
+                }
+              : {}
+        ) as A;
+      }),
+  };
+  return Effect.gen(function* () {
+    const tabHost = yield* makePreviewTargetHost(broker);
+    return yield* Effect.gen(function* () {
+      const service = yield* ScreenRunService;
+      const result = yield* service.runCell({
+        runId: "r",
+        turnId: "t",
+        threadId: "thread",
+        environmentId: "env",
+        invocation,
+        source: `const tab = await screen.tab({tabId: 'map'});
+          await tab.claim();
+          await tab.observe({screenshot: true});
+          await tab.drag([10, 10], [60, 30]);
+          await tab.observe({screenshot: true});
+          await tab.scroll([50, 50], "up", 2);
+          return true;`,
+      });
+      expect(result.status).toBe("completed");
+      expect(inputs).toEqual([
+        ["drag", { from: { x: 20, y: 20 }, to: { x: 120, y: 60 } }],
+        ["scroll", { x: 100, y: 100, deltaX: 0, deltaY: -200 }],
+      ]);
+    }).pipe(
+      Effect.provide(
+        ScreenRunService.layerWithRuntime({
+          dispatcher: createScreenDispatchRouter({ tab: tabHost }),
+          tabHost,
+          invocation: {
+            command: process.execPath,
+            entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+          },
+          assetResolver: () => resolveScreenRuntimeAsset("dev"),
+        }).pipe(Layer.provide(NodeServices.layer)),
+      ),
+    );
+  });
+});
+
+it.live(
+  "after a tab scroll an old screenshot point is refused as stale, a new screenshot works, and a wait names enabled",
+  () => {
+    const tab = {
+      environmentId: "env",
+      browserInstanceId: "server-browser",
+      connectionId: "connection",
+      threadId: "thread",
+      tabId: PreviewTabId.make("lab"),
+      title: "CU Lab",
+      url: "https://lab.test/",
+      owner: "unclaimed" as const,
+      ownedByCaller: false,
+      controlGeneration: 0,
+    };
+    const inputs: Array<[string, unknown]> = [];
+    const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+      listBoundTabs: () => Effect.succeed([tab]),
+      invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) =>
+        Effect.sync(() => {
+          if (["click", "scroll", "waitFor", "hover"].includes(request.operation))
+            inputs.push([request.operation, request.input]);
+          return (
+            request.operation === "status"
+              ? { tabId: tab.tabId, url: tab.url, control: { owner: "unclaimed", generation: 0 } }
+              : request.operation === "snapshot"
+                ? {
+                    url: tab.url,
+                    title: "CU Lab",
+                    loading: false,
+                    accessibilityTree: "- button Continue [ref=e1]",
+                    treeComplete: true,
+                    refGeneration: "1",
+                    screenshot: {
+                      mimeType: "image/png",
+                      data: "AQID",
+                      width: 200,
+                      height: 100,
+                      region: { kind: "viewport", x: 0, y: 0, width: 200, height: 100 },
+                      scale: 1,
+                    },
+                  }
+                : {}
+          ) as A;
+        }),
+    };
+    return Effect.gen(function* () {
+      const tabHost = yield* makePreviewTargetHost(broker);
+      return yield* Effect.gen(function* () {
+        const service = yield* ScreenRunService;
+        const result = yield* service.runCell({
+          runId: "r",
+          turnId: "t",
+          threadId: "thread",
+          environmentId: "env",
+          invocation,
+          source: `const tab = await screen.tab({tabId: 'lab'});
+          await tab.claim();
+          await tab.observe({screenshot: true});
+          await tab.scroll(null, "down", 2);
+          let stale;
+          try { await tab.click([10, 10]); } catch (error) { stale = [error.code, error.message, error.nothingSent]; }
+          await tab.observe({screenshot: true});
+          await tab.click([10, 10]);
+          await tab.waitFor({ role: 'button', name: 'Continue', enabled: true }, 300);
+          await tab.hover([20, 20]);
+          let afterHover;
+          try { await tab.click([20, 20]); } catch (error) { afterHover = error.code; }
+          return [...stale, afterHover];`,
+        });
+        expect(result).toMatchObject({
+          status: "completed",
+          value: [
+            "stale_reference",
+            "An input or read since that screenshot ended its points. Take tab.screenshot() again.",
+            true,
+            "stale_reference",
+          ],
+        });
+        expect(inputs.map(([operation]) => operation)).toEqual([
+          "scroll",
+          "click",
+          "waitFor",
+          "hover",
+        ]);
+        expect(inputs[3]?.[1]).toEqual({ x: 20, y: 20, timeoutMs: 5_000 });
+        expect(inputs[2]?.[1]).toMatchObject({
+          locator: 'role=button[name="Continue" s]',
+          enabled: true,
+        });
+      }).pipe(
+        Effect.provide(
+          ScreenRunService.layerWithRuntime({
+            dispatcher: createScreenDispatchRouter({ tab: tabHost }),
+            tabHost,
+            invocation: {
+              command: process.execPath,
+              entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+            },
+            assetResolver: () => resolveScreenRuntimeAsset("dev"),
+          }).pipe(Layer.provide(NodeServices.layer)),
+        ),
+      );
+    });
+  },
+);
+
+it.live(
+  "tab.screenshot() returns the image, its imageRef and the image pixel size, and a click at its [x, y] lands on that viewport pixel",
+  () => {
+    const tab = {
+      environmentId: "env",
+      browserInstanceId: "server-browser",
+      connectionId: "connection",
+      threadId: "thread",
+      tabId: PreviewTabId.make("canvas"),
+      title: "Canvas",
+      url: "https://canvas.test/",
+      owner: "unclaimed" as const,
+      ownedByCaller: false,
+      controlGeneration: 0,
+    };
+    const clicks: unknown[] = [];
+    const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+      listBoundTabs: () => Effect.succeed([tab]),
+      invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) =>
+        Effect.sync(() => {
+          if (request.operation === "click") clicks.push(request.input);
+          return (
+            request.operation === "status"
+              ? { tabId: tab.tabId, url: tab.url, control: { owner: "unclaimed", generation: 0 } }
+              : request.operation === "snapshot"
+                ? {
+                    url: tab.url,
+                    title: "Canvas",
+                    loading: false,
+                    accessibilityTree: "- img [ref=e1]",
+                    treeComplete: true,
+                    refGeneration: "1",
+                    // A 2x capture of a 300 x 200 viewport, taken only when the read asks for it.
+                    ...((request.input as { captureImage?: boolean }).captureImage
+                      ? {
+                          screenshot: {
+                            mimeType: "image/png",
+                            data: "AQID",
+                            width: 600,
+                            height: 400,
+                            region: { kind: "viewport", x: 0, y: 0, width: 300, height: 200 },
+                            scale: 2,
+                          },
+                        }
+                      : {}),
+                  }
+                : {}
+          ) as A;
+        }),
+    };
+    return Effect.gen(function* () {
+      const tabHost = yield* makePreviewTargetHost(broker);
+      return yield* Effect.gen(function* () {
+        const service = yield* ScreenRunService;
+        const result = yield* service.runCell({
+          runId: "r",
+          turnId: "t",
+          threadId: "thread",
+          environmentId: "env",
+          invocation,
+          source: `const tab = await screen.tab({tabId: 'canvas'});
+          await tab.claim();
+          const shot = await tab.screenshot();
+          await tab.click([60, 40]);
+          const codeOf = async (run) => { try { await run(); } catch (error) { return error.code; } };
+          // The screenshot's own element list never reached the cell, so numbers wait for observe().
+          const number = await codeOf(() => tab.click(0));
+          const option = await codeOf(() => tab.screenshot({ fullPage: true }));
+          await tab.observe();
+          const afterRead = await codeOf(() => tab.click([60, 40]));
+          return { imageRef: shot.imageRef, size: [shot.pixelWidth, shot.pixelHeight], capabilities: tab.capabilities, number, option, afterRead };`,
+        });
+        expect(result).toMatchObject({
+          status: "completed",
+          value: {
+            size: [600, 400],
+            number: "stale_reference",
+            option: "invalid_argument",
+            afterRead: "stale_reference",
+          },
+        });
+        const value = result.value as { imageRef: string; capabilities: string[] };
+        expect(value.capabilities).toEqual(expect.arrayContaining(["points", "screenshot"]));
+        expect(result.images.map((image) => image.imageRef)).toEqual([value.imageRef]);
+        expect(clicks).toEqual([{ x: 30, y: 20, timeoutMs: 5_000 }]);
+      }).pipe(
+        Effect.provide(
+          ScreenRunService.layerWithRuntime({
+            dispatcher: createScreenDispatchRouter({ tab: tabHost }),
+            tabHost,
+            invocation: {
+              command: process.execPath,
+              entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+            },
+            assetResolver: () => resolveScreenRuntimeAsset("dev"),
+          }).pipe(Layer.provide(NodeServices.layer)),
+        ),
+      );
+    });
+  },
+);

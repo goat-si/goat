@@ -1,0 +1,643 @@
+import {
+  AuthGrantScope,
+  type ChildSetupPurpose,
+  type DesktopSshEnvironmentTarget,
+  EnvironmentId,
+  GOAT_RUNTIME_CONTROL_HEADER,
+  GOAT_RUNTIME_SESSION_PATH,
+  ORCHESTRATION_PROTOCOL_VERSION,
+  RuntimeMode,
+  type RuntimeSessionRequest,
+  type SshHostResult,
+} from "@goat/contracts";
+import { GOAT_ACTIVITY_PATH, GOAT_ENVIRONMENT_PATH } from "@goat/contracts/legacyT3Names";
+import { fromLenientJson } from "@goat/shared/schemaJson";
+import { compareRuntimeProtocols, ownRuntimeProtocolRanges } from "@goat/shared/sshRuntimeProtocol";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import { HttpClient } from "effect/http";
+import type { ChildProcessSpawner } from "effect/process";
+import type * as FileSystem from "effect/FileSystem";
+import type * as Path from "effect/Path";
+
+import { desktopAppServerStateDirWords } from "@goat/shared/desktopAppServer";
+
+import type * as SshAuth from "./auth.ts";
+import { runSshCommand } from "./command.ts";
+import { SshCommandError, SshInvalidTargetError, SshPairingError } from "./errors.ts";
+import {
+  applyScriptPlaceholders,
+  type PreparedRemoteRuntime,
+  type RemoteGoatRunnerOptions,
+  requestedRuntime,
+  shellSingleQuote,
+  sshTargetLogFields,
+} from "./remoteRuntime.ts";
+import {
+  NATIVE_WINDOWS,
+  nativeExistingCredential,
+  nativeExistingServer,
+  nativeWindowsAfter,
+} from "./runtimeWindows.ts";
+
+// The app server's directory depends on the channel (`desktopAppServerStateDirs`). Attach to the
+// first live one; otherwise start the managed server. A probe that cannot run stays fail-open
+// (`declined`), so the managed server still serves the host. Windows hosts are skipped.
+const managedPreamble = String.raw`set -eu
+case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) printf 'GOAT_APP_SERVER=none\n'; exit 0 ;; esac
+app_userdata="$HOME/.goat/userdata"
+app_record="$app_userdata/server-runtime.json"
+app_token="$app_userdata/runtime-control.token"
+app_none() { printf 'GOAT_APP_SERVER=%s\n' "$1"; exit 0; }
+[ -f "$app_record" ] || app_none none
+[ ! -L "$app_record" ] || app_none symlink
+app_line="$(tr '\n' ' ' <"$app_record")"
+app_pid="$(printf '%s\n' "$app_line" | sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
+app_port="$(printf '%s\n' "$app_line" | sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
+case "$app_pid:$app_port" in *[!0-9:]* | :* | *:) app_none none ;; esac
+[ "$app_pid" -gt 0 ] && [ "$app_port" -ge 1 ] && [ "$app_port" -le 65535 ] || app_none none
+kill -0 "$app_pid" 2>/dev/null || app_none none
+command -v curl >/dev/null 2>&1 || app_none no-curl
+[ -f "$app_token" ] && [ ! -L "$app_token" ] && [ -s "$app_token" ] || app_none no-token
+`;
+
+// First live, reachable app server wins. A missing or dead record is skipped. A live one that
+// cannot be attached is remembered, and a later directory can still be used.
+const appServerSelect = String.raw`set -eu
+case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) printf 'GOAT_APP_SERVER=none\n'; exit 0 ;; esac
+app_declined=""
+app_found=0
+app_note() { if [ -z "$app_declined" ]; then app_declined="$1"; fi; }
+app_consider() {
+  app_userdata="$1"
+  app_record="$app_userdata/server-runtime.json"
+  app_token="$app_userdata/runtime-control.token"
+  if [ ! -f "$app_record" ] || [ -L "$app_record" ]; then return 0; fi
+  app_line="$(tr '\n' ' ' <"$app_record" 2>/dev/null || true)"
+  app_pid="$(printf '%s\n' "$app_line" | sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
+  app_port="$(printf '%s\n' "$app_line" | sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
+  case "$app_pid:$app_port" in *[!0-9:]* | :* | *:) return 0 ;; esac
+  if [ "$app_pid" -le 0 ] || [ "$app_port" -lt 1 ] || [ "$app_port" -gt 65535 ]; then return 0; fi
+  if ! kill -0 "$app_pid" 2>/dev/null; then return 0; fi
+  if ! command -v curl >/dev/null 2>&1; then app_note no-curl; return 0; fi
+  if [ ! -f "$app_token" ] || [ -L "$app_token" ] || [ ! -s "$app_token" ]; then
+    app_note no-token
+    return 0
+  fi
+  app_descriptor="$(curl -fsS --max-time 5 "http://127.0.0.1:$app_port@@GOAT_ENVIRONMENT_PATH@@" 2>/dev/null | tr '\n' ' ')" || true
+  if [ -z "$app_descriptor" ]; then app_note unreachable; return 0; fi
+  app_found=1
+}
+for app_dir in ${desktopAppServerStateDirWords}; do
+  app_consider "$app_dir"
+  if [ "$app_found" = 1 ]; then break; fi
+done
+if [ "$app_found" != 1 ]; then
+  if [ -n "$app_declined" ]; then printf 'GOAT_APP_SERVER=%s\n' "$app_declined"
+  else printf 'GOAT_APP_SERVER=none\n'; fi
+  exit 0
+fi
+`;
+
+const serverPreamble = (kind: "app" | "managed") =>
+  kind === "app" ? appServerSelect : managedPreamble;
+
+// Also names the chosen directory and any other app server whose record names a live PID, so a
+// second channel's app (stable beside nightly) is reported instead of passed over silently.
+const appServerProbeScript = () => String.raw`${appServerSelect}app_chosen="$app_userdata"
+app_others=""
+for app_dir in ${desktopAppServerStateDirWords}; do
+  if [ "$app_dir" = "$app_chosen" ]; then continue; fi
+  other_line="$(tr '\n' ' ' 2>/dev/null <"$app_dir/server-runtime.json" || true)"
+  other_pid="$(printf '%s\n' "$other_line" | sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
+  if [ -n "$other_pid" ] && kill -0 "$other_pid" 2>/dev/null; then app_others="$app_others ${"$"}{app_dir#"$HOME/"}"; fi
+done
+printf 'GOAT_APP_SERVER=live %s %s %s\n%s\nGOAT_APP_SERVER_OTHERS=%s\n' "$app_pid" "$app_port" "${"$"}{app_chosen#"$HOME/"}" "$app_descriptor" "${"$"}{app_others# }"
+`;
+
+const managedExistingServerProbeScript = String.raw`set -eu
+case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) printf 'GOAT_EXISTING=absent\n'; exit 0 ;; esac
+home="$HOME/.goat/userdata"
+record="$home/server-runtime.json"; token="$home/runtime-control.token"; identity="$home/environment-id"
+fail() { printf 'GOAT_EXISTING=%s\n' "$1"; exit 0; }
+# A clean shutdown removes the record but keeps the identity and database, which may own a
+# legacy watch; only a home with neither has no other server.
+if [ ! -f "$record" ]; then
+  if [ -e "$identity" ] || [ -e "$home/statev2.sqlite" ]; then fail unusable; fi
+  fail absent
+fi
+[ ! -L "$record" ] && [ -f "$identity" ] && [ ! -L "$identity" ] || fail unusable
+[ -f "$token" ] && [ ! -L "$token" ] && [ -s "$token" ] || fail unusable
+line="$(tr '\n' ' ' <"$record")"
+pid="$(printf '%s\n' "$line" | sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
+port="$(printf '%s\n' "$line" | sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
+origin="$(printf '%s\n' "$line" | sed -n 's/.*"origin"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+case "$pid:$port" in *[!0-9:]* | :* | *:) fail unusable ;; esac
+[ "$pid" -gt 0 ] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || fail unusable
+[ "$origin" = "http://127.0.0.1:$port" ] || fail unusable
+# A stopped recorded server may own a legacy watch; its database is not disproven.
+kill -0 "$pid" 2>/dev/null || fail unusable
+command -v curl >/dev/null 2>&1 || fail unusable
+descriptor="$(curl -fsS --max-time 5 "http://127.0.0.1:$port@@GOAT_ENVIRONMENT_PATH@@" 2>/dev/null | tr '\n' ' ')" || fail unusable
+printf 'GOAT_EXISTING=live %s %s\n%s\n' "$port" "$(cat "$identity")" "$descriptor"
+`;
+
+const appExistingServerProbeScript = String.raw`set -eu
+case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) printf 'GOAT_EXISTING=absent\n'; exit 0 ;; esac
+found_unusable=0
+try_app_home() {
+  home="$1"
+  record="$home/server-runtime.json"; token="$home/runtime-control.token"; identity="$home/environment-id"
+  if [ ! -f "$record" ]; then
+    if [ -e "$identity" ] || [ -e "$home/statev2.sqlite" ]; then found_unusable=1; fi
+    return 0
+  fi
+  if [ -L "$record" ] || [ ! -f "$identity" ] || [ -L "$identity" ]; then found_unusable=1; return 0; fi
+  if [ ! -f "$token" ] || [ -L "$token" ] || [ ! -s "$token" ]; then found_unusable=1; return 0; fi
+  line="$(tr '\n' ' ' <"$record" 2>/dev/null || true)"
+  pid="$(printf '%s\n' "$line" | sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
+  port="$(printf '%s\n' "$line" | sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
+  origin="$(printf '%s\n' "$line" | sed -n 's/.*"origin"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+  case "$pid:$port" in *[!0-9:]* | :* | *:) found_unusable=1; return 0 ;; esac
+  if [ "$pid" -le 0 ] || [ "$port" -lt 1 ] || [ "$port" -gt 65535 ]; then found_unusable=1; return 0; fi
+  if [ "$origin" != "http://127.0.0.1:$port" ]; then found_unusable=1; return 0; fi
+  if ! kill -0 "$pid" 2>/dev/null; then found_unusable=1; return 0; fi
+  if ! command -v curl >/dev/null 2>&1; then found_unusable=1; return 0; fi
+  descriptor="$(curl -fsS --max-time 5 "http://127.0.0.1:$port@@GOAT_ENVIRONMENT_PATH@@" 2>/dev/null | tr '\n' ' ')" || true
+  if [ -z "$descriptor" ]; then found_unusable=1; return 0; fi
+  printf 'GOAT_EXISTING=live %s %s\n%s\n' "$port" "$(cat "$identity")" "$descriptor"
+  exit 0
+}
+for app_dir in ${desktopAppServerStateDirWords}; do
+  try_app_home "$app_dir"
+done
+if [ "$found_unusable" = 1 ]; then printf 'GOAT_EXISTING=unusable\n'; else printf 'GOAT_EXISTING=absent\n'; fi
+`;
+
+const existingServerProbeScript = (kind: "app" | "managed") =>
+  kind === "app" ? appExistingServerProbeScript : managedExistingServerProbeScript;
+
+// The token reaches curl through its config on stdin, never argv. The record must still name the
+// port the probe saw, so a credential request never goes to whatever replaced that server.
+const serverSessionScript = (
+  kind: "app" | "managed",
+) => String.raw`${serverPreamble(kind)}[ "$app_port" = @@GOAT_PORT@@ ] || { printf 'The GOAT server on this host restarted; reconnect.\n' >&2; exit 1; }
+expected_id=@@GOAT_ID@@
+if [ -n "$expected_id" ]; then
+  [ "$(cat "$app_userdata/environment-id" 2>/dev/null)" = "$expected_id" ] || exit 1
+  descriptor="$(curl -fsS --max-time 5 "http://127.0.0.1:$app_port@@GOAT_ENVIRONMENT_PATH@@" 2>/dev/null | tr '\n' ' ')" || exit 1
+  descriptor_id="$(printf '%s\n' "$descriptor" | sed -n 's/.*"environmentId"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+  [ "$descriptor_id" = "$expected_id" ] || exit 1
+fi
+app_secret="$(tr -d '\r\n' <"$app_token")"
+printf 'header = "@@GOAT_HEADER@@: %s"\n' "$app_secret" |
+  curl -sS --max-time 20 -K - -H 'content-type: application/json' --data-binary @@GOAT_BODY@@ \
+    -w '\nGOAT_HTTP_STATUS=%{http_code}\n' "http://127.0.0.1:$app_port@@GOAT_SESSION_PATH@@"
+`;
+
+const AppServerDescriptor = Schema.Struct({
+  environmentId: Schema.optionalKey(EnvironmentId),
+  serverVersion: Schema.String,
+  sshRuntimeProtocolVersion: Schema.optionalKey(Schema.Number),
+  orchestrationProtocolVersion: Schema.optionalKey(Schema.Number),
+  protocol: Schema.optionalKey(
+    Schema.Struct({
+      ssh: Schema.Struct({ min: Schema.Number, max: Schema.Number }),
+      orchestration: Schema.Struct({ min: Schema.Number, max: Schema.Number }),
+    }),
+  ),
+  capabilities: Schema.Struct({ runtimeSessions: Schema.optionalKey(Schema.Boolean) }),
+});
+const decodeAppServerDescriptor = Schema.decodeUnknownOption(fromLenientJson(AppServerDescriptor));
+
+/** Names the probe's SSH command, so traces can tell it from other scripts. */
+const APP_SERVER_PROBE_COMMAND = "goat-app-server-probe";
+
+const CLIENT_PROTOCOL_RANGES = ownRuntimeProtocolRanges(ORCHESTRATION_PROTOCOL_VERSION);
+const isGrantScope = Schema.is(AuthGrantScope);
+const isRuntimeMode = Schema.is(RuntimeMode);
+
+/**
+ * `attach`: use the app's server. `declined`: it runs but cannot be attached (too old to issue
+ * sessions, an incompatible protocol, unreachable on loopback, no curl), so the managed server
+ * serves this client. `none`: no app server runs here.
+ */
+export type AppServerProbe =
+  | {
+      readonly kind: "attach";
+      readonly port: number;
+      readonly version: string;
+      /** Home-relative state directory of the attached server. */
+      readonly stateDir: string;
+      /** Other app-server state directories whose record names a live process. */
+      readonly otherLive: ReadonlyArray<string>;
+    }
+  | { readonly kind: "declined"; readonly reason: string }
+  | { readonly kind: "none" };
+
+export type ExistingServerProbe =
+  | {
+      readonly kind: "live";
+      readonly environmentId: EnvironmentId;
+      readonly port: number;
+      readonly version: string;
+    }
+  | { readonly kind: "absent" | "unusable" };
+
+const isEnvironmentId = Schema.is(EnvironmentId);
+
+export const parseExistingServerProbe = (stdout: string): ExistingServerProbe => {
+  const lines = stdout.split(/\r?\n/u);
+  const index = lines.findIndex((line) => line.startsWith("GOAT_EXISTING="));
+  const marker = lines[index]?.slice("GOAT_EXISTING=".length);
+  if (marker === "absent") return { kind: "absent" };
+  if (marker === undefined || !marker.startsWith("live ")) return { kind: "unusable" };
+  const [, portText, diskId] = marker.split(" ");
+  const port = Number(portText);
+  const descriptor = decodeAppServerDescriptor(lines[index + 1] ?? "");
+  if (
+    !Number.isInteger(port) ||
+    port < 1 ||
+    port > 65535 ||
+    !isEnvironmentId(diskId) ||
+    Option.isNone(descriptor) ||
+    descriptor.value.environmentId !== diskId ||
+    descriptor.value.capabilities.runtimeSessions !== true ||
+    compareRuntimeProtocols(CLIENT_PROTOCOL_RANGES, descriptor.value) !== "compatible"
+  )
+    return { kind: "unusable" };
+  return { kind: "live", environmentId: diskId, port, version: descriptor.value.serverVersion };
+};
+
+export const probeExistingServer = Effect.fn("ssh/appServer.probeExisting")(function* (
+  target: DesktopSshEnvironmentTarget,
+  kind: "app" | "managed",
+  input?: SshAuth.SshAuthOptions,
+): Effect.fn.Return<ExistingServerProbe, never, AppServerContext> {
+  const result = yield* runSshCommand(target, {
+    remoteCommandArgs: ["sh", "-s", "goat-existing-server-probe"],
+    stdin: applyScriptPlaceholders(existingServerProbeScript(kind), {
+      GOAT_ENVIRONMENT_PATH,
+    }),
+    timeoutMs: 20_000,
+    ...sshOptions(input),
+  }).pipe(
+    // Native Windows has no sh; GOAT's own runtime there answers through its native path.
+    Effect.catchTags({ SshCommandError: nativeWindowsAfter(target, input ?? {}) }),
+    Effect.option,
+  );
+  if (Option.isNone(result)) return { kind: "unusable" };
+  if (result.value === NATIVE_WINDOWS)
+    return yield* nativeExistingServer(target, kind, input ?? {}).pipe(
+      Effect.orElseSucceed((): ExistingServerProbe => ({ kind: "unusable" })),
+    );
+  return parseExistingServerProbe(result.value.stdout);
+});
+
+/** Reads the probe script's answer. Exported for tests. */
+export const parseAppServerProbe = (stdout: string): AppServerProbe => {
+  const lines = stdout.split(/\r?\n/u);
+  const index = lines.findIndex((line) => line.startsWith("GOAT_APP_SERVER="));
+  const marker = lines[index];
+  if (marker === undefined) return { kind: "none" };
+  const [status, , port, stateDir = ""] = marker.slice("GOAT_APP_SERVER=".length).split(" ");
+  if (status === "none") return { kind: "none" };
+  if (status !== "live") return { kind: "declined", reason: status ?? "unknown" };
+  const remotePort = Number(port);
+  const descriptor = decodeAppServerDescriptor(lines[index + 1] ?? "");
+  if (
+    !Number.isInteger(remotePort) ||
+    remotePort < 1 ||
+    remotePort > 65535 ||
+    Option.isNone(descriptor)
+  )
+    return { kind: "declined", reason: "unreadable" };
+  if (descriptor.value.capabilities.runtimeSessions !== true)
+    return { kind: "declined", reason: "no-runtime-sessions" };
+  const verdict = compareRuntimeProtocols(CLIENT_PROTOCOL_RANGES, descriptor.value);
+  if (verdict !== "compatible") return { kind: "declined", reason: verdict };
+  const others = lines
+    .find((line) => line.startsWith("GOAT_APP_SERVER_OTHERS="))
+    ?.slice("GOAT_APP_SERVER_OTHERS=".length);
+  return {
+    kind: "attach",
+    port: remotePort,
+    version: descriptor.value.serverVersion,
+    stateDir,
+    otherLive: others?.split(" ").filter((dir) => dir.length > 0) ?? [],
+  };
+};
+
+type AppServerContext = ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path;
+
+const sshOptions = (input: SshAuth.SshAuthOptions | undefined) => ({
+  ...(input?.authSecret === undefined ? {} : { authSecret: input.authSecret }),
+  ...(input?.batchMode === undefined ? {} : { batchMode: input.batchMode }),
+  ...(input?.interactiveAuth === undefined ? {} : { interactiveAuth: input.interactiveAuth }),
+});
+
+/**
+ * Whether the host's GOAT app server can serve this client. A check that cannot run answers
+ * `declined`, so the host keeps working through the managed server and stays there.
+ */
+export const probeAppServer = Effect.fn("ssh/appServer.probe")(function* (
+  target: DesktopSshEnvironmentTarget,
+  input?: SshAuth.SshAuthOptions,
+): Effect.fn.Return<AppServerProbe, never, AppServerContext> {
+  const result = yield* runSshCommand(target, {
+    // The trailing word is only $1 to the script; it names this call in traces and tests.
+    remoteCommandArgs: ["sh", "-s", APP_SERVER_PROBE_COMMAND],
+    stdin: applyScriptPlaceholders(appServerProbeScript(), {
+      GOAT_ENVIRONMENT_PATH: GOAT_ENVIRONMENT_PATH,
+    }),
+    timeoutMs: 20_000,
+    ...sshOptions(input),
+  }).pipe(Effect.option);
+  const probe = Option.match(result, {
+    // Unknown is not absent: the managed server may still report the app, so stay put.
+    onNone: (): AppServerProbe => ({ kind: "declined", reason: "probe-failed" }),
+    onSome: (output) => parseAppServerProbe(output.stdout),
+  });
+  if (probe.kind !== "none")
+    yield* Effect.logInfo("ssh.appServer.probed", {
+      ...sshTargetLogFields(target),
+      ...probe,
+    });
+  // Only the first live app server is attached; threads in another channel's app stay out of view.
+  if (probe.kind === "attach" && probe.otherLive.length > 0)
+    yield* Effect.logWarning("ssh.appServer.otherLive", {
+      ...sshTargetLogFields(target),
+      stateDir: probe.stateDir,
+      otherLive: probe.otherLive,
+    });
+  return probe;
+});
+
+/** The script that asks the app server on `port` for a credential. */
+const buildServerCredentialScript = (
+  kind: "app" | "managed",
+  port: number,
+  request: RuntimeSessionRequest,
+  expectedEnvironmentId?: EnvironmentId,
+) =>
+  applyScriptPlaceholders(serverSessionScript(kind), {
+    GOAT_PORT: String(port),
+    GOAT_ID: shellSingleQuote(expectedEnvironmentId ?? ""),
+    GOAT_ENVIRONMENT_PATH,
+    GOAT_HEADER: GOAT_RUNTIME_CONTROL_HEADER,
+    GOAT_BODY: shellSingleQuote(JSON.stringify(request)),
+    GOAT_SESSION_PATH: GOAT_RUNTIME_SESSION_PATH,
+  });
+
+/**
+ * Issues a credential from the app server attached on `port` and returns the JSON body, the
+ * same output `goat auth ... --json` prints, so the callers' existing decoders read it.
+ */
+export const issueExistingServerCredential = Effect.fn("ssh/appServer.issueCredential")(function* (
+  target: DesktopSshEnvironmentTarget,
+  kind: "app" | "managed",
+  port: number,
+  request: RuntimeSessionRequest,
+  input?: SshAuth.SshAuthOptions,
+  expectedEnvironmentId?: EnvironmentId,
+): Effect.fn.Return<
+  string,
+  SshCommandError | SshInvalidTargetError | SshPairingError,
+  AppServerContext
+> {
+  const result = yield* runSshCommand(target, {
+    remoteCommandArgs: ["sh", "-s", "goat-app-server-credential"],
+    timeoutStage: "pairing",
+    stdin: buildServerCredentialScript(kind, port, request, expectedEnvironmentId),
+    ...sshOptions(input),
+  }).pipe(
+    Effect.catchTags({ SshCommandError: nativeWindowsAfter(target, input ?? {}) }),
+    Effect.mapError((error) =>
+      error._tag === "SshLaunchError"
+        ? new SshPairingError({ message: error.message, stdout: "", cause: error })
+        : error,
+    ),
+  );
+  // Native Windows: its goat.exe issues or revokes through the same runtime endpoint.
+  if (result === NATIVE_WINDOWS)
+    return yield* nativeExistingCredential(
+      target,
+      kind,
+      port,
+      request,
+      input ?? {},
+      expectedEnvironmentId,
+    ).pipe(
+      Effect.mapError((error) =>
+        error._tag === "SshLaunchError"
+          ? new SshPairingError({ message: error.message, stdout: "", cause: error })
+          : error,
+      ),
+    );
+  const marker = /^GOAT_HTTP_STATUS=(\d{3})$/mu.exec(result.stdout);
+  const body = marker === null ? result.stdout : result.stdout.slice(0, marker.index).trim();
+  if (marker?.[1] !== "200")
+    return yield* new SshPairingError({
+      message: `The GOAT app server on ${target.alias} did not issue a credential (HTTP ${marker?.[1] ?? "no answer"}).`,
+      stdout: body,
+    });
+  yield* Effect.logInfo("ssh.appServer.credential.issued", {
+    ...sshTargetLogFields(target),
+    kind: request.kind,
+  });
+  return body;
+});
+
+export const issueAppServerCredential = (
+  target: DesktopSshEnvironmentTarget,
+  port: number,
+  request: RuntimeSessionRequest,
+  input?: SshAuth.SshAuthOptions,
+) => issueExistingServerCredential(target, "app", port, request, input);
+
+/**
+ * The session request matching what a remote session script would pass to `goat auth`, or none
+ * when the CLI would refuse it too (a scope it cannot grant, an unknown runtime mode).
+ */
+export const appServerSessionRequest = (input: {
+  readonly subject: string;
+  readonly scopes: ReadonlyArray<string>;
+  readonly ttl: string;
+  readonly label: string;
+  readonly runtimeModeCeiling?: string | null;
+  readonly childSetupPurpose?: ChildSetupPurpose;
+}): Option.Option<Extract<RuntimeSessionRequest, { kind: "session" }>> => {
+  const [first, ...rest] = input.scopes;
+  if (first === undefined || !isGrantScope(first) || !rest.every(isGrantScope))
+    return Option.none();
+  const ceiling = input.runtimeModeCeiling ?? undefined;
+  if (ceiling !== undefined && !isRuntimeMode(ceiling)) return Option.none();
+  return Option.some({
+    kind: "session",
+    subject: input.subject,
+    scopes: [first, ...rest],
+    ttl: input.ttl,
+    label: input.label,
+    ...(ceiling === undefined ? {} : { runtimeModeCeiling: ceiling }),
+    ...(input.childSetupPurpose === undefined
+      ? {}
+      : { childSetupPurpose: input.childSetupPurpose }),
+  });
+};
+
+const decodeActivity = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(Schema.Struct({ activity: Schema.Literals(["idle", "busy"]) })),
+);
+
+/**
+ * Whether a managed attachment should move to the app server (`appServerLive`). Only an idle
+ * managed server is left, so threads already running there finish where they started. One whose
+ * launch found the app unusable stays, as does one that cannot read the managed server's activity.
+ */
+export const shouldMoveToAppServer = Effect.fn("ssh/appServer.shouldMove")(function* (input: {
+  readonly descriptor: { readonly appServerLive?: boolean } | undefined;
+  readonly remoteServerKind: "app" | "external" | "managed" | null;
+  readonly selection: Pick<PreparedRemoteRuntime, "appServerDeclined">;
+  readonly httpBaseUrl: string;
+  readonly timeoutMs: number;
+}) {
+  if (
+    input.descriptor?.appServerLive !== true ||
+    input.remoteServerKind === "app" ||
+    input.selection.appServerDeclined === true
+  )
+    return false;
+  const client = yield* HttpClient.HttpClient;
+  return yield* client.get(new URL(GOAT_ACTIVITY_PATH, input.httpBaseUrl).toString()).pipe(
+    Effect.flatMap((response) =>
+      response.status === 200
+        ? response.text.pipe(
+            Effect.flatMap(decodeActivity),
+            Effect.map((answer) => answer.activity === "idle"),
+          )
+        : Effect.succeed(false),
+    ),
+    Effect.timeoutOption(`${input.timeoutMs} millis`),
+    Effect.map((idle) => Option.isSome(idle) && idle.value),
+    Effect.orElseSucceed(() => false),
+  );
+});
+
+const decodeForwardDescriptor = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(
+    Schema.Struct({
+      serverVersion: Schema.optionalKey(Schema.String),
+      appServerLive: Schema.optionalKey(Schema.Boolean),
+    }),
+  ),
+);
+
+/**
+ * What the server behind an open forward reports now. A server replaced on the same port
+ * (another client's update, a self-update, a manual restart) still answers the forward, so
+ * readiness alone would keep reporting the version this client attached to. `appServerLive`
+ * is the managed server saying the host's GOAT app server runs beside it.
+ */
+export const readForwardDescriptor = Effect.fn("ssh/appServer.readForwardDescriptor")(function* (
+  httpBaseUrl: string,
+  timeoutMs: number,
+) {
+  const client = yield* HttpClient.HttpClient;
+  return yield* client.get(new URL(GOAT_ENVIRONMENT_PATH, httpBaseUrl).toString()).pipe(
+    Effect.flatMap((response) =>
+      response.status === 200
+        ? response.text.pipe(Effect.flatMap(decodeForwardDescriptor))
+        : Effect.succeed(undefined),
+    ),
+    Effect.timeoutOption(`${timeoutMs} millis`),
+    Effect.map(Option.getOrUndefined),
+    Effect.orElseSucceed(() => undefined),
+  );
+});
+
+/** The launch result for an attachable app server; nothing on the host is started or written. */
+export const appServerLaunch = Effect.fn("ssh/appServer.launch")(function* (
+  target: DesktopSshEnvironmentTarget,
+  app: Extract<AppServerProbe, { readonly kind: "attach" }>,
+  runner: RemoteGoatRunnerOptions | undefined,
+) {
+  yield* Effect.logInfo("ssh.remoteServer.launch.ready", {
+    ...sshTargetLogFields(target),
+    remotePort: app.port,
+    remoteServerKind: "app",
+    selectedVersion: app.version,
+    requestedVersion: runner?.archiveVersion?.trim() ?? null,
+  });
+  return {
+    status: "ready" as const,
+    remotePort: app.port,
+    remoteServerKind: "app" as const,
+    selectedRuntime: {
+      ...requestedRuntime(runner),
+      version: app.version,
+      source: "app" as const,
+      appServerPort: app.port,
+      mayUpgradeOwnedServer: false,
+    },
+  };
+});
+
+/** Host status for an app attachment on `port`, or none when that app server no longer serves it. */
+export const appServerStatus = Effect.fn("ssh/appServer.status")(function* (
+  target: DesktopSshEnvironmentTarget,
+  port: number,
+  requestedVersion: string,
+  observed: SshHostResult | undefined,
+) {
+  const app = yield* probeAppServer(target, { batchMode: "yes", interactiveAuth: false });
+  if (app.kind !== "attach" || app.port !== port) return undefined;
+  const providers = observed?.status?.providers;
+  return {
+    kind: "ok",
+    status: {
+      host: target.alias || target.hostname,
+      requestedVersion,
+      runtimeVersion: app.version,
+      state: providers?.ready === false ? "providers_not_ready" : "ready",
+      ...(providers === undefined ? {} : { providers }),
+    },
+  } satisfies SshHostResult;
+});
+
+/**
+ * Prints the GOAT environment id of the server SSH clients use on this host, starting nothing.
+ * `attached` is the kind of server a connection to it already uses. With none, the app server's
+ * id is printed only while it could be attached (live, holding its control token, advertising
+ * `runtimeSessions`), else the managed home's.
+ */
+export const hostEnvironmentIdScript = (attached: "app" | "external" | "managed" | null) =>
+  `attached=${attached ?? "none"}` +
+  String.raw`
+home="$HOME/.goat/userdata"
+case "$attached" in
+  app | none)
+    app_home=""
+    app_attachable=""
+    for app_dir in ${desktopAppServerStateDirWords}; do
+      if [ -z "$app_home" ] && [ -f "$app_dir/environment-id" ]; then app_home="$app_dir"; fi
+      rec="$(tr '\n' ' ' <"$app_dir/server-runtime.json" 2>/dev/null || true)"
+      pid="$(printf '%s\n' "$rec" | sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
+      port="$(printf '%s\n' "$rec" | sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
+      if [ -n "$pid" ] && [ -n "$port" ] && kill -0 "$pid" 2>/dev/null && [ -s "$app_dir/runtime-control.token" ] &&
+        command -v curl >/dev/null 2>&1 &&
+        curl -fsS --max-time 5 "http://127.0.0.1:$port${GOAT_ENVIRONMENT_PATH}" 2>/dev/null | grep -q '"runtimeSessions":true'; then
+        app_attachable="$app_dir"
+        break
+      fi
+    done
+    case "$attached" in
+      app)
+        if [ -n "$app_attachable" ]; then home="$app_attachable"
+        elif [ -n "$app_home" ]; then home="$app_home"
+        else home=""; fi ;;
+      none) if [ -n "$app_attachable" ]; then home="$app_attachable"; fi ;;
+    esac ;;
+esac
+if [ -n "$home" ] && [ -f "$home/environment-id" ]; then cat "$home/environment-id"; fi
+`;

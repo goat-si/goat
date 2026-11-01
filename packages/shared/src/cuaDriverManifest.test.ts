@@ -1,0 +1,959 @@
+// @effect-diagnostics nodeBuiltinImport:off -- A trap driver script on a real temporary directory proves what runs.
+import * as NodeFS from "node:fs";
+import * as NodeFSP from "node:fs/promises";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+import * as NodeChildProcess from "node:child_process";
+
+import { describe, expect, it, vi } from "vite-plus/test";
+
+import * as HostProcess from "./HostProcess.ts";
+import { CUA_DRIVER_VERSION } from "./cuaDriverRelease.ts";
+
+import {
+  CUA_DRIVER_ALLOWED_TOOLS,
+  CUA_DRIVER_EXCLUDED_TOOLS,
+  admittedCuaApplications,
+  cuaRequestableApps,
+  cuaAppKey,
+  isExcludedCuaApplication,
+  cuaRequestableCatalog,
+  cuaDriverCapabilityManifest,
+  cuaDriverManifestApplications,
+  missingCuaDriverApplications,
+  isCuaDriverStartupRefusal,
+  cuaDriverSessionListingEnvironment,
+  listCuaDriverApplications,
+  listCuaRequestableApplications,
+  prepareCuaDriverCapabilityManifest,
+  writeCuaDriverCapabilityManifest,
+} from "./cuaDriverManifest.ts";
+
+vi.mock("node:fs/promises", { spy: true });
+vi.mock("node:child_process", { spy: true });
+
+/**
+ * Every tool the pinned driver can offer, on any platform. Refresh it from the new tag when the
+ * pin moves to a version not in `verified`; goat.17 changes no tool registration.
+ */
+const PINNED_DRIVER_TOOLS = {
+  verified: [
+    "0.38.0-goat.13",
+    "0.38.0-goat.14",
+    "0.38.0-goat.15",
+    "0.38.0-goat.16",
+    "0.38.0-goat.17",
+  ],
+  tools: [
+    // `cua-driver list-tools` of the macOS binary.
+    "bring_to_front",
+    "browser_click",
+    "browser_dialog",
+    "browser_download",
+    "browser_navigate",
+    "browser_pointer",
+    "browser_prepare",
+    "browser_select",
+    "browser_set_input_files",
+    "browser_type",
+    "check_for_update",
+    "check_permissions",
+    "click",
+    "clipboard_read",
+    "clipboard_write",
+    "double_click",
+    "drag",
+    "end_session",
+    "escalate_session",
+    "get_accessibility_tree",
+    "get_agent_cursor_state",
+    "get_browser_state",
+    "get_config",
+    "get_cursor_position",
+    "get_desktop_state",
+    "get_guide",
+    "get_recording_state",
+    "get_screen_size",
+    "get_session",
+    "get_session_state",
+    "get_window_state",
+    "health_report",
+    "hotkey",
+    "install_extension",
+    "install_ffmpeg",
+    "invoke_menu",
+    "kill_app",
+    "launch_app",
+    "list_apps",
+    "list_sessions",
+    "list_windows",
+    "menu_bar_extras",
+    "move_cursor",
+    "page",
+    "parse_visual_regions",
+    "press_key",
+    "replay_trajectory",
+    "right_click",
+    "run_script",
+    "run_steps",
+    "scroll",
+    "select_text",
+    "set_agent_cursor_enabled",
+    "set_agent_cursor_motion",
+    "set_agent_cursor_theme",
+    "set_config",
+    "set_value",
+    "set_window_frame",
+    "start_recording",
+    "start_session",
+    "stop_recording",
+    "type_text",
+    "verify_state",
+    "zoom",
+    // Linux only (platform-linux/src/tools/impl_.rs register_all).
+    "mouse_button_down",
+    "mouse_button_up",
+    "mouse_drag",
+    "parallel_mouse_drag",
+    // Windows only (platform-windows/src/tools/impl_.rs register_all).
+    "debug_window_info",
+    // Registered once the driver admits history (cua-driver/src/history_runtime.rs register_into).
+    "history_status",
+    "history_query",
+  ],
+} as const;
+
+describe("cuaDriverManifest", () => {
+  it("preserves every requestable executable alias with its bundle identity", () => {
+    expect(
+      cuaRequestableCatalog(
+        [
+          { bundle_id: "com.example.Editor", name: "Editor", executable: "/opt/editor" },
+          { bundle_id: "com.example.Editor", name: "Editor", executable: "/opt/editor-alt" },
+          { bundle_id: "com.apple.Passwords", name: "Passwords", executable: "/opt/vault" },
+        ],
+        [],
+      ),
+    ).toEqual([
+      { id: "com.example.Editor", name: "Editor", executables: ["/opt/editor", "/opt/editor-alt"] },
+    ]);
+  });
+  it("admits exact browser windows and claim tools only with capability and live claims", () => {
+    const browser = {
+      existingProfiles: [
+        { pid: 42, windowId: 7 },
+        { pid: 42, windowId: 8 },
+      ],
+      origins: ["https://example.test"],
+    };
+    const unavailable = cuaDriverCapabilityManifest({
+      applications: [],
+      browser,
+      browserClaimsSupported: false,
+    });
+    expect(unavailable).not.toContain("  browser:");
+    expect(unavailable).not.toContain('"browser_click"');
+    const empty = cuaDriverCapabilityManifest({
+      applications: [],
+      browser: { existingProfiles: [], origins: [] },
+      browserClaimsSupported: true,
+    });
+    expect(empty).not.toContain("  browser:");
+    const available = cuaDriverCapabilityManifest({
+      applications: [],
+      browser,
+      browserClaimsSupported: true,
+    });
+    expect(available).toContain(
+      "    existing_profiles:\n      - pid: 42\n        window_id: 7\n      - pid: 42\n        window_id: 8",
+    );
+    expect(available).toContain('    origins:\n      - "https://example.test"');
+    expect(available).toContain('    - "browser_click"');
+    expect(available).not.toContain("kind: existing_profile");
+    expect(available).not.toContain('"browser_download"');
+    expect(available).not.toContain('"browser_set_input_files"');
+  });
+  it("records the tool set of the pinned driver version", () => {
+    expect(PINNED_DRIVER_TOOLS.verified).toContain(CUA_DRIVER_VERSION);
+  });
+
+  it("allows or excludes with a reason every tool the pinned driver offers", () => {
+    const reviewed = new Set<string>([
+      ...CUA_DRIVER_ALLOWED_TOOLS,
+      ...Object.keys(CUA_DRIVER_EXCLUDED_TOOLS),
+    ]);
+    expect(PINNED_DRIVER_TOOLS.tools.filter((tool) => !reviewed.has(tool))).toEqual([]);
+  });
+
+  it("allows only tools the pinned driver offers", () => {
+    const offered = new Set<string>(PINNED_DRIVER_TOOLS.tools);
+    expect(CUA_DRIVER_ALLOWED_TOOLS.filter((tool) => !offered.has(tool))).toEqual([]);
+  });
+
+  it("retains every attested identity when a best-effort listing loses the bundle id", () => {
+    const apps = cuaRequestableApps(
+      [{ name: " Editor.exe ", executable: " C:\\Apps\\Editor.exe " }],
+      [],
+    );
+    expect(apps).toEqual(["C:\\Apps\\Editor.exe", "Editor.exe"]);
+    expect(apps).not.toContain("Editor window");
+  });
+
+  it("keeps every admin, install, file and exfiltration tool out of the allow list", () => {
+    const allowed = new Set<string>(CUA_DRIVER_ALLOWED_TOOLS);
+    for (const tool of Object.keys(CUA_DRIVER_EXCLUDED_TOOLS))
+      expect(allowed.has(tool), tool).toBe(false);
+    for (const tool of [
+      "install_extension",
+      "install_ffmpeg",
+      "set_config",
+      "check_for_update",
+      "replay_trajectory",
+      "parse_visual_regions",
+      "page",
+      "escalate_session",
+      "get_session_state",
+      "browser_download",
+      "browser_set_input_files",
+      "clipboard_read",
+      // A whole-display screenshot shows every other app (#1321).
+      "get_desktop_state",
+    ])
+      expect(Object.keys(CUA_DRIVER_EXCLUDED_TOOLS)).toContain(tool);
+  });
+
+  it("offers kill_app only for processes the driver launched, in every admitted app", () => {
+    expect(CUA_DRIVER_ALLOWED_TOOLS).toContain("kill_app");
+    const text = cuaDriverCapabilityManifest({
+      applications: ["com.apple.TextEdit", { executable: "/usr/bin/gedit", names: ["gedit"] }],
+    });
+    expect(text).toContain(
+      [
+        '    - bundle_id: "com.apple.TextEdit"',
+        '      terminate: "driver_launched"',
+        '    - executable: "/usr/bin/gedit" # names: ["gedit"]',
+        '      terminate: "driver_launched"',
+      ].join("\n"),
+    );
+    expect(text).not.toMatch(/terminate: "(any|deny)"|processes/);
+    // A manifest without kill_app grants no termination at all.
+    expect(
+      cuaDriverCapabilityManifest({ applications: ["com.apple.TextEdit"], tools: ["click"] }),
+    ).not.toContain("terminate");
+    expect(cuaDriverManifestApplications(text)).toEqual([
+      "com.apple.TextEdit",
+      "/usr/bin/gedit",
+      "gedit",
+    ]);
+  });
+
+  // The driver judges kill_app against executable grants only (session_manifest.rs
+  // process_control), and attests a macOS process by the binary ps reports.
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "grants a macOS app's bundle binary beside its bundle id, and nothing when it cannot be read",
+    async () => {
+      const directory = await NodeFSP.realpath(
+        await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-manifest-")),
+      );
+      const bundle = async (name: string, plist: string, binary?: string) => {
+        const app = NodePath.join(directory, name + ".app");
+        await NodeFSP.mkdir(NodePath.join(app, "Contents", "MacOS"), { recursive: true });
+        await NodeFSP.writeFile(NodePath.join(app, "Contents", "Info.plist"), plist);
+        if (binary !== undefined)
+          await NodeFSP.writeFile(NodePath.join(app, "Contents", "MacOS", binary), "");
+        return app;
+      };
+      const plist = (executable: string) =>
+        `<?xml version="1.0"?><plist><dict><key>CFBundleIdentifier</key><string>x</string><key>CFBundleExecutable</key><string>${executable}</string></dict></plist>`;
+      try {
+        const editor = await bundle("Editor", plist("Editor &amp; Co"), "Editor & Co");
+        const missing = await bundle("Missing", plist("Missing"));
+        const escape = await bundle("Escape", plist("../../Editor.app/Contents/MacOS/Editor & Co"));
+        const host = await bundle("GOAT", plist("GOAT"), "GOAT");
+        const path = await prepareCuaDriverCapabilityManifest({
+          binaryPath: "/nonexistent/cua-driver",
+          platform: "darwin",
+          environment: {},
+          hostBundleIds: ["si.goat.desktop"],
+          path: NodePath.join(directory, "manifest.yaml"),
+          listApplications: async () => [
+            { bundle_id: "org.example.editor", name: "Editor", launch_path: editor },
+            { bundle_id: "org.example.missing", name: "Missing", launch_path: missing },
+            { bundle_id: "org.example.escape", name: "Escape", launch_path: escape },
+            { bundle_id: "si.goat.desktop", name: "GOAT", launch_path: host },
+            { bundle_id: "org.example.unlisted", name: "Unlisted" },
+          ],
+        });
+        const text = await NodeFSP.readFile(path, "utf8");
+        const grants = text.split("\n").filter((line) => line.startsWith("    - executable: "));
+        expect(grants).toEqual([
+          "    - executable: " +
+            JSON.stringify(NodePath.join(editor, "Contents", "MacOS", "Editor & Co")) +
+            " # names: []",
+        ]);
+        for (const id of ["org.example.editor", "org.example.missing", "org.example.escape"])
+          expect(text).toContain(`    - bundle_id: "${id}"`);
+        expect(text).not.toContain("si.goat.desktop");
+        expect(text).not.toContain("GOAT.app");
+      } finally {
+        await NodeFSP.rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("offers the read-only get_config while set_config stays out", () => {
+    expect(CUA_DRIVER_ALLOWED_TOOLS).toContain("get_config");
+    expect(Object.keys(CUA_DRIVER_EXCLUDED_TOOLS)).toContain("set_config");
+  });
+
+  it("offers only list_apps identities outside the manifest's protected apps", () => {
+    expect(
+      cuaRequestableApps(
+        [
+          { bundle_id: " com.apple.TextEdit ", name: "Editor window" },
+          { bundle_id: "com.apple.TextEdit", name: "Duplicate" },
+          { bundle_id: " ", name: " fixture.exe ", executable: "C:\\Apps\\fixture.exe" },
+          { name: "Linux Editor", executable: "/usr/bin/editor" },
+          { name: "Name only" },
+          { bundle_id: "SI.GOAT.DESKTOP", name: "GOAT" },
+          { name: "GOAT.exe", executable: "c:/Program Files/GOAT/GOAT.exe" },
+          { bundle_id: "com.trycua.driver", name: "Driver" },
+          { bundle_id: "com.apple.Passwords", name: "Vault" },
+          { bundle_id: "org.example.vault", name: "Bitwarden" },
+          { name: "1Password.exe" },
+          { name: "Driver", executable: "C:\\Tools\\cua-driver.exe" },
+          {
+            bundle_id: "org.example.host",
+            name: "Host alias",
+            executable: "C:\\Program Files\\GOAT\\GOAT.exe",
+          },
+          {
+            bundle_id: "org.example.vault",
+            name: "Vault alias",
+            executable: "C:\\Apps\\1Password.exe",
+          },
+          { bundle_id: "com.example.Passwords", name: "Vault" },
+          { name: " ", executable: "/usr/bin/anonymous" },
+          {},
+        ],
+        ["si.goat.desktop", "\\\\?\\C:\\Program Files\\GOAT\\GOAT.exe"],
+      ),
+    ).toEqual([
+      "/usr/bin/anonymous",
+      "/usr/bin/editor",
+      "C:\\Apps\\fixture.exe",
+      "Linux Editor",
+      "Name only",
+      "com.apple.TextEdit",
+      "fixture.exe",
+    ]);
+  });
+
+  it("admits every listed app except GOAT, the driver and credential stores", () => {
+    expect(
+      admittedCuaApplications(
+        [
+          { bundle_id: "com.apple.finder", name: "Finder" },
+          { bundle_id: "si.goat.desktop", name: "GOAT" },
+          { bundle_id: "com.trycua.driver", name: "CuaDriver" },
+          { bundle_id: "com.apple.Passwords", name: "Passwords" },
+          { bundle_id: "com.1password.1password", name: "1Password" },
+          { bundle_id: "org.example.vault", name: "Bitwarden" },
+          { bundle_id: "com.apple.TextEdit", name: "TextEdit" },
+          { bundle_id: "com.apple.TextEdit", name: "TextEdit" },
+          { bundle_id: null, name: "unidentified" },
+        ],
+        ["SI.GOAT.DESKTOP"],
+      ),
+    ).toEqual(["com.apple.TextEdit", "com.apple.finder"]);
+  });
+
+  // A standalone server excludes only its own runtime; a GOAT app beside it shows approval cards.
+  it("excludes system security and screen time apps from requests and the manifest", () => {
+    const ids = [
+      "com.apple.systempreferences",
+      "com.apple.loginwindow",
+      "com.apple.SecurityAgent",
+      "com.apple.coreauthd",
+      "com.apple.LocalAuthentication.UIAgent",
+      "com.apple.keychainaccess",
+      "com.apple.ScreenTimeAgent",
+      "com.apple.ScreenTimeSettingsAgent",
+      "com.apple.ScreenTimeWidgetApplication",
+      "com.apple.ScreenTimeViewService",
+    ];
+    const listed = ids.map((bundle_id) => ({ bundle_id, name: "System app" }));
+    for (const id of ids) expect(isExcludedCuaApplication(id), id).toBe(true);
+    expect(admittedCuaApplications(listed, [])).toEqual([]);
+    expect(cuaRequestableApps(listed, [])).toEqual([]);
+  });
+
+  it("never admits or offers any GOAT desktop channel or its computer use helper", () => {
+    const listed = [
+      { bundle_id: "si.goat.desktop", name: "GOAT" },
+      { bundle_id: "si.goat.desktop.nightly", name: "GOAT (Nightly)" },
+      { bundle_id: "si.goat.desktop.dev", name: "GOAT (Dev)" },
+      { bundle_id: "si.goat.desktop.computer-use", name: "GOAT Computer Use" },
+      { bundle_id: "si.goat.desktop.nightly.computer-use", name: "GOAT Computer Use" },
+      { bundle_id: "org.gnome.TextEditor", name: "Text Editor" },
+    ];
+    expect(admittedCuaApplications(listed, ["si.goat.server"])).toEqual(["org.gnome.TextEditor"]);
+    expect(cuaRequestableApps(listed, ["si.goat.server"])).toEqual(["org.gnome.TextEditor"]);
+    for (const id of [
+      "si.goat.desktop",
+      "SI.GOAT.DESKTOP.NIGHTLY",
+      "si.goat.desktop.dev.computer-use",
+    ])
+      expect(isExcludedCuaApplication(id)).toBe(true);
+  });
+
+  // #1598: NordPass, Proton Pass and 1Password for Safari are credential stores too.
+  it("never admits or offers NordPass, Proton Pass or 1Password for Safari on any platform", () => {
+    const listed = [
+      // macOS, by bundle id with an unhelpful name, and by name.
+      { bundle_id: "com.nordsec.nordpass", name: "Vault" },
+      { bundle_id: "me.proton.pass.electron", name: "Vault" },
+      { bundle_id: "me.proton.pass.catalyst", name: "Vault" },
+      { bundle_id: "com.1password.safari", name: "Vault" },
+      { bundle_id: "org.example.np", name: "NordPass" },
+      { bundle_id: "org.example.pp", name: "Proton Pass" },
+      // Windows, by executable path.
+      {
+        bundle_id: null,
+        name: "NordPass.exe",
+        executable: "C:\\Users\\me\\AppData\\Local\\Programs\\nordpass\\NordPass.exe",
+      },
+      {
+        bundle_id: null,
+        name: "Proton Pass.exe",
+        executable: "C:\\Users\\me\\AppData\\Local\\Programs\\Proton Pass\\ProtonPass.exe",
+      },
+      // Linux, by executable with no desktop entry.
+      { bundle_id: null, name: "proton-pass", executable: "/opt/proton-pass/proton-pass" },
+      { bundle_id: null, name: "nordpass", executable: "/snap/nordpass/current/nordpass" },
+      // Snap desktop ids and Windows AUMIDs join words with "_", with an unhelpful name.
+      { bundle_id: "nordpass_nordpass", name: "Vault" },
+      { bundle_id: "proton-pass_proton-pass", name: "Vault" },
+      { bundle_id: "ProtonPass_6qsfpqg5m1w4e!App", name: "Vault" },
+      // Neighbours that are not credential stores stay admitted.
+      { bundle_id: "ch.protonmail.desktop", name: "Proton Mail" },
+      { bundle_id: "com.example.compass", name: "Compass" },
+    ];
+    expect(admittedCuaApplications(listed, [])).toEqual([
+      "ch.protonmail.desktop",
+      "com.example.compass",
+    ]);
+    expect(cuaRequestableApps(listed, [])).toEqual([
+      "ch.protonmail.desktop",
+      "com.example.compass",
+    ]);
+  });
+
+  it("admits a running Windows program with no bundle id by its executable, never GOAT's own (#1368)", () => {
+    const goat = "C:\\Program Files\\GOAT\\GOAT.exe";
+    expect(
+      admittedCuaApplications(
+        [
+          // A Start menu app: the driver gives its path as the bundle id.
+          {
+            bundle_id: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+            name: "Google Chrome",
+          },
+          // Running with no Start menu entry: only the helper's executable identifies it.
+          { bundle_id: null, name: "fixture.exe", executable: "C:\\work\\fixture.exe" },
+          { bundle_id: null, name: "GOAT.exe", executable: goat },
+          {
+            bundle_id: null,
+            name: "cua-driver.exe",
+            executable: "C:\\GOAT\\cua-driver\\cua-driver.exe",
+          },
+          {
+            bundle_id: null,
+            name: "GOAT Computer Use.exe",
+            executable: "C:\\GOAT\\GOAT Computer Use.exe",
+          },
+          {
+            bundle_id: null,
+            name: "KeePassXC.exe",
+            executable: "C:\\Apps\\KeePassXC\\KeePassXC.exe",
+          },
+          { bundle_id: null, name: "explorer.exe" },
+        ],
+        [goat.toUpperCase()],
+      ),
+    ).toEqual([
+      "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "C:\\work\\fixture.exe",
+    ]);
+  });
+
+  it("keeps GOAT out however its own path is spelled: prefixed, UNC, forward slashes or case", () => {
+    const listed = [
+      { bundle_id: null, name: "GOAT.exe", executable: "C:\\Apps\\GOAT\\GOAT.exe" },
+      { bundle_id: null, name: "GOAT.exe", executable: "\\\\server\\share\\GOAT\\GOAT.exe" },
+      { bundle_id: null, name: "notes.exe", executable: "C:\\Apps\\notes.exe" },
+    ];
+    for (const host of [
+      ["\\\\?\\C:\\Apps\\GOAT\\GOAT.exe", "\\\\?\\UNC\\server\\share\\GOAT\\GOAT.exe"],
+      ["c:/apps//goat/GOAT.EXE", "//SERVER/share/goat/goat.exe"],
+    ])
+      expect(admittedCuaApplications(listed, host)).toEqual(["C:\\Apps\\notes.exe"]);
+  });
+
+  it("admits a running Linux app with no desktop entry by its executable, one entry per path (#1513)", () => {
+    expect(
+      admittedCuaApplications(
+        [
+          { bundle_id: "org.gnome.Calculator", name: "Calculator" },
+          { bundle_id: null, name: "python3", executable: "/usr/bin/python3.12" },
+          { bundle_id: null, name: "fixture.py", executable: "/usr/bin/python3.12" },
+          { bundle_id: null, name: "cua-driver", executable: "/opt/goat/cua-driver/cua-driver" },
+          { bundle_id: null, name: "keepassxc", executable: "/usr/bin/keepassxc" },
+          { bundle_id: null, name: "node", executable: "/usr/bin/node" },
+        ],
+        ["/usr/bin/node"],
+      ),
+    ).toEqual([
+      { executable: "/usr/bin/python3.12", names: ["fixture.py", "python3"] },
+      "org.gnome.Calculator",
+    ]);
+  });
+
+  it("writes a Linux executable grant the driver matches, and reads back the names approvals use (#1513)", () => {
+    const text = cuaDriverCapabilityManifest({
+      applications: [
+        "org.gnome.Calculator",
+        { executable: "/usr/bin/python3.12", names: ["python3"] },
+      ],
+      tools: ["list_apps"],
+    });
+    expect(text).toContain('    - executable: "/usr/bin/python3.12" # names: ["python3"]');
+    expect(cuaDriverManifestApplications(text)).toEqual([
+      "org.gnome.Calculator",
+      "/usr/bin/python3.12",
+      "python3",
+    ]);
+    expect(
+      missingCuaDriverApplications(["python3", "gedit"], cuaDriverManifestApplications(text)),
+    ).toEqual(["gedit"]);
+  });
+
+  it.skipIf(HostProcess.Platform.defaultValue() !== "linux")(
+    "reads a windowed Linux app's executable from /proc, never GOAT's own process or a windowless one (#1513)",
+    async () => {
+      const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-manifest-"));
+      const child = (await import("node:child_process")).spawn("sleep", ["30"], {
+        stdio: "ignore",
+      });
+      try {
+        const pid = child.pid ?? 0;
+        const path = await prepareCuaDriverCapabilityManifest({
+          binaryPath: "/nonexistent/cua-driver",
+          platform: "linux",
+          environment: {},
+          hostBundleIds: [],
+          path: NodePath.join(directory, "manifest.yaml"),
+          listApplications: async () => [
+            { bundle_id: null, name: "sleep", pid, windows: [{ window_id: 1 }] },
+            { bundle_id: null, name: "windowless", pid, windows: [] },
+            { bundle_id: null, name: "goat", pid: process.pid, windows: [{ window_id: 2 }] },
+          ],
+        });
+        const text = await NodeFSP.readFile(path, "utf8");
+        const sleep = await NodeFSP.realpath(`/proc/${pid}/exe`);
+        expect(text).toContain(`    - executable: ${JSON.stringify(sleep)} # names: ["sleep"]`);
+        expect(text).not.toContain("windowless");
+        expect(text).not.toContain(JSON.stringify(await NodeFSP.realpath(process.execPath)));
+      } finally {
+        child.kill();
+        await NodeFSP.rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("writes a v3 manifest: tools, display, admitted apps and no file or profile scope", () => {
+    const text = cuaDriverCapabilityManifest({
+      applications: ['com.example."quoted"'],
+      tools: ["list_apps", "click"],
+    });
+    expect(text).toBe(
+      [
+        "# Written by GOAT at each driver start. See ADR-0022.",
+        "version: 3",
+        "resources:",
+        "  desktop:",
+        "    display: true",
+        "  apps:",
+        '    - bundle_id: "com.example.\\"quoted\\""',
+        "allow:",
+        "  tools:",
+        '    - "list_apps"',
+        '    - "click"',
+        "",
+      ].join("\n"),
+    );
+    expect(cuaDriverCapabilityManifest({ applications: [] })).toContain("  apps: []");
+    expect(cuaDriverCapabilityManifest({ applications: [] })).not.toMatch(
+      /files|browser|processes/,
+    );
+  });
+
+  it("reads JSON-quoted app ids without confusing tools or escaped characters", () => {
+    const applications = ['com.example."quoted"', "C:\\Apps\\notes.exe", "com.example.\nline"];
+    expect(cuaDriverManifestApplications(cuaDriverCapabilityManifest({ applications }))).toEqual(
+      applications,
+    );
+    expect(
+      cuaDriverManifestApplications(cuaDriverCapabilityManifest({ applications: [] })),
+    ).toEqual([]);
+    expect(() => cuaDriverManifestApplications("    - bundle_id: invalid")).toThrow();
+  });
+
+  it("finds a Linux executable approval missing when only a path differing by case is admitted", () => {
+    expect(missingCuaDriverApplications(["/opt/Notes", "/opt/notes"], ["/opt/notes"])).toEqual([
+      "/opt/Notes",
+    ]);
+    expect(cuaAppKey("/opt/Notes")).toBe("/opt/Notes");
+    expect(cuaAppKey("\\\\?\\C:\\Apps\\Notes.exe")).toBe(cuaAppKey("c:/apps//NOTES.exe"));
+  });
+
+  it("finds missing approvals using the same bundle and Windows path identities as admission", () => {
+    const listed = ["com.apple.TextEdit", "C:\\Apps\\notes.exe", "\\\\server\\share\\app.exe"];
+    expect(
+      missingCuaDriverApplications(
+        [
+          "COM.APPLE.TEXTEDIT",
+          "\\\\?\\C:\\Apps\\notes.exe",
+          "c:/apps//NOTES.exe",
+          "\\\\?\\UNC\\server\\share\\APP.exe",
+          "com.example.new",
+          "C:\\Apps\\new.exe",
+        ],
+        listed,
+      ),
+    ).toEqual(["com.example.new", "C:\\Apps\\new.exe"]);
+  });
+
+  it("recognizes the driver's startup refusal through wrapped causes", () => {
+    const sdk = new Error("embedded cua-driver exited before readiness (code=Some(64))");
+    expect(isCuaDriverStartupRefusal(sdk)).toBe(true);
+    expect(isCuaDriverStartupRefusal({ cause: { cause: sdk } })).toBe(true);
+    expect(
+      isCuaDriverStartupRefusal(
+        new Error("embedded cua-driver exited before readiness (code=Some(1))"),
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("cuaDriverManifest app listing", () => {
+  /**
+   * A stand-in driver that only leaves a mark when something runs it. The driver is spawned
+   * without a shell, so the stand-in is this Node binary with a preload that marks and exits:
+   * a script with a shebang would not run on Windows (#1378).
+   */
+  const trap = (onTestFinished: (cleanup: () => void) => void) => {
+    const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-cu-manifest-"));
+    onTestFinished(() => NodeFS.rmSync(directory, { recursive: true, force: true }));
+    const marker = NodePath.join(directory, "ran");
+    const preload = NodePath.join(directory, "cua-driver");
+    NodeFS.writeFileSync(
+      preload,
+      "require('node:fs').writeFileSync(" + JSON.stringify(marker) + ", '');\nprocess.exit(3);\n",
+    );
+    return {
+      ran: () => NodeFS.existsSync(marker),
+      input: {
+        binaryPath: process.execPath,
+        platform: "darwin" as const,
+        // NODE_OPTIONS reads a backslash inside quotes as an escape, so the path uses slashes.
+        environment: {
+          PATH: "/usr/bin:/bin",
+          NODE_OPTIONS: "--require " + JSON.stringify(preload.replaceAll("\\", "/")),
+        },
+        hostBundleIds: ["si.goat.desktop"],
+        path: NodePath.join(directory, "manifest.yaml"),
+      },
+    };
+  };
+
+  it("keeps the previous manifest readable until the complete replacement is ready", async ({
+    onTestFinished,
+  }) => {
+    const driver = trap(onTestFinished);
+    const before = cuaDriverCapabilityManifest({ applications: ["com.example.before"] });
+    const after = cuaDriverCapabilityManifest({ applications: ["com.example.after"] });
+    await writeCuaDriverCapabilityManifest(driver.input.path, before);
+    const written = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const { writeFile: original } = await vi.importActual<typeof NodeFSP>("node:fs/promises");
+    using _write = vi
+      .spyOn(NodeFSP, "writeFile")
+      .mockImplementation(async (path, text, options) => {
+        await original(path, text, options);
+        written.resolve();
+        await release.promise;
+      });
+    const replacing = writeCuaDriverCapabilityManifest(driver.input.path, after);
+    try {
+      await written.promise;
+      expect(NodeFS.readFileSync(driver.input.path, "utf8")).toBe(before);
+    } finally {
+      release.resolve();
+      await replacing;
+    }
+    expect(NodeFS.readFileSync(driver.input.path, "utf8")).toBe(after);
+    expect(NodeFS.readdirSync(NodePath.dirname(driver.input.path)).sort()).toEqual([
+      "cua-driver",
+      "manifest.yaml",
+    ]);
+    if (HostProcess.Platform.defaultValue() !== "win32")
+      expect(NodeFS.statSync(driver.input.path).mode & 0o777).toBe(0o600);
+  });
+
+  it("preserves the previous manifest and cleans up when replacement is refused", async ({
+    onTestFinished,
+  }) => {
+    const driver = trap(onTestFinished);
+    const before = cuaDriverCapabilityManifest({ applications: ["com.example.before"] });
+    await writeCuaDriverCapabilityManifest(driver.input.path, before);
+    const denied = new Error("rename denied");
+    using _rename = vi.spyOn(NodeFSP, "rename").mockRejectedValueOnce(denied);
+    await expect(writeCuaDriverCapabilityManifest(driver.input.path, "replacement")).rejects.toBe(
+      denied,
+    );
+    expect(NodeFS.readFileSync(driver.input.path, "utf8")).toBe(before);
+    expect(NodeFS.readdirSync(NodePath.dirname(driver.input.path)).sort()).toEqual([
+      "cua-driver",
+      "manifest.yaml",
+    ]);
+  });
+
+  it("lists through the hook and never runs the driver itself", async ({ onTestFinished }) => {
+    const driver = trap(onTestFinished);
+    const path = await prepareCuaDriverCapabilityManifest({
+      ...driver.input,
+      listApplications: async () => [
+        { bundle_id: "com.apple.TextEdit", name: "TextEdit" },
+        { bundle_id: "si.goat.desktop", name: "GOAT" },
+      ],
+    });
+    expect(driver.ran()).toBe(false);
+    const manifest = NodeFS.readFileSync(path, "utf8");
+    expect(manifest).toContain("com.apple.TextEdit");
+    expect(manifest).not.toContain("si.goat.desktop");
+  });
+
+  it("fails when the hook fails, without falling back to running the driver", async ({
+    onTestFinished,
+  }) => {
+    const driver = trap(onTestFinished);
+    await expect(
+      prepareCuaDriverCapabilityManifest({
+        ...driver.input,
+        listApplications: async () => {
+          throw new Error("driver_untrusted");
+        },
+      }),
+    ).rejects.toThrow("driver_untrusted");
+    expect(driver.ran()).toBe(false);
+  });
+
+  it("runs the driver itself when no hook is given", async ({ onTestFinished }) => {
+    const driver = trap(onTestFinished);
+    await expect(prepareCuaDriverCapabilityManifest(driver.input)).rejects.toThrow();
+    expect(driver.ran()).toBe(true);
+  });
+});
+
+describe("request-time listing on standalone servers (#1561)", () => {
+  it("names the apps a request may ask for, from the same listing the manifest uses, without GOAT or credential stores", async () => {
+    const names = await listCuaRequestableApplications({
+      binaryPath: "/nonexistent/cua-driver",
+      platform: "darwin",
+      environment: {},
+      hostBundleIds: ["si.goat.server"],
+      listApplications: async () => [
+        { bundle_id: "com.apple.TextEdit", name: "TextEdit" },
+        { bundle_id: "si.goat.server", name: "GOAT" },
+        { bundle_id: "com.1password.1password", name: "1Password" },
+        { bundle_id: null, name: "python3" },
+      ],
+    });
+    expect(names).toEqual(["com.apple.TextEdit", "python3"]);
+  });
+});
+
+describe("request-time listing on standalone servers, failure paths (#1561)", () => {
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "a driver that answers once and exits is a failed listing, never an uncaught pipe error",
+    async ({ onTestFinished }) => {
+      const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-cu-listing-"));
+      onTestFinished(() => NodeFS.rmSync(directory, { recursive: true, force: true }));
+      const binaryPath = NodePath.join(directory, "cua-driver");
+      // It answers initialize and is gone before GOAT asks for list_apps.
+      NodeFS.writeFileSync(
+        binaryPath,
+        '#!/bin/sh\nprintf \'%s\\n\' \'{"jsonrpc":"2.0","id":1,"result":{}}\'\nexec 0<&-\nexit 0\n',
+        { mode: 0o755 },
+      );
+      const uncaught: Array<unknown> = [];
+      const onUncaught = (error: unknown) => uncaught.push(error);
+      process.on("uncaughtException", onUncaught);
+      onTestFinished(() => void process.off("uncaughtException", onUncaught));
+      for (let run = 0; run < 5; run++)
+        await expect(
+          listCuaRequestableApplications({
+            binaryPath,
+            platform: "linux",
+            environment: { PATH: "/usr/bin:/bin" },
+            hostBundleIds: [],
+          }),
+        ).rejects.toThrow();
+      expect(uncaught).toEqual([]);
+    },
+  );
+});
+
+describe("request-time listing on standalone servers, review round 1 (#1574)", () => {
+  it("lists on the probed session only: a session variable the probe left out is withheld, as for the daemon", () => {
+    const env = cuaDriverSessionListingEnvironment(
+      {
+        PATH: "/usr/bin",
+        DBUS_SESSION_BUS_ADDRESS: "unix:path=/stale/bus",
+        GOAT_AUTH_TOKEN: "secret",
+      },
+      [{ name: "DISPLAY", value: ":7" }],
+      "linux",
+    );
+    expect(env).toMatchObject({ PATH: "/usr/bin", DISPLAY: ":7", DBUS_SESSION_BUS_ADDRESS: "" });
+    expect(env).not.toHaveProperty("GOAT_AUTH_TOKEN");
+  });
+
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "a cancelled listing stops its driver instead of waiting out its own timeout",
+    async ({ onTestFinished }) => {
+      const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-cu-cancel-"));
+      onTestFinished(() => NodeFS.rmSync(directory, { recursive: true, force: true }));
+      const binaryPath = NodePath.join(directory, "cua-driver");
+      // Never answers, so only cancellation can end the listing before its 15 s timeout.
+      NodeFS.writeFileSync(binaryPath, "#!/bin/sh\nexec sleep 30\n", { mode: 0o755 });
+      const controller = new AbortController();
+      const listing = listCuaRequestableApplications({
+        binaryPath,
+        platform: "linux",
+        environment: { PATH: "/usr/bin:/bin" },
+        hostBundleIds: [],
+        signal: controller.signal,
+      });
+      controller.abort();
+      await expect(listing).rejects.toThrow(/cancel/i);
+    },
+  );
+
+  it.skipIf(HostProcess.Platform.defaultValue() === "win32")(
+    "a signal shared by many finished listings keeps none of their abort handlers",
+    async ({ onTestFinished }) => {
+      const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-cu-signal-"));
+      onTestFinished(() => NodeFS.rmSync(directory, { recursive: true, force: true }));
+      const binaryPath = NodePath.join(directory, "cua-driver");
+      NodeFS.writeFileSync(binaryPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      const controller = new AbortController();
+      const held = new Set<unknown>();
+      const add = controller.signal.addEventListener.bind(controller.signal);
+      const remove = controller.signal.removeEventListener.bind(controller.signal);
+      controller.signal.addEventListener = ((
+        type: string,
+        listener: unknown,
+        options?: unknown,
+      ) => {
+        held.add(listener);
+        add(type, listener as EventListener, options as AddEventListenerOptions);
+      }) as AbortSignal["addEventListener"];
+      controller.signal.removeEventListener = ((type: string, listener: unknown) => {
+        held.delete(listener);
+        remove(type, listener as EventListener);
+      }) as AbortSignal["removeEventListener"];
+      for (let run = 0; run < 3; run++)
+        await expect(
+          listCuaRequestableApplications({
+            binaryPath,
+            platform: "linux",
+            environment: { PATH: "/usr/bin:/bin" },
+            hostBundleIds: [],
+            signal: controller.signal,
+          }),
+        ).rejects.toThrow();
+      expect(held.size).toBe(0);
+    },
+  );
+
+  it.skipIf(HostProcess.Platform.defaultValue() !== "linux")(
+    "on Linux a request may name only what the manifest would grant: never GOAT itself or an app with no identity",
+    async () => {
+      const child = (await import("node:child_process")).spawn("sleep", ["30"], {
+        stdio: "ignore",
+      });
+      try {
+        const names = await listCuaRequestableApplications({
+          binaryPath: "/nonexistent/cua-driver",
+          platform: "linux",
+          environment: {},
+          hostBundleIds: [],
+          listApplications: async () => [
+            { bundle_id: "org.gnome.Calculator", name: "Calculator" },
+            { bundle_id: null, name: "sleep", pid: child.pid ?? 0, windows: [{ window_id: 1 }] },
+            { bundle_id: null, name: "node", pid: process.pid, windows: [{ window_id: 2 }] },
+            { bundle_id: null, name: "bash", pid: child.pid ?? 0, windows: [] },
+          ],
+        });
+        expect(names).toContain("org.gnome.Calculator");
+        expect(names).toContain("sleep");
+        expect(names).not.toContain("node");
+        expect(names).not.toContain("bash");
+      } finally {
+        child.kill();
+      }
+    },
+  );
+});
+
+it("rejects an oversized driver frame before newline or child EOF", async () => {
+  const child = NodeChildProcess.spawn(
+    process.execPath,
+    [
+      "-e",
+      `
+    process.stdin.once('data', () => process.stdout.write(Buffer.alloc(8 * 1024 * 1024 + 1, 32)));
+  `,
+    ],
+    { stdio: ["pipe", "pipe", "pipe"] },
+  );
+  using _spawn = vi.spyOn(NodeChildProcess, "spawn").mockReturnValueOnce(child);
+  let bytes = 0;
+  const written = new Promise<void>((resolve) =>
+    child.stdout.on("data", (chunk: Buffer | string) => {
+      bytes += Buffer.byteLength(chunk);
+      if (bytes > 8 * 1024 * 1024) queueMicrotask(resolve);
+    }),
+  );
+  const controller = new AbortController();
+  const result = listCuaDriverApplications({
+    binaryPath: "synthetic-driver",
+    platform: "linux",
+    environment: {},
+    signal: controller.signal,
+  }).catch((error: unknown) => error);
+  try {
+    await written;
+    const rejectedBeforeEof = child.stdin.writableEnded;
+    controller.abort();
+    expect(await result).toMatchObject({
+      message: "Cua Driver listing exceeded its frame budget.",
+    });
+    expect(rejectedBeforeEof).toBe(true);
+  } finally {
+    controller.abort();
+    child.kill();
+  }
+});

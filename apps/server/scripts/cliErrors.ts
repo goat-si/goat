@@ -1,0 +1,58 @@
+import * as Schema from "effect/Schema";
+
+export class ServerCliRegistryPublishingDisabledError extends Schema.TaggedError<ServerCliRegistryPublishingDisabledError>()(
+  "ServerCliRegistryPublishingDisabledError",
+  {},
+) {
+  override get message(): string {
+    return "Registry publishing is disabled. Distribute goat-npm.tgz through GOAT GitHub Releases. An npm owner must approve any future registry identity and publisher.";
+  }
+}
+
+export class ServerCliCommandExitError extends Schema.TaggedError<ServerCliCommandExitError>()(
+  "ServerCliCommandExitError",
+  {
+    command: Schema.String,
+    args: Schema.Array(Schema.String),
+    cwd: Schema.optional(Schema.String),
+    exitCode: Schema.Int,
+  },
+) {
+  override get message(): string {
+    return `Command exited with non-zero exit code (${this.exitCode})`;
+  }
+}
+
+export class ServerCliDevelopmentIconSourceMissingError extends Schema.TaggedError<ServerCliDevelopmentIconSourceMissingError>()(
+  "ServerCliDevelopmentIconSourceMissingError",
+  {
+    sourcePath: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Missing development icon source: ${this.sourcePath}`;
+  }
+}
+
+export class ServerCliDevelopmentIconTargetMissingError extends Schema.TaggedError<ServerCliDevelopmentIconTargetMissingError>()(
+  "ServerCliDevelopmentIconTargetMissingError",
+  {
+    targetPath: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Missing development icon target: ${this.targetPath}. Build web first.`;
+  }
+}
+
+export class ServerCliExecutableImportError extends Schema.TaggedError<ServerCliExecutableImportError>()(
+  "ServerCliExecutableImportError",
+  {
+    bundlePath: Schema.String,
+    specifiers: Schema.Array(Schema.String),
+  },
+) {
+  override get message(): string {
+    return `${this.bundlePath} imports file-backed packages that a single-executable cannot resolve: ${this.specifiers.join(", ")}. Load them through createRequire instead.`;
+  }
+}

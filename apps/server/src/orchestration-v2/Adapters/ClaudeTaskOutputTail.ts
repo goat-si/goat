@@ -1,0 +1,133 @@
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
+import * as Path from "effect/Path";
+
+/**
+ * Live output for a foreground Claude Bash call.
+ *
+ * The Agent SDK sends no stdout until the tool result. Claude Code does write
+ * each running command's combined output to
+ * `<root>/<project>/<session_id>/tasks/<task_id>.output`, naming
+ * the task in its `task_started` frame (`task_type: "local_bash"`). This path is
+ * Claude Code's private layout, not SDK API, so every step degrades to "no live
+ * output": the row still gets its full output from the tool result.
+ */
+
+const CLAUDE_TASK_OUTPUT_POLL_MS = 250;
+/** Give up looking for a file Claude Code never wrote (a newer layout). */
+const MAX_LOCATE_ATTEMPTS = 40;
+/** Skip ahead of fast writers; only the tail is displayed. */
+const MAX_READ_BYTES = 256 * 1024;
+
+// Claude's per-user temp root follows the process environment and launch cwd.
+// Windows has no uid and uses `claude` under CLAUDE_CODE_TMPDIR or TEMP/TMP.
+export function claudeTaskOutputRoot(
+  environment: Readonly<Record<string, string | undefined>> | undefined,
+  path: Path.Path,
+  host: {
+    readonly uid: number | undefined;
+    readonly cwd?: string | null;
+    readonly platform?: NodeJS.Platform;
+  },
+): string | undefined {
+  const override = environment?.CLAUDE_CODE_TMPDIR?.trim();
+  if (host.uid !== undefined) {
+    // Claude's macOS build ignores the launchd TMPDIR; Linux follows its process environment.
+    const fallback =
+      host.platform === "darwin"
+        ? "/tmp"
+        : environment?.TMPDIR || environment?.TMP || environment?.TEMP || "/tmp";
+    return path.resolve(host.cwd ?? ".", override || fallback, `claude-${host.uid}`);
+  }
+  const base = override || environment?.TEMP?.trim() || environment?.TMP?.trim();
+  return base
+    ? host.cwd
+      ? path.resolve(host.cwd, base, "claude")
+      : path.join(base, "claude")
+    : undefined;
+}
+
+const locate = Effect.fn("ClaudeTaskOutputTail.locate")(function* (input: {
+  readonly root: string;
+  readonly sessionId: string;
+  readonly taskId: string;
+}) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const projects = yield* fileSystem.readDirectory(input.root).pipe(Effect.orElseSucceed(() => []));
+  for (const project of projects) {
+    const candidate = path.join(
+      input.root,
+      project,
+      input.sessionId,
+      "tasks",
+      `${input.taskId}.output`,
+    );
+    if (yield* fileSystem.exists(candidate).pipe(Effect.orElseSucceed(() => false))) {
+      return Option.some(candidate);
+    }
+  }
+  return Option.none<string>();
+});
+
+/** Complete stop on tool result or turn end, then await the effect; it performs a final read before returning. */
+export const tailClaudeTaskOutput = Effect.fn("ClaudeTaskOutputTail.tail")(function* (input: {
+  readonly root: string;
+  readonly sessionId: string;
+  readonly taskId: string;
+  readonly stop: Deferred.Deferred<void>;
+  readonly onChunk: (chunk: string) => Effect.Effect<void>;
+}) {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const pause = Deferred.await(input.stop).pipe(
+    Effect.as(true),
+    Effect.timeoutOrElse({
+      duration: CLAUDE_TASK_OUTPUT_POLL_MS,
+      orElse: () => Effect.succeed(false),
+    }),
+  );
+  let file = Option.none<string>();
+  for (let attempt = 0; Option.isNone(file); attempt += 1) {
+    file = yield* locate(input);
+    if (Option.isSome(file)) break;
+    if (attempt + 1 >= MAX_LOCATE_ATTEMPTS || (yield* pause)) return;
+  }
+  const filePath = file.value;
+  let decoder = new TextDecoder("utf-8", { fatal: false });
+  let offset = 0;
+  let last = yield* Deferred.isDone(input.stop);
+  while (true) {
+    const size = yield* fileSystem.stat(filePath).pipe(
+      Effect.map((info) => Number(info.size)),
+      Effect.orElseSucceed(() => offset),
+    );
+    if (size < offset) offset = 0;
+    if (size > offset) {
+      const start = size - offset > MAX_READ_BYTES ? size - MAX_READ_BYTES : offset;
+      const bytes = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const handle = yield* fileSystem.open(filePath, { flag: "r" });
+          yield* handle.seek(BigInt(start), "start");
+          return yield* handle.readAlloc(size - start);
+        }),
+      ).pipe(Effect.orElseSucceed(() => Option.none<Uint8Array>()));
+      if (Option.isSome(bytes)) {
+        // Skipped output must not splice two unrelated lines together.
+        const skipped = start > offset;
+        // Reset partial UTF-8 bytes when skipping output.
+        if (skipped) decoder = new TextDecoder("utf-8", { fatal: false });
+        offset = start + bytes.value.byteLength;
+        const text = (skipped ? "\n" : "") + decoder.decode(bytes.value, { stream: true });
+        if (text.length > 0) yield* input.onChunk(text);
+      }
+    }
+    if (last) {
+      const rest = decoder.decode();
+      if (rest.length > 0) yield* input.onChunk(rest);
+      return;
+    }
+    last = yield* pause;
+  }
+});

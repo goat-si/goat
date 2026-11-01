@@ -1,0 +1,983 @@
+import { type DesktopCuaFrames, DesktopHostTelemetryMessage } from "@goat/contracts";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { assert, describe, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Queue from "effect/Queue";
+import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
+
+import type * as Electron from "electron";
+import * as NodeEvents from "node:events";
+
+import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+import * as ElectronApp from "../electron/ElectronApp.ts";
+import * as ElectronPowerMonitor from "../electron/ElectronPowerMonitor.ts";
+import * as DesktopTelemetryPublisher from "./DesktopTelemetryPublisher.ts";
+import * as DesktopRendererHistory from "./DesktopRendererHistory.ts";
+import { fixture } from "../cua/DesktopCuaDriver.testkit.ts";
+
+const layerHistory = Layer.succeed(DesktopRendererHistory.DesktopRendererHistory, {
+  register: () => Effect.void,
+  recordMetrics: () => Effect.void,
+  shutdown: Effect.void,
+});
+
+function layerElectronApp(
+  metrics: ReadonlyArray<Electron.ProcessMetric>,
+  onMetricsRead: () => void = () => undefined,
+) {
+  return Layer.succeed(ElectronApp.ElectronApp, {
+    metadata: Effect.die("unexpected metadata read"),
+    name: Effect.succeed("T3 Code"),
+    systemLocale: Effect.succeed("en-US"),
+    whenReady: Effect.void,
+    requestSingleInstanceLock: Effect.succeed(true),
+    quit: Effect.void,
+    exit: () => Effect.void,
+    relaunch: () => Effect.void,
+    setPath: () => Effect.void,
+    setName: () => Effect.void,
+    setAboutPanelOptions: () => Effect.void,
+    setAppUserModelId: () => Effect.void,
+    getAppMetrics: Effect.sync(() => {
+      onMetricsRead();
+      return metrics;
+    }),
+    setAsDefaultProtocolClient: () => Effect.succeed(true),
+    setDesktopName: () => Effect.void,
+    setDockIcon: () => Effect.void,
+    appendCommandLineSwitch: () => Effect.void,
+    removeCommandLineSwitch: () => Effect.void,
+    onBeforeQuitForUpdate: () => Effect.void,
+    on: () => Effect.void,
+  } satisfies ElectronApp.ElectronApp["Service"]);
+}
+
+const layerCuaRouting = DesktopTelemetryPublisher.layer.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      layerElectronApp([]),
+      layerHistory,
+      Layer.succeed(
+        ElectronPowerMonitor.ElectronPowerMonitor,
+        ElectronPowerMonitor.ElectronPowerMonitor.of({
+          isOnBatteryPower: Effect.succeed(false),
+          getSystemIdleTime: Effect.succeed(0),
+          getSystemIdleState: () => Effect.succeed("active"),
+          getCurrentThermalState: Effect.succeed("nominal"),
+          onSimpleEvent: () => Effect.void,
+          onThermalStateChange: () => Effect.void,
+          onSpeedLimitChange: () => Effect.void,
+        }),
+      ),
+    ),
+  ),
+);
+
+const collectTelemetry = Effect.fn(function* (stream: Stream.Stream<Uint8Array>) {
+  const messages = yield* Queue.unbounded<DesktopHostTelemetryMessage>();
+  const received: DesktopHostTelemetryMessage[] = [];
+  const decode = Schema.decodeUnknownEffect(Schema.fromJsonString(DesktopHostTelemetryMessage));
+  const fiber = yield* stream.pipe(
+    Stream.mapEffect((bytes) => decode(new TextDecoder().decode(bytes).trim())),
+    Stream.runForEach((message) => {
+      received.push(message);
+      return Queue.offer(messages, message);
+    }),
+    Effect.forkScoped,
+  );
+  const next = Effect.fn(function* (type: DesktopHostTelemetryMessage["type"]) {
+    let message = yield* Queue.take(messages);
+    while (message.type !== type) message = yield* Queue.take(messages);
+    return message;
+  });
+  yield* next("desktopTelemetryHello");
+  yield* next("desktopTelemetry");
+  return { fiber, received, next };
+});
+
+describe("DesktopTelemetryPublisher", () => {
+  it.effect("coalesces requests during a blocked listing into one fresh follow-up listing", () =>
+    Effect.gen(function* () {
+      const publisher = yield* DesktopTelemetryPublisher.DesktopTelemetryPublisher;
+      const primary = yield* collectTelemetry(publisher.encodedForSource("primary"));
+      const started = yield* Deferred.make<void>();
+      const release = Promise.withResolvers<void>();
+      let listings = 0;
+      const test = yield* fixture({
+        platform: "win32",
+        helper: { granted: true },
+        publisher,
+        appListing: async () => {
+          if (++listings === 1) {
+            Deferred.doneUnsafe(started, Exit.void);
+            await release.promise;
+            return [{ name: "Initial app" }];
+          }
+          return [{ name: "Fresh app" }];
+        },
+      });
+      const request = (requestId: string) =>
+        publisher.handleControlForSource("primary", {
+          version: 1,
+          type: "cuaAppsRequest",
+          requestId,
+        });
+      yield* request("initial");
+      yield* Deferred.await(started);
+      const pending = Array.from({ length: 24 }, (_, i) => `pending-${i}`);
+      for (const id of pending) yield* request(id);
+      yield* Effect.sync(() => release.resolve());
+      for (const id of ["initial", ...pending]) {
+        const report = yield* primary.next("cuaApps");
+        assert.deepEqual(report, {
+          version: 1,
+          type: "cuaApps",
+          requestId: id,
+          status: "listed",
+          apps: [id === "initial" ? "Initial app" : "Fresh app"],
+          // The test helper lists names only; its catalog of names and icons is empty.
+          catalog: [],
+        });
+      }
+      assert.equal(test.helperAppListings.length, 2);
+    }).pipe(Effect.provide(layerCuaRouting), Effect.scoped),
+  );
+
+  it.effect(
+    "bounds pending app requests to the newest 32 and drops the oldest without answering",
+    () =>
+      Effect.gen(function* () {
+        const publisher = yield* DesktopTelemetryPublisher.DesktopTelemetryPublisher;
+        const primary = yield* collectTelemetry(publisher.encodedForSource("primary"));
+        const started = yield* Deferred.make<void>();
+        const release = Promise.withResolvers<void>();
+        let listings = 0;
+        const test = yield* fixture({
+          platform: "win32",
+          helper: { granted: true },
+          publisher,
+          appListing: async () => {
+            if (++listings === 1) {
+              Deferred.doneUnsafe(started, Exit.void);
+              await release.promise;
+            }
+            return [{ name: "Editor" }];
+          },
+        });
+        const request = (requestId: string) =>
+          publisher.handleControlForSource("primary", {
+            version: 1,
+            type: "cuaAppsRequest",
+            requestId,
+          });
+        yield* request("initial");
+        yield* Deferred.await(started);
+        const pending = Array.from({ length: 40 }, (_, i) => `pending-${i}`);
+        for (const id of pending) yield* request(id);
+        yield* Effect.sync(() => release.resolve());
+        const answered: string[] = [];
+        for (let i = 0; i < 33; i++) {
+          const report = yield* primary.next("cuaApps");
+          if (report.type === "cuaApps") answered.push(report.requestId);
+        }
+        assert.deepEqual(answered, ["initial", ...pending.slice(-32)]);
+        assert.equal(test.helperAppListings.length, 2);
+      }).pipe(Effect.provide(layerCuaRouting), Effect.scoped),
+  );
+
+  it.effect(
+    "drops a replaced source's queued requests and in-flight answers even when ids repeat",
+    () =>
+      Effect.gen(function* () {
+        const publisher = yield* DesktopTelemetryPublisher.DesktopTelemetryPublisher;
+        const primary = yield* collectTelemetry(publisher.encodedForSource("primary"));
+        const started = yield* Deferred.make<void>();
+        const release = Promise.withResolvers<void>();
+        let listings = 0;
+        const test = yield* fixture({
+          platform: "win32",
+          helper: { granted: true },
+          publisher,
+          appListing: async () => {
+            if (++listings === 1) {
+              Deferred.doneUnsafe(started, Exit.void);
+              await release.promise;
+              return [{ name: "Old app" }];
+            }
+            return [{ name: "New app" }];
+          },
+        });
+        const request = (requestId: string) =>
+          publisher.handleControlForSource("primary", {
+            version: 1,
+            type: "cuaAppsRequest",
+            requestId,
+          });
+        yield* request("reused-id");
+        yield* Deferred.await(started);
+        yield* request("old-pending");
+        const replacement = yield* collectTelemetry(publisher.encodedForSource("primary"));
+        yield* request("reused-id");
+        yield* Effect.sync(() => release.resolve());
+        assert.deepEqual(yield* replacement.next("cuaApps"), {
+          version: 1,
+          type: "cuaApps",
+          requestId: "reused-id",
+          status: "listed",
+          apps: ["New app"],
+          catalog: [],
+        });
+        assert.equal(test.helperAppListings.length, 2);
+        assert.isEmpty(primary.received.filter((message) => message.type === "cuaApps"));
+      }).pipe(Effect.provide(layerCuaRouting), Effect.scoped),
+  );
+
+  it.effect("does not list queued requests after their source detaches or is replaced", () =>
+    Effect.gen(function* () {
+      const publisher = yield* DesktopTelemetryPublisher.DesktopTelemetryPublisher;
+      yield* collectTelemetry(publisher.encodedForSource("primary"));
+      const request = (requestId: string) =>
+        publisher.handleControlForSource("primary", {
+          version: 1,
+          type: "cuaAppsRequest",
+          requestId,
+        });
+      yield* request("detached");
+      yield* publisher.removeControlSource("primary");
+      yield* collectTelemetry(publisher.encodedForSource("primary"));
+      yield* request("replaced");
+      const replacement = yield* collectTelemetry(publisher.encodedForSource("primary"));
+      const test = yield* fixture({ platform: "win32", helper: { granted: true }, publisher });
+      yield* request("fresh");
+      const report = yield* replacement.next("cuaApps");
+      assert.equal(report.type === "cuaApps" && report.requestId, "fresh");
+      assert.equal(test.helperAppListings.length, 1);
+    }).pipe(Effect.provide(layerCuaRouting), Effect.scoped),
+  );
+
+  it.effect(
+    "routes app listings only for attached primary requests and never replays them to another source",
+    () =>
+      Effect.gen(function* () {
+        const publisher = yield* DesktopTelemetryPublisher.DesktopTelemetryPublisher;
+        const primary = yield* collectTelemetry(publisher.encodedForSource("primary"));
+        const remote = yield* collectTelemetry(publisher.encodedForSource("ssh:remote"));
+        const request = (source: string, requestId: string) =>
+          publisher.handleControlForSource(source, {
+            version: 1,
+            type: "cuaAppsRequest",
+            requestId,
+          });
+        yield* request("ssh:remote", "foreign");
+        yield* request("primary", "accepted");
+        yield* publisher.cuaAppsRequests.pipe(Stream.take(1), Stream.runDrain);
+        const accepted = yield* publisher.takeCuaAppsRequests;
+        assert.deepEqual(accepted.requestIds, ["accepted"]);
+        const report = {
+          version: 1,
+          type: "cuaApps",
+          requestId: "accepted",
+          status: "listed",
+          apps: ["Editor"],
+        } as const;
+        yield* accepted.publish({ ...report, requestId: "foreign" });
+        yield* accepted.publish(report);
+        assert.deepEqual(yield* primary.next("cuaApps"), report);
+        yield* publisher.removeControlSource("primary");
+        yield* accepted.publish(report);
+        yield* request("primary", "detached");
+        const replacement = yield* collectTelemetry(publisher.encodedForSource("primary"));
+        yield* accepted.publish(report);
+        yield* request("primary", "replacement");
+        yield* publisher.cuaAppsRequests.pipe(Stream.take(1), Stream.runDrain);
+        const next = yield* publisher.takeCuaAppsRequests;
+        assert.deepEqual(next.requestIds, ["replacement"]);
+        const fresh = { ...report, requestId: "replacement" };
+        yield* next.publish(fresh);
+        assert.deepEqual(yield* replacement.next("cuaApps"), fresh);
+        yield* publisher.handleControlForSource("primary", {
+          version: 1,
+          type: "setDiagnosticsDemand",
+          enabled: true,
+        });
+        yield* remote.next("desktopTelemetry");
+        assert.isEmpty(remote.received.filter((message) => message.type === "cuaApps"));
+        assert.deepEqual(
+          primary.received.filter((message) => message.type === "cuaApps"),
+          [report],
+        );
+      }).pipe(Effect.provide(layerCuaRouting), Effect.scoped),
+  );
+
+  it.effect("accepts CUA controls only from the attached primary and disables it on detach", () =>
+    Effect.gen(function* () {
+      const publisher = yield* DesktopTelemetryPublisher.DesktopTelemetryPublisher;
+      const primary = yield* collectTelemetry(publisher.encodedForSource("primary"));
+      const request = (source: string, requestId: string) =>
+        publisher.handleControlForSource(source, {
+          version: 1,
+          type: "cuaDriverRequest",
+          requestId,
+          enabled: true,
+        });
+      yield* request("ssh:remote", "remote-ignored");
+      yield* publisher.removeControlSource("ssh:remote");
+      yield* request("primary", "accepted");
+      yield* publisher.removeControlSource("primary");
+      yield* request("primary", "detached-ignored");
+      yield* Fiber.interrupt(primary.fiber);
+      yield* request("primary", "stopped-ignored");
+
+      yield* collectTelemetry(publisher.encodedForSource("primary"));
+      yield* request("primary", "replacement");
+      const requests = yield* publisher.cuaRequests.pipe(Stream.take(3), Stream.runCollect);
+      assert.equal(requests[0]?.requestId, "accepted");
+      assert.equal(requests[0]?.enabled, true);
+      assert.equal(requests[1]?.enabled, false);
+      assert.equal(requests[2]?.requestId, "replacement");
+      assert.equal(requests[2]?.enabled, true);
+    }).pipe(Effect.provide(layerCuaRouting), Effect.scoped),
+  );
+
+  it.effect("sends private CUA descriptors only to the primary, with no replay after detach", () =>
+    Effect.gen(function* () {
+      const publisher = yield* DesktopTelemetryPublisher.DesktopTelemetryPublisher;
+      const primary = yield* collectTelemetry(publisher.encodedForSource("primary"));
+      const remote = yield* collectTelemetry(publisher.encodedForSource("ssh:remote"));
+      const generic = yield* collectTelemetry(publisher.encoded);
+      const report = {
+        version: 1,
+        type: "cuaDriverReport",
+        requestId: "private-session",
+        status: "ready",
+        mcp: {
+          command: "/native/driver",
+          args: ["mcp", "--session", "private-session"],
+          environment: [{ name: "CUA_TOKEN", value: "private-token" }],
+          socketPath: "/private/driver.sock",
+        },
+      } as const;
+      yield* publisher.handleControlForSource("primary", {
+        version: 1,
+        type: "cuaDriverRequest",
+        requestId: report.requestId,
+        enabled: true,
+      });
+      yield* publisher.publishCuaReport(report);
+      assert.deepEqual(yield* primary.next("cuaDriverReport"), report);
+      yield* publisher.removeControlSource("primary");
+      yield* publisher.publishCuaReport({ ...report, requestId: "late-after-detach" });
+      const replacement = yield* collectTelemetry(publisher.encodedForSource("primary"));
+      yield* publisher.handleControlForSource("primary", {
+        version: 1,
+        type: "cuaDriverRequest",
+        requestId: "replacement-session",
+        enabled: true,
+      });
+      yield* publisher.publishCuaReport(report);
+      yield* publisher.handleControlForSource("primary", {
+        version: 1,
+        type: "setDiagnosticsDemand",
+        enabled: true,
+      });
+      yield* Effect.forEach([remote, generic, replacement], (source) =>
+        source.next("desktopTelemetry"),
+      );
+      assert.deepEqual(
+        primary.received.filter((message) => message.type === "cuaDriverReport"),
+        [report],
+      );
+      for (const source of [remote, generic, replacement]) {
+        assert.isEmpty(source.received.filter((message) => message.type === "cuaDriverReport"));
+      }
+      const superseding = yield* collectTelemetry(publisher.encodedForSource("primary"));
+      yield* Fiber.interrupt(replacement.fiber);
+      const latestReport = { ...report, requestId: "superseding-session" };
+      yield* publisher.handleControlForSource("primary", {
+        version: 1,
+        type: "cuaDriverRequest",
+        requestId: latestReport.requestId,
+        enabled: true,
+      });
+      yield* publisher.publishCuaReport(latestReport);
+      assert.deepEqual(yield* superseding.next("cuaDriverReport"), latestReport);
+      assert.deepEqual(
+        primary.received.filter((message) => message.type === "cuaDriverReport"),
+        [report],
+      );
+    }).pipe(Effect.provide(layerCuaRouting), Effect.scoped),
+  );
+
+  it.effect(
+    "watches only while its own server says agents control the host, ignoring late and foreign messages",
+    () =>
+      Effect.gen(function* () {
+        const publisher = yield* DesktopTelemetryPublisher.DesktopTelemetryPublisher;
+        const heard = yield* Queue.unbounded<boolean>();
+        yield* publisher.cuaWatch.pipe(
+          Stream.runForEach((active) => Queue.offer(heard, active)),
+          Effect.forkScoped,
+        );
+        assert.isFalse(yield* Queue.take(heard));
+        const watch = (seq: number, active: boolean) =>
+          ({ version: 1, type: "cuaWatch", seq, active }) as const;
+        const current = publisher.cuaWatch.pipe(Stream.runHead);
+        const primary = yield* collectTelemetry(publisher.encodedForSource("primary"));
+        yield* publisher.handleControlForSource("ssh:remote", watch(9, true));
+        assert.deepEqual(yield* current, Option.some(false));
+        yield* publisher.handleControlForSource("primary", watch(2, true));
+        assert.isTrue(yield* Queue.take(heard));
+        // seq 1 was sent before seq 2 and arrived after it.
+        yield* publisher.handleControlForSource("primary", watch(1, false));
+        assert.deepEqual(yield* current, Option.some(true));
+        yield* publisher.handleControlForSource("primary", watch(3, false));
+        assert.isFalse(yield* Queue.take(heard));
+        yield* publisher.handleControlForSource("primary", watch(4, true));
+        assert.isTrue(yield* Queue.take(heard));
+        // The server going away ends the watch.
+        yield* Fiber.interrupt(primary.fiber);
+        assert.isFalse(yield* Queue.take(heard));
+        assert.equal(yield* Queue.size(heard), 0);
+      }).pipe(Effect.provide(layerCuaRouting), Effect.scoped),
+  );
+
+  it.effect(
+    "replays approved apps, accepts apps-only updates and clears them with the local server",
+    () =>
+      Effect.gen(function* () {
+        const publisher = yield* DesktopTelemetryPublisher.DesktopTelemetryPublisher;
+        const primary = yield* collectTelemetry(publisher.encodedForSource("primary"));
+        const watch = (seq: number, apps?: ReadonlyArray<string>) =>
+          ({
+            version: 1,
+            type: "cuaWatch",
+            seq,
+            active: true,
+            ...(apps === undefined ? {} : { apps }),
+          }) as const;
+        const current = publisher.cuaWatchApps.pipe(Stream.runHead);
+        yield* publisher.handleControlForSource("primary", watch(1, ["com.example.notes"]));
+        assert.deepEqual(yield* current, Option.some(["com.example.notes"]));
+        yield* publisher.handleControlForSource("primary", watch(2, ["com.example.new"]));
+        yield* publisher.handleControlForSource("primary", watch(1, ["com.example.old"]));
+        yield* publisher.handleControlForSource("ssh:remote", watch(3, ["com.example.foreign"]));
+        assert.deepEqual(yield* current, Option.some(["com.example.new"]));
+        yield* publisher.handleControlForSource("primary", watch(3));
+        assert.deepEqual(yield* current, Option.some([]));
+        yield* publisher.handleControlForSource("primary", watch(4, ["com.example.notes"]));
+        yield* Fiber.interrupt(primary.fiber);
+        assert.deepEqual(yield* current, Option.some([]));
+      }).pipe(Effect.provide(layerCuaRouting), Effect.scoped),
+  );
+
+  it.effect(
+    "hands its own server's window capture requests to the helper, and clears them when that server goes away",
+    () =>
+      Effect.gen(function* () {
+        const publisher = yield* DesktopTelemetryPublisher.DesktopTelemetryPublisher;
+        const heard = yield* Queue.unbounded<DesktopCuaFrames>();
+        yield* publisher.cuaFrames.pipe(
+          Stream.runForEach((request) => Queue.offer(heard, request)),
+          Effect.forkScoped,
+        );
+        assert.equal((yield* Queue.take(heard)).seq, 0);
+        const frames = (seq: number) =>
+          ({
+            version: 1,
+            type: "cuaFrames",
+            seq,
+            targets: [
+              { key: "desktop:control:a", pid: 7, windowId: 3, maxWidth: 320, intervalMs: 500 },
+            ],
+          }) as const;
+        const primary = yield* collectTelemetry(publisher.encodedForSource("primary"));
+        yield* publisher.handleControlForSource("ssh:remote", frames(9));
+        // Another environment's server never asks this host to capture anything.
+        assert.equal(yield* Queue.size(heard), 0);
+        const none: DesktopCuaFrames = { version: 1, type: "cuaFrames", seq: 0, targets: [] };
+        assert.deepEqual(yield* publisher.cuaFrames.pipe(Stream.runHead), Option.some(none));
+        yield* publisher.handleControlForSource("primary", frames(7));
+        assert.deepEqual(yield* Queue.take(heard), frames(7));
+        yield* Fiber.interrupt(primary.fiber);
+        assert.deepEqual((yield* Queue.take(heard)).targets, []);
+        assert.equal(yield* Queue.size(heard), 0);
+      }).pipe(Effect.provide(layerCuaRouting), Effect.scoped),
+  );
+
+  it.effect(
+    "sends a ready driver right behind the readiness of the helper that runs it, in one write",
+    () =>
+      Effect.gen(function* () {
+        const publisher = yield* DesktopTelemetryPublisher.DesktopTelemetryPublisher;
+        const readiness = {
+          version: 1,
+          type: "cuaReadiness",
+          generation: 4,
+          readiness: {
+            grants: { accessibility: "granted", screenCapture: "granted" },
+            helper: "authenticated",
+            capture: "ready",
+            tree: "ready",
+            input: "background",
+            blockers: [],
+            reasons: [],
+          },
+          signals: { privateMode: "unsupported", humanInput: "unsupported" },
+        } as const;
+        const chunks = yield* Queue.unbounded<string>();
+        const decoder = new TextDecoder();
+        yield* publisher.encodedForSource("primary").pipe(
+          Stream.runForEach((chunk) => Queue.offer(chunks, decoder.decode(chunk))),
+          Effect.forkScoped,
+        );
+        // Attached once its first snapshot arrives, as collectTelemetry waits.
+        let first = yield* Queue.take(chunks);
+        while (!first.includes('"desktopTelemetry"')) first = yield* Queue.take(chunks);
+        yield* publisher.handleControlForSource("primary", {
+          version: 1,
+          type: "cuaDriverRequest",
+          requestId: "agent",
+          enabled: true,
+        });
+        // The server admits unattended work on these signals once the driver is ready; the
+        // readiness stream alone could reach it after the report.
+        yield* publisher.publishCuaReadiness(readiness);
+        yield* publisher.publishCuaReport({
+          version: 1,
+          type: "cuaDriverReport",
+          requestId: "agent",
+          status: "ready",
+          mcp: { command: "/native/driver", args: ["mcp"], environment: [] },
+        });
+        let chunk = yield* Queue.take(chunks);
+        while (!chunk.includes('"cuaDriverReport"')) chunk = yield* Queue.take(chunks);
+        const lines = chunk.trim().split("\n");
+        assert.lengthOf(lines, 2);
+        assert.include(lines[0] ?? "", '"cuaReadiness"');
+        assert.include(lines[0] ?? "", '"privateMode":"unsupported"');
+        assert.include(lines[1] ?? "", '"cuaDriverReport"');
+      }).pipe(Effect.provide(layerCuaRouting), Effect.scoped),
+  );
+
+  it.effect(
+    "sends the helper's readiness only to its own server, newest first to one that connects later",
+    () =>
+      Effect.gen(function* () {
+        const publisher = yield* DesktopTelemetryPublisher.DesktopTelemetryPublisher;
+        const report = (generation: number) =>
+          ({
+            version: 1,
+            type: "cuaReadiness",
+            generation,
+            readiness: {
+              grants: { accessibility: "granted", screenCapture: "pending" },
+              helper: "unauthenticated",
+              capture: "pending",
+              tree: "unavailable",
+              input: "unavailable",
+              blockers: [],
+              reasons: [],
+            },
+            signals: { privateMode: "unsupported", humanInput: "unsupported" },
+          }) as const;
+        yield* publisher.publishCuaReadiness(report(1));
+        yield* publisher.publishCuaReadiness(report(2));
+        const primary = yield* collectTelemetry(publisher.encodedForSource("primary"));
+        const remote = yield* collectTelemetry(publisher.encodedForSource("ssh:remote"));
+        // The replay can land before the first snapshot that collectTelemetry waits for.
+        const replayed =
+          primary.received.find((message) => message.type === "cuaReadiness") ??
+          (yield* primary.next("cuaReadiness"));
+        assert.deepEqual(replayed, report(2));
+        yield* publisher.publishCuaReadiness(report(3));
+        assert.deepEqual(yield* primary.next("cuaReadiness"), report(3));
+        yield* publisher.handleControlForSource("primary", {
+          version: 1,
+          type: "setDiagnosticsDemand",
+          enabled: true,
+        });
+        yield* remote.next("desktopTelemetry");
+        assert.isEmpty(remote.received.filter((message) => message.type === "cuaReadiness"));
+      }).pipe(Effect.provide(layerCuaRouting), Effect.scoped),
+  );
+
+  it.effect(
+    "tells a reconnecting server about a secret field that still has focus, and nothing once it clears",
+    () =>
+      Effect.gen(function* () {
+        const publisher = yield* DesktopTelemetryPublisher.DesktopTelemetryPublisher;
+        const privateMode = (active: boolean) =>
+          ({
+            version: 1,
+            type: "cuaPrivateMode",
+            active,
+            target: { pid: 7, windowId: 3 },
+          }) as const;
+        yield* publisher.publishCuaSafety(privateMode(true));
+        const reconnected = yield* collectTelemetry(publisher.encodedForSource("primary"));
+        const remote = yield* collectTelemetry(publisher.encodedForSource("ssh:remote"));
+        // The replay can land before the first snapshot that collectTelemetry waits for.
+        const replayed =
+          reconnected.received.find((message) => message.type === "cuaPrivateMode") ??
+          (yield* reconnected.next("cuaPrivateMode"));
+        assert.deepEqual(replayed, privateMode(true));
+        yield* publisher.publishCuaSafety(privateMode(false));
+        assert.deepEqual(yield* reconnected.next("cuaPrivateMode"), privateMode(false));
+        yield* Fiber.interrupt(reconnected.fiber);
+
+        const later = yield* collectTelemetry(publisher.encodedForSource("primary"));
+        yield* publisher.handleControlForSource("primary", {
+          version: 1,
+          type: "setDiagnosticsDemand",
+          enabled: true,
+        });
+        yield* later.next("desktopTelemetry");
+        yield* remote.next("desktopTelemetry");
+        assert.isEmpty(later.received.filter((message) => message.type === "cuaPrivateMode"));
+        assert.isEmpty(remote.received.filter((message) => message.type === "cuaPrivateMode"));
+      }).pipe(Effect.provide(layerCuaRouting), Effect.scoped),
+  );
+
+  it.effect("stops when its scope closes during an Electron telemetry sample", () =>
+    Effect.gen(function* () {
+      const pollStarted = yield* Deferred.make<void>();
+      const blockPoll = yield* Deferred.make<void>();
+      const layerPower = Layer.succeed(
+        ElectronPowerMonitor.ElectronPowerMonitor,
+        ElectronPowerMonitor.ElectronPowerMonitor.of({
+          isOnBatteryPower: Effect.succeed(false),
+          getSystemIdleTime: Deferred.succeed(pollStarted, undefined).pipe(
+            Effect.andThen(Deferred.await(blockPoll)),
+            Effect.as(0),
+          ),
+          getSystemIdleState: () => Effect.succeed("active"),
+          getCurrentThermalState: Effect.succeed("nominal"),
+          onSimpleEvent: () => Effect.void,
+          onThermalStateChange: () => Effect.void,
+          onSpeedLimitChange: () => Effect.void,
+        }),
+      );
+      const layer = DesktopTelemetryPublisher.layer.pipe(
+        Layer.provide(Layer.mergeAll(layerElectronApp([]), layerPower, layerHistory)),
+      );
+      const scope = yield* Scope.make();
+
+      yield* Layer.buildWithScope(layer, scope);
+      yield* Deferred.await(pollStarted);
+
+      const closeFiber = yield* Scope.close(scope, Exit.void).pipe(Effect.forkDetach);
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+
+      assert.isDefined(closeFiber.pollUnsafe());
+    }),
+  );
+});
+
+describe("DesktopRendererHistory", () => {
+  it.effect(
+    "persists surface identity and memory through renderer replacement and destruction",
+    () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const directory = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "goat-renderer-history-",
+        });
+        let previewPid = 7_002;
+        let previewDestroyed = false;
+        let urlReads = 0;
+        const main = Object.assign(new NodeEvents.EventEmitter(), {
+          id: 1,
+          getOSProcessId: () => 7_001,
+          isDestroyed: () => false,
+          getURL: () => {
+            urlReads += 1;
+            return "https://private.invalid/main?secret=private";
+          },
+        });
+        const preview = Object.assign(new NodeEvents.EventEmitter(), {
+          id: 2,
+          getOSProcessId: () => previewPid,
+          isDestroyed: () => previewDestroyed,
+          getURL: () => {
+            urlReads += 1;
+            return "https://private.invalid/preview?secret=private";
+          },
+        });
+        const metrics = [7_001, 7_002].map(
+          (pid) =>
+            ({
+              pid,
+              type: "Tab",
+              creationTime: pid * 100,
+              memory: { workingSetSize: 2_048, peakWorkingSetSize: 4_096 },
+              cpu: { percentCPUUsage: 0, cumulativeCPUUsage: 0, idleWakeupsPerSecond: 0 },
+            }) satisfies Electron.ProcessMetric,
+        );
+        const recordSchema = Schema.fromJsonString(
+          Schema.Struct({
+            event: Schema.String,
+            mainPid: Schema.Number,
+            mainSessionStartedAtUnixMs: Schema.Number,
+            timestampUnixMs: Schema.Number,
+            webContentsId: Schema.Number,
+            surface: Schema.String,
+            tabId: Schema.optional(Schema.String),
+            rendererPid: Schema.NullOr(Schema.Number),
+            rendererPidSource: Schema.String,
+            rendererCreationTimeMs: Schema.NullOr(Schema.Number),
+            memory: Schema.NullOr(
+              Schema.Struct({
+                kind: Schema.String,
+                sampledAtUnixMs: Schema.Number,
+                workingSetBytes: Schema.Number,
+                peakWorkingSetBytes: Schema.Number,
+              }),
+            ),
+            reason: Schema.optional(Schema.String),
+            exitCode: Schema.optional(Schema.Number),
+          }),
+        );
+        const decodeRecord = Schema.decodeUnknownEffect(recordSchema);
+        type Record = typeof recordSchema.Type;
+        const persisted: Record[] = [];
+        let milestone:
+          | {
+              readonly matches: (record: Record) => boolean;
+              readonly written: Deferred.Deferred<Record>;
+            }
+          | undefined;
+        const layerFile = Layer.succeed(FileSystem.FileSystem, {
+          ...fileSystem,
+          writeFile: (filePath, bytes, options) =>
+            fileSystem.writeFile(filePath, bytes, options).pipe(
+              Effect.tap(() =>
+                decodeRecord(new TextDecoder().decode(bytes).trim()).pipe(
+                  Effect.orDie,
+                  Effect.flatMap((record) =>
+                    Effect.sync(() => {
+                      persisted.push(record);
+                      if (milestone?.matches(record)) {
+                        Deferred.doneUnsafe(milestone.written, Effect.succeed(record));
+                      }
+                    }),
+                  ),
+                ),
+              ),
+            ),
+        });
+        const layer = DesktopRendererHistory.layer.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              Layer.succeed(
+                DesktopEnvironment.DesktopEnvironment,
+                DesktopEnvironment.DesktopEnvironment.of({
+                  logDir: directory,
+                } as DesktopEnvironment.DesktopEnvironment["Service"]),
+              ),
+              layerFile,
+            ),
+          ),
+        );
+
+        yield* Effect.gen(function* () {
+          const history = yield* DesktopRendererHistory.DesktopRendererHistory;
+          yield* history.register(main as unknown as Electron.WebContents, { surface: "main" });
+          yield* history.register(preview as unknown as Electron.WebContents, {
+            surface: "preview",
+          });
+          yield* history.register(preview as unknown as Electron.WebContents, {
+            surface: "preview",
+            tabId: "preview-tab",
+          });
+          const sampled = yield* Deferred.make<Record>();
+          milestone = {
+            matches: (row) => row.event === "sample" && row.webContentsId === 2,
+            written: sampled,
+          };
+          yield* TestClock.adjust(Duration.seconds(30));
+          yield* history.recordMetrics(metrics);
+          const sample = yield* Deferred.await(sampled);
+          assert.equal(sample.rendererPid, 7_002);
+          assert.equal(sample.rendererCreationTimeMs, 700_200);
+          assert.equal(sample.tabId, "preview-tab");
+          assert.equal(sample.mainPid, process.pid);
+          assert.equal(sample.memory?.kind, "electron-process-working-set");
+          assert.equal(sample.memory?.workingSetBytes, 2_048 * 1_024);
+          assert.equal(sample.memory?.peakWorkingSetBytes, 4_096 * 1_024);
+          assert.equal(sample.memory?.sampledAtUnixMs, sample.timestampUnixMs);
+          assert.isTrue(
+            persisted.some(
+              (row) =>
+                row.event === "created" && row.surface === "main" && row.rendererPid === 7_001,
+            ),
+          );
+          assert.isTrue(
+            persisted.some((row) => row.event === "identified" && row.tabId === "preview-tab"),
+          );
+
+          const replaced = yield* Deferred.make<Record>();
+          milestone = { matches: (row) => row.event === "dom-ready", written: replaced };
+          previewPid = 7_003;
+          preview.emit("dom-ready");
+          const replacement = yield* Deferred.await(replaced);
+          assert.equal(replacement.rendererPid, 7_003);
+          assert.isNull(replacement.rendererCreationTimeMs);
+          assert.isNull(replacement.memory);
+          metrics[1] = { ...metrics[1]!, pid: 7_003, creationTime: 700_300 };
+          const replacementSampled = yield* Deferred.make<Record>();
+          milestone = {
+            matches: (row) => row.event === "sample" && row.webContentsId === 2,
+            written: replacementSampled,
+          };
+          yield* TestClock.adjust(Duration.seconds(30));
+          yield* history.recordMetrics(metrics);
+          assert.equal((yield* Deferred.await(replacementSampled)).rendererCreationTimeMs, 700_300);
+
+          const crashed = yield* Deferred.make<Record>();
+          milestone = { matches: (row) => row.event === "render-process-gone", written: crashed };
+          previewPid = 0;
+          preview.emit("render-process-gone", {}, { reason: "oom", exitCode: -7 });
+          const crash = yield* Deferred.await(crashed);
+          assert.equal(crash.rendererPid, 7_003);
+          assert.equal(crash.rendererPidSource, "last-known");
+          assert.equal(crash.reason, "oom");
+          assert.equal(crash.exitCode, -7);
+          const restarted = yield* Deferred.make<Record>();
+          milestone = { matches: (row) => row.event === "dom-ready", written: restarted };
+          previewPid = 7_003;
+          preview.emit("dom-ready");
+          const restart = yield* Deferred.await(restarted);
+          assert.equal(restart.rendererPid, 7_003);
+          assert.equal(restart.rendererPidSource, "current");
+          assert.isNull(restart.rendererCreationTimeMs);
+          assert.isNull(restart.memory);
+          const destroyed = yield* Deferred.make<Record>();
+          milestone = { matches: (row) => row.event === "destroyed", written: destroyed };
+          previewDestroyed = true;
+          preview.emit("destroyed");
+          const destruction = yield* Deferred.await(destroyed);
+          assert.equal(destruction.rendererPid, 7_003);
+          assert.isNull(destruction.rendererCreationTimeMs);
+          assert.equal(destruction.tabId, "preview-tab");
+          assert.equal(preview.eventNames().length, 0);
+          const afterDestroy = yield* Deferred.make<Record>();
+          milestone = { matches: (row) => row.event === "sample", written: afterDestroy };
+          const previousCount = persisted.length;
+          yield* TestClock.adjust(Duration.seconds(30));
+          yield* history.recordMetrics(metrics);
+          assert.equal((yield* Deferred.await(afterDestroy)).webContentsId, 1);
+          assert.isFalse(persisted.slice(previousCount).some((row) => row.webContentsId === 2));
+          for (let index = 0; index < 12; index++) main.emit("dom-ready");
+          yield* history.shutdown;
+          assert.equal(
+            persisted.filter((row) => row.webContentsId === 1 && row.event === "dom-ready").length,
+            12,
+          );
+          const afterShutdown = persisted.length;
+          yield* history.register(main as unknown as Electron.WebContents, { surface: "main" });
+          yield* history.recordMetrics(metrics);
+          assert.equal(persisted.length, afterShutdown);
+          assert.equal(main.eventNames().length, 0);
+          yield* history.shutdown;
+        }).pipe(Effect.provide(layer));
+
+        assert.equal(main.eventNames().length, 0);
+        assert.equal(
+          persisted.filter((row) => row.webContentsId === 1 && row.event === "dom-ready").length,
+          12,
+        );
+        assert.equal(urlReads, 0);
+        const contents = yield* fileSystem.readFileString(`${directory}/renderer-history.ndjson`);
+        assert.isFalse(contents.includes("private.invalid"));
+        assert.isFalse(contents.includes("secret"));
+      }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("rotates retained incident history within three 256 kib files", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const directory = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "goat-renderer-rotation-",
+      });
+      const filePath = `${directory}/renderer-history.ndjson`;
+      const maxBytes = 256 * 1_024;
+      const encodeSeed = Schema.encodeEffect(
+        Schema.fromJsonString(Schema.Struct({ seed: Schema.String })),
+      );
+      for (const [suffix, seed] of [
+        ["", "current"],
+        [".1", "previous"],
+        [".2", "expired"],
+        [".3", "overflow"],
+      ] as const) {
+        const encodedSeed = yield* encodeSeed({ seed });
+        yield* fileSystem.writeFileString(
+          `${filePath}${suffix}`,
+          `${encodedSeed.padEnd(maxBytes - 1, " ")}\n`,
+        );
+      }
+      const written = yield* Deferred.make<void>();
+      const layerFile = Layer.succeed(FileSystem.FileSystem, {
+        ...fileSystem,
+        writeFile: (target, bytes, options) =>
+          fileSystem
+            .writeFile(target, bytes, options)
+            .pipe(Effect.tap(() => Deferred.succeed(written, undefined))),
+      });
+      const layer = DesktopRendererHistory.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.succeed(
+              DesktopEnvironment.DesktopEnvironment,
+              DesktopEnvironment.DesktopEnvironment.of({
+                logDir: directory,
+              } as DesktopEnvironment.DesktopEnvironment["Service"]),
+            ),
+            layerFile,
+          ),
+        ),
+      );
+      const renderer = Object.assign(new NodeEvents.EventEmitter(), {
+        id: 7,
+        getOSProcessId: () => 9_001,
+        isDestroyed: () => false,
+      });
+      yield* Effect.gen(function* () {
+        const history = yield* DesktopRendererHistory.DesktopRendererHistory;
+        yield* history.register(renderer as unknown as Electron.WebContents, {
+          surface: "preview",
+          tabId: "t".repeat(1_000),
+        });
+        yield* Deferred.await(written);
+      }).pipe(Effect.provide(layer));
+      assert.deepEqual((yield* fileSystem.readDirectory(directory)).sort(), [
+        "renderer-history.ndjson",
+        "renderer-history.ndjson.1",
+        "renderer-history.ndjson.2",
+      ]);
+      let totalBytes = 0;
+      for (const suffix of ["", ".1", ".2"]) {
+        const size = Number((yield* fileSystem.stat(`${filePath}${suffix}`)).size);
+        assert.isAtMost(size, maxBytes);
+        totalBytes += size;
+      }
+      assert.isAtMost(totalBytes, 3 * maxBytes);
+      assert.include(yield* fileSystem.readFileString(`${filePath}.1`), '"seed":"current"');
+      assert.include(yield* fileSystem.readFileString(`${filePath}.2`), '"seed":"previous"');
+      const current = yield* fileSystem.readFileString(filePath);
+      assert.include(current, `"tabId":"${"t".repeat(128)}"`);
+      assert.notInclude(current, "t".repeat(129));
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+});

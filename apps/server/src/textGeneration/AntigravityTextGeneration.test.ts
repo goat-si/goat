@@ -1,0 +1,941 @@
+import * as M from "@goat/contracts";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { it } from "@effect/vitest";
+import { ANTIGRAVITY_DEFAULT_MODEL, ProviderInstanceId, ProviderSetupError } from "@goat/contracts";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import * as Queue from "effect/Queue";
+import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
+
+import { type AcpError } from "effect-acp/errors";
+import type * as AcpSchema from "effect-acp/compat";
+import { expect } from "vite-plus/test";
+
+import type * as AcpSessionRuntime from "@goat/provider-acp/server/AcpSessionRuntime";
+import { removeAntigravitySessionFiles } from "../provider/acp/AntigravitySessionFiles.ts";
+
+import {
+  type AntigravityTextGenerationOptions,
+  isAntigravityTextGenerationAvailable,
+  makeAntigravityTextGeneration,
+} from "./AntigravityTextGeneration.ts";
+import { MemoryGenerationRunnerError } from "@goat/provider-core/server/memoryGenerationRunner";
+
+type TextRuntime = Effect.Success<ReturnType<AntigravityTextGenerationOptions["makeRuntime"]>>;
+
+const requestContext = { requestId: "test-request", method: "test" };
+const SESSION_ID = "047c62f6-607b-44db-bfbe-f83b67e9e8b1";
+const modelSelection = {
+  instanceId: ProviderInstanceId.make("antigravity-test"),
+  model: "gemini-test",
+};
+const encodeMetadata = Schema.encodeEffect(
+  Schema.fromJsonString(Schema.Struct({ cwd: Schema.String })),
+);
+
+interface PromptContext {
+  readonly emit: (
+    update: AcpSchema.SessionNotification["update"],
+    sessionId?: string,
+  ) => Effect.Effect<void, AcpError>;
+  permission: Parameters<TextRuntime["handleRequestPermission"]>[0];
+  question: Parameters<TextRuntime["handleElicitation"]>[0];
+  readFile: Parameters<TextRuntime["handleReadTextFile"]>[0];
+  createTerminal: Parameters<TextRuntime["handleCreateTerminal"]>[0];
+  extension: Parameters<TextRuntime["handleUnknownExtRequest"]>[0];
+  readonly cwd: string;
+}
+
+const makeFixture = Effect.fn("makeAntigravityTextGenerationFixture")(function* (
+  options: {
+    readonly currentModel?: string;
+    readonly modelOptions?: ReadonlyArray<string>;
+    readonly memoryRunnerContext?: import("@goat/provider-core/server/memoryGenerationRunner").MemoryGenerationRunnerContext;
+    readonly outputs?: ReadonlyArray<string>;
+    readonly prompt?: (context: PromptContext) => Effect.Effect<AcpSchema.PromptResponse, AcpError>;
+    readonly startError?: AcpError;
+    readonly rejectAdmission?: boolean;
+    readonly sessionId?: string;
+  } = {},
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-antigravity-text-test-" });
+  const profileDirectory = path.join(root, "profile");
+  const projectDirectory = path.join(root, "project");
+  const conversations = path.join(profileDirectory, "antigravity-acp", "conversations");
+  const nativeSessionId = options.sessionId ?? SESSION_ID;
+  const sessionBase = path.join(conversations, SESSION_ID);
+  const brainDirectory = path.join(profileDirectory, "antigravity-acp", "brain", SESSION_ID);
+  yield* fs.makeDirectory(projectDirectory, { recursive: true });
+  yield* fs.makeDirectory(conversations, { recursive: true });
+  yield* fs.writeFileString(path.join(projectDirectory, "keep.txt"), "untouched");
+  yield* fs.writeFileString(path.join(conversations, "user-session.db"), "keep native history");
+  const enteredPrompt = yield* Deferred.make<void>();
+  const state = {
+    workspaces: [] as Array<string>,
+    closed: [] as Array<string>,
+    prompts: [] as Array<Parameters<TextRuntime["prompt"]>[0]>,
+    selectedModels: [] as Array<string>,
+    selectedModes: [] as Array<string>,
+    nativeFilesAtClose: [] as Array<boolean>,
+    cancellations: 0,
+    stop: undefined as Effect.Effect<void> | undefined,
+  };
+  const outputs = [...(options.outputs ?? ['{"title":"Repair login"}'])];
+  const incoming: Omit<PromptContext, "cwd" | "emit"> = {
+    permission: () => Effect.die("No permission handler."),
+    question: () => Effect.die("No question handler."),
+    readFile: () => Effect.die("No file handler."),
+    createTerminal: () => Effect.die("No terminal handler."),
+    extension: () => Effect.die("No extension handler."),
+  };
+
+  const withProcess: AntigravityTextGenerationOptions["withProcess"] = (stop, task) =>
+    Effect.gen(function* () {
+      if (options.rejectAdmission) {
+        return yield* new ProviderSetupError({
+          instanceId: modelSelection.instanceId,
+          operation: "launch",
+          detail: "Sign in before starting Antigravity.",
+        });
+      }
+      const scope = yield* Scope.Scope;
+      const child = yield* Effect.forkIn(task, scope);
+      state.stop = Fiber.interrupt(child).pipe(Effect.andThen(stop));
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          state.stop = undefined;
+        }),
+      );
+      return yield* Fiber.await(child).pipe(
+        Effect.flatMap((exit) => exit),
+        Effect.ensuring(Fiber.interrupt(child)),
+      );
+    });
+
+  const makeRuntime: AntigravityTextGenerationOptions["makeRuntime"] = (cwd) =>
+    Effect.gen(function* () {
+      const events = yield* Queue.unbounded<AcpSessionRuntime.AcpSessionRuntimeEvent>();
+      state.workspaces.push(cwd);
+      expect(yield* fs.readDirectory(cwd).pipe(Effect.orDie)).toEqual([]);
+      yield* Effect.addFinalizer(() =>
+        Effect.gen(function* () {
+          state.nativeFilesAtClose.push(yield* fs.exists(`${sessionBase}.db`).pipe(Effect.orDie));
+          state.closed.push(cwd);
+        }),
+      );
+      let sessionUpdate: Parameters<TextRuntime["handleSessionUpdate"]>[0] = () => Effect.void;
+
+      return {
+        start: () =>
+          Effect.gen(function* () {
+            if (options.startError) return yield* options.startError;
+            yield* fs.makeDirectory(brainDirectory, { recursive: true }).pipe(Effect.orDie);
+            yield* fs.writeFileString(`${sessionBase}.db`, "helper session").pipe(Effect.orDie);
+            yield* fs.writeFileString(`${sessionBase}.db-wal`, "helper journal").pipe(Effect.orDie);
+            const metadata = yield* encodeMetadata({ cwd }).pipe(Effect.orDie);
+            yield* fs.writeFileString(`${sessionBase}.meta`, metadata).pipe(Effect.orDie);
+            yield* fs
+              .writeFileString(path.join(brainDirectory, "output.txt"), "helper artifact")
+              .pipe(Effect.orDie);
+            return {
+              sessionId: nativeSessionId,
+              initializeResult: { protocolVersion: 1 },
+              sessionSetupResult: { sessionId: nativeSessionId },
+              modelConfigId: "model",
+            };
+          }),
+        setMode: (mode) =>
+          Effect.sync(() => {
+            state.selectedModes.push(mode);
+            return {};
+          }),
+        getConfigOptions: Effect.succeed([
+          {
+            id: "model",
+            name: "Model",
+            category: "model",
+            type: "select",
+            currentValue: options.currentModel ?? modelSelection.model,
+            options: (options.modelOptions ?? [modelSelection.model]).map((value) => ({
+              value,
+              name: value,
+            })),
+          },
+        ]),
+        getEvents: () => Stream.fromQueue(events),
+        setModel: (model) =>
+          Effect.sync(() => {
+            state.selectedModels.push(model);
+          }),
+        setConfigOption: () => Effect.succeed({ configOptions: [] }),
+        prompt: (request) =>
+          Effect.gen(function* () {
+            state.prompts.push(request);
+            yield* Deferred.succeed(enteredPrompt, undefined);
+            const emit: PromptContext["emit"] = (update, sessionId = nativeSessionId) =>
+              sessionUpdate({ sessionId, update });
+            if (options.prompt) {
+              return yield* options.prompt({
+                emit,
+                ...incoming,
+                cwd,
+              });
+            }
+            const output = outputs.shift() ?? '{"title":"Repair login"}';
+            yield* emit({
+              sessionUpdate: "agent_thought_chunk",
+              content: { type: "text", text: "Choose concise text." },
+            });
+            yield* emit(
+              {
+                sessionUpdate: "agent_message_chunk",
+                content: { type: "text", text: "unrelated session" },
+              },
+              "another-session",
+            );
+            for (const text of [output.slice(0, 9), output.slice(9)]) {
+              yield* emit({
+                sessionUpdate: "agent_message_chunk",
+                content: { type: "text", text },
+              });
+            }
+            return { stopReason: "end_turn" };
+          }),
+        cancel: Effect.gen(function* () {
+          state.cancellations += 1;
+          const acknowledge = yield* Deferred.make<void>();
+          yield* Queue.offer(events, { _tag: "EventStreamBarrier", acknowledge });
+          yield* Deferred.await(acknowledge);
+        }),
+        handleSessionUpdate: (handler) =>
+          Effect.sync(() => {
+            sessionUpdate = handler;
+          }),
+        handleRequestPermission: (handler) =>
+          Effect.sync(() => {
+            incoming.permission = handler;
+          }),
+        handleElicitation: (handler) =>
+          Effect.sync(() => {
+            incoming.question = handler;
+          }),
+        handleReadTextFile: (handler) =>
+          Effect.sync(() => {
+            incoming.readFile = handler;
+          }),
+        handleWriteTextFile: () => Effect.void,
+        handleCreateTerminal: (handler) =>
+          Effect.sync(() => {
+            incoming.createTerminal = handler;
+          }),
+        handleTerminalOutput: () => Effect.void,
+        handleTerminalWaitForExit: () => Effect.void,
+        handleTerminalKill: () => Effect.void,
+        handleTerminalRelease: () => Effect.void,
+        handleUnknownExtRequest: (handler) =>
+          Effect.sync(() => {
+            incoming.extension = handler;
+          }),
+      } satisfies TextRuntime;
+    });
+
+  const textGeneration = yield* makeAntigravityTextGeneration({
+    profileDirectory,
+    ...(options.memoryRunnerContext === undefined
+      ? {}
+      : { memoryRunnerContext: options.memoryRunnerContext }),
+    makeRuntime,
+    withProcess,
+  });
+  const titleInput = { cwd: projectDirectory, message: "Repair Google login", modelSelection };
+  const assertCleaned = Effect.gen(function* () {
+    expect(state.closed).toEqual(state.workspaces);
+    for (const workspace of state.workspaces) {
+      expect(yield* fs.exists(workspace)).toBe(false);
+    }
+    expect(yield* fs.exists(`${sessionBase}.db`)).toBe(false);
+    expect(yield* fs.exists(`${sessionBase}.db-wal`)).toBe(false);
+    expect(yield* fs.exists(`${sessionBase}.meta`)).toBe(false);
+    expect(yield* fs.exists(brainDirectory)).toBe(false);
+    expect(yield* fs.readFileString(path.join(projectDirectory, "keep.txt"))).toBe("untouched");
+    expect(yield* fs.readFileString(path.join(conversations, "user-session.db"))).toBe(
+      "keep native history",
+    );
+  });
+  return {
+    fs,
+    path,
+    profileDirectory,
+    projectDirectory,
+    sessionBase,
+    brainDirectory,
+    state,
+    incoming,
+    enteredPrompt,
+    textGeneration,
+    titleInput,
+    assertCleaned,
+  };
+});
+
+const memorySelection = M.MemoryModelSelection.make({
+  instanceId: M.ProviderInstanceId.make("antigravity-test"),
+  model: "gemini-test",
+  options: [],
+});
+const memoryContext = {
+  providerInstanceId: memorySelection.instanceId,
+  environmentId: M.EnvironmentId.make("memory-owner"),
+};
+const memoryId = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+const memoryRevision = M.MemoryRevision.make({
+  memorySpaceId: M.MemorySpaceId.make(memoryId(1)),
+  memoryId: M.MemoryId.make(memoryId(2)),
+  revisionId: M.MemoryRevisionId.make(memoryId(3)),
+  payloadRef: M.MemoryRevisionId.make(memoryId(3)),
+  operationId: M.MemoryOperationId.make(memoryId(4)),
+  parents: [],
+  scope: { kind: "user" },
+  assertionKind: "inference",
+  provenance: { environmentId: memoryContext.environmentId },
+  createdAtUtc: "2026-10-14T00:00:00.000Z",
+});
+const memoryPayload = M.MemoryPayload.make({
+  text: "Synthetic input",
+  evidence: [],
+  derivedFromMemoryRevisions: [],
+});
+const memorySummary = M.GenerateMemorySummaryInput.make({
+  cwd: process.cwd(),
+  sourceThread: {
+    environmentId: memoryContext.environmentId,
+    threadId: M.ThreadId.make("synthetic-thread"),
+  },
+  sourceWatermark: {
+    fromEventId: M.EventId.make("e1"),
+    toEventId: M.EventId.make("e2"),
+    throughSequence: 2,
+  },
+  messages: [{ messageId: M.MessageId.make("m1"), text: "Synthetic input", completed: true }],
+  modelSelection: memorySelection,
+});
+const memoryConflict = M.ResolveMemoryConflictInput.make({
+  cwd: memorySummary.cwd,
+  memorySpaceId: memoryRevision.memorySpaceId,
+  memoryId: memoryRevision.memoryId,
+  conflictId: M.MemoryConflictId.make(memoryId(8)),
+  heads: [
+    { revision: memoryRevision, payload: memoryPayload },
+    {
+      revision: {
+        ...memoryRevision,
+        revisionId: M.MemoryRevisionId.make(memoryId(5)),
+        payloadRef: M.MemoryRevisionId.make(memoryId(5)),
+      },
+      payload: memoryPayload,
+    },
+  ],
+  modelSelection: memorySelection,
+});
+const memoryOutput = { text: "Synthetic result", assertionKind: "inference", evidence: [] };
+const memoryOperations = ["resolveMemoryConflict", "generateMemorySummary"] as const;
+
+it.layer(NodeServices.layer)("AntigravityTextGeneration", (it) => {
+  it.effect.each(memoryOperations)(
+    "fails an undisclosed Antigravity model before prompting for %s",
+    (operation) =>
+      Effect.gen(function* () {
+        const fixture = yield* makeFixture({
+          memoryRunnerContext: memoryContext,
+          currentModel: "",
+          modelOptions: [],
+        });
+        const selection = { ...memorySelection, model: ANTIGRAVITY_DEFAULT_MODEL };
+        const error = yield* (
+          operation === "resolveMemoryConflict"
+            ? fixture.textGeneration.resolveMemoryConflict!({
+                ...memoryConflict,
+                modelSelection: selection,
+              }).pipe(Effect.map((outcome): M.GenerateMemorySummaryOutcome => outcome))
+            : fixture.textGeneration.generateMemorySummary!({
+                ...memorySummary,
+                modelSelection: selection,
+              })
+        ).pipe(Effect.flip);
+        expect(error.detail).toContain("did not disclose");
+        expect(error.cause).toEqual(new MemoryGenerationRunnerError({ code: "unavailable" }));
+        expect(fixture.state.prompts).toEqual([]);
+        yield* fixture.assertCleaned;
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect.each(memoryOperations)(
+    "captures the selected Antigravity default alias for %s",
+    (operation) =>
+      Effect.gen(function* () {
+        const fixture = yield* makeFixture({
+          memoryRunnerContext: memoryContext,
+          outputs: [
+            JSON.stringify(
+              operation === "resolveMemoryConflict"
+                ? { ...memoryOutput, judgment: "Synthetic" }
+                : { summary: memoryOutput },
+            ),
+          ],
+        });
+        const selection = { ...memorySelection, model: ANTIGRAVITY_DEFAULT_MODEL };
+        const generated =
+          operation === "resolveMemoryConflict"
+            ? yield* fixture.textGeneration.resolveMemoryConflict!({
+                ...memoryConflict,
+                modelSelection: selection,
+              })
+            : yield* fixture.textGeneration.generateMemorySummary!({
+                ...memorySummary,
+                modelSelection: selection,
+              });
+        expect(generated.execution.effectiveModel).toBe(modelSelection.model);
+        expect(generated.execution.requestedModelSelection).toEqual(selection);
+        expect(fixture.state.selectedModels).toEqual([]);
+        yield* fixture.assertCleaned;
+      }).pipe(Effect.scoped),
+  );
+  it.effect.each(memoryOperations)(
+    "fails unavailable Antigravity model before prompting for %s",
+    (operation) =>
+      Effect.gen(function* () {
+        const fixture = yield* makeFixture({ memoryRunnerContext: memoryContext });
+        const selection = { ...memorySelection, model: "unavailable-synthetic-model" };
+        const error = yield* (
+          operation === "resolveMemoryConflict"
+            ? fixture.textGeneration.resolveMemoryConflict!({
+                ...memoryConflict,
+                modelSelection: selection,
+              }).pipe(Effect.map((outcome): M.GenerateMemorySummaryOutcome => outcome))
+            : fixture.textGeneration.generateMemorySummary!({
+                ...memorySummary,
+                modelSelection: selection,
+              })
+        ).pipe(Effect.flip);
+        expect(error.operation).toBe(operation);
+        expect(fixture.state.prompts).toEqual([]);
+        yield* fixture.assertCleaned;
+      }).pipe(Effect.scoped),
+  );
+  it.effect.each(memoryOperations)(
+    "fails Antigravity auth admission before runtime creation for %s",
+    (operation) =>
+      Effect.gen(function* () {
+        const fixture = yield* makeFixture({
+          memoryRunnerContext: memoryContext,
+          rejectAdmission: true,
+        });
+        const error = yield* (
+          operation === "resolveMemoryConflict"
+            ? fixture.textGeneration.resolveMemoryConflict!(memoryConflict).pipe(
+                Effect.map((outcome): M.GenerateMemorySummaryOutcome => outcome),
+              )
+            : fixture.textGeneration.generateMemorySummary!(memorySummary)
+        ).pipe(Effect.flip);
+        expect(error.operation).toBe(operation);
+        expect(fixture.state.workspaces).toEqual([]);
+      }).pipe(Effect.scoped),
+  );
+  it.effect.each(memoryOperations)(
+    "rejects memory output over the schema byte budget for %s",
+    (operation) =>
+      Effect.gen(function* () {
+        const fixture = yield* makeFixture({
+          memoryRunnerContext: memoryContext,
+          outputs: [
+            JSON.stringify(
+              operation === "resolveMemoryConflict"
+                ? {
+                    ...memoryOutput,
+                    text: "x".repeat(65536),
+                    judgment: "Synthetic",
+                  }
+                : {
+                    summary: {
+                      ...memoryOutput,
+                      text: "x".repeat(65536),
+                    },
+                  },
+            ),
+          ],
+        });
+        const error = yield* (
+          operation === "resolveMemoryConflict"
+            ? fixture.textGeneration.resolveMemoryConflict!(memoryConflict).pipe(
+                Effect.map((outcome): M.GenerateMemorySummaryOutcome => outcome),
+              )
+            : fixture.textGeneration.generateMemorySummary!(memorySummary)
+        ).pipe(Effect.flip);
+        expect(error.operation).toBe(operation);
+        yield* fixture.assertCleaned;
+      }).pipe(Effect.scoped),
+  );
+  it.effect.each(memoryOperations)(
+    "runs %s in isolation with selected model provenance",
+    (operation) =>
+      Effect.gen(function* () {
+        const fixture = yield* makeFixture({
+          memoryRunnerContext: memoryContext,
+          outputs: [
+            JSON.stringify(
+              operation === "resolveMemoryConflict"
+                ? { ...memoryOutput, judgment: "Synthetic judgment" }
+                : { summary: memoryOutput },
+            ),
+          ],
+        });
+        const generated =
+          operation === "resolveMemoryConflict"
+            ? yield* fixture.textGeneration.resolveMemoryConflict!(memoryConflict)
+            : yield* fixture.textGeneration.generateMemorySummary!(memorySummary);
+        expect(generated.execution).toEqual({
+          requestedModelSelection: memorySelection,
+          effectiveModel: "gemini-test",
+          effectiveProvider: "antigravity",
+          providerInstanceId: memoryContext.providerInstanceId,
+          environmentId: memoryContext.environmentId,
+        });
+        expect(fixture.state.workspaces).not.toContain(memorySummary.cwd);
+        expect(fixture.state.selectedModes).toEqual(["default"]);
+        yield* fixture.assertCleaned;
+      }).pipe(Effect.scoped),
+  );
+  it.effect.each(memoryOperations)(
+    "rejects tool attempts despite apparent success for %s",
+    (operation) =>
+      Effect.gen(function* () {
+        const fixture = yield* makeFixture({
+          memoryRunnerContext: memoryContext,
+          prompt: ({ emit }) =>
+            Effect.gen(function* () {
+              yield* emit({
+                sessionUpdate: "tool_call",
+                toolCallId: "synthetic-tool",
+                title: "Tool attempt",
+                status: "pending",
+              });
+              yield* emit({
+                sessionUpdate: "agent_message_chunk",
+                content: {
+                  type: "text",
+                  text: JSON.stringify(
+                    operation === "resolveMemoryConflict"
+                      ? { ...memoryOutput, judgment: "Synthetic judgment" }
+                      : { summary: memoryOutput },
+                  ),
+                },
+              });
+              return { stopReason: "end_turn" as const };
+            }),
+        });
+        const exit = yield* Effect.exit(
+          operation === "resolveMemoryConflict"
+            ? fixture.textGeneration.resolveMemoryConflict!(memoryConflict).pipe(
+                Effect.map((outcome): M.GenerateMemorySummaryOutcome => outcome),
+              )
+            : fixture.textGeneration.generateMemorySummary!(memorySummary),
+        );
+        expect(exit._tag).toBe("Failure");
+        yield* fixture.assertCleaned;
+      }).pipe(Effect.scoped),
+  );
+  it.effect.each(memoryOperations)("rejects forged execution JSON for %s", (operation) =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture({
+        memoryRunnerContext: memoryContext,
+        outputs: [
+          JSON.stringify(
+            operation === "resolveMemoryConflict"
+              ? {
+                  ...memoryOutput,
+                  judgment: "Synthetic",
+                  execution: { effectiveModel: "forged" },
+                }
+              : {
+                  summary: {
+                    ...memoryOutput,
+                    execution: { effectiveModel: "forged" },
+                  },
+                },
+          ),
+        ],
+      });
+      const exit = yield* Effect.exit(
+        operation === "resolveMemoryConflict"
+          ? fixture.textGeneration.resolveMemoryConflict!(memoryConflict).pipe(
+              Effect.map((outcome): M.GenerateMemorySummaryOutcome => outcome),
+            )
+          : fixture.textGeneration.generateMemorySummary!(memorySummary),
+      );
+      expect(exit._tag).toBe("Failure");
+      yield* fixture.assertCleaned;
+    }).pipe(Effect.scoped),
+  );
+  it.effect.each(memoryOperations)(
+    "rejects configured global MCP before runtime creation for %s",
+    (operation) =>
+      Effect.gen(function* () {
+        const fixture = yield* makeFixture({ memoryRunnerContext: memoryContext });
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        yield* fs.makeDirectory(path.join(fixture.profileDirectory, "config"), { recursive: true });
+        yield* fs.writeFileString(
+          path.join(fixture.profileDirectory, "config", "mcp_config.json"),
+          '{"mcpServers":{"synthetic":{}}}',
+        );
+        const exit = yield* Effect.exit(
+          operation === "resolveMemoryConflict"
+            ? fixture.textGeneration.resolveMemoryConflict!(memoryConflict).pipe(
+                Effect.map((outcome): M.GenerateMemorySummaryOutcome => outcome),
+              )
+            : fixture.textGeneration.generateMemorySummary!(memorySummary),
+        );
+        expect(exit._tag).toBe("Failure");
+        expect(fixture.state.workspaces).toEqual([]);
+      }).pipe(Effect.scoped),
+  );
+  it.effect.each(memoryOperations)(
+    "rejects mismatched instance before runtime creation for %s",
+    (operation) =>
+      Effect.gen(function* () {
+        const fixture = yield* makeFixture({
+          memoryRunnerContext: {
+            ...memoryContext,
+            providerInstanceId: M.ProviderInstanceId.make("other-instance"),
+          },
+        });
+        const exit = yield* Effect.exit(
+          operation === "resolveMemoryConflict"
+            ? fixture.textGeneration.resolveMemoryConflict!(memoryConflict).pipe(
+                Effect.map((outcome): M.GenerateMemorySummaryOutcome => outcome),
+              )
+            : fixture.textGeneration.generateMemorySummary!(memorySummary),
+        );
+        expect(exit._tag).toBe("Failure");
+        expect(fixture.state.workspaces).toEqual([]);
+      }).pipe(Effect.scoped),
+  );
+  it.effect(
+    "generates all helper types in empty workspaces and removes only owned session files",
+    () =>
+      Effect.gen(function* () {
+        const fixture = yield* makeFixture({
+          outputs: [
+            '{"subject":"  Repair Google login.\\nExtra line","body":"  Keep the remote callback.  ","branch":"Repair Login"}',
+            '```json\n{"title":" Repair Google login\\nExtra line","body":"  ## Summary\\nSupport remote callbacks.  "}\n```',
+            '{"branch":" Repair Google Login "}',
+            '{"title":"  \\"Repair Google login\\"  "}',
+          ],
+        });
+        const common = { cwd: fixture.projectDirectory, modelSelection };
+        expect(
+          yield* fixture.textGeneration.generateCommitMessage({
+            ...common,
+            branch: "feature/login",
+            stagedSummary: "M login.ts",
+            stagedPatch: "+handleRemoteCallback()",
+            includeBranch: true,
+          }),
+        ).toEqual({
+          subject: "Repair Google login",
+          body: "Keep the remote callback.",
+          branch: "feature/repair-login",
+        });
+        expect(
+          yield* fixture.textGeneration.generatePrContent({
+            ...common,
+            baseBranch: "main",
+            headBranch: "feature/login",
+            commitSummary: "Repair login",
+            diffSummary: "M login.ts",
+            diffPatch: "+handleRemoteCallback()",
+          }),
+        ).toEqual({ title: "Repair Google login", body: "## Summary\nSupport remote callbacks." });
+        expect(
+          yield* fixture.textGeneration.generateBranchName({
+            ...common,
+            message: "Repair Google login",
+          }),
+        ).toEqual({ branch: "repair-google-login" });
+        expect(yield* fixture.textGeneration.generateThreadTitle(fixture.titleInput)).toEqual({
+          title: "Repair Google login",
+        });
+        expect(new Set(fixture.state.workspaces).size).toBe(4);
+        expect(fixture.state.workspaces).not.toContain(fixture.projectDirectory);
+        expect(fixture.state.nativeFilesAtClose).toEqual([true, true, true, true]);
+        expect(fixture.state.selectedModes).toEqual(["default", "default", "default", "default"]);
+        expect(fixture.state.selectedModels).toEqual(Array(4).fill(modelSelection.model));
+        expect(fixture.state.prompts[0]?.prompt).toEqual([
+          { type: "text", text: expect.stringContaining("+handleRemoteCallback()") },
+        ]);
+        yield* fixture.assertCleaned;
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect.each(["tool_call", "tool_call_update"] as const)(
+    "aborts on %s even without a permission request",
+    (sessionUpdate) =>
+      Effect.gen(function* () {
+        const fixture = yield* makeFixture({
+          prompt: ({ emit }) =>
+            emit({ sessionUpdate, toolCallId: "tool-1", title: "Read files" }).pipe(
+              Effect.andThen(Effect.never),
+            ),
+        });
+        const error = yield* fixture.textGeneration
+          .generateThreadTitle(fixture.titleInput)
+          .pipe(Effect.flip);
+        expect(error.detail).toContain("tool work");
+        expect(fixture.state.cancellations).toBe(1);
+        yield* fixture.assertCleaned;
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect("rejects native permission and choice requests instead of answering them", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture({ prompt: () => Effect.never });
+      const child = yield* fixture.textGeneration
+        .generateThreadTitle(fixture.titleInput)
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(fixture.enteredPrompt);
+      const reply = yield* fixture.incoming.permission(
+        {
+          sessionId: SESSION_ID,
+          toolCall: { toolCallId: "question-1", title: "Choose a title", kind: "other" },
+          options: [
+            { optionId: "first-native-choice", name: "Use this title", kind: "allow_once" },
+            { optionId: "second-native-choice", name: "Use this title", kind: "allow_once" },
+          ],
+        },
+        requestContext,
+      );
+      const error = yield* Fiber.join(child).pipe(Effect.flip);
+      expect(reply).toEqual({ outcome: { outcome: "cancelled" } });
+      expect(error.detail).toContain("permission or user input");
+      yield* fixture.assertCleaned;
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect.each(["file", "terminal", "extension"] as const)(
+    "denies unexpected %s requests",
+    (kind) =>
+      Effect.gen(function* () {
+        const fixture = yield* makeFixture({ prompt: () => Effect.never });
+        const child = yield* fixture.textGeneration
+          .generateThreadTitle(fixture.titleInput)
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(fixture.enteredPrompt);
+        const request =
+          kind === "file"
+            ? fixture.incoming.readFile(
+                { sessionId: SESSION_ID, path: "/not-allowed" },
+                requestContext,
+              )
+            : kind === "terminal"
+              ? fixture.incoming.createTerminal(
+                  { sessionId: SESSION_ID, command: "not-allowed" },
+                  requestContext,
+                )
+              : fixture.incoming.extension("_ask_user", {}, requestContext);
+        const denied = yield* request.pipe(Effect.exit);
+        expect(Exit.isFailure(denied)).toBe(true);
+        const error = yield* Fiber.join(child).pipe(Effect.flip);
+        expect(error.detail).toContain("tool or user input");
+        yield* fixture.assertCleaned;
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect.each([
+    { output: "   ", detail: "empty" },
+    { output: "No JSON here", detail: "invalid structured output" },
+    { output: '{"title":42}', detail: "invalid structured output" },
+    { output: "x".repeat(128_001), detail: "output limit" },
+  ])("rejects $detail output and closes the runtime", ({ output, detail }) =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture({ outputs: [output] });
+      const error = yield* fixture.textGeneration
+        .generateThreadTitle(fixture.titleInput)
+        .pipe(Effect.flip);
+      expect(error.detail).toContain(detail);
+      yield* fixture.assertCleaned;
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("does not return partial JSON after native cancellation", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture({
+        prompt: ({ emit }) =>
+          emit({
+            sessionUpdate: "agent_message_chunk",
+            content: { type: "text", text: '{"title":"Partial title"}' },
+          }).pipe(Effect.as({ stopReason: "cancelled" })),
+      });
+      const error = yield* fixture.textGeneration
+        .generateThreadTitle(fixture.titleInput)
+        .pipe(Effect.flip);
+      expect(error.detail).toContain("cancelled");
+      yield* fixture.assertCleaned;
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("rejects a helper that writes files in its temporary workspace", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const fixture = yield* makeFixture({
+        prompt: ({ cwd, emit }) =>
+          Effect.gen(function* () {
+            yield* fs
+              .writeFileString(path.join(cwd, "unexpected.txt"), "unexpected")
+              .pipe(Effect.orDie);
+            yield* emit({
+              sessionUpdate: "agent_message_chunk",
+              content: { type: "text", text: '{"title":"Ignored output"}' },
+            });
+            return { stopReason: "end_turn" };
+          }),
+      });
+      const error = yield* fixture.textGeneration
+        .generateThreadTitle(fixture.titleInput)
+        .pipe(Effect.flip);
+      expect(error.detail).toContain("wrote files");
+      yield* fixture.assertCleaned;
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("pauses memory on a model the account cannot select", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture({ memoryRunnerContext: memoryContext });
+      const error = yield* fixture.textGeneration.generateMemorySummary!({
+        ...memorySummary,
+        modelSelection: { ...memorySelection, model: "not-in-the-account" },
+      }).pipe(Effect.flip);
+      expect(error.detail).toContain("select the Antigravity model");
+      expect(error.cause).toEqual(new MemoryGenerationRunnerError({ code: "unavailable" }));
+      expect(fixture.state.prompts).toEqual([]);
+      yield* fixture.assertCleaned;
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("uses the native default without sending GOAT's default selection as a model ID", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture();
+      const result = yield* fixture.textGeneration.generateThreadTitle({
+        ...fixture.titleInput,
+        modelSelection: { ...modelSelection, model: ANTIGRAVITY_DEFAULT_MODEL },
+      });
+      expect(result).toEqual({ title: "Repair login" });
+      expect(fixture.state.selectedModels).toEqual([]);
+      yield* fixture.assertCleaned;
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect.each([
+    {
+      name: "hooks.json",
+      value: '{"default":{"PreInvocation":[{"command":"do-not-run"}]}}',
+      available: false,
+    },
+    {
+      name: "mcp_config.json",
+      value: '{"mcpServers":{"server":{"command":"do-not-run"}}}',
+      available: false,
+    },
+    { name: "hooks.json", value: "invalid JSON", available: false },
+    { name: "mcp_config.json", value: "x".repeat(64_001), available: false },
+    { name: "hooks.json", value: "{}", available: true },
+    { name: "hooks.json", value: '{"hooks":{}}', available: true },
+    { name: "mcp_config.json", value: '{"mcpServers":{}}', available: true },
+  ])("checks $name before starting a helper, available=$available", ({ name, value, available }) =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture();
+      const configDirectory = fixture.path.join(fixture.profileDirectory, "config");
+      yield* fixture.fs.makeDirectory(configDirectory, { recursive: true });
+      yield* fixture.fs.writeFileString(fixture.path.join(configDirectory, name), value);
+      expect(yield* isAntigravityTextGenerationAvailable(fixture.profileDirectory)).toBe(available);
+      const result = yield* fixture.textGeneration
+        .generateThreadTitle(fixture.titleInput)
+        .pipe(Effect.exit);
+      expect(Exit.isSuccess(result)).toBe(available);
+      expect(fixture.state.workspaces.length).toBe(available ? 1 : 0);
+      yield* fixture.assertCleaned;
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("does not launch during sign-out or before sign-in", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture({ rejectAdmission: true });
+      const error = yield* fixture.textGeneration
+        .generateThreadTitle(fixture.titleInput)
+        .pipe(Effect.flip);
+      expect(error._tag).toBe("TextGenerationError");
+      expect(fixture.state.workspaces).toEqual([]);
+      yield* fixture.assertCleaned;
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect.each(["caller", "sign-out"] as const)(
+    "closes all helper resources when stopped by %s",
+    (source) =>
+      Effect.gen(function* () {
+        const fixture = yield* makeFixture({ prompt: () => Effect.never });
+        const child = yield* fixture.textGeneration
+          .generateThreadTitle(fixture.titleInput)
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(fixture.enteredPrompt);
+        if (source === "caller") {
+          yield* Fiber.interrupt(child);
+        } else {
+          if (!fixture.state.stop) return yield* Effect.die("No tracked helper to stop.");
+          yield* fixture.state.stop;
+          yield* Fiber.await(child);
+        }
+        expect(fixture.state.cancellations).toBe(1);
+        yield* fixture.assertCleaned;
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect("refuses unsafe native session IDs without deleting other files", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture({ sessionId: "../../user-session" });
+      const error = yield* fixture.textGeneration
+        .generateThreadTitle(fixture.titleInput)
+        .pipe(Effect.flip);
+      expect(error.detail).toContain("invalid text helper session ID");
+      expect(fixture.state.prompts).toEqual([]);
+      expect(yield* fixture.fs.readFileString(`${fixture.sessionBase}.db`)).toBe("helper session");
+      expect(fixture.state.closed).toEqual(fixture.state.workspaces);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("keeps native sessions whose metadata belongs to a different workspace", () =>
+    Effect.gen(function* () {
+      const fixture = yield* makeFixture();
+      yield* fixture.fs.writeFileString(`${fixture.sessionBase}.db`, "keep this session");
+      const metadata = yield* encodeMetadata({ cwd: fixture.projectDirectory });
+      yield* fixture.fs.writeFileString(`${fixture.sessionBase}.meta`, metadata);
+      yield* removeAntigravitySessionFiles({
+        profileDirectory: fixture.profileDirectory,
+        sessionId: SESSION_ID,
+        cwd: "different-temporary-workspace",
+      });
+      expect(yield* fixture.fs.readFileString(`${fixture.sessionBase}.db`)).toBe(
+        "keep this session",
+      );
+      expect(yield* fixture.fs.readFileString(`${fixture.sessionBase}.meta`)).toBe(metadata);
+    }).pipe(Effect.scoped),
+  );
+});

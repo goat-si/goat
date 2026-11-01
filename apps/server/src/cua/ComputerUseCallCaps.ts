@@ -1,0 +1,96 @@
+/**
+ * How long one driver call may run before GOAT stops waiting for it, fails that call and replaces
+ * the driver, so a stuck call costs its own cap instead of the whole cell. Measured on macOS: list
+ * calls stay under 0.2 s, a tree read under 0.7 s, a click or key under 0.6 s, the slowest scroll
+ * 6.9 s (a reveal walk the driver will drop); each cap keeps at least 1.4x that headroom.
+ */
+const CAP_MS: Readonly<Record<string, number>> = {
+  list_apps: 2_000,
+  list_windows: 2_000,
+  list_menu_bar_extras: 2_000,
+  click: 3_000,
+  double_click: 3_000,
+  right_click: 3_000,
+  press_key: 3_000,
+  hotkey: 3_000,
+  set_value: 3_000,
+  bring_to_front: 3_000,
+  drag: 3_000,
+  invoke_menu: 5_000,
+  get_desktop_state: 7_000,
+  zoom: 7_000,
+  scroll: 10_000,
+  launch_app: 15_000,
+  run_steps: 60_000,
+  run_actions: 60_000,
+};
+const DEFAULT_CAP_MS = 4_000;
+
+/** Kept back from the cell's deadline, so a capped call's error reaches the cell while it runs. */
+export const CELL_RESERVE_MS = 1_500;
+/** Below this, a call cannot get an answer back in time and is refused before it is queued. */
+export const MIN_CALL_MS = 250;
+
+const record = (args: unknown): Readonly<Record<string, unknown>> =>
+  typeof args === "object" && args !== null ? (args as Record<string, unknown>) : {};
+
+/** Parses a non-negative integer argument, including trimmed integer strings the driver coerces. */
+export const driverIntegerArg = (value: unknown): number | undefined => {
+  if (typeof value === "number" && Number.isInteger(value) && value >= 0) return value;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (/^\+?\d+$/.test(trimmed)) {
+      const parsed = Number(trimmed);
+      if (Number.isSafeInteger(parsed)) return parsed;
+    }
+  }
+  return undefined;
+};
+
+/** Parses a boolean argument, including trimmed "true"/"false" strings the driver coerces. */
+export const driverBoolArg = (value: unknown): boolean | undefined => {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const lower = value.trim().toLowerCase();
+    if (lower === "true") return true;
+    if (lower === "false") return false;
+  }
+  return undefined;
+};
+
+export const driverCallCapMs = (tool: string, args: unknown): number => {
+  const given = record(args);
+  if (tool === "get_window_state")
+    return driverBoolArg(given.include_screenshot) === true ? 7_000 : 4_000;
+  if (tool === "run_script") {
+    const raw = driverIntegerArg(given.timeout_ms);
+    const ms = raw !== undefined && raw >= 100 && raw <= 120_000 ? raw : 30_000;
+    return ms + 1_500;
+  }
+  if (tool === "verify_state") {
+    const raw = driverIntegerArg(given.timeout_ms);
+    return (raw ?? 0) + 2_000;
+  }
+  if (tool === "drag") {
+    const raw = driverIntegerArg(given.duration_ms);
+    const dur = raw !== undefined ? Math.min(10_000, raw) : 500;
+    return Math.max(3_000, dur + 2_500);
+  }
+  if (tool === "type_text" || tool === "type_text_chars") {
+    const rawDelay = driverIntegerArg(given.delay_ms);
+    const perChar = rawDelay !== undefined ? Math.min(200, Math.max(8, rawDelay)) + 24 : 40;
+    return 4_000 + perChar * (typeof given.text === "string" ? [...given.text].length : 0);
+  }
+  return CAP_MS[tool] ?? DEFAULT_CAP_MS;
+};
+
+/** The deadline one driver call gets inside a cell that ends at cellDeadline. */
+export const driverCallDeadline = (
+  tool: string,
+  args: unknown,
+  cellDeadline: number,
+  now: number,
+): number => Math.min(now + driverCallCapMs(tool, args), cellDeadline - CELL_RESERVE_MS);
+
+/** A wait in whole or tenth seconds, as the guest reads it. */
+export const seconds = (ms: number) => `${Number((ms / 1_000).toFixed(1))} s`;

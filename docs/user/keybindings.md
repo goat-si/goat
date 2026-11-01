@@ -1,0 +1,254 @@
+# Keybindings
+
+Customize shortcuts in **Settings → Keybindings** on web and desktop. That page
+also lists the command IDs and defaults available in your version.
+
+## Composer controls
+
+In **Settings → General → Send shortcut**, choose whether Enter sends, requires
+`mod+Enter` for multiline prompts, or always requires `mod+Enter`. `Shift+Enter`
+inserts a new line. This applies to the web and desktop composer at desktop widths.
+
+**Follow-up behavior** chooses Queue or Steer while the agent runs. Use
+`mod+Enter` to do the opposite for one message. When the send shortcut requires
+`mod+Enter` for that message, `mod+Enter` sends with your follow-up behavior and
+`mod+Shift+Enter` does the opposite. `mod+Alt+Enter` sends, keeps that thread running in the
+background, and opens a fresh new-thread composer. In a new thread, `mod+Enter`
+does the same. Change these shortcuts in **Settings → Keybindings** under
+**Composer: Opposite Queue or Steer Action**, **Composer: Start in Background**,
+or **Composer: Send and Start New Thread**. These bindings take priority over the
+send shortcut. Click the send button to use the configured follow-up behavior.
+
+When a thread has queued messages, `mod+Shift+Enter` sends the first one as a steer
+while a turn is running, or as a new turn when the thread is stopped. While the
+composer uses `mod+Shift+Enter` for the opposite action, first click
+elsewhere in the thread, outside the composer and any terminal. Change it under
+**Queue: Send First Queued Message** in Keybindings.
+
+Use `mod+shift+m` to choose a model and `mod+shift+h` to choose a host.
+To step a new thread to the next machine instead of opening the menu, bind
+**Composer: Cycle Host** in Keybindings. It has no default shortcut.
+Use `mod+shift+e` for effort, `mod+shift+a` for access mode, `mod+shift+x` for the
+workspace, and `mod+shift+g` for the Git branch. Choose **Local**, **New
+worktree**, or **Worktree on SSH** (desktop) from the workspace menu. To continue in an existing worktree, use
+**New thread in this worktree** from the branch toolbar.
+
+To change effort one step without opening the picker, bind
+**Composer: Increase Effort** and **Composer: Decrease Effort** in Keybindings.
+Both are unbound by default. Increase wraps from the highest level to the
+lowest, and decrease wraps from the lowest level to the highest.
+
+In the model picker, press Left in an empty search field or Shift+Tab to reach
+the provider list. Use Up/Down to move and Enter to choose. Right returns to
+model search. `mod+shift+up` and `mod+shift+down` switch providers directly and clear the
+search. These provider shortcuts can also be changed in Settings.
+
+These shortcuts run inside the focused web or desktop client. `mod` uses Command
+on macOS and Ctrl on Windows and Linux, including GNOME, KDE Plasma, Niri, and
+Hyprland. If a custom desktop shortcut takes the same keys, choose another binding
+in Settings.
+
+## Copy pull request references
+
+With a PR open in the right panel or on the Pull requests page, use `mod+shift+c`
+to copy its URL and `mod+shift+k` to copy its number with a `#` prefix.
+Both shortcuts can be changed in Settings. Search for “Copy Link or Thread”
+or “Copy Number”. They copy the selected PR and leave terminal input alone.
+
+## Files panel and open files
+
+These shortcuts work while the Files panel or an open file has the keyboard. They
+never run while you type in a field, and the ones that act on the selected item
+also stay out of a file's editor. The shortcuts list button (keyboard icon) in the
+Files panel and in a file's header shows every key with its current binding.
+Search Settings for “Files:” to change them.
+
+| Keys                             | Action                                                                   |
+| -------------------------------- | ------------------------------------------------------------------------ |
+| `↑` `↓` `Home` `End`             | Move between rows                                                        |
+| `PageUp` `PageDown`              | Move a page of rows                                                      |
+| `→` `←`                          | Open or close a folder, or step into or out of it                        |
+| `Enter`, `Space`                 | Open a file or toggle a folder                                           |
+| `mod+↓`                          | Open the file and move to it, or open the folder                         |
+| `alt+→` `alt+←`, or Option-click | Open or close a folder with its subfolders                               |
+| `mod+→` `mod+←`                  | Expand or collapse all folders                                           |
+| Type a letter                    | Start a search in Search files                                           |
+| `mod+f`                          | Search files in the panel, or find in an open file's editor              |
+| `ctrl+g`                         | Go to a line in the open file (`42` or `42:7`)                           |
+| `mod+alt+e`                      | Switch between the Files panel and the open file                         |
+| `mod+alt+r`                      | Reveal the item in Finder or File Explorer                               |
+| `mod+alt+y`                      | Refresh: in the panel, its files and the open file; in a file, that file |
+| `mod+alt+c`                      | Copy the full path                                                       |
+| `mod+alt+shift+c`                | Copy the path relative to the thread's workspace                         |
+| Not set                          | Copy name, Copy contents                                                 |
+
+`Shift` with the arrows or a click, and `mod`-click, select several rows. Path
+and name copies then put one item per line. A folder you just opened or closed is
+still the item the shortcuts act on. Paths on a remote environment are that
+machine's paths.
+
+`mod+alt+r` works where the environment supports revealing files, and is the
+same action as the row menu's reveal item.
+
+Copy contents copies the whole file and refuses a file that is too large to read
+completely, a binary file, or text in an encoding GOAT cannot decode. Copy name
+and Copy contents have no default keys; set them in Settings, or use the row menu
+and the copy button beside a file's breadcrumbs.
+
+`ctrl+g` opens Go to line from anywhere in an open file, including its header,
+even while the editor's find bar is open. Inside the editor text and its find bar,
+the find-next key keeps its meaning (`cmd+g` on macOS, `ctrl+g` on Windows and
+Linux).
+
+`mod+f` in a file's editor opens the editor's own find; in the Files panel it
+moves to Search files, where `↓` returns to the rows. A rendered Markdown, HTML or
+table view, and a file shown read-only (for example one too large to load
+completely), has no find of its own; in a browser, `mod+f` there opens the
+browser's find. A rendered HTML page also keeps its own keys while it has focus.
+
+If you bind a file shortcut to keys another command already uses, move that
+command as well; otherwise the other command can run first.
+
+## Find in a diff
+
+Click into a diff in the Diff panel or a pull request's Code tab, then press
+`mod+f` to search every file in it, including folded files and unchanged lines
+hidden between changes. Enter and `Shift+Enter` move between matches, and a
+match in a folded file opens it. Escape closes the search. This shortcut is not
+configurable. A very large uncommitted diff loads its files as you scroll, and
+find only searches the files loaded so far.
+
+## iPad
+
+With a hardware keyboard, use `Cmd+1` through `Cmd+9` to open the first nine
+displayed threads. The shortcuts follow the current list filters and order.
+`Cmd+K` opens the command palette to search commands, projects, and threads.
+Use the arrow keys and Return to choose a result, or `Cmd+1` through `Cmd+9` to
+choose directly. Escape or `Cmd+K` closes the palette. Start a search with `>`
+to show only actions.
+
+In a new thread, `Cmd+Shift+H` moves the draft to the next machine.
+
+In the composer, Return sends and `Shift+Return` inserts a new line. `Cmd+Return`
+also sends. To make Return insert a new line instead, change the Return key
+behavior in Settings → Keyboard.
+
+## Edit the configuration file
+
+Keybindings live on the environment's machine, in `keybindings.json` in its
+`userdata` folder: `~/.goat/userdata/keybindings.json` for `goat serve` and SSH
+hosts, and `~/.goat/desktop/userdata/keybindings.json` for the desktop app
+([GOAT (Nightly) uses its own folder](./install.md#goat-and-goat-nightly-side-by-side)).
+You can edit this file directly. It is a JSON array of rules:
+
+```json
+[
+  { "key": "mod+g", "command": "terminal.toggle" },
+  { "key": "mod+shift+g", "command": "terminal.new", "when": "terminalFocus" }
+]
+```
+
+GOAT creates the file with its defaults and adds new defaults on later startups.
+New defaults do not replace commands you customized. If a new default overlaps one
+of your shortcuts, [rule order](#precedence) decides which runs.
+Invalid rules are ignored; if the file cannot be parsed, GOAT uses defaults.
+
+## Rule shape
+
+Each rule requires a `key` shortcut and a `command` ID. An optional `when`
+expression restricts when it runs.
+
+Project scripts use `script.{id}.run`, such as `script.test.run`.
+
+## Key syntax
+
+Join modifiers and a key with `+`, such as `mod+shift+d` or `ctrl+l`.
+`mod` means Command on macOS and Control elsewhere. Other modifiers are
+`cmd` / `meta`, `ctrl` / `control`, `alt` / `option`, and `shift`.
+
+## When conditions
+
+Available context keys are `terminalFocus`, `terminalOpen`, `previewFocus`,
+`previewOpen`, `rightPanelOpen`, `modelPickerOpen`, `usagePageOpen`, `notesPageOpen`,
+`composerFocus`, `draftThreadRoute`, `turnRunning`, `editableFocus`, `fileViewFocus`,
+`fileTreeFocus`, `isWeb`, and `isDesktop`.
+`draftThreadRoute` is true in a new thread, including a restored draft, before you
+send its first message.
+`editableFocus` is true while a text field, the composer, or another editor has
+the keyboard. `fileViewFocus` is true while the Files panel or an open file has
+the keyboard, and `fileTreeFocus` while the Files panel has it. `isWeb` is true in a browser tab. `isDesktop` is true in the
+desktop app. Unknown keys evaluate to `false`.
+
+`mod+1` through `mod+9` jump to the first nine threads, and to models while the
+model picker is open. The thread jumps do not run while the model picker is open.
+Those defaults use `isDesktop` so they do not steal the
+browser's tab-switch shortcuts. Remove that condition in Settings if you want
+the same jumps in a browser.
+
+Combine keys with `!` for not, `&&` for and, `||` for or, and parentheses:
+
+```json
+{ "key": "mod+j", "command": "terminal.toggle", "when": "terminalOpen && !terminalFocus" }
+```
+
+## Find in the current thread
+
+`chat.find` searches conversation messages and proposed plans in the active thread. Entering a
+query searches the entire thread, including older messages. Thread search requires server support;
+update an older server to enable it. Select **Retry** if a search fails. It defaults to
+`mod+f` outside terminals and previews. Press **Enter** or **Shift+Enter** to move between matches,
+and **Escape** to close find.
+
+## Precedence
+
+The last rule whose key and condition both match wins, even if it belongs to a
+different command. Put a more specific rule after a general one when they share
+a shortcut.
+
+## Commands with special behavior
+
+`thread.stop` interrupts the running turn in the focused thread. It has no default
+shortcut; assign one in **Settings → Keybindings**.
+
+`thread.undo` (`mod+z` by default) reverses the actions shown in the notice at the
+bottom of the sidebar, such as unpin, settle, snooze, archive, or discarding a
+draft. Consecutive
+actions of the same kind undo together. The notice remains available for five
+seconds after the latest action. Right after an action, the shortcut works even
+in a text field such as the composer. Once you type or press another key, the
+field gets its own undo back. Terminals always keep their native shortcut.
+
+`navigation.back` (`mod+[` by default) and `navigation.forward` (`mod+]`) move
+through the pages you have visited, like a browser's back and forward buttons.
+
+`chat.new` may ask you to choose a project when there is more than one.
+`chat.newLocal` skips that chooser. Both use your
+[new-thread defaults](./thread-sidebar.md#start-a-thread). `chat.newWithoutProject`
+(`mod+alt+n`) starts a thread [without a project](./thread-sidebar.md#start-without-a-project).
+
+## Reserved shortcuts
+
+In the desktop app, `mod+w` closes the focused terminal or the active right-panel
+tab. When nothing remains to close, it does nothing; it never closes the window. In a browser, `mod+w`
+closes the browser tab; rebind `rightPanel.close` and `terminal.close` to an available
+shortcut such as `alt+w`.
+
+`mod+shift+t` reopens the last closed tab across the app, including files,
+diffs, pull requests, browsers, and devices, in the order you closed them.
+A browser opens in a fresh session without its old page history. Incognito tabs
+can reopen until you reload or quit the app. This shortcut does not undo deleted work.
+Browsers also use it to reopen browser tabs; choose another binding in Settings
+if the browser takes it first.
+
+Many defaults include `!terminalFocus` so they do not intercept terminal input.
+Keep that condition when remapping them if you want the same behavior.
+
+## Desktop quit shortcut
+
+Use `Cmd+Q` on macOS or `Ctrl+Q` on Windows and Linux. In the default **Hold** mode,
+hold for 1.2 seconds or press twice within 500 milliseconds. Holding requires
+keyboard repeat; if repeat is disabled, use two presses or the application menu.
+
+Change **Settings → General → Confirmations → Quit shortcut** to **Direct** for a
+single press or **Double press** for two presses only. Choosing **Quit** from the
+application menu always quits immediately.

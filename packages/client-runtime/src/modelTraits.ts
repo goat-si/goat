@@ -1,0 +1,202 @@
+import type { ModelSelection, ProviderDriverKind, ProviderOptionDescriptor } from "@goat/contracts";
+import {
+  buildProviderOptionSelectionsFromDescriptors,
+  getProviderOptionCurrentLabel,
+  getProviderOptionCurrentValue,
+  isClaudeUltrathinkPrompt,
+} from "@goat/shared/model";
+import { REASONING_EFFORT_OPTION_IDS } from "./state/threadExecution.ts";
+
+export const REASONING_SELECT_DESCRIPTOR_IDS: ReadonlySet<string> = new Set([
+  ...REASONING_EFFORT_OPTION_IDS,
+  "thinking",
+]);
+
+export function replaceDescriptorCurrentValue(
+  descriptors: ReadonlyArray<ProviderOptionDescriptor>,
+  descriptorId: string,
+  currentValue: string | boolean | undefined,
+): ReadonlyArray<ProviderOptionDescriptor> {
+  return descriptors.map((descriptor) =>
+    descriptor.id !== descriptorId
+      ? descriptor
+      : descriptor.type === "boolean"
+        ? {
+            ...descriptor,
+            ...(typeof currentValue === "boolean" ? { currentValue } : {}),
+          }
+        : {
+            ...descriptor,
+            ...(typeof currentValue === "string" ? { currentValue } : {}),
+          },
+  );
+}
+
+export function getDescriptorStringValue(
+  descriptor: Extract<ProviderOptionDescriptor, { type: "select" }> | null,
+  selection?: ModelSelection | null,
+  reportedSelection?: ModelSelection | null,
+): string | null {
+  if (!descriptor) {
+    return null;
+  }
+  const value = getProviderOptionCurrentValue(descriptor, selection, reportedSelection);
+  return typeof value === "string" ? value : null;
+}
+
+// Prompt-injected levels such as Ultrathink still work when typed, but pickers do not offer them.
+export function selectableProviderOptionChoices(
+  descriptor: Extract<ProviderOptionDescriptor, { type: "select" }>,
+) {
+  return descriptor.options.filter(
+    (option) => !descriptor.promptInjectedValues?.includes(option.id),
+  );
+}
+
+export function getPromptControlledTraits(
+  descriptors: ReadonlyArray<ProviderOptionDescriptor>,
+  prompt: string,
+  allowPromptInjectedEffort = true,
+) {
+  const primarySelectDescriptor =
+    descriptors.find((descriptor) => descriptor.type === "select") ?? null;
+  const ultrathinkPromptControlled =
+    allowPromptInjectedEffort &&
+    (primarySelectDescriptor?.promptInjectedValues?.length ?? 0) > 0 &&
+    isClaudeUltrathinkPrompt(prompt);
+  const ultrathinkInBodyText =
+    ultrathinkPromptControlled && isClaudeUltrathinkPrompt(prompt.replace(/^Ultrathink:\s*/i, ""));
+  return { primarySelectDescriptor, ultrathinkPromptControlled, ultrathinkInBodyText };
+}
+
+export function getTraitSelectChange(
+  selected: ReturnType<typeof getPromptControlledTraits> & {
+    descriptors: ReadonlyArray<ProviderOptionDescriptor>;
+  },
+  descriptor: Extract<ProviderOptionDescriptor, { type: "select" }>,
+  prompt: string,
+  value: string,
+) {
+  if (!value || descriptor.promptInjectedValues?.includes(value)) return null;
+  const isPrimary = descriptor.id === selected.primarySelectDescriptor?.id;
+  if (isPrimary && selected.ultrathinkInBodyText) return null;
+  return {
+    prompt:
+      isPrimary && selected.ultrathinkPromptControlled
+        ? prompt.replace(/^Ultrathink:\s*/i, "")
+        : prompt,
+    modelOptions: buildProviderOptionSelectionsFromDescriptors(
+      replaceDescriptorCurrentValue(selected.descriptors, descriptor.id, value),
+    ),
+  };
+}
+
+export function buildTraitsTriggerDisplay(input: {
+  provider: ProviderDriverKind;
+  descriptors: ReadonlyArray<ProviderOptionDescriptor>;
+  primarySelectDescriptorId: string | null;
+  ultrathinkPromptControlled: boolean;
+  modelSelection?: ModelSelection | null;
+  reportedModelSelection?: ModelSelection | null | undefined;
+}): { label: string } {
+  let fastModeFallbackLabel: string | null = null;
+  let speedLabel: string | null = null;
+  let reasoningLabelIndex = -1;
+  const labels: Array<string> = [];
+  for (const descriptor of input.descriptors) {
+    if (descriptor.id === "fastMode" && descriptor.type === "boolean") {
+      speedLabel = descriptor.currentValue === true ? "Fast" : null;
+      fastModeFallbackLabel = speedLabel ?? "Normal";
+      continue;
+    }
+    if (
+      input.provider === "codex" &&
+      descriptor.id === "serviceTier" &&
+      descriptor.type === "select"
+    ) {
+      const currentValue = getProviderOptionCurrentValue(descriptor);
+      const fastTier = descriptor.options.find(({ label }) => label === "Fast");
+      const ultrafastTier = descriptor.options.find(({ label }) => label === "Ultrafast");
+      if (
+        ((fastTier || ultrafastTier) && currentValue === "default") ||
+        (fastTier && currentValue === fastTier.id) ||
+        (ultrafastTier && currentValue === ultrafastTier.id)
+      ) {
+        speedLabel =
+          ultrafastTier && currentValue === ultrafastTier.id
+            ? "Ultrafast"
+            : fastTier && currentValue === fastTier.id
+              ? "Fast"
+              : null;
+        fastModeFallbackLabel =
+          descriptor.options.find(({ id }) => id === currentValue)?.label ?? "Normal";
+        continue;
+      }
+    }
+    const label =
+      input.ultrathinkPromptControlled && descriptor.id === input.primarySelectDescriptorId
+        ? "Ultrathink"
+        : descriptor.type === "boolean"
+          ? `${descriptor.label} ${descriptor.currentValue === true ? "On" : "Off"}`
+          : getProviderOptionCurrentLabel(
+              descriptor,
+              input.modelSelection,
+              input.reportedModelSelection,
+            );
+    if (typeof label === "string" && label.length > 0) {
+      if (
+        reasoningLabelIndex === -1 &&
+        descriptor.type === "select" &&
+        REASONING_SELECT_DESCRIPTOR_IDS.has(descriptor.id)
+      ) {
+        reasoningLabelIndex = labels.length;
+      }
+      labels.push(label);
+    }
+  }
+
+  if (labels.length === 0 && fastModeFallbackLabel !== null) {
+    return { label: fastModeFallbackLabel };
+  }
+  if (speedLabel) {
+    if (reasoningLabelIndex >= 0) {
+      labels[reasoningLabelIndex] = `${labels[reasoningLabelIndex]} ${speedLabel}`;
+    } else {
+      labels.push(speedLabel);
+    }
+  }
+  return { label: labels.join(" · ") };
+}
+
+type SelectDescriptor = Extract<ProviderOptionDescriptor, { type: "select" }>;
+
+/** The reasoning select the effort slider drives, or null when the model has none. */
+export function findReasoningDescriptor(
+  selectDescriptors: ReadonlyArray<SelectDescriptor>,
+): SelectDescriptor | null {
+  return (
+    selectDescriptors.find(
+      (descriptor) =>
+        REASONING_SELECT_DESCRIPTOR_IDS.has(descriptor.id) && descriptor.options.length > 1,
+    ) ?? null
+  );
+}
+
+/** The slider step for a selected value, falling back to the provider default, then the first. */
+export function resolveEffortStepIndex(
+  descriptor: SelectDescriptor,
+  selectedValue: string | null,
+): number {
+  const choices = selectableProviderOptionChoices(descriptor);
+  const selected = choices.findIndex((option) => option.id === selectedValue);
+  if (selected >= 0) return selected;
+  return Math.max(
+    0,
+    choices.findIndex((option) => option.isDefault),
+  );
+}
+
+/** Where a step sits along the edge-aligned track, from 0 (first) to 1 (last); dots and thumb share it. */
+export function effortStepFraction(index: number, stepCount: number): number {
+  return stepCount > 1 ? index / (stepCount - 1) : 0;
+}

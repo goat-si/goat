@@ -1,0 +1,568 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { assert, it } from "@effect/vitest";
+import * as HostProcess from "@goat/shared/HostProcess";
+import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import { HttpClient, HttpClientResponse } from "effect/http";
+import * as ChildProcess from "effect/process/ChildProcess";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import * as TestClock from "effect/testing/TestClock";
+import * as ProcessRunner from "../processRunner.ts";
+import {
+  ensurePinnedRuntimeInstalled,
+  pinnedRuntimeCommand,
+  PinnedRuntimeInstallError,
+  pinnedRuntimePaths,
+  type PinnedRuntimeProgress,
+  prunePinnedRuntimes,
+} from "./pinnedRuntime.ts";
+import { SERVICE_LAUNCHER_PROTOCOL } from "./serviceProtocol.ts";
+
+const version = "1.2.3";
+const archiveName = `goat-${version}-linux-x64.tar.gz`;
+const archiveBytes = new TextEncoder().encode("not really a tarball");
+const archiveHex = (bytes: Uint8Array) =>
+  Effect.promise(() => crypto.subtle.digest("SHA-256", bytes)).pipe(
+    Effect.map((digest) =>
+      Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join(""),
+    ),
+  );
+const validChecksums = archiveHex(archiveBytes).pipe(
+  Effect.map((hex) => `${hex}  ${archiveName}\n`),
+);
+const releaseHttpClient = (checksums: string, requests: string[] = []) =>
+  HttpClient.make((request) => {
+    requests.push(request.url);
+    const body = request.url.endsWith("/SHA256SUMS") ? checksums : archiveBytes;
+    return Effect.succeed(HttpClientResponse.fromWeb(request, new Response(body)));
+  });
+const extractingRunner = (fs: FileSystem.FileSystem, path: Path.Path, commands: string[] = []) =>
+  ProcessRunner.ProcessRunner.of({
+    run: (input) =>
+      Effect.gen(function* () {
+        commands.push(input.command);
+        const targetIndex = input.args.indexOf("-C");
+        const stagingDir = input.args[targetIndex + 1];
+        if (input.command !== "tar" || stagingDir === undefined) {
+          return yield* Effect.die(`unexpected command ${input.command}`);
+        }
+        yield* fs.writeFileString(path.join(stagingDir, "goat"), "#!/bin/sh\n").pipe(Effect.orDie);
+        return {
+          stdout: "",
+          stderr: "",
+          code: ChildProcessSpawner.ExitCode(0),
+          timedOut: false,
+          stdoutTruncated: false,
+          stderrTruncated: false,
+          stdoutInvalidUtf8: false,
+          stderrInvalidUtf8: false,
+        };
+      }),
+  });
+
+it.layer(NodeServices.layer)("ensurePinnedRuntimeInstalled", (it) => {
+  it.effect("reuses a verified cache only while its executable matches the install record", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-pinned-verified-" });
+      const requests: string[] = [];
+      const checksums = yield* validChecksums;
+      const install = (verifyCachedInstall: boolean) =>
+        ensurePinnedRuntimeInstalled({
+          baseDir,
+          version,
+          fs,
+          path,
+          platform: "linux",
+          arch: "x64",
+          httpClient: releaseHttpClient(checksums, requests),
+          runner: extractingRunner(fs, path),
+          validate: () => Effect.void,
+          verifyCachedInstall,
+        });
+      const paths = yield* install(true);
+      assert.lengthOf(requests, 2);
+
+      // Unchanged bytes: no download, no checksum fetch.
+      yield* install(true);
+      assert.lengthOf(requests, 2);
+
+      // Replaced bytes behind an intact sentinel are reinstalled from the verified release.
+      yield* fs.writeFileString(paths.entryPath, "#!/bin/sh\necho tampered\n");
+      yield* install(true);
+      assert.lengthOf(requests, 4);
+      assert.isTrue(requests[2]!.endsWith("/SHA256SUMS"));
+      assert.equal(yield* fs.readFileString(paths.entryPath), "#!/bin/sh\n");
+
+      // An install from before records counts as unverified.
+      yield* fs.remove(path.join(paths.versionDir, ".install-record"));
+      yield* install(true);
+      assert.lengthOf(requests, 6);
+
+      // Callers that do not ask keep the plain sentinel check.
+      yield* fs.writeFileString(paths.entryPath, "#!/bin/sh\necho tampered\n");
+      yield* install(false);
+      assert.lengthOf(requests, 6);
+    }),
+  );
+
+  it.effect("installs the verified release archive as the runtime executable", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-pinned-archive-" });
+      const requests: string[] = [];
+      const commands: string[] = [];
+      const upstream = path.join(baseDir, "runtime", "versions", version);
+      yield* fs.makeDirectory(upstream, { recursive: true });
+      yield* fs.writeFileString(path.join(upstream, "t3"), "upstream runtime\n");
+      yield* fs.writeFileString(path.join(upstream, ".install-complete"), version);
+      const paths = yield* ensurePinnedRuntimeInstalled({
+        baseDir,
+        version,
+        fs,
+        path,
+        platform: "linux",
+        arch: "x64",
+        httpClient: releaseHttpClient(yield* validChecksums, requests),
+        releaseBaseUrl: "https://releases.example/download",
+        runner: extractingRunner(fs, path, commands),
+        validate: (staging) =>
+          fs.exists(staging.entryPath).pipe(
+            Effect.flatMap((exists) => (exists ? Effect.void : Effect.die("missing runtime"))),
+            Effect.orDie,
+          ),
+      });
+      assert.equal(paths.entryPath, path.join(paths.versionDir, "goat"));
+      assert.deepEqual(pinnedRuntimeCommand(paths), { command: paths.entryPath, args: [] });
+      assert.deepEqual(requests, [
+        `https://releases.example/download/v${version}/SHA256SUMS`,
+        `https://releases.example/download/v${version}/${archiveName}`,
+      ]);
+      assert.deepEqual(commands, ["tar"]);
+      assert.equal(paths.versionDir, path.join(baseDir, "runtime", "goat", "versions", version));
+      assert.equal(yield* fs.readFileString(path.join(upstream, "t3")), "upstream runtime\n");
+      assert.equal(yield* fs.readFileString(path.join(upstream, ".install-complete")), version);
+      assert.equal(yield* fs.readFileString(paths.sentinelPath), `${version}\n`);
+      assert.isFalse(yield* fs.exists(path.join(paths.versionDir, "t3-runtime-archive")));
+    }),
+  );
+
+  it.effect("cleans up an interrupted download without reporting verification or extraction", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-pinned-progress-failed-" });
+      const checksums = yield* validChecksums;
+      const progress: PinnedRuntimeProgress[] = [];
+      let cancelled = false;
+      const client = HttpClient.make((request) =>
+        Effect.succeed(
+          HttpClientResponse.fromWeb(
+            request,
+            request.url.endsWith("/SHA256SUMS")
+              ? new Response(checksums)
+              : new Response(
+                  new ReadableStream({
+                    start(controller) {
+                      controller.enqueue(archiveBytes.slice(0, 4));
+                    },
+                    cancel() {
+                      cancelled = true;
+                    },
+                  }),
+                ),
+          ),
+        ),
+      );
+      const firstChunk = yield* Deferred.make<void>();
+      const install = yield* ensurePinnedRuntimeInstalled({
+        baseDir,
+        version,
+        fs,
+        path,
+        platform: "linux",
+        arch: "x64",
+        httpClient: client,
+        runner: extractingRunner(fs, path),
+        validate: () => Effect.die("must not validate an interrupted archive"),
+        onProgress: (event) => {
+          progress.push(event);
+          if (event.stage === "download" && event.received === 4)
+            Deferred.doneUnsafe(firstChunk, Effect.void);
+        },
+      }).pipe(Effect.forkScoped);
+      yield* Deferred.await(firstChunk);
+      yield* Fiber.interrupt(install);
+      assert.deepEqual(progress.at(-1), { stage: "download", received: 4, total: undefined });
+      assert.isTrue(progress.every((event) => event.stage === "download"));
+      assert.isTrue(cancelled);
+      assert.deepEqual(
+        yield* fs.readDirectory(path.join(baseDir, "runtime", "goat", "versions")),
+        [],
+      );
+    }),
+  );
+
+  it.effect("refuses an archive whose checksum does not match the release", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-pinned-archive-bad-" });
+      const commands: string[] = [];
+      const error = yield* ensurePinnedRuntimeInstalled({
+        baseDir,
+        version,
+        fs,
+        path,
+        platform: "linux",
+        arch: "x64",
+        httpClient: releaseHttpClient(`${"0".repeat(64)}  ${archiveName}\n`),
+        runner: extractingRunner(fs, path, commands),
+        validate: () => Effect.die("must not validate an unverified archive"),
+      }).pipe(Effect.flip);
+      assert.instanceOf(error, PinnedRuntimeInstallError);
+      assert.equal(error.step, "verifying the GOAT release archive checksum");
+      assert.deepEqual(commands, []);
+      assert.deepEqual(
+        yield* fs.readDirectory(path.join(baseDir, "runtime", "goat", "versions")),
+        [],
+      );
+    }),
+  );
+
+  it.effect("validates a staging tree before atomically publishing it", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-pinned-runtime-test-" });
+      const finalPaths = pinnedRuntimePaths(path, baseDir, version, "linux");
+      let validatedDirectory = "";
+
+      const installed = yield* ensurePinnedRuntimeInstalled({
+        baseDir,
+        version,
+        fs,
+        path,
+        platform: "linux",
+        arch: "x64",
+        httpClient: releaseHttpClient(yield* validChecksums),
+        runner: extractingRunner(fs, path),
+        validate: (staging) =>
+          Effect.gen(function* () {
+            validatedDirectory = staging.versionDir;
+            assert.isFalse(yield* fs.exists(finalPaths.versionDir));
+            assert.isTrue(yield* fs.exists(staging.entryPath));
+          }).pipe(Effect.orDie),
+      });
+
+      assert.notEqual(validatedDirectory, finalPaths.versionDir);
+      assert.deepEqual(installed, finalPaths);
+      assert.isTrue(yield* fs.exists(finalPaths.entryPath));
+      assert.equal(yield* fs.readFileString(finalPaths.sentinelPath), `${version}\n`);
+    }),
+  );
+
+  it.effect("removes staging and leaves no final runtime when validation fails", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-pinned-runtime-test-" });
+      const finalPaths = pinnedRuntimePaths(path, baseDir, version, "linux");
+
+      yield* ensurePinnedRuntimeInstalled({
+        baseDir,
+        version,
+        fs,
+        path,
+        platform: "linux",
+        arch: "x64",
+        httpClient: releaseHttpClient(yield* validChecksums),
+        runner: extractingRunner(fs, path),
+        validate: () =>
+          Effect.fail(new PinnedRuntimeInstallError({ step: "validating the staged runtime" })),
+      }).pipe(Effect.flip);
+
+      assert.isFalse(yield* fs.exists(finalPaths.versionDir));
+      assert.deepEqual(
+        (yield* fs.readDirectory(path.dirname(finalPaths.versionDir))).filter((entry) =>
+          entry.startsWith(".staging-"),
+        ),
+        [],
+      );
+    }),
+  );
+
+  it.effect("replaces an incomplete pinned runtime", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-pinned-runtime-repair-" });
+      const finalPaths = pinnedRuntimePaths(path, baseDir, version, "linux");
+      yield* fs.makeDirectory(finalPaths.versionDir, { recursive: true });
+      yield* fs.writeFileString(path.join(finalPaths.versionDir, "partial"), "incomplete\n");
+
+      yield* ensurePinnedRuntimeInstalled({
+        baseDir,
+        version,
+        fs,
+        path,
+        platform: "linux",
+        arch: "x64",
+        httpClient: releaseHttpClient(yield* validChecksums),
+        runner: extractingRunner(fs, path),
+        validate: () => Effect.void,
+      });
+
+      assert.isFalse(yield* fs.exists(path.join(finalPaths.versionDir, "partial")));
+      assert.isTrue(yield* fs.exists(finalPaths.entryPath));
+    }),
+  );
+
+  it.effect("preserves a completed runtime when validation fails", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-pinned-runtime-repair-" });
+      const finalPaths = pinnedRuntimePaths(path, baseDir, version, "linux");
+      yield* fs.makeDirectory(path.dirname(finalPaths.entryPath), { recursive: true });
+      yield* fs.writeFileString(finalPaths.entryPath, "broken\n");
+      yield* fs.writeFileString(finalPaths.sentinelPath, `${version}\n`);
+
+      let validations = 0;
+      const requests: string[] = [];
+      yield* ensurePinnedRuntimeInstalled({
+        baseDir,
+        version,
+        fs,
+        path,
+        platform: "linux",
+        arch: "x64",
+        httpClient: releaseHttpClient(yield* validChecksums, requests),
+        runner: extractingRunner(fs, path),
+        validate: (paths) =>
+          Effect.gen(function* () {
+            validations += 1;
+            const source = yield* fs.readFileString(paths.entryPath).pipe(Effect.orDie);
+            if (source === "broken\n") {
+              return yield* new PinnedRuntimeInstallError({ step: "validating the runtime" });
+            }
+          }),
+      }).pipe(Effect.flip);
+
+      assert.equal(validations, 1);
+      assert.deepEqual(requests, []);
+      assert.equal(yield* fs.readFileString(finalPaths.entryPath), "broken\n");
+    }),
+  );
+});
+
+it.layer(NodeServices.layer)("prunePinnedRuntimes", (it) => {
+  const lsofRunner = (stdout: string) =>
+    ProcessRunner.ProcessRunner.of({
+      run: () =>
+        Effect.succeed({
+          stdout,
+          stderr: "",
+          code: ChildProcessSpawner.ExitCode(0),
+          timedOut: false,
+          stdoutTruncated: false,
+          stderrTruncated: false,
+          stdoutInvalidUtf8: false,
+          stderrInvalidUtf8: false,
+        }),
+    });
+
+  const setup = Effect.fn(function* (versions: ReadonlyArray<string>) {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-pinned-prune-" });
+    const versionsDir = path.join(baseDir, "runtime", "goat", "versions");
+    const now = Duration.toMillis(Duration.days(1));
+    yield* TestClock.setTime(now);
+    const install = Effect.fn(function* (
+      version: string,
+      completed: "long ago" | "just now" | "never" = "long ago",
+    ) {
+      const directory = path.join(versionsDir, version);
+      yield* fs.makeDirectory(directory, { recursive: true });
+      yield* fs.writeFileString(path.join(directory, "goat"), "");
+      if (completed === "never") return;
+      const sentinel = path.join(directory, ".install-complete");
+      yield* fs.writeFileString(sentinel, `${version}\n`);
+      const at = completed === "just now" ? now : 0;
+      yield* fs.utimes(sentinel, at, at);
+    });
+    for (const version of versions) yield* install(version);
+    return { baseDir, versionsDir, install };
+  });
+
+  it.effect("removes only completed runtimes nothing references", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const { baseDir, versionsDir, install } = yield* setup([
+        "1.0.0",
+        "1.1.0",
+        "1.2.0",
+        "1.2.5",
+        "1.3.0",
+        "1.3.5",
+        "1.4.0",
+        "1.5.0",
+        "2.0.0",
+        "2.1.0",
+      ]);
+      // A downgrade another process installed but has not pointed anything at yet.
+      yield* install("0.5.0", "just now");
+      yield* install("1.0.1", "never");
+      yield* install(".staging-abc", "never");
+      yield* install(".pruned-0.8.0");
+      yield* install("other", "never");
+      yield* fs.symlink(path.join(versionsDir, "other"), path.join(versionsDir, "0.9.0"));
+      const binDir = path.join(baseDir, "bin");
+      const customBinDir = path.join(baseDir, "custom-bin");
+      yield* fs.makeDirectory(binDir);
+      yield* fs.makeDirectory(customBinDir);
+      // Chained: the launcher reaches its runtime through a second link.
+      yield* fs.symlink(path.join(versionsDir, "1.2.0", "goat"), path.join(baseDir, "alias-goat"));
+      yield* fs.symlink(path.join(baseDir, "alias-goat"), path.join(binDir, "goat"));
+      yield* fs.symlink(path.join(versionsDir, "1.2.5", "goat"), path.join(customBinDir, "goat"));
+      yield* fs.writeFileString(
+        path.join(baseDir, "runtime", "launchers"),
+        `${path.join(customBinDir, "goat")}\n`,
+      );
+      yield* fs.writeFileString(
+        path.join(baseDir, "runtime", "service-state.json"),
+        JSON.stringify({
+          protocol: SERVICE_LAUNCHER_PROTOCOL,
+          activeVersion: "1.4.0",
+          update: { id: "u", fromVersion: "1.4.0", targetVersion: "1.5.0", status: "rolled-back" },
+        }),
+      );
+
+      const removed = yield* prunePinnedRuntimes({
+        baseDir,
+        keep: ["2.0.0"],
+        references: [`ExecStart=${path.join(versionsDir, "1.3.5", "goat")} __service-launcher`],
+      }).pipe(
+        Effect.provideService(
+          ProcessRunner.ProcessRunner,
+          lsofRunner(`p42\nftxt\nn${path.join(versionsDir, "1.3.0", "goat")}\n`),
+        ),
+        Effect.provideService(HostProcess.Platform, "darwin"),
+        Effect.provideService(HostProcess.Environment, { GOAT_INSTALL_BIN_DIR: binDir }),
+      );
+
+      // 1.2.0 is the default launcher, 1.2.5 a recorded one, 1.3.0 running, 1.3.5 in the unit,
+      // 1.4.0 active, 1.5.0 the rolled-back target, 2.0.0 the caller's, 0.5.0 just installed.
+      // Being newer than the caller's version does not keep 2.1.0.
+      assert.deepEqual(removed.toSorted(), ["0.8.0", "1.0.0", "1.1.0", "2.1.0"]);
+      // The launcher found on PATH is remembered for a service that cannot see it.
+      assert.equal(
+        yield* fs.readFileString(path.join(baseDir, "runtime", "launchers")),
+        `${path.join(customBinDir, "goat")}\n${path.join(binDir, "goat")}\n`,
+      );
+      assert.deepEqual((yield* fs.readDirectory(versionsDir)).toSorted(), [
+        ".staging-abc",
+        "0.5.0",
+        "0.9.0",
+        "1.0.1",
+        "1.2.0",
+        "1.2.5",
+        "1.3.0",
+        "1.3.5",
+        "1.4.0",
+        "1.5.0",
+        "2.0.0",
+        "other",
+      ]);
+    }),
+  );
+
+  it.effect("matches a Windows shim whatever its casing", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const { baseDir, versionsDir } = yield* setup(["1.0.0", "1.1.0"]);
+      const shim = path.join(baseDir, "goat.cmd");
+      yield* fs.writeFileString(
+        shim,
+        `@echo off\r\n"${path.join(versionsDir, "1.0.0", "goat.exe").toUpperCase()}" %*`,
+      );
+      yield* fs.writeFileString(path.join(baseDir, "runtime", "launchers"), `${shim}\n`);
+
+      const removed = yield* prunePinnedRuntimes({ baseDir, keep: ["2.0.0"] }).pipe(
+        Effect.provideService(
+          ProcessRunner.ProcessRunner,
+          lsofRunner("C:\\Windows\\explorer.exe\n"),
+        ),
+        Effect.provideService(HostProcess.Platform, "win32"),
+        Effect.provideService(HostProcess.Environment, {}),
+      );
+      assert.deepEqual(removed, ["1.1.0"]);
+    }),
+  );
+
+  it.effect.each([
+    { name: "the process list is unavailable", state: undefined, lsof: "" },
+    { name: "the service state is unparseable", state: "{", lsof: "p1\nftxt\nn/sbin/launchd\n" },
+    {
+      name: "the service state cannot be read",
+      state: null,
+      lsof: "p1\nftxt\nn/sbin/launchd\n",
+    },
+  ])("keeps everything when $name", ({ state, lsof }) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const { baseDir, versionsDir } = yield* setup(["1.0.0"]);
+      const statePath = path.join(baseDir, "runtime", "service-state.json");
+      if (state === null) yield* fs.makeDirectory(statePath);
+      else if (state !== undefined) yield* fs.writeFileString(statePath, state);
+
+      const removed = yield* prunePinnedRuntimes({ baseDir, keep: ["2.0.0"] }).pipe(
+        Effect.provideService(ProcessRunner.ProcessRunner, lsofRunner(lsof)),
+        Effect.provideService(HostProcess.Platform, "darwin"),
+        Effect.provideService(HostProcess.Environment, { GOAT_INSTALL_BIN_DIR: baseDir }),
+      );
+      assert.deepEqual(removed, []);
+      assert.deepEqual(yield* fs.readDirectory(versionsDir), ["1.0.0"]);
+    }),
+  );
+
+  it.effect.skipIf(HostProcess.Platform.defaultValue() !== "linux")(
+    "keeps a runtime a process runs through a symlink",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const { baseDir, versionsDir } = yield* setup(["1.0.0", "1.1.0"]);
+        const entry = path.join(versionsDir, "1.0.0", "goat");
+        // Bash runs under any name. Ubuntu 26.04's sleep is a uutils multicall binary that picks
+        // the utility by its own name, so a copy named goat exits at once and nothing runs 1.0.0.
+        // The trailing `:` keeps bash from exec-ing sleep in its place.
+        yield* fs.copyFile("/bin/bash", entry);
+        yield* fs.chmod(entry, 0o755);
+        const link = path.join(baseDir, "goat");
+        yield* fs.symlink(entry, link);
+        // Its argv names only the link, as with `t3 serve` run from PATH. Removing the link after
+        // spawning leaves the process's executable as the only reference.
+        const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        yield* spawner.spawn(ChildProcess.make(link, ["-c", "sleep 30; :"]));
+        yield* fs.remove(link);
+
+        const removed = yield* prunePinnedRuntimes({ baseDir, keep: ["2.0.0"] }).pipe(
+          Effect.provideService(HostProcess.Platform, "linux"),
+          Effect.provideService(HostProcess.Environment, { GOAT_INSTALL_BIN_DIR: baseDir }),
+          Effect.provide(ProcessRunner.layer),
+        );
+        assert.deepEqual(removed, ["1.1.0"]);
+      }),
+  );
+});

@@ -1,0 +1,50 @@
+## Claude provider run (claudeAgent, approval-required)
+{"waits":[{"threadId":"mcp:9ab5417b-d310-46eb-a276-9b2a81b736ea","runId":"run:thread:mcp%3A9ab5417b-d310-46eb-a276-9b2a81b736ea:ordinal:1","status":"failed","timedOut":false}],"thread":{"status":"failed","providerInstanceId":"claudeAgent","model":"claude-opus-5-5","runtimeMode":"approval-required"},"assistant":["Not logged in · Please run /login"]}
+
+## Codex provider run (codex/claude-opus-5-5, full-access)
+{"waits":[{"threadId":"mcp:63af9cdf-89f1-4f09-810d-e9dda6c30fa4","runId":"run:thread:mcp%3A63af9cdf-89f1-4f09-810d-e9dda6c30fa4:ordinal:1","status":"completed","timedOut":false}],"thread":{"status":"completed","providerInstanceId":"codex","model":"claude-opus-5-5","runtimeMode":"full-access"}}
+읽기 전용 명령 5개와 스레드 설정 조회를 함께 실행하겠습니다.
+프로브를 마쳤습니다. 명령 5개는 승인 없이 실행됐고(승인 정책 `never`, 샌드박스 `danger-full-access`) 모두 종료 코드 0이었습니다. 파일·설치·서버·git은 건드리지 않았습니다.
+
+**명령 결과 원문**
+```
+juns-MacBook-Pro.local
+jun
+/Users/jun/tmp
+ProductName:		macOS
+ProductVersion:		27.2
+BuildVersion:		26B5091g
+Sun Oct 11 08:01:09 KST 2026
+```
+위에서부터 `hostname`, `whoami`, `pwd`, `sw_vers`, `date` 결과입니다.
+
+**`goat_thread_configuration` 결과 원문**
+```json
+{"threadId":"mcp:63af9cdf-89f1-4f09-810d-e9dda6c30fa4","modelSelection":{"instanceId":"codex","model":"claude-opus-5-5"},"runtimeMode":"full-access","interactionMode":"default"}
+```
+- provider 인스턴스는 `codex`, 모델은 `claude-opus-5-5`로 기대값과 같습니다.
+- runtimeMode는 `full-access`입니다.
+
+**참고: 실행된 머신**
+hostname이 `juns-MacBook-Pro.local`로 나와서, 이 스레드는 원격 SSH 호스트가 아니라 로컬 MacBook에서 실행된 것으로 보입니다. SSH 원격 환경을 확인하려던 것이라면 이 결과는 원격 런타임을 보여 주지 않습니다.
+
+**실제 사용 가능한 MCP 도구 (namespace별)**
+- **`mcp__goat__*` (T3 Code)**
+  - 스레드: `goat_thread_configuration`, `goat_thread_read`, `goat_thread_list`, `goat_thread_launch`, `goat_thread_send`, `goat_thread_wait`
+  - 위임: `delegate_task`, `task_status`, `task_cancel`, `orchestrator_capabilities`
+  - 원격 SSH: `goat_ssh_host_list`, `goat_ssh_browse`, `goat_ssh_thread_launch`
+  - 그 외 그룹: `goat_worktree_*`, `goat_project_*`, `goat_queue_*`, `preview_*` (브라우저), `device_*`, `html_preview`/`html_render`, `schedule_task` 계열, PR 링크/감시 도구
+- **`mcp__codexclaw__*`**: `catalog_list`, `subagents_get`, `subagents_set`
+- **`mcp__cua_repl__*`**: `js`, `js_reset`
+- **`mcp__node_repl__*`**: `js`, `js_reset`, `js_add_node_module_dir`
+- **`mcp__codex_apps__*`**: 하위 namespace는 `chatgpt_space___`, `codex_document_control___`, `github___`, `google_drive___`, `hotline___`, `pets___`, `plugin_management___`, `safety_settings___`, `search_service___`, `sites___`, `slack___`입니다.
+
+이번 턴의 도구 이름은 모두 하네스가 붙인 `custom_` 접두사가 달린 형태입니다(예: `custom_mcp__goat__goat_thread_configuration`). 실제로 호출해 본 MCP 도구는 `goat_thread_configuration` 하나뿐이고, 나머지 목록은 도구 카탈로그 기준입니다.
+
+## remote process
+GOAT_WP5_META 44450 3773
+GOAT_WP5_HOME /Users/jun/.goat
+44450 /Users/jun/.goat/runtime/goat/versions/0.0.45/goat serve --host 127.0.0.1 --port 3773 --base-dir /Users/jun/.goat
+58a95e5e79fbd80ba7bbecf328625df93a9aa7e51c5e8290d8f79db96af43667  /Users/jun/.goat/ssh-launch/3d2a436bc21e2dc4/run-t3.sh
+## catalog
+42

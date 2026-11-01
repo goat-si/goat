@@ -1,0 +1,363 @@
+# Settings and project overrides
+
+On web and desktop, the "Applying settings for …" sentence at the top of Settings pages picks
+the project and environment a change applies to. Pages that only hold device preferences, such as
+Appearance, don't show it. They start at **All projects** and **All environments**
+and stay selected as you move between categories or search for a setting.
+
+Preferences saved on this device, such as appearance, confirmations and browser profiles, always
+show and ignore the selection. Everything else is stored on a server. Choose one environment to
+edit its settings, or leave **All environments** to edit every connected environment at once.
+Offline environments keep their current values; this is a bulk edit, not a synced global default.
+
+Choose a project to override settings for it on the selected environments. A layers icon beside
+each server row's title shows where the value comes from: the built-in default, the environment,
+or a project override. Click it to see that chain on every selected environment. An override can
+be reset to inherit again. Settings that cannot be overridden by a project are shown read-only
+while a project is selected.
+
+When the selected environments disagree, the control shows **Mixed** in place of a value and the
+layers icon turns amber. Picking a value applies it to every selected environment.
+
+Changing an environment value never touches a project's own override. When projects override the
+setting you are editing, the layers icon counts them and the chain lists each one with its value:
+click a project to jump to it, or **Reset all** to make those projects follow the environment
+again.
+
+Providers and diagnostics are per machine: they show one environment at a time, the primary
+one until you pick another. Every other setting fans out to the selection.
+
+With a project selected, a provider's switch in **Settings → Providers** turns it on or off for
+that project only, in either direction: a provider off on the machine can be used in one project,
+and one on everywhere can be kept out of another. That project's model pickers follow the switch,
+and no new turn there can start on a provider it turned off, including queued messages and
+follow-ups from delegated tasks. A turn already running when the switch flips finishes. A delegated
+task's result still lands in its parent thread, which sees it on its next turn. Reset returns the project to the
+machine's setting. Every other provider setting stays per machine.
+
+The **Development discipline** built-in skill works the same way: with a project selected, set it
+to On, Off or Inherit in **Settings → Integrations → Agent tools**. Off keeps it out of that
+project's `$` menu and turns, while other projects keep the environment's value. Inherit
+follows the environment again. Environments running an older GOAT do not offer the control.
+
+On mobile, open **Settings** and use the filter in its header to choose connected environments
+and a project. The filter stays available in server-setting pages. With **All projects** selected,
+the **Server settings** categories and auto-settle controls in **Thread behavior** edit the
+selected environments' defaults. Choosing a project edits its overrides on the selected
+environments. Use **Use defaults** in a page to remove that page's project overrides.
+Open **Settings → Projects & threads → Overview** to rename the project across its selected
+connected checkouts and see where those checkouts live. It also lists each checkout's actions and
+where they come from. **Turn off actions for this project** stops a repository's setup action or
+the environment's shared actions from running there, and **Use inherited actions** brings them back.
+Settings that are environment-wide stay read-only while a project is selected. When selected
+targets disagree, a control shows **Mixed** until you choose one value. Appearance, keyboard,
+and other phone-only settings ignore the filter.
+
+## Worktree branch names
+
+In **Settings → Source control → Worktree branch naming**, choose a static prefix,
+a model-selected semantic prefix such as `feat/` or `fix/`, or custom instructions
+for the complete name. The static prefix defaults to `goat/`; a trailing slash is
+optional, and an empty prefix adds nothing. Invalid characters in a static prefix
+are replaced with hyphens. Custom instructions are appended to
+the naming prompt and can specify issue IDs, namespaces, and casing.
+
+These settings apply to automatically named new worktree branches. Select a project
+to override its environment defaults. Worktree directories keep their original names.
+If generation fails, or a custom name is invalid or already taken, the temporary
+branch name remains.
+
+## Standing instructions for launched threads
+
+In **Settings → General → Standing instructions**, write the rules every thread an
+agent launches should follow, such as which model to use for subagents or how to
+commit and open pull requests. GOAT puts them in front of the first message of each
+thread an agent, GOAT Bot, or Slack starts here, including threads started from
+another machine over SSH, which get this machine's instructions. Select a project to
+replace them for that project; an empty project value turns them off there.
+
+The launched thread shows them as a collapsed **Standing instructions** block above
+the task, with a short version code that changes whenever the text does. Threads you
+start yourself are unaffected, and an agent can ask for a launch without them.
+
+## Scheduled tasks
+
+Open **Settings → Scheduled tasks** to create recurring tasks or manage existing
+ones across your connected environments. Use the settings filter to narrow the
+list by environment or project. Each task runs on the environment you choose,
+using its project, model, and workspace settings. Fixed-time schedules use that
+environment's time zone, which may differ from your phone's.
+
+Deleting a thread also deletes tasks that post into that thread. Tasks that start
+a new thread on each run survive deletion of their previous threads.
+
+You can edit, pause, resume, run immediately, or delete a task from the list.
+Webhook tasks only run when their URL is called, so they can't be run
+immediately.
+Leaving an edited form asks before discarding unsaved changes.
+
+A run first shows Dispatching or Queued, then Running. Completed means the agent finished;
+Failed, Interrupted and Cancelled report how that run ended. Pausing stops future scheduled
+runs; stop an active run from its thread. Older environments may show Dispatched (legacy)
+because they did not record the final outcome.
+
+Choose **Notifications** for each task: **All runs**, **Failed runs only**, or
+**Important updates** for tasks posting into an existing thread. Important updates keeps successful
+checks quiet when the agent reports nothing new or actionable. Quiet runs remain readable, and
+older unread results stay unread until you visit. Failures and requests for input or approval
+still need attention. Alerts also depend on your app settings and device permissions. Update
+older clients to use these notification choices consistently.
+
+## Webhook automations
+
+In **Settings → Scheduled tasks**, choose **On webhook**
+as a task's schedule to run it whenever another service calls its URL, such as
+GitHub on a new pull request or a CI job that failed. The editor shows the
+full URL on the address you use to reach the environment, such as a LAN or
+Tailscale address, and only the path when that address is unknown. GOAT-provided
+public URLs arrive with GOAT Connect; until then, a sender outside your network
+needs a public HTTPS address you set up yourself.
+**Rotate** replaces the URL and the old one stops working.
+
+The prompt decides what the agent sees. Placeholders pull values out of the
+request: `{{body.path}}` for a JSON or form field, `{{headers.name}}`,
+`{{query.name}}`, `{{body}}` for the raw body, and `{{request}}` for everything.
+For example, `Review this PR: {{body.pull_request.html_url}}` sends only the
+pull request link. A placeholder with no value is left empty.
+
+Each value reaches the agent wrapped in `<webhook-data-…>` tags and marked as
+untrusted request data. This helps the agent tell it apart from your
+instructions, but it doesn't guarantee the agent ignores what the text says.
+Inside a value, every `$`, other currency sign and `@`, and a `/` that starts
+a lone word, gets an invisible character after it, so mentions like `$skill`,
+`@file` and `/command` don't act. Text copied from a value, such as an email
+address or a command, carries that character too. Without a signature, anyone
+with the URL can start a run with any content. A signature only proves which
+service sent the request: a GitHub payload still carries text written by any
+GitHub user.
+
+For GitHub, turn on **Require signature**, keep the header
+`x-hub-signature-256`, hex encoding and the `sha256=` prefix, and enter the
+same secret in the repository's webhook settings with content type
+`application/json`. Requests without a valid signature are rejected. Set this
+up on desktop or web; mobile keeps an existing signature check but can't turn
+one on.
+
+To run only for some requests, add **Filters**. Each one tests a value named
+like a placeholder, without the braces, such as `headers.x-github-event` equals
+`pull_request` or `body.action` is one of `opened, reopened`. A task runs only
+when every filter matches; other requests are answered normally, logged as
+**Filtered** with the first filter that failed, and start nothing. Values
+compare as text, and a value that is an object or a list only passes
+**exists**. Separate **is one of** values with commas; a value can't contain
+a comma or start or end with a space.
+
+To suppress repeated deliveries, set a **Replay key** template, such as
+`{{headers.delivery-id}}`. The same key is ignored for seven days per task.
+To combine a burst, set a **Coalesce key**, such as `{{body.id}}`, and a window
+of 10–3600 seconds (120 by default). One run uses the latest body, headers,
+and query when the window from the first delivery closes; later requests
+do not extend it. Pending windows survive a server restart. Keys must contain
+request placeholders; if any placeholder is missing, or the render is empty,
+that key's rule is skipped. Clear the templates to turn dedupe off.
+
+Duplicate and coalesced log entries share a limit of 10 per task per minute.
+Additional deliveries are accepted without a log entry, and coalesced deliveries
+always replace the persisted payload. Coalesced updates count toward a separate
+60-per-minute validation limit; exceeding it receives HTTP 429.
+
+On desktop and web, pick **Deliveries** from a task's menu to see recent
+requests and the prompt each one produced.
+
+If the environment is offline, the sender gets an error and nothing runs;
+redeliver from the sender, such as GitHub's **Recent Deliveries**, once it is
+back. Holding requests while the environment is offline is unavailable until
+GOAT Connect arrives.
+
+## GOAT tools agents see
+
+GOAT lists two tools to each agent it runs: `goat_describe`, which finds GOAT's capabilities, and
+`goat_call`, which runs one by its path, such as `thread.read`. Every other capability stays
+available through them, so an agent starts with a small context instead of a long tool list.
+
+If an agent on one of your providers handles this badly, list every tool again: in
+**Settings → Integrations → Agent tools**, set **GOAT tools agents see** to **All tools**. The
+setting applies to the whole environment. Running agents are told that the list changed; Pi picks
+the change up in its next session. Set it back to **Core**, or reset it, to return to the two
+tools. Outside agents that connect to GOAT's MCP URL always see every tool.
+
+**Core + goat_eval** adds `goat_eval`, which runs several GOAT calls as one small program and
+returns only what the program keeps, so agents without a code mode spend fewer turns. It is
+opt-in while GOAT measures whether it helps; choose it in the same row.
+
+## Defaults and inheritance
+
+General contains the model and workspace for new threads. Integrations controls agent browser
+access. Its **Agent tools** row, which chooses between GOAT's core tools and every tool for the
+agents GOAT runs, applies to the whole environment and has no project override. Source control
+contains automatic pull, the default pull request merge method and text
+generation. The same rows edit environment defaults or project overrides depending on the
+project crumb.
+
+The Project category, shown while a project is selected, holds the project's name, icon, actions,
+checkouts and removal. Actions belong to a project: editing them creates the project's own list
+on each selected environment, and reset returns to the environment's shared list.
+
+Settings a repository can also declare in `goat.json` (or an older `t3.json` in a branch without
+one), such as the workspace for new threads, resolve in one order: a project override, then the
+environment setting, then `goat.json`, then the
+built-in default. Leave a setting on **Inherit** to let the next tier decide.
+Browser access changes apply when an agent session next starts.
+
+New worktrees initialize git submodules recursively. If that step is slow because the repository
+declares many nested submodules, set **Submodules** in **Settings → General** (with the project
+selected to override it there) to **Top level only** to stop at the ones the repository declares
+itself, or **Skip** to leave them for a setup script. It resolves in the same order as the
+workspace default: a `"worktreeSubmodules"` value in the `goat.json` of the branch being checked out
+applies when the project and environment are both on **Inherit**.
+
+A repository with large folders that agents only read, such as vendored reference code, can keep
+them out of new worktrees with `"worktreeSparseExclude": [".repos/"]` in `goat.json`. GOAT checks
+the worktree out with Git sparse checkout, so those folders are never written, which matters most
+on Windows. Run `git sparse-checkout disable` in a worktree to bring them back there.
+
+## Check an agent's work when its run completes
+
+An agent's reported tests are only what it says it ran. To have GOAT run a check itself, turn on
+**Run as a check when an agent's run completes** for one of the project's actions, such as
+`vp test run`. Each time a run completes, the action runs in the thread's worktree, and its exit
+code, duration and last lines of output are stored with that run's result next to the agent's
+reported tests, where orchestrating agents read them with `goat_call {path:"thread.read"}`. A check that runs
+longer than 10 minutes is stopped and recorded as timed out. A failing check does not change the
+run's outcome.
+
+Threads in the project's main checkout record the check as skipped, because other threads may be
+editing there. Turn on **Also check threads in the shared checkout** to run it there as well.
+
+## Worktree location
+
+New worktrees go in the `worktrees` folder of the GOAT home directory. To put them somewhere else,
+such as another drive, set **Settings → Storage → Worktree location** to an absolute path like
+`D:\worktrees` or `~/worktrees`. The setting is per machine. Existing worktrees stay where they
+are, and cleanup covers both the default folder and the custom one.
+
+If the custom folder can't be used when a thread starts, for example because its drive is
+unmounted, the worktree goes in the default folder instead. The thread's setup steps say so, and
+**Settings → Storage** shows a warning under **Worktree location** until the folder is back.
+
+### Slow worktrees on Windows
+
+On Windows, Microsoft Defender scans every file a new worktree writes, which can stretch a
+checkout to minutes. When Defender scans the worktree folder, **Settings → Connections** shows a
+warning for that machine with the command to exclude it, which you run in an administrator
+PowerShell on that machine. GOAT never changes Defender itself. A Dev Drive is the alternative
+Microsoft recommends: create one in Windows Settings and set **Worktree location** to a folder on
+it. GOAT also turns on Git's file system cache and long paths for the repository when they are
+unset.
+
+A checkout that is slow but still printing progress keeps going. GOAT stops Git only after two
+minutes without output, and says how long it ran and what it printed last. If the repository's
+post-checkout hook is what went quiet, the files are already in place, so GOAT keeps the worktree
+and notes it in the checkout step. On Windows the hook itself can keep running in the background,
+because Git Bash detaches it from Git.
+
+## Storage cleanup
+
+Open **Settings → Storage** to enable automatic cleanup on one machine or all connected
+environments. Policies are off by default and run on the server at startup, when changed, and
+hourly. Offline machines keep their existing policies.
+
+Select a project to set **Automatic worktree cleanup** to **Inherit**, **Off**, or **Custom**.
+Inherit follows each machine's rules; Off keeps that project's worktrees until you remove them
+manually. Custom applies separate worktree rules to the selected project or checkout. Browser
+captures and log retention remain machine-wide.
+
+Worktrees can be removed after a chosen number of inactive days, after a thread settles, after
+merging, or when they have no commits beyond the default branch. Set settled retention to 0 days
+to remove a worktree at the next cleanup after settlement. Only GOAT-managed worktrees are eligible.
+Active sessions and shared worktrees prevent removal. **Keep worktrees with local changes** defaults
+to **Uncommitted changes**, which protects tracked edits and untracked files but deletes ignored
+files such as `.env` and build output. **Any local files** also protects ignored files other than
+`node_modules`. **Edited tracked files** protects only tracked edits and allows untracked and
+ignored files to be deleted. Branches and thread history stay; starting another turn recreates the checkout.
+Merge cleanup requires a merged pull request whose commits are included in the remote default
+branch. A squash or rebase merge on GitHub also counts when the pull request targeted the default
+branch and the worktree is still at the pull request's last commit.
+
+Enable **Delete worktrees with deleted threads** to remove safe worktrees after their last
+thread is deleted, including archived threads and worktrees left by earlier deletions. The
+server waits for sessions and terminals to stop and retries skipped worktrees after restart.
+Existing prompts for deleting a worktree manually remain available when this policy is off.
+
+Choose **Delete now** to run the enabled rules immediately. The latest results show which
+worktrees were removed or kept and why, plus any failures.
+Results also list folders in the worktree folder that no thread uses, with their sizes; automatic
+cleanup never removes them. **Disk usage** below can.
+
+Browser captures and rotated logs have separate retention periods. Expired capture links stop
+working. Current logs, message attachments, and browser profiles are kept.
+
+## Disk usage
+
+**Settings → Storage → Disk usage** shows each machine's free space and what GOAT's own folders
+hold there: worktrees and their `node_modules` and Rust `target/` folders, leftover folders of
+removed worktrees, worktrees Git still lists after their folder was deleted, older GOAT runtimes,
+rotated logs past retention, temporary folders, files deleted threads left behind, and the kache
+build cache. **Scan again** measures now; a scan can take a minute on machines with many worktrees.
+
+**Clean up…** lists every path it would delete with its size. Nothing is deleted until you choose
+**Delete**. It starts with the categories that are safe to clear; tick build outputs, leftover
+folders, temporary folders and deleted threads' files yourself after checking them. A worktree
+qualifies only when it has no uncommitted changes, every commit is on a remote, and no thread on
+any GOAT server on that machine uses it. Build outputs qualify once every thread using their
+worktree is archived, and only when Git ignores them and tracks nothing in them. A deleted thread's
+files stay while a surviving thread, its archived history, a task or a scheduled prompt still
+mentions that thread. Anything that changed after you reviewed it is skipped. Anything that holds
+work shows as **Needs attention** and is never deleted. Each deletion is written to
+`storage-cleanup.ndjson` in that machine's logs folder.
+
+From a terminal, `goat storage --dry-run` lists the default selection and `goat storage --clean`
+asks you to approve exactly that list in the GOAT app; run it again with `--approval <id>` once
+you have. Agents use the same approval: they can look, and a person decides what goes.
+
+GOAT warns when a machine runs low on disk: Fleet shows an alert with **Free up space**, and you
+get one notification each time the level gets worse, following your notification settings. A disk
+is low when free space is under both 15% and 50 GiB, and almost full under both 5% and 15 GiB, so a
+large disk is not flagged with hundreds of gigabytes free and a small cloud machine is not flagged
+while half empty. Change the limits with `fleet.pressure` (`elevatedDiskFreePercent`,
+`elevatedDiskFreeGiB`, `criticalDiskFreePercent`, `criticalDiskFreeGiB`) in that machine's
+settings. Agents hear about a full disk the way they hear about load and keep new work off it.
+
+Thread history has a size budget of 2 GiB per machine, set as `storageCleanup.historyBudgetBytes`
+in the server's `settings.json`. While history is larger, GOAT trims long command output, tool
+output, and reasoning in threads untouched for a week, oldest first. Each trimmed field keeps its
+start and end with an _output trimmed_ note. Messages are never trimmed.
+
+Threads untouched for 30 days move their tool calls, output, and reasoning to a compressed archive
+next to the database; messages stay. Opening the thread, or an agent reading it, restores
+everything first, usually in well under a second. Change the window with
+`storageCleanup.historyArchiveAfterDays`, or set it to `null` to keep every thread in the
+database. Archives are kept until you set `storageCleanup.historyArchiveDeleteAfterDays`; after
+that many days an archive is deleted for good. Copy the `thread-archive` folder to keep a backup.
+
+## Project icons
+
+Select the project and open Project to choose an icon, emoji, monogram, or image. The choice applies to
+every checkout in the project group and appears on connected clients. Choose **Automatic** to let
+GOAT detect an icon again.
+
+Choose **Monogram** in the icon picker to set one or two letters or numbers and a color.
+
+When no image is found, web and desktop show a two-character monogram with a color
+from the icon palette, derived from the saved project name. For example, `Nebula` becomes `NA`,
+`Silver Orchard` becomes `SO`, and `M7 Forge` becomes `M7`.
+
+## Keep the default branch current
+
+In Source control, enable **Automatically pull** to keep the default-branch checkout up to date
+with its configured upstream. Choose an environment to set the default or a project to override it.
+On mobile, use **Settings → Source control** to change selected environment defaults or project overrides.
+
+GOAT only pulls when it can fast-forward and the checkout has no changed files, untracked files,
+or local commits. It skips checkouts on another branch or without an upstream. If a checkout has
+local work, resolve it yourself before automatic pulls can resume.

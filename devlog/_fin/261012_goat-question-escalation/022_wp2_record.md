@@ -1,0 +1,9 @@
+# 022 — wp2 cycle record
+
+**Conclusion.** `QuestionEscalationService` landed in `b5d44c77d` (builder gpt-6.1-sol, `q13-wp2-build-r1`) and `556b90ff6` (repair `q13-wp2-repair-r1`). A pending `user_input` question in a thread whose launcher lives in this environment produces one launcher message: notification source `question`, prose that says how to answer, how to forward to the user and how to shape `answers`, and a `goat-question` JSON block built from `OrchestrationV2QuestionEscalation`. When the question leaves pending, a still-queued escalation run is cancelled; a delivered one gets a notice only if someone other than the launcher answered, and never into an archived or deleted launcher. Startup subscribes, waits for readiness, then sweeps (cap 500). Events are reduced to keys and reconciled per pair, so a busy launcher stalls nobody else.
+
+**Evidence.** Pre-implementation audit `q13-wp2-audit-r1` NEAR-PASS (020 E7–E9). Review `q13-wp2-review-r1` PASS-WITH-FIXES (1 major: inline dispatch under a global semaphore stalled the event stream), fixed and re-reviewed `q13-wp2-review-r2` PASS. Receipt: 5 test files / 111 tests, lint clean, tsc clean in contracts, client-runtime, server, web. Criterion c-1 met.
+
+**What did not improve / open (moved to wp4 hardening).** Subscription retry: a retry closes the worker scope (interrupting healthy workers) and restarts from a fresh cursor, so a pair resolved during the gap is not revisited; the 3-retry budget never resets; startup sweep forks up to 500 workers at once. Resolutions during downtime remain unreconciled (accepted 020-A2).
+
+**Direction.** Next P consumes [030_wp3_host_tools_waits.md](030_wp3_host_tools_waits.md) with errata E1–E7, re-anchored against HEAD and upstream's `HostThreadsMcpService.readOnHost` and strict-argument rule ([011](011_wp1_stale_check.md)).

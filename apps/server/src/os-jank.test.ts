@@ -1,0 +1,182 @@
+// @effect-diagnostics nodeBuiltinImport:off - Observe the existing synchronous shell probe without launching the user's login shell.
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { it as effectIt } from "@effect/vitest";
+import * as HostProcess from "@goat/shared/HostProcess";
+import { CommandAvailability, WindowsShellEnvironment } from "@goat/shared/shell";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
+import * as NodeChildProcess from "node:child_process";
+import * as NodeOS from "node:os";
+import { assert, it, vi } from "vite-plus/test";
+import { fixPath, hydratePosixHome, resolveBaseDir } from "./os-jank.ts";
+
+vi.mock("node:child_process", { spy: true });
+
+effectIt.effect(
+  "keeps the standalone default at T3 home and respects explicit GOAT and custom homes",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-base-" });
+      yield* fs.makeDirectory(path.join(home, ".t3", "userdata"), { recursive: true });
+      const sentinel = path.join(home, ".t3", "userdata", "settings.json");
+      yield* fs.writeFileString(sentinel, "upstream sentinel");
+      for (const raw of [undefined, "", " "]) {
+        assert.equal(
+          yield* resolveBaseDir(raw).pipe(Effect.provideService(HostProcess.HomeDirectory, home)),
+          path.join(home, ".t3"),
+        );
+      }
+      assert.equal(
+        yield* resolveBaseDir("~/.goat").pipe(
+          Effect.provideService(HostProcess.HomeDirectory, home),
+        ),
+        path.join(home, ".goat"),
+      );
+      assert.equal(yield* resolveBaseDir(path.join(home, "chosen")), path.join(home, "chosen"));
+      assert.equal(yield* fs.readFileString(sentinel), "upstream sentinel");
+      assert.isFalse(yield* fs.exists(path.join(home, ".goat")));
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it("hydrates HOME independently of a blank process HOME", () => {
+  const originalHome = process.env.HOME;
+  const env: NodeJS.ProcessEnv = { HOME: " " };
+
+  try {
+    process.env.HOME = " ";
+    hydratePosixHome(env);
+  } finally {
+    if (originalHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = originalHome;
+    }
+  }
+
+  assert.equal(env.HOME, NodeOS.userInfo().homedir);
+});
+
+it("preserves an explicitly configured HOME", () => {
+  const env: NodeJS.ProcessEnv = { HOME: "/custom/home" };
+
+  hydratePosixHome(env, () => {
+    throw new Error("HOME lookup should not run");
+  });
+
+  assert.equal(env.HOME, "/custom/home");
+});
+
+effectIt.effect("hydrates PATH when the desktop handoff is absent", () =>
+  Effect.acquireUseRelease(
+    Effect.sync(() =>
+      vi
+        .spyOn(NodeChildProcess, "execFileSync")
+        .mockReturnValue("__GOAT_ENV_PATH_START__\n/opt/tools/bin\n__GOAT_ENV_PATH_END__\n"),
+    ),
+    (probe) =>
+      Effect.gen(function* () {
+        const env: NodeJS.ProcessEnv = { SHELL: "/bin/bash", PATH: "/usr/bin" };
+
+        yield* fixPath().pipe(
+          Effect.provideService(HostProcess.Platform, "linux"),
+          Effect.provideService(HostProcess.Environment, env),
+          Effect.provide(NodeServices.layer),
+        );
+
+        assert.equal(probe.mock.calls.length, 1);
+        assert.equal(env.PATH, "/opt/tools/bin:/usr/bin");
+      }),
+    (probe) => Effect.sync(() => probe.mockRestore()),
+  ),
+);
+
+effectIt.effect("keeps mise's PATH record with the login shell PATH", () =>
+  Effect.acquireUseRelease(
+    Effect.sync(() =>
+      vi
+        .spyOn(NodeChildProcess, "execFileSync")
+        .mockReturnValue(
+          [
+            "__GOAT_ENV_PATH_START__",
+            "/home/me/.local/bin:/mise/installs/claude/latest:/mise/shims",
+            "__GOAT_ENV_PATH_END__",
+            "__GOAT_ENV___MISE_DIFF_START__",
+            "mise-diff",
+            "__GOAT_ENV___MISE_DIFF_END__",
+          ].join("\n"),
+        ),
+    ),
+    () =>
+      Effect.gen(function* () {
+        const env: NodeJS.ProcessEnv = { SHELL: "/bin/bash", PATH: "/usr/bin" };
+
+        yield* fixPath().pipe(
+          Effect.provideService(HostProcess.Platform, "linux"),
+          Effect.provideService(HostProcess.Environment, env),
+          Effect.provide(NodeServices.layer),
+        );
+
+        assert.equal(env.__MISE_DIFF, "mise-diff");
+      }),
+    (probe) => Effect.sync(() => probe.mockRestore()),
+  ),
+);
+
+effectIt.effect("hydrates a missing JAVA_HOME from the login shell and keeps an explicit one", () =>
+  Effect.acquireUseRelease(
+    Effect.sync(() =>
+      vi
+        .spyOn(NodeChildProcess, "execFileSync")
+        .mockReturnValue(
+          [
+            "__GOAT_ENV_PATH_START__",
+            "/opt/homebrew/bin",
+            "__GOAT_ENV_PATH_END__",
+            "__GOAT_ENV_JAVA_HOME_START__",
+            "/opt/homebrew/opt/openjdk@17",
+            "__GOAT_ENV_JAVA_HOME_END__",
+          ].join("\n"),
+        ),
+    ),
+    () =>
+      Effect.gen(function* () {
+        const missing: NodeJS.ProcessEnv = { SHELL: "/bin/zsh", PATH: "/usr/bin" };
+        const explicit: NodeJS.ProcessEnv = {
+          SHELL: "/bin/zsh",
+          PATH: "/usr/bin",
+          JAVA_HOME: "/custom/jdk",
+        };
+
+        for (const env of [missing, explicit]) {
+          yield* fixPath().pipe(
+            Effect.provideService(HostProcess.Platform, "darwin"),
+            Effect.provideService(HostProcess.Environment, env),
+            Effect.provide(NodeServices.layer),
+          );
+        }
+
+        assert.equal(missing.JAVA_HOME, "/opt/homebrew/opt/openjdk@17");
+        assert.equal(explicit.JAVA_HOME, "/custom/jdk");
+      }),
+    (probe) => Effect.sync(() => probe.mockRestore()),
+  ),
+);
+
+effectIt.effect("replaces a Path-spelled Windows PATH instead of adding a second key", () =>
+  Effect.gen(function* () {
+    const env: NodeJS.ProcessEnv = { Path: "C:\\Windows" };
+
+    yield* fixPath().pipe(
+      Effect.provideService(HostProcess.Platform, "win32"),
+      Effect.provideService(HostProcess.Environment, env),
+      Effect.provideService(WindowsShellEnvironment, () => Effect.succeed({ PATH: "C:\\Tools" })),
+      Effect.provideService(CommandAvailability, () => Effect.succeed(true)),
+      Effect.provide(NodeServices.layer),
+    );
+
+    assert.deepEqual(env, { PATH: "C:\\Tools;C:\\Windows" });
+  }),
+);

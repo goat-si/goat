@@ -1,0 +1,168 @@
+import {
+  AVAILABLE_CONNECTION_STATE,
+  connectionProjectionPhase,
+  type SupervisorConnectionState,
+} from "@goat/client-runtime/connection";
+import {
+  createEnvironmentShellAtoms,
+  createEnvironmentSnapshotAtom,
+  createShellEnvironmentAtoms,
+  type EnvironmentShellState,
+  type EnvironmentShellStatus,
+} from "@goat/client-runtime/state/shell";
+import {
+  type EnvironmentCatalogState,
+  enabledEnvironmentIds,
+} from "@goat/client-runtime/state/connections";
+import type { EnvironmentId } from "@goat/contracts";
+import { useAtomValue } from "@effect/atom-react";
+import * as Option from "effect/Option";
+import { AsyncResult, Atom } from "effect/reactivity";
+
+import { environmentCatalog } from "../connection/catalog";
+import { connectionAtomRuntime } from "../connection/runtime";
+import { isHostedStaticApp } from "../hostedPairing";
+import { isLocalEnvironmentDisabled } from "../localEnvironment";
+
+export const shellEnvironment = createShellEnvironmentAtoms(connectionAtomRuntime);
+export const environmentShell = createEnvironmentShellAtoms(connectionAtomRuntime);
+export const environmentSnapshotAtom = createEnvironmentSnapshotAtom(environmentShell.stateAtom);
+
+const NO_SHELL_STATUS_ATOM = Atom.make<EnvironmentShellStatus | null>(null).pipe(
+  Atom.withLabel("web-environment-shell-status:none"),
+);
+const NO_SHELL_SNAPSHOT_ATOM = Atom.make(false).pipe(
+  Atom.withLabel("web-environment-shell-has-snapshot:none"),
+);
+
+export function useEnvironmentShellStatus(
+  environmentId: EnvironmentId | null,
+): EnvironmentShellStatus | null {
+  return useAtomValue(
+    environmentId === null ? NO_SHELL_STATUS_ATOM : environmentShell.statusAtom(environmentId),
+  );
+}
+
+export function useEnvironmentShellHasSnapshot(environmentId: EnvironmentId | null): boolean {
+  return useAtomValue(
+    environmentId === null
+      ? NO_SHELL_SNAPSHOT_ATOM
+      : environmentShell.hasSnapshotAtom(environmentId),
+  );
+}
+
+let previousLiveEnvironmentIds: ReadonlySet<EnvironmentId> = new Set();
+/** Environments whose threads reflect the server now, not a cache or a resync in flight. */
+export const liveShellEnvironmentIdsAtom = Atom.make((get) => {
+  const next = new Set<EnvironmentId>();
+  for (const environmentId of enabledEnvironmentIds(get(environmentCatalog.catalogValueAtom))) {
+    if (get(environmentShell.statusAtom(environmentId)) === "live") next.add(environmentId);
+  }
+  if (
+    next.size === previousLiveEnvironmentIds.size &&
+    [...next].every((environmentId) => previousLiveEnvironmentIds.has(environmentId))
+  ) {
+    return previousLiveEnvironmentIds;
+  }
+  previousLiveEnvironmentIds = next;
+  return next;
+}).pipe(Atom.withLabel("web-live-shell-environment-ids"));
+
+export function createPendingEnvironmentShellIdsAtom(input: {
+  readonly catalogAtom: Atom.Atom<AsyncResult.AsyncResult<EnvironmentCatalogState, unknown>>;
+  readonly shellStateValueAtom: (environmentId: EnvironmentId) => Atom.Atom<EnvironmentShellState>;
+  readonly connectionStateAtom: (
+    environmentId: EnvironmentId,
+  ) => Atom.Atom<AsyncResult.AsyncResult<SupervisorConnectionState, unknown>>;
+}) {
+  return Atom.make((get): ReadonlyArray<EnvironmentId> | null => {
+    const catalog = AsyncResult.value(get(input.catalogAtom));
+    if (Option.isNone(catalog)) return null;
+    const pending: EnvironmentId[] = [];
+    for (const environmentId of enabledEnvironmentIds(catalog.value)) {
+      if (Option.isSome(get(input.shellStateValueAtom(environmentId)).snapshot)) continue;
+      const connection = Option.getOrElse(
+        AsyncResult.value(get(input.connectionStateAtom(environmentId))),
+        () => AVAILABLE_CONNECTION_STATE,
+      );
+      if (
+        connectionProjectionPhase(connection) !== "disconnected" ||
+        (connection.phase === "backoff" && connection.desired && connection.attempt <= 2)
+      ) {
+        pending.push(environmentId);
+      }
+    }
+    return pending;
+  }).pipe(Atom.withLabel("web-pending-environment-shell-ids"));
+}
+
+export const pendingEnvironmentShellIdsAtom = createPendingEnvironmentShellIdsAtom({
+  catalogAtom: environmentCatalog.catalogAtom,
+  shellStateValueAtom: environmentShell.stateValueAtom,
+  connectionStateAtom: environmentCatalog.stateAtom,
+});
+
+export const allEnvironmentShellsBootstrappedAtom = Atom.map(
+  pendingEnvironmentShellIdsAtom,
+  (ids) => ids !== null && ids.length === 0,
+).pipe(Atom.withLabel("web-all-environment-shells-bootstrapped"));
+
+// Catalog can precede primary discovery; an empty or incomplete catalog cannot prove absence.
+function catalogIsComplete(
+  catalog: EnvironmentCatalogState,
+  requiresPrimaryEnvironment: boolean,
+): boolean {
+  if (!catalog.isReady || catalog.entries.size === 0) return false;
+  return (
+    !requiresPrimaryEnvironment ||
+    Array.from(catalog.entries.values()).some(
+      (entry) => entry.target._tag === "PrimaryConnectionTarget",
+    )
+  );
+}
+
+export function createAllEnvironmentProjectSnapshotsReadyAtom(input: {
+  readonly catalogValueAtom: Atom.Atom<EnvironmentCatalogState>;
+  readonly shellStateValueAtom: (environmentId: EnvironmentId) => Atom.Atom<EnvironmentShellState>;
+  readonly requiresPrimaryEnvironment: boolean;
+}) {
+  return Atom.make((get) => {
+    const catalog = get(input.catalogValueAtom);
+    if (!catalogIsComplete(catalog, input.requiresPrimaryEnvironment)) return false;
+    for (const environmentId of enabledEnvironmentIds(catalog)) {
+      const shell = get(input.shellStateValueAtom(environmentId));
+      if (shell.status !== "live" || Option.isNone(shell.snapshot)) return false;
+    }
+    return true;
+  }).pipe(Atom.withLabel("web-all-environment-project-snapshots-ready"));
+}
+
+/** Hosted pages and desktops with their local server off have no primary environment to wait for. */
+export function requiresPrimaryEnvironment(): boolean {
+  return !isHostedStaticApp() && !(typeof window !== "undefined" && isLocalEnvironmentDisabled());
+}
+
+export const allEnvironmentProjectSnapshotsReadyAtom =
+  createAllEnvironmentProjectSnapshotsReadyAtom({
+    catalogValueAtom: environmentCatalog.catalogValueAtom,
+    shellStateValueAtom: environmentShell.stateValueAtom,
+    requiresPrimaryEnvironment: requiresPrimaryEnvironment(),
+  });
+
+export const allReachableShellsLiveAtom = Atom.make((get) => {
+  const catalog = get(environmentCatalog.catalogValueAtom);
+  if (!catalogIsComplete(catalog, requiresPrimaryEnvironment())) return false;
+  for (const environmentId of enabledEnvironmentIds(catalog)) {
+    const shell = get(environmentShell.stateValueAtom(environmentId));
+    if (shell.status === "live" && Option.isSome(shell.snapshot)) continue;
+    const state = AsyncResult.value(get(environmentCatalog.stateAtom(environmentId)));
+    if (Option.isNone(state)) return false;
+    const connection = state.value;
+    const settledOffline =
+      connection.phase === "offline" ||
+      connection.phase === "blocked" ||
+      (connection.phase === "backoff" && connection.attempt > 2);
+    if (!settledOffline) return false;
+  }
+  return true;
+}).pipe(Atom.withLabel("web-all-reachable-shells-live"));

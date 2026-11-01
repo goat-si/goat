@@ -1,0 +1,36 @@
+{
+  "name": "@goat/provider-devin-cloud",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./client": {
+      "types": "./src/client.ts",
+      "import": "./src/client.ts"
+    },
+    "./settings": {
+      "types": "./src/settings.ts",
+      "import": "./src/settings.ts"
+    },
+    "./server": {
+      "types": "./src/server.ts",
+      "import": "./src/server.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vp test run --config ../../vite.config.ts --dir ."
+  },
+  "dependencies": {
+    "@goat/contracts": "workspace:*",
+    "@goat/provider-acp-registry": "workspace:*",
+    "@goat/provider-core": "workspace:*",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "@goat/shared": "workspace:*",
+    "@types/node": "catalog:",
+    "effect-acp": "workspace:*",
+    "vite-plus": "catalog:"
+  }
+}

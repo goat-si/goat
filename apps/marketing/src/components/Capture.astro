@@ -1,0 +1,42 @@
+---
+import type { ImageMetadata } from "astro";
+import { getImage } from "astro:assets";
+
+interface Props {
+  light: ImageMetadata;
+  dark: ImageMetadata;
+  alt: string;
+  widths: number[];
+  sizes: string;
+  /** The first capture on a page is the largest paint, so it loads eagerly. */
+  priority?: boolean;
+  class?: string;
+}
+
+const { light, dark, alt, widths, sizes, priority = false, class: className } = Astro.props;
+const [lightImage, darkImage] = await Promise.all(
+  [light, dark].map((src) => getImage({ src, widths, format: "webp", quality: 82 })),
+);
+const fallbackWidth = widths[Math.floor(widths.length / 2)] ?? light.width;
+const fallback = await getImage({ src: light, width: fallbackWidth, format: "webp", quality: 82 });
+---
+
+<picture class={className}>
+  <source
+    media="(prefers-color-scheme: dark)"
+    srcset={darkImage.srcSet.attribute}
+    sizes={sizes}
+    type="image/webp"
+  />
+  <source srcset={lightImage.srcSet.attribute} sizes={sizes} type="image/webp" />
+  <img
+    src={fallback.src}
+    alt={alt}
+    width={light.width}
+    height={light.height}
+    sizes={sizes}
+    loading={priority ? "eager" : "lazy"}
+    fetchpriority={priority ? "high" : "auto"}
+    decoding="async"
+  />
+</picture>

@@ -1,0 +1,36 @@
+---
+import { messages, type Locale } from "../i18n";
+
+interface Props {
+  locale: Locale;
+}
+
+const { locale } = Astro.props;
+const d = messages(locale).home.machines.diagram;
+---
+
+<figure class="diagram" aria-label={d.label}>
+  <div class="diagram-column">
+    <p class="diagram-heading">{d.clients}</p>
+    <ul class="diagram-nodes">
+      {d.clientItems.map((item) => <li class="diagram-node">{item}</li>)}
+    </ul>
+  </div>
+  <div class="diagram-link" aria-hidden="true"></div>
+  <div class="diagram-column diagram-center">
+    <div class="diagram-environment">
+      <p class="diagram-environment-title">{d.environment}</p>
+      <p class="diagram-environment-note">{d.environmentNote}</p>
+      <ul class="diagram-chips">
+        {d.environmentItems.map((item) => <li>{item}</li>)}
+      </ul>
+    </div>
+  </div>
+  <div class="diagram-link" aria-hidden="true"></div>
+  <div class="diagram-column">
+    <p class="diagram-heading">{d.reaches}</p>
+    <ul class="diagram-nodes">
+      {d.reachItems.map((item) => <li class="diagram-node">{item}</li>)}
+    </ul>
+  </div>
+</figure>

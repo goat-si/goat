@@ -1,0 +1,321 @@
+# Outside agents
+
+Agents that GOAT did not start can work with an environment through its MCP
+server. They can read projects and threads, start and message threads, and
+check which providers and models are available. This covers Claude Code or
+Codex in your own terminal, ChatGPT, and bots that support MCP. Each agent signs
+in once, and you choose what it may do.
+
+## Get the MCP URL
+
+In **Settings → Connections**, open a saved environment's menu and choose
+**Copy MCP URL**. The URL is the environment's address followed by `/mcp`, for
+example:
+
+```text
+https://<environment-address>/mcp
+```
+
+The copied URL uses the route this device is connected over, so an agent on the
+same device can reach it.
+
+- **An agent on your own computers** can use `localhost` on the host or any
+  `https` address, such as
+  [Tailscale HTTPS](./remote-access.md#tailscale-https). Signing in sends the
+  agent's credentials to the environment, and agents only do that over `https`
+  or to `localhost`. A plain-`http` LAN or Tailscale address, like
+  `http://100.x.y.z:3773`, lets an agent find the environment but not finish
+  signing in.
+- **A hosted agent**, such as ChatGPT or a bot running in the cloud, must reach
+  the environment from the internet through an HTTPS address you manage. GOAT
+  Connect is coming soon; GOAT does not currently provide a public address. A
+  Tailscale address only works from your own tailnet.
+
+## Approve a sign-in
+
+The first time an agent connects, it opens a sign-in page on the environment.
+The page names the agent and where its access goes:
+
+- For an agent on your computer, approval returns to a `localhost` address on
+  the computer that opened the page.
+- For a hosted agent, approval goes to that service, such as `chatgpt.com`.
+  Anyone who runs that service gets the access.
+
+Only approve a sign-in you just started. To approve, enter a pairing code from
+**Settings → Connections** or from `goat auth pairing create` on the host. A
+browser already signed in to the environment with permission to manage access
+can approve without a code.
+
+Then choose what the agent may do:
+
+- **Read only** is the default. The agent can read projects and threads and see
+  the available providers and models. It cannot change anything.
+- **Supervised** through **Full access** also let it start, message and stop
+  threads in every project. A thread it starts or steers cannot run with more
+  permissions than the mode you chose.
+
+## Work with files and terminals
+
+In **Settings → Integrations → Agent tools**, choose workspace and terminal access for the
+environment or project. Both start **Off**. Approve the matching optional access when the agent
+signs in; existing agent permissions, including Full access, do not add these grants.
+
+An agent can list, search paths and read uncommitted workspace files. Saves require the version
+from a complete read, or an explicit create-only request for a new file. Conflicts preserve the
+current file. Reads and saves stay inside the selected workspace; large files can be read in
+pages, while saves are limited to 32 KiB of encoded UTF-8 text.
+
+For an outside agent to use terminals, bind its authorized session to an existing thread under
+**Settings → Connections → Authorized clients → Terminal binding**. Only the opener can write,
+clear, restart or close its terminals. Output is read in bounded pages; a gap means some output
+was evicted or the terminal was reset. Terminal operations also require Full access mode.
+
+**Operate grants shell execution with the server's OS file and network authority.** The starting
+workspace directory is not a sandbox. Connect directly to the destination environment's MCP URL;
+these file and terminal tools do not forward through a `host` argument.
+
+Turn access Off, unbind the session, or revoke it to prevent further agent calls. Existing
+processes keep running; use the normal terminal view to close them. Rebinding does not transfer
+old terminals. Signing in again creates a separate session, so revoke the previous session when
+reducing its access.
+
+## Claude Code
+
+```sh
+claude mcp add --transport http goat https://<environment-address>/mcp --header "x-goat-tool-listing: core"
+claude mcp login goat
+```
+
+`claude mcp login` opens the sign-in page in your browser. On a machine
+without a browser, add `--no-browser`, open the printed URL elsewhere, and
+paste the final URL back when asked. `claude mcp list` shows `goat` as connected
+once you approve.
+
+## Codex
+
+```sh
+codex mcp add goat --url https://<environment-address>/mcp
+codex mcp login goat
+```
+
+Then add `http_headers = { "x-goat-tool-listing" = "core" }` under `[mcp_servers.goat]` in
+`~/.codex/config.toml`; `codex mcp add` has no header option.
+
+`codex mcp login --no-browser` prints the sign-in URL instead of opening it.
+`codex mcp list` shows `goat` with OAuth once you approve.
+
+## ChatGPT
+
+Add the environment as a custom MCP app in ChatGPT's apps settings:
+
+1. Create a new app or plugin with a custom MCP server.
+2. Set the server URL to `https://<environment-address>/mcp`, using your
+   server's publicly reachable HTTPS address.
+3. Choose **OAuth** for authentication. ChatGPT discovers the rest; you do not
+   need a client ID or secret.
+4. Create the app, then approve the sign-in page that opens.
+
+## Other agents and bots
+
+Any agent that supports remote MCP servers over HTTP with OAuth can connect. Give
+it the MCP URL and choose OAuth, and the agent finds the sign-in settings itself.
+Agents without OAuth support can use a client token instead.
+
+The agent finds GOAT's capabilities with `goat_describe` and runs any of them with
+`goat_call {path, args}`, where `path` names the capability, such as `thread.read`.
+An agent that sends the `x-goat-tool-listing: core` header, as the Claude Code,
+Codex and client token settings on this page do, is listed only those two tools:
+about 2 KB of tool definitions instead of about 210 KB. Every tool stays callable by
+name either way.
+
+## Manage queues and inactive threads
+
+Ask an agent with thread write access to resume a held queue with `queue.resume`,
+or start a selected queued user message with `queued_run.start`. The selected
+message must still be queued and the thread stopped. Both use the environment's
+normal queue, provider and usage-limit rules. These calls stay in the connected
+environment and may target another project within your approved permission mode.
+
+`thread.delete` irreversibly removes an inactive thread; there is no restore tool.
+It refuses queued or active work, background subagents, provider-native children
+and the agent's own thread. Use `thread.organize` to archive reversibly instead.
+`provider_session.detach` disconnects an explicit session belonging to another
+thread. Disconnecting can affect shared provider-session continuity. The next
+send creates or resumes a session according to the provider's support.
+
+Give each request a `clientRequestId` and retry with the identical key and
+arguments if the response is lost. Retained identical requests are deduplicated
+for at least 24 hours; omitted keys have no retry guarantee. Acceptance confirms
+command intake, not provider execution or disconnect completion. To reconcile,
+read `queue.receipt`, `queued_run.receipt`, `thread.lifecycle_receipt` or
+`provider_session.receipt` with that key, using the same thread credential or
+outside-client session and its original permissions. A missing receipt may have
+expired and never proves that the action did not execute. For example:
+
+```json
+{ "path": "thread.lifecycle_receipt", "args": { "clientRequestId": "delete-1" } }
+```
+
+## Set up a client with the goat-mcp skill
+
+The `goat-mcp` skill is a step-by-step guide an agent can follow to connect its
+own client: finding the MCP URL, signing in or using a client token, the
+settings for Claude Code, Claude Desktop, Codex, Cursor, VS Code, OpenCode,
+Gemini CLI, ChatGPT and Grok, checking the connection, and fixing common
+errors. Clients that only start local stdio servers connect through the
+`mcp-remote` bridge it describes.
+
+`goat mcp skill` prints the skill. To install it for Claude Code or Codex:
+
+```sh
+mkdir -p ~/.claude/skills/goat-mcp && goat mcp skill > ~/.claude/skills/goat-mcp/SKILL.md
+mkdir -p ~/.codex/skills/goat-mcp && goat mcp skill > ~/.codex/skills/goat-mcp/SKILL.md
+```
+
+On a machine without GOAT, copy
+[skills/goat-mcp/SKILL.md](https://github.com/goat-si/goat/blob/dev/skills/goat-mcp/SKILL.md)
+from the GOAT repository into the client's skills folder.
+
+## Long-running orchestrators
+
+A bot or script that drives GOAT for weeks, such as an orchestrator on another
+machine, should use one client token instead of signing in for every call.
+Create it on the host:
+
+```sh
+goat auth client create --name "Grok Bot" --runtime-mode-ceiling approval-required --token-only
+```
+
+Send the token as `Authorization: Bearer <token>` to the MCP URL. It lasts 90
+days unless you pass `--ttl`. The `--runtime-mode-ceiling` works like the access
+you choose on the sign-in page. Without it, the client gets **Supervised**.
+
+### Give a client its token
+
+Keep the token in an environment variable, such as
+`export GOAT_MCP_TOKEN="$(goat auth client create --name "Cursor" --token-only)"`,
+and let the client read it when it starts, so the token stays out of its
+config file. Replace `<url>` with the MCP URL:
+
+| Client               | Setting                                                                                                                                                                          |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Claude Code          | `claude mcp add-json --scope user goat '{"type":"http","url":"<url>","headers":{"x-goat-tool-listing":"core","Authorization":"Bearer ${GOAT_MCP_TOKEN}"}}'`                      |
+| Codex                | `codex mcp add goat --url <url> --bearer-token-env-var GOAT_MCP_TOKEN`, then the `http_headers` line above in `config.toml`                                                      |
+| Cursor               | `"url": "<url>"` and `"headers": { "x-goat-tool-listing": "core", "Authorization": "Bearer ${env:GOAT_MCP_TOKEN}" }` in `mcp.json`                                               |
+| VS Code              | `"type": "http"`, `"url": "<url>"` and the same `headers` under `servers` in `mcp.json`                                                                                          |
+| OpenCode             | `"type": "remote"`, `"oauth": false` and `"headers": { "x-goat-tool-listing": "core", "Authorization": "Bearer {env:GOAT_MCP_TOKEN}" }`                                          |
+| Gemini CLI           | `gemini mcp add --scope user --transport http --header 'x-goat-tool-listing: core' --header 'Authorization: Bearer ${GOAT_MCP_TOKEN}' goat <url>`                                |
+| Clients without HTTP | `npx -y mcp-remote <url> --header "x-goat-tool-listing:core" --header "Authorization:${GOAT_MCP_AUTH}"`, with `GOAT_MCP_AUTH` set to `Bearer <token>` (Node.js 20.18.1 or newer) |
+| xAI API              | `"authorization": "Bearer <token>"` in an `mcp` tool; the URL must be public `https`                                                                                             |
+
+Restart the client after changing the variable. The
+[goat-mcp skill](#set-up-a-client-with-the-goat-mcp-skill) has full config files
+and fixes for common errors.
+
+### Sessions and revoking
+
+Initialize MCP once and reuse the `mcp-session-id` header from that response
+for later calls, including long `thread.wait` polls. End the session with
+an HTTP `DELETE` when the bot shuts down.
+
+`goat auth client list` shows each token's name and when it was last used.
+The same tokens appear in **Settings → Connections**. Revoke one there or with
+`goat auth client revoke <session-id>`.
+
+### Let an orchestrator answer approvals
+
+By default only you can answer a thread's approval requests, such as running a
+command in a **Supervised** thread. To let a trusted orchestrator answer them
+too, add the approve scope when you create its token:
+
+```sh
+goat auth client create --name "Grok Bot" \
+  --scope orchestration:read --scope orchestration:operate --scope orchestration:approve
+```
+
+Through `goat_call`, the client can then list approvals with `pending_request.list`, read them
+with `pending_request.read`, and answer with `pending_request.respond`
+and `decision` set to `accept` or `decline`. It can only answer approvals in
+threads that run within its ceiling. Each answer records the client's name and
+reason, and the approval shows who answered it. This also works for threads on
+SSH hosts that the client reaches through this environment, once those hosts
+run a GOAT version that supports it.
+
+Agents running inside GOAT and clients that signed in through the sign-in page
+never get this permission. To make approvals human-only again, revoke the token
+and create one without `orchestration:approve`.
+
+## Cloud agents from any machine
+
+Claude Cloud, Cursor Cloud and Devin Cloud runs only need one environment that is signed in to
+that service. Through `goat_call`, an agent can call `cloud_agent.holders` to see which connected environments hold a
+login, and `cloud_agent.launch` to start a run there. Add `dryRun: true` to see which environment
+would run it. The environment needs a project for the repository, and the run starts from that
+project's pushed branch. Launching needs **Full access**.
+
+A bot that starts cloud runs on its own can show them in GOAT with `goat_call {path:"cloud_agent.run_register", args}`, where `args` is:
+
+```json
+{
+  "provider": "cursorCloud",
+  "url": "https://cursor.com/agents/bc-…",
+  "repo": "owner/name",
+  "launchedBy": "Grok Bot",
+  "notifyWebhook": true
+}
+```
+
+The run appears in Fleet under its provider and in the thread list with "via Grok Bot". When an
+environment signed in to the same account can see the run, GOAT follows it and reports when it
+ends. Otherwise it keeps only the link and says so (`tracking: "link-only"`), and never posts `run.completed` for it. Devin Cloud sessions
+started outside GOAT are always link-only. **Stop** on a registered run's thread only stops
+following it: the run keeps going, and you cancel it from its page in the provider.
+`cloud_agent.run_forget` removes a registered run from GOAT; the cloud run itself keeps going.
+
+## Scripts on the host
+
+On the machine that runs the environment, sign the terminal in once with
+`goat login`, and `goat thread` then uses the same tools:
+
+```sh
+goat login
+id=$(goat thread start . "Find why the tests are slow")
+goat thread send "$id" "Now fix it" --wait
+goat thread show "$id"
+goat thread list
+```
+
+`.` means the project that contains the current folder; a project id also
+works. A new thread uses the project's default model and permission mode, and
+runs in the project folder unless you pass `--worktree <base-branch>`. `send`
+never interrupts: a busy thread gets the message as its next turn. Pass `-` as
+the message to read it from stdin.
+
+`--wait` prints the agent's reply. It exits 1 when the run fails or stops, and
+2 when the agent waits for an answer you give in the app. Add `--json` for a
+result that always includes the thread id.
+
+Every other capability is a command too. `goat describe` lists them, `goat describe thread`
+shows one resource, and `goat describe thread.read` prints its arguments. Run one as
+`goat thread read -f threadId=$id` or `goat call thread.read '{"threadId":"…"}'`: `-f key=value`
+passes a string and `-F key=value` passes `true`, `false`, `null`, or a whole number. `--json` prints
+a result with `status` `ok`, `error`, or `needs_human`. The exit code is 0 for ok, 1 for an
+error, 2 for a mistyped command, 3 when you need to act in the app, 4 when retrying is safe, and 5
+when a change may have happened, so check before retrying. Work that keeps running after the
+command returns prints an operation id; `goat operation wait <id>` follows it and exits 0 when it
+succeeded, 1 when it failed or was cancelled, 3 when it waits for you, and 6 when it is still
+running at the deadline.
+
+`goat login` stores a client session for this environment that lasts 30 days. It
+appears under **Settings → Connections** as "goat CLI", and threads it starts or
+changes run at most `approval-required` unless you pass `--access`. `goat whoami`
+shows which credential the terminal uses, and `goat logout` revokes it. Inside a
+GOAT thread whose agent has a GOAT credential in its environment, `goat` uses
+that thread's own access instead, and `goat login`, `goat pair`, and the
+`goat auth` commands that create credentials refuse to run.
+
+## Remove an agent
+
+Approved agents appear under **Settings → Connections** like other clients.
+Revoke one there to cut off its access immediately. A sign-in lasts 30 days;
+after that the agent asks you to approve it again.

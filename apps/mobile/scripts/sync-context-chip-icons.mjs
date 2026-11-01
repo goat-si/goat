@@ -1,0 +1,109 @@
+import * as NodeFS from "node:fs";
+import * as NodeModule from "node:module";
+import * as NodePath from "node:path";
+import * as NodeURL from "node:url";
+
+const scriptDirectory = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
+const appDirectory = NodePath.resolve(scriptDirectory, "..");
+const repositoryRoot = NodePath.resolve(appDirectory, "../..");
+const outputDirectory = NodePath.join(appDirectory, "assets/context-chip-icons");
+const generatedModulePath = NodePath.join(appDirectory, "src/lib/contextChipIcons.generated.ts");
+
+const requireFromWeb = NodeModule.createRequire(
+  NodePath.join(repositoryRoot, "apps/web/package.json"),
+);
+const requireFromScripts = NodeModule.createRequire(
+  NodePath.join(repositoryRoot, "scripts/package.json"),
+);
+const sharp = requireFromScripts("sharp");
+const lucideIconsDirectory = NodePath.join(
+  NodePath.dirname(requireFromWeb.resolve("lucide-react/package.json")),
+  "dist/esm/icons",
+);
+// Web sources import siblings without an extension, which Vite resolves but Node's type stripping
+// does not, so spell out `.ts` for relative imports made from a TypeScript module.
+NodeModule.registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (
+      context.parentURL?.endsWith(".ts") &&
+      specifier.startsWith(".") &&
+      !specifier.endsWith(".ts")
+    ) {
+      return nextResolve(`${specifier}.ts`, context);
+    }
+    return nextResolve(specifier, context);
+  },
+});
+const { SKILL_CHIP_ICON_SVG: skillSvg } = await import(
+  NodeURL.pathToFileURL(
+    NodePath.join(repositoryRoot, "apps/web/src/components/composerInlineChip.ts"),
+  ).href
+);
+
+if (typeof skillSvg !== "string" || !skillSvg.startsWith("<svg")) {
+  throw new Error(
+    "SKILL_CHIP_ICON_SVG from apps/web/src/components/composerInlineChip.ts is not SVG markup",
+  );
+}
+
+const lucideIcons = [
+  "circle-dashed",
+  "film",
+  "git-merge",
+  "globe",
+  "git-pull-request-arrow",
+  "git-pull-request-closed",
+  "git-pull-request-draft",
+  "image",
+  "message-circle",
+  "messages-square",
+  "monitor",
+  "mouse-pointer-click",
+  "terminal",
+];
+
+async function lucideSvg(name) {
+  const module = await import(
+    NodeURL.pathToFileURL(NodePath.join(lucideIconsDirectory, `${name}.js`)).href
+  );
+  const body = module.__iconNode
+    .map(([tag, { key: _key, ...attributes }]) => {
+      const attributeText = Object.entries(attributes)
+        .map(([attribute, value]) => `${attribute}="${value}"`)
+        .join(" ");
+      return `<${tag} ${attributeText}/>`;
+    })
+    .join("");
+  return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
+}
+
+async function renderIcon(token, svg) {
+  const sized = svg
+    .replace(/^<svg[^>]*?>/, (tag) =>
+      tag
+        .replace(/ (?:width|height)="[^"]*"/g, "")
+        .replace("<svg ", '<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" '),
+    )
+    .replaceAll("currentColor", "#ffffff");
+  await sharp(Buffer.from(sized), { density: 72 * (64 / 24) })
+    .resize(64, 64)
+    .png()
+    .toFile(NodePath.join(outputDirectory, `${token}.png`));
+}
+
+NodeFS.rmSync(outputDirectory, { recursive: true, force: true });
+NodeFS.mkdirSync(outputDirectory, { recursive: true });
+
+for (const name of lucideIcons) {
+  await renderIcon(name, await lucideSvg(name));
+}
+await renderIcon("skill", skillSvg);
+
+const tokens = [...lucideIcons, "skill"].sort();
+const generatedSource = `import type { ImageSourcePropType } from "react-native";\n\nexport const CONTEXT_CHIP_ICON_SOURCES = {\n${tokens
+  .map(
+    (token) =>
+      `  ${/^\w+$/.test(token) ? token : `"${token}"`}: require("../../assets/context-chip-icons/${token}.png"),`,
+  )
+  .join("\n")}\n} as const satisfies Readonly<Record<string, ImageSourcePropType>>;\n`;
+NodeFS.writeFileSync(generatedModulePath, generatedSource);

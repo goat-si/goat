@@ -1,0 +1,172 @@
+import {
+  type AuthMcpClientAccess,
+  type AuthEnvironmentScope,
+  type ChildSetupPurpose,
+  type EnvironmentAuthorizationError,
+  type EnvironmentId,
+  McpCapabilityUnavailableError,
+  OrchestratorMcpFailure,
+  PreviewAutomationUnavailableError,
+  type ProviderInstanceId,
+  type RuntimeMode,
+  type RunId,
+  type ScreenBindingHints,
+  type ThreadId,
+} from "@goat/contracts";
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import { formatThreadLink } from "@goat/shared/threadLinks";
+
+const ALL_MCP_CAPABILITIES = [
+  "memory",
+  "preview",
+  "orchestration",
+  "worktree",
+  "device",
+  "pull-requests",
+  "screen",
+] as const;
+export type McpCapability = (typeof ALL_MCP_CAPABILITIES)[number];
+
+export interface McpThreadCaller {
+  readonly threadId: ThreadId;
+  /** Server-issued; never from tool arguments. */
+  readonly runId?: RunId;
+  readonly providerSessionId: string;
+  readonly providerInstanceId: ProviderInstanceId;
+  /** A delegated child task; its parent owns the work it hands back. */
+  readonly subagent?: boolean;
+}
+
+/** An agent GOAT did not launch, signed in through MCP OAuth or an issued client token. */
+export interface McpClientCaller {
+  readonly sessionId: string;
+  readonly label: string;
+  readonly access: AuthMcpClientAccess;
+  /** May accept or decline provider approvals (`orchestration:approve`). */
+  readonly approvals?: boolean;
+  /** The origin an outside client reached; its thread links open the web app there. */
+  readonly webOrigin?: string | undefined;
+}
+
+/** Read-only clients map to the lowest mode because McpToolAccess blocks writes first. */
+export const clientRuntimeModeCeiling = (client: McpClientCaller | undefined): RuntimeMode =>
+  client === undefined || client.access === "read-only" ? "approval-required" : client.access;
+
+/** Thread callers default to their own thread; client callers need thread for tools that act as the caller. */
+export interface McpInvocationScope {
+  /** A Home's signed Child setup purpose; McpToolAccess admits it only to the Child setup tools. */
+  readonly childSetupPurpose?: ChildSetupPurpose;
+  readonly readOnly?: boolean;
+  /** Trusted typed mentions for this credential generation; never supplied by MCP arguments. */
+  readonly screenBindingHints?: ScreenBindingHints;
+  readonly memoryPolicy?: {
+    readonly grant: import("@goat/contracts").MemoryTaskGrantCeiling;
+    readonly policyEpoch: number;
+  };
+  /** Missing scopes or live reauthorization never imply memory access. */
+  readonly grantedScopes?: ReadonlyArray<AuthEnvironmentScope>;
+  readonly reauthorize?: (
+    required: ReadonlyArray<AuthEnvironmentScope>,
+  ) => Effect.Effect<void, EnvironmentAuthorizationError>;
+  readonly environmentId: EnvironmentId;
+  readonly capabilities: ReadonlySet<McpCapability>;
+  readonly issuedAt: number;
+  readonly requestNamespace: string;
+  readonly thread: McpThreadCaller | undefined;
+  readonly client: McpClientCaller | undefined;
+}
+
+/**
+ * GOAT clients render `goat-thread://` links as thread chips. Outside MCP clients cannot open
+ * them, so their links point at the web app on the origin they reached.
+ */
+export const threadLinkFor = (
+  scope: Pick<McpInvocationScope, "environmentId" | "client">,
+  threadId: ThreadId,
+  title: string,
+): string => {
+  const origin = scope.client?.webOrigin;
+  return origin === undefined
+    ? formatThreadLink(threadId, title)
+    : formatThreadLink(
+        threadId,
+        title,
+        `${origin}/${encodeURIComponent(scope.environmentId)}/${encodeURIComponent(threadId)}`,
+      );
+};
+
+export class McpInvocationContext extends Context.Service<
+  McpInvocationContext,
+  McpInvocationScope
+>()("goat/mcp/McpInvocationContext") {}
+
+/**
+ * `McpSchema.EnabledWhen` for tools a delegated child must not see or call.
+ * EnabledWhen only receives the MCP client profile, so read the GOAT caller from the request fiber.
+ */
+export const hiddenFromSubagents = (): boolean => {
+  const fiber = Fiber.getCurrent();
+  const scope = fiber && Context.getOrUndefined(fiber.context, McpInvocationContext);
+  return scope?.thread?.subagent !== true;
+};
+
+export type McpCapabilityError<C extends McpCapability> = C extends "preview"
+  ? PreviewAutomationUnavailableError
+  : McpCapabilityUnavailableError;
+
+const missingCapability = (
+  invocation: McpInvocationScope,
+  capability: McpCapability,
+): PreviewAutomationUnavailableError | McpCapabilityUnavailableError => {
+  const fields = {
+    environmentId: invocation.environmentId,
+    ...(invocation.thread === undefined
+      ? {}
+      : {
+          threadId: invocation.thread.threadId,
+          providerSessionId: invocation.thread.providerSessionId,
+          providerInstanceId: invocation.thread.providerInstanceId,
+        }),
+  };
+  return capability === "preview"
+    ? new PreviewAutomationUnavailableError({ capability, ...fields })
+    : new McpCapabilityUnavailableError({ capability, ...fields });
+};
+
+export const requireMcpCapability = <const C extends McpCapability>(
+  capability: C,
+): Effect.Effect<McpInvocationScope, McpCapabilityError<C>, McpInvocationContext> =>
+  McpInvocationContext.pipe(
+    Effect.filterOrFail(
+      (invocation) => invocation.capabilities.has(capability),
+      (invocation) => missingCapability(invocation, capability) as McpCapabilityError<C>,
+    ),
+    Effect.withSpan("mcp.requireCapability"),
+  );
+
+export const requireThreadMcpCapability = <const C extends "preview" | "device">(
+  capability: C,
+): Effect.Effect<McpThreadInvocationScope, McpCapabilityError<C>, McpInvocationContext> =>
+  McpInvocationContext.pipe(
+    Effect.filterOrFail(
+      (invocation): invocation is McpThreadInvocationScope =>
+        invocation.capabilities.has(capability) && invocation.thread !== undefined,
+      (invocation) => missingCapability(invocation, capability) as McpCapabilityError<C>,
+    ),
+    Effect.withSpan("mcp.requireCapability"),
+  );
+
+const threadCallerRequired = (operation: string) =>
+  new OrchestratorMcpFailure({
+    code: "thread_credential_required",
+    message: `${operation} acts as the calling GOAT thread, so it needs an agent running inside GOAT. This MCP client signed in from outside a thread.`,
+  });
+
+export type McpThreadInvocationScope = McpInvocationScope & { readonly thread: McpThreadCaller };
+
+export const requireThreadScope = (scope: McpInvocationScope, operation: string) =>
+  scope.thread === undefined
+    ? Effect.fail(threadCallerRequired(operation))
+    : Effect.succeed(scope as McpThreadInvocationScope);

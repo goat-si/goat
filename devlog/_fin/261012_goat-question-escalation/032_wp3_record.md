@@ -1,0 +1,9 @@
+# 032 — wp3 cycle record
+
+**Conclusion.** wp3 landed in `d0caf593f` (builder gpt-6.1-sol, `q13-wp3-build-r1`) and `379cf9f86` (repair `q13-wp3-repair-r1`); after the rebase onto the launch watch they are `bd4e82b9a` and `424781808`. `PendingQuestionsMcpService` owns the pending-question tools; `host` routes them to another machine through `HostThreadsMcpService` (`readOnHost`, new `writeOnHost`). A host-routed answer carries the origin agent as a foreign `agent` responder, accepted only from an outside caller. `goat_pending_request_list({ scope: "launched" })` lists every question in threads the caller launched, locally by query and on connected or named hosts (max 16 hosts, cap 100 results, deduped by environment). `goat_ssh_thread_launch` records the origin as the remote thread's launcher and retries once without it on an older strict remote. `goat_thread_wait` (also with `host`) and `delegate_task(mode:"wait")` return with `pendingRequestIds` when the thread asks, including async questions after the run ends; `ignoreRequestIds` keeps waiting past forwarded ones. Instructions tell agents to end the turn instead of sleep-polling.
+
+**Evidence.** Audit `q13-wp3-audit-r1` NEAR-PASS (030 E8). Review `q13-wp3-review-r1` PASS-WITH-FIXES (4 minors), fixed in the repair commit. Receipt: 13 test files / 251 tests; tsc clean in contracts, provider-core, client-runtime, server, web. Criteria c-3 and c-4 met.
+
+**What did not improve / open.** The repair commit was verified by tests only; its review folds into the wp4 branch review. A remote thread still cannot push its question to the origin (#5). Legacy delegated children without `launcher` are not discoverable through `scope:"launched"` on remotes (local legacy rule only).
+
+**Direction.** wp4: escalation subscription retry hardening (040 §2), internals and user docs, full-branch cross-family review, rebase on origin/dev, final gate, push.

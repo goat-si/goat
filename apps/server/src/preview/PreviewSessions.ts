@@ -1,0 +1,417 @@
+/**
+ * PreviewSessions - one list of what agents drive on this host, browser tabs and the desktop
+ * alike (D6, #1135), and the controls a person uses on them. Browser sessions come from the
+ * server browser's tabs; desktop sessions from computer use controls. Both carry the same
+ * owner, status and control names, so every client renders one panel.
+ *
+ * Browser takeover and hand back of a person's own control stay on the tab's viewer stream,
+ * which already serializes them with input; this service stops agents and hands back after it.
+ *
+ * @module PreviewSessions
+ */
+import {
+  type AuthSessionId,
+  WS_METHODS,
+  type ComputerUseRefusalReason,
+  type CuaAgentBlock,
+  cuaAgentBlockTitle,
+  type HandoffError,
+  type PreviewSession,
+  type PreviewSessionControl,
+  type PreviewSessionControlInput,
+  type PreviewSessionControlResult,
+  type PreviewSessionFramesInput,
+  type PreviewSessionPlatform,
+  type PreviewSessionsSnapshot,
+  ThreadId,
+} from "@goat/contracts";
+import * as HostProcess from "@goat/shared/HostProcess";
+import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as PubSub from "effect/PubSub";
+import * as Stream from "effect/Stream";
+
+import { ComputerUseCallApps } from "../cua/ComputerUseCallApps.ts";
+import { hasCard } from "../cua/ComputerUseControl.ts";
+import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
+import {
+  makeComputerUseRpcHandlers,
+  stopAllComputerUse,
+  stopComputerUse,
+} from "../cua/ComputerUseRpcHandlers.ts";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as Handoffs from "../handoffs/Handoffs.ts";
+import * as DesktopFrames from "./DesktopFrames.ts";
+import * as PreviewHandoffs from "./PreviewHandoffs.ts";
+import { BrowserOriginGrants } from "./BrowserOriginGrantsLayer.ts";
+import * as ServerBrowser from "./ServerBrowser.ts";
+import * as ScreenRunService from "../screenCode/ScreenRunService.ts";
+import type { ServerBrowserSessionView } from "./ServerBrowserSessions.ts";
+
+export class PreviewSessions extends Context.Service<
+  PreviewSessions,
+  {
+    readonly snapshot: Effect.Effect<PreviewSessionsSnapshot>;
+    /** The current list, then a new one after every change. */
+    readonly changes: Stream.Stream<PreviewSessionsSnapshot>;
+    readonly control: (
+      input: PreviewSessionControlInput,
+      sessionId: AuthSessionId,
+    ) => Effect.Effect<PreviewSessionControlResult, HandoffError>;
+    /** One viewer's live picture of a desktop session (#1370). */
+    readonly frames: DesktopFrames.DesktopFrames["Service"]["frames"];
+  }
+>()("goat/preview/PreviewSessions") {}
+
+const platformOf = (platform: string): PreviewSessionPlatform =>
+  platform === "darwin" ? "mac" : platform === "win32" ? "windows" : "linux";
+
+const browserId = PreviewHandoffs.browserSessionId;
+const DESKTOP_PREFIX = PreviewHandoffs.DESKTOP_SESSION_PREFIX;
+
+const parseBrowserId = (id: string) => {
+  const [kind, threadId, tabId, ...rest] = id.split(":");
+  if (kind !== "browser" || threadId === undefined || tabId === undefined || rest.length > 0)
+    return undefined;
+  return { threadId: decodeURIComponent(threadId), tabId: decodeURIComponent(tabId) };
+};
+
+type Base = Pick<PreviewSession, "environmentId" | "host" | "platform">;
+
+/**
+ * A running turn the desktop gave no driver: a grant macOS has not given (#1399), or a Windows
+ * desktop the helper cannot use (#1516). It holds no control, so there is nothing to stop or take
+ * over; the tile says what a person must do.
+ */
+export const blockedSession = (
+  base: Base,
+  threadId: ThreadId,
+  block: CuaAgentBlock,
+): PreviewSession => ({
+  id: `${DESKTOP_PREFIX}blocked:${threadId}`,
+  kind: "desktop",
+  ...base,
+  threadId,
+  target: {
+    kind: "desktop",
+    title: cuaAgentBlockTitle(block),
+    motionSupport: "unsupported",
+  },
+  owner: "agent",
+  status: "permission-needed",
+  reason:
+    block.reason === "permissionsNotGranted"
+      ? "permissionsNotGranted"
+      : block.blocker === "screenLocked"
+        ? "screenLocked"
+        : "helperUnavailable",
+  capabilities: { controls: [], frames: false, privateMode: false, humanInput: false },
+});
+
+/** An agent's browser tab as a session; a person's own tab is not one. */
+export const browserSession = (
+  base: Base,
+  tab: ServerBrowserSessionView,
+): PreviewSession | undefined => {
+  if (tab.agentId === null) return undefined;
+  // A stopped agent stays stopped while a person holds the tab or types a secret in it.
+  const status = tab.agentStopped
+    ? "stopped"
+    : tab.handoffReason !== null
+      ? "waiting-for-human"
+      : tab.private || tab.humanControls
+        ? "paused"
+        : "acting";
+  const controls: ReadonlyArray<PreviewSessionControl> = tab.agentStopped
+    ? ["handBack", "stopAll"]
+    : tab.humanControls || tab.handoffReason !== null
+      ? ["handBack", "stop", "stopAll"]
+      : ["takeover", "stop", "stopAll"];
+  return {
+    id: browserId(tab.threadId, tab.tabId),
+    kind: "browser",
+    ...base,
+    threadId: tab.threadId,
+    target: { kind: "browser", tabId: tab.tabId, url: tab.url, title: tab.title },
+    owner: tab.private ? "private" : tab.humanControls ? "human" : "agent",
+    status,
+    ...(tab.agentStopped ? { reason: "userStoppedSession" as const } : {}),
+    ...(tab.agentStopped || tab.handoffReason === null ? {} : { handoffReason: tab.handoffReason }),
+    capabilities: { controls, frames: true, privateMode: true, humanInput: true },
+  };
+};
+
+/**
+ * A thread's computer use control as a session, while one of its turns is live or a person
+ * stopped it. Between turns no agent acts on the screen, so it is left out (#1360), unless its
+ * agent asked a person for a step that is still open.
+ */
+export const desktopSession = (
+  base: Base,
+  control: ComputerUseLeases.ComputerUseControl,
+  state: ComputerUseLeases.ComputerUseControlState,
+  detection: ComputerUseLeases.ComputerUseDetection,
+  handoffReason?: string,
+  /** The app of the window the agent last acted on, as its lease proxy learned it. */
+  bundleId?: string,
+): PreviewSession | undefined => {
+  const waiting = handoffReason !== undefined && state._tag !== "ended";
+  // A turn's provider gets a control whether or not its agent touches the screen; one that only
+  // opened a browser tab would otherwise show a second, empty card beside it.
+  if (!hasCard(control, state) && !waiting) return undefined;
+  const reason: ComputerUseRefusalReason | undefined =
+    state._tag === "ended"
+      ? "userStoppedSession"
+      : state._tag === "paused"
+        ? "userIntervened"
+        : undefined;
+  // A paused or stopped control keeps the apps it last held; unknown when it never ran.
+  const scope = state._tag === "active" ? { apps: state.apps } : control.scope;
+  const apps = scope?.apps;
+  return {
+    id: `${DESKTOP_PREFIX}${control.controlId}`,
+    kind: "desktop",
+    ...base,
+    threadId: control.threadId,
+    target: {
+      kind: "desktop",
+      motionSupport: base.platform === "mac" && detection.frames ? "supported" : "unsupported",
+      ...(bundleId === undefined ? {} : { bundleId }),
+      ...(control.target === undefined
+        ? {}
+        : { pid: control.target.pid, windowId: control.target.windowId }),
+      // Only while the agent holds the screen: a person's turn or a stop shows no agent cursor.
+      ...(control.cursor === undefined || state._tag !== "active"
+        ? {}
+        : { cursor: control.cursor }),
+      ...(control.cursorReport === undefined || state._tag !== "active"
+        ? {}
+        : {
+            cursorState: {
+              identity: control.cursorReport.identity,
+              phase: control.cursorReport.phase,
+            },
+          }),
+      title:
+        scope === undefined
+          ? "Computer use"
+          : apps === undefined
+            ? "Whole screen"
+            : apps.length === 0
+              ? "No apps approved"
+              : apps.join(", "),
+    },
+    owner:
+      state._tag !== "paused"
+        ? "agent"
+        : state.reason === "private"
+          ? "private"
+          : state.reason === "takeover"
+            ? "human"
+            : "agent",
+    status:
+      state._tag === "ended"
+        ? "stopped"
+        : waiting || (state._tag === "paused" && state.reason === "human_input")
+          ? "waiting-for-human"
+          : state._tag === "paused"
+            ? "paused"
+            : "acting",
+    ...(reason === undefined ? {} : { reason }),
+    ...(waiting ? { handoffReason } : {}),
+    lease: {
+      threadId: control.threadId,
+      expiresAt: DateTime.formatIso(control.expiresAt),
+      ...(apps === undefined ? {} : { scope: apps }),
+    },
+    capabilities: {
+      controls:
+        state._tag === "ended"
+          ? ["stopAll"]
+          : state._tag === "paused" || waiting
+            ? ["handBack", "stop", "stopAll"]
+            : ["takeover", "stop", "stopAll"],
+      frames: detection.frames,
+      privateMode: detection.privateMode,
+      humanInput: detection.humanInput,
+    },
+  };
+};
+
+const make = Effect.gen(function* () {
+  const browser = yield* Effect.serviceOption(ServerBrowser.ServerBrowser);
+  const leases = yield* Effect.serviceOption(ComputerUseLeases.ComputerUseLeases);
+  const claims = yield* Effect.serviceOption(BrowserOriginGrants);
+  const screen = yield* Effect.serviceOption(ScreenRunService.ScreenRunService);
+  type ScreenChange = Parameters<ScreenRunService.ScreenRunService["Service"]["controlChanged"]>[0];
+  const fenceScreen = (
+    change: Parameters<ScreenRunService.ScreenRunService["Service"]["fence"]>[0],
+  ) => (Option.isSome(screen) ? screen.value.fence(change) : Effect.void);
+  // Tab cleanup reads and closes pages a stuck page can hold up, so it runs after control is back
+  // and never delays a Stop; the fence has already cut every affected cell.
+  const cleanupScreen = (change: ScreenChange) =>
+    Option.isSome(screen)
+      ? screen.value.controlChanged(change).pipe(
+          Effect.timeout("45 seconds"),
+          Effect.catchCause((cause) =>
+            Effect.logWarning("screen cleanup after stop failed", { cause }),
+          ),
+          Effect.forkDetach,
+          Effect.asVoid,
+        )
+      : Effect.void;
+  const desktopFrames = yield* DesktopFrames.DesktopFrames;
+  const callApps = yield* ComputerUseCallApps;
+  const environment = yield* ServerEnvironment.ServerEnvironment;
+  const handoffs = yield* Handoffs.Handoffs;
+  const requests = yield* Effect.serviceOption(PreviewHandoffs.PreviewHandoffs);
+  const host = yield* HostProcess.Hostname;
+  const platform = platformOf(yield* HostProcess.Platform);
+
+  const snapshot = Effect.gen(function* () {
+    const base: Base = { environmentId: yield* environment.getEnvironmentId, host, platform };
+    const sessions: Array<PreviewSession> = [];
+    if (Option.isSome(browser))
+      for (const tab of yield* browser.value.sessions) {
+        const session = browserSession(base, tab);
+        if (session) sessions.push(session);
+      }
+    if (Option.isSome(leases)) {
+      const detection = yield* leases.value.detection;
+      const reasons = Option.isSome(requests)
+        ? yield* requests.value.desktopReasons
+        : new Map<string, string>();
+      for (const { control, state } of yield* leases.value.sessions) {
+        const session = desktopSession(
+          base,
+          control,
+          state,
+          detection,
+          reasons.get(control.controlId),
+          control.target === undefined ? undefined : callApps.bundleIdOf(control.target.pid),
+        );
+        if (session) sessions.push(session);
+      }
+      for (const { threadId, block } of yield* leases.value.blockedTurns)
+        sessions.push(blockedSession(base, threadId, block));
+    }
+    return { sessions };
+  }).pipe(Effect.withSpan("PreviewSessions.snapshot"));
+
+  const changes = Stream.unwrap(
+    Effect.gen(function* () {
+      const wake = yield* PubSub.sliding<void>(1);
+      if (Option.isSome(browser))
+        yield* browser.value.sessionChanges.pipe(
+          Stream.runForEach(() => PubSub.publish(wake, undefined)),
+          Effect.forkScoped,
+        );
+      if (Option.isSome(leases)) {
+        const subscription = yield* leases.value.subscribe;
+        yield* PubSub.take(subscription).pipe(
+          Effect.andThen(PubSub.publish(wake, undefined)),
+          Effect.forever,
+          Effect.forkScoped,
+        );
+      }
+      return Stream.concat(Stream.make(undefined), Stream.fromPubSub(wake)).pipe(
+        Stream.mapEffect(() => snapshot),
+      );
+    }),
+  );
+
+  const control = Effect.fn("PreviewSessions.control")(function* (
+    input: PreviewSessionControlInput,
+    sessionId: AuthSessionId,
+  ) {
+    if (input.control === "stopAll") {
+      yield* fenceScreen({});
+      // Control first, and nothing a stuck page could hold up: no titles or URLs are read.
+      if (Option.isSome(browser)) yield* browser.value.stopAllAgents;
+      const { failed } = yield* stopAllComputerUse(leases, handoffs, sessionId, claims);
+      yield* cleanupScreen({ kind: "stopAll" });
+      // A grant left alive lets its thread take the screen again on its next turn.
+      return failed === 0
+        ? { applied: true }
+        : ({ applied: false, reason: "not_allowed" } as const);
+    }
+    // Agents ask through preview.request_handoff; a person's client cannot ask for them.
+    if (input.control === "requestHandoff")
+      return { applied: false, reason: "not_allowed" } as const;
+    const id = input.sessionId ?? "";
+    const tab = parseBrowserId(id);
+    if (tab !== undefined) {
+      if (Option.isNone(browser)) return { applied: false, reason: "not_found" } as const;
+      if (input.control === "takeover") return { applied: false, reason: "unsupported" } as const;
+      if (input.control === "stop")
+        yield* fenceScreen({ threadId: tab.threadId, tabId: tab.tabId });
+      // The record first: a hand back it did not take leaves the tab held and the error shown.
+      else if (Option.isSome(requests)) yield* requests.value.handBack(id);
+      const applied = yield* browser.value.controlSession({
+        ...tab,
+        control: input.control === "stop" ? "stop" : "handBack",
+      });
+      if (input.control === "stop")
+        yield* cleanupScreen({ kind: "stop", threadId: tab.threadId, tabId: tab.tabId });
+      return applied ? { applied } : ({ applied, reason: "not_found" } as const);
+    }
+    if (!id.startsWith(DESKTOP_PREFIX) || Option.isNone(leases))
+      return { applied: false, reason: "not_found" } as const;
+    const controlId = id.slice(DESKTOP_PREFIX.length);
+    const live = (yield* leases.value.sessions).find(
+      ({ control }) => control.controlId === controlId,
+    );
+    if (live === undefined) return { applied: false, reason: "not_found" } as const;
+    const cutoff =
+      input.control === "takeover" || input.control === "stop"
+        ? {
+            kind: input.control,
+            threadId: live.control.threadId,
+            controlId: live.control.controlId,
+          }
+        : undefined;
+    if (cutoff) yield* fenceScreen(cutoff);
+    // The pause is the host's: a person on the desktop holds every agent there.
+    if (input.control === "takeover") {
+      yield* leases.value.pause("takeover");
+      if (Option.isSome(requests)) yield* requests.value.taken(id);
+    } else if (input.control === "handBack") {
+      // Ends this control's request only; another thread's stays held for the person.
+      if (Option.isSome(requests)) yield* requests.value.handBack(id);
+      yield* leases.value.resume;
+    } else {
+      const threadId = ThreadId.make(live.control.threadId);
+      const { failed } = yield* stopComputerUse(leases, handoffs, sessionId, threadId, claims);
+      if (cutoff) yield* cleanupScreen(cutoff);
+      // A grant left alive keeps the thread's apps from every other thread until it ends.
+      if (failed > 0) return { applied: false, reason: "not_allowed" } as const;
+    }
+    if (input.control === "takeover" && cutoff) yield* cleanupScreen(cutoff);
+    return { applied: true };
+  });
+
+  return PreviewSessions.of({ snapshot, changes, control, frames: desktopFrames.frames });
+});
+
+export const layer = Layer.effect(PreviewSessions, make).pipe(Layer.provide(DesktopFrames.layer));
+
+/** Agents' requests for a person, provided once beside the browser for MCP and these cards. */
+export const layerHandoffs = PreviewHandoffs.layer;
+
+/** The preview session RPCs, with the computer use controls they build on. */
+export const makePreviewSessionRpcHandlers = Effect.fn("PreviewSessions.rpcHandlers")(function* (
+  sessionId: AuthSessionId,
+) {
+  const sessions = yield* PreviewSessions;
+  return {
+    ...(yield* makeComputerUseRpcHandlers(sessionId)),
+    [WS_METHODS.previewSessionsSubscribe]: (_input: {}) => sessions.changes,
+    [WS_METHODS.previewSessionsControl]: (input: PreviewSessionControlInput) =>
+      sessions.control(input, sessionId),
+    [WS_METHODS.previewSessionsFrames]: (input: PreviewSessionFramesInput) =>
+      sessions.frames(input),
+  } as const;
+});

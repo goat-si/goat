@@ -1,0 +1,661 @@
+import * as MintControlApi from "./http/MintControlApi.ts";
+import * as MintControl from "./auth/MintControl.ts";
+import * as AccountDeletionAuthentication from "./auth/AccountDeletionAuthentication.ts";
+import * as AccountErasure from "./accounts/AccountErasure.ts";
+import * as HostRevocations from "./accounts/HostRevocations.ts";
+import * as AccountDeletionApi from "./http/AccountDeletionApi.ts";
+import * as ClerkDeletionWebhook from "./http/ClerkDeletionWebhook.ts";
+import * as ApnsDeliveryQueueConsumer from "./agentActivity/ApnsDeliveryQueueConsumer.ts";
+import * as AccountAccess from "./accounts/AccountAccess.ts";
+import * as AccountTransactions from "./accounts/AccountTransactions.ts";
+import * as AccountDeviceAdmission from "./accounts/AccountDeviceAdmission.ts";
+import * as AccountLimits from "./accounts/AccountLimits.ts";
+import * as AccountRateLimitObject from "./accounts/AccountRateLimitObject.ts";
+import * as RelayRateLimits from "./accounts/RelayRateLimits.ts";
+import * as AccountLifecycle from "./accounts/AccountLifecycle.ts";
+import * as AccountAdminApi from "./http/AccountAdminApi.ts";
+import * as EnvironmentOwnership from "./environments/EnvironmentOwnership.ts";
+import * as EndpointIdentity from "./environments/EndpointIdentity.ts";
+import * as ManagedProvisioningIntents from "./environments/ManagedProvisioningIntents.ts";
+import * as RetiredEndpointCollector from "./environments/RetiredEndpointCollector.ts";
+import * as retiredInventoryBinding from "./environments/retiredInventoryBinding.ts";
+import * as DeliveryAuthorization from "./agentActivity/DeliveryAuthorization.ts";
+import * as HookDeliveryAuthorization from "./hooks/HookDeliveryAuthorization.ts";
+import * as ConnectPushQueue from "./agentActivity/ConnectPushQueue.ts";
+import * as ConnectTokenExchange from "./auth/ConnectTokenExchange.ts";
+import * as ConnectAuthentication from "./auth/ConnectAuthentication.ts";
+import * as ConnectAccounts from "./auth/ConnectAccounts.ts";
+import { isGoatConnectPushEnabled } from "@goat/shared/goatConnect";
+import * as ClientKeys from "./auth/ClientKeys.ts";
+import * as CliLinkApprovals from "./auth/CliLinkApprovals.ts";
+import * as Alchemy from "alchemy";
+import * as Axiom from "alchemy/Axiom";
+import * as Cloudflare from "alchemy/Cloudflare";
+import * as Drizzle from "alchemy/Drizzle/Postgres";
+import * as Config from "effect/Config";
+import * as Cause from "effect/Cause";
+import * as DateTime from "effect/DateTime";
+import * as Crypto from "effect/Crypto";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import * as Redacted from "effect/Redacted";
+import * as Etag from "effect/http/Etag";
+import * as HttpMiddleware from "effect/http/HttpMiddleware";
+import * as HttpPlatform from "effect/http/HttpPlatform";
+import * as HttpRouter from "effect/http/HttpRouter";
+import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
+import * as HttpApiScalar from "effect/http-api/HttpApiScalar";
+
+import { RelayApi } from "@goat/contracts/relay";
+
+import {
+  RELAY_HTTP_ROUTER_CONFIG,
+  traceRelayHttpRequestWith,
+  withoutCapturedParentSpan,
+} from "./http/Api.ts";
+import * as RelayHttpApi from "./http/Api.ts";
+import { ManagedEndpointZone, RelayApiZone, RelayDeploymentConfig } from "./zone.ts";
+import { RelayObservability } from "./observability.ts";
+import * as Observability from "./observability.ts";
+import * as DeliveryAttempts from "./agentActivity/DeliveryAttempts.ts";
+import * as AgentActivityRows from "./agentActivity/AgentActivityRows.ts";
+import * as Devices from "./agentActivity/Devices.ts";
+import * as DpopProofs from "./auth/DpopProofs.ts";
+import * as RelayTokens from "./auth/RelayTokens.ts";
+import * as EnvironmentCredentials from "./environments/EnvironmentCredentials.ts";
+import * as EnvironmentLinks from "./environments/EnvironmentLinks.ts";
+import * as ManagedEndpointAllocations from "./environments/ManagedEndpointAllocations.ts";
+import * as LiveActivities from "./agentActivity/LiveActivities.ts";
+import * as RelayDb from "./db.ts";
+import {
+  RelayApnsDeliveryDeadLetterQueue,
+  RelayApnsDeliveryQueue,
+  RelayFcmDeliveryQueue,
+  RelayFcmDeliveryDeadLetterQueue,
+} from "./queues.ts";
+import * as WebCrypto from "./WebCrypto.ts";
+import * as FcmAssertionSigner from "./agentActivity/FcmAssertionSigner.ts";
+import * as FcmClient from "./agentActivity/FcmClient.ts";
+import * as FcmDeliveryQueueSender from "./agentActivity/FcmDeliveryQueueSender.ts";
+import * as FcmDeliveries from "./agentActivity/FcmDeliveries.ts";
+import * as FcmDeliveryQueueConsumer from "./agentActivity/FcmDeliveryQueueConsumer.ts";
+import * as RelayConfiguration from "./Config.ts";
+import * as AgentActivityPublisher from "./agentActivity/AgentActivityPublisher.ts";
+import * as ApnsClient from "./agentActivity/ApnsClient.ts";
+import * as ApnsProviderTokens from "./agentActivity/ApnsProviderTokens.ts";
+import * as ApnsDeliveryQueue from "./agentActivity/ApnsDeliveryQueue.ts";
+import * as ApnsDeliveries from "./agentActivity/ApnsDeliveries.ts";
+import * as CloudflareApiPause from "./environments/CloudflareApiPause.ts";
+import * as EnvironmentConnector from "./environments/EnvironmentConnector.ts";
+import * as ConnectLinkReservations from "./environments/ConnectLinkReservations.ts";
+import * as EnvironmentLinker from "./environments/EnvironmentLinker.ts";
+import * as EnvironmentPublishSignatures from "./environments/EnvironmentPublishSignatures.ts";
+import * as ManagedEndpointProvider from "./environments/ManagedEndpointProvider.ts";
+import * as ManagedEndpointReaper from "./environments/ManagedEndpointReaper.ts";
+import * as ManagedTunnelLimits from "./environments/ManagedTunnelLimits.ts";
+import * as MobileRegistrations from "./agentActivity/MobileRegistrations.ts";
+import * as HookForwarder from "./hooks/HookForwarder.ts";
+import * as HeldHooks from "./hooks/HeldHooks.ts";
+import * as HookInbox from "./hooks/HookInbox.ts";
+import * as HookInboxObject from "./hooks/HookInboxObject.ts";
+
+const layerWebcrypto = Layer.succeed(
+  Crypto.Crypto,
+  Crypto.make({
+    randomBytes: (size) => globalThis.crypto.getRandomValues(new Uint8Array(size)),
+    digest: (algorithm, data) =>
+      Effect.promise(async () => {
+        const input = new Uint8Array(data.length);
+        input.set(data);
+        return new Uint8Array(await globalThis.crypto.subtle.digest(algorithm, input.buffer));
+      }),
+  }),
+);
+
+const layerHttpPlatformNotSupported = Layer.succeed(HttpPlatform.HttpPlatform, {
+  platform: "web",
+  compression: {
+    algorithms: new Set<HttpPlatform.CompressionAlgorithm>(),
+    compressResponse: (response) => Effect.succeed(response),
+  },
+  fileResponse: Effect.fn("HttpPlatform.fileResponse")(function () {
+    return Effect.die("Relay API does not serve filesystem responses");
+  }),
+  fileWebResponse: Effect.fn("HttpPlatform.fileWebResponse")(function () {
+    return Effect.die("Relay API does not serve file responses");
+  }),
+});
+
+const layerRelayApi = Layer.mergeAll(
+  AccountDeletionApi.layerAccount,
+  AccountDeletionApi.layerHost,
+  RelayHttpApi.layerHealthApi,
+  RelayHttpApi.layerMetadataApi,
+  RelayHttpApi.layerMobileApi,
+  RelayHttpApi.layerClientApi,
+  RelayHttpApi.layerTokenApi,
+  RelayHttpApi.layerDpopClientApi,
+  RelayHttpApi.layerServerApi,
+);
+
+const CloudMintKeyPair = Alchemy.KeyPair("CloudMintKeyPair");
+const ApnsDeliveryJobSigningSecret = Alchemy.makeRandom("ApnsDeliveryJobSigningSecret", {
+  bytes: 32,
+});
+
+export class Api extends Cloudflare.Worker<Api, {}>()("Api") {}
+
+export const layer = Api.make(
+  RelayDeploymentConfig.pipe(
+    Effect.map(({ relayPublicDomain }) => ({
+      main: import.meta.filename,
+      compatibility: {
+        date: "2026-05-22",
+        flags: ["nodejs_compat"],
+      },
+      // Requests run several Postgres queries in sequence. At the user's edge
+      // each one paid the round trip to the database (~300 ms from JNB); next
+      // to PlanetScale `us-west` the request pays that distance once.
+      placement: { region: "aws:us-west-2" },
+      domain: relayPublicDomain,
+    })),
+    Effect.orDie,
+  ),
+  Effect.gen(function* () {
+    const { relayPublicOrigin, stage } = yield* RelayDeploymentConfig;
+    const apnsDeliveryQueue = yield* RelayApnsDeliveryQueue;
+    const apnsDeliveryDeadLetterQueue = yield* RelayApnsDeliveryDeadLetterQueue;
+    const fcmDeliveryQueue = yield* RelayFcmDeliveryQueue;
+    const fcmDeliveryDeadLetterQueue = yield* RelayFcmDeliveryDeadLetterQueue;
+    const cloudMintKeyPair = yield* CloudMintKeyPair;
+    const relayApiZone = yield* RelayApiZone;
+    const managedEndpointZone = yield* ManagedEndpointZone;
+    const randomApnsDeliveryJobSigningSecret = yield* ApnsDeliveryJobSigningSecret;
+    yield* RelayObservability;
+
+    const apnsEnabled =
+      isGoatConnectPushEnabled() &&
+      (yield* Config.Boolean("APNS_ENABLED").pipe(Config.withDefault(false)));
+    const apnsCredentials = apnsEnabled
+      ? {
+          environment: yield* Config.schema(RelayConfiguration.ApnsEnvironment, "APNS_ENVIRONMENT"),
+          teamId: yield* Config.String("APNS_TEAM_ID"),
+          keyId: yield* Config.String("APNS_KEY_ID"),
+          bundleId: yield* Config.String("APNS_BUNDLE_ID"),
+          privateKey: yield* Config.Redacted("APNS_PRIVATE_KEY"),
+        }
+      : null;
+    const fcmServiceAccount = isGoatConnectPushEnabled()
+      ? Option.getOrUndefined(
+          Option.filter(
+            yield* Config.option(Config.Redacted("FCM_SERVICE_ACCOUNT")),
+            (value) => Redacted.value(value).trim().length > 0,
+          ),
+        )
+      : undefined;
+    const apnsDeliveryJobSigningSecret = yield* randomApnsDeliveryJobSigningSecret;
+    const apnsDeliveryQueueSender = yield* Cloudflare.Queues.WriteQueue(apnsDeliveryQueue);
+    const fcmDeliveryQueueSender = yield* Cloudflare.Queues.WriteQueue(fcmDeliveryQueue);
+
+    const clerkSecretKey = yield* Config.Redacted("CLERK_SECRET_KEY");
+    const clerkPublishableKey = yield* Config.String("CLERK_PUBLISHABLE_KEY");
+    const clerkJwtAudience = yield* Config.String("CLERK_JWT_AUDIENCE");
+    const clerkAuthorizedParties = (yield* Config.String("CLERK_AUTHORIZED_PARTIES"))
+      .split(",")
+      .map((origin) => origin.trim())
+      .filter(Boolean);
+    const clerkCliOAuthClientId = yield* Config.String("CLERK_CLI_OAUTH_CLIENT_ID");
+    const mintDisabled = yield* MintControl.config;
+    const subjectDigestKey = yield* Config.Redacted("RELAY_SUBJECT_DIGEST_KEY");
+    const clerkWebhookSigningSecret = Option.getOrUndefined(
+      yield* Config.option(Config.Redacted("CLERK_WEBHOOK_SIGNING_SECRET")),
+    );
+    const clerkSessionIssuer = Option.getOrUndefined(
+      yield* Config.option(Config.String("CLERK_SESSION_ISSUER")),
+    );
+
+    const cloudMintPrivateKey = yield* cloudMintKeyPair.privateKey;
+    const cloudMintPublicKey = yield* cloudMintKeyPair.publicKey;
+    const hyperdrive = yield* Cloudflare.Hyperdrive.Connect(yield* RelayDb.RelayHyperdrive);
+    // Named statements collide behind Hyperdrive transaction pooling (Effect-TS/effect#8320); use unnamed statements.
+    const db = yield* Drizzle.Postgres(hyperdrive.connectionString, undefined, {
+      prepare: false,
+    });
+
+    const managedEndpointTunnelBinding = yield* Cloudflare.Tunnel.ReadWriteTunnel();
+    // Keep Worker custom-domain reconciliation ordered after API zone provisioning.
+    yield* yield* relayApiZone.zoneId;
+    const managedEndpointDnsBinding = yield* Cloudflare.DNS.ReadWriteDns(managedEndpointZone);
+    const managedEndpointZoneName = yield* managedEndpointZone.name;
+    const managedEndpointCleanupMode = yield* RelayConfiguration.managedEndpointCleanupModeConfig;
+    const legacyManagedEndpointCleanupMode =
+      yield* RelayConfiguration.legacyManagedEndpointCleanupModeConfig;
+    const legacyTunnelGraceMinutes = Option.getOrUndefined(
+      yield* RelayConfiguration.legacyTunnelGraceMinutesConfig,
+    );
+    // Endpoint keys and their hashes differ by stage, including in shared accounts.
+    const hookRateLimit = yield* Cloudflare.RateLimit("HOOK_RATE_LIMIT", {
+      namespaceId: 1001,
+      simple: {
+        limit: HookForwarder.RELAY_HOOK_RATE_LIMIT.limit,
+        period: HookForwarder.RELAY_HOOK_RATE_LIMIT.periodSeconds,
+      },
+    });
+    const hookEndpointRateLimit = yield* Cloudflare.RateLimit("HOOK_ENDPOINT_RATE_LIMIT", {
+      namespaceId: 1002,
+      simple: {
+        limit: HookForwarder.RELAY_HOOK_ENDPOINT_RATE_LIMIT.limit,
+        period: HookForwarder.RELAY_HOOK_ENDPOINT_RATE_LIMIT.periodSeconds,
+      },
+    });
+    const policy = yield* AccountLimits.config;
+    const operatorSecret = yield* Config.schema(
+      Schema.Redacted(Schema.String.pipe(Schema.check(Schema.isPattern(/^\S+$/)))),
+      "RELAY_OPERATOR_SECRET",
+    );
+    const accountCounters = yield* AccountRateLimitObject.AccountRateLimitObject;
+    const mobileRate = yield* Cloudflare.RateLimit("MOBILE_REGISTRATION_RATE_LIMIT", {
+      namespaceId: 1003,
+      simple: { limit: policy.mobile_registration, period: 60 },
+    });
+    const publishRate = yield* Cloudflare.RateLimit("ACTIVITY_PUBLISH_RATE_LIMIT", {
+      namespaceId: 1004,
+      simple: { limit: policy.activity_publish, period: 60 },
+    });
+    const hookInboxes = yield* HookInboxObject.HookInboxObject.pipe(
+      Effect.provide(HookInboxObject.layer(db)),
+    );
+    const retiredAuth = yield* (yield* Cloudflare.Tunnel.makeTunnelClient(
+      "RelayRetiredEndpoints",
+      ["Cloudflare Tunnel Read", "Cloudflare Tunnel Write"],
+      (auth) => auth,
+    ))();
+
+    const alchemyRuntimeContext: Alchemy.BaseRuntimeContext = yield* Cloudflare.Worker;
+
+    const loadSettings = Effect.gen(function* () {
+      return RelayConfiguration.RelayConfiguration.of({
+        relayIssuer: relayPublicOrigin,
+        ...(fcmServiceAccount ? { fcmServiceAccount } : {}),
+        apns: apnsCredentials,
+        apnsDeliveryJobSigningSecret: yield* apnsDeliveryJobSigningSecret,
+        clerkSecretKey,
+        clerkPublishableKey,
+        clerkJwtAudience,
+        clerkAuthorizedParties,
+        clerkCliOAuthClientId,
+        mintDisabled,
+        subjectDigestKey,
+        ...(clerkWebhookSigningSecret === undefined ? {} : { clerkWebhookSigningSecret }),
+        ...(clerkSessionIssuer === undefined ? {} : { clerkSessionIssuer }),
+        cloudMintPrivateKey: yield* cloudMintPrivateKey,
+        cloudMintPublicKey: yield* cloudMintPublicKey,
+        managedEndpointBaseDomain: yield* managedEndpointZoneName,
+        managedEndpointNamespace: stage,
+        managedEndpointCleanupMode,
+        legacyManagedEndpointCleanupMode,
+        ...(legacyTunnelGraceMinutes === undefined ? {} : { legacyTunnelGraceMinutes }),
+      });
+    });
+
+    const inboxCall =
+      <A>(operation: HookInbox.HookInboxError["operation"], endpointKey: string) =>
+      (effect: Effect.Effect<A, never, Alchemy.RuntimeContext>) =>
+        effect.pipe(
+          Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
+          Effect.catchCause((cause) =>
+            Effect.fail(
+              new HookInbox.HookInboxError({
+                operation,
+                endpointKey,
+                cause: Cause.squash(cause),
+              }),
+            ),
+          ),
+        );
+    const layerHookInbox = Layer.succeed(HookInbox.HookInbox, {
+      hold: Effect.fn("HookInbox.hold")(function ({ endpointKey, baseUrl, hook }) {
+        return hookInboxes
+          .getByName(endpointKey)
+          .hold(hook, baseUrl)
+          .pipe(inboxCall("hold", endpointKey));
+      }),
+      wake: Effect.fn("HookInbox.wake")(function ({ endpointKey, baseUrl }) {
+        return hookInboxes
+          .getByName(endpointKey)
+          .wake(baseUrl)
+          .pipe(inboxCall("wake", endpointKey));
+      }),
+      clear: Effect.fn("HookInbox.clear")(function ({ endpointKey, authorization, retire }) {
+        return hookInboxes
+          .getByName(endpointKey)
+          .clear(authorization, retire)
+          .pipe(inboxCall("clear", endpointKey));
+      }),
+    });
+
+    const layerRates = Layer.succeed(
+      RelayRateLimits.RelayRateLimits,
+      yield* RelayRateLimits.makeWorkerRateLimits({
+        stage,
+        close: (key) =>
+          accountCounters
+            .getByName(key)
+            .close()
+            .pipe(Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext)),
+        hourly: (key, operation) =>
+          accountCounters
+            .getByName(key)
+            .consume(operation)
+            .pipe(Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext)),
+        mobile: (key) =>
+          mobileRate
+            .limit({ key })
+            .pipe(Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext)),
+        publish: (key) =>
+          publishRate
+            .limit({ key })
+            .pipe(Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext)),
+      }).pipe(Effect.provide(layerWebcrypto)),
+    );
+    const layerRuntime = Layer.empty
+      .pipe(
+        Layer.provideMerge(AccountLifecycle.layer),
+        Layer.provideMerge(AccountErasure.layer),
+        Layer.provideMerge(HostRevocations.layer),
+        Layer.provideMerge(AccountDeletionAuthentication.layer),
+        Layer.provideMerge(RetiredEndpointCollector.layer),
+        Layer.provideMerge(MobileRegistrations.layer),
+        Layer.provideMerge(AgentActivityPublisher.layer),
+        Layer.provideMerge(EnvironmentConnector.layer),
+        Layer.provideMerge(EnvironmentLinker.layer),
+        Layer.provideMerge(ConnectLinkReservations.layer),
+        Layer.provideMerge(
+          Layer.mergeAll(
+            EnvironmentPublishSignatures.layer,
+            ManagedEndpointReaper.layer,
+            HeldHooks.layer,
+          ),
+        ),
+        Layer.provideMerge(
+          ManagedEndpointProvider.layerCloudflareBindings(
+            managedEndpointTunnelBinding,
+            managedEndpointDnsBinding,
+            alchemyRuntimeContext,
+          ),
+        ),
+        Layer.provideMerge(DpopProofs.layer),
+        Layer.provideMerge(ApnsDeliveries.layer),
+      )
+      .pipe(
+        Layer.provideMerge(
+          FcmDeliveries.layer.pipe(
+            Layer.provide(
+              Layer.succeed(FcmDeliveryQueueSender.FcmDeliveryQueueSender, {
+                send: Effect.fn("FcmDeliveryQueueSender.send")(
+                  function* (body) {
+                    return yield* fcmDeliveryQueueSender.send(body);
+                  },
+                  Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
+                ),
+              }),
+            ),
+            Layer.provideMerge(
+              FcmClient.layer.pipe(
+                Layer.provide(FcmAssertionSigner.layer),
+                Layer.provide(
+                  Layer.succeed(WebCrypto.WebCrypto, { subtle: globalThis.crypto.subtle }),
+                ),
+              ),
+            ),
+          ),
+        ),
+        Layer.provideMerge(ApnsClient.layer.pipe(Layer.provideMerge(ApnsProviderTokens.layer))),
+        Layer.provideMerge(
+          ApnsDeliveryQueue.layerCloudflareQueues(apnsDeliveryQueueSender, alchemyRuntimeContext),
+        ),
+        Layer.provideMerge(Layer.mergeAll(AgentActivityRows.layer, Devices.layer, layerHookInbox)),
+        Layer.provideMerge(EnvironmentCredentials.layer),
+        Layer.provideMerge(
+          retiredInventoryBinding.layer(
+            managedEndpointTunnelBinding,
+            managedEndpointDnsBinding,
+            retiredAuth,
+            alchemyRuntimeContext,
+          ),
+        ),
+        Layer.provideMerge(ManagedEndpointAllocations.layer),
+        Layer.provideMerge(
+          Layer.mergeAll(
+            ConnectTokenExchange.layer.pipe(Layer.provide(ConnectAuthentication.layer)),
+            CloudflareApiPause.layer,
+            EnvironmentLinks.layer,
+            ManagedTunnelLimits.layer,
+          ),
+        ),
+      )
+      .pipe(
+        Layer.provideMerge(LiveActivities.layer),
+        Layer.provideMerge(DeliveryAuthorization.layer),
+        Layer.provideMerge(DeliveryAttempts.layer),
+        Layer.provideMerge(
+          Layer.mergeAll(
+            RelayTokens.layer,
+            ClientKeys.layer,
+            CliLinkApprovals.layer.pipe(Layer.provide(DpopProofs.layer)),
+          ),
+        ),
+        Layer.provideMerge(ManagedProvisioningIntents.layer),
+        Layer.provideMerge(EndpointIdentity.layer),
+        Layer.provideMerge(EnvironmentOwnership.layer),
+        Layer.provideMerge(AccountDeviceAdmission.layer),
+        Layer.provideMerge(HookDeliveryAuthorization.layer),
+        Layer.provideMerge(Layer.mergeAll(AccountAccess.layer, ConnectAccounts.layer)),
+        Layer.provideMerge(AccountTransactions.layer),
+        Layer.provideMerge(layerRates),
+        Layer.provideMerge(Layer.succeed(AccountLimits.AccountLimits, policy)),
+        Layer.provideMerge(Layer.succeed(AccountAdminApi.AccountOperatorSecret, operatorSecret)),
+        Layer.provideMerge(
+          RelayDb.RelayTransactions.layer.pipe(
+            Layer.provideMerge(Layer.succeed(RelayDb.RelayDb, db)),
+          ),
+        ),
+        Layer.provideMerge(Layer.effect(RelayConfiguration.RelayConfiguration, loadSettings)),
+        Layer.provideMerge(layerWebcrypto),
+        Layer.provideMerge(
+          Layer.succeed(WebCrypto.WebCrypto, { subtle: globalThis.crypto.subtle }),
+        ),
+      );
+
+    // Fails open: a limiter outage must not drop webhooks the environment would accept.
+    const allowWith =
+      (limiter: typeof hookRateLimit) =>
+      (key: string): Effect.Effect<boolean> =>
+        limiter.limit({ key }).pipe(
+          Effect.map((result) => result.success),
+          Effect.provideService(Alchemy.RuntimeContext, alchemyRuntimeContext),
+          Effect.catch((error) =>
+            Effect.logWarning("Hook rate limiter unavailable", { error: error.message }).pipe(
+              Effect.andThen(
+                Effect.annotateCurrentSpan({ "relay.hook.rate_limiter_failed_open": true }),
+              ),
+              Effect.as(true),
+            ),
+          ),
+        );
+    const layerHookRateLimiter = Layer.succeed(HookForwarder.HookRateLimiter, {
+      allowHook: allowWith(hookRateLimit),
+      allowEndpoint: allowWith(hookEndpointRateLimit),
+    });
+
+    const layerApp = Layer.merge(
+      Layer.mergeAll(layerRelayApi, AccountAdminApi.layer, ClerkDeletionWebhook.layer),
+      HookForwarder.layerApi.pipe(
+        Layer.provide(HookForwarder.layer),
+        Layer.provide(layerHookRateLimiter),
+      ),
+    ).pipe(
+      Layer.provideMerge(RelayHttpApi.layerClientAuth),
+      Layer.provideMerge(RelayHttpApi.layerDpopClientAuth),
+      Layer.provideMerge(RelayHttpApi.layerEnvironmentAuth),
+      Layer.provide(layerRuntime),
+    );
+
+    yield* Cloudflare.Queues.consumeQueueMessages<unknown>(
+      apnsDeliveryQueue,
+      {
+        batchSize: 10,
+        maxRetries: 5,
+        maxWaitTime: "5 seconds",
+        retryDelay: "30 seconds",
+        deadLetterQueue: apnsDeliveryDeadLetterQueue.queueName as unknown as string,
+      },
+      (stream) =>
+        ConnectPushQueue.consume(stream, ApnsDeliveryQueueConsumer.processMessage).pipe(
+          Effect.withSpan("relay.apn_delivery_queue.process_batch"),
+          Effect.provide(layerRuntime),
+        ),
+    );
+
+    yield* Cloudflare.Queues.consumeQueueMessages<unknown>(
+      fcmDeliveryQueue,
+      {
+        batchSize: 10,
+        maxRetries: 5,
+        maxWaitTime: "1 second",
+        retryDelay: "30 seconds",
+        deadLetterQueue: fcmDeliveryDeadLetterQueue.queueName as unknown as string,
+      },
+      (stream) =>
+        ConnectPushQueue.consume(stream, FcmDeliveryQueueConsumer.processMessage).pipe(
+          Effect.withSpan("relay.fcm_delivery_queue.process_batch"),
+          Effect.provide(layerRuntime),
+        ),
+    );
+
+    yield* Cloudflare.Workers.cron("*/5 * * * *", () =>
+      Effect.all(
+        [
+          AccountLifecycle.AccountLifecycle.pipe(
+            Effect.flatMap((service) => service.scanPending),
+            Effect.tapError((e) =>
+              Effect.logWarning("Account operations scan failed", { errorTag: e._tag }),
+            ),
+            Effect.ignore,
+          ),
+          RetiredEndpointCollector.RetiredEndpointCollector.pipe(
+            Effect.flatMap((service) => service.sweep),
+            Effect.tapError((e) =>
+              Effect.logWarning("Retired inventory failed", { errorTag: e._tag }),
+            ),
+            Effect.ignore,
+          ),
+          DpopProofs.DpopProofReplay.pipe(
+            Effect.flatMap((dpopProofs) => dpopProofs.pruneExpired),
+            Effect.andThen(
+              Effect.all([AgentActivityRows.AgentActivityRows, DateTime.now]).pipe(
+                Effect.flatMap(([activityRows, now]) =>
+                  activityRows.pruneTerminal({
+                    updatedBefore: DateTime.formatIso(DateTime.subtract(now, { minutes: 30 })),
+                  }),
+                ),
+              ),
+            ),
+            Effect.catchCause((cause) =>
+              Cause.hasInterrupts(cause)
+                ? Effect.interrupt
+                : Effect.logWarning("Failed to prune expired relay state", { cause }),
+            ),
+          ),
+          ManagedEndpointReaper.ManagedEndpointReaper.pipe(
+            Effect.flatMap((reaper) => reaper.sweep.pipe(Effect.timeout("2 minutes"))),
+            Effect.tap((result) =>
+              result.scanned > 0
+                ? Effect.logInfo("Finished managed tunnel cleanup", result)
+                : Effect.void,
+            ),
+            Effect.catchCause((cause) =>
+              Cause.hasInterrupts(cause)
+                ? Effect.interrupt
+                : Effect.logWarning("Failed to clean up inactive managed tunnels", { cause }),
+            ),
+          ),
+          AgentActivityPublisher.AgentActivityPublisher.pipe(
+            Effect.flatMap((publisher) => publisher.endIdleLiveActivities),
+            Effect.catchCause((cause) =>
+              Cause.hasInterrupts(cause)
+                ? Effect.interrupt
+                : Effect.logWarning("Failed to end idle Live Activities", { cause }),
+            ),
+          ),
+        ],
+        { concurrency: 3, discard: true },
+      ).pipe(
+        Effect.withSpan("relay.cron.prune_expired_state"),
+        Observability.withSchemaErrorSpanAttributes,
+        Effect.provide(layerRuntime),
+      ),
+    );
+
+    const fetch = Layer.merge(
+      Layer.mergeAll(
+        HttpApiBuilder.layer(RelayApi, { openapiPath: "/openapi.json" }).pipe(
+          Layer.provide(layerApp),
+        ),
+        HttpApiScalar.layer(RelayApi, { path: "/docs" }),
+        RelayHttpApi.layerDocsRedirectRoute,
+      ).pipe(
+        Layer.provide([
+          Etag.layerWeak,
+          layerHttpPlatformNotSupported,
+          RelayHttpApi.layerCors,
+          MintControlApi.layer.pipe(Layer.provide(layerRuntime)),
+        ]),
+      ),
+      RelayHttpApi.layerNotFoundRoute,
+    ).pipe(
+      HttpRouter.toHttpEffect,
+      Effect.provideService(HttpRouter.RouterConfig, RELAY_HTTP_ROUTER_CONFIG),
+      withoutCapturedParentSpan,
+      Effect.map((httpEffect) =>
+        traceRelayHttpRequestWith(httpEffect, Layer.empty).pipe(
+          Observability.withSchemaErrorSpanAttributes,
+        ),
+      ),
+    );
+
+    return { fetch };
+  }).pipe(
+    Effect.provide(
+      Layer.empty.pipe(
+        Layer.provideMerge(Cloudflare.Hyperdrive.ConnectBinding),
+        Layer.provideMerge(Cloudflare.Workers.CronEventSourceLive),
+        Layer.provideMerge(Cloudflare.Queues.WriteQueueBinding),
+        Layer.provideMerge(Cloudflare.Queues.EventSourceLive),
+        Layer.provideMerge(Cloudflare.Tunnel.ReadWriteTunnelBinding),
+        Layer.provideMerge(Cloudflare.DNS.ReadWriteDnsHttp),
+        Layer.provideMerge(Cloudflare.Workers.RateLimitBinding),
+        Layer.provideMerge(AccountRateLimitObject.layer),
+        // Disable the duplicate runtime span; ours applies route/header/token redaction and rejects sender traceparent.
+        Layer.provideMerge(
+          Alchemy.Telemetry.layer(Layer.succeed(HttpMiddleware.TracerDisabledWhen)(() => true)),
+        ),
+        Layer.provideMerge(
+          Layer.unwrap(
+            Effect.map(RelayObservability, (observability) =>
+              Axiom.Telemetry({
+                serviceName: "goat-relay",
+                token: observability.workerIngestToken,
+                traces: observability.traces,
+              }),
+            ),
+          ),
+        ),
+      ),
+    ),
+  ),
+);
+
+export default layer;

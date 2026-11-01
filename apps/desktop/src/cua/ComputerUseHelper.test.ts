@@ -1,0 +1,733 @@
+// @effect-diagnostics nodeBuiltinImport:off -- The fake helper speaks over in-memory Node streams, and discovery reads a real temporary directory.
+import { CUA_DRIVER_VERSION } from "@goat/shared/cuaDriverRelease";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+import * as NodeStream from "node:stream";
+import * as NodeReadline from "node:readline";
+
+import { assert, describe, expect, it } from "@effect/vitest";
+import { vi } from "vite-plus/test";
+
+import {
+  ComputerUseHelperError,
+  classifyHelperBundle,
+  checkHelperCapture,
+  daemonMismatch,
+  listHelperApplications,
+  makeHelperHost,
+  openHelperSession,
+  probeHelperGrants,
+  type HelperProcess,
+} from "./ComputerUseHelper.ts";
+import { type HelperServiceManager, makeHelperServiceManager } from "./ComputerUseHelperService.ts";
+
+const BUNDLE_ID = "si.goat.desktop.dev.computer-use";
+
+/**
+ * A scripted helper on in-memory pipes: greets, then answers each request with reply(). A null
+ * greeting never greets, as a helper stuck before its hello.
+ */
+function fakeHelper(options: {
+  readonly greeting?: object | null;
+  /** write sends an unrequested line before the reply goes out; after() runs once it has. */
+  readonly reply?: (
+    request: { id: string; method: string; params: unknown },
+    write: (line: object) => void,
+  ) => object | undefined;
+  readonly after?: (
+    request: { id: string; method: string; params: unknown },
+    write: (line: object) => void,
+  ) => void;
+}) {
+  const stdin = new NodeStream.PassThrough();
+  const stdout = new NodeStream.PassThrough();
+  const received: Array<{ method: string; params: unknown }> = [];
+  const signals: Array<NodeJS.Signals> = [];
+  let exit!: () => void;
+  const exited = new Promise<void>((resolve) => (exit = resolve));
+  let stdinEnded = false;
+  const die = () => {
+    stdout.end();
+    exit();
+  };
+  stdin.on("end", () => {
+    stdinEnded = true;
+    die();
+  });
+  const write = (line: object) => stdout.write(JSON.stringify(line) + "\n");
+  NodeReadline.createInterface({ input: stdin }).on("line", (line) => {
+    const request = JSON.parse(line) as { id: string; method: string; params: unknown };
+    received.push({ method: request.method, params: request.params });
+    const answer = options.reply?.(request, write);
+    if (answer) stdout.write(JSON.stringify({ id: request.id, ...answer }) + "\n");
+    options.after?.(request, write);
+  });
+  if (options.greeting !== null)
+    stdout.write(
+      JSON.stringify(
+        options.greeting ?? {
+          type: "hello",
+          protocol: 1,
+          pid: 99,
+          bundleId: BUNDLE_ID,
+          version: "1",
+        },
+      ) + "\n",
+    );
+  const process: HelperProcess = {
+    stdin,
+    stdout,
+    kill: (signal) => {
+      signals.push(signal);
+      die();
+    },
+    exited,
+  };
+  return { process, received, die, signals, stdinEnded: () => stdinEnded };
+}
+
+const helperError = async (promise: Promise<unknown>) => {
+  const error = await promise.then(
+    () => undefined,
+    (cause: unknown) => cause,
+  );
+  assert.instanceOf(error, ComputerUseHelperError);
+  return error as ComputerUseHelperError;
+};
+
+describe("ComputerUseHelper protocol", () => {
+  it.each([
+    {
+      name: "another helper identity",
+      greeting: { type: "hello", protocol: 1, pid: 1, bundleId: "si.goat.desktop.computer-use" },
+      code: "bundle_mismatch",
+    },
+    {
+      name: "a newer protocol",
+      greeting: { type: "hello", protocol: 2, pid: 1, bundleId: BUNDLE_ID },
+      code: "protocol_mismatch",
+    },
+    {
+      name: "an untrusted launcher",
+      greeting: { type: "refused", reason: "untrusted_parent", message: "not signed by team" },
+      code: "untrusted_parent",
+    },
+  ])("refuses $name with a typed code and closes the helper", async ({ greeting, code }) => {
+    const helper = fakeHelper({ greeting });
+    const error = await helperError(openHelperSession(helper.process, BUNDLE_ID));
+    assert.equal(error.code, code);
+    assert.isTrue(helper.stdinEnded());
+  });
+
+  it("matches replies to requests and turns helper errors into typed errors", async () => {
+    const helper = fakeHelper({
+      reply: ({ method }) =>
+        method === "permissions"
+          ? { result: { accessibility: true, screenRecording: false } }
+          : { error: { code: "socket_in_use", message: "Something already exists." } },
+    });
+    const session = await openHelperSession(helper.process, BUNDLE_ID);
+    assert.equal(session.pid, 99);
+    const [grants, refused] = await Promise.all([
+      session.permissions(false),
+      helperError(session.start({ socketPath: "/tmp/x.sock", environment: [], noOverlay: false })),
+    ]);
+    assert.deepEqual(grants, { accessibility: true, screenRecording: false });
+    assert.equal(refused.code, "socket_in_use");
+    assert.deepEqual(helper.received[0], { method: "permissions", params: { prompt: false } });
+    await session.close();
+  });
+
+  it("can watch only when the helper's hello says so", async () => {
+    const hello = { type: "hello", protocol: 1, pid: 99, bundleId: BUNDLE_ID };
+    const older = await openHelperSession(fakeHelper({ greeting: hello }).process, BUNDLE_ID);
+    const newer = await openHelperSession(
+      fakeHelper({ greeting: { ...hello, features: ["watch"] } }).process,
+      BUNDLE_ID,
+    );
+    expect([older.canWatch, newer.canWatch]).toEqual([false, true]);
+    await Promise.all([older.close(), newer.close()]);
+  });
+
+  it("passes on only the frames of the capture request in force, once it is sent", async () => {
+    const picture = (framesId: number) => ({
+      type: "frame",
+      framesId,
+      key: "desktop:control:a",
+      width: 320,
+      height: 200,
+      data: "QUJD",
+    });
+    const helper = fakeHelper({
+      greeting: { type: "hello", protocol: 1, pid: 99, bundleId: BUNDLE_ID, features: ["frames"] },
+      // A frame of the old request still in the pipe when the new one is answered.
+      reply: ({ params }, write) => {
+        const { framesId } = params as { framesId: number };
+        write(picture(framesId - 1));
+        return { result: { framesId } };
+      },
+      after: ({ params }, write) => {
+        const { framesId } = params as { framesId: number };
+        write(picture(framesId));
+        write({ type: "frameUnavailable", framesId, key: "desktop:control:a", reason: "private" });
+      },
+    });
+    const session = await openHelperSession(helper.process, BUNDLE_ID);
+    assert.isTrue(session.canFrame);
+    const seen: Array<{ type: string; framesId: number }> = [];
+    const done = new Promise<void>((resolve) =>
+      session.onFrame((frame) => {
+        seen.push({ type: frame.type, framesId: frame.framesId });
+        if (frame.type === "frameUnavailable") resolve();
+      }),
+    );
+    await session.frames(5, [
+      { key: "desktop:control:a", pid: 7, windowId: 3, maxWidth: 320, intervalMs: 500 },
+    ]);
+    await done;
+    assert.deepEqual(seen, [
+      { type: "frame", framesId: 5 },
+      { type: "frameUnavailable", framesId: 5 },
+    ]);
+    assert.deepEqual(helper.received.at(-1)?.method, "frames");
+    await session.close();
+  });
+
+  it("delivers the events of the watch in force, switching watches as the answer is read", async () => {
+    const target = (windowId: number) => ({ pid: 7, windowId });
+    const event = (watchId: string, active: boolean, windowId: number) => ({
+      type: "event",
+      watchId,
+      event: { type: "privateMode", active, target: target(windowId) },
+    });
+    const helper = fakeHelper({
+      reply: (request, write) => {
+        const params = request.params as { watchId?: string };
+        // The old watch clears its active field before the new watch is answered.
+        if (request.method === "watch" && params.watchId === "w2") write(event("w1", false, 1));
+        // A stray event of a watch that is not in force.
+        if (request.method === "watch") write(event("other", true, 9));
+        return { result: { watchId: params.watchId } };
+      },
+      after: (request, write) => {
+        const params = request as unknown as { params: { watchId?: string } };
+        if (request.method === "watch")
+          write(event(params.params.watchId ?? "", true, params.params.watchId === "w1" ? 1 : 2));
+      },
+    });
+    const session = await openHelperSession(helper.process, BUNDLE_ID);
+    const seen: Array<{ active: boolean; windowId: number }> = [];
+    const done = new Promise<void>((resolve) =>
+      session.onEvent((delivered) => {
+        if (delivered.type !== "privateMode") return;
+        seen.push({ active: delivered.active, windowId: delivered.target.windowId });
+        if (seen.length === 3) resolve();
+      }),
+    );
+    await session.watch("w1");
+    await session.watch("w2");
+    await done;
+    // w1's first state, w1's clearing under the old watch, then w2's first state.
+    expect(seen).toEqual([
+      { active: true, windowId: 1 },
+      { active: false, windowId: 1 },
+      { active: true, windowId: 2 },
+    ]);
+    expect(helper.received.map(({ method }) => method)).toEqual(["watch", "watch"]);
+    await session.close();
+  });
+
+  it("fails a request in flight when the helper exits, and reports the session ended", async () => {
+    const helper = fakeHelper({});
+    const session = await openHelperSession(helper.process, BUNDLE_ID);
+    const pending = session.stop();
+    helper.die();
+    assert.equal((await helperError(pending)).code, "helper_exited");
+    await session.ended;
+    assert.equal((await helperError(session.permissions(false))).code, "helper_exited");
+  });
+});
+
+describe("ComputerUseHelper daemon admission", () => {
+  it("hands an agent connection the helper's own --mcp command and starts no daemon", async () => {
+    const helper = fakeHelper({ reply: () => ({ result: {} }) });
+    const bundlePath = "/Applications/GOAT.app/Contents/Helpers/GOAT Computer Use.app";
+    const host = makeHelperHost({
+      bundle: {
+        bundlePath,
+        executable: bundlePath + "/Contents/MacOS/GOAT Computer Use",
+        driverPath: bundlePath + "/Contents/Resources/cua-driver/cua-driver",
+        bundleId: BUNDLE_ID,
+      },
+      driverVersion: CUA_DRIVER_VERSION,
+      capabilityManifestPath: "/state/cua-driver/agents.yaml",
+      environment: [{ name: "CUA_DRIVER_KEY_GAP_MS", value: "20" }],
+      spawn: () => helper.process,
+      readMetadata: () => Promise.reject(new Error("no daemon to read")),
+      direct: true,
+    });
+    const connection = await host.start();
+    expect(connection.mcp).toEqual({
+      command: bundlePath + "/Contents/MacOS/GOAT Computer Use",
+      args: ["--mcp", "--capability-manifest", "/state/cua-driver/agents.yaml"],
+      environment: [{ name: "CUA_DRIVER_KEY_GAP_MS", value: "20" }],
+    });
+    // No socket and no daemon: the driver exists only under each connection's helper.
+    expect(connection.socketPath).toBe("");
+    expect(helper.received).toEqual([]);
+    await host.stop();
+  });
+
+  it("opens one helper however many starts of a host race, and never shares one host's helper with another", async () => {
+    const spawned: Array<ReturnType<typeof fakeHelper>> = [];
+    const bundlePath = "/Applications/GOAT.app/Contents/Helpers/GOAT Computer Use.app";
+    const options = {
+      bundle: {
+        bundlePath,
+        executable: bundlePath + "/Contents/MacOS/GOAT Computer Use",
+        driverPath: bundlePath + "/Contents/Resources/cua-driver/cua-driver",
+        bundleId: BUNDLE_ID,
+      },
+      driverVersion: CUA_DRIVER_VERSION,
+      capabilityManifestPath: "/state/cua-driver/agents.yaml",
+      environment: [],
+      spawn: (_executable: string) => {
+        const helper = fakeHelper({});
+        spawned.push(helper);
+        return helper.process;
+      },
+      readMetadata: () => Promise.reject(new Error("no daemon to read")),
+      direct: true,
+    };
+    const service = makeHelperServiceManager({
+      open: (executable) => openHelperSession(options.spawn(executable), BUNDLE_ID),
+      // The fake's pid names no real process.
+      alive: () => true,
+    });
+    const first = makeHelperHost({ ...options, service });
+    const second = makeHelperHost({ ...options, service });
+    await Promise.all([first.start(), first.start(), first.start()]);
+    assert.lengthOf(spawned, 1);
+    // Each host owns its helper's watch and captures, so the second gets one of its own.
+    await second.start();
+    assert.lengthOf(spawned, 2);
+    await first.stop();
+    assert.isTrue(spawned[0]?.stdinEnded());
+    assert.isFalse(spawned[1]?.stdinEnded());
+    await second.stop();
+    assert.isTrue(spawned[1]?.stdinEnded());
+  });
+
+  it("a stop that lands while the host is starting cancels it and leaves no helper running", async () => {
+    const spawned: Array<ReturnType<typeof fakeHelper>> = [];
+    const bundlePath = "/Applications/GOAT.app/Contents/Helpers/GOAT Computer Use.app";
+    const host = makeHelperHost({
+      bundle: {
+        bundlePath,
+        executable: bundlePath + "/Contents/MacOS/GOAT Computer Use",
+        driverPath: bundlePath + "/Contents/Resources/cua-driver/cua-driver",
+        bundleId: BUNDLE_ID,
+      },
+      driverVersion: CUA_DRIVER_VERSION,
+      capabilityManifestPath: "/state/cua-driver/agents.yaml",
+      environment: [],
+      spawn: () => {
+        const helper = fakeHelper({});
+        spawned.push(helper);
+        return helper.process;
+      },
+      readMetadata: () => Promise.reject(new Error("no daemon to read")),
+      direct: true,
+    });
+    const started = host.start();
+    await host.stop();
+    assert.equal((await helperError(started)).code, "aborted");
+    assert.isTrue(spawned.every((helper) => helper.stdinEnded()));
+    assert.isUndefined(host.servicePid());
+  });
+
+  const directHost = (spawn: () => HelperProcess, service?: HelperServiceManager) => {
+    const bundlePath = "/Applications/GOAT.app/Contents/Helpers/GOAT Computer Use.app";
+    return makeHelperHost({
+      bundle: {
+        bundlePath,
+        executable: bundlePath + "/Contents/MacOS/GOAT Computer Use",
+        driverPath: bundlePath + "/Contents/Resources/cua-driver/cua-driver",
+        bundleId: BUNDLE_ID,
+      },
+      driverVersion: CUA_DRIVER_VERSION,
+      capabilityManifestPath: "/state/cua-driver/agents.yaml",
+      environment: [],
+      spawn,
+      readMetadata: () => Promise.reject(new Error("no daemon to read")),
+      direct: true,
+      ...(service ? { service } : {}),
+    });
+  };
+
+  it("a stop before the helper greets ends its process group at once instead of waiting out the hello deadline", async (context) => {
+    // Frozen timers: only the stop itself can end this start.
+    vi.useFakeTimers();
+    context.onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const helper = fakeHelper({ greeting: null });
+    const spawned = Promise.withResolvers<void>();
+    const host = directHost(() => {
+      spawned.resolve();
+      return helper.process;
+    });
+    const started = host.start();
+    await spawned.promise;
+    await host.stop();
+    assert.equal((await helperError(started)).code, "aborted");
+    assert.deepEqual(helper.signals, ["SIGKILL"]);
+    assert.isUndefined(host.servicePid());
+  });
+
+  it("a start after a stop opens its own helper instead of the one that stop ends", async () => {
+    const spawned: Array<ReturnType<typeof fakeHelper>> = [];
+    const spawn = () => {
+      const pid = 100 + spawned.length;
+      const helper = fakeHelper({
+        greeting: { type: "hello", protocol: 1, pid, bundleId: BUNDLE_ID, version: "1" },
+      });
+      spawned.push(helper);
+      return helper.process;
+    };
+    const service = makeHelperServiceManager({
+      open: (_executable, signal) => openHelperSession(spawn(), BUNDLE_ID, signal),
+      alive: () => true,
+    });
+    const host = directHost(spawn, service);
+    const first = host.start().catch((error: unknown) => error);
+    const stopped = host.stop();
+    const second = host.start();
+    await Promise.all([first, stopped]);
+    const connection = await second;
+    // Whatever the stopped start opened is gone; the helper handed out is the newest, alive.
+    assert.equal(connection.pid, 100 + spawned.length - 1);
+    assert.isFalse(spawned.at(-1)?.stdinEnded());
+    assert.isTrue(spawned.slice(0, -1).every((helper) => helper.stdinEnded()));
+    assert.equal(host.servicePid(), connection.pid);
+    await host.stop();
+    assert.isTrue(spawned.at(-1)?.stdinEnded());
+  });
+
+  it("a stop during a failed Windows start's release kills the helper instead of waiting for its answer", async (context) => {
+    vi.useFakeTimers();
+    context.onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const asked = Promise.withResolvers<void>();
+    // Its driver started, but it never answers stop.
+    const helper = fakeHelper({
+      reply: ({ method, params }) =>
+        method === "start"
+          ? {
+              result: {
+                socketPath: (params as { socketPath: string }).socketPath,
+                driverPid: 700,
+                hostBundleId: BUNDLE_ID,
+              },
+            }
+          : undefined,
+      after: ({ method }) => {
+        if (method === "stop") asked.resolve();
+      },
+    });
+    const host = makeHelperHost({
+      bundle: {
+        bundlePath: "/Helpers/GOAT Computer Use.app",
+        executable: "/Helpers/GOAT Computer Use.app/Contents/MacOS/GOAT Computer Use",
+        driverPath: "/Helpers/GOAT Computer Use.app/Contents/Resources/cua-driver/cua-driver",
+        bundleId: BUNDLE_ID,
+      },
+      driverVersion: CUA_DRIVER_VERSION,
+      capabilityManifestPath: "/state/manifest.yaml",
+      environment: [],
+      spawn: () => helper.process,
+      socket: async () => ({ path: "\\\\.\\pipe\\goat-cu-test", release: async () => {} }),
+      // Something else answered on the pipe, so the start fails after the driver started.
+      readMetadata: async () => ({ ...metadata, pid: 4 }),
+    });
+    const started = host.start();
+    await asked.promise;
+    await host.stop();
+    assert.equal((await helperError(started)).code, "incompatible_daemon");
+    assert.deepEqual(helper.signals, ["SIGKILL"]);
+    assert.isUndefined(host.servicePid());
+  });
+
+  it("a cancelled capture check kills its helper and says so", async (context) => {
+    vi.useFakeTimers();
+    context.onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const asked = Promise.withResolvers<void>();
+    // It never answers captureCheck, as a helper stuck capturing.
+    const helper = fakeHelper({ after: () => asked.resolve() });
+    const cancel = new AbortController();
+    const checked = checkHelperCapture(
+      helper.process,
+      BUNDLE_ID,
+      { pid: 1, windowId: 2 },
+      cancel.signal,
+    );
+    await asked.promise;
+    cancel.abort(new ComputerUseHelperError("aborted", "Computer use stopped."));
+    assert.equal((await checked).kind, "failed");
+    assert.deepEqual(helper.signals, ["SIGKILL"]);
+  });
+
+  it("a cancelled grants probe kills its helper", async (context) => {
+    vi.useFakeTimers();
+    context.onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const asked = Promise.withResolvers<void>();
+    // It never answers permissions, as a helper whose prompt is still showing.
+    const helper = fakeHelper({ after: () => asked.resolve() });
+    const cancel = new AbortController();
+    const probed = probeHelperGrants(helper.process, BUNDLE_ID, true, cancel.signal);
+    await asked.promise;
+    const stopped = new ComputerUseHelperError("aborted", "Computer use stopped.");
+    cancel.abort(stopped);
+    assert.strictEqual(
+      await probed.then(
+        () => undefined,
+        (error: unknown) => error,
+      ),
+      stopped,
+    );
+    assert.deepEqual(helper.signals, ["SIGKILL"]);
+  });
+
+  it("a cancelled app listing kills its helper and the driver it runs", async (context) => {
+    vi.useFakeTimers();
+    context.onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const asked = Promise.withResolvers<void>();
+    // It never answers listApps, as a helper whose driver is slow to list.
+    const helper = fakeHelper({ after: () => asked.resolve() });
+    const cancel = new AbortController();
+    const listed = listHelperApplications(helper.process, BUNDLE_ID, cancel.signal);
+    await asked.promise;
+    const stopped = new ComputerUseHelperError("aborted", "Computer use stopped.");
+    cancel.abort(stopped);
+    assert.strictEqual(
+      await listed.then(
+        () => undefined,
+        (error: unknown) => error,
+      ),
+      stopped,
+    );
+    assert.deepEqual(helper.signals, ["SIGKILL"]);
+  });
+
+  it("a Windows stop while the helper is busy starting its driver kills it instead of asking it to stop", async (context) => {
+    vi.useFakeTimers();
+    context.onTestFinished(() => {
+      vi.useRealTimers();
+    });
+    const asked = Promise.withResolvers<void>();
+    let socketReleased = false;
+    // It never answers start, as a helper whose driver is still coming up.
+    const helper = fakeHelper({ after: () => asked.resolve() });
+    const host = makeHelperHost({
+      bundle: {
+        bundlePath: "/Helpers/GOAT Computer Use.app",
+        executable: "/Helpers/GOAT Computer Use.app/Contents/MacOS/GOAT Computer Use",
+        driverPath: "/Helpers/GOAT Computer Use.app/Contents/Resources/cua-driver/cua-driver",
+        bundleId: BUNDLE_ID,
+      },
+      driverVersion: CUA_DRIVER_VERSION,
+      capabilityManifestPath: "/state/manifest.yaml",
+      environment: [],
+      spawn: () => helper.process,
+      socket: async () => ({
+        path: "\\\\.\\pipe\\goat-cu-test",
+        release: async () => {
+          socketReleased = true;
+        },
+      }),
+      readMetadata: () => Promise.reject(new Error("no daemon to read")),
+    });
+    const started = host.start();
+    await asked.promise;
+    await host.stop();
+    assert.equal((await helperError(started)).code, "aborted");
+    assert.deepEqual(
+      helper.received.map(({ method }) => method),
+      ["start"],
+    );
+    assert.deepEqual(helper.signals, ["SIGKILL"]);
+    assert.isTrue(socketReleased);
+  });
+
+  const expected = { pid: 700, bundleId: BUNDLE_ID, driverVersion: CUA_DRIVER_VERSION };
+  const metadata = {
+    driverVersion: CUA_DRIVER_VERSION,
+    contractVersion: "0.8.0",
+    mcpProtocolVersion: "2025-06-18",
+    pid: 700,
+    embedded: true,
+    hostBundleId: BUNDLE_ID,
+  };
+
+  it("admits only the embedded daemon the helper started, for this helper, at the pinned version", () => {
+    assert.isUndefined(daemonMismatch(metadata, expected));
+    assert.match(daemonMismatch({ ...metadata, pid: 1 }, expected) ?? "", /belongs to pid 1/);
+    assert.match(
+      daemonMismatch({ ...metadata, embedded: false }, expected) ?? "",
+      /not running embedded/,
+    );
+    assert.match(
+      daemonMismatch({ ...metadata, hostBundleId: "si.goat.desktop" }, expected) ?? "",
+      /reports host si.goat.desktop/,
+    );
+    assert.match(
+      daemonMismatch({ ...metadata, driverVersion: "0.38.0" }, expected) ?? "",
+      /0.38.0/,
+    );
+  });
+
+  it("stops the driver and the helper instead of handing out a daemon that fails admission", async () => {
+    const helper = fakeHelper({
+      reply: ({ method, params }) =>
+        method === "start"
+          ? {
+              result: {
+                socketPath: (params as { socketPath: string }).socketPath,
+                driverPid: 700,
+                hostBundleId: BUNDLE_ID,
+              },
+            }
+          : { result: {} },
+    });
+    const host = makeHelperHost({
+      bundle: {
+        bundlePath: "/Helpers/GOAT Computer Use.app",
+        executable: "/Helpers/GOAT Computer Use.app/Contents/MacOS/GOAT Computer Use",
+        driverPath: "/Helpers/GOAT Computer Use.app/Contents/Resources/cua-driver/cua-driver",
+        bundleId: BUNDLE_ID,
+      },
+      driverVersion: CUA_DRIVER_VERSION,
+      capabilityManifestPath: "/state/manifest.yaml",
+      environment: [],
+      spawn: () => helper.process,
+      socket: async () => ({ path: "\\\\.\\pipe\\goat-cu-test", release: async () => {} }),
+      // Something else answered on the pipe.
+      readMetadata: async () => ({ ...metadata, pid: 4 }),
+    });
+    const error = await helperError(host.start());
+    assert.equal(error.code, "incompatible_daemon");
+    assert.deepEqual(
+      helper.received.map(({ method }) => method),
+      ["start", "stop"],
+    );
+    assert.isTrue(helper.stdinEnded());
+    assert.isUndefined(host.servicePid());
+  });
+
+  it.each([
+    { name: "the helper's relay where screenshots are guarded (Windows)", through: true },
+    { name: "the driver itself elsewhere", through: false },
+  ])("hands agents $name as the MCP command, with the same route", async ({ through }) => {
+    const helper = fakeHelper({
+      reply: ({ method, params }) =>
+        method === "start"
+          ? {
+              result: {
+                socketPath: (params as { socketPath: string }).socketPath,
+                driverPid: 700,
+                hostBundleId: BUNDLE_ID,
+              },
+            }
+          : { result: {} },
+    });
+    const bundle = {
+      bundlePath: "C:/GOAT/resources/computer-use-helper",
+      executable: "C:/GOAT/resources/computer-use-helper/GOAT Computer Use.exe",
+      driverPath: "C:/GOAT/resources/computer-use-helper/cua-driver/cua-driver.exe",
+      bundleId: BUNDLE_ID,
+    };
+    const host = makeHelperHost({
+      bundle,
+      driverVersion: CUA_DRIVER_VERSION,
+      capabilityManifestPath: "C:/state/manifest.yaml",
+      environment: [],
+      spawn: () => helper.process,
+      readMetadata: async () => metadata,
+      socket: async () => ({ path: "\\\\.\\pipe\\goat-cu-test", release: async () => {} }),
+      mcpThroughHelper: through,
+    });
+    const connection = await host.start();
+    assert.equal(connection.mcp.command, through ? bundle.executable : bundle.driverPath);
+    expect(connection.mcp.args).toEqual([
+      "mcp",
+      "--embedded",
+      "--socket",
+      "\\\\.\\pipe\\goat-cu-test",
+      "--host-bundle-id",
+      BUNDLE_ID,
+    ]);
+    await host.stop();
+  });
+});
+
+describe("ComputerUseHelper bundle discovery", () => {
+  /** A temporary directory removed when the test ends, pass or fail. */
+  const scratch = (onTestFinished: (cleanup: () => void) => void) => {
+    const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-cu-test-"));
+    onTestFinished(() => NodeFS.rmSync(directory, { recursive: true, force: true }));
+    return directory;
+  };
+  const makeBundle = (root: string) => {
+    const bundle = NodePath.join(root, "GOAT Computer Use.app");
+    NodeFS.mkdirSync(NodePath.join(bundle, "Contents", "MacOS"), { recursive: true });
+    NodeFS.writeFileSync(NodePath.join(bundle, "Contents", "MacOS", "GOAT Computer Use"), "", {
+      mode: 0o755,
+    });
+    return bundle;
+  };
+
+  it("falls back only when nothing at all is at the helper path", async ({ onTestFinished }) => {
+    const root = scratch(onTestFinished);
+    expect(await classifyHelperBundle(NodePath.join(root, "GOAT Computer Use.app"), false)).toEqual(
+      { kind: "absent" },
+    );
+    // A path the developer set must exist.
+    expect(
+      (await classifyHelperBundle(NodePath.join(root, "GOAT Computer Use.app"), true)).kind,
+    ).toBe("unusable");
+  });
+
+  it("treats a dangling link or a bundle without its executable as unusable, not absent", async ({
+    onTestFinished,
+  }) => {
+    const root = scratch(onTestFinished);
+    const link = NodePath.join(root, "GOAT Computer Use.app");
+    NodeFS.symlinkSync(NodePath.join(root, "missing.app"), link);
+    expect(await classifyHelperBundle(link, false)).toMatchObject({
+      kind: "unusable",
+      message: expect.stringContaining("ENOENT"),
+    });
+    const empty = NodePath.join(scratch(onTestFinished), "GOAT Computer Use.app");
+    NodeFS.mkdirSync(empty);
+    expect((await classifyHelperBundle(empty, false)).kind).toBe("unusable");
+  });
+
+  it("finds a bundle through a link at its resolved path", async ({ onTestFinished }) => {
+    const root = scratch(onTestFinished);
+    const bundle = makeBundle(root);
+    const link = NodePath.join(scratch(onTestFinished), "GOAT Computer Use.app");
+    NodeFS.symlinkSync(bundle, link);
+    expect(await classifyHelperBundle(link, false)).toEqual({
+      kind: "found",
+      path: NodeFS.realpathSync(bundle),
+    });
+  });
+});
