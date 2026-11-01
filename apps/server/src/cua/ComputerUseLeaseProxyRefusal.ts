@@ -111,9 +111,10 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
     args: input.message.params?.arguments,
   });
   const initialTime = yield* Clock.currentTimeMillis;
-  const guarded = input.strict();
+  // Read at each decision: a strict update can land while this admission waits on a listing.
+  const guarded = () => input.strict();
   const initiallyDenied =
-    guarded &&
+    guarded() &&
     foregroundRequired &&
     !input.foreground().some((grant) => grant.expiresAtMillis > initialTime);
   const batch = batchAppScope(input.message.params?.name, input.message.params?.arguments);
@@ -140,7 +141,7 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
   // Without strict guards only protected apps (GOAT, credential stores) stay out of reach.
   const judge = (): ScopeVerdict => {
     const verdict = judgeScope();
-    return guarded ||
+    return guarded() ||
       (verdict._tag === "refuse" &&
         verdict.app !== undefined &&
         isExcludedCuaApplication(verdict.app))
@@ -213,7 +214,7 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
       "foreground_not_approved",
       FOREGROUND_NOT_APPROVED,
     );
-  const missing = guarded && verdict._tag === "allow" ? unresolvedBatch() : undefined;
+  const missing = guarded() && verdict._tag === "allow" ? unresolvedBatch() : undefined;
   if (missing !== undefined)
     return refusal(
       input.id,
@@ -242,11 +243,11 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
     );
   if (input.shared() && takesScreen(input.message.params?.name, input.message.params?.arguments))
     return refusal(input.id, input.message.method, "screen_shared", SCREEN_SHARED);
-  if (guarded && input.tokenFirstRefuses())
+  if (guarded() && input.tokenFirstRefuses())
     return refusal(input.id, input.message.method, "token_first", TOKEN_FIRST_MESSAGE);
   const now = yield* Clock.currentTimeMillis;
   if (
-    guarded &&
+    guarded() &&
     foregroundRequired &&
     !input.foreground().some((grant) => grant.expiresAtMillis > now)
   )

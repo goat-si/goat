@@ -29,11 +29,29 @@ describe("the proxy's lease flags", () => {
   });
   it("deny a shared screen only with strict guards", () => {
     const flags = makeLeaseFlags();
-    flags.take(update({ shared: true }));
-    flags.apply(update({ shared: true }));
+    const strictShared = update({ shared: true });
+    flags.take(strictShared);
+    flags.apply(strictShared);
     expect(flags.sharedNow()).toBe(true);
-    flags.take(update({ shared: true, strictInputGuards: false }));
-    flags.apply(update({ shared: true, strictInputGuards: false }));
+    const relaxedShared = update({ shared: true, strictInputGuards: false });
+    flags.take(relaxedShared);
+    flags.apply(relaxedShared);
     expect(flags.sharedNow()).toBe(false);
+  });
+
+  it("keep a received strict update until it is applied, whatever arrives after it", () => {
+    const flags = makeLeaseFlags();
+    const off = update({ strictInputGuards: false });
+    flags.take(off);
+    flags.apply(off);
+    const strict = update({});
+    const laterOff = update({ strictInputGuards: false });
+    flags.take(strict);
+    flags.take(laterOff);
+    expect(flags.strict()).toBe(true);
+    flags.apply(strict);
+    expect(flags.strict()).toBe(true);
+    flags.apply(laterOff);
+    expect(flags.strict()).toBe(false);
   });
 });

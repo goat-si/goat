@@ -43,6 +43,7 @@ import { cellErrorSafety, cellResultSafety } from "./ScreenActionOutcome.ts";
 import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
 import { ScreenHostBridge, type ScreenHostDispatcher } from "./ScreenHostBridge.ts";
 import {
+  followStrictInputGuards,
   makeStrictInputGuards,
   refreshStrictInputGuards,
   type StrictInputGuards,
@@ -263,6 +264,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
   const limits = screenRunLimits();
   const strictInputGuards = options.strictInputGuards ?? makeStrictInputGuards();
   const serverSettings = Option.getOrUndefined(yield* Effect.serviceOption(ServerSettingsService));
+  if (serverSettings) yield* followStrictInputGuards(strictInputGuards, serverSettings);
   const bridge = new ScreenHostBridge(
     cursorPhases,
     options.desktopHost?.staleTargetStep,

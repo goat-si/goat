@@ -84,4 +84,29 @@ describe("the proxy's own refusals follow the strict input guards setting", () =
       assert.include(refusedAs(refused), "app_not_allowed");
     }),
   );
+
+  it.effect("a strict update that lands while the admission is judged refuses the call", () =>
+    Effect.gen(function* () {
+      let reads = 0;
+      const refused = yield* refuseProxyCall({
+        id: 1,
+        message: call("click", { pid: PID, window_id: 9, x: 1, y: 1 }),
+        finished: () => undefined,
+        paused: () => undefined,
+        idle: () => false,
+        apps: () => approvedApps(undefined),
+        listed: new Map<number, ListedApp>([
+          [PID, { id: "com.example.Editor", bundleId: "com.example.Editor", name: "App" }],
+        ]),
+        host: { bundleIds: true },
+        shared: () => false,
+        toFile: () => undefined,
+        tokenFirstRefuses: () => true,
+        strict: () => reads++ > 0,
+        foreground: () => [],
+        listApps: Effect.void,
+      });
+      assert.include(refusedAs(refused), "token_first");
+    }),
+  );
 });

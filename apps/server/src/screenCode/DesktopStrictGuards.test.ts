@@ -6,7 +6,7 @@ import * as NodeURL from "node:url";
 import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
 import { ScreenRunService } from "./ScreenRunService.ts";
 import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
-import type { StrictInputGuards } from "./ScreenStrictGuards.ts";
+import { makeStrictInputGuards, type StrictInputGuards } from "./ScreenStrictGuards.ts";
 import { context, fixture } from "./DesktopTargetHost.testkit.ts";
 
 const cellService = (
@@ -39,7 +39,7 @@ const settledOf = (expression: string) =>
 /** The first click is delivered but its effect is not seen; the second is an ordinary click. */
 const noopThenClick = (strict: boolean) => {
   let clicked = 0;
-  const holder = { value: strict };
+  const holder = { ...makeStrictInputGuards(), value: strict };
   const made = fixture(
     {
       click: () =>
@@ -81,7 +81,7 @@ it.live("strict guards still stop a group after a suspected_noop click", () => {
 /** A partial click may have landed; the next click comes as a separate call. */
 const partialThenClick = (strict: boolean) => {
   let clicked = 0;
-  const holder = { value: strict };
+  const holder = { ...makeStrictInputGuards(), value: strict };
   const made = fixture(
     {
       click: () =>
