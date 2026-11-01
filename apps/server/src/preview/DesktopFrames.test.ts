@@ -587,6 +587,14 @@ describe("DesktopFrames", () => {
     assert.equal(reason(frameGate({ control: unnamed, state: active }, detects)), "windowUnknown");
   });
 
+  it("scopes the captured window to the approved apps only under strict input guards", () => {
+    const entry = { control, state: active };
+    assert.deepInclude(frameGate(entry, detects, true), { apps: ["com.apple.calculator"] });
+    const loose = frameGate(entry, detects, false);
+    assert.equal(loose._tag, "open");
+    if (loose._tag === "open") assert.isUndefined(loose.apps);
+  });
+
   it("asks for the widest and most frequent viewer, never past the limits, and only for open gates", () => {
     const open = { _tag: "open", pid: 7, windowId: 3, apps: undefined, wakeAt: 60_000 } as const;
     const targets = planFrames(

@@ -218,7 +218,9 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
     yield* leases.attached(input.threadId),
     (control) => run !== undefined && control.runId === run.id,
   );
+  // The remote-origin terminal block is a strict guard too.
   if (
+    strict &&
     origin._tag === "unattended" &&
     Option.isSome(current) &&
     current.value.everyApp &&
