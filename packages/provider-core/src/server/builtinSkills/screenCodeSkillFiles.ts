@@ -46,7 +46,7 @@ A cell error may say \`First failure: call N ... (nothing sent)\` or \`(may have
 
 Receipt categories: \`confirmed\` proves an effect; \`unverifiable\` means input was sent without proof of its effect; \`suspected_noop\` means sent but the effect was not seen, so observe before considering a retry; \`refused\` means that call was not sent; \`unknown_outcome\` means it may have landed; \`partial\` means part may have landed. Do not blindly resend any sent or uncertain input.
 
-Read evidence: \`read:completed\` records a completed read; \`read:cut\` records a cut or incomplete read. \`read:filtered\`, \`read:incomplete_search\`, and \`read:degraded\` describe limited evidence when present; filtered, incomplete or degraded reads cannot establish that an omitted item is absent. Check the observation's scope, completeness, truncation and warnings.
+Read evidence: \`read:completed\` records a completed read; \`read:cut\` records a cut or incomplete read. This version does not emit separate \`read:filtered\`, \`read:incomplete_search\`, or \`read:degraded\` receipt labels. Filtered, incomplete or degraded reads cannot establish that an omitted item is absent. Check the observation's scope, completeness, truncation and warnings.
 `,
     "references/workflows.md": `# Screen workflows
 
