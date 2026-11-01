@@ -26,7 +26,6 @@ import type {
   ScreenHostDispatchResult,
 } from "./ScreenHostBridge.ts";
 import { dispatchInTurn } from "./ScreenBatchGroups.ts";
-import { CELL_RESERVE_MS } from "../cua/ComputerUseCallCaps.ts";
 import { driverError, driverResult, driverValue, fail } from "./DesktopDriverReplies.ts";
 import { ScreenObservations } from "./ScreenObservations.ts";
 import { makeBindWindow, makeLaunch } from "./DesktopLaunch.ts";
@@ -36,8 +35,7 @@ import {
   type GuardElement,
 } from "./DesktopInputGuards.ts";
 import { aimOf, type Placed, type Rect } from "./DesktopFrames.ts";
-import { waitForGone } from "./DesktopWaitGone.ts";
-import { waitForOutcome } from "./DesktopWindowClosure.ts";
+import { runDesktopWait } from "./DesktopWait.ts";
 import { hitCloseButton, windowIntentOf } from "./DesktopWindowIntent.ts";
 import {
   annotatePointerResult,
@@ -47,14 +45,12 @@ import {
 } from "./DesktopTargetPoints.ts";
 import {
   finishCellTracker,
-  pollHiddenWindow,
   runInputWithEvidence,
   seedBatchBaseline,
   withoutUnprovenClose,
 } from "./DesktopEvidence.ts";
 import {
   availabilityFromControlState,
-  buildWaitExpectation,
   desktopCallArgs as callArgs,
   inspectBatchMember,
   INPUT_METHODS,
@@ -740,59 +736,13 @@ export const createDesktopTargetHost = (deps: {
         callArgs(call.args).verify === true,
       );
     }
-    if (call.method === "wait_for") {
-      const args = callArgs(call.args);
-      if (args.gone !== undefined)
-        return yield* waitForGone({
-          args,
-          pid: bound.pid,
-          windowId: bound.windowId,
-          deadline: call.deadlineMillis,
-          read: (readArgs) =>
-            boundRequest(bound, "nothing", "get_window_state", readArgs, call, context),
-        });
-      if (args.window === "hidden")
-        return yield* pollHiddenWindow({
-          list: () =>
-            boundRequest(bound, "nothing", "list_windows", { pid: bound.pid }, call, context),
-          pid: bound.pid,
-          windowId: bound.windowId,
-          timeoutMs: args.timeoutMs,
-          cellDeadlineMillis: call.deadlineMillis,
-        });
-      const waited = buildWaitExpectation(args);
-      if (waited.error || !waited.expectation)
-        return yield* Effect.fail(waited.error ?? fail("invalid_argument"));
-      const expectation = waited.expectation;
-      const now = yield* Clock.currentTimeMillis;
-      const requested = typeof args.timeoutMs === "number" ? args.timeoutMs : 10_000;
-      const reply = yield* boundRequest(
-        bound,
-        "nothing",
-        "verify_state",
-        {
-          pid: bound.pid,
-          window_id: bound.windowId,
-          expect: [expectation],
-          // The driver call's own cap is this wait plus 2 s, within the cell's reserve.
-          timeout_ms: Math.max(
-            0,
-            Math.min(requested, 10_000, call.deadlineMillis - now - CELL_RESERVE_MS - 2_000),
-          ),
-        },
-        call,
-        context,
-      );
-      const status = string(object(driverValue(reply))?.status) ?? "unknown";
-      return yield* waitForOutcome({
-        status,
-        gone: args.window === "gone",
-        list: () =>
-          boundRequest(bound, "nothing", "list_windows", { pid: bound.pid }, call, context),
+    if (call.method === "wait_for")
+      return yield* runDesktopWait({
+        args: callArgs(call.args),
         target: bound,
-        cellDeadlineMillis: call.deadlineMillis,
+        deadline: call.deadlineMillis,
+        request: (tool, args) => boundRequest(bound, "nothing", tool, args, call, context),
       });
-    }
     if (call.method === "end_foreground") {
       const current = Option.getOrUndefined(
         yield* deps.leases.currentControl(context.invocation.thread.threadId),

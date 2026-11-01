@@ -82,7 +82,7 @@ interface Tab extends TargetBase { status(): Promise<object>; claim(): Promise<o
   logs(o?: { since?: string }): Promise<object> } // since is an inclusive ISO 8601 instant`;
 
 const APP = `// App Condition: { role?, name?, value?, enabled?, selected? } | { window: "exists" | "gone" | "hidden" }. "gone" is met, and bound "closed", only when the driver proves the window closed.
-// waitFor({gone: true, role?, name?, value?}) waits until a complete window read has no match; name at least one.
+// waitFor({gone: true, role?, name?, value?}) is met only when a complete check of the window finds no match; name at least one. Otherwise { met: false, reason: "still_present" | "incomplete_read" }.
 // Narrow waitFor/verify with { role: "AXStaticText", value: "702" } or { value: "702" } when several elements share a role, or { name, value } when named.
 // Steps already decided in one app window: start them together and await once, so they reach the app as
 // one GOAT-side group; each member is an individual driver call, in order: await Promise.all(["7", "+", "2", "="].map((k) => app.click(k)));
