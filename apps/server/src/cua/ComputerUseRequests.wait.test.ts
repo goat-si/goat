@@ -322,8 +322,14 @@ it.effect(
           Effect.gen(function* () {
             yield* leases.everyAppControl(threadId, false, { runId });
             assert.deepEqual(yield* Queue.take(watched), []);
-            assert.equal((yield* request({ apps: [devBuild] }, WAIT)).kind, "available");
+            const named = yield* request({ apps: [devBuild] }, WAIT);
+            assert.equal(named.kind, "available");
+            assert.include(named.message, "make sure the app is running");
             assert.deepEqual(yield* Queue.take(watched), [devBuild]);
+            assert.equal((yield* request({ apps: [devBuild] }, WAIT)).kind, "available");
+            assert.equal((yield* request({ apps: ["zz.example.other"] }, WAIT)).kind, "available");
+            assert.deepEqual(yield* Queue.take(watched), [devBuild]);
+            assert.deepEqual(yield* Queue.take(watched), [devBuild, "zz.example.other"]);
           }),
         (_active, apps) => Queue.offer(watched, apps).pipe(Effect.asVoid),
       );
@@ -349,6 +355,7 @@ it.effect(
             const named = yield* request({ apps: [devBuild] }, WAIT);
             assert.equal(named.kind, "available");
             assert.include(named.message, "bounded_resource_outside_manifest");
+            assert.include(named.message, "make sure the app is running");
             assert.deepEqual(yield* Queue.take(watched), [devBuild]);
           }),
         (_active, apps) => Queue.offer(watched, apps).pipe(Effect.asVoid),

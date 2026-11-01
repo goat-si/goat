@@ -28,9 +28,9 @@ The \`cua-driver\` tools act on the computer this GOAT server runs on. Use them 
 - An \`effect\` always outranks a \`code\` (which may sit under \`refusal\`). Nothing was sent only when \`effect\` is \`refused\`, or there is no effect and the code is \`stale_element_token\`, \`stale_geometry\`, \`window_id_not_found\` or \`permission_denied\`.
 - \`partial\`, \`unverifiable\`, any other code, or no clear effect: the input may have landed. Observe before sending it again unchanged (a repeat can submit twice); other steps go on.
 - GOAT's own refusals carry \`refused\` and \`detail\`, and nothing was sent: \`userStoppedSession\`, \`userIntervened\`, \`appNotAllowed\`, \`helperUnavailable\`, \`targetRefused\`. Their text says what to do: make single calls on an approved window, or ask with \`computer_use.request\` (it waits for an answer).
-- \`bounded_resource_outside_manifest\` on an app opened after computer use started: nothing was sent. Call \`computer_use.request\` with its \`bundle_id\`, then retry.
+- \`bounded_resource_outside_manifest\`: nothing was sent. Make sure the app is running; call \`computer_use.request\` with its \`bundle_id\`, wait a few seconds, then retry. If still refused, report it.
 - \`code: "interrupted"\`: a pause or Stop cut off a call that had already started. With \`effect: "unverifiable"\` it may have acted; without one it was a read and changed nothing.
-- Details: \`target_busy\`: the named thread holds that window or the desktop; wait or work elsewhere. \`control_idle\`: this turn is over, leave the screen. \`reconnecting\`: its link to GOAT blinked; retry shortly, then observe. \`transport_lost\`: it stayed down and the control ended; tell the person.
+- Details: \`target_busy\`: another thread holds the target; wait or work elsewhere. \`control_idle\`: this turn is over, leave the screen. \`reconnecting\`: retry shortly, then observe. \`transport_lost\`: the link stayed down and control ended; tell the person.
 </computer_use>`;
 
 /** Batches and scripts: when several steps go in one call, and when single calls are the only way. */

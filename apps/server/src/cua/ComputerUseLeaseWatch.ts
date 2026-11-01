@@ -39,6 +39,7 @@ export const startHelperWatch = Effect.fn("ComputerUseLeases.startHelperWatch")(
   readonly end: (threadId: ThreadId, reason: ComputerUseControlEnd, now: number) => boolean;
   readonly signals: PubSub.PubSub<void>;
   readonly watchKick: PubSub.PubSub<void>;
+  readonly manifestGeneration: () => number;
   readonly live: Effect.Effect<ReadonlyArray<ComputerUseLease>, ComputerUseLeaseError>;
   readonly receiver:
     | Pick<DesktopTelemetryReceiver.DesktopTelemetryReceiver["Service"], "setCuaWatch">
@@ -54,6 +55,7 @@ export const startHelperWatch = Effect.fn("ComputerUseLeases.startHelperWatch")(
     let delivered = false;
     let deliveredApps: ReadonlyArray<string> = [];
     let unsure = false;
+    let deliveredGeneration = input.manifestGeneration();
     for (;;) {
       // A grant cancelled or expired under a control ends it, though nothing here ended it.
       let endedAny = false;
@@ -108,25 +110,28 @@ export const startHelperWatch = Effect.fn("ComputerUseLeases.startHelperWatch")(
       const appsChanged =
         apps.length !== deliveredApps.length ||
         apps.some((app, index) => app !== deliveredApps[index]);
+      const generation = input.manifestGeneration();
+      const refreshRequested = Option.isSome(listed) && generation !== deliveredGeneration;
       // Only a driver this server runs itself offers a refresh; a desktop host refreshes its own.
       const refresh = Option.isSome(driver) ? driver.value.refreshManifest : undefined;
-      if (appsChanged && refresh)
+      if ((appsChanged || refreshRequested) && refresh)
         yield* refresh(apps).pipe(Effect.ignoreCause({ log: true }), Effect.forkScoped);
       const active = current.length > 0;
       let retry = false;
       // The server's own helper takes the wanted state as is, so it cannot fall behind.
       if (Option.isSome(linuxHelper)) yield* linuxHelper.value.setWatch(active);
-      if (active !== delivered || appsChanged || unsure) {
+      if (active !== delivered || appsChanged || unsure || refreshRequested) {
         const sent =
           receiver === undefined
             ? true
-            : yield* receiver.setCuaWatch(active, apps).pipe(
+            : yield* receiver.setCuaWatch(active, apps, refreshRequested).pipe(
                 Effect.as(true),
                 Effect.orElseSucceed(() => false),
               );
         if (sent) {
           delivered = active;
           deliveredApps = apps;
+          if (Option.isSome(listed)) deliveredGeneration = generation;
           unsure = false;
         } else {
           unsure = true;

@@ -44,6 +44,7 @@ import { cuaDriverReports } from "./desktopCuaReports.ts";
 import { makeAppsRequestHandler } from "./desktopCuaApps.ts";
 import { makeHelperFollowers } from "./helperFollowers.ts";
 import { refreshDesktopManifest, listenBrowserManifestRequests } from "./DesktopCuaManifest.ts";
+import type { OwnedHost } from "./DesktopCuaOwnedHost.ts";
 import { agentRouteFailure } from "./agentRouteProbe.ts";
 import {
   captureCheckFailure,
@@ -79,23 +80,6 @@ export {
   type DesktopCuaDriverDependencies,
   type CuaManifestScope,
 } from "./DesktopCuaNative.ts";
-
-interface OwnedHost {
-  readonly manifestPath: string | undefined;
-  readonly host: NativeHost;
-  readonly abort: AbortController;
-  readonly started: Promise<EmbeddedDriverConnection>;
-  /** Run by GOAT Computer Use; only such a host makes the helper's readiness "running". */
-  readonly helper: boolean;
-  readonly direct: boolean;
-  readonly refreshManifest: (
-    apps: ReadonlyArray<string>,
-  ) => ReturnType<typeof refreshDesktopManifest>;
-  /** It exited before GOAT stopped it; retire aborts before stopping, so its own stop never is. */
-  crashed?: boolean;
-  monitor?: Promise<void>;
-  cleanup?: Promise<void>;
-}
 
 export class DesktopCuaDriver extends Context.Service<
   DesktopCuaDriver,
@@ -404,10 +388,12 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         ),
       );
     }
+    const abort = new AbortController();
+    const refreshListing = helperListing(engine, abort.signal);
     const entry: OwnedHost = {
       manifestPath: scope === "agents" ? manifestPath : undefined,
       host,
-      abort: new AbortController(),
+      abort,
       started: Promise.resolve().then(() => host.start()),
       helper: engine.kind === "helper",
       direct: engine.kind === "helper" && environment.platform === "darwin",
@@ -417,7 +403,11 @@ export const make = Effect.fn("desktop.cua.make")(function* (
               apps,
               path: manifestPath,
               read: native.readManifest,
-              prepare: () => native.prepareManifest(manifestInput),
+              prepare: () =>
+                native.prepareManifest({
+                  ...manifestInput,
+                  ...(refreshListing === undefined ? {} : { listApplications: refreshListing }),
+                }),
             })
           : Effect.succeed(false),
     };

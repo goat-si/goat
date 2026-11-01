@@ -1,4 +1,4 @@
-import { type DesktopCuaFrames, DesktopHostTelemetryMessage } from "@goat/contracts";
+import { type DesktopCuaFrames } from "@goat/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
@@ -22,6 +22,7 @@ import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronPowerMonitor from "../electron/ElectronPowerMonitor.ts";
 import * as DesktopTelemetryPublisher from "./DesktopTelemetryPublisher.ts";
+import { collectTelemetry } from "./DesktopTelemetryPublisher.testkit.ts";
 import * as DesktopRendererHistory from "./DesktopRendererHistory.ts";
 import { fixture } from "../cua/DesktopCuaDriver.testkit.ts";
 
@@ -82,28 +83,6 @@ const layerCuaRouting = DesktopTelemetryPublisher.layer.pipe(
     ),
   ),
 );
-
-const collectTelemetry = Effect.fn(function* (stream: Stream.Stream<Uint8Array>) {
-  const messages = yield* Queue.unbounded<DesktopHostTelemetryMessage>();
-  const received: DesktopHostTelemetryMessage[] = [];
-  const decode = Schema.decodeUnknownEffect(Schema.fromJsonString(DesktopHostTelemetryMessage));
-  const fiber = yield* stream.pipe(
-    Stream.mapEffect((bytes) => decode(new TextDecoder().decode(bytes).trim())),
-    Stream.runForEach((message) => {
-      received.push(message);
-      return Queue.offer(messages, message);
-    }),
-    Effect.forkScoped,
-  );
-  const next = Effect.fn(function* (type: DesktopHostTelemetryMessage["type"]) {
-    let message = yield* Queue.take(messages);
-    while (message.type !== type) message = yield* Queue.take(messages);
-    return message;
-  });
-  yield* next("desktopTelemetryHello");
-  yield* next("desktopTelemetry");
-  return { fiber, received, next };
-});
 
 describe("DesktopTelemetryPublisher", () => {
   it.effect("coalesces requests during a blocked listing into one fresh follow-up listing", () =>
@@ -448,6 +427,30 @@ describe("DesktopTelemetryPublisher", () => {
         yield* Fiber.interrupt(primary.fiber);
         assert.isFalse(yield* Queue.take(heard));
         assert.equal(yield* Queue.size(heard), 0);
+      }).pipe(Effect.provide(layerCuaRouting), Effect.scoped),
+  );
+
+  it.effect(
+    "redelivers unchanged apps for a newer watch sequence, but not a retry of the same sequence",
+    () =>
+      Effect.gen(function* () {
+        const publisher = yield* DesktopTelemetryPublisher.DesktopTelemetryPublisher;
+        const primary = yield* collectTelemetry(publisher.encodedForSource("primary"));
+        const heard = yield* Queue.unbounded<ReadonlyArray<string>>();
+        yield* publisher.cuaWatchApps.pipe(
+          Stream.runForEach((apps) => Queue.offer(heard, apps)),
+          Effect.forkScoped,
+        );
+        assert.deepEqual(yield* Queue.take(heard), []);
+        const watch = (seq: number) =>
+          ({ version: 1, type: "cuaWatch", seq, active: true, apps: ["editor"] }) as const;
+        yield* publisher.handleControlForSource("primary", watch(1));
+        assert.deepEqual(yield* Queue.take(heard), ["editor"]);
+        yield* publisher.handleControlForSource("primary", watch(1));
+        assert.equal(yield* Queue.size(heard), 0);
+        yield* publisher.handleControlForSource("primary", watch(2));
+        assert.deepEqual(yield* Queue.take(heard), ["editor"]);
+        yield* Fiber.interrupt(primary.fiber);
       }).pipe(Effect.provide(layerCuaRouting), Effect.scoped),
   );
 

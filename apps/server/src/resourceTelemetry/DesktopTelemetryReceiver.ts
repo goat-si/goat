@@ -222,12 +222,13 @@ export class DesktopTelemetryReceiver extends Context.Service<
     ) => Effect.Effect<void, DesktopTelemetryControlError | DesktopTelemetryDescriptorUnavailable>;
     /**
      * Tells the desktop whether agents control this host, so its helper watches only then. Every
-     * call writes: a change with the next seq, a repeat (a retry after a failed write) with the
-     * same one. The current value also goes out again when the desktop reconnects.
+     * call writes: a change or refresh with the next seq; an ordinary repeat keeps the same one.
+     * The current value also goes out again when the desktop reconnects.
      */
     readonly setCuaWatch: (
       active: boolean,
       apps?: ReadonlyArray<string>,
+      refresh?: boolean,
     ) => Effect.Effect<void, DesktopTelemetryControlError>;
     /** Frames and no-picture answers from the desktop helper, for the targets last sent. */
     readonly cuaFrames: Stream.Stream<DesktopCuaFrame>;
@@ -245,16 +246,18 @@ const decodeMessage = Schema.decodeUnknownEffect(DesktopHostTelemetryMessage);
 
 /**
  * The watch state after the server decides agents do or do not control the host: a change
- * takes the next seq, the same value keeps the current one. seq 0 means nothing was sent yet.
+ * or refresh takes the next seq; an ordinary repeat keeps it. seq 0 means nothing was sent yet.
  */
 type CuaWatchState = Pick<DesktopCuaWatch, "seq" | "active" | "apps">;
 export const nextCuaWatch = (
   current: CuaWatchState,
   active: boolean,
   apps?: ReadonlyArray<string>,
+  refresh = false,
 ): CuaWatchState => {
   const sorted = apps === undefined ? undefined : [...new Set(apps)].sort();
-  return current.seq > 0 &&
+  return !refresh &&
+    current.seq > 0 &&
     current.active === active &&
     JSON.stringify(current.apps) === JSON.stringify(sorted)
     ? current
@@ -817,8 +820,8 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
       config.desktopTelemetryControlFd === undefined || config.desktopTelemetryFd === undefined
         ? Effect.fail(new DesktopTelemetryDescriptorUnavailable({ mode: config.mode }))
         : sendControlMessage({ version: 1, type: "cuaDriverRequest", requestId, enabled }),
-    setCuaWatch: (active, apps) =>
-      Ref.update(cuaWatch, (current) => nextCuaWatch(current, active, apps)).pipe(
+    setCuaWatch: (active, apps, refresh) =>
+      Ref.update(cuaWatch, (current) => nextCuaWatch(current, active, apps, refresh)).pipe(
         Effect.andThen(sendCuaWatch),
       ),
     cuaFrames: Stream.fromPubSub(cuaFrameMessages),

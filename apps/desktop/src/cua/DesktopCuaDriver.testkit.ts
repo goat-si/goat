@@ -500,6 +500,7 @@ export const fixture = Effect.fn(function* (
       return text;
     },
     helperApps: async (bundle, _platform, signal) => {
+      if (signal?.aborted) throw signal.reason;
       helperAppListings.push(bundle.bundleId);
       if (appListingFails) throw new Error("driver_untrusted");
       // listing holds the first listing until the start it serves is stopped.

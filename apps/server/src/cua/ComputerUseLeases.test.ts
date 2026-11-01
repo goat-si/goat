@@ -834,6 +834,25 @@ it.effect(
     }),
 );
 
+it.effect("retries a standalone manifest when an already named app is requested again", () =>
+  Effect.gen(function* () {
+    const refreshed = yield* Queue.unbounded<ReadonlyArray<string>>();
+    const watched = yield* Queue.unbounded<boolean>();
+    yield* Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      yield* Queue.take(watched);
+      const control = yield* leases.control(thread, Option.none());
+      yield* Queue.take(watched);
+      yield* leases.nameApps(thread, control.controlId, ["editor"]);
+      assert.deepEqual(yield* Queue.take(refreshed), ["editor"]);
+      yield* Queue.take(watched);
+      yield* leases.nameApps(thread, control.controlId, ["editor"]);
+      assert.deepEqual(yield* Queue.take(refreshed), ["editor"]);
+    }).pipe(Effect.provide(standaloneLeases(refreshed, watched)));
+  }),
+);
+
 it.effect(
   "refreshes a standalone driver for changed approvals without blocking the lease watcher",
   () =>
