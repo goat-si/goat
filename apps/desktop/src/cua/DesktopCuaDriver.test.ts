@@ -575,6 +575,18 @@ describe("DesktopCuaDriver verification", () => {
 });
 
 describe("DesktopCuaDriver app listing for the agents' manifest", () => {
+  it.effect("refreshes the manifest after the start request finishes", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const test = yield* fixture({ platform: "darwin", helper: { granted: true } });
+        yield* test.request("agent");
+        assert.equal((yield* test.next).status, "ready");
+        yield* test.listApps([{ bundle_id: "com.example.late", name: "Late" }]);
+        yield* test.approveApps(["com.example.late"]);
+        assert.include(test.manifest(), "com.example.late");
+      }),
+    ),
+  );
   it.effect(
     "lists apps through the macOS helper, so its driver never runs outside the helper's seal check",
     () =>
