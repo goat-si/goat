@@ -63,8 +63,8 @@ export const busyTerminalNextStep = (input: {
 }) =>
   Effect.sync(() => {
     const reason = replaceWithTerminal("none", ...input.reasons).reason;
+    if (reason === undefined) throw new Error("Expected terminal reason");
     const reply: ComputerUsePrimitiveReply = {
-      state: "primitive-reply",
       requestId: "request",
       registrationId: "registration",
       controlId: "control",
