@@ -538,7 +538,7 @@ const keptVisibleCopy = [
   ],
   [
     "README.md",
-    "GOAT is a fork of [T3 Code](https://github.com/pingdotgg/t3code) by Ping and shares its git history. We merge upstream every cycle, and [devlog/_chase](./devlog/_chase/README.md) records how far GOAT has followed and where it deliberately differs. Thank you to the T3 Code team for the foundation.",
+    "GOAT began as a fork of [T3 Code](https://github.com/pingdotgg/t3code) by Ping, and its event-sourced core is still T3 Code's. On 2026-11-01 this repository's history was condensed into one starting commit, so it no longer shares T3 Code's git history; upstream changes are brought over by hand, and [devlog/_chase](./devlog/_chase/README.md) records how far GOAT has followed and where it deliberately differs. Thank you to the T3 Code team for the foundation.",
   ],
   [
     "README.md",
@@ -599,7 +599,7 @@ const keptVisibleCopy = [
   ],
   [
     "structure/overview.md",
-    "GOAT is a fork of T3 Code and shares its git history. [`README.md`](../README.md) states that.",
+    "GOAT is a fork of T3 Code, and its git history restarted from one commit on 2026-11-01. [`README.md`](../README.md) states that.",
   ],
 ] as const;
 

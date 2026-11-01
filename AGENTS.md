@@ -2,7 +2,7 @@
 
 GOAT runs the coding agents people already use, such as Codex, Claude Code, Cursor, Grok, OpenCode, Antigravity, Pi and ACP agents, on the machines they own, puts cloud agents that run in their vendor's environment beside them, and lets people steer all of it from the desktop app, a browser, or a phone. Every machine runs a GOAT server: a Node WebSocket server that wraps the provider CLIs and serves the web, desktop, and mobile clients. On top of that, GOAT adds GOAT Bot, agents that start and follow work on other machines, Fleet, memory, and the `goat` MCP tools agents use to orchestrate other threads.
 
-GOAT began as a fork of [T3 Code](https://github.com/pingdotgg/t3code). It keeps that event-sourced core and still merges upstream changes, so many files here are shared with upstream. [Fork delta](devlog/_chase/010_fork_delta.md) records the areas where the two differ.
+GOAT began as a fork of [T3 Code](https://github.com/pingdotgg/t3code). It keeps that event-sourced core and brings over upstream changes by hand, so many files here are shared with upstream. [Fork delta](devlog/_chase/010_fork_delta.md) records the areas where the two differ.
 
 ## What GOAT protects
 
@@ -218,7 +218,7 @@ Architecture and its constraints: `docs/internals/overview.md`. Glossary: `docs/
   options, and pass combinators as additional function-builder arguments.
 - Inferred types over annotations. `any` is the enemy.
 - New files stay under about 800 lines. `goat/code-budget` fails a file over 1000 lines, a listed file that grows past its recorded length, and new non-null assertions (outside tests) or casts to `any`. Move code into a new module instead of raising the baseline. See [code budgets](docs/operations/code-quality.md).
-- GOAT features live in GOAT-owned modules. An upstream file gets a thin hook only (an import, a registration, a call), because every changed upstream line can conflict on the next upstream merge.
+- GOAT features live in GOAT-owned modules. An upstream file gets a thin hook only (an import, a registration, a call), because every changed upstream line can conflict when the next upstream change is brought over.
 - Default to no comment. Write one only for a constraint, an external quirk, or an invariant the code can't show, in one line where you can and four at most. Don't restate names or signatures, narrate steps, record history, or explain the fix you just made; the PR carries that. `goat/no-low-value-comments` enforces the length cap and the mechanical cases.
 - React effects are for synchronizing with something outside React. Derive in render and act in handlers instead of syncing state, but don't hide real lifecycle work in refs or stores to dodge one. The `goat/react-effect-budget` lint rule holds each file to its count in `scripts/effect-budget.json`; a new effect states its reason with `// oxlint-disable-next-line goat/react-effect-budget -- <why>`.
 - Our users drive agents all day and notice a dropped frame, a lying spinner, and a stale label. No continuously repainting animations; they peg the GPU on high-refresh displays.
