@@ -26,3 +26,20 @@ it("ships references covering the error schema and only current screen methods",
     expect(errors + workflows).not.toContain(term);
   }
 });
+
+it("never promises nothing was sent for codes GOAT also raises after input went out", () => {
+  const errors = screenCodeSkillFiles()["references/errors.md"] ?? "";
+  // Each of these can follow a dispatched input with effectStarted true (post-input reads, launches, redirects).
+  for (const code of [
+    "stale_reference",
+    "user_interacting",
+    "screen_locked",
+    "permission_denied",
+    "blocked_url",
+  ]) {
+    const line =
+      errors.split("\n").find((each) => each.startsWith("- \u0060" + code + "\u0060")) ?? "";
+    expect(line, code).not.toBe("");
+    expect(line, code).not.toMatch(/; nothing sent for (the|that) refus/);
+  }
+});

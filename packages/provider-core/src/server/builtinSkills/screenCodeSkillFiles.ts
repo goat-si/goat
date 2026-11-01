@@ -14,11 +14,11 @@ For each error follow its \`nextStep\`. Delivery below concerns the failing call
 - \`unavailable\`: surface or target is unavailable; depends: read effectStarted and the receipt; observe again when available or ask the person.
 - \`target_missing\`: target or window not found; depends: read effectStarted and the receipt (a launch may have started); use screen.discover() and rebind with screen.app({ bundle_id, window_id }).
 - \`target_ambiguous\`: more than one target matches; depends: read effectStarted and the receipt; discover and rebind with screen.app({ bundle_id, window_id }).
-- \`stale_reference\`: observation, point, or target reference expired; nothing sent for the refused call; observe again, or for a target its \`nextStep\` names why (an earlier turn, another run, a control change, lost permission, a replaced window) and the exact \`screen.app({ bundle_id, window_id })\` call; when the person took control, wait until they hand it back.
-- \`blocked_url\`: the person blocked this browser host for agents; nothing sent for the refused call; do not try another route to it, tell the person.
-- \`permission_denied\`: authority or desktop permission refused; nothing sent for that refusal; ask the person to grant the required permission.
-- \`user_interacting\`: the person is using the target; nothing sent for the refused call; wait for the indicated delay and observe again.
-- \`screen_locked\`: screen is locked; nothing sent for the refused call; wait for the person to unlock it.
+- \`stale_reference\`: observation, point, or target reference expired; usually nothing sent, but a launch that already went out keeps this code: read effectStarted and the receipt; observe again, or for a target its \`nextStep\` names why (an earlier turn, another run, a control change, lost permission, a replaced window) and the exact \`screen.app({ bundle_id, window_id })\` call; when the person took control, wait until they hand it back.
+- \`blocked_url\`: the person blocked this browser host for agents; depends: a tab that was opened before its redirect reached the host carries effectStarted true; do not try another route to it, tell the person.
+- \`permission_denied\`: authority or desktop permission refused; depends: a refusal before dispatch sent nothing, but a refusal seen after an input went out keeps this code with effectStarted true; read the receipt, observe, and ask the person to grant the required permission.
+- \`user_interacting\`: the person is using the target; depends: a refusal before dispatch sent nothing, but one seen after an input went out keeps this code with effectStarted true; wait for the indicated delay, observe again, and never resend input that may have landed.
+- \`screen_locked\`: screen is locked; depends: read effectStarted and the receipt, as for user_interacting; wait for the person to unlock it, then observe.
 - \`user_intervened\`: explicit takeover interrupted control; depends: read effectStarted and the receipt; wait for the person, then observe again.
 - \`stopped\`: the person stopped computer use; depends: read effectStarted and the receipt; stop for this turn.
 - \`deadline\`: the call or cell ran out of time; depends: read effectStarted and the receipt; observe again, never replay a possibly sent input.
@@ -40,7 +40,7 @@ For each error follow its \`nextStep\`. Delivery below concerns the failing call
 - \`paused\`: control is paused; depends: read effectStarted and the receipt; wait for the person, then observe again.
 - \`private\`: a private surface or field is unavailable; nothing sent for the refused call; ask the person to handle it.
 - \`cleanup_failed\`: cleanup could not finish; depends: read effectStarted and the receipt; ask the person to inspect the affected target.
-- \`context_reset\`: the cell context was reset and saved bindings or values were lost; depends: read effectStarted and the receipt; bind again and observe again.
+- \`context_reset\`: not an error: a result's \`truncated\` list says the cell context was reset (a cut cell, or ten idle minutes) and saved bindings and values were lost; bind again and observe again.
 - \`not_run\`: an earlier call failed and this call was not dispatched; nothing sent for this call; inspect the first failure and observe again in a new cell.
 
 A cell error may say \`First failure: call N ... (nothing sent)\` or \`(may have landed)\`. This identifies the first failed call, not proof that other calls did nothing. Read the journal and never replay earlier input that may have landed.
@@ -52,7 +52,7 @@ Read evidence: \`read:completed\` (\`confirmed\`) means the read returned everyt
     "references/workflows.md": `# Screen workflows
 
 - Large window: \`await app.observe({ depth: 2 })\` maps the tree. Use a current row in \`await app.observe({ within: n })\`, or search with \`await app.observe({ query: { name: "Settings" } })\`. Check completeness; a missed item in an incomplete search proves nothing.
-- Dialogs and sheets: inspect the observation's scope for the sheet and act on its current rows. Check \`otherWindows\` and the input's \`windows.opened\`; bind an opened window with \`await screen.app({ bundle_id, window_id })\` and observe it. If \`window_gone\` gives alternatives, inspect them or call \`await screen.discover()\` and rebind.
+- Dialogs and sheets: inspect the observation's scope for the sheet and act on its current rows. Check \`otherWindows\`, the input result's \`windows.opened\` and the cell outcome's \`windowsOpened\`; bind an opened window with \`await screen.app({ bundle_id, window_id })\` and observe it. If \`window_gone\` gives alternatives, inspect them or call \`await screen.discover()\` and rebind.
 - Menus: \`await app.menu(["File", "Open"])\`; observe the result before the next decision.
 - Chat: observe the message field's accessibility id, then \`await app.type(text, { id })\`. Check the draft and recipient; only after the person confirms, use \`await app.press("Enter", { id }, { send: true })\`. Never resend if the outcome is unverifiable. In KakaoTalk, open a chat with \`await app.click(n, { count: 2 })\`; opening it marks messages read.
 - Waiting: \`await app.waitFor({ role: "AXStaticText", value: "Ready" })\` or \`await app.waitFor({ window: "gone" })\`; inspect \`met\`. \`await app.waitFor({ gone: true, name: "Loading" })\` waits for an element to disappear; it is met only when a complete check finds no match, otherwise \`reason\` is \`still_present\` or \`incomplete_read\` (always on Windows), and it takes role and name only. Do not use sleep loops.
