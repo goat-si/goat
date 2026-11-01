@@ -860,6 +860,7 @@ export const type = async (
         }, focused === "text"),
       );
     }
+    await readiness.onHistoryFocus?.();
     remaining(deadline);
     await gate();
     gate.signal?.throwIfAborted();

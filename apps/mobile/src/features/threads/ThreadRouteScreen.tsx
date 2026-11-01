@@ -111,7 +111,7 @@ import {
   ThreadInspectorPreview,
   type ThreadInspectorPresentation,
 } from "./thread-inspector-preview";
-import type { ThreadInspectorTarget } from "./thread-inspector-navigation";
+import { routeThreadIdentity, type ThreadInspectorTarget } from "./thread-inspector-navigation";
 import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
 
 interface ThreadInspectorSelection {
@@ -174,10 +174,7 @@ function LiveThreadRouteController(props: ThreadRouteScreenProps) {
   const routeName = useRoute().name;
   const routeConnectionState =
     routeEnvironmentRuntime?.connectionState ?? (environmentId ? "available" : connectionState);
-  const routeThreadKey =
-    environmentId !== null && threadIdRaw !== null
-      ? scopedThreadKey(environmentId, ThreadId.make(threadIdRaw))
-      : null;
+  const routeThreadKey = routeThreadIdentity(environmentId, threadIdRaw);
   const selectedThreadKey =
     selectedThread === null
       ? null
@@ -196,6 +193,7 @@ function LiveThreadRouteController(props: ThreadRouteScreenProps) {
       {props.inspectorPresentation ? (
         <ThreadInspectorHeader
           title={selectedThread?.title ?? "Thread"}
+          {...{ environmentId, threadId: threadIdRaw === null ? null : ThreadId.make(threadIdRaw) }}
           {...props.inspectorPresentation}
         />
       ) : null}

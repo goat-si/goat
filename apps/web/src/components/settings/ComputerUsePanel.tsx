@@ -33,12 +33,14 @@ const ADVANCED_TARGETS: ReadonlySet<string> = new Set([
   "computer-use-skill",
   "screen-code-skill",
   "computer-use-move-pointer",
+  "computer-use-keep-typed-text",
 ]);
 
 export interface ComputerUseSettingsPatch {
   readonly enableCua?: boolean;
   readonly disabledBuiltInSkills?: ReadonlyArray<string>;
   readonly cuaMovePointer?: "never" | "allowed";
+  readonly computerUseKeepTypedText?: boolean;
   readonly cuaAllowedApps?: ReadonlyArray<string>;
 }
 
@@ -199,6 +201,7 @@ export function ComputerUsePanel({
   localCheck,
   disabledSkills,
   movePointer,
+  keepTypedText,
   save,
   bridge,
 }: {
@@ -214,6 +217,7 @@ export function ComputerUsePanel({
   localCheck: boolean;
   disabledSkills: ReadonlyArray<string>;
   movePointer: "never" | "allowed";
+  keepTypedText: boolean;
   save: (patch: ComputerUseSettingsPatch) => Promise<string | null>;
   bridge: Omit<ComputerUseSetupActions, "save"> & {
     readonly reveal?: (() => Promise<void>) | undefined;
@@ -341,6 +345,15 @@ export function ComputerUsePanel({
               checked={movePointer === "allowed"}
               canConfigure={canConfigure}
               onChange={(checked) => save({ cuaMovePointer: checked ? "allowed" : "never" })}
+            />
+            <SettingSwitchRow
+              {...searchableSetting("computer-use-keep-typed-text")}
+              settingKey="computerUseKeepTypedText"
+              description="Keep text only when GOAT confirms it reached a normal browser field. Desktop typing and protected fields stay redacted."
+              label="Keep typed text"
+              checked={keepTypedText}
+              canConfigure={canConfigure}
+              onChange={(checked) => save({ computerUseKeepTypedText: checked })}
             />
             <BuiltInSkillRows
               disabledSkills={disabledSkills}
@@ -472,7 +485,7 @@ function SettingSwitchRow({
 }: {
   id: string;
   title: string;
-  settingKey: "disabledBuiltInSkills" | "cuaMovePointer";
+  settingKey: "disabledBuiltInSkills" | "cuaMovePointer" | "computerUseKeepTypedText";
   description: string;
   label: string;
   checked: boolean;

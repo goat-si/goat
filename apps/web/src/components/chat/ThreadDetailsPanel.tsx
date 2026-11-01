@@ -21,6 +21,7 @@ import ProjectScriptsControl, {
 } from "../ProjectScriptsControl";
 import { memo, type ComponentProps } from "react";
 import { ThreadDetailsCard } from "./ThreadDetailsCard";
+import { ComputerUseHistorySection } from "./ComputerUseHistorySection";
 import { OpenInPicker } from "./OpenInPicker";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { ThreadAutomationsPanel } from "./ThreadAutomationsPanel";
@@ -199,6 +200,14 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                 ) : null}
               </div>
             </ThreadDetailsSection>
+          ) : null}
+
+          {!props.draftId ? (
+            <ComputerUseHistorySection
+              environmentId={props.environmentId}
+              threadId={props.threadId}
+              hideWithoutPermission
+            />
           ) : null}
 
           {density === "full" && !props.draftId ? (

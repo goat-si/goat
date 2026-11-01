@@ -34,6 +34,7 @@ import { EnvironmentRegistry } from "../connection/registry.ts";
 import { createCommandPermissions } from "./commandPermissions.ts";
 import { createEnvironmentRpcCommand } from "./runtime.ts";
 import { createServerEnvironmentAtoms } from "./server.ts";
+import { createComputerUseHistoryCommand } from "./computerUseHistory.ts";
 
 vi.mock("./session.ts", () => ({
   createEnvironmentSessionAtoms: () => ({ sessionStateAtom: sessions }),
@@ -800,4 +801,25 @@ it.effect(
         ).toBe("Failure");
       }),
     ),
+);
+
+it.effect("history command enforces read scope at the destination", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const registry = yield* setup;
+      const command = createComputerUseHistoryCommand(runtime);
+      registry.set(sessions(env), AsyncResult.success(grant(false)));
+      expect(registry.get(command.permissionAtom(env))).toBe(false);
+      registry.set(
+        sessions(env),
+        AsyncResult.success({
+          ...grant(false),
+          scopes: [AuthOrchestrationReadScope],
+          permissions: [AuthOrchestrationReadScope],
+        }),
+      );
+      expect(registry.get(command.permissionAtom(env))).toBe(true);
+      expect(registry.get(command.permissionAtom(other))).toBe(false);
+    }),
+  ),
 );

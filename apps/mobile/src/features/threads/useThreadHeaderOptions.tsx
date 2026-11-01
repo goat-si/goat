@@ -119,6 +119,8 @@ export function useThreadHeaderOptions(props: {
   const { environmentId, threadId, gitStatus } = props.gitControls;
   return {
     options,
+    rightHeaderItems:
+      usesDuoHeader || layout.usesSplitView ? threadCenterHeaderItems : compactRightHeaderItems,
     // Factories re-read only on version changes; include displayed items and hidden callback state such as default refs.
     optionsVersion: [
       splitLeftHeaderItems,
