@@ -17,7 +17,7 @@ import { driverResult, driverValue, fail } from "./DesktopDriverReplies.ts";
 import type { ScreenHostContext } from "./ScreenHostBridge.ts";
 import type { BoundWindow } from "./DesktopTargetHost.ts";
 import type { ScreenCellRef, ScreenTargetLabel } from "../cua/ComputerUseCallApps.ts";
-import { boundsOf } from "./DesktopFrames.ts";
+import { boundsOf, sameRect } from "./DesktopFrames.ts";
 import * as NodeCrypto from "node:crypto";
 
 /** How long a launch that binds keeps looking for the app's first window. */
@@ -211,12 +211,28 @@ export const makeBindWindow =
         previous.ref.runId === context.runId &&
         previous.ref.turnId === context.turnId
       ) {
+        const listed = boundsOf(input.bounds);
+        // A window that moved or resized replaces its target: its frames and points were measured
+        // against the old rectangle, so only an unmoved window keeps them.
         if (
           previous.connectionGeneration === input.connectionGeneration &&
           previous.controlId === input.controlId &&
-          previous.ref.environmentId === context.environmentId
-        )
+          previous.ref.environmentId === context.environmentId &&
+          (listed === undefined ||
+            (previous.windowBounds !== undefined && sameRect(listed, previous.windowBounds)))
+        ) {
+          deps.labelTarget?.(
+            previous.ref.id,
+            {
+              kind: "app",
+              bundleId: input.bundleId,
+              name: input.name,
+              iconBundleId: input.iconBundleId,
+            },
+            context,
+          );
           return previous.ref;
+        }
         lastClickedTableCell ??= previous.lastClickedTableCell;
         deps.evict(id);
         deps.targets.delete(id);

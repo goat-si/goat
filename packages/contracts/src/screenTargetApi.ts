@@ -3,7 +3,7 @@
  * A thread gets it with its first result, after a reset, a new provider session or a version
  * change, and when a surface first becomes available; it names only the surfaces the turn has.
  */
-export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/29";
+export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/30";
 
 const HEADER = `// goat_screen_run cell API, contract ${SCREEN_TARGET_CONTRACT_VERSION}. Await every call, alone or in one Promise.all; the cell's return value comes back as JSON.
 // At most 4 calls wait for answers at once (pendingCalls); one more throws pending_limit with nothing sent, so await some before starting more.
@@ -132,7 +132,7 @@ export const screenTargetApi = (surfaces: {
     ...(app ? [SCREEN_APP] : []),
     ...(tab ? [SCREEN_TAB] : []),
     "  discover(): Promise<{ apps: unknown; windows: unknown; tabs: unknown; unavailable: object }>; // app and window rows another thread uses now carry inUse: true and holderThreadId (it may have just finished); holdersUnknown: true means some rows could not be checked",
-    "  state: object; // state values survive later turns until reset; targets survive cells of one turn, but targets must be bound again each turn; rebinding the same window returns the same target within a turn. A refused stale target names why and the call to bind it again.",
+    "  state: object; // state values survive later turns until reset; targets survive cells of one turn, but targets must be bound again each turn; rebinding the same unmoved window returns the same target within a turn. A refused stale target names why and the call to bind it again.",
     "  debug: boolean; // diagnostics for inputs and observation timing in this cell; initially false",
     "};",
     ...(app
