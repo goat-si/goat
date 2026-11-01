@@ -43,7 +43,7 @@ Agents also reach the same server over MCP. The HTTP MCP server is named `GOAT` 
 `/mcp` (`layerMcpTransport` in `apps/server/src/mcp/McpHttpServer.ts`). Tool names are not all
 `goat_*`; see [`mcp-toolkits.md`](mcp-toolkits.md).
 
-GOAT is a fork of T3 Code and shares its git history. [`README.md`](../README.md) states that.
+GOAT is a fork of T3 Code, and its git history restarted from one commit on 2026-11-01. [`README.md`](../README.md) states that.
 New checkpoint refs use `refs/goat/`, with legacy `refs/t3/` readers. Tracing sent to the
 GOAT Connect relay from `apps/server/src/cloud/relayTracing.ts` retains relay-owned names.
 Local state defaults to `~/.goat`, with a legacy `~/.t3` fallback. Where each process writes

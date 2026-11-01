@@ -12,6 +12,12 @@
   <a href="./structure/INDEX.md">How it is built</a>
 </p>
 
+<p align="center">
+  <a href="https://github.com/goat-si/goat-releases/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/goat-si/goat-releases?include_prereleases&label=release&color=111111"></a>
+  <a href="./LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-111111"></a>
+  <img alt="macOS, Windows and Linux" src="https://img.shields.io/badge/platforms-macOS%20%7C%20Windows%20%7C%20Linux-111111">
+</p>
+
 GOAT runs the coding agents you already use, such as Claude Code, Codex and Cursor, on the machines you own: your laptop, a desktop at home, an SSH server or a cloud machine. You steer all of them from one place, whether that is the desktop app, a browser or your phone. Agents can start work on another machine, follow it, and hear back when it finishes, and **Fleet** shows you what is running and what needs you.
 
 <p align="center">
@@ -43,6 +49,7 @@ GOAT began as a fork of [T3 Code](https://github.com/pingdotgg/t3code) and keeps
 - **Fleet.** One view of every connected machine and the agents working on it, with counts of threads that are running or waiting for you.
 - **Memory.** Finished conversations become memories scoped to all projects, one project or one thread. You can import memories from Codex, Claude and OMO, and share them across devices through a hub.
 - **Orchestration tools.** The GOAT MCP server gives agents `goat_*` tools to launch threads, watch them, get notified when they end, and report results to the thread that started them. Outside agents such as Claude Code, Codex and ChatGPT can connect to the same server.
+- **Computer use.** Agents read and operate desktop apps and browser tabs from short screen-code cells, checking each step against what is on screen. Desktop apps run through [goat-cu](https://github.com/goat-si/goat-cu), GOAT's driver for macOS, Windows and Linux, which refuses an input it cannot aim at the right window instead of guessing. You approve which apps an agent may use, and Stop ends it at once.
 - **Cloud agents.** Claude Cloud, Cursor Cloud and Devin Cloud appear as providers next to the local ones.
 - **Its own desktop app.** The GOAT desktop app has its own app ID, data folder and update feed, so it installs beside the T3 Code app without sharing state. Its command line is `goat`.
 
@@ -101,7 +108,7 @@ Then run `vp i` to install dependencies and `vp run dev` to start the server and
 
 ## Lineage
 
-GOAT is a fork of [T3 Code](https://github.com/pingdotgg/t3code) by Ping and shares its git history. We merge upstream every cycle, and [devlog/_chase](./devlog/_chase/README.md) records how far GOAT has followed and where it deliberately differs. Thank you to the T3 Code team for the foundation.
+GOAT began as a fork of [T3 Code](https://github.com/pingdotgg/t3code) by Ping, and its event-sourced core is still T3 Code's. On 2026-11-01 this repository's history was condensed into one starting commit, so it no longer shares T3 Code's git history; upstream changes are brought over by hand, and [devlog/_chase](./devlog/_chase/README.md) records how far GOAT has followed and where it deliberately differs. Thank you to the T3 Code team for the foundation.
 
 ## License
 
