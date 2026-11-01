@@ -15,6 +15,7 @@ import {
   type ScreenHostReply,
   type ScreenImage,
   type ScreenImageMetadata,
+  type ScreenActionOutcome,
   type ScreenJournalEntry,
   type ScreenRunError,
   type ScreenTargetRef,
