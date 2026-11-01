@@ -34,7 +34,7 @@ vi.mock("node:child_process", { spy: true });
 
 /**
  * Every tool the pinned driver can offer, on any platform. Refresh it from the new tag when the
- * pin moves to a version not in `verified`; goat.17 changes no tool registration.
+ * pin moves to a version not in `verified`; goat.18 changes no tool registration.
  */
 const PINNED_DRIVER_TOOLS = {
   verified: [
@@ -43,6 +43,7 @@ const PINNED_DRIVER_TOOLS = {
     "0.38.0-goat.15",
     "0.38.0-goat.16",
     "0.38.0-goat.17",
+    "0.38.0-goat.18",
   ],
   tools: [
     // `cua-driver list-tools` of the macOS binary.
