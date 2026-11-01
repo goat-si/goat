@@ -9,14 +9,20 @@ export const startComputerUseSettingsObserver = Effect.fn(
   "Handoffs.startComputerUseSettingsObserver",
 )(function* (
   settings: ServerSettings.ServerSettingsService["Service"],
-  observe: (apps: ReadonlyArray<string>) => Effect.Effect<void, HandoffError>,
+  observe: (apps: ReadonlyArray<string>, strict: boolean) => Effect.Effect<void, HandoffError>,
   invalidate: () => Effect.Effect<void, HandoffError>,
 ) {
   const changes = yield* settings.subscribeChanges;
-  yield* observe((yield* settings.getSettings).cuaAllowedApps);
+  const observeNow = Effect.gen(function* () {
+    const current = yield* settings.getSettings;
+    yield* observe(current.cuaAllowedApps, current.cuaStrictInputGuards);
+  });
+  yield* observeNow;
   yield* Effect.gen(function* () {
-    yield* observe((yield* settings.getSettings).cuaAllowedApps);
-    yield* Stream.runForEach(changes, (snapshot) => observe(snapshot.cuaAllowedApps));
+    yield* observeNow;
+    yield* Stream.runForEach(changes, (snapshot) =>
+      observe(snapshot.cuaAllowedApps, snapshot.cuaStrictInputGuards),
+    );
   }).pipe(
     Effect.catchCauseIf(
       (cause) => !Cause.hasInterruptsOnly(cause),

@@ -28,6 +28,10 @@ export const makeAppsRequestHandler = (input: {
 }) => {
   const { publisher, native, platform } = input;
   const enabled = Effect.tryPromise(() => native.computerUseEnabled(input.settingsPath));
+  // An unreadable choice keeps the strict listing.
+  const strict = Effect.tryPromise(() => native.strictInputGuards(input.settingsPath)).pipe(
+    Effect.orElseSucceed(() => true),
+  );
   return Effect.fn("desktop.cua.appsRequest")(function* () {
     const batch = yield* publisher.takeCuaAppsRequests;
     if (batch.requestIds.length === 0) return;
@@ -48,12 +52,14 @@ export const makeAppsRequestHandler = (input: {
         withResolvedWindowsPaths(input.hostBundleIds(selected), platform),
       );
       if (input.isClosed() || !(yield* enabled)) return undefined;
-      const apps = cuaRequestableApps(listed, hosts);
+      // Without strict input guards protected apps are listed too; the driver decides on them.
+      const options = { includeProtected: !(yield* strict) };
+      const apps = cuaRequestableApps(listed, hosts, options);
       // A partial list could wrongly reject a real app, so an oversized answer is unavailable.
       if (apps.length > 1000) return undefined;
       // Names and icons are for people; a catalog that fails leaves the approval list intact.
       const catalog = yield* Effect.tryPromise(() =>
-        native.appCatalog(listed, hosts, platform),
+        native.appCatalog(listed, hosts, platform, options),
       ).pipe(Effect.option);
       return { apps, catalog: Option.getOrUndefined(catalog) };
     }).pipe(Effect.orElseSucceed(() => undefined));

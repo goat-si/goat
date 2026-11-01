@@ -613,6 +613,7 @@ export const ComputerUseLeaseUpdate = Schema.Union([
      * the pointer would take it from that thread.
      */
     shared: Schema.optionalKey(Schema.Literal(true)),
+    strictInputGuards: Schema.optionalKey(Schema.Literal(false)),
   }),
   Schema.Struct({
     state: Schema.Literal("paused"),
@@ -841,6 +842,7 @@ export const ComputerUseCallAdmission = Schema.Union([
           Schema.isGreaterThanOrEqualTo(0),
           Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER),
         ),
+        strictInputGuards: Schema.optionalKey(Schema.Literal(false)),
       }),
     ),
   }),

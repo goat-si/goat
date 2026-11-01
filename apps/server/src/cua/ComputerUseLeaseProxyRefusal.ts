@@ -92,6 +92,8 @@ interface ProxyCallCheck {
   /** Refuses arguments that would write a capture to a file. */
   readonly toFile: () => string | undefined;
   readonly tokenFirstRefuses: () => boolean;
+  /** False when the person has not opted into strict input guards: GOAT's own guards stand down. */
+  readonly strict: () => boolean;
   readonly foreground: () => ReadonlyArray<ComputerUseForegroundGrant>;
   readonly listApps: Effect.Effect<void>;
   /** macOS: an Apple Events route's refusal names its app, so its pid is listed before it runs. */
@@ -108,8 +110,12 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
     args: input.message.params?.arguments,
   });
   const initialTime = yield* Clock.currentTimeMillis;
+  // Read at each decision: a strict update can land while this admission waits on a listing.
+  const guarded = () => input.strict();
   const initiallyDenied =
-    foregroundRequired && !input.foreground().some((grant) => grant.expiresAtMillis > initialTime);
+    guarded() &&
+    foregroundRequired &&
+    !input.foreground().some((grant) => grant.expiresAtMillis > initialTime);
   const batch = batchAppScope(input.message.params?.name, input.message.params?.arguments);
   const unresolvedBatch = () =>
     batch?.apps.find(
@@ -122,7 +128,7 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
             ),
         ),
     );
-  const judge = () =>
+  const judgeScope = () =>
     scopeVerdict({
       name: input.message.params?.name,
       args:
@@ -131,6 +137,7 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
       appOf: (pid) => input.listed.get(pid),
       bundleIds: input.host.bundleIds,
     });
+  const judge = (): ScopeVerdict => (guarded() ? judgeScope() : { _tag: "allow" });
   // A pid allowed only by the binary it ran when last listed may run another one of the same name
   // now. A host that reads it (Linux) must read the same binary, a failed read refuses; elsewhere
   // only a listing taken for this call confirms it.
@@ -211,7 +218,7 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
       "foreground_not_approved",
       FOREGROUND_NOT_APPROVED,
     );
-  const missing = verdict._tag === "allow" ? unresolvedBatch() : undefined;
+  const missing = guarded() && verdict._tag === "allow" ? unresolvedBatch() : undefined;
   if (missing !== undefined)
     return refusal(
       "none",
@@ -243,10 +250,14 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
     );
   if (input.shared() && takesScreen(input.message.params?.name, input.message.params?.arguments))
     return refusal("none", input.id, input.message.method, "screen_shared", SCREEN_SHARED);
-  if (input.tokenFirstRefuses())
+  if (guarded() && input.tokenFirstRefuses())
     return refusal("none", input.id, input.message.method, "token_first", TOKEN_FIRST_MESSAGE);
   const now = yield* Clock.currentTimeMillis;
-  if (foregroundRequired && !input.foreground().some((grant) => grant.expiresAtMillis > now))
+  if (
+    guarded() &&
+    foregroundRequired &&
+    !input.foreground().some((grant) => grant.expiresAtMillis > now)
+  )
     return refusal(
       "none",
       input.id,

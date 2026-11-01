@@ -101,6 +101,8 @@ export interface BoundWindow {
   readonly appId: string;
   /** The bundle id list_apps gave the app, used for input admission. */
   readonly bundleId?: string;
+  /** Set from the person's strict-guards setting before each input; absent means strict. */
+  strictInputGuards?: boolean;
   readonly controlId: string;
   epoch: number;
   /** The driver generation the window was bound under; a rebind after a replacement moves it. */
@@ -185,9 +187,12 @@ export const createDesktopTargetHost = (deps: {
   /** Names the app a target id was bound to, for the cell's timeline row. */
   readonly labelTarget?: (targetId: string, label: ScreenTargetLabel, cell: ScreenCellRef) => void;
   readonly cursorGeneration?: (ref: ScreenTargetRef, callKey?: string) => number;
+  /** Whether GOAT's own input guards apply; absent means they do. */
+  readonly strictInputGuards?: () => boolean;
 }): DesktopTargetHost => {
   const observations = deps.observations ?? new ScreenObservations();
   const isMac = (deps.platform ?? HostProcess.Platform.defaultValue()) === "darwin";
+  const strict = () => deps.strictInputGuards?.() ?? true;
   const targets = new Map<string, BoundWindow>();
   const { dropTarget, staleTargetStep, staleTarget } = staleTargets(targets, observations);
   const cellTrackers = new Map<
@@ -645,6 +650,7 @@ export const createDesktopTargetHost = (deps: {
     }
     const bound = resolve(call, context);
     if (!bound) return yield* Effect.fail(staleTarget(call.targetRef?.id));
+    bound.strictInputGuards = strict();
     // Any call here may change this process's windows, so only an input right after a read of its
     // own window compares with it; another binding's input on the process voids that read too.
     const baseline = bound.fullRows;
@@ -872,15 +878,12 @@ export const createDesktopTargetHost = (deps: {
   const dispatchBatch: NonNullable<ScreenHostDispatcher["dispatchBatch"]> = Effect.fn(
     "DesktopTargetHost.dispatchBatch",
   )(function* (calls, context, markDispatched) {
-    const refused = preflightDesktopBatch(calls, (call) =>
-      inspectBatchMember(
-        call.method,
-        callArgs(call.args),
-        resolve(call, context),
-        deps.platform,
-        tokenOf,
-      ),
-    );
+    const guarded = strict();
+    const refused = preflightDesktopBatch(calls, (call) => {
+      const member = resolve(call, context);
+      if (member) member.strictInputGuards = guarded;
+      return inspectBatchMember(call.method, callArgs(call.args), member, deps.platform, tokenOf);
+    });
     if (refused !== undefined) return refused;
     const first = calls[0];
     const firstBound = first && resolve(first, context);
@@ -912,7 +915,7 @@ export const createDesktopTargetHost = (deps: {
             ? withWindow(each, invoke(each, context, true))
             : dispatch(each, context);
         }),
-      BATCH_FAILED_CATEGORIES,
+      guarded ? BATCH_FAILED_CATEGORIES : new Set(),
     );
   });
   return {

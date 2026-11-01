@@ -124,10 +124,13 @@ export const CUA_DRIVER_EXCLUDED_TOOLS = {
  * testing it), the driver's own app, and credential stores. Matched against the bundle id
  * (case-insensitive) and the app name.
  */
-const EXCLUDED_BUNDLE_IDS = new Set([
+const GOAT_BUNDLE_IDS = new Set([
   "com.trycua.driver",
   // Every released GOAT channel and its helper: any of them can show this host's approval cards.
   ...Object.values(DESKTOP_CHANNEL_APP_IDS).flatMap((id) => [id, computerUseHelperBundleId(id)]),
+]);
+const EXCLUDED_BUNDLE_IDS = new Set([
+  ...GOAT_BUNDLE_IDS,
   "com.apple.keychainaccess",
   "com.apple.systempreferences",
   "com.apple.loginwindow",
@@ -234,11 +237,23 @@ export function admittedCuaApplications(
   return entries.sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0));
 }
 
+/** What a listing offers: without strict input guards protected apps too, never GOAT itself. */
+export interface CuaRequestableOptions {
+  readonly includeProtected?: boolean;
+}
+
 function excludedCuaApplication(
   app: CuaDriverListedApp,
   id: string,
   host: ReadonlySet<string>,
+  includeProtected = false,
 ): boolean {
+  if (includeProtected)
+    return (
+      host.has(cuaAppKey(id)) ||
+      GOAT_BUNDLE_IDS.has(id.toLowerCase()) ||
+      EXCLUDED_EXECUTABLE.test(id)
+    );
   return (
     host.has(cuaAppKey(id)) ||
     EXCLUDED_BUNDLE_IDS.has(id.toLowerCase()) ||
@@ -264,13 +279,14 @@ export function isExcludedCuaApplication(app: string): boolean {
 export function cuaRequestableApps(
   apps: ReadonlyArray<CuaDriverListedApp>,
   hostBundleIds: ReadonlyArray<string>,
+  options: CuaRequestableOptions = {},
 ): ReadonlyArray<string> {
   const host = new Set(hostBundleIds.map(cuaAppKey));
   const requestable = new Set<string>();
   for (const app of apps) {
     const bundle = app.bundle_id?.trim() ?? "";
     const ids = [bundle || app.name?.trim() || "", app.executable?.trim() || ""].filter(Boolean);
-    if (ids.some((id) => excludedCuaApplication(app, id, host))) continue;
+    if (ids.some((id) => excludedCuaApplication(app, id, host, options.includeProtected))) continue;
     for (const id of ids) requestable.add(id);
   }
   return [...requestable].sort();
@@ -279,11 +295,12 @@ export function cuaRequestableApps(
 export function cuaRequestableCatalog(
   apps: ReadonlyArray<CuaDriverListedApp>,
   hostBundleIds: ReadonlyArray<string>,
+  options: CuaRequestableOptions = {},
 ) {
   const catalog = new Map<string, { name: string; executables: Set<string> }>();
   for (const app of apps) {
     const id = app.bundle_id?.trim() || app.executable?.trim() || app.name?.trim() || "";
-    if (!id || !cuaRequestableApps([app], hostBundleIds).includes(id)) continue;
+    if (!id || !cuaRequestableApps([app], hostBundleIds, options).includes(id)) continue;
     const entry = catalog.get(id) ?? {
       name: app.name?.trim() || id,
       executables: new Set<string>(),
@@ -730,7 +747,9 @@ async function withBundleExecutables(
  * The app names an approval request may use on a host whose server runs the driver itself
  * (#1561): the same listing and identities the manifest is built from, read when asked.
  */
-export async function listCuaRequestableApplicationListing(input: CuaDriverListingInput) {
+export async function listCuaRequestableApplicationListing(
+  input: CuaDriverListingInput & CuaRequestableOptions,
+) {
   const { apps, host } = await listForHost(input);
   // On Linux the manifest grants only a desktop entry or an attested executable, and never this
   // process, so a name with neither, or GOAT's own, is not an app a request can be granted.
@@ -742,13 +761,13 @@ export async function listCuaRequestableApplicationListing(input: CuaDriverListi
         )
       : apps;
   return {
-    apps: cuaRequestableApps(grantable, host),
-    catalog: cuaRequestableCatalog(grantable, host),
+    apps: cuaRequestableApps(grantable, host, input),
+    catalog: cuaRequestableCatalog(grantable, host, input),
   };
 }
 
 export async function listCuaRequestableApplications(
-  input: CuaDriverListingInput,
+  input: CuaDriverListingInput & CuaRequestableOptions,
 ): Promise<ReadonlyArray<string>> {
   return (await listCuaRequestableApplicationListing(input)).apps;
 }

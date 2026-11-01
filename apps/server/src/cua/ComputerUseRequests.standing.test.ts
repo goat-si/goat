@@ -47,6 +47,7 @@ it.effect.each(["session", "named"] as const)("organization denial precedes %s a
             sessionId,
           );
           yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+            cuaStrictInputGuards: true,
             cuaDeniedApps: ["com.example.Editor"],
           });
           assert.deepInclude(yield* request({ apps: ["com.example.Editor"] }), {
@@ -380,6 +381,9 @@ it.effect("a named denied app is refused after a person's approval", () =>
       });
       yield* withRequests(orchestrator, supported, ({ request, handoffs }) =>
         Effect.gen(function* () {
+          yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+            cuaStrictInputGuards: true,
+          });
           const first = yield* request({ apps: ["com.example.Other"] });
           if (first.kind !== "needs_human") return assert.fail("expected approval");
           yield* handoffs.respond(

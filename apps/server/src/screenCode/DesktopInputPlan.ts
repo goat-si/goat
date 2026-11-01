@@ -274,6 +274,7 @@ export const validateMenuInput = (
     args: menuArgs,
     appId: bound.appId,
     ...(bound.bundleId === undefined ? {} : { bundleId: bound.bundleId }),
+    ...(bound.strictInputGuards === undefined ? {} : { strict: bound.strictInputGuards }),
   });
   if (admission.refused !== undefined) return { error: admission.refused };
   noteAdmittedInput(bound, "invoke_menu", menuArgs, tracker);

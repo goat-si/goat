@@ -88,6 +88,7 @@ const automation = (kind: "finished" | "paused") => (input: Input) =>
       shared: () => false,
       toFile: () => undefined,
       tokenFirstRefuses: () => false,
+      strict: () => true,
       foreground: () => [],
       listApps: Effect.sync(() => {
         listed = true;

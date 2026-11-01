@@ -20,7 +20,6 @@ import {
   CommandId,
   RunId,
   SCREEN_TARGET_CONTRACT_VERSION,
-  screenTargetApi,
   ScreenTargetRef,
   ThreadId,
 } from "@goat/contracts";
@@ -56,6 +55,14 @@ import {
 } from "./ScreenActionOutcome.ts";
 import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
 import { ScreenHostBridge, type ScreenHostDispatcher } from "./ScreenHostBridge.ts";
+import { makeScreenApiTeacher } from "./ScreenApiTeaching.ts";
+import {
+  followStrictInputGuards,
+  makeStrictInputGuards,
+  refreshStrictInputGuards,
+  type StrictInputGuards,
+} from "./ScreenStrictGuards.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
 import { screenRunLimits, screenBytes } from "./ScreenRunLimits.ts";
 import { resolveScreenRuntimeAsset, screenRuntimeLayout } from "./ScreenRuntimeAsset.ts";
 import { createScreenRunSupervisor, type ScreenRunSupervisor } from "./ScreenRunSupervisor.ts";
@@ -154,10 +161,12 @@ export function layerWithTabHost() {
       const browser = yield* ServerBrowser.ServerBrowser;
       const cursorPublisher = yield* ScreenCursorPublisher;
       const callApps = yield* ComputerUseCallApps;
+      const strictInputGuards = makeStrictInputGuards();
       const desktopHost = createDesktopTargetHost({
         primitiveChannel,
         leases,
         labelTarget: callApps.screenTarget,
+        strictInputGuards: () => strictInputGuards.value,
       });
       const tabHost = yield* makePreviewTargetHost(broker);
       return yield* make({
@@ -172,6 +181,7 @@ export function layerWithTabHost() {
         desktopHost,
         tabHost,
         cursorPublisher,
+        strictInputGuards,
       });
     }),
   );
@@ -189,6 +199,8 @@ interface ScreenRuntimeOptions {
   readonly invocation?: SelfInvocation;
   readonly assetResolver?: () => Effect.Effect<{ path: string; sha256: string }, ScreenRunError>;
   readonly scheduleDeadline?: (run: () => void, ms: number) => () => void;
+  /** The person's strict-guards choice shared with the desktop host; refreshed each cell. */
+  readonly strictInputGuards?: StrictInputGuards;
 }
 const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntimeOptions = {}) {
   const invocation = options.invocation ?? (yield* resolveSelfInvocation());
@@ -252,7 +264,14 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
   const runCallback = <A, E>(effect: Effect.Effect<A, E>, signal?: AbortSignal) =>
     Effect.runPromiseWith(callbackContext)(effect, signal ? { signal } : undefined);
   const limits = screenRunLimits();
-  const bridge = new ScreenHostBridge(cursorPhases, options.desktopHost?.staleTargetStep);
+  const strictInputGuards = options.strictInputGuards ?? makeStrictInputGuards();
+  const serverSettings = Option.getOrUndefined(yield* Effect.serviceOption(ServerSettingsService));
+  if (serverSettings) yield* followStrictInputGuards(strictInputGuards, serverSettings);
+  const bridge = new ScreenHostBridge(
+    cursorPhases,
+    options.desktopHost?.staleTargetStep,
+    () => strictInputGuards.value,
+  );
   const callApps = yield* ComputerUseCallApps;
   if (options.dispatcher) {
     const dispatcher = options.dispatcher;
@@ -340,50 +359,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
   });
   const turns = new Map<string, { threadId: string; environmentId: string }>();
   yield* Effect.addFinalizer(() => Effect.sync(() => supervisor?.dispose()));
-  // What each thread was last given of the cell API; the oldest thread drops out first.
-  const taught = new Map<
-    string,
-    { version: string; session: string; app: boolean; tab: boolean }
-  >();
-  /** The API bundle a result carries, when the thread lacks this version or a surface it now has. */
-  const apiFor = (
-    invocation: McpThreadInvocationScope,
-    availability: ScreenRunResult["availability"],
-    reset: boolean,
-  ): string | undefined => {
-    const threadId = invocation.thread.threadId;
-    const has = (kind: "app" | "tab") =>
-      availability.some((surface) => surface.kind === kind && surface.available);
-    const now = { app: has("app"), tab: has("tab") };
-    const before = taught.get(threadId);
-    const session = invocation.thread.providerSessionId;
-    if (
-      !reset &&
-      before !== undefined &&
-      before.version === SCREEN_TARGET_CONTRACT_VERSION &&
-      before.session === session &&
-      (before.app || !now.app) &&
-      (before.tab || !now.tab)
-    )
-      return undefined;
-    // The bundle names what the turn has now; the record keeps what this session was already given.
-    const given =
-      before !== undefined &&
-      before.session === session &&
-      before.version === SCREEN_TARGET_CONTRACT_VERSION;
-    taught.delete(threadId);
-    taught.set(threadId, {
-      version: SCREEN_TARGET_CONTRACT_VERSION,
-      session,
-      app: now.app || (given && !reset && before?.app === true),
-      tab: now.tab || (given && !reset && before?.tab === true),
-    });
-    if (taught.size > 1024) {
-      const oldest = taught.keys().next().value;
-      if (oldest !== undefined) taught.delete(oldest);
-    }
-    return screenTargetApi(now);
-  };
+  const apiFor = makeScreenApiTeacher();
   const closingTurns = new Set<string>();
   const endedRuns = new Set<string>();
   const activeCells = makeCellAuthority(options.leases);
@@ -535,6 +511,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
         return run !== undefined && OPEN_RUN.has(run.status);
       });
       if (!(yield* runIsOpen)) return yield* Effect.fail(fail("stale_run"));
+      yield* refreshStrictInputGuards(strictInputGuards, serverSettings);
       const cellLimits = yield* Effect.try({
         try: () => screenRunLimits(input.limits),
         catch: () => fail("invalid_argument"),

@@ -15,6 +15,8 @@ import * as Path from "effect/Path";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
+import * as ServerSettings from "../serverSettings.ts";
+
 class BrowserManifestWriteError extends Schema.TaggedError<BrowserManifestWriteError>()(
   "BrowserManifestWriteError",
   { cause: Schema.Defect() },
@@ -64,6 +66,14 @@ export const make = Effect.fn("StandaloneCuaManifest.make")(function* (
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const manifestPath = path.join(stateDir, "cua-driver", "capability-manifest.yaml");
+  const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
+  // Without strict input guards requests may name protected apps; an unreadable choice is strict.
+  const includeProtected = Option.isSome(settings)
+    ? settings.value.getSettings.pipe(
+        Effect.map((current) => !current.cuaStrictInputGuards),
+        Effect.orElseSucceed(() => false),
+      )
+    : Effect.succeed(false);
   // Listed on the driver's own screen: a server started over SSH has no DISPLAY of its own, and
   // without one the listing sees no windows, so apps without a desktop entry never get admitted.
   const prepare = Effect.fn("StandaloneCuaManifest.prepare")(
@@ -95,8 +105,8 @@ export const make = Effect.fn("StandaloneCuaManifest.make")(function* (
   const requestListing = <E>(startBinary: Effect.Effect<string, E>) =>
     Effect.fn("StandaloneCuaManifest.requestListing")(
       (display: ReadonlyArray<CuaDisplay.CuaDisplayVariable>) =>
-        startBinary.pipe(
-          Effect.flatMap((binaryPath) =>
+        Effect.all([startBinary, includeProtected]).pipe(
+          Effect.flatMap(([binaryPath, protectedApps]) =>
             // Interrupting the request (its deadline, or the server stopping) ends the
             // listing's driver as well.
             Effect.tryPromise((signal) =>
@@ -106,6 +116,7 @@ export const make = Effect.fn("StandaloneCuaManifest.make")(function* (
                 environment: cuaDriverSessionListingEnvironment(environment, display, platform),
                 hostBundleIds: [hostBundleId],
                 signal,
+                includeProtected: protectedApps,
               }),
             ),
           ),

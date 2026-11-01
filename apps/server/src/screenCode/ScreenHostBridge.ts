@@ -110,10 +110,15 @@ export class ScreenHostBridge {
   constructor(
     cursorPhases?: ScreenCursorPhases,
     staleTargetStep?: (targetId: string, reason?: string) => string | undefined,
+    strictInputGuards: () => boolean = () => true,
   ) {
     this.cursorPhases = cursorPhases;
     this.staleTargetStep = staleTargetStep;
+    this.strictInputGuards = strictInputGuards;
   }
+  /** Whether a failed write that may have landed stops the cell's later input (strict mode). */
+  private readonly strictInputGuards: () => boolean;
+
   setDispatcher(dispatcher: ScreenHostDispatcher): void {
     this.dispatcher = dispatcher;
   }
@@ -203,6 +208,7 @@ export class ScreenHostBridge {
     // A failed write that may have changed the page stops the cell's later input, since the cell
     // has not seen that change; a refusal that sent nothing, or a failed read, leaves the cell free.
     const halt = (safety: ActionOutcomeSafety) => {
+      if (!this.strictInputGuards()) return;
       if (safety.possibleCommit && state.haltedBy === undefined) state.haltedBy = call.callId;
     };
     const notRunEvidence = (error: ScreenRunError) =>

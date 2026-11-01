@@ -628,6 +628,14 @@ function ServerSettingsDetail(props: {
                       disabled={disabledFor("enableCua")}
                       onValueChange={(value) => write({ enableCua: value })}
                     />
+                    <SettingsSwitchRow
+                      icon="desktopcomputer"
+                      label="Strict input guards"
+                      subtitle="Off by default. On adds GOAT's own checks before computer input is sent."
+                      value={uniform("cuaStrictInputGuards")}
+                      disabled={disabledFor("cuaStrictInputGuards")}
+                      onValueChange={(value) => write({ cuaStrictInputGuards: value })}
+                    />
                     <ComputerUseHistoryRetentionRow
                       value={uniform("computerUseKeepTypedText")}
                       disabled={disabledFor("computerUseKeepTypedText")}

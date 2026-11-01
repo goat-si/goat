@@ -29,7 +29,8 @@ export const foregroundServiceLayer = Layer.merge(
 );
 export const foregroundProxyLayer = Layer.merge(
   foregroundServiceLayer,
-  ServerSettings.ServerSettingsService.layerTest({ enableCua: true }),
+  // Foreground approval is a strict guard; these tests exercise it.
+  ServerSettings.ServerSettingsService.layerTest({ enableCua: true, cuaStrictInputGuards: true }),
 );
 const encodeHandoff = Schema.encodeSync(Schema.fromJsonString(Schema.toCodecJson(Handoff)));
 

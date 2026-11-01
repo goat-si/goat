@@ -19,6 +19,12 @@ export const COMPUTER_USE_SETTINGS_SEARCH_ITEMS = [
     ],
   },
   {
+    id: "computer-use-strict-input-guards",
+    title: "Strict input guards",
+    to: "/settings/integrations",
+    searchTerms: ["computer use input guards confirmations advanced"],
+  },
+  {
     id: "computer-use-keep-typed-text",
     title: "Keep typed text",
     to: "/settings/integrations",

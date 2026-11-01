@@ -39,6 +39,8 @@ const callAdmissionRefusal = (input: {
   readonly bound: (id: TurnItemId) => boolean;
   /** Another thread's app lease in this call's way (D17). */
   readonly appBusy?: AppBusy | undefined;
+  /** The person's strict input guards; without them foreground and shared screens do not refuse. */
+  readonly strict: boolean;
 }) => {
   const { call, state, current, now } = input;
   if (state._tag === "ended") return state.reason;
@@ -55,9 +57,10 @@ const callAdmissionRefusal = (input: {
     return "replaced";
   if (DateTime.toEpochMillis(current.expiresAt) <= now || (state.validUntil ?? state.wakeAt) <= now)
     return "expired";
-  if (!allowsForegroundCall(call, state.foreground, now, input.bound))
+  if (input.strict && !allowsForegroundCall(call, state.foreground, now, input.bound))
     return "foreground_not_approved";
-  if (state.shared === true && takesScreen(call.name, call.args)) return "screen_shared";
+  if (input.strict && state.shared === true && takesScreen(call.name, call.args))
+    return "screen_shared";
   if (input.appBusy !== undefined) return "app_busy";
   return undefined;
 };
@@ -153,6 +156,8 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
           : Option.none();
         if (Option.isSome(settings) && Option.isNone(currentSettings))
           return { status: "refused", detail: "reconnecting" } as const;
+        // No settings service (a test host) keeps the guards on.
+        const strict = Option.isNone(currentSettings) || currentSettings.value.cuaStrictInputGuards;
         reservations.reclaimStopped(canAct, now);
         // Release and close do not wait on admission: neither can resurrect a yielding validation.
         if (request.action === "validate" && reservations.lookup(threadId, request) !== call)
@@ -172,16 +177,19 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
           now,
           bound: (id) => deps.bound(threadId, call.controlId, id),
           appBusy: inTheWay,
+          strict,
         });
         if (detail === "app_busy" && inTheWay !== undefined)
           return { status: "refused", detail, ...inTheWay } as const;
         if (detail !== undefined) return { status: "refused", detail } as const;
         if (state._tag !== "active") return { status: "refused", detail: "replaced" } as const;
-        const denied = deniedCallApp(
-          call,
-          Option.isSome(currentSettings) ? currentSettings.value.cuaDeniedApps : [],
-          controls.get(threadId)?.nonPersonFullAccess === true,
-        );
+        const denied = strict
+          ? deniedCallApp(
+              call,
+              Option.isSome(currentSettings) ? currentSettings.value.cuaDeniedApps : [],
+              controls.get(threadId)?.nonPersonFullAccess === true,
+            )
+          : undefined;
         if (denied !== undefined)
           return { status: "refused", detail: "app_not_allowed", app: denied } as const;
         // Confirmation retains the original ticket and its conflict coverage until cleanup.
@@ -205,7 +213,7 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
                 : { reservationId: decision.reservationId, connectionId: call.connectionId },
             );
         }
-        return withCallPermissions(decision, state);
+        return withCallPermissions(decision, state, strict);
       }).pipe(Effect.provideService(Scheduler.PreventSchedulerYield, true)),
     );
   });

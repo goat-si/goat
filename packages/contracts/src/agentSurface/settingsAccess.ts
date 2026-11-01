@@ -66,6 +66,7 @@ export const SETTINGS_ACCESS = {
   disabledBuiltInSkills: agent,
   cuaFullAccessAutoAdmit: person(GRANTS_AGENTS),
   cuaMovePointer: person(GRANTS_AGENTS),
+  cuaStrictInputGuards: person("A person chooses whether input guards restrict agents."),
   cuaAllowedApps: person(GRANTS_AGENTS),
   cuaDeniedApps: person("An organization or person sets the computer use safety boundary."),
   deviceOnboardingCompleted: agent,

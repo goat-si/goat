@@ -21,7 +21,10 @@ it.effect("organization denial precedes full access", () =>
   withWaiting(({ request, leases, runId }) =>
     Effect.gen(function* () {
       yield* leases.everyAppControl(threadId, false, { runId });
-      yield* (yield* ServerSettings.ServerSettingsService).updateSettings({ cuaDeniedApps: [APP] });
+      yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+        cuaStrictInputGuards: true,
+        cuaDeniedApps: [APP],
+      });
       assert.deepInclude(yield* request({ apps: [APP] }), {
         kind: "refused",
         code: "app_not_allowed",
@@ -128,20 +131,29 @@ it.effect("an approved foreground request lets this turn's control take the fore
   ),
 );
 
-it.effect.each(["remote", "schedule"] as const)(
-  "refuses a terminal request in a %s full-access turn",
-  (from) =>
+it.effect.each([
+  { from: "remote", strict: true },
+  { from: "schedule", strict: true },
+  { from: "remote", strict: false },
+] as const)(
+  "a terminal request in a $from full-access turn is refused only under strict input guards ($strict)",
+  ({ from, strict }) =>
     withWaiting(
       ({ request, leases, runId }) =>
         Effect.gen(function* () {
+          yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+            cuaStrictInputGuards: strict,
+          });
           yield* leases.everyAppControl(threadId, from === "schedule", { runId });
           for (const app of ["com.apple.Terminal", "com.googlecode.iterm2"]) {
             const result = yield* request({ apps: [app] }, Duration.zero);
-            assert.deepInclude(result, {
-              kind: "refused",
-              reason: "unknown_app",
-              code: "app_not_allowed",
-            });
+            if (strict)
+              assert.deepInclude(result, {
+                kind: "refused",
+                reason: "unknown_app",
+                code: "app_not_allowed",
+              });
+            else assert.equal(result.kind, "available");
           }
         }),
       undefined,

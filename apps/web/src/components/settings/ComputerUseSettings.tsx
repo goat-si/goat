@@ -23,6 +23,10 @@ export function useComputerUseHost(environmentId: EnvironmentId, local: boolean)
     environmentId,
     (settings) => settings.disabledBuiltInSkills,
   );
+  const strictInputGuards = useEnvironmentSettings(
+    environmentId,
+    (settings) => settings.cuaStrictInputGuards,
+  );
   const movePointer = useEnvironmentSettings(environmentId, (settings) => settings.cuaMovePointer);
   const keepTypedText = useEnvironmentSettings(
     environmentId,
@@ -84,6 +88,7 @@ export function useComputerUseHost(environmentId: EnvironmentId, local: boolean)
     enabled,
     disabledSkills,
     movePointer,
+    strictInputGuards,
     keepTypedText,
     allowedApps,
     canConfigure,
@@ -190,6 +195,7 @@ function ComputerUseControls({
         localCheck={host.localCheck}
         disabledSkills={host.disabledSkills}
         movePointer={host.movePointer}
+        strictInputGuards={host.strictInputGuards}
         keepTypedText={host.keepTypedText}
         save={host.save}
         bridge={{

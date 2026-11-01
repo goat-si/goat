@@ -512,6 +512,7 @@ const refusalBase: Parameters<typeof refuseProxyCall>[0] = {
   shared: () => false,
   toFile: () => undefined,
   tokenFirstRefuses: () => false,
+  strict: () => true,
   foreground: () => [],
   listApps: Effect.void,
 };

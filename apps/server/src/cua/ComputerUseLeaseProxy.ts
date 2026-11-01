@@ -13,6 +13,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { proxyCallAdmission } from "./ComputerUseLeaseCallPermissions.ts";
 import { makeTokenFirst } from "./ComputerUseTokenFirst.ts";
+import { makeLeaseFlags } from "./ComputerUseLeaseProxyFlags.ts";
 import { typeAutomationRefusal } from "./ComputerUseAutomationRefusal.ts";
 import { typeManifestRefusal } from "./ComputerUseManifestRefusal.ts";
 import * as Admission from "./ComputerUseLeaseProxyAdmission.ts";
@@ -115,11 +116,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   let apps: ReadonlySet<string> | undefined;
   let foreground: ReadonlyArray<Contracts.ComputerUseForegroundGrant> = [];
   const lifecycleLock = yield* Semaphore.make(1);
-  let shared = false;
-  // An older applied update cannot lift the latest receipt's restriction (sharedNow).
-  let sharedTaken = false;
+  const flags = makeLeaseFlags();
   const claims = makeProxyBrowserClaims(options.onBrowserClaimReport);
-  const sharedNow = () => shared || sharedTaken;
   const fences = makeLeaseFences(options.controlId);
   let ownRequests = 0;
   let interruptionsSeen: number | undefined;
@@ -487,7 +485,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     identities.scope(apps, next);
     apps = next;
     batches.grant(update.apps);
-    shared = update.shared === true;
+    flags.apply(update);
     // A pause that began and ended before this update still ends the call it overlapped.
     const count = update.interruptions?.count ?? 0;
     const missedPause =
@@ -552,7 +550,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
     apps: () => apps,
     foreground: () => foreground,
     shared: (update) => {
-      sharedTaken = update.shared === true;
+      flags.take(update);
       claims.update(update);
     },
     deadline: (value) => {
@@ -620,7 +618,8 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       apps: () => apps,
       listed,
       host: options,
-      shared: sharedNow,
+      shared: flags.sharedNow,
+      strict: flags.strict,
       toFile: () => refuseCaptureFileArguments(message.params?.arguments),
       tokenFirstRefuses: () => tokenFirst.refuses(message.params?.name, message.params?.arguments),
       foreground: () => foreground,
@@ -964,7 +963,7 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       isRequest &&
         message?.method === "tools/call" &&
         takesScreen(message.params?.name, message.params?.arguments),
-      sharedNow,
+      flags.sharedNow,
       stillCurrent,
       (now) => register(now).pipe(Effect.andThen(current.driver.send(line))),
       Math.min(permissionDeadline, primitiveDeadline),

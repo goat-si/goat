@@ -33,12 +33,14 @@ const ADVANCED_TARGETS: ReadonlySet<string> = new Set([
   "computer-use-skill",
   "screen-code-skill",
   "computer-use-move-pointer",
+  "computer-use-strict-input-guards",
   "computer-use-keep-typed-text",
 ]);
 
 export interface ComputerUseSettingsPatch {
   readonly enableCua?: boolean;
   readonly disabledBuiltInSkills?: ReadonlyArray<string>;
+  readonly cuaStrictInputGuards?: boolean;
   readonly cuaMovePointer?: "never" | "allowed";
   readonly computerUseKeepTypedText?: boolean;
   readonly cuaAllowedApps?: ReadonlyArray<string>;
@@ -201,6 +203,7 @@ export function ComputerUsePanel({
   localCheck,
   disabledSkills,
   movePointer,
+  strictInputGuards,
   keepTypedText,
   save,
   bridge,
@@ -217,6 +220,7 @@ export function ComputerUsePanel({
   localCheck: boolean;
   disabledSkills: ReadonlyArray<string>;
   movePointer: "never" | "allowed";
+  strictInputGuards: boolean;
   keepTypedText: boolean;
   save: (patch: ComputerUseSettingsPatch) => Promise<string | null>;
   bridge: Omit<ComputerUseSetupActions, "save"> & {
@@ -340,11 +344,20 @@ export function ComputerUsePanel({
             <SettingSwitchRow
               {...searchableSetting("computer-use-move-pointer")}
               settingKey="cuaMovePointer"
-              description="Off keeps your pointer where you put it: agents click through element tokens, the keyboard and background clicks. On lets a full access agent move your pointer when an app ignores background clicks."
+              description="Applies with strict input guards on. Off keeps your pointer where you put it: agents click through element tokens, the keyboard and background clicks. On lets a full access agent move your pointer when an app ignores background clicks."
               label="Let agents move my pointer"
               checked={movePointer === "allowed"}
               canConfigure={canConfigure}
               onChange={(checked) => save({ cuaMovePointer: checked ? "allowed" : "never" })}
+            />
+            <SettingSwitchRow
+              {...searchableSetting("computer-use-strict-input-guards")}
+              settingKey="cuaStrictInputGuards"
+              description="Off by default: agents act on input directly and see what the OS and driver refuse. On adds GOAT's own checks before input is sent: chat sends need confirmation, paste and off-window clicks are refused, approved and denied app lists apply, and a failed step stops the steps after it."
+              label="Strict input guards"
+              checked={strictInputGuards}
+              canConfigure={canConfigure}
+              onChange={(checked) => save({ cuaStrictInputGuards: checked })}
             />
             <SettingSwitchRow
               {...searchableSetting("computer-use-keep-typed-text")}
@@ -485,7 +498,11 @@ function SettingSwitchRow({
 }: {
   id: string;
   title: string;
-  settingKey: "disabledBuiltInSkills" | "cuaMovePointer" | "computerUseKeepTypedText";
+  settingKey:
+    | "disabledBuiltInSkills"
+    | "cuaMovePointer"
+    | "cuaStrictInputGuards"
+    | "computerUseKeepTypedText";
   description: string;
   label: string;
   checked: boolean;

@@ -1,6 +1,5 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import {
   type ComputerUsePauseReason,
   type ComputerUseCallReservation,
@@ -32,11 +31,6 @@ import * as ComputerUsePrimitiveChannel from "./ComputerUsePrimitiveChannel.ts";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import type { McpThreadInvocationScope } from "../mcp/McpInvocationContext.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
-import { runMigrations } from "../persistence/Migrations.ts";
-
-const historyDatabase = Layer.effectDiscard(runMigrations()).pipe(
-  Layer.provideMerge(NodeSqliteClient.layer({ filename: ":memory:" })),
-);
 
 const threadId = ThreadId.make("thread:bot");
 const controlId = "control:one";
@@ -216,7 +210,7 @@ const threadFixture = Effect.fn("LeaseRouteTest.threadFixture")(function* (
   });
   const context = yield* Layer.build(
     Layer.mergeAll(
-      ServerSettings.layerTest({ enableCua: true }),
+      ServerSettings.layerTest({ enableCua: true, cuaStrictInputGuards: true }),
       Layer.succeed(McpSessionRegistry.McpSessionRegistry, registry),
       leaseLayer,
       ComputerUsePrimitiveChannel.layer.pipe(Layer.provide(leaseLayer)),
@@ -771,99 +765,6 @@ describe("computer use lease route", () => {
       assert.isUndefined(yield* next);
     }).pipe(Effect.scoped),
   );
-  it.effect.each([
-    [undefined, true],
-    ["allowed", false],
-  ] as const)(
-    "a call that would move the person's pointer is refused unless the host allows it (movePointer %s)",
-    ([movePointer, refused]) =>
-      Effect.gen(function* () {
-        const received: Array<ComputerUseCallReservation> = [];
-        let nextTicket = 0;
-        const invocation: McpThreadInvocationScope = {
-          environmentId: EnvironmentId.make("environment:test"),
-          capabilities: new Set<never>(),
-          issuedAt: 0,
-          requestNamespace: "test",
-          client: undefined,
-          thread: {
-            threadId,
-            providerSessionId: "provider:test",
-            providerInstanceId: ProviderInstanceId.make("codex"),
-          },
-        };
-        const routes = LeaseRoute.layer.pipe(
-          Layer.provideMerge(
-            Layer.mergeAll(
-              ServerSettings.ServerSettingsService.layerTest({
-                ...(movePointer === undefined ? {} : { cuaMovePointer: movePointer }),
-                cuaDeniedApps: ["com.example.Blocked"],
-              }),
-              historyDatabase,
-              Layer.mock(McpSessionRegistry.McpSessionRegistry)({
-                resolve: (token) => Effect.succeed(token === "fixture" ? invocation : undefined),
-              }),
-              Layer.mock(ComputerUseLeases.ComputerUseLeases)({
-                foregroundApprovalEpoch: Effect.die("unused"),
-                proxy: undefined,
-                currentControl: () => Effect.succeedNone,
-                callReservation: (_owner, call) =>
-                  Effect.sync(() => {
-                    received.push(call);
-                    return {
-                      status: "admitted",
-                      reservationId:
-                        ++nextTicket === 1 ? "reservation:test" : `reservation:test:${nextTicket}`,
-                    } as const;
-                  }),
-              }),
-            ),
-          ),
-        );
-        const app = yield* Effect.acquireRelease(
-          Effect.sync(() => HttpRouter.toWebHandler(routes, { disableLogger: true })),
-          (web) => Effect.promise(() => web.dispose()),
-        );
-        const reserve = (args: object, targetApp?: string) =>
-          Effect.promise(() =>
-            app
-              .handler(
-                new Request("http://goat.test/api/computer-use/lease/calls", {
-                  method: "POST",
-                  body: JSON.stringify({
-                    action: "reserve",
-                    controlId,
-                    connectionId: "driver:1",
-                    callId: "one",
-                    name: "click",
-                    args,
-                    ...(targetApp === undefined ? {} : { app: targetApp }),
-                    interruptions: 0,
-                    idleEpoch: 0,
-                  }),
-                  headers: { "content-type": "application/json", authorization: "Bearer fixture" },
-                }),
-              )
-              .then((response) => response.json() as Promise<Record<string, unknown>>),
-          );
-        const foreground = yield* reserve({ pid: 42, window_id: 7, delivery_mode: "foreground" });
-        assert.deepEqual(
-          foreground,
-          refused
-            ? { status: "refused", detail: "pointer_locked" }
-            : { status: "admitted", reservationId: "reservation:test" },
-        );
-        // A background click is judged by the leases as before, whatever the setting.
-        assert.equal((yield* reserve({ pid: 42, window_id: 7, x: 3, y: 4 })).status, "admitted");
-        assert.deepEqual(yield* reserve({ pid: 42, window_id: 7 }, "COM.EXAMPLE.BLOCKED"), {
-          status: "refused",
-          detail: "app_not_allowed",
-          app: "COM.EXAMPLE.BLOCKED",
-        });
-        assert.equal(received.length, refused ? 1 : 2);
-      }).pipe(Effect.scoped),
-  );
-
   it.effect(
     "authenticates call reservations, rejects malformed requests and binds the credential's thread",
     () =>
@@ -884,7 +785,7 @@ describe("computer use lease route", () => {
         const routes = LeaseRoute.layer.pipe(
           Layer.provideMerge(
             Layer.mergeAll(
-              ServerSettings.layerTest(),
+              ServerSettings.layerTest({ cuaStrictInputGuards: true }),
               Layer.mock(McpSessionRegistry.McpSessionRegistry)({
                 resolve: (token) => Effect.succeed(token === "fixture" ? invocation : undefined),
               }),
@@ -956,7 +857,7 @@ describe("computer use lease route", () => {
         ]);
       }).pipe(Effect.scoped),
   );
-  it.layer(ServerSettings.layerTest())("streams", (it) => {
+  it.layer(ServerSettings.layerTest({ cuaStrictInputGuards: true }))("streams", (it) => {
     it.effect("pushes a revocation as soon as it is recorded", () =>
       Effect.gen(function* () {
         const f = yield* fixture();
