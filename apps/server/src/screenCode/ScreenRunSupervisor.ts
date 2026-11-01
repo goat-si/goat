@@ -16,7 +16,7 @@ import {
   ScreenEffectReceipt,
 } from "@goat/contracts";
 import { ScreenHostBridge, type ScreenHostContext } from "./ScreenHostBridge.ts";
-import { cellErrorSafety } from "./ScreenActionOutcome.ts";
+import { cellErrorSafety, isScreenRead } from "./ScreenActionOutcome.ts";
 
 const isScreenGuestError = Schema.is(ScreenGuestError);
 const isScreenRunError = Schema.is(ScreenRunError);
@@ -314,7 +314,7 @@ export function createScreenRunSupervisor(deps: {
               settled = true;
               cleanup();
               deps.hostBridge.cutCellNow(identity.runId, identity.turnId, cellId);
-              const { journal, effectsStarted } = deps.hostBridge.takeCellImagesNow(
+              const { journal, writesStarted } = deps.hostBridge.takeCellImagesNow(
                 identity.runId,
                 identity.turnId,
                 cellId,
@@ -336,7 +336,8 @@ export function createScreenRunSupervisor(deps: {
               );
               const receipts = normalized.slice(-16);
               const effectStarted =
-                effectsStarted > 0 || receipts.some((receipt) => receipt.dispatched);
+                writesStarted > 0 ||
+                normalized.some((receipt) => receipt.dispatched && !isScreenRead(receipt.method));
               callAbort.abort();
               close(session);
               reject(
