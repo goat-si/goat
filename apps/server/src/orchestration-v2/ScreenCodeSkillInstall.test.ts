@@ -13,6 +13,14 @@ it("installs and refreshes the screen guide under host state for an attached tur
     const path = installScreenCodeSkillAt(stateDir);
     expect(path).toBe(NodePath.join(stateDir, "skills", "screen-code", "SKILL.md"));
     expect(NodeFS.readFileSync(path!, "utf8")).toBe(screenCodeSkillFiles()["SKILL.md"]);
+    for (const [relative, content] of Object.entries(screenCodeSkillFiles())) {
+      expect(NodeFS.readFileSync(NodePath.join(NodePath.dirname(path!), relative), "utf8")).toBe(
+        content,
+      );
+    }
+    expect(Object.keys(screenCodeSkillFiles())).toEqual(
+      expect.arrayContaining(["references/errors.md", "references/workflows.md"]),
+    );
     NodeFS.writeFileSync(path!, "stale");
     expect(installScreenCodeSkillAt(stateDir)).toBe(path);
     expect(NodeFS.readFileSync(path!, "utf8")).toBe(screenCodeSkillFiles()["SKILL.md"]);
