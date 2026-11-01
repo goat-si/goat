@@ -773,3 +773,26 @@ it.live("a busy menu invocation leaves the target usable", () => {
     yield* finish;
   }).pipe(Effect.provide(cellService(host)));
 });
+
+it.live.each([
+  ["bringToFront", "bring_to_front"],
+  ["launch", "launch_app"],
+])("a busy app.%s leaves the target usable", ([method, tool]) => {
+  const { host, sent } = fixture({
+    [tool]: new DriverError({
+      effect: "refused",
+      code: "desktop_busy",
+      status: "refused",
+      refusal: { code: "desktop_busy", message: "desktop input is busy" },
+    }),
+  });
+  return Effect.gen(function* () {
+    const result = yield* runCell(
+      `${BIND} let failure; try { await app.${method}(); } catch (e) { failure = [e.code, e.effectStarted, e.safety?.possibleCommit]; } const again = await app.click('Apply'); return [failure, again.verdict];`,
+    );
+    expect(result.value).toEqual([["unavailable", false, false], "confirmed"]);
+    expect(sent.filter((entry) => entry.tool === tool)).toHaveLength(1);
+    expect(sent.filter((entry) => entry.tool === "click")).toHaveLength(1);
+    yield* finish;
+  }).pipe(Effect.provide(cellService(host)));
+});

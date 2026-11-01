@@ -387,3 +387,22 @@ describe("a reply already marked as possibly committed keeps that mark", () => {
     assert.isTrue(driverRefused("select_text", JSON.parse(reply({ code: "unknown_tool" }))));
   });
 });
+
+it("desktop lease refusals require observing again", () => {
+  for (const code of ["desktop_busy", "desktop_lease_unavailable"]) {
+    assert.deepInclude(
+      driverOutcomeSafety("click", {
+        result: {
+          isError: true,
+          structuredContent: {
+            effect: "refused",
+            status: "refused",
+            code,
+            refusal: { code, message: "busy" },
+          },
+        },
+      }),
+      { possibleCommit: false, retryClass: "new_key", code: "write_refused_reobserve" },
+    );
+  }
+});

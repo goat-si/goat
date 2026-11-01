@@ -66,6 +66,17 @@ export const driverError = (reply: ComputerUsePrimitiveReply): ScreenRunError | 
   const evidence = driverEvidence(object(object(reply.result)?.structuredContent));
   return error === undefined || evidence.length === 0 ? error : { ...error, evidence };
 };
+export const driverFailureNextStep = (
+  reply: ComputerUsePrimitiveReply,
+  error: ScreenRunError,
+  possibleCommit: boolean,
+) => {
+  const structured = object(object(reply.result)?.structuredContent);
+  const code = string(object(structured?.refusal)?.code) ?? string(structured?.code);
+  return possibleCommit && (code === "desktop_busy" || code === "desktop_lease_unavailable")
+    ? "Earlier input may have landed. Observe before acting; never resend it."
+    : error.nextStep;
+};
 const classifyDriverError = (reply: ComputerUsePrimitiveReply): ScreenRunError | undefined => {
   if (reply.status === "unknown_outcome")
     return { ...fail("unknown_outcome"), effectStarted: true };
