@@ -356,3 +356,24 @@ it.effect("a send button first shown by within is still guarded as a send button
     expect(sent.filter((each) => each.tool === "click")).toHaveLength(0);
   }),
 );
+
+it.effect("within preserves the degraded base read receipt", () =>
+  Effect.gen(function* () {
+    const { host } = fixture({
+      get_window_state: window(tree, { degraded: true, degraded_reason: "ax_timeout" }),
+    });
+    const target = yield* bind(host);
+    const base = yield* host.observe(call("get_window_state", {}, target), context);
+    const observation = base.value as ScreenObservation;
+    const within = yield* host.observe(
+      call("get_window_state", { within: 1, withinBase: observation.observationId }, target),
+      context,
+    );
+    expect(base.evidence).toEqual(["read:degraded"]);
+    expect(within).toMatchObject({
+      category: "unverifiable",
+      safety: { code: "read_indeterminate", possibleCommit: false },
+      evidence: ["read:degraded"],
+    });
+  }),
+);

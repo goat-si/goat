@@ -44,32 +44,84 @@ const call = (callId: number) => ({
   deadlineMillis: 60000,
 });
 
-it.effect("completed and cut reads leave a cell running without possible commits", () =>
+it.effect("a read rejected after dispatch has failure safety in its reply and receipt", () =>
   Effect.gen(function* () {
     const bridge = new ScreenHostBridge();
     bridge.setDispatcher({
-      availability: () => Effect.succeed([{ kind: "tab", available: true }]),
-      dispatch: (request) =>
+      availability: () => Effect.succeed([]),
+      dispatch: () =>
         Effect.succeed({
-          value: "readable",
-          category: request.callId === 1 ? ("confirmed" as const) : ("unverifiable" as const),
-          evidence: [request.callId === 1 ? "read:completed" : "read:cut"],
-          safety: classifyActionOutcome({
-            effect: "read",
-            status: request.callId === 1 ? "completed" : "partial",
-          }),
+          value: "x".repeat(1000),
+          category: "confirmed" as const,
+          evidence: ["read:completed"],
+          safety: classifyActionOutcome({ effect: "read", status: "completed" }),
         }),
     });
-    for (const id of [1, 2, 3]) {
-      const reply = yield* bridge.handle({ ...call(id), method: "observe" }, context());
-      expect(reply?.outcome).toBe("ok");
-    }
+    const live = context();
+    const reply = yield* bridge.handle(call(1), {
+      ...live,
+      limits: { ...live.limits, returnBytes: 100 },
+    });
+    expect(reply?.error?.safety).toMatchObject({
+      code: "read_indeterminate",
+      possibleCommit: false,
+    });
     const journal = (yield* bridge.takeCellImages("r", "t", "c")).journal;
-    expect(journal.map(({ receipt }) => receipt.safety?.code)).toEqual([
-      "read_completed",
-      "read_indeterminate",
-      "read_indeterminate",
-    ]);
-    expect(journal.every(({ receipt }) => receipt.safety?.possibleCommit === false)).toBe(true);
+    expect(journal[0]?.receipt.safety).toMatchObject({
+      code: "read_indeterminate",
+      possibleCommit: false,
+    });
   }),
+);
+
+it.effect.each(["invalid image", "oversized image reply"] as const)(
+  "%s has failure safety in both reply and receipt",
+  (kind) =>
+    Effect.gen(function* () {
+      const bridge = new ScreenHostBridge();
+      const metadata = {
+        imageRef: "i",
+        callId: 1,
+        targetId: "target",
+        observationId: "o",
+        regionId: "g",
+        region: { kind: "viewport" as const, x: 0, y: 0, width: 1, height: 1 },
+        pixelWidth: 1,
+        pixelHeight: 1,
+        scale: 1,
+        mimeType: "image/png" as const,
+      };
+      const image = {
+        ...metadata,
+        callId: kind === "invalid image" ? 2 : 1,
+        bytes: Buffer.from("png").toString("base64"),
+      };
+      bridge.setDispatcher({
+        availability: () => Effect.succeed([]),
+        dispatch: () =>
+          Effect.succeed({
+            value: { text: "x".repeat(1000) },
+            image,
+            imageMetadata: metadata,
+            category: "confirmed" as const,
+            evidence: ["read:completed"],
+            safety: classifyActionOutcome({ effect: "read", status: "completed" }),
+          }),
+      });
+      const live = context();
+      const reply = yield* bridge.handle(call(1), {
+        ...live,
+        limits: { ...live.limits, returnBytes: 100 },
+      });
+      expect(reply?.outcome).toBe("error");
+      expect(reply?.error?.safety).toMatchObject({
+        code: "read_indeterminate",
+        possibleCommit: false,
+      });
+      const journal = (yield* bridge.takeCellImages("r", "t", "c")).journal;
+      expect(journal[0]?.receipt).toMatchObject({
+        category: "refused",
+        safety: { code: "read_indeterminate", possibleCommit: false },
+      });
+    }),
 );

@@ -80,6 +80,46 @@ const bind = (host: ReturnType<typeof timedHost>["host"]) =>
 
 type Timed = { ms?: number; phases?: Record<string, number> };
 
+it.effect("incomplete query and degraded driver reads remain indeterminate", () =>
+  Effect.gen(function* () {
+    const incomplete = timedHost({
+      get_window_state: (args: Record<string, unknown>) =>
+        goat2WindowState(args, { elements_complete: false }),
+    });
+    const ref = yield* bind(incomplete.host);
+    const query = yield* incomplete.host.observe(
+      call("get_window_state", { mode: "query", query: { name: "missing" } }, ref),
+      context,
+    );
+    expect(query).toMatchObject({
+      category: "unverifiable",
+      safety: { code: "read_indeterminate", possibleCommit: false },
+      evidence: ["read:incomplete_search"],
+    });
+  }),
+);
+
+it.effect("degraded driver reads remain indeterminate", () =>
+  Effect.gen(function* () {
+    const degraded = timedHost({
+      get_window_state: (args: Record<string, unknown>) => ({
+        ...goat2WindowState(args),
+        degraded: true,
+        degraded_reason: "ax_timeout",
+        elements: [],
+        tree_markdown: "",
+      }),
+    });
+    const degradedRef = yield* bind(degraded.host);
+    const result = yield* degraded.host.observe(call("get_window_state", {}, degradedRef), context);
+    expect(result).toMatchObject({
+      category: "unverifiable",
+      safety: { code: "read_indeterminate", possibleCommit: false },
+      evidence: ["read:degraded"],
+    });
+  }),
+);
+
 it.effect("complete desktop reads are confirmed without a possible commit", () =>
   Effect.gen(function* () {
     const { host } = timedHost({ get_window_state: goat2WindowState });

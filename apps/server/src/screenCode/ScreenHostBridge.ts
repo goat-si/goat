@@ -1,4 +1,5 @@
 // @effect-diagnostics schemaSyncInEffect:off preferSchemaOverJson:off - Frames are bounded before decode; JSON size is measured for the pipe.
+import { imageReceipt, settleOmittedImages } from "./ScreenImageReceipts.ts";
 import { replyTargetId } from "./ScreenHostReplyTarget.ts";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
@@ -30,6 +31,7 @@ import {
   isScreenRead,
   screenActionSafety,
   screenFailureSafety,
+  screenReplyFailureSafety,
   markUnawaited,
   firstScreenFailure,
 } from "./ScreenActionOutcome.ts";
@@ -571,15 +573,15 @@ export class ScreenHostBridge {
           try: () => Buffer.byteLength(JSON.stringify(outcome.value) ?? ""),
           catch: () => ({
             ...failure("downstream_failure", call.callId),
-            effectStarted: callDispatched,
-            safety,
+            effectStarted: callDispatched && !isScreenRead(call.method),
+            safety: screenReplyFailureSafety(call, safety, callDispatched),
           }),
         });
         if (bytes > context.limits.returnBytes)
           return yield* Effect.fail({
             ...failure("output_limit", call.callId),
-            effectStarted: callDispatched,
-            safety,
+            effectStarted: callDispatched && !isScreenRead(call.method),
+            safety: screenReplyFailureSafety(call, safety, callDispatched),
             limit: { name: "returnBytes" as const, maximum: context.limits.returnBytes },
           });
       }
@@ -663,7 +665,7 @@ export class ScreenHostBridge {
       );
       return refused(call, {
         ...failure(dispatched ? "unknown_outcome" : (state.cutoffReason ?? "stopped"), call.callId),
-        effectStarted: dispatched,
+        effectStarted: dispatched && !isScreenRead(call.method),
         safety,
         nextStep: state.paused
           ? outcomeSentence(dispatched ? "paused_dispatched" : "paused_unsent")
@@ -701,11 +703,10 @@ export class ScreenHostBridge {
         image.targetId !== metadata.targetId ||
         !isScreenImageSchema(image)
       ) {
-        settle("unverifiable");
         const error = {
           ...failure("downstream_failure", call.callId),
-          effectStarted: callDispatched,
-          safety: result.success.safety,
+          effectStarted: callDispatched && !isScreenRead(call.method),
+          safety: screenReplyFailureSafety(call, result.success.safety, callDispatched),
         };
         failCell(error);
         return refused(call, { ...error, safety: screenFailureSafety(call, error) });
@@ -758,26 +759,30 @@ export class ScreenHostBridge {
     const json = image ? JSON.stringify(value) : undefined;
     if (json !== undefined && Buffer.byteLength(json) > context.limits.returnBytes) {
       state.truncated.push("return");
-      settle("unverifiable");
       const error = {
         ...failure("output_limit", call.callId),
-        effectStarted: callDispatched,
-        safety: result.success.safety,
+        effectStarted: callDispatched && !isScreenRead(call.method),
+        safety: screenReplyFailureSafety(call, result.success.safety, callDispatched),
         limit: { name: "returnBytes" as const, maximum: context.limits.returnBytes },
       };
       failCell(error);
       return refused(call, { ...error, safety: screenFailureSafety(call, error) });
     }
-    const evidence = result.success.evidence ?? [];
+    const omitted =
+      metadata &&
+      state.metadata.some((item) => item.callId === call.callId && item.omitted) &&
+      isScreenRead(call.method);
+    const receipt = omitted ? imageReceipt(call.method) : result.success;
+    const evidence = receipt.evidence ?? [];
     const withEffect = applyObservedEffect(state, call, result.success, admittedIndex, value);
     if (Buffer.byteLength(JSON.stringify(withEffect) ?? "") <= context.limits.returnBytes)
       value = withEffect;
     settle(
-      result.success.category,
+      receipt.category,
       "settled",
       undefined,
       evidence,
-      result.success.safety,
+      receipt.safety,
       result.success.outcome ? { outcome: result.success.outcome } : {},
     );
     return {
@@ -786,7 +791,7 @@ export class ScreenHostBridge {
       cellId: call.cellId,
       callId: call.callId,
       outcome: "ok" as const,
-      category: result.success.category,
+      category: receipt.category,
       ...(result.success.warnings?.length ? { warnings: result.success.warnings } : {}),
       ...(evidence.length
         ? { evidence: evidence.slice(0, 16).map((line) => line.slice(0, 200)) }
@@ -811,7 +816,7 @@ export class ScreenHostBridge {
     return {
       images: state?.images ?? [],
       imageMetadata: state?.metadata ?? [],
-      journal: state?.journal ?? [],
+      journal: settleOmittedImages(state?.journal ?? [], state?.metadata ?? []),
       truncated: state?.truncated ?? [],
       effectsStarted: state?.effectsStarted ?? 0,
       firstFailure: state?.firstFailure,

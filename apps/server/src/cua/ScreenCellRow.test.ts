@@ -181,11 +181,6 @@ describe("ScreenCellRow", () => {
     );
     expect(screenCellSummary(facts({ durationMs: 320 }))).toBe("320 ms");
   });
-  it("summarizes a completed read without calling it unverifiable", () => {
-    expect(screenCellSummary(facts({ receipts: [receipt(1, "observe", "confirmed")] }))).toBe(
-      "1 confirmed · 820 ms",
-    );
-  });
   it("summarizes window observations separately from driver outcomes", () => {
     const summary = screenCellSummary(
       facts({

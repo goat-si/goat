@@ -85,3 +85,73 @@ it.effect("identical images in a cell are emitted once while each capture keeps 
     expect(second?.value).toMatchObject({ imageRef: "i1", regionId: "g2", observationId: "o2" });
   }),
 );
+
+it.effect("an invalid read image does not start a write effect", () =>
+  Effect.gen(function* () {
+    const bridge = new ScreenHostBridge();
+    bridge.setDispatcher({
+      availability: () => Effect.succeed([{ kind: "tab", available: true }]),
+      dispatch: (request) => {
+        const metadata: ScreenImageMetadata = {
+          imageRef: "i",
+          callId: request.callId,
+          targetId: "target",
+          observationId: "o",
+          regionId: "g",
+          region: { kind: "viewport", x: 0, y: 0, width: 1, height: 1 },
+          pixelWidth: 1,
+          pixelHeight: 1,
+          scale: 1,
+          mimeType: "image/png",
+        };
+        return Effect.succeed({
+          value: metadata,
+          image: { ...metadata, callId: 999, bytes: "cG5n" },
+          imageMetadata: metadata,
+          category: "confirmed" as const,
+          evidence: ["read:completed"],
+        });
+      },
+    });
+    const reply = yield* bridge.handle(call(1), context());
+    expect(reply?.error).toMatchObject({ effectStarted: false, safety: { possibleCommit: false } });
+  }),
+);
+
+it.effect("an omitted screenshot settles its read as indeterminate", () =>
+  Effect.gen(function* () {
+    const bridge = new ScreenHostBridge();
+    bridge.setDispatcher({
+      availability: () => Effect.succeed([{ kind: "tab", available: true }]),
+      dispatch: (request) => {
+        const metadata: ScreenImageMetadata = {
+          imageRef: "i",
+          callId: request.callId,
+          targetId: "target",
+          observationId: "o",
+          regionId: "g",
+          region: { kind: "viewport", x: 0, y: 0, width: 1, height: 1 },
+          pixelWidth: 1,
+          pixelHeight: 1,
+          scale: 1,
+          mimeType: "image/png",
+        };
+        return Effect.succeed({
+          value: metadata,
+          image: { ...metadata, bytes: Buffer.alloc(101).toString("base64") },
+          imageMetadata: metadata,
+          category: "confirmed" as const,
+          evidence: ["read:completed"],
+        });
+      },
+    });
+    yield* bridge.handle(call(1), context());
+    const collected = yield* bridge.takeCellImages("r", "t", "c");
+    expect(collected.images).toEqual([]);
+    expect(collected.journal[0]?.receipt).toMatchObject({
+      category: "unverifiable",
+      safety: { code: "read_indeterminate", possibleCommit: false },
+      evidence: ["read:image_omitted"],
+    });
+  }),
+);

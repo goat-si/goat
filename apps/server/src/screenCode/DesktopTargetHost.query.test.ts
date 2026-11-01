@@ -144,6 +144,14 @@ it.effect("a query finds an item past a reduced full read", () =>
       "Read stopped at 256 elements; observe({query:{name}}) searches up to 4,096.",
     );
     expect(full.elements.some((each) => each.index === 900)).toBe(false);
+    expect(outcomes[1]).toMatchObject({
+      _tag: "Success",
+      success: {
+        category: "unverifiable",
+        safety: { code: "read_indeterminate", possibleCommit: false },
+        evidence: ["read:filtered"],
+      },
+    });
     const found = observed(outcomes[1]);
     expect(found.elements.map((each) => each.index)).toEqual([900]);
     // An ordinary read does not prove it walked every part of the window.

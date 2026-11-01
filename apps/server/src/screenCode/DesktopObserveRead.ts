@@ -34,7 +34,17 @@ export interface DesktopQuery {
   readonly id?: string;
 }
 /** The rest of a read cut for budget: its rows and text, and what earlier pages carried. */
+export type DesktopReadReason = "cut" | "filtered" | "incomplete_search" | "degraded";
+
+export interface DesktopKeptTree {
+  readonly base: string;
+  readonly state: Record<string, unknown>;
+  readonly cut: boolean;
+  readonly reason?: DesktopReadReason | undefined;
+}
+
 export interface DesktopPages {
+  readonly reason?: DesktopReadReason | undefined;
   /** The observation the pages continue; a newer read of the window ends them. */
   readonly base: string;
   /** Rows with frames in window points from origin, as the read's observation gave them. */
