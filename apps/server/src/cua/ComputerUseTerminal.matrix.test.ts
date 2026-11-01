@@ -63,7 +63,7 @@ import { refuseProxyCall } from "./ComputerUseLeaseProxyRefusal.ts";
 import { staleGeneration } from "./ComputerUseLeaseProxyPrimitive.ts";
 import { proxyCallAdmission } from "./ComputerUseLeaseCallPermissions.ts";
 import { narrowBatch } from "./ComputerUseBatchIdentity.ts";
-import { historyTerminal } from "./ComputerUseTerminal.historyMatrix.testkit.ts";
+import { historyCancelled, historyTerminal } from "./ComputerUseTerminal.historyMatrix.testkit.ts";
 import { busyTerminalNextStep, imageCompact } from "./ComputerUseTerminal.imageMatrix.testkit.ts";
 import { guestCompletion } from "./ComputerUseTerminal.guestMatrix.testkit.ts";
 import { preDispatchSites } from "./ComputerUseTerminal.preDispatch.testkit.ts";
@@ -863,6 +863,7 @@ const sites: ReadonlyArray<{
   },
   { name: "ComputerUseLeaseProxyPersonStop.terminalSink", run: proxy },
   { name: "ComputerUseHistoryProxy.terminalSink", run: historyTerminal },
+  { name: "ComputerUseHistoryProxy.cancelledTerminal", run: historyCancelled },
   { name: "ComputerUseLeaseProxy.interrupt", run: interruptedProxy },
   { name: "ComputerUseLeaseProxyThread.output", run: threadProxy },
   { name: "ComputerUseLeaseProxyOptions.retainedTerminal", run: received },
