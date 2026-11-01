@@ -241,11 +241,13 @@ export const completionCellError = (
   const terminal = replaceWithTerminal(error ?? "none", retained, reason);
   if (error === undefined && terminal.reason === undefined) return undefined;
   return cellTerminalError(
-    error ?? {
-      code: "stopped",
-      effectStarted: terminal.possibleCommit,
-      nextStep: "Refresh the screen run and retry if appropriate.",
-    },
+    error === undefined
+      ? {
+          code: "stopped",
+          effectStarted: terminal.possibleCommit,
+          nextStep: "Refresh the screen run and retry if appropriate.",
+        }
+      : { ...error, effectStarted: terminal.possibleCommit },
     receipts,
     terminal.reason,
   );
