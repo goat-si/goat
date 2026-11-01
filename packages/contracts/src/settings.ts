@@ -85,14 +85,13 @@ import { AgentToolListing, DEFAULT_AGENT_TOOL_LISTING } from "./agentSurface/lis
 import { CuaSettingsFields, CuaSettingsPatchFields } from "./computerUseSettings.ts";
 import { SnoozeSettingsFields, SnoozeSettingsPatchFields } from "./snoozePresets.ts";
 import { BuiltInSkillProjectOverrideFields } from "./builtinSkills.ts";
+import * as BlockedBrowser from "./blockedBrowserHosts.ts";
 
 export * from "./settingsFontSizes.ts";
 export { requiredScopesForServerSettingsPatch } from "./auth.ts";
-
 export const TimestampFormat = Schema.Literals(["locale", "12-hour", "24-hour"]);
 export type TimestampFormat = typeof TimestampFormat.Type;
 const DEFAULT_TIMESTAMP_FORMAT: TimestampFormat = "locale";
-
 export const DiffLayout = Schema.Literals(["stacked", "split"]);
 export type DiffLayout = typeof DiffLayout.Type;
 const DEFAULT_DIFF_LAYOUT: DiffLayout = "stacked";
@@ -1440,7 +1439,7 @@ export const ServerSettings = Schema.Struct({
   continueThreadsAfterServerUpdate: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(true)),
   ),
-  enableAgentBrowserAccess: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  ...BlockedBrowser.BlockedBrowserSettingsFields,
   projectAgentBrowserAccessOverrides: Schema.Record(ProjectId, Schema.Boolean).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
@@ -1914,7 +1913,7 @@ const ServerSettingsPatchFields = Schema.Struct({
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
   continueThreadsAfterServerUpdate: Schema.optionalKey(Schema.Boolean),
   automaticServerUpdates: Schema.optionalKey(Schema.Boolean),
-  enableAgentBrowserAccess: Schema.optionalKey(Schema.Boolean),
+  ...BlockedBrowser.BlockedBrowserSettingsPatchFields,
   projectAgentBrowserAccessOverrides: Schema.optionalKey(
     Schema.Record(ProjectId, Schema.NullOr(Schema.Boolean)),
   ),

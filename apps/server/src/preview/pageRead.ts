@@ -8,6 +8,7 @@ import { dottedPattern, maskSecrets, openReaders, tabCookies } from "./pageSecre
 import { HIDDEN_IN_DOCUMENT, readFailure, resolvePageScope, scopeHidden } from "./pageScope.ts";
 import { withoutDataPayload } from "./ServerBrowserPage.ts";
 import type { SessionControl } from "./SessionControl.ts";
+import type { ActionChannel } from "./actionChannel.ts";
 
 const READ_SCRIPT = `async (scope, { settleMs, timeoutMs, markdown, scoped }) => {
   const document = scope.ownerDocument;
@@ -192,6 +193,7 @@ export const pageRead = (
   input: PreviewAutomationReadInput,
   /** The tab's filled-secret mask, applied to the whole text before it is paged. */
   filled: (text: string) => string = (text) => text,
+  channel?: ActionChannel,
 ): Promise<PreviewAutomationRead> =>
   control.observe(async () => {
     if ((input.offset ?? 0) > 0 && !input.revision) throw readFailure("revision_required");
@@ -235,7 +237,9 @@ export const pageRead = (
             "scope",
             `return (${READ_SCRIPT})(scope, ${JSON.stringify(args)})`,
           ) as (scope: unknown) => Promise<Rendered>;
-          rendered = await scope.evaluate(render);
+          rendered = await (channel
+            ? channel.call(() => scope.evaluate(render))
+            : scope.evaluate(render));
           // Cut text can end inside a secret or a markup wrapper that no mask can see whole.
           if (rendered.truncatedRender) throw readFailure("render_cut");
           // Frame elements embedding the scope live in other documents; check them after the read.

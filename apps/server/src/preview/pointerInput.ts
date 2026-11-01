@@ -4,8 +4,9 @@
  * @module pointerInput
  */
 import type { Page } from "playwright-core";
-import { remaining } from "./actionReadiness.ts";
+import { remaining, type ReadinessGate } from "./actionReadiness.ts";
 import { ServerBrowserOperationError } from "./browserOperationError.ts";
+import { BrowserControlInterrupted } from "./SessionControl.ts";
 
 type Point = { readonly x: number; readonly y: number };
 
@@ -13,56 +14,106 @@ type Point = { readonly x: number; readonly y: number };
  * Before each input after the first: an earlier one can open a dialog that holds the page past
  * the caller's deadline, or a person can take the tab, and then the rest must not go out.
  */
-const again = (gate: () => void, deadline: number) => {
+const again = async (gate: ReadinessGate, deadline: number) => {
   if (performance.now() >= deadline)
     throw new ServerBrowserOperationError(
       "PreviewAutomationTimeoutError",
       "The deadline passed partway through the pointer input, so the rest was not sent.",
     );
-  gate();
+  await gate();
+  gate.signal?.throwIfAborted();
 };
 
 /** Presses at `from`, moves in `steps` to `to`, releases; each input passes the gate first. */
 export const dragBetween = async (
   page: Page,
   input: { readonly from: Point; readonly to: Point; readonly steps?: number | undefined },
-  gate: () => void,
+  gate: ReadinessGate,
   deadline: number,
 ) => {
+  const channel = gate.channel;
+  if (!channel) throw new Error("An action channel is required for pointer input.");
   const steps = input.steps ?? 10;
-  remaining(deadline);
-  gate();
-  await page.mouse.move(input.from.x, input.from.y);
-  again(gate, deadline);
-  await page.mouse.down();
+  const cdp = await channel.newCDPSession(page);
+  const send = channel.sendFor(cdp);
+  let cut = false;
   try {
-    for (let step = 1; step <= steps; step++) {
-      const along = (from: number, to: number) => from + ((to - from) * step) / steps;
-      again(gate, deadline);
-      await page.mouse.move(along(input.from.x, input.to.x), along(input.from.y, input.to.y));
+    remaining(deadline);
+    await gate();
+    gate.signal?.throwIfAborted();
+    await send("Input.dispatchMouseEvent", { type: "mouseMoved", ...input.from });
+    await again(gate, deadline);
+    let held = false;
+    try {
+      const pressing = send("Input.dispatchMouseEvent", {
+        type: "mousePressed",
+        ...input.from,
+        button: "left",
+        buttons: 1,
+        clickCount: 1,
+      });
+      held = true;
+      await pressing;
+      for (let step = 1; step <= steps; step++) {
+        const along = (from: number, to: number) => from + ((to - from) * step) / steps;
+        await again(gate, deadline);
+        await send("Input.dispatchMouseEvent", {
+          type: "mouseMoved",
+          x: along(input.from.x, input.to.x),
+          y: along(input.from.y, input.to.y),
+          button: "left",
+          buttons: 1,
+        });
+      }
+      await again(gate, deadline);
+      await send("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        ...input.to,
+        button: "left",
+        buttons: 0,
+        clickCount: 1,
+      });
+      held = false;
+    } catch (cause) {
+      if (held && (cause instanceof BrowserControlInterrupted || gate.signal?.aborted)) {
+        cut = true;
+        await channel.resetPressedInput(input.from, cdp);
+      } else if (held) {
+        try {
+          await send("Input.cancelDragging");
+        } finally {
+          await send("Input.dispatchMouseEvent", {
+            type: "mouseReleased",
+            ...input.from,
+            button: "left",
+            buttons: 0,
+            clickCount: 1,
+          });
+        }
+      }
+      throw cause;
     }
-    again(gate, deadline);
-  } catch (cause) {
-    // A drag cut short still lets go of the button it pressed, where the pointer stopped.
-    await page.mouse.up().catch(() => undefined);
-    throw cause;
+  } finally {
+    if (!cut && !gate.signal?.aborted) await channel.detach(cdp);
   }
-  await page.mouse.up();
 };
 
 /** A real wheel at a point goes to whatever is under it, which page script can zoom on. */
 export const wheelAt = async (
-  page: Page,
+  _page: Page,
   at: Point,
   delta: readonly [number, number],
-  gate: () => void,
+  gate: ReadinessGate,
   deadline: number,
 ) => {
+  const channel = gate.channel;
+  if (!channel) throw new Error("An action channel is required for pointer input.");
   remaining(deadline);
-  gate();
-  await page.mouse.move(at.x, at.y);
-  again(gate, deadline);
-  await page.mouse.wheel(delta[0], delta[1]);
+  await gate();
+  gate.signal?.throwIfAborted();
+  await channel.mouse.move(at.x, at.y);
+  await again(gate, deadline);
+  await channel.mouse.wheel(delta[0], delta[1]);
 };
 
 type Box = Point & { readonly width: number; readonly height: number };

@@ -5,6 +5,8 @@
  */
 import { constVoid } from "effect/Function";
 import type { ElementHandle, Frame, JSHandle, Locator, Page } from "playwright-core";
+import { actionCall, disposeAction, type ReadinessGate } from "./actionReadiness.ts";
+import { BrowserControlInterrupted } from "./SessionControl.ts";
 
 export type ClickEvidence =
   | "dom"
@@ -289,11 +291,17 @@ const bounded = async <A>(work: Promise<A> | undefined, ms = SETTLE_MS) => {
   }
 };
 
-const stopWatch = (watch: JSHandle<Watch>) =>
-  void watch
-    .evaluate((state) => state.stop())
+const stopWatch = (watch: JSHandle<Watch>, gate: ReadinessGate) => {
+  const channel = gate.channel;
+  if (!channel) throw new Error("An action channel is required for click observation.");
+  if (gate.signal?.aborted) return;
+  void channel
+    .call(() => watch.evaluate((state) => state.stop()))
     .catch(constVoid)
-    .finally(() => void watch.dispose().catch(constVoid));
+    .finally(() => {
+      if (!gate.signal?.aborted) void channel.call(() => watch.dispose()).catch(constVoid);
+    });
+};
 
 type Point = { readonly x: number; readonly y: number };
 export type ClickAim =
@@ -310,8 +318,8 @@ const contentOrigin = (x: number, y: number) => `(() => {
     box.top + el.clientTop + parseFloat(style.paddingTop)];
 })()`;
 
-const disposeAim = (aim: ClickAim | undefined) => {
-  if (aim && "element" in aim) void aim.element.dispose().catch(constVoid);
+const disposeAim = (aim: ClickAim | undefined, gate?: ReadinessGate) => {
+  if (aim && "element" in aim) disposeAction(gate, aim.element);
 };
 
 /**
@@ -323,30 +331,47 @@ export const aimClick = async (
   page: Page,
   locator: Locator | null,
   point: Point,
+  gate?: ReadinessGate,
 ): Promise<ClickAim> => {
-  const finding = findAim(page, locator, point).catch(() => undefined);
+  const finding = findAim(page, locator, point, gate).catch((cause: unknown) => {
+    if (gate?.signal?.aborted || cause instanceof BrowserControlInterrupted) throw cause;
+    return undefined;
+  });
   const aim = await bounded(finding, 2 * SETTLE_MS);
-  if (aim === undefined) void finding.then(disposeAim);
+  if (aim === undefined) void finding.then((late) => disposeAim(late, gate)).catch(constVoid);
   return aim ?? { point };
 };
 export const releaseAim = disposeAim;
 
-const findAim = async (page: Page, locator: Locator | null, point: Point): Promise<ClickAim> => {
+const findAim = async (
+  page: Page,
+  locator: Locator | null,
+  point: Point,
+  gate?: ReadinessGate,
+): Promise<ClickAim> => {
   if (locator !== null) {
-    const element = await locator.elementHandle({ timeout: SETTLE_MS }).catch(() => null);
-    const frame = element ? await element.ownerFrame() : null;
+    const element = await actionCall(gate, () =>
+      locator.elementHandle({ timeout: SETTLE_MS }),
+    ).catch(() => null);
+    const frame = element ? await actionCall(gate, () => element.ownerFrame()) : null;
     if (element && frame) return { frame, element };
-    void element?.dispose().catch(constVoid);
+    if (element) disposeAction(gate, element);
   }
   let frame = page.mainFrame();
   let at = point;
   for (let depth = 0; depth < 3; depth++) {
-    const hit = await frame.evaluateHandle(`document.elementFromPoint(${at.x}, ${at.y})`);
+    const hit = await actionCall(gate, () =>
+      frame.evaluateHandle(`document.elementFromPoint(${at.x}, ${at.y})`),
+    );
     const element = hit.asElement();
-    const child = element ? await element.contentFrame().catch(() => null) : null;
-    void hit.dispose().catch(constVoid);
+    const child = element
+      ? await actionCall(gate, () => element.contentFrame()).catch(() => null)
+      : null;
+    disposeAction(gate, hit);
     if (!child) break;
-    const origin = (await frame.evaluate(contentOrigin(at.x, at.y))) as [number, number] | null;
+    const origin = (await actionCall(gate, () => frame.evaluate(contentOrigin(at.x, at.y)))) as
+      | [number, number]
+      | null;
     if (!origin) break;
     frame = child;
     at = { x: at.x - origin[0], y: at.y - origin[1] };
@@ -358,7 +383,15 @@ const findAim = async (page: Page, locator: Locator | null, point: Point): Promi
  * Starts watching before the click. `arm` begins counting right before the press, at the click's
  * target; `settle` waits briefly after it and returns the verdict.
  */
-export const watchClick = async (page: Page, frame: Frame = page.mainFrame()) => {
+export const watchClick = async (
+  page: Page,
+  frame: Frame = page.mainFrame(),
+  gate: ReadinessGate = () => {},
+) => {
+  await gate();
+  gate.signal?.throwIfAborted();
+  const channel = gate.channel;
+  if (!channel) throw new Error("An action channel is required for click observation.");
   const seen = new Set<ClickEvidence>();
   // The page says the click followed a link into a new window; the browser says one opened. A
   // popup counts only with both: a blocked one (a sandboxed frame) or an earlier click's does not.
@@ -371,15 +404,21 @@ export const watchClick = async (page: Page, frame: Frame = page.mainFrame()) =>
   };
   page.on("popup", onPopup);
   // A page that cannot run script, or that a dialog holds, still reports a dialog the press opened.
-  const installing = Promise.resolve()
-    .then(() => frame.evaluateHandle(INSTALL) as Promise<JSHandle<Watch>>)
-    .catch(() => undefined);
+  let installing: Promise<JSHandle<Watch> | undefined>;
+  try {
+    installing = (
+      channel.call(() => frame.evaluateHandle(INSTALL)) as Promise<JSHandle<Watch>>
+    ).catch(() => undefined);
+  } catch (cause) {
+    if (gate.signal?.aborted || cause instanceof BrowserControlInterrupted) throw cause;
+    installing = Promise.resolve(undefined);
+  }
   const watch = await bounded(installing, INSTALL_MS);
-  if (watch === undefined) void installing.then((late) => late && stopWatch(late));
+  if (watch === undefined) void installing.then((late) => late && stopWatch(late, gate));
   const release = () => {
     page.off("popup", onPopup);
     // Not awaited: a dialog the page opened holds every evaluation until it closes.
-    if (watch) stopWatch(watch);
+    if (watch) stopWatch(watch, gate);
   };
   const record = (kinds: ReadonlyArray<string> | void | undefined) => {
     for (const kind of kinds ?? []) seen.add(kind as ClickEvidence);
@@ -389,14 +428,23 @@ export const watchClick = async (page: Page, frame: Frame = page.mainFrame()) =>
   let first: Promise<void> | undefined;
   let navigated: Promise<void> | undefined;
   const arm = async (aim: ClickAim) => {
+    await gate();
+    gate.signal?.throwIfAborted();
     const target: unknown = "element" in aim ? aim.element : aim.point;
-    await bounded(watch?.evaluate((state, at) => state.arm(at), target).catch(constVoid));
-    first = watch
-      ?.evaluate((state) => state.changed.then(() => [...state.seen]))
-      .then(record, constVoid);
-    navigated = watch
-      ?.evaluate((state) => state.navigated.then(() => [...state.seen]))
-      .then(record, constVoid);
+    await bounded(
+      watch &&
+        channel.call(() => watch.evaluate((state, at) => state.arm(at), target)).catch(constVoid),
+    );
+    first =
+      watch &&
+      channel
+        .call(() => watch.evaluate((state) => state.changed.then(() => [...state.seen])))
+        .then(record, constVoid);
+    navigated =
+      watch &&
+      channel
+        .call(() => watch.evaluate((state) => state.navigated.then(() => [...state.seen])))
+        .then(record, constVoid);
   };
   const settle = async (dialog = false): Promise<ClickEffect> => {
     try {
@@ -409,12 +457,15 @@ export const watchClick = async (page: Page, frame: Frame = page.mainFrame()) =>
         // A failed read proves nothing.
         record(
           await bounded(
-            watch
-              ?.evaluate((state) => {
-                state.stop();
-                return [...state.seen];
-              })
-              .catch(() => undefined),
+            watch &&
+              channel
+                .call(() =>
+                  watch.evaluate((state) => {
+                    state.stop();
+                    return [...state.seen];
+                  }),
+                )
+                .catch(() => undefined),
           ),
         );
       }

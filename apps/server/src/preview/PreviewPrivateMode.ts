@@ -64,7 +64,11 @@ const PRIVATE_MODE_SCRIPT = `(() => {
  * Each document reports when it starts, so only a new document clears its frame's secret, never a
  * history or hash move within one; frames that go away stop counting.
  */
-export async function watchPrivateMode(page: Page, onChange: (on: boolean) => void) {
+export async function watchPrivateMode(
+  page: Page,
+  onChange: (on: boolean) => void,
+  signal?: AbortSignal,
+) {
   const privateFrames = new Set<Frame>();
   let last = false;
   const publish = () => {
@@ -73,6 +77,7 @@ export async function watchPrivateMode(page: Page, onChange: (on: boolean) => vo
     last = on;
     onChange(on);
   };
+  signal?.throwIfAborted();
   await page.exposeBinding(BINDING, ({ frame }, on: unknown) => {
     if (on === true) privateFrames.add(frame);
     else privateFrames.delete(frame);
@@ -81,9 +86,14 @@ export async function watchPrivateMode(page: Page, onChange: (on: boolean) => vo
   page.on("framedetached", (frame) => {
     if (privateFrames.delete(frame)) publish();
   });
+  signal?.throwIfAborted();
   await page.addInitScript(PRIVATE_MODE_SCRIPT);
   // A page that was already open, such as a desktop tab GOAT adopted, gets it now too.
   await Promise.all(
-    page.frames().map((frame) => frame.evaluate(PRIVATE_MODE_SCRIPT).catch(() => undefined)),
+    page.frames().map((frame) => {
+      signal?.throwIfAborted();
+      return frame.evaluate(PRIVATE_MODE_SCRIPT).catch(() => undefined);
+    }),
   );
+  signal?.throwIfAborted();
 }

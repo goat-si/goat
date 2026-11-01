@@ -18,7 +18,7 @@ import { createScreenDispatchRouter } from "../screenCode/ScreenDispatchRouter.t
 import { ScreenRunService } from "../screenCode/ScreenRunService.ts";
 import { resolveScreenRuntimeAsset } from "../screenCode/ScreenRuntimeAsset.ts";
 import { chromiumInstalled } from "./PreviewChromium.fixture.ts";
-import * as ServerBrowserPage from "./ServerBrowserPage.ts";
+import { testActionPage as ServerBrowserPage } from "./actionChannel.testkit.ts";
 
 const invocation = {
   environmentId: "env" as EnvironmentId,

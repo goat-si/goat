@@ -3,7 +3,7 @@
  *
  * @module ServerBrowserSessions
  */
-import type { ThreadId } from "@goat/contracts";
+import type { PreviewAutomationRequest, ThreadId } from "@goat/contracts";
 import type { Page } from "playwright-core";
 
 import type { SessionControl } from "./SessionControl.ts";
@@ -38,3 +38,30 @@ export const browserSessionView = async (tab: {
   agentStopped: tab.control.isAgentStopped,
   handoffReason: tab.control.handoffReason,
 });
+
+export const tabOwner = (tab: {
+  readonly control: { readonly controller: string | null; readonly agentId: string | null };
+}) =>
+  tab.control.controller !== null
+    ? ("human" as const)
+    : tab.control.agentId !== null
+      ? ("agent" as const)
+      : ("unclaimed" as const);
+
+export const markUsed = (
+  tabs: Iterable<{
+    readonly threadId: string;
+    readonly tabId: string;
+    readonly control: { readonly agentId: string | null };
+    usedAt: number;
+  }>,
+  request: PreviewAutomationRequest,
+  now: number,
+) => {
+  for (const tab of tabs)
+    if (
+      tab.threadId === request.threadId &&
+      (tab.control.agentId === request.agentSessionId || tab.tabId === request.tabId)
+    )
+      tab.usedAt = now;
+};

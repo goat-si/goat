@@ -814,7 +814,7 @@ it.live(
       expect(refused[2]?.[2]).toContain("did you mean timeoutMs?");
       expect(refused[3]?.[2]).toContain("did you mean screenshot?");
       // Only the accepted forms reached the browser: two presses, the click before the second, a click, a wait.
-      expect(sent.filter((operation) => operation !== "status")).toEqual([
+      expect(sent.filter((operation) => operation !== "status" && operation !== "claim")).toEqual([
         "press",
         "click",
         "press",

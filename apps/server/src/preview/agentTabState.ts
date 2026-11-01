@@ -16,6 +16,9 @@ export interface AgentInput {
   readonly at: number;
   /** The tab's control generation then; a person taking the tab since moves it on. */
   readonly generation: number;
+  readonly authority?: number;
+  readonly signal?: AbortSignal;
+  readonly runSignal?: AbortSignal | undefined;
 }
 
 /**
@@ -25,7 +28,11 @@ export interface AgentInput {
  */
 export const popupOwner = (
   opener: {
-    readonly control: { readonly agentId: string | null; readonly generation: number };
+    readonly control: {
+      readonly agentId: string | null;
+      readonly generation: number;
+      readonly authority?: number;
+    };
     readonly agentOperating: boolean;
     readonly lastAgentInput?: AgentInput | undefined;
   },
@@ -34,11 +41,19 @@ export const popupOwner = (
   if (opener.control.agentId !== null) return opener.control.agentId;
   const recent = opener.lastAgentInput;
   return recent &&
-    recent.generation === opener.control.generation &&
+    matchesControl(recent, opener.control) &&
     (opener.agentOperating || now - recent.at < POPUP_ATTRIBUTION_MS)
     ? recent.agentId
     : null;
 };
+
+export const matchesControl = (
+  input: Pick<AgentInput, "generation" | "authority">,
+  control: { readonly generation: number; readonly authority?: number },
+) =>
+  input.authority === undefined
+    ? input.generation === control.generation
+    : input.authority === control.authority;
 
 /** Openings remembered per tab; the oldest goes first once a tab opens more windows than this. */
 const OPENINGS_KEPT = 32;
@@ -53,12 +68,46 @@ type Opener = Omit<Parameters<typeof popupOwner>[0], "lastAgentInput">;
 export class PopupAttribution {
   /** The agent whose input last reached the tab. */
   lastInput: AgentInput | undefined;
-  private readonly openings = new Map<string, string | null>();
+  private readonly openings = new Map<
+    string,
+    {
+      owner: string | null;
+      agentControlled: boolean;
+      signal?: AbortSignal;
+      runSignal?: AbortSignal;
+      identity?: Pick<AgentInput, "generation" | "authority">;
+      /** The input that opened it came from a request without a run, which keeps run-less adoption. */
+      runless?: boolean;
+    }
+  >();
 
   opened(targetId: string, opener: Opener, now: number) {
-    this.openings.set(targetId, popupOwner({ ...opener, lastAgentInput: this.lastInput }, now));
+    const recent = this.lastInput;
+    const owner = popupOwner({ ...opener, lastAgentInput: recent }, now);
+    const input =
+      recent && recent.agentId === owner && matchesControl(recent, opener.control)
+        ? recent
+        : undefined;
+    this.openings.set(targetId, {
+      owner,
+      agentControlled: !("controller" in opener.control) || opener.control.controller === null,
+      ...(input
+        ? {
+            identity: {
+              generation: input.generation,
+              ...(input.authority === undefined ? {} : { authority: input.authority }),
+            },
+          }
+        : {}),
+      ...(input?.signal ? { signal: input.signal } : {}),
+      ...(input?.runSignal ? { runSignal: input.runSignal } : { runless: input !== undefined }),
+    });
     if (this.openings.size > OPENINGS_KEPT)
       this.openings.delete(this.openings.keys().next().value ?? "");
+  }
+
+  opening(targetId: string | undefined) {
+    return targetId === undefined ? undefined : this.openings.get(targetId);
   }
 
   owner(targetId: string | undefined, opener: Opener, now: number) {
@@ -66,7 +115,9 @@ export class PopupAttribution {
     if (opening === undefined)
       return popupOwner({ ...opener, lastAgentInput: this.lastInput }, now);
     this.openings.delete(targetId ?? "");
-    return opening;
+    return opening.identity && !matchesControl(opening.identity, opener.control)
+      ? null
+      : opening.owner;
   }
 }
 
@@ -75,11 +126,14 @@ export const watchOpenings = async (
   cdp: Pick<CDPSession, "send" | "on">,
   tab: Opener & { readonly popups: PopupAttribution },
   now: () => number,
+  signal?: AbortSignal,
 ) => {
+  signal?.throwIfAborted();
   const self = (await cdp.send("Target.getTargetInfo")).targetInfo.targetId;
   cdp.on("Target.targetCreated", ({ targetInfo }) => {
     if (targetInfo.openerId === self) tab.popups.opened(targetInfo.targetId, tab, now());
   });
+  signal?.throwIfAborted();
   await cdp.send("Target.setDiscoverTargets", { discover: true });
 };
 
@@ -172,3 +226,29 @@ export class ClosedPopups {
     );
   }
 }
+
+export const attributeSecretFill = async <A>(
+  tab: {
+    readonly popups: PopupAttribution;
+    readonly control: { readonly generation: number; readonly authority: number };
+    agentOperating: boolean;
+  },
+  input: Omit<AgentInput, "at" | "generation" | "authority">,
+  now: () => number,
+  fill: () => Promise<A>,
+) => {
+  const attribution = {
+    ...input,
+    at: now(),
+    generation: tab.control.generation,
+    authority: tab.control.authority,
+  };
+  tab.popups.lastInput = attribution;
+  tab.agentOperating = true;
+  try {
+    return await fill();
+  } finally {
+    tab.popups.lastInput = { ...attribution, at: now() };
+    tab.agentOperating = false;
+  }
+};

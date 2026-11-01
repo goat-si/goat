@@ -15,8 +15,9 @@ import {
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vite-plus/test";
 import { inputFence } from "./PreviewInputFence.ts";
 import * as PreviewUpload from "./PreviewUpload.ts";
+import { testActionChannel } from "./actionChannel.testkit.ts";
 import { watchPrivateMode } from "./PreviewPrivateMode.ts";
-import * as ServerBrowserPage from "./ServerBrowserPage.ts";
+import { testActionPage as ServerBrowserPage } from "./actionChannel.testkit.ts";
 import { SessionControl } from "./SessionControl.ts";
 
 // `chromium.launch({ headless: true })` starts chromium-headless-shell.
@@ -248,37 +249,17 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
       ServerBrowserPage.select(page, { locator: "#s", values: ["b"] }, stopped),
     ).rejects.toThrow("stopped");
     expect(await page.evaluate("s.value")).toBe("a");
-
     const uploading = PreviewUpload.setInputFiles(
       page,
       cdp,
       { locator: "#f", paths: [NodePath.join(NodeOS.tmpdir(), "missing-upload.txt")] },
-      stopped,
+      Object.assign(stopped, { channel: testActionChannel(page, cdp) }),
     );
     void uploading.catch(() => undefined);
     await page.evaluate("document.body.insertAdjacentHTML('beforeend', '<input id=f type=file>')");
     await expect(uploading).rejects.toThrow("stopped");
     expect(await page.evaluate("f.files.length")).toBe(0);
   });
-
-  it("uploads through a label in one call after the gate", async () => {
-    const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-upload-"));
-    using _removeDirectory = {
-      [Symbol.dispose]: () => NodeFS.rmSync(directory, { recursive: true, force: true }),
-    };
-    const file = NodePath.join(directory, "note.txt");
-    NodeFS.writeFileSync(file, "hello");
-    await page.setContent(
-      '<label id="l">Attach <input id="f" type="file"></label><script>window.changes = 0; f.addEventListener("change", () => changes++)</script>',
-    );
-    let gates = 0;
-    await PreviewUpload.setInputFiles(page, cdp, { locator: "#l", paths: [file] }, () => {
-      gates++;
-    });
-    expect(gates).toBe(1);
-    expect(await page.evaluate("[f.files[0]?.name, window.changes]")).toEqual(["note.txt", 1]);
-  });
-
   it("skips the capture for a text-only snapshot and still returns the page", async () => {
     await page.setContent("<main><h1>Inbox</h1><button>Compose</button></main>");
     const result = await ServerBrowserPage.snapshot({

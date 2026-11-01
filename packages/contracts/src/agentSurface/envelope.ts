@@ -271,6 +271,7 @@ export const FAILURE_CLASSES: Readonly<Record<string, FailureClass>> = {
   // Browser preview control (PreviewAutomationControlReason)
   agentMismatch: before("conflict"),
   humanControl: before("conflict"),
+  blocked_url: before("permission_denied"),
   // A password or passkey field has focus; control returns when it loses focus.
   privateMode: before("conflict"),
   tabRequired: before("invalid_request"),

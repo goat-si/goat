@@ -24,6 +24,7 @@ import { SettingResetButton, SettingsRow, SettingsSection } from "./settingsLayo
 import { searchableSetting } from "./settingsSearch";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { AgentWorkspaceTerminalSettings } from "./AgentWorkspaceTerminalSettings";
+import { BlockedBrowserHostsSetting } from "./BlockedBrowserHostsSetting";
 import {
   useScopedSettings,
   useScopedSettingsMixed,
@@ -258,35 +259,38 @@ export function AgentBrowserAccessSetting() {
   const isProjectScope = scope.kind === "project" || scope.kind === "checkout";
 
   return (
-    <SettingsRow
-      serverScoped
-      settingKeys={["enableAgentBrowserAccess"]}
-      {...searchableSetting("agent-browser-access")}
-      description={
-        isProjectScope
-          ? "Allow agents in this project to use the shared browser. Applies when the agent session next starts."
-          : "Allow agents to use the shared browser. Projects can override it."
-      }
-      resetAction={
-        settings.enableAgentBrowserAccess !== DEFAULT_SERVER_SETTINGS.enableAgentBrowserAccess ? (
-          <SettingResetButton
-            label="default browser access"
-            onClick={() =>
-              updateSettings({
-                enableAgentBrowserAccess: DEFAULT_SERVER_SETTINGS.enableAgentBrowserAccess,
-              })
-            }
+    <>
+      <SettingsRow
+        serverScoped
+        settingKeys={["enableAgentBrowserAccess"]}
+        {...searchableSetting("agent-browser-access")}
+        description={
+          isProjectScope
+            ? "Allow agents in this project to use the shared browser. Applies when the agent session next starts."
+            : "Allow agents to use the shared browser. Projects can override it."
+        }
+        resetAction={
+          settings.enableAgentBrowserAccess !== DEFAULT_SERVER_SETTINGS.enableAgentBrowserAccess ? (
+            <SettingResetButton
+              label="default browser access"
+              onClick={() =>
+                updateSettings({
+                  enableAgentBrowserAccess: DEFAULT_SERVER_SETTINGS.enableAgentBrowserAccess,
+                })
+              }
+            />
+          ) : null
+        }
+        control={
+          <ScopedSwitch
+            settingKeys={["enableAgentBrowserAccess"]}
+            aria-label="Agent browser access"
+            checked={settings.enableAgentBrowserAccess}
+            onCheckedChange={(enabled) => updateSettings({ enableAgentBrowserAccess: enabled })}
           />
-        ) : null
-      }
-      control={
-        <ScopedSwitch
-          settingKeys={["enableAgentBrowserAccess"]}
-          aria-label="Agent browser access"
-          checked={settings.enableAgentBrowserAccess}
-          onCheckedChange={(enabled) => updateSettings({ enableAgentBrowserAccess: enabled })}
-        />
-      }
-    />
+        }
+      />
+      <BlockedBrowserHostsSetting />
+    </>
   );
 }

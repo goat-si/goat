@@ -1,7 +1,7 @@
 import { chromium, type CDPSession, type Page } from "playwright-core";
 import { expect, it, vi } from "vite-plus/test";
 import { chromiumInstalled } from "./PreviewChromium.fixture.ts";
-import * as ServerBrowserPage from "./ServerBrowserPage.ts";
+import { testActionPage as ServerBrowserPage } from "./actionChannel.testkit.ts";
 import { pointBefore } from "./ServerBrowserPointer.ts";
 
 const fixture = async (run: (page: Page, cdp: CDPSession) => Promise<void>) => {

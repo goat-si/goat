@@ -4,6 +4,7 @@ import { MARKDOWN_FORMAT, normalizeText } from "./markdownFormat.ts";
 import type { Page, Request } from "playwright-core";
 import { ServerBrowserOperationError } from "./ServerBrowserPage.ts";
 import type { SessionControl } from "./SessionControl.ts";
+import type { DispatchGate } from "./ServerBrowserPage.ts";
 import { REDACTED, redactCookieValues } from "./cookieValues.ts";
 import { tabCookies } from "./pageSecrets.ts";
 import { FETCHED_BODY } from "./browserArtifacts.ts";
@@ -289,7 +290,8 @@ export const inPageFetch = (
   page: FetchPage,
   control: Pick<SessionControl, "observe">,
   input: InPageFetchInput,
-) => control.observe(() => fetchInPage(page, input));
+  gate?: DispatchGate,
+) => control.observe(() => fetchInPage(page, input, gate));
 
 type FetchPage = Pick<Page, "evaluateHandle" | "url" | "context" | "on" | "off">;
 type Held = { readonly outcome: PageOutcome; readonly body: Uint8Array | null };
@@ -398,6 +400,7 @@ const readHeldBody = async (
 const fetchInPage = async (
   page: FetchPage,
   input: InPageFetchInput,
+  gate?: DispatchGate,
 ): Promise<InPageFetchResult> => {
   const url = resolveFetchUrl(input.url, page.url());
   const format = input.format ?? "markdown";
@@ -419,7 +422,17 @@ const fetchInPage = async (
   });
   const watch = watchFetchFailure(page, url);
   try {
-    return await fetchHeld(page, args, url, format, maxChars, timeoutMs, deadline, watch.classify);
+    return await fetchHeld(
+      page,
+      args,
+      url,
+      format,
+      maxChars,
+      timeoutMs,
+      deadline,
+      watch.classify,
+      gate,
+    );
   } finally {
     watch.dispose();
   }
@@ -434,12 +447,16 @@ const fetchHeld = async (
   timeoutMs: number,
   deadline: number,
   classify: ReturnType<typeof watchFetchFailure>["classify"],
+  gate?: DispatchGate,
 ): Promise<InPageFetchResult> => {
   // Page-side code is passed as source: the server compiles without DOM types. The handle keeps a
   // binary body in the page, out of reach of page scripts, until it is read and disposed.
-  const pending = page.evaluateHandle<Held>(
-    `(async () => { const held = { body: null }; const outcome = await (${FETCH_SCRIPT})(${args}, held); return { outcome, body: held.body }; })()`,
-  );
+  await gate?.();
+  const expression = `(async () => { const held = { body: null }; const outcome = await (${FETCH_SCRIPT})(${args}, held); return { outcome, body: held.body }; })()`;
+  if (gate && !gate.channel) throw new Error("An action channel is required for fetch.");
+  const pending = gate?.channel
+    ? gate.channel.call(() => page.evaluateHandle<Held>(expression))
+    : page.evaluateHandle<Held>(expression);
   const held = await beforeDeadline(pending, deadline, url).catch((cause: unknown) => {
     // A handle that arrives after the deadline is released as soon as it does.
     void pending.then((late) => late.dispose()).catch(() => undefined);

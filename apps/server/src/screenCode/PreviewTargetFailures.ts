@@ -17,13 +17,7 @@ const beforeInput = new Set<PreviewAutomationError["_tag"]>([
 ]);
 
 /** Operations that only read the tab: a failure leaves nothing that may have landed. */
-const readOnly = new Set<PreviewAutomationOperation>([
-  "snapshot",
-  "status",
-  "read",
-  "waitFor",
-  "fetch",
-]);
+const readOnly = new Set<PreviewAutomationOperation>(["snapshot", "status", "read", "waitFor"]);
 
 const FETCH_NEXT_STEP = {
   cors: "The site does not let this page read it (CORS). Open it with tab.goto(url) and tab.read(), or fetch from a tab on that site.",
@@ -36,6 +30,13 @@ export const previewTargetFailure = (
   error: PreviewAutomationError,
   operation: PreviewAutomationOperation,
 ): ScreenRunError => {
+  if (error._tag === "PreviewAutomationControlInterruptedError" && error.reason === "blocked_url") {
+    return {
+      code: "blocked_url",
+      effectStarted: error.dispatched === true,
+      nextStep: "A person can change the blocked host setting.",
+    };
+  }
   const effectStarted = !readOnly.has(operation) && !beforeInput.has(error._tag);
   const message = NodeUtil.stripVTControlCharacters(error.message)
     .replace(/https?:\/\/\S+/gi, "[url]")
@@ -105,6 +106,7 @@ export const previewActionFailure = (
   });
   const failure = previewTargetFailure(error, operation);
   const kept = ["target_ambiguous", "invalid_argument", "target_missing"].includes(failure.code);
+  if (failure.code === "blocked_url") return { ...failure, safety };
   return {
     ...failure,
     code: safety.possibleCommit

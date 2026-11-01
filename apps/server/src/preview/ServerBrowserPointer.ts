@@ -1,5 +1,6 @@
 // @effect-diagnostics globalDate:off - Playwright waits run outside the Effect runtime.
 import type { Page } from "playwright-core";
+import { abortable, actionCall } from "./actionReadiness.ts";
 
 import {
   DEFAULT_TIMEOUT_MS,
@@ -35,16 +36,23 @@ export const pointBefore = async <Input extends TargetInput>(
       gate.deadline === undefined ? Infinity : gate.deadline - performance.now(),
     );
   // A target that matches nothing is refused here, before the pointer waits out its whole budget.
-  if (left() > 0) await requireMatch(locator, left());
+  if (left() > 0) await requireMatch(locator, left(), gate.channel ? gate : undefined);
   const box =
     left() > 0
-      ? await locator.boundingBox({ timeout: Math.max(1, left()) }).catch(() => null)
+      ? await abortable(
+          () =>
+            actionCall(gate.channel ? gate : undefined, () =>
+              locator.boundingBox({ timeout: Math.max(1, left()) }),
+            ).catch(() => null),
+          gate.signal,
+        )
       : null;
   // A desktop page's viewport is unknown to Playwright; its boxes are still in viewport pixels.
   const viewport = page.viewportSize();
   const point = box && { x: box.x + box.width / 2, y: box.y + box.height / 2 };
   // A Stop and resume during the wait leave this action's control behind; its pointer stays.
-  gate.check?.();
+  await gate.check?.();
+  gate.signal?.throwIfAborted();
   if (
     point &&
     left() > 0 &&

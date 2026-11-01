@@ -11,6 +11,7 @@ export const PreviewAutomationControlReason = Schema.Literals([
   "tabLimit",
   "privateMode",
   "stopped",
+  "blocked_url",
 ]);
 export type PreviewAutomationControlReason = typeof PreviewAutomationControlReason.Type;
 
@@ -28,6 +29,7 @@ const MESSAGES: Readonly<Record<PreviewAutomationControlReason, string>> = {
     "A password, one-time code or passkey prompt has focus, so this tab is private until a person leaves it. Do not retry now; take a fresh snapshot after they finish.",
   stopped:
     "A person stopped agent control of this browser tab. Do not continue in it until they hand it back.",
+  blocked_url: "This browser host is blocked.",
   interrupted: "Browser control changed. Take a fresh snapshot before trying again.",
 };
 

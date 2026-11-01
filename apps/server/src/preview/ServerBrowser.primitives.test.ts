@@ -19,6 +19,7 @@ import type { BrowserContext, Page } from "playwright-core";
 import { beforeEach, expect, vi } from "vite-plus/test";
 
 import * as ServerConfig from "../config.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as Broker from "../mcp/PreviewAutomationBroker.ts";
 import * as DesktopChannel from "./DesktopBrowserChannel.ts";
@@ -134,6 +135,7 @@ function makeContext() {
   const context = {
     page,
     sessions,
+    on: () => context,
     cookies: vi.fn(async () => [{ name: "sid", value: "SecretCookieValue99" }]),
     newPage: async () => page as unknown as Page,
     grantPermissions: vi.fn(async () => {}),
@@ -167,6 +169,7 @@ const asSession = (providerSessionId: string) => ({
 });
 
 const dependencies = Layer.mergeAll(
+  ServerSettings.layerTest(),
   Manager.layer,
   Broker.layer,
   Layer.succeed(ServerEnvironment.ServerEnvironment, {
@@ -196,69 +199,79 @@ beforeEach(() => {
   contexts.length = 0;
 });
 
-it.live(
-  "routes fetch as an observable read and scrollCollect as an action recorded in the timeline",
-  () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        yield* ServerBrowser.ServerBrowser;
-        const broker = yield* Broker.PreviewAutomationBroker;
-        yield* Effect.yieldNow;
-        const opened = yield* broker.invoke<PreviewAutomationStatus>({
-          scope,
-          operation: "open",
-          input: { reuseExistingTab: false, show: false },
-        });
-        const tabId = PreviewTabId.make(opened.tabId!);
+it.live("requires agent ownership for fetch and scrollCollect while preserving redaction", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      yield* ServerBrowser.ServerBrowser;
+      const broker = yield* Broker.PreviewAutomationBroker;
+      yield* Effect.yieldNow;
+      const opened = yield* broker.invoke<PreviewAutomationStatus>({
+        scope,
+        operation: "open",
+        input: { reuseExistingTab: false, show: false },
+      });
+      const tabId = PreviewTabId.make(opened.tabId!);
 
-        // Another agent session can observe via fetch, with cookies redacted.
-        const fetched = yield* broker.invoke<PreviewAutomationFetchResult>({
+      const fetchDenied = yield* broker
+        .invoke<PreviewAutomationFetchResult>({
           scope: asSession("agent-b"),
           tabId,
           operation: "fetch",
           input: { url: "/api/profile" },
-        });
-        expect(fetched.status).toBe(200);
-        expect(fetched.text).toContain('"user":"june"');
-        expect(fetched.text).not.toContain("SecretCookieValue99");
+        })
+        .pipe(Effect.flip);
+      expect(fetchDenied).toMatchObject({
+        _tag: "PreviewAutomationControlInterruptedError",
+        reason: "agentMismatch",
+        dispatched: false,
+      });
+      const fetched = yield* broker.invoke<PreviewAutomationFetchResult>({
+        scope,
+        tabId,
+        operation: "fetch",
+        input: { url: "/api/profile" },
+      });
+      expect(fetched.status).toBe(200);
+      expect(fetched.text).toContain('"user":"june"');
+      expect(fetched.text).not.toContain("SecretCookieValue99");
 
-        // Another agent session cannot scroll-collect on a tab it does not own.
-        const denied = yield* broker
-          .invoke<PreviewAutomationScrollCollectResult>({
-            scope: asSession("agent-b"),
-            tabId,
-            operation: "scrollCollect",
-            input: { url: "/api/items", minItems: 4 },
-          })
-          .pipe(Effect.flip);
-        expect(denied).toMatchObject({
-          _tag: "PreviewAutomationControlInterruptedError",
-          reason: "agentMismatch",
-          dispatched: false,
-        });
-
-        // The owning agent session collects items across scrolls and records the action.
-        const collected = yield* broker.invoke<PreviewAutomationScrollCollectResult>({
-          scope,
+      // Another agent session cannot scroll-collect on a tab it does not own.
+      const denied = yield* broker
+        .invoke<PreviewAutomationScrollCollectResult>({
+          scope: asSession("agent-b"),
           tabId,
           operation: "scrollCollect",
           input: { url: "/api/items", minItems: 4 },
-        });
-        expect(collected).toEqual({
-          items: [1, 2, 3, 4],
-          rounds: 2,
-          responses: 2,
-          stoppedBecause: "minItems",
-        });
+        })
+        .pipe(Effect.flip);
+      expect(denied).toMatchObject({
+        _tag: "PreviewAutomationControlInterruptedError",
+        reason: "agentMismatch",
+        dispatched: false,
+      });
 
-        const snapshot = yield* broker.invoke<PreviewAutomationSnapshot>({
-          scope,
-          tabId,
-          operation: "snapshot",
-          input: { captureImage: false },
-        });
-        expect(String(snapshot.accessibilityTree).startsWith("@layers none\n")).toBe(true);
-        expect(snapshot.actionTimeline.map((entry) => entry.action)).toContain("scrollCollect");
-      }),
-    ).pipe(Effect.provide(layer)),
+      // The owning agent session collects items across scrolls and records the action.
+      const collected = yield* broker.invoke<PreviewAutomationScrollCollectResult>({
+        scope,
+        tabId,
+        operation: "scrollCollect",
+        input: { url: "/api/items", minItems: 4 },
+      });
+      expect(collected).toEqual({
+        items: [1, 2, 3, 4],
+        rounds: 2,
+        responses: 2,
+        stoppedBecause: "minItems",
+      });
+
+      const snapshot = yield* broker.invoke<PreviewAutomationSnapshot>({
+        scope,
+        tabId,
+        operation: "snapshot",
+        input: { captureImage: false },
+      });
+      expect(String(snapshot.accessibilityTree).startsWith("@layers none\n")).toBe(true);
+      expect(snapshot.actionTimeline.map((entry) => entry.action)).toContain("scrollCollect");
+    }),
+  ).pipe(Effect.provide(layer)),
 );

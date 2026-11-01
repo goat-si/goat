@@ -1489,7 +1489,7 @@ export const layer: Layer.Layer<
         const reservedHeldTurnItemIds = new Set<TurnItemId>();
         // Ends once the root turn and the children it drives settle. Background commands such
         // as a dev server keep this consumer alive afterwards and must not pin preview focus.
-        const endPreviewActivity = yield* previewAgentActivity.begin(input.run.threadId);
+        const endPreview = yield* previewAgentActivity.begin(input.run.threadId, input.run.id);
         const providerEventFiber = yield* eventSubscription.events.pipe(
           Stream.mapEffect((event) =>
             Effect.gen(function* () {
@@ -1705,7 +1705,7 @@ export const layer: Layer.Layer<
           // Also after events this run does not accept, such as a child handed to another run.
           Stream.tap(() =>
             Effect.gen(function* () {
-              if (yield* agentTurnsSettled) yield* endPreviewActivity;
+              if (yield* agentTurnsSettled) yield* endPreview;
             }),
           ),
           Stream.takeUntilEffect(() => shouldStopProviderEventIngestion),
@@ -1842,7 +1842,7 @@ export const layer: Layer.Layer<
                 );
               }),
           ),
-          Effect.ensuring(endPreviewActivity),
+          Effect.ensuring(endPreview),
           Effect.ensuring(closeEventSubscription),
           Effect.forkDetach,
         );

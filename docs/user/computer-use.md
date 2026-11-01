@@ -57,6 +57,14 @@ Agents read and use web pages in GOAT's built-in browser by default, including
 pages that build their content with scripts. To have an agent use another
 browser tool instead, name that tool in your request.
 
+To keep agents away from a site, select an environment and add its host under
+**Settings → Integrations → Browser → Blocked browser hosts**. On mobile, use
+**Settings → Agent behavior → Preview browser**. Enter a host such as `example.com`, without a
+scheme or path; its subdomains are blocked too. The list starts empty and you can remove hosts at
+any time. GOAT stops agents from opening or acting on blocked sites, and if a page sends the browser
+there anyway, the agent loses access to that tab for the rest of the turn. A later turn can use it
+once the tab is on an allowed host.
+
 Ask an agent to use a page in GOAT's built-in browser and an app on the computer
 running that GOAT environment in the same task. Point it to a specific tab or
 app when you start the turn. In the web or desktop composer, type `@` and pick

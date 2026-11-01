@@ -1,5 +1,6 @@
 import { constVoid } from "effect/Function";
 import type { CDPSession } from "playwright-core";
+import { openSetupSend } from "./openRunSignals.ts";
 
 const escapeHtml = (value: string) =>
   value.replaceAll("&", "&amp;").replaceAll('"', "&quot;").replaceAll("<", "&lt;");
@@ -9,13 +10,14 @@ export const isPdfAssetUrl = (url: string) => {
   return pathname.startsWith("/api/assets/") && /\.pdf$/i.test(pathname);
 };
 
-export async function installPdfDocumentNavigation(cdp: CDPSession) {
-  const nativeViewer = await cdp.send("Runtime.evaluate", {
+export async function installPdfDocumentNavigation(cdp: CDPSession, signal?: AbortSignal) {
+  const send = openSetupSend(cdp, signal);
+  const nativeViewer = await send("Runtime.evaluate", {
     expression: "navigator.pdfViewerEnabled",
     returnByValue: true,
   });
   if (nativeViewer.result?.value === true) return;
-  const { frameTree } = await cdp.send("Page.getFrameTree");
+  const { frameTree } = await send("Page.getFrameTree");
   // The shell cannot open PDFs. Commit a document at the original URL so the
   // client can embed its signed bytes while Back and Forward keep working.
   cdp.on("Fetch.requestPaused", (event) => {
@@ -64,7 +66,7 @@ export async function installPdfDocumentNavigation(cdp: CDPSession) {
     })().catch(() => proceed().catch(constVoid));
   });
   // Only document navigations pause; the client's PDF fetch gets the original bytes.
-  await cdp.send("Fetch.enable", {
+  await send("Fetch.enable", {
     patterns: [
       { urlPattern: "*/api/assets/*", resourceType: "Document", requestStage: "Response" },
     ],

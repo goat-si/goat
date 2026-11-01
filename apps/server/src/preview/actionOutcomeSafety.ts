@@ -26,6 +26,7 @@ export const PREVIEW_ADMISSION_REASONS: ReadonlySet<PreviewAutomationControlReas
   "dialogPending",
   "tabRequired",
   "tabLimit",
+  "blocked_url",
 ]);
 
 const READ_BROWSER_OPERATIONS: ReadonlySet<PreviewAutomationOperation> = new Set([
@@ -33,7 +34,6 @@ const READ_BROWSER_OPERATIONS: ReadonlySet<PreviewAutomationOperation> = new Set
   "snapshot",
   "read",
   "logs",
-  "fetch",
   "waitFor",
   "signInState",
 ]);
@@ -53,6 +53,7 @@ export function classifyBrowserControlReason(
     case "humanControl":
     case "privateMode":
     case "stopped":
+    case "blocked_url":
     case undefined:
       return "terminal";
   }

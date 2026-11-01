@@ -1,6 +1,7 @@
 import * as ServerSettingsWatcher from "./serverSettingsWatcher.ts";
 import * as ConnectHubSettings from "./auth/ConnectHubSettings.ts";
 import { settingsLayers } from "./serverSettingsLayers.ts";
+import { cleanAllowedApps, rejectProtectedAllowedApps } from "./serverSettingsAllowedApps.ts";
 import * as HubConnectAccess from "./auth/HubConnectAccess.ts";
 import {
   DEFAULT_SERVER_SETTINGS as CLIENT_DEFAULT_SERVER_SETTINGS,
@@ -39,7 +40,6 @@ import {
   withIdleCompaction,
 } from "@goat/contracts";
 import { deepMerge, type DeepPartial } from "@goat/shared/Struct";
-import { cuaAppKey, isExcludedCuaApplication } from "@goat/shared/cuaDriverManifest";
 import { writeFileStringAtomically } from "@goat/shared/atomicWrite";
 import { fromJsonStringPretty, fromLenientJson } from "@goat/shared/schemaJson";
 import {
@@ -176,30 +176,6 @@ const foldProviderInstanceEnabledFlags = (settings: ServerSettings): ServerSetti
     providerInstances: providerInstances as ServerSettings["providerInstances"],
   };
 };
-
-const cleanAllowedApps = (settings: ServerSettings): ServerSettings => {
-  const seen = new Set<string>();
-  return {
-    ...settings,
-    cuaAllowedApps: settings.cuaAllowedApps.filter((app) => {
-      const key = cuaAppKey(app);
-      if (isExcludedCuaApplication(app) || seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    }),
-  };
-};
-
-const rejectProtectedAllowedApps = (settings: ServerSettings) =>
-  settings.cuaAllowedApps.some(isExcludedCuaApplication)
-    ? Effect.fail(
-        new ServerSettingsError({
-          settingsPath: "<memory>",
-          operation: "normalize",
-          reason: "A protected app cannot be always allowed.",
-        }),
-      )
-    : Effect.void;
 
 const normalizeServerSettings = (
   settings: ServerSettings,
@@ -825,6 +801,10 @@ export class ServerSettingsService extends Context.Service<
     readonly ready: Effect.Effect<void, ServerSettingsError>;
 
     readonly getSettings: Effect.Effect<ServerSettings, ServerSettingsError>;
+    readonly blockedBrowserHostsSnapshot?: Effect.Effect<
+      ReadonlyArray<string>,
+      ServerSettingsError
+    >;
     /** Hub settings as last committed, without reading secrets; doubles may leave it out. */
     readonly committedHub?: Effect.Effect<ServerSettings["hub"], ServerSettingsError>;
     /** Hub and cloud consent generations, advanced inside each commit; doubles may leave it out. */
@@ -1009,6 +989,9 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
     start: Effect.void,
     ready: Effect.void,
     getSettings,
+    blockedBrowserHostsSnapshot: Ref.get(currentSettingsRef).pipe(
+      Effect.map((settings) => settings.blockedBrowserHosts),
+    ),
     committedHub: Ref.get(currentSettingsRef).pipe(Effect.map((settings) => settings.hub)),
     hubConsentGenerations: hubConsent.current,
     ...agentWorkspaceTerminalSettingsMethods(
@@ -1345,6 +1328,7 @@ const make = Effect.gen(function* () {
     readonly settings: ServerSettings;
     readonly revision: CodexRoute.SettingsRevision;
   }>();
+  const blockedBrowserHostsRef = yield* Ref.make<ReadonlyArray<string> | null>(null);
   const startedRef = yield* Ref.make(false);
   const startedDeferred = yield* Deferred.make<void, ServerSettingsError>();
   const watcherScope = yield* Scope.make("sequential");
@@ -1352,6 +1336,7 @@ const make = Effect.gen(function* () {
 
   const emitChange = (settings: ServerSettings) =>
     Effect.gen(function* () {
+      yield* Ref.set(blockedBrowserHostsRef, settings.blockedBrowserHosts);
       yield* hubConsent.committed(settings.hub);
       yield* PubSub.publish(changesPubSub, settings);
       if (Option.isSome(routeState))
@@ -2104,6 +2089,12 @@ const make = Effect.gen(function* () {
     getSettings: getSettingsFromCache.pipe(
       Effect.flatMap(materializeSettingsSecrets),
       Effect.map(resolveTextGenerationProvider),
+    ),
+    blockedBrowserHostsSnapshot: Ref.get(blockedBrowserHostsRef).pipe(
+      Effect.filterOrFail(
+        (hosts): hosts is ReadonlyArray<string> => hosts !== null,
+        () => new ServerSettingsError({ settingsPath, operation: "read-file" }),
+      ),
     ),
     committedHub: getSettingsFromCache.pipe(Effect.map((settings) => settings.hub)),
     hubConsentGenerations: hubConsent.current,

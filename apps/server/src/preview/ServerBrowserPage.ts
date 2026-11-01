@@ -8,10 +8,7 @@ import {
   type PreviewAutomationHoverInput,
   type PreviewAutomationNetworkEntry,
   type PreviewAutomationPressInput,
-  type PreviewAutomationReloadInput,
   type PreviewAutomationScrollInput,
-  type PreviewAutomationSelectInput,
-  type PreviewAutomationSelectResult,
   type PreviewAutomationSnapshot,
   type PreviewAutomationSnapshotInput,
   type PreviewAutomationTypeInput,
@@ -21,14 +18,18 @@ import { constVoid } from "effect/Function";
 import * as NodeCrypto from "node:crypto";
 import type { CDPSession, ConsoleMessage, Frame, Locator, Page } from "playwright-core";
 import { pointerInterception } from "./pointerInterception.ts";
+import { subsequentClick } from "./actionClick.ts";
+import { evaluationExpired, requireEvaluationChannel } from "./actionEvaluation.ts";
 import { describeReceiver } from "./pointerReceiver.ts";
 import {
+  abortable,
+  actionCall,
+  disposeAction,
+  acquireTarget,
   actionDeadline,
   pinTarget,
   remaining,
-  matchedElement,
   revealFramesOf,
-  waitUntilSelectable,
   waitUntilWritable,
   type Readiness,
 } from "./actionReadiness.ts";
@@ -72,8 +73,7 @@ export { ServerBrowserOperationError } from "./browserOperationError.ts";
 import { ServerBrowserOperationError } from "./browserOperationError.ts";
 import { matchesState, stateConditions } from "./locatorState.ts";
 import { setRange } from "./rangeValue.ts";
-import { settleScroll } from "./scrollPositions.ts";
-
+import { scrollPositionRead, settleScroll } from "./scrollPositions.ts";
 export const toOperationError = (
   cause: unknown,
   timeoutMs?: number,
@@ -82,7 +82,11 @@ export const toOperationError = (
     return new ServerBrowserOperationError(
       "PreviewAutomationControlInterruptedError",
       cause.message,
-      cause.beforeInput ? { reason: cause.reason, beforeInput: true } : cause.reason,
+      cause.reason === "blocked_url"
+        ? { reason: cause.reason, beforeInput: cause.beforeInput }
+        : cause.beforeInput
+          ? { reason: cause.reason, beforeInput: true }
+          : cause.reason,
     );
   if (cause instanceof ServerBrowserOperationError) return cause;
   const message = cause instanceof Error ? cause.message : String(cause);
@@ -128,50 +132,6 @@ const withReceiver = async (
     ...(typeof error.detail === "object" ? error.detail : {}),
     interceptedBy: `${intercepted} Now at the target: ${receiver}.`.slice(0, 300),
   });
-};
-
-/** Real Chromium history, including same-document entries whose response is null. */
-export const navigateHistory = async (
-  page: Page,
-  cdp: CDPSession,
-  operation: "back" | "forward" | "reload",
-  input: PreviewAutomationReloadInput,
-  timeout: number,
-  assertControl: () => void,
-) => {
-  const options = {
-    timeout: input.timeoutMs ?? timeout,
-    waitUntil:
-      input.readiness === "domContentLoaded" ? ("domcontentloaded" as const) : ("load" as const),
-  };
-  if (operation === "reload" && input.ignoreCache !== true) {
-    assertControl();
-    invalidateRefs(page);
-    await page.reload(options);
-    return;
-  }
-  let entryId: number | undefined;
-  if (operation !== "reload") {
-    const history = await cdp.send("Page.getNavigationHistory");
-    const index = history.currentIndex + (operation === "back" ? -1 : 1);
-    entryId = history.entries[index]?.id;
-    if (entryId === undefined) {
-      throw new ServerBrowserOperationError(
-        "PreviewAutomationExecutionError",
-        `No ${operation} history entry exists for this browser tab.`,
-      );
-    }
-  }
-  assertControl();
-  invalidateRefs(page);
-  // Install the waiter before sending CDP: an acknowledgement alone does not
-  // prove that Electron's guest page actually committed a navigation.
-  await Promise.all([
-    page.waitForNavigation(options),
-    operation === "reload"
-      ? cdp.send("Page.reload", { ignoreCache: true })
-      : cdp.send("Page.navigateToHistoryEntry", { entryId: entryId! }),
-  ]);
 };
 
 const pageRefs = new WeakMap<Page, { generation: string; refs: Map<string, string> }>();
@@ -236,15 +196,16 @@ export type PointerReporter = (
   phase: "move" | "click",
 ) => Promise<void>;
 const noPointer: PointerReporter = async () => {};
-
 /** A gate rechecks authority after target waits; linger covers input still draining after return. */
 export interface DispatchGate {
-  (): void;
+  (): void | Promise<void>;
   readonly linger?: (work: Promise<unknown>) => void;
   /** The gate's checks, including control changes since the action began, without dispatching. */
-  readonly check?: () => void;
+  readonly check?: () => void | Promise<void>;
   /** When the caller stops waiting, on the performance.now() clock; no input goes out after it. */
   readonly deadline?: number;
+  readonly signal?: AbortSignal | undefined;
+  readonly channel?: import("./actionChannel.ts").ActionChannel | undefined;
 }
 const open: DispatchGate = () => {};
 
@@ -258,8 +219,7 @@ const targetChanged = () =>
   );
 
 /** The target's element, after Playwright's wait for it; a detached target is a changed one. */
-export const elementOf = (locator: Locator, timeout: number) =>
-  matchedElement(locator, timeout, targetChanged);
+export const elementOf = acquireTarget;
 
 /** A wait for the target that timed out sent nothing, so the broker can report it unsent. */
 const unsentOnTimeout = (cause: unknown) =>
@@ -275,18 +235,44 @@ const unsentOnTimeout = (cause: unknown) =>
  * Waits for visible, enabled and stable before the gate, within the request's deadline: the
  * Playwright action after it has only a short budget, and motion can come from any script.
  */
-const settled = async (locator: Locator, deadline: number, enabled = true) => {
-  const handle = await elementOf(locator, remaining(deadline)).catch((cause: unknown) => {
-    throw unsentOnTimeout(cause);
-  });
+const settled = async (
+  locator: Locator,
+  deadline: number,
+  enabled = true,
+  gate: DispatchGate = open,
+) => {
+  const handle = await elementOf(locator, remaining(deadline), gate.signal, gate).catch(
+    (cause: unknown) => {
+      throw unsentOnTimeout(cause);
+    },
+  );
   try {
-    await handle.waitForElementState("visible", { timeout: remaining(deadline) });
-    if (enabled) await handle.waitForElementState("enabled", { timeout: remaining(deadline) });
-    await handle.waitForElementState("stable", { timeout: remaining(deadline) });
+    await abortable(
+      () =>
+        actionCall(gate, () =>
+          handle.waitForElementState("visible", { timeout: remaining(deadline) }),
+        ),
+      gate.signal,
+    );
+    if (enabled)
+      await abortable(
+        () =>
+          actionCall(gate, () =>
+            handle.waitForElementState("enabled", { timeout: remaining(deadline) }),
+          ),
+        gate.signal,
+      );
+    await abortable(
+      () =>
+        actionCall(gate, () =>
+          handle.waitForElementState("stable", { timeout: remaining(deadline) }),
+        ),
+      gate.signal,
+    );
   } catch (cause) {
     throw unsentOnTimeout(cause);
   } finally {
-    void handle.dispose().catch(constVoid);
+    disposeAction(gate, handle);
   }
 };
 
@@ -298,8 +284,9 @@ const targetPoint = (
   locator: Locator | null,
   input: { readonly x?: number | undefined; readonly y?: number | undefined },
   deadline: number,
+  gate: DispatchGate,
 ) =>
-  locatePoint(page, locator, input, deadline).catch((cause: unknown) => {
+  locatePoint(page, locator, input, deadline, gate).catch((cause: unknown) => {
     throw unsentOnTimeout(cause);
   });
 
@@ -308,19 +295,22 @@ const locatePoint = async (
   locator: Locator | null,
   input: { readonly x?: number | undefined; readonly y?: number | undefined },
   deadline: number,
+  gate: DispatchGate,
 ) => {
   if (locator === null) return { x: input.x ?? 0, y: input.y ?? 0 };
-  const target = await elementOf(locator, remaining(deadline));
+  const target = await elementOf(locator, remaining(deadline), gate.signal, gate);
   try {
-    await revealFramesOf(target, deadline);
+    await revealFramesOf(target, deadline, gate);
   } finally {
-    void target.dispose().catch(constVoid);
+    disposeAction(gate, target);
   }
   const viewport = page.viewportSize();
-  let box = await locator.boundingBox({ timeout: remaining(deadline) });
+  let box = await actionCall(gate, () => locator.boundingBox({ timeout: remaining(deadline) }));
   if (!inViewport(box, viewport)) {
-    await locator.scrollIntoViewIfNeeded({ timeout: remaining(deadline) });
-    box = await locator.boundingBox({ timeout: remaining(deadline) });
+    await gate();
+    gate.signal?.throwIfAborted();
+    await actionCall(gate, () => locator.scrollIntoViewIfNeeded({ timeout: remaining(deadline) }));
+    box = await actionCall(gate, () => locator.boundingBox({ timeout: remaining(deadline) }));
   }
   if (box) return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
   return { x: (viewport?.width ?? 0) / 2, y: (viewport?.height ?? 0) / 2 };
@@ -520,6 +510,7 @@ const captureFullPage = async (cdp: CDPSession) => {
 
 type SnapshotInput = PreviewAutomationSnapshotInput & {
   readonly agentSessionId?: string | undefined;
+  readonly actionChannel?: import("./actionChannel.ts").ActionChannel | undefined;
   readonly page: Page;
   readonly cdp: CDPSession;
   /** Headless pages render at the scale the server set; a desktop page at its display's. */
@@ -610,6 +601,7 @@ const capture = async (
               refs: new Map(),
             }).accessibilityTree,
             captureImage,
+            input.actionChannel,
           )
         : Promise.resolve(undefined);
     screenshot = await image;
@@ -701,10 +693,10 @@ export const click = async (
   const timeout = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const deadline = actionDeadline(timeout, gate.deadline);
   const locator = targetLocator(page, input);
-  const point = await targetPoint(page, locator, input, deadline);
+  const point = await targetPoint(page, locator, input, deadline, gate);
   await pointer(point, "click");
   const button = input.button ?? "left";
-  if (locator !== null) await settled(locator, deadline);
+  if (locator !== null) await settled(locator, deadline, true, gate);
   let sent = false;
   let dialog = false;
   let onDialog = constVoid;
@@ -717,11 +709,15 @@ export const click = async (
     };
     page.once("dialog", onDialog);
   });
-  const aim = await aimClick(page, locator, point);
-  const watch = await watchClick(page, aim.frame);
+  const aim = await aimClick(page, locator, point, gate);
+  const watch = await watchClick(page, aim.frame, gate).catch((cause: unknown) => {
+    page.off("dialog", onDialog);
+    releaseAim(aim, gate);
+    throw cause;
+  });
   // Each press goes out on its own after the gate: Playwright sends a double click's presses
   // together, and the browser still delivers the rest after the first opens a dialog.
-  const press = (count: number) => {
+  const press = async (count: number) => {
     // A dialog the page opened before the press is not the click's, and holds the page: send nothing.
     if (dialogBeforePress)
       throw new BrowserControlInterrupted(
@@ -736,15 +732,16 @@ export const click = async (
         "PreviewAutomationTimeoutError",
         "The click's deadline passed after its first press; the later presses were not sent.",
       );
-    gate();
+    await gate();
+    gate.signal?.throwIfAborted();
     sent = true;
     if (count === 1)
       return locator === null
-        ? page.mouse.click(point.x, point.y, { button })
-        : locator.click({ button, ...dispatched(deadline) });
-    return page.mouse
-      .down({ button, clickCount: count })
-      .then(() => page.mouse.up({ button, clickCount: count }));
+        ? requireEvaluationChannel(gate).call(() => page.mouse.click(point.x, point.y, { button }))
+        : requireEvaluationChannel(gate).call(() =>
+            locator.click({ button, ...dispatched(deadline) }),
+          );
+    return subsequentClick(gate, point, button, count);
   };
   let presses = 0;
   try {
@@ -762,18 +759,17 @@ export const click = async (
     }
   } catch (cause) {
     watch.cancel();
-    releaseAim(aim);
+    releaseAim(aim, gate);
     throw await withReceiver(page, locator, cause, deadline);
   } finally {
     page.off("dialog", onDialog);
   }
   if (!sent) watch.cancel();
-  const outcome = await watch.settle(dialog).finally(() => releaseAim(aim));
+  const outcome = await watch.settle(dialog).finally(() => releaseAim(aim, gate));
   // A dialog that stopped a multi-press click leaves it short of what was asked.
   const short = (input.clickCount ?? 1) > presses && (input.clickCount ?? 1) > 1;
   return { ...point, ...outcome, ...(short ? { pressesCompleted: presses } : {}) };
 };
-
 export const type = async (
   page: Page,
   input: PreviewAutomationTypeInput,
@@ -781,53 +777,77 @@ export const type = async (
   readiness: Readiness = {},
 ) => {
   const deadline = actionDeadline(input.timeoutMs ?? DEFAULT_TIMEOUT_MS, gate.deadline);
+  const channel = gate.channel;
+  if (!channel) throw new Error("An action channel is required for typing.");
   const locator = targetLocator(page, input);
   // A shadow host also matches :focus; use its innermost focused descendant.
   const target = locator ?? page.locator("*:focus").last();
   const present = locator !== null || (await target.count()) > 0;
-  const handle = present ? await pinTarget(target, deadline) : null;
+  const handle = present ? await pinTarget(target, deadline, gate.signal, gate) : null;
   try {
-    if (handle) await waitUntilWritable(handle, deadline, readiness);
+    if (handle) await waitUntilWritable(handle, deadline, readiness, gate);
+    if (handle) await gate();
+    gate.signal?.throwIfAborted();
     const focused =
       handle !== null &&
-      (await handle.evaluate((element, clear) => {
-        // Like the desktop host: an enabled text control or contenteditable
-        // that actually takes focus. Anything else would swallow the text or
-        // send it to whichever field had focus before.
-        const control = element as unknown as {
-          readonly type?: string;
-          readonly disabled?: boolean;
-          readonly readOnly?: boolean;
-          readonly isContentEditable?: boolean;
-          readonly focus?: () => void;
-        };
-        // A native range takes a value, not keystrokes; setRange sets it after the gate.
-        if (clear && element.tagName === "INPUT" && control.type === "range" && !control.disabled)
-          return "range";
-        const nonText = [
-          "button",
-          "checkbox",
-          "color",
-          "file",
-          "hidden",
-          "image",
-          "radio",
-          "range",
-          "reset",
-          "submit",
-        ];
-        const textControl =
-          element.tagName === "TEXTAREA" ||
-          (element.tagName === "INPUT" && !nonText.includes(control.type ?? "text"));
-        if (!(textControl || control.isContentEditable) || control.disabled || control.readOnly) {
-          return false;
-        }
-        control.focus?.();
-        const root = element.getRootNode() as { readonly activeElement?: typeof element | null };
-        const active = root.activeElement;
-        const owned = active != null && (active === element || element.contains(active));
-        // Selected here, the old text is replaced by the one input sent after the gate.
-        if (owned && clear) {
+      (await channel.call(() =>
+        handle.evaluate((element, clear) => {
+          // Like the desktop host: an enabled text control or contenteditable
+          // that actually takes focus. Anything else would swallow the text or
+          // send it to whichever field had focus before.
+          const control = element as unknown as {
+            readonly type?: string;
+            readonly disabled?: boolean;
+            readonly readOnly?: boolean;
+            readonly isContentEditable?: boolean;
+            readonly focus?: () => void;
+          };
+          // A native range takes a value, not keystrokes; setRange sets it after the gate.
+          if (clear && element.tagName === "INPUT" && control.type === "range" && !control.disabled)
+            return "range";
+          const nonText = [
+            "button",
+            "checkbox",
+            "color",
+            "file",
+            "hidden",
+            "image",
+            "radio",
+            "range",
+            "reset",
+            "submit",
+          ];
+          const textControl =
+            element.tagName === "TEXTAREA" ||
+            (element.tagName === "INPUT" && !nonText.includes(control.type ?? "text"));
+          if (!(textControl || control.isContentEditable) || control.disabled || control.readOnly) {
+            return false;
+          }
+          control.focus?.();
+          const root = element.getRootNode() as { readonly activeElement?: typeof element | null };
+          const active = root.activeElement;
+          const owned = active != null && (active === element || element.contains(active));
+          // Selected here, the old text is replaced by the one input sent after the gate.
+          return owned ? (textControl ? "text" : "editable") : false;
+        }, input.clear === true),
+      ));
+    if (focused === "range" && handle) {
+      remaining(deadline);
+      await gate();
+      gate.signal?.throwIfAborted();
+      return await channel.call(() => setRange(handle, input.text));
+    }
+    if (focused !== "text" && focused !== "editable") {
+      throw new ServerBrowserOperationError(
+        "PreviewAutomationTargetNotEditableError",
+        "The target is not an enabled text field, so no text was typed.",
+      );
+    }
+    if (input.clear && handle) {
+      await gate();
+      gate.signal?.throwIfAborted();
+      await channel.call(() =>
+        handle.evaluate((element, textControl) => {
           if (textControl) (element as unknown as { select(): void }).select();
           else
             (
@@ -837,34 +857,23 @@ export const type = async (
             )
               .getSelection()
               ?.selectAllChildren(element);
-        }
-        return owned;
-      }, input.clear === true));
-    if (focused === "range" && handle) {
-      remaining(deadline);
-      gate();
-      return await setRange(handle, input.text);
-    }
-    if (focused !== true) {
-      throw new ServerBrowserOperationError(
-        "PreviewAutomationTargetNotEditableError",
-        "The target is not an enabled text field, so no text was typed.",
+        }, focused === "text"),
       );
     }
     remaining(deadline);
-    gate();
+    await gate();
+    gate.signal?.throwIfAborted();
     // One input after the gate: a key press is held off by the input fence; inserted text is a
     // single call with nothing to wait for.
     if (input.text === "") {
-      if (input.clear) await page.keyboard.press("Delete");
+      if (input.clear) await channel.keyboard.press("Delete");
       return;
     }
-    await page.keyboard.insertText(input.text);
+    await channel.keyboard.insertText(input.text);
   } finally {
-    void handle?.dispose().catch(constVoid);
+    if (handle && !gate.signal?.aborted) void channel.dispose(handle).catch(constVoid);
   }
 };
-
 export const hover = async (
   page: Page,
   input: PreviewAutomationHoverInput,
@@ -873,100 +882,26 @@ export const hover = async (
 ) => {
   const timeout = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const deadline = actionDeadline(timeout, gate.deadline);
+  const channel = gate.channel;
+  if (!channel) throw new Error("An action channel is required for hover.");
   // Hovering only shows things, so a selector naming several rows hovers the first of them.
   const locator = targetLocator(page, input)?.first() ?? null;
-  await pointer(await targetPoint(page, locator, input, deadline), "move");
+  await pointer(await targetPoint(page, locator, input, deadline, gate), "move");
   if (locator === null) {
     remaining(deadline);
-    gate();
-    await page.mouse.move(input.x ?? 0, input.y ?? 0);
+    await gate();
+    gate.signal?.throwIfAborted();
+    await channel.mouse.move(input.x ?? 0, input.y ?? 0);
     return;
   }
-  await settled(locator, deadline, false);
+  await settled(locator, deadline, false, gate);
   remaining(deadline);
-  gate();
-  await locator.hover(dispatched(deadline));
+  await gate();
+  gate.signal?.throwIfAborted();
+  await channel.call(() => locator.hover(dispatched(deadline)));
 };
 
-export const select = async (
-  page: Page,
-  input: PreviewAutomationSelectInput,
-  gate: DispatchGate = open,
-  readiness: Readiness = {},
-): Promise<PreviewAutomationSelectResult> => {
-  const deadline = actionDeadline(input.timeoutMs ?? DEFAULT_TIMEOUT_MS, gate.deadline);
-  const handle = await elementOf(targetLocator(page, input)!, remaining(deadline));
-  try {
-    const ready = await waitUntilSelectable(handle, input.values, deadline, readiness);
-    const found = await handle.evaluate((element) => {
-      if (element.tagName !== "SELECT") return null;
-      const select = element as unknown as {
-        matches(selector: string): boolean;
-        readonly multiple: boolean;
-        readonly options: ArrayLike<{ value: string; label: string }>;
-      };
-      return {
-        disabled: select.matches(":disabled"),
-        multiple: select.multiple,
-        options: Array.from(select.options, ({ value, label }) => ({ value, label: label.trim() })),
-      };
-    });
-    if (found === null)
-      throw new ServerBrowserOperationError(
-        "PreviewAutomationTargetNotEditableError",
-        "This element is not a <select>. Click a custom dropdown, then click its option.",
-      );
-    if (found.disabled && !ready)
-      throw new ServerBrowserOperationError(
-        "PreviewAutomationExecutionError",
-        "This <select> stayed disabled until the deadline, so nothing was selected.",
-        { beforeInput: true },
-      );
-    if (found.disabled) throw targetChanged();
-    const values = input.values.map(
-      (entry) =>
-        (
-          found.options.find((option) => option.value === entry) ??
-          found.options.find((option) => option.label === entry.trim())
-        )?.value,
-    );
-    const missing = values.indexOf(undefined);
-    if (missing !== -1 || (!found.multiple && values.length > 1))
-      throw new ServerBrowserOperationError(
-        "PreviewAutomationExecutionError",
-        missing !== -1
-          ? `This <select> ${ready ? "has" : "still has"} no option "${input.values[missing]}"${ready ? "" : " after waiting for it"}.`
-          : "This <select> takes one option.",
-        { beforeInput: true },
-      );
-    remaining(deadline);
-    gate();
-    // What Playwright's selectOption does once the options exist, without its wait for them.
-    const selected = await handle.evaluate((element, chosen) => {
-      const select = element as unknown as {
-        selectedIndex: number;
-        readonly options: ArrayLike<{ value: string; selected: boolean }>;
-        readonly selectedOptions: ArrayLike<{ value: string }>;
-        dispatchEvent(event: unknown): boolean;
-      };
-      // No values clears the selection, single select included (selectOption's contract).
-      select.selectedIndex = -1;
-      for (const value of chosen) {
-        const option = Array.from(select.options).find((entry) => entry.value === value);
-        if (option) option.selected = true;
-      }
-      const EventType = (
-        globalThis as unknown as { Event: new (type: string, init: object) => unknown }
-      ).Event;
-      select.dispatchEvent(new EventType("input", { bubbles: true, composed: true }));
-      select.dispatchEvent(new EventType("change", { bubbles: true }));
-      return Array.from(select.selectedOptions, (option) => option.value);
-    }, values as ReadonlyArray<string>);
-    return { selected };
-  } finally {
-    void handle.dispose().catch(constVoid);
-  }
-};
+export { select } from "./actionSelect.ts";
 
 export const drag = async (
   page: Page,
@@ -983,23 +918,28 @@ export const drag = async (
   }
   const source = targetLocator(page, { locator: input.source })!;
   const target = targetLocator(page, { locator: input.target })!;
-  await pointer(await targetPoint(page, source, {}, deadline), "move");
-  await settled(source, deadline, false);
-  await settled(target, deadline, false);
-  const end = await target.boundingBox({ timeout: remaining(deadline) }).catch(() => null);
-  if (end) await pointer({ x: end.x + end.width / 2, y: end.y + end.height / 2 }, "move");
-  remaining(deadline);
-  gate();
-  await source.dragTo(target, dispatched(deadline));
+  const start = await targetPoint(page, source, {}, deadline, gate);
+  await pointer(start, "move");
+  await settled(source, deadline, false, gate);
+  await settled(target, deadline, false, gate);
+  const end = await actionCall(gate, () =>
+    target.boundingBox({ timeout: remaining(deadline) }),
+  ).catch(() => null);
+  if (!end) throw targetChanged();
+  const finish = { x: end.x + end.width / 2, y: end.y + end.height / 2 };
+  await pointer(finish, "move");
+  await dragBetween(page, { from: start, to: finish }, gate, deadline);
 };
-
 export const press = async (
-  page: Page,
+  _page: Page,
   input: PreviewAutomationPressInput,
   gate: DispatchGate = open,
 ) => {
-  gate();
-  await page.keyboard.press([...(input.modifiers ?? []), input.key].join("+"));
+  const channel = gate.channel;
+  if (!channel) throw new Error("An action channel is required for keyboard input.");
+  await gate();
+  gate.signal?.throwIfAborted();
+  await channel.keyboard.press([...(input.modifiers ?? []), input.key].join("+"));
 };
 
 export const scroll = async (
@@ -1008,26 +948,43 @@ export const scroll = async (
   gate: DispatchGate = open,
 ): Promise<{ readonly settled: boolean }> => {
   const delta = [input.deltaX ?? 0, input.deltaY ?? 0] as const;
+  const channel = requireEvaluationChannel(gate);
   if (input.x !== undefined && input.y !== undefined) {
     await wheelAt(page, { x: input.x, y: input.y }, delta, gate, gate.deadline ?? Infinity);
     return {
-      settled: await settleScroll(page, { point: { x: input.x, y: input.y } }, gate.deadline),
+      settled: await settleScroll(
+        channel,
+        scrollPositionRead(page, { point: { x: input.x, y: input.y } }),
+        gate.deadline,
+      ),
     };
   }
   const locator = targetLocator(page, input);
   if (locator === null) {
-    gate();
+    await gate();
+    gate.signal?.throwIfAborted();
     // Page-side code is passed as source: the server compiles without DOM types.
-    await page.evaluate(`scrollBy(${delta[0]}, ${delta[1]})`);
-    return { settled: await settleScroll(page, undefined, gate.deadline) };
+    await actionCall(gate, () => page.evaluate(`scrollBy(${delta[0]}, ${delta[1]})`));
+    return {
+      settled: await settleScroll(channel, scrollPositionRead(page, undefined), gate.deadline),
+    };
   }
-  const handle = await elementOf(locator, DEFAULT_TIMEOUT_MS);
+  const handle = await elementOf(locator, DEFAULT_TIMEOUT_MS, gate.signal, gate);
   try {
-    gate();
-    await handle.evaluate((element, [x, y]) => element.scrollBy(x, y), delta);
-    return { settled: await settleScroll(page, { element: handle }, gate.deadline) };
+    await gate();
+    gate.signal?.throwIfAborted();
+    await actionCall(gate, () =>
+      handle.evaluate((element, [x, y]) => element.scrollBy(x, y), delta),
+    );
+    return {
+      settled: await settleScroll(
+        channel,
+        scrollPositionRead(page, { element: handle }),
+        gate.deadline,
+      ),
+    };
   } finally {
-    void handle.dispose().catch(constVoid);
+    disposeAction(gate, handle);
   }
 };
 
@@ -1051,25 +1008,19 @@ export const evaluate = async (
   { page, cdp }: { readonly page: Page; readonly cdp: CDPSession },
   input: PreviewAutomationEvaluateInput,
   timeoutMs: number,
+  gate?: DispatchGate,
 ) => {
   const before = frameUrls(page);
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const expired = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      // Stops a busy script; an awaited promise is abandoned and settles unread.
-      void cdp.send("Runtime.terminateExecution").catch(constVoid);
-      reject(
-        new ServerBrowserOperationError(
-          "PreviewAutomationTimeoutError",
-          `Evaluation did not finish within ${timeoutMs}ms and was stopped.`,
-        ),
-      );
-    }, timeoutMs);
-  });
-  const evaluation = cdp.send("Runtime.evaluate", {
+  await gate?.();
+  const channel = requireEvaluationChannel(gate);
+  const evaluation = channel.send("Runtime.evaluate", {
     expression: input.expression,
     awaitPromise: input.awaitPromise ?? true,
     returnByValue: input.returnByValue ?? true,
+  });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => evaluationExpired(channel, reject, timeoutMs), timeoutMs);
   });
   void evaluation.catch(constVoid);
   const result = await Promise.race([evaluation, expired]).finally(() => clearTimeout(timer));

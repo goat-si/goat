@@ -6,11 +6,43 @@
  */
 import type { ElementHandle, Locator } from "playwright-core";
 import { ServerBrowserOperationError } from "./browserOperationError.ts";
+import { BrowserControlInterrupted } from "./SessionControl.ts";
 
 export interface Readiness {
   /** Called once when the first check finds the target not ready, before waiting starts. */
   readonly onWaiting?: (() => void) | undefined;
 }
+export interface ReadinessGate {
+  (): void | Promise<void>;
+  readonly signal?: AbortSignal | undefined;
+  readonly channel?: import("./actionChannel.ts").ActionChannel | undefined;
+}
+export const actionCall = <A>(gate: ReadinessGate | undefined, work: () => A): A => {
+  if (!gate) return work();
+  if (!gate.channel) throw new Error("An action channel is required for browser commands.");
+  return gate.channel.call(work);
+};
+export const disposeAction = (
+  gate: ReadinessGate | undefined,
+  handle: { dispose(): Promise<void> },
+) => {
+  if (!gate?.signal?.aborted) void actionCall(gate, () => handle.dispose()).catch(() => undefined);
+};
+// Cancellation stops continuation; a browser operation already issued cannot be recalled.
+export const abortable = async <A>(work: () => Promise<A>, signal?: AbortSignal) => {
+  if (!signal) return work();
+  if (signal.aborted) throw signal.reason;
+  let abort: (() => void) | undefined;
+  const interrupted = new Promise<never>((_, reject) => {
+    abort = () => reject(signal.reason);
+    signal.addEventListener("abort", abort, { once: true });
+  });
+  try {
+    return await Promise.race([work(), interrupted]);
+  } finally {
+    if (abort) signal.removeEventListener("abort", abort);
+  }
+};
 
 const isTimeout = (cause: unknown) => cause instanceof Error && cause.name === "TimeoutError";
 
@@ -40,33 +72,32 @@ const LOADING_SLICE_MS = 500;
  * Refuses a target that still matches nothing a short grace after its page loaded, rather than
  * spending the whole wait on it; a target that exists but is not ready yet keeps the full wait.
  */
-export const requireMatch = async (target: Locator, timeoutMs: number) => {
+export const requireMatch = async (target: Locator, timeoutMs: number, gate?: ReadinessGate) => {
   const ends = performance.now() + timeoutMs;
-  if ((await target.count()) > 0) return;
-  // Each wait is awaited whole, so none outlives the call: while the page loads the target is
-  // looked for in short slices, and once it has loaded, for what is left of the grace. The load
-  // state comes from Playwright's lifecycle tracking, which a stuck page script cannot hold up.
+  if ((await abortable(() => actionCall(gate, () => target.count()), gate?.signal)) > 0) return;
   for (let graceLeft = NO_MATCH_GRACE_MS; ;) {
-    const loaded = await target
-      .page()
-      .waitForLoadState("load", { timeout: 1 })
-      .then(
-        () => true,
-        () => false,
-      );
+    const loaded = await abortable(
+      () => actionCall(gate, () => target.page().waitForLoadState("load", { timeout: 1 })),
+      gate?.signal,
+    ).then(
+      () => true,
+      (cause: unknown) => {
+        if (gate?.signal?.aborted || cause instanceof BrowserControlInterrupted) throw cause;
+        return false;
+      },
+    );
     const slice = Math.min(remaining(ends), loaded ? Math.max(1, graceLeft) : LOADING_SLICE_MS);
     const started = performance.now();
-    const found = await target
-      .first()
-      .waitFor({ state: "attached", timeout: slice })
-      .then(
-        () => true,
-        (cause: unknown) => {
-          // The deadline passing first stays the wait's own timeout; only a spent grace is a miss.
-          if (!isTimeout(cause) || performance.now() >= ends) throw cause;
-          return false;
-        },
-      );
+    const found = await abortable(
+      () => actionCall(gate, () => target.first().waitFor({ state: "attached", timeout: slice })),
+      gate?.signal,
+    ).then(
+      () => true,
+      (cause: unknown) => {
+        if (!isTimeout(cause) || performance.now() >= ends) throw cause;
+        return false;
+      },
+    );
     if (found) return;
     if (loaded) graceLeft -= performance.now() - started;
     if (graceLeft <= 0)
@@ -112,55 +143,108 @@ export const waitUntilWritable = async (
   handle: ElementHandle,
   deadline: number,
   readiness: Readiness,
+  gate: ReadinessGate,
 ) => {
   const ready = async () =>
-    (await handle.isVisible()) &&
-    (await handle.isEditable().catch((cause: unknown) => {
+    (await actionCall(gate, () => handle.isVisible())) &&
+    (await actionCall(gate, () => handle.isEditable()).catch((cause: unknown) => {
       throw neverWritable(cause);
     }));
-  if (!(await ready())) {
+  if (!(await abortable(ready, gate.signal))) {
     readiness.onWaiting?.();
-    await handle.waitForElementState("visible", { timeout: remaining(deadline) });
-    await handle
-      .waitForElementState("editable", { timeout: remaining(deadline) })
-      .catch((cause: unknown) => {
-        throw isTimeout(cause) ? notWritable() : cause;
-      });
+    await abortable(
+      () =>
+        actionCall(gate, () =>
+          handle.waitForElementState("visible", { timeout: remaining(deadline) }),
+        ),
+      gate.signal,
+    );
+    await abortable(
+      () =>
+        actionCall(gate, () =>
+          handle.waitForElementState("editable", { timeout: remaining(deadline) }),
+        ).catch((cause: unknown) => {
+          throw isTimeout(cause) ? notWritable() : cause;
+        }),
+      gate.signal,
+    );
   }
-  await revealFramesOf(handle, deadline);
-  await handle.scrollIntoViewIfNeeded({ timeout: remaining(deadline) });
+  await revealFramesOf(handle, deadline, gate);
+  await gate();
+  gate.signal?.throwIfAborted();
+  await abortable(
+    () => actionCall(gate, () => handle.scrollIntoViewIfNeeded({ timeout: remaining(deadline) })),
+    gate.signal,
+  );
 };
 
 /**
  * Brings the frames that hold a target into view, outermost first. An off-screen frame from
  * another site is not rendered, so a target inside it never settles until its frame shows.
  */
-export const revealFramesOf = async (handle: ElementHandle, deadline: number) => {
+export const revealFramesOf = async (
+  handle: ElementHandle,
+  deadline: number,
+  gate?: ReadinessGate,
+) => {
   const chain: Array<ElementHandle> = [];
   try {
-    for (let frame = await handle.ownerFrame(); frame?.parentFrame(); frame = frame.parentFrame())
-      chain.unshift(await frame.frameElement());
-    for (const element of chain)
-      await element.scrollIntoViewIfNeeded({ timeout: remaining(deadline) });
+    for (
+      let frame = await actionCall(gate, () => handle.ownerFrame());
+      frame?.parentFrame();
+      frame = frame.parentFrame()
+    ) {
+      const child = frame;
+      chain.unshift(await actionCall(gate, () => child.frameElement()));
+    }
+    for (const element of chain) {
+      await gate?.();
+      gate?.signal?.throwIfAborted();
+      await abortable(
+        () =>
+          actionCall(gate, () => element.scrollIntoViewIfNeeded({ timeout: remaining(deadline) })),
+        gate?.signal,
+      );
+    }
   } finally {
-    for (const element of chain) void element.dispose().catch(() => undefined);
+    for (const element of chain) disposeAction(gate, element);
   }
 };
 
-/** The element a locator names once something matches it; one that detached is `gone`. */
-export const matchedElement = async (target: Locator, timeoutMs: number, gone: () => Error) => {
-  const ends = performance.now() + timeoutMs;
-  await requireMatch(target, timeoutMs);
-  const handle = await target.elementHandle({
-    timeout: Math.max(1, Math.floor(ends - performance.now())),
-  });
-  if (handle === null) throw gone();
+/** The element a locator names after its bounded no-match check. */
+export const acquireTarget = async (
+  target: Locator,
+  timeout: number,
+  signal?: AbortSignal,
+  gate?: ReadinessGate,
+) => {
+  const ends = performance.now() + timeout;
+  await requireMatch(target, timeout, gate);
+  const pending = actionCall(gate, () =>
+    target.elementHandle({ timeout: Math.max(1, Math.floor(ends - performance.now())) }),
+  );
+  let handle: ElementHandle | null;
+  try {
+    handle = await abortable(() => pending, signal);
+  } catch (cause) {
+    void pending.then(
+      (late) => {
+        if (late) disposeAction(gate, late);
+      },
+      () => undefined,
+    );
+    throw cause;
+  }
+  if (handle === null) throw targetChanged();
   return handle;
 };
 
-/** The element a locator names now, held for the rest of the action. */
-export const pinTarget = (target: Locator, deadline: number) =>
-  matchedElement(target, remaining(deadline), targetChanged);
+export const pinTarget = (
+  target: Locator,
+  deadline: number,
+  signal?: AbortSignal,
+  gate?: ReadinessGate,
+) => acquireTarget(target, remaining(deadline), signal, gate);
 
 /** In the select's own frame: enabled (a disabled fieldset counts) and holding every value. */
 const selectable = ([element, wanted]: readonly [unknown, ReadonlyArray<string>]) => {
@@ -188,16 +272,35 @@ export const waitUntilSelectable = async (
   values: ReadonlyArray<string>,
   deadline: number,
   readiness: Readiness,
+  gate: ReadinessGate,
 ) => {
-  const frame = await handle.ownerFrame();
+  const frame = await abortable(() => actionCall(gate, () => handle.ownerFrame()), gate.signal);
   if (frame === null) throw targetChanged();
-  if (await frame.evaluate(selectable, [handle, values] as const)) return true;
+  if (
+    await abortable(
+      () => actionCall(gate, () => frame.evaluate(selectable, [handle, values] as const)),
+      gate.signal,
+    )
+  )
+    return true;
   readiness.onWaiting?.();
   try {
-    const waiter = await frame.waitForFunction(selectable, [handle, values] as const, {
-      timeout: remaining(deadline),
-    });
-    void waiter.dispose().catch(() => undefined);
+    const waiting = actionCall(gate, () =>
+      frame.waitForFunction(selectable, [handle, values] as const, {
+        timeout: remaining(deadline),
+      }),
+    );
+    let waiter;
+    try {
+      waiter = await abortable(() => waiting, gate.signal);
+    } catch (cause) {
+      void waiting.then(
+        (late) => disposeAction(gate, late),
+        () => undefined,
+      );
+      throw cause;
+    }
+    disposeAction(gate, waiter);
     return true;
   } catch (cause) {
     if (isTimeout(cause)) return false;

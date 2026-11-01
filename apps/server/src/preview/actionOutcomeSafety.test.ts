@@ -10,6 +10,16 @@ import {
 import { classifyBrowserActionOutcome } from "./actionOutcomeSafety.ts";
 
 describe("actionOutcomeSafety", () => {
+  it("reports a blocked host as a terminal refusal before input", () => {
+    expect(
+      classifyBrowserActionOutcome({
+        operation: "navigate",
+        status: "failed",
+        errorTag: "PreviewAutomationControlInterruptedError",
+        controlReason: "blocked_url",
+      }),
+    ).toMatchObject({ possibleCommit: false, retryClass: "never" });
+  });
   it("keeps possibleCommit false across all read outcomes and allows auto-retry only on transient read failures", () => {
     const completed = classifyActionOutcome({ effect: "read", status: "completed" });
     expect(completed).toEqual({
@@ -253,20 +263,25 @@ describe("actionOutcomeSafety", () => {
     });
   });
 
-  it("fetch is a read: it never commits, and a timed-out fetch may be sent again", () => {
-    expect(classifyBrowserActionOutcome({ operation: "fetch", status: "completed" })).toMatchObject(
-      {
-        possibleCommit: false,
-        writeStatus: "not_applicable",
-      },
-    );
+  it("a timed-out dispatched fetch is not automatically retried", () => {
     expect(
       classifyBrowserActionOutcome({
         operation: "fetch",
         status: "failed",
         errorTag: "PreviewAutomationTimeoutError",
+        dispatched: true,
       }),
-    ).toMatchObject({ possibleCommit: false, retryClass: "same_key" });
+    ).toMatchObject({ possibleCommit: true, retryClass: "never" });
+  });
+
+  it("a completed fetch records that a request may have affected the server", () => {
+    expect(classifyBrowserActionOutcome({ operation: "fetch", status: "completed" })).toMatchObject(
+      {
+        possibleCommit: true,
+        writeStatus: "committed",
+        retryClass: "never",
+      },
+    );
   });
 
   it("an execution error GOAT raised before any input left sent nothing", () => {

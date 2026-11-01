@@ -104,3 +104,16 @@ it("gives each popup to the agent whose input opened it, in whatever order popup
   expect(popups.owner("unknown", opener, 61_000)).toBe("agent-b");
   expect(popups.owner(undefined, { ...opener, agentOperating: false }, 61_000)).toBeNull();
 });
+
+it("rechecks an opening's authority while allowing privacy generation changes", () => {
+  const popups = new PopupAttribution();
+  const control = { agentId: "agent", generation: 0, authority: 0 };
+  const opener = { control, agentOperating: true };
+  popups.lastInput = { agentId: "agent", at: 0, generation: 0, authority: 0 };
+  popups.opened("privacy", opener, 0);
+  popups.opened("takeover", opener, 0);
+  control.generation++;
+  expect(popups.owner("privacy", opener, 1)).toBe("agent");
+  control.authority++;
+  expect(popups.owner("takeover", opener, 1)).toBeNull();
+});
