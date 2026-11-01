@@ -51,7 +51,11 @@ it("includes goat_screen_run in Claude's guide when screen code is attached", ()
     nativeThreadId: "native-screen-code",
     resume: false,
     cwd: "/workspace",
-    screenCodeSkill: true,
+    ...ClaudeRuntimeSkills.skillOptions({
+      ...mcpSession,
+      builtInSkills: ["screen-code"],
+      screenCodeSkillPath: "/state/skills/screen-code/SKILL.md",
+    }),
     mcpServers: {
       goat: {
         type: "http",
@@ -61,7 +65,38 @@ it("includes goat_screen_run in Claude's guide when screen code is attached", ()
     },
   });
   assert.include(JSON.stringify(options.systemPrompt), "goat_screen_run");
+  assert.include(
+    JSON.stringify(options.systemPrompt),
+    "Read the screen-code skill at /state/skills/screen-code/SKILL.md",
+  );
   assert.isDefined(options.mcpServers?.goat);
+  for (const term of [
+    "list_windows",
+    "get_window_state",
+    "get_accessibility_tree",
+    "element_token",
+    "verify_state",
+    "run_steps",
+    'since:"latest"',
+  ])
+    assert.notInclude(JSON.stringify(options.systemPrompt), term);
+});
+
+it("omits screen guidance when the skill is disabled, including driver-only turns", () => {
+  for (const driver of [false, true]) {
+    const session = {
+      ...mcpSession,
+      builtInSkills: driver ? ["computer-use" as const] : [],
+      screenCodeSkillPath: "/state/skills/screen-code/SKILL.md",
+    };
+    const text = ClaudeRuntimeSkills.runtimeInstructions({
+      ...ClaudeRuntimeSkills.skillOptions(session),
+      mcpServers: driver ? { "cua-driver": { command: "driver" } } : {},
+    });
+    assert.notInclude(text, "<screen_code>");
+    assert.notInclude(text, "/state/skills/screen-code/SKILL.md");
+    assert.equal(text.includes("list_windows"), driver);
+  }
 });
 
 it.each([undefined, false, true])(

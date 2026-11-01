@@ -449,6 +449,19 @@ async function subagentsOpen(): Promise<boolean> {
   }
 }
 
+async function readScreenCodePath(): Promise<string | undefined> {
+  const path = env(SCREEN_CODE_SKILL_GATE_ENV);
+  if (path === undefined) return undefined;
+  try {
+    const { readFile } = await import("node:fs/promises");
+    const value: unknown = JSON.parse(await readFile(path, "utf8"));
+    if (typeof value === "object" && value !== null && "screenCodeSkillPath" in value && typeof value.screenCodeSkillPath === "string") {
+      return value.screenCodeSkillPath.replace(/\\s+/g, " ").trim();
+    }
+  } catch { return undefined; }
+  return undefined;
+}
+
 async function readTurnSkill(key: "screenCode" | "browser", environmentName: string): Promise<boolean> {
   const path = env(SCREEN_CODE_SKILL_GATE_ENV);
   if (path === undefined) return env(environmentName) === "on";
@@ -811,6 +824,8 @@ export default async function goatMcpExtension(pi: ExtensionAPI) {
     const withComputerUse = computerUse && cuaOpen && (await readCuaSkill());
     const withScreenCode = await readTurnSkill("screenCode", SCREEN_CODE_SKILL_ENV);
     const withBrowser = await readTurnSkill("browser", BROWSER_TOOLS_ENV);
+    const screenCodePath = withScreenCode ? await readScreenCodePath() : undefined;
+    const screenCodeInstructions = SCREEN_CODE_INSTRUCTIONS + (screenCodePath ? " Read the screen-code skill at " + screenCodePath + " before the first cell." : "");
     const sections = event.systemPromptOptions?.sections;
     if (sections && typeof sections === "object" && event.systemPromptOptions?.forceSystemPrompt === undefined) {
       // A full prompt override bypasses Pi's later section rendering.
@@ -820,7 +835,7 @@ export default async function goatMcpExtension(pi: ExtensionAPI) {
       else delete sections.goat_browser;
       if (withComputerUse) sections.goat_computer_use = COMPUTER_USE_INSTRUCTIONS;
       else delete sections.goat_computer_use;
-      if (withScreenCode) sections.goat_screen_code = SCREEN_CODE_INSTRUCTIONS;
+      if (withScreenCode) sections.goat_screen_code = screenCodeInstructions;
       else delete sections.goat_screen_code;
       return undefined;
     }
@@ -833,7 +848,7 @@ export default async function goatMcpExtension(pi: ExtensionAPI) {
         ORCHESTRATION_INSTRUCTIONS +
         (withBrowser ? "\\n\\n" + BROWSER_INSTRUCTIONS : "") +
         (withComputerUse ? "\\n\\n" + COMPUTER_USE_INSTRUCTIONS : "") +
-        (withScreenCode ? "\\n\\n" + SCREEN_CODE_INSTRUCTIONS : ""),
+        (withScreenCode ? "\\n\\n" + screenCodeInstructions : ""),
     };
   });
 }

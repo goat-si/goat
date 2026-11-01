@@ -15,6 +15,7 @@ export const writePiScreenSkillGate = Effect.fn("PiScreenSkillGate.write")(
       path,
       JSON.stringify({
         screenCode: McpProviderSession.carriesScreenCodeSkill(attached),
+        screenCodeSkillPath: attached?.screenCodeSkillPath,
         browser: attached?.browserToolsAvailable === true,
       }),
     ),

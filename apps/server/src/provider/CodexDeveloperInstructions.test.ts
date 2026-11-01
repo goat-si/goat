@@ -57,10 +57,46 @@ describe("buildCodexAdditionalContext", () => {
   it("a browser-only attachment gives Codex the screen-code guide", () => {
     const context = buildCodexAdditionalContext(
       { model: "gpt-5.3-codex" },
-      { browser: true, device: false, screenCode: true },
+      {
+        browser: true,
+        device: false,
+        screenCode: true,
+        screenCodeSkillPath: "/state/skills/screen-code/SKILL.md",
+      },
+    );
+    NodeAssert.match(
+      context.goat_code_runtime_screen_code_01?.value ?? "",
+      /Read the screen-code skill at \/state\/skills\/screen-code\/SKILL.md/,
     );
     NodeAssert.match(context.goat_code_runtime_screen_code_01?.value ?? "", /goat_screen_run/);
     NodeAssert.equal(context.goat_code_runtime_computer_use_01, undefined);
+    for (const term of [
+      "list_windows",
+      "get_window_state",
+      "get_accessibility_tree",
+      "element_token",
+      "verify_state",
+      "run_steps",
+      'since:"latest"',
+    ])
+      NodeAssert.ok(!JSON.stringify(context).includes(term));
+  });
+
+  it("keeps screen guidance out of disabled and driver-only turns", () => {
+    for (const computerUse of [false, true]) {
+      const context = buildCodexAdditionalContext(
+        { model: "test" },
+        {
+          browser: true,
+          device: false,
+          computerUse,
+          screenCode: false,
+          screenCodeSkillPath: "/state/skills/screen-code/SKILL.md",
+        },
+      );
+      NodeAssert.equal(context.goat_code_runtime_screen_code_01, undefined);
+      NodeAssert.equal(context.goat_code_runtime_computer_use_01 !== undefined, computerUse);
+    }
   });
 
   it("delivers all orchestration sections in authored order when keys are sorted", () => {

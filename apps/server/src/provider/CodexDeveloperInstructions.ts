@@ -24,6 +24,7 @@ export interface GoatToolAvailability {
   /** The managed `cua-driver` MCP server is attached to this turn. */
   readonly computerUse?: boolean;
   readonly screenCode?: boolean;
+  readonly screenCodeSkillPath?: string | undefined;
 }
 
 const normalizeAvailability = (
@@ -98,7 +99,14 @@ export function buildCodexAdditionalContext(
       ? Object.fromEntries(
           SCREEN_CODE_INSTRUCTION_SECTIONS.map((section, index) => [
             `goat_code_runtime_screen_code_${String(index + 1).padStart(2, "0")}`,
-            { kind: "application" as const, value: section },
+            {
+              kind: "application" as const,
+              value:
+                section +
+                (toolsAvailable.screenCodeSkillPath
+                  ? ` Read the screen-code skill at ${toolsAvailable.screenCodeSkillPath.replaceAll(/\s+/g, " ").trim()} before the first cell.`
+                  : ""),
+            },
           ]),
         )
       : {}),
