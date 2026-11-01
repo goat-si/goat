@@ -263,10 +263,10 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
   const cuaWatchApps = yield* Ref.make<ReadonlyArray<string>>([]);
   const cuaWatchAppsChanges = yield* PubSub.sliding<ReadonlyArray<string>>(1);
   const setCuaWatchApps = Effect.fn("desktop.telemetryPublisher.setCuaWatchApps")(
-    (apps: ReadonlyArray<string>) =>
+    (apps: ReadonlyArray<string>, refresh = false) =>
       Ref.getAndSet(cuaWatchApps, apps).pipe(
         Effect.flatMap((previous) =>
-          previous.length === apps.length && previous.every((app, i) => app === apps[i])
+          !refresh && previous.length === apps.length && previous.every((app, i) => app === apps[i])
             ? Effect.void
             : PubSub.publish(cuaWatchAppsChanges, apps),
         ),
@@ -514,10 +514,14 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
           const source = cuaSource;
           if (sourceId !== PRIMARY_LOCAL_ENVIRONMENT_ID || !source) return Effect.void;
           if (source.watchSeq !== undefined && message.seq < source.watchSeq) return Effect.void;
+          const refresh = source.watchSeq !== undefined && message.seq > source.watchSeq;
           source.watchSeq = message.seq;
           return setCuaWatching(message.active).pipe(
             Effect.andThen(
-              setCuaWatchApps(message.active ? [...new Set(message.apps ?? [])].sort() : []),
+              setCuaWatchApps(
+                message.active ? [...new Set(message.apps ?? [])].sort() : [],
+                refresh,
+              ),
             ),
           );
         });

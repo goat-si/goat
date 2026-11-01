@@ -261,7 +261,7 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
         ? "This thread already has live whole-desktop foreground approval for this purpose until its approved expiry. Pause, Stop, control replacement or turn end requires new foreground approval. The cua-driver tools are attached from your next turn if they are not already."
         : `This thread is admitted${own.value.apps === undefined ? "" : ` for ${own.value.apps.join(", ")}`} until ${DateTime.formatIso(own.value.expiresAt)}. ${
             named
-              ? "An app opened after computer use started is added in a moment; if a call is still refused with bounded_resource_outside_manifest, wait a few seconds and call again."
+              ? "A manifest refresh was requested. Wait a few seconds, then retry the call. If it is still refused with bounded_resource_outside_manifest, make sure the app is running and call computer_use.request again with its app id. If it remains unavailable, report the refusal."
               : "The cua-driver tools are attached from your next turn if they are not already."
           }`,
     } satisfies ComputerUseRequestResult;
@@ -353,7 +353,7 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
         ? "This thread runs in full access: this turn can bring apps forward and take keyboard or pointer focus without approval. Tell the person first that the screen may briefly be taken and returned."
         : wanted === undefined
           ? "This thread runs in full access: this turn can act on every app without approval."
-          : `This thread runs in full access: this turn can act on every app without approval. ${wanted.join(", ")} ${wanted.length === 1 ? "is" : "are"} added to computer use in a moment if opened after it started; if a call is still refused with bounded_resource_outside_manifest, wait a few seconds and call again.`,
+          : `This thread runs in full access: this turn can act on every app without approval. A manifest refresh was requested for ${wanted.join(", ")}. Wait a few seconds, then retry the call. If it is still refused with bounded_resource_outside_manifest, make sure the app is running and call computer_use.request again with its app id. If it remains unavailable, report the refusal.`,
     } satisfies ComputerUseRequestResult;
   }
   const handoff = yield* handoffs.create(createInput);

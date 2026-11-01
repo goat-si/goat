@@ -340,6 +340,7 @@ const make = Effect.gen(function* () {
   // Wakes the desktop watch below; a new control does not wake proxies, so it has its own.
   const watchKick = yield* PubSub.sliding<void>(1);
   const kick = PubSub.publish(watchKick, undefined).pipe(Effect.asVoid);
+  let manifestGeneration = 0;
   const proxy = Option.getOrUndefined(yield* resolveSelfInvocation().pipe(Effect.option));
   const fullAccessAdmitted = makeFullAccessAdmitted(sql);
   const controls = new Map<ThreadId, ControlRecord>();
@@ -664,6 +665,7 @@ const make = Effect.gen(function* () {
       end,
       signals,
       watchKick,
+      manifestGeneration: () => manifestGeneration,
       live: live(),
       receiver: Option.getOrUndefined(desktop),
       linuxHelper,
@@ -708,8 +710,9 @@ const make = Effect.gen(function* () {
       const record = controls.get(threadId);
       if (record?.controlId !== controlId || !acting(record)) return;
       const named = [...new Set([...(record.named ?? []), ...apps])].sort();
-      if (named.length === (record.named?.length ?? 0)) return;
-      controls.set(threadId, { ...record, named });
+      if (named.length !== (record.named?.length ?? 0))
+        controls.set(threadId, { ...record, named });
+      manifestGeneration++;
       yield* kick;
     }),
     attached: Effect.fn("ComputerUseLeases.attached")(function* (threadId: ThreadId) {

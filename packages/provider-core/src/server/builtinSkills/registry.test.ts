@@ -12,7 +12,8 @@ import { describe, expect, it } from "vite-plus/test";
 
 import { GOAT_DEVELOPMENT_INSTRUCTIONS } from "../developmentInstructions.ts";
 import { buildRuntimeInstructions } from "../runtimeInstructions.ts";
-import { COMPUTER_USE_PLATFORM_NOTES } from "./computerUse.ts";
+import { COMPUTER_USE_PLATFORM_NOTES, COMPUTER_USE_SKILL_CORE } from "./computerUse.ts";
+
 import { browserSkillFiles } from "./browserSkillFiles.ts";
 import { computerUseAppNote } from "./computerUseSkillFiles.ts";
 import { screenCodeSkillFiles } from "./screenCodeSkillFiles.ts";
@@ -22,6 +23,10 @@ import {
   resolveBuiltInSkills,
   withBuiltInSkillText,
 } from "./registry.ts";
+
+it("tells agents how to recover when an app stays outside the manifest", () => {
+  expect(COMPUTER_USE_SKILL_CORE).toContain("Make sure the app is running");
+});
 
 /**
  * Identifiers that exist only in other vendors' computer use skills and tool surfaces (#1161,
