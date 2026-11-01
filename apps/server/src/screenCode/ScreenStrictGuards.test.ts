@@ -5,7 +5,8 @@ import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 
-import type { ServerSettings, ServerSettingsService } from "../serverSettings.ts";
+import type { ServerSettings } from "@goat/contracts";
+import type { ServerSettingsService } from "../serverSettings.ts";
 import {
   followStrictInputGuards,
   makeStrictInputGuards,
