@@ -15,8 +15,8 @@ upstream과 GOAT 저장소가 git 히스토리를 공유하지 않는다. upstre
 | upstream                    | [trycua/cua](https://github.com/trycua/cua) `main`, 경로 `libs/cua-driver`. MIT, 루트 `LICENSE.md` "Copyright (c) 2025 Cua AI, Inc."        |
 | upstream 릴리스 태그        | `cua-driver-rs-v<version>` (monorepo의 다른 패키지 태그와 섞여 있다)                                                                        |
 | fork point                  | `cua-driver-rs-v0.37.0` = `2d2f99228d4d2508dc6fcc84c176b296e146714a` (2026-10-20 릴리스)                                                    |
-| 포크 저장소                 | `goat-si/goat-cu` (2026-10-25 생성, public). `upstream` = subtree split만, `main` = `upstream` + GOAT 변경(PR로만)                       |
-| reviewed-through (split)    | 포크 `upstream` `04a4a3701e2f`. trycua/cua `main` `aeae5569473b`(2026-10-26, 0.38.0 태그 뒤)의 split이다 (goat-si/goat-cu#30)            |
+| 포크 저장소                 | `goat-si/goat-cu` (2026-10-25 생성, public). `upstream` = subtree split만, `main` = `upstream` + GOAT 변경(PR로만)                          |
+| reviewed-through (split)    | 포크 `upstream` `04a4a3701e2f`. trycua/cua `main` `aeae5569473b`(2026-10-26, 0.38.0 태그 뒤)의 split이다 (goat-si/goat-cu#30)               |
 | 포크 `main`                 | `8bb74972794e` (#40). split 위에 GOAT 변경은 PR로만                                                                                         |
 | 포크 릴리스                 | `cua-driver-rs-v0.38.0-goat.3` (포크 `main` `8bb74972794e`, 2026-10-27, run 40460378842). 서명 없음 + attestation. 태그 규약은 포크 GOAT.md |
 | GOAT가 실제로 쓰는 드라이버 | 포크 `0.38.0-goat.3` 아카이브를 크기·SHA-256으로 pin (#1839, dev `f374e6c8a4`). 헬퍼 빌드가 Developer ID로 서명                             |
@@ -35,7 +35,7 @@ split `a10bf063f35a`는 그것을 조상으로 가진다. 그래서 다음 사�
 | ------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
 | 드라이버 버전                         | `packages/shared/src/cuaDriverRelease.ts:3` `CUA_DRIVER_VERSION`                                                                    |
 | 플랫폼별 아카이브 이름·바이트·SHA-256 | `packages/shared/src/cuaDriverRelease.ts:11-37`                                                                                     |
-| 다운로드 URL                          | `packages/shared/src/cuaDriverRelease.ts` (`github.com/goat-si/goat-cu/releases/download/cua-driver-rs-v…`)                      |
+| 다운로드 URL                          | `packages/shared/src/cuaDriverRelease.ts` (`github.com/goat-si/goat-cu/releases/download/cua-driver-rs-v…`)                         |
 | 아카이브 안의 필수 파일               | `packages/shared/src/cuaDriverRelease.ts:66-79` `requiredFiles`                                                                     |
 | 텔레메트리·업데이트 확인 끄기         | `packages/shared/src/cuaDriverRelease.ts:85-91`, `:140-148`                                                                         |
 | SDK                                   | `pnpm-workspace.yaml:58` catalog `@trycua/cua-driver: 0.37.0`, 사용처 `apps/server/package.json:58`, `apps/desktop/package.json:24` |
