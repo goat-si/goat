@@ -53,7 +53,11 @@ import type {
 } from "@goat/client-runtime/state/shell";
 import { getLocalStorageItem } from "./hooks/useLocalStorage";
 import { readThreadPreviewState } from "./previewStateStore";
-import { resolveAppModelSelection, resolveAppModelSelectionForInstance } from "./modelSelection";
+import {
+  readInstanceCustomModels,
+  resolveAppModelSelection,
+  resolveAppModelSelectionForInstance,
+} from "./modelSelection";
 import {
   DEFAULT_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
@@ -1193,6 +1197,7 @@ function withFallbackInstanceOptions(input: {
   readonly selectedProvider: ProviderDriverKind;
   readonly selectedInstanceId?: ProviderInstanceId | null | undefined;
   readonly requestedInstanceId?: ProviderInstanceId | null | undefined;
+  readonly settings: UnifiedSettings;
 }): ProviderOptionSelectionsByProvider | null {
   const { modelOptions, selectedInstanceId, requestedInstanceId } = input;
   if (
@@ -1205,16 +1210,26 @@ function withFallbackInstanceOptions(input: {
     return modelOptions;
   }
   const requestedOptions = modelOptions[requestedInstanceId];
-  const requestedDriver = input.providers.find(
+  const requestedProvider = input.providers.find(
     (provider) => provider.instanceId === requestedInstanceId,
-  )?.driver;
-  // The model of the selection the options came from, which can differ from the shown model's source.
+  );
   const requestedModel = input.optionSelections?.[requestedInstanceId]?.model;
-  if (
-    !requestedOptions ||
-    requestedDriver !== input.selectedProvider ||
-    requestedModel !== input.selectedModel
-  ) {
+  // Static aliases are shared across instances; exact custom slugs and catalog aliases are not.
+  const modelIdentity = (instanceId: ProviderInstanceId, model: string | undefined) => {
+    const isCustom =
+      input.providers
+        .find((provider) => provider.instanceId === instanceId)
+        ?.models.some((entry) => entry.slug === model && entry.isCustom) ||
+      readInstanceCustomModels(input.settings, instanceId, input.selectedProvider).some(
+        (entry) => entry.slug === model,
+      );
+    return isCustom ? model : normalizeModelSlug(model, input.selectedProvider);
+  };
+  const sameModel =
+    requestedModel === input.selectedModel ||
+    modelIdentity(requestedInstanceId, requestedModel) ===
+      modelIdentity(selectedInstanceId, input.selectedModel);
+  if (!requestedOptions || requestedProvider?.driver !== input.selectedProvider || !sameModel) {
     return modelOptions;
   }
   return { ...modelOptions, [selectedInstanceId]: requestedOptions };
