@@ -1,3 +1,5 @@
+import { ThreadId, type EnvironmentId } from "@goat/contracts";
+import { scopedThreadKey } from "../../lib/scopedEntities";
 import { StackActions, useNavigation } from "@react-navigation/native";
 import { createContext, use } from "react";
 import { Platform } from "react-native";
@@ -41,4 +43,10 @@ export function useOpenThreadInspector() {
     }
     return true;
   };
+}
+
+export function routeThreadIdentity(environmentId: EnvironmentId | null, threadId: string | null) {
+  return environmentId === null || threadId === null
+    ? null
+    : scopedThreadKey(environmentId, ThreadId.make(threadId));
 }

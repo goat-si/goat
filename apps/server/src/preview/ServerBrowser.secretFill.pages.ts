@@ -1,5 +1,7 @@
 /** Synthetic sites the secret-fill tests route every request to. */
 export const PAGES: Record<string, string> = {
+  "https://history.test/":
+    '<input id="normal"><input id="pw" type="password"><div id="edit" contenteditable="true"></div>',
   "https://login.test/": [
     "<title>Sign in</title>",
     '<input id="user" aria-label="Email"><input id="pw" type="password" aria-label="Password">',

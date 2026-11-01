@@ -1,4 +1,6 @@
 import * as Schema from "effect/Schema";
+import { ComputerUseLeaseCallOutcome } from "./computerUseLeaseHistory.ts";
+export { ComputerUseLeaseCallOutcome } from "./computerUseLeaseHistory.ts";
 import * as SchemaAST from "effect/SchemaAST";
 import * as SchemaParser from "effect/SchemaParser";
 import * as SchemaTransformation from "effect/SchemaTransformation";
@@ -276,6 +278,7 @@ export const ComputerUseLeaseDriverEnded = Schema.Struct({
 export type ComputerUseLeaseDriverEnded = typeof ComputerUseLeaseDriverEnded.Type;
 
 export const ComputerUseLeaseReport = Schema.Union([
+  ComputerUseLeaseCallOutcome,
   ComputerUseLeaseTarget,
   ComputerUseLeaseHumanInput,
   ComputerUseLeaseAgentInput,

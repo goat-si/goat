@@ -1,9 +1,11 @@
 import { assert, describe, it } from "@effect/vitest";
 import { ThreadId, type ComputerUsePrimitiveRequest } from "@goat/contracts";
+import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
+import { cancellationHistoryFixture } from "./ComputerUseHistoryCancellation.testkit.ts";
 import {
   active,
   reobserveRefusalSafety,
@@ -615,9 +617,11 @@ describe("proxy execution ownership", () => {
     "suppresses a reply cancelled during asynchronous reply processing while releasing its ticket",
     () =>
       Effect.gen(function* () {
+        const { history, threadId, reservation } = yield* cancellationHistoryFixture;
         const entered = yield* Deferred.make<void>();
         const gate = yield* Deferred.make<void>();
         const h = yield* harness({
+          reservation,
           overlay: (command) =>
             command.op === "show" && command.phase === "resting"
               ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(gate)))
@@ -645,11 +649,15 @@ describe("proxy execution ownership", () => {
         yield* h.nextToDriver;
         yield* Deferred.succeed(gate, undefined);
         assert.equal((yield* h.nextReservation).action, "release");
+        const historyEntries = yield* history.listForThread(threadId);
+        assert.equal(historyEntries.length, 1);
+        assert.equal(historyEntries[0]?.method, "click");
+        assert.equal(historyEntries[0]?.verdict, "unknown_outcome");
         yield* h.send(call(8, "get_guide"));
         yield* h.nextToDriver;
         yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 8, result: { content: [] } }));
         assert.equal((yield* h.nextToProvider).id, 8);
-      }),
+      }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
   );
   it.effect("returns the holding thread without dispatching a denied mutation", () =>
     Effect.gen(function* () {

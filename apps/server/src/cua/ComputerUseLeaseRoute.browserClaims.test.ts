@@ -1,5 +1,6 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import {
   type ComputerUsePauseReason,
   EnvironmentId,
@@ -23,6 +24,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import * as ServerSettings from "../serverSettings.ts";
+import { runMigrations } from "../persistence/Migrations.ts";
 import { leaseUpdates } from "./ComputerUseLeaseRoute.ts";
 import * as LeaseRoute from "./ComputerUseLeaseRoute.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
@@ -50,6 +52,7 @@ const fixture = Effect.fnUntraced(function* (
   const paused = yield* Ref.make<ComputerUsePauseReason | undefined>(undefined);
   const signals = yield* PubSub.unbounded<void>();
   const leases = ComputerUseLeases.ComputerUseLeases.of({
+    ownsControl: () => Effect.die("unused"),
     blocked: () => Effect.die("unused"),
     blockedTurns: Effect.die("unused"),
     active: () => Effect.succeedNone,
@@ -217,6 +220,9 @@ const threadFixture = Effect.fn("LeaseRouteTest.threadFixture")(function* (
   });
   const baseContext = yield* Layer.build(
     Layer.mergeAll(
+      Layer.effectDiscard(runMigrations()).pipe(
+        Layer.provideMerge(NodeSqliteClient.layer({ filename: ":memory:" })),
+      ),
       ServerSettings.layerTest({ enableCua: true }),
       Layer.succeed(McpSessionRegistry.McpSessionRegistry, registry),
       leaseLayer,

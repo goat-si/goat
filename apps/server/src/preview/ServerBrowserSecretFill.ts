@@ -1,3 +1,5 @@
+import { FOCUSED, SELECTED } from "./secretFillTargetScripts.ts";
+import { STILL_FILLED } from "./secretFillStillFilled.ts";
 // @effect-diagnostics globalTimers:off -- The privacy settle wait runs inside a Promise-based browser operation.
 /**
  * goat_preview_fill_secret: types an origin-bound secret into a password field over CDP in an
@@ -21,6 +23,7 @@ import type { BrowserContext, CDPSession, Frame, Page, Request } from "playwrigh
 
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import { rememberSecret } from "./pageSecrets.ts";
+import { HISTORY_FIELD_SCRIPT } from "./historyFieldScript.ts";
 import {
   compileSecretForms,
   compileSkeletonForms,
@@ -118,22 +121,6 @@ export const playwrightDebugLogging = (debug: string | undefined) =>
     .split(/[\s,]+/u)
     .some((pattern) => pattern !== "" && !pattern.startsWith("-") && /\*|pw/u.test(pattern));
 
-// Isolated-world scripts: the page's own script cannot replace what they read.
-const FOCUSED = `function () {
-  let element = document.activeElement;
-  while (element && element.shadowRoot && element.shadowRoot.activeElement)
-    element = element.shadowRoot.activeElement;
-  return element;
-}`;
-const SELECTED = `function (selector) {
-  const found = [];
-  const visit = (root) => {
-    found.push(...root.querySelectorAll(selector));
-    for (const element of root.querySelectorAll("*")) if (element.shadowRoot) visit(element.shadowRoot);
-  };
-  visit(document);
-  return found.length === 1 ? found[0] : found.length;
-}`;
 const PASSWORD_ORIGIN = `function () {
   const field = this instanceof HTMLInputElement && this.type === "password" &&
     !this.disabled && !this.readOnly && this.isConnected && this.ownerDocument === document;
@@ -200,29 +187,6 @@ const FILL = `function (value, origin, identifier, account) {
     active = active.shadowRoot.activeElement;
   if (active === this) this.blur();
   return true;
-}`;
-// Any value left in the field counts: an edit must not lift the fence on most of the password.
-// An empty or detached field keeps its entry until its document goes, and then any text field of
-// that document holding the value, or four or more characters of it, holds the fence instead.
-const STILL_FILLED = `function (value) {
-  if (this.isConnected && this.value !== "") return this.type === "password" ? "hidden" : "shown";
-  const root = this.ownerDocument;
-  if (!root || typeof value !== "string") return "empty";
-  const typed = new Set(["text", "password", "search", "email", "tel", "url", "hidden"]);
-  let state = "empty";
-  const visit = (scope) => {
-    for (const field of scope.querySelectorAll("input, textarea")) {
-      const area = field.localName === "textarea";
-      const held = field.value;
-      if (!held || (!area && !typed.has(field.type))) continue;
-      if (!held.includes(value) && !(held.length >= 4 && value.includes(held))) continue;
-      if (area || (field.type !== "password" && field.type !== "hidden")) state = "shown";
-      else if (state === "empty") state = "hidden";
-    }
-    for (const element of scope.querySelectorAll("*")) if (element.shadowRoot) visit(element.shadowRoot);
-  };
-  visit(root);
-  return state;
 }`;
 
 interface Target {
@@ -861,6 +825,33 @@ export const make = Effect.gen(function* () {
       : null;
   };
 
+  const historyField = async (tab: SecretFillTab, threadId: ThreadId, channel: ActionChannel) => {
+    if (pixelsOff(tab, threadId) !== null) return undefined;
+    const target = await locate(tab, undefined, channel).catch(() => undefined);
+    if (target === undefined) return undefined;
+    try {
+      const checked = await channel.sendFor(target.session)("Runtime.callFunctionOn", {
+        objectId: target.objectId,
+        functionDeclaration: HISTORY_FIELD_SCRIPT,
+        returnByValue: true,
+      });
+      if (
+        checked.exceptionDetails !== undefined ||
+        checked.result.value !== true ||
+        pixelsOff(tab, threadId) !== null
+      )
+        return undefined;
+      const { node } = await channel.sendFor(target.session)("DOM.describeNode", {
+        objectId: target.objectId,
+      });
+      return { session: target.session, nodeId: node.backendNodeId };
+    } catch {
+      return undefined;
+    } finally {
+      await release(target, channel);
+    }
+  };
+
   /**
    * Refuses where a recording starts, after the tab is marked as starting one: a fill checks that
    * mark after reserving its context, so whichever comes second refuses.
@@ -987,5 +978,14 @@ export const make = Effect.gen(function* () {
     );
   };
 
-  return { fill, guard, assertPixels, mask, maskText, signInState: signInStateOf };
+  return {
+    fill,
+    guard,
+    assertPixels,
+    historyField,
+    historySafe: (tab: SecretFillTab, threadId: ThreadId) => pixelsOff(tab, threadId) === null,
+    mask,
+    maskText,
+    signInState: signInStateOf,
+  };
 });

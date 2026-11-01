@@ -11,6 +11,7 @@ import { BrowserControlInterrupted } from "./SessionControl.ts";
 export interface Readiness {
   /** Called once when the first check finds the target not ready, before waiting starts. */
   readonly onWaiting?: (() => void) | undefined;
+  readonly onHistoryFocus?: (() => Promise<void>) | undefined;
 }
 export interface ReadinessGate {
   (): void | Promise<void>;

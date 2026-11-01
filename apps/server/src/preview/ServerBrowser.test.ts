@@ -1,3 +1,4 @@
+import { assertDialogHistory, historyMemoryLayer } from "./BrowserHistoryAssertions.testkit.ts";
 import * as NodeEvents from "node:events";
 import * as NodeVM from "node:vm";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - Playwright download mocks perform real file operations outside the Effect runtime.
@@ -189,7 +190,6 @@ function makeContext(onClose?: (context: BrowserContext) => void) {
   return context;
 }
 
-// Runs the real encoder script against fake canvas and MediaRecorder globals.
 function makeEncoderPage() {
   const canvas = {
     width: 0,
@@ -273,6 +273,7 @@ const asSession = (providerSessionId: string) => ({
 });
 const dependencies = Layer.mergeAll(
   ServerSettings.layerTest(),
+  historyMemoryLayer,
   Broker.layer,
   Manager.layer,
   Layer.succeed(ServerEnvironment.ServerEnvironment, {
@@ -465,7 +466,6 @@ it.live.each([
             });
           }
         }
-        // This second capture queues behind the first even if its requesting fiber was cancelled.
         cdp.send.mockImplementation(original);
         yield* broker.invoke({ scope, tabId, operation: "snapshot", input: {} });
         expect(viewerCdp.send.mock.calls.map(([method]) => method)).toEqual([
@@ -495,8 +495,6 @@ it.live("a snapshot that cannot capture times out on the request's own deadline 
       const error = yield* broker
         .invoke<void>({ scope, tabId, operation: "snapshot", input: {}, timeoutMs: 200 })
         .pipe(Effect.flip);
-      // The server browser answered with the deadline the error names, before the broker gave up
-      // on it and cut it off.
       expect(error).toMatchObject({
         _tag: "PreviewAutomationTimeoutError",
         timeoutMs: 200,
@@ -549,7 +547,7 @@ it.live("logs read filtered diagnostics without page capture or invalidating sna
       const element = { boundingBox: box, waitForElementState: box, dispose: box, ownerFrame: no };
       const locator = { scrollIntoViewIfNeeded: box, boundingBox: box, click: box };
       const handle = { elementHandle: async () => element, count: async () => 1 };
-      page.locator.mockImplementationOnce(() => ({ ...locator, ...handle }) as never);
+      page.locator.mockImplementation(() => ({ ...locator, ...handle }) as never);
       yield* broker.invoke({
         scope,
         tabId,
@@ -570,7 +568,6 @@ it.live("tells the desktop once per thread when its agent turns start and end", 
     desktopTurns.on("turn", record);
     yield* Effect.addFinalizer(() => Effect.sync(() => desktopTurns.off("turn", record)));
     const endFirst = yield* activity.begin(threadId);
-    // An overlapping turn on the same thread neither starts nor ends focus on its own.
     const endSecond = yield* activity.begin(threadId);
     expect(yield* Queue.take(turns)).toEqual([threadId, true]);
     yield* endFirst;
@@ -681,7 +678,6 @@ it.live.each([
         yield* viewer.input({ type: "text", text: "hello" });
       }).pipe(Effect.forkScoped);
       yield* Effect.addFinalizer(() => Effect.sync(() => committed.resolve()));
-      // The text reaches the page while the first navigation is still uncommitted.
       yield* Effect.promise(() => typed.promise);
       expect(page.goto).toHaveBeenLastCalledWith(
         "http://localhost:5173/fixed",
@@ -1171,7 +1167,6 @@ it.live("interrupts an active wait on takeover and frees the queue for human inp
         _tag: "PreviewAutomationControlInterruptedError",
         reason: "humanControl",
       });
-      // The native read is still pending, but no longer holds the control queue.
       yield* viewer.input({ type: "text", text: "human input" });
       expect(contexts[0]!.sessions.at(-1)!.send).toHaveBeenCalledWith("Input.insertText", {
         text: "human input",
@@ -1293,8 +1288,14 @@ it.live("reports a pending dialog without evaluating the page and resolves it ex
         reason: "dialogPending",
       });
       expect(page.goto).toHaveBeenCalledTimes(1);
-      yield* broker.invoke({ scope, tabId, operation: "dialog", input: { accept: true } });
+      yield* broker.invoke({
+        scope,
+        tabId,
+        operation: "dialog",
+        input: { accept: true, promptText: "private" },
+      });
       expect(yield* Fiber.join(blockedAction)).toBe(true);
+      yield* assertDialogHistory(scope.thread.threadId);
       expect(dialog.accept).toHaveBeenCalledTimes(1);
       const resolved = yield* broker.invoke<PreviewAutomationStatus>({
         scope,
@@ -2216,7 +2217,6 @@ it.live("agents read a human's tab with no arguments and act on it only while no
         input: {},
       });
       expect(diagnostics.console.entries[0]?.text).toBe("human tab evidence");
-      // Acting is refused while the user controls the tab.
       const refused = yield* broker
         .invoke<void>({
           scope,
