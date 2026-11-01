@@ -46,7 +46,11 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as ComputerUseAgentConnections from "./ComputerUseAgentConnections.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import * as ComputerUsePrimitiveChannel from "./ComputerUsePrimitiveChannel.ts";
-import { threadLeaseUpdates, withPrimitiveRequests } from "./ComputerUseLeaseThreadStream.ts";
+import {
+  readStrictGuards,
+  threadLeaseUpdates,
+  withPrimitiveRequests,
+} from "./ComputerUseLeaseThreadStream.ts";
 import { watchClaimChanges } from "./ComputerUseLeaseClaimChanges.ts";
 import { LEASE_HEARTBEAT_HEADER, LEASE_HEARTBEAT_MS } from "./ComputerUseLeaseStreamFollower.ts";
 import { movesPersonPointer } from "./ComputerUsePointerPolicy.ts";
@@ -126,6 +130,7 @@ export const leaseUpdates = (input: {
           Effect.map((value) => value.enableCua),
           Effect.orElseSucceed(() => false),
         );
+        const strictGuards = yield* readStrictGuards(settings);
         const state = enabled
           ? yield* leases.controlState(input.threadId, input.controlId).pipe(
               Effect.orElseSucceed((): ComputerUseLeases.ComputerUseControlState => ({
@@ -176,6 +181,7 @@ export const leaseUpdates = (input: {
                 ...(state.foreground === undefined ? {} : { foreground: state.foreground }),
                 ...(state.interruptions.count === 0 ? {} : { interruptions: state.interruptions }),
                 ...(state.shared === true ? { shared: true } : {}),
+                ...(strictGuards ? {} : { strictInputGuards: false as const }),
                 ...(browserClaimVersion === 0 ? {} : { browserClaimVersion }),
                 ...(browserClaimBindings.length === 0 ? {} : { browserClaimBindings }),
                 ...(browserClaims.length === 0 ? {} : { browserClaims }),
@@ -412,7 +418,9 @@ const callLayer = HttpRouter.add(
         Option.isSome(control) &&
         control.value.controlId === call.value.controlId &&
         control.value.nonPersonFullAccess === true;
-      const app = deniedCallApp(call.value, settings.value.cuaDeniedApps, nonPerson);
+      const app = settings.value.cuaStrictInputGuards
+        ? deniedCallApp(call.value, settings.value.cuaDeniedApps, nonPerson)
+        : undefined;
       if (app !== undefined)
         return HttpServerResponse.text(
           encodeAdmission({ status: "refused", detail: "app_not_allowed", app }),
@@ -421,6 +429,7 @@ const callLayer = HttpRouter.add(
     }
     if (
       call.value.action === "reserve" &&
+      settings.value.cuaStrictInputGuards &&
       settings.value.cuaMovePointer !== "allowed" &&
       movesPersonPointer(call.value)
     )

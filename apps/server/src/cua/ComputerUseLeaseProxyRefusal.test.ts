@@ -40,6 +40,7 @@ const click = (input: {
     shared: () => false,
     toFile: () => undefined,
     tokenFirstRefuses: () => false,
+    strict: () => true,
     foreground: () => [],
     listApps: input.listApps,
   });

@@ -30,7 +30,10 @@ const layer = ComputerUseLeases.layer.pipe(
     Layer.mergeAll(
       database,
       NodeServices.layer,
-      ServerSettings.ServerSettingsService.layerTest({ enableCua: true }),
+      ServerSettings.ServerSettingsService.layerTest({
+        enableCua: true,
+        cuaStrictInputGuards: true,
+      }),
     ),
   ),
 );

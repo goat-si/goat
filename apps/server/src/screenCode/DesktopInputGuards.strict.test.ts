@@ -16,6 +16,7 @@ const element = (role: string, name: string, index: number): GuardElement => ({
   editable: false,
   editingCell: false,
   tableCell: false,
+  menuSurface: false,
 });
 const sendButton = element("AXButton", "Send", 4);
 

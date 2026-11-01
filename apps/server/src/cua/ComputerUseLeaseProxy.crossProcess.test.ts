@@ -127,7 +127,9 @@ describe("lease proxy cross-process primitive gate", () => {
           proxyChannelToken: "channel:process-secret",
         };
         yield* channel.issue({ ...authority, expiresAt: DateTime.toEpochMillis(deadline) });
-        const settingsContext = yield* Layer.build(ServerSettings.layerTest({ enableCua: true }));
+        const settingsContext = yield* Layer.build(
+          ServerSettings.layerTest({ enableCua: true, cuaStrictInputGuards: true }),
+        );
         const settings = Context.get(settingsContext, ServerSettings.ServerSettingsService);
         const registry = McpSessionRegistry.McpSessionRegistry.of({
           resolve: (token: string) =>

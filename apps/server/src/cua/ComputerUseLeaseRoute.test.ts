@@ -208,7 +208,7 @@ const threadFixture = Effect.fn("LeaseRouteTest.threadFixture")(function* (
   });
   const context = yield* Layer.build(
     Layer.mergeAll(
-      ServerSettings.layerTest({ enableCua: true }),
+      ServerSettings.layerTest({ enableCua: true, cuaStrictInputGuards: true }),
       Layer.succeed(McpSessionRegistry.McpSessionRegistry, registry),
       leaseLayer,
       ComputerUsePrimitiveChannel.layer.pipe(Layer.provide(leaseLayer)),
@@ -764,11 +764,12 @@ describe("computer use lease route", () => {
     }).pipe(Effect.scoped),
   );
   it.effect.each([
-    [undefined, true],
-    ["allowed", false],
+    [undefined, true, true],
+    ["allowed", false, true],
+    [undefined, false, false],
   ] as const)(
-    "a call that would move the person's pointer is refused unless the host allows it (movePointer %s)",
-    ([movePointer, refused]) =>
+    "a call that would move the person's pointer is refused unless the host allows it (movePointer %s, pointer refused %s, strict %s)",
+    ([movePointer, refused, strict]) =>
       Effect.gen(function* () {
         const received: Array<ComputerUseCallReservation> = [];
         const invocation: McpThreadInvocationScope = {
@@ -789,6 +790,7 @@ describe("computer use lease route", () => {
               ServerSettings.ServerSettingsService.layerTest({
                 ...(movePointer === undefined ? {} : { cuaMovePointer: movePointer }),
                 cuaDeniedApps: ["com.example.Blocked"],
+                cuaStrictInputGuards: strict,
               }),
               Layer.mock(McpSessionRegistry.McpSessionRegistry)({
                 resolve: (token) => Effect.succeed(token === "fixture" ? invocation : undefined),
@@ -841,12 +843,14 @@ describe("computer use lease route", () => {
         );
         // A background click is judged by the leases as before, whatever the setting.
         assert.equal((yield* reserve({ pid: 42, window_id: 7, x: 3, y: 4 })).status, "admitted");
-        assert.deepEqual(yield* reserve({ pid: 42, window_id: 7 }, "COM.EXAMPLE.BLOCKED"), {
-          status: "refused",
-          detail: "app_not_allowed",
-          app: "COM.EXAMPLE.BLOCKED",
-        });
-        assert.equal(received.length, refused ? 1 : 2);
+        // Denied apps are a strict guard too; without it the call goes on to the leases.
+        assert.deepEqual(
+          yield* reserve({ pid: 42, window_id: 7 }, "COM.EXAMPLE.BLOCKED"),
+          strict
+            ? { status: "refused", detail: "app_not_allowed", app: "COM.EXAMPLE.BLOCKED" }
+            : { status: "admitted", reservationId: "reservation:test" },
+        );
+        assert.equal(received.length, (refused ? 1 : 2) + (strict ? 0 : 1));
       }).pipe(Effect.scoped),
   );
 
@@ -870,7 +874,7 @@ describe("computer use lease route", () => {
         const routes = LeaseRoute.layer.pipe(
           Layer.provideMerge(
             Layer.mergeAll(
-              ServerSettings.layerTest(),
+              ServerSettings.layerTest({ cuaStrictInputGuards: true }),
               Layer.mock(McpSessionRegistry.McpSessionRegistry)({
                 resolve: (token) => Effect.succeed(token === "fixture" ? invocation : undefined),
               }),
@@ -942,7 +946,7 @@ describe("computer use lease route", () => {
         ]);
       }).pipe(Effect.scoped),
   );
-  it.layer(ServerSettings.layerTest())("streams", (it) => {
+  it.layer(ServerSettings.layerTest({ cuaStrictInputGuards: true }))("streams", (it) => {
     it.effect("pushes a revocation as soon as it is recorded", () =>
       Effect.gen(function* () {
         const f = yield* fixture();
