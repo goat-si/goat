@@ -848,6 +848,7 @@ describe("orchestrator MCP toolkit", () => {
             delegated.resultContextTransferId,
           );
           const transferReads: Array<string> = [];
+          const messageReads: Array<string> = [];
           const tracer = Tracer.make({
             span(options) {
               const span = new Tracer.NativeSpan(options);
@@ -855,11 +856,16 @@ describe("orchestrator MCP toolkit", () => {
               span.end = (endTime, exit) => {
                 end(endTime, exit);
                 const query = span.attributes.get("db.query.text");
+                if (typeof query !== "string") return;
                 if (
-                  typeof query === "string" &&
                   /SELECT[\s\S]*FROM orchestration_v2_projection_context_transfers/i.test(query)
                 ) {
                   transferReads.push(query);
+                }
+                if (
+                  /SELECT\s+payload_json\s+FROM orchestration_v2_projection_messages/i.test(query)
+                ) {
+                  messageReads.push(query);
                 }
               };
               return span;
@@ -895,6 +901,13 @@ describe("orchestrator MCP toolkit", () => {
             afterRead.subagents.find((task) => task.id === runningFollowup.taskId)
               ?.completionDelivery?.state,
           ).toBe("acknowledged");
+
+          const messageReadsBeforeCapabilities = messageReads.length;
+          const capabilities = yield* invoke("goat_schedule_list", {}).pipe(
+            Effect.withTracer(tracer),
+          );
+          expect(capabilities.isError).not.toBe(true);
+          expect(messageReads).toHaveLength(messageReadsBeforeCapabilities);
         }).pipe(Effect.provide(layerTest));
       }),
     ),
