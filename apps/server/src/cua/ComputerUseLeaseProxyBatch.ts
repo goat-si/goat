@@ -96,7 +96,15 @@ export const makeProxyBatchScope = (
     }
     if (!acceptsInput(listed.get(child), name, "app_scope"))
       return named
-        ? { refused: refusal(id, message.method, "outside_manifest", BATCH_SCOPE_UNSUPPORTED) }
+        ? {
+            refused: refusal(
+              "none",
+              id,
+              message.method,
+              "outside_manifest",
+              BATCH_SCOPE_UNSUPPORTED,
+            ),
+          }
         : unchanged;
     if (named || apps === undefined) return unchanged;
     const appScope = { apps, delivery: "background" };

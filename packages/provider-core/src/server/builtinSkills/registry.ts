@@ -14,7 +14,8 @@ import {
   COMPUTER_USE_PLATFORM_NOTES,
   COMPUTER_USE_SKILL_BATCH,
   COMPUTER_USE_SKILL_CORE,
-  COMPUTER_USE_SKILL_PEOPLE,
+  COMPUTER_USE_SKILL_HANDOFF,
+  COMPUTER_USE_SKILL_CONFIRMATION,
 } from "./computerUse.ts";
 import { BROWSER_SKILL_CORE } from "./browser.ts";
 import { GOAT_DISCIPLINE_SKILL } from "./goatDiscipline.ts";
@@ -26,7 +27,12 @@ const SECTIONS: Readonly<
 > = {
   "computer-use": (platform) => {
     const notes = COMPUTER_USE_PLATFORM_NOTES[platform];
-    const skill = [COMPUTER_USE_SKILL_CORE, COMPUTER_USE_SKILL_BATCH, COMPUTER_USE_SKILL_PEOPLE];
+    const skill = [
+      COMPUTER_USE_SKILL_CORE,
+      COMPUTER_USE_SKILL_BATCH,
+      COMPUTER_USE_SKILL_HANDOFF,
+      COMPUTER_USE_SKILL_CONFIRMATION,
+    ];
     return notes === undefined ? skill : [...skill, notes];
   },
   browser: () => [BROWSER_SKILL_CORE],

@@ -557,7 +557,10 @@ const listedWindows = (list: WindowRead, pid: number) =>
   list.pipe(
     Effect.map((reply) => parseWindowList(driverValue(reply), pid)),
     Effect.catchIf(
-      (error) => error.code !== "user_interacting" && error.code !== "screen_locked",
+      (error) =>
+        error.code !== "user_interacting" &&
+        error.code !== "screen_locked" &&
+        error.code !== "stopped_by_person",
       () => Effect.void,
     ),
   );
@@ -723,7 +726,10 @@ export const resolveObservedSheet = Effect.fn("DesktopInputPlan.resolveObservedS
           return Effect.succeed(checked.ok ? { reply, state: checked.state, windowId } : undefined);
         }),
         Effect.catchIf(
-          (error) => error.code !== "user_interacting" && error.code !== "screen_locked",
+          (error) =>
+            error.code !== "user_interacting" &&
+            error.code !== "screen_locked" &&
+            error.code !== "stopped_by_person",
           () => Effect.void,
         ),
       );

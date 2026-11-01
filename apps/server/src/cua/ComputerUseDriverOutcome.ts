@@ -13,6 +13,11 @@ import {
 } from "@goat/shared/actionOutcomeSafety";
 import { actionResultFromDriver, PRE_DISPATCH_CODES } from "@goat/shared/computerUseActions";
 
+import {
+  replaceWithTerminal,
+  terminalReplyState,
+  terminalErrorState,
+} from "./ComputerUseTerminal.ts";
 import { isReadOnlyCall } from "./ComputerUseLeaseMessages.ts";
 
 export { driverExitReason } from "./ComputerUseDriverExit.ts";
@@ -53,6 +58,23 @@ const UNVERIFIED_INPUT_NOTE =
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
+
+export const driverScreenLocked = (message: unknown): boolean => {
+  if (!isRecord(message)) return false;
+  const error = isRecord(message.error) ? message.error : undefined;
+  const result = isRecord(message.result) ? message.result : undefined;
+  const raw = error ? error.data : result?.structuredContent;
+  if (!isRecord(raw)) return false;
+  const code = isRecord(raw.refusal) ? raw.refusal.code : raw.code;
+  return (
+    code === "screen_locked" &&
+    (raw.effect === undefined || raw.effect === "refused") &&
+    (error !== undefined ||
+      result?.isError === true ||
+      raw.effect === "refused" ||
+      raw.status === "refused")
+  );
+};
 
 /**
  * The driver's own word that nothing went out, on refusals that carry no effect: bring_to_front's
@@ -110,6 +132,25 @@ export function driverOutcomeSafety(
   args?: unknown,
 ): ActionOutcomeSafety {
   const safety = classifiedSafety(tool, message, args);
+  const envelope = isRecord(message) ? message : {};
+  const status =
+    envelope.status === "settled" ||
+    envelope.status === "not_started" ||
+    envelope.status === "unknown_outcome"
+      ? envelope.status
+      : undefined;
+  const terminal = replaceWithTerminal(
+    terminalReplyState(envelope.result, status),
+    terminalErrorState(envelope.error),
+    safety.possibleCommit,
+  );
+  if (terminal.reason !== undefined)
+    return terminal.possibleCommit
+      ? {
+          ...classifyActionOutcome({ effect: "write", status: "indeterminate", dispatched: true }),
+          retryClass: "never",
+        }
+      : { ...safety, retryClass: "never" };
   const marked = markedSafety(message);
   return !safety.possibleCommit &&
     !isReadOnlyCall(tool, args) &&
@@ -141,6 +182,23 @@ function classifiedSafety(
     isReadOnlyCall(tool, args) || (tool === "run_script" && scriptSentNothing(structured))
       ? "read"
       : "write";
+  const nestedCode = isRecord(structured.refusal) ? structured.refusal.code : undefined;
+  const terminal = [structured.code, nestedCode].some(
+    (code) => code === "stopped_by_person" || code === "screen_locked",
+  );
+  const reportedInput = isRecord(structured.safety) && structured.safety.possibleCommit === true;
+  if (
+    terminal &&
+    (error !== undefined ||
+      result.isError === true ||
+      envelope.status === "unknown_outcome" ||
+      envelope.status === "not_started") &&
+    (reportedInput || (envelope.status === "unknown_outcome" && effect === "write"))
+  )
+    return {
+      ...classifyActionOutcome({ effect: "write", status: "indeterminate", dispatched: true }),
+      retryClass: "never",
+    };
   // GOAT's own refusal (ComputerUseLeaseResponses refusal) names its detail and sent nothing.
   if (
     isRefusalDetail(structured.detail) &&
@@ -155,18 +213,39 @@ function classifiedSafety(
     error !== undefined || result.isError === true || envelope.status === "unknown_outcome";
   const refusalCode = isRecord(structured.refusal) ? structured.refusal.code : structured.code;
   if (
-    (refusalCode === "screen_locked" ||
-      refusalCode === "user_interacting" ||
+    (refusalCode === "stopped_by_person" || refusalCode === "screen_locked") &&
+    envelope.status === "unknown_outcome"
+  )
+    return {
+      ...classifyActionOutcome({ effect, status: "indeterminate", dispatched: true }),
+      retryClass: "never",
+    };
+  const screenLocked = driverScreenLocked(message);
+  if (refusalCode === "stopped_by_person" && failed) {
+    const dispatched = structured.effect === "unverifiable";
+    return {
+      ...classifyActionOutcome({
+        effect,
+        status: dispatched ? "indeterminate" : "refused",
+        dispatched,
+        refusalCategory: "terminal",
+      }),
+      retryClass: "never",
+    };
+  }
+  if (
+    screenLocked ||
+    ((refusalCode === "user_interacting" ||
       refusalCode === "desktop_busy" ||
       refusalCode === "desktop_lease_unavailable") &&
-    (structured.effect === undefined || structured.effect === "refused") &&
-    (failed || structured.effect === "refused" || structured.status === "refused")
+      (structured.effect === undefined || structured.effect === "refused") &&
+      (failed || structured.effect === "refused" || structured.status === "refused"))
   )
     return classifyActionOutcome({
       effect,
       status: "refused",
       dispatched: false,
-      refusalCategory: refusalCode === "screen_locked" ? "terminal" : "reobserve",
+      refusalCategory: screenLocked ? "terminal" : "reobserve",
     });
   if (effect === "read" && !failed) return classifyActionOutcome({ effect, status: "completed" });
   const code = structured.code;

@@ -87,10 +87,19 @@ export const waitForOutcome = Effect.fn("DesktopWindowClosure.waitForOutcome")(f
   const listed =
     remain < MIN_CALL_MS
       ? Option.none()
-      : yield* deps.list().pipe(Effect.timeoutOption(remain), Effect.orElseSucceed(Option.none));
+      : yield* deps.list().pipe(
+          Effect.timeoutOption(remain),
+          Effect.catchIf(
+            (error) => error.code !== "stopped_by_person" && error.code !== "screen_locked",
+            () => Effect.succeedNone,
+          ),
+        );
   const reply = Option.getOrUndefined(listed);
+  const error = reply === undefined ? undefined : driverError(reply);
+  if (error?.code === "stopped_by_person" || error?.code === "screen_locked")
+    return yield* Effect.fail(error);
   const closure =
-    reply === undefined || driverError(reply)
+    reply === undefined || error
       ? "unproven"
       : windowClosure(driverValue(reply), deps.target.pid, deps.target.windowId);
   return {

@@ -161,7 +161,8 @@ pointer** under **Settings > Integrations > Computer use > Advanced**.
 **Stop** on a thread stops its computer use at once, even in the middle of an
 action sequence. Pause, takeover and private mode also revoke foreground
 control. After pause or Stop, a full-access thread gets foreground control
-automatically only on its next turn.
+automatically only on its next turn. On a Mac with Input Monitoring allowed for
+GOAT Computer Use, press **Esc** to stop all active computer-use sessions on that Mac.
 
 Full access skips app and foreground approvals. Everything else on this page still
 applies to it: password managers and GOAT's own windows stay off limits, a
@@ -199,7 +200,9 @@ in full access. **Stop all**
 at the top of the stack stops every agent on this computer, including approved
 work that runs on its own. While a page asks for a password, a one-time code or
 a passkey, its tile reads **Private (paused)** and agents can neither see nor
-use the page until you leave that field.
+use the page until you leave that field. If the screen locks, computer use pauses
+and the computer-use card reads **Screen locked**. Unlock the screen and choose **Hand back**
+to continue.
 
 The GOAT menu bar or taskbar menu offers the same stops, per app or all at
 once; its **Stop All Computer Use** also stops agents in browser tabs, like
@@ -263,7 +266,10 @@ On a Mac, GOAT needs **Accessibility** and **Screen Recording**. When you turn
 computer use on from the desktop app on that Mac, GOAT walks you through both
 and then checks that they work: it restarts computer use, has it read and
 capture one of GOAT's own windows, and shows which check failed if one did. Keep
-a GOAT window visible and the Mac unlocked while it checks.
+a GOAT window visible and the Mac unlocked while it checks. **Input Monitoring**
+is optional: allow GOAT Computer Use in **System Settings → Privacy & Security →
+Input Monitoring** to stop active computer-use sessions by pressing Esc. Without it, use **Stop**
+in GOAT.
 After GOAT, its helper or the Mac restarts, updates or wakes, the check may need
 to run again. In the GOAT desktop app on that Mac, choose **Run check** when it is
 available.

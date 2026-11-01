@@ -373,11 +373,12 @@ export function createScreenRunSupervisor(deps: {
                 void deps
                   .runCallback(deps.hostBridge.handle(call, identity.context), callAbort.signal)
                   .then(
-                    (reply) => {
+                    (prepared) => {
+                      if (!prepared || session.closed || session.active?.cellId !== cellId) return;
+                      const reply = deps.hostBridge.finalizeReply(prepared, call, identity.context);
                       if (reply?.outcome === "error" && reply.error)
                         hostErrors.set(call.callId, reply.error);
-                      if (reply && !session.closed && session.active?.cellId === cellId)
-                        session.child.stdin.write(`${JSON.stringify(reply)}\n`);
+                      if (reply) session.child.stdin.write(`${JSON.stringify(reply)}\n`);
                     },
                     // Aborting unawaited calls after a result is ours; it is not a runtime failure.
                     () => {

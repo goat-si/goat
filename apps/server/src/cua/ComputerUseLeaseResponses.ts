@@ -1,6 +1,7 @@
 // @effect-diagnostics preferSchemaOverJson:off -- Constructs raw MCP JSON-RPC response lines.
 import { classifyActionOutcome } from "@goat/shared/actionOutcomeSafety";
 import {
+  type ActionOutcomeSafety,
   type ComputerUsePauseReason,
   type ComputerUseRefusalDetail,
   computerUseRefusalReason,
@@ -21,6 +22,7 @@ import {
 } from "./ComputerUseLeaseMessages.ts";
 
 import { refusalSafety } from "./ComputerUseDriverOutcome.ts";
+import { replaceWithTerminal, type ComputerUseTerminalState } from "./ComputerUseTerminal.ts";
 import type { Stopping } from "./leaseUpdateFences.ts";
 
 export type JsonRpcId = string | number;
@@ -41,6 +43,7 @@ export const reservedIdAnswer = (id: string, prefix: string) =>
   });
 
 export const refusal = (
+  replaced: ComputerUseTerminalState | "none",
   id: JsonRpcId,
   method: string | undefined,
   detail: ComputerUseRefusalDetail,
@@ -49,9 +52,38 @@ export const refusal = (
   holderThreadId?: import("@goat/contracts").ThreadId,
   call?: { readonly tool?: string | undefined; readonly args?: unknown },
 ) => {
+  const incoming =
+    detail === "screen_locked"
+      ? "screen_locked"
+      : detail === "stopped" || detail === "stopped_all"
+        ? "stopped_by_person"
+        : undefined;
+  const merged = replaceWithTerminal(replaced, incoming);
+  if (merged.possibleCommit) {
+    const cause: Interruption =
+      merged.reason === "screen_locked"
+        ? { _tag: "pause", reason: "screen_locked" }
+        : merged.reason === "stopped_by_person"
+          ? { _tag: "end", reason: "stopped" }
+          : { _tag: "other", detail, message };
+    return cutOff(id, call?.tool, cause, call?.args, merged);
+  }
+  if (merged.reason === "stopped_by_person" && incoming !== "stopped_by_person") {
+    detail = "stopped";
+    message = LEASE_END_MESSAGES.stopped;
+  }
+  if (merged.reason === "screen_locked" && incoming !== "screen_locked") {
+    detail = "screen_locked";
+    message = PAUSE_MESSAGES.screen_locked;
+  }
   const refused = {
     refused: computerUseRefusalReason(detail),
     detail,
+    ...(detail === "screen_locked"
+      ? { code: "screen_locked" }
+      : detail === "stopped" || detail === "stopped_all"
+        ? { code: "stopped_by_person" }
+        : {}),
     safety: refusalSafety(detail, call?.tool, call?.args),
   };
   return JSON.stringify(
@@ -73,8 +105,39 @@ export const refusal = (
   );
 };
 
+export const terminalReplacement = (
+  id: JsonRpcId,
+  tool: string | undefined,
+  args: unknown,
+  replaced: ComputerUseTerminalState,
+  dispatched: boolean,
+) => {
+  const state = replaceWithTerminal(replaced);
+  if (state.reason === undefined)
+    throw new Error("A terminal replacement requires a terminal reason.");
+  const cause: Interruption =
+    state.reason === "screen_locked"
+      ? { _tag: "pause", reason: "screen_locked" }
+      : { _tag: "end", reason: "stopped" };
+  return dispatched || state.possibleCommit
+    ? cutOff(id, tool, cause, args, state)
+    : refusal(
+        state,
+        id,
+        "tools/call",
+        state.reason === "screen_locked" ? "screen_locked" : "stopped",
+        state.reason === "screen_locked"
+          ? PAUSE_MESSAGES.screen_locked
+          : LEASE_END_MESSAGES.stopped,
+      );
+};
+
 export const pausedDetail = (reason: ComputerUsePauseReason): ComputerUseRefusalDetail =>
-  reason === "private" ? "private_mode" : "waiting_for_human";
+  reason === "private"
+    ? "private_mode"
+    : reason === "screen_locked"
+      ? "screen_locked"
+      : "waiting_for_human";
 
 export const interruptionDetail = (cause: Interruption): ComputerUseRefusalDetail =>
   cause._tag === "end"
@@ -99,17 +162,50 @@ export const interruptionRefusal = (cause: Interruption) =>
 export const cutOff = (
   id: JsonRpcId,
   tool: string | undefined,
-  cause: Interruption,
-  args?: unknown,
+  originalCause: Interruption,
+  args: unknown,
+  replaced: ComputerUseTerminalState | "none",
 ) => {
-  const read = isReadOnlyCall(tool, args);
-  const safety = classifyActionOutcome({
+  const state = replaceWithTerminal(replaced);
+  const reason = replaceWithTerminal(
+    state,
+    originalCause._tag === "pause" && originalCause.reason === "screen_locked"
+      ? "screen_locked"
+      : originalCause._tag === "end" &&
+          (originalCause.reason === "stopped" || originalCause.reason === "stopped_all")
+        ? "stopped_by_person"
+        : undefined,
+  ).reason;
+  const cause: Interruption =
+    reason === "stopped_by_person" &&
+    !(
+      originalCause._tag === "end" &&
+      (originalCause.reason === "stopped" || originalCause.reason === "stopped_all")
+    )
+      ? { _tag: "end", reason: "stopped" }
+      : reason === "screen_locked" &&
+          !(originalCause._tag === "pause" && originalCause.reason === "screen_locked")
+        ? { _tag: "pause", reason: "screen_locked" }
+        : originalCause;
+  const read = !state.possibleCommit && isReadOnlyCall(tool, args);
+  const outcomeSafety = classifyActionOutcome({
     effect: read ? "read" : "write",
     status: "indeterminate",
     dispatched: true,
   });
+  const safety: ActionOutcomeSafety =
+    (cause._tag === "end" && (cause.reason === "stopped" || cause.reason === "stopped_all")) ||
+    (cause._tag === "pause" && cause.reason === "screen_locked")
+      ? { ...outcomeSafety, retryClass: "never" }
+      : outcomeSafety;
   const sentence = read ? READ_CUT_OFF : MAY_HAVE_ACTED;
   const detail = interruptionDetail(cause);
+  const code =
+    detail === "screen_locked"
+      ? "screen_locked"
+      : detail === "stopped" || detail === "stopped_all"
+        ? "stopped_by_person"
+        : "interrupted";
   const text =
     cause._tag === "pause"
       ? `${PAUSE_STATE[cause.reason]}. ${sentence} ${PAUSE_NEXT[cause.reason]}`
@@ -122,8 +218,17 @@ export const cutOff = (
     result: {
       content: [{ type: "text", text }],
       structuredContent: read
-        ? { code: "interrupted", detail, safety }
-        : { effect: "unverifiable", code: "interrupted", detail, safety },
+        ? {
+            code,
+            detail,
+            safety,
+          }
+        : {
+            effect: "unverifiable",
+            code,
+            detail,
+            safety,
+          },
       isError: true,
     },
   });
@@ -138,10 +243,14 @@ export const offScreenAnswer = (
   method: string,
   tool: string | undefined,
   verdict: "other" | "unknown",
-  args?: unknown,
-) =>
-  isReadOnlyCall(tool, args)
+  args: unknown,
+  replaced: ComputerUseTerminalState,
+) => {
+  const terminal = replaceWithTerminal(replaced);
+  if (terminal.reason !== undefined) return terminalReplacement(id, tool, args, terminal, true);
+  return isReadOnlyCall(tool, args)
     ? refusal(
+        replaced,
         id,
         method,
         "wrong_display",
@@ -176,6 +285,7 @@ export const offScreenAnswer = (
           isError: true,
         },
       });
+};
 
 /** Receipt-time restrictions outrank the last applied state when a call has not run. */
 export const unsentCallRefusal = (
@@ -197,27 +307,30 @@ export const unsentCallRefusal = (
     state.finished ?? (pending !== undefined && "end" in pending ? pending.end : undefined);
   const pausing =
     state.paused ?? (pending !== undefined && "pause" in pending ? pending.pause : undefined);
-  if (ending !== undefined) return refusal(id, method, ending, LEASE_END_MESSAGES[ending]);
+  if (ending !== undefined) return refusal("none", id, method, ending, LEASE_END_MESSAGES[ending]);
   if (pausing !== undefined)
-    return refusal(id, method, pausedDetail(pausing), PAUSE_MESSAGES[pausing]);
+    return refusal("none", id, method, pausedDetail(pausing), PAUSE_MESSAGES[pausing]);
   if (state.idle || (pending !== undefined && "idle" in pending))
     return refusal(
+      "none",
       id,
       method,
       "control_idle",
       "This thread's turn has ended. Computer use is idle until its next turn.",
     );
-  if (state.held === true) return refusal(id, method, "reconnecting", RECONNECTING);
+  if (state.held === true) return refusal("none", id, method, "reconnecting", RECONNECTING);
   if (pending !== undefined && "narrowed" in pending)
     return refusal(
+      "none",
       id,
       method,
       "app_not_approved",
       "The apps this thread may control changed while this call waited, so it did not run. Observe again, then act only on an app that is still approved.",
     );
   if (state.foregroundRevoked)
-    return refusal(id, method, "foreground_not_approved", FOREGROUND_NOT_APPROVED);
+    return refusal("none", id, method, "foreground_not_approved", FOREGROUND_NOT_APPROVED);
   return refusal(
+    "none",
     id,
     method,
     interruptionDetail(lastInterruption),
@@ -235,9 +348,10 @@ export const unsentOutcome = (
   notSent: () => string,
 ) =>
   outcome === "shared"
-    ? refusal(id, method, "screen_shared", SCREEN_SHARED)
+    ? refusal("none", id, method, "screen_shared", SCREEN_SHARED)
     : outcome === "expired"
       ? refusal(
+          "none",
           id,
           method,
           "expired",

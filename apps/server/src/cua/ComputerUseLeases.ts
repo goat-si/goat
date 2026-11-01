@@ -228,6 +228,8 @@ export class ComputerUseLeases extends Context.Service<
     readonly appHolders?: (threadId: ThreadId) => Effect.Effect<ReadonlyArray<AppHolder>>;
     /** Ends the thread's control; true when one was live. */
     readonly stop: (threadId: ThreadId) => Effect.Effect<boolean>;
+    readonly stopAllIfCurrent?: (threadId: ThreadId, controlId: string) => Effect.Effect<boolean>;
+    readonly screenLocked?: (threadId: ThreadId, controlId: string) => Effect.Effect<boolean>;
     /**
      * Records the window an agent's admitted call named, or where its cursor is on it (see
      * withCursor), reported by that control's own proxy; false when not the thread's live one.
@@ -309,6 +311,7 @@ export class ComputerUseLeases extends Context.Service<
         readonly kind: "stop" | "credentialRevoked" | "pause" | "private";
         readonly threadId: ThreadId;
         readonly controlId: string;
+        readonly terminal?: "stopped_by_person" | "screen_locked";
       }) => void,
     ) => () => void;
     /** How this server starts its own lease proxy subcommand. */
@@ -351,12 +354,14 @@ const make = Effect.gen(function* () {
       kind: "stop" | "credentialRevoked" | "pause" | "private";
       threadId: ThreadId;
       controlId: string;
+      terminal?: "stopped_by_person" | "screen_locked";
     }) => void
   >();
   const notifyAuthority = (change: {
     kind: "stop" | "credentialRevoked" | "pause" | "private";
     threadId: ThreadId;
     controlId: string;
+    terminal?: "stopped_by_person" | "screen_locked";
   }) => {
     for (const listener of authorityListeners) listener(change);
   };
@@ -428,6 +433,7 @@ const make = Effect.gen(function* () {
           const identityChanged = runId !== undefined && runId !== existing.runId;
           const reused: ControlRecord = {
             ...nextTurn(existing),
+            ...(paused === "screen_locked" && existing.acted === true ? { acted: true } : {}),
             identityEpoch: existing.identityEpoch + (identityChanged ? 1 : 0),
             nonPersonFullAccess: everyApp !== undefined && nonPerson,
             uses: existing.uses + 1,
@@ -608,6 +614,9 @@ const make = Effect.gen(function* () {
       kind: reason === "revoked" ? "credentialRevoked" : "stop",
       threadId,
       controlId: record.controlId,
+      ...(reason === "stopped" || reason === "stopped_all"
+        ? { terminal: "stopped_by_person" }
+        : {}),
     });
     // A pause belongs to the agents it held; with none left the next one starts unpaused.
     if (![...controls.values()].some((other) => other.ended === undefined)) paused = undefined;
@@ -615,6 +624,11 @@ const make = Effect.gen(function* () {
   };
 
   /** Every agent's input calls on this host, keyed by control id and call (#1235). */
+  const stopAllAt = (now: number) => {
+    foreground.clear();
+    return [...controls.keys()].filter((id) => end(id, "stopped_all", now));
+  };
+
   const agentInputs = makeAgentInputLog();
   /**
    * Whether a proxy's report time is close to this server's clock, which the proxy shares on
@@ -640,12 +654,12 @@ const make = Effect.gen(function* () {
     return record;
   });
 
-  const pause = (reason: ComputerUsePauseReason) =>
+  const pause = (reason: ComputerUsePauseReason, includeIdle = false) =>
     Effect.sync(() => {
       foreground.clear();
       // A person's input with no agent on the screen is just a person using their computer,
       // also between a thread's turns.
-      if (![...controls.values()].some(acting)) return false;
+      if (!includeIdle && ![...controls.values()].some(acting)) return false;
       paused = reason;
       interrupted(reason);
       for (const record of controls.values())
@@ -654,6 +668,7 @@ const make = Effect.gen(function* () {
             kind: reason === "private" ? "private" : "pause",
             threadId: record.threadId,
             controlId: record.controlId,
+            ...(reason === "screen_locked" ? { terminal: "screen_locked" } : {}),
           });
       return true;
     }).pipe(Effect.flatMap((held) => (held ? changed : Effect.void)));
@@ -760,6 +775,28 @@ const make = Effect.gen(function* () {
         Effect.map((now) => end(threadId, "stopped", now)),
         Effect.tap((stopped) => (stopped ? changed : Effect.void)),
       ),
+    stopAllIfCurrent: (threadId, controlId) =>
+      Clock.currentTimeMillis.pipe(
+        Effect.map((now) => {
+          const record = controls.get(threadId);
+          if (
+            record?.controlId !== controlId ||
+            record.ended !== undefined ||
+            DateTime.toEpochMillis(record.expiresAt) <= now
+          )
+            return false;
+          stopAllAt(now);
+          return true;
+        }),
+        Effect.tap((stopped) => (stopped ? changed : Effect.void)),
+      ),
+    screenLocked: Effect.fn("ComputerUseLeases.screenLocked")(function* (threadId, controlId) {
+      const record = yield* liveControl(threadId, controlId);
+      if (record === undefined) return false;
+      if (paused === "screen_locked") return true;
+      yield* pause("screen_locked", true);
+      return true;
+    }),
     setTarget: Effect.fn("ComputerUseLeases.setTarget")(function* (
       threadId: ThreadId,
       controlId: string,
@@ -827,10 +864,7 @@ const make = Effect.gen(function* () {
       else agentInputs.ended(key, report.at);
       return true;
     }),
-    stopAll: Effect.map(Clock.currentTimeMillis, (now) => {
-      foreground.clear();
-      return [...controls.keys()].filter((id) => end(id, "stopped_all", now));
-    }).pipe(Effect.tap(() => changed)),
+    stopAll: Effect.map(Clock.currentTimeMillis, stopAllAt).pipe(Effect.tap(() => changed)),
     turnEnded,
     // Fails only on a read; a control left as it was is read again on the next end.
     settle: Effect.suspend(() =>

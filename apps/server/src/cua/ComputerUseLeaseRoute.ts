@@ -42,6 +42,8 @@ import {
   HttpServerResponse,
 } from "effect/http";
 
+import * as Handoffs from "../handoffs/Handoffs.ts";
+import { stopComputerUseFromHelper } from "./ComputerUseRpcHandlers.ts";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import * as BrowserOriginGrants from "../preview/BrowserOriginGrantsLayer.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -260,6 +262,35 @@ const makeReportLayer = (serverScope?: Scope.Scope) =>
         return HttpServerResponse.empty({ status: 204 });
       }
       const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      if ("personStop" in value || "screenLocked" in value) {
+        const channel = yield* Effect.serviceOption(
+          ComputerUsePrimitiveChannel.ComputerUsePrimitiveChannel,
+        );
+        if (Option.isNone(channel)) return HttpServerResponse.empty({ status: 401 });
+        const token = request.headers["x-goat-proxy-channel"] ?? "";
+        if (
+          (yield* channel.value.authenticate({ threadId, proxyChannelToken: token })) === undefined
+        )
+          return HttpServerResponse.empty({ status: 401 });
+        if ("screenLocked" in value) {
+          const accepted =
+            leases.screenLocked === undefined
+              ? false
+              : yield* leases.screenLocked(threadId, value.controlId);
+          return HttpServerResponse.empty({ status: accepted ? 204 : 409 });
+        }
+        const handoffs = yield* Effect.serviceOption(Handoffs.Handoffs);
+        if (Option.isNone(handoffs)) return HttpServerResponse.empty({ status: 503 });
+        const claims = yield* Effect.serviceOption(BrowserOriginGrants.BrowserOriginGrants);
+        const result = yield* stopComputerUseFromHelper(
+          Option.some(leases),
+          handoffs.value,
+          threadId,
+          value.controlId,
+          claims,
+        );
+        return HttpServerResponse.empty({ status: result.stopped ? 204 : 409 });
+      }
       if ("type" in value) {
         const sql = yield* Effect.serviceOption(SqlClient.SqlClient);
         if (Option.isNone(sql)) {

@@ -5,7 +5,6 @@ import { failure, FAILED_CATEGORIES, notRun, refused } from "./ScreenHostReplies
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
-import type * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
@@ -16,19 +15,21 @@ import {
   type ScreenHostReply,
   type ScreenImage,
   type ScreenImageMetadata,
-  type ScreenSurfaceAvailability,
   type ScreenActionOutcome,
-  type ScreenEffectReceipt,
   type ScreenJournalEntry,
   type ScreenRunError,
-  type ScreenRunLimits,
   type ScreenTargetRef,
-  type ScreenBindingHints,
 } from "@goat/contracts";
-import type { McpThreadInvocationScope } from "../mcp/McpInvocationContext.ts";
 import type { ScreenCursorPhases } from "../cua/ScreenCursorPhases.ts";
 import { shortcutLabel } from "../cua/ScreenCellRow.ts";
 import {
+  replaceWithTerminal,
+  terminalFailure,
+  type ComputerUseTerminalReason,
+} from "../cua/ComputerUseTerminal.ts";
+import {
+  callTerminalError,
+  finalScreenReply,
   isScreenRead,
   screenActionSafety,
   screenFailureSafety,
@@ -39,53 +40,16 @@ import {
 import { outcomeSentence } from "./DesktopInputGuards.ts";
 import { applyObservedEffect } from "./ScreenObservedEffect.ts";
 import { BatchGroups, dispatchInTurn } from "./ScreenBatchGroups.ts";
+import { imageSize, key } from "./ScreenHostFailures.ts";
 const isScreenImageSchema = Schema.is(ScreenImageSchema);
-
 const decodeOptionScreenHostCall = Schema.decodeUnknownOption(ScreenHostCall);
 
-export interface ScreenHostContext {
-  readonly runId: string;
-  readonly turnId: string;
-  readonly cellId: string;
-  readonly environmentId: string;
-  readonly threadId: string;
-  readonly invocation: McpThreadInvocationScope;
-  readonly limits: ScreenRunLimits;
-  readonly bindingHints?: ScreenBindingHints;
-}
-
-export interface ScreenHostDispatchResult {
-  readonly safety?: ActionOutcomeSafety;
-  readonly value?: unknown;
-  readonly image?: ScreenImage;
-  readonly imageMetadata?: ScreenImageMetadata;
-  readonly category: ScreenEffectReceipt["category"];
-  readonly observedWindow?: string;
-  readonly observedBaseline?: string;
-  readonly evidence?: readonly string[];
-  readonly warnings?: readonly string[];
-  readonly outcome?: ScreenActionOutcome;
-}
-
-export interface ScreenHostDispatcher {
-  readonly availability: (
-    context: ScreenHostContext,
-  ) => Effect.Effect<readonly ScreenSurfaceAvailability[]>;
-  readonly dispatch: (
-    call: ScreenHostCall,
-    context: ScreenHostContext,
-  ) => Effect.Effect<ScreenHostDispatchResult, ScreenRunError>;
-  /**
-   * Calls of one batch group, in order, as one trip where the host can. It returns an outcome for
-   * each call from the first that ran; calls past the end of the list did not run. It marks each
-   * call dispatched right before that call can reach the driver.
-   */
-  readonly dispatchBatch?: (
-    calls: ReadonlyArray<ScreenHostCall>,
-    context: ScreenHostContext,
-    markDispatched: (index: number) => boolean,
-  ) => Effect.Effect<ReadonlyArray<Exit.Exit<ScreenHostDispatchResult, ScreenRunError>>>;
-}
+import type { ScreenHostContext, ScreenHostDispatcher } from "./ScreenHostTypes.ts";
+export type {
+  ScreenHostContext,
+  ScreenHostDispatchResult,
+  ScreenHostDispatcher,
+} from "./ScreenHostTypes.ts";
 
 interface CellState {
   closed: boolean;
@@ -110,12 +74,8 @@ interface CellState {
   readonly batches: BatchGroups;
 }
 
-const imageSize = (image: ScreenImage) => Buffer.from(image.bytes, "base64").byteLength;
 // A tab wait's deadline answer must still reach the cell process before the cell ends.
 const WAIT_REPLY_RESERVE_MS = 100;
-const key = (runId: string, turnId: string, cellId: string) =>
-  `${runId}\u0000${turnId}\u0000${cellId}`;
-
 export { observationReplyBudget } from "./ScreenObservationBudget.ts";
 
 export class ScreenHostBridge {
@@ -133,9 +93,15 @@ export class ScreenHostBridge {
     { readonly targets: string[]; readonly keys: Map<number, string> }
   >();
   private readonly closedCells = new Map<string, Set<string>>();
+  private readonly terminalCells = new Map<string, ComputerUseTerminalReason>();
   private readonly fencedTurns = new Set<string>();
   private readonly targetGates = new Map<string, Semaphore.Semaphore>();
   private dispatcher: ScreenHostDispatcher | undefined;
+  terminalObserver?: (
+    context: ScreenHostContext,
+    reason: ComputerUseTerminalReason,
+    error: ScreenRunError,
+  ) => void;
   private readonly cursorPhases: ScreenCursorPhases | undefined;
   private readonly staleTargetStep:
     | ((targetId: string, reason?: string) => string | undefined)
@@ -148,11 +114,9 @@ export class ScreenHostBridge {
     this.cursorPhases = cursorPhases;
     this.staleTargetStep = staleTargetStep;
   }
-
   setDispatcher(dispatcher: ScreenHostDispatcher): void {
     this.dispatcher = dispatcher;
   }
-
   availability = Effect.fn("ScreenHostBridge.availability")(function* (
     this: ScreenHostBridge,
     context: ScreenHostContext,
@@ -164,13 +128,14 @@ export class ScreenHostBridge {
       { kind: "tab" as const, available: false, reason: "no_host" as const },
     ];
   });
-
   private cell(context: ScreenHostContext): CellState {
     const id = key(context.runId, context.turnId, context.cellId);
     let state = this.cells.get(id);
     if (!state) {
+      const terminal = this.terminalCells.get(id);
       state = {
         closed: false,
+        ...(terminal === undefined ? {} : { cutoffReason: terminal }),
         cutoff: new AbortController(),
         calls: 0,
         pending: 0,
@@ -189,8 +154,7 @@ export class ScreenHostBridge {
     }
     return state;
   }
-
-  handle = Effect.fn("ScreenHostBridge.handle")(function* (
+  private handleOnce = Effect.fn("ScreenHostBridge.handleOnce")(function* (
     this: ScreenHostBridge,
     raw: unknown,
     context: ScreenHostContext,
@@ -266,10 +230,16 @@ export class ScreenHostBridge {
       call.turnId !== context.turnId ||
       call.cellId !== context.cellId
     )
-      return deny({
-        ...failure("stopped", call.callId),
-        ...(state.paused ? { nextStep: outcomeSentence("paused_unsent") } : {}),
-      });
+      return deny(
+        terminalFailure(
+          replaceWithTerminal("none", state.cutoffReason),
+          isScreenRead(call.method) ? "list_apps" : call.method,
+          call.args,
+        ) ?? {
+          ...failure("stopped", call.callId),
+          ...(state.paused ? { nextStep: outcomeSentence("paused_unsent") } : {}),
+        },
+      );
     if (call.callId <= state.lastCallId) return deny(failure("invalid_argument", call.callId));
     state.lastCallId = call.callId;
     if (joined !== undefined && "late" in joined) return deny(notRun(call.callId, joined.late));
@@ -412,9 +382,17 @@ export class ScreenHostBridge {
       ...(holderThreadId === undefined ? {} : { holderThreadId }),
     });
     const failCell = (error: ScreenRunError) => {
-      const safety = screenFailureSafety(call, error);
+      if (error.code === "stopped_by_person" || error.code === "screen_locked")
+        this.terminalObserver?.(context, error.code, error);
+      const safety =
+        callTerminalError(error, undefined, call, error.effectStarted)?.safety ??
+        screenFailureSafety(call, error);
       state.firstFailure ??= firstScreenFailure(call.callId, error, safety);
-      ownFailure = { ...error, safety, effectStarted: safety.possibleCommit };
+      ownFailure = {
+        ...error,
+        safety,
+        effectStarted: error.effectStarted || safety.possibleCommit,
+      };
       settle(
         safety.possibleCommit ? "unknown_outcome" : "refused",
         safety.possibleCommit ? "unknown" : "settled",
@@ -634,16 +612,31 @@ export class ScreenHostBridge {
         state.effectsStarted--;
         if (!isScreenRead(call.method)) state.writesStarted--;
       }
-      return refused(call, { ...ownFailure, callId: call.callId });
+      const terminal = callTerminalError(ownFailure, state.cutoffReason, call, callDispatched);
+      return refused(call, { ...ownFailure, ...terminal, callId: call.callId });
     }
     if (state.closed) {
       const dispatched = callDispatched;
-      const safety = screenActionSafety(call, dispatched ? "indeterminate" : "refused", dispatched);
+      const terminal =
+        state.cutoffReason === "stopped_by_person" || state.cutoffReason === "screen_locked"
+          ? terminalFailure(
+              replaceWithTerminal(
+                result._tag === "Success" ? (result.success.safety ?? "none") : result.failure,
+                state.cutoffReason,
+              ),
+              isScreenRead(call.method) ? "list_apps" : call.method,
+              call.args,
+              dispatched,
+            )
+          : undefined;
+      const safety =
+        terminal?.safety ??
+        screenActionSafety(call, dispatched ? "indeterminate" : "refused", dispatched);
       settle(
         dispatched ? "unknown_outcome" : "refused",
         dispatched ? "unknown" : "settled",
         dispatched,
-        [],
+        result._tag === "Success" ? (result.success.evidence ?? []) : [],
         safety,
       );
       return refused(call, {
@@ -653,6 +646,7 @@ export class ScreenHostBridge {
         nextStep: state.paused
           ? outcomeSentence(dispatched ? "paused_dispatched" : "paused_unsent")
           : outcomeSentence(dispatched ? "unknown_outcome" : "refused"),
+        ...terminal,
       });
     }
     if (result._tag === "Failure") {
@@ -785,7 +779,24 @@ export class ScreenHostBridge {
       ...(value === undefined ? {} : { value: value as NonNullable<ScreenHostReply["value"]> }),
     } satisfies ScreenHostReply;
   });
-
+  handle = Effect.fn("ScreenHostBridge.handle")(function* (
+    this: ScreenHostBridge,
+    raw: unknown,
+    context: ScreenHostContext,
+  ) {
+    const reply = yield* this.handleOnce(raw, context);
+    const call = decodeOptionScreenHostCall(raw);
+    if (Option.isNone(call)) return reply;
+    return this.finalizeReply(reply, call.value, context);
+  });
+  finalizeReply(
+    reply: ScreenHostReply | undefined,
+    call: ScreenHostCall,
+    context: ScreenHostContext,
+  ) {
+    const state = this.cell(context);
+    return finalScreenReply(reply, call, state.cutoffReason, state.journal);
+  }
   takeCellImages = Effect.fn("ScreenHostBridge.takeCellImages")(function* (
     this: ScreenHostBridge,
     runId: string,
@@ -794,7 +805,6 @@ export class ScreenHostBridge {
   ) {
     return this.takeCellImagesNow(runId, turnId, cellId);
   });
-
   takeCellImagesNow(runId: string, turnId: string, cellId: string) {
     const id = key(runId, turnId, cellId);
     const state = this.cells.get(id);
@@ -809,19 +819,16 @@ export class ScreenHostBridge {
       firstFailure: state?.firstFailure,
     };
   }
-
   /** Targets the cell has called, so a change to one tab can spare a cell that never used it. */
   cellTargetIds(runId: string, turnId: string, cellId: string): ReadonlySet<string> {
     return this.cellTargets.get(key(runId, turnId, cellId)) ?? new Set();
   }
-
   private factsOf(context: Pick<ScreenHostContext, "runId" | "turnId" | "cellId">) {
     const id = key(context.runId, context.turnId, context.cellId);
     let facts = this.cellFacts.get(id);
     if (!facts) this.cellFacts.set(id, (facts = { targets: [], keys: new Map() }));
     return facts;
   }
-
   private noteCellTarget(
     context: Pick<ScreenHostContext, "runId" | "turnId" | "cellId">,
     targetId: string,
@@ -829,7 +836,6 @@ export class ScreenHostBridge {
     const { targets } = this.factsOf(context);
     if (!targets.includes(targetId) && targets.length < 64) targets.push(targetId);
   }
-
   /** What a finished cell acted on, in first-use order, and its key labels, even after a cut. */
   takeCellFacts(runId: string, turnId: string, cellId: string) {
     const id = key(runId, turnId, cellId);
@@ -837,7 +843,6 @@ export class ScreenHostBridge {
     this.cellFacts.delete(id);
     return facts;
   }
-
   cutCell = Effect.fn("ScreenHostBridge.cutCell")(function* (
     this: ScreenHostBridge,
     runId: string,
@@ -847,13 +852,21 @@ export class ScreenHostBridge {
   ) {
     this.cutCellNow(runId, turnId, cellId, reason);
   });
-
   cutCellNow(runId: string, turnId: string, cellId: string, reason?: string): void {
     const id = key(runId, turnId, cellId);
+    if (reason === "stopped_by_person" || reason === "screen_locked") {
+      const merged = replaceWithTerminal(this.terminalCells.get(id), reason).reason;
+      if (merged !== undefined) this.terminalCells.set(id, merged);
+    }
     const state = this.cells.get(id);
     if (state) {
       state.closed = true;
-      if (reason === "permission_denied" || reason === "target_permission_denied")
+      const terminal = this.terminalCells.get(id);
+      if (terminal !== undefined) state.cutoffReason = terminal;
+      if (
+        terminal === undefined &&
+        (reason === "permission_denied" || reason === "target_permission_denied")
+      )
         state.cutoffReason = "permission_denied";
       if (reason === "pause" || reason === "takeover" || reason === "waiting_for_human")
         state.paused = true;
@@ -869,7 +882,6 @@ export class ScreenHostBridge {
     this.endCellTargets(runId, turnId, cellId, reason);
     state?.cutoff.abort();
   }
-
   discardCell = Effect.fn("ScreenHostBridge.discardCell")(function* (
     this: ScreenHostBridge,
     runId: string,
@@ -879,7 +891,6 @@ export class ScreenHostBridge {
   ) {
     this.discardCellNow(runId, turnId, cellId);
   });
-
   discardCellNow(runId: string, turnId: string, cellId: string): void {
     const id = key(runId, turnId, cellId);
     const state = this.cells.get(id);
@@ -896,7 +907,6 @@ export class ScreenHostBridge {
     if (closed.size >= 4096) this.fencedTurns.add(turn);
     else closed.add(cellId);
   }
-
   markUnawaitedNow(
     runId: string,
     turnId: string,
@@ -908,7 +918,6 @@ export class ScreenHostBridge {
     this.cutCellNow(runId, turnId, cellId, "unawaited");
     markUnawaited(state.journal, callIds);
   }
-
   invalidateTarget = Effect.fn("ScreenHostBridge.invalidateTarget")(function* (
     this: ScreenHostBridge,
     runId: string,
@@ -918,7 +927,6 @@ export class ScreenHostBridge {
   ) {
     this.invalidateTargetNow(runId, turnId, targetId, reason);
   });
-
   invalidateTargetNow(runId: string, turnId: string, targetId: string, reason?: string): void {
     const turn = `${runId}\u0000${turnId}`;
     let invalid = this.invalidTargets.get(turn);
@@ -935,7 +943,6 @@ export class ScreenHostBridge {
         reason === "takeover" ? "takeover" : reason === "private" ? "private" : "ended",
       );
   }
-
   finishTurn = Effect.fn("ScreenHostBridge.finishTurn")(function* (
     this: ScreenHostBridge,
     runId: string,
@@ -954,6 +961,8 @@ export class ScreenHostBridge {
       if (cellId.startsWith(`${turn}\u0000`)) this.cellFacts.delete(cellId);
     this.invalidTargets.delete(turn);
     this.closedCells.delete(turn);
+    for (const cellId of this.terminalCells.keys())
+      if (cellId.startsWith(`${turn}\u0000`)) this.terminalCells.delete(cellId);
     this.fencedTurns.delete(turn);
     for (const targetId of this.turnTargets.get(turn) ?? []) this.targetGates.delete(targetId);
     this.turnTargets.delete(turn);

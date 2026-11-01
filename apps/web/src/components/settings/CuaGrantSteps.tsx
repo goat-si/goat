@@ -184,6 +184,15 @@ export function CuaGrantSteps({
           </li>
         ))}
       </ol>
+      {helper ? (
+        <div className="rounded-lg border px-3 py-2">
+          <p className="font-medium">Input Monitoring (optional)</p>
+          <p className="text-xs text-muted-foreground">Lets you press Esc to stop the agent.</p>
+          <p className="text-xs text-muted-foreground">
+            In System Settings → Privacy &amp; Security → Input Monitoring, allow {grants.name}.
+          </p>
+        </div>
+      ) : null}
       <CuaGrantTroubleshooting grants={grants} onReveal={onReveal} />
     </div>
   );

@@ -6,7 +6,11 @@ import * as TestClock from "effect/testing/TestClock";
 
 import { active, call, harness } from "./ComputerUseLeaseProxy.testkit.ts";
 import { makeOverlayDrawer, makeScopedAgentCursorReports } from "./agentCursorReports.ts";
-import { EnvironmentId, type AgentCursorReport } from "@goat/contracts";
+import {
+  EnvironmentId,
+  type AgentCursorReport,
+  type ComputerUseOverlayCommand,
+} from "@goat/contracts";
 
 /** A PNG header the proxy reads the screenshot size from. */
 const pngOf = (width: number, height: number) => {
@@ -19,6 +23,21 @@ const pngOf = (width: number, height: number) => {
 };
 
 describe("agent cursor reports", () => {
+  it.effect("posts a screen lock notice only while the overlay is showing", () =>
+    Effect.gen(function* () {
+      const posted: ComputerUseOverlayCommand[] = [];
+      const sink = Object.assign((_command: ComputerUseOverlayCommand) => Effect.void, {
+        post: (command: ComputerUseOverlayCommand) => Effect.sync(() => void posted.push(command)),
+      });
+      const drawer = yield* makeOverlayDrawer(undefined, () => sink);
+      yield* drawer.draw({ type: "call", id: "1", name: "click", args: { pid: 4, window_id: 9 } });
+      yield* drawer.screenLocked();
+      assert.deepEqual(posted.at(-1), { op: "status", message: "screen locked" });
+      yield* drawer.draw({ type: "pause", reason: "screen_locked" });
+      yield* drawer.screenLocked();
+      assert.equal(posted.filter((command) => command.op === "status").length, 1);
+    }),
+  );
   it.effect("a show does not wait for the helper's ack, and a capture's hide does", () =>
     Effect.gen(function* () {
       const posted: Array<string> = [];

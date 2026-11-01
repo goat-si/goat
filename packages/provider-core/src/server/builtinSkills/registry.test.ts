@@ -169,7 +169,7 @@ describe("computer use skill text", () => {
     const mac = builtInSkillSections(["computer-use"], "darwin").join("\n");
     expect(mac).toContain('os="macOS"');
     expect(mac).not.toContain('os="Windows"');
-    expect(builtInSkillSections(["computer-use"], "freebsd")).toHaveLength(3);
+    expect(builtInSkillSections(["computer-use"], "freebsd")).toHaveLength(4);
   });
 
   it("contains no identifier from another vendor's computer use skill", () => {

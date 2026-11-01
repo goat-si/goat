@@ -30,6 +30,7 @@ it.effect("installs the primitive binder into the same service used by claims", 
       Layer.provideMerge(BrowserClaimBind.layer),
       Layer.provide(
         Layer.mock(ComputerUseLeases.ComputerUseLeases)({
+          onAuthorityChange: () => () => {},
           subscribe: PubSub.subscribe(signals),
           currentControl: () => Effect.succeedNone,
           proxy: undefined,
@@ -69,6 +70,7 @@ it.effect("the installed binder uses the same live primitive channel exposed to 
       Layer.provideMerge(BrowserClaimBind.layer),
       Layer.provide(
         Layer.mock(ComputerUseLeases.ComputerUseLeases)({
+          onAuthorityChange: () => () => {},
           subscribe: PubSub.subscribe(signals),
           currentControl: () => Effect.succeedSome({ controlId, threadId, expiresAt }),
           controlState: () =>
