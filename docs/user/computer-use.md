@@ -46,10 +46,11 @@ them do at that keyboard.
 
 Computer use also blocks System Settings, login and security prompts, and Screen
 Time. Full access started by a bot, channel, schedule, webhook, or another
-environment cannot control Terminal or iTerm. An organization can block more
-apps by adding their bundle IDs to `cuaDeniedApps` in the environment's
-`userdata/settings.json`; only a person can change this setting. Input without
-an identifiable target is refused; specify an app window to continue.
+environment cannot control Terminal or iTerm. With **Strict input
+guards** on, an organization can block more apps by adding their bundle IDs to
+`cuaDeniedApps` in the environment's `userdata/settings.json`, and input
+without an identifiable target is refused; only a person can change these
+settings.
 
 ## Ask an agent to work across the browser and apps
 
@@ -151,12 +152,19 @@ answers, or while it is off in **System Settings > Privacy & Security >
 Automation**, the agent stops that action and tells you, naming the app when it
 can.
 
-Your pointer stays where you put it. By default agents never move it: they
-click through an element's accessibility action, the keyboard, or a background
-click that shows only their own cursor, and a call that would move your pointer
-does not run. If an app ignores background clicks, the agent tells you. To let
-full access agents move your pointer for such apps, turn on **Let agents move my
-pointer** under **Settings > Integrations > Computer use > Advanced**.
+By default GOAT adds no input checks of its own: agents click by element, key
+or point, bring a window forward when a background click does not land, and keep
+going after a step whose effect they could not confirm. What macOS, Windows,
+Linux or the driver refuses still comes back to the agent, and the limits below
+still apply.
+
+To have GOAT check input before it is sent, turn on **Strict input guards** under
+**Settings > Integrations > Computer use > Advanced**. With it on, a call that
+would move your pointer does not run unless **Let agents move my pointer** is
+also on, sending in a chat app needs the agent to say it is sending, paste,
+renaming a list item by typing and clicks outside the window are refused,
+foreground is used only after element and keyboard tries, approved-app lists
+and `cuaDeniedApps` apply, and a failed step stops the steps after it.
 
 **Stop** on a thread stops its computer use at once, even in the middle of an
 action sequence. Pause, takeover and private mode also revoke foreground
