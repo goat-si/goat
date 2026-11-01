@@ -760,7 +760,10 @@ export const withHolders = Effect.fn("DesktopWindows.withHolders")(function* (
       const apps = yield* request("list_apps", {}, call, context).pipe(
         Effect.asSome,
         Effect.catchIf(
-          (error) => error.code !== "user_interacting" && error.code !== "screen_locked",
+          (error) =>
+            error.code !== "user_interacting" &&
+            error.code !== "screen_locked" &&
+            error.code !== "stopped_by_person",
           () => Effect.succeedNone,
         ),
       );

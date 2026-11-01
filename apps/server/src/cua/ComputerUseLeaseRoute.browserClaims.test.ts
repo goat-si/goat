@@ -170,6 +170,7 @@ const threadFixture = Effect.fn("LeaseRouteTest.threadFixture")(function* (
     | undefined
   >(undefined);
   const leaseLayer = Layer.mock(ComputerUseLeases.ComputerUseLeases)({
+    onAuthorityChange: () => () => {},
     releaseApps: (owner, id) => Effect.sync(() => released.push([owner, id])),
     streamOpened: () => Effect.void,
     proxy: undefined,

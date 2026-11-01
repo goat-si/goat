@@ -20,10 +20,23 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import { driverCallDeadline, MIN_CALL_MS, seconds } from "./ComputerUseCallCaps.ts";
+import { terminalReplacement } from "./ComputerUseLeaseResponses.ts";
+import {
+  terminalFailure,
+  replaceWithTerminal,
+  terminalReason,
+  terminalErrorState,
+  terminalReplyState,
+  type ComputerUseTerminalState,
+  type ComputerUseTerminalReason,
+} from "./ComputerUseTerminal.ts";
+
+const resultOf = Schema.decodeUnknownSync(Schema.Struct({ result: Schema.Json }));
 
 /**
  * No live control means waiting cannot help: the agent asks again, and GOAT restarts and checks
@@ -43,6 +56,7 @@ interface Pending {
   readonly request: ComputerUsePrimitiveRequest;
   readonly answer: Deferred.Deferred<ComputerUsePrimitiveReply>;
   sent: boolean;
+  terminal?: ComputerUseTerminalReason | undefined;
   /** When its answer reached the server; a loaded server may resume the caller later. */
   answeredAt?: number;
 }
@@ -56,6 +70,8 @@ export const DRIVER_BIND_WAIT_MS = 10_000;
 export const PROXY_ANSWER_GRACE_MS = 1_000;
 
 interface Control {
+  terminal?: "stopped_by_person" | "screen_locked" | undefined;
+  epoch: { reason?: ComputerUseTerminalReason | undefined };
   maxAcceptedGeneration: number;
   maxCutoffGeneration: number;
   binding: { readonly connectionId: string; readonly generation: number } | undefined;
@@ -151,7 +167,9 @@ export class ComputerUsePrimitiveChannel extends Context.Service<
       readonly registrationId: string;
     }) => Effect.Effect<void>;
     readonly reportControlReady: (input: Report) => Effect.Effect<boolean>;
-    readonly reportControlCutoff: (input: Report) => Effect.Effect<boolean>;
+    readonly reportControlCutoff: (
+      input: Report & { readonly terminal?: "stopped_by_person" | "screen_locked" },
+    ) => Effect.Effect<boolean>;
     readonly request: (
       input: PrimitiveChannelRequest,
     ) => Effect.Effect<
@@ -175,6 +193,9 @@ export class ComputerUsePrimitiveChannel extends Context.Service<
 export const make = Effect.gen(function* () {
   const leases = yield* ComputerUseLeases.ComputerUseLeases;
   const attachments = new Map<ThreadId, Attachment>();
+  const waitingEpochs = new Map<string, Map<Control["epoch"], number>>();
+  const waitingKey = (threadId: ThreadId, controlId: string) =>
+    JSON.stringify([threadId, controlId]);
   const threadTokens = new Map<ThreadId, string>();
   // Completed and replaced whenever a binding, a registration or a control changes, so a call
   // waiting for a driver re-checks at once, including when its proxy goes away.
@@ -184,14 +205,33 @@ export const make = Effect.gen(function* () {
     changed = Deferred.makeUnsafe<void>();
     Deferred.doneUnsafe(waiting, Exit.void);
   };
-  const settle = (pending: Pending) =>
-    Deferred.doneUnsafe(
-      pending.answer,
-      Exit.succeed({
-        ...pending.request,
-        status: pending.sent ? "unknown_outcome" : "not_started",
-      }),
-    );
+  const terminalReply = (
+    pending: Pending,
+    terminalState: ComputerUseTerminalState,
+  ): ComputerUsePrimitiveReply => ({
+    ...pending.request,
+    status: pending.sent || terminalState.possibleCommit ? "unknown_outcome" : "not_started",
+    ...(terminalState.reason === undefined
+      ? {}
+      : {
+          result: resultOf(
+            JSON.parse(
+              terminalReplacement(
+                pending.request.callId,
+                pending.request.tool,
+                pending.request.args,
+                terminalState,
+                pending.sent,
+              ),
+            ),
+          ).result,
+        }),
+  });
+  const settle = (pending: Pending, state: ComputerUseTerminalState) => {
+    const merged = replaceWithTerminal(state, pending.terminal);
+    pending.terminal = merged.reason;
+    return Deferred.doneUnsafe(pending.answer, Exit.succeed(terminalReply(pending, merged)));
+  };
   const cancelDelivered = (registration: Registration, pending: Pending) => {
     if (pending.sent)
       Queue.offerUnsafe(registration.cancellations, {
@@ -205,7 +245,7 @@ export const make = Effect.gen(function* () {
     for (const [id, pending] of control.pending) {
       control.pending.delete(id);
       cancelDelivered(registration, pending);
-      settle(pending);
+      settle(pending, replaceWithTerminal("none", control.terminal));
     }
   };
   const close = (attachment: Attachment) => {
@@ -218,7 +258,7 @@ export const make = Effect.gen(function* () {
       control.abandoned.clear();
       for (const pending of control.pending.values()) {
         cancelDelivered(registration, pending);
-        settle(pending);
+        settle(pending, replaceWithTerminal("none", control.terminal));
       }
       control.pending.clear();
     }
@@ -253,6 +293,7 @@ export const make = Effect.gen(function* () {
     let record = value.controls.get(controlId);
     if (record === undefined) {
       record = {
+        epoch: {},
         maxAcceptedGeneration: -1,
         maxCutoffGeneration: -1,
         binding: undefined,
@@ -263,6 +304,26 @@ export const make = Effect.gen(function* () {
     }
     return record;
   };
+  const latch = (record: Control, reason: ComputerUseTerminalReason) => {
+    record.terminal = replaceWithTerminal(record.terminal, reason).reason;
+    record.epoch.reason = replaceWithTerminal(record.epoch, reason).reason;
+  };
+  const latchWaiting = (
+    threadId: ThreadId,
+    controlId: string,
+    reason: ComputerUseTerminalReason,
+  ) => {
+    for (const epoch of waitingEpochs.get(waitingKey(threadId, controlId))?.keys() ?? [])
+      epoch.reason = replaceWithTerminal(epoch, reason).reason;
+  };
+  const unsubscribe = leases.onAuthorityChange?.((change) => {
+    if (change.terminal === undefined) return;
+    latchWaiting(change.threadId, change.controlId, change.terminal);
+    const registered = attachments.get(change.threadId)?.registration;
+    if (registered !== undefined) latch(control(registered, change.controlId), change.terminal);
+    wake();
+  });
+  if (unsubscribe !== undefined) yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
   const active = (threadId: ThreadId, controlId: string) =>
     leases.controlState(threadId, controlId).pipe(
       Effect.map((state) => state._tag === "active" && state.idle !== true),
@@ -296,8 +357,20 @@ export const make = Effect.gen(function* () {
                 .controlState(threadId, current.controlId)
                 .pipe(Effect.orElseSucceed(() => ({ _tag: "ended" as const })))
             : { _tag: "ended" as const, reason: current.ended };
-        if (state._tag !== "ended" && !(state._tag === "active" && state.idle === true)) continue;
         const record = registered?.controls.get(current.controlId);
+        if (
+          state._tag === "ended" &&
+          "reason" in state &&
+          (state.reason === "stopped" || state.reason === "stopped_all")
+        ) {
+          latchWaiting(threadId, current.controlId, "stopped_by_person");
+          if (record !== undefined) latch(record, "stopped_by_person");
+        }
+        if (state._tag === "paused" && state.reason === "screen_locked") {
+          latchWaiting(threadId, current.controlId, "screen_locked");
+          if (record !== undefined) latch(record, "screen_locked");
+        }
+        if (state._tag !== "ended" && !(state._tag === "active" && state.idle === true)) continue;
         // A proxy still starting registers as a thread proxy, so its attachment waits for it.
         if (registered?.kind !== "control" && keepsRegistration(state)) {
           if (registered !== undefined && record !== undefined) clear(registered, record);
@@ -320,19 +393,23 @@ export const make = Effect.gen(function* () {
     controlId: string,
     registered: Registration,
     record: Control,
+    epoch: Control["epoch"],
     binding: NonNullable<Control["binding"]>,
     now: number,
     deadlineMillis: number,
   ) {
+    const terminal = () => replaceWithTerminal(epoch, record.terminal).reason;
     if (
       input.expectedConnectionGeneration !== undefined &&
       input.expectedConnectionGeneration !== binding.connectionId
     )
-      return yield* Effect.fail({
-        code: "stale_reference" as const,
-        effectStarted: false,
-        nextStep: "Bind the desktop app again after the driver reconnects.",
-      });
+      return yield* Effect.fail(
+        terminalFailure(replaceWithTerminal("none", terminal()), input.tool, input.args) ?? {
+          code: "stale_reference" as const,
+          effectStarted: false,
+          nextStep: "Bind the desktop app again after the driver reconnects.",
+        },
+      );
     const answer = yield* Deferred.make<ComputerUsePrimitiveReply>();
     const request: ComputerUsePrimitiveRequest = {
       state: "primitive-request",
@@ -355,16 +432,25 @@ export const make = Effect.gen(function* () {
     const offered = yield* Queue.offer(registered.queue, request);
     if (!offered) {
       record.pending.delete(request.requestId);
-      return yield* Effect.fail(desktopNotReady("unbound"));
+      return yield* Effect.fail(
+        terminalFailure(replaceWithTerminal("none", terminal()), input.tool, input.args) ??
+          desktopNotReady("unbound"),
+      );
     }
     let timedOut = false;
-    const deadlineFailure = () => ({
-      code: "deadline" as const,
-      effectStarted: pending.sent,
-      nextStep: pending.sent
-        ? `The driver did not answer within ${seconds(deadlineMillis - now)} and may still be working on it. Observe before acting again; do not resend input.`
-        : `The driver did not take this call within ${seconds(deadlineMillis - now)}; nothing was sent. Try it again.`,
-    });
+    const deadlineFailure = () =>
+      terminalFailure(
+        replaceWithTerminal("none", terminal()),
+        input.tool,
+        input.args,
+        pending.sent,
+      ) ?? {
+        code: "deadline" as const,
+        effectStarted: pending.sent,
+        nextStep: pending.sent
+          ? `The driver did not answer within ${seconds(deadlineMillis - now)} and may still be working on it. Observe before acting again; do not resend input.`
+          : `The driver did not take this call within ${seconds(deadlineMillis - now)}; nothing was sent. Try it again.`,
+      };
     return yield* Deferred.await(answer).pipe(
       Effect.timeoutOrElse({
         duration: Math.max(0, deadlineMillis - now) + PROXY_ANSWER_GRACE_MS,
@@ -382,14 +468,37 @@ export const make = Effect.gen(function* () {
         ),
       ),
       Effect.filterOrFail(
-        ({ answered, at }) => at <= deadlineMillis || answered.status === "not_started",
+        ({ answered, at }) =>
+          replaceWithTerminal(
+            terminalReplyState(answered.result, answered.status),
+            terminalErrorState(answered.error),
+            pending.terminal,
+            epoch,
+          ).reason !== undefined ||
+          at <= deadlineMillis ||
+          answered.status === "not_started",
         deadlineFailure,
       ),
-      Effect.map(({ answered }) =>
-        input.authority === "claimBind"
-          ? { ...answered, driverGeneration: binding.generation + 1 }
-          : answered,
-      ),
+      Effect.map(({ answered }) => {
+        const reply = terminalReplyState(answered.result, answered.status);
+        const merged = replaceWithTerminal(
+          reply,
+          terminalErrorState(answered.error),
+          pending.terminal,
+          epoch,
+        );
+        const reason = merged.reason;
+        const result =
+          reason !== undefined &&
+          (reply.wireReason !== reason ||
+            !reply.terminalSafety ||
+            (merged.possibleCommit && !reply.possibleCommit))
+            ? terminalReply(pending, merged)
+            : answered;
+        return input.authority === "claimBind"
+          ? { ...result, driverGeneration: binding.generation + 1 }
+          : result;
+      }),
       Effect.ensuring(
         Effect.sync(() => {
           if (!record.pending.delete(request.requestId)) return;
@@ -423,7 +532,7 @@ export const make = Effect.gen(function* () {
           for (const [id, pending] of record.pending) {
             record.pending.delete(id);
             cancelDelivered(kept, pending);
-            settle(pending);
+            settle(pending, replaceWithTerminal("none", record.terminal));
           }
       else if (previous !== undefined) yield* close(previous) ?? Effect.void;
       attachments.set(input.threadId, {
@@ -484,6 +593,24 @@ export const make = Effect.gen(function* () {
         controls: new Map(),
       };
       value.registration = registered;
+      const current = Option.getOrUndefined(yield* leases.currentControl(input.threadId));
+      if (current !== undefined) {
+        const state = yield* leases
+          .controlState(input.threadId, current.controlId)
+          .pipe(Effect.option);
+        const terminal = replaceWithTerminal(
+          "none",
+          terminalReason(undefined, Option.getOrUndefined(state)),
+          terminalReason(
+            undefined,
+            current.ended === undefined ? undefined : { _tag: "ended", reason: current.ended },
+          ),
+        ).reason;
+        if (terminal !== undefined) {
+          latchWaiting(input.threadId, current.controlId, terminal);
+          latch(control(registered, current.controlId), terminal);
+        }
+      }
       const requests = Stream.merge(
         Stream.merge(Stream.fromQueue(queue), Stream.fromQueue(cancellations)),
         Stream.fromQueue(cursors),
@@ -555,6 +682,8 @@ export const make = Effect.gen(function* () {
         )
           return false;
         clear(registered, record);
+        if (record.terminal === "screen_locked") delete record.terminal;
+        record.epoch = record.terminal === undefined ? {} : { reason: record.terminal };
         record.maxAcceptedGeneration = input.driverGeneration;
         record.binding = { connectionId: input.connectionId, generation: input.driverGeneration };
         wake();
@@ -579,6 +708,13 @@ export const make = Effect.gen(function* () {
           record.binding.connectionId !== input.connectionId
         )
           return false;
+        if (
+          input.terminal !== undefined &&
+          input.driverGeneration >= record.maxAcceptedGeneration
+        ) {
+          latchWaiting(input.threadId, input.controlId, input.terminal);
+          latch(record, input.terminal);
+        }
         record.maxCutoffGeneration = input.driverGeneration;
         if (record.binding !== undefined && record.binding.generation <= input.driverGeneration)
           clear(registered, record);
@@ -599,30 +735,112 @@ export const make = Effect.gen(function* () {
       let now = started;
       // The call belongs to the control it began under; a successor never inherits it.
       let began: string | undefined;
+      let beganEpoch: Control["epoch"] | undefined;
+      let retainedKey: string | undefined;
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          if (retainedKey === undefined || beganEpoch === undefined) return;
+          const waiters = waitingEpochs.get(retainedKey);
+          const count = waiters?.get(beganEpoch) ?? 0;
+          if (count > 1) waiters?.set(beganEpoch, count - 1);
+          else waiters?.delete(beganEpoch);
+          if (waiters?.size === 0) waitingEpochs.delete(retainedKey);
+        }),
+      );
       // A driver GOAT is starting again (a new turn, a replaced child) binds within moments, so
       // the call waits for it inside its own budget instead of failing or hanging to its deadline.
       for (;;) {
+        const previousFailure = terminalFailure(
+          replaceWithTerminal("none", terminalReason(beganEpoch?.reason)),
+          input.tool,
+          input.args,
+        );
+        if (previousFailure !== undefined) return yield* Effect.fail(previousFailure);
         const current = Option.getOrUndefined(yield* leases.currentControl(input.threadId));
+        if (current !== undefined) {
+          began ??= current.controlId;
+          if (current.controlId === began && beganEpoch === undefined) {
+            const registered = attachments.get(input.threadId)?.registration;
+            beganEpoch =
+              registered === undefined
+                ? replaceWithTerminal("none")
+                : control(registered, began).epoch;
+            retainedKey = waitingKey(input.threadId, began);
+            let waiters = waitingEpochs.get(retainedKey);
+            if (waiters === undefined) {
+              waiters = new Map();
+              waitingEpochs.set(retainedKey, waiters);
+            }
+            waiters.set(beganEpoch, (waiters.get(beganEpoch) ?? 0) + 1);
+          }
+          const record = attachments
+            .get(input.threadId)
+            ?.registration?.controls.get(current.controlId);
+          const state = yield* leases
+            .controlState(input.threadId, current.controlId)
+            .pipe(Effect.option);
+          const terminal = replaceWithTerminal(
+            "none",
+            terminalReason(record?.terminal, Option.getOrUndefined(state)),
+            terminalReason(
+              undefined,
+              current.ended === undefined ? undefined : { _tag: "ended", reason: current.ended },
+            ),
+          ).reason;
+          const failure = terminalFailure(
+            replaceWithTerminal("none", terminal),
+            input.tool,
+            input.args,
+          );
+          if (failure !== undefined) return yield* Effect.fail(failure);
+        }
         if (current === undefined || !(yield* active(input.threadId, current.controlId)))
-          return yield* Effect.fail(desktopNotReady("none"));
-        began ??= current.controlId;
-        if (current.controlId !== began) return yield* Effect.fail(desktopNotReady("unbound"));
+          return yield* Effect.fail(
+            terminalFailure(
+              replaceWithTerminal("none", terminalReason(beganEpoch?.reason)),
+              input.tool,
+              input.args,
+            ) ?? desktopNotReady("none"),
+          );
+        if (current.controlId !== began)
+          return yield* Effect.fail(
+            terminalFailure(
+              replaceWithTerminal("none", terminalReason(beganEpoch?.reason)),
+              input.tool,
+              input.args,
+            ) ?? desktopNotReady("unbound"),
+          );
         const value = attachments.get(input.threadId);
         const registered = value?.registration;
-        const record = registered?.controls.get(current.controlId);
+        const record =
+          registered === undefined ? undefined : control(registered, current.controlId);
+        // Nothing may yield between this check and the minimum-time or unbound refusals.
+        const capturedFailure = terminalFailure(
+          replaceWithTerminal("none", terminalReason(beganEpoch?.reason)),
+          input.tool,
+          input.args,
+        );
+        if (capturedFailure !== undefined) return yield* Effect.fail(capturedFailure);
         const binding = record?.binding;
         if (registered !== undefined && record !== undefined && binding !== undefined) {
           if (deadlineMillis - now < MIN_CALL_MS)
-            return yield* Effect.fail({
-              code: "deadline" as const,
-              effectStarted: false,
-              nextStep: "This cell has too little time left for this call; run it in a new cell.",
-            });
+            return yield* Effect.fail(
+              terminalFailure(
+                replaceWithTerminal("none", terminalReason(record.terminal)),
+                input.tool,
+                input.args,
+              ) ?? {
+                code: "deadline" as const,
+                effectStarted: false,
+                nextStep: "This cell has too little time left for this call; run it in a new cell.",
+              },
+            );
           return yield* send(
             input,
             current.controlId,
             registered,
             record,
+            beganEpoch ?? record.epoch,
             binding,
             now,
             deadlineMillis,
@@ -635,11 +853,17 @@ export const make = Effect.gen(function* () {
           registered === undefined ||
           now >= waitUntil
         )
-          return yield* Effect.fail(desktopNotReady("unbound"));
+          return yield* Effect.fail(
+            terminalFailure(
+              replaceWithTerminal("none", beganEpoch, record?.terminal),
+              input.tool,
+              input.args,
+            ) ?? desktopNotReady("unbound"),
+          );
         yield* Deferred.await(changed).pipe(Effect.timeoutOption(waitUntil - now));
         now = yield* Clock.currentTimeMillis;
       }
-    }),
+    }, Effect.scoped),
     reply: Effect.fn("ComputerUsePrimitiveChannel.reply")((input) =>
       Clock.currentTimeMillis.pipe(
         Effect.map((now) => {
@@ -662,6 +886,25 @@ export const make = Effect.gen(function* () {
           const original = pending.request;
           if (!answers(original)) return false;
           record.pending.delete(original.requestId);
+          const replyState = replaceWithTerminal(
+            terminalReplyState(input.reply.result, input.reply.status),
+            terminalErrorState(input.reply.error),
+          );
+          const replyTerminal = replyState.reason;
+          if (replyTerminal !== undefined) {
+            latchWaiting(input.threadId, input.reply.controlId, replyTerminal);
+            latch(record, replyTerminal);
+          }
+          if (replyTerminal !== undefined && replyTerminal === record.terminal) {
+            pending.terminal = replaceWithTerminal(pending.terminal, replyState).reason;
+            pending.answeredAt = now;
+            Deferred.doneUnsafe(pending.answer, Exit.succeed(input.reply));
+            return true;
+          }
+          if (record.terminal !== undefined) {
+            settle(pending, replaceWithTerminal(replyState, record.terminal));
+            return true;
+          }
           pending.answeredAt = now;
           Deferred.doneUnsafe(pending.answer, Exit.succeed(input.reply));
           return true;
@@ -681,7 +924,7 @@ export const make = Effect.gen(function* () {
               if (pending.request.runId === runId && pending.request.turnId === turnId) {
                 record.pending.delete(id);
                 if (value.registration) cancelDelivered(value.registration, pending);
-                settle(pending);
+                settle(pending, replaceWithTerminal("none", record.terminal));
               }
           }
       }),

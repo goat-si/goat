@@ -66,6 +66,8 @@ it.effect(
       const runtime = compose(issuer).pipe(
         Layer.provideMerge(
           Layer.mock(Leases.ComputerUseLeases)({
+            onAuthorityChange: () => () => {},
+            currentControl: () => Effect.succeedNone,
             subscribe: PubSub.subscribe(signals),
             proxy: undefined,
           }),

@@ -1,7 +1,7 @@
 import { authorizeClaimBind, type PendingBrowserBind } from "./ComputerUseClaimBindAuthority.ts";
 import type { ComputerUseLeaseUpdate } from "@goat/contracts";
 import * as Effect from "effect/Effect";
-import type { OutstandingCall } from "./ComputerUseLeaseProxyOptions.ts";
+import { retainedTerminal, type OutstandingCall } from "./ComputerUseLeaseProxyOptions.ts";
 import type { Envelope } from "./ComputerUseLeaseProtocol.ts";
 import { refusal, type JsonRpcId } from "./ComputerUseLeaseResponses.ts";
 
@@ -230,6 +230,7 @@ export const makeProxyBrowserClaims = (report?: (value: BrowserClaimReport) => v
       if (!binding)
         return {
           refused: refusal(
+            "none",
             id,
             message.method,
             "outside_manifest",
@@ -252,6 +253,7 @@ export const makeProxyBrowserClaims = (report?: (value: BrowserClaimReport) => v
     if (isRecord(untrustedArgs) && untrustedArgs.authority === "claimBind")
       return {
         refused: refusal(
+          "none",
           id,
           message.method,
           "outside_manifest",
@@ -266,14 +268,16 @@ export const makeProxyBrowserClaims = (report?: (value: BrowserClaimReport) => v
     if ("refused" in browser)
       return {
         refused: refusal(
+          "none",
           id,
           message.method,
           "outside_manifest",
           "This browser call has no approved claim.",
         ),
       };
+    let selected: SelectedClaim | undefined;
     if (browser.args !== undefined) {
-      const selected: SelectedClaim = {
+      selected = {
         claimId: browser.claimId,
         claimGeneration: browser.claimGeneration,
         origins: JSON.stringify(browser.args.origin_scope),
@@ -281,27 +285,18 @@ export const makeProxyBrowserClaims = (report?: (value: BrowserClaimReport) => v
       };
       line = replaceCallArguments(line, browser.args);
       message = { ...message, params: { ...message.params, arguments: browser.args } };
-      if (refusesClaimedBrowserDesktopCall(message.params?.name, message.params?.arguments, pids))
-        return {
-          refused: refusal(
-            id,
-            message.method,
-            "outside_manifest",
-            "Desktop access to a claimed browser is not permitted.",
-          ),
-        };
-      return { line, message, selected };
     }
     if (refusesClaimedBrowserDesktopCall(message.params?.name, message.params?.arguments, pids))
       return {
         refused: refusal(
+          "none",
           id,
           message.method,
           "outside_manifest",
           "Desktop access to a claimed browser is not permitted.",
         ),
       };
-    return { line, message, selected: undefined };
+    return { line, message, selected };
   };
   const allowed = (selected: SelectedClaim | undefined, message: Envelope) =>
     (selected === undefined ||
@@ -353,6 +348,7 @@ export const makeProxyBrowserClaims = (report?: (value: BrowserClaimReport) => v
     outstanding.delete(key);
     yield* request.sink.answer(
       refusal(
+        retainedTerminal(request),
         request.id,
         request.method,
         "outside_manifest",
@@ -375,7 +371,13 @@ export const makeProxyBrowserClaims = (report?: (value: BrowserClaimReport) => v
     method: string | undefined,
   ) {
     if (selected === undefined || (yield* supported())) return undefined;
-    return refusal(id, method, "outside_manifest", "This driver does not support browser claims.");
+    return refusal(
+      "none",
+      id,
+      method,
+      "outside_manifest",
+      "This driver does not support browser claims.",
+    );
   });
   return { update, gate, allowed, outside, refuseReply, attach, unsupported, report };
 };

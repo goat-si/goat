@@ -106,7 +106,11 @@ const driverFailure = (
   return {
     ...error,
     ...(denied ? { code: "permission_denied" as const, nextStep: said || error.nextStep } : {}),
-    ...(safety.possibleCommit ? { code: "unknown_outcome" as const } : {}),
+    ...(safety.possibleCommit &&
+    error.code !== "stopped_by_person" &&
+    error.code !== "screen_locked"
+      ? { code: "unknown_outcome" as const }
+      : {}),
     safety,
     effectStarted: safety.possibleCommit,
   };

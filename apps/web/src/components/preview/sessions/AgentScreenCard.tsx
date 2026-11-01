@@ -61,6 +61,7 @@ const TONE: Record<Chip, { readonly dot: string; readonly ring: string }> = {
   "You're controlling": { dot: "bg-success", ring: "ring-success/60" },
   "Waiting for you": { dot: "bg-warning", ring: "ring-warning/70" },
   "Private (paused)": { dot: "bg-muted-foreground", ring: "ring-border" },
+  "Screen locked": { dot: "bg-muted-foreground", ring: "ring-border" },
   "Permission needed": { dot: "bg-destructive", ring: "ring-destructive/60" },
   Stopped: { dot: "bg-muted-foreground/40", ring: "ring-border" },
 };
@@ -455,7 +456,7 @@ export function AgentScreenCardView(props: AgentScreenCardViewProps) {
           <TooltipTrigger render={<span className="flex min-w-0 flex-1 flex-col" />}>
             <span className="truncate font-medium text-sm leading-5">{name}</span>
             <span className="truncate text-muted-foreground text-xs leading-4">
-              {previewSessionDetail(session)}
+              {chip === "Screen locked" ? chip : previewSessionDetail(session)}
             </span>
           </TooltipTrigger>
           <TooltipPopup side="top">{detail ? `${detail} · ${chip}` : chip}</TooltipPopup>

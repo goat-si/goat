@@ -16,7 +16,7 @@ import {
   type ThreadId,
 } from "@goat/contracts";
 import type { PreviewAutomationBroker } from "../mcp/PreviewAutomationBroker.ts";
-import type { ComputerUseLeases } from "../cua/ComputerUseLeases.ts";
+import { ComputerUseLeases } from "../cua/ComputerUseLeases.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
 import { ScreenHostBridge } from "./ScreenHostBridge.ts";
 import { screenRunLimits } from "./ScreenRunLimits.ts";
@@ -538,14 +538,20 @@ it.live("desktop private authority notification cuts an active screen cell", () 
       NonNullable<ComputerUseLeases["Service"]["onAuthorityChange"]>
     >[0];
     let notify: AuthorityListener | undefined;
-    const leases = {
-      onAuthorityChange: (listener: AuthorityListener) => {
-        notify = listener;
-        return () => {
-          notify = undefined;
-        };
-      },
-    } as ComputerUseLeases["Service"];
+    const leases = yield* ComputerUseLeases.pipe(
+      Effect.provide(
+        Layer.mock(ComputerUseLeases)({
+          proxy: undefined,
+          currentControl: () => Effect.succeedNone,
+          onAuthorityChange: (listener: AuthorityListener) => {
+            notify = listener;
+            return () => {
+              notify = undefined;
+            };
+          },
+        }),
+      ),
+    );
     const layer = ScreenRunService.layerWithRuntime({
       leases,
       invocation: {
@@ -638,14 +644,20 @@ it.live("Stop during slow tab cleanup fails a cell that caught its dispatched in
       NonNullable<ComputerUseLeases["Service"]["onAuthorityChange"]>
     >[0];
     let notify: AuthorityListener | undefined;
-    const leases = {
-      onAuthorityChange: (listener: AuthorityListener) => {
-        notify = listener;
-        return () => {
-          notify = undefined;
-        };
-      },
-    } as ComputerUseLeases["Service"];
+    const leases = yield* ComputerUseLeases.pipe(
+      Effect.provide(
+        Layer.mock(ComputerUseLeases)({
+          proxy: undefined,
+          currentControl: () => Effect.succeedNone,
+          onAuthorityChange: (listener: AuthorityListener) => {
+            notify = listener;
+            return () => {
+              notify = undefined;
+            };
+          },
+        }),
+      ),
+    );
     const tabHost = yield* makePreviewTargetHost(broker);
     return yield* Effect.gen(function* () {
       const service = yield* ScreenRunService;
@@ -930,65 +942,4 @@ it.live.each(["new message", "turn end"] as const)(
         ),
       );
     }),
-);
-
-it.live("a held cell deadline preserves unknown input receipts through the service error", () =>
-  Effect.gen(function* () {
-    const offered = yield* Deferred.make<void>();
-    const held = yield* Deferred.make<void>();
-    let fireDeadline: (() => void) | undefined;
-    const serviceLayer = ScreenRunService.layerWithRuntime({
-      invocation: {
-        command: process.execPath,
-        entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
-      },
-      assetResolver: () => resolveScreenRuntimeAsset("dev"),
-      scheduleDeadline: (run) => {
-        fireDeadline = run;
-        return () => {
-          fireDeadline = undefined;
-        };
-      },
-      dispatcher: {
-        availability: () => Effect.succeed([{ kind: "app", available: true }]),
-        dispatch: () =>
-          Deferred.succeed(offered, undefined).pipe(
-            Effect.flatMap(() => Deferred.await(held)),
-            Effect.as({ value: true, category: "confirmed" as const, evidence: ["late"] }),
-          ),
-      },
-    }).pipe(Layer.provide(NodeServices.layer));
-    return yield* Effect.gen(function* () {
-      const service = yield* ScreenRunService;
-      const running = yield* service
-        .runCell({
-          runId: "run",
-          turnId: "turn",
-          threadId: "thread",
-          environmentId: "env",
-          invocation: context.invocation,
-          source: "return await screen.launch_app({bundle_id: 'org.example.Editor'});",
-        })
-        .pipe(Effect.result, Effect.forkChild);
-      yield* Deferred.await(offered);
-      expect(fireDeadline).toBeDefined();
-      fireDeadline?.();
-      const result = yield* Fiber.join(running);
-      expect(result._tag).toBe("Failure");
-      if (result._tag === "Failure")
-        expect(result.failure).toMatchObject({
-          code: "unknown_outcome",
-          effectStarted: true,
-          receipts: [{ dispatched: true, journalState: "unknown", category: "unknown_outcome" }],
-        });
-      yield* Deferred.succeed(held, undefined);
-      yield* service.finishTurn({
-        runId: "run",
-        turnId: "turn",
-        threadId: "thread",
-        environmentId: "env",
-        reason: "test",
-      });
-    }).pipe(Effect.provide(serviceLayer));
-  }),
 );

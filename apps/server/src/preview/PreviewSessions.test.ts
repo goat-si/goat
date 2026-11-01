@@ -55,6 +55,14 @@ describe("preview sessions", () => {
   it("shows a browser tab and a desktop control with the same owner, status and controls", () => {
     const browser = browserSession(base, tab)!;
     const desktop = desktopSession(base, control, active, detected)!;
+    const locked = desktopSession(
+      base,
+      control,
+      { _tag: "paused", reason: "screen_locked" },
+      detected,
+      "Sign in",
+    )!;
+    expect([locked.status, previewSessionChip(locked)]).toEqual(["paused", "Screen locked"]);
     for (const session of [browser, desktop]) {
       expect(session.owner).toBe("agent");
       expect(session.status).toBe("acting");
@@ -161,6 +169,13 @@ describe("preview sessions", () => {
       { _tag: "ended", reason: "stopped_all" },
       detected,
     )!;
+    const locked = desktopSession(
+      base,
+      control,
+      { _tag: "paused", reason: "screen_locked" },
+      detected,
+    )!;
+    expect([locked.reason, previewSessionChip(locked)]).toEqual(["screenLocked", "Screen locked"]);
     const secret = desktopSession(base, control, { _tag: "paused", reason: "private" }, detected)!;
     expect([previewSessionChip(secret), secret.status]).toEqual(["Private (paused)", "paused"]);
     // A host whose helper cannot detect these says so instead of implying protection.
@@ -181,6 +196,13 @@ describe("preview sessions", () => {
 
   it("leaves out a control between its thread's turns, when no agent acts on the screen", () => {
     expect(desktopSession(base, { ...control, idle: true }, active, detected)).toBeUndefined();
+    const locked = desktopSession(
+      base,
+      { ...control, idle: true },
+      { _tag: "paused", reason: "screen_locked" },
+      detected,
+    );
+    expect(locked && previewSessionChip(locked)).toBe("Screen locked");
     // A person's stop still shows until the next turn replaces it.
     expect(
       desktopSession(

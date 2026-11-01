@@ -23,7 +23,7 @@ import * as CuaDriver from "./CuaDriver.ts";
 const endGrants = Effect.fn("ComputerUse.endGrants")(function* (
   leases: ComputerUseLeases.ComputerUseLeases["Service"],
   handoffs: Handoffs.Handoffs["Service"],
-  sessionId: AuthSessionId,
+  sessionId: AuthSessionId | undefined,
   which: (grant: ComputerUseLeases.ComputerUseLease) => boolean,
 ) {
   const ended = new Set<ThreadId>();
@@ -40,20 +40,20 @@ const endGrants = Effect.fn("ComputerUse.endGrants")(function* (
   // Released first, so they hold no app and admit no newer control even if ending them fails.
   yield* leases.release(picked.map((grant) => grant.handoffId));
   for (const grant of picked) {
-    yield* handoffs
-      .respond(
-        { threadId: grant.threadId, handoffId: grant.handoffId, action: "cancelled" },
-        sessionId,
-      )
-      .pipe(
-        Effect.tap(() => Effect.sync(() => ended.add(grant.threadId))),
-        Effect.catchCause((cause) =>
-          Effect.logWarning("Stop could not end a computer use admission", {
-            handoffId: grant.handoffId,
-            cause,
-          }).pipe(Effect.andThen(Effect.sync(() => void (failed += 1)))),
-        ),
-      );
+    const input = { threadId: grant.threadId, handoffId: grant.handoffId };
+    yield* (
+      sessionId === undefined
+        ? handoffs.cancelComputerUseByPerson(input)
+        : handoffs.respond({ ...input, action: "cancelled" }, sessionId)
+    ).pipe(
+      Effect.tap(() => Effect.sync(() => ended.add(grant.threadId))),
+      Effect.catchCause((cause) =>
+        Effect.logWarning("Stop could not end a computer use admission", {
+          handoffId: grant.handoffId,
+          cause,
+        }).pipe(Effect.andThen(Effect.sync(() => void (failed += 1)))),
+      ),
+    );
   }
   return { ended, failed };
 });
@@ -100,6 +100,23 @@ export const stopComputerUse = Effect.fn("ComputerUse.stop")(function* (
   );
   return { stopped: stopped || ended.size > 0, failed };
 });
+
+export const stopComputerUseFromHelper = Effect.fn("ComputerUse.stopFromHelper")(function* (
+  leases: Option.Option<ComputerUseLeases.ComputerUseLeases["Service"]>,
+  handoffs: Handoffs.Handoffs["Service"],
+  threadId: ThreadId,
+  controlId: string,
+  claims: Option.Option<BrowserOriginGrants["Service"]> = Option.none(),
+) {
+  if (Option.isNone(leases) || leases.value.stopAllIfCurrent === undefined)
+    return { stopped: false, failed: 0 };
+  const stopped = yield* leases.value.stopAllIfCurrent(threadId, controlId);
+  if (!stopped) return { stopped: false, failed: 0 };
+  if (Option.isSome(claims)) yield* claims.value.stop();
+  yield* handoffs.stopComputerUseSessions();
+  const { failed } = yield* endGrants(leases.value, handoffs, undefined, () => true);
+  return { stopped: true, failed };
+}, Effect.uninterruptible);
 
 export const makeComputerUseRpcHandlers = Effect.fn("ComputerUse.rpcHandlers")(function* (
   sessionId: AuthSessionId,

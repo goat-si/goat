@@ -32,10 +32,22 @@ import * as Stream from "effect/Stream";
 import type { AgentInputReport } from "./agentInputReports.ts";
 import type { BrowserClaimReport } from "./ComputerUseLeaseProxyBrowserClaims.ts";
 import { SCREEN_CALL_EXPIRED } from "./ComputerUseLeaseMessages.ts";
-import { type JsonRpcId, refusal, reservedIdAnswer } from "./ComputerUseLeaseResponses.ts";
+import {
+  type JsonRpcId,
+  refusal,
+  reservedIdAnswer,
+  offScreenAnswer,
+} from "./ComputerUseLeaseResponses.ts";
 import type { ComputerUseCallTarget } from "./computerUseTarget.ts";
 import { type LinuxScreenshotPolicy, windowArgument } from "./ComputerUseLinuxScreenshots.ts";
 import type { NamedWindow, WindowPlacement } from "./x11WindowPlacement.ts";
+import {
+  replaceWithTerminal,
+  terminalErrorState,
+  terminalFailure,
+  terminalReplyState,
+  type ComputerUseTerminalState,
+} from "./ComputerUseTerminal.ts";
 import { type Envelope, parse, OWN_ID } from "./ComputerUseLeaseProtocol.ts";
 
 export const PRIMITIVE_ID = "goat:primitive:";
@@ -75,11 +87,21 @@ export const beginHops = (primitive: ComputerUsePrimitiveRequest | undefined) =>
     if (hops !== undefined) hops.forwardAt = now;
   });
 
+export interface ReplyContext {
+  readonly tool?: string | undefined;
+  readonly request?: Envelope | undefined;
+  readonly terminalState?: () => ComputerUseTerminalState;
+}
+
 export interface ReplySink {
+  readonly terminal?: (() =>
+    | import("./ComputerUseTerminal.ts").ComputerUseTerminalReason
+    | undefined) & { readonly release?: () => void };
+  readonly release?: () => void;
   readonly answer: (
     line: string,
     status?: ComputerUsePrimitiveReply["status"],
-    context?: { readonly tool?: string | undefined },
+    context?: ReplyContext,
   ) => Effect.Effect<unknown>;
 }
 
@@ -126,8 +148,30 @@ export interface OutstandingCall {
   /** The screen call's step times, finished when the driver's line arrives. */
   readonly hops?: PrimitiveHops;
   cancelled?: boolean;
+  received?: ComputerUseTerminalState;
   readonly sink: ReplySink;
 }
+
+export const rememberDriverReply = (request: OutstandingCall, message: Envelope) => {
+  request.received = replaceWithTerminal(
+    request.received ?? "none",
+    terminalReplyState(message.result),
+    terminalErrorState(message.error),
+  );
+};
+
+export const retainedTerminal = (request: OutstandingCall) =>
+  replaceWithTerminal(request.received ?? "none");
+
+export const offScreenForRequest = (request: OutstandingCall, verdict: "other" | "unknown") =>
+  offScreenAnswer(
+    request.id,
+    request.method,
+    request.tool,
+    verdict,
+    request.args,
+    retainedTerminal(request),
+  );
 
 export const primitiveReplySink = (
   request: ComputerUsePrimitiveRequest,
@@ -136,6 +180,7 @@ export const primitiveReplySink = (
   answer: Effect.fn("ComputerUseLeaseProxyOptions.answer")(function* (
     line: string,
     status: ComputerUsePrimitiveReply["status"] = "not_started",
+    context?: ReplyContext,
   ) {
     const answeredAt = yield* Clock.currentTimeMillis;
     const envelope = parse(line);
@@ -226,6 +271,12 @@ export const primitiveReplySink = (
       64 * 1024,
     );
     const hops = hopTimes(primitiveHops.get(request), answeredAt);
+    const terminal = replaceWithTerminal(
+      terminalReplyState(rawResult, status),
+      terminalErrorState(envelope?.error),
+      context?.terminalState?.() ?? "none",
+    );
+    const failure = terminalFailure(terminal, request.tool, request.args, terminal.possibleCommit);
     return yield* (
       reply?.({
         requestId: request.requestId,
@@ -236,9 +287,31 @@ export const primitiveReplySink = (
         turnId: request.turnId,
         callId: request.callId,
         status,
-        ...(result === undefined ? {} : { result }),
-        ...(error === undefined ? {} : { error }),
-        ...(image === undefined ? {} : { image }),
+        ...(failure === undefined
+          ? {
+              ...(result === undefined ? {} : { result }),
+              ...(error === undefined ? {} : { error }),
+              ...(image === undefined ? {} : { image }),
+            }
+          : {
+              result: {
+                isError: true,
+                structuredContent: {
+                  code: failure.code,
+                  ...(failure.safety === undefined
+                    ? {}
+                    : {
+                        safety: {
+                          possibleCommit: failure.safety.possibleCommit,
+                          retryClass: failure.safety.retryClass,
+                          writeStatus: failure.safety.writeStatus,
+                          code: failure.safety.code,
+                        },
+                      }),
+                },
+                content: [{ type: "text", text: failure.nextStep }],
+              },
+            }),
         ...(hops === undefined || Object.keys(hops).length === 0 ? {} : { hops }),
       }) ?? Effect.void
     );
@@ -264,6 +337,7 @@ export const forwardPrimitiveRequests = Effect.fnUntraced(function* <E>(
     request: ComputerUsePrimitiveRequest,
   ) => Effect.Effect<unknown, E>,
   onSettled?: (requestId: string) => void,
+  wrap?: (sink: ReplySink, id: string, request: ComputerUsePrimitiveRequest) => ReplySink,
 ) {
   if (requests === undefined) return;
   const waiting = yield* Queue.unbounded<{
@@ -295,7 +369,7 @@ export const forwardPrimitiveRequests = Effect.fnUntraced(function* <E>(
         primitiveHops.set(request, { receivedAt: yield* Clock.currentTimeMillis });
         const first = primitiveReplySink(request, reply);
         let answered = false;
-        const sink: ReplySink = {
+        const guard: ReplySink = {
           answer: (line, status, context) =>
             Effect.suspend(() => {
               if (answered) return Effect.void;
@@ -303,13 +377,14 @@ export const forwardPrimitiveRequests = Effect.fnUntraced(function* <E>(
               return first.answer(line, status, context);
             }),
         };
+        const sink = wrap?.(guard, id, request) ?? guard;
         yield* Clock.currentTimeMillis.pipe(
           Effect.flatMap((now) => Effect.sleep(Math.max(0, request.deadlineMillis - now))),
           Effect.andThen(
             Effect.suspend(() =>
               dispatchedPrimitives.has(request)
                 ? Effect.void
-                : sink.answer(refusal(id, "tools/call", "expired", SCREEN_CALL_EXPIRED)),
+                : sink.answer(refusal("none", id, "tools/call", "expired", SCREEN_CALL_EXPIRED)),
             ),
           ),
           Effect.forkScoped,
@@ -339,6 +414,7 @@ export interface LeaseProxyDriver {
    * Keyboard and pointer events the macOS helper saw, each with when it happened on this
    * process's clock, every agent's own included (#1235). Absent where the child reports none.
    */
+  readonly personStop?: Stream.Stream<void>;
   readonly humanInput?: Stream.Stream<{
     readonly source: ComputerUseHumanInputSource;
     readonly at: number;
@@ -371,12 +447,10 @@ export interface LeaseProxyOptions<EU, ED> {
   readonly onDriverCutoff?: (current: {
     readonly connectionId: string;
     readonly generation: number;
+    readonly terminal?: "stopped_by_person" | "screen_locked";
   }) => Effect.Effect<void>;
   /** `tool` names the provider's call a driver reply answers, for the CLI's app guide. */
-  readonly output: (
-    line: string,
-    context?: { readonly tool?: string | undefined },
-  ) => Effect.Effect<void>;
+  readonly output: (line: string, context?: ReplyContext) => Effect.Effect<void>;
   /** The server's view of this thread's control, newest last. Ending or failing ends it. */
   readonly leaseUpdates: Stream.Stream<ComputerUseLeaseUpdate, EU>;
   /** Starts one driver child; run again after a pause, each time in its own scope. */
@@ -452,6 +526,8 @@ export interface LeaseProxyOptions<EU, ED> {
    * person. Reports go one at a time in order; a call reaches the driver only after its start
    * report has answered, so the server knows the call before any helper can see its events.
    */
+  readonly onPersonStop?: () => Effect.Effect<boolean>;
+  readonly onScreenLocked?: () => Effect.Effect<unknown>;
   readonly onAgentInput?: (report: AgentInputReport) => Effect.Effect<unknown>;
 }
 

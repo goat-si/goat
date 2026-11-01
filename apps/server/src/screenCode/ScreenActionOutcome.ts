@@ -2,11 +2,20 @@ import type {
   ActionOutcomeSafety,
   ScreenEffectReceipt,
   ScreenHostCall,
-  ScreenJournalEntry,
+  ScreenHostReply,
   ScreenRunError,
   ScreenRunResult,
+  ScreenJournalEntry,
 } from "@goat/contracts";
 import { classifyActionOutcome } from "@goat/shared/actionOutcomeSafety";
+import { ScreenRunError as ScreenRunErrorSchema } from "@goat/contracts";
+import * as Schema from "effect/Schema";
+const isScreenRunError = Schema.is(ScreenRunErrorSchema);
+import {
+  terminalFailure,
+  replaceWithTerminal,
+  type ComputerUseTerminalReason,
+} from "../cua/ComputerUseTerminal.ts";
 
 const reads = new Set<ScreenHostCall["method"]>([
   "list_apps",
@@ -61,6 +70,50 @@ export const screenReplyFailureSafety = (
     ? screenActionSafety(call, "indeterminate", dispatched)
     : (safety ?? screenActionSafety(call, dispatched ? "indeterminate" : "refused", dispatched));
 
+export const callTerminalError = (
+  error: ScreenRunError,
+  cutoff: string | undefined,
+  call: ScreenHostCall,
+  dispatched: boolean,
+) => {
+  const merged = replaceWithTerminal(error, cutoff);
+  return terminalFailure(
+    merged,
+    isScreenRead(call.method) ? "list_apps" : call.method,
+    call.args,
+    dispatched || merged.possibleCommit,
+  );
+};
+
+export const finalScreenReply = (
+  reply: ScreenHostReply | undefined,
+  call: ScreenHostCall,
+  cutoff: string | undefined,
+  journal: readonly ScreenJournalEntry[],
+): ScreenHostReply | undefined => {
+  if (reply === undefined) return undefined;
+  const existing = reply.error ?? { code: "stopped", effectStarted: false, nextStep: "Stopped." };
+  const possibleInput = journal.some(
+    (entry) =>
+      entry.receipt.callId === call.callId && entry.receipt.safety?.possibleCommit === true,
+  );
+  const terminal = callTerminalError(
+    { ...existing, effectStarted: existing.effectStarted || possibleInput },
+    cutoff,
+    call,
+    possibleInput,
+  );
+  if (terminal === undefined) return reply;
+  return {
+    t: "reply",
+    runId: reply.runId,
+    cellId: reply.cellId,
+    callId: reply.callId,
+    outcome: "error",
+    error: { ...existing, ...terminal },
+  };
+};
+
 // What a refused call says of itself; true of that call only, never of the cell around it.
 const UNSENT = /(?:[,;]|\s+and)\s*(?:so\s+)?nothing was sent(?=[.;,]|$)|\s*\bNothing was sent\./gi;
 
@@ -96,11 +149,12 @@ const afterEarlierInput = (
  * A cell's final error: when any of its calls may have committed, the cell as a whole may have,
  * so rerunning it would repeat that input. Pass every receipt, before any are cut for the reply.
  */
-export const cellErrorSafety = <
+const cellErrorSafety = <
   E extends {
     readonly safety?: ActionOutcomeSafety;
     readonly effectStarted?: boolean;
     readonly callId?: number;
+    readonly code?: string;
     readonly nextStep?: string;
   },
 >(
@@ -123,7 +177,10 @@ export const cellErrorSafety = <
   )
     return error;
   const nextStep =
-    error.effectStarted === true || error.nextStep === undefined
+    error.effectStarted === true ||
+    error.nextStep === undefined ||
+    error.code === "stopped_by_person" ||
+    error.code === "screen_locked"
       ? undefined
       : afterEarlierInput(error, receipts);
   return {
@@ -136,6 +193,69 @@ export const cellErrorSafety = <
     ...(nextStep === undefined ? {} : { nextStep }),
   };
 };
+
+export const cellTerminalError = (
+  error: ScreenRunError,
+  receipts: readonly ScreenEffectReceipt[],
+  reason: ComputerUseTerminalReason | undefined,
+): ScreenRunError => {
+  const assessed = cellErrorSafety(error, receipts);
+  const merged = replaceWithTerminal(error, assessed, reason);
+  const terminal = terminalFailure(merged, "list_apps", {}, merged.possibleCommit);
+  if (terminal === undefined) return assessed;
+  const safety =
+    assessed.safety ??
+    classifyActionOutcome({
+      effect: merged.possibleCommit ? "write" : "read",
+      status: merged.possibleCommit ? "indeterminate" : "refused",
+      dispatched: merged.possibleCommit,
+    });
+  return {
+    ...assessed,
+    ...terminal,
+    safety: {
+      ...safety,
+      possibleCommit: merged.possibleCommit,
+      retryClass: "never",
+    },
+  };
+};
+
+export const latchCellTerminal = (
+  cells: Map<string, ComputerUseTerminalReason>,
+  id: string,
+  reason: ComputerUseTerminalReason | undefined,
+) => {
+  const merged = replaceWithTerminal(cells.get(id), reason).reason;
+  if (merged !== undefined) cells.set(id, merged);
+};
+
+export const completionCellError = (
+  candidate: unknown,
+  receipts: readonly ScreenEffectReceipt[],
+  reason: ComputerUseTerminalReason | undefined,
+): ScreenRunError | undefined => {
+  const error = isScreenRunError(candidate) ? candidate : undefined;
+  if (error === undefined && reason === undefined) return undefined;
+  return cellTerminalError(
+    error ?? {
+      code: "stopped",
+      effectStarted: false,
+      nextStep: "Refresh the screen run and retry if appropriate.",
+    },
+    receipts,
+    reason,
+  );
+};
+
+export const appendCellNotices = (
+  journal: readonly ScreenJournalEntry[],
+  notices: readonly ScreenJournalEntry[],
+) =>
+  [
+    ...journal,
+    ...notices.map((entry, index) => ({ ...entry, sequence: journal.length + index + 1 })),
+  ].slice(-64);
 
 export const cellResultSafety = (result: ScreenRunResult): ScreenRunResult =>
   result.error === undefined
@@ -180,3 +300,8 @@ export const firstScreenFailure = (
   code: error.code,
   mayHaveSent: error.effectStarted || safety.possibleCommit,
 });
+
+export const cellFailureBase = (
+  reason: ComputerUseTerminalReason | undefined,
+  cause: { readonly code: string; readonly effectStarted?: boolean | undefined },
+) => terminalFailure(replaceWithTerminal(cause, reason), "list_apps", {});

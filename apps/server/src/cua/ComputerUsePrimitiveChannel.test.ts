@@ -6,6 +6,7 @@ import {
   type ComputerUsePrimitiveRequest,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
@@ -14,6 +15,7 @@ import * as TestClock from "effect/testing/TestClock";
 
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import * as PrimitiveChannel from "./ComputerUsePrimitiveChannel.ts";
+import { terminalFailure } from "./ComputerUseTerminal.ts";
 
 const threadId = ThreadId.make("thread:primitive");
 const controlId = "control:primitive";
@@ -75,24 +77,43 @@ const fixture = Effect.fn("PrimitiveChannelTest.fixture")(function* () {
 /** The control-state fields the channel reads. */
 type TurnState =
   | { readonly _tag: "active"; readonly idle?: true }
-  | { readonly _tag: "ended"; readonly reason: ComputerUseControlEnd };
+  | { readonly _tag: "ended"; readonly reason: ComputerUseControlEnd }
+  | { readonly _tag: "paused"; readonly reason: "screen_locked" };
 
 /** One thread whose control state a test moves between turns, Stop and revocation. */
 const turnFixture = Effect.fn("PrimitiveChannelTest.turnFixture")(function* (options?: {
   readonly before?: (
     channel: PrimitiveChannel.ComputerUsePrimitiveChannel["Service"],
   ) => Effect.Effect<void>;
+  readonly onStateRead?: () => Effect.Effect<void>;
 }) {
   const signals = yield* PubSub.unbounded<void>();
   let state: TurnState = { _tag: "active" };
+  let liveControlId = controlId;
+  let notify: Parameters<
+    NonNullable<ComputerUseLeases.ComputerUseLeases["Service"]["onAuthorityChange"]>
+  >[0] = () => {};
   const leases = ComputerUseLeases.ComputerUseLeases.of({
     // An ended control keeps its record with the reason, as ComputerUseLeases.end writes it.
     currentControl: () =>
       Effect.sync(() =>
-        Option.some(state._tag === "ended" ? { controlId, ended: state.reason } : { controlId }),
+        Option.some(
+          state._tag === "ended"
+            ? { controlId: liveControlId, ended: state.reason }
+            : { controlId: liveControlId },
+        ),
       ),
-    controlState: () => Effect.sync(() => state),
+    controlState: () =>
+      Effect.gen(function* () {
+        const captured = state;
+        yield* options?.onStateRead?.() ?? Effect.void;
+        return captured;
+      }),
     subscribe: PubSub.subscribe(signals),
+    onAuthorityChange: (listener: typeof notify) => {
+      notify = listener;
+      return () => {};
+    },
   } as unknown as ComputerUseLeases.ComputerUseLeases["Service"]);
   const channel = yield* PrimitiveChannel.make.pipe(
     Effect.provideService(ComputerUseLeases.ComputerUseLeases, leases),
@@ -108,6 +129,13 @@ const turnFixture = Effect.fn("PrimitiveChannelTest.turnFixture")(function* (opt
   return {
     channel,
     registration,
+    lockAuthority: () =>
+      notify({ kind: "pause", threadId, controlId: liveControlId, terminal: "screen_locked" }),
+    stopAuthority: () =>
+      notify({ kind: "stop", threadId, controlId: liveControlId, terminal: "stopped_by_person" }),
+    replaceControl: Effect.sync(() => {
+      liveControlId = "control:next";
+    }),
     setState: (next: TurnState) =>
       Effect.sync(() => {
         state = next;
@@ -115,7 +143,7 @@ const turnFixture = Effect.fn("PrimitiveChannelTest.turnFixture")(function* (opt
     report: (current: typeof authority, driverGeneration: number) => ({
       ...current,
       registrationId: registration.registrationId,
-      controlId,
+      controlId: liveControlId,
       connectionId: `driver:${driverGeneration}`,
       driverGeneration,
     }),
@@ -133,6 +161,205 @@ const turnFixture = Effect.fn("PrimitiveChannelTest.turnFixture")(function* (opt
 });
 
 describe("ComputerUsePrimitiveChannel", () => {
+  it.effect.each(["lock first", "stop first"])(
+    "person stop dominates a lock for a waiting call: %s",
+    (order) =>
+      Effect.gen(function* () {
+        const reading = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        let hold = false;
+        const f = yield* turnFixture({
+          onStateRead: () =>
+            hold
+              ? Deferred.succeed(reading, undefined).pipe(Effect.andThen(Deferred.await(release)))
+              : Effect.void,
+        });
+        yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined));
+        const pending = yield* f
+          .request()
+          .pipe(Effect.result, Effect.forkChild({ startImmediately: true }));
+        hold = true;
+        yield* f.channel.closeStream({ threadId, registrationId: f.registration.registrationId });
+        yield* Deferred.await(reading);
+        if (order === "lock first") {
+          f.lockAuthority();
+          f.stopAuthority();
+        } else {
+          f.stopAuthority();
+          f.lockAuthority();
+        }
+        yield* Deferred.succeed(release, undefined);
+        const answer = yield* Fiber.join(pending);
+        assert.equal(answer._tag, "Failure");
+        if (answer._tag === "Failure") {
+          assert.equal(answer.failure.code, "stopped_by_person");
+          assert.equal(answer.failure.safety?.retryClass, "never");
+        }
+      }),
+  );
+  it.effect("an unbound waiter sees Stop after its registration closes", () =>
+    Effect.gen(function* () {
+      const reading = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      let hold = false;
+      const f = yield* turnFixture({
+        onStateRead: () =>
+          hold
+            ? Deferred.succeed(reading, undefined).pipe(Effect.andThen(Deferred.await(release)))
+            : Effect.void,
+      });
+      yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined));
+      const pending = yield* f
+        .request()
+        .pipe(Effect.result, Effect.forkChild({ startImmediately: true }));
+      hold = true;
+      yield* f.channel.closeStream({ threadId, registrationId: f.registration.registrationId });
+      yield* Deferred.await(reading);
+      f.stopAuthority();
+      yield* Deferred.succeed(release, undefined);
+      const answer = yield* Fiber.join(pending);
+      assert.equal(answer._tag, "Failure");
+      if (answer._tag === "Failure") assert.equal(answer.failure.code, "stopped_by_person");
+    }),
+  );
+  it.effect("an unbound call retains its control's stop when another control binds", () =>
+    Effect.gen(function* () {
+      const f = yield* turnFixture();
+      const pending = yield* f
+        .request()
+        .pipe(Effect.result, Effect.forkChild({ startImmediately: true }));
+      f.stopAuthority();
+      yield* f.replaceControl;
+      yield* f.channel.reportControlReady(f.report(authority, 0));
+      const answer = yield* Fiber.join(pending);
+      assert.equal(answer._tag, "Failure");
+      if (answer._tag === "Failure") assert.equal(answer.failure.code, "stopped_by_person");
+    }),
+  );
+  it("terminal deadlines preserve possible input and never suggest a retry", () => {
+    const failure = terminalFailure(
+      { reason: "screen_locked", possibleCommit: false },
+      "click",
+      {},
+      true,
+    );
+    assert.equal(failure?.safety?.possibleCommit, true);
+    assert.equal(failure?.safety?.retryClass, "never");
+    assert.notInclude(failure?.nextStep ?? "", "call did not run");
+  });
+  it.effect("a terminal proxy refusal preserves its not-started outcome", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      yield* f.channel.reportControlReady(f.report(1));
+      const waiting = yield* f.request().pipe(Effect.forkChild);
+      const request = Option.getOrThrow(yield* Stream.runHead(f.registered.requests));
+      const result = {
+        isError: true,
+        structuredContent: {
+          code: "stopped_by_person",
+          safety: { retryClass: "never", possibleCommit: false },
+        },
+      };
+      assert.isTrue(
+        yield* f.channel.reply({
+          ...authority,
+          registrationId: f.registered.registrationId,
+          reply: { ...request, status: "not_started", result },
+        }),
+      );
+      const answer = yield* Fiber.join(waiting);
+      assert.equal(answer.status, "not_started");
+      assert.deepEqual(answer.result, result);
+    }),
+  );
+  it.effect("a late typed terminal reply survives before the cutoff report", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      yield* f.channel.reportControlReady(f.report(1));
+      const waiting = yield* f.channel
+        .request({
+          threadId,
+          runId: "run:late",
+          turnId: "turn:late",
+          callId: 1,
+          deadlineMillis: 30000,
+          tool: "list_apps",
+          args: {},
+        })
+        .pipe(Effect.result, Effect.forkChild);
+      const request = Option.getOrThrow(yield* Stream.runHead(f.registered.requests));
+      yield* TestClock.adjust(2500);
+      assert.isTrue(
+        yield* f.channel.reply({
+          ...authority,
+          registrationId: f.registered.registrationId,
+          reply: {
+            ...request,
+            status: "unknown_outcome",
+            result: {
+              isError: true,
+              structuredContent: { code: "stopped_by_person", safety: { retryClass: "never" } },
+            },
+          },
+        }),
+      );
+      const answer = yield* Fiber.join(waiting);
+      assert.equal(answer._tag, "Success");
+      if (answer._tag === "Success")
+        assert.include(JSON.stringify(answer.success), "stopped_by_person");
+    }),
+  );
+  it.effect("an old lock cutoff cannot poison a newer driver generation", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      assert.isTrue(yield* f.channel.reportControlReady(f.report(1)));
+      assert.isTrue(yield* f.channel.reportControlReady(f.report(2)));
+      assert.isTrue(
+        yield* f.channel.reportControlCutoff({ ...f.report(1), terminal: "screen_locked" }),
+      );
+      const pending = yield* f.request().pipe(Effect.forkChild);
+      const delivered = Option.getOrThrow(yield* Stream.runHead(f.registered.requests));
+      assert.isTrue(
+        yield* f.channel.reply({
+          ...authority,
+          registrationId: f.registered.registrationId,
+          reply: { ...delivered, status: "settled", result: { ok: true } },
+        }),
+      );
+      const answer = yield* Fiber.join(pending);
+      assert.equal(answer.status, "settled");
+      assert.deepEqual(answer.result, { ok: true });
+    }),
+  );
+  it.effect("a terminal driver cutoff settles before a delayed stop report", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      assert.isTrue(yield* f.channel.reportControlReady(f.report(1)));
+      const waiter = yield* f.request().pipe(Effect.forkChild);
+      yield* Stream.runHead(f.registered.requests);
+      assert.isTrue(
+        yield* f.channel.reportControlCutoff({ ...f.report(1), terminal: "stopped_by_person" }),
+      );
+      const answer = yield* Fiber.join(waiter);
+      assert.include(JSON.stringify(answer), '"code":"stopped_by_person"');
+      assert.include(JSON.stringify(answer), '"retryClass":"never"');
+      const next = yield* Effect.flip(f.request());
+      assert.equal(next.code, "stopped_by_person");
+      assert.equal(next.safety?.retryClass, "never");
+    }),
+  );
+  it.effect("a stop settles an in-flight call with its terminal person reason", () =>
+    Effect.gen(function* () {
+      const f = yield* turnFixture();
+      assert.isTrue(yield* f.channel.reportControlReady(f.report(authority, 1)));
+      const waiter = yield* f.request().pipe(Effect.forkChild);
+      yield* Stream.runHead(f.registration.requests);
+      yield* f.setState({ _tag: "ended", reason: "stopped_all" });
+      const answer = yield* Fiber.join(waiter);
+      assert.include(JSON.stringify(answer), '"code":"stopped_by_person"');
+      assert.include(JSON.stringify(answer), '"retryClass":"never"');
+    }),
+  );
   it.effect("cancel after delivery emits a proxy marker for the admitted request", () =>
     Effect.gen(function* () {
       const f = yield* fixture();
@@ -291,11 +518,15 @@ describe("ComputerUsePrimitiveChannel", () => {
           state: "primitive-cancel",
           requestId: (delivered as ComputerUsePrimitiveRequest).requestId,
         });
-        assert.equal((yield* Effect.flip(t.request())).reason, "desktop_not_ready");
+        const stopped = yield* Effect.flip(t.request());
+        assert.equal(stopped.code, "stopped_by_person");
+        assert.equal(stopped.safety?.possibleCommit, false);
+        assert.equal(stopped.safety?.retryClass, "never");
 
         const next = { ...authority, attachmentGeneration: "attachment:two" };
+        yield* t.replaceControl;
         yield* t.setState({ _tag: "active" });
-        yield* t.channel.issue({ ...next, controlId, expiresAt: 60_000 });
+        yield* t.channel.issue({ ...next, controlId: "control:next", expiresAt: 60_000 });
         assert.isTrue(yield* t.channel.reportControlReady(t.report(next, 1)));
         const waiter = yield* t.request().pipe(Effect.forkChild);
         const resumed = Option.getOrThrow(yield* Stream.runHead(t.registration.requests));
@@ -707,4 +938,48 @@ it.effect("only forwards claimBind authority when supplied as a host request fie
     yield* f.channel.cancel("run:cell", "turn:cell");
     yield* Fiber.join(agentCall);
   }),
+);
+
+it.effect("reconnection preserves a paused screen lock", () =>
+  Effect.gen(function* () {
+    const f = yield* turnFixture();
+    yield* f.channel.reportControlReady(f.report(authority, 1));
+    yield* f.channel.reportControlCutoff({ ...f.report(authority, 1), terminal: "screen_locked" });
+    yield* f.setState({ _tag: "paused", reason: "screen_locked" });
+    yield* f.channel.closeStream({ threadId, registrationId: f.registration.registrationId });
+    const second = yield* f.channel.registerStream({
+      ...authority,
+      proxyInstanceId: "second",
+      kind: "thread",
+    });
+    assert.equal(second.status, "registered");
+    const answer = yield* Effect.flip(f.request());
+    assert.equal(answer.code, "screen_locked");
+    assert.equal(answer.safety?.retryClass, "never");
+  }),
+);
+it.effect.each(["stopped_by_person", "screen_locked"] as const)(
+  "late terminal cutoff preserves %s",
+  (terminal) =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      yield* f.channel.reportControlReady(f.report(1));
+      const waiting = yield* f.channel
+        .request({
+          threadId,
+          runId: "run:late",
+          turnId: "turn:late",
+          callId: 1,
+          deadlineMillis: 30000,
+          tool: "list_apps",
+          args: {},
+        })
+        .pipe(Effect.result, Effect.forkChild);
+      yield* Stream.runHead(f.registered.requests);
+      yield* TestClock.adjust(2500);
+      yield* f.channel.reportControlCutoff({ ...f.report(1), terminal });
+      const answer = yield* Fiber.join(waiting);
+      assert.equal(answer._tag, "Success");
+      if (answer._tag === "Success") assert.include(JSON.stringify(answer.success), terminal);
+    }),
 );

@@ -44,6 +44,7 @@ export const narrowBatch = (
     if (!bundleIds || entries.length === 0 || entries.some((app) => app.bundleId === undefined))
       return {
         refused: refusal(
+          "none",
           id,
           message.method,
           "app_not_allowed",
@@ -55,6 +56,7 @@ export const narrowBatch = (
   if (canonical.size > MAX_BATCH_SCOPE_APPS)
     return {
       refused: refusal(
+        "none",
         id,
         message.method,
         "app_not_allowed",
@@ -67,6 +69,7 @@ export const narrowBatch = (
   if (typeof raw !== "object" || raw === null || Array.isArray(raw))
     return {
       refused: refusal(
+        "none",
         id,
         message.method,
         "app_not_allowed",
