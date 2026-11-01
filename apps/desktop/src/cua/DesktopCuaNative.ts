@@ -5,7 +5,11 @@ import {
 } from "./agentRouteProbe.ts";
 import type { ComputerUseApp, ComputerUseReadiness } from "@goat/contracts";
 import { cuaDriverHostOptions } from "@goat/shared/cuaDriverRelease";
-import { listCuaDriverApplications, type CuaDriverListedApp } from "@goat/shared/cuaDriverManifest";
+import {
+  listCuaDriverApplications,
+  type CuaDriverListedApp,
+  type CuaRequestableOptions,
+} from "@goat/shared/cuaDriverManifest";
 import { fromLenientJson } from "@goat/shared/schemaJson";
 import * as Schema from "effect/Schema";
 import type { CuaDriverLike, ToolResult } from "@trycua/cua-driver";
@@ -168,9 +172,12 @@ export interface DesktopCuaDriverDependencies {
     listed: ReadonlyArray<CuaDriverListedApp>,
     hostBundleIds: ReadonlyArray<string>,
     platform: NodeJS.Platform,
+    options?: CuaRequestableOptions,
   ) => Promise<ReadonlyArray<ComputerUseApp>>;
   /** Read the local server's persisted opt-in, not whether an agent driver happens to run. */
   readonly computerUseEnabled: (settingsPath: string) => Promise<boolean>;
+  /** The person's strict input guards choice; off unless they opted in, as on the server. */
+  readonly strictInputGuards: (settingsPath: string) => Promise<boolean>;
   readonly readManifest: (path: string) => Promise<string>;
   /** The apps the helper's driver lists, after the helper verifies it (#1241, macOS and Windows). */
   readonly helperApps: (
@@ -199,7 +206,12 @@ export function bitmapHasContent(bitmap: Uint8Array): boolean {
 }
 
 const decodeComputerUseSetting = Schema.decodeUnknownSync(
-  fromLenientJson(Schema.Struct({ enableCua: Schema.optionalKey(Schema.Boolean) })),
+  fromLenientJson(
+    Schema.Struct({
+      enableCua: Schema.optionalKey(Schema.Boolean),
+      cuaStrictInputGuards: Schema.optionalKey(Schema.Boolean),
+    }),
+  ),
 );
 
 export const dependencies: DesktopCuaDriverDependencies = {
@@ -273,19 +285,23 @@ export const dependencies: DesktopCuaDriverDependencies = {
   listApps: listCuaDriverApplications,
   appCatalog: (() => {
     const catalogs = new Map<NodeJS.Platform, ReturnType<typeof makeAppCatalog>>();
-    return (listed, hostBundleIds, platform) => {
+    return (listed, hostBundleIds, platform, options) => {
       let catalog = catalogs.get(platform);
       if (catalog === undefined) {
         catalog = makeAppCatalog(makeAppIconReader(platform));
         catalogs.set(platform, catalog);
       }
-      return catalog(listed, hostBundleIds);
+      return catalog(listed, hostBundleIds, options);
     };
   })(),
   computerUseEnabled: async (settingsPath) => {
     const raw = await (await import("node:fs/promises")).readFile(settingsPath, "utf8");
     const settings = decodeComputerUseSetting(raw);
     return settings.enableCua === true;
+  },
+  strictInputGuards: async (settingsPath) => {
+    const raw = await (await import("node:fs/promises")).readFile(settingsPath, "utf8");
+    return decodeComputerUseSetting(raw).cuaStrictInputGuards === true;
   },
   readManifest: async (path) => (await import("node:fs/promises")).readFile(path, "utf8"),
   helperApps: (bundle, platform, signal) =>

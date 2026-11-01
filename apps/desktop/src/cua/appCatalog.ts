@@ -6,7 +6,11 @@
  * @module appCatalog
  */
 import { COMPUTER_USE_APP_ICON_LIMIT, type ComputerUseApp } from "@goat/contracts";
-import { cuaRequestableApps, type CuaDriverListedApp } from "@goat/shared/cuaDriverManifest";
+import {
+  cuaRequestableApps,
+  type CuaDriverListedApp,
+  type CuaRequestableOptions,
+} from "@goat/shared/cuaDriverManifest";
 
 export interface CatalogApp {
   readonly id: string;
@@ -31,6 +35,7 @@ export function makeAppCatalog(readIcons: AppIconReader) {
   return async (
     listed: ReadonlyArray<CuaDriverListedApp>,
     hostBundleIds: ReadonlyArray<string>,
+    options?: CuaRequestableOptions,
   ): Promise<ReadonlyArray<ComputerUseApp>> => {
     const entries = new Map<
       string,
@@ -38,7 +43,7 @@ export function makeAppCatalog(readIcons: AppIconReader) {
     >();
     for (const app of listed) {
       const id = app.bundle_id?.trim() || app.executable?.trim() || "";
-      if (!id || !cuaRequestableApps([app], hostBundleIds).includes(id)) continue;
+      if (!id || !cuaRequestableApps([app], hostBundleIds, options).includes(id)) continue;
       const executables = [app.executable?.trim(), app.bundle_executable?.trim()].filter(
         (value): value is string => Boolean(value),
       );

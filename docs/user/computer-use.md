@@ -42,7 +42,9 @@ use an app you installed later, turn computer use off and on again.
 
 These limits keep agents away from places they never need. They do not stop an
 agent from typing into an app it may use, so give agents work you would let
-them do at that keyboard.
+them do at that keyboard. With **Strict input guards** off, an agent can still ask
+for password managers and the other protected apps below, and you can approve
+them, but computer use itself still does not control them.
 
 Computer use also blocks System Settings, login and security prompts, and Screen
 Time. With **Strict input guards** on, full access started by a bot, channel,

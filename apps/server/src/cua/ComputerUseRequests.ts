@@ -176,10 +176,7 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
     const listed = yield* cua.value.listedApps;
     if (Option.isSome(listed)) {
       const known = new Set(listed.value.map(cuaAppKey));
-      // Listings leave protected apps out; without strict guards that is the driver's call.
-      const unknownApps = wanted.filter(
-        (app) => !known.has(cuaAppKey(app)) && (strict || !isExcludedCuaApplication(app)),
-      );
+      const unknownApps = wanted.filter((app) => !known.has(cuaAppKey(app)));
       if (unknownApps.length > 0)
         return {
           kind: "refused",
