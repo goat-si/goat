@@ -17,8 +17,6 @@ export const waitForGone = Effect.fn("DesktopWaitGone.waitForGone")(function* (d
   readonly pid: number;
   readonly windowId: number;
   readonly deadline: number;
-  /** Each read retires the driver's earlier tokens, so the target's refs go before the first. */
-  readonly retire: () => void;
   readonly read: (
     args: Record<string, unknown>,
   ) => Effect.Effect<ComputerUsePrimitiveReply, ScreenRunError>;
@@ -33,7 +31,6 @@ export const waitForGone = Effect.fn("DesktopWaitGone.waitForGone")(function* (d
     args.selected !== undefined
   )
     return yield* Effect.fail(fail("invalid_argument", "Use gone: true with role, name or value."));
-  deps.retire();
   const result = yield* pollDesktopWait({
     read: () =>
       deps
