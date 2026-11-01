@@ -424,15 +424,18 @@ const decodePnpmList = Schema.decodeUnknownOption(
 // Unlike npm's latest tag, pnpm outdated respects minimumReleaseAge and its excludes.
 const resolvePnpmGlobalLatestVersion = Effect.fn("resolvePnpmGlobalLatestVersion")(function* (
   packageName: string,
+  env: NodeJS.ProcessEnv,
 ) {
-  // Match the updater's pnpm and server environment, rather than the instance's.
-  const pnpmPath = yield* resolveCommandPath("pnpm");
+  // Match the updater's pnpm and environment.
+  const pnpmPath = yield* resolveCommandPath("pnpm", {
+    env: { ...(yield* HostProcess.Environment), ...env },
+  });
   if (!pnpmPath) return null;
   // Silent reporting keeps project package-manager warnings out of the JSON.
   const outdated = yield* runProbe(
     pnpmPath,
     ["outdated", "-g", "--reporter=silent", "--format", "json", packageName],
-    {},
+    env,
     // pnpm outdated exits 1 when updates are available.
     [0, 1],
   );
@@ -446,7 +449,7 @@ const resolvePnpmGlobalLatestVersion = Effect.fn("resolvePnpmGlobalLatestVersion
   const listed = yield* runProbe(
     pnpmPath,
     ["ls", "-g", "--reporter=silent", "--depth", "0", "--json", packageName],
-    {},
+    env,
   );
   const listedEntries = listed ? Option.getOrUndefined(decodePnpmList(listed)) : undefined;
   return nonEmptyString(listedEntries?.[0]?.dependencies?.[packageName]?.version);
@@ -545,6 +548,7 @@ export const resolvePackageManagedProviderMaintenance = Effect.fn(
       updateExecutable: "vp",
       updateArgs: ["i", "-g", packageName],
       updateLockKey: "vite-plus-global",
+      env: context.env,
     });
   }
   if (commandPaths.some(isBunGlobalCommandPath)) {
@@ -554,6 +558,7 @@ export const resolvePackageManagedProviderMaintenance = Effect.fn(
       updateExecutable: "bun",
       updateArgs: ["i", "-g", `${packageName}@latest`],
       updateLockKey: "bun-global",
+      env: context.env,
     });
   }
   if (commandPaths.some(isPnpmGlobalCommandPath)) {
@@ -570,7 +575,8 @@ export const resolvePackageManagedProviderMaintenance = Effect.fn(
       updateExecutable: "pnpm",
       updateArgs: ["add", "-g", ...allowBuild, `${packageName}@latest`],
       updateLockKey: "pnpm-global",
-      lookupLatestVersion: resolvePnpmGlobalLatestVersion(packageName).pipe(
+      env: context.env,
+      lookupLatestVersion: resolvePnpmGlobalLatestVersion(packageName, context.env).pipe(
         Effect.provideContext(services),
       ),
     });
@@ -583,6 +589,7 @@ export const resolvePackageManagedProviderMaintenance = Effect.fn(
       updateExecutable: "yarn",
       updateArgs: ["global", "add", `${packageName}@latest`],
       updateLockKey: "yarn-global",
+      env: context.env,
     });
   }
   if (yield* isVoltaPackageInstall(context, packageName)) {
@@ -592,6 +599,7 @@ export const resolvePackageManagedProviderMaintenance = Effect.fn(
       updateExecutable: "volta",
       updateArgs: ["install", `${packageName}@latest`],
       updateLockKey: "volta",
+      env: context.env,
     });
   }
 
@@ -612,6 +620,7 @@ export const resolvePackageManagedProviderMaintenance = Effect.fn(
         `${packageName}@latest`,
       ],
       updateLockKey: `npm-global:${normalizeCommandPath(npmPrefix)}`,
+      env: context.env,
     });
   }
 
@@ -782,7 +791,8 @@ const withConfiguredNpmVersionLookup = Effect.fn("withConfiguredNpmVersionLookup
   if (!packageName || capabilities.latestVersion !== undefined) {
     return capabilities;
   }
-  const npmPath = yield* resolveCommandPath("npm");
+  const env = { ...(yield* HostProcess.Environment), ...capabilities.update?.env };
+  const npmPath = yield* resolveCommandPath("npm", { env });
   if (!npmPath) return capabilities;
   const services = yield* Effect.context<ProviderMaintenanceResolverServices>();
   const update = capabilities.update;
@@ -800,7 +810,7 @@ const withConfiguredNpmVersionLookup = Effect.fn("withConfiguredNpmVersionLookup
       `${packageName}@latest`,
       "version",
     ],
-    {},
+    env,
   ).pipe(
     Effect.map((stdout) => {
       const value = stdout ? Option.getOrNull(decodeNpmViewVersion(stdout.trim())) : null;

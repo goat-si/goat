@@ -1425,7 +1425,11 @@ describe("AcpAdapterV2", () => {
     }).pipe(Effect.provide(layerTest), Effect.scoped),
   );
 
-  it.live.each([[true, false], [false, false], [false, true]] as const)(
+  it.live.each([
+    [true, false],
+    [false, false],
+    [false, true],
+  ] as const)(
     "keeps unchanged ACP attachments across turns (credential=%s, Copilot modes=%s, #934)",
     (attached, copilotModes) =>
       Effect.gen(function* () {
@@ -1453,7 +1457,12 @@ describe("AcpAdapterV2", () => {
           flavor: {
             driver: ACP_TEST_DRIVER,
             capabilities: AcpProviderCapabilitiesV2,
-            makeRuntime: makeMockRuntime({ childProcessSpawner, mockAgentPath, protocolEvents, environment: copilotModes ? { GOAT_ACP_COPILOT_MODES: "1" } : {} }),
+            makeRuntime: makeMockRuntime({
+              childProcessSpawner,
+              mockAgentPath,
+              protocolEvents,
+              environment: copilotModes ? { GOAT_ACP_COPILOT_MODES: "1" } : {},
+            }),
           },
           selfInvocation,
         });
