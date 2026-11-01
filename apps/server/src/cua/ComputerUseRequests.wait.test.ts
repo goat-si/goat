@@ -21,7 +21,10 @@ it.effect("organization denial precedes full access", () =>
   withWaiting(({ request, leases, runId }) =>
     Effect.gen(function* () {
       yield* leases.everyAppControl(threadId, false, { runId });
-      yield* (yield* ServerSettings.ServerSettingsService).updateSettings({ cuaDeniedApps: [APP] });
+      yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+        cuaStrictInputGuards: true,
+        cuaDeniedApps: [APP],
+      });
       assert.deepInclude(yield* request({ apps: [APP] }), {
         kind: "refused",
         code: "app_not_allowed",

@@ -153,13 +153,20 @@ it.effect("a denial committed during admission prevents the call", () =>
   }).pipe(Effect.provide(everyAppLayer)),
 );
 
-it.effect.each([true, false])(
-  "checks terminal calls for full access origin (nonPerson %s)",
-  (nonPerson) =>
+it.effect.each([
+  { nonPerson: true, strict: true },
+  { nonPerson: false, strict: true },
+  { nonPerson: true, strict: false },
+])(
+  "terminal calls from a remote origin are refused only under strict input guards ($nonPerson, $strict)",
+  ({ nonPerson, strict }) =>
     Effect.gen(function* () {
       yield* runMigrations();
+      yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+        cuaStrictInputGuards: strict,
+      });
       const leases = yield* ComputerUseLeases.ComputerUseLeases;
-      const owner = ThreadId.make(`thread-terminal-${nonPerson}`);
+      const owner = ThreadId.make(`thread-terminal-${nonPerson}-${strict}`);
       yield* threadIn(owner, "full-access");
       const control = Option.getOrThrow(yield* leases.everyAppControl(owner, false, { nonPerson }));
       for (const app of ["com.apple.Terminal", "com.googlecode.iterm2"]) {
@@ -174,7 +181,7 @@ it.effect.each([true, false])(
           args: { pid: 42, window_id: 7 },
           app,
         });
-        assert.equal(result.status, nonPerson ? "refused" : "admitted");
+        assert.equal(result.status, nonPerson && strict ? "refused" : "admitted");
         if (result.status === "refused") assert.equal(result.detail, "app_not_allowed");
       }
     }).pipe(Effect.provide(everyAppLayer)),
@@ -563,13 +570,16 @@ it.effect(
     }).pipe(Effect.scoped, Effect.provide(everyAppLayer)),
 );
 
-it.effect(
-  "permits a verified ordinary batch but rejects a terminal batch for a remote origin",
-  () =>
+it.effect.each([true, false])(
+  "a remote origin's terminal batch is refused only under strict input guards (%s)",
+  (strict) =>
     Effect.gen(function* () {
       yield* runMigrations();
+      yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+        cuaStrictInputGuards: strict,
+      });
       const leases = yield* ComputerUseLeases.ComputerUseLeases;
-      const owner = ThreadId.make("thread-remote-batch");
+      const owner = ThreadId.make(`thread-remote-batch-${strict}`);
       yield* threadIn(owner, "full-access");
       const control = Option.getOrThrow(
         yield* leases.everyAppControl(owner, false, { nonPerson: true }),
@@ -586,7 +596,10 @@ it.effect(
           args: { app_scope: { apps: [app], delivery: "background" }, steps: [] },
           safetyApps: [app],
         });
-        assert.equal(result.status, app === "com.apple.Terminal" ? "refused" : "admitted");
+        assert.equal(
+          result.status,
+          strict && app === "com.apple.Terminal" ? "refused" : "admitted",
+        );
         if (result.status === "refused") assert.equal(result.detail, "app_not_allowed");
       }
     }).pipe(Effect.provide(everyAppLayer)),

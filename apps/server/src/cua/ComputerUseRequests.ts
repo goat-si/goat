@@ -84,9 +84,10 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
   const foreground = input.request.foreground === true;
   const wanted = input.request.apps;
   const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
-  const denied = new Set(
-    Option.isSome(settings) ? (yield* settings.value.getSettings).cuaDeniedApps.map(cuaAppKey) : [],
-  );
+  const hostSettings = Option.isSome(settings) ? yield* settings.value.getSettings : undefined;
+  // Denied and protected apps are strict guards; no settings service keeps them on.
+  const strict = hostSettings === undefined || hostSettings.cuaStrictInputGuards;
+  const denied = new Set(strict && hostSettings ? hostSettings.cuaDeniedApps.map(cuaAppKey) : []);
   const cua = yield* Effect.serviceOption(CuaDriver.CuaDriver);
   if (wanted !== undefined && denied.size > 0) {
     const catalog = Option.isSome(cua) ? yield* cua.value.appCatalog : [];
@@ -153,7 +154,7 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
   if (wanted !== undefined) {
     // Credential stores stay out whether or not the host can list its apps (#1598).
     const catalog = yield* cua.value.appCatalog;
-    const excluded = wanted.filter(
+    const excluded = (strict ? wanted : []).filter(
       (app) =>
         isExcludedCuaApplication(app) ||
         catalog.some(

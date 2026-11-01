@@ -9,7 +9,6 @@ import type { Envelope } from "./ComputerUseLeaseProtocol.ts";
 import { refusal, type JsonRpcId } from "./ComputerUseLeaseResponses.ts";
 import { reservationRefusal, scopeMessage } from "./ComputerUseLeaseMessages.ts";
 import { approvedApps, scopeVerdict, type ListedApp } from "./ComputerUseScope.ts";
-import { isExcludedCuaApplication } from "@goat/shared/cuaDriverManifest";
 
 type Permissions = NonNullable<
   Extract<ComputerUseCallAdmission, { status: "admitted" }>["permissions"]
@@ -58,7 +57,8 @@ const admissionScopeRefusal = (
   listed: ReadonlyMap<number, ListedApp>,
   bundleIds: boolean,
 ) => {
-  if (permissions === undefined) return undefined;
+  // Without strict input guards GOAT applies no scope of its own to an admitted call.
+  if (permissions === undefined || permissions.strictInputGuards === false) return undefined;
   const verdict = scopeVerdict({
     name: message.params?.name,
     args: message.params?.arguments,
@@ -67,16 +67,6 @@ const admissionScopeRefusal = (
     bundleIds,
   });
   if (verdict._tag === "allow") return undefined;
-  // Without strict input guards only protected apps (GOAT, credential stores) stay out of reach.
-  if (
-    permissions.strictInputGuards === false &&
-    !(
-      verdict._tag === "refuse" &&
-      verdict.app !== undefined &&
-      isExcludedCuaApplication(verdict.app)
-    )
-  )
-    return undefined;
   const reason = verdict._tag === "refuse" ? verdict.reason : "app_not_approved";
   const app = verdict._tag === "refuse" ? verdict.app : undefined;
   return refusal(

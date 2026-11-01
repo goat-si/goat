@@ -45,12 +45,11 @@ agent from typing into an app it may use, so give agents work you would let
 them do at that keyboard.
 
 Computer use also blocks System Settings, login and security prompts, and Screen
-Time. Full access started by a bot, channel, schedule, webhook, or another
-environment cannot control Terminal or iTerm. With **Strict input
-guards** on, an organization can block more apps by adding their bundle IDs to
-`cuaDeniedApps` in the environment's `userdata/settings.json`, and input
-without an identifiable target is refused; only a person can change these
-settings.
+Time. With **Strict input guards** on, full access started by a bot, channel,
+schedule, webhook, or another environment cannot control Terminal or iTerm, an
+organization can block more apps by adding their bundle IDs to `cuaDeniedApps`
+in the environment's `userdata/settings.json`, and input without an
+identifiable target is refused; only a person can change these settings.
 
 ## Ask an agent to work across the browser and apps
 
@@ -163,8 +162,9 @@ To have GOAT check input before it is sent, turn on **Strict input guards** unde
 would move your pointer does not run unless **Let agents move my pointer** is
 also on, sending in a chat app needs the agent to say it is sending, paste,
 renaming a list item by typing and clicks outside the window are refused,
-foreground is used only after element and keyboard tries, approved-app lists
-and `cuaDeniedApps` apply, and a failed step stops the steps after it.
+foreground is used only after element and keyboard tries, approved-app lists,
+`cuaDeniedApps` and the remote-origin Terminal block apply, and a failed step
+stops the steps after it.
 
 **Stop** on a thread stops its computer use at once, even in the middle of an
 action sequence. Pause, takeover and private mode also revoke foreground

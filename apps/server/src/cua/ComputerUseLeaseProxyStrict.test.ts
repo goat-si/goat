@@ -74,15 +74,18 @@ describe("the proxy's own refusals follow the strict input guards setting", () =
       assert.isUndefined(yield* judge({ ...base, strict: false }));
     }),
   );
-  it.effect("a protected app stays out of reach without strict guards", () =>
-    Effect.gen(function* () {
-      const refused = yield* judge({
-        app: "com.apple.keychainaccess",
-        approved: undefined,
-        strict: false,
-      });
-      assert.include(refusedAs(refused), "app_not_allowed");
-    }),
+  it.effect.each([true, false])(
+    "a protected app is out of reach only under strict guards (%s)",
+    (strict) =>
+      Effect.gen(function* () {
+        const refused = yield* judge({
+          app: "com.apple.keychainaccess",
+          approved: undefined,
+          strict,
+        });
+        if (strict) assert.include(refusedAs(refused), "app_not_allowed");
+        else assert.isUndefined(refused);
+      }),
   );
 
   it.effect("a strict update that lands while the admission is judged refuses the call", () =>

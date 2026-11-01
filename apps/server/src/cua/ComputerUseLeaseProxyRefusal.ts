@@ -9,7 +9,6 @@ import { requiresForeground } from "./ComputerUseCallReservations.ts";
 import { sendsAppleEvents } from "./ComputerUseAutomationRefusal.ts";
 import { TOKEN_FIRST_MESSAGE } from "./ComputerUseTokenFirst.ts";
 import { batchAppScope } from "./ComputerUseBatchScope.ts";
-import { isExcludedCuaApplication } from "@goat/shared/cuaDriverManifest";
 import { batchNeedsListing } from "./ComputerUseBatchIdentity.ts";
 import {
   appKey,
@@ -138,16 +137,7 @@ export const refuseProxyCall = Effect.fn("ComputerUseLeaseProxy.refuseCall")(fun
       appOf: (pid) => input.listed.get(pid),
       bundleIds: input.host.bundleIds,
     });
-  // Without strict guards only protected apps (GOAT, credential stores) stay out of reach.
-  const judge = (): ScopeVerdict => {
-    const verdict = judgeScope();
-    return guarded() ||
-      (verdict._tag === "refuse" &&
-        verdict.app !== undefined &&
-        isExcludedCuaApplication(verdict.app))
-      ? verdict
-      : { _tag: "allow" };
-  };
+  const judge = (): ScopeVerdict => (guarded() ? judgeScope() : { _tag: "allow" });
   // A pid allowed only by the binary it ran when last listed may run another one of the same name
   // now. A host that reads it (Linux) must read the same binary, a failed read refuses; elsewhere
   // only a listing taken for this call confirms it.

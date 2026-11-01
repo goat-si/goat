@@ -76,9 +76,10 @@ it.effect("turns computer use off even when session cleanup is unavailable", () 
   ),
 );
 
-it.effect("refuses to persist a hard-denied app in the allowed apps list", () =>
+it.effect("strict input guards refuse to persist a hard-denied app in the allowed apps list", () =>
   Effect.gen(function* () {
     const settings = yield* ServerSettings.ServerSettingsService;
+    yield* settings.updateSettings({ cuaStrictInputGuards: true });
     for (const app of [
       "com.1password.1password",
       "com.apple.systempreferences",
@@ -122,11 +123,14 @@ it.effect("loads an organization deny list from settings.json", () =>
   }).pipe(Effect.provide(layerServerSettings().pipe(Layer.provideMerge(NodeServices.layer)))),
 );
 
-it.effect("persists allowed apps and rejects protected apps without changing the file", () =>
+it.effect("strict input guards reject protected allowed apps without changing the file", () =>
   Effect.gen(function* () {
     const settings = yield* ServerSettings.ServerSettingsService;
     yield* settings.start;
-    yield* settings.updateSettings({ cuaAllowedApps: ["com.example.Editor"] });
+    yield* settings.updateSettings({
+      cuaStrictInputGuards: true,
+      cuaAllowedApps: ["com.example.Editor"],
+    });
     const result = yield* Effect.result(
       settings.updateSettings({ cuaAllowedApps: ["COM.1PASSWORD.1PASSWORD"] }),
     );
@@ -135,7 +139,26 @@ it.effect("persists allowed apps and rejects protected apps without changing the
   }).pipe(Effect.provide(layerServerSettings().pipe(Layer.provideMerge(NodeServices.layer)))),
 );
 
-it.effect("loads settings while removing protected and duplicate allowed apps", () =>
+it.effect(
+  "strict input guards load settings while removing protected and duplicate allowed apps",
+  () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const config = yield* ServerConfig.ServerConfig;
+      yield* fs.writeFileString(
+        config.settingsPath,
+        JSON.stringify({
+          cuaStrictInputGuards: true,
+          cuaAllowedApps: ["com.example.Editor", "COM.EXAMPLE.EDITOR", "com.1password.1password"],
+        }),
+      );
+      const settings = yield* ServerSettings.ServerSettingsService;
+      yield* settings.start;
+      expect((yield* settings.getSettings).cuaAllowedApps).toEqual(["com.example.Editor"]);
+    }).pipe(Effect.provide(layerServerSettings().pipe(Layer.provideMerge(NodeServices.layer)))),
+);
+
+it.effect("without strict input guards a protected allowed app is kept as the person set it", () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const config = yield* ServerConfig.ServerConfig;
@@ -147,6 +170,20 @@ it.effect("loads settings while removing protected and duplicate allowed apps", 
     );
     const settings = yield* ServerSettings.ServerSettingsService;
     yield* settings.start;
-    expect((yield* settings.getSettings).cuaAllowedApps).toEqual(["com.example.Editor"]);
+    expect((yield* settings.getSettings).cuaAllowedApps).toEqual([
+      "com.example.Editor",
+      "com.1password.1password",
+    ]);
+    yield* settings.updateSettings({
+      cuaAllowedApps: ["com.example.Editor", "com.1password.1password", "com.apple.keychainaccess"],
+    });
+    expect((yield* settings.getSettings).cuaAllowedApps).toEqual([
+      "com.example.Editor",
+      "com.1password.1password",
+      "com.apple.keychainaccess",
+    ]);
+    // Turning strict on later is not refused for apps that were already stored.
+    yield* settings.updateSettings({ cuaStrictInputGuards: true });
+    expect((yield* settings.getSettings).cuaStrictInputGuards).toBe(true);
   }).pipe(Effect.provide(layerServerSettings().pipe(Layer.provideMerge(NodeServices.layer)))),
 );

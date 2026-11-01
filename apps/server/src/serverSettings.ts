@@ -934,7 +934,7 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
         Effect.gen(function* () {
           const current = yield* Ref.get(currentSettingsRef);
           const next = yield* update(current);
-          yield* rejectProtectedAllowedApps(next);
+          yield* rejectProtectedAllowedApps(current, next);
           return yield* checkpointAdmission.tryCommit(
             current,
             next,
@@ -1889,7 +1889,7 @@ const make = Effect.gen(function* () {
         });
       }
       const updated = yield* update(current);
-      yield* rejectProtectedAllowedApps(updated);
+      yield* rejectProtectedAllowedApps(current, updated);
       if (Option.isSome(routeState)) yield* routeState.value.validate(current, updated);
       if (CodexRoute.instanceFingerprint(current) === CodexRoute.instanceFingerprint(updated))
         return yield* connectAccess.commit(

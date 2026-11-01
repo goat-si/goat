@@ -36,14 +36,18 @@ describe("an admission reply's scope follows the strict input guards it carries"
     );
     expect(proxyCallAdmission(1, CLICK, admitted(false), other, true).refused).toBeUndefined();
   });
-  it("keeps protected apps out of reach without strict guards", () => {
-    const refused = proxyCallAdmission(
-      1,
-      CLICK,
-      admitted(false),
-      listed("com.apple.keychainaccess"),
-      true,
-    );
-    expect(refusedAs(refused.refused)).toContain("app_not_allowed");
-  });
+  it.each([true, false])(
+    "keeps protected apps out of reach only under strict guards (%s)",
+    (strict) => {
+      const refused = proxyCallAdmission(
+        1,
+        CLICK,
+        admitted(strict ? undefined : false),
+        listed("com.apple.keychainaccess"),
+        true,
+      );
+      if (strict) expect(refusedAs(refused.refused)).toContain("app_not_allowed");
+      else expect(refused.refused).toBeUndefined();
+    },
+  );
 });
