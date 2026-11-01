@@ -7,7 +7,7 @@ export function screenCodeSkillFiles(): Readonly<Record<string, string>> {
   return {
     "references/errors.md": `# Screen errors and receipts
 
-For each error follow its \`nextStep\`. Delivery below concerns the failing call; an earlier call in the same cell may have landed even when this call sent nothing. Check \`effectStarted\`, \`safety\`, and every receipt before deciding. Never replay input that may have landed; observe in a new cell.
+For each error follow its \`nextStep\`. Delivery below concerns the failing call; an earlier call in the same cell may have landed even when this call sent nothing. Check \`effectStarted\`, \`safety\`, and every receipt before deciding. Never replay input that may have landed; observe in a new cell. Reads (observe, waitFor, list and fetch calls) change nothing: a cut or failed read keeps \`effectStarted: false\` and \`possibleCommit: false\`, and may simply be read again.
 
 - \`invalid_argument\`: invalid call or options; nothing sent for preflight refusals; fix the argument and observe again.
 - \`unsupported\`: the target cannot perform the requested operation; depends: read effectStarted and the receipt; use a supported screen action after observing.
@@ -25,7 +25,7 @@ For each error follow its \`nextStep\`. Delivery below concerns the failing call
 - \`resource_exhausted\`: a runtime resource was exhausted; depends: read effectStarted and the receipt; observe again before a smaller cell.
 - \`runtime_unavailable\`: the screen runtime could not start or is unavailable; depends: read effectStarted and the receipt; stop and report the runtime problem.
 - \`downstream_failure\`: the target or its host failed; depends: read effectStarted and the receipt; observe again before deciding what remains.
-- \`unknown_outcome\`: a dispatched operation's result is unknown; may have landed; observe again and never resend it.
+- \`unknown_outcome\`: a dispatched operation's result is unknown; for an input it may have landed: observe again and never resend it; for a read (\`possibleCommit: false\`) nothing changed and it may be read again.
 - \`source_limit\`: cell source exceeds its limit; nothing sent by that rejected cell; shorten it and observe again if needed.
 - \`wall_limit\`: cell wall-time limit reached; depends: read effectStarted and the receipt; observe again before continuing.
 - \`call_limit\`: cell call budget exhausted; depends: read effectStarted and the receipt; observe again in a shorter new cell.
@@ -45,7 +45,7 @@ For each error follow its \`nextStep\`. Delivery below concerns the failing call
 
 A cell error may say \`First failure: call N ... (nothing sent)\` or \`(may have landed)\`. This identifies the first failed call, not proof that other calls did nothing. Read the journal and never replay earlier input that may have landed.
 
-Receipt categories: \`confirmed\` proves an effect; \`unverifiable\` means input was sent without proof of its effect; \`suspected_noop\` means sent but the effect was not seen, so observe before considering a retry; \`refused\` means that call was not sent; \`unknown_outcome\` means it may have landed; \`partial\` means part may have landed. Do not blindly resend any sent or uncertain input.
+Receipt categories: \`confirmed\` proves an effect; \`unverifiable\` means input was sent without proof of its effect; \`suspected_noop\` means sent but the effect was not seen, so observe before considering a retry; \`refused\` means that call was not sent; \`unknown_outcome\` means an input may have landed (a read's result is only unknown); \`partial\` means part may have landed. Do not blindly resend any sent or uncertain input.
 
 Read evidence for app reads: \`read:completed\` (\`confirmed\`) means the read returned everything it asked for. Otherwise the app read is \`unverifiable\` and says why: \`read:cut\` (cut by its budget or the driver's walk), \`read:filtered\` (filtered by the driver, so text under elements was not searched), \`read:incomplete_search\` (a query that could not search everything), \`read:degraded\` (the accessibility read degraded) or \`read:image_omitted\` (the screenshot was not returned). A read receipt never counts as a possible write. Such reads cannot establish that an omitted item is absent. A tab read is \`confirmed\` even when its tree is truncated, so for tabs check the observation's \`complete\`, \`truncated\` and \`omitted\` instead of the receipt. Check the observation's scope, completeness, truncation and warnings.
 `,
