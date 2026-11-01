@@ -777,7 +777,7 @@ it.live("a busy menu invocation leaves the target usable", () => {
 it.live.each([
   ["bringToFront", "bring_to_front"],
   ["launch", "launch_app"],
-])("a busy app.%s leaves the target usable", ([method, tool]) => {
+] as const)("a busy app.%s leaves the target usable", ([method, tool]) => {
   const { host, sent } = fixture({
     [tool]: new DriverError({
       effect: "refused",
