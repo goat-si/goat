@@ -42,6 +42,12 @@ import { makePreviewTargetHost } from "./PreviewTargetHost.ts";
 import { cellErrorSafety, cellResultSafety } from "./ScreenActionOutcome.ts";
 import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
 import { ScreenHostBridge, type ScreenHostDispatcher } from "./ScreenHostBridge.ts";
+import {
+  makeStrictInputGuards,
+  refreshStrictInputGuards,
+  type StrictInputGuards,
+} from "./ScreenStrictGuards.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
 import { screenRunLimits, screenBytes } from "./ScreenRunLimits.ts";
 import { resolveScreenRuntimeAsset, screenRuntimeLayout } from "./ScreenRuntimeAsset.ts";
 import { createScreenRunSupervisor, type ScreenRunSupervisor } from "./ScreenRunSupervisor.ts";
@@ -150,10 +156,12 @@ export function layerWithTabHost() {
       const browser = yield* ServerBrowser.ServerBrowser;
       const cursorPublisher = yield* ScreenCursorPublisher;
       const callApps = yield* ComputerUseCallApps;
+      const strictInputGuards = makeStrictInputGuards();
       const desktopHost = createDesktopTargetHost({
         primitiveChannel,
         leases,
         labelTarget: callApps.screenTarget,
+        strictInputGuards: () => strictInputGuards.value,
       });
       const tabHost = yield* makePreviewTargetHost(broker);
       return yield* make({
@@ -168,6 +176,7 @@ export function layerWithTabHost() {
         desktopHost,
         tabHost,
         cursorPublisher,
+        strictInputGuards,
       });
     }),
   );
@@ -186,6 +195,8 @@ interface ScreenRuntimeOptions {
   readonly invocation?: SelfInvocation;
   readonly assetResolver?: () => Effect.Effect<{ path: string; sha256: string }, ScreenRunError>;
   readonly scheduleDeadline?: (run: () => void, ms: number) => () => void;
+  /** The person's strict-guards choice shared with the desktop host; refreshed each cell. */
+  readonly strictInputGuards?: StrictInputGuards;
 }
 
 const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntimeOptions = {}) {
@@ -250,7 +261,13 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
   const runCallback = <A, E>(effect: Effect.Effect<A, E>, signal?: AbortSignal) =>
     Effect.runPromiseWith(callbackContext)(effect, signal ? { signal } : undefined);
   const limits = screenRunLimits();
-  const bridge = new ScreenHostBridge(cursorPhases, options.desktopHost?.staleTargetStep);
+  const strictInputGuards = options.strictInputGuards ?? makeStrictInputGuards();
+  const serverSettings = Option.getOrUndefined(yield* Effect.serviceOption(ServerSettingsService));
+  const bridge = new ScreenHostBridge(
+    cursorPhases,
+    options.desktopHost?.staleTargetStep,
+    () => strictInputGuards.value,
+  );
   const callApps = yield* ComputerUseCallApps;
   if (options.dispatcher) {
     const dispatcher = options.dispatcher;
@@ -526,6 +543,7 @@ const make = Effect.fn("ScreenRunService.make")(function* (options: ScreenRuntim
         return run !== undefined && OPEN_RUN.has(run.status);
       });
       if (!(yield* runIsOpen)) return yield* Effect.fail(fail("stale_run"));
+      yield* refreshStrictInputGuards(strictInputGuards, serverSettings);
       const cellLimits = yield* Effect.try({
         try: () => screenRunLimits(input.limits),
         catch: () => fail("invalid_argument"),
