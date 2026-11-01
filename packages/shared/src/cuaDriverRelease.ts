@@ -1,4 +1,4 @@
-// GOAT's Cua Driver fork (goat-si/cua-driver): unsigned release archives with build-provenance
+// GOAT's Cua Driver fork (goat-si/goat-cu): unsigned release archives with build-provenance
 // attestations; GOAT signs the driver inside its helper. The daemon reports this version, and
 // hosts compare it exactly. Bump it with the archive pins and third-party-licenses.config.json.
 export const CUA_DRIVER_VERSION = "0.38.0-goat.17";
@@ -76,7 +76,7 @@ export function cuaDriverRelease(platform: NodeJS.Platform, arch: string): CuaDr
     version: CUA_DRIVER_VERSION,
     ...archive,
     format: platform === "win32" ? "zip" : "tar.gz",
-    url: `https://github.com/goat-si/cua-driver/releases/download/cua-driver-rs-v${CUA_DRIVER_VERSION}/${archive.archiveName}`,
+    url: `https://github.com/goat-si/goat-cu/releases/download/cua-driver-rs-v${CUA_DRIVER_VERSION}/${archive.archiveName}`,
     executable,
     requiredFiles: [
       executable,
@@ -120,7 +120,7 @@ export const CUA_DRIVER_PROBED_SESSION_NAMES = ["DBUS_SESSION_BUS_ADDRESS"] as c
  * `display` carries the screen a server started over SSH must reach (DISPLAY, XAUTHORITY, the
  * D-Bus session bus), all on the embedded allowlist. The privacy switches always win.
  * npm SDK 0.37.0 rejects CUA_DRIVER_DISABLE_SCREENCAPTURE at construction, so it is dropped here;
- * an embedded driver keeps screencapture off when the variable is unset (goat-si/cua-driver#19).
+ * an embedded driver keeps screencapture off when the variable is unset (goat-si/goat-cu#19).
  * `withheld` names the daemon must not inherit when `display` does not set them.
  */
 export function cuaDriverHostOptions(

@@ -1,12 +1,12 @@
 # 20 — Cua Driver chase MOC
 
-> 축: upstream `trycua/cua` `libs/cua-driver` (태그 `cua-driver-rs-v*`) · 포크 [goat-si/cua-driver](https://github.com/goat-si/cua-driver)
+> 축: upstream `trycua/cua` `libs/cua-driver` (태그 `cua-driver-rs-v*`) · 포크 [goat-si/goat-cu](https://github.com/goat-si/goat-cu)
 > reviewed-through: 포크 `upstream` `04a4a3701e2f` = trycua `aeae5569473b` (main, 0.38.0 뒤) · GOAT pin: 포크 `0.38.0-goat.3` (#1839) · 열린 카드 001 · 갱신 2026-10-27
 
 - 어디까지 따라갔는가, GOAT pin이 어디 있는가: [20_cua_baseline](./20_cua_baseline.md)
 - 포크가 upstream과 다른 곳과 충돌 정책: [20_cua_fork_delta](./20_cua_fork_delta.md)
 - 한 사이클을 도는 순서: [20_cua_cycle_runbook](./20_cua_cycle_runbook.md)
-- 포크 저장소 쪽 요약: 포크의 [GOAT.md](https://github.com/goat-si/cua-driver/blob/main/GOAT.md). 결정은 #1595, ADR 개정은 #1594
+- 포크 저장소 쪽 요약: 포크의 [GOAT.md](https://github.com/goat-si/goat-cu/blob/main/GOAT.md). 결정은 #1595, ADR 개정은 #1594
 
 | NNN | 카드                                                                   | 포크 delta 영역                                                | P   | 상태           |
 | --- | ---------------------------------------------------------------------- | -------------------------------------------------------------- | --- | -------------- |

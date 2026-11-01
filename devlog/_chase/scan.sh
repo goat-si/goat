@@ -30,7 +30,7 @@ cd "$(git rev-parse --show-toplevel)"
 # Fork delta areas (devlog/_chase/010_fork_delta.md) are "### `slug` title" blocks. Slugs must be
 # unique, well formed and in byte order, and every hash on a "- 커밋:" line must be reachable from
 # the target. Branches cite PR numbers there, which this check skips. The Cua registry passes its own
-# path, a label and 0 for the hash check: its commits live in goat-si/cua-driver.
+# path, a label and 0 for the hash check: its commits live in goat-si/goat-cu.
 check_fork_delta() {
   local registry=${1:-devlog/_chase/010_fork_delta.md} label=${2:-fork delta registry} check_commits=${3:-1}
   local ids problems="" id="" line sha
@@ -81,11 +81,11 @@ scan_cua() {
     echo "  skipped (--no-fetch)"
   fi
   echo
-  echo "## fork goat-si/cua-driver (upstream = reviewed-through split)"
+  echo "## fork goat-si/goat-cu (upstream = reviewed-through split)"
   if [ "$fetch" = 1 ]; then
-    git ls-remote https://github.com/goat-si/cua-driver.git refs/heads/upstream refs/heads/main 2>/dev/null |
+    git ls-remote https://github.com/goat-si/goat-cu.git refs/heads/upstream refs/heads/main 2>/dev/null |
       awk '{ sub("refs/heads/", "", $2); printf "  %-9s %s\n", $2, substr($1, 1, 12) }' || echo "  unavailable"
-    git ls-remote --tags --refs https://github.com/goat-si/cua-driver.git 2>/dev/null |
+    git ls-remote --tags --refs https://github.com/goat-si/goat-cu.git 2>/dev/null |
       sed 's#.*refs/tags/#  tag #' | sort -V | tail -5 || true
   else
     echo "  skipped (--no-fetch)"

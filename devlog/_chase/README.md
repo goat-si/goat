@@ -5,12 +5,12 @@ GOAT가 따라가는 upstream은 둘이고, 축 번호로 나눈다.
 | 축   | upstream                                                                   | 들이는 방식                                                                                                         | 기준선                                  | 포크 delta                                  | 사이클 절차                                       | MOC                                       |
 | ---- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | --------------------------------------- | ------------------------------------------- | ------------------------------------------------- | ----------------------------------------- |
 | `10` | [pingdotgg/t3code](https://github.com/pingdotgg/t3code) `main`             | 같은 repo의 `upstream` remote를 `git merge`                                                                         | [000_baseline](./000_baseline.md)       | [010_fork_delta](./010_fork_delta.md)       | [020_cycle_runbook](./020_cycle_runbook.md)       | [10_t3_chase_MOC](./10_t3_chase_MOC.md)   |
-| `20` | [trycua/cua](https://github.com/trycua/cua) `libs/cua-driver` (Cua Driver) | 별도 repo [goat-si/cua-driver](https://github.com/goat-si/cua-driver)에 subtree split을 머지, GOAT는 아티팩트를 pin | [20_cua_baseline](./20_cua_baseline.md) | [20_cua_fork_delta](./20_cua_fork_delta.md) | [20_cua_cycle_runbook](./20_cua_cycle_runbook.md) | [20_cua_chase_MOC](./20_cua_chase_MOC.md) |
+| `20` | [trycua/cua](https://github.com/trycua/cua) `libs/cua-driver` (Cua Driver) | 별도 repo [goat-si/goat-cu](https://github.com/goat-si/goat-cu)에 subtree split을 머지, GOAT는 아티팩트를 pin | [20_cua_baseline](./20_cua_baseline.md) | [20_cua_fork_delta](./20_cua_fork_delta.md) | [20_cua_cycle_runbook](./20_cua_cycle_runbook.md) | [20_cua_chase_MOC](./20_cua_chase_MOC.md) |
 
 GOAT는 T3 Code의 포크이고 git 히스토리를 공유한다. 그래서 jawcode처럼 별도 클론을 읽고 카드 단위로 손 포팅하지 않는다.
 T3 upstream은 사이클마다 `git merge`로 들여오고, 이 폴더는 그 머지를 안전하게 만드는 기록만 둔다.
 
-Cua Driver는 GOAT 저장소에 코드가 없다. GOAT는 포크(goat-si/cua-driver) 릴리스 아카이브를 이름, 크기, SHA-256으로 pin하고
+Cua Driver는 GOAT 저장소에 코드가 없다. GOAT는 포크(goat-si/goat-cu) 릴리스 아카이브를 이름, 크기, SHA-256으로 pin하고
 (`packages/shared/src/cuaDriverRelease.ts`, #1591), npm SDK는 upstream 0.37.0을 쓴다 (#1595).
 그래서 20 축은 두 단계를 기록한다: upstream을 포크에 들이는 것, 포크 릴리스로 GOAT pin을 옮기는 것.
 
@@ -26,7 +26,7 @@ devlog/_chase/
   10_t3_chase_MOC.md           T3 축 카드 목록과 상태
   10.NNN_t3_chase_<topic>.md   열린 카드
   20_cua_baseline.md           Cua 기준선, GOAT pin 위치, 사이클 로그
-  20_cua_fork_delta.md         포크 goat-si/cua-driver의 분기 레지스트리
+  20_cua_fork_delta.md         포크 goat-si/goat-cu의 분기 레지스트리
   20_cua_cycle_runbook.md      Cua 사이클 절차 (포크 머지부터 GOAT pin까지)
   20_cua_chase_MOC.md          Cua 축 카드 목록과 상태
   20.NNN_cua_chase_<topic>.md  열린 카드

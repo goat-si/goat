@@ -27,7 +27,7 @@
   sent a message and gating steering by that reach move to roadmap 400. The Readiness and
   approvals bullet below states the decision.
 - Amended 2026-10-25, D15 (Jun, 2026-10-25; #1594, tracking #1595): GOAT builds Cua Driver from
-  its own fork, [goat-si/cua-driver](https://github.com/goat-si/cua-driver), instead of
+  its own fork, [goat-si/goat-cu](https://github.com/goat-si/goat-cu), instead of
   downloading upstream release binaries. The Engine and Driver fork bullets below state the
   decision; GOAT pins the fork's `cua-driver-rs-v0.37.0-goat.2` archives since #1591.
 - Amended 2026-10-25, D16 (owner decision, Jun, 2026-10-25 18:15 KST, corrected 18:17; #1617,
@@ -155,7 +155,7 @@
     way. Direct mode has no driver cursor overlay, so the helper draws
     the agent cursor itself (#1214). GOAT behavior lives in the helper and in small, separate
     driver changes in the fork with recorded provenance, never in a rewritten driver.
-  - **Driver fork (D15).** `goat-si/cua-driver` is a `git subtree split` of trycua/cua
+  - **Driver fork (D15).** `goat-si/goat-cu` is a `git subtree split` of trycua/cua
     `libs/cua-driver` that keeps upstream history: the `upstream` branch holds only upstream splits
     (`upstream-v0.37.0` is the split of `cua-driver-rs-v0.37.0`, `2d2f99228d`), `main` adds GOAT's
     changes through pull requests, and releases are tagged `cua-driver-rs-v0.37.0-goat.N`. Its
