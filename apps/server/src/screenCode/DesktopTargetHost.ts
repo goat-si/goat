@@ -73,7 +73,7 @@ import {
 } from "./DesktopWindows.ts";
 import { noteHops } from "./DesktopHops.ts";
 import { runDesktopObserve } from "./DesktopObserveLatency.ts";
-import { type DesktopPages, type DesktopRow } from "./DesktopObserveRead.ts";
+import { type DesktopPages, type DesktopKeptTree, type DesktopRow } from "./DesktopObserveRead.ts";
 import { makeMenuBarExtras, makeSelectText } from "./DesktopSelectionExtras.ts";
 import { confirmByTree, type TreeBaseline } from "./DesktopTreeEffect.ts";
 
@@ -112,11 +112,7 @@ export interface BoundWindow {
   /** Those rows when a whole, uncut read gave them and no call has gone to the window since. */
   fullRows?: TreeBaseline;
   /** The latest whole read's raw tree, for observe({within}); any input to the process ends it. */
-  lastTree?: {
-    readonly base: string;
-    readonly state: Record<string, unknown>;
-    readonly cut: boolean;
-  };
+  lastTree?: DesktopKeptTree;
   /** Pages observe({within}) showed of the read behind observationId; their numbers act like its own. */
   withinPages?: { readonly base: string; readonly ids: Set<string> };
   boundWindows?: ReadonlyArray<WindowEntry> | undefined;

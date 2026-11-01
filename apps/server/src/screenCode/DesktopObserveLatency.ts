@@ -245,7 +245,7 @@ const observePage = Effect.fn("DesktopObserveLatency.page")(function* (
   });
   return {
     value: withObserveTiming(res.observation, timing, rawBudget),
-    ...readReceipt(call, res.observation.truncated ? "cut" : undefined),
+    ...readReceipt(call, bound.pages?.reason ?? (res.observation.truncated ? "cut" : undefined)),
   };
 });
 
@@ -356,7 +356,7 @@ const observeWithin = Effect.fn("DesktopObserveLatency.within")(function* (
   });
   return {
     value: withObserveTiming(observation, timing, rawBudget),
-    ...readReceipt(call, observation.truncated ? "cut" : undefined),
+    ...readReceipt(call, kept.reason ?? (observation.truncated ? "cut" : undefined)),
   };
 });
 
@@ -846,10 +846,21 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
         bound.fullObservationId = observationId;
         delete bound.structuralDiff;
       } else if (numbersChanged) bound.structuralDiff = true;
+      const reason =
+        state.degraded === true
+          ? "degraded"
+          : filtered
+            ? "filtered"
+            : observation.incompleteSearch
+              ? "incomplete_search"
+              : observation.truncated || raw.cut
+                ? "cut"
+                : undefined;
       // A read its budget cut keeps the rest for observe({after}) until the next read.
       if (observation.elements.length < tree.shown.length)
         bound.pages = {
           base: observation.observationId,
+          reason,
           rows: placed.rows,
           text: treeText,
           given: new Set(observation.elements.map((element) => element.index)),
@@ -863,6 +874,7 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
       if (!isDiff && !filtered && query === undefined && !interactive && raw.tree.trim() !== "")
         bound.lastTree = {
           base: observationId,
+          reason,
           state: { ...state, tree_markdown: raw.tree },
           cut: raw.cut || state.truncated === true,
         };
@@ -886,18 +898,7 @@ export const runDesktopObserve = Effect.fn("DesktopObserveLatency.observe")(func
           timing,
           rawBudget,
         ),
-        ...readReceipt(
-          call,
-          state.degraded === true
-            ? "degraded"
-            : filtered
-              ? "filtered"
-              : observation.incompleteSearch
-                ? "incomplete_search"
-                : observation.truncated || raw.cut
-                  ? "cut"
-                  : undefined,
-        ),
+        ...readReceipt(call, reason),
       };
     }
   }
