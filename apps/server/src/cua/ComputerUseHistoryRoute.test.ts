@@ -218,7 +218,7 @@ it.effect("accepts outcomes only for the authenticated thread and its control", 
       Layer.mergeAll(
         database,
         serviceLayer,
-        ServerSettings.layerTest({ computerUseKeepTypedText: true }),
+        ServerSettings.layerTest({ computerUseKeepTypedText: true, cuaStrictInputGuards: true }),
       ),
     ),
   ),

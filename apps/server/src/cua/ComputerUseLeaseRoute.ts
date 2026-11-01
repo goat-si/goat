@@ -470,9 +470,12 @@ const makeCallLayer = (serverScope: Scope.Scope) =>
           Option.isSome(control) &&
           control.value.controlId === call.value.controlId &&
           control.value.nonPersonFullAccess === true;
-        deniedApp = settings.value.cuaStrictInputGuards
-          ? deniedCallApp(call.value, settings.value.cuaDeniedApps, nonPerson)
-          : undefined;
+        // The organization list is a strict guard; the remote-origin terminal block always holds.
+        deniedApp = deniedCallApp(
+          call.value,
+          settings.value.cuaStrictInputGuards ? settings.value.cuaDeniedApps : [],
+          nonPerson,
+        );
       }
       const pointerLocked =
         call.value.action === "reserve" &&

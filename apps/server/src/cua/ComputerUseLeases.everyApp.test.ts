@@ -95,7 +95,10 @@ it.effect("a new organization denial refuses a pending ticket on validation", ()
     assert.equal(result.status, "admitted");
     if (result.status !== "admitted" || result.reservationId === null)
       return assert.fail("missing ticket");
-    yield* settings.updateSettings({ cuaDeniedApps: ["com.example.Editor"] });
+    yield* settings.updateSettings({
+      cuaDeniedApps: ["com.example.Editor"],
+      cuaStrictInputGuards: true,
+    });
     const check = yield* leases.callReservation(owner, {
       action: "validate",
       controlId: control.controlId,
@@ -138,7 +141,10 @@ it.effect("a denial committed during admission prevents the call", () =>
         Effect.forkChild,
       );
     yield* Deferred.await(reading);
-    yield* settings.updateSettings({ cuaDeniedApps: ["com.example.Editor"] });
+    yield* settings.updateSettings({
+      cuaDeniedApps: ["com.example.Editor"],
+      cuaStrictInputGuards: true,
+    });
     yield* Deferred.succeed(release, undefined);
     assert.deepInclude(yield* Fiber.join(pending), {
       status: "refused",

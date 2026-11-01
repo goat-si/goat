@@ -183,13 +183,12 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
           return { status: "refused", detail, ...inTheWay } as const;
         if (detail !== undefined) return { status: "refused", detail } as const;
         if (state._tag !== "active") return { status: "refused", detail: "replaced" } as const;
-        const denied = strict
-          ? deniedCallApp(
-              call,
-              Option.isSome(currentSettings) ? currentSettings.value.cuaDeniedApps : [],
-              controls.get(threadId)?.nonPersonFullAccess === true,
-            )
-          : undefined;
+        // The organization list is a strict guard; the remote-origin terminal block always holds.
+        const denied = deniedCallApp(
+          call,
+          strict && Option.isSome(currentSettings) ? currentSettings.value.cuaDeniedApps : [],
+          controls.get(threadId)?.nonPersonFullAccess === true,
+        );
         if (denied !== undefined)
           return { status: "refused", detail: "app_not_allowed", app: denied } as const;
         // Confirmation retains the original ticket and its conflict coverage until cleanup.
