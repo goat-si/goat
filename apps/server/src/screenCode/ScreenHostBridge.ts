@@ -572,14 +572,14 @@ export class ScreenHostBridge {
           try: () => Buffer.byteLength(JSON.stringify(outcome.value) ?? ""),
           catch: () => ({
             ...failure("downstream_failure", call.callId),
-            effectStarted: callDispatched,
+            effectStarted: callDispatched && !isScreenRead(call.method),
             safety: screenReplyFailureSafety(call, safety, callDispatched),
           }),
         });
         if (bytes > context.limits.returnBytes)
           return yield* Effect.fail({
             ...failure("output_limit", call.callId),
-            effectStarted: callDispatched,
+            effectStarted: callDispatched && !isScreenRead(call.method),
             safety: screenReplyFailureSafety(call, safety, callDispatched),
             limit: { name: "returnBytes" as const, maximum: context.limits.returnBytes },
           });
@@ -664,7 +664,7 @@ export class ScreenHostBridge {
       );
       return refused(call, {
         ...failure(dispatched ? "unknown_outcome" : (state.cutoffReason ?? "stopped"), call.callId),
-        effectStarted: dispatched,
+        effectStarted: dispatched && !isScreenRead(call.method),
         safety,
         nextStep: state.paused
           ? outcomeSentence(dispatched ? "paused_dispatched" : "paused_unsent")
@@ -704,7 +704,7 @@ export class ScreenHostBridge {
       ) {
         const error = {
           ...failure("downstream_failure", call.callId),
-          effectStarted: callDispatched,
+          effectStarted: callDispatched && !isScreenRead(call.method),
           safety: screenReplyFailureSafety(call, result.success.safety, callDispatched),
         };
         failCell(error);
@@ -760,7 +760,7 @@ export class ScreenHostBridge {
       state.truncated.push("return");
       const error = {
         ...failure("output_limit", call.callId),
-        effectStarted: callDispatched,
+        effectStarted: callDispatched && !isScreenRead(call.method),
         safety: screenReplyFailureSafety(call, result.success.safety, callDispatched),
         limit: { name: "returnBytes" as const, maximum: context.limits.returnBytes },
       };
