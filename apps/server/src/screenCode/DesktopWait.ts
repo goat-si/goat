@@ -53,7 +53,8 @@ export const runDesktopWait = Effect.fn("DesktopWait.run")(function* (deps: {
     typeof value === "object" &&
     value !== null &&
     "status" in value &&
-    typeof value.status === "string"
+    typeof value.status === "string" &&
+    value.status.length > 0
       ? value.status
       : "unknown";
   return yield* waitForOutcome({

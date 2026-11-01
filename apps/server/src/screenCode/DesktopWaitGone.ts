@@ -28,20 +28,22 @@ export const waitForGone = Effect.fn("DesktopWaitGone.waitForGone")(function* (d
   ) => Effect.Effect<ComputerUsePrimitiveReply, ScreenRunError>;
 }) {
   const { args, pid, windowId } = deps;
-  const hasField =
-    typeof args.role === "string" ||
-    typeof args.name === "string" ||
-    (typeof args.value === "string" && args.value.trim().length > 0);
+  // The driver can answer "unsatisfied" for a value mismatch on one match without a complete
+  // read, so a gone wait names only role and name; name already matches label, value and id.
+  const hasField = typeof args.role === "string" || typeof args.name === "string";
   const expected =
     args.gone === true &&
     hasField &&
+    args.value === undefined &&
     args.window === undefined &&
     args.enabled === undefined &&
     args.selected === undefined
-      ? buildWaitExpectation({ role: args.role, name: args.name, value: args.value }).expectation
+      ? buildWaitExpectation({ role: args.role, name: args.name }).expectation
       : undefined;
   if (expected === undefined)
-    return yield* Effect.fail(fail("invalid_argument", "Use gone: true with role, name or value."));
+    return yield* Effect.fail(
+      fail("invalid_argument", "Use gone: true with role or name (name also matches values)."),
+    );
   const result = yield* pollDesktopWait({
     read: () => deps.verify({ pid, window_id: windowId, expect: [expected], timeout_ms: 0 }),
     initial: { met: false, reason: "incomplete_read" } as GoneResult,

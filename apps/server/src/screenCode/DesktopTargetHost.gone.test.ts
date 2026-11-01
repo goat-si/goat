@@ -82,12 +82,15 @@ it.effect("a failed check fails the gone wait instead of reporting it met", () =
   }),
 );
 
-it.effect("gone needs role, name or value and refuses other condition fields unsent", () =>
+it.effect("gone needs role or name and refuses value and other condition fields unsent", () =>
   Effect.gen(function* () {
     const { host, sent } = fixture({ verify_state: { status: "unsatisfied" } });
     const ref = yield* bind(host);
     for (const args of [
       { gone: true },
+      // A value mismatch on one match can read as absent without a complete read.
+      { gone: true, value: "702" },
+      { gone: true, role: "AXStaticText", value: "702" },
       { gone: true, name: "Loading", enabled: true },
       { gone: true, name: "Loading", window: "exists" },
       { gone: "yes", name: "Loading" },
