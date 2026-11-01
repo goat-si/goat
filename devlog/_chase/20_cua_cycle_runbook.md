@@ -3,7 +3,7 @@
 한 사이클은 스캔, 분류, split, 머지, 라이선스 확인, 호환성 검증, 후보 아티팩트, GOAT pin 검증, 릴리스, 기록 순서로 돈다.
 대상은 upstream 릴리스 태그 `cua-driver-rs-v<version>` 하나다. 사이클 이름은 그 버전이고(`0.38.0`), 카드
 `20.NNN_cua_chase_cycle_<version>.md` 하나가 사이클을 대표한다. 포크 쪽 요약은 포크의
-[GOAT.md](https://github.com/goat-si/cua-driver/blob/main/GOAT.md) "Syncing upstream"이고, 이 문서는 그 단계에 명령,
+[GOAT.md](https://github.com/goat-si/goat-cu/blob/main/GOAT.md) "Syncing upstream"이고, 이 문서는 그 단계에 명령,
 멈출 조건, GOAT 쪽 단계를 더한다. 둘이 어긋나면 고쳐서 맞춘다.
 
 규칙은 T3 축과 같은 이유로 정한다.
@@ -25,7 +25,7 @@ GOAT checkout 옆에 두 클론을 만든다. `/tmp`에 두지 않는다. 아래
 GOAT=$(git rev-parse --show-toplevel)      # GOAT checkout 안에서 실행
 FORK=$(cd "$GOAT/.." && pwd)/cua-driver
 CUA_UPSTREAM=$(cd "$GOAT/.." && pwd)/trycua-cua
-git clone https://github.com/goat-si/cua-driver.git "$FORK"
+git clone https://github.com/goat-si/goat-cu.git "$FORK"
 # monorepo는 약 650 MB다. blob 없이 받아도 split은 tree만 읽으므로 된다.
 git clone --filter=blob:none --no-checkout --no-tags https://github.com/trycua/cua.git "$CUA_UPSTREAM"
 ```
@@ -122,20 +122,20 @@ git -C "$FORK" diff "$OLD" "$NEW" -- rust/Cargo.lock | rg '^\+name = '   # 새 c
 
 포크 `goat-ci.yml`은 `main` push에서 아카이브만 만들고, `SHA256SUMS`와 attestation은 릴리스 태그 push run의 `release` job만 만든다.
 그래서 검증 대상은 태그 run이 게시한 자산이다: `main` push run의 아카이브로 파일 목록과 배치를 미리 볼 수 있지만, 해시와 provenance는
-`gh release download "cua-driver-rs-v$VER-goat.$N" -R goat-si/cua-driver -D "$CAND"`로 받은 자산에서 확인한다. 태그 run도 느린
+`gh release download "cua-driver-rs-v$VER-goat.$N" -R goat-si/goat-cu -D "$CAND"`로 받은 자산에서 확인한다. 태그 run도 느린
 회귀 lane을 모두 통과해야 게시하므로, 게시 전에 실패하면 릴리스 자산이 생기지 않는다.
 
 ```bash
 CAND="../cua-candidates-$VER"
 TAG="cua-driver-rs-v$VER-goat.$N"
-gh release download "$TAG" -R goat-si/cua-driver -D "$CAND"
+gh release download "$TAG" -R goat-si/goat-cu -D "$CAND"
 SUMS=$(find "$CAND" -name SHA256SUMS)   # 하나여야 한다
 find "$CAND" -type f \( -name 'cua-driver-rs-*.tar.gz' -o -name 'cua-driver-rs-*.zip' \) | while read -r a; do
   want=$(awk -v n="$(basename "$a")" '$2 == n || $2 == "*" n { print $1 }' "$SUMS")
   have=$(shasum -a 256 "$a" | cut -d' ' -f1)
   [ -n "$want" ] && [ "$want" = "$have" ] || { echo "SHA256SUMS mismatch: $a"; exit 1; }
-  gh attestation verify "$a" --repo goat-si/cua-driver \
-    --signer-workflow goat-si/cua-driver/.github/workflows/goat-ci.yml \
+  gh attestation verify "$a" --repo goat-si/goat-cu \
+    --signer-workflow goat-si/goat-cu/.github/workflows/goat-ci.yml \
     --source-digest "$RELEASE_SHA" --source-ref "refs/tags/$TAG" || exit 1
 done
 ```

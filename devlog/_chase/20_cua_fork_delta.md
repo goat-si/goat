@@ -3,7 +3,7 @@
 > 기준: 포크 `main` `ec339be454a5` (2026-10-25). 대부분의 영역은 아직 계획이다.
 
 포크 `main`이 upstream split과 다른 곳, 그 이유, upstream 머지에서 충돌하거나 의미가 깨질 때의 정책을 영역별로 적는다.
-T3 축의 [010](./010_fork_delta.md)과 같은 형식이지만 따로 둔다. 여기 적는 커밋은 goat-si/cua-driver에 있어서
+T3 축의 [010](./010_fork_delta.md)과 같은 형식이지만 따로 둔다. 여기 적는 커밋은 goat-si/goat-cu에 있어서
 `origin/dev`에서 닿지 않으므로 010의 해시 검사를 받을 수 없다.
 
 ## 원칙
@@ -16,14 +16,14 @@ trycua/cua `main`에 별도 PR로 보내며, 드라이버 문제는 upstream에 
 ## 영역 규칙
 
 - 블록은 ``### `slug` 제목``이고 슬러그의 알파벳 순서로 둔다. 이유는 010과 같다.
-- `- 변경:` 줄에 포크 PR(`goat-si/cua-driver#N`), 포크 커밋(`goat-si/cua-driver@<sha>`), GOAT issue(`#N`)를 적는다.
+- `- 변경:` 줄에 포크 PR(`goat-si/goat-cu#N`), 포크 커밋(`goat-si/goat-cu@<sha>`), GOAT issue(`#N`)를 적는다.
   `- 커밋:` 줄은 쓰지 않는다. 그 이름은 010에서 dev 도달 검사를 받는다.
 - `- 상태:`는 `계획`, `진행`, `적용`, `upstream 반영` 중 하나다. upstream이 받아 영역이 비면 블록을 지우고 사이클 카드에 적는다.
 - `devlog/_chase/scan.sh --cua`가 슬러그 중복, 형식, 순서를 검사한다.
 
 ### `attribution` 라이선스, 고지, 상표
 
-- 변경: goat-si/cua-driver@64ba7cd62620 (`LICENSE.md`), goat-si/cua-driver#1 (README 첫 줄), #1589
+- 변경: goat-si/goat-cu@64ba7cd62620 (`LICENSE.md`), goat-si/goat-cu#1 (README 첫 줄), #1589
 - 경로: `LICENSE.md`, `README.md`, `GOAT.md`, 빌드가 만드는 고지 파일
 - upstream: 해당 없음 (GOAT 전용)
 - 상태: 진행. `LICENSE.md`는 적용, README 고지는 PR, 고지 생성은 #1589
@@ -107,7 +107,7 @@ trycua/cua `main`에 별도 PR로 보내며, 드라이버 문제는 upstream에 
 
 ### `standalone-build` monorepo 밖 의존성 vendoring
 
-- 변경: goat-si/cua-driver@64ba7cd62620
+- 변경: goat-si/goat-cu@64ba7cd62620
 - 경로: `vendor/`, `rust/crates/cua-driver/Cargo.toml`, `.gitignore`
 - upstream: 해당 없음 (monorepo 구조 때문)
 - 상태: 적용

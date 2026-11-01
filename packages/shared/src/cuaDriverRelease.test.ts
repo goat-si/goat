@@ -18,7 +18,7 @@ describe("Cua Driver launch policy", () => {
   ] as const)("downloads the pinned %s/%s archive from GOAT's fork (#1591)", (platform, arch) => {
     const release = cuaDriverRelease(platform, arch)!;
     expect(release.url).toBe(
-      `https://github.com/goat-si/cua-driver/releases/download/cua-driver-rs-v${release.version}/${release.archiveName}`,
+      `https://github.com/goat-si/goat-cu/releases/download/cua-driver-rs-v${release.version}/${release.archiveName}`,
     );
     expect(release.requiredFiles).toContain(release.executable);
     expect(release.format).toBe(platform === "win32" ? "zip" : "tar.gz");

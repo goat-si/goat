@@ -39,7 +39,7 @@
   - **Pin 0.37.0.** `packages/shared/src/cuaDriverRelease.ts` pins the 0.37.0 archive names, byte
     sizes and SHA-256, and the pnpm catalog pins `@trycua/cua-driver` 0.37.0, the newest version
     published for both halves. ADR-0023 (D15) moves the archives from upstream's official release
-    to artifacts GOAT builds from its fork, `goat-si/cua-driver`, at the same 0.37.0 protocol,
+    to artifacts GOAT builds from its fork, `goat-si/goat-cu`, at the same 0.37.0 protocol,
     through the same pin and verification; the pin names the fork's
     `cua-driver-rs-v0.38.0-goat.17` archives from that release's `SHA256SUMS`, while the SDK stays
     on npm 0.37.0. Updates happen only through GOAT releases. The
