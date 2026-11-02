@@ -29,7 +29,9 @@ import type {
   ServerProviderModel,
   ServerProviderSkill,
 } from "@goat/contracts";
-import { PREFERRED_DEFAULT_CODEX_MODELS, ServerSettingsError } from "@goat/contracts";
+import { ServerSettingsError } from "@goat/contracts";
+import { applyPreferredCodexDefaultModel } from "./codexModelDefaults.ts";
+export { applyPreferredCodexDefaultModel } from "./codexModelDefaults.ts";
 
 import {
   codexModelFamily,
@@ -44,10 +46,12 @@ import {
 } from "./codexLaunchArgs.ts";
 import {
   buildServerProvider,
+  classifySpawnFailure,
   COMPACT_SLASH_COMMAND,
   DEFAULT_TIMEOUT_MS,
   providerModelsFromSettings,
   spawnAndCollect,
+  spawnFailureMessage,
   type ServerProviderDraft,
 } from "@goat/provider-core/server/snapshotProbe";
 import { expandHomePath } from "@goat/provider-core/server/pathExpansion";
@@ -265,27 +269,6 @@ function parseCodexModelListResponse(
     ...(model.isDefault ? { isDefault: true } : {}),
     capabilities: mapCodexModelCapabilities(model),
   }));
-}
-
-export function applyPreferredCodexDefaultModel(
-  models: ReadonlyArray<ServerProviderModel>,
-): ReadonlyArray<ServerProviderModel> {
-  const preferredSlug = PREFERRED_DEFAULT_CODEX_MODELS.flatMap((slug) =>
-    models.filter((model) => !model.isCustom && codexModelFamily(model.slug) === slug),
-  )[0]?.slug;
-  if (!preferredSlug) {
-    return models;
-  }
-  return models.map((model) => {
-    if (model.slug === preferredSlug) {
-      return model.isDefault ? model : { ...model, isDefault: true };
-    }
-    if (!model.isDefault) {
-      return model;
-    }
-    const { isDefault: _isDefault, ...rest } = model;
-    return rest;
-  });
 }
 
 function applyConfiguredCodexServiceTier(
@@ -898,11 +881,12 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
         },
       });
   }
+  const probeCwd = process.cwd();
   const probeResult = yield* probe({
     binaryPath: codexSettings.binaryPath,
     homePath: codexSettings.homePath,
     launchArgs: resolveCodexLaunchArgs(codexSettings.launchArgs, resolvedEnvironment),
-    cwd: process.cwd(),
+    cwd: probeCwd,
     environment: routeInput.success.execution.environment,
     route: routeInput.success,
     ...(managedAuth ? { skipNativeUsage: true } : {}),
@@ -917,15 +901,19 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     const error = probeResult.failure;
     const routeFailure =
       "cause" in error && isHomeRouteUnavailable(error.cause) ? error.cause : undefined;
-    const installed = routeFailure !== undefined || !isCodexAppServerSpawnError(error);
-    const version = installed
-      ? yield* probeCodexCliVersion({
-          binaryPath: codexSettings.binaryPath,
-          homePath: codexSettings.homePath,
-          cwd: process.cwd(),
-          environment: routeInput.success.execution.environment,
-        })
-      : null;
+    const failure = isCodexAppServerSpawnError(error)
+      ? classifySpawnFailure(error, probeCwd)
+      : "unknown";
+    const installed = routeFailure !== undefined || failure !== "missing";
+    const version =
+      installed && failure === "unknown"
+        ? yield* probeCodexCliVersion({
+            binaryPath: codexSettings.binaryPath,
+            homePath: codexSettings.homePath,
+            cwd: probeCwd,
+            environment: routeInput.success.execution.environment,
+          })
+        : null;
     return buildStatus({
       presentation: CODEX_PRESENTATION,
       enabled: codexSettings.enabled,
@@ -940,7 +928,8 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
         message: routeFailure
           ? routeFailure.message
           : installed
-            ? `Codex app-server provider probe failed: ${error.message}.`
+            ? (spawnFailureMessage(failure, probeCwd, codexSettings.binaryPath) ??
+              `Codex app-server provider probe failed: ${error.message}.`)
             : `Could not start Codex CLI (\`${codexSettings.binaryPath}\`). Check Settings → Providers → Codex → Binary path on the server.` +
               (codexSettings.binaryPath === "codex"
                 ? " Installing ChatGPT or Codex desktop may not add codex to PATH."

@@ -29,7 +29,8 @@ import {
 import * as ProviderLatestVersions from "@goat/provider-core/server/ProviderLatestVersions";
 import {
   buildServerProvider,
-  isCommandMissingCause,
+  classifySpawnFailure,
+  spawnFailureMessage,
   parseGenericCliVersion,
   providerModelsFromSettings,
   spawnAndCollect,
@@ -228,6 +229,7 @@ export const discoverPiCommandsForCwd = Effect.fn("discoverPiCommandsForCwd")(
 const runPiVersionCommand = Effect.fn("PiProviderStatus.runPiVersionCommand")(function* (
   piSettings: PiSettings,
   environment: NodeJS.ProcessEnv,
+  cwd: string,
 ) {
   const command = piSettings.binaryPath || "pi";
   const spawnCommand = yield* resolveSpawnCommand(command, ["--version"], {
@@ -238,6 +240,7 @@ const runPiVersionCommand = Effect.fn("PiProviderStatus.runPiVersionCommand")(fu
     ChildProcess.make(spawnCommand.command, spawnCommand.args, {
       env: environment,
       shell: spawnCommand.shell,
+      cwd,
     }),
   );
 });
@@ -351,13 +354,15 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
     });
   }
 
-  const versionResult = yield* runPiVersionCommand(piSettings, environment).pipe(
+  const spawnCwd = process.cwd();
+  const versionResult = yield* runPiVersionCommand(piSettings, environment, spawnCwd).pipe(
     Effect.timeoutOption(VERSION_PROBE_TIMEOUT_MS),
     Effect.result,
   );
 
   if (Result.isFailure(versionResult)) {
     const error = versionResult.failure;
+    const failure = classifySpawnFailure(error, spawnCwd);
     yield* Effect.logWarning("Pi CLI health check failed.", { errorTag: error._tag });
     return buildServerProvider({
       presentation: PI_PRESENTATION,
@@ -365,13 +370,15 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
       checkedAt,
       models: fallbackModels,
       probe: {
-        installed: !isCommandMissingCause(error),
+        installed: failure !== "missing",
         version: null,
         status: "error",
         auth: { status: "unknown" },
-        message: isCommandMissingCause(error)
-          ? "Pi CLI (`pi`) is not installed or not on PATH. Install with `npm install -g --ignore-scripts @earendil-works/pi-coding-agent`."
-          : "Failed to execute Pi CLI health check.",
+        message:
+          failure === "missing"
+            ? "Pi CLI (`pi`) is not installed or not on PATH. Install with `npm install -g --ignore-scripts @earendil-works/pi-coding-agent`."
+            : (spawnFailureMessage(failure, spawnCwd, piSettings.binaryPath || "pi") ??
+              "Failed to execute Pi CLI health check."),
       },
     });
   }
