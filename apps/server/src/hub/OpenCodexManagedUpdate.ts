@@ -12,10 +12,10 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
-import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 
 import { isRolloutEligible, rolloutBucket } from "../cloud/autoUpdatePolicy.ts";
+import { SshRuntimeAutoUpdate } from "../cloud/sshRuntimeAutoUpdate.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
@@ -23,9 +23,26 @@ import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as HubParity from "./HubParity.ts";
 import { OpenCodexSync } from "./OpenCodexSync.ts";
+import {
+  State,
+  affectedBy,
+  brokeAgainst,
+  decodeState,
+  encodeState,
+  phaseOf,
+  applyOrchestratedStep,
+  holdAffected,
+  recoverUncertain,
+  restoreAdmission,
+  withRecords,
+  withWindow,
+} from "./ocxUpdateWindow.ts";
+import type { OrchestratedPlan } from "./ocxContracts.ts";
 import { type OpenCodexRelease, OpenCodexUpdateHost } from "./OpenCodexUpdateHost.ts";
 import {
   failedTargetKey,
+  compareOpenCodexVersions,
+  isStableOpenCodexVersion,
   type OpenCodexUpdateMember,
   type OpenCodexUpdateStep,
   planOpenCodexUpdate,
@@ -43,41 +60,6 @@ const RESTART_TOLERANCE_MS = 2_000;
 const HEALTH_FAILURES = new Set(["health-failed", "probation-health-failed"]);
 const STATE_FILE = "opencodex-update.json";
 
-const State = Schema.Struct({
-  members: Schema.Array(OpenCodexUpdateMemberRecord),
-  failedTargets: Schema.Record(Schema.String, Schema.String),
-  /** The open window survives a GOAT restart: its steps, baseline, roles and process starts. */
-  window: Schema.optional(
-    Schema.Struct({
-      targetVersion: Schema.String,
-      /** Every Child linked when the window opened; recovery judges parity against all of them. */
-      children: Schema.Array(Schema.String),
-      steps: Schema.Array(
-        Schema.Struct({
-          alias: Schema.NullOr(Schema.String),
-          fromVersion: Schema.String,
-          restored: Schema.optional(Schema.Boolean),
-        }),
-      ),
-      probationEndsAt: Schema.optional(Schema.Number),
-      baseline: Schema.Record(
-        Schema.String,
-        Schema.Literals(["ok", "degraded", "broken", "unproven"]),
-      ),
-      roles: Schema.Record(Schema.String, Schema.String),
-      startedAt: Schema.Record(Schema.String, Schema.Number),
-      processIds: Schema.Record(Schema.String, Schema.Int),
-      /** Set once a rollback starts; a restore that failed is resumed before anything else. */
-      restoring: Schema.optional(Schema.String),
-      /** The member that failed its own health check; only it is restored without waiting. */
-      failedMember: Schema.optional(Schema.String),
-    }),
-  ),
-});
-type State = typeof State.Type;
-const decodeState = Schema.decodeUnknownOption(Schema.fromJsonString(State));
-const encodeState = Schema.encodeSync(Schema.fromJsonString(State));
-
 export class OpenCodexManagedUpdate extends Context.Service<
   OpenCodexManagedUpdate,
   {
@@ -92,16 +74,9 @@ export class OpenCodexManagedUpdate extends Context.Service<
   }
 >()("goat/hub/OpenCodexManagedUpdate") {}
 
-const brokeAgainst = (
-  baseline: Readonly<Record<string, HubParityResult["verdict"]>>,
-  alias: string,
-  result: HubParityResult,
-) => result.verdict === "broken" && baseline[alias] !== "broken";
-
-type Window = NonNullable<State["window"]>;
-
 const make = Effect.gen(function* () {
   const host = yield* OpenCodexUpdateHost;
+  const sshRuntime = yield* SshRuntimeAutoUpdate;
   const sync = yield* OpenCodexSync;
   const parity = yield* HubParity.HubParity;
   const settings = yield* ServerSettings.ServerSettingsService;
@@ -120,6 +95,7 @@ const make = Effect.gen(function* () {
   const state = yield* Ref.make<State>({ members: [], failedTargets: {} });
   // A person's check and the scheduler's must never open two windows at once.
   const checking = yield* Semaphore.make(1);
+  const retainedHome = yield* Ref.make(false);
 
   /** A file that exists but cannot be read must not erase the memory of a rolled-back target. */
   const readState = Effect.gen(function* () {
@@ -128,84 +104,29 @@ const make = Effect.gen(function* () {
   }).pipe(Effect.orElseSucceed(() => undefined));
   // A window restored after a GOAT restart holds manual syncs off before the first check, which
   // the hub and goatclaw settings may never run.
-  yield* readState.pipe(
-    Effect.flatMap((stored) => sync.markUpdating(stored?.window !== undefined)),
-  );
+  const initial = yield* readState;
+  yield* sync.markUpdating(initial?.window !== undefined);
+  yield* restoreAdmission(initial, host, retainedHome);
   /** Every change is one atomic write, so a GOAT restart sees either all of it or none. */
   const mutate = Effect.fn("OpenCodexManagedUpdate.mutate")(function* (
     change: (current: State, at: number) => State,
   ) {
     const next = change(yield* Ref.get(state), yield* Clock.currentTimeMillis);
-    yield* Ref.set(state, next);
-    yield* sync.markUpdating(next.window !== undefined);
     yield* fs.makeDirectory(config.stateDir, { recursive: true });
     const temporary = `${stateFile}.tmp`;
     yield* fs.writeFileString(temporary, encodeState(next));
     yield* fs.rename(temporary, stateFile);
+    yield* Ref.set(state, next);
+    yield* sync.markUpdating(next.window !== undefined);
   });
-  const withRecords = (
-    current: State,
-    at: number,
-    steps: ReadonlyArray<Pick<OpenCodexUpdateStep, "alias" | "fromVersion">>,
-    targetVersion: string,
-    phase: OpenCodexUpdateMemberRecord["phase"],
-    reason?: string,
-  ): State => {
-    const aliases = new Set(steps.map(({ alias }) => alias));
-    return {
-      ...current,
-      members: [
-        ...current.members.filter(({ alias }) => !aliases.has(alias)),
-        ...steps.map((step) => ({
-          alias: step.alias,
-          phase,
-          fromVersion: step.fromVersion,
-          targetVersion,
-          at,
-          ...(reason === undefined ? {} : { reason }),
-        })),
-      ],
-    };
-  };
-  const withWindow = (current: State, change: (window: Window) => Window | undefined): State => {
-    const { window, ...rest } = current;
-    const next = window === undefined ? undefined : change(window);
-    return next === undefined ? rest : { ...rest, window: next };
-  };
   const record = (
     step: Pick<OpenCodexUpdateStep, "alias" | "fromVersion">,
     targetVersion: string,
     phase: OpenCodexUpdateMemberRecord["phase"],
     reason?: string,
   ) => mutate((current, at) => withRecords(current, at, [step], targetVersion, phase, reason));
-  const phaseOf = (current: State, alias: string | null, targetVersion: string) =>
-    current.members.find((entry) => entry.alias === alias && entry.targetVersion === targetVersion)
-      ?.phase;
-  /** Restarting the Home cuts every Child's routing, so a Home step affects all of them. */
-  const affectedBy = (
-    steps: ReadonlyArray<{ readonly alias: string | null }>,
-    children: ReadonlyArray<string>,
-  ): ReadonlyArray<string | null> =>
-    steps.some(({ alias }) => alias === null)
-      ? [null, ...children]
-      : steps.map(({ alias }) => alias);
-  /** Runs `body` while every affected member refuses new turns, or not at all. */
-  const holding = <A, E>(affected: ReadonlyArray<string | null>, body: Effect.Effect<A, E>) => {
-    const held: Array<string | null> = [];
-    return Effect.gen(function* () {
-      for (const alias of affected) {
-        if (!(yield* host.holdAdmission(alias))) return "admission-unsupported" as const;
-        held.push(alias);
-      }
-      return yield* body;
-    }).pipe(
-      Effect.ensuring(
-        Effect.suspend(() =>
-          Effect.forEach(held, (alias) => host.releaseAdmission(alias), { discard: true }),
-        ),
-      ),
-    );
-  };
+  const holding = <A, E>(affected: ReadonlyArray<string | null>, body: Effect.Effect<A, E>) =>
+    holdAffected(host, retainedHome, affected, body);
 
   /**
    * Children first, then the Home, so a Child is never left ahead of the Home it relays to. A
@@ -229,7 +150,9 @@ const make = Effect.gen(function* () {
               ? {
                   ...current.failedTargets,
                   ...Object.fromEntries(
-                    opened.steps.map(({ alias }) => [failedTargetKey(alias), opened.targetVersion]),
+                    opened.steps
+                      .filter((step) => step.via === undefined || step.started === true)
+                      .map(({ alias }) => [failedTargetKey(alias), opened.targetVersion]),
                   ),
                 }
               : current.failedTargets,
@@ -246,7 +169,14 @@ const make = Effect.gen(function* () {
     const window = (yield* Ref.get(state)).window!;
     const restore = Effect.gen(function* () {
       for (const step of window.steps.toReversed()) {
-        if (step.restored === true) continue;
+        const ocx = window.orchestrated?.[failedTargetKey(step.alias)];
+        if (step.restored === true && ocx === undefined) {
+          if (step.via === "ocx-update" && step.started === true)
+            yield* record(step, window.targetVersion, "rolled-back", window.restoring);
+          continue;
+        }
+        if (step.via !== undefined && step.started !== true) continue;
+        if (ocx?.pending || ocx?.uncertain) return false;
         // Only the member being restored, when it is the one that failed its health check, may
         // restart under work: it already fails its turns. Everyone else this restart touches,
         // including a Child restored earlier, waits for idle like the update itself.
@@ -255,7 +185,8 @@ const make = Effect.gen(function* () {
         );
         const members = yield* Effect.forEach(touched, (alias) => host.member(alias, scope));
         if (members.some(({ runningTurns }) => runningTurns !== 0)) return false;
-        const installed = yield* host.install(step.alias, step.fromVersion);
+        const installed =
+          ocx === undefined ? yield* host.install(step.alias, step.fromVersion) : true;
         const snapshot = installed ? (yield* host.member(step.alias, scope)).snapshot : undefined;
         if (
           snapshot?.runtime.healthy !== true ||
@@ -342,6 +273,8 @@ const make = Effect.gen(function* () {
     return true;
   });
 
+  const windowOps = { host, retainedHome, nextAt, mutate, record, rollBack, healthy };
+
   /**
    * Home first, then each Child; any failure restores every member this window moved. Every
    * member a step restarts holds admission until the last health check, so no turn starts
@@ -353,6 +286,7 @@ const make = Effect.gen(function* () {
     readonly members: ReadonlyArray<OpenCodexUpdateMember>;
     readonly children: ReadonlyArray<string>;
     readonly scope: McpInvocationScope;
+    readonly orchestrated: Readonly<Record<string, OrchestratedPlan>>;
   }) => {
     const affected = affectedBy(input.steps, input.children);
     return sync.exclusive(holding(affected, moveWindow(input, affected))).pipe(
@@ -374,6 +308,7 @@ const make = Effect.gen(function* () {
       readonly members: ReadonlyArray<OpenCodexUpdateMember>;
       readonly children: ReadonlyArray<string>;
       readonly scope: McpInvocationScope;
+      readonly orchestrated: Readonly<Record<string, OrchestratedPlan>>;
     },
     affected: ReadonlyArray<string | null>,
   ) {
@@ -398,7 +333,10 @@ const make = Effect.gen(function* () {
       ...current,
       window: {
         targetVersion,
-        steps: [],
+        steps: steps.map((step) => ({
+          ...step,
+          ...(step.via === "ocx-update" ? { restored: true } : {}),
+        })),
         children: [...input.children],
         baseline,
         roles,
@@ -416,10 +354,25 @@ const make = Effect.gen(function* () {
       yield* mutate((current, at) =>
         withWindow(withRecords(current, at, [step], targetVersion, "installed"), (window) => ({
           ...window,
-          steps: [...window.steps, { alias: step.alias, fromVersion: step.fromVersion }],
+          steps: window.steps.map((entry) =>
+            entry.alias === step.alias ? { ...entry, started: true } : entry,
+          ),
         })),
       );
-      const installed = yield* host.install(step.alias, targetVersion);
+      let installed = false;
+      if (step.via === "managed") {
+        installed = yield* host.install(step.alias, targetVersion);
+      } else {
+        const outcome = yield* applyOrchestratedStep(
+          windowOps,
+          step,
+          targetVersion,
+          scope,
+          input.orchestrated[failedTargetKey(step.alias)],
+        );
+        if (outcome !== "applied") return { outcome };
+        installed = true;
+      }
       // Before the health check records its process: a Child's sync may restart its runtime.
       // A failed sync is reported in the window's sync report and never rolls the install back.
       if (installed) yield* sync.syncUpdatedMember(step.alias, scope);
@@ -456,6 +409,8 @@ const make = Effect.gen(function* () {
       done
         ? Effect.succeed("closed")
         : Ref.set(nextAt, now + RETRY_INTERVAL_MS).pipe(Effect.as("restoring"));
+    const recovered = yield* recoverUncertain(windowOps, current, now, scope);
+    if (recovered !== undefined) return recovered;
     if (window.restoring !== undefined)
       return yield* closedOr(yield* rollBack(window.restoring, false, scope));
     // GOAT stopped between an install and its health check; that member is unproven.
@@ -511,17 +466,21 @@ const make = Effect.gen(function* () {
     if (now < (yield* Ref.get(nextAt))) return;
     yield* Ref.set(nextAt, now + RETRY_INTERVAL_MS);
     const configured = yield* settings.getSettings.pipe(Effect.option);
-    if (
-      Option.isNone(configured) ||
-      !configured.value.hub.enabled ||
-      !configured.value.goatclaw.enabled
-    )
-      return;
     const stored = yield* readState;
     if (stored === undefined)
       return yield* publish(now, { decision: "wait", reason: "state-unreadable" });
     yield* Ref.set(state, stored);
     yield* sync.markUpdating(stored.window !== undefined);
+    const replaced = yield* sshRuntime.replacedInto;
+    const followUp =
+      Option.isSome(configured) &&
+      configured.value.automaticServerUpdates &&
+      replaced !== undefined &&
+      replaced !== stored.runtimeUpdateChecked;
+    const settleFollowUp =
+      followUp && replaced !== undefined
+        ? mutate((current) => ({ ...current, runtimeUpdateChecked: replaced }))
+        : Effect.void;
 
     const scope: McpInvocationScope = {
       environmentId,
@@ -535,24 +494,35 @@ const make = Effect.gen(function* () {
         access: "read-only",
       },
     };
-    const home = yield* host.member(null, scope);
-    if (home.snapshot?.link.role === "child") {
-      // The Home coordinates its Children; a Child never moves on its own schedule.
-      yield* Ref.set(nextAt, now + CHECK_INTERVAL_MS);
-      return yield* publish(now, { decision: "none", reason: "coordinated-by-home" });
-    }
-    const childAliases =
-      home.snapshot?.link.role === "home" ? home.snapshot.link.links.map(({ alias }) => alias) : [];
     const open = yield* continueWindow(now, scope);
     if (open !== "closed")
       return yield* publish(now, {
         decision: open === "probation" ? "update" : "wait",
-        reason: open === "probation" ? "probation" : "rollback-incomplete",
-        targetVersion: stored.window!.targetVersion,
+        reason:
+          open === "probation"
+            ? "probation"
+            : open === "uncertain"
+              ? "apply-uncertain"
+              : "rollback-incomplete",
+        ...(stored.window === undefined ? {} : { targetVersion: stored.window.targetVersion }),
       });
-    // This check closed a window: its Home and Child readings predate the rollback or acceptance.
-    if (stored.window !== undefined)
+    if (stored.window !== undefined) {
+      yield* settleFollowUp;
       return yield* publish(now, { decision: "none", reason: "window-closed" });
+    }
+    if (
+      Option.isNone(configured) ||
+      ((!configured.value.hub.enabled || !configured.value.goatclaw.enabled) && !followUp)
+    )
+      return;
+    const home = yield* host.member(null, scope);
+    if (home.snapshot?.link.role === "child") {
+      yield* Ref.set(nextAt, now + CHECK_INTERVAL_MS);
+      yield* settleFollowUp;
+      return yield* publish(now, { decision: "none", reason: "coordinated-by-home" });
+    }
+    const childAliases =
+      home.snapshot?.link.role === "home" ? home.snapshot.link.links.map(({ alias }) => alias) : [];
     const children = yield* Effect.forEach(childAliases, (alias) => host.member(alias, scope));
 
     // Busy retries every 10 minutes must not refetch the registry document each time.
@@ -572,10 +542,37 @@ const make = Effect.gen(function* () {
         publishedAt: latest.publishedAt,
         now,
       });
+    const target = rolledOut ? latest?.version : undefined;
+    const candidates =
+      target === undefined
+        ? []
+        : [home, ...children].filter(
+            ({ snapshot }) =>
+              snapshot?.ownership !== "managed" &&
+              snapshot?.runtime.healthy === true &&
+              isStableOpenCodexVersion(snapshot.runtime.version) &&
+              compareOpenCodexVersions(snapshot.runtime.version, target) < 0,
+          );
+    const reads = yield* Effect.forEach(
+      candidates,
+      (member) =>
+        host
+          .orchestratedPlan(member.alias, target ?? "")
+          .pipe(Effect.map((result) => ({ member, result }))),
+      { concurrency: 3 },
+    );
+    const indeterminate = reads.some(
+      ({ result }) =>
+        result.kind === "unknown" || (result.kind === "plan" && result.plan.updateInFlight),
+    );
+    const orchestrated: Record<string, OrchestratedPlan> = {};
+    for (const { member, result } of reads)
+      if (result.kind === "plan") orchestrated[failedTargetKey(member.alias)] = result.plan;
     const plan = planOpenCodexUpdate({
       home,
       children,
-      targetVersion: rolledOut ? latest?.version : undefined,
+      targetVersion: target,
+      orchestrated,
       failedTargets: (yield* Ref.get(state)).failedTargets,
     });
     const summary = {
@@ -585,9 +582,15 @@ const make = Effect.gen(function* () {
       advisories: plan.advisories,
       ...(latest === undefined ? {} : { targetVersion: latest.version }),
     };
-    if (plan.decision !== "wait") yield* Ref.set(nextAt, now + CHECK_INTERVAL_MS);
-    if (plan.decision !== "update" || plan.targetVersion === undefined)
+    if (plan.decision !== "wait" && !indeterminate) yield* Ref.set(nextAt, now + CHECK_INTERVAL_MS);
+    if (plan.decision !== "update" || plan.targetVersion === undefined) {
+      if (
+        !indeterminate &&
+        ["up-to-date", "advice-only", "previous-failure"].includes(summary.reason)
+      )
+        yield* settleFollowUp;
       return yield* publish(now, summary);
+    }
 
     const result = yield* runWindow({
       steps: plan.steps,
@@ -595,6 +598,7 @@ const make = Effect.gen(function* () {
       members: [home, ...children],
       children: childAliases,
       scope,
+      orchestrated,
     });
     if (result.outcome === "busy" || result.outcome === "admission-unsupported") {
       // Unsupported admission is structural; it waits for the next release check.
@@ -606,6 +610,10 @@ const make = Effect.gen(function* () {
         waitingOn: result.waitingOn,
       });
     }
+    if (result.outcome === "uncertain")
+      return yield* publish(now, { ...summary, decision: "wait", reason: "apply-uncertain" });
+    const closed = (yield* Ref.get(state)).window === undefined;
+    if (closed && !indeterminate) yield* settleFollowUp;
     const restoring = (yield* Ref.get(state)).window?.restoring !== undefined;
     if (restoring) yield* Ref.set(nextAt, now + RETRY_INTERVAL_MS);
     yield* publish(

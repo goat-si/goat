@@ -67,10 +67,19 @@ export const orchestratedPlanOf = (
   stdout: string,
 ):
   | { readonly kind: "plan"; readonly plan: OrchestratedPlan }
-  | { readonly kind: "legacy" | "unknown" } => {
+  | { readonly kind: "legacy" }
+  | { readonly kind: "unknown" } => {
   const parsed = decodePlan(stdout);
   if (Option.isNone(parsed)) return { kind: "unknown" };
-  const { planToken, updateInFlight, mutationBoundMs, reason, ...plan } = parsed.value;
+  const {
+    schema: _schema,
+    installer: _installer,
+    planToken,
+    updateInFlight,
+    mutationBoundMs,
+    reason,
+    ...plan
+  } = parsed.value;
   if (
     typeof planToken !== "string" ||
     !TOKEN.test(planToken) ||
