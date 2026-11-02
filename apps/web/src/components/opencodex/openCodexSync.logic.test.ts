@@ -55,11 +55,13 @@ describe("Sync OpenCodex dialog", () => {
           { alias: null, state: "synced", restartCodex: true },
           { alias: "mac-studio", state: "failed", restartCodex: true, reason: "exit-2" },
           { alias: "mini", state: "skipped", restartCodex: false, reason: "busy" },
+          { alias: "other", state: "failed", restartCodex: true, reason: "interrupted" },
         ],
       }),
     ).toEqual([
       "OpenCodex sync on mac-studio failed: ocx sync exited 2.",
       "OpenCodex sync on mini skipped: work is running there; try again when it finishes.",
+      "OpenCodex sync on other failed: the sync was interrupted.",
     ]);
     expect(openCodexSyncNotes({ ...plan, trigger: "manual" })).toEqual([]);
   });
