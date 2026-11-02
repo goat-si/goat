@@ -15,6 +15,8 @@ import { createModelCapabilities } from "@goat/shared/model";
 import { compareSemverVersions } from "@goat/shared/semver";
 import {
   buildServerProvider,
+  classifySpawnFailure,
+  spawnFailureMessage,
   COMPACT_SLASH_COMMAND,
   nonEmptyTrimmed,
   providerModelsFromSettings,
@@ -24,6 +26,7 @@ import * as OpenCodeRuntime from "./OpenCodeRuntime.ts";
 import type { ProbedOpenCode } from "./versionProbe.ts";
 import type { Agent, ProviderListResponse } from "@opencode-ai/sdk/v2";
 import * as OpenCodeServerOwner from "./OpenCodeServerOwner.ts";
+import { findSpawnCwd } from "./spawnFailure.ts";
 
 const OPENCODE_PRESENTATION = {
   displayName: "OpenCode",
@@ -66,6 +69,7 @@ function formatOpenCodeProbeError(input: {
   readonly isExternalServer: boolean;
   readonly phase: "version" | "inventory";
   readonly serverUrl: string;
+  readonly binaryPath: string;
 }): {
   readonly installed: boolean;
   readonly message: string;
@@ -110,6 +114,12 @@ function formatOpenCodeProbeError(input: {
     };
   }
 
+  const spawnCwd = findSpawnCwd(input.cause);
+  if (spawnCwd !== undefined) {
+    const failure = classifySpawnFailure(input.cause, spawnCwd);
+    const message = spawnFailureMessage(failure, spawnCwd, input.binaryPath);
+    if (message) return { installed: true, message };
+  }
   if (lower.includes("enoent") || lower.includes("notfound")) {
     return {
       installed: false,
@@ -707,6 +717,7 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
       isExternalServer,
       phase,
       serverUrl: openCodeSettings.serverUrl,
+      binaryPath: openCodeSettings.binaryPath,
     });
     return buildServerProvider({
       presentation: OPENCODE_PRESENTATION,

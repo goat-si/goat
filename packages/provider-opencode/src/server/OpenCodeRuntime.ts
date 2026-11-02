@@ -36,6 +36,7 @@ import { signalProcessGroup } from "@goat/provider-core/server/processGroup";
 import { isWindowsCommandNotFound } from "@goat/provider-core/server/snapshotProbe";
 import * as OpenCodeServerLedger from "./OpenCodeServerLedger.ts";
 import { collectStreamAsString } from "@goat/provider-core/server/snapshotProbe";
+import { classifyStartupExit, OpenCodeSpawnFailure } from "./spawnFailure.ts";
 import * as NetService from "@goat/shared/Net";
 import { AgentScope } from "@goat/shared/AgentScope";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -113,11 +114,6 @@ export class OpenCodeRuntimeError extends Data.TaggedError(OPENCODE_RUNTIME_ERRO
 }> {}
 
 export type OpenCodeStartupFailureReason = "databaseLocked";
-
-// Classify stderr database locks at exit so callers need not parse diagnostics.
-function classifyStartupExit(stderr: string): OpenCodeStartupFailureReason | undefined {
-  return /SQLITE_BUSY|database is locked/i.test(stderr) ? "databaseLocked" : undefined;
-}
 
 export const isOpenCodeRuntimeError = (u: unknown): u is OpenCodeRuntimeError =>
   P.isTagged(u, OPENCODE_RUNTIME_ERROR_TAG);
@@ -591,14 +587,17 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
   )(
     function* (input) {
       const spawnCommand = yield* resolveCommand(input.binaryPath, input.args, input.environment);
-      const child = yield* spawner.spawn(
-        ChildProcess.make(spawnCommand.command, spawnCommand.args, {
-          detached: hostPlatform !== "win32",
-          shell: spawnCommand.shell,
-          ...(input.cwd ? { cwd: input.cwd } : {}),
-          ...(input.environment ? { env: input.environment } : { extendEnv: true }),
-        }),
-      );
+      const spawnCwd = input.cwd ?? process.cwd();
+      const child = yield* spawner
+        .spawn(
+          ChildProcess.make(spawnCommand.command, spawnCommand.args, {
+            detached: hostPlatform !== "win32",
+            shell: spawnCommand.shell,
+            cwd: spawnCwd,
+            ...(input.environment ? { env: input.environment } : { extendEnv: true }),
+          }),
+        )
+        .pipe(Effect.mapError((cause) => new OpenCodeSpawnFailure({ spawnCwd, cause })));
       const terminateCommandGroup =
         hostPlatform === "win32"
           ? child.kill({ killSignal: "SIGKILL" }).pipe(Effect.asVoid)
