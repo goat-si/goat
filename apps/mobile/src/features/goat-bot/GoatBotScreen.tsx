@@ -19,15 +19,12 @@ import { NativeScrollView } from "../../native/NativeScrollViewMarker";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { IOS_NAV_BAR_HEIGHT } from "../../lib/layoutMetrics";
+import type { DraftComposerAttachment } from "../../lib/composerImages";
 import {
-  pickComposerFiles,
-  pickComposerMedia,
-  type DraftComposerAttachment,
-} from "../../lib/composerImages";
-import { ComposerAttachmentStrip } from "../../components/ComposerAttachmentStrip";
-import * as Dialog from "../../components/ui/Dialog";
-import { releaseUnusedComposerAttachmentFiles } from "../../state/use-composer-drafts";
-import { ComposerAttachmentButton } from "../threads/ComposerAttachmentButton";
+  GoatBotAttachButton,
+  GoatBotAttachmentStrip,
+  releaseGoatBotAttachments,
+} from "./GoatBotComposerAttachments";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
 import { useRemoteConnectionStatus } from "../../state/use-remote-environment-registry";
@@ -424,26 +421,9 @@ export function GoatBotScreen(props: {
     }
   };
   const support = session.attachmentSupport;
-  const pick = async (kind: "media" | "files") => {
-    try {
-      const maxBytes = support?.maxUploadBytes ?? undefined;
-      const result =
-        kind === "files"
-          ? await pickComposerFiles({ existingCount: attachments.length, maxBytes })
-          : await pickComposerMedia({ existingCount: attachments.length, maxVideoBytes: maxBytes });
-      const picked = "files" in result ? result.files : result.attachments;
-      if (picked.length > 0) setAttachments((current) => [...current, ...picked]);
-      if (result.error) Dialog.alert("Could not attach file", result.error);
-    } catch (error) {
-      Dialog.alert("Could not attach file", error instanceof Error ? error.message : "Try again.");
-    }
-  };
   const removeAttachment = (id: string) => {
-    const removed = attachments.filter((attachment) => attachment.id === id);
+    releaseGoatBotAttachments(attachments.filter((attachment) => attachment.id === id));
     setAttachments((current) => current.filter((attachment) => attachment.id !== id));
-    void releaseUnusedComposerAttachmentFiles(removed).catch((error) =>
-      console.warn("[goat-bot] could not release a removed attachment", error),
-    );
   };
   const canSubmit = session.canSend && (text.trim().length > 0 || attachments.length > 0);
   return (
@@ -521,18 +501,18 @@ export function GoatBotScreen(props: {
         className="gap-2 border-t border-border px-4 pt-2"
         style={composerPaddingStyle}
       >
-        <ComposerAttachmentStrip
-          environmentId={session.historyEnvironmentId ?? undefined}
+        <GoatBotAttachmentStrip
+          environmentId={session.historyEnvironmentId}
           attachments={attachments}
           onRemove={removeAttachment}
         />
         <View className="flex-row items-end gap-2">
           {support ? (
-            <ComposerAttachmentButton
+            <GoatBotAttachButton
               disabled={!session.canSend}
-              supportsFiles={support.maxUploadBytes !== null}
-              onPickMedia={() => pick("media")}
-              onPickFiles={() => pick("files")}
+              existingCount={attachments.length}
+              maxUploadBytes={support.maxUploadBytes}
+              onPicked={(picked) => setAttachments((current) => [...current, ...picked])}
             />
           ) : null}
           <TextInput

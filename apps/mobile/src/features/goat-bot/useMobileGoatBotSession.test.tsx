@@ -67,6 +67,7 @@ vi.mock("../../state/entities", () => ({
       ? { source: harness.workerShell }
       : null;
   },
+  useServerConfigs: () => new Map(),
 }));
 vi.mock("../../state/shell", () => ({
   useEnvironmentShellReadiness: () => ({ status: "loading" }),

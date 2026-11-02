@@ -45,8 +45,6 @@ import { environmentThreadDetails } from "../../state/threads";
 import { useThreadVisibleTurnItems } from "../../state/use-thread-detail";
 import { useServerConfigs, useThreadShell } from "../../state/entities";
 import { useEnvironmentShellReadiness } from "../../state/shell";
-import { releaseUnusedComposerAttachmentFiles } from "../../state/use-composer-drafts";
-import { uploadGoatBotAttachments } from "./goatBotAttachments";
 import { useReplying } from "./useReplying";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
 import { pickMobileGoatBotEnvironment } from "./goatBotHomeMode";
@@ -112,11 +110,17 @@ function newSession(environmentId: EnvironmentId): Session {
       ) {
         throw new Error("GOAT Bot isn't available");
       }
-      const files = await uploadGoatBotAttachments({
-        environmentId,
-        attachments: uploads.get(clientKey) ?? attachments,
-        remember: (uploaded) => uploads.set(clientKey, uploaded),
-      });
+      // Upload code loads only for messages that carry files.
+      const files =
+        attachments.length === 0
+          ? []
+          : await (
+              await import("./goatBotAttachments")
+            ).uploadGoatBotAttachments({
+              environmentId,
+              attachments: uploads.get(clientKey) ?? attachments,
+              remember: (uploaded) => uploads.set(clientKey, uploaded),
+            });
       const result = await runAtomCommand(appAtomRegistry, channelEnvironment.ingest, {
         environmentId,
         input: goatBotIngestInput({
@@ -132,9 +136,13 @@ function newSession(environmentId: EnvironmentId): Session {
         // The server keeps its own copy once it has the message; the local files can go.
         const sent = uploads.get(clientKey) ?? attachments;
         uploads.delete(clientKey);
-        void releaseUnusedComposerAttachmentFiles(sent).catch((error) =>
-          console.warn("[goat-bot] could not release sent attachment files", error),
-        );
+        void import("../../state/use-composer-drafts")
+          .then(({ releaseUnusedComposerAttachmentFiles }) =>
+            releaseUnusedComposerAttachmentFiles(sent),
+          )
+          .catch((error) =>
+            console.warn("[goat-bot] could not release sent attachment files", error),
+          );
       }
       return {
         requestKey: result.value.inputId,
