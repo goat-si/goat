@@ -3,7 +3,8 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import type { Connection } from "effect/sql/SqlConnection";
-import { makeReaderPool } from "./nodeSqliteReaderPool.ts";
+import * as Semaphore from "effect/Semaphore";
+import { makeReaderPool, makeReaderRestart } from "./nodeSqliteReaderPool.ts";
 
 // Fake slots resolve synchronously, so a forked use that has not finished is waiting for a permit.
 const makePool = (backingOff: Array<boolean> = []) => {
@@ -96,5 +97,20 @@ it.effect("leases a slot that can serve now before one waiting out restart backo
     // With every free slot in backoff, the lowest one is used and waits inside its own acquire.
     const all = yield* makePool([true, true, true, true]);
     assert.equal(yield* all.use((connection) => Effect.succeed(slotOf(connection))), 0);
+  }),
+);
+
+it.effect("a failure after a success never shortens the shared restart deadline", () =>
+  Effect.gen(function* () {
+    const restart = makeReaderRestart(yield* Semaphore.make(1));
+    const ms = (value: number) => BigInt(value) * 1_000_000n;
+    restart.fail(ms(0));
+    restart.fail(ms(10));
+    // The deadline is 510ms; a healthy slot's success resets only the next interval.
+    restart.succeed();
+    restart.fail(ms(20));
+    assert.equal(restart.remainingMs(ms(20)), 490);
+    restart.fail(ms(600));
+    assert.equal(restart.remainingMs(ms(600)), 500);
   }),
 );

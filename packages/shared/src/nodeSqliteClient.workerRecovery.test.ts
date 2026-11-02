@@ -628,6 +628,42 @@ it.effect("serves reads from a running slot while another slot waits out restart
   ),
 );
 
+it.effect("slots waiting on one restart deadline start one worker at a time", () =>
+  withReaderClient((sql) =>
+    Effect.gen(function* () {
+      failingWorkers.message = "startup fault";
+      yield* Effect.gen(function* () {
+        yield* countEntries(sql).pipe(SqliteClient.readOnly, Effect.flip);
+        const before = startedWorkers.length;
+        const reads = [];
+        for (let index = 0; index < 2; index++)
+          reads.push(
+            yield* Effect.forkChild(countEntries(sql).pipe(SqliteClient.readOnly, Effect.result), {
+              startImmediately: true,
+            }),
+          );
+        yield* TestClock.adjust("249 millis");
+        assert.equal(startedWorkers.length, before);
+        yield* TestClock.adjust("1 millis");
+        // The first restart fails and moves the deadline to 750ms; the second slot keeps waiting.
+        assert.equal(startedWorkers.length, before + 1);
+        assert.equal((yield* Fiber.join(reads[0]!))._tag, "Failure");
+        yield* TestClock.adjust("499 millis");
+        assert.equal(startedWorkers.length, before + 1);
+        yield* TestClock.adjust("1 millis");
+        assert.equal(startedWorkers.length, before + 2);
+        assert.equal((yield* Fiber.join(reads[1]!))._tag, "Failure");
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            failingWorkers.message = undefined;
+          }),
+        ),
+      );
+    }),
+  ),
+);
+
 it.effect("a slot waiting out restart backoff honors a deadline another slot extends", () =>
   withReaderClient((sql) =>
     Effect.gen(function* () {

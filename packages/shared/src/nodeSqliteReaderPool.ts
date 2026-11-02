@@ -5,11 +5,26 @@ import type { SqlError } from "effect/sql/SqlError";
 
 const READER_POOL_SIZE = 4;
 
-// Startup failures usually share one cause, so every slot honors the same restart backoff.
-export interface ReaderRestart {
-  retryAt: bigint;
-  retryMs: number;
-}
+// Startup failures usually share one cause, so every slot honors one restart backoff and one
+// restart runs at a time: slots waiting behind it re-check the deadline a failure extended.
+export const makeReaderRestart = (gate: Semaphore.Semaphore) => {
+  let retryAt = 0n;
+  let retryMs = 250;
+  return {
+    gate,
+    // A later failure never shortens a deadline another slot already set.
+    fail: (now: bigint) => {
+      const next = now + BigInt(retryMs) * 1_000_000n;
+      if (next > retryAt) retryAt = next;
+      retryMs = Math.min(8_000, retryMs * 2);
+    },
+    succeed: () => {
+      retryMs = 250;
+    },
+    remainingMs: (now: bigint) => Number(retryAt - now) / 1e6,
+  };
+};
+export type ReaderRestart = ReturnType<typeof makeReaderRestart>;
 
 export interface ReaderSlot {
   readonly acquire: Effect.Effect<Connection, SqlError>;
@@ -21,7 +36,7 @@ export const makeReaderPool = Effect.fn("SqliteReaderPool.make")(function* <R>(o
   readonly makeSlot: (restart: ReaderRestart) => Effect.Effect<ReaderSlot, never, R>;
   readonly available: Effect.Effect<void, SqlError> | undefined;
 }) {
-  const restart: ReaderRestart = { retryAt: 0n, retryMs: 250 };
+  const restart = makeReaderRestart(yield* Semaphore.make(1));
   const slots = yield* Effect.forEach(Array.from({ length: READER_POOL_SIZE }), () =>
     options.makeSlot(restart),
   );

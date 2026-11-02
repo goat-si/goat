@@ -255,10 +255,7 @@ const makeReader = Effect.fn("SqliteReader.make")(function* (
     | undefined;
   const clock = yield* Clock.Clock;
   let retiring = Promise.resolve();
-  const backoff = () => {
-    restart.retryAt = clock.monotonicTimeNanosUnsafe() + BigInt(restart.retryMs) * 1_000_000n;
-    restart.retryMs = Math.min(8_000, restart.retryMs * 2);
-  };
+  const backoff = () => restart.fail(clock.monotonicTimeNanosUnsafe());
   let nextRequestId = 0;
 
   const start = Effect.fn("SqliteReader.start")(function* () {
@@ -311,7 +308,7 @@ const makeReader = Effect.fn("SqliteReader.make")(function* (
       recordReaderSql(request.owner, reply);
       pending.delete(reply.id);
       if (pending.size === 0) worker.unref();
-      if ("rows" in reply) restart.retryMs = 250;
+      if ("rows" in reply) restart.succeed();
       request.resume(reply);
     });
     worker.on("error", (cause) => stop(`Database reader failed: ${cause.message}`));
@@ -441,44 +438,41 @@ const makeReader = Effect.fn("SqliteReader.make")(function* (
 
   const acquire = Effect.withFiber((fiber) => {
     const restore = Context.get(fiber.context, ReadOnly) ?? identity;
-    return restore(
-      starting.withPermits(1)(
-        Effect.gen(function* () {
-          if (current === undefined) {
-            yield* Effect.promise(() => retiring);
-            // Another slot can push the shared deadline out while this one sleeps.
-            let remaining = Number(restart.retryAt - clock.monotonicTimeNanosUnsafe()) / 1e6;
-            while (remaining > 0) {
-              yield* Effect.sleep(Duration.millis(remaining));
-              remaining = Number(restart.retryAt - clock.monotonicTimeNanosUnsafe()) / 1e6;
-            }
-          }
-          const reader =
-            current ??
-            (yield* start().pipe(
-              Effect.catch((cause) => {
-                backoff();
-                return retire(undefined, cause);
-              }),
-            ));
-          const startup = yield* Effect.timeoutOption(reader.started, startupTimeout);
-          if (current !== reader)
-            return yield* retire(undefined, new Error("Reader epoch retired"));
-          if (Option.isSome(startup) && startup.value.type === "ready") return reader.connection;
-          return yield* retire(
-            reader,
-            new Error(
-              Option.isSome(startup) && startup.value.type === "unavailable"
-                ? startup.value.message
-                : "Reader startup deadline exceeded",
-            ),
-          );
-        }),
-      ),
+    const remaining = () => restart.remainingMs(clock.monotonicTimeNanosUnsafe());
+    const begin = Effect.gen(function* () {
+      if (current === undefined) {
+        yield* Effect.promise(() => retiring);
+        // Another slot can push the shared deadline out while this one waits.
+        while (remaining() > 0) yield* Effect.sleep(Duration.millis(remaining()));
+      }
+      const reader =
+        current ??
+        (yield* start().pipe(
+          Effect.catch((cause) => {
+            backoff();
+            return retire(undefined, cause);
+          }),
+        ));
+      const startup = yield* Effect.timeoutOption(reader.started, startupTimeout);
+      if (current !== reader) return yield* retire(undefined, new Error("Reader epoch retired"));
+      if (Option.isSome(startup) && startup.value.type === "ready") return reader.connection;
+      return yield* retire(
+        reader,
+        new Error(
+          Option.isSome(startup) && startup.value.type === "unavailable"
+            ? startup.value.message
+            : "Reader startup deadline exceeded",
+        ),
+      );
+    });
+    // A slot that must restart during backoff takes the shared gate, so one restart runs at a time.
+    const startOrReuse = Effect.suspend(() =>
+      current === undefined && remaining() > 0 ? restart.gate.withPermits(1)(begin) : begin,
     );
+    return restore(starting.withPermits(1)(startOrReuse));
   });
   const backingOff = () =>
-    current === undefined && restart.retryAt > clock.monotonicTimeNanosUnsafe();
+    current === undefined && restart.remainingMs(clock.monotonicTimeNanosUnsafe()) > 0;
   return { acquire, backingOff } satisfies ReaderSlot;
 });
 
