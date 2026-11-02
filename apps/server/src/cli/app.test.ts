@@ -160,7 +160,7 @@ describe("goat server command safety", () => {
           },
         );
         expect(result.status).toBe(0);
-        expect(result.stdout).toContain(`CWD ${home}`);
+        expect(result.stdout.split("\n")).toContain(`CWD ${home}`);
         if (mode === "default") expect(result.stdout).toContain("Unknown command");
         else expect(result.stdout).toContain("not-a-directory");
       } finally {
@@ -188,7 +188,7 @@ describe("goat server command safety", () => {
       if (expected === "failure")
         expect(result.stdout).toContain("Cannot access the current working directory");
       else
-        expect(result.stdout).toContain(
+        expect(result.stdout.split("\n")).toContain(
           `CWD ${expected === "root" ? "/" : expected === "home" ? home : NodePath.join(home, "deleted")}`,
         );
     } finally {
