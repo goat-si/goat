@@ -224,9 +224,11 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
     });
   });
 
-  const removeRecord = (name: string) =>
+  const removeRecord = (record: DetachedAppServerRecord) =>
     tryIo("Could not remove a Codex process record.", async () => {
-      const files = paths(name);
+      const files = paths(record.name);
+      // GOAT's alias in its private socket directory; Codex removes its own socket on a clean exit.
+      await NodeFSP.rm(record.socketPath, { force: true });
       await NodeFSP.rm(files.record, { force: true });
       await NodeFSP.rm(files.pid, { force: true });
       await NodeFSP.rm(files.stderr, { force: true });
@@ -288,7 +290,7 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
   ) {
     if (classification.type === "gone" && classification.possibleLeftovers?.length)
       yield* warn(classification.possibleLeftovers);
-    yield* removeRecord(record.name);
+    yield* removeRecord(record);
     yield* Ref.update(blocked, (current) => {
       const next = new Map(current);
       next.delete(record.name);

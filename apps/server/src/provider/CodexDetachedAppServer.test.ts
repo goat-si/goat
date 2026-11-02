@@ -528,3 +528,38 @@ it.effect("a socket directory other users can write to is refused", () =>
     }),
   ),
 );
+
+it.effect("cleanup removes GOAT's socket alias once the recorded group is gone", () =>
+  withRecordDirectory((directory) =>
+    Effect.gen(function* () {
+      const dir = NodePath.join(directory, "codex-app-servers");
+      const alias = NodePath.join(directory, "alias.sock");
+      yield* Effect.promise(() => NodeFSP.mkdir(dir));
+      yield* Effect.promise(() => NodeFSP.writeFile(alias, ""));
+      const aliased = { ...record, socketPath: alias };
+      yield* Effect.promise(() =>
+        NodeFSP.writeFile(NodePath.join(dir, aliased.name + ".json"), JSON.stringify(aliased)),
+      );
+      yield* Effect.promise(() =>
+        NodeFSP.writeFile(NodePath.join(dir, aliased.name + ".pid"), "1234"),
+      );
+      const service = yield* makeDetachedAppServers({
+        stateDir: directory,
+        bootId: Effect.succeed("boot-one"),
+        processTable: processTable([]),
+        socketAccepts: () => Effect.succeed(false),
+        signalGroup: () => Effect.die("unexpected signal"),
+      });
+      const outcomes = yield* service.cleanup;
+      assert.equal(outcomes[0]?.outcome, "cleaned");
+      assert.isFalse(
+        yield* Effect.promise(() =>
+          NodeFSP.access(alias).then(
+            () => true,
+            () => false,
+          ),
+        ),
+      );
+    }),
+  ),
+);
