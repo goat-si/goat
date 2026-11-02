@@ -95,7 +95,7 @@ export const readBootstrapEnvelope = Effect.fn("readBootstrapEnvelope")(function
     });
 
     const cleanup = () => {
-      stream.removeListener("error", handleError);
+      input.removeListener("error", handleError);
       input.removeListener("line", handleLine);
       input.removeListener("close", handleClose);
       input.close();
@@ -137,7 +137,8 @@ export const readBootstrapEnvelope = Effect.fn("readBootstrapEnvelope")(function
       resume(Effect.succeedNone);
     };
 
-    stream.once("error", handleError);
+    // readline re-emits its input's errors on the interface, which needs its own listener.
+    input.on("error", handleError);
     input.once("line", handleLine);
     input.once("close", handleClose);
 
