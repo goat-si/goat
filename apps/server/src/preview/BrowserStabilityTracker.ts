@@ -9,6 +9,11 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import {
+  type CleanMarkdown,
+  type CleanMarkdownOptions,
+  extractCleanMarkdown,
+} from "./BrowserCleanMarkdown.ts";
 
 export interface StabilityRequest {
   readonly requestId: string;
@@ -198,3 +203,152 @@ export const makeBrowserStabilityTracker: Effect.Effect<BrowserStabilityTracker>
     } satisfies BrowserStabilityTracker;
   },
 );
+
+const STABILITY_CDP_EVENTS = [
+  "Network.requestWillBeSent",
+  "Network.loadingFinished",
+  "Network.loadingFailed",
+  "Page.frameNavigated",
+  "Page.lifecycleEvent",
+  "DOM.documentUpdated",
+  "DOM.setChildNodes",
+  "DOM.childNodeInserted",
+  "DOM.childNodeRemoved",
+  "DOM.childNodeCountUpdated",
+  "DOM.attributeModified",
+  "DOM.attributeRemoved",
+  "DOM.characterDataModified",
+  "DOM.shadowRootPushed",
+  "DOM.shadowRootPopped",
+  "Inspector.detached",
+  "Inspector.targetCrashed",
+] as const;
+type StabilityCdpEvent = (typeof STABILITY_CDP_EVENTS)[number];
+type StabilityCdpCommand =
+  | "Network.enable"
+  | "Page.enable"
+  | "Page.setLifecycleEventsEnabled"
+  | "DOM.enable"
+  | "DOM.getDocument"
+  | "Inspector.enable";
+
+/** The part of a CDP session the bridge uses; playwright's CDPSession satisfies it. */
+export interface StabilityCdpSession {
+  on(event: StabilityCdpEvent, listener: (params: unknown) => void): unknown;
+  off(event: StabilityCdpEvent, listener: (params: unknown) => void): unknown;
+  send(method: StabilityCdpCommand, params?: object): Promise<unknown>;
+}
+
+const DOM_ACTIVITY: ReadonlySet<string> = new Set(
+  STABILITY_CDP_EVENTS.filter((event) => event.startsWith("DOM.") || event.startsWith("Page.")),
+);
+
+const stringField = (value: unknown, key: string): string | undefined => {
+  if (typeof value !== "object" || value === null || !(key in value)) return undefined;
+  const field: unknown = Reflect.get(value, key);
+  return typeof field === "string" ? field : undefined;
+};
+
+const applyCdpEvent = (
+  tracker: BrowserStabilityTracker,
+  event: StabilityCdpEvent,
+  params: unknown,
+): Effect.Effect<void> => {
+  // Inspector.targetCrashed carries no params, so it is matched before any field is read.
+  if (event === "Inspector.detached" || event === "Inspector.targetCrashed")
+    return tracker.onTargetDetached();
+  if (DOM_ACTIVITY.has(event)) return tracker.onDomMutation();
+  const requestId = stringField(params, "requestId");
+  if (requestId === undefined) return Effect.void;
+  if (event === "Network.loadingFinished") return tracker.onRequestFinished(requestId);
+  if (event === "Network.loadingFailed") return tracker.onRequestFailed(requestId);
+  const url =
+    typeof params === "object" && params !== null && "request" in params
+      ? stringField(params.request, "url")
+      : undefined;
+  return url === undefined
+    ? Effect.void
+    : tracker.onRequestStarted({ requestId, url, resourceType: stringField(params, "type") });
+};
+
+const DOM_DOCUMENT_URL = "goat:dom-document";
+
+/**
+ * Feeds a page's CDP events to the tracker for the scope's lifetime. DOM mutation events only
+ * cover nodes the client has requested, so each document is fetched whole, and settling waits
+ * for that fetch. A command the session rejects marks the target detached.
+ */
+export const attachStabilityTracker = Effect.fn("BrowserStabilityTracker.attach")(function* (
+  cdp: StabilityCdpSession,
+  tracker: BrowserStabilityTracker,
+) {
+  // Tracker changes are synchronous, so running them inline keeps the CDP event order.
+  const runSync = Effect.runSyncWith(yield* Effect.context<never>());
+  let closed = false;
+  let documents = 0;
+  const apply = (effect: Effect.Effect<void>) => {
+    if (!closed) runSync(effect);
+  };
+  const detach = () => apply(tracker.onTargetDetached());
+  const fetchDocument = () => {
+    documents += 1;
+    const requestId = DOM_DOCUMENT_URL + ":" + String(documents);
+    apply(tracker.onRequestStarted({ requestId, url: DOM_DOCUMENT_URL }));
+    void cdp
+      .send("DOM.getDocument", { depth: -1, pierce: true })
+      .then(() => apply(tracker.onRequestFinished(requestId)), detach);
+  };
+  const listeners = STABILITY_CDP_EVENTS.map((event) => {
+    const listener = (params: unknown) => {
+      apply(applyCdpEvent(tracker, event, params));
+      if (event === "DOM.documentUpdated" && !closed) fetchDocument();
+    };
+    return [event, listener] as const;
+  });
+  yield* Effect.acquireRelease(
+    Effect.sync(() => {
+      for (const [event, listener] of listeners) cdp.on(event, listener);
+    }),
+    () =>
+      Effect.sync(() => {
+        closed = true;
+        for (const [event, listener] of listeners) cdp.off(event, listener);
+      }),
+  );
+  yield* Effect.promise(() =>
+    Promise.all(
+      [
+        cdp.send("Network.enable"),
+        cdp.send("Page.enable"),
+        cdp.send("Page.setLifecycleEventsEnabled", { enabled: true }),
+        cdp.send("DOM.enable"),
+        cdp.send("Inspector.enable"),
+      ].map((sent) => sent.then(undefined, detach)),
+    ),
+  );
+  if (!closed) fetchDocument();
+});
+
+export interface StableMarkdownRead {
+  readonly stability: StabilityOutcome;
+  /** Undefined only when the target detached; after a timeout the page may still be partial. */
+  readonly content: CleanMarkdown | undefined;
+}
+
+/** Waits for network and DOM quiet, then reads the page HTML and cleans it to markdown. */
+export const readCleanMarkdownWhenStable = Effect.fn(
+  "BrowserStabilityTracker.readCleanMarkdownWhenStable",
+)(function* <E, R>(
+  tracker: BrowserStabilityTracker,
+  read: {
+    readonly wait: StabilityWait;
+    readonly html: Effect.Effect<string, E, R>;
+    readonly options?: CleanMarkdownOptions;
+  },
+): Effect.fn.Return<StableMarkdownRead, E, R> {
+  const stability = yield* tracker.waitForStability(read.wait);
+  if (!stability.settled && stability.reason === "detached")
+    return { stability, content: undefined };
+  const html = yield* read.html;
+  return { stability, content: extractCleanMarkdown(html, read.options) };
+});
