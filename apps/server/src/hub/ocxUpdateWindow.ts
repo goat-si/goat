@@ -30,7 +30,7 @@ export const OrchestratedWindowEntry = Schema.Struct({
   ),
 });
 
-export const samePlan = (before: OrchestratedPlan, after: OrchestratedPlan) =>
+const samePlan = (before: OrchestratedPlan, after: OrchestratedPlan) =>
   after.canApply &&
   !after.updateInFlight &&
   before.planToken === after.planToken &&
