@@ -86,7 +86,6 @@ describe("rectangle union and paint-order occlusion", () => {
     const union = new RectUnion();
     for (let i = 0; i < 5000; i++) expect(union.add(paintRect(i * 2, 0, 1, 1))).toBe(true);
     expect(union.size).toBe(RectUnion.MAX_RECTS);
-    expect(RectUnion.MAX_RECTS).toBe(5000);
     expect(union.add(paintRect(0, 0, 10000, 2))).toBe(false);
     expect(union.size).toBe(5000);
     expect(union.contains(paintRect(1, 0, 1, 1))).toBe(false);

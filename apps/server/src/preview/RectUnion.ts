@@ -58,7 +58,7 @@ export class RectUnion {
     return this.#rects.length;
   }
 
-  /** a minus b as up to four disjoint pieces: bottom, top, then left and right of their shared band. */
+  /** a minus b as up to four disjoint pieces: bottom, top, left, right. a and b must intersect. */
   splitDiff(a: PaintRect, b: PaintRect): readonly PaintRect[] {
     const parts: PaintRect[] = [];
     if (a.y1 < b.y1) parts.push({ x1: a.x1, y1: a.y1, x2: a.x2, y2: b.y1 });
