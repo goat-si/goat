@@ -15,7 +15,7 @@ import { Command, Flag } from "effect/cli";
 import * as HostProcess from "@goat/shared/HostProcess";
 import {
   encodePowerShellCommand,
-  WINDOWS_DETACHED_SPAWN_POWERSHELL,
+  WINDOWS_SUPERVISOR_SPAWN_POWERSHELL,
 } from "@goat/shared/windowsHostProcess";
 import type { RuntimeProtocolVerdict } from "@goat/shared/sshRuntimeProtocol";
 import {
@@ -145,7 +145,7 @@ export type SshRuntimeSupervisorResult =
 
 /**
  * Starts a program outside the SSH session's job object, which Windows OpenSSH terminates with
- * the session, and returns its PID. See {@link WINDOWS_DETACHED_SPAWN_POWERSHELL}.
+ * the session, and returns its PID. See {@link WINDOWS_SUPERVISOR_SPAWN_POWERSHELL}.
  */
 const spawnWindowsDetached = (
   argv: ReadonlyArray<string>,
@@ -159,7 +159,7 @@ const spawnWindowsDetached = (
       "-NoProfile",
       "-NonInteractive",
       "-EncodedCommand",
-      encodePowerShellCommand(WINDOWS_DETACHED_SPAWN_POWERSHELL),
+      encodePowerShellCommand(WINDOWS_SUPERVISOR_SPAWN_POWERSHELL),
     ],
     {
       encoding: "utf8",
