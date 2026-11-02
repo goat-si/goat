@@ -23,6 +23,7 @@ import { CHECKPOINT_PULL_MAX_BYTES, FORGET_RECORDS_MAX_BYTES } from "./MemoryChe
 import { encodeCheckpointRecord } from "./MemoryCheckpointInventory.ts";
 import { decideMemoryOperation, memoryOperationDigest } from "./MemoryDecider.ts";
 import { scanMemoryValue } from "./MemorySecretScanner.ts";
+import * as Quota from "./MemoryQuotaService.ts";
 import * as Store from "./MemoryStore.ts";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -484,4 +485,49 @@ it.effect(
       yield* admit(forget(90, 92, [], legacy));
       assert.isAtMost((yield* usage).requiredCheckpointBoundBytes, before);
     }).pipe(Effect.provide(layer)),
+);
+
+it.effect(
+  "regression: quota admission charges but never refuses a hub first delete beyond its reservation",
+  () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const store = yield* Store.MemoryStore;
+      const quota = yield* Quota.MemoryQuotaService;
+      yield* join;
+      yield* admit(
+        upsert({ memory: 95, operation: 96, text: "hub copy without evidence", messages: [] }),
+      );
+      const scope = { kind: "thread" as const, thread };
+      const used = (yield* store.usage(space, scope)).permanentBytes;
+      yield* sql`INSERT INTO memory_quota_counters(space,dimension,scope_key,value) VALUES (${space},'usage_key_bytes','',${M.MEMORY_PERMANENT_METADATA_MAX_BYTES - used}) ON CONFLICT(space,dimension,scope_key) DO UPDATE SET value=value+excluded.value`;
+      assert.strictEqual(
+        (yield* store.usage(space, scope)).permanentBytes,
+        M.MEMORY_PERMANENT_METADATA_MAX_BYTES,
+      );
+      // The member reserved evidence from a revision this hub never received.
+      const op = forget(95, 97, ["member-only"]);
+      const decided = decideMemoryOperation(
+        yield* store.loadAggregate(space, op.memoryId),
+        op,
+        Store.hubAdmission,
+        scanMemoryValue(op),
+      );
+      const outcome = yield* quota.commit(
+        {
+          ...decided,
+          receipt: {
+            operationId: op.operationId,
+            memoryId: op.memoryId,
+            operationDigest: memoryOperationDigest(op),
+            outcome: "deleted",
+            hubSequence: 1,
+          },
+        },
+        env,
+        Effect.void,
+      );
+      assert.strictEqual(outcome.receipt.outcome, "deleted");
+      assert.isDefined((yield* store.loadAggregate(space, op.memoryId)).tombstone);
+    }).pipe(Effect.provide(Quota.layer.pipe(Layer.provideMerge(layer)))),
 );
