@@ -273,7 +273,71 @@ export function registerBackendStopTests({
     ),
   );
 
-  it.effect("closing an instance bounds a stuck spawn and releases a late child", () =>
+  it.effect("instance scope closes within the backend stop budget while release continues", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const owner = yield* Scope.make("sequential");
+        const started = yield* Deferred.make<void>();
+        const releasing = yield* Deferred.make<void>();
+        const allowRelease = yield* Deferred.make<void>();
+        const exited = yield* Deferred.make<void>();
+        const persisted = yield* Deferred.make<void>();
+        const records: Array<{ message: string; details: string }> = [];
+        const layer = Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make(() =>
+            Effect.gen(function* () {
+              const scope = yield* Scope.Scope;
+              yield* Scope.addFinalizer(
+                scope,
+                Deferred.succeed(releasing, undefined).pipe(
+                  Effect.andThen(Deferred.await(allowRelease)),
+                  Effect.andThen(Deferred.succeed(exited, undefined)),
+                  Effect.asVoid,
+                ),
+              );
+              return makeProcess({
+                exitCode: Deferred.await(exited).pipe(Effect.as(ChildProcessSpawner.ExitCode(0))),
+              });
+            }),
+          ),
+        );
+        const instance = yield* makeTestInstance({
+          spawnerLayer: layer,
+          backendOutputLog: {
+            beginSession: ({ details }) =>
+              details.includes("pid=123")
+                ? Deferred.succeed(started, undefined).pipe(Effect.asVoid)
+                : Effect.void,
+            recordStop: (record) =>
+              Effect.sync(() => {
+                records.push(record);
+              }),
+            persistStopOutput: () => Deferred.succeed(persisted, undefined).pipe(Effect.asVoid),
+          },
+        }).pipe(Scope.provide(owner));
+        yield* instance.start;
+        yield* Deferred.await(started);
+        const closing = yield* Scope.close(owner, Exit.void).pipe(
+          Effect.forkChild({ startImmediately: true }),
+        );
+        yield* Deferred.await(releasing);
+        yield* TestClock.adjust("7 seconds");
+        const stillWaitingAtSevenSeconds = closing.pollUnsafe() === undefined;
+        yield* TestClock.adjust("1 second");
+        const closedInBudget = closing.pollUnsafe() !== undefined;
+        const warning = records.find((record) => record.message === "backend stop timed out");
+        yield* Deferred.succeed(allowRelease, undefined);
+        yield* Fiber.join(closing);
+        yield* Deferred.await(persisted);
+        assert.isTrue(stillWaitingAtSevenSeconds);
+        assert.isTrue(closedInBudget);
+        assert.include(warning?.details ?? "", "reason=instance-closed");
+      }),
+    ),
+  );
+
+  it.effect("closing an instance releases a late child without recording its output", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const owner = yield* Scope.make("sequential");
@@ -325,7 +389,7 @@ export function registerBackendStopTests({
         const closing = yield* Scope.close(owner, Exit.void).pipe(
           Effect.forkChild({ startImmediately: true }),
         );
-        yield* TestClock.adjust("5 seconds");
+        yield* TestClock.adjust("1 second");
         const closedBeforeSpawn = closing.pollUnsafe() !== undefined;
         const warning = records.find(
           (record) => record.message === "backend spawn still pending at stop",

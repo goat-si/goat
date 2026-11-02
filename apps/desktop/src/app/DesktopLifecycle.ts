@@ -105,7 +105,7 @@ interface QuitState {
   waitingSinceNanos: bigint | null;
 }
 
-// Longer than a backend's stop budget (SIGTERM, 5s grace, SIGKILL, 1s wait),
+// Longer than a backend's stop budget (1s spawn wait, 5s grace, SIGKILL, 1s wait, margin),
 // so a double Cmd-Q at the start of a normal quit cannot cut the backend stop
 // short and orphan it.
 const SHUTDOWN_STALL_THRESHOLD = Duration.seconds(10);

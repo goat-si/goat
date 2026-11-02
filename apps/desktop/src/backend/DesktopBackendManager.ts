@@ -2,6 +2,8 @@ import {
   runBackendProcess,
   signalOfExitReason,
   DEFAULT_BACKEND_TERMINATE_GRACE,
+  BACKEND_SPAWN_SETTLE_TIMEOUT,
+  BACKEND_STOP_TIMEOUT,
   type DesktopBackendStartConfig,
   type PreflightFailure,
 } from "./DesktopBackendProcess.ts";
@@ -46,7 +48,6 @@ import * as DesktopTelemetryPublisher from "../telemetry/DesktopTelemetryPublish
 import * as DesktopBrowserHost from "../preview/DesktopBrowserHost.ts";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
 
-const BACKEND_SPAWN_SETTLE_TIMEOUT = Duration.seconds(5);
 const STARTUP_FAILURE_RESTART_ATTEMPTS = 3;
 const MAX_PREFLIGHT_FAILURE_ATTEMPTS = 5;
 export interface DesktopBackendSnapshot {
@@ -164,7 +165,6 @@ const withActiveRun =
 
 const closeRun = (
   run: ActiveBackendRun,
-  parentScope: Scope.Scope,
   onSpawnPending: Effect.Effect<void>,
   options?: { readonly timeout?: Duration.Duration },
 ): Effect.Effect<boolean> => {
@@ -186,7 +186,7 @@ const closeRun = (
     return close.pipe(Effect.as(true));
   }
 
-  return Effect.forkIn(close, parentScope).pipe(
+  return Effect.forkDetach(close).pipe(
     Effect.flatMap((closeFiber) =>
       Fiber.await(closeFiber).pipe(Effect.timeoutOption(timeout), Effect.map(Option.isSome)),
     ),
@@ -208,7 +208,6 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
   | Scope.Scope
 > {
   const parentScope = yield* Scope.Scope;
-  const runsScope = yield* Scope.make("sequential");
   const fileSystem = yield* FileSystem.FileSystem;
   const backendOutputLogFactory = yield* DesktopObservability.DesktopBackendOutputLogFactory;
   const backendOutputLog = yield* backendOutputLogFactory.forInstance(spec.id);
@@ -846,7 +845,6 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
         const waitStarted = yield* Clock.monotonicTimeNanos;
         const closed = yield* closeRun(
           run,
-          runsScope,
           backendOutputLog.recordStop({
             message: "backend spawn still pending at stop",
             level: "WARN",
@@ -942,9 +940,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
       }) ?? Effect.void
     );
   });
-  yield* Effect.addFinalizer(() =>
-    stop("instance-closed").pipe(Effect.ensuring(Scope.close(runsScope, Exit.void))),
-  );
+  yield* Effect.addFinalizer(() => stop("instance-closed", { timeout: BACKEND_STOP_TIMEOUT }));
 
   return {
     id: spec.id,

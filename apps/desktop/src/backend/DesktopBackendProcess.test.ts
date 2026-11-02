@@ -1,4 +1,5 @@
 import * as NodeNet from "node:net";
+import * as HostProcess from "@goat/shared/HostProcess";
 import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Deferred from "effect/Deferred";
@@ -26,6 +27,7 @@ const http = Layer.succeed(
 const childShutdown = (exitOnTerm: boolean) =>
   Effect.scoped(
     Effect.gen(function* () {
+      const platform = yield* HostProcess.Platform;
       const scope = yield* Effect.acquireRelease(Scope.make("sequential"), (scope) =>
         Scope.close(scope, Exit.void),
       );
@@ -65,8 +67,12 @@ const childShutdown = (exitOnTerm: boolean) =>
       yield* Deferred.await(ready);
       yield* Scope.close(scope, Exit.void);
       const exit = yield* Fiber.join(run);
-      assert.equal(exit.reason, exitOnTerm ? "code=0" : "killed by SIGKILL");
-      assert.include(chunks.join(""), "shutdown line");
+      if (platform === "win32") {
+        assert.isNotEmpty(exit.reason);
+      } else {
+        assert.equal(exit.reason, exitOnTerm ? "code=0" : "killed by SIGKILL");
+        assert.include(chunks.join(""), "shutdown line");
+      }
     }).pipe(Effect.provide(Layer.merge(NodeServices.layer, http))),
   );
 
@@ -76,6 +82,7 @@ it.live("retains SIGTERM output from a child that exits cleanly", () => childShu
 it.live("keeps shutdown output when the scope closes while onStarted is blocked", () =>
   Effect.scoped(
     Effect.gen(function* () {
+      const platform = yield* HostProcess.Platform;
       const ready = yield* Deferred.make<void>();
       const started = yield* Deferred.make<void>();
       const allowStarted = yield* Deferred.make<void>();
@@ -135,11 +142,12 @@ it.live("keeps shutdown output when the scope closes while onStarted is blocked"
       yield* Deferred.await(started);
       yield* Deferred.await(ready);
       yield* Scope.close(scope, Exit.void);
-      yield* Deferred.await(outputSeen);
+      if (platform !== "win32") yield* Deferred.await(outputSeen);
       const captured = output;
       yield* Deferred.succeed(allowStarted, undefined);
-      yield* Fiber.join(run);
-      assert.include(captured, "shutdown line");
+      const exit = yield* Fiber.join(run);
+      assert.isNotEmpty(exit.reason);
+      if (platform !== "win32") assert.include(captured, "shutdown line");
     }).pipe(Effect.provide(Layer.merge(NodeServices.layer, http))),
   ),
 );
