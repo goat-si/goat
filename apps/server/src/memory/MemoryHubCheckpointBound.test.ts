@@ -23,6 +23,7 @@ import { CHECKPOINT_PULL_MAX_BYTES, FORGET_RECORDS_MAX_BYTES } from "./MemoryChe
 import { encodeCheckpointRecord } from "./MemoryCheckpointInventory.ts";
 import { decideMemoryOperation, memoryOperationDigest } from "./MemoryDecider.ts";
 import { scanMemoryValue } from "./MemorySecretScanner.ts";
+import * as HubKit from "./MemoryHubService.testkit.ts";
 import * as Quota from "./MemoryQuotaService.ts";
 import * as Store from "./MemoryStore.ts";
 
@@ -530,4 +531,43 @@ it.effect(
       assert.strictEqual(outcome.receipt.outcome, "deleted");
       assert.isDefined((yield* store.loadAggregate(space, op.memoryId)).tombstone);
     }).pipe(Effect.provide(Quota.layer.pipe(Layer.provideMerge(layer)))),
+);
+
+it.effect(
+  "regression: a pushed first delete lands with its lease invalidation at full staging",
+  () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* HubKit.seed;
+      const { hub, claim } = yield* HubKit.conflict;
+      // A token about to gain a digit makes the invalidation itself grow the snapshot.
+      yield* sql`UPDATE memory_identity_ledger SET fence_json=json_set(fence_json,'$.highestFencingToken',8) WHERE space=${HubKit.space} AND memory_id=${HubKit.memoryId}`;
+      assert.strictEqual((yield* hub.claim(claim, HubKit.principal())).fencingToken, 9);
+      yield* fillStaging;
+      const op = decodeOperation({
+        protocolVersion: 1,
+        memorySpaceId: HubKit.space,
+        memoryId: HubKit.memoryId,
+        operationId: HubKit.id(60),
+        originEnvironmentId: HubKit.hubEnv,
+        expectedHeads: [],
+        kind: "forget",
+        tombstone: {
+          memorySpaceId: HubKit.space,
+          memoryId: HubKit.memoryId,
+          deleteOperationId: HubKit.id(60),
+          deletingEnvironmentId: HubKit.hubEnv,
+          deletedAtUtc: now,
+          suppressedSourceKeys: Array.from({ length: 99 }, (_, n) => ({
+            environmentId: HubKit.hubEnv,
+            sourceId: HubKit.id(61),
+            sourceItemKey: `${"k".repeat(480)}${n}`,
+          })),
+          suppressedContent: [],
+          sourceExclusions: [],
+        },
+      });
+      const result = yield* hub.push(HubKit.pushInput(op), HubKit.principal());
+      assert.strictEqual(result.receipts[0]?.outcome, "deleted");
+    }).pipe(Effect.provide(HubKit.live)),
 );

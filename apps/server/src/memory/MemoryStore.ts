@@ -417,7 +417,11 @@ const make = Effect.gen(function* () {
         base ? appendHubEntryTx(input) : withHubBudget(appendHubEntryTx(input)),
       ),
     readHubTailTx,
-    transitionHubLeaseTx: (input) => withHubBudget(transitionHubLeaseTx(input)),
+    // Invalidating the lease is part of a deletion and must land with it.
+    transitionHubLeaseTx: (input) =>
+      input.action.kind === "invalidate" && input.action.reason === "forget"
+        ? transitionHubLeaseTx(input)
+        : withHubBudget(transitionHubLeaseTx(input)),
     readHubRetentionTx,
     readHubUsageTx,
     readHubInventoryTx,
