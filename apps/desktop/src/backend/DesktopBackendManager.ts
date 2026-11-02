@@ -426,6 +426,8 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
         });
         controlRun = runId;
         recoveryStatus = "starting";
+        let startedPid: number | undefined;
+        let observedExit = false;
         const finalizeRun = Effect.fn("desktop.backendInstance.finalizeRun")(function* (
           reason: string,
           exitCode?: number,
@@ -501,6 +503,13 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
                 },
               );
 
+              if (!isCurrentRun && observedExit && startedPid !== undefined) {
+                yield* backendOutputLog.recordStop({
+                  message: "late-spawned backend exited",
+                  level: "WARN",
+                  details: `pid=${startedPid} runId=${runId} exit=${reason}`,
+                });
+              }
               if (isCurrentRun && !exitObserved && Option.isSome(pid)) {
                 if (wasReady) yield* spec.onShutdown?.() ?? Effect.void;
                 yield* pauseRecovery();
@@ -581,8 +590,16 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
           onStarted: Effect.fn("desktop.backendInstance.onStarted")(function* (pid) {
             yield* mutex.withPermits(1)(
               Effect.gen(function* () {
+                startedPid = pid;
                 const activeBeforeStart = Option.getOrUndefined((yield* Ref.get(state)).active);
-                if (activeBeforeStart?.id !== runId) return;
+                if (activeBeforeStart?.id !== runId) {
+                  yield* backendOutputLog.recordStop({
+                    message: "backend spawned after its stop gave up; releasing it",
+                    level: "WARN",
+                    details: `pid=${pid} runId=${runId}`,
+                  });
+                  return;
+                }
                 yield* updateActiveRun(runId, (run) => ({ ...run, pid: Option.some(pid) }));
                 yield* startupFailure.reset;
                 yield* backendOutputLog.beginSession({
@@ -598,6 +615,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
             yield* mutex.withPermits(1)(
               Effect.gen(function* () {
                 const exitAtNanos = yield* Clock.monotonicTimeNanos;
+                observedExit = true;
                 yield* updateActiveRun(runId, (run) => ({
                   ...run,
                   exitObserved: true,

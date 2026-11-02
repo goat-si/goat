@@ -346,6 +346,7 @@ export function registerBackendStopTests({
         const released = yield* Deferred.make<void>();
         const exited = yield* Deferred.make<void>();
         const drained = yield* Deferred.make<void>();
+        const lateExitLogged = yield* Deferred.make<void>();
         let loggedOutput = "";
         const records: Array<{ message: string; level: string; details: string }> = [];
         const layer = Layer.succeed(
@@ -381,7 +382,13 @@ export function registerBackendStopTests({
             recordStop: (record) =>
               Effect.sync(() => {
                 records.push(record);
-              }),
+              }).pipe(
+                Effect.andThen(
+                  record.message === "late-spawned backend exited"
+                    ? Deferred.succeed(lateExitLogged, undefined).pipe(Effect.asVoid)
+                    : Effect.void,
+                ),
+              ),
           },
         }).pipe(Scope.provide(owner));
         yield* instance.start;
@@ -398,6 +405,19 @@ export function registerBackendStopTests({
         yield* Fiber.join(closing);
         yield* Deferred.await(released);
         yield* Deferred.await(drained);
+        yield* Deferred.await(lateExitLogged);
+        const spawnedRecord = records.find(
+          (record) => record.message === "backend spawned after its stop gave up; releasing it",
+        );
+        const exitedRecord = records.find(
+          (record) => record.message === "late-spawned backend exited",
+        );
+        assert.equal(spawnedRecord?.level, "WARN");
+        assert.include(spawnedRecord?.details ?? "", "pid=123");
+        assert.include(spawnedRecord?.details ?? "", "runId=1");
+        assert.equal(exitedRecord?.level, "WARN");
+        assert.include(exitedRecord?.details ?? "", "pid=123");
+        assert.include(exitedRecord?.details ?? "", "exit=code=0");
         assert.equal(loggedOutput, "");
         assert.isTrue(closedBeforeSpawn);
         assert.equal(warning?.level, "WARN");
