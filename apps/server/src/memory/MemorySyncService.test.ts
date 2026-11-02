@@ -61,10 +61,9 @@ import * as Settings from "../serverSettings.ts";
 import * as Secrets from "../auth/ServerSecretStore.ts";
 import * as Events from "../orchestration-v2/EventSink.ts";
 import * as RuntimeIdentity from "../runtimeIdentity.ts";
-import { runMigrations } from "../persistence/Migrations.ts";
 import searchMigration from "../persistence/Migrations/080_MemorySearchCounters.ts";
 import revisionSizeMigration from "../persistence/Migrations/095_MemoryRevisionCheckpointSize.ts";
-import { migrationManifest } from "../persistence/Migrations.ts";
+import { migrationManifest, runMigrations } from "../persistence/Migrations.ts";
 import * as Store from "./MemoryStore.ts";
 import * as Service from "./MemoryService.ts";
 import * as Quota from "./MemoryQuotaService.ts";
@@ -6400,6 +6399,7 @@ it.effect.each(["accepted", "rejected"] as const)(
             }).pipe(Effect.mapError(() => new M.MemoryHubError({ code: "unavailable" }))),
         });
         const integrated = McpHttpServer.layerMemoryToolkit.pipe(
+          Layer.provide(McpFixture.layerRecallUnused),
           Layer.provide(McpAccess.layerPermissionProfilesOff),
           Layer.provideMerge(fixture(client)),
           Layer.provideMerge(McpServer.McpServer.layer),

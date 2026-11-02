@@ -83,3 +83,88 @@ export const ftsMatchQuery = (text: string) => {
   const expanded = clauses.length === 1 ? clauses[0]! : `(${clauses.join(" ")})`;
   return `${exact} OR ${expanded}`;
 };
+
+const RECALL_STOPWORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "are",
+  "as",
+  "at",
+  "be",
+  "by",
+  "about",
+  "can",
+  "could",
+  "decide",
+  "decided",
+  "did",
+  "do",
+  "does",
+  "how",
+  "me",
+  "please",
+  "tell",
+  "us",
+  "we",
+  "what",
+  "when",
+  "where",
+  "which",
+  "who",
+  "why",
+  "would",
+  "you",
+  "for",
+  "from",
+  "in",
+  "is",
+  "it",
+  "of",
+  "on",
+  "or",
+  "the",
+  "to",
+  "was",
+  "with",
+  "지난번",
+  "우리",
+  "함께",
+  "이야기했던",
+  "내용",
+  "다시",
+  "한번",
+  "자세하게",
+  "찾아보고",
+  "알려줘",
+]);
+
+export const recallTerms = (text: string) => {
+  const terms = new Set<string>();
+  for (const token of text
+    .normalize("NFC")
+    .toLowerCase()
+    .match(/[\p{L}\p{N}]+(?:[_\-.:/][\p{L}\p{N}]+)*/gu) ?? []) {
+    const term = /[_\-.:/]/u.test(token)
+      ? token
+      : token.replace(/[\uAC00-\uD7A3]+/gu, stripHangulParticle);
+    if (Array.from(term).length < 2 || RECALL_STOPWORDS.has(term)) continue;
+    terms.add(term);
+  }
+  return [...terms];
+};
+
+export const recallMatch = (terms: readonly string[]) => {
+  if (!terms.length) return undefined;
+  return terms
+    .map((term) => {
+      const codeLike = /[_\-.:/]/u.test(term);
+      const prefix =
+        !codeLike &&
+        (/[\uAC00-\uD7A3]/u.test(term)
+          ? Array.from(term).length >= 2
+          : Array.from(term).length >= 3);
+      return `${ftsQuote(term)}${prefix ? "*" : ""}`;
+    })
+    .join(" OR ");
+};

@@ -1,3 +1,4 @@
+import * as RecallFixture from "./MemoryRecall.ts";
 import { checkUsage } from "./MemoryUsageScan.testkit.ts";
 import * as Settings from "../serverSettings.ts";
 import { McpServer } from "effect/ai";
@@ -948,6 +949,7 @@ it.effect(
     }).pipe(
       Effect.provide(
         McpHttpServer.layerMemoryToolkit.pipe(
+          Layer.provide(Layer.mock(RecallFixture.MemoryRecall)({})),
           Layer.provide(McpAccess.layerPermissionProfilesOff),
           Layer.provideMerge(live),
           Layer.provide(Layer.mock(Sync.MemorySyncService)({})),

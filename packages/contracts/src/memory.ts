@@ -1251,7 +1251,7 @@ export const MemoryCausalBoundary = struct({
 export type MemoryCausalBoundary = typeof MemoryCausalBoundary.Type;
 
 export const MemoryContextSnapshot = struct({
-  protocolVersion: Schema.Literals([1, 2]),
+  protocolVersion: Schema.Literals([1, 2, 3, 4]),
   memorySpaceId: MemorySpaceId,
   projectionWatermark: NonNegativeInt,
   items: array(
@@ -2851,17 +2851,6 @@ export const MemoryHubSourceReadResultResult = bounded(
   MEMORY_PAGE_MAX_UTF8_BYTES,
 );
 export type MemoryHubSourceReadResultResult = typeof MemoryHubSourceReadResultResult.Type;
-export const MEMORY_MCP_TOOLS = [
-  "memory_search",
-  "memory_list",
-  "memory_read",
-  "memory_history",
-  "memory_sync_status",
-  "memory_upsert",
-  "memory_forget",
-  "memory_revert_resolution",
-  "memory_read_source",
-] as const;
 export const MEMORY_HUB_PATHS = {
   join: "/api/memory-hub/v1/join",
   push: "/api/memory-hub/v1/push",

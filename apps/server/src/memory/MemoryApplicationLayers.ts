@@ -28,6 +28,7 @@ import * as MemoryOwnerSourceReadPolicyBinding from "../memory/MemoryOwnerSource
 import * as MemoryQuota from "../memory/MemoryQuotaService.ts";
 import * as MemoryReportAdapter from "../memory/MemoryReportAdapter.ts";
 import * as MemoryReportWorker from "../memory/MemoryReportWorker.ts";
+import * as MemoryRecall from "../memory/MemoryRecall.ts";
 import * as MemoryService from "../memory/MemoryService.ts";
 import * as MemorySettings from "../memory/MemorySettingsService.ts";
 import * as MemorySnapshot from "../memory/MemorySnapshot.ts";
@@ -408,6 +409,7 @@ export const makeMemoryApplicationLayers = (deps: {
   const layerMemorySnapshot = MemorySnapshot.layer;
   const provideMemorySnapshot = MemorySnapshotBinding.provide;
   const layerMemorySnapshotWithDependencies = layerMemorySnapshot.pipe(
+    Layer.provide(layerServerSettings),
     Layer.provide(layerMemorySync),
     Layer.provide(layerMemoryService),
     Layer.provide(layerMemoryQuota),
@@ -425,7 +427,11 @@ export const makeMemoryApplicationLayers = (deps: {
     McpHttpServer.layerMemoryToolkit,
     layerMemoryAdministrationToolkit,
     // The goatclaw capability gate on every MCP registration reads the caller's profile.
-  ).pipe(Layer.provide(PermissionProfiles.layer), Layer.provide(ChannelSessionReceiptGate.layer));
+  ).pipe(
+    Layer.provide(MemoryRecall.layer.pipe(Layer.provide(ProjectionStoreV2.layer))),
+    Layer.provide(PermissionProfiles.layer),
+    Layer.provide(ChannelSessionReceiptGate.layer),
+  );
 
   return {
     layerMemorySourceReadBinding,

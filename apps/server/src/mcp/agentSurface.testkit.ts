@@ -61,6 +61,7 @@ import * as FleetPlacement from "../fleet/resources/Placement.ts";
 import * as HtmlRender from "../htmlRender/HtmlRender.ts";
 import * as MemoryService from "../memory/MemoryService.ts";
 import * as MemorySyncService from "../memory/MemorySyncService.ts";
+import * as MemoryRecall from "../memory/MemoryRecall.ts";
 import * as MemorySettingsService from "../memory/MemorySettingsService.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
@@ -254,6 +255,7 @@ const inertDependencies = Layer.mergeAll(
     },
   }),
   Layer.mock(MemorySyncService.MemorySyncService)({}),
+  Layer.mock(MemoryRecall.MemoryRecall)({}),
   Layer.mock(MemorySettingsService.MemorySettingsService)({}),
   Layer.mock(OrchestratorMcpService.OrchestratorMcpService)({}),
   Layer.mock(PreviewAutomationBroker.PreviewAutomationBroker)({}),
