@@ -40,6 +40,36 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
   "install before runner switch",
   () => {
     it.live.each([false, true])(
+      "repairs the runner alias after old-client publication (copy fallback=%s)",
+      (copyFallback) =>
+        Effect.gen(function* () {
+          const f = yield* fixture("none", { identical: true });
+          if (copyFallback) {
+            const shim = `${f.home}/.test/identity-bin/ln`;
+            yield* f.fs.writeFileString(
+              shim,
+              '#!/bin/sh\n[ "$1" = -s ] || exit 1\nexec /bin/ln "$@"\n',
+            );
+            yield* f.fs.chmod(shim, 0o700);
+          }
+          const protocol = `${f.state}/run-t3.sh`;
+          const alias = `${f.state}/run-goat.sh`;
+          let result = yield* shell(f.home, f.scripts.launch, [stateKey]);
+          assert.equal(result.code, 0, result.stderr);
+          assert.equal(yield* f.fs.readFileString(alias), yield* f.fs.readFileString(protocol));
+          if (!copyFallback)
+            assert.equal((yield* f.fs.stat(alias)).ino, (yield* f.fs.stat(protocol)).ino);
+          yield* f.fs.copyFile(protocol, `${protocol}.old-client`);
+          yield* f.fs.rename(`${protocol}.old-client`, protocol);
+          yield* f.fs.writeFileString(alias, "stale alias\n");
+          result = yield* shell(f.home, f.scripts.launch, [stateKey]);
+          assert.equal(result.code, 0, result.stderr);
+          assert.equal(yield* f.fs.readFileString(alias), yield* f.fs.readFileString(protocol));
+          if (!copyFallback)
+            assert.equal((yield* f.fs.stat(alias)).ino, (yield* f.fs.stat(protocol)).ino);
+        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+    it.live.each([false, true])(
       "launch from a deleted cwd starts in home (upgrade=%s)",
       (upgrade) =>
         Effect.gen(function* () {
