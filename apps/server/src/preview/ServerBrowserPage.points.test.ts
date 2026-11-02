@@ -205,6 +205,18 @@ const COVERS = `<body style="margin:0">
     <span style="position:relative;z-index:1;background:#fff">xxxxxxxxxxxxxxxxxxxx xxxxx</span>
   </div>
   <button style="position:absolute;left:110px;top:435px;width:60px;height:15px;padding:0;font-size:8px">Beside inline</button>
+  <div style="position:absolute;left:500px;top:400px;width:220px;height:100px;columns:2;column-gap:20px;z-index:1">
+    <div style="height:200px;background:#fff"></div>
+  </div>
+  <button style="position:absolute;left:602px;top:410px;width:16px;height:20px;padding:0;font-size:6px">In column gap</button>
+</body>`;
+
+// Zoom doubles the border to 20px, so the cover is clipped short of the button in the border strip.
+const ZOOM_CLIP = `<body style="margin:0">
+  <div style="position:relative;z-index:1;zoom:2;width:100px;height:50px;border:10px solid transparent;overflow:hidden">
+    <div style="margin-left:-10px;width:110px;height:50px;background:#fff"></div>
+  </div>
+  <button style="position:absolute;left:12px;top:30px;width:6px;height:20px;padding:0;font-size:4px">Zoomed border</button>
 </body>`;
 
 // The body's overflow clips here, since the root's is not visible; its cover cannot reach the button.
@@ -226,11 +238,14 @@ it("a snapshot marks only a button under a solid later-painted cover [occluded],
       "Under round clip",
       "Under translucent",
       "Beside inline",
+      "In column gap",
     ])
       expect(lineOf(tree, name)).not.toContain("[occluded]");
     expect(tree.match(/\[occluded\]/g)).toHaveLength(1);
     await page.setContent(BODY_CLIP);
     expect(lineOf(await snapshotTree(page, cdp), "Outside body")).not.toContain("[occluded]");
+    await page.setContent(ZOOM_CLIP);
+    expect(lineOf(await snapshotTree(page, cdp), "Zoomed border")).not.toContain("[occluded]");
     const noPaint = {
       send: (method: string, params?: object) =>
         method === "DOMSnapshot.captureSnapshot"

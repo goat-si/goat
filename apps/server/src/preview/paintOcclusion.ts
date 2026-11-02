@@ -32,6 +32,9 @@ const STYLES = [
   "overflow-y",
   "clip",
   "contain",
+  "zoom",
+  "column-count",
+  "column-width",
 ] as const;
 type StyleName = (typeof STYLES)[number];
 const at = Object.fromEntries(STYLES.map((name, index) => [name, index])) as Record<
@@ -44,8 +47,11 @@ const UNALTERED = (
 ).map((name) => at[name]);
 /** Covers are bucketed by this many CSS pixels, so a ref only meets the covers near it. */
 const CELL = 128;
-/** A cover spanning more cells than this, such as an endless page's background, is left out. */
-const MAX_COVER_CELLS = 20_000;
+/** A cover or ref spanning more cells than this, such as an endless page's background, is left out. */
+const MAX_CELLS = 20_000;
+const span = (rect: PaintRect) =>
+  (Math.floor(rect.x2 / CELL) - Math.floor(rect.x1 / CELL) + 1) *
+  (Math.floor(rect.y2 / CELL) - Math.floor(rect.y1 / CELL) + 1);
 
 type Style = ReadonlyArray<string>;
 type Painted = {
@@ -157,11 +163,17 @@ export const occludedRefs = (shot: unknown, tree: string): ReadonlySet<string> =
       return false;
     return !visible(style) || /paint|strict|content/.test(style[at.contain] ?? "");
   };
-  /** Paints itself and its descendants unaltered, and clips them, if at all, to a rectangle. */
+  /**
+   * Paints itself and its descendants unaltered and unfragmented, at its computed sizes, and clips
+   * them, if at all, to a rectangle. A column's fragments share one box that spans the gaps.
+   */
   const plain = (node: number, layout: Painted) =>
     layout.style[at.opacity] === "1" &&
     layout.style[at["mix-blend-mode"]] === "normal" &&
     layout.style[at.clip] === "auto" &&
+    layout.style[at.zoom] === "1" &&
+    layout.style[at["column-count"]] === "auto" &&
+    layout.style[at["column-width"]] === "auto" &&
     UNALTERED.every((index) => layout.style[index] === "none") &&
     (!clips(node, layout) || RADII.every((index) => layout.style[index] === "0px"));
   const plainAbove: Array<boolean> = [];
@@ -203,10 +215,7 @@ export const occludedRefs = (shot: unknown, tree: string): ReadonlySet<string> =
     const rect = intersect(layout.bounds, clipAbove[node]);
     if (!solid || rect.x2 <= rect.x1 || rect.y2 <= rect.y1) continue;
     const cover = { node, rect, paintOrder: layout.paintOrder };
-    const spanned =
-      (Math.floor(rect.x2 / CELL) - Math.floor(rect.x1 / CELL) + 1) *
-      (Math.floor(rect.y2 / CELL) - Math.floor(rect.y1 / CELL) + 1);
-    if (spanned > MAX_COVER_CELLS) continue;
+    if (span(rect) > MAX_CELLS) continue;
     for (const cell of cells(rect)) {
       const bucket = grid.get(cell);
       if (bucket) bucket.push(cover);
@@ -240,6 +249,7 @@ export const occludedRefs = (shot: unknown, tree: string): ReadonlySet<string> =
     };
     const union = new RectUnion();
     const seen = new Set<Cover>();
+    if (span(enclosure) > MAX_CELLS) continue;
     for (const cell of cells(enclosure))
       for (const cover of grid.get(cell) ?? []) {
         if (seen.has(cover)) continue;
