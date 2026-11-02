@@ -3,11 +3,13 @@ import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as ServerConfig from "../config.ts";
 import * as TestClock from "effect/testing/TestClock";
 
-import { makeFleet, MINUTE, setup } from "./OpenCodexManagedUpdate.testkit.ts";
+import { decodeState, encodeState } from "./ocxUpdateWindow.ts";
+import { makeFleet, MINUTE, service, setup } from "./OpenCodexManagedUpdate.testkit.ts";
 
 const decodeFailed = Schema.decodeEffect(
   Schema.fromJsonString(
@@ -102,6 +104,37 @@ it.layer(NodeServices.layer)("OpenCodex SSH replacement follow-up", (it) => {
         yield* fs.readFileString(path.join(config.stateDir, "opencodex-update.json")),
       );
       expect(state.failedTargets).toEqual({ "": "2.90.0" });
+    }),
+  );
+  it.effect("never invokes the managed installer for an incomplete adopted step", () =>
+    Effect.gen(function* () {
+      const fleet = makeFleet({ homeOwnership: "adopted" });
+      fleet.orchestrated = true;
+      fleet.applyResult = "uncertain";
+      fleet.versions.set("mac-studio", "2.90.0");
+      const { update, baseDir } = yield* setup(fleet);
+      yield* update.check;
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const config = yield* ServerConfig.ServerConfig.pipe(
+        Effect.provide(ServerConfig.layerTest(process.cwd(), baseDir)),
+      );
+      const file = path.join(config.stateDir, "opencodex-update.json");
+      const state = Option.getOrThrow(decodeState(yield* fs.readFileString(file)));
+      if (state.window === undefined) throw new Error("Expected a window");
+      const { orchestrated: _orchestrated, ...window } = state.window;
+      yield* fs.writeFileString(
+        file,
+        encodeState({
+          ...state,
+          window: { ...window, steps: window.steps.map((step) => ({ ...step, restored: false })) },
+        }),
+      );
+      fleet.holds = 0;
+      const resumed = yield* service(fleet, baseDir);
+      yield* resumed.check;
+      expect(fleet.installs).toEqual([]);
+      expect((yield* resumed.status)?.reason).toBe("rollback-incomplete");
     }),
   );
 });

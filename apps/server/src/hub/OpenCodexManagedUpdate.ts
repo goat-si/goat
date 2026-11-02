@@ -176,6 +176,10 @@ const make = Effect.gen(function* () {
           continue;
         }
         if (step.via !== undefined && step.started !== true) continue;
+        if (step.via === "ocx-update" && ocx === undefined) {
+          yield* record(step, window.targetVersion, "rollback-failed", "apply-uncertain");
+          return false;
+        }
         if (ocx?.pending || ocx?.uncertain) return false;
         // Only the member being restored, when it is the one that failed its health check, may
         // restart under work: it already fails its turns. Everyone else this restart touches,
