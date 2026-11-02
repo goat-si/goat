@@ -1,6 +1,19 @@
 import { scopeThreadRef, scopedThreadKey } from "@goat/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/models";
 import type { LaunchFold } from "@goat/client-runtime/state/launch-fold";
+import type { ThreadListSection } from "@goat/client-runtime/state/thread-list-priority";
+
+export function resolveNestedRowVariant(
+  section: ThreadListSection,
+  parentVariant?: "card" | "slim",
+): "card" | "slim" {
+  return section === "priority" ||
+    section === "pinned" ||
+    section === "active" ||
+    (section === "settled" && parentVariant === "card")
+    ? "card"
+    : "slim";
+}
 
 type ShelfThread = Pick<EnvironmentThreadShell, "environmentId" | "id">;
 const keyOf = (thread: ShelfThread) =>

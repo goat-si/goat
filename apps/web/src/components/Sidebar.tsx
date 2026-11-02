@@ -136,7 +136,7 @@ import { primaryServerKeybindingsAtom } from "../state/server";
 import { environmentProjects } from "../state/projects";
 import { threadEnvironment } from "../state/threads";
 import { useOlderSettledShelf, useOlderSettledShelfGrowth } from "../state/olderSettledShelf";
-import { projectSettledLaunchShelf } from "./sidebar/settledLaunchShelf";
+import { projectSettledLaunchShelf, resolveNestedRowVariant } from "./sidebar/settledLaunchShelf";
 import { useThreadSearch } from "../state/queries";
 import { useOrchestrationCommand } from "../state/use-orchestration-command";
 import { readEnvironmentScope, useEnvironmentScope } from "../state/session";
@@ -3017,6 +3017,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         section: SidebarSection,
                         nested = false,
                         parentKey?: string,
+                        parentVariant?: "card" | "slim",
                       ): ReactNode => {
                         const threadKey = scopedThreadKey(
                           scopeThreadRef(thread.environmentId, thread.id),
@@ -3025,9 +3026,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                           snoozed: section === "snoozed",
                           settled: thread.settledOverride === "settled",
                         });
-                        const isCard =
-                          section === "priority" || section === "pinned" || section === "active";
-                        const rowVariant = isCard ? "card" : "slim";
+                        const rowVariant = resolveNestedRowVariant(section, parentVariant);
                         const launched = launchFold.childrenByParentKey.get(threadKey);
                         const Row = nested ? SidebarNestedThreadRow : SortableThreadRow;
                         return (
@@ -3065,6 +3064,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                       foldedSectionByKey.get(threadShellKey(child)) ?? "active",
                                       true,
                                       threadKey,
+                                      rowVariant,
                                     )
                                   }
                                 />
