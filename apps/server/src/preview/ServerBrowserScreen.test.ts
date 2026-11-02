@@ -10,8 +10,10 @@ import type { ServerBrowserViewerOutput } from "./ServerBrowser.ts";
 import {
   assertScreenExpectation,
   makeSurface,
+  paintOccludedRefs,
   type ScreenTab,
   screenActionGate,
+  screenTree,
 } from "./ServerBrowserScreen.ts";
 import { SessionControl } from "./SessionControl.ts";
 
@@ -71,6 +73,39 @@ describe("screen expectation at the input gate", () => {
     // The agent may dispatch again, but this action began under the control that Stop ended.
     expect(() => control.assertAgentMayDispatch()).not.toThrow();
     expect(() => gate.check?.()).toThrow();
+  });
+});
+
+describe("refs other content paints over", () => {
+  const box = (x: number, y: number, width: number, height: number) => ({ x, y, width, height });
+
+  it("a modal painted above a button hides it, but not a frame's button under the same modal", () => {
+    const occluded = paintOccludedRefs([
+      { ref: "e1", box: box(0, 0, 800, 600), paintOrder: 1, opaque: true },
+      { ref: "e2", box: box(100, 100, 80, 20), paintOrder: 2 },
+      { ref: "e3", box: box(200, 150, 400, 300), paintOrder: 9, opaque: true },
+      { ref: "e4", box: box(250, 200, 80, 20), paintOrder: 5 },
+      // A frame's boxes and paint order are its own; the main document's modal does not reach it.
+      { ref: "f1e2", box: box(250, 200, 80, 20), paintOrder: 1 },
+      // No paint data: the element stays visible.
+      { ref: "e5", box: box(260, 210, 10, 10) },
+    ]);
+    expect([...occluded]).toEqual(["e4"]);
+  });
+
+  it("the tree marks an occluded ref and leaves every other line as it was", () => {
+    const tree =
+      '- dialog [ref=e3]\n  - button "Close" [ref=e5]\n- button "Buy" [ref=e4] [box=250,200,80,20]';
+    const input = { limit: 10_000, unread: [], generation: "7" };
+    const plain = screenTree(tree, { ...input, refs: new Map() });
+    const refs = new Map<string, string>();
+    const marked = screenTree(tree, { ...input, refs, occluded: new Set(["e4"]) });
+    expect(marked.accessibilityTree.split("\n")).toEqual([
+      ...plain.accessibilityTree.split("\n").slice(0, 2),
+      '- button "Buy" [ref=t3-7-e4] [occluded] [box=250,200,80,20]',
+    ]);
+    expect(refs.get("t3-7-e4")).toBe("e4");
+    expect(marked.treeComplete).toBe(true);
   });
 });
 
