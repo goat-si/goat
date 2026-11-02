@@ -1,7 +1,18 @@
 import * as LatestAnswer from "./ProjectionLatestAnswer.ts";
 import * as LaunchEdges from "./ProjectionLaunchEdges.ts";
 import * as RunNotification from "./ProjectionRunNotification.ts";
-import { makeShellThreadRows, type ShellThreadRow } from "./ProjectionShellThreadRows.ts";
+import {
+  makeShellThreadRows,
+  runMapsByThreadId,
+  shellItemCountMap,
+  shellForkSourceIds,
+  type ShellRunRow,
+  type ShellRunItemCountRow,
+  type ShellItemCountRow,
+  selectShellDecodeRows,
+  shellStatusFromStoredRunStatus,
+  type ShellThreadRow,
+} from "./ProjectionShellThreadRows.ts";
 import { gateThreadReads, ThreadArchiveGate } from "./ThreadArchiveGate.ts";
 import { MAX_CONTINUATION_CHAIN } from "./ContinuationChain.ts";
 import { LEGACY_MCP_APP_OUTPUT_KEY } from "@goat/contracts/legacyT3Names";
@@ -454,6 +465,7 @@ export interface ProjectionTimelinePage {
 }
 
 export interface ShellSnapshotOptions {
+  readonly omitIdleSubagents?: boolean;
   readonly location?: "active" | "archive";
   readonly projectId?: ProjectId;
   readonly unsettledOnly?: boolean;
@@ -465,6 +477,14 @@ export interface ShellSnapshotOptions {
   readonly worktreePath?: string;
   readonly threadIds?: ReadonlyArray<ThreadId>;
 }
+
+export interface ShellSnapshotIndex {
+  readonly subagentThreadIds: ReadonlyArray<ThreadId>;
+  readonly subagentParentIds: ReadonlySet<string>;
+}
+export type ShellSnapshotRead = OrchestrationV2ThreadShellSnapshot & {
+  readonly shellIndex?: ShellSnapshotIndex;
+};
 
 export interface OlderSettledThreadsQuery {
   readonly before: OrchestrationV2OlderSettledCursor;
@@ -540,7 +560,7 @@ export interface ProjectionStoreV2Shape {
   ) => Effect.Effect<void, ProjectionStoreV2Error>;
   readonly getShellSnapshot: (
     options?: ShellSnapshotOptions,
-  ) => Effect.Effect<OrchestrationV2ThreadShellSnapshot, ProjectionStoreV2Error>;
+  ) => Effect.Effect<ShellSnapshotRead, ProjectionStoreV2Error>;
   readonly listActiveSubagentThreadIds: () => Effect.Effect<
     ReadonlyArray<ThreadId>,
     ProjectionStoreV2Error
@@ -563,7 +583,7 @@ export interface ProjectionStoreV2Shape {
   readonly readShellSnapshot: (
     options?: ShellSnapshotOptions,
   ) => Effect.Effect<
-    Effect.Effect<OrchestrationV2ThreadShellSnapshot, ProjectionStoreV2Error>,
+    Effect.Effect<ShellSnapshotRead, ProjectionStoreV2Error>,
     ProjectionStoreV2Error
   >;
   /** Stable task-id/entry-index pages over ledger history, including archived parents. */
@@ -1283,12 +1303,6 @@ type ShellPendingTurnItemRow = PayloadRow & {
   readonly owning_provider_instance_id: string | null;
 };
 
-type ShellRunRow = {
-  readonly thread_id: string;
-  readonly run_id: string;
-  readonly ordinal: number;
-};
-
 type SettlementThreadRow = Pick<
   ShellThreadRow,
   | "thread_id"
@@ -1301,18 +1315,6 @@ type SettlementThreadRow = Pick<
   | "latest_user_message_at"
   | "latest_user_authored_message_at"
 >;
-
-type ShellRunItemCountRow = {
-  readonly thread_id: string;
-  readonly run_id: string;
-  readonly item_count: number;
-};
-
-type ShellItemCountRow = {
-  readonly thread_id: string;
-  readonly item_count: number;
-  readonly runless_item_count: number;
-};
 
 const encodeTimelineSources = Schema.encodeEffect(
   Schema.fromJsonString(
@@ -2029,26 +2031,6 @@ type ShellThreadState = {
   readonly itemCountByRunId: ReadonlyMap<RunId, number>;
 };
 
-function shellStatusFromStoredRunStatus(status: string | null): OrchestrationV2ShellThreadStatus {
-  switch (status) {
-    case null:
-      return "idle";
-    case "preparing":
-    case "queued":
-    case "starting":
-    case "running":
-    case "waiting":
-    case "completed":
-    case "interrupted":
-    case "failed":
-    case "cancelled":
-    case "rolled_back":
-      return status;
-    default:
-      return "failed";
-  }
-}
-
 function itemCountThroughRun(input: {
   readonly state: ShellThreadState;
   readonly runId: RunId;
@@ -2066,20 +2048,6 @@ function itemCountThroughRun(input: {
     }
   }
   return count;
-}
-
-function shellForkSourceIds(
-  rows: ReadonlyArray<{ readonly forked_from_run_source_thread_id: string | null }>,
-): ReadonlyArray<ThreadId> {
-  return [
-    ...new Set(
-      rows.flatMap((row) =>
-        row.forked_from_run_source_thread_id === null
-          ? []
-          : [ThreadId.make(row.forked_from_run_source_thread_id)],
-      ),
-    ),
-  ];
 }
 
 function visibleItemCountForShell(input: {
@@ -6568,40 +6536,6 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       }
     `;
 
-    const runMapsByThreadId = (input: {
-      readonly runRows: ReadonlyArray<ShellRunRow>;
-      readonly itemCountRows: ReadonlyArray<ShellRunItemCountRow>;
-    }) => {
-      const runOrdinalsByThreadId = new Map<ThreadId, Map<RunId, number>>();
-      for (const row of input.runRows) {
-        const threadId = ThreadId.make(row.thread_id);
-        const runId = RunId.make(row.run_id);
-        const existing = runOrdinalsByThreadId.get(threadId) ?? new Map<RunId, number>();
-        existing.set(runId, row.ordinal);
-        runOrdinalsByThreadId.set(threadId, existing);
-      }
-      const itemCountsByThreadId = new Map<ThreadId, Map<RunId, number>>();
-      for (const row of input.itemCountRows) {
-        const threadId = ThreadId.make(row.thread_id);
-        const runId = RunId.make(row.run_id);
-        const existing = itemCountsByThreadId.get(threadId) ?? new Map<RunId, number>();
-        existing.set(runId, row.item_count);
-        itemCountsByThreadId.set(threadId, existing);
-      }
-      return { runOrdinalsByThreadId, itemCountsByThreadId };
-    };
-
-    const shellItemCountMap = (rows: ReadonlyArray<ShellItemCountRow>) =>
-      new Map(
-        rows.map(
-          (row) =>
-            [
-              ThreadId.make(row.thread_id),
-              { itemCount: row.item_count, runlessItemCount: row.runless_item_count },
-            ] as const,
-        ),
-      );
-
     const pendingBackgroundDataByThreadId = Effect.fn(
       "ProjectionStore.pendingBackgroundDataByThreadId",
     )(function* (input: {
@@ -7049,24 +6983,47 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       };
     });
 
-    const decodeShellSnapshot = Effect.fn("ProjectionStore.decodeShellSnapshot")(function* ({
-      targetThreadIds,
-      threadRows,
-      runRows,
-      itemCountRows,
-      shellItemCountRows,
-      sequenceRows,
-      providerThreadRows,
-      pendingTurnItemRows,
-    }: Effect.Success<ReturnType<typeof readShellSnapshotRows>>) {
+    const decodeShellSnapshot = Effect.fn("ProjectionStore.decodeShellSnapshot")(function* (
+      {
+        targetThreadIds,
+        threadRows,
+        runRows,
+        itemCountRows,
+        shellItemCountRows,
+        sequenceRows,
+        providerThreadRows,
+        pendingTurnItemRows,
+      }: Effect.Success<ReturnType<typeof readShellSnapshotRows>>,
+      omitIdleSubagents = false,
+    ) {
+      let shellIndex: ShellSnapshotIndex | undefined;
+      let retainedRows = threadRows;
+      let retainedProviderRows = providerThreadRows;
+      let retainedPendingRows = pendingTurnItemRows;
+      if (omitIdleSubagents) {
+        const selected = selectShellDecodeRows({
+          targetThreadIds,
+          threadRows,
+          providerThreadRows,
+          pendingTurnItemRows,
+        });
+        shellIndex = selected.shellIndex;
+        const keep = selected.keep;
+        retainedRows = threadRows.filter((row) => keep.has(row.thread_id));
+        retainedProviderRows = providerThreadRows.filter((row) => keep.has(row.thread_id));
+        retainedPendingRows = pendingTurnItemRows.filter((row) => keep.has(row.thread_id));
+      }
       const { runOrdinalsByThreadId, itemCountsByThreadId } = runMapsByThreadId({
         runRows,
         itemCountRows,
       });
       const shellItemCountsByThreadId = shellItemCountMap(shellItemCountRows);
       const { providerThreadsByThreadId, pendingTurnItemsByThreadId } =
-        yield* pendingBackgroundDataByThreadId({ providerThreadRows, pendingTurnItemRows });
-      const states = yield* Effect.forEach(threadRows, (row) =>
+        yield* pendingBackgroundDataByThreadId({
+          providerThreadRows: retainedProviderRows,
+          pendingTurnItemRows: retainedPendingRows,
+        });
+      const states = yield* Effect.forEach(retainedRows, (row) =>
         shellThreadStateFromRow({
           row,
           runOrdinalsByThreadId,
@@ -7095,19 +7052,21 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         snapshotSequence: sequenceRows[0]?.snapshot_sequence ?? 0,
         threads: shells.filter((thread) => thread.archivedAt === null),
         archivedThreads: shells.filter((thread) => thread.archivedAt !== null),
+        ...(shellIndex === undefined ? {} : { shellIndex }),
       };
     }, Effect.mapError(shellSnapshotReadError));
 
     const readShellSnapshot: ProjectionStoreV2Shape["readShellSnapshot"] = (options) =>
       readShellSnapshotRows(options).pipe(
         Effect.mapError(shellSnapshotReadError),
-        Effect.map(decodeShellSnapshot),
+        Effect.map((rows) => decodeShellSnapshot(rows, options?.omitIdleSubagents)),
       );
 
     const getShellSnapshot: ProjectionStoreV2Shape["getShellSnapshot"] = (options) =>
-      sql
-        .withTransaction(readShellSnapshotRows(options))
-        .pipe(Effect.mapError(shellSnapshotReadError), Effect.flatMap(decodeShellSnapshot));
+      sql.withTransaction(readShellSnapshotRows(options)).pipe(
+        Effect.mapError(shellSnapshotReadError),
+        Effect.flatMap((rows) => decodeShellSnapshot(rows, options?.omitIdleSubagents)),
+      );
 
     const countThreads = Effect.fn("ProjectionStore.countThreads")(function* () {
       const rows = yield* sql<{ readonly count: number }>`
@@ -7610,11 +7569,27 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
             service.getThreadProjection(threadId).pipe(Effect.map(threadShellFromProjection)),
         );
         const visible = shells.filter((thread) => thread.deletedAt === null);
+        const active = visible.filter((thread) => thread.archivedAt === null);
+        const subagents = active.filter(
+          (thread) => thread.lineage.relationshipToParent === "subagent",
+        );
         return {
           schemaVersion: ORCHESTRATION_V2_PROJECTION_SCHEMA_VERSION,
           snapshotSequence: yield* Ref.get(sequence),
-          threads: visible.filter((thread) => thread.archivedAt === null),
+          threads: active,
           archivedThreads: visible.filter((thread) => thread.archivedAt !== null),
+          ...(options?.omitIdleSubagents
+            ? {
+                shellIndex: {
+                  subagentThreadIds: subagents.map((thread) => thread.id),
+                  subagentParentIds: new Set(
+                    subagents.flatMap((thread) =>
+                      thread.lineage.parentThreadId === null ? [] : [thread.lineage.parentThreadId],
+                    ),
+                  ),
+                },
+              }
+            : {}),
         };
       }),
       countThreads: Effect.fn("ProjectionStore.countThreads")(function* () {

@@ -1039,7 +1039,6 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
     let subagents = subagentShellState([], 0);
     const filterSubagentTranscript = (stored: ApplicationStoredEvent) =>
       shouldPublishShellApplicationEvent(stored, subagents.ids, subagents);
-
     const enrichmentChanges = yield* projectEnrichment.subscribeChanges;
     const loadProjectMetadataSnapshot = Effect.fn("ws.orchestrationV2.loadProjectMetadataSnapshot")(
       function* (snapshotSequence: number) {
@@ -1057,20 +1056,21 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
       },
     );
     const loadSnapshot = Effect.fn("ws.orchestrationV2.loadShellSnapshot")(function* () {
-      const base = buildActiveShellSnapshot(
-        yield* loadShellSnapshotParts({
-          sql,
-          readThreads: threadManagement.readShellSnapshot({ location: "active" }),
-          listProjects: projects.listShells(),
-          latestSequence: applicationEvents.latestApplicationSequence,
-        }),
-      );
-      subagents = subagentShellState(base.threads, base.snapshotSequence);
-      const forSubscriber = shellSnapshotForSubscriber(base, {
-        omitIdleSubagents: input.omitIdleSubagents === true,
+      const omitIdleSubagents = input.omitIdleSubagents === true;
+      const parts = yield* loadShellSnapshotParts({
+        sql,
+        readThreads: threadManagement.readShellSnapshot({ location: "active", omitIdleSubagents }),
+        listProjects: projects.listShells(),
+        latestSequence: applicationEvents.latestApplicationSequence,
+      });
+      const base = buildActiveShellSnapshot(parts);
+      const options = {
+        omitIdleSubagents,
         omitOlderSettled: input.omitOlderSettled === true,
         now: yield* DateTime.now,
-      });
+      };
+      const forSubscriber = shellSnapshotForSubscriber(base, options, parts.shellIndex);
+      subagents = subagentShellState([...forSubscriber.subagentThreadIds], base.snapshotSequence);
       const enriched = yield* enrichProjectShells(base.projects);
       return {
         snapshot: {
