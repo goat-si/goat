@@ -48,6 +48,7 @@ import { stripUnservedToolOutputImageBytes } from "./toolOutputImageBytes.ts";
 import { ComputerUseCallApps } from "../cua/ComputerUseCallApps.ts";
 import { boundFileChangeForStorage } from "./WireProjection.ts";
 import { withFileChangeLineCounts } from "./fileChangeLineCounts.ts";
+import { withWriterFallback } from "./readerOverloadFallback.ts";
 
 export class ProviderEventNormalizeError extends Schema.TaggedError<ProviderEventNormalizeError>()(
   "ProviderEventNormalizeError",
@@ -775,6 +776,7 @@ export const layer: Layer.Layer<
         },
         (effect, input) =>
           effect.pipe(
+            withWriterFallback,
             Effect.mapError(
               (cause) =>
                 new ProviderEventNormalizeError({

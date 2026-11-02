@@ -32,6 +32,7 @@ import * as EventStore from "./EventStore.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
+import { withWriterFallback } from "./readerOverloadFallback.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 
@@ -54,7 +55,7 @@ const CODEX_DRIVER = ProviderDriverKind.make("codex");
 function threadCreatedEvent(
   now: DateTime.Utc,
 ): Effect.Effect<
-  OrchestrationV2DomainEvent,
+  Extract<OrchestrationV2DomainEvent, { readonly type: "thread.created" }>,
   IdAllocator.IdAllocatorV2Error,
   IdAllocator.IdAllocatorV2
 > {
@@ -335,33 +336,39 @@ it.effect.each([false, true])(
       }).pipe(Effect.provide(layerFor(path.join(directory, "state.sqlite"), writerWorker)));
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
-it.effect("ingests plan, screen row, and terminal events while reader admission is saturated", () =>
+type IngestEvent = ProviderEventIngestor.ProviderEventIngestInput["event"];
+interface Saturated {
+  readonly now: DateTime.Utc;
+  readonly thread: OrchestrationV2AppThread;
+  readonly providerSessionId: ProviderEventIngestor.ProviderEventIngestInput["providerSessionId"];
+  readonly providerThreadId: OrchestrationV2AppThread["activeProviderThreadId"] & {};
+  readonly projection: ProjectionStore.ProjectionStoreV2Shape;
+  readonly ingest: (
+    event: IngestEvent,
+  ) => ReturnType<ProviderEventIngestor.ProviderEventIngestorV2Shape["ingestNormalized"]>;
+}
+
+/** Runs `body` while every reader slot is busy and all 64 admissions are queued. */
+const withSaturatedReaders = <A, E>(body: (saturated: Saturated) => Effect.Effect<A, E>) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const directory = yield* fs.makeTempDirectoryScoped({ prefix: "ingestor-overload-" });
-    yield* Effect.gen(function* () {
+    return yield* Effect.gen(function* () {
       const nonReaders = new Set(workers);
       const now = yield* DateTime.now;
       const sql = yield* SqlClient.SqlClient;
       const eventSink = yield* EventSink.EventSinkV2;
+      const projection = yield* ProjectionStore.ProjectionStoreV2;
       const ingestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
       const allocator = yield* IdAllocator.IdAllocatorV2;
-      const thread = yield* threadCreatedEvent(now);
-      yield* eventSink.write({ events: [thread] });
-      const threadId = thread.threadId;
+      const created = yield* threadCreatedEvent(now);
+      yield* eventSink.write({ events: [created] });
+      const threadId = created.threadId;
       const providerSessionId = yield* allocator.allocate.providerSession({
         providerInstanceId: modelSelection.instanceId,
         threadId,
       });
-      const ingest = (event: ProviderEventIngestor.ProviderEventIngestInput["event"]) =>
-        ingestor.ingestNormalized({
-          providerSessionId,
-          providerInstanceId: modelSelection.instanceId,
-          threadId,
-          event,
-        });
-      const providerTurnId = ProviderTurnId.make("provider-turn:overload");
       const { held, reads } = yield* saturateReaders(nonReaders);
       using _held = {
         [Symbol.dispose]: () => {
@@ -370,67 +377,157 @@ it.effect("ingests plan, screen row, and terminal events while reader admission 
       };
       const overflow = yield* sql`SELECT 1`.pipe(NodeSqliteClient.readOnly, Effect.flip);
       assert.isTrue(NodeSqliteClient.isReaderAdmissionOverload(overflow));
-
-      const planned = yield* ingest({
-        type: "plan.updated",
-        driver: CODEX_DRIVER,
-        plan: {
-          id: PlanId.make(`${threadId}:plan`),
-          threadId,
-          runId: null,
-          nodeId: NodeId.make(`${threadId}:plan-node`),
-          status: "active",
-          kind: "todo_list",
-          steps: [{ id: "1", text: "Ingest under overload", status: "running" }],
-        },
-      });
-      assert.deepEqual(
-        planned.map((stored) => stored.event.type),
-        ["plan.updated"],
-      );
-      const screenRow = yield* ingest({
-        type: "turn_item.updated",
-        driver: CODEX_DRIVER,
-        turnItem: {
-          id: TurnItemId.make(`${threadId}:screen-row`),
-          type: "dynamic_tool",
-          threadId,
-          runId: null,
-          nodeId: null,
-          providerThreadId: null,
-          providerTurnId: null,
-          nativeItemRef: null,
-          parentItemId: null,
-          ordinal: 1,
-          status: "running",
-          title: "goat screen run",
-          toolName: "goat.goat_screen_run",
-          input: { code: "..." },
-          startedAt: now,
-          completedAt: null,
-          updatedAt: now,
-        },
-      });
-      assert.deepEqual(
-        screenRow.map((stored) => stored.event.type),
-        ["turn-item.updated"],
-      );
-      const terminal = yield* ingest({
-        type: "turn.terminal",
-        driver: CODEX_DRIVER,
+      const result = yield* body({
+        now,
+        thread: created.payload,
+        providerSessionId,
         providerThreadId: allocator.derive.providerThread({
           driver: CODEX_DRIVER,
           nativeThreadId: "native-thread",
         }),
-        providerTurnId,
-        runOrdinal: 1,
-        status: "completed",
-        failure: null,
-        threadDisposition: "reusable",
+        projection,
+        ingest: (event) =>
+          ingestor.ingestNormalized({
+            providerSessionId,
+            providerInstanceId: modelSelection.instanceId,
+            threadId,
+            event,
+          }),
       });
-      assert.isEmpty(terminal);
       for (const spy of held) spy.mockRestore();
       for (const read of reads) yield* Fiber.interrupt(read);
+      return result;
     }).pipe(Effect.provide(layerFor(path.join(directory, "state.sqlite"), false)));
-  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
+
+const ingestionReads: ReadonlyArray<{
+  readonly name: string;
+  readonly event: (saturated: Saturated) => IngestEvent;
+  readonly stored: ReadonlyArray<string>;
+}> = [
+  {
+    name: "plan.updated reading the previous plan",
+    event: ({ thread }) => ({
+      type: "plan.updated",
+      driver: CODEX_DRIVER,
+      plan: {
+        id: PlanId.make(`${thread.id}:plan`),
+        threadId: thread.id,
+        runId: null,
+        nodeId: NodeId.make(`${thread.id}:plan-node`),
+        status: "active",
+        kind: "todo_list",
+        steps: [{ id: "1", text: "Ingest under overload", status: "running" }],
+      },
+    }),
+    stored: ["plan.updated"],
+  },
+  {
+    name: "turn_item.updated reading the stored screen row",
+    event: ({ thread, now }) => ({
+      type: "turn_item.updated",
+      driver: CODEX_DRIVER,
+      turnItem: {
+        id: TurnItemId.make(`${thread.id}:screen-row`),
+        type: "dynamic_tool",
+        threadId: thread.id,
+        runId: null,
+        nodeId: null,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        parentItemId: null,
+        ordinal: 1,
+        status: "running",
+        title: "goat screen run",
+        toolName: "goat.goat_screen_run",
+        input: { code: "..." },
+        startedAt: now,
+        completedAt: null,
+        updatedAt: now,
+      },
+    }),
+    stored: ["turn-item.updated"],
+  },
+  {
+    name: "turn.terminal reading pending native user inputs",
+    event: ({ providerThreadId }) => ({
+      type: "turn.terminal",
+      driver: CODEX_DRIVER,
+      providerThreadId,
+      providerTurnId: ProviderTurnId.make("provider-turn:overload"),
+      runOrdinal: 1,
+      status: "completed",
+      failure: null,
+      threadDisposition: "reusable",
+    }),
+    stored: [],
+  },
+  {
+    name: "app_thread.created reading the existing thread",
+    event: ({ thread }) => ({
+      type: "app_thread.created",
+      driver: CODEX_DRIVER,
+      appThread: { ...thread, title: "Renamed under overload" },
+    }),
+    stored: ["thread.metadata-updated"],
+  },
+  {
+    name: "provider_thread.updated reading rewound thread records",
+    event: ({ thread, now, providerSessionId, providerThreadId }) => ({
+      type: "provider_thread.updated",
+      driver: CODEX_DRIVER,
+      providerThread: {
+        id: providerThreadId,
+        driver: CODEX_DRIVER,
+        providerInstanceId: modelSelection.instanceId,
+        providerSessionId,
+        appThreadId: thread.id,
+        ownerNodeId: null,
+        nativeThreadRef: { driver: CODEX_DRIVER, nativeId: "native-thread", strength: "strong" },
+        nativeConversationHeadRef: null,
+        status: "idle",
+        firstRunOrdinal: null,
+        lastRunOrdinal: null,
+        handoffIds: [],
+        forkedFrom: null,
+        createdAt: now,
+        updatedAt: now,
+      },
+      retainedNativeTurnIds: [],
+    }),
+    stored: ["provider-thread.updated"],
+  },
+];
+
+it.effect.each(ingestionReads)("ingests $name while reader admission is saturated", (read) =>
+  withSaturatedReaders((saturated) =>
+    Effect.gen(function* () {
+      const stored = yield* saturated.ingest(read.event(saturated));
+      assert.deepEqual(
+        stored.map((event) => event.event.type),
+        read.stored,
+      );
+    }),
+  ),
+);
+
+it.effect("fails reads outside provider ingestion fast while reader admission is saturated", () =>
+  withSaturatedReaders(({ thread, projection }) =>
+    Effect.gen(function* () {
+      const failure = yield* projection.getThread(thread.id).pipe(Effect.flip);
+      assert.isTrue(NodeSqliteClient.isReaderAdmissionOverload(failure));
+    }),
+  ),
+);
+
+it.effect("reruns an ingestion read on the writer inside an enclosing readOnly", () =>
+  withSaturatedReaders(({ thread, projection }) =>
+    Effect.gen(function* () {
+      const read = yield* withWriterFallback(projection.getThread(thread.id)).pipe(
+        NodeSqliteClient.readOnly,
+      );
+      assert.equal(read.id, thread.id);
+    }),
+  ),
 );

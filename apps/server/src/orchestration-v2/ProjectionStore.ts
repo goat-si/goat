@@ -8,9 +8,8 @@ import { LEGACY_MCP_APP_OUTPUT_KEY } from "@goat/contracts/legacyT3Names";
 import { pendingGuestMessageCount } from "@goat/contracts";
 import { applyThreadPullRequestLinkUpdate } from "../sourceControl/threadPullRequests.ts";
 import { projectTurnItemForWire } from "./WireProjection.ts";
-import { readOnReaderOrWriter } from "./readerOverloadFallback.ts";
+import { readOnReader } from "./readerOverloadFallback.ts";
 import * as Stream from "effect/Stream";
-import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import { makeThreadFind, findProjectedThreadItems } from "./ThreadFind.ts";
 import type {
   OrchestrationV2SearchThreadInput,
@@ -7302,12 +7301,6 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         );
       }).pipe(Effect.mapError((cause) => new ProjectionStoreReadError({ cause })));
 
-    const readOnReader =
-      <Args extends ReadonlyArray<unknown>, A, E, R>(
-        method: (...args: Args) => Effect.Effect<A, E, R>,
-      ) =>
-      (...args: Args): Effect.Effect<A, E, R> =>
-        method(...args).pipe(NodeSqliteClient.readOnly);
     return gateThreadReads(archiveGate, {
       apply,
       setCompletionNotification: (input) =>
@@ -7358,7 +7351,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getRunMessage: readOnReader(getRunMessage),
       canStartQueuedRun: readOnReader(canStartQueuedRun),
       getHeldQueuedRuns: readOnReader(getHeldQueuedRuns),
-      getPendingNativeUserInputs: readOnReaderOrWriter(getPendingNativeUserInputs),
+      getPendingNativeUserInputs: readOnReader(getPendingNativeUserInputs),
       hasUnpairedRunInterruptRequest: readOnReader(hasUnpairedRunInterruptRequest),
       getServerActivityBlockers,
       getIgnoredActivity,
@@ -7366,14 +7359,14 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         getServerActivityBlockers(1).pipe(
           Effect.map((blockers) => (blockers.length > 0 ? ("busy" as const) : ("idle" as const))),
         ),
-      isNodeStored: readOnReaderOrWriter(isNodeStored),
+      isNodeStored: readOnReader(isNodeStored, true),
       getMessageCount: readOnReader(getMessageCount),
       getNextTurnItemOrdinal: readOnReader(getNextTurnItemOrdinal),
-      getTurnItem: readOnReaderOrWriter(getTurnItem),
+      getTurnItem: readOnReader(getTurnItem),
       getThreadRecords: (threadId, fields, filter) =>
-        getThreadRecords(threadId, fields, filter).pipe(NodeSqliteClient.readOnly),
+        readOnReader(() => getThreadRecords(threadId, fields, filter))(),
       getRuntimeRequest: readOnReader(getRuntimeRequest),
-      getPlan: readOnReaderOrWriter(getPlan),
+      getPlan: readOnReader(getPlan),
       getProviderControlContext: readOnReader(getProviderControlContext),
       getLimitRecoveryCandidates: readOnReader(getLimitRecoveryCandidates),
       getRecoveryThreadIds: readOnReader(getRecoveryThreadIds),
