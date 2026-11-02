@@ -1,13 +1,20 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- FileSystem.access cannot test directory search permission.
 import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
 import { isCommandMissingCause } from "./snapshotProbe.ts";
 
-export type SpawnFailure = "missing" | "cwd_inaccessible" | "permission_denied" | "unknown";
+export type SpawnFailure =
+  | "missing"
+  | "cwd_inaccessible"
+  | "permission_denied"
+  | "exec_failed"
+  | "unknown";
 
 export function classifySpawnFailure(
   cause: unknown,
   cwd: string,
   accessDirectory = (path: string) => NodeFS.accessSync(path, NodeFS.constants.X_OK),
+  command?: { binary: string; env?: NodeJS.ProcessEnv | undefined },
 ): SpawnFailure {
   const seen = new Set<unknown>();
   const pending: unknown[] = [cause];
@@ -47,9 +54,33 @@ export function classifySpawnFailure(
       return "cwd_inaccessible";
     return "unknown";
   }
-  if (code === "ENOENT") return "missing";
+  if (code === "ENOENT") {
+    if (command && executableExists(command.binary, cwd, command.env ?? process.env))
+      return "exec_failed";
+    return "missing";
+  }
   if (code === "EACCES" || code === "EPERM") return "permission_denied";
   return "unknown";
+}
+
+function executableExists(binary: string, cwd: string, env: NodeJS.ProcessEnv): boolean {
+  const paths =
+    binary.includes("/") || binary.includes("\\")
+      ? [NodePath.resolve(cwd, binary)]
+      : (env.PATH ?? "/usr/bin:/bin")
+          .split(NodePath.delimiter)
+          .map((dir) => NodePath.resolve(cwd, dir || ".", binary));
+  const extensions =
+    env.PATHEXT && !NodePath.extname(binary) ? ["", ...env.PATHEXT.split(";")] : [""];
+  return paths.some((path) =>
+    extensions.some((extension) => {
+      try {
+        return NodeFS.statSync(path + extension).isFile();
+      } catch {
+        return false;
+      }
+    }),
+  );
 }
 
 export function spawnFailureMessage(
@@ -59,6 +90,8 @@ export function spawnFailureMessage(
 ): string | undefined {
   if (failure === "cwd_inaccessible")
     return `The GOAT server process cannot enter the working directory \`${cwd}\`.`;
+  if (failure === "exec_failed")
+    return `The executable \`${binary}\` exists but could not be started; its interpreter or loader may be missing.`;
   if (failure === "permission_denied")
     return `The GOAT server process does not have permission to execute \`${binary}\`.`;
   return undefined;

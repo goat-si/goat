@@ -172,7 +172,10 @@ export const checkFxProviderStatus = Effect.fn("checkFxProviderStatus")(function
   );
   if (Result.isFailure(versionResult) || Option.isNone(versionResult.success)) {
     const failure = Result.isFailure(versionResult)
-      ? classifySpawnFailure(versionResult.failure, spawnCwd)
+      ? classifySpawnFailure(versionResult.failure, spawnCwd, undefined, {
+          binary: settings.binaryPath || "fx",
+          env: environment,
+        })
       : "unknown";
     const missing = failure === "missing";
     return snapshot(settings, checkedAt, {

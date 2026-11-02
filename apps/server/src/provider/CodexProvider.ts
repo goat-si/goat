@@ -902,7 +902,10 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     const routeFailure =
       "cause" in error && isHomeRouteUnavailable(error.cause) ? error.cause : undefined;
     const failure = isCodexAppServerSpawnError(error)
-      ? classifySpawnFailure(error, probeCwd)
+      ? classifySpawnFailure(error, probeCwd, undefined, {
+          binary: codexSettings.binaryPath,
+          env: routeInput.success.execution.environment,
+        })
       : "unknown";
     const installed = routeFailure !== undefined || failure !== "missing";
     const version =

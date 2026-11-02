@@ -431,7 +431,10 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
 
   if (Result.isFailure(versionResult)) {
     const error = versionResult.failure;
-    const failure = classifySpawnFailure(error, spawnCwd);
+    const failure = classifySpawnFailure(error, spawnCwd, undefined, {
+      binary: grokSettings.binaryPath || "grok",
+      env: probeEnvironment,
+    });
     yield* Effect.logWarning("Grok CLI health check failed.", {
       errorTag: error._tag,
     });

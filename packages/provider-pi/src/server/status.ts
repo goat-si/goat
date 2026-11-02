@@ -362,7 +362,10 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
 
   if (Result.isFailure(versionResult)) {
     const error = versionResult.failure;
-    const failure = classifySpawnFailure(error, spawnCwd);
+    const failure = classifySpawnFailure(error, spawnCwd, undefined, {
+      binary: piSettings.binaryPath || "pi",
+      env: environment,
+    });
     yield* Effect.logWarning("Pi CLI health check failed.", { errorTag: error._tag });
     return buildServerProvider({
       presentation: PI_PRESENTATION,

@@ -515,7 +515,10 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
 
   if (Result.isFailure(versionProbe)) {
     const error = versionProbe.failure;
-    const failure = classifySpawnFailure(error, spawnCwd);
+    const failure = classifySpawnFailure(error, spawnCwd, undefined, {
+      binary: claudeSettings.binaryPath,
+      env: resolvedEnvironment,
+    });
     yield* Effect.logWarning("Claude Agent CLI health check failed.", {
       errorTag: error._tag,
     });

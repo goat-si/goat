@@ -87,7 +87,10 @@ export const checkMuseProviderStatus = Effect.fn("checkMuseProviderStatus")(func
   }).pipe(Effect.timeoutOption(DEFAULT_TIMEOUT_MS), Effect.result);
 
   if (Result.isFailure(versionResult)) {
-    const failure = classifySpawnFailure(versionResult.failure, spawnCwd);
+    const failure = classifySpawnFailure(versionResult.failure, spawnCwd, undefined, {
+      binary: settings.binaryPath,
+      env: museEnvironment,
+    });
     const missing = failure === "missing";
     return snapshot({
       installed: !missing,
