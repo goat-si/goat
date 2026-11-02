@@ -30,7 +30,11 @@ export const makeStopDeadline = Effect.fn("desktop.backendInstance.stop.deadline
     details: string,
   ) {
     const first = yield* Ref.modify(reported, (value) => [!value, true] as const);
-    if (first) yield* recordStop({ message: "backend stop timed out", level: "WARN", details });
+    if (first) {
+      const write = recordStop({ message: "backend stop timed out", level: "WARN", details });
+      if (timeout) yield* Effect.forkDetach(write);
+      else yield* write;
+    }
   });
   return { remaining, reportTimeout };
 });

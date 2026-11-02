@@ -75,27 +75,26 @@ export function registerBackendStopTests({
       }),
     ),
   );
-  it.effect("PR 2418: a slow stop record does not discard the shutdown notification", () =>
+  it.effect("PR 2418: a stalled stop record cannot prevent a bounded stop", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const ready = yield* Deferred.make<void>();
         const recording = yield* Deferred.make<void>();
         const allowRecord = yield* Deferred.make<void>();
-        const stopped = yield* Deferred.make<void>();
+        const killObserved = yield* Deferred.make<void>();
         let shutdowns = 0;
         const spawnerLayer = Layer.succeed(
           ChildProcessSpawner.ChildProcessSpawner,
           ChildProcessSpawner.make(() =>
             Effect.gen(function* () {
               const exit = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
-              yield* Scope.addFinalizer(
-                yield* Scope.Scope,
-                Deferred.succeed(exit, ChildProcessSpawner.ExitCode(0)).pipe(
-                  Effect.andThen(Deferred.succeed(stopped, undefined)),
+              const kill = () =>
+                Deferred.succeed(killObserved, undefined).pipe(
+                  Effect.andThen(Deferred.succeed(exit, ChildProcessSpawner.ExitCode(0))),
                   Effect.asVoid,
-                ),
-              );
-              return makeProcess({ exitCode: Deferred.await(exit) });
+                );
+              yield* Scope.addFinalizer(yield* Scope.Scope, kill());
+              return makeProcess({ exitCode: Deferred.await(exit), kill });
             }),
           ),
         );
@@ -111,7 +110,9 @@ export function registerBackendStopTests({
                 ? Deferred.succeed(recording, undefined).pipe(
                     Effect.andThen(Deferred.await(allowRecord)),
                   )
-                : Effect.void,
+                : message === "backend stop timed out"
+                  ? Deferred.await(allowRecord)
+                  : Effect.void,
           },
         });
         yield* instance.start;
@@ -121,9 +122,12 @@ export function registerBackendStopTests({
           .pipe(Effect.forkChild);
         yield* Deferred.await(recording);
         yield* TestClock.adjust(BACKEND_STOP_TIMEOUT);
-        yield* Deferred.succeed(allowRecord, undefined);
+        const returnedBeforeRelease = stopping.pollUnsafe() !== undefined;
+        if (!returnedBeforeRelease) yield* Deferred.succeed(allowRecord, undefined);
         yield* Fiber.join(stopping);
-        yield* Deferred.await(stopped);
+        yield* Deferred.await(killObserved);
+        yield* Deferred.succeed(allowRecord, undefined);
+        assert.isTrue(returnedBeforeRelease);
         assert.equal(shutdowns, 1);
       }),
     ),
@@ -569,6 +573,7 @@ export function registerBackendStopTests({
         const exited = yield* Deferred.make<void>();
         const drained = yield* Deferred.make<void>();
         const lateExitLogged = yield* Deferred.make<void>();
+        const allowWarnings = yield* Deferred.make<void>();
         let loggedOutput = "";
         const records: Array<{ message: string; level: string; details: string }> = [];
         const layer = Layer.succeed(
@@ -610,6 +615,9 @@ export function registerBackendStopTests({
                     ? Deferred.succeed(lateExitLogged, undefined).pipe(Effect.asVoid)
                     : Effect.void,
                 ),
+                Effect.andThen(
+                  record.level === "WARN" ? Deferred.await(allowWarnings) : Effect.void,
+                ),
               ),
           },
         }).pipe(Scope.provide(owner));
@@ -620,6 +628,7 @@ export function registerBackendStopTests({
         );
         yield* TestClock.adjust("1 second");
         const closedBeforeSpawn = closing.pollUnsafe() !== undefined;
+        if (!closedBeforeSpawn) yield* Deferred.succeed(allowWarnings, undefined);
         const warning = records.find(
           (record) => record.message === "backend spawn still pending at stop",
         );
@@ -628,6 +637,7 @@ export function registerBackendStopTests({
         yield* Deferred.await(released);
         yield* Deferred.await(drained);
         yield* Deferred.await(lateExitLogged);
+        yield* Deferred.succeed(allowWarnings, undefined);
         const spawnedRecord = records.find(
           (record) => record.message === "backend spawned after its stop gave up; releasing it",
         );

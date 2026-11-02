@@ -118,6 +118,7 @@ interface ActiveBackendRun {
   readonly id: number;
   readonly scope: Scope.Closeable;
   readonly spawnReady: Deferred.Deferred<void>;
+  readonly boundedStop: Ref.Ref<boolean>;
   readonly fiber: Option.Option<Fiber.Fiber<void, never>>;
   readonly pid: Option.Option<number>;
   readonly exitObserved: boolean;
@@ -372,6 +373,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
 
         const runScope = yield* Scope.make("sequential");
         const spawnReady = yield* Deferred.make<void>();
+        const boundedStop = yield* Ref.make(false);
         const runId = yield* Ref.modify(state, (latest) => [
           latest.nextRunId,
           {
@@ -380,6 +382,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
               id: latest.nextRunId,
               scope: runScope,
               spawnReady,
+              boundedStop,
               fiber: Option.none(),
               pid: Option.none(),
               exitObserved: false,
@@ -474,11 +477,13 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
               );
 
               if (!isCurrentRun && observedExit && startedPid !== undefined) {
-                yield* backendOutputLog.recordStop({
+                const write = backendOutputLog.recordStop({
                   message: "late-spawned backend exited",
                   level: "WARN",
                   details: `pid=${startedPid} runId=${runId} exit=${reason}`,
                 });
+                if (yield* Ref.get(boundedStop)) yield* Effect.forkDetach(write);
+                else yield* write;
               }
               if (isCurrentRun && !exitObserved && Option.isSome(pid)) {
                 if (wasReady) yield* spec.onShutdown?.() ?? Effect.void;
@@ -563,11 +568,13 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
                 startedPid = pid;
                 const activeBeforeStart = Option.getOrUndefined((yield* Ref.get(state)).active);
                 if (activeBeforeStart?.id !== runId) {
-                  yield* backendOutputLog.recordStop({
+                  const write = backendOutputLog.recordStop({
                     message: "backend spawned after its stop gave up; releasing it",
                     level: "WARN",
                     details: `pid=${pid} runId=${runId}`,
                   });
+                  if (yield* Ref.get(boundedStop)) yield* Effect.forkDetach(write);
+                  else yield* write;
                   return;
                 }
                 yield* updateActiveRun(runId, (run) => ({ ...run, pid: Option.some(pid) }));
@@ -812,13 +819,9 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
         ] as const;
       });
       const run = Option.getOrUndefined(result.active);
+      if (run && options?.timeout) yield* Ref.set(run.boundedStop, true);
       if (run && result.newStopRequest) {
         yield* backendOutputLog.markStop;
-        yield* backendOutputLog.recordStop({
-          message: "backend stop requested",
-          level: "INFO",
-          details: `pid=${Option.match(run.pid, { onNone: () => "pending", onSome: String })} reason=${reason} graceMs=${Duration.toMillis(DEFAULT_BACKEND_TERMINATE_GRACE)} timeoutMs=${options?.timeout ? Duration.toMillis(options.timeout) : "none"}`,
-        });
       }
       return result;
     });
@@ -841,7 +844,18 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
       );
       return;
     }
-    const { active, restartFiber, notifyShutdown } = acquired.value;
+    const { active, restartFiber, notifyShutdown, newStopRequest } = acquired.value;
+    const run = Option.getOrUndefined(active);
+    if (run && newStopRequest) {
+      const write = backendOutputLog.recordStop({
+        message: "backend stop requested",
+        level: "INFO",
+        details: `pid=${Option.match(run.pid, { onNone: () => "pending", onSome: String })} reason=${reason} graceMs=${Duration.toMillis(DEFAULT_BACKEND_TERMINATE_GRACE)} timeoutMs=${options?.timeout ? Duration.toMillis(options.timeout) : "none"}`,
+      });
+      if (options?.timeout)
+        yield* write.pipe(Effect.timeoutOption(yield* remaining(options.timeout)));
+      else yield* write;
+    }
 
     const finish = Effect.gen(function* () {
       if (notifyShutdown) {
@@ -856,13 +870,16 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
         // The enclosing operation owns the span for this inline handler.
         onSome: Effect.fnUntraced(function* (run) {
           const waitStarted = yield* Clock.monotonicTimeNanos;
+          const pendingWarning = backendOutputLog.recordStop({
+            message: "backend spawn still pending at stop",
+            level: "WARN",
+            details: `pid=pending reason=${reason}`,
+          });
           const closed = yield* closeRun(
             run,
-            backendOutputLog.recordStop({
-              message: "backend spawn still pending at stop",
-              level: "WARN",
-              details: `pid=pending reason=${reason}`,
-            }),
+            options?.timeout
+              ? Effect.forkDetach(pendingWarning).pipe(Effect.asVoid)
+              : pendingWarning,
             options?.timeout ? { timeout: yield* remaining(options.timeout) } : undefined,
           );
           if (!closed) {
