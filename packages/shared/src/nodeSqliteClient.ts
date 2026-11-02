@@ -54,6 +54,8 @@ export interface SqliteClientConfig {
   readonly readerStartupTimeout?: Duration.Input | undefined;
   /** Reader workers started on demand; a positive integer, 4 by default. */
   readonly readerPoolSize?: number | undefined;
+  /** Longest a read waits for one of the 64 reader admissions before failing as overloaded; 30 seconds by default. */
+  readonly readerAdmissionTimeout?: Duration.Input | undefined;
   /** Ignored for in-memory databases. */
   readonly checkpointWorker?: boolean | undefined;
   readonly writerWorker?: boolean | undefined;
@@ -62,7 +64,12 @@ export interface SqliteClientConfig {
 }
 
 export { isReaderAdmissionOverload } from "./readerAdmissionOverload.ts";
-import { ReaderAdmissionOverloadError } from "./readerAdmissionOverload.ts";
+import {
+  admissionSqlError,
+  makeReaderAdmission,
+  readerAdmissionTimeout,
+} from "./readerAdmission.ts";
+export { failFastReaderAdmission } from "./readerAdmission.ts";
 export { onWriter, readOnly } from "./sqliteReadRouting.ts";
 import { ReadOnly } from "./sqliteReadRouting.ts";
 
@@ -1115,21 +1122,21 @@ const make = Effect.fn("makeWithDatabase")(function* (
           size: options.readerPoolSize,
         })
       : undefined;
-  let admittedReaders = 0;
+  const admission = yield* makeReaderAdmission({
+    limit: 64,
+    timeout: readerAdmissionTimeout(options.readerAdmissionTimeout),
+    honorFailFast: true,
+  });
   const admit = (target: { readonly name: Acquired["connection"] }) =>
-    Effect.suspend(() => {
-      if (target.name !== "reader") return Effect.void;
-      if (admittedReaders >= 64)
-        return Effect.fail(
-          failed(new ReaderAdmissionOverloadError(), "Database reader overloaded", "acquire"),
-        );
-      admittedReaders++;
-      return Effect.void;
-    });
+    target.name === "reader"
+      ? Effect.withFiber((fiber) =>
+          admission
+            .acquire(fiber.getRef(TransactionAcquire)?.restore ?? fiber.getRef(ReadOnly))
+            .pipe(Effect.mapError(admissionSqlError)),
+        )
+      : Effect.void;
   const releaseAdmission = (target: { readonly name: Acquired["connection"] }) =>
-    Effect.sync(() => {
-      if (target.name === "reader") admittedReaders--;
-    });
+    target.name === "reader" ? admission.release : Effect.void;
 
   const writer = { name: "writer" as const, lock: semaphore, connection };
   let activeWriter: ConnectionOwner | undefined;

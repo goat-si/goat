@@ -318,7 +318,11 @@ it.effect.each([false, true])(
           startImmediately: true,
         });
         assert.isUndefined(replacement.pollUnsafe());
-        const overflow = yield* sql`SELECT 1`.pipe(NodeSqliteClient.readOnly, Effect.flip);
+        const overflow = yield* sql`SELECT 1`.pipe(
+          NodeSqliteClient.readOnly,
+          NodeSqliteClient.failFastReaderAdmission,
+          Effect.flip,
+        );
         assert.isTrue(NodeSqliteClient.isReaderAdmissionOverload(overflow));
         reads.push(replacement);
         yield* sql`CREATE TABLE writer_after_interrupt (value INTEGER)`;
@@ -402,7 +406,11 @@ const withSaturatedReaders = <A, E, E2 = never>(
           for (const spy of held) spy.mockRestore();
         },
       };
-      const overflow = yield* sql`SELECT 1`.pipe(NodeSqliteClient.readOnly, Effect.flip);
+      const overflow = yield* sql`SELECT 1`.pipe(
+        NodeSqliteClient.readOnly,
+        NodeSqliteClient.failFastReaderAdmission,
+        Effect.flip,
+      );
       assert.isTrue(NodeSqliteClient.isReaderAdmissionOverload(overflow));
       const result = yield* body(fixture);
       for (const spy of held) spy.mockRestore();
@@ -593,13 +601,20 @@ it.effect.each(ingestionReads)("ingests $name while reader admission is saturate
   ),
 );
 
-it.effect("fails reads outside provider ingestion fast while reader admission is saturated", () =>
-  withSaturatedReaders(({ thread, projection }) =>
-    Effect.gen(function* () {
-      const failure = yield* projection.getThread(thread.id).pipe(Effect.flip);
-      assert.isTrue(NodeSqliteClient.isReaderAdmissionOverload(failure));
-    }),
-  ),
+it.effect(
+  "waits then fails reads outside provider ingestion while reader admission is saturated",
+  () =>
+    withSaturatedReaders(({ thread, projection }) =>
+      Effect.gen(function* () {
+        const read = yield* Effect.forkChild(projection.getThread(thread.id).pipe(Effect.flip), {
+          startImmediately: true,
+        });
+        assert.isUndefined(read.pollUnsafe());
+        yield* TestClock.adjust("30 seconds");
+        const failure = yield* Fiber.join(read);
+        assert.isTrue(NodeSqliteClient.isReaderAdmissionOverload(failure));
+      }),
+    ),
 );
 
 it.effect("reruns an ingestion read on the writer inside an enclosing readOnly", () =>
