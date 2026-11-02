@@ -14,6 +14,21 @@ import { snapshotChecks } from "./ProviderDiagnosis.ts";
 
 import { applyPreferredCodexDefaultModel, mapCodexModelCapabilities } from "./CodexProvider.ts";
 
+it.effect("reports a deleted process cwd as a Codex working directory failure", () =>
+  Effect.gen(function* () {
+    const fixture = yield* routeFixture({ role: "home" });
+    using _cwd = vi.spyOn(process, "cwd").mockImplementation(() => {
+      throw Object.assign(new Error("deleted"), { code: "ENOENT" });
+    });
+    const snapshot = yield* checkCodexProviderStatus(fixture.input.settings, undefined, {}).pipe(
+      Effect.provideService(HomeRoute.OpenCodexRoute, fixture.service),
+    );
+    assert.isTrue(snapshot.installed);
+    assert.equal(snapshot.status, "error");
+    assert.include(snapshot.message ?? "", "working directory");
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
 it.effect.each([
   { code: "EACCES", cwd: "/goat-test-missing-cwd-38401", installed: true },
   { code: "ENOENT", cwd: "/goat-test-missing-cwd-38401", installed: true },
