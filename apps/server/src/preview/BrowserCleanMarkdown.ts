@@ -40,6 +40,8 @@ const DROP_CLOSE = "\u0002";
 const INDENT = "\u0003";
 const MAX_RENDER_DEPTH = 400;
 const MAX_COLSPAN = 1000;
+/** Bounds each close search so adversarial nesting cannot make tree building quadratic. */
+const MAX_CLOSE_SCAN = 256;
 
 const set = (...tags: Array<string>): ReadonlySet<string> => new Set(tags);
 const words = (list: string) => set(...list.split(" "));
@@ -229,6 +231,15 @@ const makeElement = (
 const parseHtml = (html: string): ElementNode => {
   const root = makeElement("#root", new Map(), false);
   const stack: Array<ElementNode> = [root];
+  const openCounts = new Map<string, number>();
+  const counted = (tag: string, delta: number) =>
+    openCounts.set(tag, (openCounts.get(tag) ?? 0) + delta);
+  const popTo = (depth: number) => {
+    while (stack.length > depth) {
+      const removed = stack.pop();
+      if (removed) counted(removed.tag, -1);
+    }
+  };
   const top = () => stack.at(-1) ?? root;
   const addText = (text: string) => {
     if (!text) return;
@@ -238,10 +249,14 @@ const parseHtml = (html: string): ElementNode => {
     else parent.children.push({ kind: "text", text });
   };
   const closeWithin = (close: ReadonlySet<string>, within: ReadonlySet<string>) => {
-    for (let depth = stack.length - 1; depth > 0; depth--) {
+    let isOpen = false;
+    for (const tag of close) isOpen ||= (openCounts.get(tag) ?? 0) > 0;
+    if (!isOpen) return;
+    const floor = Math.max(1, stack.length - MAX_CLOSE_SCAN);
+    for (let depth = stack.length - 1; depth >= floor; depth--) {
       const tag = stack[depth]?.tag ?? "";
       if (close.has(tag)) {
-        stack.length = depth;
+        popTo(depth);
         return;
       }
       if (within.has(tag)) return;
@@ -256,7 +271,10 @@ const parseHtml = (html: string): ElementNode => {
     const element = makeElement(tag.name, tag.attrs, foreign);
     parent.children.push(element);
     // HTML ignores "/>" on its own elements; only foreign content (svg, math) self-closes.
-    if (!VOID.has(tag.name) && !(tag.selfClosing && foreign)) stack.push(element);
+    if (!VOID.has(tag.name) && !(tag.selfClosing && foreign)) {
+      stack.push(element);
+      counted(tag.name, 1);
+    }
     return element;
   };
 
@@ -301,7 +319,7 @@ const parseHtml = (html: string): ElementNode => {
         kind: "text",
         text: RCDATA.has(tag.name) ? decodeEntities(body) : body,
       });
-      if (stack.at(-1) === element) stack.pop();
+      if (stack.at(-1) === element) popTo(stack.length - 1);
       const close = end === -1 ? -1 : html.indexOf(">", end);
       index = close === -1 ? html.length : close + 1;
     }
