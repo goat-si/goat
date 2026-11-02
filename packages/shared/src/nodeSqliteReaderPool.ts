@@ -5,27 +5,22 @@ import type { SqlError } from "effect/sql/SqlError";
 
 const DEFAULT_READER_POOL_SIZE = 4;
 
-// Startup failures usually share one cause, so every slot honors one restart backoff and one
-// restart runs at a time: slots waiting behind it re-check the deadline a failure extended.
+// Startup failures usually share one cause, so every slot honors one restart backoff and workers
+// start one at a time: each start waits for the previous start's outcome, then the deadline.
 export const makeReaderRestart = (gate: Semaphore.Semaphore) => {
   let retryAt = 0n;
   let retryMs = 250;
-  let failing = false;
   let probe: Effect.Effect<unknown> = Effect.void;
   return {
     gate,
-    // From a failure until a read succeeds, restarts go through the gate one at a time.
-    failing: () => failing,
     // A later failure never shortens a deadline another slot already set.
     fail: (now: bigint) => {
       const next = now + BigInt(retryMs) * 1_000_000n;
       if (next > retryAt) retryAt = next;
       retryMs = Math.min(8_000, retryMs * 2);
-      failing = true;
     },
     succeed: () => {
       retryMs = 250;
-      failing = false;
     },
     remainingMs: (now: bigint) => Number(retryAt - now) / 1e6,
     // A restart's startup outlives a cancelled request, so the next restart waits for its outcome,
@@ -50,6 +45,9 @@ export const makeReaderPool = Effect.fn("SqliteReaderPool.make")(function* <R>(o
   readonly size?: number | undefined;
 }) {
   const size = options.size ?? DEFAULT_READER_POOL_SIZE;
+  if (!Number.isInteger(size) || size < 1) {
+    return yield* Effect.die(new Error(`readerPoolSize must be a positive integer, got ${size}`));
+  }
   const restart = makeReaderRestart(yield* Semaphore.make(1));
   const slots = yield* Effect.forEach(Array.from({ length: size }), () =>
     options.makeSlot(restart),

@@ -114,3 +114,18 @@ it.effect("a failure after a success never shortens the shared restart deadline"
     assert.equal(restart.remainingMs(ms(600)), 500);
   }),
 );
+
+it.effect("rejects a reader pool size that is not a positive integer", () =>
+  Effect.gen(function* () {
+    for (const size of [0, -1, 1.5]) {
+      const exit = yield* Effect.exit(
+        makeReaderPool({
+          makeSlot: () => Effect.die(new Error("no slot is made")),
+          available: undefined,
+          size,
+        }),
+      );
+      assert.isTrue(exit._tag === "Failure");
+    }
+  }),
+);

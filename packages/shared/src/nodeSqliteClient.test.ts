@@ -662,7 +662,7 @@ it.effect("releases reader requests and connection permits when recovery is inte
   ),
 );
 
-it.effect("recovers startup once on each concurrently started reader slot", () => {
+it.effect("recovers each reader slot's startup in turn, one worker start at a time", () => {
   const { warnings, layer: logs } = captureWarnings();
   const config = { point: "initialize" as const, codes: [261], expected: 2 };
   return withWorkerRecovery(config, (failures, attempted) =>
@@ -671,14 +671,15 @@ it.effect("recovers startup once on each concurrently started reader slot", () =
         const before = startedWorkers.length;
         const first = yield* countEntries(sql).pipe(SqliteClient.readOnly, Effect.forkChild);
         yield* attempted();
-        // The first slot is still starting, so the second read starts the next slot.
+        // The second slot waits for the first slot's startup before it starts its own worker.
         const second = yield* countEntries(sql).pipe(
           SqliteClient.readOnly,
           Effect.forkChild({ startImmediately: true }),
         );
-        yield* attempted(1);
         yield* TestClock.adjust("10 millis");
         assert.equal(yield* Fiber.join(first), 1);
+        yield* attempted(1);
+        yield* TestClock.adjust("10 millis");
         assert.equal(yield* Fiber.join(second), 1);
         assert.deepEqual(failures, [261, 261]);
         assert.equal(startedWorkers.length, before + 2);

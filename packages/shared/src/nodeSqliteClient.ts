@@ -52,6 +52,7 @@ export interface SqliteClientConfig {
   /** Ignored for in-memory databases, which cannot share a second connection. */
   readonly readerWorker?: boolean | undefined;
   readonly readerStartupTimeout?: Duration.Input | undefined;
+  /** Reader workers started on demand; a positive integer, 4 by default. */
   readonly readerPoolSize?: number | undefined;
   /** Ignored for in-memory databases. */
   readonly checkpointWorker?: boolean | undefined;
@@ -449,32 +450,29 @@ const makeReader = Effect.fn("SqliteReader.make")(function* (
   const acquire = Effect.withFiber((fiber) => {
     const restore = Context.get(fiber.context, ReadOnly) ?? identity;
     const remaining = () => restart.remainingMs(clock.monotonicTimeNanosUnsafe());
-    const begin = Effect.gen(function* () {
-      if (current === undefined) {
+    // Workers start one at a time: each waits for the previous start's outcome and the shared deadline.
+    const startNext = restart.gate.withPermits(1)(
+      Effect.gen(function* () {
         yield* Effect.promise(() => retiring);
-        if (restart.failing()) yield* restart.probe();
-        // Another slot can push the shared deadline out while this one waits.
+        yield* restart.probe();
         while (remaining() > 0) yield* Effect.sleep(Duration.millis(remaining()));
-      }
-      const reader =
-        current ??
-        (yield* start().pipe(
+        return yield* start().pipe(
           Effect.tap((started) => Effect.sync(() => restart.setProbe(started.started))),
           Effect.catch((cause) => {
             backoff();
             return retire(undefined, cause);
           }),
-        ));
+        );
+      }),
+    );
+    const begin = Effect.gen(function* () {
+      const reader = current ?? (yield* startNext);
       const startup = yield* reader.started;
       if (current !== reader) return yield* retire(undefined, new Error("Reader epoch retired"));
       if (startup.type === "ready") return reader.connection;
       return yield* retire(reader, new Error(startup.message));
     });
-    // A slot that must start a worker after a failure takes the shared gate: one restart at a time.
-    const startOrReuse = Effect.suspend(() =>
-      current === undefined && restart.failing() ? restart.gate.withPermits(1)(begin) : begin,
-    );
-    return restore(starting.withPermits(1)(startOrReuse));
+    return restore(starting.withPermits(1)(begin));
   });
   const backingOff = () =>
     current === undefined && restart.remainingMs(clock.monotonicTimeNanosUnsafe()) > 0;

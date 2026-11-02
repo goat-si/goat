@@ -235,43 +235,46 @@ it.effect.each(["statement", "transaction"] as const)(
 );
 
 it.effect("bounds reader admission before the connection semaphore", () =>
-  withReaderClient((sql) =>
-    Effect.gen(function* () {
-      yield* countEntries(sql).pipe(SqliteClient.readOnly);
-      const worker = startedWorkers.at(-1)!;
-      using _held = vi.spyOn(worker, "postMessage").mockImplementation(() => {});
-      const reads = [];
-      for (let index = 0; index < 64; index++) {
-        reads.push(
-          yield* Effect.forkChild(countEntries(sql).pipe(SqliteClient.readOnly), {
-            startImmediately: true,
-          }),
+  withReaderClient(
+    (sql) =>
+      Effect.gen(function* () {
+        yield* countEntries(sql).pipe(SqliteClient.readOnly);
+        const worker = startedWorkers.at(-1)!;
+        using _held = vi.spyOn(worker, "postMessage").mockImplementation(() => {});
+        const reads = [];
+        for (let index = 0; index < 64; index++) {
+          reads.push(
+            yield* Effect.forkChild(countEntries(sql).pipe(SqliteClient.readOnly), {
+              startImmediately: true,
+            }),
+          );
+        }
+        const overflow = yield* Effect.forkChild(
+          countEntries(sql).pipe(SqliteClient.readOnly, Effect.result),
+          { startImmediately: true },
         );
-      }
-      const overflow = yield* Effect.forkChild(
-        countEntries(sql).pipe(SqliteClient.readOnly, Effect.result),
-        { startImmediately: true },
-      );
-      const state = overflow.pollUnsafe();
-      assert.isDefined(state, "overflow must complete without joining the reader queue");
-      const result = yield* Fiber.join(overflow);
-      assert.equal(result._tag, "Failure");
-      if (result._tag !== "Failure") return;
-      const rejected = result.failure;
-      assert.equal(rejected._tag, "SqlError");
-      assert.include(String(rejected.reason.cause), "Reader admission limit reached");
-      assert.isTrue(SqliteClient.isReaderAdmissionOverload(rejected));
-      assert.isTrue(
-        SqliteClient.isReaderAdmissionOverload(new Error("wrapped", { cause: rejected })),
-      );
-      assert.isFalse(
-        SqliteClient.isReaderAdmissionOverload(new Error("Reader admission limit reached")),
-      );
-      const cycle = new Error("cycle");
-      Object.defineProperty(cycle, "cause", { value: cycle });
-      assert.isFalse(SqliteClient.isReaderAdmissionOverload(cycle));
-      for (const read of reads) yield* Fiber.interrupt(read);
-    }),
+        const state = overflow.pollUnsafe();
+        assert.isDefined(state, "overflow must complete without joining the reader queue");
+        const result = yield* Fiber.join(overflow);
+        assert.equal(result._tag, "Failure");
+        if (result._tag !== "Failure") return;
+        const rejected = result.failure;
+        assert.equal(rejected._tag, "SqlError");
+        assert.include(String(rejected.reason.cause), "Reader admission limit reached");
+        assert.isTrue(SqliteClient.isReaderAdmissionOverload(rejected));
+        assert.isTrue(
+          SqliteClient.isReaderAdmissionOverload(new Error("wrapped", { cause: rejected })),
+        );
+        assert.isFalse(
+          SqliteClient.isReaderAdmissionOverload(new Error("Reader admission limit reached")),
+        );
+        const cycle = new Error("cycle");
+        Object.defineProperty(cycle, "cause", { value: cycle });
+        assert.isFalse(SqliteClient.isReaderAdmissionOverload(cycle));
+        for (const read of reads) yield* Fiber.interrupt(read);
+      }),
+    // One slot makes every admitted read queue on the held worker.
+    { readerPoolSize: 1 },
   ),
 );
 
@@ -432,52 +435,55 @@ it.effect(
         return new Int32Array(latch);
       }),
       (latch) =>
-        withReaderClient((sql) =>
-          Effect.gen(function* () {
-            yield* countEntries(sql).pipe(SqliteClient.readOnly);
-            const worker = startedWorkers.at(-1)!;
-            const active = yield* Deferred.make<void>();
-            worker.on("message", (reply) => {
-              if (reply?.type === "native-active") Deferred.doneUnsafe(active, Effect.void);
-            });
-            const transaction = yield* Effect.forkChild(
-              sql
-                .withTransaction(
-                  Effect.gen(function* () {
-                    yield* countEntries(sql);
-                    yield* sql`SELECT hold_reader()`;
-                  }),
-                )
-                .pipe(SqliteClient.readOnly),
-            );
-            yield* Deferred.await(active);
-            using terminated = vi.spyOn(worker, "terminate");
-            const cancellation = yield* Effect.forkChild(Fiber.interrupt(transaction), {
-              startImmediately: true,
-            });
-            assert.equal(terminated.mock.calls.length, 1);
-            const before = startedWorkers.length;
-            const replacement = yield* Effect.forkChild(
-              countEntries(sql).pipe(SqliteClient.readOnly),
-              { startImmediately: true },
-            );
-            assert.equal(startedWorkers.length, before);
-            Atomics.store(latch, 0, 1);
-            Atomics.notify(latch, 0);
-            yield* Fiber.join(cancellation);
-            assert.equal(worker.threadId, -1);
-            yield* TestClock.adjust("250 millis");
-            assert.equal(yield* Fiber.join(replacement), 1);
-            yield* sql`INSERT INTO entries VALUES ('after retirement')`;
-            assert.equal((yield* sql`PRAGMA wal_checkpoint(TRUNCATE)`)[0]?.busy, 0);
-          }).pipe(
-            Effect.ensuring(
-              Effect.sync(() => {
-                Atomics.store(latch, 0, 1);
-                Atomics.notify(latch, 0);
-              }),
+        withReaderClient(
+          (sql) =>
+            Effect.gen(function* () {
+              yield* countEntries(sql).pipe(SqliteClient.readOnly);
+              const worker = startedWorkers.at(-1)!;
+              const active = yield* Deferred.make<void>();
+              worker.on("message", (reply) => {
+                if (reply?.type === "native-active") Deferred.doneUnsafe(active, Effect.void);
+              });
+              const transaction = yield* Effect.forkChild(
+                sql
+                  .withTransaction(
+                    Effect.gen(function* () {
+                      yield* countEntries(sql);
+                      yield* sql`SELECT hold_reader()`;
+                    }),
+                  )
+                  .pipe(SqliteClient.readOnly),
+              );
+              yield* Deferred.await(active);
+              using terminated = vi.spyOn(worker, "terminate");
+              const cancellation = yield* Effect.forkChild(Fiber.interrupt(transaction), {
+                startImmediately: true,
+              });
+              assert.equal(terminated.mock.calls.length, 1);
+              const before = startedWorkers.length;
+              const replacement = yield* Effect.forkChild(
+                countEntries(sql).pipe(SqliteClient.readOnly),
+                { startImmediately: true },
+              );
+              assert.equal(startedWorkers.length, before);
+              Atomics.store(latch, 0, 1);
+              Atomics.notify(latch, 0);
+              yield* Fiber.join(cancellation);
+              assert.equal(worker.threadId, -1);
+              yield* TestClock.adjust("250 millis");
+              assert.equal(yield* Fiber.join(replacement), 1);
+              yield* sql`INSERT INTO entries VALUES ('after retirement')`;
+              assert.equal((yield* sql`PRAGMA wal_checkpoint(TRUNCATE)`)[0]?.busy, 0);
+            }).pipe(
+              Effect.ensuring(
+                Effect.sync(() => {
+                  Atomics.store(latch, 0, 1);
+                  Atomics.notify(latch, 0);
+                }),
+              ),
             ),
-          ),
+          // One slot makes the replacement read wait for the retiring worker.
+          { readerPoolSize: 1 },
         ),
       (latch) =>
         Effect.sync(() => {
