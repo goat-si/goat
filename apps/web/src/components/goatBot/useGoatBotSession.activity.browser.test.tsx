@@ -144,17 +144,20 @@ function Conversation({ items }: { readonly items: OrchestrationV2ProjectedTurnI
   );
 }
 
-const projection = (status: "running" | "completed") => ({
+const sessionWorker = { environmentId: "env", threadId: "worker-1", runId: "run-1" } as never;
+
+// A session run waiting on approval while its tool call runs; only the approval may show.
+const projection = (requestStatus: "pending" | "resolved") => ({
   environmentId: "env",
   projection: {
-    runs: [],
-    nodes: [],
-    runtimeRequests: [],
+    runs: [{ id: "run-1", status: "running" }],
+    nodes: [{ id: "node-1", runId: "run-1" }],
+    runtimeRequests: [{ nodeId: "node-1", kind: "command", status: requestStatus }],
     turnItems: [
       {
         type: "command_execution",
         runId: RunId.make("run-1"),
-        status,
+        status: "running",
         title: "Run df -h",
         updatedAt: DateTime.makeUnsafe(at),
       },
@@ -172,13 +175,17 @@ it("follows the acknowledged task's worker without loading its detail", async ()
 
 it("updates from a detail-only change while another view keeps the worker loaded", async () => {
   setup();
-  appAtomRegistry.set(detailAtom, projection("running"));
+  appAtomRegistry.set(detailAtom, projection("pending"));
   const unmountOtherView = appAtomRegistry.mount(detailAtom);
   try {
-    await using screen = await render(<Conversation items={conversation()} />, { router: false });
-    await expect.element(screen.getByRole("status")).toHaveTextContent("Run df -h");
-    await act(() => appAtomRegistry.set(detailAtom, projection("completed")));
+    await using screen = await render(
+      <Conversation items={conversation({ worker: sessionWorker })} />,
+      { router: false },
+    );
+    await expect.element(screen.getByRole("status")).toHaveTextContent("Waiting for your approval");
+    await act(() => appAtomRegistry.set(detailAtom, projection("resolved")));
     await expect.element(screen.getByRole("status")).toHaveTextContent("Working");
+    await expect.element(screen.getByRole("status")).not.toHaveTextContent("Run df -h");
   } finally {
     unmountOtherView();
   }
@@ -186,7 +193,7 @@ it("updates from a detail-only change while another view keeps the worker loaded
 
 it("never reads a remote worker through a local thread with the same id", async () => {
   setup({ activityRunStatus: "waiting", pendingRuntimeRequest: null });
-  appAtomRegistry.set(detailAtom, projection("running"));
+  appAtomRegistry.set(detailAtom, projection("pending"));
   const unmountOtherView = appAtomRegistry.mount(detailAtom);
   try {
     const remote = conversation({

@@ -262,17 +262,18 @@ function conversation(worker: object): OrchestrationV2ProjectedTurnItem[] {
     };
   });
 }
-const detail = (status: "running" | "completed") => ({
+// A session run waiting on approval while its tool call runs; only the approval may show.
+const detail = (requestStatus: "pending" | "resolved") => ({
   environmentId: "env",
   projection: {
-    runs: [],
-    nodes: [],
-    runtimeRequests: [],
+    runs: [{ id: "run-1", status: "running" }],
+    nodes: [{ id: "node-1", runId: "run-1" }],
+    runtimeRequests: [{ nodeId: "node-1", kind: "command", status: requestStatus }],
     turnItems: [
       {
         type: "command_execution",
         runId: RunId.make("run-1"),
-        status,
+        status: "running",
         title: "Run df -h",
         updatedAt: DateTime.makeUnsafe(at),
       },
@@ -296,13 +297,13 @@ describe("mobile GOAT Bot activity", () => {
   });
 
   it("follows a detail-only change while another screen keeps the worker loaded", async () => {
-    setup({ environmentId: "env", threadId: "worker-1" });
-    registry.set(detailAtom, detail("running"));
+    setup({ environmentId: "env", threadId: "worker-1", runId: "run-1" });
+    registry.set(detailAtom, detail("pending"));
     const unmountOtherScreen = registry.mount(detailAtom);
     try {
       await render();
-      expect(session.activity?.text).toBe("Run df -h");
-      await act(async () => registry.set(detailAtom, detail("completed")));
+      expect(session.activity?.text).toBe("Waiting for your approval");
+      await act(async () => registry.set(detailAtom, detail("resolved")));
       expect(session.activity?.text).toBe("Copying files");
     } finally {
       unmountOtherScreen();
@@ -311,7 +312,7 @@ describe("mobile GOAT Bot activity", () => {
 
   it("never reads a remote worker through a local thread with the same id", async () => {
     setup({ environmentId: "env", threadId: "worker-1", host: "mac-studio" });
-    registry.set(detailAtom, detail("running"));
+    registry.set(detailAtom, detail("pending"));
     const unmountOtherScreen = registry.mount(detailAtom);
     try {
       await render();
