@@ -35,6 +35,7 @@ import { readerWorkerSource, checkpointWorkerSource } from "./sqliteWorkerSource
 
 import { makeWriter } from "./nodeSqliteWriter.ts";
 import { hasLargeBinding, sqliteParameters } from "./nodeSqliteParameters.ts";
+import { waitForWalRecovery } from "./nodeSqliteWalRecovery.ts";
 
 const ATTR_DB_SYSTEM_NAME = "db.system.name";
 
@@ -154,28 +155,6 @@ const classifyError = (cause: unknown, message: string, operation: string) => {
   }
   return classifySqliteError(cause, { message, operation });
 };
-
-// WAL recovery can bypass SQLite's busy handler and fails before changing data.
-// Retry only SQLITE_BUSY_RECOVERY (261), never BUSY_SNAPSHOT or a whole transaction.
-// Delay on the caller's Effect clock for at most 500 attempts of 10 ms.
-const isWalRecovery = (error: SqlError) => {
-  const cause = error.reason.cause;
-  return Predicate.hasProperty(cause, "errcode") && cause.errcode === 261;
-};
-
-const waitForWalRecovery = <A, R>(effect: Effect.Effect<A, SqlError, R>) =>
-  Effect.catchIf(effect, isWalRecovery, () =>
-    // Keep retry machinery off the successful first attempt. The first failure
-    // already consumed one attempt, leaving 500 delayed attempts in total.
-    Effect.delay(
-      Effect.retry(effect, {
-        times: 499,
-        schedule: Schedule.spaced("10 millis"),
-        while: isWalRecovery,
-      }),
-      "10 millis",
-    ),
-  );
 
 interface ReaderRequest {
   readonly sql: string;
@@ -1190,12 +1169,18 @@ const make = Effect.fn("makeWithDatabase")(function* (
           : ("writer" as const),
     }),
   );
+  // Cancelling a read retires its worker, so a read resolves the reader only once it holds the lock.
+  const readerLock = { name: "reader" as const, lock: readerSemaphore };
+  const lockTarget = (candidate: {
+    readonly name: Acquired["connection"];
+  }): Effect.Effect<typeof readerLock | Effect.Success<typeof route>, SqlError> =>
+    candidate.name === "reader" ? Effect.succeed(readerLock) : route;
   const borrower: Borrower = (use) =>
     Effect.flatMap(candidate, (candidate) =>
       Effect.acquireUseRelease(
         admit(candidate),
         () =>
-          Effect.flatMap(route, (target) =>
+          Effect.flatMap(lockTarget(candidate), (target) =>
             Effect.withFiber((fiber) => {
               const clock = fiber.getRef(Clock.Clock);
               const start = clock.monotonicTimeNanosUnsafe();
@@ -1209,7 +1194,9 @@ const make = Effect.fn("makeWithDatabase")(function* (
                 ) {
                   annotateAcquired(fiber, acquired(target, clock, start), ownerAtWaitStart);
                 }
-                return use(target.connection);
+                return "connection" in target
+                  ? use(target.connection)
+                  : Effect.flatMap(route, (reader) => use(reader.connection));
               });
               const useOwnedConnection =
                 target.name === "writer"
@@ -1255,7 +1242,7 @@ const make = Effect.fn("makeWithDatabase")(function* (
   const transactionAcquirer = Effect.flatMap(candidate, (candidate) =>
     Effect.andThen(
       Effect.acquireRelease(admit(candidate), () => releaseAdmission(candidate)),
-      Effect.flatMap(route, (target) =>
+      Effect.flatMap(lockTarget(candidate), (target) =>
         Effect.uninterruptibleMask((restore) => {
           const fiber = Fiber.getCurrent()!;
           const scope = Context.getUnsafe(fiber.context, Scope.Scope);
@@ -1277,10 +1264,12 @@ const make = Effect.fn("makeWithDatabase")(function* (
               }).pipe(Effect.andThen(target.lock.release(1))),
             );
           });
-          return Effect.as(
+          return Effect.andThen(
             // A scheduler yield after taking the permit must not precede its release finalizer.
             Effect.provideService(acquire, Scheduler.PreventSchedulerYield, true),
-            target.connection,
+            "connection" in target
+              ? Effect.succeed(target.connection)
+              : Effect.map(route, (reader) => reader.connection),
           );
         }),
       ),
