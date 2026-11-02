@@ -373,9 +373,11 @@ export class SshRuntimeAutoUpdate extends Context.Service<
   }
 >()("goat/cloud/sshRuntimeAutoUpdate") {}
 
-const decodeMarker = Schema.decodeUnknownOption(
-  Schema.fromJsonString(Schema.Struct({ targetVersion: Schema.String, at: Schema.Number })),
+const Marker = Schema.fromJsonString(
+  Schema.Struct({ targetVersion: Schema.String, at: Schema.Number }),
 );
+const decodeMarker = Schema.decodeUnknownOption(Marker);
+const encodeMarker = Schema.encodeSync(Marker);
 const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
 const decodeLaunchResult = Schema.decodeUnknownOption(
   Schema.fromJsonString(
@@ -597,7 +599,7 @@ export const make = Effect.fn("server.ssh_runtime_auto_update.make")(function* (
               return yield* fail("This host has no Git Bash to update the SSH runtime.");
             const at = yield* Clock.currentTimeMillis;
             yield* fs
-              .writeFileString(`${markerFile}.tmp`, JSON.stringify({ targetVersion, at }))
+              .writeFileString(`${markerFile}.tmp`, encodeMarker({ targetVersion, at }))
               .pipe(
                 Effect.andThen(fs.rename(`${markerFile}.tmp`, markerFile)),
                 Effect.mapError(() => fail("Could not write the SSH runtime replacement marker.")),
