@@ -24,6 +24,7 @@ function makeNativeProcess(pid = 42) {
     write: vi.fn(),
     resize: vi.fn(),
     kill: vi.fn(),
+    on: (event: string, listener: (...args: Array<unknown>) => void) => events.on(event, listener),
     onData: vi.fn((callback: (data: string) => void) => {
       events.on("data", callback);
       return {
@@ -60,14 +61,18 @@ const spawnInput = { shell: "powershell.exe", cwd: ".", cols: 80, rows: 24, env:
 
 const fakeNodePty = { spawn } as unknown as typeof import("node-pty");
 
-const layerTestFor = (platform: NodeJS.Platform = "win32") =>
+const layerTestFor = (
+  platform: NodeJS.Platform = "win32",
+  loadNodePty: () => Promise<typeof import("node-pty")> = () => Promise.resolve(fakeNodePty),
+  architecture: NodeJS.Architecture = "x64",
+) =>
   NodePtyAdapter.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
         NodeServices.layer,
         Layer.succeed(HostProcess.Platform, platform),
-        Layer.succeed(HostProcess.Architecture, "x64"),
-        Layer.succeed(NodePtyAdapter.NodePtyModuleLoaderRef, () => Promise.resolve(fakeNodePty)),
+        Layer.succeed(HostProcess.Architecture, architecture),
+        Layer.succeed(NodePtyAdapter.NodePtyModuleLoaderRef, loadNodePty),
       ),
     ),
   );
@@ -226,4 +231,58 @@ it.effect("replays an exit to late subscribers and respects unsubscription", () 
     assert.deepEqual(late.mock.calls, [[{ exitCode: 7, signal: 2 }]]);
     assert.equal(nativeProcess.events.listenerCount("exit"), 0);
   }).pipe(Effect.provide(layerTest)),
+);
+
+const hostPlatform = HostProcess.Platform.defaultValue();
+
+// Live: a real pty and shell. node-pty's Windows terminal has no Unix socket to fail this way.
+it.live.skipIf(hostPlatform === "win32")(
+  "a pty socket error ends the process without escaping",
+  () => {
+    const terminals: Array<import("node-pty").IPty> = [];
+    const capturingNodePty = () =>
+      import("node-pty").then((real) => ({
+        ...real,
+        spawn: (...args: Parameters<typeof real.spawn>) => {
+          const terminal = real.spawn(...args);
+          terminals.push(terminal);
+          return terminal;
+        },
+      }));
+    return Effect.gen(function* () {
+      const adapter = yield* PtyAdapter.PtyAdapter;
+      const pty = yield* Effect.acquireRelease(
+        adapter.spawn({
+          shell: "/bin/sh",
+          args: ["-c", "read line"],
+          cwd: ".",
+          cols: 80,
+          rows: 24,
+          env: { PATH: process.env.PATH ?? "" },
+        }),
+        (spawned) =>
+          Effect.sync(() => {
+            try {
+              spawned.kill("SIGKILL");
+            } catch {
+              // Already exited.
+            }
+          }),
+      );
+      const exited = Promise.withResolvers<PtyAdapter.PtyExitEvent>();
+      pty.onExit(exited.resolve);
+      const terminal = terminals[0];
+      assert.isDefined(terminal);
+      // IPty does not declare emit; node-pty's Terminal forwards it to the socket.
+      (terminal as unknown as NodeEvents.EventEmitter).emit(
+        "error",
+        Object.assign(new Error("boom"), { code: "EBADF" }),
+      );
+      yield* Effect.promise(() => exited.promise);
+    }).pipe(
+      Effect.provide(
+        layerTestFor(hostPlatform, capturingNodePty, HostProcess.Architecture.defaultValue()),
+      ),
+    );
+  },
 );

@@ -1,4 +1,5 @@
 import * as HostProcess from "@goat/shared/HostProcess";
+import { ignoreClosedPipe } from "@goat/shared/closedPipe";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
@@ -35,13 +36,6 @@ const prepareWorkingDirectory = Effect.fn("server.prepareWorkingDirectory")(func
     yield* Effect.logWarning(`Working directory is inaccessible; changed to ${result.current}.`);
   return result.original;
 });
-
-// The desktop launcher reads this process's stdout and stderr. Once it is gone,
-// every log write fails, and Node turns an unhandled stream error into a crash
-// that skips shutdown and leaves the ownership lock and runtime record behind.
-function ignoreClosedLauncherPipe(error: NodeJS.ErrnoException): void {
-  if (error.code !== "EPIPE" && error.code !== "ERR_STREAM_DESTROYED") throw error;
-}
 
 const runServerCommand = Effect.fn("server.runServerCommand")(function* (
   flags: CliServerFlags,
@@ -80,8 +74,11 @@ const runServerCommand = Effect.fn("server.runServerCommand")(function* (
       if (config.mode !== "desktop" || config.desktopBootstrapToken === undefined)
         return yield* run;
       yield* Effect.sync(() => {
-        process.stdout.on("error", ignoreClosedLauncherPipe);
-        process.stderr.on("error", ignoreClosedLauncherPipe);
+        // The desktop launcher reads this process's stdout and stderr. Once it is gone,
+        // every log write fails, and Node turns an unhandled stream error into a crash
+        // that skips shutdown and leaves the ownership lock and runtime record behind.
+        process.stdout.on("error", ignoreClosedPipe);
+        process.stderr.on("error", ignoreClosedPipe);
       });
       return yield* Effect.raceFirst(
         run,

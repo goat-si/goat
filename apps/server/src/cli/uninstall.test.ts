@@ -132,7 +132,7 @@ it("passes the Windows removal directory literally with delayed expansion disabl
   const spawn = vi.mocked(NodeChildProcess.spawn);
   spawn.mockClear();
   const runtimeDir = "C:\\GOAT home %COMSPEC% !COMSPEC! & data\\runtime\\goat";
-  spawnWindowsRemoval("fake-cmd.exe", runtimeDir);
+  spawnWindowsRemoval("fake-cmd.exe", runtimeDir, () => {});
   expect(spawn).toHaveBeenCalledWith(
     "fake-cmd.exe",
     [

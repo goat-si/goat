@@ -85,29 +85,36 @@ export const describeServerProcess = Effect.fn("triage.describeServerProcess")(f
 });
 
 const pickAgent = (agents: ReadonlyArray<TriageAgent>) =>
-  Effect.promise(async () => {
-    const readline = NodeReadlinePromises.createInterface({
-      input: process.stdin,
-      output: process.stdout,
-    });
-    try {
-      const menu = agents
-        .map((agent, index) => `  [${String(index + 1)}] ${agent.label}`)
-        .join("\n");
-      for (;;) {
-        const answer = (await readline.question(`Run triage with:\n${menu}\n> `)).trim();
-        const byNumber = agents[Number.parseInt(answer, 10) - 1];
-        if (byNumber !== undefined) {
-          return byNumber;
+  Effect.tryPromise({
+    try: async () => {
+      const readline = NodeReadlinePromises.createInterface({
+        input: process.stdin,
+        output: process.stdout,
+      });
+      // Closing the interface leaves a pending question unsettled, so a broken terminal rejects it here.
+      const broken = new Promise<never>((_, reject) => readline.once("error", reject));
+      try {
+        const menu = agents
+          .map((agent, index) => `  [${String(index + 1)}] ${agent.label}`)
+          .join("\n");
+        for (;;) {
+          const answer = (
+            await Promise.race([readline.question(`Run triage with:\n${menu}\n> `), broken])
+          ).trim();
+          const byNumber = agents[Number.parseInt(answer, 10) - 1];
+          if (byNumber !== undefined) {
+            return byNumber;
+          }
+          const byId = agents.find((agent) => agent.id === answer.toLowerCase());
+          if (byId !== undefined) {
+            return byId;
+          }
         }
-        const byId = agents.find((agent) => agent.id === answer.toLowerCase());
-        if (byId !== undefined) {
-          return byId;
-        }
+      } finally {
+        readline.close();
       }
-    } finally {
-      readline.close();
-    }
+    },
+    catch: () => new TriageAgentChoiceRequiredError(),
   });
 
 const runInteractiveSession = (input: {

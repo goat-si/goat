@@ -307,6 +307,10 @@
       "types": "./src/cliArgs.ts",
       "import": "./src/cliArgs.ts"
     },
+    "./closedPipe": {
+      "types": "./src/closedPipe.ts",
+      "import": "./src/closedPipe.ts"
+    },
     "./connectAuth": {
       "types": "./src/connectAuth.ts",
       "import": "./src/connectAuth.ts"
