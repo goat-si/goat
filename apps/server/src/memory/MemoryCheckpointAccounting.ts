@@ -11,7 +11,7 @@ import {
   selectCheckpointIndependent,
   measureCheckpointRevisionHistory,
 } from "./MemoryCheckpointInventory.ts";
-import { futureForgetReserve } from "./MemoryCheckpointBound.ts";
+import { deletingEnvironmentBytes, futureForgetReserve } from "./MemoryCheckpointBound.ts";
 
 const noLineage: ReadonlySet<M.MemoryRevisionId> = new Set();
 
@@ -63,6 +63,7 @@ export const refreshCheckpointAccounting = Effect.fnUntraced(function* (
     new Set([...pending.map((row) => row.dimension), ...dirty.map((key) => key.dimension)]),
   );
   const now = yield* Clock.currentTimeMillis;
+  const environmentBytes = new Map<string, number>();
   for (const key of dirty) {
     const memory = key.scope_key.startsWith("m:");
     const id = key.scope_key.slice(2);
@@ -122,7 +123,17 @@ export const refreshCheckpointAccounting = Effect.fnUntraced(function* (
         reserve_keys: number;
       }>`SELECT reserve_bytes,reserve_keys FROM memory_identity_ledger i WHERE space=${space} AND memory_id=${id} AND NOT EXISTS(SELECT 1 FROM memory_tombstones t WHERE t.space=i.space AND t.memory_id=i.memory_id)`;
       if (reserves[0]) {
-        const reserve = futureForgetReserve(reserves[0].reserve_bytes, reserves[0].reserve_keys);
+        if (!environmentBytes.has(space)) {
+          const members = yield* sql<{
+            environment: string;
+          }>`SELECT environment FROM memory_hub_members WHERE space=${space}`;
+          environmentBytes.set(space, deletingEnvironmentBytes(members.map((m) => m.environment)));
+        }
+        const reserve = futureForgetReserve(
+          reserves[0].reserve_bytes,
+          reserves[0].reserve_keys,
+          environmentBytes.get(space),
+        );
         size.bytes += reserve.bytes;
         size.rows += reserve.rows;
       }

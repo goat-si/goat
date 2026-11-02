@@ -22,15 +22,26 @@ export const checkpointBoundSql = (bytes: string, rows: string) =>
   `(${bytes}+${CHECKPOINT_PAGE_OVERHEAD}*((${rows})/${PAGE_RECORDS}+(2*(${bytes}))/${PAGE_RECORD_BYTES}+1))`;
 
 // A forget swaps live records for a stripped forgotten item, tombstone and compact receipt, each
-// with one environment id (FORGET_RECORDS_MAX_BYTES covers ids within the core bound, pinned by
-// MemoryHubCheckpointBound.test.ts), plus suppressions the local forget keeps within reserve_bytes
-// minus the core. Removed live records are not credited, so live + reserve bounds the result.
+// holding the deleting environment id once: 6 KiB covers them for ids within the core bound
+// (MemoryHubCheckpointBound.test.ts) and longer legacy member ids add their excess three times.
+// Suppressions come from reserve_bytes minus the core; removed live records are not credited.
 export const FORGET_RECORDS_MAX_BYTES = 6 * M.MEMORY_IDENTITY_CORE_MAX_BYTES;
-/** Hub membership enforces the environment id bound FORGET_RECORDS_MAX_BYTES assumes. */
+const encodedBytes = (environmentId: string) =>
+  new TextEncoder().encode(JSON.stringify(environmentId)).length;
+/** New hub members must fit the core bound; existing longer ids are charged by futureForgetReserve. */
 export const environmentIdFitsForgetRecords = (environmentId: string) =>
-  new TextEncoder().encode(JSON.stringify(environmentId)).length <=
-  M.MEMORY_IDENTITY_CORE_MAX_BYTES;
-export const futureForgetReserve = (reserveBytes: number, keys: number) => ({
-  bytes: Math.max(0, reserveBytes - M.MEMORY_IDENTITY_CORE_MAX_BYTES) + FORGET_RECORDS_MAX_BYTES,
+  encodedBytes(environmentId) <= M.MEMORY_IDENTITY_CORE_MAX_BYTES;
+/** Encoded bytes of the longest environment id that may delete in a space. */
+export const deletingEnvironmentBytes = (environmentIds: Iterable<string>) =>
+  Math.max(M.MEMORY_IDENTITY_CORE_MAX_BYTES, ...[...environmentIds].map(encodedBytes));
+export const futureForgetReserve = (
+  reserveBytes: number,
+  keys: number,
+  environmentBytes: number = M.MEMORY_IDENTITY_CORE_MAX_BYTES,
+) => ({
+  bytes:
+    Math.max(0, reserveBytes - M.MEMORY_IDENTITY_CORE_MAX_BYTES) +
+    FORGET_RECORDS_MAX_BYTES +
+    3 * Math.max(0, environmentBytes - M.MEMORY_IDENTITY_CORE_MAX_BYTES),
   rows: keys + 8,
 });

@@ -99,20 +99,25 @@ const upsert = (input: {
   });
 
 /** The base fragment a member's local forget sends: one exclusion per reserved evidence message. */
-const forget = (memory: number, operation: number, messages: ReadonlyArray<string>) =>
+const forget = (
+  memory: number,
+  operation: number,
+  messages: ReadonlyArray<string>,
+  deleting: string = env,
+) =>
   decodeOperation({
     protocolVersion: 1,
     memorySpaceId: space,
     memoryId: id(memory),
     operationId: id(operation),
-    originEnvironmentId: env,
+    originEnvironmentId: deleting,
     expectedHeads: [],
     kind: "forget",
     tombstone: {
       memorySpaceId: space,
       memoryId: id(memory),
       deleteOperationId: id(operation),
-      deletingEnvironmentId: env,
+      deletingEnvironmentId: deleting,
       deletedAtUtc: now,
       suppressedSourceKeys: [],
       suppressedContent: [],
@@ -364,42 +369,47 @@ it.effect(
 const fillStaging = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const current = (yield* usage).stagingBytes;
-  yield* sql`INSERT INTO memory_hub_retention(space,published_pinned_bytes) VALUES (${space},${M.MEMORY_CHECKPOINT_STAGING_MAX_BYTES - current}) ON CONFLICT(space) DO UPDATE SET published_pinned_bytes=published_pinned_bytes+excluded.published_pinned_bytes`;
+  yield* sql`INSERT INTO memory_hub_retention(space) VALUES (${space}) ON CONFLICT(space) DO NOTHING`;
+  yield* sql`UPDATE memory_hub_retention SET published_pinned_bytes=published_pinned_bytes+${M.MEMORY_CHECKPOINT_STAGING_MAX_BYTES - current} WHERE space=${space}`;
   assert.strictEqual((yield* usage).stagingBytes, M.MEMORY_CHECKPOINT_STAGING_MAX_BYTES);
 });
 const messages = (prefix: string, count: number) =>
   Array.from({ length: count }, (_, n) => `${prefix}-${n}`);
 
 it.effect(
-  "regression: at full staging a reserved deletion succeeds and unreserved suppressions are refused",
+  "regression: at full staging a base deletion lands and later forgets of the identity are budgeted",
   () =>
     Effect.gen(function* () {
       yield* join;
       yield* admit(upsert({ memory: 40, operation: 41, text: "a", messages: ["a-0"] }));
       yield* admit(upsert({ memory: 50, operation: 51, text: "b", messages: ["b-0"] }));
       yield* fillStaging;
-      const stuffed = forget(40, 42, ["a-0"]);
-      if (stuffed.kind !== "forget") throw new Error("fixture kind");
-      const extra = {
-        ...stuffed,
-        tombstone: {
-          ...stuffed.tombstone,
-          suppressedSourceKeys: Array.from({ length: 99 }, (_, n) => ({
-            environmentId: env,
-            sourceId: M.MemoryImportSourceId.make(id(60)),
-            sourceItemKey: `${"k".repeat(480)}${n}`,
-          })),
-        },
-      };
-      const refused = yield* admit(extra).pipe(Effect.flip);
-      assert.deepInclude(refused, { _tag: "MemoryCapacityError", dimension: "checkpoint_staging" });
+      const keys = Array.from({ length: 99 }, (_, n) => ({
+        environmentId: env,
+        sourceId: M.MemoryImportSourceId.make(id(60)),
+        sourceItemKey: `${"k".repeat(480)}${n}`,
+      }));
+      const withKeys = (op: M.MemoryOperation) =>
+        op.kind === "forget"
+          ? { ...op, tombstone: { ...op.tombstone, suppressedSourceKeys: keys } }
+          : op;
+      // A member may send more than the hub reserved; the deletion itself still wins.
+      yield* admit(withKeys(forget(40, 42, ["a-0"])));
+      yield* fillStaging;
+      for (const later of [withKeys(forget(40, 43, [])), forget(40, 44, [])]) {
+        const refused = yield* admit(later).pipe(Effect.flip);
+        assert.deepInclude(refused, {
+          _tag: "MemoryCapacityError",
+          dimension: "checkpoint_staging",
+        });
+      }
       const before = (yield* usage).requiredCheckpointBoundBytes;
       yield* admit(forget(50, 52, ["b-0"]));
       assert.isAtMost((yield* usage).requiredCheckpointBoundBytes, before);
     }).pipe(Effect.provide(layer)),
 );
 
-it.effect("regression: evidence added by a later revision stays deletable at full staging", () =>
+it.effect("regression: deleting later evidence stays within the reserved bound", () =>
   Effect.gen(function* () {
     yield* join;
     const first = upsert({ memory: 70, operation: 71, text: "no evidence yet", messages: [] });
@@ -415,8 +425,9 @@ it.effect("regression: evidence added by a later revision stays deletable at ful
         parent: first.revision.revisionId,
       }),
     );
-    yield* fillStaging;
+    const before = (yield* usage).requiredCheckpointBoundBytes;
     yield* admit(forget(70, 73, evidence));
+    assert.isAtMost((yield* usage).requiredCheckpointBoundBytes, before);
   }).pipe(Effect.provide(layer)),
 );
 
@@ -457,5 +468,20 @@ it.effect(
         )
         .pipe(Effect.flip);
       assert.deepInclude(refused, { _tag: "MemoryStoreConflict", code: "payload_too_large" });
+    }).pipe(Effect.provide(layer)),
+);
+
+it.effect(
+  "regression: an existing member with a long environment id is charged for its deletions",
+  () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* join;
+      const legacy = "L".repeat(8192);
+      yield* sql`INSERT INTO memory_hub_members(space,environment,credential_digest,credential_version,status) VALUES (${space},${legacy},${"c".repeat(64)},1,'active')`;
+      yield* admit(upsert({ memory: 90, operation: 91, text: "small", messages: [] }));
+      const before = (yield* usage).requiredCheckpointBoundBytes;
+      yield* admit(forget(90, 92, [], legacy));
+      assert.isAtMost((yield* usage).requiredCheckpointBoundBytes, before);
     }).pipe(Effect.provide(layer)),
 );
