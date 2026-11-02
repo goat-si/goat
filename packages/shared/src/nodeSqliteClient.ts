@@ -54,6 +54,7 @@ export interface SqliteClientConfig {
   readonly readerStartupTimeout?: Duration.Input | undefined;
   /** Reader workers started on demand; a positive integer, 4 by default. */
   readonly readerPoolSize?: number | undefined;
+  /** Longest a read waits for one of the 64 reader admissions before failing as overloaded; 30 seconds by default. */
   readonly readerAdmissionTimeout?: Duration.Input | undefined;
   /** Ignored for in-memory databases. */
   readonly checkpointWorker?: boolean | undefined;
