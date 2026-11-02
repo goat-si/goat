@@ -123,6 +123,18 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           }
         }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
+    it.live("launch falls back to the filesystem root when home cannot be entered", () =>
+      Effect.gen(function* () {
+        const f = yield* fixture("none", { seed: false });
+        const vanished = `${f.home}/vanished`;
+        yield* f.fs.makeDirectory(vanished);
+        const prefix = `cd '${vanished}'\nrmdir '${vanished}'\ncd() { [ "$1" != "$HOME" ] || return 1; command cd "$@"; }\n`;
+        const result = yield* shell(f.home, prefix + f.scripts.launch, [stateKey]);
+        assert.equal(result.code, 0, result.stderr);
+        const started = (yield* f.events).find((event) => event.type === "start");
+        assert.equal(started?.cwd, "/");
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
     it.live.each([
       { leaveRemoteServerRunning: true, action: "disconnect" },
       { leaveRemoteServerRunning: false, action: "disconnect" },
