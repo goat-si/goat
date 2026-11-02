@@ -105,42 +105,50 @@ const admin = Layer.effect(Hub.MemoryHubAdministrator, Hub.makeAdministrator).pi
     ),
   ),
 );
-const sync = Layer.unwrap(
-  Effect.gen(function* () {
-    const administrator = yield* Hub.MemoryHubAdministrator;
-    return Layer.mock(Sync.MemorySyncService)({
-      readLocalReadiness: () => Effect.succeed({ memorySpaceId: space, bootstrap: "ready" }),
-      syncStatus: (_input, permit) =>
-        permit.pipe(Effect.andThen(Effect.fail(new M.MemoryHubError({ code: "hub_disabled" })))),
-      hubDiagnostics: (_input, permit) =>
-        permit.pipe(
-          Effect.as({
-            version: 1,
-            publication: { state: "current" as const },
-            readiness: "ready" as const,
-            connection: "connected" as const,
-            recoverableHolds: ["availability" as const],
-            permanentHolds: [],
-            reconcile: "available" as const,
-          }),
-        ),
-      reconcileHub: (input, permit) =>
-        permit.pipe(
-          Effect.as({ version: input.expectedVersion, rearmedClasses: ["availability" as const] }),
-        ),
-      updateHubSettings: (input, permit) =>
-        administrator.update(
-          input,
-          permit.pipe(Effect.mapError(() => new M.MemoryHubForbiddenError({}))),
-        ),
-    });
-  }),
-).pipe(Layer.provide(admin));
+type Readiness = Effect.Success<
+  ReturnType<Sync.MemorySyncService["Service"]["readLocalReadiness"]>
+>;
+const syncWith = (readiness: Readiness = { memorySpaceId: space, bootstrap: "ready" }) =>
+  Layer.unwrap(
+    Effect.gen(function* () {
+      const administrator = yield* Hub.MemoryHubAdministrator;
+      return Layer.mock(Sync.MemorySyncService)({
+        readLocalReadiness: () => Effect.succeed(readiness),
+        syncStatus: (_input, permit) =>
+          permit.pipe(Effect.andThen(Effect.fail(new M.MemoryHubError({ code: "hub_disabled" })))),
+        hubDiagnostics: (_input, permit) =>
+          permit.pipe(
+            Effect.as({
+              version: 1,
+              publication: { state: "current" as const },
+              readiness: "ready" as const,
+              connection: "connected" as const,
+              recoverableHolds: ["availability" as const],
+              permanentHolds: [],
+              reconcile: "available" as const,
+            }),
+          ),
+        reconcileHub: (input, permit) =>
+          permit.pipe(
+            Effect.as({
+              version: input.expectedVersion,
+              rearmedClasses: ["availability" as const],
+            }),
+          ),
+        updateHubSettings: (input, permit) =>
+          administrator.update(
+            input,
+            permit.pipe(Effect.mapError(() => new M.MemoryHubForbiddenError({}))),
+          ),
+      });
+    }),
+  ).pipe(Layer.provide(admin));
 
 const makeLayer = <E, R, E2, R2>(
   serviceCore: Layer.Layer<Layer.Success<typeof core>, E, R>,
   profiles: Layer.Layer<Profiles.PermissionProfiles, E2, R2>,
   threads = McpToolAccessTestkit.liveThreadsLayer,
+  sync = syncWith(),
 ) =>
   Layer.mergeAll(
     McpHttpServer.layerMemoryToolkit,
@@ -168,6 +176,13 @@ const makeLayer = <E, R, E2, R2>(
     Layer.provide(NodeServices.layer),
   );
 export const layer = makeLayer(core, McpToolAccessTestkit.layerPermissionProfilesOff);
+/** No memory space is bound on this server. */
+export const unboundLayer = makeLayer(
+  core,
+  McpToolAccessTestkit.layerPermissionProfilesOff,
+  McpToolAccessTestkit.liveThreadsLayer,
+  syncWith({ memorySpaceId: null, bootstrap: "unbound" }),
+);
 export const planLayer = makeLayer(
   core,
   McpToolAccessTestkit.layerPermissionProfilesOff,
