@@ -20,34 +20,35 @@ const SETUP = {
 } as const;
 
 const runFixture = (setup: keyof typeof SETUP, body: string) =>
-  Effect.promise(
-    () =>
-      new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
-        const script = [
-          `import { installProcessErrorNet, containRejections } from ${JSON.stringify(moduleUrl)};`,
-          'import * as NodeEvents from "node:events";',
-          SETUP[setup],
-          body,
-        ].join("\n");
-        const child = NodeChildProcess.spawn(
-          process.execPath,
-          ["--input-type=module", "-e", script],
-          { cwd: packageDir, stdio: ["ignore", "pipe", "pipe"] },
-        );
-        let stdout = "";
-        let stderr = "";
-        child.on("error", reject);
-        child.stdout.on("error", reject);
-        child.stderr.on("error", reject);
-        child.stdout.on("data", (chunk: Buffer) => {
-          stdout += chunk.toString();
-        });
-        child.stderr.on("data", (chunk: Buffer) => {
-          stderr += chunk.toString();
-        });
-        child.on("close", (code) => resolve({ code, stdout, stderr }));
-      }),
-  );
+  Effect.callback<{ code: number | null; stdout: string; stderr: string }>((resume) => {
+    const script = [
+      `import { installProcessErrorNet, containRejections } from ${JSON.stringify(moduleUrl)};`,
+      'import * as NodeEvents from "node:events";',
+      SETUP[setup],
+      body,
+    ].join("\n");
+    const child = NodeChildProcess.spawn(process.execPath, ["--input-type=module", "-e", script], {
+      cwd: packageDir,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    const fail = (error: Error) => resume(Effect.die(error));
+    child.on("error", fail);
+    child.stdout.on("error", fail);
+    child.stderr.on("error", fail);
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+    child.on("close", (code) => resume(Effect.succeed({ code, stdout, stderr })));
+    // An interrupted test must not leave its fixture running.
+    return Effect.sync(() => {
+      child.kill();
+    });
+  });
 
 const emitUnheard = (fields: string) =>
   `setImmediate(() => new NodeEvents.EventEmitter().emit("error", Object.assign(new Error("teardown"), ${fields})));
@@ -179,6 +180,38 @@ setImmediate(() => console.log("alive"));`,
     expect(result.code).toBe(1);
     expect(result.stdout).not.toContain("alive");
     expect(result.stderr).toContain("real bug");
+  }),
+);
+
+it.live(
+  "a rejection the handler cannot even inspect, a revoked Proxy, still logs and exits 1",
+  () =>
+    Effect.gen(function* () {
+      const result = yield* runFixture(
+        "net",
+        `const { proxy, revoke } = Proxy.revocable({}, {});
+revoke();
+void Promise.reject(proxy);
+setImmediate(() => console.log("alive"));`,
+      );
+      expect(result.code).toBe(1);
+      expect(result.stdout).not.toContain("alive");
+      expect(result.stderr).toContain("goat: fatal error while handling an uncaught error");
+    }),
+);
+
+it.live("an unheard error whose code getter throws still logs and exits 1", () =>
+  Effect.gen(function* () {
+    const result = yield* runFixture(
+      "net",
+      `const error = new Error("exotic");
+Object.defineProperty(error, "code", { get() { throw new Error("getter"); } });
+setImmediate(() => new NodeEvents.EventEmitter().emit("error", error));
+setImmediate(() => console.log("alive"));`,
+    );
+    expect(result.code).toBe(1);
+    expect(result.stdout).not.toContain("alive");
+    expect(result.stderr).toContain("goat: fatal error while handling an uncaught error");
   }),
 );
 

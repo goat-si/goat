@@ -50,6 +50,8 @@ const runServerCommand = Effect.fn("server.runServerCommand")(function* (
     readonly originalCwd?: string | undefined;
   },
 ) {
+  // For the process lifetime: shutdown tears down pipes and sockets, when teardown errors cluster.
+  yield* Effect.sync(installProcessErrorNet);
   const originalCwd = (yield* prepareWorkingDirectory()) ?? options?.originalCwd;
   const logLevel = yield* GlobalFlag.LogLevel;
   const config = yield* resolveServerConfig(flags, logLevel, { ...options, originalCwd });
@@ -83,8 +85,6 @@ const runServerCommand = Effect.fn("server.runServerCommand")(function* (
             process.off("SIGINT", onSigint);
           }),
       );
-      // For the process lifetime: shutdown tears down pipes and sockets, when teardown errors cluster.
-      yield* Effect.sync(installProcessErrorNet);
       // Held until the server exits, before any layer opens the database.
       yield* acquireServerOwnerLock({
         stateDir: config.stateDir,

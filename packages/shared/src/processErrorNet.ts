@@ -23,7 +23,8 @@ interface NetState {
 }
 
 const WS_CLOSED_CONNECTING = "WebSocket was closed before the connection was established";
-const STATE_KEY = Symbol.for("goat.processErrorNet");
+// Versioned: a copy with a different state shape must not adopt this one.
+const STATE_KEY = Symbol.for("goat.processErrorNet/1");
 
 const stringProperty = (value: object, name: string): string | undefined => {
   const property: unknown = Reflect.get(value, name);
@@ -58,6 +59,20 @@ const writeStderr = (text: string) => {
 
 const errorKey = (error: unknown) => (error instanceof Error ? error.name : typeof error);
 
+const safeString = (value: unknown) => {
+  try {
+    return String(value);
+  } catch {
+    return "(unprintable)";
+  }
+};
+
+// An exotic value (a revoked Proxy, a throwing getter) must not turn the handler itself into a crash.
+const failHandling = (cause: unknown) => {
+  writeStderr(`goat: fatal error while handling an uncaught error: ${safeString(cause)}\n`);
+  process.exit(1);
+};
+
 const isNetState = (value: unknown): value is NetState =>
   typeof value === "object" && value !== null && "classifiers" in value && "onRejection" in value;
 
@@ -70,26 +85,34 @@ const makeState = (): NetState => {
     classifiers: new Set(),
     counts: new Map(),
     onUncaught: (error) => {
-      const key = teardownKey(error);
-      if (key !== undefined) return contain(net, key, NodeUtil.inspect(error));
-      log(net, "fatal uncaught exception", errorKey(error), NodeUtil.inspect(error));
+      try {
+        const key = teardownKey(error);
+        if (key !== undefined) return contain(net, key, NodeUtil.inspect(error));
+        log(net, "fatal uncaught exception", errorKey(error), NodeUtil.inspect(error));
+      } catch (cause) {
+        return failHandling(cause);
+      }
       process.exit(1);
     },
     onRejection: (reason) => {
-      for (const classify of net.classifiers) {
-        const message = classify(reason);
-        if (message !== undefined) return contain(net, "rejection", message);
+      try {
+        for (const classify of net.classifiers) {
+          const message = classify(reason);
+          if (message !== undefined) return contain(net, "rejection", message);
+        }
+        // Node's rule: with another listener present, that listener decides.
+        if (process.listenerCount("unhandledRejection") > 1) {
+          return log(
+            net,
+            "unhandled rejection left to another listener",
+            errorKey(reason),
+            NodeUtil.inspect(reason),
+          );
+        }
+        log(net, "fatal unhandled rejection", errorKey(reason), NodeUtil.inspect(reason));
+      } catch (cause) {
+        return failHandling(cause);
       }
-      // Node's rule: with another listener present, that listener decides.
-      if (process.listenerCount("unhandledRejection") > 1) {
-        return log(
-          net,
-          "unhandled rejection left to another listener",
-          errorKey(reason),
-          NodeUtil.inspect(reason),
-        );
-      }
-      log(net, "fatal unhandled rejection", errorKey(reason), NodeUtil.inspect(reason));
       process.exit(1);
     },
   };
