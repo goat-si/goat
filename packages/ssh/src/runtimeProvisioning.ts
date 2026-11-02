@@ -190,7 +190,13 @@ sh -c ${shellSingleQuote(installer)} -- --version
   ) =>
     Effect.gen(function* () {
       let exact = requestedRuntime(runner);
-      if (isNodeScriptRunner(runner)) return exact;
+      if (isNodeScriptRunner(runner)) {
+        yield* Effect.try({
+          try: () => buildRemoteGoatRunnerScript(runner),
+          catch: runtimePreparationError,
+        });
+        return exact;
+      }
       const directory = runner?.archiveDirectory?.trim() ?? "";
       const bundleDirectory = runner?.bundledArchiveDirectory?.trim() ?? "";
       const mirror = runner?.releaseBaseUrl?.trim() ?? "";
