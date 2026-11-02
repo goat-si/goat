@@ -620,7 +620,7 @@ it.layer(
           Effect.fail(
             new CodexErrors.CodexAppServerSpawnError({
               command: `${binaryPath} app-server`,
-              cause: new Error("spawn ENOENT"),
+              cause: Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" }),
             }),
           ),
         );
