@@ -357,6 +357,14 @@ const make = Effect.gen(function* () {
             M.MEMORY_LOG_MAX_TAIL_BYTES,
           );
         }
+        // The first delete of a known memory is charged but never refused: a member builds it
+        // from its own reservation, which can cover evidence this environment never reserved.
+        if (firstForget)
+          charges.splice(
+            0,
+            charges.length,
+            ...charges.map((c) => ({ ...c, limit: Number.MAX_SAFE_INTEGER })),
+          );
         if (input.admission.kind !== "hubAdmission") {
           const baselines: Record<string, number> = {
             lifetime_ids: usage.environmentLifetimeIds,

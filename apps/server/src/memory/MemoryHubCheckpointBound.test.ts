@@ -23,6 +23,8 @@ import { CHECKPOINT_PULL_MAX_BYTES, FORGET_RECORDS_MAX_BYTES } from "./MemoryChe
 import { encodeCheckpointRecord } from "./MemoryCheckpointInventory.ts";
 import { decideMemoryOperation, memoryOperationDigest } from "./MemoryDecider.ts";
 import { scanMemoryValue } from "./MemorySecretScanner.ts";
+import * as HubKit from "./MemoryHubService.testkit.ts";
+import * as Quota from "./MemoryQuotaService.ts";
 import * as Store from "./MemoryStore.ts";
 
 const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
@@ -99,20 +101,25 @@ const upsert = (input: {
   });
 
 /** The base fragment a member's local forget sends: one exclusion per reserved evidence message. */
-const forget = (memory: number, operation: number, messages: ReadonlyArray<string>) =>
+const forget = (
+  memory: number,
+  operation: number,
+  messages: ReadonlyArray<string>,
+  deleting: string = env,
+) =>
   decodeOperation({
     protocolVersion: 1,
     memorySpaceId: space,
     memoryId: id(memory),
     operationId: id(operation),
-    originEnvironmentId: env,
+    originEnvironmentId: deleting,
     expectedHeads: [],
     kind: "forget",
     tombstone: {
       memorySpaceId: space,
       memoryId: id(memory),
       deleteOperationId: id(operation),
-      deletingEnvironmentId: env,
+      deletingEnvironmentId: deleting,
       deletedAtUtc: now,
       suppressedSourceKeys: [],
       suppressedContent: [],
@@ -358,4 +365,209 @@ it.effect(
         );
       }
     }).pipe(Effect.provide(layer)),
+);
+
+/** Fills checkpoint staging to its limit with a pinned publication, as a busy hub would. */
+const fillStaging = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const current = (yield* usage).stagingBytes;
+  yield* sql`INSERT INTO memory_hub_retention(space) VALUES (${space}) ON CONFLICT(space) DO NOTHING`;
+  yield* sql`UPDATE memory_hub_retention SET published_pinned_bytes=published_pinned_bytes+${M.MEMORY_CHECKPOINT_STAGING_MAX_BYTES - current} WHERE space=${space}`;
+  assert.strictEqual((yield* usage).stagingBytes, M.MEMORY_CHECKPOINT_STAGING_MAX_BYTES);
+});
+const messages = (prefix: string, count: number) =>
+  Array.from({ length: count }, (_, n) => `${prefix}-${n}`);
+
+it.effect(
+  "regression: at full staging a base deletion lands and later forgets of the identity are budgeted",
+  () =>
+    Effect.gen(function* () {
+      yield* join;
+      yield* admit(upsert({ memory: 40, operation: 41, text: "a", messages: ["a-0"] }));
+      yield* admit(upsert({ memory: 50, operation: 51, text: "b", messages: ["b-0"] }));
+      yield* fillStaging;
+      const keys = Array.from({ length: 99 }, (_, n) => ({
+        environmentId: env,
+        sourceId: M.MemoryImportSourceId.make(id(60)),
+        sourceItemKey: `${"k".repeat(480)}${n}`,
+      }));
+      const withKeys = (op: M.MemoryOperation) =>
+        op.kind === "forget"
+          ? { ...op, tombstone: { ...op.tombstone, suppressedSourceKeys: keys } }
+          : op;
+      // A member may send more than the hub reserved; the deletion itself still wins.
+      yield* admit(withKeys(forget(40, 42, ["a-0"])));
+      yield* fillStaging;
+      for (const later of [withKeys(forget(40, 43, [])), forget(40, 44, [])]) {
+        const refused = yield* admit(later).pipe(Effect.flip);
+        assert.deepInclude(refused, {
+          _tag: "MemoryCapacityError",
+          dimension: "checkpoint_staging",
+        });
+      }
+      const before = (yield* usage).requiredCheckpointBoundBytes;
+      yield* admit(forget(50, 52, ["b-0"]));
+      assert.isAtMost((yield* usage).requiredCheckpointBoundBytes, before);
+    }).pipe(Effect.provide(layer)),
+);
+
+it.effect("regression: deleting later evidence stays within the reserved bound", () =>
+  Effect.gen(function* () {
+    yield* join;
+    const first = upsert({ memory: 70, operation: 71, text: "no evidence yet", messages: [] });
+    yield* admit(first);
+    if (first.kind !== "upsert") throw new Error("fixture kind");
+    const evidence = messages("later", 100);
+    yield* admit(
+      upsert({
+        memory: 70,
+        operation: 72,
+        text: "now with evidence",
+        messages: evidence,
+        parent: first.revision.revisionId,
+      }),
+    );
+    const before = (yield* usage).requiredCheckpointBoundBytes;
+    yield* admit(forget(70, 73, evidence));
+    assert.isAtMost((yield* usage).requiredCheckpointBoundBytes, before);
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect(
+  "contract: hub membership refuses an environment id the forget allowance cannot cover",
+  () =>
+    Effect.gen(function* () {
+      const store = yield* Store.MemoryStore;
+      const environmentId = M.EnvironmentId.make("e".repeat(M.MEMORY_IDENTITY_CORE_MAX_BYTES));
+      const requestId = M.MemoryOperationId.make(id(80));
+      const requestDigest = "b".repeat(64);
+      yield* store.transact(
+        store.writeHubAdminTx({
+          record: {
+            requestId,
+            requestDigest,
+            expectedVersion: 1,
+            stage: "prepared",
+            action: { requestId, expectedVersion: 1, action: "provisionMember", environmentId },
+            secretName: "synthetic-member-key",
+            result: null,
+            memberVersion: null,
+          },
+          expectedStage: null,
+        }),
+      );
+      const refused = yield* store
+        .transact(
+          store.activateHubMemberTx({
+            requestId,
+            requestDigest,
+            memorySpaceId: space,
+            environmentId,
+            expectedCredentialVersion: null,
+            next: { credentialDigest: "a".repeat(64) },
+            now: 100,
+          }),
+        )
+        .pipe(Effect.flip);
+      assert.deepInclude(refused, { _tag: "MemoryStoreConflict", code: "payload_too_large" });
+    }).pipe(Effect.provide(layer)),
+);
+
+it.effect(
+  "regression: an existing member with a long environment id is charged for its deletions",
+  () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* join;
+      const legacy = "L".repeat(8192);
+      yield* sql`INSERT INTO memory_hub_members(space,environment,credential_digest,credential_version,status) VALUES (${space},${legacy},${"c".repeat(64)},1,'active')`;
+      yield* admit(upsert({ memory: 90, operation: 91, text: "small", messages: [] }));
+      const before = (yield* usage).requiredCheckpointBoundBytes;
+      yield* admit(forget(90, 92, [], legacy));
+      assert.isAtMost((yield* usage).requiredCheckpointBoundBytes, before);
+    }).pipe(Effect.provide(layer)),
+);
+
+it.effect(
+  "regression: quota admission charges but never refuses a hub first delete beyond its reservation",
+  () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const store = yield* Store.MemoryStore;
+      const quota = yield* Quota.MemoryQuotaService;
+      yield* join;
+      yield* admit(
+        upsert({ memory: 95, operation: 96, text: "hub copy without evidence", messages: [] }),
+      );
+      const scope = { kind: "thread" as const, thread };
+      const used = (yield* store.usage(space, scope)).permanentBytes;
+      yield* sql`INSERT INTO memory_quota_counters(space,dimension,scope_key,value) VALUES (${space},'usage_key_bytes','',${M.MEMORY_PERMANENT_METADATA_MAX_BYTES - used}) ON CONFLICT(space,dimension,scope_key) DO UPDATE SET value=value+excluded.value`;
+      assert.strictEqual(
+        (yield* store.usage(space, scope)).permanentBytes,
+        M.MEMORY_PERMANENT_METADATA_MAX_BYTES,
+      );
+      // The member reserved evidence from a revision this hub never received.
+      const op = forget(95, 97, ["member-only"]);
+      const decided = decideMemoryOperation(
+        yield* store.loadAggregate(space, op.memoryId),
+        op,
+        Store.hubAdmission,
+        scanMemoryValue(op),
+      );
+      const outcome = yield* quota.commit(
+        {
+          ...decided,
+          receipt: {
+            operationId: op.operationId,
+            memoryId: op.memoryId,
+            operationDigest: memoryOperationDigest(op),
+            outcome: "deleted",
+            hubSequence: 1,
+          },
+        },
+        env,
+        Effect.void,
+      );
+      assert.strictEqual(outcome.receipt.outcome, "deleted");
+      assert.isDefined((yield* store.loadAggregate(space, op.memoryId)).tombstone);
+    }).pipe(Effect.provide(Quota.layer.pipe(Layer.provideMerge(layer)))),
+);
+
+it.effect(
+  "regression: a pushed first delete lands with its lease invalidation at full staging",
+  () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* HubKit.seed;
+      const { hub, claim } = yield* HubKit.conflict;
+      // A token about to gain a digit makes the invalidation itself grow the snapshot.
+      yield* sql`UPDATE memory_identity_ledger SET fence_json=json_set(fence_json,'$.highestFencingToken',8) WHERE space=${HubKit.space} AND memory_id=${HubKit.memoryId}`;
+      assert.strictEqual((yield* hub.claim(claim, HubKit.principal())).fencingToken, 9);
+      yield* fillStaging;
+      const op = decodeOperation({
+        protocolVersion: 1,
+        memorySpaceId: HubKit.space,
+        memoryId: HubKit.memoryId,
+        operationId: HubKit.id(60),
+        originEnvironmentId: HubKit.hubEnv,
+        expectedHeads: [],
+        kind: "forget",
+        tombstone: {
+          memorySpaceId: HubKit.space,
+          memoryId: HubKit.memoryId,
+          deleteOperationId: HubKit.id(60),
+          deletingEnvironmentId: HubKit.hubEnv,
+          deletedAtUtc: now,
+          suppressedSourceKeys: Array.from({ length: 99 }, (_, n) => ({
+            environmentId: HubKit.hubEnv,
+            sourceId: HubKit.id(61),
+            sourceItemKey: `${"k".repeat(480)}${n}`,
+          })),
+          suppressedContent: [],
+          sourceExclusions: [],
+        },
+      });
+      const result = yield* hub.push(HubKit.pushInput(op), HubKit.principal());
+      assert.strictEqual(result.receipts[0]?.outcome, "deleted");
+    }).pipe(Effect.provide(HubKit.live)),
 );
