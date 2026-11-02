@@ -563,7 +563,10 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   const recede = shouldRecedeThreadRow({ status, selected });
   const isRegeneratingTitle = thread.titleRegeneration != null;
   const worktreeFolder = folderName(thread.worktreePath) ?? thread.worktreePath?.trim();
-  const rowAccessibilityLabel = `${thread.title}${props.hasQueuedMessages ? ", messages queued to send" : ""}${isRegeneratingTitle ? ", regenerating title" : ""}${worktreeFolder ? `, in worktree ${worktreeFolder}` : ""}`;
+  const worktreeLabel = worktreeFolder
+    ? `, in worktree ${worktreeFolder}${thread.branch ? ` (${thread.branch})` : ""}`
+    : "";
+  const rowAccessibilityLabel = `${thread.title}${props.hasQueuedMessages ? ", messages queued to send" : ""}${isRegeneratingTitle ? ", regenerating title" : ""}${worktreeLabel}`;
   const timeLabel = props.timeLabel;
 
   const visitThread = useAtomCommand(threadEnvironment.visit, { reportFailure: false });

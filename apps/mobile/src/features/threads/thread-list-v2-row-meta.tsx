@@ -98,17 +98,12 @@ export function folderName(path: string | null | undefined): string | null {
 }
 
 export function ThreadListV2WorktreeGlyph(props: {
-  readonly thread: Pick<EnvironmentThreadShell, "worktreePath" | "branch">;
+  readonly thread: Pick<EnvironmentThreadShell, "worktreePath">;
   readonly tintClassName: string;
 }) {
   if (!props.thread.worktreePath?.trim()) return null;
-  const folder = folderName(props.thread.worktreePath);
   return (
-    <View
-      accessibilityLabel={`Worktree: ${folder ?? props.thread.worktreePath}${props.thread.branch ? ` (${props.thread.branch})` : ""}`}
-      accessibilityElementsHidden
-      importantForAccessibility="no-hide-descendants"
-    >
+    <View accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
       <SymbolView
         name="arrow.triangle.branch"
         size={11}
