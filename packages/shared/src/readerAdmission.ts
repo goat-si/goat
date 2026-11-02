@@ -29,10 +29,9 @@ export const admissionSqlError = (
     }),
   });
 
-export const FailFastReaderAdmission = Context.Reference<boolean>(
-  "@goat/shared/FailFastReaderAdmission",
-  { defaultValue: () => false },
-);
+const FailFastReaderAdmission = Context.Reference<boolean>("@goat/shared/FailFastReaderAdmission", {
+  defaultValue: () => false,
+});
 export const failFastReaderAdmission = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   Effect.provideService(effect, FailFastReaderAdmission, true);
 
