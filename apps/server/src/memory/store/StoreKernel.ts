@@ -1,4 +1,4 @@
-import { CHECKPOINT_PAGE_OVERHEAD } from "../MemoryCheckpointBound.ts";
+import { checkpointBoundSql } from "../MemoryCheckpointBound.ts";
 import { refreshCheckpointAccounting } from "../MemoryCheckpointAccounting.ts";
 import * as M from "@goat/contracts";
 import * as Effect from "effect/Effect";
@@ -77,6 +77,7 @@ export const makeStoreKernel = Effect.gen(function* () {
       }>`SELECT dimension,value FROM memory_quota_counters WHERE space='_hub_global' AND scope_key=''`,
     );
   });
+  const globalBound = checkpointBoundSql("coalesce(b.value,0)", "coalesce(n.value,0)");
   const globalCheckpointReservation = Effect.fnUntraced(function* () {
     yield* stored(
       "checkpoint-accounting",
@@ -86,9 +87,9 @@ export const makeStoreKernel = Effect.gen(function* () {
       "hub-checkpoint-bound-global",
       sql<{ bytes: number; bound: number }>`
       SELECT coalesce(sum(max(coalesce(r.checkpoint_bytes,0),
-        coalesce(b.value,0)+max(1,coalesce(n.value,0))*${CHECKPOINT_PAGE_OVERHEAD})+
+        ${sql.unsafe(globalBound)})+
         coalesce(r.published_pinned_bytes,0)-CASE WHEN r.checkpoint_id IS NOT r.reserved_snapshot_id AND NOT EXISTS(SELECT 1 FROM json_each(r.handles_json) h WHERE json_extract(h.value,'$.checkpointId')=r.reserved_snapshot_id) AND r.snapshot_generation=coalesce(g.value,0) AND EXISTS(SELECT 1 FROM memory_inbox_pending p WHERE p.space=r.space AND p.reason='hub_snapshot' AND p.checkpoint_id='hub:'||r.reserved_snapshot_id) THEN min(r.last_snapshot_bytes,r.published_pinned_bytes) ELSE 0 END),0) AS bytes,
-      coalesce(sum(coalesce(b.value,0)+max(1,coalesce(n.value,0))*${CHECKPOINT_PAGE_OVERHEAD}),0) AS bound
+      coalesce(sum(${sql.unsafe(globalBound)}),0) AS bound
       FROM (SELECT space FROM memory_hub_retention UNION SELECT space FROM memory_quota_counters WHERE dimension='hub_snapshot_rows' AND scope_key='') s
       LEFT JOIN memory_hub_retention r ON r.space=s.space
       LEFT JOIN memory_quota_counters b ON b.space=s.space AND b.dimension='hub_snapshot_bytes' AND b.scope_key=''

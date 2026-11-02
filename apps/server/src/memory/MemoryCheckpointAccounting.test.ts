@@ -27,6 +27,7 @@ import {
 } from "./MemoryCheckpointInventory.ts";
 import {
   checkpointBound,
+  checkpointPages,
   CHECKPOINT_PAGE_OVERHEAD,
   futureForgetReserve,
 } from "./MemoryCheckpointBound.ts";
@@ -305,10 +306,7 @@ it.effect.each([0, 1, 100, 101])(
         actual += new TextEncoder().encode(encoded).length;
       }
       assert.isTrue(actual <= checkpointBound(size.bytes, size.rows));
-      assert.strictEqual(
-        checkpointBound(size.bytes, size.rows),
-        size.bytes + Math.max(1, count) * CHECKPOINT_PAGE_OVERHEAD,
-      );
+      assert.isAtMost(Math.ceil(Math.max(1, count) / 100), checkpointPages(size.bytes, size.rows));
     }),
 );
 

@@ -74,7 +74,7 @@ export const checkpointInventorySize = (inventory: CheckpointInventory) => {
   return { bytes, rows };
 };
 
-type RevisionRow = {
+export type RevisionRow = {
   revision_id: string;
   operation_id: string;
   parents_json: string;
@@ -84,7 +84,7 @@ type RevisionRow = {
   payload_ref: string | null;
   created_at: number;
 };
-const revisionRecord = Effect.fnUntraced(function* (
+export const revisionRecord = Effect.fnUntraced(function* (
   space: M.MemorySpaceId,
   id: M.MemoryId,
   r: RevisionRow,
