@@ -1,6 +1,8 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Option from "effect/Option";
@@ -183,6 +185,50 @@ it.layer(NodeServices.layer)("OpenCodex SSH replacement follow-up", (it) => {
       const { update } = yield* setup(fleet);
       yield* update.check;
       expect(fleet.holdsDuringSync[0]).toBeGreaterThan(0);
+      expect(fleet.holds).toBe(0);
+    }),
+  );
+  it.effect(
+    "rechecks an interrupted dispatch in the same service before the admission ceiling",
+    () =>
+      Effect.gen(function* () {
+        const fleet = makeFleet({ homeOwnership: "adopted" });
+        fleet.orchestrated = true;
+        fleet.versions.set("mac-studio", "2.90.0");
+        const started = yield* Deferred.make<void>();
+        fleet.onApply = Effect.sync(() => {
+          fleet.inFlight = true;
+        }).pipe(Effect.andThen(Deferred.succeed(started, undefined)), Effect.andThen(Effect.never));
+        const { update } = yield* setup(fleet);
+        const dispatch = yield* Effect.forkChild(update.check);
+        yield* Deferred.await(started);
+        yield* Fiber.interrupt(dispatch);
+        expect(fleet.holds).toBe(1);
+        yield* TestClock.adjust(10 * MINUTE);
+        yield* update.check;
+        expect(fleet.planReads).toBeGreaterThan(2);
+        yield* TestClock.adjust(40 * MINUTE);
+        yield* update.check;
+        expect(fleet.holds).toBe(0);
+      }),
+  );
+
+  it.effect("rechecks a defective dispatch in the same service before the admission ceiling", () =>
+    Effect.gen(function* () {
+      const fleet = makeFleet({ homeOwnership: "adopted" });
+      fleet.orchestrated = true;
+      fleet.versions.set("mac-studio", "2.90.0");
+      fleet.onApply = Effect.sync(() => {
+        fleet.inFlight = true;
+      }).pipe(Effect.andThen(Effect.die("dispatch fault")));
+      const { update } = yield* setup(fleet);
+      yield* update.check;
+      expect(fleet.holds).toBe(1);
+      yield* TestClock.adjust(10 * MINUTE);
+      yield* update.check;
+      expect(fleet.planReads).toBeGreaterThan(2);
+      yield* TestClock.adjust(40 * MINUTE);
+      yield* update.check;
       expect(fleet.holds).toBe(0);
     }),
   );

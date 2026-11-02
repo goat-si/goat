@@ -7,6 +7,7 @@ import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -598,6 +599,7 @@ const make = Effect.gen(function* () {
       return yield* publish(now, summary);
     }
 
+    yield* Ref.set(nextAt, now + RETRY_INTERVAL_MS);
     const result = yield* runWindow({
       steps: plan.steps,
       targetVersion: plan.targetVersion,
@@ -605,7 +607,15 @@ const make = Effect.gen(function* () {
       children: childAliases,
       scope,
       orchestrated,
-    });
+    }).pipe(
+      Effect.onExit((exit) =>
+        Exit.isFailure(exit)
+          ? Clock.currentTimeMillis.pipe(
+              Effect.flatMap((at) => Ref.set(nextAt, at + RETRY_INTERVAL_MS)),
+            )
+          : Effect.void,
+      ),
+    );
     if (result.outcome === "busy" || result.outcome === "admission-unsupported") {
       // Unsupported admission is structural; it waits for the next release check.
       if (result.outcome === "busy") yield* Ref.set(nextAt, now + RETRY_INTERVAL_MS);
@@ -619,7 +629,10 @@ const make = Effect.gen(function* () {
     if (result.outcome === "uncertain")
       return yield* publish(now, { ...summary, decision: "wait", reason: "apply-uncertain" });
     const closed = (yield* Ref.get(state)).window === undefined;
-    if (closed && !indeterminate) yield* settleFollowUp;
+    if (closed && !indeterminate) {
+      yield* Ref.set(nextAt, now + CHECK_INTERVAL_MS);
+      yield* settleFollowUp;
+    }
     const restoring = (yield* Ref.get(state)).window?.restoring !== undefined;
     if (restoring) yield* Ref.set(nextAt, now + RETRY_INTERVAL_MS);
     yield* publish(
