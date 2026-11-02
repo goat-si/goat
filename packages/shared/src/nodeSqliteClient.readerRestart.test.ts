@@ -252,3 +252,27 @@ it.effect("a slot waiting out restart backoff honors a deadline another slot ext
     }),
   ),
 );
+
+it.effect(
+  "a restart whose worker never answers holds back the next one only until the startup deadline",
+  () =>
+    withReaderClient((sql) =>
+      Effect.gen(function* () {
+        yield* failFirstStartup(sql);
+        const restart = yield* holdRestart(sql);
+        const before = startedWorkers.length;
+        const next = yield* Effect.forkChild(countEntries(sql).pipe(SqliteClient.readOnly), {
+          startImmediately: true,
+        });
+        yield* TestClock.adjust("0 millis");
+        yield* Fiber.interrupt(restart.read);
+        yield* TestClock.adjust("9999 millis");
+        assert.equal(startedWorkers.length, before);
+        // Slot 0's worker never answered; at the 10s startup deadline the next slot restarts anyway.
+        yield* TestClock.adjust("1 millis");
+        assert.equal(startedWorkers.length, before + 1);
+        assert.equal(yield* Fiber.join(next), 1);
+        yield* restart.release;
+      }),
+    ),
+);

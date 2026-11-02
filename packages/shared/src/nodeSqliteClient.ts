@@ -449,7 +449,11 @@ const makeReader = Effect.fn("SqliteReader.make")(function* (
       const reader =
         current ??
         (yield* start().pipe(
-          Effect.tap((started) => Effect.sync(() => restart.setProbe(started.started))),
+          Effect.tap((started) =>
+            Effect.sync(() =>
+              restart.setProbe(Effect.timeoutOption(started.started, startupTimeout)),
+            ),
+          ),
           Effect.catch((cause) => {
             backoff();
             return retire(undefined, cause);
