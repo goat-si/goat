@@ -192,4 +192,22 @@ describe("guardBrowserAppSurface", () => {
       }),
     ).toEqual({});
   });
+
+  it("refuses web content inside a sheet and treats page dialogs as unverified", () => {
+    const inSheet = guardBrowserAppSurface({
+      method: "click",
+      appId: "com.apple.Safari",
+      target: target({ ancestors: [{ role: "AXWebArea" }, { role: "AXSheet" }] }),
+    });
+    expect(inSheet.refused?.reason).toBe("web_content");
+    const pageDialog = guardBrowserAppSurface({
+      method: "click",
+      appId: "com.google.Chrome",
+      target: target({
+        ancestors: [{ role: "AXGroup", subrole: "AXApplicationDialog" }, { role: "AXWindow" }],
+        ancestryComplete: false,
+      }),
+    });
+    expect(pageDialog.refused?.reason).toBe("unverified_target");
+  });
 });
