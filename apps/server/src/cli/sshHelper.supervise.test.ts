@@ -269,6 +269,61 @@ const tempSuperviseHome = () => {
 const record = (stateDir: string, name: string) =>
   NodeFS.readFileSync(NodePath.join(stateDir, name), "utf8");
 
+it("passes a usable Windows working directory to replacement and rollback", async () => {
+  const oldPid = deadPid();
+  const { baseDir, stateDir, logFile } = tempSuperviseHome();
+  const runnerFile = NodePath.join(stateDir, "run-t3.sh");
+  const previousRunnerFile = NodePath.join(stateDir, "previous.sh");
+  const profile = NodePath.join(stateDir, "profile");
+  NodeFS.mkdirSync(profile);
+  const previousProfile = process.env.USERPROFILE;
+  try {
+    for (const usable of [true, false]) {
+      process.env.USERPROFILE = usable ? profile : NodePath.join(stateDir, "missing-profile");
+      NodeFS.writeFileSync(runnerFile, "new");
+      NodeFS.writeFileSync(previousRunnerFile, "old");
+      using spawn = vi
+        .spyOn(NodeChildProcess, "spawnSync")
+        .mockReturnValue({ status: 1, stdout: "" } as ReturnType<
+          typeof NodeChildProcess.spawnSync
+        >);
+      await superviseSshRuntimeReplacement({
+        oldPid,
+        oldInstanceId: "old",
+        port: 1,
+        baseDir,
+        stateDir,
+        runnerFile,
+        previousRunnerFile,
+        targetVersion: "2",
+        previousVersion: "1",
+        identity: "new",
+        previousIdentity: "old",
+        executable: "new.exe",
+        previousExecutable: "old.exe",
+        platform: "win32",
+        exitTimeoutMs: 1000,
+        readyTimeoutMs: 0,
+        logFile,
+      });
+      assert.equal(spawn.mock.calls.length, 2);
+      const expected = usable ? profile : NodePath.parse(baseDir).root;
+      for (const call of spawn.mock.calls) {
+        const options = call[2] as { env: NodeJS.ProcessEnv };
+        assert.equal(options.env.GOAT_SPAWN_CWD, expected);
+        const args = call[1] as string[];
+        assert.include(
+          Buffer.from(args[3]!, "base64").toString("utf16le"),
+          "CurrentDirectory = $env:GOAT_SPAWN_CWD",
+        );
+      }
+    }
+  } finally {
+    if (previousProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = previousProfile;
+  }
+});
+
 it("restores the runner when refreshing its alias fails", async () => {
   const { baseDir, stateDir, logFile } = tempSuperviseHome();
   const runnerFile = NodePath.join(stateDir, "run-t3.sh");
