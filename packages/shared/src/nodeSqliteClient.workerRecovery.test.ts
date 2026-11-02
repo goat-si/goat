@@ -206,68 +206,75 @@ it.effect("retires cancelled native reader work before another reader can run", 
 it.effect.each(["statement", "transaction"] as const)(
   "runs a %s queued behind a cancelled read on a fresh reader",
   (shape) =>
-    withReaderClient((sql) =>
-      Effect.gen(function* () {
-        yield* countEntries(sql).pipe(SqliteClient.readOnly);
-        const worker = startedWorkers.at(-1)!;
-        const sent = yield* Deferred.make<void>();
-        using held = vi.spyOn(worker, "postMessage").mockImplementation(() => {
-          Deferred.doneUnsafe(sent, Effect.void);
-        });
-        const cancelled = yield* Effect.forkChild(countEntries(sql).pipe(SqliteClient.readOnly));
-        yield* Deferred.await(sent);
-        const queued = yield* Effect.forkChild(
-          (shape === "statement" ? countEntries(sql) : sql.withTransaction(countEntries(sql))).pipe(
-            SqliteClient.readOnly,
-          ),
-          { startImmediately: true },
-        );
-        yield* Fiber.interrupt(cancelled);
-        held.mockRestore();
-        yield* TestClock.adjust("250 millis");
-        assert.equal(yield* Fiber.join(queued), 1);
-      }),
+    withReaderClient(
+      (sql) =>
+        Effect.gen(function* () {
+          yield* countEntries(sql).pipe(SqliteClient.readOnly);
+          const worker = startedWorkers.at(-1)!;
+          const sent = yield* Deferred.make<void>();
+          using held = vi.spyOn(worker, "postMessage").mockImplementation(() => {
+            Deferred.doneUnsafe(sent, Effect.void);
+          });
+          const cancelled = yield* Effect.forkChild(countEntries(sql).pipe(SqliteClient.readOnly));
+          yield* Deferred.await(sent);
+          const queued = yield* Effect.forkChild(
+            (shape === "statement"
+              ? countEntries(sql)
+              : sql.withTransaction(countEntries(sql))
+            ).pipe(SqliteClient.readOnly),
+            { startImmediately: true },
+          );
+          yield* Fiber.interrupt(cancelled);
+          held.mockRestore();
+          yield* TestClock.adjust("250 millis");
+          assert.equal(yield* Fiber.join(queued), 1);
+        }),
+      // One slot keeps the queued read behind the cancelled one, which is the path under test.
+      { readerPoolSize: 1 },
     ),
 );
 
 it.effect("bounds reader admission before the connection semaphore", () =>
-  withReaderClient((sql) =>
-    Effect.gen(function* () {
-      yield* countEntries(sql).pipe(SqliteClient.readOnly);
-      const worker = startedWorkers.at(-1)!;
-      using _held = vi.spyOn(worker, "postMessage").mockImplementation(() => {});
-      const reads = [];
-      for (let index = 0; index < 64; index++) {
-        reads.push(
-          yield* Effect.forkChild(countEntries(sql).pipe(SqliteClient.readOnly), {
-            startImmediately: true,
-          }),
+  withReaderClient(
+    (sql) =>
+      Effect.gen(function* () {
+        yield* countEntries(sql).pipe(SqliteClient.readOnly);
+        const worker = startedWorkers.at(-1)!;
+        using _held = vi.spyOn(worker, "postMessage").mockImplementation(() => {});
+        const reads = [];
+        for (let index = 0; index < 64; index++) {
+          reads.push(
+            yield* Effect.forkChild(countEntries(sql).pipe(SqliteClient.readOnly), {
+              startImmediately: true,
+            }),
+          );
+        }
+        const overflow = yield* Effect.forkChild(
+          countEntries(sql).pipe(SqliteClient.readOnly, Effect.result),
+          { startImmediately: true },
         );
-      }
-      const overflow = yield* Effect.forkChild(
-        countEntries(sql).pipe(SqliteClient.readOnly, Effect.result),
-        { startImmediately: true },
-      );
-      const state = overflow.pollUnsafe();
-      assert.isDefined(state, "overflow must complete without joining the reader queue");
-      const result = yield* Fiber.join(overflow);
-      assert.equal(result._tag, "Failure");
-      if (result._tag !== "Failure") return;
-      const rejected = result.failure;
-      assert.equal(rejected._tag, "SqlError");
-      assert.include(String(rejected.reason.cause), "Reader admission limit reached");
-      assert.isTrue(SqliteClient.isReaderAdmissionOverload(rejected));
-      assert.isTrue(
-        SqliteClient.isReaderAdmissionOverload(new Error("wrapped", { cause: rejected })),
-      );
-      assert.isFalse(
-        SqliteClient.isReaderAdmissionOverload(new Error("Reader admission limit reached")),
-      );
-      const cycle = new Error("cycle");
-      Object.defineProperty(cycle, "cause", { value: cycle });
-      assert.isFalse(SqliteClient.isReaderAdmissionOverload(cycle));
-      for (const read of reads) yield* Fiber.interrupt(read);
-    }),
+        const state = overflow.pollUnsafe();
+        assert.isDefined(state, "overflow must complete without joining the reader queue");
+        const result = yield* Fiber.join(overflow);
+        assert.equal(result._tag, "Failure");
+        if (result._tag !== "Failure") return;
+        const rejected = result.failure;
+        assert.equal(rejected._tag, "SqlError");
+        assert.include(String(rejected.reason.cause), "Reader admission limit reached");
+        assert.isTrue(SqliteClient.isReaderAdmissionOverload(rejected));
+        assert.isTrue(
+          SqliteClient.isReaderAdmissionOverload(new Error("wrapped", { cause: rejected })),
+        );
+        assert.isFalse(
+          SqliteClient.isReaderAdmissionOverload(new Error("Reader admission limit reached")),
+        );
+        const cycle = new Error("cycle");
+        Object.defineProperty(cycle, "cause", { value: cycle });
+        assert.isFalse(SqliteClient.isReaderAdmissionOverload(cycle));
+        for (const read of reads) yield* Fiber.interrupt(read);
+      }),
+    // One slot makes every admitted read queue on the held worker.
+    { readerPoolSize: 1 },
   ),
 );
 
@@ -333,54 +340,57 @@ it.effect("caps repeated reader startup backoff and resets it after a successful
 );
 
 it.effect("cancels reader startup waiters and releases all their admission slots", () =>
-  withReaderClient((sql) =>
-    Effect.gen(function* () {
-      const started = yield* Deferred.make<void>();
-      const original = startedWorkers.length;
-      const created = yield* Effect.forkChild(nextStartedWorker, { startImmediately: true });
-      const read = yield* Effect.forkChild(
-        sql.withTransaction(countEntries(sql)).pipe(SqliteClient.readOnly),
-        { startImmediately: true },
-      );
-      const worker = yield* Fiber.join(created);
-      // Startup has posted initialize, but its reply is held at the worker boundary.
-      using messages = vi.spyOn(worker, "emit").mockImplementation((event, ...args) => {
-        if (event === "message") {
-          Deferred.doneUnsafe(started, Effect.void);
-          return true;
-        }
-        return Reflect.apply(Object.getPrototypeOf(Object.getPrototypeOf(worker)).emit, worker, [
-          event,
-          ...args,
-        ]);
-      });
-      yield* Deferred.await(started);
-      const reads = [];
-      for (let index = 0; index < 63; index++)
-        reads.push(
-          yield* Effect.forkChild(
-            sql.withTransaction(countEntries(sql)).pipe(SqliteClient.readOnly),
-            { startImmediately: true },
-          ),
-        );
-      for (const waiting of reads) yield* Fiber.interrupt(waiting);
-      yield* Fiber.interrupt(read);
-      messages.mockRestore();
-      worker.emit("message", { type: "ready" });
-      assert.equal(yield* countEntries(sql).pipe(SqliteClient.readOnly), 1);
-      assert.equal(startedWorkers.length, original + 1);
-      using _held = vi.spyOn(worker, "postMessage").mockImplementation(() => {});
-      const admitted = [];
-      for (let index = 0; index < 64; index++) {
-        const waiting = yield* Effect.forkChild(
-          countEntries(sql).pipe(SqliteClient.readOnly, Effect.result),
+  withReaderClient(
+    (sql) =>
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>();
+        const original = startedWorkers.length;
+        const created = yield* Effect.forkChild(nextStartedWorker, { startImmediately: true });
+        const read = yield* Effect.forkChild(
+          sql.withTransaction(countEntries(sql)).pipe(SqliteClient.readOnly),
           { startImmediately: true },
         );
-        assert.isUndefined(waiting.pollUnsafe());
-        admitted.push(waiting);
-      }
-      for (const waiting of admitted) yield* Fiber.interrupt(waiting);
-    }),
+        const worker = yield* Fiber.join(created);
+        // Startup has posted initialize, but its reply is held at the worker boundary.
+        using messages = vi.spyOn(worker, "emit").mockImplementation((event, ...args) => {
+          if (event === "message") {
+            Deferred.doneUnsafe(started, Effect.void);
+            return true;
+          }
+          return Reflect.apply(Object.getPrototypeOf(Object.getPrototypeOf(worker)).emit, worker, [
+            event,
+            ...args,
+          ]);
+        });
+        yield* Deferred.await(started);
+        const reads = [];
+        for (let index = 0; index < 63; index++)
+          reads.push(
+            yield* Effect.forkChild(
+              sql.withTransaction(countEntries(sql)).pipe(SqliteClient.readOnly),
+              { startImmediately: true },
+            ),
+          );
+        for (const waiting of reads) yield* Fiber.interrupt(waiting);
+        yield* Fiber.interrupt(read);
+        messages.mockRestore();
+        worker.emit("message", { type: "ready" });
+        assert.equal(yield* countEntries(sql).pipe(SqliteClient.readOnly), 1);
+        assert.equal(startedWorkers.length, original + 1);
+        using _held = vi.spyOn(worker, "postMessage").mockImplementation(() => {});
+        const admitted = [];
+        for (let index = 0; index < 64; index++) {
+          const waiting = yield* Effect.forkChild(
+            countEntries(sql).pipe(SqliteClient.readOnly, Effect.result),
+            { startImmediately: true },
+          );
+          assert.isUndefined(waiting.pollUnsafe());
+          admitted.push(waiting);
+        }
+        for (const waiting of admitted) yield* Fiber.interrupt(waiting);
+      }),
+    // One slot makes every waiter queue on the startup being cancelled.
+    { readerPoolSize: 1 },
   ),
 );
 
@@ -425,52 +435,55 @@ it.effect(
         return new Int32Array(latch);
       }),
       (latch) =>
-        withReaderClient((sql) =>
-          Effect.gen(function* () {
-            yield* countEntries(sql).pipe(SqliteClient.readOnly);
-            const worker = startedWorkers.at(-1)!;
-            const active = yield* Deferred.make<void>();
-            worker.on("message", (reply) => {
-              if (reply?.type === "native-active") Deferred.doneUnsafe(active, Effect.void);
-            });
-            const transaction = yield* Effect.forkChild(
-              sql
-                .withTransaction(
-                  Effect.gen(function* () {
-                    yield* countEntries(sql);
-                    yield* sql`SELECT hold_reader()`;
-                  }),
-                )
-                .pipe(SqliteClient.readOnly),
-            );
-            yield* Deferred.await(active);
-            using terminated = vi.spyOn(worker, "terminate");
-            const cancellation = yield* Effect.forkChild(Fiber.interrupt(transaction), {
-              startImmediately: true,
-            });
-            assert.equal(terminated.mock.calls.length, 1);
-            const before = startedWorkers.length;
-            const replacement = yield* Effect.forkChild(
-              countEntries(sql).pipe(SqliteClient.readOnly),
-              { startImmediately: true },
-            );
-            assert.equal(startedWorkers.length, before);
-            Atomics.store(latch, 0, 1);
-            Atomics.notify(latch, 0);
-            yield* Fiber.join(cancellation);
-            assert.equal(worker.threadId, -1);
-            yield* TestClock.adjust("250 millis");
-            assert.equal(yield* Fiber.join(replacement), 1);
-            yield* sql`INSERT INTO entries VALUES ('after retirement')`;
-            assert.equal((yield* sql`PRAGMA wal_checkpoint(TRUNCATE)`)[0]?.busy, 0);
-          }).pipe(
-            Effect.ensuring(
-              Effect.sync(() => {
-                Atomics.store(latch, 0, 1);
-                Atomics.notify(latch, 0);
-              }),
+        withReaderClient(
+          (sql) =>
+            Effect.gen(function* () {
+              yield* countEntries(sql).pipe(SqliteClient.readOnly);
+              const worker = startedWorkers.at(-1)!;
+              const active = yield* Deferred.make<void>();
+              worker.on("message", (reply) => {
+                if (reply?.type === "native-active") Deferred.doneUnsafe(active, Effect.void);
+              });
+              const transaction = yield* Effect.forkChild(
+                sql
+                  .withTransaction(
+                    Effect.gen(function* () {
+                      yield* countEntries(sql);
+                      yield* sql`SELECT hold_reader()`;
+                    }),
+                  )
+                  .pipe(SqliteClient.readOnly),
+              );
+              yield* Deferred.await(active);
+              using terminated = vi.spyOn(worker, "terminate");
+              const cancellation = yield* Effect.forkChild(Fiber.interrupt(transaction), {
+                startImmediately: true,
+              });
+              assert.equal(terminated.mock.calls.length, 1);
+              const before = startedWorkers.length;
+              const replacement = yield* Effect.forkChild(
+                countEntries(sql).pipe(SqliteClient.readOnly),
+                { startImmediately: true },
+              );
+              assert.equal(startedWorkers.length, before);
+              Atomics.store(latch, 0, 1);
+              Atomics.notify(latch, 0);
+              yield* Fiber.join(cancellation);
+              assert.equal(worker.threadId, -1);
+              yield* TestClock.adjust("250 millis");
+              assert.equal(yield* Fiber.join(replacement), 1);
+              yield* sql`INSERT INTO entries VALUES ('after retirement')`;
+              assert.equal((yield* sql`PRAGMA wal_checkpoint(TRUNCATE)`)[0]?.busy, 0);
+            }).pipe(
+              Effect.ensuring(
+                Effect.sync(() => {
+                  Atomics.store(latch, 0, 1);
+                  Atomics.notify(latch, 0);
+                }),
+              ),
             ),
-          ),
+          // One slot makes the replacement read wait for the retiring worker.
+          { readerPoolSize: 1 },
         ),
       (latch) =>
         Effect.sync(() => {
@@ -865,4 +878,74 @@ it.effect("reports native reader durations on successful and failed statements",
       ),
     );
   }),
+);
+
+it.effect("serializes reader requests through their replies without leaking values mode", () =>
+  withReaderClient(
+    (sql) =>
+      Effect.gen(function* () {
+        // Finish startup before holding requests at the worker transport boundary.
+        yield* countEntries(sql).pipe(SqliteClient.readOnly);
+        const worker = startedWorkers[startedWorkers.length - 1]!;
+        const send = worker.postMessage.bind(worker);
+        const requests: Array<() => void> = [];
+        const postMessage = vi.spyOn(worker, "postMessage").mockImplementation((...args) => {
+          requests.push(() => send(...args));
+        });
+        yield* Effect.gen(function* () {
+          const select = sql`SELECT name FROM entries`;
+          const values = yield* Effect.forkChild(select.values.pipe(SqliteClient.readOnly), {
+            startImmediately: true,
+          });
+          const objects = yield* Effect.forkChild(select.pipe(SqliteClient.readOnly), {
+            startImmediately: true,
+          });
+          // A pending reply holds the connection so a retry cannot be overtaken
+          // by another request or a transaction on the same worker.
+          assert.lengthOf(requests, 1);
+          postMessage.mockRestore();
+          for (const request of requests) request();
+          assert.deepEqual(yield* Fiber.join(values), [["first"]]);
+          assert.deepEqual(yield* Fiber.join(objects), [{ name: "first" }]);
+          assert.deepEqual(yield* select.pipe(SqliteClient.readOnly), [{ name: "first" }]);
+        }).pipe(Effect.ensuring(Effect.sync(() => postMessage.mockRestore())));
+      }),
+    // One slot puts both requests on the same worker, which is the serialization under test.
+    { readerPoolSize: 1 },
+  ),
+);
+
+it.effect("serves reads from a running slot while another slot waits out restart backoff", () =>
+  withReaderClient((sql) =>
+    Effect.gen(function* () {
+      const before = startedWorkers.length;
+      const release = yield* Deferred.make<void>();
+      const entered = [Deferred.makeUnsafe<void>(), Deferred.makeUnsafe<void>()];
+      const held = [];
+      for (const started of entered)
+        held.push(
+          yield* Effect.forkChild(
+            sql
+              .withTransaction(
+                Effect.gen(function* () {
+                  yield* countEntries(sql);
+                  yield* Deferred.succeed(started, undefined);
+                  yield* Deferred.await(release);
+                }),
+              )
+              .pipe(SqliteClient.readOnly),
+            { startImmediately: true },
+          ),
+        );
+      for (const started of entered) yield* Deferred.await(started);
+      yield* Deferred.succeed(release, undefined);
+      for (const fiber of held) yield* Fiber.join(fiber);
+      assert.equal(startedWorkers.length, before + 2);
+      // The first slot's worker dies, so that slot must wait out restart backoff.
+      yield* Effect.promise(() => startedWorkers[before]!.terminate());
+      // The clock never advances: only the still-running slot can serve this read.
+      assert.equal(yield* countEntries(sql).pipe(SqliteClient.readOnly), 1);
+      assert.equal(startedWorkers.length, before + 2);
+    }),
+  ),
 );
