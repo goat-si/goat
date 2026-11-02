@@ -457,6 +457,14 @@ cleanup_runner_next() {
   [ -z "$LEGACY_IDENTITY_LINK" ] || rm -f "$LEGACY_IDENTITY_LINK"
   [ -z "$RETAINED_SNAPSHOT_FILE" ] || rm -f "$RETAINED_SNAPSHOT_FILE"
 }
+sync_runner_alias() {
+  alias_next="$STATE_DIR/run-goat.next.$$"
+  rm -f "$alias_next"
+  if ! ln "$RUNNER_FILE" "$alias_next" 2>/dev/null; then
+    cp "$RUNNER_FILE" "$alias_next" && chmod 700 "$alias_next" || { rm -f "$alias_next"; return 1; }
+  fi
+  mv -f "$alias_next" "$STATE_DIR/run-goat.sh"
+}
 trap 'runner_exit=$?; cleanup_runner_next; exit "$runner_exit"' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
@@ -518,6 +526,7 @@ publish_selected_runner() {
   }
   check_retained_runner
 @@GOAT_RUNNER_INSTALL@@
+  sync_runner_alias
   RUNNER_PUBLISHED=1
 }
 pending_attachment_safe() {

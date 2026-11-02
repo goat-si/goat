@@ -58,7 +58,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           assert.equal(result.code, 0, result.stderr);
           assert.equal(yield* f.fs.readFileString(alias), yield* f.fs.readFileString(protocol));
           if (!copyFallback)
-            assert.equal((yield* f.fs.stat(alias)).ino, (yield* f.fs.stat(protocol)).ino);
+            assert.deepEqual((yield* f.fs.stat(alias)).ino, (yield* f.fs.stat(protocol)).ino);
           yield* f.fs.copyFile(protocol, `${protocol}.old-client`);
           yield* f.fs.rename(`${protocol}.old-client`, protocol);
           yield* f.fs.writeFileString(alias, "stale alias\n");
@@ -66,7 +66,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           assert.equal(result.code, 0, result.stderr);
           assert.equal(yield* f.fs.readFileString(alias), yield* f.fs.readFileString(protocol));
           if (!copyFallback)
-            assert.equal((yield* f.fs.stat(alias)).ino, (yield* f.fs.stat(protocol)).ino);
+            assert.deepEqual((yield* f.fs.stat(alias)).ino, (yield* f.fs.stat(protocol)).ino);
         }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
     it.live.each([false, true])(
