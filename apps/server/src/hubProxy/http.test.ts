@@ -351,6 +351,7 @@ it.live(
             new Promise<NodeNet.Server>((resolve) => {
               const server = NodeNet.createServer((socket) => {
                 socket.on("error", () => {});
+                socket.resume();
                 connected.resolve();
               });
               server.listen(0, "127.0.0.1", () => resolve(server));
