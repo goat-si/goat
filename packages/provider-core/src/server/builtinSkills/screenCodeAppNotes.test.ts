@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vite-plus/test";
-import { screenCodeAppNote } from "./computerUseSkillFiles.ts";
+import { computerUseAppNote, screenCodeAppNote } from "./computerUseSkillFiles.ts";
+
+const browsers = [
+  ["Google Chrome", "com.google.Chrome"],
+  ["Brave Browser", "com.brave.Browser"],
+  ["Microsoft Edge", "com.microsoft.edgemac"],
+  ["Arc", "company.thebrowser.Browser"],
+] as const;
 
 const apps = [
   ["Finder", "com.apple.finder"],
@@ -8,9 +15,21 @@ const apps = [
   ["TextEdit", "com.apple.textedit"],
   ["Preview", "com.apple.preview"],
   ["Safari", "com.apple.safari"],
+  ...browsers,
 ] as const;
 
 describe("screen-code app notes", () => {
+  it("routes web pages in Chrome-family browsers to GOAT's browser instead of the app target, by name and bundle id", () => {
+    for (const [name, bundle] of browsers) {
+      const screenNote = screenCodeAppNote("darwin", name);
+      expect(screenCodeAppNote("darwin", bundle)).toBe(screenNote);
+      expect(screenNote).toContain("screen.tab()");
+      const computerNote = computerUseAppNote("darwin", name);
+      expect(computerUseAppNote("darwin", bundle)).toBe(computerNote);
+      expect(computerNote).toContain("GOAT's browser");
+    }
+  });
+
   it.each(apps)("uses screen calls for %s and resolves its bundle id", (name, bundle) => {
     const note = screenCodeAppNote("darwin", name);
     expect(note).toBeTruthy();
