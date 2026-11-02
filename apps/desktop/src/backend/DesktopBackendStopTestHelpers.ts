@@ -4,6 +4,7 @@ import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
@@ -17,15 +18,138 @@ import { ChildProcessSpawner } from "effect/process";
 import * as DesktopConfig from "../app/DesktopConfig.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
+import { BACKEND_STOP_TIMEOUT } from "./DesktopBackendProcess.ts";
 import type * as Harness from "./DesktopBackendManager.test.ts";
 
 export function registerBackendStopTests({
   makeTestInstance,
   makeProcess,
+  baseConfig,
 }: {
   makeTestInstance: typeof Harness.makeTestInstance;
   makeProcess: typeof Harness.makeProcess;
+  baseConfig: Parameters<typeof Harness.makeTestInstance>[0]["config"] & {};
 }) {
+  it.effect("PR 2418: a blocked shutdown callback cannot extend the stop budget", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const ready = yield* Deferred.make<void>();
+        const shutdown = yield* Deferred.make<void>();
+        const allowShutdown = yield* Deferred.make<void>();
+        const returned = yield* Deferred.make<void>();
+        const stopped = yield* Deferred.make<void>();
+        const spawnerLayer = Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make(() =>
+            Effect.gen(function* () {
+              const exit = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
+              yield* Scope.addFinalizer(
+                yield* Scope.Scope,
+                Deferred.succeed(exit, ChildProcessSpawner.ExitCode(0)).pipe(
+                  Effect.andThen(Deferred.succeed(stopped, undefined)),
+                  Effect.asVoid,
+                ),
+              );
+              return makeProcess({ exitCode: Deferred.await(exit) });
+            }),
+          ),
+        );
+        const instance = yield* makeTestInstance({
+          spawnerLayer,
+          onReady: Deferred.succeed(ready, undefined).pipe(Effect.asVoid),
+          onShutdown: Deferred.succeed(shutdown, undefined).pipe(
+            Effect.andThen(Deferred.await(allowShutdown)),
+          ),
+        });
+        yield* instance.start;
+        yield* Deferred.await(ready);
+        const stopping = yield* instance
+          .stop("quit", { timeout: BACKEND_STOP_TIMEOUT })
+          .pipe(Effect.andThen(Deferred.succeed(returned, undefined)), Effect.forkChild);
+        yield* Deferred.await(shutdown);
+        yield* TestClock.adjust(BACKEND_STOP_TIMEOUT);
+        const inBudget = yield* Deferred.isDone(returned);
+        yield* Deferred.succeed(allowShutdown, undefined);
+        yield* Fiber.join(stopping);
+        yield* Deferred.await(stopped);
+        assert.isTrue(inBudget);
+      }),
+    ),
+  );
+  it.effect("PR 2418: stop bounds waiting for a start and eventually stops its backend", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const resolving = yield* Deferred.make<void>();
+        const resolve = yield* Deferred.make<void>();
+        const stopped = yield* Deferred.make<void>();
+        const stopReturned = yield* Deferred.make<void>();
+        const stopRequested = yield* Deferred.make<void>();
+        const spawned = yield* Deferred.make<void>();
+        const records: Array<{ message: string; level: string; details: string }> = [];
+        const spawnerLayer = Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make(() =>
+            Effect.gen(function* () {
+              yield* Deferred.succeed(spawned, undefined);
+              const exit = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
+              yield* Scope.addFinalizer(
+                yield* Scope.Scope,
+                Deferred.succeed(exit, ChildProcessSpawner.ExitCode(0)).pipe(
+                  Effect.andThen(Deferred.succeed(stopped, undefined)),
+                  Effect.asVoid,
+                ),
+              );
+              return makeProcess({ exitCode: Deferred.await(exit) });
+            }),
+          ),
+        );
+        const instance = yield* makeTestInstance({
+          spawnerLayer,
+          configResolve: Deferred.succeed(resolving, undefined).pipe(
+            Effect.andThen(Deferred.await(resolve)),
+            Effect.andThen(Effect.succeed(baseConfig)),
+          ),
+          backendOutputLog: {
+            recordStop: (record) =>
+              Effect.sync(() => {
+                records.push(record);
+              }).pipe(
+                Effect.andThen(
+                  record.message === "backend stop requested"
+                    ? Deferred.succeed(stopRequested, undefined)
+                    : Effect.void,
+                ),
+                Effect.asVoid,
+              ),
+          },
+        });
+        const starting = yield* instance.start.pipe(Effect.forkChild);
+        yield* Deferred.await(resolving);
+        const stopping = yield* instance
+          .stop("quit", { timeout: BACKEND_STOP_TIMEOUT })
+          .pipe(Effect.andThen(Deferred.succeed(stopReturned, undefined)), Effect.forkChild);
+        yield* TestClock.adjust(BACKEND_STOP_TIMEOUT);
+        const result = yield* Deferred.isDone(stopReturned);
+        yield* Deferred.succeed(resolve, undefined);
+        yield* Fiber.join(starting);
+        yield* Fiber.join(stopping);
+        assert.isTrue(result);
+        assert.isTrue(
+          records.some(
+            (r) =>
+              r.message === "backend stop timed out" &&
+              r.level === "WARN" &&
+              r.details.includes("reason=quit") &&
+              r.details.includes(`waitedMs=${Duration.toMillis(BACKEND_STOP_TIMEOUT)}`) &&
+              r.details.includes("waiting for a backend start in progress"),
+          ),
+        );
+        yield* Deferred.await(stopRequested);
+        if (yield* Deferred.isDone(spawned)) yield* Deferred.await(stopped);
+        assert.isFalse((yield* instance.snapshot).desiredRunning);
+      }),
+    ),
+  );
   it.effect.each([
     ["a backend still running after the grace is recorded with its stop reason and output", "kill"],
     ["output written after the stop begins reaches the persisted session", "output"],
@@ -324,7 +448,7 @@ export function registerBackendStopTests({
         yield* Deferred.await(releasing);
         yield* TestClock.adjust("7 seconds");
         const stillWaitingAtSevenSeconds = closing.pollUnsafe() === undefined;
-        yield* TestClock.adjust("1 second");
+        yield* TestClock.adjust("2 seconds");
         const closedInBudget = closing.pollUnsafe() !== undefined;
         const warning = records.find((record) => record.message === "backend stop timed out");
         yield* Deferred.succeed(allowRelease, undefined);

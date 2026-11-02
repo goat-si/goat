@@ -207,7 +207,7 @@ export function makeTestInstance(input: MakeInstanceInput) {
 }
 
 describe("DesktopBackendManager", () => {
-  registerBackendStopTests({ makeTestInstance, makeProcess });
+  registerBackendStopTests({ makeTestInstance, makeProcess, baseConfig });
   it.effect.each([
     ["a requested stop that exits cleanly records reason and elapsed", false],
     ["stop with a timeout equal to the grace records that it gave up", true],
