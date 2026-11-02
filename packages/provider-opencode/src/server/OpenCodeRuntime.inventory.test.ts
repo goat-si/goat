@@ -1,5 +1,12 @@
 import * as NodeAssert from "node:assert/strict";
 
+import { vi } from "vite-plus/test";
+import * as PlatformError from "effect/PlatformError";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import * as Schema from "effect/Schema";
+import { OpenCodeSettings } from "../settings.ts";
+import * as OpenCodeServerOwner from "./OpenCodeServerOwner.ts";
+import { checkOpenCodeProviderStatus } from "./status.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk/v2";
 import { it } from "@effect/vitest";
@@ -138,59 +145,101 @@ it.layer(layerTest)("OpenCodeRuntime inventory", (it) => {
       NodeAssert.deepEqual(inventory.skills, []);
     }),
   );
+});
 
-  it.effect("drops oversized CLI skill output without losing the model inventory", () =>
-    Effect.gen(function* () {
-      const fs = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const hostEnvironment = yield* HostProcess.Environment;
-      const executablePath = yield* HostProcess.ExecutablePath;
-      const hostPlatform = yield* HostProcess.Platform;
-      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-opencode-inventory-" });
-      const isWindows = hostPlatform === "win32";
-      const binaryPath = path.join(tempDir, isWindows ? "opencode.cmd" : "opencode");
-      const scriptPath = path.join(tempDir, "opencode.mjs");
-      const oversizedContentBytes = 8 * 1024 * 1024 + 1;
+it.live("drops oversized CLI skill output without losing the model inventory", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const hostEnvironment = yield* HostProcess.Environment;
+    const executablePath = yield* HostProcess.ExecutablePath;
+    const hostPlatform = yield* HostProcess.Platform;
+    const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-opencode-inventory-" });
+    const isWindows = hostPlatform === "win32";
+    const binaryPath = path.join(tempDir, isWindows ? "opencode.cmd" : "opencode");
+    const scriptPath = path.join(tempDir, "opencode.mjs");
+    const oversizedContentBytes = 8 * 1024 * 1024 + 1;
 
-      yield* fs.writeFileString(
-        scriptPath,
-        [
-          'if (process.argv[2] === "models") {',
-          '  process.stdout.write(`openai/gpt-test\\n{"id":"gpt-test","providerID":"openai","name":"GPT Test"}\\n`);',
-          '} else if (process.argv[2] === "debug") {',
-          `  const content = "x".repeat(${oversizedContentBytes});`,
-          '  process.stdout.write(`[{"name":"oversized","content":"${content}"}]`);',
-          "}",
-          "",
-        ].join("\n"),
-      );
-      yield* fs.writeFileString(
-        binaryPath,
-        [
-          ...(isWindows ? ["@echo off"] : ["#!/bin/sh"]),
-          isWindows
-            ? '"%GOAT_TEST_NODE_BINARY%" "%GOAT_TEST_OPENCODE_SCRIPT%" %*'
-            : 'exec "$GOAT_TEST_NODE_BINARY" "$GOAT_TEST_OPENCODE_SCRIPT" "$@"',
-          "",
-        ].join("\n"),
-      );
-      if (!isWindows) {
-        yield* fs.chmod(binaryPath, 0o755);
-      }
+    yield* fs.writeFileString(
+      scriptPath,
+      [
+        'if (process.argv[2] === "models") {',
+        '  process.stdout.write(`openai/gpt-test\\n{"id":"gpt-test","providerID":"openai","name":"GPT Test"}\\n`);',
+        '} else if (process.argv[2] === "debug") {',
+        `  const content = "x".repeat(${oversizedContentBytes});`,
+        '  process.stdout.write(`[{"name":"oversized","content":"${content}"}]`);',
+        "}",
+        "",
+      ].join("\n"),
+    );
+    yield* fs.writeFileString(
+      binaryPath,
+      [
+        ...(isWindows ? ["@echo off"] : ["#!/bin/sh"]),
+        isWindows
+          ? '"%GOAT_TEST_NODE_BINARY%" "%GOAT_TEST_OPENCODE_SCRIPT%" %*'
+          : 'exec "$GOAT_TEST_NODE_BINARY" "$GOAT_TEST_OPENCODE_SCRIPT" "$@"',
+        "",
+      ].join("\n"),
+    );
+    if (!isWindows) {
+      yield* fs.chmod(binaryPath, 0o755);
+    }
 
-      const runtime = yield* OpenCodeRuntime.OpenCodeRuntime;
-      const inventory = yield* runtime.loadInventoryFromCli({
-        binaryPath,
-        cwd: tempDir,
-        environment: {
-          ...hostEnvironment,
-          GOAT_TEST_NODE_BINARY: executablePath,
-          GOAT_TEST_OPENCODE_SCRIPT: scriptPath,
-        },
-      });
+    const runtime = yield* OpenCodeRuntime.OpenCodeRuntime;
+    const inventory = yield* runtime.loadInventoryFromCli({
+      binaryPath,
+      cwd: tempDir,
+      environment: {
+        ...hostEnvironment,
+        GOAT_TEST_NODE_BINARY: executablePath,
+        GOAT_TEST_OPENCODE_SCRIPT: scriptPath,
+      },
+    });
 
-      NodeAssert.deepEqual(inventory.providerList.connected, ["openai"]);
-      NodeAssert.equal(inventory.skills.length, 0);
-    }),
+    NodeAssert.deepEqual(inventory.providerList.connected, ["openai"]);
+    NodeAssert.equal(inventory.skills.length, 0);
+  }).pipe(Effect.provide(layerTest)),
+);
+
+const decodeOpenCodeSettings = Schema.decodeSync(OpenCodeSettings);
+
+it.effect("reports deleted process cwd through OpenCode status", () => {
+  const spawner = ChildProcessSpawner.make(() =>
+    Effect.fail(
+      PlatformError.systemError({
+        _tag: "NotFound",
+        module: "ChildProcess",
+        method: "spawn",
+        cause: { code: "ENOENT" },
+      }),
+    ),
   );
+  const layer = OpenCodeRuntime.layer.pipe(
+    Layer.provide(OpenCodeServerLedger.layerTest),
+    Layer.provide(Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner)),
+    Layer.provideMerge(NodeServices.layer),
+  );
+  return Effect.gen(function* () {
+    const runtime = yield* OpenCodeRuntime.OpenCodeRuntime;
+    using _cwd = vi.spyOn(process, "cwd").mockImplementation(() => {
+      throw Object.assign(new Error("deleted"), { code: "ENOENT" });
+    });
+    const error = yield* runtime
+      .runOpenCodeCommand({ binaryPath: "opencode", args: ["--version"] })
+      .pipe(Effect.flip);
+    const snapshot = yield* checkOpenCodeProviderStatus(
+      decodeOpenCodeSettings({ enabled: true }),
+      "/",
+      Effect.fail(error),
+      Effect.succeed([]),
+    ).pipe(
+      Effect.provideService(
+        OpenCodeServerOwner.OpenCodeServerOwner,
+        {} as OpenCodeServerOwner.OpenCodeServerOwner["Service"],
+      ),
+    );
+    NodeAssert.equal(snapshot.installed, true);
+    NodeAssert.match(snapshot.message ?? "", /working directory/);
+  }).pipe(Effect.provide(layer));
 });

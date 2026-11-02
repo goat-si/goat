@@ -1,6 +1,8 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as PlatformError from "effect/PlatformError";
+import { vi } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
@@ -60,6 +62,49 @@ const check = (statusJson: string) =>
   }).pipe(Effect.provide(NodeServices.layer));
 
 describe("checkFxProviderStatus", () => {
+  it.effect("reports a deleted process cwd as a working directory failure", () =>
+    Effect.gen(function* () {
+      using _cwd = vi.spyOn(process, "cwd").mockImplementation(() => {
+        throw Object.assign(new Error("deleted"), { code: "ENOENT" });
+      });
+      const spawner = ChildProcessSpawner.make(() =>
+        Effect.fail(
+          PlatformError.systemError({
+            _tag: "NotFound",
+            module: "ChildProcess",
+            method: "spawn",
+            cause: { code: "ENOENT" },
+          }),
+        ),
+      );
+      const snapshot = yield* checkFxProviderStatus(settings, {}).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      );
+      assert.equal(snapshot.installed, true);
+      assert.include(snapshot.message ?? "", "working directory");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+  it.effect("reports an inaccessible inherited cwd instead of a missing executable", () =>
+    Effect.gen(function* () {
+      const cwd = "/goat-test-missing-fx-cwd-497";
+      using _cwd = vi.spyOn(process, "cwd").mockReturnValue(cwd);
+      const spawner = ChildProcessSpawner.make(() =>
+        Effect.fail(
+          PlatformError.systemError({
+            _tag: "NotFound",
+            module: "ChildProcess",
+            method: "spawn",
+            cause: { code: "ENOENT" },
+          }),
+        ),
+      );
+      const draft = yield* checkFxProviderStatus(settings, {}).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      );
+      assert.equal(draft.installed, true);
+      assert.include(draft.message ?? "", cwd);
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
   it.effect("keeps fx disabled by default without invoking its CLI", () =>
     Effect.gen(function* () {
       let invocations = 0;

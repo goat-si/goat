@@ -1,7 +1,13 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- creates a real executable fixture.
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- constructs a native executable fixture path.
+import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as PlatformError from "effect/PlatformError";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
@@ -10,6 +16,7 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { lazyChildProcessSpawner } from "@goat/shared/testing/lazyChildProcessSpawner";
 
+import { vi } from "vite-plus/test";
 import { checkPiProviderStatus, MINIMUM_PI_VERSION } from "./status.ts";
 
 const encoder = new TextEncoder();
@@ -123,6 +130,64 @@ const settings = {
 } as const;
 
 describe("PiProvider", () => {
+  it.effect("reports a deleted process cwd as a working directory failure", () =>
+    Effect.gen(function* () {
+      using _cwd = vi.spyOn(process, "cwd").mockImplementation(() => {
+        throw Object.assign(new Error("deleted"), { code: "ENOENT" });
+      });
+      const spawner = ChildProcessSpawner.make(() =>
+        Effect.fail(
+          PlatformError.systemError({
+            _tag: "NotFound",
+            module: "ChildProcess",
+            method: "spawn",
+            cause: { code: "ENOENT" },
+          }),
+        ),
+      );
+      const snapshot = yield* checkPiProviderStatus(settings, {}).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      );
+      assert.equal(snapshot.installed, true);
+      assert.include(snapshot.message ?? "", "working directory");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+  it.live("reports an installed executable whose interpreter is missing", () =>
+    Effect.gen(function* () {
+      const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-pi-shebang-"));
+      try {
+        const binaryPath = NodePath.join(dir, "pi");
+        NodeFS.writeFileSync(binaryPath, "#!/nonexistent/interpreter\n", { mode: 0o755 });
+        const snapshot = yield* checkPiProviderStatus({ ...settings, binaryPath });
+        assert.equal(snapshot.installed, true);
+        assert.include(snapshot.message ?? "", "could not be started");
+      } finally {
+        NodeFS.rmSync(dir, { recursive: true });
+      }
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+  it.effect("uses the inherited spawn cwd instead of the project cwd to diagnose permissions", () =>
+    Effect.gen(function* () {
+      const spawner = ChildProcessSpawner.make(() =>
+        Effect.fail(
+          PlatformError.systemError({
+            _tag: "PermissionDenied",
+            module: "ChildProcess",
+            method: "spawn",
+            cause: { code: "EACCES" },
+          }),
+        ),
+      );
+      const snapshot = yield* checkPiProviderStatus(
+        settings,
+        {},
+        "/goat-test-missing-project-4381",
+      ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
+      assert.equal(snapshot.installed, true);
+      assert.include(snapshot.message ?? "", "permission");
+      assert.notInclude(snapshot.message ?? "", "goat-test-missing-project");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
   it.effect("requires the first published Pi version with entries and settlement hooks", () =>
     Effect.gen(function* () {
       const snapshot = yield* checkPiProviderStatus(settings).pipe(

@@ -40,6 +40,8 @@ const deadPid = () => {
   return Number(child.stdout.toString());
 };
 
+const spawnFailure = vi.hoisted(() => ({ sync: false }));
+
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   // These fixtures exercise replacement/rollback with real Node processes. Windows cannot
@@ -48,6 +50,10 @@ vi.mock("node:child_process", async (importOriginal) => {
     ...actual,
     spawn: (...input: Parameters<typeof actual.spawn>) => {
       const [command, args, options] = input;
+      if (spawnFailure.sync) {
+        spawnFailure.sync = false;
+        throw new Error("injected spawn failure");
+      }
       return HostProcess.Platform.defaultValue() === "win32" && command.endsWith(".mjs")
         ? actual.spawn(process.execPath, [command, ...(args ?? [])], options)
         : actual.spawn(...input);
@@ -79,6 +85,7 @@ const superviseFailedReplacement = async (
       `import * as fs from "node:fs";`,
       `import { tryAcquireServerOwnerLock } from ${lockModuleUrl};`,
       `import { serverOwnerTag } from ${tagModuleUrl};`,
+      `fs.appendFileSync(${JSON.stringify(`${stateDir}/working-directories`)}, process.cwd() + "\\n");`,
       `if (process.env.GOAT_SSH_REPLACEMENT_ID) {`,
       // The replacement tags itself the way a real server does; another server uses its own tag.
       target === "foreign"
@@ -114,11 +121,37 @@ const superviseFailedReplacement = async (
     result,
     ran: NodeFS.existsSync(`${dbPath}.replacement-ran`),
     database: NodeFS.readFileSync(dbPath, "utf8"),
+    workingDirectories: NodeFS.readFileSync(NodePath.join(stateDir, "working-directories"), "utf8")
+      .trim()
+      .split("\n"),
     record: readSshReplacementRecord(
       NodeFS.readFileSync(NodePath.join(stateDir, SSH_REPLACEMENT_RECORD_FILE), "utf8"),
     ),
   };
 };
+
+it("starts replacement and rollback from the home directory", async () => {
+  const { workingDirectories } = await superviseFailedReplacement("trial");
+  assert.deepEqual(workingDirectories, [NodeOS.homedir(), NodeOS.homedir()]);
+});
+
+it("replacement and rollback start at root when home is an executable file", async () => {
+  const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-bad-home-"));
+  roots.push(root);
+  const home = NodePath.join(root, "home-file");
+  NodeFS.writeFileSync(home, "", { mode: 0o700 });
+  const homeKey = HostProcess.Platform.defaultValue() === "win32" ? "USERPROFILE" : "HOME";
+  const previous = process.env[homeKey];
+  process.env[homeKey] = home;
+  try {
+    const { result, workingDirectories } = await superviseFailedReplacement("trial");
+    assert.equal(result.status, "failed");
+    assert.deepEqual(workingDirectories, [NodePath.parse(home).root, NodePath.parse(home).root]);
+  } finally {
+    if (previous === undefined) delete process.env[homeKey];
+    else process.env[homeKey] = previous;
+  }
+});
 
 it("restores the backup over a failed replacement's own writes", async () => {
   const { result, database, ran, record } = await superviseFailedReplacement("trial");
@@ -236,7 +269,97 @@ const tempSuperviseHome = () => {
 const record = (stateDir: string, name: string) =>
   NodeFS.readFileSync(NodePath.join(stateDir, name), "utf8");
 
-it("restores the previous runner when the drained server stays alive", async () => {
+it("passes a usable Windows working directory to replacement and rollback", async () => {
+  const oldPid = deadPid();
+  const { baseDir, stateDir, logFile } = tempSuperviseHome();
+  const runnerFile = NodePath.join(stateDir, "run-t3.sh");
+  const previousRunnerFile = NodePath.join(stateDir, "previous.sh");
+  const profile = NodePath.join(stateDir, "profile");
+  NodeFS.mkdirSync(profile);
+  const previousProfile = process.env.USERPROFILE;
+  try {
+    for (const usable of [true, false]) {
+      process.env.USERPROFILE = usable ? profile : NodePath.join(stateDir, "missing-profile");
+      NodeFS.writeFileSync(runnerFile, "new");
+      NodeFS.writeFileSync(previousRunnerFile, "old");
+      using spawn = vi
+        .spyOn(NodeChildProcess, "spawnSync")
+        .mockReturnValue({ status: 1, stdout: "" } as ReturnType<
+          typeof NodeChildProcess.spawnSync
+        >);
+      await superviseSshRuntimeReplacement({
+        oldPid,
+        oldInstanceId: "old",
+        port: 1,
+        baseDir,
+        stateDir,
+        runnerFile,
+        previousRunnerFile,
+        targetVersion: "2",
+        previousVersion: "1",
+        identity: "new",
+        previousIdentity: "old",
+        executable: "new.exe",
+        previousExecutable: "old.exe",
+        platform: "win32",
+        exitTimeoutMs: 1000,
+        readyTimeoutMs: 0,
+        logFile,
+      });
+      assert.equal(spawn.mock.calls.length, 2);
+      const expected = usable ? profile : NodePath.parse(baseDir).root;
+      for (const call of spawn.mock.calls) {
+        const options = call[2] as { env: NodeJS.ProcessEnv };
+        assert.equal(options.env.GOAT_SPAWN_CWD, expected);
+        const args = call[1] as string[];
+        assert.include(
+          Buffer.from(args[3]!, "base64").toString("utf16le"),
+          "CurrentDirectory = $env:GOAT_SPAWN_CWD",
+        );
+      }
+    }
+  } finally {
+    if (previousProfile === undefined) delete process.env.USERPROFILE;
+    else process.env.USERPROFILE = previousProfile;
+  }
+});
+
+it("restores the runner when refreshing its alias fails", async () => {
+  const { baseDir, stateDir, logFile } = tempSuperviseHome();
+  const runnerFile = NodePath.join(stateDir, "run-t3.sh");
+  const previousRunnerFile = NodePath.join(stateDir, "run-t3.previous.sh");
+  const alias = NodePath.join(stateDir, "run-goat.sh");
+  const previousBytes = "previous runner\n";
+  NodeFS.writeFileSync(runnerFile, "replacement runner\n");
+  NodeFS.writeFileSync(previousRunnerFile, previousBytes);
+  NodeFS.mkdirSync(alias);
+  NodeFS.writeFileSync(NodePath.join(alias, "keep"), "sentinel");
+  const result = await superviseSshRuntimeReplacement({
+    oldPid: process.pid,
+    oldInstanceId: "old-instance",
+    port: 51234,
+    baseDir,
+    stateDir,
+    runnerFile,
+    previousRunnerFile,
+    targetVersion: "2.0.0",
+    previousVersion: "1.0.0",
+    identity: "replacement-identity",
+    previousIdentity: "previous-identity",
+    exitTimeoutMs: 0,
+    readyTimeoutMs: 1_000,
+    logFile,
+  });
+  assert.equal(result.status, "old-alive");
+  assert.equal(NodeFS.readFileSync(runnerFile, "utf8"), previousBytes);
+  assert.equal(NodeFS.readFileSync(NodePath.join(alias, "keep"), "utf8"), "sentinel");
+  assert.deepEqual(
+    NodeFS.readdirSync(stateDir).filter((name) => name.startsWith("run-goat.sh.next.")),
+    [],
+  );
+});
+
+it("restores the previous runner and alias when the drained server stays alive", async () => {
   const sleep = NodeChildProcess.spawn(process.execPath, ["-e", "process.stdin.resume()"], {
     stdio: ["pipe", "ignore", "ignore"],
   });
@@ -244,12 +367,14 @@ it("restores the previous runner when the drained server stays alive", async () 
     const sleepPid = sleep.pid ?? 0;
     assert.isAbove(sleepPid, 0);
     const { baseDir, stateDir, logFile } = tempSuperviseHome();
-    const runnerFile = NodePath.join(stateDir, "run-t3.mjs");
+    const runnerFile = NodePath.join(stateDir, "run-t3.sh");
+    const alias = NodePath.join(stateDir, "run-goat.sh");
     const previousRunnerFile = NodePath.join(stateDir, "run-t3.previous.mjs");
     const previousBytes = `#!${process.execPath}\nprocess.exit(86);\n`;
     NodeFS.writeFileSync(runnerFile, `#!${process.execPath}\nprocess.exit(87);\n`, {
       mode: 0o700,
     });
+    NodeFS.linkSync(runnerFile, alias);
     NodeFS.writeFileSync(previousRunnerFile, previousBytes, { mode: 0o700 });
     const previousVersion = "1.4.2";
     const previousIdentity = "previous-runner-identity";
@@ -284,6 +409,7 @@ it("restores the previous runner when the drained server stays alive", async () 
     );
     assert.isTrue(answersSignal0(sleepPid));
     assert.equal(NodeFS.readFileSync(runnerFile, "utf8"), previousBytes);
+    assert.equal(NodeFS.readFileSync(alias, "utf8"), previousBytes);
     assert.isFalse(NodeFS.existsSync(previousRunnerFile));
     assert.equal(record(stateDir, "pid"), `${sleepPid}\n`);
     assert.equal(record(stateDir, "port"), `${port}\n`);
@@ -402,6 +528,44 @@ it("rolls back to a previous version whose protocol does not overlap this build"
     }
   }
 });
+
+it.each(["sync", "async"] as const)(
+  "restores the runner after a %s spawn failure",
+  async (mode) => {
+    const { baseDir, stateDir, logFile } = tempSuperviseHome();
+    const runnerFile = NodePath.join(stateDir, "run-t3.mjs");
+    const previousRunnerFile = NodePath.join(stateDir, "previous.mjs");
+    const previous = `#!${process.execPath}\nprocess.exit(1);\n`;
+    NodeFS.writeFileSync(previousRunnerFile, previous, { mode: 0o700 });
+    if (mode === "sync") NodeFS.writeFileSync(runnerFile, previous, { mode: 0o700 });
+    spawnFailure.sync = mode === "sync";
+    try {
+      const result = await superviseSshRuntimeReplacement({
+        oldPid: deadPid(),
+        oldInstanceId: "old",
+        port: 1,
+        baseDir,
+        stateDir,
+        runnerFile,
+        previousRunnerFile,
+        targetVersion: "2.0.0",
+        previousVersion: "1.0.0",
+        identity: "new",
+        previousIdentity: "old",
+        exitTimeoutMs: 1000,
+        readyTimeoutMs: 5000,
+        logFile,
+      });
+      assert.deepEqual(result, {
+        status: "failed",
+        reason: "GOAT 2.0.0 and the previous 1.0.0 both failed to start.",
+      });
+      assert.equal(NodeFS.readFileSync(runnerFile, "utf8"), previous);
+    } finally {
+      spawnFailure.sync = false;
+    }
+  },
+);
 
 it("records a supervisor that throws as a failed replacement", async () => {
   const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-supervise-"));

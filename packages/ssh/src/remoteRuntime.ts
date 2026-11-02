@@ -17,6 +17,7 @@ import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
 
 import type { NativeWindowsSelection } from "./runtimeWindows.ts";
+import { SshLaunchError } from "./errors.ts";
 
 // A cold archive launch also downloads and unpacks a ~70 MB release archive
 // and may wait on another installer's lock. The budgets nest: the checksum
@@ -198,6 +199,17 @@ export function sshTargetLogFields(target: DesktopSshEnvironmentTarget) {
 
 export function isNodeScriptRunner(runner: RemoteGoatRunnerOptions | undefined): boolean {
   return Boolean(runner?.nodeScriptPath?.trim());
+}
+
+export function absoluteRemoteNodeScriptPath(runner: RemoteGoatRunnerOptions | undefined): string {
+  const path = runner?.nodeScriptPath?.trim() || "";
+  if (path && !/^(?:\/|[a-z]:[\\/]|\\\\)/i.test(path)) {
+    throw new SshLaunchError({
+      message: "The remote node script path must be absolute.",
+      stdout: "",
+    });
+  }
+  return path;
 }
 
 export interface SshRuntimeProgress {

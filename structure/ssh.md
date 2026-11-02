@@ -108,7 +108,7 @@ When the app quits, its forward fails and the next ensure starts or reuses the m
 When no [app server](#app-server) serves the host, one host user runs one SSH-managed server, and
 every client shares it. The launch, pairing, MCP
 session, stop, and log scripts keep their ownership records (`pid`, `port`, `managed`, `identity`,
-`run-t3.sh`, `server.log`) in `~/.goat/ssh-launch/runtime` (`REMOTE_RUNTIME_STATE_KEY` in
+`run-t3.sh`, `run-goat.sh`, `server.log`) in `~/.goat/ssh-launch/runtime` (`REMOTE_RUNTIME_STATE_KEY` in
 `packages/ssh/src/command.ts`), whatever alias, hostname, or port the client dialled. A client that
 finds a compatible live server attaches to it, so threads started from any client live in that
 server's state and every client sees them.
@@ -148,8 +148,9 @@ keeps attachment blocked. An attach-only folded launch leaves this recovery to t
 or explicit refresh. Recovering the mutex or waiting ten minutes alone does not clear the fence.
 Clients predating this fence cannot enforce it.
 
-The runner keeps `run-t3.sh` because independently updated clients and retained supervisors
-use that path for reuse, replacement, and rollback. Its shell variables use `GOAT_*`;
+The runner's `run-goat.sh` name is an alias of `run-t3.sh`, the compatibility file independently
+updated clients and retained supervisors use for reuse, replacement, and rollback. New publishers
+and supervisors synchronize the alias from the compatibility file. Its shell variables use `GOAT_*`;
 only literal `T3_ARCHIVE_VERSION` and `T3_NODE_SCRIPT_PATH` declarations remain as metadata
 for older clients that inspect the file without sourcing it. New readers prefer GOAT
 declarations and also accept legacy runners.

@@ -75,6 +75,7 @@ import {
 import { makeExistingServerRoutes, type ExistingServerRouteShape } from "./existingServer.ts";
 import { makeRemoteScripts, type RuntimeExecutableShape } from "./runtimeExecutable.ts";
 import {
+  absoluteRemoteNodeScriptPath,
   applyScriptPlaceholders,
   decodeRemoteJsonOutput,
   isNodeScriptRunner,
@@ -783,6 +784,7 @@ exec "$GOAT_RUNTIME_DIR/goat" "$@"
 `;
 
 const REMOTE_LAUNCH_SCRIPT = `set -eu
+cd "$HOME" 2>/dev/null || cd /
 @@GOAT_NODE_ENV_SCRIPT@@
 STATE_KEY="$1"
 STATE_DIR="$HOME/.goat/ssh-launch/$STATE_KEY"
@@ -1127,7 +1129,7 @@ trap 'release_recovery_lock; release_replacement_lock' EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
-acquire_replacement_lock || { printf 'Another client is replacing the remote runtime.\\n' >&2; exit 1; }
+acquire_replacement_lock || { printf 'Another client is replacing the remote runtime.\\n' >&2; exit 1; }; [ -e "$STATE_DIR/run-t3.sh" ] || rm -f "$STATE_DIR/run-goat.sh" || :
 REMOTE_MANAGED="$(cat "$MANAGED_FILE" 2>/dev/null || true)"
 REMOTE_PID="$(cat "$PID_FILE" 2>/dev/null || true)"
 REMOTE_PORT="$(cat "$PORT_FILE" 2>/dev/null || true)"
@@ -1195,12 +1197,9 @@ export class SshInvalidArchiveVersionError extends Schema.TaggedError<SshInvalid
   }
 }
 
-// The version becomes a directory name the runner removes and recreates, so
-// it must be one exact SemVer segment: no separators, no `..`, no shell
-// metacharacters beyond what SemVer allows.
+// The version names a runtime directory, so it must be one exact SemVer segment.
 const EXACT_ARCHIVE_VERSION =
   /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
-
 export class SshMissingRunnerError extends Schema.TaggedError<SshMissingRunnerError>()(
   "SshMissingRunnerError",
   {},
@@ -1211,7 +1210,7 @@ export class SshMissingRunnerError extends Schema.TaggedError<SshMissingRunnerEr
 }
 
 export function buildRemoteGoatRunnerScript(input?: RemoteGoatRunnerOptions): string {
-  const nodeScriptPath = input?.nodeScriptPath?.trim() || "";
+  const nodeScriptPath = absoluteRemoteNodeScriptPath(input);
   const archiveVersion = input?.archiveVersion?.trim() || "";
   if (nodeScriptPath === "" && archiveVersion === "") {
     throw new SshMissingRunnerError();

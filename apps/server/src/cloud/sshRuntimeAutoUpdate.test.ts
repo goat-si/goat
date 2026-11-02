@@ -32,6 +32,7 @@ const isShellCommand = (command: string) =>
 const makeHarness = Effect.fn("test.ssh_runtime_auto_update.harness")(function* (
   options: {
     readonly ownVersion?: string;
+    readonly homeIsFile?: boolean;
     readonly otherBaseDir?: boolean;
     readonly platform?: NodeJS.Platform;
     /** Windows only. Undefined means Git Bash was not found. */
@@ -64,6 +65,7 @@ const makeHarness = Effect.fn("test.ssh_runtime_auto_update.harness")(function* 
     preflights: [] as ReadonlyArray<string>[],
     launches: [] as {
       readonly shell: string;
+      readonly cwd: string;
       readonly script: string;
       readonly args: ReadonlyArray<string>;
       readonly env: NodeJS.ProcessEnv;
@@ -183,6 +185,11 @@ const makeHarness = Effect.fn("test.ssh_runtime_auto_update.harness")(function* 
       getServerActivity: () => Effect.sync(() => state.activity),
     }),
   );
+  if (options.homeIsFile) {
+    yield* fs.remove(home, { recursive: true });
+    yield* fs.writeFileString(home, "");
+    yield* fs.chmod(home, 0o700);
+  }
   return {
     runtime,
     state,
@@ -366,6 +373,15 @@ it.layer(NodeServices.layer)("SSH runtime auto-update", (it) => {
       expect(launch?.env.HOME).toBe(h.home);
       // The supervisor and its rollback must not reuse this server's replacement identity.
       expect(launch?.env[SSH_REPLACEMENT_ID_ENV]).toBeUndefined();
+    }),
+  );
+
+  it.effect("starts the detached shell at root when home is an executable file", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness({ homeIsFile: true });
+      yield* h.runtime.prepare(target);
+      expect(yield* h.runtime.activate(target)).toBe("requested");
+      expect(h.state.launches[0]?.cwd).toBe(NodePath.parse(h.home).root);
     }),
   );
 

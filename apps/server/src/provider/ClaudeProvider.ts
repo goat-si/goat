@@ -29,7 +29,9 @@ import {
   buildServerProvider,
   COMPACT_SLASH_COMMAND,
   DEFAULT_TIMEOUT_MS,
-  isCommandMissingCause,
+  classifySpawnFailure,
+  safeProcessCwd,
+  spawnFailureMessage,
   parseGenericCliVersion,
   providerModelsFromSettings,
   spawnAndCollect,
@@ -504,15 +506,20 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     });
   }
 
+  const spawnCwd = cwd ?? safeProcessCwd();
   const versionProbe = yield* runClaudeCommand(
     claudeSettings,
     ["--version"],
     resolvedEnvironment,
-    cwd,
+    spawnCwd,
   ).pipe(Effect.timeoutOption(CLAUDE_VERSION_CHECK_TIMEOUT_MS), Effect.result);
 
   if (Result.isFailure(versionProbe)) {
     const error = versionProbe.failure;
+    const failure = classifySpawnFailure(error, spawnCwd, undefined, {
+      binary: claudeSettings.binaryPath,
+      env: resolvedEnvironment,
+    });
     yield* Effect.logWarning("Claude Agent CLI health check failed.", {
       errorTag: error._tag,
     });
@@ -522,13 +529,15 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
       checkedAt,
       models: allModels,
       probe: {
-        installed: !isCommandMissingCause(error),
+        installed: failure !== "missing",
         version: null,
         status: "error",
         auth: { status: "unknown" },
-        message: isCommandMissingCause(error)
-          ? "Claude Agent CLI (`claude`) was not found on PATH."
-          : "Failed to execute Claude Agent CLI health check.",
+        message:
+          failure === "missing"
+            ? "Claude Agent CLI (`claude`) was not found on PATH."
+            : (spawnFailureMessage(failure, spawnCwd, claudeSettings.binaryPath) ??
+              "Failed to execute Claude Agent CLI health check."),
       },
     });
   }

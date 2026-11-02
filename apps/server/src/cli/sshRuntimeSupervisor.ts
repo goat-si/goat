@@ -6,6 +6,7 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodeChildProcess from "node:child_process";
 import * as NodePath from "node:path";
+import * as NodeOS from "node:os";
 
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -24,6 +25,7 @@ import {
 } from "../serverOwnerLock.ts";
 import { tryAcquireServerOwnerLock } from "../serverOwnerLockFile.ts";
 import { processExists, readSshRuntimeCompatibility } from "./sshRuntimeProbes.ts";
+import { serverWorkingDirectory } from "./serverWorkingDirectory.ts";
 
 /**
  * The supervisor's record of the last replacement it ran, in the launch state directory it
@@ -85,6 +87,28 @@ const restoreRunner = (input: SshRuntimeSupervisorInput) => {
   NodeFS.copyFileSync(input.previousRunnerFile, `${input.runnerFile}.restore`);
   NodeFS.chmodSync(`${input.runnerFile}.restore`, 0o700);
   NodeFS.renameSync(`${input.runnerFile}.restore`, input.runnerFile);
+  if (NodePath.basename(input.runnerFile) === "run-t3.sh") {
+    const alias = NodePath.join(NodePath.dirname(input.runnerFile), "run-goat.sh");
+    const next = `${alias}.next.${process.pid}`;
+    try {
+      NodeFS.rmSync(next, { force: true });
+      try {
+        NodeFS.linkSync(input.runnerFile, next);
+      } catch {
+        NodeFS.copyFileSync(input.runnerFile, next);
+        NodeFS.chmodSync(next, 0o700);
+      }
+      NodeFS.renameSync(next, alias);
+    } catch {
+      // The alias is cosmetic; a later launch can repair it.
+    } finally {
+      try {
+        NodeFS.rmSync(next, { force: true });
+      } catch {
+        // Alias cleanup cannot invalidate the restored runner.
+      }
+    }
+  }
 };
 
 export interface SshRuntimeSupervisorInput {
@@ -127,6 +151,7 @@ const spawnWindowsDetached = (
   argv: ReadonlyArray<string>,
   logFile: string,
   env: Readonly<Record<string, string>>,
+  cwd: string,
 ) => {
   const result = NodeChildProcess.spawnSync(
     "powershell.exe",
@@ -143,6 +168,7 @@ const spawnWindowsDetached = (
         ...process.env,
         GOAT_SPAWN_ARGS: argv.join("\n"),
         GOAT_SPAWN_LOG: logFile,
+        GOAT_SPAWN_CWD: cwd,
         GOAT_SPAWN_ENV: Object.entries(env)
           .map(([name, value]) => `${name}=${value}`)
           .join("\n"),
@@ -248,21 +274,40 @@ const superviseReplacement = async (
     ];
     const env = { GOAT_NO_BROWSER: "1", ...extraEnv };
     let pid: number | undefined;
-    if (input.platform === "win32") {
-      pid =
-        executable === undefined
-          ? undefined
-          : spawnWindowsDetached([executable, ...args], input.logFile, env);
-    } else {
-      const log = NodeFS.openSync(input.logFile, "a");
-      const child = NodeChildProcess.spawn(runner, args, {
-        detached: true,
-        stdio: ["ignore", log, log],
-        env: { ...process.env, ...env },
-      });
-      NodeFS.closeSync(log);
-      child.unref();
-      pid = child.pid;
+    try {
+      if (input.platform === "win32") {
+        pid =
+          executable === undefined
+            ? undefined
+            : spawnWindowsDetached(
+                [executable, ...args],
+                input.logFile,
+                env,
+                serverWorkingDirectory(process.env.USERPROFILE ?? "", input.baseDir),
+              );
+      } else {
+        const log = NodeFS.openSync(input.logFile, "a");
+        try {
+          const child = NodeChildProcess.spawn(runner, args, {
+            cwd: serverWorkingDirectory(NodeOS.homedir()),
+            detached: true,
+            stdio: ["ignore", log, log],
+            env: { ...process.env, ...env },
+          });
+          const spawned = await new Promise<boolean>((resolve) => {
+            child.once("error", () => resolve(false));
+            child.once("spawn", () => resolve(true));
+          });
+          if (spawned) {
+            child.unref();
+            pid = child.pid;
+          }
+        } finally {
+          NodeFS.closeSync(log);
+        }
+      }
+    } catch {
+      return undefined;
     }
     if (pid === undefined) return undefined;
     const deadline = Date.now() + input.readyTimeoutMs;

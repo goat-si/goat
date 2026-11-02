@@ -1,3 +1,5 @@
+import * as PlatformError from "effect/PlatformError";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { MuseSettings } from "../settings.ts";
@@ -56,6 +58,18 @@ const fakeCli = (source = 'process.stdout.write("muse 1.0.3-R2198.1\\n");') =>
   });
 
 it.layer(NodeServices.layer)("Muse status", (it) => {
+  it.effect("reports a missing probe cwd instead of a missing executable", () =>
+    Effect.gen(function* () {
+      const cwd = "/goat-test-missing-muse-cwd-497";
+      const snapshot = yield* checkMuseProviderStatus(
+        settings({ enabled: true, binaryPath: "muse" }),
+        {},
+        cwd,
+      );
+      expect(snapshot.installed).toBe(true);
+      expect(snapshot.message).toContain(cwd);
+    }),
+  );
   it.effect("does not expose CLI stderr or start an SDK host after a failed version check", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -130,3 +144,27 @@ it.layer(NodeServices.layer)("Muse status", (it) => {
     ),
   );
 });
+
+it.effect("reports a deleted process cwd as a working directory failure", () =>
+  Effect.gen(function* () {
+    using _cwd = vi.spyOn(process, "cwd").mockImplementation(() => {
+      throw Object.assign(new Error("deleted"), { code: "ENOENT" });
+    });
+    const spawner = ChildProcessSpawner.make(() =>
+      Effect.fail(
+        PlatformError.systemError({
+          _tag: "NotFound",
+          module: "ChildProcess",
+          method: "spawn",
+          cause: { code: "ENOENT" },
+        }),
+      ),
+    );
+    const snapshot = yield* checkMuseProviderStatus(
+      settings({ enabled: true, binaryPath: "muse" }),
+      {},
+    ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
+    expect(snapshot.installed).toBe(true);
+    expect(snapshot.message).toContain("working directory");
+  }).pipe(Effect.provide(NodeServices.layer)),
+);

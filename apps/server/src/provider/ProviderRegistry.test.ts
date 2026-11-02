@@ -615,17 +615,17 @@ it.layer(
         const { directory, binaryPath } = yield* writeFakeCodexCli(
           `touch "$(dirname "$0")/ran"; echo 0.1.4161006`,
         );
-
         const status = yield* checkCodexProviderStatus(decodeCodexSettings({ binaryPath }), () =>
           Effect.fail(
             new CodexErrors.CodexAppServerSpawnError({
               command: `${binaryPath} app-server`,
-              cause: new Error("spawn ENOENT"),
+              cause: Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" }),
             }),
           ),
         );
 
-        assert.strictEqual(status.installed, false);
+        assert.strictEqual(status.installed, true);
+        assert.include(status.message ?? "", "exists but could not be started");
         assert.strictEqual(status.version, null);
         assert.isFalse(yield* fs.exists(path.join(directory, "ran")));
       }),

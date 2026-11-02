@@ -19,8 +19,22 @@ import {
   SSH_REPLACEMENT_ID_ENV,
 } from "../serverOwnerLock.ts";
 import { type CliServerFlags, resolveServerConfig, sharedServerCommandFlags } from "./config.ts";
+import {
+  recoverServerWorkingDirectory,
+  resolveFromOriginalWorkingDirectory,
+} from "./serverWorkingDirectory.ts";
 
 const encodeCommand = Schema.encodeEffect(Schema.fromJsonString(Schema.String));
+
+const prepareWorkingDirectory = Effect.fn("server.prepareWorkingDirectory")(function* () {
+  const result = yield* Effect.try({
+    try: recoverServerWorkingDirectory,
+    catch: (error) => new CliError.UserError({ cause: String(error) }),
+  });
+  if (result.current)
+    yield* Effect.logWarning(`Working directory is inaccessible; changed to ${result.current}.`);
+  return result.original;
+});
 
 // The desktop launcher reads this process's stdout and stderr. Once it is gone,
 // every log write fails, and Node turns an unhandled stream error into a crash
@@ -35,10 +49,12 @@ const runServerCommand = Effect.fn("server.runServerCommand")(function* (
     readonly startupPresentation?: ServerConfig.StartupPresentation;
     readonly forceAutoBootstrapProjectFromCwd?: boolean;
     readonly rejectRunningServer?: boolean;
+    readonly originalCwd?: string | undefined;
   },
 ) {
+  const originalCwd = (yield* prepareWorkingDirectory()) ?? options?.originalCwd;
   const logLevel = yield* GlobalFlag.LogLevel;
-  const config = yield* resolveServerConfig(flags, logLevel, options);
+  const config = yield* resolveServerConfig(flags, logLevel, { ...options, originalCwd });
   const environment = yield* HostProcess.Environment;
   // Before any layer starts, so nothing in this process can reach another machine first.
   yield* applyDevSshPolicy(config, environment);
@@ -86,6 +102,7 @@ const runServerCommand = Effect.fn("server.runServerCommand")(function* (
 export const runDefaultServerCommand = Effect.fn("server.runDefaultServerCommand")(function* (
   flags: CliServerFlags,
 ) {
+  const originalCwd = yield* prepareWorkingDirectory();
   if (Option.isSome(flags.cwd)) {
     const cwd = flags.cwd.value.trim();
     const fs = yield* FileSystem.FileSystem;
@@ -96,14 +113,18 @@ export const runDefaultServerCommand = Effect.fn("server.runDefaultServerCommand
       cwd === "~" ||
       /[/\\]/.test(cwd) ||
       (platform === "win32" && /^[a-z]:/i.test(cwd));
-    if (!explicitPath && (!(yield* fs.exists(cwd)) || (yield* fs.stat(cwd)).type !== "Directory")) {
+    const validationPath = resolveFromOriginalWorkingDirectory(cwd, originalCwd);
+    if (
+      !explicitPath &&
+      (!(yield* fs.exists(validationPath)) || (yield* fs.stat(validationPath)).type !== "Directory")
+    ) {
       return yield* new CliError.UserError({
         cause: cwd,
         userMessage: `Unknown command ${yield* encodeCommand(cwd)}. Use "goat --help" for commands or an explicit path such as "goat ./my-project" for a new directory.`,
       });
     }
   }
-  return yield* runServerCommand(flags, { rejectRunningServer: true });
+  return yield* runServerCommand(flags, { rejectRunningServer: true, originalCwd });
 });
 
 export const startCommand = Command.make("start", { ...sharedServerCommandFlags }).pipe(

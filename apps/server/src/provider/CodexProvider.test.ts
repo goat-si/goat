@@ -8,8 +8,92 @@ import { checkCodexProviderStatus } from "./CodexProvider.ts";
 // Recorded from the pinned Codex 0.156.1 config/read in an isolated home.
 import nativeConfigRead from "./testFixtures/codexHomeConfigRead.0.156.1.json" with { type: "json" };
 import { assert, it } from "@effect/vitest";
+import { vi } from "vite-plus/test";
+import { ProviderDriverKind, ProviderInstanceId } from "@goat/contracts";
+import { snapshotChecks } from "./ProviderDiagnosis.ts";
 
 import { applyPreferredCodexDefaultModel, mapCodexModelCapabilities } from "./CodexProvider.ts";
+
+it.effect("reports a deleted process cwd as a Codex working directory failure", () =>
+  Effect.gen(function* () {
+    const fixture = yield* routeFixture({ role: "home" });
+    using _cwd = vi.spyOn(process, "cwd").mockImplementation(() => {
+      throw Object.assign(new Error("deleted"), { code: "ENOENT" });
+    });
+    const snapshot = yield* checkCodexProviderStatus(fixture.input.settings, undefined, {}).pipe(
+      Effect.provideService(HomeRoute.OpenCodexRoute, fixture.service),
+    );
+    assert.isTrue(snapshot.installed);
+    assert.equal(snapshot.status, "error");
+    assert.include(snapshot.message ?? "", "working directory");
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect.each([
+  { code: "EACCES", cwd: "/goat-test-missing-cwd-38401", installed: true },
+  { code: "ENOENT", cwd: "/goat-test-missing-cwd-38401", installed: true },
+  { code: "ENOENT", cwd: null, installed: false },
+  { code: "EACCES", cwd: null, installed: true },
+])("diagnoses Codex spawn $code for cwd $cwd", ({ code, cwd, installed }) =>
+  Effect.gen(function* () {
+    const fixture = yield* routeFixture({ role: "home" });
+    const spawnCwd = cwd ?? process.cwd();
+    using _cwd = vi.spyOn(process, "cwd").mockReturnValue(spawnCwd);
+    const snapshot = yield* checkCodexProviderStatus(
+      { ...fixture.input.settings, binaryPath: "/goat-test-missing-codex" },
+      () =>
+        Effect.fail(
+          new CodexErrors.CodexAppServerSpawnError({ command: "codex", cause: { code } }),
+        ),
+      {},
+    ).pipe(Effect.provideService(HomeRoute.OpenCodexRoute, fixture.service));
+    assert.equal(snapshot.installed, installed);
+    assert.equal(snapshot.status, "error");
+    if (installed) {
+      const checks = snapshotChecks({
+        ...snapshot,
+        instanceId: ProviderInstanceId.make("codex"),
+        driver: ProviderDriverKind.make("codex"),
+      });
+      assert.isFalse(checks.some((check) => check.reason === "executable_missing"));
+    }
+    if (cwd) {
+      assert.include(snapshot.message ?? "", cwd);
+      assert.include(snapshot.message ?? "", "cannot enter");
+      assert.notInclude(snapshot.message ?? "", "Binary path");
+    } else if (code === "ENOENT") assert.include(snapshot.message ?? "", "Binary path");
+    else assert.include(snapshot.message ?? "", "permission");
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("reports an unsearchable Codex spawn directory as a probe error", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const fixture = yield* routeFixture({ role: "home" });
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-codex-cwd-" });
+      yield* fs.chmod(directory, 0o000);
+      yield* Effect.addFinalizer(() => fs.chmod(directory, 0o700).pipe(Effect.ignore));
+      const cwd = process.getuid?.() === 0 ? `${directory}/missing` : directory;
+      using _cwd = vi.spyOn(process, "cwd").mockReturnValue(cwd);
+      const snapshot = yield* checkCodexProviderStatus(
+        { ...fixture.input.settings, binaryPath: "/goat-test-missing-codex" },
+        () =>
+          Effect.fail(
+            new CodexErrors.CodexAppServerSpawnError({
+              command: "codex",
+              cause: { code: "EACCES" },
+            }),
+          ),
+        {},
+      ).pipe(Effect.provideService(HomeRoute.OpenCodexRoute, fixture.service));
+      assert.isTrue(snapshot.installed);
+      assert.include(snapshot.message ?? "", cwd);
+      assert.include(snapshot.message ?? "", "cannot enter");
+      assert.notInclude(snapshot.message ?? "", "Binary path");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  ),
+);
 
 it("maps current Codex model capability fields", () => {
   const capabilities = mapCodexModelCapabilities({

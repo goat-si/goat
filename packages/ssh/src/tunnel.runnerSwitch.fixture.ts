@@ -116,7 +116,7 @@ console.log(await (await import(${JSON.stringify(new URL("../../../apps/server/s
     previousRunnerFile: flag("--previous-runner"), targetVersion: flag("--target-version"),
     previousVersion: flag("--previous-version"), identity: flag("--identity"), previousIdentity: flag("--previous-identity"),
     exitTimeoutMs: 10000, readyTimeoutMs: 10000, logFile: flag("--log") });
-  event("supervise", { status: result.status });
+  event("supervise", { status: result.status, cwd: process.cwd() });
   fs.writeFileSync(flag("--result"), result.status + " " + (result.pid ?? 0) + " " + (result.version ?? "-") + "\\n");
   } else if (args[1] === "runtime-port") {
 const current = runtime();
@@ -195,7 +195,7 @@ fs.appendFileSync(path.join(fixture, "pids"), process.pid + "\\n");
 const installed = fs.existsSync(path.join(state, "run-t3.sh"))
   ? fs.readFileSync(path.join(state, "run-t3.sh"), "utf8") : "";
 const marker = path.join(home, ".goat/runtime/goat/versions", version, ".install-complete");
-event("start", { installed, complete: fs.readFileSync(marker, "utf8").trim() });
+event("start", { installed, complete: fs.readFileSync(marker, "utf8").trim(), cwd: process.cwd() });
 if (args.includes("--test-seed")) console.log(JSON.stringify(record));
 else if (process.env.FIXTURE_SUPERVISED === "1") fs.writeFileSync(path.join(fixture, "accepted-ready-" + process.pid), "ready");
 else {
@@ -369,6 +369,7 @@ export const fixture = Effect.fn("test.runnerSwitch.fixture")(function* (
               oldAlive?: boolean;
               installed?: string;
               complete?: string;
+              cwd?: string;
             },
         ),
     ),

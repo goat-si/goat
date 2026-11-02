@@ -1,3 +1,8 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- exercises real directory search permission.
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- builds a native permission-test fixture path.
+import * as NodePath from "node:path";
 import { it } from "@effect/vitest";
 import { describe, expect } from "vite-plus/test";
 import type { ModelCapabilities } from "@goat/contracts";
@@ -10,12 +15,82 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import {
+  classifySpawnFailure,
   collectStreamAsString,
   isCommandMissingCause,
   parseGenericCliVersion,
+  ProviderCommandNotFoundError,
   providerModelsFromSettings,
   spawnAndCollect,
 } from "./snapshotProbe.ts";
+
+describe("spawn failure diagnosis", () => {
+  it("recognizes an existing executable with a missing interpreter, including PATH lookup", () => {
+    const cwd = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-broken-shebang-"));
+    try {
+      const binary = NodePath.join(cwd, "broken");
+      NodeFS.writeFileSync(binary, "#!/nonexistent/interpreter\n", { mode: 0o755 });
+      for (const name of [binary, "./broken", "broken"]) {
+        expect(
+          classifySpawnFailure({ code: "ENOENT" }, cwd, undefined, {
+            binary: name,
+            env: { PATH: cwd },
+          }),
+        ).toBe("exec_failed");
+      }
+    } finally {
+      NodeFS.rmSync(cwd, { recursive: true });
+    }
+  });
+  it("recognizes a directory without search permission", () => {
+    const cwd = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-spawn-permission-"));
+    try {
+      NodeFS.chmodSync(cwd, 0o000);
+      if (process.getuid?.() === 0) {
+        expect(
+          classifySpawnFailure({ code: "EACCES" }, cwd, () => {
+            throw Object.assign(new Error("injected access failure"), { code: "EACCES" });
+          }),
+        ).toBe("cwd_inaccessible");
+      } else {
+        expect(classifySpawnFailure({ code: "EACCES" }, cwd)).toBe("cwd_inaccessible");
+      }
+    } finally {
+      NodeFS.chmodSync(cwd, 0o700);
+      NodeFS.rmdirSync(cwd);
+    }
+  });
+  it("distinguishes a missing executable from a missing working directory through nested causes", () => {
+    const failure = { cause: { cause: { code: "ENOENT" } } };
+    expect(classifySpawnFailure(failure, process.cwd())).toBe("missing");
+    expect(classifySpawnFailure(failure, "/goat-test-nonexistent-cwd-2819393")).toBe(
+      "cwd_inaccessible",
+    );
+  });
+
+  it("distinguishes executable permission from an unsearchable working directory", () => {
+    const failure = { cause: { code: "EACCES" } };
+    expect(classifySpawnFailure(failure, process.cwd())).toBe("permission_denied");
+    expect(classifySpawnFailure(failure, "/goat-test-nonexistent-cwd-2819393")).toBe(
+      "cwd_inaccessible",
+    );
+    expect(classifySpawnFailure({ code: "EPERM" }, process.cwd())).toBe("permission_denied");
+    expect(classifySpawnFailure({ code: "ENOTDIR" }, "/goat-test-nonexistent-cwd-2819393")).toBe(
+      "cwd_inaccessible",
+    );
+    expect(classifySpawnFailure({ code: "EIO" }, process.cwd())).toBe("unknown");
+  });
+
+  it("preserves Windows command-not-found evidence", () => {
+    const error = new ProviderCommandNotFoundError({
+      binaryPath: "codex.cmd",
+      exitCode: 9009,
+      stdoutLength: 0,
+      stderrLength: 0,
+    });
+    expect(classifySpawnFailure({ cause: error }, process.cwd())).toBe("missing");
+  });
+});
 
 const OPENCODE_CUSTOM_MODEL_CAPABILITIES: ModelCapabilities = createModelCapabilities({
   optionDescriptors: [
