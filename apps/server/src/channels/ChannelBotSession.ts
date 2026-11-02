@@ -8,9 +8,11 @@ import { bindingKeyFor, makeSessionEligibility } from "./channelSessionEligibili
 import {
   CHANNEL_RECEPTION_TAIL_LIMITS,
   type ChannelConversationId,
+  type ChannelInputId,
   ChannelRequester,
   type ChannelTask,
   type ChannelTaskId,
+  type ChatAttachment,
   CommandId,
   isChannelChildWorkActive,
   type MessageId,
@@ -325,12 +327,21 @@ const make = Effect.gen(function* () {
       refused,
     });
 
+  /** The files the person sent with an input, as the gateway stored them for the bot thread. */
+  const inputAttachments = (inputId: ChannelInputId) =>
+    ledger
+      .getInput(inputId)
+      .pipe(
+        Effect.map((stored): ReadonlyArray<ChatAttachment> => stored?.message.attachments ?? []),
+      );
+
   const launchGeneration = Effect.fn("ChannelBotSession.launchGeneration")(function* (
     stored: ChannelLedger.ChannelStoredTask,
     row: SessionRow,
     owner: string,
     requester: ChannelRequester,
     memoryGrantCeiling: keyof typeof MEMORY_RANK,
+    attachments: ReadonlyArray<ChatAttachment>,
   ) {
     const task = stored.task;
     const target = yield* requireTarget(task);
@@ -364,7 +375,7 @@ const make = Effect.gen(function* () {
         initialMessage: {
           messageId: ids.messageId,
           text: row.context_text ?? "",
-          attachments: [],
+          attachments,
           ...(memoryGrantCeiling === "none" ? {} : { memoryGrantCeiling }),
         },
         createdBy: "system",
@@ -411,6 +422,7 @@ const make = Effect.gen(function* () {
     text: string,
     owner: string,
     requester: ChannelRequester,
+    attachments: ReadonlyArray<ChatAttachment>,
   ) {
     const task = stored.task;
     const ids = sessionSendIdsFor(task.taskId, task.generation);
@@ -424,7 +436,7 @@ const make = Effect.gen(function* () {
         threadId,
         messageId: ids.messageId,
         text,
-        attachments: [],
+        attachments,
         mode: "queue",
         createdBy: "user",
         creationSource: "server",
@@ -545,6 +557,7 @@ const make = Effect.gen(function* () {
     }
     const settings = yield* serverSettings.getSettings.pipe(Effect.orDie);
     const message = turnInstruction(initial.task, botFiles, settings.goatclaw.enabled);
+    const attachments = yield* inputAttachments(initial.task.originInputId);
     const notesRevision =
       initial.task.briefVersion === undefined
         ? yield* channelNotesRevision(botFiles.notes).pipe(
@@ -566,7 +579,7 @@ const make = Effect.gen(function* () {
       const due = sessionRotationDue(usage, DateTime.toEpochMillis(yield* DateTime.now));
       if (due === undefined) {
         const { stored } = yield* freeze(message);
-        return yield* queueInto(stored, row.thread_id, message, owner, requester);
+        return yield* queueInto(stored, row.thread_id, message, owner, requester, attachments);
       }
       if (Option.isSome(records) && (yield* sessionBusy(row.thread_id, records.value))) {
         yield* Effect.logInfo("GOAT Bot session rotation waits for its work", {
@@ -584,7 +597,7 @@ const make = Effect.gen(function* () {
       if (row === undefined) return "deferred" as const;
     }
     const { stored } = yield* freeze(row.context_text ?? message);
-    return yield* launchGeneration(stored, row, owner, requester, memoryGrantCeiling);
+    return yield* launchGeneration(stored, row, owner, requester, memoryGrantCeiling, attachments);
   });
 
   const serve: ChannelBotSession["Service"]["serve"] = (initial, owner) =>
@@ -626,6 +639,7 @@ const make = Effect.gen(function* () {
       readonly first: ReturnType<typeof turnSteerIdsFor>;
       readonly queued: ReturnType<typeof turnSteerIdsFor>;
     },
+    attachments: ReadonlyArray<ChatAttachment> = [],
   ) {
     const task = stored.task;
     const projectId = ProjectId.make((yield* requireTarget(task)).projectId);
@@ -663,7 +677,7 @@ const make = Effect.gen(function* () {
               threadId,
               messageId: which.messageId,
               text,
-              attachments: [],
+              attachments,
               mode,
               ...(mode === "steer" && current !== undefined ? { targetRunId: current.id } : {}),
               createdBy: "user",
@@ -751,6 +765,7 @@ const make = Effect.gen(function* () {
       worker.threadId,
       "Follow-up from " + event.payload.from + ": " + event.payload.text,
       ids,
+      yield* inputAttachments(event.payload.inputId),
     );
     const own = [ids.first.messageId, ids.queued.messageId];
     if (result._tag === "failed") {

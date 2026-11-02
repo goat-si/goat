@@ -276,6 +276,9 @@ export const makeTimelineRecords = (deps: TimelineRecordDeps) => {
         });
       }
       const createdBy = entry.role === "user" ? ("user" as const) : ("agent" as const);
+      // A later record of the same message, such as its read time, keeps the files it came with.
+      const attachments =
+        entry.attachments ?? (existing?.type === "user_message" ? existing.attachments : []);
       const message: OrchestrationV2ConversationMessage = {
         createdBy,
         creationSource: "server",
@@ -286,7 +289,7 @@ export const makeTimelineRecords = (deps: TimelineRecordDeps) => {
         nodeId: null,
         role: entry.role,
         text: entry.text,
-        attachments: [],
+        attachments,
         streaming: false,
         createdAt: base.startedAt,
         updatedAt: now,
@@ -303,7 +306,7 @@ export const makeTimelineRecords = (deps: TimelineRecordDeps) => {
               // A channel input starts no provider turn; runId null marks it as runless.
               inputIntent: "turn_start",
               text: entry.text,
-              attachments: [],
+              attachments,
             }
           : {
               ...base,

@@ -89,7 +89,13 @@ describe("createGoatBotSendQueue", () => {
 
 it("keeps the submit-time bot and receivedAt through a failed attempt and retry", async () => {
   let clock = "2026-10-12T12:00:00Z";
-  const calls: Array<{ clientKey: string; text: string; receivedAt: string; bot: typeof bot }> = [];
+  const calls: Array<{
+    clientKey: string;
+    text: string;
+    attachments: ReadonlyArray<unknown>;
+    receivedAt: string;
+    bot: typeof bot;
+  }> = [];
   const attempt = deferred<{ requestKey: string }>();
   const queue = createGoatBotSendQueue({
     send: async (message) => {
@@ -110,8 +116,20 @@ it("keeps the submit-time bot and receivedAt through a failed attempt and retry"
   queue.retry("fixed-key");
   await vi.waitFor(() => expect(queue.pendingInputs()[0]?.state).toBe("accepted"));
   expect(calls).toEqual([
-    { clientKey: "fixed-key", text: "original", receivedAt: "2026-10-12T12:00:00Z", bot },
-    { clientKey: "fixed-key", text: "original", receivedAt: "2026-10-12T12:00:00Z", bot },
+    {
+      clientKey: "fixed-key",
+      text: "original",
+      attachments: [],
+      receivedAt: "2026-10-12T12:00:00Z",
+      bot,
+    },
+    {
+      clientKey: "fixed-key",
+      text: "original",
+      attachments: [],
+      receivedAt: "2026-10-12T12:00:00Z",
+      bot,
+    },
   ]);
   expect(queue.pendingInputs()[0]?.state).toBe("accepted");
 });
@@ -165,4 +183,29 @@ it("never retries a final rejected input even through the queue API", async () =
   });
   queue.retry("key");
   expect(queue.pendingInputs()[0]?.state).toBe("failed");
+});
+
+it("sends a message's files on every attempt and names them while it is pending", async () => {
+  const sent: Array<ReadonlyArray<string>> = [];
+  const attempt = deferred<{ requestKey: string }>();
+  const queue = createGoatBotSendQueue({
+    send: async (message) => {
+      sent.push(message.attachments.map((file) => file.name));
+      return sent.length === 1 ? attempt.promise : { requestKey: "input" };
+    },
+    canDispatch: () => true,
+    onChange: () => {},
+    makeKey: () => "key",
+    now: () => "2026-10-12T12:00:00Z",
+  });
+  const photo = { id: "draft-1", type: "image", name: "photo.png", uri: "file:///photo.png" };
+  queue.submit("", bot, [photo]);
+  expect(queue.pendingInputs()[0]?.attachments).toEqual([
+    { id: "draft-1", type: "image", name: "photo.png" },
+  ]);
+  attempt.reject(new Error("socket closed"));
+  await vi.waitFor(() => expect(queue.pendingInputs()[0]?.state).toBe("failed"));
+  queue.retry("key");
+  await vi.waitFor(() => expect(queue.pendingInputs()[0]?.state).toBe("accepted"));
+  expect(sent).toEqual([["photo.png"], ["photo.png"]]);
 });

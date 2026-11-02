@@ -1,5 +1,10 @@
 /** The GOAT Bot session harness: a scripted front desk and helpers shared by session tests. */
-import type { ChannelReceptionInput, ChannelTask, ChannelTaskId } from "@goat/contracts";
+import type {
+  ChannelReceptionInput,
+  ChannelTask,
+  ChannelTaskId,
+  ChatAttachment,
+} from "@goat/contracts";
 import { ProviderInstanceId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -75,7 +80,12 @@ export const sessionHarness = () => {
 };
 
 /** One message from the person, read and dispatched, with worker runs reconciled. */
-export const ask = (text: string, key: string, context: typeof rpcContext = rpcContext) =>
+export const ask = (
+  text: string,
+  key: string,
+  context: typeof rpcContext = rpcContext,
+  attachments: ReadonlyArray<ChatAttachment> = [],
+) =>
   Effect.gen(function* () {
     const gateway = yield* ChannelGateway.ChannelGateway;
     const runtime = yield* ChannelRuntime.ChannelRuntime;
@@ -83,7 +93,7 @@ export const ask = (text: string, key: string, context: typeof rpcContext = rpcC
     const ledger = yield* ChannelLedger.ChannelLedger;
     const reception = yield* ChannelReceptionService.ChannelReceptionService;
     yield* runtime.drain;
-    const ingested = yield* gateway.ingest(goatInput(text, key), context);
+    const ingested = yield* gateway.ingest({ ...goatInput(text, key), attachments }, context);
     yield* reception.receive(ingested.inputId, runtime.ownerToken);
     yield* runtime.drain;
     yield* reports.reconcile(runtime.ownerToken);
