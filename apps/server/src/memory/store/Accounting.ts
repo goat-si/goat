@@ -1,19 +1,17 @@
 import * as M from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import { encodeCompactReceipt } from "./CompactReceipt.ts";
+import { measureForgetReservation } from "./ForgetReservation.ts";
 import type { CoreReads } from "./CoreReads.ts";
 import type { RevertResults } from "./RevertResults.ts";
 import {
   compactCodec,
   environmentOrdinalCodec,
-  exclusionsCodec,
   hubReceiptCodec,
-  lineageCodec,
   lineageForRevision,
   receiptCodec,
   scopeKey,
   stored,
-  suppressionCodec,
 } from "./StoreCodecs.ts";
 import type { StoreKernel } from "./StoreKernel.ts";
 import {
@@ -126,40 +124,12 @@ export const makeAccounting = (
     revisions: MemoryAggregate["revisions"],
     includeRevisionLineage = true,
   ) {
-    const records = new Map<string, M.MemorySuppressionRecord>();
-    for (const { revision, payload } of revisions) {
-      const { sourceThread, sourceWatermark } = revision.provenance;
-      if (!sourceThread || !sourceWatermark) continue;
-      for (const messageId of new Set((payload?.evidence ?? []).flatMap((e) => e.messageIds))) {
-        const exclusion = { sourceThread, sourceWatermark, messageIds: [messageId] };
-        const key = yield* exclusionsCodec.encode([exclusion]);
-        records.set(key, {
-          memorySpaceId: op.memorySpaceId,
-          memoryId: op.memoryId,
-          deleteOperationId: op.operationId,
-          kind: "sourceExclusion",
-          exclusion,
-        });
-      }
-    }
-    let bytes = 0;
-    for (const record of records.values())
-      bytes += new TextEncoder().encode(yield* suppressionCodec.encode(record)).length;
-    const lineage = new Map<string, M.MemoryImportLineageRecord>();
-    for (const record of [
+    return yield* measureForgetReservation(op, revisions, [
       ...(yield* readImportLineage(op.memorySpaceId, op.memoryId)),
       ...(includeRevisionLineage
         ? revisions.flatMap(({ revision }) => lineageForRevision(revision))
         : []),
-    ])
-      lineage.set(M.memoryImportLineageRecordKey(record), record);
-    let lineageBytes = 0;
-    for (const record of lineage.values())
-      lineageBytes += new TextEncoder().encode(yield* lineageCodec.encode(record)).length + 64;
-    return {
-      bytes: Math.max(M.MEMORY_PAYLOAD_MAX_UTF8_BYTES, bytes) + lineageBytes,
-      keys: records.size + lineage.size,
-    };
+    ]);
   });
   const firstForgetReservation = Effect.fn("MemoryStore.firstForgetReservation")(function* (
     op: M.MemoryOperation,
