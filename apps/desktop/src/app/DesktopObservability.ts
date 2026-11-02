@@ -50,6 +50,11 @@ export interface RotatingLogFileWriter {
 }
 
 export interface DesktopBackendOutputLogShape {
+  readonly recordStop: (input: {
+    readonly message: string;
+    readonly level: "INFO" | "WARN" | "ERROR";
+    readonly details: string;
+  }) => Effect.Effect<void>;
   readonly beginSession: (input: { readonly details: string }) => Effect.Effect<void>;
   readonly writeOutputChunk: (
     streamName: "stdout" | "stderr",
@@ -124,7 +129,7 @@ const sanitizeLogValue = (value: string): string => value.replace(/\s+/g, " ").t
 
 const DesktopBackendChildLogRecord = Schema.Struct({
   message: Schema.String,
-  level: Schema.Literals(["INFO", "ERROR"]),
+  level: Schema.Literals(["INFO", "WARN", "ERROR"]),
   timestamp: Schema.String,
   annotations: Schema.Record(Schema.String, Schema.Unknown),
   spans: Schema.Record(Schema.String, Schema.Unknown),
@@ -136,6 +141,7 @@ const encodeDesktopBackendChildLogRecord = Schema.encodeEffect(
 );
 
 const DesktopBackendOutputLogNoop: DesktopBackendOutputLogShape = {
+  recordStop: () => Effect.void,
   beginSession: () => Effect.void,
   writeOutputChunk: () => Effect.void,
   persistFailureSnapshot: () => Effect.void,
@@ -405,7 +411,7 @@ const writeBackendChildLogRecord = Effect.fn("desktop.observability.writeBackend
     logFile: RotatingLogFileWriter,
     input: {
       readonly message: string;
-      readonly level: "INFO" | "ERROR";
+      readonly level: "INFO" | "WARN" | "ERROR";
       readonly annotations: Record<string, unknown>;
     },
   ): Effect.fn.Return<void> {
@@ -504,6 +510,24 @@ const makeBackendOutputLogShape = (
         });
       });
       return {
+        recordStop: Effect.fn("desktop.observability.backendOutput.recordStop")(function* ({
+          message,
+          level,
+          details,
+        }) {
+          const runId = yield* currentDesktopRunId;
+          yield* writeBackendChildLogRecord(logFile, {
+            message,
+            level,
+            annotations: {
+              component: "desktop-backend-child",
+              runId,
+              instanceId: id,
+              phase: "STOP",
+              details: sanitizeLogValue(details),
+            },
+          });
+        }),
         beginSession: Effect.fn("desktop.observability.backendOutput.beginSession")(function* ({
           details,
         }) {

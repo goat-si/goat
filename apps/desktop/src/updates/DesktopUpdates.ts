@@ -26,8 +26,8 @@ import * as Stream from "effect/Stream";
 import * as Queue from "effect/Queue";
 import { compareSemverVersions } from "@goat/shared/semver";
 import * as DesktopBackendActivity from "./DesktopBackendActivity.ts";
-
 import * as DesktopBackendPool from "../backend/DesktopBackendPool.ts";
+import { BACKEND_STOP_TIMEOUT } from "../backend/DesktopBackendProcess.ts";
 import * as DesktopConfig from "../app/DesktopConfig.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
@@ -867,7 +867,7 @@ export const make = Effect.gen(function* () {
           yield* Ref.set(installRunningBackendsRef, runningInstances);
           yield* Effect.forEach(
             instances,
-            (instance) => instance.stop({ timeout: Duration.seconds(5) }),
+            (instance) => instance.stop("update-install", { timeout: BACKEND_STOP_TIMEOUT }),
             { concurrency: "unbounded" },
           );
           yield* electronUpdater.quitAndInstall({

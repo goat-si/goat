@@ -1,5 +1,7 @@
 import {
   runBackendProcess,
+  signalOfExitReason,
+  DEFAULT_BACKEND_TERMINATE_GRACE,
   type DesktopBackendStartConfig,
   type PreflightFailure,
 } from "./DesktopBackendProcess.ts";
@@ -68,12 +70,22 @@ export const PRIMARY_INSTANCE_ID: BackendInstanceId = BackendInstanceId(
   PRIMARY_LOCAL_ENVIRONMENT_ID,
 );
 
+export type BackendStopReason =
+  | "quit"
+  | "update-install"
+  | "recovery-retry"
+  | "recovery-stop"
+  | "instance-closed";
+
 export interface DesktopBackendInstance {
   readonly id: BackendInstanceId;
   readonly label: Effect.Effect<string>;
   readonly start: Effect.Effect<void>;
   readonly showRecovery?: Effect.Effect<void>;
-  readonly stop: (options?: { readonly timeout?: Duration.Duration }) => Effect.Effect<void>;
+  readonly stop: (
+    reason: BackendStopReason,
+    options?: { readonly timeout?: Duration.Duration },
+  ) => Effect.Effect<void>;
   readonly currentConfig: Effect.Effect<Option.Option<DesktopBackendStartConfig>>;
   readonly snapshot: Effect.Effect<DesktopBackendSnapshot>;
   readonly waitForReady: (timeout: Duration.Duration) => Effect.Effect<boolean>;
@@ -106,6 +118,11 @@ interface ActiveBackendRun {
   readonly pid: Option.Option<number>;
   readonly exitObserved: boolean;
   readonly stopRequested: boolean;
+  readonly stopRequest: Option.Option<{
+    readonly reason: BackendStopReason;
+    readonly atNanos: bigint;
+  }>;
+  readonly exitAtNanos: Option.Option<bigint>;
 }
 
 interface BackendManagerState {
@@ -384,6 +401,8 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
               pid: Option.none(),
               exitObserved: false,
               stopRequested: false,
+              stopRequest: Option.none(),
+              exitAtNanos: Option.none(),
             } satisfies ActiveBackendRun),
             nextRunId: latest.nextRunId + 1,
           },
@@ -399,58 +418,72 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
           const databaseAhead = exitCode === SERVER_EXIT_CODE_DATABASE_AHEAD;
           yield* mutex.withPermits(1)(
             Effect.gen(function* () {
-              const { isCurrentRun, nextState, pid, exitObserved, stopRequested, wasReady } =
-                yield* Ref.modify(
-                  state,
-                  (
-                    latest,
-                  ): readonly [
-                    {
-                      readonly isCurrentRun: boolean;
-                      readonly nextState: BackendManagerState;
-                      readonly pid: Option.Option<number>;
-                      readonly exitObserved: boolean;
-                      readonly stopRequested: boolean;
-                      readonly wasReady: boolean;
-                    },
-                    BackendManagerState,
-                  ] => {
-                    const currentRun = Option.getOrUndefined(latest.active);
-                    if (currentRun?.id !== runId) {
-                      return [
-                        {
-                          isCurrentRun: false,
-                          nextState: latest,
-                          pid: Option.none<number>(),
-                          exitObserved: false,
-                          stopRequested: false,
-                          wasReady: false,
-                        },
-                        latest,
-                      ] as const;
-                    }
-
-                    const next = {
-                      ...latest,
-                      active:
-                        !currentRun.exitObserved && Option.isSome(currentRun.pid)
-                          ? latest.active
-                          : Option.none<ActiveBackendRun>(),
-                      ready: false,
-                    };
+              const {
+                isCurrentRun,
+                nextState,
+                pid,
+                exitObserved,
+                stopRequested,
+                stopRequest,
+                exitAtNanos,
+                wasReady,
+              } = yield* Ref.modify(
+                state,
+                (
+                  latest,
+                ): readonly [
+                  {
+                    readonly isCurrentRun: boolean;
+                    readonly nextState: BackendManagerState;
+                    readonly pid: Option.Option<number>;
+                    readonly exitObserved: boolean;
+                    readonly stopRequested: boolean;
+                    readonly stopRequest: ActiveBackendRun["stopRequest"];
+                    readonly exitAtNanos: ActiveBackendRun["exitAtNanos"];
+                    readonly wasReady: boolean;
+                  },
+                  BackendManagerState,
+                ] => {
+                  const currentRun = Option.getOrUndefined(latest.active);
+                  if (currentRun?.id !== runId) {
                     return [
                       {
-                        isCurrentRun: true,
-                        nextState: next,
-                        pid: currentRun.pid,
-                        exitObserved: currentRun.exitObserved,
-                        stopRequested: currentRun.stopRequested,
-                        wasReady: latest.ready,
+                        isCurrentRun: false,
+                        nextState: latest,
+                        pid: Option.none<number>(),
+                        exitObserved: false,
+                        stopRequested: false,
+                        stopRequest: Option.none(),
+                        exitAtNanos: Option.none(),
+                        wasReady: false,
                       },
-                      next,
+                      latest,
                     ] as const;
-                  },
-                );
+                  }
+
+                  const next = {
+                    ...latest,
+                    active:
+                      !currentRun.exitObserved && Option.isSome(currentRun.pid)
+                        ? latest.active
+                        : Option.none<ActiveBackendRun>(),
+                    ready: false,
+                  };
+                  return [
+                    {
+                      isCurrentRun: true,
+                      nextState: next,
+                      pid: currentRun.pid,
+                      exitObserved: currentRun.exitObserved,
+                      stopRequested: currentRun.stopRequested,
+                      stopRequest: currentRun.stopRequest,
+                      exitAtNanos: currentRun.exitAtNanos,
+                      wasReady: latest.ready,
+                    },
+                    next,
+                  ] as const;
+                },
+              );
 
               if (isCurrentRun && !exitObserved && Option.isSome(pid)) {
                 if (wasReady) yield* spec.onShutdown?.() ?? Effect.void;
@@ -460,9 +493,29 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
               if (isCurrentRun) {
                 yield* removeControlSource(runId);
                 if (Option.isSome(pid)) {
-                  if (exitObserved && !stopRequested) {
+                  const signal = signalOfExitReason(reason);
+                  if (exitObserved && Option.isSome(stopRequest)) {
+                    const elapsed = Option.match(exitAtNanos, {
+                      onNone: () => "exit observation time unavailable",
+                      onSome: (atNanos) =>
+                        `exit observed ${Number((atNanos - stopRequest.value.atNanos) / 1_000_000n)}ms after the stop request`,
+                    });
+                    const details = `pid=${pid.value} ${reason} ${signal && signal !== "SIGTERM" ? "during" : "after"} stop reason=${stopRequest.value.reason}; ${elapsed}`;
+                    if (signal && signal !== "SIGTERM") {
+                      yield* backendOutputLog.persistFailure({
+                        details: `${details} (the desktop sends SIGKILL if the server has not exited ${Duration.toMillis(DEFAULT_BACKEND_TERMINATE_GRACE)}ms after SIGTERM)`,
+                      });
+                    } else {
+                      yield* backendOutputLog.recordStop({
+                        message: "backend stopped",
+                        level: "INFO",
+                        details,
+                      });
+                      yield* backendOutputLog.discardSession;
+                    }
+                  } else if (exitObserved && !stopRequested) {
                     yield* backendOutputLog.persistFailure({
-                      details: `pid=${pid.value} ${reason}`,
+                      details: `pid=${pid.value} ${reason}${signal ? "; the desktop had not requested a stop" : ""}`,
                     });
                   } else {
                     yield* backendOutputLog.discardSession;
@@ -522,11 +575,14 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
               details: `pid=${pid} port=${config.value.bootstrap.port} cwd=${config.value.cwd}`,
             });
           }),
-          onExitObserved: () =>
-            updateActiveRun(runId, (run) => ({
+          onExitObserved: Effect.fn("desktop.backendInstance.onExitObserved")(function* () {
+            const exitAtNanos = yield* Clock.monotonicTimeNanos;
+            yield* updateActiveRun(runId, (run) => ({
               ...run,
               exitObserved: true,
-            })),
+              exitAtNanos: Option.some(exitAtNanos),
+            }));
+          }),
           onReady: Effect.fn("desktop.backendInstance.onReady")(function* () {
             const isCurrentRun = yield* Ref.modify(state, (latest) => {
               const activeRun = Option.getOrUndefined(latest.active);
@@ -696,19 +752,29 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
     });
   });
 
-  const stop = Effect.fn("desktop.backendInstance.stop")(function* (options?: {
-    readonly timeout?: Duration.Duration;
-  }) {
+  const stop = Effect.fn("desktop.backendInstance.stop")(function* (
+    reason: BackendStopReason,
+    options?: {
+      readonly timeout?: Duration.Duration;
+    },
+  ) {
     recoveryStatus = "stopped";
     const { active, restartFiber, notifyShutdown } = yield* mutex.withPermits(1)(
       Effect.gen(function* () {
+        const atNanos = yield* Clock.monotonicTimeNanos;
         const result = yield* Ref.modify(state, (latest) => {
           const active = Option.map(latest.active, (run) =>
-            run.exitObserved ? run : { ...run, stopRequested: true },
+            run.exitObserved || run.stopRequested
+              ? run
+              : { ...run, stopRequested: true, stopRequest: Option.some({ reason, atNanos }) },
           );
           return [
             {
               active,
+              newStopRequest:
+                Option.isSome(latest.active) &&
+                !latest.active.value.exitObserved &&
+                !latest.active.value.stopRequested,
               restartFiber: latest.restartFiber,
               notifyShutdown: latest.ready,
             },
@@ -721,6 +787,14 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
             },
           ] as const;
         });
+        const run = Option.getOrUndefined(result.active);
+        if (run && result.newStopRequest) {
+          yield* backendOutputLog.recordStop({
+            message: "backend stop requested",
+            level: "INFO",
+            details: `pid=${Option.match(run.pid, { onNone: () => "pending", onSome: String })} reason=${reason} graceMs=${Duration.toMillis(DEFAULT_BACKEND_TERMINATE_GRACE)} timeoutMs=${options?.timeout ? Duration.toMillis(options.timeout) : "none"}`,
+          });
+        }
         return result;
       }),
     );
@@ -736,8 +810,15 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
       onNone: () => Effect.void,
       // The enclosing operation owns the span for this inline handler.
       onSome: Effect.fnUntraced(function* (run) {
+        const waitStarted = yield* Clock.monotonicTimeNanos;
         const closed = yield* closeRun(run, parentScope, options);
         if (!closed) {
+          const waitedMs = Number(((yield* Clock.monotonicTimeNanos) - waitStarted) / 1_000_000n);
+          yield* backendOutputLog.recordStop({
+            message: "backend stop timed out",
+            level: "WARN",
+            details: `pid=${Option.match(run.pid, { onNone: () => "pending", onSome: String })} reason=${reason} waitedMs=${waitedMs}; the server may still be running`,
+          });
           return;
         }
         const cleanup = yield* mutex.withPermits(1)(
@@ -797,7 +878,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
   const retry: Effect.Effect<void> = Effect.gen(function* () {
     const current = yield* Ref.get(state);
     if (Option.isSome(current.active)) {
-      yield* stop({ timeout: Duration.seconds(10) });
+      yield* stop("recovery-retry", { timeout: Duration.seconds(10) });
       if (Option.isSome((yield* Ref.get(state)).active)) return;
     }
     if (yield* recovery.reset) {
@@ -814,12 +895,12 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
         label: yield* spec.label,
         reason: record.pause,
         retry,
-        stop: stop({ timeout: Duration.seconds(10) }),
+        stop: stop("recovery-stop", { timeout: Duration.seconds(10) }),
         logPath: Option.getOrUndefined(config)?.backendLogPath ?? "",
       }) ?? Effect.void
     );
   });
-  yield* Effect.addFinalizer(() => stop());
+  yield* Effect.addFinalizer(() => stop("instance-closed"));
 
   return {
     id: spec.id,

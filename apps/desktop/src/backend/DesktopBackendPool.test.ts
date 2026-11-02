@@ -38,6 +38,7 @@ function layerPool(labelRef: Ref.Ref<string>): Layer.Layer<DesktopBackendPool.De
         Layer.succeed(DesktopObservability.DesktopBackendOutputLogFactory, {
           forInstance: () =>
             Effect.succeed({
+              recordStop: () => Effect.void,
               beginSession: () => Effect.void,
               writeOutputChunk: () => Effect.void,
               persistFailureSnapshot: () => Effect.void,

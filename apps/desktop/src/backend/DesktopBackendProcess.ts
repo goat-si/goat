@@ -24,7 +24,12 @@ const DEFAULT_BACKEND_READINESS_TIMEOUT = Duration.minutes(1);
 const DEFAULT_BACKEND_READINESS_INTERVAL = Duration.millis(100);
 const DEFAULT_BACKEND_READINESS_REQUEST_TIMEOUT = Duration.seconds(1);
 // Match the service launcher's grace period so backends can stop provider sessions.
-const DEFAULT_BACKEND_TERMINATE_GRACE = Duration.seconds(5);
+export const DEFAULT_BACKEND_TERMINATE_GRACE = Duration.seconds(5);
+// Grace, the SIGKILL exit wait, and a margin.
+export const BACKEND_STOP_TIMEOUT = Duration.sum(
+  DEFAULT_BACKEND_TERMINATE_GRACE,
+  Duration.seconds(2),
+);
 const DEFAULT_BACKEND_OUTPUT_DRAIN_TIMEOUT = Duration.seconds(5);
 const BACKEND_READINESS_PATH = GOAT_ENVIRONMENT_PATH;
 const { logWarning: logBackendProcessWarning } =
@@ -257,6 +262,9 @@ const encodeBootstrapJson = Schema.encodeEffect(Schema.fromJsonString(DesktopBac
 const decodeDesktopTelemetryControlLine = Schema.decodeUnknownEffect(
   Schema.fromJsonString(DesktopTelemetryControlMessage),
 );
+
+export const signalOfExitReason = (reason: string): string | undefined =>
+  /^killed by (SIG[A-Z0-9]+)$/.exec(reason)?.[1];
 
 export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
   options: RunBackendProcessOptions,
