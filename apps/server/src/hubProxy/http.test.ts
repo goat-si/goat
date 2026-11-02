@@ -13,9 +13,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as HubConnectAccess from "../auth/HubConnectAccess.ts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- sends an oversized declared body without allocating it.
 import * as NodeHttp from "node:http";
-// @effect-diagnostics-next-line nodeBuiltinImport:off -- observes the real ws teardown error.
 import * as NodeEvents from "node:events";
-// @effect-diagnostics-next-line nodeBuiltinImport:off -- holds a real WebSocket handshake open.
 import * as NodeNet from "node:net";
 
 import { expect, it } from "@effect/vitest";
@@ -364,20 +362,29 @@ it.live(
       if (address === null || typeof address === "string") throw new Error("Expected TCP address");
       const baseUrl = `ws://127.0.0.1:${address.port}/`;
       let listenerCount: number | undefined;
+      let targetCloseState: number | undefined;
       const originalClose = NodeWS.WebSocket.prototype.close;
-      using _close = vi.spyOn(NodeWS.WebSocket.prototype, "close").mockImplementation(function (
-        this: NodeWS.WebSocket,
-        ...args
-      ) {
-        if (this.url === `${baseUrl}ws` && this.readyState === NodeWS.WebSocket.CONNECTING) {
-          this.once("close", () => closed.resolve());
-          this.once(NodeEvents.errorMonitor, () => {
-            listenerCount = this.listenerCount("error");
-            this.on("error", () => {});
-          });
-        }
-        return originalClose.apply(this, args);
-      });
+      yield* Effect.acquireRelease(
+        Effect.sync(() =>
+          vi.spyOn(NodeWS.WebSocket.prototype, "close").mockImplementation(function (
+            this: NodeWS.WebSocket,
+            ...args
+          ) {
+            if (this.url === `${baseUrl}ws`) {
+              targetCloseState = this.readyState;
+              if (this.readyState === NodeWS.WebSocket.CONNECTING) {
+                this.once("close", () => closed.resolve());
+                this.once(NodeEvents.errorMonitor, () => {
+                  listenerCount = this.listenerCount("error");
+                  this.on("error", () => {});
+                });
+              }
+            }
+            return originalClose.apply(this, args);
+          }),
+        ),
+        (spy) => Effect.sync(() => spy.mockRestore()),
+      );
       const fiber = yield* openUpstreamSocket(
         {
           nodeId: "node-1",
@@ -389,8 +396,18 @@ it.live(
         },
         "",
       ).pipe(Effect.scoped, Effect.forkScoped);
-      yield* Effect.promise(() => connected.promise);
+      const first = yield* Effect.raceFirst(
+        Effect.promise(() => connected.promise).pipe(Effect.as("connected" as const)),
+        Fiber.await(fiber).pipe(Effect.as("fiber completed" as const)),
+      );
+      if (first !== "connected") throw new Error("Upstream fiber completed before TCP connected");
       yield* Fiber.interrupt(fiber);
+      if (targetCloseState === undefined) throw new Error("Upstream socket close() was not called");
+      if (targetCloseState !== NodeWS.WebSocket.CONNECTING) {
+        throw new Error(
+          `Upstream socket close() called in state ${targetCloseState}, not CONNECTING`,
+        );
+      }
       yield* Effect.promise(() => closed.promise);
       expect(listenerCount).toBeGreaterThanOrEqual(1);
     }).pipe(Effect.scoped),
