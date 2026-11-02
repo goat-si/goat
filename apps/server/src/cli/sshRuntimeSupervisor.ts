@@ -6,6 +6,7 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodeChildProcess from "node:child_process";
 import * as NodePath from "node:path";
+import * as NodeOS from "node:os";
 
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -255,7 +256,14 @@ const superviseReplacement = async (
           : spawnWindowsDetached([executable, ...args], input.logFile, env);
     } else {
       const log = NodeFS.openSync(input.logFile, "a");
+      let cwd = NodeOS.homedir();
+      try {
+        NodeFS.accessSync(cwd, NodeFS.constants.X_OK);
+      } catch {
+        cwd = "/";
+      }
       const child = NodeChildProcess.spawn(runner, args, {
+        cwd,
         detached: true,
         stdio: ["ignore", log, log],
         env: { ...process.env, ...env },
