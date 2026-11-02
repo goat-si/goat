@@ -399,12 +399,22 @@ it.effect.each(["statement", "transaction"] as const)(
           const refill = [];
           for (let i = 0; i < 64; i++) {
             const read = yield* Effect.forkChild(
-              countEntries(sql).pipe(SqliteClient.readOnly, Effect.result),
+              countEntries(sql).pipe(
+                SqliteClient.readOnly,
+                SqliteClient.failFastReaderAdmission,
+                Effect.result,
+              ),
               { startImmediately: true },
             );
             assert.isUndefined(read.pollUnsafe());
             refill.push(read);
           }
+          const overflow = yield* countEntries(sql).pipe(
+            SqliteClient.readOnly,
+            SqliteClient.failFastReaderAdmission,
+            Effect.flip,
+          );
+          assert.isTrue(SqliteClient.isReaderAdmissionOverload(overflow));
           for (const read of refill) yield* Fiber.interrupt(read);
         }),
       { readerPoolSize: 1 },
@@ -468,11 +478,21 @@ it.effect("queues reader admissions in FIFO order", () =>
         );
         assert.isUndefined(a.pollUnsafe());
         assert.isUndefined(b.pollUnsafe());
+        const last = reads.pop();
+        assert.isDefined(last);
+        if (last === undefined) return;
+        yield* Fiber.interrupt(last);
+        yield* TestClock.adjust("30 seconds");
+        assert.isDefined(b.pollUnsafe(), "B must expire while A owns the released admission");
+        const result = yield* Fiber.join(b);
+        assert.equal(result._tag, "Failure");
+        if (result._tag === "Failure")
+          assert.isTrue(SqliteClient.isReaderAdmissionOverload(result.failure));
+        assert.isUndefined(a.pollUnsafe());
         held.mockRestore();
         for (const request of requests) request();
-        for (const read of reads) yield* Fiber.join(read);
         assert.equal((yield* Fiber.join(a))._tag, "Success");
-        assert.equal((yield* Fiber.join(b))._tag, "Success");
+        for (const read of reads) yield* Fiber.join(read);
       }),
     { readerPoolSize: 1 },
   ),
