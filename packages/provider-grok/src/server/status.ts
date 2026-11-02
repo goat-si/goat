@@ -434,11 +434,7 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
         version: null,
         status: "error",
         auth: { status: "unknown" },
-        message: spawnFailureMessage(
-          "cwd_inaccessible",
-          spawnCwd,
-          grokSettings.binaryPath || "grok",
-        ),
+        message: "The GOAT server process cannot access its working directory.",
       },
     });
   const versionResult = yield* runGrokCliCommand(

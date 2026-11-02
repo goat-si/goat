@@ -826,17 +826,17 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     });
   }
 
-  const probeCwd = safeProcessCwd();
+  const processCwd = safeProcessCwd();
   const routeInput =
-    probeCwd === undefined
+    processCwd === undefined
       ? Result.fail({
-          message: spawnFailureMessage("cwd_inaccessible", undefined, codexSettings.binaryPath),
+          message: "The GOAT server process cannot access its working directory.",
         })
       : yield* HomeRoute.resolveCodexRouteContext({
           settings: codexSettings,
           binaryPath: codexSettings.binaryPath,
           home: codexSettings.homePath,
-          cwd: probeCwd,
+          cwd: processCwd,
           environment: resolvedEnvironment,
           configArgv: codexExecLaunchArgs(
             resolveCodexLaunchArgs(codexSettings.launchArgs, resolvedEnvironment),
@@ -857,6 +857,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
         message: routeInput.failure.message,
       },
     });
+  const probeCwd = routeInput.success.execution.cwd;
   const routes = yield* Effect.serviceOption(HomeRoute.OpenCodexRoute);
   if (codexSettings.modelRoute === "opencodex") {
     const observedRoute = Option.isSome(routes)
