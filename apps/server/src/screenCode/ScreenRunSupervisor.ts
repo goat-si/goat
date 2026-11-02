@@ -192,6 +192,8 @@ export function createScreenRunSupervisor(deps: {
     };
     child.once("exit", onProcessEnd);
     child.once("error", onProcessEnd);
+    // A live child that closed its stdin fails the next write with EPIPE; unheard, it ends the server.
+    child.stdin.on("error", onProcessEnd);
     const boot: ScreenRunBoot = {
       t: "boot",
       limits: { ...deps.limits, turnWasmBytes },

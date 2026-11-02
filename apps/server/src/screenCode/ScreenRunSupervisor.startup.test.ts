@@ -108,6 +108,52 @@ it.live("waits for a fresh runtime before starting the cell clock", () =>
   ),
 );
 
+it.live("a child that closes its stdin ends its session instead of the server", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const child = NodeChildProcess.spawn(
+        process.execPath,
+        [
+          "-e",
+          `
+        const fs = require('node:fs');
+        const byte = Buffer.alloc(1);
+        while (fs.readSync(0, byte, 0, 1, null) === 1 && byte[0] !== 10) {}
+        fs.closeSync(0);
+        process.stdout.write('{"t":"ready"}\\n');
+        setInterval(() => {}, 1000);
+      `,
+        ],
+        { stdio: ["pipe", "pipe", "pipe"] },
+      );
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+        }),
+      );
+      using _spawn = vi.spyOn(NodeChildProcess, "spawn").mockReturnValueOnce(child);
+      const limits = screenRunLimits({ cellWallMs: 2000 });
+      const supervisor = fixtureSupervisor({
+        asset: { path: "unused", sha256: "unused" },
+        limits,
+        hostBridge: new ScreenHostBridge(),
+      });
+      yield* Effect.addFinalizer(() => Effect.sync(supervisor.dispose));
+      const result = yield* supervisor
+        .runCell({ runId: "r", turnId: "t", context: context("one", limits) }, "return 7;", false)
+        .pipe(Effect.result);
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure") {
+        expect(result.failure.code).toBe("runtime_unavailable");
+        expect(result.failure.effectStarted).toBe(false);
+        expect(result.failure.startupFailed).toBeUndefined();
+      }
+      expect(supervisor.consumeLost("thread")).toBe(true);
+      expect(supervisor.activeCount()).toBe(0);
+    }),
+  ),
+);
+
 it.live("a runtime that never becomes ready fails without starting the cell", () =>
   Effect.scoped(
     Effect.gen(function* () {
