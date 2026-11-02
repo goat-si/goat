@@ -904,7 +904,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     const failure = isCodexAppServerSpawnError(error)
       ? classifySpawnFailure(error, probeCwd, undefined, {
           binary: codexSettings.binaryPath,
-          env: routeInput.success.execution.environment,
+          env: { ...process.env, ...routeInput.success.execution.environment },
         })
       : "unknown";
     const installed = routeFailure !== undefined || failure !== "missing";
