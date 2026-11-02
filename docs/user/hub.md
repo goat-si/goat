@@ -115,7 +115,9 @@ skipped with a pointer to **Repair**. Codex restarts to pick up the models only
 on a machine with nothing running. On a busy hub the models are written, but
 Codex keeps its old list until it restarts or you sync again once the work
 finishes; a busy Child is skipped until you sync again. GOAT also syncs each
-machine right after a managed OpenCodex update moves it.
+machine right after an OpenCodex update moves it. Adopted installs are updated when their
+OpenCodex supports orchestrated updates and otherwise receive advice; a stuck update window clears
+once the member is back on its previous version, reinstalled with its own installer.
 
 Each action lists its steps and their results. Some changes wait for a person: a
 host key GOAT has not pinned or that changed, re-linking a device, or removing

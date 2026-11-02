@@ -167,7 +167,7 @@ export const OpenCodexUpdateMemberRecord = Schema.Struct({
 });
 export type OpenCodexUpdateMemberRecord = typeof OpenCodexUpdateMemberRecord.Type;
 
-/** The coordinator's last managed-update decision; adopted installs only ever get advice. */
+/** The coordinator's last managed-update decision; adopted installs get advice unless their ocx applies updates itself (update.orchestrated/1). */
 export const OpenCodexUpdateStatus = Schema.Struct({
   checkedAt: Schema.Number,
   decision: Schema.Literals(["none", "wait", "update"]),
