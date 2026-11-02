@@ -84,6 +84,57 @@ describe("Windows SSH host", () => {
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 
+  it.effect("passes a usable Windows working directory to initial and supervisor launches", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-windows-cwd-" });
+      const bin = `${root}/bin`;
+      const profile = `${root}/profile`;
+      const drive = `${root}/drive`;
+      yield* fs.makeDirectory(bin);
+      yield* fs.makeDirectory(profile);
+      yield* fs.makeDirectory(drive);
+      yield* fs.writeFileString(`${bin}/uname`, "#!/bin/sh\necho MINGW64\n");
+      yield* fs.writeFileString(
+        `${bin}/cygpath`,
+        String.raw`#!/bin/sh
+if [ "$1" = -u ] && [ "$2" = 'D:/' ]; then printf '%s\n' "$TEST_DRIVE"; else printf '%s\n' "$2"; fi
+`,
+      );
+      yield* fs.writeFileString(
+        `${bin}/powershell.exe`,
+        '#!/bin/sh\nprintf "%s\n" "$GOAT_SPAWN_CWD"\n',
+      );
+      for (const name of ["uname", "cygpath", "powershell.exe"])
+        yield* fs.chmod(`${bin}/${name}`, 0o755);
+      for (const [userProfile, expected] of [
+        [profile, profile],
+        [`${root}/missing`, drive],
+        ["", drive],
+      ]) {
+        const result = NodeChildProcess.spawnSync(
+          remoteShell,
+          ["-c", `${REMOTE_HOST_PROCESS_SCRIPT}\nwindows_spawn_detached /tmp/log goat serve`],
+          {
+            encoding: "utf8",
+            env: {
+              ...process.env,
+              PATH: `${bin}:${process.env.PATH ?? ""}`,
+              USERPROFILE: userProfile,
+              SystemDrive: "D:",
+              TEST_DRIVE: drive,
+            },
+          },
+        );
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(result.stdout.trim(), expected);
+      }
+      const launch = buildRemoteRuntimeProbeScript("1.2.3", "fixture", true);
+      assert.include(launch, 'windows_spawn_detached "$SUPERVISE_LOG"');
+      assert.include(launch, 'windows_spawn_detached "$LOG_FILE"');
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
   it("feeds a Windows host the upload script ahead of the archive on stdin", () => {
     const archive = new Uint8Array(256 * 1024).map((_, index) => index % 251);
     const script = `set -eu\ncat > "$GOAT_UPLOAD_OUT"\nprintf 'ran %s\\n' "$#"\n`;
