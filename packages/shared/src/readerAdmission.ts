@@ -37,7 +37,7 @@ export const failFastReaderAdmission = <A, E, R>(effect: Effect.Effect<A, E, R>)
 
 export type ReaderLaneName = "interactive" | "background";
 /** Forked fibers inherit their parent's lane. */
-export const ReaderLane = Context.Reference<ReaderLaneName>("@goat/shared/ReaderLane", {
+const ReaderLane = Context.Reference<ReaderLaneName>("@goat/shared/ReaderLane", {
   defaultValue: () => "interactive",
 });
 /** Periodic sweeps yield reader admissions and reader slots to reads a person is waiting on. */
