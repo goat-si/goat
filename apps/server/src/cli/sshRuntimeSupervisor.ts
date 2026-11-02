@@ -98,8 +98,14 @@ const restoreRunner = (input: SshRuntimeSupervisorInput) => {
         NodeFS.chmodSync(next, 0o700);
       }
       NodeFS.renameSync(next, alias);
+    } catch {
+      // The alias is cosmetic; a later launch can repair it.
     } finally {
-      NodeFS.rmSync(next, { force: true });
+      try {
+        NodeFS.rmSync(next, { force: true });
+      } catch {
+        // Alias cleanup cannot invalidate the restored runner.
+      }
     }
   }
 };
