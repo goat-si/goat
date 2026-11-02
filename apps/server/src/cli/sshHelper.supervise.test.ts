@@ -245,7 +245,7 @@ const tempSuperviseHome = () => {
 const record = (stateDir: string, name: string) =>
   NodeFS.readFileSync(NodePath.join(stateDir, name), "utf8");
 
-it("restores the previous runner when the drained server stays alive", async () => {
+it("restores the previous runner and alias when the drained server stays alive", async () => {
   const sleep = NodeChildProcess.spawn(process.execPath, ["-e", "process.stdin.resume()"], {
     stdio: ["pipe", "ignore", "ignore"],
   });
@@ -253,12 +253,14 @@ it("restores the previous runner when the drained server stays alive", async () 
     const sleepPid = sleep.pid ?? 0;
     assert.isAbove(sleepPid, 0);
     const { baseDir, stateDir, logFile } = tempSuperviseHome();
-    const runnerFile = NodePath.join(stateDir, "run-t3.mjs");
+    const runnerFile = NodePath.join(stateDir, "run-t3.sh");
+    const alias = NodePath.join(stateDir, "run-goat.sh");
     const previousRunnerFile = NodePath.join(stateDir, "run-t3.previous.mjs");
     const previousBytes = `#!${process.execPath}\nprocess.exit(86);\n`;
     NodeFS.writeFileSync(runnerFile, `#!${process.execPath}\nprocess.exit(87);\n`, {
       mode: 0o700,
     });
+    NodeFS.linkSync(runnerFile, alias);
     NodeFS.writeFileSync(previousRunnerFile, previousBytes, { mode: 0o700 });
     const previousVersion = "1.4.2";
     const previousIdentity = "previous-runner-identity";
@@ -293,6 +295,7 @@ it("restores the previous runner when the drained server stays alive", async () 
     );
     assert.isTrue(answersSignal0(sleepPid));
     assert.equal(NodeFS.readFileSync(runnerFile, "utf8"), previousBytes);
+    assert.equal(NodeFS.readFileSync(alias, "utf8"), previousBytes);
     assert.isFalse(NodeFS.existsSync(previousRunnerFile));
     assert.equal(record(stateDir, "pid"), `${sleepPid}\n`);
     assert.equal(record(stateDir, "port"), `${port}\n`);
