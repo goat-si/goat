@@ -273,6 +273,119 @@ export function registerBackendStopTests({
     ),
   );
 
+  it.effect("closing an instance bounds a stuck spawn and releases a late child", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const owner = yield* Scope.make("sequential");
+        const entered = yield* Deferred.make<void>();
+        const allowSpawn = yield* Deferred.make<void>();
+        const released = yield* Deferred.make<void>();
+        const exited = yield* Deferred.make<void>();
+        const drained = yield* Deferred.make<void>();
+        let loggedOutput = "";
+        const records: Array<{ message: string; level: string; details: string }> = [];
+        const layer = Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make(() =>
+            Effect.gen(function* () {
+              const scope = yield* Scope.Scope;
+              yield* Deferred.succeed(entered, undefined);
+              yield* Deferred.await(allowSpawn);
+              yield* Scope.addFinalizer(
+                scope,
+                Deferred.succeed(released, undefined).pipe(
+                  Effect.andThen(Deferred.succeed(exited, undefined)),
+                  Effect.asVoid,
+                ),
+              );
+              return makeProcess({
+                stdout: Stream.make(new TextEncoder().encode("late output")).pipe(
+                  Stream.ensuring(Deferred.succeed(drained, undefined).pipe(Effect.asVoid)),
+                ),
+                exitCode: Deferred.await(exited).pipe(Effect.as(ChildProcessSpawner.ExitCode(0))),
+              });
+            }),
+          ),
+        );
+        const instance = yield* makeTestInstance({
+          spawnerLayer: layer,
+          backendOutputLog: {
+            writeOutputChunk: (_stream, chunk) =>
+              Effect.sync(() => {
+                loggedOutput += new TextDecoder().decode(chunk);
+              }),
+            recordStop: (record) =>
+              Effect.sync(() => {
+                records.push(record);
+              }),
+          },
+        }).pipe(Scope.provide(owner));
+        yield* instance.start;
+        yield* Deferred.await(entered);
+        const closing = yield* Scope.close(owner, Exit.void).pipe(
+          Effect.forkChild({ startImmediately: true }),
+        );
+        yield* TestClock.adjust("5 seconds");
+        const closedBeforeSpawn = closing.pollUnsafe() !== undefined;
+        const warning = records.find(
+          (record) => record.message === "backend spawn still pending at stop",
+        );
+        yield* Deferred.succeed(allowSpawn, undefined);
+        yield* Fiber.join(closing);
+        yield* Deferred.await(released);
+        yield* Deferred.await(drained);
+        assert.equal(loggedOutput, "");
+        assert.isTrue(closedBeforeSpawn);
+        assert.equal(warning?.level, "WARN");
+        assert.include(warning?.details ?? "", "pid=pending");
+        assert.include(warning?.details ?? "", "reason=instance-closed");
+      }),
+    ),
+  );
+
+  it.effect("a failed spawn does not delay a concurrent stop", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const entered = yield* Deferred.make<void>();
+        const allowFailure = yield* Deferred.make<void>();
+        const cause = PlatformError.systemError({
+          _tag: "Unknown",
+          module: "ChildProcess",
+          method: "spawn",
+          cause: new Error("spawn failed"),
+        });
+        const records: string[] = [];
+        const layer = Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make(() =>
+            Deferred.succeed(entered, undefined).pipe(
+              Effect.andThen(Deferred.await(allowFailure)),
+              Effect.andThen(Effect.fail(cause)),
+            ),
+          ),
+        );
+        const instance = yield* makeTestInstance({
+          spawnerLayer: layer,
+          backendOutputLog: {
+            recordStop: ({ message }) =>
+              Effect.sync(() => {
+                records.push(message);
+              }),
+          },
+        });
+        yield* instance.start;
+        yield* Deferred.await(entered);
+        const stopping = yield* instance
+          .stop("quit")
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.succeed(allowFailure, undefined);
+        yield* Fiber.join(stopping);
+        assert.isFalse((yield* instance.snapshot).desiredRunning);
+        assert.notInclude(records, "backend spawn still pending at stop");
+      }),
+    ),
+  );
+
   it.effect("does not release a process before its spawn finishes", () =>
     Effect.scoped(
       Effect.gen(function* () {

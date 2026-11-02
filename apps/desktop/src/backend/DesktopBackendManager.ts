@@ -46,6 +46,7 @@ import * as DesktopTelemetryPublisher from "../telemetry/DesktopTelemetryPublish
 import * as DesktopBrowserHost from "../preview/DesktopBrowserHost.ts";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
 
+const BACKEND_SPAWN_SETTLE_TIMEOUT = Duration.seconds(5);
 const STARTUP_FAILURE_RESTART_ATTEMPTS = 3;
 const MAX_PREFLIGHT_FAILURE_ATTEMPTS = 5;
 export interface DesktopBackendSnapshot {
@@ -164,16 +165,21 @@ const withActiveRun =
 const closeRun = (
   run: ActiveBackendRun,
   parentScope: Scope.Scope,
+  onSpawnPending: Effect.Effect<void>,
   options?: { readonly timeout?: Duration.Duration },
 ): Effect.Effect<boolean> => {
   const waitForFiber = Option.match(run.fiber, {
     onNone: () => Effect.void,
     onSome: (fiber) => Fiber.await(fiber).pipe(Effect.asVoid),
   });
-  const close = Deferred.await(run.spawnReady).pipe(
-    Effect.andThen(Scope.close(run.scope, Exit.void)),
-    Effect.andThen(waitForFiber),
-  );
+  const close = Effect.gen(function* () {
+    const settled = yield* Deferred.await(run.spawnReady).pipe(
+      Effect.timeoutOption(BACKEND_SPAWN_SETTLE_TIMEOUT),
+    );
+    if (Option.isNone(settled)) yield* onSpawnPending;
+    yield* Scope.close(run.scope, Exit.void);
+    if (Option.isSome(settled)) yield* waitForFiber;
+  });
   const timeout = options?.timeout;
 
   if (!timeout) {
@@ -576,6 +582,8 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
           onStarted: Effect.fn("desktop.backendInstance.onStarted")(function* (pid) {
             yield* mutex.withPermits(1)(
               Effect.gen(function* () {
+                const activeBeforeStart = Option.getOrUndefined((yield* Ref.get(state)).active);
+                if (activeBeforeStart?.id !== runId) return;
                 yield* updateActiveRun(runId, (run) => ({ ...run, pid: Option.some(pid) }));
                 yield* startupFailure.reset;
                 yield* backendOutputLog.beginSession({
@@ -675,9 +683,15 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
             },
           ),
           onOutput: (streamName, chunk) =>
-            startupFailure
-              .append(streamName, chunk)
-              .pipe(Effect.andThen(backendOutputLog.writeOutputChunk(streamName, chunk))),
+            Ref.get(state).pipe(
+              Effect.flatMap((current) =>
+                Option.getOrUndefined(current.active)?.id === runId
+                  ? startupFailure
+                      .append(streamName, chunk)
+                      .pipe(Effect.andThen(backendOutputLog.writeOutputChunk(streamName, chunk)))
+                  : Effect.void,
+              ),
+            ),
         }).pipe(
           Effect.ensuring(Deferred.succeed(spawnReady, undefined).pipe(Effect.asVoid)),
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
@@ -690,7 +704,8 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
           Effect.ensuring(Scope.close(runScope, Exit.void).pipe(Effect.ignore)),
         );
 
-        const fiber = yield* Effect.forkIn(program, runsScope);
+        // A pending spawn must outlive instance teardown to release any late child.
+        const fiber = yield* Effect.forkDetach(program);
         yield* updateActiveRun(runId, (run) => ({
           ...run,
           fiber: Option.some(fiber),
@@ -829,7 +844,16 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
       // The enclosing operation owns the span for this inline handler.
       onSome: Effect.fnUntraced(function* (run) {
         const waitStarted = yield* Clock.monotonicTimeNanos;
-        const closed = yield* closeRun(run, runsScope, options);
+        const closed = yield* closeRun(
+          run,
+          runsScope,
+          backendOutputLog.recordStop({
+            message: "backend spawn still pending at stop",
+            level: "WARN",
+            details: `pid=pending reason=${reason}`,
+          }),
+          options,
+        );
         if (!closed) {
           const waitedMs = Number(((yield* Clock.monotonicTimeNanos) - waitStarted) / 1_000_000n);
           yield* backendOutputLog.recordStop({
