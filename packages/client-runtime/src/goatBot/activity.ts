@@ -6,18 +6,17 @@ import {
   type OrchestrationV2Run,
   type OrchestrationV2RuntimeRequest,
   type OrchestrationV2ThreadShell,
-  type OrchestrationV2TurnItem,
 } from "@goat/contracts";
-import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import type { Atom, AtomRegistry } from "effect/reactivity";
 
 import type { GoatBotItemReaders } from "./rows.ts";
 
 /**
- * What GOAT Bot's "..." says: reading the newest message, or the step of the work it acknowledged.
- * Task observations always count. Worker thread activity counts only when it provably belongs to
- * the task's run, because a GOAT Bot session thread serves several tasks one run at a time.
+ * What GOAT Bot's "..." says: reading the newest message, or how the work it acknowledged is going.
+ * It reads the task's own updates, and from the worker only run status and pending requests, never
+ * tool calls. Worker state counts only when it provably belongs to the task's run, because a GOAT
+ * Bot session thread serves several tasks one run at a time.
  */
 export interface GoatBotActivity {
   readonly state: "reading" | "working";
@@ -27,15 +26,8 @@ export interface GoatBotActivity {
 /** The task the working indicator follows and its newest update in the conversation. */
 export interface GoatBotActivityTask {
   readonly chip: ChannelTaskChip;
-  readonly update: GoatBotStep | null;
+  readonly update: string | null;
 }
-
-interface GoatBotStep {
-  readonly text: string;
-  readonly at: number;
-}
-
-type StepItem = Pick<OrchestrationV2TurnItem, "type" | "runId" | "status" | "title" | "updatedAt">;
 
 /** What this client already holds for a worker thread. Nothing is loaded for the indicator. */
 export interface GoatBotWorkerObservation {
@@ -49,7 +41,6 @@ export interface GoatBotWorkerObservation {
     readonly runtimeRequests: ReadonlyArray<
       Pick<OrchestrationV2RuntimeRequest, "nodeId" | "kind" | "status">
     >;
-    readonly turnItems: ReadonlyArray<StepItem>;
   } | null;
 }
 
@@ -74,15 +65,6 @@ const RUN_STATUS_TEXT: Partial<Record<string, string>> = {
   running: "Working",
   waiting: "Waiting on other work",
 };
-const NOT_STEPS: ReadonlySet<OrchestrationV2TurnItem["type"]> = new Set([
-  "user_message",
-  "assistant_message",
-  "reasoning",
-  "notification",
-]);
-
-const timeOf = (item: Pick<OrchestrationV2TurnItem, "updatedAt">) =>
-  DateTime.toEpochMillis(item.updatedAt);
 
 /**
  * The newest acknowledged task still outstanding. An acknowledgement is a bot reply to one of the
@@ -94,7 +76,7 @@ export function goatBotActivityTask(input: {
 }): GoatBotActivityTask | null {
   const chips = new Map<string, ChannelTaskChip>();
   const acknowledged = new Map<string, number>();
-  const updates = new Map<string, GoatBotStep>();
+  const updates = new Map<string, string>();
   const inputs = new Set<string>();
   input.visibleTurnItems.forEach(({ item }, index) => {
     if (item.type === "notification" && item.ledgerTask !== undefined) {
@@ -120,7 +102,7 @@ export function goatBotActivityTask(input: {
       (presentation.tone === "reply" || presentation.tone === "status") &&
       item.text.trim() !== ""
     ) {
-      updates.set(taskId, { text: item.text, at: timeOf(item) });
+      updates.set(taskId, item.text);
     }
   });
   let newest: { readonly chip: ChannelTaskChip; readonly index: number } | null = null;
@@ -133,7 +115,7 @@ export function goatBotActivityTask(input: {
   return { chip: newest.chip, update: updates.get(newest.chip.taskId) ?? null };
 }
 
-/** Reading wins; otherwise the followed task's most specific step. */
+/** Reading wins; otherwise what waits on the person, then the followed task's newest update. */
 export function goatBotActivity(input: {
   readonly reading: boolean;
   readonly task: GoatBotActivityTask | null;
@@ -143,17 +125,11 @@ export function goatBotActivity(input: {
   if (input.task === null) return null;
   const { chip, update } = input.task;
   const run = runEvidence(chip, input.worker);
-  const step =
-    update !== null && run.step !== null
-      ? run.step.at > update.at
-        ? run.step
-        : update
-      : (update ?? run.step);
   const summary = chip.summary?.trim() ? chip.summary : null;
   const text =
     attentionText(chip) ??
     run.request ??
-    step?.text ??
+    update ??
     summary ??
     (run.status === null ? undefined : RUN_STATUS_TEXT[run.status]) ??
     TASK_STATUS_TEXT[chip.status] ??
@@ -184,15 +160,14 @@ function requestText(kind: string, blocking: boolean | undefined): string | null
 interface RunEvidence {
   readonly status: string | null;
   readonly request: string | null;
-  readonly step: GoatBotStep | null;
 }
 
-const NO_EVIDENCE: RunEvidence = { status: null, request: null, step: null };
+const NO_EVIDENCE: RunEvidence = { status: null, request: null };
 
 /**
- * A dedicated worker (no run id, not a session thread) is the task's own thread, so its shell and
- * resident items describe the task. A shared thread counts only through resident records that name
- * the task's run; the shell's run fields may already describe another task's run.
+ * A dedicated worker (no run id, not a session thread) is the task's own thread, so its shell
+ * describes the task. A shared thread counts only through resident records that name the task's
+ * run; the shell's run fields may already describe another task's run.
  */
 function runEvidence(
   chip: ChannelTaskChip,
@@ -209,7 +184,6 @@ function runEvidence(
     return {
       status: shell?.activityRunStatus ?? null,
       request: request === null ? null : requestText(request.kind, request.blocking),
-      step: projection === null ? null : currentStep(projection.turnItems, null),
     };
   }
   if (projection === null) return NO_EVIDENCE;
@@ -222,19 +196,7 @@ function runEvidence(
   return {
     status: run.status,
     request: request === undefined ? null : requestText(request.kind, undefined),
-    step: currentStep(projection.turnItems, runId),
   };
-}
-
-function currentStep(items: ReadonlyArray<StepItem>, runId: string | null): GoatBotStep | null {
-  const item = items.findLast(
-    (entry) =>
-      !NOT_STEPS.has(entry.type) &&
-      (entry.status === "pending" || entry.status === "running" || entry.status === "waiting") &&
-      (runId === null || entry.runId === runId) &&
-      (entry.title ?? "").trim() !== "",
-  );
-  return item === undefined ? null : { text: item.title ?? "", at: timeOf(item) };
 }
 
 function clip(text: string): string {

@@ -252,36 +252,38 @@ describe("goatBotActivity", () => {
         runs: [],
         nodes: [],
         runtimeRequests: [],
-        turnItems: [tool("Run tests", null, 9)],
       },
     };
     expect(working(acknowledged(task), worker)?.text).toBe(text);
   });
 
-  it("shows the newer of the task's own update and the dedicated worker's current step", () => {
-    const task = chip("task-1", { summary: "Summary" });
+  it.each([
+    ["the GOAT Bot session", { environmentId: env, threadId: session, runId: runA }],
+    ["a dedicated worker", { environmentId: env, threadId: ThreadId.make("worker-task-1") }],
+  ] as const)("never shows %s's tool calls, only the task's own updates", (_, worker) => {
+    const task = chip("task-1", { summary: "Summary", worker });
+    const toolCalls = ["goat_call", "Bash", "provider.list", "thread.report_result"].map(
+      (title, index) => tool(title, worker.threadId === session ? runA : null, 5 + index),
+    );
+    const projection = {
+      runs: [{ id: runA, status: "running" as const }],
+      nodes: [],
+      runtimeRequests: [],
+      turnItems: [...toolCalls, tool("Read logs", runA, 9, "waiting", "subagent")],
+    };
+    const observation: GoatBotWorkerObservation = {
+      shell: { activityRunStatus: "running", pendingRuntimeRequest: null },
+      projection,
+    };
+    expect(working(acknowledged(task), observation)?.text).toBe("Summary");
     const update: Entry = {
       kind: "bot",
       text: "Checked the first disk",
       taskId: "task-1",
-      second: 5,
+      channelKind: "status",
+      second: 3,
     };
-    const items = acknowledged(task, update);
-    const withItems = (...turnItems: ReadonlyArray<ReturnType<typeof tool>>) => ({
-      shell: { activityRunStatus: "running" as const, pendingRuntimeRequest: null },
-      projection: { runs: [], nodes: [], runtimeRequests: [], turnItems },
-    });
-    expect(working(items, withItems(tool("Run df -h", null, 6)))?.text).toBe("Run df -h");
-    expect(working(items, withItems(tool("Run df -h", null, 4)))?.text).toBe(
-      "Checked the first disk",
-    );
-    expect(working(items, withItems(tool("Read logs", null, 6, "waiting", "subagent")))?.text).toBe(
-      "Read logs",
-    );
-    expect(
-      working(acknowledged(task), withItems(tool("Run df -h", null, 6, "completed")))?.text,
-    ).toBe("Summary");
-    expect(working(acknowledged(task), withItems(tool("  ", null, 6)))?.text).toBe("Summary");
+    expect(working(acknowledged(task, update), observation)?.text).toBe("Checked the first disk");
   });
 
   it("falls back to the dedicated worker's run, then to the task's status", () => {
@@ -323,9 +325,18 @@ describe("goatBotActivity", () => {
     const taskA = chip("task-a", {
       worker: { environmentId: env, threadId: session, runId: runA },
     });
-    const observation = (
-      aItems: ReadonlyArray<ReturnType<typeof tool>>,
-    ): GoatBotWorkerObservation => ({
+    const projection = {
+      runs: [
+        { id: runA, status: "waiting" as const },
+        { id: runB, status: "running" as const },
+      ],
+      nodes: [{ id: NodeId.make("node-b"), runId: runB }],
+      runtimeRequests: [
+        { nodeId: NodeId.make("node-b"), kind: "command" as const, status: "pending" as const },
+      ],
+      turnItems: [tool("Check logs", runA, 5, "waiting", "subagent"), tool("Edit files", runB, 8)],
+    };
+    const observation: GoatBotWorkerObservation = {
       shell: {
         activityRunStatus: "running",
         pendingRuntimeRequest: {
@@ -334,21 +345,9 @@ describe("goatBotActivity", () => {
           createdAt: DateTime.makeUnsafe(at(8)),
         },
       },
-      projection: {
-        runs: [
-          { id: runA, status: "waiting" },
-          { id: runB, status: "running" },
-        ],
-        nodes: [{ id: NodeId.make("node-b"), runId: runB }],
-        runtimeRequests: [{ nodeId: NodeId.make("node-b"), kind: "command", status: "pending" }],
-        turnItems: [...aItems, tool("Edit files", runB, 8)],
-      },
-    });
-    const items = acknowledged(taskA);
-    expect(
-      working(items, observation([tool("Check logs", runA, 5, "waiting", "subagent")]))?.text,
-    ).toBe("Check logs");
-    expect(working(items, observation([]))?.text).toBe("Waiting on other work");
+      projection,
+    };
+    expect(working(acknowledged(taskA), observation)?.text).toBe("Waiting on other work");
   });
 
   it("counts a session request only when the request's own run is the task's", () => {
@@ -363,7 +362,6 @@ describe("goatBotActivity", () => {
         runtimeRequests: [
           { nodeId: NodeId.make("node-1"), kind: "command" as const, status: "pending" as const },
         ],
-        turnItems: [],
       },
     });
     expect(working(acknowledged(taskA), projection(runB))?.text).toBe("Working");
@@ -384,7 +382,6 @@ describe("goatBotActivity", () => {
         runs: [{ id: runB, status: "running" }],
         nodes: [],
         runtimeRequests: [],
-        turnItems: [tool("Edit files", runB, 8)],
       },
     };
     const noRunId = chip("task-a", {
@@ -412,7 +409,6 @@ describe("goatBotActivity", () => {
         runs: [],
         nodes: [],
         runtimeRequests: [],
-        turnItems: [tool("Local tool", null, 9)],
       },
     };
     expect(working(acknowledged(remote), local)?.text).toBe("Copying files on mac-studio");
