@@ -79,6 +79,7 @@ const superviseFailedReplacement = async (
       `import * as fs from "node:fs";`,
       `import { tryAcquireServerOwnerLock } from ${lockModuleUrl};`,
       `import { serverOwnerTag } from ${tagModuleUrl};`,
+      `fs.appendFileSync(${JSON.stringify(`${stateDir}/working-directories`)}, process.cwd() + "\\n");`,
       `if (process.env.GOAT_SSH_REPLACEMENT_ID) {`,
       // The replacement tags itself the way a real server does; another server uses its own tag.
       target === "foreign"
@@ -114,11 +115,19 @@ const superviseFailedReplacement = async (
     result,
     ran: NodeFS.existsSync(`${dbPath}.replacement-ran`),
     database: NodeFS.readFileSync(dbPath, "utf8"),
+    workingDirectories: NodeFS.readFileSync(NodePath.join(stateDir, "working-directories"), "utf8")
+      .trim()
+      .split("\n"),
     record: readSshReplacementRecord(
       NodeFS.readFileSync(NodePath.join(stateDir, SSH_REPLACEMENT_RECORD_FILE), "utf8"),
     ),
   };
 };
+
+it("starts replacement and rollback from the home directory", async () => {
+  const { workingDirectories } = await superviseFailedReplacement("trial");
+  assert.deepEqual(workingDirectories, [NodeOS.homedir(), NodeOS.homedir()]);
+});
 
 it("restores the backup over a failed replacement's own writes", async () => {
   const { result, database, ran, record } = await superviseFailedReplacement("trial");
