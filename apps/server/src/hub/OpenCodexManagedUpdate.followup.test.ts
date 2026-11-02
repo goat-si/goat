@@ -8,6 +8,8 @@ import * as Path from "effect/Path";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as ServerConfig from "../config.ts";
+import * as AutomationHold from "../automationHold.ts";
+import * as Scheduler from "../scheduling/Scheduler.ts";
 import * as TestClock from "effect/testing/TestClock";
 
 import { decodeState, encodeState } from "./ocxUpdateWindow.ts";
@@ -230,6 +232,37 @@ it.layer(NodeServices.layer)("OpenCodex SSH replacement follow-up", (it) => {
       yield* TestClock.adjust(40 * MINUTE);
       yield* update.check;
       expect(fleet.holds).toBe(0);
+    }),
+  );
+  it.effect("releases a persisted pending Home at the ceiling while automation is held", () =>
+    Effect.gen(function* () {
+      const fleet = makeFleet({ homeOwnership: "adopted" });
+      fleet.orchestrated = true;
+      fleet.applyResult = "uncertain";
+      fleet.versions.set("mac-studio", "2.90.0");
+      const { update, baseDir } = yield* setup(fleet);
+      yield* update.check;
+      yield* TestClock.adjust(50 * MINUTE - 5_000);
+      fleet.holds = 0;
+      fleet.homeHolds = 0;
+      const hold = yield* AutomationHold.makeInMemory({
+        reason: "channel-copy",
+        heldAt: "2026-10-25T00:00:00.000Z",
+      });
+      yield* Effect.gen(function* () {
+        const scheduler = yield* Scheduler.Scheduler;
+        yield* service(fleet, baseDir, scheduler);
+        expect(fleet.holds).toBe(1);
+        const reads = fleet.planReads;
+        const applies = fleet.applyCalls;
+        yield* TestClock.adjust(5_000);
+        expect(fleet.holds).toBe(0);
+        expect(fleet.planReads).toBe(reads);
+        expect(fleet.applyCalls).toBe(applies);
+      }).pipe(
+        Effect.provide(Scheduler.layer),
+        Effect.provideService(AutomationHold.AutomationHold, hold),
+      );
     }),
   );
 });

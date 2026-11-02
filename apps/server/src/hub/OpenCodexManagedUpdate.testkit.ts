@@ -122,7 +122,7 @@ const snapshotOf = (fleet: Fleet, alias: string | null): OpenCodexInventorySnaps
   };
 };
 
-const build = (fleet: Fleet, baseDir: string) =>
+const build = (fleet: Fleet, baseDir: string, scheduler?: Scheduler.Scheduler["Service"]) =>
   Layer.build(
     ManagedUpdate.layerService.pipe(
       Layer.provide(
@@ -275,7 +275,11 @@ const build = (fleet: Fleet, baseDir: string) =>
           getEnvironmentId: Effect.succeed(EnvironmentId.make("hub-fixture")),
         }),
       ),
-      Layer.provide(Layer.mock(Scheduler.Scheduler)({ register: () => Effect.void })),
+      Layer.provide(
+        scheduler === undefined
+          ? Layer.mock(Scheduler.Scheduler)({ register: () => Effect.void })
+          : Layer.succeed(Scheduler.Scheduler, scheduler),
+      ),
       Layer.provide(
         Layer.mock(SshRuntimeAutoUpdate)({
           supported: true,
@@ -289,8 +293,9 @@ const build = (fleet: Fleet, baseDir: string) =>
 export const service = Effect.fn("OpenCodexManagedUpdateTest.service")(function* (
   fleet: Fleet,
   baseDir: string,
+  scheduler?: Scheduler.Scheduler["Service"],
 ) {
-  const context = yield* build(fleet, baseDir);
+  const context = yield* build(fleet, baseDir, scheduler);
   return yield* ManagedUpdate.OpenCodexManagedUpdate.pipe(Effect.provideContext(context));
 });
 

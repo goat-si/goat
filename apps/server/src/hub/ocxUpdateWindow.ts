@@ -197,6 +197,24 @@ export const restoreAdmission = Effect.fn("OpenCodexUpdateWindow.restoreAdmissio
   }
 });
 
+export const releaseOverrun = Effect.fn("OpenCodexUpdateWindow.releaseOverrun")(function* (
+  current: State,
+  host: Host,
+  retainedHome: Ref.Ref<AdmissionOwnership>,
+  now: number,
+) {
+  const entry = current.window?.orchestrated?.[""];
+  if (
+    entry === undefined ||
+    entry.settled ||
+    (!entry.pending && !entry.uncertain) ||
+    now < entry.notAfter + entry.boundMs + OVERRUN_GRACE_MS
+  )
+    return false;
+  yield* releaseRetained(host, retainedHome).pipe(Effect.uninterruptible);
+  return true;
+});
+
 export const holdAffected = <A, E>(
   host: Host,
   retainedHome: Ref.Ref<AdmissionOwnership>,

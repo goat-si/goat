@@ -35,6 +35,7 @@ import {
   applyOrchestratedStep,
   holdAffected,
   recoverUncertain,
+  releaseOverrun,
   restoreAdmission,
   withRecords,
   withWindow,
@@ -68,6 +69,7 @@ export class OpenCodexManagedUpdate extends Context.Service<
     readonly status: Effect.Effect<OpenCodexUpdateStatus | undefined>;
     /** The scheduler's due work: one plan and, when eligible, one window. */
     readonly check: Effect.Effect<void>;
+    readonly admissionGuard: Effect.Effect<void>;
     /**
      * A person asked from the update dialog: the same check without waiting out the retry timer.
      * The staged rollout, idle wait and probation still apply.
@@ -654,12 +656,41 @@ const make = Effect.gen(function* () {
       ? { ...current, sync: synced }
       : current;
   });
+  const admissionGuard = checking.withPermit(
+    Effect.gen(function* () {
+      const current = yield* readState;
+      if (current === undefined) return;
+      yield* restoreAdmission(current, host, retainedHome);
+      const now = yield* Clock.currentTimeMillis;
+      if (!(yield* releaseOverrun(current, host, retainedHome, now))) return;
+      const window = current.window;
+      const entry = window?.orchestrated?.[""];
+      if (
+        window === undefined ||
+        entry === undefined ||
+        current.members.find((member) => member.alias === null)?.reason === "apply-overrun"
+      )
+        return;
+      yield* Ref.set(state, current);
+      yield* record(
+        { alias: null, fromVersion: entry.fromVersion },
+        window.targetVersion,
+        "rollback-failed",
+        "apply-overrun",
+      );
+      yield* Effect.logWarning("opencodex.update.apply-overrun", { alias: null });
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("opencodex.update.admission-guard-failed", { cause }),
+      ),
+    ),
+  );
   const check = checking.withPermit(runCheck);
   const checkNow = checking
     .withPermit(Ref.set(nextAt, 0).pipe(Effect.andThen(runCheck)))
     .pipe(Effect.andThen(readStatus), Effect.withSpan("OpenCodexManagedUpdate.checkNow"));
 
-  return OpenCodexManagedUpdate.of({ status: readStatus, check, checkNow });
+  return OpenCodexManagedUpdate.of({ status: readStatus, check, checkNow, admissionGuard });
 });
 
 /**
@@ -672,6 +703,9 @@ export const layerService = Layer.effect(
     const service = yield* make;
     const scheduler = yield* Scheduler.Scheduler;
     yield* scheduler.register("opencodex-managed-update", service.check);
+    yield* scheduler.register("opencodex-update-admission-guard", service.admissionGuard, {
+      whileAutomationHeld: "run",
+    });
     return service;
   }),
 );
