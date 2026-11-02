@@ -26,6 +26,7 @@ const scope: McpInvocationScope = {
 };
 
 const scriptedOcx = Effect.fn("OpenCodexOcxLeaseTest.scriptedOcx")(function* (fleet: Fleet) {
+  const testScope = yield* Effect.scope;
   const lease = yield* Ref.make<"sync" | "update" | undefined>(undefined);
   const syncStarted = yield* Deferred.make<void>();
   const syncRelease = yield* Deferred.make<void>();
@@ -78,7 +79,10 @@ const scriptedOcx = Effect.fn("OpenCodexOcxLeaseTest.scriptedOcx")(function* (fl
       fleet.inFlight = true;
       yield* Deferred.succeed(updateStarted, undefined);
       if (script.loseApplyReply) {
-        yield* Effect.forkScoped(Deferred.await(updateRelease).pipe(Effect.ensuring(endUpdate)));
+        yield* Deferred.await(updateRelease).pipe(
+          Effect.ensuring(endUpdate),
+          Effect.forkIn(testScope),
+        );
         return "uncertain" as const;
       }
       return yield* Effect.gen(function* () {

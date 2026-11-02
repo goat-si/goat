@@ -471,13 +471,13 @@ const make = Effect.gen(function* () {
 
   const runCheck = Effect.gen(function* () {
     const now = yield* Clock.currentTimeMillis;
-    if (now < (yield* Ref.get(nextAt))) return;
-    yield* Ref.set(nextAt, now + RETRY_INTERVAL_MS);
-    const configured = yield* settings.getSettings.pipe(Effect.option);
     const stored = yield* readState;
     if (stored === undefined)
       return yield* publish(now, { decision: "wait", reason: "state-unreadable" });
     yield* restoreAdmission(stored, host, retainedHome);
+    if (now < (yield* Ref.get(nextAt))) return;
+    yield* Ref.set(nextAt, now + RETRY_INTERVAL_MS);
+    const configured = yield* settings.getSettings.pipe(Effect.option);
     yield* Ref.set(state, stored);
     yield* sync.markUpdating(stored.window !== undefined);
     const replaced = yield* sshRuntime.replacedInto;

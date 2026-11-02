@@ -7,7 +7,7 @@ import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
 
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
-import { OpenCodexUpdateHost } from "./OpenCodexUpdateHost.ts";
+import { OpenCodexUpdateHost, type OpenCodexRelease } from "./OpenCodexUpdateHost.ts";
 import {
   applyOrchestratedStep,
   recoverUncertain,
@@ -68,7 +68,7 @@ const fixture = Effect.fn("OpenCodexWindowTest.fixture")(function* () {
     },
   });
   const host = OpenCodexUpdateHost.of({
-    latestRelease: Effect.succeed(undefined),
+    latestRelease: Effect.sync((): OpenCodexRelease | undefined => undefined),
     member: (alias) =>
       Effect.succeed({
         alias,
