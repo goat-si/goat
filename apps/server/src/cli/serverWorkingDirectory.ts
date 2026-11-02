@@ -53,7 +53,7 @@ export function resolveFromOriginalWorkingDirectory(value: string, original?: st
   return NodePath.resolve(original, trimmed);
 }
 
-export function serverWorkingDirectory(home: string): string {
+export function serverWorkingDirectory(home: string, fallbackPath = home): string {
   try {
     if (NodeFS.statSync(home).isDirectory()) {
       NodeFS.accessSync(home, NodeFS.constants.X_OK);
@@ -62,5 +62,5 @@ export function serverWorkingDirectory(home: string): string {
   } catch {
     // Fall back when home cannot be searched.
   }
-  return NodePath.parse(home).root || "/";
+  return NodePath.parse(fallbackPath).root || "/";
 }

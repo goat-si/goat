@@ -151,6 +151,7 @@ const spawnWindowsDetached = (
   argv: ReadonlyArray<string>,
   logFile: string,
   env: Readonly<Record<string, string>>,
+  cwd: string,
 ) => {
   const result = NodeChildProcess.spawnSync(
     "powershell.exe",
@@ -167,6 +168,7 @@ const spawnWindowsDetached = (
         ...process.env,
         GOAT_SPAWN_ARGS: argv.join("\n"),
         GOAT_SPAWN_LOG: logFile,
+        GOAT_SPAWN_CWD: cwd,
         GOAT_SPAWN_ENV: Object.entries(env)
           .map(([name, value]) => `${name}=${value}`)
           .join("\n"),
@@ -277,7 +279,12 @@ const superviseReplacement = async (
         pid =
           executable === undefined
             ? undefined
-            : spawnWindowsDetached([executable, ...args], input.logFile, env);
+            : spawnWindowsDetached(
+                [executable, ...args],
+                input.logFile,
+                env,
+                serverWorkingDirectory(process.env.USERPROFILE ?? "", input.baseDir),
+              );
       } else {
         const log = NodeFS.openSync(input.logFile, "a");
         try {
