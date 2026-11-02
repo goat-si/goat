@@ -18,6 +18,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Fiber from "effect/Fiber";
 import * as Deferred from "effect/Deferred";
+import * as TestClock from "effect/testing/TestClock";
 import type * as NodeWorkerThreads from "node:worker_threads";
 import { vi } from "vite-plus/test";
 import { runMigrations } from "../persistence/Migrations.ts";
@@ -202,6 +203,7 @@ it.effect.each([false, true])(
         const beforeRow = yield* sql<{
           updated_at: string;
         }>`SELECT updated_at FROM orchestration_v2_projection_threads WHERE thread_id = ${threadId}`;
+        yield* TestClock.adjust("5 seconds");
         yield* sql`SELECT 1`.pipe(NodeSqliteClient.readOnly);
         const reader = workers.at(-1)!;
         const sent = yield* Deferred.make<void>();
