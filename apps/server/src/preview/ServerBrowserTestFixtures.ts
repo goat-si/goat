@@ -2,7 +2,7 @@
 import * as NodeEvents from "node:events";
 import { vi } from "vite-plus/test";
 
-export type MockFrame = ReturnType<typeof makeFrame>;
+type MockFrame = ReturnType<typeof makeFrame>;
 
 /** What the next copy shortcut copies: the page's selection, or the focused frame's. */
 export const mockCopy: { page: string; key: string; focusedFrame: MockFrame | null } = {
@@ -19,6 +19,26 @@ export function makeFrame() {
     recording: Promise.withResolvers<void>(),
   };
   return frame;
+}
+
+/** A ref-click locator: a 10px box at the origin whose probe finds it on top at its centre. */
+export function refClickTarget() {
+  const box = async () => ({ x: 0, y: 0, width: 10, height: 10 });
+  const evaluate = async () => ({
+    rects: [{ x: 0, y: 0, width: 10, height: 10 }],
+    origin: { x: 0, y: 0 },
+    border: { x: 0, y: 0 },
+    inside: true,
+  });
+  const element = { boundingBox: box, waitForElementState: box, dispose: box, evaluate };
+  const handle = { ...element, ownerFrame: async () => null };
+  return {
+    scrollIntoViewIfNeeded: box,
+    boundingBox: box,
+    click: vi.fn(async (_options?: unknown) => {}),
+    elementHandle: async () => handle,
+    count: async () => 1,
+  };
 }
 
 const PNG_HEADER = (() => {
