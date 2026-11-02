@@ -292,7 +292,7 @@ const make = Effect.gen(function* () {
     return true;
   });
 
-  const windowOps = { host, retainedHome, nextAt, mutate, record, rollBack, healthProof };
+  const windowOps = { host, sync, retainedHome, nextAt, mutate, record, rollBack, healthProof };
 
   /**
    * Home first, then each Child; any failure restores every member this window moved. Every

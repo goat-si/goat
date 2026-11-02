@@ -7,6 +7,7 @@ import * as Ref from "effect/Ref";
 import type * as PlatformError from "effect/PlatformError";
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import type { OpenCodexUpdateHost } from "./OpenCodexUpdateHost.ts";
+import type { OpenCodexSync } from "./OpenCodexSync.ts";
 import { failedTargetKey } from "./opencodexUpdatePlan.ts";
 import type { OpenCodexUpdateStep } from "./opencodexUpdatePlan.ts";
 
@@ -143,6 +144,7 @@ type Step = Pick<OpenCodexUpdateStep, "alias" | "fromVersion">;
 type Failure = PlatformError.PlatformError;
 type WindowOps = {
   readonly host: Host;
+  readonly sync: Context.Service.Shape<typeof OpenCodexSync>;
   readonly retainedHome: Ref.Ref<AdmissionOwnership>;
   readonly nextAt: Ref.Ref<number>;
   readonly mutate: (change: (current: State, at: number) => State) => Effect.Effect<void, Failure>;
@@ -355,7 +357,7 @@ export const recoverUncertain = Effect.fn("OpenCodexUpdateWindow.recover")(funct
   now: number,
   scope: McpInvocationScope,
 ) {
-  const { host, retainedHome, nextAt, mutate, record, rollBack, healthProof } = ops;
+  const { host, sync, retainedHome, nextAt, mutate, record, rollBack, healthProof } = ops;
   const window = current.window;
   if (window === undefined) return undefined;
   const closedOr = (done: boolean): Effect.Effect<"closed" | "restoring"> =>
@@ -452,76 +454,88 @@ export const recoverUncertain = Effect.fn("OpenCodexUpdateWindow.recover")(funct
       return "uncertain" as const;
     }
     const restoring = version === entry.fromVersion;
-    const proof =
+    const forward =
       !restoring &&
       version === window.targetVersion &&
-      window.steps.at(-1)?.alias === uncertain.alias
-        ? yield* healthProof(uncertain.alias, version, scope)
-        : undefined;
-    const phase = restoring
-      ? undefined
-      : proof === undefined
-        ? ("rollback-failed" as const)
-        : ("probation" as const);
-    const settled = {
-      fromVersion: entry.fromVersion,
-      planToken: entry.planToken,
-      notAfter: entry.notAfter,
-      boundMs: entry.boundMs,
-      settled: true as const,
-    };
-    yield* Effect.gen(function* () {
-      yield* releaseHome;
-      yield* mutate((latest, at) => {
-        const recorded =
-          phase === undefined
-            ? latest
-            : withRecords(
-                latest,
-                at,
-                [uncertain],
-                window.targetVersion,
-                phase,
-                phase === "rollback-failed" ? "apply-uncertain" : undefined,
-              );
-        const withFailures = restoring
-          ? {
-              ...recorded,
-              failedTargets: {
-                ...recorded.failedTargets,
-                ...Object.fromEntries(
-                  window.steps
-                    .filter((step) => step.via === undefined || step.started === true)
-                    .map(({ alias }) => [failedTargetKey(alias), window.targetVersion]),
-                ),
-              },
-            }
-          : recorded;
-        return withWindow(withFailures, (open) => ({
-          ...open,
-          ...(restoring ? { restoring: "install-failed" } : {}),
-          ...(proof === undefined
-            ? {}
-            : {
-                probationEndsAt: now + PROBATION_MS,
-                startedAt: { ...open.startedAt, [key]: proof.startedAt },
-                processIds: { ...open.processIds, [key]: proof.processId },
-              }),
-          orchestrated: {
-            ...open.orchestrated,
-            [key]: phase === "rollback-failed" ? { ...settled, uncertain: true } : settled,
-          },
-        }));
-      });
-    }).pipe(Effect.uninterruptible);
-    if (restoring)
-      return yield* closedOr(yield* rollBack("install-failed", true, scope, uncertain.alias));
-    if (proof !== undefined) {
-      yield* Ref.set(nextAt, now + PROBATION_CHECK_MS);
-      return "probation" as const;
-    }
-    yield* Ref.set(nextAt, now + RETRY_INTERVAL_MS);
-    return "uncertain" as const;
+      window.steps.at(-1)?.alias === uncertain.alias;
+    const settle = Effect.gen(function* () {
+      if (forward) {
+        if ((yield* sync.lastUpdate)?.targetVersion !== window.targetVersion)
+          yield* sync.beginUpdate(window.targetVersion);
+        yield* sync.syncUpdatedMember(uncertain.alias, scope);
+      }
+      const proof =
+        !restoring &&
+        version === window.targetVersion &&
+        window.steps.at(-1)?.alias === uncertain.alias
+          ? yield* healthProof(uncertain.alias, version, scope)
+          : undefined;
+      const phase = restoring
+        ? undefined
+        : proof === undefined
+          ? ("rollback-failed" as const)
+          : ("probation" as const);
+      const settled = {
+        fromVersion: entry.fromVersion,
+        planToken: entry.planToken,
+        notAfter: entry.notAfter,
+        boundMs: entry.boundMs,
+        settled: true as const,
+      };
+      yield* Effect.gen(function* () {
+        yield* mutate((latest, at) => {
+          const recorded =
+            phase === undefined
+              ? latest
+              : withRecords(
+                  latest,
+                  at,
+                  [uncertain],
+                  window.targetVersion,
+                  phase,
+                  phase === "rollback-failed" ? "apply-uncertain" : undefined,
+                );
+          const withFailures = restoring
+            ? {
+                ...recorded,
+                failedTargets: {
+                  ...recorded.failedTargets,
+                  ...Object.fromEntries(
+                    window.steps
+                      .filter((step) => step.via === undefined || step.started === true)
+                      .map(({ alias }) => [failedTargetKey(alias), window.targetVersion]),
+                  ),
+                },
+              }
+            : recorded;
+          return withWindow(withFailures, (open) => ({
+            ...open,
+            ...(restoring ? { restoring: "install-failed" } : {}),
+            ...(proof === undefined
+              ? {}
+              : {
+                  probationEndsAt: now + PROBATION_MS,
+                  startedAt: { ...open.startedAt, [key]: proof.startedAt },
+                  processIds: { ...open.processIds, [key]: proof.processId },
+                }),
+            orchestrated: {
+              ...open.orchestrated,
+              [key]: phase === "rollback-failed" ? { ...settled, uncertain: true } : settled,
+            },
+          }));
+        });
+        yield* releaseHome;
+      }).pipe(Effect.uninterruptible);
+      if (restoring)
+        return yield* closedOr(yield* rollBack("install-failed", true, scope, uncertain.alias));
+      if (proof !== undefined) {
+        yield* Ref.set(nextAt, now + PROBATION_CHECK_MS);
+        return "probation" as const;
+      }
+      yield* Ref.set(nextAt, now + RETRY_INTERVAL_MS);
+      return "uncertain" as const;
+    });
+    return yield* forward ? sync.exclusive(settle) : settle;
   }
   return undefined;
 });

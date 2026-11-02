@@ -5,8 +5,10 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Ref from "effect/Ref";
 import * as TestClock from "effect/testing/TestClock";
+import * as Stream from "effect/Stream";
 
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
+import { OpenCodexSync } from "./OpenCodexSync.ts";
 import { OpenCodexUpdateHost, type OpenCodexRelease } from "./OpenCodexUpdateHost.ts";
 import {
   applyOrchestratedStep,
@@ -102,8 +104,20 @@ const fixture = Effect.fn("OpenCodexWindowTest.fixture")(function* (blockSettlem
       yield* Deferred.await(resume);
     }
   });
+  const sync = OpenCodexSync.of({
+    plan: () => Effect.die("unused"),
+    run: () => Effect.die("unused"),
+    latest: Effect.sync(() => undefined),
+    lastUpdate: Effect.sync(() => undefined),
+    changes: Stream.empty,
+    markUpdating: () => Effect.void,
+    exclusive: (body) => body,
+    beginUpdate: () => Effect.void,
+    syncUpdatedMember: () => Effect.void,
+  });
   const ops = {
     host,
+    sync,
     retainedHome,
     nextAt,
     mutate,

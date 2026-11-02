@@ -315,4 +315,43 @@ it.layer(NodeServices.layer)("OpenCodex SSH replacement follow-up", (it) => {
       expect(fleet.holds).toBe(0);
     }),
   );
+  it.effect("syncs the recovered target under admission before recording probation", () =>
+    Effect.gen(function* () {
+      const fleet = makeFleet({ homeOwnership: "adopted" });
+      fleet.orchestrated = true;
+      fleet.applyResult = "uncertain";
+      fleet.versions.set("mac-studio", "2.90.0");
+      const { update, baseDir } = yield* setup(fleet);
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const config = yield* ServerConfig.ServerConfig.pipe(
+        Effect.provide(ServerConfig.layerTest(process.cwd(), baseDir)),
+      );
+      let phaseAtSync: string | undefined;
+      fleet.onSync = fs.readFileString(path.join(config.stateDir, "opencodex-update.json")).pipe(
+        Effect.map((raw) => Option.getOrThrow(decodeState(raw))),
+        Effect.tap((state) =>
+          Effect.sync(() => {
+            phaseAtSync = state.members.find((member) => member.alias === null)?.phase;
+          }),
+        ),
+        Effect.asVoid,
+        Effect.orDie,
+      );
+      yield* update.check;
+      fleet.versions.set(null, "2.90.0");
+      fleet.inFlight = false;
+      yield* TestClock.adjust(20 * MINUTE);
+      yield* update.check;
+      yield* TestClock.adjust(10 * MINUTE);
+      yield* update.check;
+      expect(fleet.log).toEqual(["sync:home@2.90.0"]);
+      expect(phaseAtSync).toBe("installed");
+      expect(fleet.holdsDuringSync[0]).toBeGreaterThan(0);
+      expect(yield* update.status).toMatchObject({
+        members: [{ phase: "probation" }],
+        sync: { members: [{ alias: null, state: "synced" }] },
+      });
+    }),
+  );
 });

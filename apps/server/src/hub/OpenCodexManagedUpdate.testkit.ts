@@ -73,6 +73,7 @@ export const makeFleet = (
   /** Members whose sync restarts their runtime, as a Child's can after applying Home settings. */
   syncRestarts: new Set<string | null>(),
   syncFails: new Set<string | null>(),
+  onSync: undefined as Effect.Effect<void> | undefined,
   syncReport: undefined as OpenCodexSyncReport | undefined,
   /** What the managed update last told the sync about its window. */
   updating: undefined as boolean | undefined,
@@ -151,30 +152,34 @@ const build = (fleet: Fleet, baseDir: string, scheduler?: Scheduler.Scheduler["S
               fleet.syncReport = { trigger: "update", checkedAt: 0, targetVersion, members: [] };
             }),
           syncUpdatedMember: (alias) =>
-            Effect.sync(() => {
-              fleet.holdsDuringSync.push(fleet.homeHolds);
-              fleet.log.push(`sync:${alias ?? "home"}@${fleet.versions.get(alias)}`);
-              if (fleet.syncRestarts.has(alias)) {
-                fleet.startedAt.set(alias, required(fleet.startedAt.get(alias)) + 5 * 60_000);
-                fleet.processId.set(alias, required(fleet.processId.get(alias)) + 1);
-              }
-              const updating = fleet.inFlight;
-              const failed = fleet.syncFails.has(alias);
-              fleet.syncHolding = !updating;
-              fleet.syncReport = {
-                ...required(fleet.syncReport),
-                members: [
-                  ...required(fleet.syncReport).members,
-                  {
-                    alias,
-                    state: updating ? "skipped" : failed ? "failed" : "synced",
-                    restartCodex: !updating,
-                    ...(updating ? { reason: "updating" } : failed ? { reason: "exit-1" } : {}),
-                  },
-                ],
-              };
-              fleet.syncHolding = false;
-            }),
+            (fleet.onSync ?? Effect.void).pipe(
+              Effect.andThen(
+                Effect.sync(() => {
+                  fleet.holdsDuringSync.push(fleet.homeHolds);
+                  fleet.log.push(`sync:${alias ?? "home"}@${fleet.versions.get(alias)}`);
+                  if (fleet.syncRestarts.has(alias)) {
+                    fleet.startedAt.set(alias, required(fleet.startedAt.get(alias)) + 5 * 60_000);
+                    fleet.processId.set(alias, required(fleet.processId.get(alias)) + 1);
+                  }
+                  const updating = fleet.inFlight;
+                  const failed = fleet.syncFails.has(alias);
+                  fleet.syncHolding = !updating;
+                  fleet.syncReport = {
+                    ...required(fleet.syncReport),
+                    members: [
+                      ...required(fleet.syncReport).members,
+                      {
+                        alias,
+                        state: updating ? "skipped" : failed ? "failed" : "synced",
+                        restartCodex: !updating,
+                        ...(updating ? { reason: "updating" } : failed ? { reason: "exit-1" } : {}),
+                      },
+                    ],
+                  };
+                  fleet.syncHolding = false;
+                }),
+              ),
+            ),
         }),
       ),
       Layer.provide(
