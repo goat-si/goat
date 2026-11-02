@@ -1,5 +1,6 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- FileSystem.access cannot test directory search permission.
 import * as NodeFS from "node:fs";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- resolves executable paths synchronously during spawn diagnosis.
 import * as NodePath from "node:path";
 import { isCommandMissingCause } from "./snapshotProbe.ts";
 

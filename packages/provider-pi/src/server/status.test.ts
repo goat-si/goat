@@ -1,5 +1,7 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- creates a real executable fixture.
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- constructs a native executable fixture path.
 import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
