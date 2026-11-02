@@ -108,7 +108,7 @@ When the app quits, its forward fails and the next ensure starts or reuses the m
 When no [app server](#app-server) serves the host, one host user runs one SSH-managed server, and
 every client shares it. The launch, pairing, MCP
 session, stop, and log scripts keep their ownership records (`pid`, `port`, `managed`, `identity`,
-`run-t3.sh`, `server.log`) in `~/.goat/ssh-launch/runtime` (`REMOTE_RUNTIME_STATE_KEY` in
+`run-t3.sh`, `run-goat.sh`, `server.log`) in `~/.goat/ssh-launch/runtime` (`REMOTE_RUNTIME_STATE_KEY` in
 `packages/ssh/src/command.ts`), whatever alias, hostname, or port the client dialled. A client that
 finds a compatible live server attaches to it, so threads started from any client live in that
 server's state and every client sees them.
