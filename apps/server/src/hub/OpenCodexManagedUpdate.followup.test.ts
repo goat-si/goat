@@ -9,7 +9,7 @@ import * as ServerConfig from "../config.ts";
 import * as TestClock from "effect/testing/TestClock";
 
 import { decodeState, encodeState } from "./ocxUpdateWindow.ts";
-import { makeFleet, MINUTE, service, setup } from "./OpenCodexManagedUpdate.testkit.ts";
+import { makeFleet, MINUTE, phases, service, setup } from "./OpenCodexManagedUpdate.testkit.ts";
 
 const decodeFailed = Schema.decodeEffect(
   Schema.fromJsonString(
@@ -135,6 +135,44 @@ it.layer(NodeServices.layer)("OpenCodex SSH replacement follow-up", (it) => {
       yield* resumed.check;
       expect(fleet.installs).toEqual([]);
       expect((yield* resumed.status)?.reason).toBe("rollback-incomplete");
+    }),
+  );
+  it.effect("does not remember a refused adopted update as a failed target", () =>
+    Effect.gen(function* () {
+      const fleet = makeFleet({ homeOwnership: "adopted" });
+      fleet.orchestrated = true;
+      fleet.applyResult = "refused";
+      fleet.versions.set("mac-studio", "2.90.0");
+      const { update } = yield* setup(fleet);
+      yield* update.check;
+      expect(fleet.applyCalls).toBe(1);
+      yield* update.checkNow;
+      expect(fleet.applyCalls).toBe(2);
+      expect(fleet.installs).toEqual([]);
+    }),
+  );
+
+  it.effect("waits for a person to restore an adopted install after probation fails", () =>
+    Effect.gen(function* () {
+      const fleet = makeFleet({ homeOwnership: "adopted" });
+      fleet.orchestrated = true;
+      fleet.versions.set("mac-studio", "2.90.0");
+      const { update } = yield* setup(fleet);
+      yield* update.check;
+      fleet.unhealthyAt.add("home@2.90.0");
+      yield* TestClock.adjust(MINUTE);
+      yield* update.check;
+      expect(phases(yield* update.status)).toEqual([
+        [null, "rollback-failed", "probation-health-failed"],
+      ]);
+      expect(fleet.installs).toEqual([]);
+      fleet.versions.set(null, "2.89.0");
+      yield* TestClock.adjust(10 * MINUTE);
+      yield* update.check;
+      expect(phases(yield* update.status)).toEqual([
+        [null, "rolled-back", "probation-health-failed"],
+      ]);
+      expect(fleet.installs).toEqual([]);
     }),
   );
 });
