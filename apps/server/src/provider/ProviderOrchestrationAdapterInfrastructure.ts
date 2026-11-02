@@ -1,4 +1,5 @@
 import type { McpCredentialRotation } from "../orchestration-v2/ProviderSessionManager.ts";
+import * as CodexDetachedAppServerLive from "./CodexDetachedAppServerLive.ts";
 import * as MemoryDerivedCache from "../memory/MemoryDerivedCache.ts";
 import * as Layer from "effect/Layer";
 
@@ -100,6 +101,7 @@ export const layerMemoryAdmission = Layer.effect(
 export type ProviderOrchestrationAdapterInfrastructure =
   | ClaudeAdapterV2.ClaudeAgentSdkQueryRunner
   | CodexAdapterV2.CodexAppServerClientFactory
+  | CodexDetachedAppServerLive.CodexDetachedAppServers
   | CursorAgentSdk.CursorAgentSdkRunner
   | CursorSdk.CursorSdk
   | CursorKeychain.CursorKeychain
@@ -110,7 +112,9 @@ export type ProviderOrchestrationAdapterInfrastructure =
 export const layer = Layer.mergeAll(
   MemoryDerivedCache.layer,
   ClaudeAdapterV2.layerQueryRunner,
-  CodexAdapterV2.layerAppServerClientFactory,
+  CodexAdapterV2.layerAppServerClientFactory.pipe(
+    Layer.provideMerge(CodexDetachedAppServerLive.layerLive),
+  ),
   CursorAgentSdk.layer.pipe(Layer.provideMerge(CursorSdk.layer)),
   CursorKeychain.layer,
   IdAllocator.layer,

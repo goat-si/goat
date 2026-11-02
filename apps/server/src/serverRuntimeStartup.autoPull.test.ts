@@ -38,6 +38,7 @@ import { layerMemoryDefaultStarted } from "./server.ts";
 import { ServerActivation } from "./serverActivation.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
+import * as CodexDetachedAppServerLive from "./provider/CodexDetachedAppServerLive.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
@@ -136,6 +137,11 @@ it.effect.each([
             reconcile: () => Effect.succeed(recovery),
           }),
           Layer.mock(Orchestrator.OrchestratorV2)({ recoverDelegatedTasks: Effect.void }),
+          Layer.mock(CodexDetachedAppServerLive.CodexDetachedAppServers)({
+            cleanup: Effect.succeed([]),
+            beginServerShutdown: Effect.void,
+            socketTransportEnabled: false,
+          }),
           Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
             shutdown: Effect.void,
           }),
