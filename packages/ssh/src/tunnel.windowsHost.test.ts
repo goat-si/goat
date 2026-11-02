@@ -140,6 +140,54 @@ if [ "$1" = -u ] && [ "$2" = 'D:/' ]; then printf '%s\n' "$TEST_DRIVE"; else pri
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 
+  it.effect.each([
+    { name: "initial", args: "serve" },
+    { name: "supervisor", args: "__ssh-helper supervise" },
+  ])("falls back from an inaccessible profile for the $name launch", ({ args }) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-windows-inaccessible-" });
+      const bin = `${root}/bin`;
+      const profile = `${root}/profile`;
+      const drive = `${root}/drive`;
+      yield* fs.makeDirectory(bin);
+      yield* fs.makeDirectory(drive);
+      yield* fs.makeDirectory(profile);
+      yield* fs.chmod(profile, 0o000);
+      yield* fs.writeFileString(`${bin}/uname`, "#!/bin/sh\necho MINGW64\n");
+      yield* fs.writeFileString(
+        `${bin}/cygpath`,
+        `#!/bin/sh\nif [ "$1" = -u ] && [ "$2" = 'D:/' ]; then printf '%s\\n' "$TEST_DRIVE"; else printf '%s\\n' "$2"; fi\n`,
+      );
+      yield* fs.writeFileString(
+        `${bin}/powershell.exe`,
+        '#!/bin/sh\nprintf "%s\\n" "$GOAT_SPAWN_CWD"\n',
+      );
+      for (const name of ["uname", "cygpath", "powershell.exe"])
+        yield* fs.chmod(`${bin}/${name}`, 0o755);
+      // Root can enter mode-000 directories, so use an unenterable file in that case.
+      const userProfile = process.getuid?.() === 0 ? `${root}/file` : profile;
+      if (userProfile !== profile) yield* fs.writeFileString(userProfile, "not a directory");
+      const result = NodeChildProcess.spawnSync(
+        remoteShell,
+        ["-c", `${REMOTE_HOST_PROCESS_SCRIPT}\nwindows_spawn_detached /tmp/log goat ${args}`],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            PATH: `${bin}:${process.env.PATH ?? ""}`,
+            USERPROFILE: userProfile,
+            SystemDrive: "D:",
+            TEST_DRIVE: drive,
+          },
+        },
+      );
+      yield* fs.chmod(profile, 0o700);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout.trim(), drive);
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
   it("feeds a Windows host the upload script ahead of the archive on stdin", () => {
     const archive = new Uint8Array(256 * 1024).map((_, index) => index % 251);
     const script = `set -eu\ncat > "$GOAT_UPLOAD_OUT"\nprintf 'ran %s\\n' "$#"\n`;
