@@ -245,6 +245,41 @@ const tempSuperviseHome = () => {
 const record = (stateDir: string, name: string) =>
   NodeFS.readFileSync(NodePath.join(stateDir, name), "utf8");
 
+it("restores the runner when refreshing its alias fails", async () => {
+  const { baseDir, stateDir, logFile } = tempSuperviseHome();
+  const runnerFile = NodePath.join(stateDir, "run-t3.sh");
+  const previousRunnerFile = NodePath.join(stateDir, "run-t3.previous.sh");
+  const alias = NodePath.join(stateDir, "run-goat.sh");
+  const previousBytes = "previous runner\n";
+  NodeFS.writeFileSync(runnerFile, "replacement runner\n");
+  NodeFS.writeFileSync(previousRunnerFile, previousBytes);
+  NodeFS.mkdirSync(alias);
+  NodeFS.writeFileSync(NodePath.join(alias, "keep"), "sentinel");
+  const result = await superviseSshRuntimeReplacement({
+    oldPid: process.pid,
+    oldInstanceId: "old-instance",
+    port: 51234,
+    baseDir,
+    stateDir,
+    runnerFile,
+    previousRunnerFile,
+    targetVersion: "2.0.0",
+    previousVersion: "1.0.0",
+    identity: "replacement-identity",
+    previousIdentity: "previous-identity",
+    exitTimeoutMs: 0,
+    readyTimeoutMs: 1_000,
+    logFile,
+  });
+  assert.equal(result.status, "old-alive");
+  assert.equal(NodeFS.readFileSync(runnerFile, "utf8"), previousBytes);
+  assert.equal(NodeFS.readFileSync(NodePath.join(alias, "keep"), "utf8"), "sentinel");
+  assert.deepEqual(
+    NodeFS.readdirSync(stateDir).filter((name) => name.startsWith("run-goat.sh.next.")),
+    [],
+  );
+});
+
 it("restores the previous runner and alias when the drained server stays alive", async () => {
   const sleep = NodeChildProcess.spawn(process.execPath, ["-e", "process.stdin.resume()"], {
     stdio: ["pipe", "ignore", "ignore"],

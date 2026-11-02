@@ -68,6 +68,25 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         );
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
+    it.live("launch succeeds when publishing the runner alias fails", () =>
+      Effect.gen(function* () {
+        const f = yield* fixture("none", { seed: false });
+        const mv = `${f.home}/.test/identity-bin/mv`;
+        yield* f.fs.makeDirectory(`${f.home}/.test/identity-bin`);
+        yield* f.fs.writeFileString(
+          mv,
+          `#!/bin/sh\nfor arg do [ "$arg" != '${f.state}/run-goat.sh' ] || exit 1; done\nexec /bin/mv "$@"\n`,
+        );
+        yield* f.fs.chmod(mv, 0o700);
+        const result = yield* shell(f.home, f.scripts.launch, [stateKey]);
+        assert.equal(result.code, 0, result.stderr);
+        assert.equal(yield* f.fs.readFileString(`${f.state}/run-t3.sh`), f.scripts.runner + "\n");
+        assert.deepEqual(
+          (yield* f.fs.readDirectory(f.state)).filter((name) => name.startsWith("run-goat.next.")),
+          [],
+        );
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
     it.live.each([false, true])(
       "repairs the runner alias after old-client publication (copy fallback=%s)",
       (copyFallback) =>
