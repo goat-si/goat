@@ -5,6 +5,7 @@ import {
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 
+import { computePaintOrderOcclusion, paintRect } from "./RectUnion.ts";
 import type { ServerBrowserViewerOutput } from "./ServerBrowser.ts";
 import type { DispatchGate } from "./ServerBrowserPage.ts";
 import {
@@ -412,9 +413,37 @@ export const viewportPlacement = (viewport: Size, image: Size) => ({
   scale: image.width / viewport.width,
 });
 
+/** An element of the page's paint snapshot, under its native aria ref such as e12 or f1e3. */
+export interface PaintedElement {
+  readonly ref: string;
+  readonly box: {
+    readonly x: number;
+    readonly y: number;
+    readonly width: number;
+    readonly height: number;
+  };
+  readonly paintOrder?: number;
+  readonly opaque?: boolean;
+}
+
+/** Native refs whose whole box lies under opaque content painted above them in the same frame. */
+export const paintOccludedRefs = (elements: ReadonlyArray<PaintedElement>): ReadonlySet<string> =>
+  new Set(
+    computePaintOrderOcclusion(
+      elements.map(({ ref, box, paintOrder, opaque }) => ({
+        ref,
+        bounds: paintRect(box.x, box.y, box.width, box.height),
+        // A frame's refs carry its f<n> prefix, and paint order only compares within one document.
+        document: /^f\d+/.exec(ref)?.[0] ?? "",
+        ...(paintOrder === undefined ? {} : { paintOrder }),
+        ...(opaque === undefined ? {} : { opaque }),
+      })),
+    ).flatMap((element) => (element.occludedByPaintOrder ? [element.ref] : [])),
+  );
+
 /**
  * Cuts the masked tree and namespaces its refs. Screen code learns whether the cut or a frame the
- * tree could not read left part of the page out.
+ * tree could not read left part of the page out, and which refs other content paints over.
  */
 export const screenTree = (
   text: string,
@@ -423,6 +452,8 @@ export const screenTree = (
     readonly unread: ReadonlyArray<unknown>;
     readonly generation: string;
     readonly refs: Map<string, string>;
+    /** Native refs from paintOccludedRefs; their lines gain an [occluded] attribute. */
+    readonly occluded?: ReadonlySet<string>;
   },
 ) => {
   const { generation } = input;
@@ -432,7 +463,7 @@ export const screenTree = (
       .replace(/\[ref=((?:f\d+)?e\d+)\]/g, (_match, nativeRef: string) => {
         const ref = `t3-${generation}-${nativeRef}`;
         input.refs.set(ref, nativeRef);
-        return `[ref=${ref}]`;
+        return `[ref=${ref}]${input.occluded?.has(nativeRef) ? " [occluded]" : ""}`;
       }),
     treeComplete: text.length <= input.limit && input.unread.length === 0,
     refGeneration: String(generation),
