@@ -196,6 +196,32 @@ describe("goat server command safety", () => {
       await NodeFSP.rm(home, { recursive: true, force: true });
     }
   });
+  it.each(["cwd", "flag", "env", "bootstrap"])(
+    "resolves relative %s against the inaccessible original cwd",
+    async (source) => {
+      const home = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-cwd-"));
+      try {
+        const result = NodeChildProcess.spawnSync(
+          process.execPath,
+          [
+            NodePath.join(import.meta.dirname, "serverCwd.fixture.ts"),
+            "start",
+            `relative-${source}`,
+          ],
+          {
+            env: { HOME: home, PATH: process.env.PATH ?? "" },
+            encoding: "utf8",
+          },
+        );
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain(NodePath.join(home, "deleted", "relative"));
+        expect(result.stdout.split("\n")).toContain(`CWD ${home}`);
+      } finally {
+        await NodeFSP.chmod(NodePath.join(home, "deleted"), 0o700).catch(() => undefined);
+        await NodeFSP.rm(home, { recursive: true, force: true });
+      }
+    },
+  );
   it.effect("rejects unknown command words without creating a home or project", () =>
     withTempDirectory("t3-cli-unknown-", (root) =>
       Effect.gen(function* () {

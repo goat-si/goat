@@ -17,6 +17,8 @@ const scenario = process.argv[3] ?? "deleted";
 const base = NodePath.join(home, "not-a-directory");
 NodeFS.writeFileSync(base, "fixture");
 NodeFS.mkdirSync(cwd);
+if (scenario.startsWith("relative-"))
+  NodeFS.writeFileSync(NodePath.join(cwd, "relative"), "fixture");
 process.chdir(cwd);
 if (scenario === "deleted") NodeFS.rmdirSync(cwd);
 else if (scenario !== "accessible" && process.getuid?.() !== 0) NodeFS.chmodSync(cwd, 0o000);
@@ -39,14 +41,38 @@ if (scenario !== "deleted" && scenario !== "accessible") {
 }
 const mode = process.argv[2];
 if (!mode) throw new Error("Fixture command is required");
-const args =
-  mode === "default" ? ["unknown-command"] : [mode, "--base-dir", base, "--port", "43001"];
+const configEnv: Record<string, string> = {};
+let args = mode === "default" ? ["unknown-command"] : [mode, "--base-dir", base, "--port", "43001"];
+if (scenario === "relative-cwd") args = ["./relative", "--base-dir", base, "--port", "43001"];
+if (scenario === "relative-flag") args = ["start", "--base-dir", "relative", "--port", "43001"];
+if (scenario === "relative-env") {
+  args = ["start", "--port", "43001"];
+  configEnv.GOAT_HOME = "relative";
+}
+if (scenario === "relative-bootstrap") {
+  const bootstrap = NodePath.join(home, "bootstrap.json");
+  NodeFS.writeFileSync(
+    bootstrap,
+    JSON.stringify({
+      mode: "desktop",
+      noBrowser: true,
+      port: 43001,
+      goatHome: "relative",
+      host: "127.0.0.1",
+      desktopBootstrapToken: "fixture",
+      tailscaleServeEnabled: false,
+      tailscaleServePort: 443,
+    }) + "\n",
+  );
+  configEnv.GOAT_BOOTSTRAP_FD = String(NodeFS.openSync(bootstrap, "r"));
+  args = ["start", "--port", "43001"];
+}
 const program = Command.runWith(makeCli(), { version: "0.0.0" })(args).pipe(
   Effect.provide(
     Layer.mergeAll(
       NodeServices.layer,
       NetService.layer,
-      ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })),
+      ConfigProvider.layer(ConfigProvider.fromEnv({ env: configEnv })),
     ),
   ),
   Effect.match({ onFailure: (error) => String(error), onSuccess: () => "unexpected success" }),
