@@ -15,6 +15,7 @@ import { makeFtsIndex } from "./store/FtsIndex.ts";
 import { makeImportLineage } from "./store/ImportLineage.ts";
 import { makeImports } from "./store/Imports.ts";
 import { makeApplyDecision } from "./store/ApplyDecision.ts";
+import { makeRecallStore } from "./store/Recall.ts";
 import { makeSearch } from "./store/Search.ts";
 import { makeWorkQueue } from "./store/WorkQueue.ts";
 import { makeOutbox } from "./store/Outbox.ts";
@@ -156,6 +157,7 @@ const make = Effect.gen(function* () {
     importLineage,
   );
   const { applyDecision, pendingReceived, readParked } = applyDecisionModule;
+  const recallStore = makeRecallStore(kernel);
   const searchModule = makeSearch(kernel, coreReads);
   const { readCursor, withReceivedCursor, list, searchCoverage, search } = searchModule;
   const workQueue = makeWorkQueue(kernel, itemWrites);
@@ -489,6 +491,7 @@ const make = Effect.gen(function* () {
         return yield* transact(search(filter, text, mode));
       }),
     searchCoverage: (filter) => transact(searchCoverage(filter)),
+    ...recallStore,
     dueWork,
     readWork,
     retryWork,

@@ -60,6 +60,7 @@ const OFF_GRAMMAR_NAMES = [
   "memory_list",
   "memory_read",
   "memory_read_source",
+  "memory_recall",
   "memory_revert_resolution",
   "memory_search",
   "memory_settings_get",

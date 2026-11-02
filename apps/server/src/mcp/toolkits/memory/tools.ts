@@ -4,6 +4,7 @@ import * as M from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import * as SchemaAST from "effect/SchemaAST";
 import { Tool, Toolkit } from "effect/ai";
+import * as MemoryRecall from "../../../memory/MemoryRecall.ts";
 import * as MemoryService from "../../../memory/MemoryService.ts";
 import * as MemorySyncService from "../../../memory/MemorySyncService.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
@@ -79,6 +80,17 @@ const SearchTool = Tool.dynamic(agentSurfaceRegistry["memory.search"].name, {
   .addDependency(MemorySyncService.MemorySyncService)
   .addDependency(ThreadManagementService.ThreadManagementService)
   .annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["memory.search"]));
+
+const RecallTool = Tool.dynamic(agentSurfaceRegistry["memory.recall"].name, {
+  description: agentSurfaceRegistry["memory.recall"].description,
+  parameters: memoryInputSchema(M.MemoryRecallInput),
+  success: M.MemoryRecallResult,
+  failure,
+  failureMode: "return",
+})
+  .addDependency(McpInvocationContext.McpInvocationContext)
+  .addDependency(MemoryRecall.MemoryRecall)
+  .annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["memory.recall"]));
 
 const ListTool = Tool.dynamic(agentSurfaceRegistry["memory.list"].name, {
   description: agentSurfaceRegistry["memory.list"].description,
@@ -186,6 +198,7 @@ const ReadSourceTool = Tool.dynamic(agentSurfaceRegistry["memory.source_read"].n
 
 export const MemoryToolkit = Toolkit.make(
   SearchTool,
+  RecallTool,
   ListTool,
   ReadTool,
   HistoryTool,

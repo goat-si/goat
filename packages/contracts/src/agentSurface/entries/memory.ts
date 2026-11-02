@@ -2,6 +2,28 @@ import { entry } from "../entry.ts";
 import { MEMORY_OPERATION_ID } from "../idempotencyReasons.ts";
 
 export const memoryEntries = {
+  "memory.recall": entry({
+    resource: "memory",
+    verb: "recall",
+    name: "memory_recall",
+    toolkit: "memory",
+    summary: "Recall related memories.",
+    description:
+      "Find memories with one natural-language query (any language). Searches this thread, this project's other threads, project and user memory; ranked by relevance and recency; flags weak matches. Use before asking the user to repeat context.",
+    guide: "Needs memory:read. Results can be stale; verify changeable facts.",
+    parameters: {
+      query: "One natural-language query.",
+      limit: "Maximum hits, 1 to 20; default 8.",
+      memorySpaceId: "Optional current memory space.",
+    },
+    examples: [{ title: "Recall a prior decision", args: { query: "release checklist decision" } }],
+    effect: "read",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: { idempotentHint: false, openWorldHint: false },
+  }),
   "memory.search": entry({
     resource: "memory",
     verb: "search",

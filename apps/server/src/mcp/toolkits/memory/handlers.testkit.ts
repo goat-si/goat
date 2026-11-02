@@ -29,6 +29,8 @@ import * as Threads from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as Store from "../../../memory/MemoryStore.ts";
 import * as Quota from "../../../memory/MemoryQuotaService.ts";
 import * as Service from "../../../memory/MemoryService.ts";
+import * as Recall from "../../../memory/MemoryRecall.ts";
+import * as Projection from "../../../orchestration-v2/ProjectionStore.ts";
 import * as Sync from "../../../memory/MemorySyncService.ts";
 import * as MemorySettings from "../../../memory/MemorySettingsService.ts";
 import * as Hub from "../../../memory/MemoryHubService.ts";
@@ -63,6 +65,8 @@ const makeCore = <E, R>(
   serviceLayer: typeof Service.layer,
   databaseLayer: Layer.Layer<SqlClient.SqlClient, E, R>,
   environmentLayer = identity,
+  resolve: RepositoryResolver.RepositoryIdentityResolver["Service"]["resolve"] = () =>
+    Effect.succeed(null),
 ) =>
   serviceLayer.pipe(
     Layer.provide(
@@ -80,11 +84,16 @@ const makeCore = <E, R>(
     Layer.provide(environmentLayer),
     Layer.provide(
       Layer.mock(RepositoryResolver.RepositoryIdentityResolver)({
-        resolve: () => Effect.succeed(null),
+        resolve,
       }),
     ),
   );
 export const core = makeCore(Service.layer, database);
+/** For toolkit tests that never call memory_recall. */
+export const layerRecallUnused = Layer.mock(Recall.MemoryRecall)({});
+export const coreWithResolver = (
+  resolve: RepositoryResolver.RepositoryIdentityResolver["Service"]["resolve"],
+) => makeCore(Service.layer, database, identity, resolve);
 const settings = Settings.layerTest({}, "memoryHub");
 const admin = Layer.effect(Hub.MemoryHubAdministrator, Hub.makeAdministrator).pipe(
   Layer.provideMerge(storage),
@@ -100,6 +109,7 @@ const sync = Layer.unwrap(
   Effect.gen(function* () {
     const administrator = yield* Hub.MemoryHubAdministrator;
     return Layer.mock(Sync.MemorySyncService)({
+      readLocalReadiness: () => Effect.succeed({ memorySpaceId: space, bootstrap: "ready" }),
       syncStatus: (_input, permit) =>
         permit.pipe(Effect.andThen(Effect.fail(new M.MemoryHubError({ code: "hub_disabled" })))),
       hubDiagnostics: (_input, permit) =>
@@ -136,10 +146,22 @@ const makeLayer = <E, R, E2, R2>(
     McpHttpServer.layerMemoryToolkit,
     McpHttpServer.layerMemoryAdministrationToolkit,
   ).pipe(
+    Layer.provide(Recall.layer),
     Layer.provideMerge(profiles),
     Layer.provideMerge(serviceCore),
     Layer.provideMerge(
       MemorySettings.layer.pipe(Layer.provideMerge(sync), Layer.provideMerge(settings)),
+    ),
+    Layer.provide(Layer.mock(Projection.ProjectionStoreV2)({})),
+    Layer.provide(identity),
+    Layer.provide(
+      Layer.succeed(Settings.MemoryHubCommittedSettings, {
+        read: Effect.succeed({
+          provenance: null,
+          settings: { mode: "hub" as const, memorySpaceId: space },
+          version: 1,
+        }),
+      }),
     ),
     Layer.provideMerge(McpServer.McpServer.layer),
     Layer.provideMerge(threads),
@@ -197,6 +219,7 @@ export const layerForThreadEnvironment = <E, R>(
   databaseLayer: Layer.Layer<SqlClient.SqlClient, E, R>,
 ) =>
   McpHttpServer.layerMemoryToolkit.pipe(
+    Layer.provide(Layer.mock(Recall.MemoryRecall)({})),
     Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
     Layer.provideMerge(
       makeCore(

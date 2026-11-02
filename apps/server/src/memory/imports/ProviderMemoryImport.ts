@@ -54,18 +54,26 @@ const frameId = "00000000-0000-4000-8000-000000000000";
  * the smallest scope an imported memory gets. False means it is stored but never
  * injected automatically, whatever scope it is mapped to.
  */
-const fitsTurnStart = (text: string, address: { readonly environmentId: M.EnvironmentId }) =>
+const fitsTurnStart = (
+  text: string,
+  address: { readonly environmentId: M.EnvironmentId; readonly memorySpaceId: M.MemorySpaceId },
+) =>
   Renderer.memoryContextFits(
-    Renderer.renderMemoryContext([
-      {
-        memoryId: M.MemoryId.make(frameId),
-        revisionId: M.MemoryRevisionId.make(frameId),
-        scope: { kind: "user" },
-        provenance: { environmentId: address.environmentId },
-        assertionKind: "inference",
-        text,
-      },
-    ]),
+    Renderer.renderMemoryContext(
+      [
+        {
+          memoryId: M.MemoryId.make(frameId),
+          revisionId: M.MemoryRevisionId.make(frameId),
+          scope: { kind: "user" },
+          provenance: { environmentId: address.environmentId },
+          assertionKind: "inference",
+          text,
+        },
+      ],
+      false,
+      undefined,
+      address.memorySpaceId,
+    ),
   );
 const validateOutput = Schema.decodeUnknownEffect(M.MemoryImportProviderResult);
 const validPayload = Schema.is(M.MemoryPayload);

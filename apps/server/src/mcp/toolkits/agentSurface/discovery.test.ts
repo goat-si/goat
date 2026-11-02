@@ -3,6 +3,7 @@ import { expect, it } from "@effect/vitest";
 import {
   EnvironmentId,
   MemoryReadInput,
+  MemoryRecallInput,
   MemorySearchInput,
   ProviderInstanceId,
   ThreadId,
@@ -243,6 +244,7 @@ const notesOf = (entry: AgentSurfaceEntry) => entry.parameters;
 // Dynamic tools carry JSON Schema; their handlers decode with these contract schemas.
 const dynamicInputs: Readonly<Record<string, Schema.Codec<unknown, unknown>>> = {
   "memory.search": MemorySearchInput,
+  "memory.recall": MemoryRecallInput,
   "memory.read": MemoryReadInput,
 };
 

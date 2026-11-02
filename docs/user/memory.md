@@ -87,3 +87,5 @@ In **Settings → Memory → Hub diagnostics**, sharing off means memory sharing
 For a recoverable sync hold, restore compatibility or connectivity, then use **Reconcile** when available to let eligible work resume. A permanent hold needs attention to device identity or authorization in Sharing settings; Reconcile cannot bypass it. **Reconcile accepted** confirms the request was accepted, not that synchronization has finished. **Last valid settings in use** means the latest settings could not be published; review the settings and reload diagnostics after correcting the problem.
 
 On web and desktop, if Memory says **Device disconnected**, reconnect that environment to continue. If it says **Memory unavailable**, update or reconnect the selected environment. **Hub disconnected** means the hub connection is offline; **Hub connected** alone does not mean every memory is ready to read. **Waiting to sync** means that memory still has changes to share.
+
+Agents can recall related memories across this project’s threads with a natural-language query. Results are ranked by relevance and recency and may be stale; verify changeable details.

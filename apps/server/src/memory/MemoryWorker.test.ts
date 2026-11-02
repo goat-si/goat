@@ -5,7 +5,6 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
-import * as Environment from "../environment/ServerEnvironment.ts";
 import * as Settings from "../serverSettings.ts";
 import * as Store from "./MemoryStore.ts";
 import * as Quota from "./MemoryQuotaService.ts";
@@ -16,8 +15,6 @@ import { MemoryGenerationRunnerError } from "@goat/provider-core/server/memoryGe
 import * as Hold from "./MemoryGenerationHold.ts";
 import * as Snapshot from "./MemorySnapshot.ts";
 import { threadProvenanceCases } from "./threadProvenance.testkit.ts";
-import * as Sync from "./MemorySyncService.ts";
-import * as Projection from "../orchestration-v2/ProjectionStore.ts";
 import {
   id,
   environmentId,
@@ -37,6 +34,9 @@ import {
   seedDerivedSummary,
   incrementalSummary,
   seedRolledBackRegeneration,
+  lineageLive,
+  lineagePolicy,
+  lineageSetup,
 } from "./MemoryWorker.testkit.ts";
 import { countingTracer } from "../observability/countingTracer.testkit.ts";
 describe("MemoryWorker", () => {
@@ -966,42 +966,6 @@ describe("MemoryWorker", () => {
   });
 });
 
-// The snapshot service and worker share the real writer/store; only the provider and
-// projection shell are synthetic. The second turn receives no new memory snapshot.
-const lineageLive = (onInput?: (input: M.GenerateMemorySummaryInput) => void) =>
-  Snapshot.layer.pipe(
-    Layer.provideMerge(live(false, onInput)),
-    Layer.provide(
-      Layer.succeed(Environment.ServerEnvironmentIdentity, {
-        getEnvironmentId: Effect.succeed(environmentId),
-      }),
-    ),
-    Layer.provide(
-      Layer.mock(Projection.ProjectionStoreV2)({
-        getThreadShell: (requested) =>
-          Effect.succeed({
-            id: requested,
-            projectId: M.ProjectId.make("project"),
-            activeRunId: M.RunId.make("run"),
-            activityRunStatus: "running",
-          } as M.OrchestrationV2ThreadShell),
-      }),
-    ),
-    Layer.provide(
-      Layer.mock(Sync.MemorySyncService)({
-        readLocalReadiness: () =>
-          Effect.succeed({ memorySpaceId: space, bootstrap: "ready" as const }),
-      }),
-    ),
-  );
-const lineagePolicy = { grant: "read" as const, policyEpoch: 1 };
-const lineageSetup = Effect.gen(function* () {
-  yield* TestClock.setTime(Date.parse(now));
-  yield* seed;
-  const sql = yield* SqlClient.SqlClient;
-  yield* sql`CREATE TABLE projection_projects(project_id TEXT,workspace_root TEXT,deleted_at TEXT)`;
-  yield* sql`INSERT INTO projection_projects VALUES ('project','/synthetic',NULL)`;
-});
 const lineageUpsert = (
   n: number,
   deps: readonly M.MemoryRevisionId[] = [],

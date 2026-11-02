@@ -2,6 +2,7 @@ import * as M from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as MemoryAccess from "../../../memory/MemoryAccess.ts";
+import * as MemoryRecall from "../../../memory/MemoryRecall.ts";
 import * as MemoryService from "../../../memory/MemoryService.ts";
 import * as MemorySyncService from "../../../memory/MemorySyncService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -149,6 +150,7 @@ export const memoryFailure =
       : Effect.fail(mapped);
   };
 
+const decodeRecall = argumentsOf("memory_recall", M.MemoryRecallInput);
 const decodeSearch = argumentsOf("memory_search", M.MemorySearchInput);
 const decodeList = argumentsOf("memory_list", M.MemoryListInput);
 const decodeReadSource = argumentsOf("memory_read_source", M.MemoryReadSourceInput);
@@ -169,6 +171,16 @@ const callerThread = Effect.gen(function* () {
     : undefined;
 });
 const handlers = {
+  memory_recall: McpToolAccess.reads((input) =>
+    Effect.gen(function* () {
+      const service = yield* MemoryRecall.MemoryRecall;
+      return yield* service.recall(
+        yield* decodeRecall(input),
+        yield* invocationPermit("read"),
+        yield* callerThread,
+      );
+    }).pipe(Effect.catch(memoryFailure("memory_recall"))),
+  ),
   memory_search: McpToolAccess.reads((input) =>
     Effect.gen(function* () {
       const service = yield* MemoryService.MemoryService;

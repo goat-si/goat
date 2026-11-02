@@ -19,6 +19,7 @@ import * as Owner from "./memory/MemoryOwnerSourceReader.ts";
 import * as Registry from "./provider/ProviderInstanceRegistry.ts";
 import * as Generation from "./textGeneration/TextGeneration.ts";
 import * as Sync from "./memory/MemorySyncService.ts";
+import * as Recall from "./memory/MemoryRecall.ts";
 import * as Worker from "./memory/MemoryWorker.ts";
 import * as Maintenance from "./memory/MemoryFtsMaintenance.ts";
 import * as RuntimeIdentity from "./runtimeIdentity.ts";
@@ -125,6 +126,7 @@ const environment = (home: string) =>
     let memoryEnabled = true;
     const context = yield* Layer.buildWithMemoMap(
       McpHttp.layerMemoryToolkit.pipe(
+        Layer.provide(Layer.mock(Recall.MemoryRecall)({})),
         Layer.provide(AccessFixture.layerPermissionProfilesOff),
         Layer.provideMerge(
           Layer.mergeAll(

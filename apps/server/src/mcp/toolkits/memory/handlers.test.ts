@@ -1,3 +1,4 @@
+import * as RecallFixture from "../../../memory/MemoryRecall.ts";
 import { expect, it } from "@effect/vitest";
 import * as M from "@goat/contracts";
 import * as Effect from "effect/Effect";
@@ -164,7 +165,7 @@ it.effect.each(M.MEMORY_MCP_TOOLS.filter((name) => name !== "memory_read_source"
           ? Fixture.upsert()
           : name === "memory_list"
             ? { memorySpaceId: Fixture.space, includeQuarantined: false }
-            : name === "memory_search"
+            : name === "memory_search" || name === "memory_recall"
               ? { memorySpaceId: Fixture.space, query: "synthetic" }
               : name === "memory_sync_status"
                 ? {}
@@ -270,6 +271,7 @@ it.effect(
         }),
       ).pipe(Layer.provideMerge(Fixture.core));
       const toolkit = McpHttpServer.layerMemoryToolkit.pipe(
+        Layer.provide(Layer.mock(RecallFixture.MemoryRecall)({})),
         Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
         Layer.provideMerge(observed),
         Layer.provideMerge(McpServer.McpServer.layer),
@@ -756,4 +758,35 @@ it.effect(
       ).not.toBe(true);
       expect(yield* service.read(input, Effect.void)).toMatchObject({ status: "forgotten" });
     }).pipe(Effect.provide(Fixture.layerWithProfiles)),
+);
+
+it.effect("memory recall through the registered toolkit honors the read grant", () =>
+  Effect.gen(function* () {
+    const service = yield* MemoryService.MemoryService;
+    const store = yield* Store.MemoryStore;
+    yield* service.upsert(Fixture.upsert(), Effect.void);
+    const aggregate = yield* store.loadAggregate(Fixture.space, Fixture.memoryId);
+    if (aggregate.item?.status !== "active") throw new Error("fixture item is not active");
+    yield* store.index({
+      memorySpaceId: Fixture.space,
+      memoryId: Fixture.memoryId,
+      revisionId: aggregate.item.revision.revisionId,
+      generation: aggregate.generation,
+    });
+    const allowed = yield* Fixture.call(
+      "memory_recall",
+      { query: "synthetic memory" },
+      Fixture.scope(["memory:read"]),
+    );
+    expect(allowed.result.isError).not.toBe(true);
+    expect(allowed.body).toMatchObject({
+      items: [{ memoryId: Fixture.memoryId, relation: "user" }],
+    });
+    const denied = yield* Fixture.call(
+      "memory_recall",
+      { query: "synthetic memory" },
+      Fixture.scope([]),
+    );
+    expect(denied.body).toMatchObject({ code: "unavailable" });
+  }).pipe(Effect.provide(Fixture.layer)),
 );

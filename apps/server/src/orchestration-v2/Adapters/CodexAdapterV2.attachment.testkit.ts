@@ -44,6 +44,7 @@ const DEFAULT_CODEX_SETTINGS = Schema.decodeSync(CodexSettings)({});
 export const GOAT_MEMORY_TOOLS = [
   "goat_memory_list",
   "goat_memory_search",
+  "goat_memory_recall",
   "goat_memory_read",
   "goat_memory_history",
   "goat_memory_sync_status",

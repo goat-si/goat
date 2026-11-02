@@ -1,4 +1,5 @@
 import { repairSchedule } from "../retryJitter.ts";
+import { makeMemoryProviderAuthority } from "./MemoryProviderAuthority.ts";
 import { isReleasedRuntimeRequest } from "./ReleasedRuntimeRequest.ts";
 import * as CodexRoute from "../provider/CodexRouteService.ts";
 import * as AdapterInfrastructure from "../provider/ProviderOrchestrationAdapterInfrastructure.ts";
@@ -581,59 +582,26 @@ export const layerWithOptions = (
       };
       const isMcpCredentialReserved = (threadId: ThreadId, mcpCredentialId: string) =>
         (mcpCredentialReservations.get(mcpReservationKey(threadId, mcpCredentialId)) ?? 0) > 0;
-      const isCurrentAttachment = (
-        config: import("@goat/provider-core/server/mcpSession").McpProviderSessionConfig,
-      ) =>
-        Effect.gen(function* () {
-          const threadId = config.threadId;
-          const prepared = memoryPrepareInputs.get(threadId);
-          const holdsCurrentAuthority = mcpSessions
-            .read(threadId)
-            .pipe(
-              Effect.map(
-                (current) =>
-                  current?.providerSessionId === config.providerSessionId &&
-                  current.credentialGeneration === config.credentialGeneration,
-              ),
-            );
-          if (!prepared || !(yield* holdsCurrentAuthority)) return false;
-          const attached =
-            isMcpCredentialReserved(threadId, config.providerSessionId) ||
-            Array.from((yield* Ref.get(sessions)).values()).some(
-              (entry) =>
-                entry.runtime.instanceId === prepared.providerInstanceId &&
-                entry.attachedThreadIds.has(threadId) &&
-                entry.mcpCredentialIdByThread.get(threadId) === config.providerSessionId,
-            );
-          if (!attached) return false;
-          const thread = yield* projectionStore.getThread(threadId).pipe(Effect.option);
-          return (
-            Option.isSome(thread) &&
-            thread.value.deletedAt === null &&
-            thread.value.archivedAt === null &&
-            thread.value.providerInstanceId === prepared.providerInstanceId &&
-            // Authority can be replaced under the same id while the thread is read.
-            (yield* holdsCurrentAuthority)
-          );
-        });
-      const currentMemoryPolicy = (threadId: ThreadId) =>
-        Effect.gen(function* () {
-          const committed = Option.isSome(memoryPolicy)
-            ? yield* memoryPolicy.value.read
-            : undefined;
-          const denied = { grant: "none" as const, policyEpoch: committed?.epoch ?? 0 };
-          if (!committed?.policyReady || !committed.enableAgentMemoryAccess) return denied;
-          const config = yield* mcpSessions.read(threadId);
-          if (!config) return denied;
-          const policy = yield* (
-            mcpSessionRegistry.currentMemoryPolicy?.(config.providerSessionId) ??
-              Effect.succeed(undefined)
-          );
-          // Denied credentials never need the attachment's thread projection.
-          if (!policy || policy.grant === "none" || policy.policyEpoch !== committed.epoch)
-            return denied;
-          return (yield* isCurrentAttachment(config)) ? policy : denied;
-        });
+      const { isCurrentAttachment, currentMemoryPolicy } = makeMemoryProviderAuthority({
+        policy: memoryPolicy,
+        readConfig: (threadId) => mcpSessions.read(threadId),
+        registry: mcpSessionRegistry,
+        projection: projectionStore,
+        prepared: (threadId) => memoryPrepareInputs.get(threadId),
+        attached: (config, prepared) =>
+          Ref.get(sessions).pipe(
+            Effect.map(
+              (entries) =>
+                isMcpCredentialReserved(config.threadId, config.providerSessionId) ||
+                Array.from(entries.values()).some(
+                  (entry) =>
+                    entry.runtime.instanceId === prepared.providerInstanceId &&
+                    entry.attachedThreadIds.has(config.threadId) &&
+                    entry.mcpCredentialIdByThread.get(config.threadId) === config.providerSessionId,
+                ),
+            ),
+          ),
+      });
       if (Option.isSome(admission))
         yield* admission.value.bind(currentMemoryPolicy, isCurrentAttachment);
       const mcpPrepareLock = yield* KeyedLock.make<ThreadId>();

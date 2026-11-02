@@ -23,6 +23,20 @@ import {
 const servedMemoryToolkits = (sync: Layer.Layer<Sync.MemorySyncService>) =>
   layerMemoryToolkits.pipe(
     Layer.provide(Fixture.core),
+    Layer.provide(
+      Layer.succeed(Settings.MemoryHubCommittedSettings, {
+        read: Effect.succeed({
+          provenance: null,
+          settings: { mode: "hub" as const, memorySpaceId: Fixture.space },
+          version: 1,
+        }),
+      }),
+    ),
+    Layer.provide(
+      Layer.succeed(Identity.ServerEnvironmentIdentity, {
+        getEnvironmentId: Effect.succeed(M.EnvironmentId.make("fixture-memory-mcp")),
+      }),
+    ),
     Layer.provide(Layer.mock(Settings.ServerSettingsService)({})),
     Layer.provide(sync),
     Layer.provideMerge(McpServer.McpServer.layer),
@@ -41,7 +55,7 @@ it.effect(
           .map((name) => listedToolName(resolveAgentSurfaceEntry(name)!))
           .sort(),
       );
-      expect(new Set(names).size).toBe(16);
+      expect(new Set(names).size).toBe(17);
       const result = yield* Fixture.call(
         "memory_hub_disable",
         { requestId: M.MemoryOperationId.make(Fixture.id(30)), expectedVersion: 3 },
@@ -133,6 +147,15 @@ it.effect("two consumers of the application Snapshot layer observe the same inst
           second.pipe(Layer.provide(layerMemorySnapshot)),
         ).pipe(
           Layer.provide(Fixture.core),
+          Layer.provide(
+            Layer.succeed(Settings.MemoryHubCommittedSettings, {
+              read: Effect.succeed({
+                provenance: null,
+                settings: { mode: "disabled" as const },
+                version: 1,
+              }),
+            }),
+          ),
           Layer.provide(
             Layer.mock(Sync.MemorySyncService)({
               readLocalReadiness: () =>
