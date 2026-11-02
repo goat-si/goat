@@ -3,7 +3,10 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
-export function recoverServerWorkingDirectory(): { original?: string; current?: string } {
+export function recoverServerWorkingDirectory(): {
+  original?: string | undefined;
+  current?: string | undefined;
+} {
   let original: string | undefined;
   try {
     original = process.cwd();

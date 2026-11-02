@@ -31,9 +31,9 @@ const program = Command.runWith(makeCli(), { version: "0.0.0" })(args).pipe(
   ),
   Effect.match({ onFailure: (error) => String(error), onSuccess: () => "unexpected success" }),
 );
-console.log(`RESULT ${await Effect.runPromise(program)}`);
+process.stdout.write(`RESULT ${await Effect.runPromise(program)}\n`);
 try {
-  console.log(`CWD ${process.cwd()}`);
+  process.stdout.write(`CWD ${process.cwd()}\n`);
 } catch {
-  console.log("CWD unavailable");
+  process.stdout.write("CWD unavailable\n");
 }
