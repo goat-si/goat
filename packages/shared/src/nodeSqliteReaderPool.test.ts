@@ -91,12 +91,12 @@ it.effect("an interrupted use returns its slot only after its cancellation finis
   }),
 );
 
-it.effect("leases a running slot first and starts no idle slot while another backs off", () =>
+it.effect("leases a free running slot, then a free failing slot, before an idle one", () =>
   Effect.gen(function* () {
     assert.equal(yield* leasedSlot(yield* makePool(["idle", "running", "backoff", "idle"])), 1);
-    // A backoff anywhere keeps new workers from starting: the failing slot retries on its schedule.
+    // With a failing slot free, it retries on its own schedule instead of an idle slot starting.
     assert.equal(yield* leasedSlot(yield* makePool(["idle", "backoff", "idle", "idle"])), 1);
-    // Without a backoff, an idle slot starts before a running one is waited for.
+    // Without a backoff, the lowest idle slot starts a worker.
     assert.equal(yield* leasedSlot(yield* makePool(["idle", "idle", "idle", "idle"])), 0);
   }),
 );
