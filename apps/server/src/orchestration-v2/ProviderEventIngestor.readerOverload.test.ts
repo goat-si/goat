@@ -2,8 +2,12 @@ import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   NodeId,
+  PlanId,
   ProviderDriverKind,
   ProviderInstanceId,
+  ProviderTurnId,
+  RuntimeRequestId,
+  TurnItemId,
   type ModelSelection,
   type OrchestrationV2AppThread,
   type OrchestrationV2DomainEvent,
@@ -29,6 +33,7 @@ import * as EventStore from "./EventStore.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProviderEventIngestor from "./ProviderEventIngestor.ts";
+import { withWriterFallback } from "./readerOverloadFallback.ts";
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 
@@ -51,7 +56,7 @@ const CODEX_DRIVER = ProviderDriverKind.make("codex");
 function threadCreatedEvent(
   now: DateTime.Utc,
 ): Effect.Effect<
-  OrchestrationV2DomainEvent,
+  Extract<OrchestrationV2DomainEvent, { readonly type: "thread.created" }>,
   IdAllocator.IdAllocatorV2Error,
   IdAllocator.IdAllocatorV2
 > {
@@ -152,6 +157,50 @@ const layerFor = (filename: string, writerWorker: boolean) => {
   );
 };
 
+/** Starts every reader slot, then holds 64 admissions so the next reader read is rejected. */
+const saturateReaders = (nonReaders: ReadonlySet<NodeWorkerThreads.Worker>) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const warmRelease = yield* Deferred.make<void>();
+    const warmEntered = Array.from({ length: 4 }, () => Deferred.makeUnsafe<void>());
+    const warm = [];
+    for (const entered of warmEntered)
+      warm.push(
+        yield* Effect.forkChild(
+          sql
+            .withTransaction(
+              Effect.gen(function* () {
+                yield* sql`SELECT 1`;
+                yield* Deferred.succeed(entered, undefined);
+                yield* Deferred.await(warmRelease);
+              }),
+            )
+            .pipe(NodeSqliteClient.readOnly),
+          { startImmediately: true },
+        ),
+      );
+    for (const entered of warmEntered) yield* Deferred.await(entered);
+    yield* Deferred.succeed(warmRelease, undefined);
+    for (const fiber of warm) yield* Fiber.join(fiber);
+    const readers = workers.filter((worker) => !nonReaders.has(worker));
+    assert.lengthOf(readers, 4);
+    const sent = yield* Deferred.make<void>();
+    const held = readers.map((reader) =>
+      vi.spyOn(reader, "postMessage").mockImplementation(() => {
+        Deferred.doneUnsafe(sent, Effect.void);
+      }),
+    );
+    const reads = [];
+    for (let index = 0; index < 64; index++)
+      reads.push(
+        yield* Effect.forkChild(sql`SELECT 1`.pipe(NodeSqliteClient.readOnly), {
+          startImmediately: true,
+        }),
+      );
+    yield* Deferred.await(sent);
+    return { held, reads };
+  });
+
 it.effect.each([false, true])(
   "deduplicates under reader saturation with writerWorker=%s",
   (writerWorker) =>
@@ -206,49 +255,12 @@ it.effect.each([false, true])(
           updated_at: string;
         }>`SELECT updated_at FROM orchestration_v2_projection_threads WHERE thread_id = ${threadId}`;
         yield* TestClock.adjust("5 seconds");
-        // Start every reader slot so that no idle slot can drain the saturated admissions.
-        const warmRelease = yield* Deferred.make<void>();
-        const warmEntered = Array.from({ length: 4 }, () => Deferred.makeUnsafe<void>());
-        const warm = [];
-        for (const entered of warmEntered)
-          warm.push(
-            yield* Effect.forkChild(
-              sql
-                .withTransaction(
-                  Effect.gen(function* () {
-                    yield* sql`SELECT 1`;
-                    yield* Deferred.succeed(entered, undefined);
-                    yield* Deferred.await(warmRelease);
-                  }),
-                )
-                .pipe(NodeSqliteClient.readOnly),
-              { startImmediately: true },
-            ),
-          );
-        for (const entered of warmEntered) yield* Deferred.await(entered);
-        yield* Deferred.succeed(warmRelease, undefined);
-        for (const fiber of warm) yield* Fiber.join(fiber);
-        const readers = workers.filter((worker) => !nonReaders.has(worker));
-        assert.lengthOf(readers, 4);
-        const sent = yield* Deferred.make<void>();
-        const held = readers.map((reader) =>
-          vi.spyOn(reader, "postMessage").mockImplementation(() => {
-            Deferred.doneUnsafe(sent, Effect.void);
-          }),
-        );
+        const { held, reads } = yield* saturateReaders(nonReaders);
         using _held = {
           [Symbol.dispose]: () => {
             for (const spy of held) spy.mockRestore();
           },
         };
-        const reads = [];
-        for (let index = 0; index < 64; index++)
-          reads.push(
-            yield* Effect.forkChild(sql`SELECT 1`.pipe(NodeSqliteClient.readOnly), {
-              startImmediately: true,
-            }),
-          );
-        yield* Deferred.await(sent);
         assert.isTrue(yield* projection.isNodeStored(node));
         assert.isFalse(
           yield* projection.isNodeStored({ ...node, status: "completed", completedAt: now }),
@@ -324,4 +336,279 @@ it.effect.each([false, true])(
         assert.equal(normalizeError._tag, "ProviderEventNormalizeError");
       }).pipe(Effect.provide(layerFor(path.join(directory, "state.sqlite"), writerWorker)));
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+type IngestEvent = ProviderEventIngestor.ProviderEventIngestInput["event"];
+interface Saturated {
+  readonly now: DateTime.Utc;
+  readonly thread: OrchestrationV2AppThread;
+  readonly providerSessionId: ProviderEventIngestor.ProviderEventIngestInput["providerSessionId"];
+  readonly providerThreadId: OrchestrationV2AppThread["activeProviderThreadId"] & {};
+  readonly childThreadId: OrchestrationV2AppThread["id"];
+  readonly projection: ProjectionStore.ProjectionStoreV2Shape;
+  readonly ingest: (
+    event: IngestEvent,
+  ) => ReturnType<ProviderEventIngestor.ProviderEventIngestorV2Shape["ingestNormalized"]>;
+}
+
+/** Runs `seed`, then `body` while every reader slot is busy and all 64 admissions are queued. */
+const withSaturatedReaders = <A, E, E2 = never>(
+  body: (saturated: Saturated) => Effect.Effect<A, E>,
+  seed: (saturated: Saturated) => Effect.Effect<unknown, E2> = () => Effect.void,
+) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const directory = yield* fs.makeTempDirectoryScoped({ prefix: "ingestor-overload-" });
+    return yield* Effect.gen(function* () {
+      const nonReaders = new Set(workers);
+      const now = yield* DateTime.now;
+      const sql = yield* SqlClient.SqlClient;
+      const eventSink = yield* EventSink.EventSinkV2;
+      const projection = yield* ProjectionStore.ProjectionStoreV2;
+      const ingestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
+      const allocator = yield* IdAllocator.IdAllocatorV2;
+      const created = yield* threadCreatedEvent(now);
+      yield* eventSink.write({ events: [created] });
+      const threadId = created.threadId;
+      const providerSessionId = yield* allocator.allocate.providerSession({
+        providerInstanceId: modelSelection.instanceId,
+        threadId,
+      });
+      const fixture: Saturated = {
+        now,
+        thread: created.payload,
+        providerSessionId,
+        providerThreadId: allocator.derive.providerThread({
+          driver: CODEX_DRIVER,
+          nativeThreadId: "native-thread",
+        }),
+        childThreadId: allocator.derive.threadFromProviderThread({
+          driver: CODEX_DRIVER,
+          nativeThreadId: "native-overload-subagent",
+        }),
+        projection,
+        ingest: (event) =>
+          ingestor.ingestNormalized({
+            providerSessionId,
+            providerInstanceId: modelSelection.instanceId,
+            threadId,
+            event,
+          }),
+      };
+      yield* seed(fixture);
+      const { held, reads } = yield* saturateReaders(nonReaders);
+      using _held = {
+        [Symbol.dispose]: () => {
+          for (const spy of held) spy.mockRestore();
+        },
+      };
+      const overflow = yield* sql`SELECT 1`.pipe(NodeSqliteClient.readOnly, Effect.flip);
+      assert.isTrue(NodeSqliteClient.isReaderAdmissionOverload(overflow));
+      const result = yield* body(fixture);
+      for (const spy of held) spy.mockRestore();
+      for (const read of reads) yield* Fiber.interrupt(read);
+      return result;
+    }).pipe(Effect.provide(layerFor(path.join(directory, "state.sqlite"), false)));
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
+
+const overloadTurnId = ProviderTurnId.make("provider-turn:overload");
+const ingestionReads: ReadonlyArray<{
+  readonly name: string;
+  readonly seed?: (saturated: Saturated) => ReturnType<Saturated["ingest"]>;
+  readonly event: (saturated: Saturated) => IngestEvent;
+  readonly stored: ReadonlyArray<string>;
+}> = [
+  {
+    name: "plan.updated reading the previous plan",
+    event: ({ thread }) => ({
+      type: "plan.updated",
+      driver: CODEX_DRIVER,
+      plan: {
+        id: PlanId.make(`${thread.id}:plan`),
+        threadId: thread.id,
+        runId: null,
+        nodeId: NodeId.make(`${thread.id}:plan-node`),
+        status: "active",
+        kind: "todo_list",
+        steps: [{ id: "1", text: "Ingest under overload", status: "running" }],
+      },
+    }),
+    stored: ["plan.updated"],
+  },
+  {
+    name: "turn_item.updated reading the stored screen row",
+    event: ({ thread, now }) => ({
+      type: "turn_item.updated",
+      driver: CODEX_DRIVER,
+      turnItem: {
+        id: TurnItemId.make(`${thread.id}:screen-row`),
+        type: "dynamic_tool",
+        threadId: thread.id,
+        runId: null,
+        nodeId: null,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        parentItemId: null,
+        ordinal: 1,
+        status: "running",
+        title: "goat screen run",
+        toolName: "goat.goat_screen_run",
+        input: { code: "..." },
+        startedAt: now,
+        completedAt: null,
+        updatedAt: now,
+      },
+    }),
+    stored: ["turn-item.updated"],
+  },
+  {
+    name: "turn.terminal reading pending native user inputs",
+    seed: ({ thread, now, providerSessionId, ingest }) =>
+      ingest({
+        type: "runtime_request.updated",
+        driver: CODEX_DRIVER,
+        threadId: thread.id,
+        runtimeRequest: {
+          id: RuntimeRequestId.make(`${thread.id}:question`),
+          nodeId: NodeId.make(`${thread.id}:question-node`),
+          providerTurnId: overloadTurnId,
+          nativeRequestRef: null,
+          kind: "user_input",
+          status: "pending",
+          responseCapability: { type: "live", providerSessionId },
+          createdAt: now,
+          resolvedAt: null,
+        },
+      }),
+    event: ({ providerThreadId }) => ({
+      type: "turn.terminal",
+      driver: CODEX_DRIVER,
+      providerThreadId,
+      providerTurnId: overloadTurnId,
+      runOrdinal: 1,
+      status: "completed",
+      failure: null,
+      threadDisposition: "reusable",
+    }),
+    stored: ["runtime-request.updated:cancelled"],
+  },
+  {
+    name: "app_thread.created reading the existing thread",
+    event: ({ thread }) => ({
+      type: "app_thread.created",
+      driver: CODEX_DRIVER,
+      appThread: { ...thread, title: "Renamed under overload" },
+    }),
+    stored: ["thread.metadata-updated"],
+  },
+  {
+    name: "provider_thread.updated reading rewound thread records",
+    event: ({ thread, now, providerSessionId, providerThreadId }) => ({
+      type: "provider_thread.updated",
+      driver: CODEX_DRIVER,
+      providerThread: {
+        id: providerThreadId,
+        driver: CODEX_DRIVER,
+        providerInstanceId: modelSelection.instanceId,
+        providerSessionId,
+        appThreadId: thread.id,
+        ownerNodeId: null,
+        nativeThreadRef: { driver: CODEX_DRIVER, nativeId: "native-thread", strength: "strong" },
+        nativeConversationHeadRef: null,
+        status: "idle",
+        firstRunOrdinal: null,
+        lastRunOrdinal: null,
+        handoffIds: [],
+        forkedFrom: null,
+        createdAt: now,
+        updatedAt: now,
+      },
+      retainedNativeTurnIds: [],
+    }),
+    stored: ["provider-thread.updated"],
+  },
+  {
+    name: "subagent.updated reading the child thread to sync its model",
+    seed: ({ thread, childThreadId, ingest }) =>
+      ingest({
+        type: "app_thread.created",
+        driver: CODEX_DRIVER,
+        appThread: {
+          ...thread,
+          id: childThreadId,
+          title: "review design",
+          activeProviderThreadId: null,
+          lineage: {
+            parentThreadId: thread.id,
+            relationshipToParent: "subagent",
+            rootThreadId: thread.id,
+          },
+        },
+      }),
+    event: ({ thread, childThreadId, now }) => ({
+      type: "subagent.updated",
+      driver: CODEX_DRIVER,
+      subagent: {
+        id: NodeId.make(`${thread.id}:subagent`),
+        threadId: thread.id,
+        runId: null,
+        parentNodeId: NodeId.make(`${thread.id}:root`),
+        origin: "provider_native",
+        createdBy: "agent",
+        driver: CODEX_DRIVER,
+        providerInstanceId: modelSelection.instanceId,
+        providerThreadId: null,
+        childThreadId,
+        nativeTaskRef: null,
+        prompt: "Review the design",
+        title: "review design",
+        model: "gpt-6.1-sol",
+        status: "running",
+        result: null,
+        startedAt: now,
+        completedAt: null,
+        updatedAt: now,
+      },
+    }),
+    stored: ["subagent.updated", "thread.model-selection-updated"],
+  },
+];
+
+it.effect.each(ingestionReads)("ingests $name while reader admission is saturated", (read) =>
+  withSaturatedReaders(
+    (saturated) =>
+      Effect.gen(function* () {
+        const stored = yield* saturated.ingest(read.event(saturated));
+        assert.deepEqual(
+          stored.map(({ event }) =>
+            event.type === "runtime-request.updated"
+              ? `${event.type}:${event.payload.status}`
+              : event.type,
+          ),
+          read.stored,
+        );
+      }),
+    read.seed,
+  ),
+);
+
+it.effect("fails reads outside provider ingestion fast while reader admission is saturated", () =>
+  withSaturatedReaders(({ thread, projection }) =>
+    Effect.gen(function* () {
+      const failure = yield* projection.getThread(thread.id).pipe(Effect.flip);
+      assert.isTrue(NodeSqliteClient.isReaderAdmissionOverload(failure));
+    }),
+  ),
+);
+
+it.effect("reruns an ingestion read on the writer inside an enclosing readOnly", () =>
+  withSaturatedReaders(({ thread, projection }) =>
+    Effect.gen(function* () {
+      const read = yield* withWriterFallback(projection.getThread(thread.id)).pipe(
+        NodeSqliteClient.readOnly,
+      );
+      assert.equal(read.id, thread.id);
+    }),
+  ),
 );

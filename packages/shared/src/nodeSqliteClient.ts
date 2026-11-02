@@ -63,18 +63,8 @@ export interface SqliteClientConfig {
 
 export { isReaderAdmissionOverload } from "./readerAdmissionOverload.ts";
 import { ReaderAdmissionOverloadError } from "./readerAdmissionOverload.ts";
-
-// SqlClient masks transaction acquisition, so readOnly carries the caller's interruption policy.
-const ReadOnly = Context.Reference<typeof Effect.interruptible | undefined>(
-  "@goat/shared/nodeSqliteClient/ReadOnly",
-  { defaultValue: () => undefined },
-);
-
-/** Wrap the whole transaction; existing write transactions retain the writer, and writes on the reader fail as readonly. */
-export const readOnly = <A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
-  Effect.uninterruptibleMask((restore) =>
-    restore(Effect.provideService(effect, ReadOnly, restore)),
-  );
+export { onWriter, readOnly } from "./sqliteReadRouting.ts";
+import { ReadOnly } from "./sqliteReadRouting.ts";
 
 interface Acquired {
   readonly connection: "writer" | "reader";
