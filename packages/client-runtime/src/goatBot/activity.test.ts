@@ -252,7 +252,6 @@ describe("goatBotActivity", () => {
         runs: [],
         nodes: [],
         runtimeRequests: [],
-        turnItems: [tool("Run tests", null, 9)],
       },
     };
     expect(working(acknowledged(task), worker)?.text).toBe(text);
@@ -363,7 +362,6 @@ describe("goatBotActivity", () => {
         runtimeRequests: [
           { nodeId: NodeId.make("node-1"), kind: "command" as const, status: "pending" as const },
         ],
-        turnItems: [],
       },
     });
     expect(working(acknowledged(taskA), projection(runB))?.text).toBe("Working");
@@ -384,7 +382,6 @@ describe("goatBotActivity", () => {
         runs: [{ id: runB, status: "running" }],
         nodes: [],
         runtimeRequests: [],
-        turnItems: [tool("Edit files", runB, 8)],
       },
     };
     const noRunId = chip("task-a", {
@@ -412,7 +409,6 @@ describe("goatBotActivity", () => {
         runs: [],
         nodes: [],
         runtimeRequests: [],
-        turnItems: [tool("Local tool", null, 9)],
       },
     };
     expect(working(acknowledged(remote), local)?.text).toBe("Copying files on mac-studio");
