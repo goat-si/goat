@@ -61,8 +61,6 @@ while ([DateTime]::UtcNow -lt $deadline) {
 exit 5
 `;
 
-export const WINDOWS_SUPERVISOR_SPAWN_POWERSHELL = WINDOWS_DETACHED_SPAWN_POWERSHELL;
-
 /** The `-EncodedCommand` form of a PowerShell program: base64 of its UTF-16LE bytes. */
 export function encodePowerShellCommand(script: string): string {
   let binary = "";
