@@ -944,6 +944,7 @@ export const layer: Layer.Layer<
                 input.event.type === "app_thread.created"
                   ? threadCommands.withLock(input.event.appThread.id, effect)
                   : effect,
+              withWriterFallback,
             ),
         ),
     });
