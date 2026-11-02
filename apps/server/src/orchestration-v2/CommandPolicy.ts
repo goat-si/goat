@@ -132,6 +132,19 @@ export function isNativeMaintenanceCommand(message: {
   );
 }
 
+export function shouldClearActiveOrder(
+  command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
+  activeOrderKey: string | null | undefined,
+): boolean {
+  return (
+    activeOrderKey != null &&
+    command.createdBy === "user" &&
+    command.notification === undefined &&
+    command.delegatedCompletion === undefined &&
+    !isNativeMaintenanceCommand(command)
+  );
+}
+
 /**
  * A goal command sent into active work stops that work when it starts or
  * replaces goal work, or ends a goal that is driving the run.
