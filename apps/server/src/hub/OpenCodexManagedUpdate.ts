@@ -35,6 +35,8 @@ import {
   phaseOf,
   applyOrchestratedStep,
   holdAffected,
+  isRecordedOverrun,
+  recordOverrun,
   recoverUncertain,
   releaseOverrun,
   restoreAdmission,
@@ -103,6 +105,7 @@ const make = Effect.gen(function* () {
   const stateLock = yield* Semaphore.make(1);
   const retainedHome = yield* Ref.make<AdmissionOwnership>("none");
   const overrunSignal = yield* Ref.make(yield* Deferred.make<void>());
+  const recoveryHoldUntil = yield* Ref.make<number | undefined>(undefined);
 
   /** A file that exists but cannot be read must not erase the memory of a rolled-back target. */
   const readState = Effect.gen(function* () {
@@ -137,13 +140,16 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         if ((yield* Ref.get(state)) !== expected) return false;
         const pending = expected.window?.orchestrated?.[""];
-        if (
-          pending !== undefined &&
-          !pending.settled &&
-          (pending.pending || pending.uncertain) &&
-          (yield* Clock.currentTimeMillis) >= pending.notAfter + pending.boundMs + 30 * MINUTE
-        )
-          return false;
+        if (pending !== undefined && !pending.settled && (pending.pending || pending.uncertain)) {
+          const now = yield* Clock.currentTimeMillis;
+          const until = yield* Ref.get(recoveryHoldUntil);
+          if (
+            !isRecordedOverrun(expected) &&
+            now >= pending.notAfter + pending.boundMs + 30 * MINUTE
+          )
+            return false;
+          if (until !== undefined && now >= until) return false;
+        }
         yield* writeState(change);
         yield* after;
         return true;
@@ -156,7 +162,16 @@ const make = Effect.gen(function* () {
     reason?: string,
   ) => mutate((current, at) => withRecords(current, at, [step], targetVersion, phase, reason));
   const holding = <A, E>(affected: ReadonlyArray<string | null>, body: Effect.Effect<A, E>) =>
-    holdAffected(host, retainedHome, affected, body, stateLock);
+    holdAffected(
+      host,
+      retainedHome,
+      affected,
+      body,
+      stateLock,
+      state,
+      recoveryHoldUntil,
+      overrunSignal,
+    );
 
   const enforceOverrun = Effect.fn("OpenCodexManagedUpdate.enforceOverrun")(function* () {
     yield* stateLock.withPermit(
@@ -165,27 +180,12 @@ const make = Effect.gen(function* () {
         if (current === undefined) return;
         yield* restoreAdmission(current, host, retainedHome);
         const now = yield* Clock.currentTimeMillis;
-        if (!(yield* releaseOverrun(current, host, retainedHome, now))) return;
+        const recorded = isRecordedOverrun(current);
+        if (!(yield* releaseOverrun(current, host, retainedHome, recoveryHoldUntil, now))) return;
         yield* Deferred.succeed(yield* Ref.get(overrunSignal), undefined);
-        const window = current.window;
-        const entry = window?.orchestrated?.[""];
-        if (
-          window === undefined ||
-          entry === undefined ||
-          current.members.find((member) => member.alias === null)?.reason === "apply-overrun"
-        )
-          return;
         yield* Ref.set(state, current);
-        yield* writeState((latest, at) =>
-          withRecords(
-            latest,
-            at,
-            [{ alias: null, fromVersion: entry.fromVersion }],
-            window.targetVersion,
-            "rollback-failed",
-            "apply-overrun",
-          ),
-        );
+        if (recorded) return;
+        yield* writeState(recordOverrun);
         yield* Effect.logWarning("opencodex.update.apply-overrun", { alias: null });
       }).pipe(Effect.uninterruptible),
     );
@@ -250,6 +250,7 @@ const make = Effect.gen(function* () {
         const touched = (step.alias === null ? [null, ...window.children] : [step.alias]).filter(
           (alias) => !(alias === step.alias && failedTargetKey(alias) === window.failedMember),
         );
+        const before = yield* Ref.get(state);
         const members = yield* Effect.forEach(touched, (alias) => host.member(alias, scope));
         if (members.some(({ runningTurns }) => runningTurns !== 0)) return false;
         const installed =
@@ -261,14 +262,24 @@ const make = Effect.gen(function* () {
           snapshot.runtime.role !== window.roles[failedTargetKey(step.alias)] ||
           snapshot.parityEvidence?.modelsStatus !== 200
         ) {
-          yield* record(step, window.targetVersion, "rollback-failed", window.restoring);
+          const committed = yield* mutateIfCurrent(before, (current, at) =>
+            withRecords(
+              current,
+              at,
+              [step],
+              window.targetVersion,
+              "rollback-failed",
+              window.restoring,
+            ),
+          );
+          if (!committed) return false;
           yield* Effect.logWarning("opencodex.update.rollback-failed", {
             alias: step.alias,
             targetVersion: window.targetVersion,
           });
           return false;
         }
-        yield* mutate((current, at) =>
+        const committed = yield* mutateIfCurrent(before, (current, at) =>
           withWindow(
             withRecords(current, at, [step], window.targetVersion, "rolled-back", window.restoring),
             (open) => ({
@@ -279,10 +290,15 @@ const make = Effect.gen(function* () {
             }),
           ),
         );
+        if (!committed) return false;
       }
       // Restored versions are not enough: the pair must route again before the window closes.
+      const beforeParity = yield* Ref.get(state);
       if (!(yield* paritySurvives(window.children, scope))) return false;
-      yield* mutate((current) => withWindow(current, () => undefined));
+      if (
+        !(yield* mutateIfCurrent(beforeParity, (current) => withWindow(current, () => undefined)))
+      )
+        return false;
       yield* Effect.logWarning("opencodex.update.rolled-back", {
         targetVersion: window.targetVersion,
         reason: window.restoring,
@@ -361,6 +377,7 @@ const make = Effect.gen(function* () {
     state,
     stateLock,
     overrunSignal,
+    recoveryHoldUntil,
     enforceOverrun,
     record,
     rollBack,

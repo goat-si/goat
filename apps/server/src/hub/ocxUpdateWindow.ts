@@ -23,6 +23,7 @@ export const OrchestratedWindowEntry = Schema.Struct({
   pending: Schema.optional(Schema.Literal(true)),
   uncertain: Schema.optional(Schema.Literal(true)),
   settled: Schema.optional(Schema.Literal(true)),
+  overrun: Schema.optional(Schema.Literal(true)),
   observed: Schema.optional(
     Schema.Struct({
       version: Schema.String,
@@ -132,11 +133,41 @@ export const affectedBy = (
 ): ReadonlyArray<string | null> =>
   steps.some(({ alias }) => alias === null) ? [null, ...children] : steps.map(({ alias }) => alias);
 
+export const isRecordedOverrun = (current: State) =>
+  current.window?.orchestrated?.[""]?.overrun === true ||
+  current.members.some(
+    (member) =>
+      member.alias === null &&
+      member.reason === "apply-overrun" &&
+      member.targetVersion === current.window?.targetVersion,
+  );
+
+export const recordOverrun = (current: State, at: number): State => {
+  const window = current.window;
+  const entry = window?.orchestrated?.[""];
+  if (window === undefined || entry === undefined) return current;
+  return withWindow(
+    withRecords(
+      current,
+      at,
+      [{ alias: null, fromVersion: entry.fromVersion }],
+      window.targetVersion,
+      "rollback-failed",
+      "apply-overrun",
+    ),
+    (open) => ({
+      ...open,
+      orchestrated: { ...open.orchestrated, "": { ...entry, overrun: true } },
+    }),
+  );
+};
+
 const MINUTE = 60_000;
 const APPLY_START_MS = 5 * MINUTE;
 const OVERRUN_GRACE_MS = 30 * MINUTE;
 const RETRY_INTERVAL_MS = 10 * MINUTE;
 const PROBATION_MS = 10 * MINUTE;
+const RECOVERY_HOLD_MS = 6 * MINUTE;
 const PROBATION_CHECK_MS = MINUTE;
 const RESTART_TOLERANCE_MS = 2_000;
 
@@ -158,6 +189,7 @@ type WindowOps = {
   readonly state: Ref.Ref<State>;
   readonly stateLock: Semaphore.Semaphore;
   readonly overrunSignal: Ref.Ref<Deferred.Deferred<void>>;
+  readonly recoveryHoldUntil: Ref.Ref<number | undefined>;
   readonly enforceOverrun: () => Effect.Effect<void, Failure>;
   readonly record: (
     step: Step,
@@ -213,7 +245,7 @@ export const restoreAdmission = Effect.fn("OpenCodexUpdateWindow.restoreAdmissio
   const ownership = yield* Ref.get(retainedHome);
   if (!unsettled && (ownership === "retained" || ownership === "held-and-retained")) {
     yield* releaseRetained(host, retainedHome).pipe(Effect.uninterruptible);
-  } else if (unsettled && ownership === "none") {
+  } else if (unsettled && ownership === "none" && !isRecordedOverrun(initial)) {
     const now = yield* Clock.currentTimeMillis;
     if (now < pending.notAfter + pending.boundMs + OVERRUN_GRACE_MS)
       yield* host.holdAdmission(null).pipe(
@@ -227,17 +259,22 @@ export const releaseOverrun = Effect.fn("OpenCodexUpdateWindow.releaseOverrun")(
   current: State,
   host: Host,
   retainedHome: Ref.Ref<AdmissionOwnership>,
+  recoveryHoldUntil: Ref.Ref<number | undefined>,
   now: number,
 ) {
   const entry = current.window?.orchestrated?.[""];
-  if (
-    entry === undefined ||
+  if (entry === undefined) return false;
+  if (isRecordedOverrun(current)) {
+    const until = yield* Ref.get(recoveryHoldUntil);
+    if (until === undefined || now < until) return false;
+  } else if (
     entry.settled ||
     (!entry.pending && !entry.uncertain) ||
     now < entry.notAfter + entry.boundMs + OVERRUN_GRACE_MS
   )
     return false;
   yield* releaseAllHome(host, retainedHome).pipe(Effect.uninterruptible);
+  yield* Ref.set(recoveryHoldUntil, undefined);
   return true;
 });
 
@@ -247,16 +284,30 @@ export const holdAffected = <A, E>(
   affected: ReadonlyArray<string | null>,
   body: Effect.Effect<A, E>,
   stateLock: Semaphore.Semaphore,
+  state: Ref.Ref<State>,
+  recoveryHoldUntil: Ref.Ref<number | undefined>,
+  overrunSignal: Ref.Ref<Deferred.Deferred<void>>,
+  expected?: State,
 ) => {
   const held: Array<string | null> = [];
   return Effect.gen(function* () {
     for (const alias of affected) {
       const acquired = yield* stateLock.withPermit(
         Effect.gen(function* () {
+          if (expected !== undefined && (yield* Ref.get(state)) !== expected) return false;
           if (alias === null && (yield* Ref.get(retainedHome)) !== "none") return true;
           if (!(yield* host.holdAdmission(alias))) return false;
           held.push(alias);
-          if (alias === null) yield* Ref.set(retainedHome, "held");
+          if (alias === null) {
+            yield* Ref.set(retainedHome, "held");
+            if (isRecordedOverrun(yield* Ref.get(state))) {
+              yield* Ref.set(
+                recoveryHoldUntil,
+                (yield* Clock.currentTimeMillis) + RECOVERY_HOLD_MS,
+              );
+              yield* Ref.set(overrunSignal, yield* Deferred.make<void>());
+            }
+          }
           return true;
         }).pipe(Effect.uninterruptible),
       );
@@ -283,6 +334,7 @@ export const holdAffected = <A, E>(
                             )
                         : Effect.void,
                     ),
+                    Effect.andThen(Ref.set(recoveryHoldUntil, undefined)),
                   )
                 : host.releaseAdmission(alias),
             { discard: true },
@@ -404,6 +456,7 @@ export const recoverUncertain = Effect.fn("OpenCodexUpdateWindow.recover")(funct
     state,
     stateLock,
     overrunSignal,
+    recoveryHoldUntil,
     enforceOverrun,
     rollBack,
     healthProof,
@@ -448,7 +501,12 @@ export const recoverUncertain = Effect.fn("OpenCodexUpdateWindow.recover")(funct
     }
     const releaseHome =
       uncertain.alias === null ? releaseRetained(host, retainedHome) : Effect.void;
-    if (uncertain.alias === null && now >= entry.notAfter + entry.boundMs + OVERRUN_GRACE_MS) {
+    const postOverrun = uncertain.alias === null && isRecordedOverrun(current);
+    if (
+      uncertain.alias === null &&
+      !postOverrun &&
+      now >= entry.notAfter + entry.boundMs + OVERRUN_GRACE_MS
+    ) {
       yield* enforceOverrun();
       yield* Ref.set(nextAt, now + RETRY_INTERVAL_MS);
       return "uncertain" as const;
@@ -512,10 +570,14 @@ export const recoverUncertain = Effect.fn("OpenCodexUpdateWindow.recover")(funct
             if ((yield* Ref.get(state)) !== current) return false;
             if (uncertain.alias !== null) return true;
             const ownership = yield* Ref.get(retainedHome);
-            return (
-              (ownership === "retained" || ownership === "held-and-retained") &&
-              (yield* Clock.currentTimeMillis) < entry.notAfter + entry.boundMs + OVERRUN_GRACE_MS
-            );
+            const until = yield* Ref.get(recoveryHoldUntil);
+            return postOverrun
+              ? ownership === "held" &&
+                  until !== undefined &&
+                  (yield* Clock.currentTimeMillis) < until
+              : (ownership === "retained" || ownership === "held-and-retained") &&
+                  (yield* Clock.currentTimeMillis) <
+                    entry.notAfter + entry.boundMs + OVERRUN_GRACE_MS;
           }),
         );
         if (!safe) {
@@ -552,6 +614,7 @@ export const recoverUncertain = Effect.fn("OpenCodexUpdateWindow.recover")(funct
         notAfter: entry.notAfter,
         boundMs: entry.boundMs,
         settled: true as const,
+        ...(postOverrun ? { overrun: true as const } : {}),
       };
       const committed = yield* mutateIfCurrent(
         current,
@@ -611,7 +674,44 @@ export const recoverUncertain = Effect.fn("OpenCodexUpdateWindow.recover")(funct
       yield* Ref.set(nextAt, now + RETRY_INTERVAL_MS);
       return "uncertain" as const;
     });
-    return yield* forward ? sync.exclusive(settle) : settle;
+    if (!forward) return yield* settle;
+    if (!postOverrun) return yield* sync.exclusive(settle);
+    const postOverrunRecovery = Effect.gen(function* () {
+      const permitted = yield* stateLock.withPermit(
+        Effect.gen(function* () {
+          if ((yield* Ref.get(state)) !== current || (yield* Ref.get(retainedHome)) !== "held")
+            return false;
+          const until = yield* Ref.get(recoveryHoldUntil);
+          return until !== undefined && (yield* Clock.currentTimeMillis) < until;
+        }),
+      );
+      if (!permitted) return "uncertain" as const;
+      const affected = affectedBy(window.steps, window.children);
+      const members = yield* Effect.forEach(affected, (alias) => host.member(alias, scope));
+      if (members.some((member) => member.runningTurns !== 0)) {
+        yield* Ref.set(nextAt, (yield* Clock.currentTimeMillis) + RETRY_INTERVAL_MS);
+        return "uncertain" as const;
+      }
+      return yield* settle;
+    });
+    const outcome = yield* sync.exclusive(
+      holdAffected(
+        host,
+        retainedHome,
+        affectedBy(window.steps, window.children),
+        postOverrunRecovery,
+        stateLock,
+        state,
+        recoveryHoldUntil,
+        overrunSignal,
+        current,
+      ),
+    );
+    if (outcome === "admission-unsupported") {
+      yield* Ref.set(nextAt, (yield* Clock.currentTimeMillis) + RETRY_INTERVAL_MS);
+      return "uncertain" as const;
+    }
+    return outcome;
   }
   return undefined;
 });

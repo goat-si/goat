@@ -108,6 +108,7 @@ const fixture = Effect.fn("OpenCodexWindowTest.fixture")(function* (blockSettlem
   });
   const stateLock = yield* Semaphore.make(1);
   const overrunSignal = yield* Ref.make(yield* Deferred.make<void>());
+  const recoveryHoldUntil = yield* Ref.make<number | undefined>(undefined);
   const mutateIfCurrent = (
     expected: State,
     change: (current: State, at: number) => State,
@@ -138,6 +139,7 @@ const fixture = Effect.fn("OpenCodexWindowTest.fixture")(function* (blockSettlem
     state,
     stateLock,
     overrunSignal,
+    recoveryHoldUntil,
     mutateIfCurrent,
     enforceOverrun: () => Effect.void,
     retainedHome,

@@ -440,4 +440,134 @@ it.layer(NodeServices.layer)("OpenCodex SSH replacement follow-up", (it) => {
       expect(state.window?.orchestrated?.[""]?.observed?.version).toBe("2.90.0");
     }),
   );
+  it.effect("closes an overrun at the previous version and settles the SSH follow-up", () =>
+    Effect.gen(function* () {
+      const fleet = makeFleet({ homeOwnership: "adopted" });
+      fleet.orchestrated = true;
+      fleet.applyResult = "uncertain";
+      fleet.automatic = true;
+      fleet.runtimeReplaced = "1.1.0";
+      fleet.versions.set("mac-studio", "2.90.0");
+      const { update, baseDir } = yield* setup(fleet);
+      yield* update.check;
+      yield* TestClock.adjust(50 * MINUTE);
+      yield* update.check;
+      expect(fleet.holds).toBe(0);
+      fleet.inFlight = false;
+      const calls = fleet.homeHoldCalls;
+      yield* TestClock.adjust(10 * MINUTE);
+      yield* update.check;
+      expect(fleet.holds).toBe(0);
+      expect(fleet.homeHoldCalls).toBe(calls);
+      yield* TestClock.adjust(10 * MINUTE);
+      yield* update.check;
+      expect(phases(yield* update.status)).toEqual([[null, "rolled-back", "install-failed"]]);
+      expect(fleet.updating).toBe(false);
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const config = yield* ServerConfig.ServerConfig.pipe(
+        Effect.provide(ServerConfig.layerTest(process.cwd(), baseDir)),
+      );
+      const persisted = Option.getOrThrow(
+        decodeState(yield* fs.readFileString(path.join(config.stateDir, "opencodex-update.json"))),
+      );
+      expect(persisted.runtimeUpdateChecked).toBe("1.1.0");
+    }),
+  );
+
+  it.effect("reacquires admission and accepts an overrun recovered at the target", () =>
+    Effect.gen(function* () {
+      const fleet = makeFleet({ homeOwnership: "adopted" });
+      fleet.orchestrated = true;
+      fleet.applyResult = "uncertain";
+      fleet.versions.set("mac-studio", "2.90.0");
+      const { update } = yield* setup(fleet);
+      yield* update.check;
+      yield* TestClock.adjust(50 * MINUTE);
+      yield* update.check;
+      expect(fleet.holds).toBe(0);
+      fleet.inFlight = false;
+      fleet.versions.set(null, "2.90.0");
+      const calls = fleet.homeHoldCalls;
+      yield* TestClock.adjust(10 * MINUTE);
+      yield* update.check;
+      expect(fleet.holds).toBe(0);
+      expect(fleet.homeHoldCalls).toBe(calls);
+      yield* TestClock.adjust(10 * MINUTE);
+      yield* update.check;
+      expect(fleet.homeHoldCalls).toBeGreaterThan(calls);
+      expect(fleet.holdsDuringSync[0]).toBeGreaterThan(0);
+      expect(fleet.log).toEqual(["sync:home@2.90.0"]);
+      expect(fleet.holds).toBe(0);
+      expect(phases(yield* update.status)).toEqual([[null, "probation", undefined]]);
+      yield* TestClock.adjust(10 * MINUTE);
+      yield* update.check;
+      expect(phases(yield* update.status)).toEqual([[null, "accepted", undefined]]);
+    }),
+  );
+
+  it.effect("defers target recovery after an overrun while the Home is busy", () =>
+    Effect.gen(function* () {
+      const fleet = makeFleet({ homeOwnership: "adopted" });
+      fleet.orchestrated = true;
+      fleet.applyResult = "uncertain";
+      fleet.versions.set("mac-studio", "2.90.0");
+      const { update } = yield* setup(fleet);
+      yield* update.check;
+      yield* TestClock.adjust(50 * MINUTE);
+      yield* update.check;
+      fleet.inFlight = false;
+      fleet.versions.set(null, "2.90.0");
+      yield* TestClock.adjust(10 * MINUTE);
+      yield* update.check;
+      fleet.running.set(null, 1);
+      yield* TestClock.adjust(10 * MINUTE);
+      yield* update.check;
+      expect(fleet.log).toEqual([]);
+      expect(fleet.holds).toBe(0);
+      expect((yield* update.status)?.reason).toBe("apply-uncertain");
+      fleet.running.set(null, 0);
+      yield* TestClock.adjust(10 * MINUTE);
+      yield* update.check;
+      expect(fleet.log).toEqual(["sync:home@2.90.0"]);
+      expect(phases(yield* update.status)).toEqual([[null, "probation", undefined]]);
+    }),
+  );
+  it.effect("releases a stalled post-overrun recovery and retries without a stale commit", () =>
+    Effect.gen(function* () {
+      const fleet = makeFleet({ homeOwnership: "adopted" });
+      fleet.orchestrated = true;
+      fleet.applyResult = "uncertain";
+      fleet.versions.set("mac-studio", "2.90.0");
+      const { update } = yield* setup(fleet);
+      yield* update.check;
+      yield* TestClock.adjust(50 * MINUTE);
+      yield* update.check;
+      fleet.inFlight = false;
+      fleet.versions.set(null, "2.90.0");
+      yield* TestClock.adjust(10 * MINUTE);
+      yield* update.check;
+      const started = yield* Deferred.make<void>();
+      const cancelled = yield* Deferred.make<void>();
+      fleet.onSync = Deferred.succeed(started, undefined).pipe(
+        Effect.andThen(Effect.never),
+        Effect.onInterrupt(() => Deferred.succeed(cancelled, undefined)),
+      );
+      yield* TestClock.adjust(10 * MINUTE);
+      const checking = yield* Effect.forkChild(update.check);
+      yield* Deferred.await(started);
+      expect(fleet.holds).toBeGreaterThan(0);
+      yield* TestClock.adjust(6 * MINUTE);
+      yield* update.admissionGuard;
+      yield* Deferred.await(cancelled);
+      yield* Fiber.join(checking);
+      expect(fleet.holds).toBe(0);
+      expect(phases(yield* update.status)).toEqual([[null, "rollback-failed", "apply-overrun"]]);
+      fleet.onSync = undefined;
+      yield* TestClock.adjust(4 * MINUTE);
+      yield* update.check;
+      expect(phases(yield* update.status)).toEqual([[null, "probation", undefined]]);
+      expect(fleet.holds).toBe(0);
+    }),
+  );
 });
