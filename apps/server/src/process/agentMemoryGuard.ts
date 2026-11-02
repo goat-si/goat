@@ -53,14 +53,25 @@ export function parseProcessTable(stdout: string): ProcessRow[] {
   }
   return rows;
 }
-export function treeOf(
-  rows: ReadonlyArray<ProcessRow>,
+function indexRows(rows: ReadonlyArray<ProcessRow>) {
+  const byPid = new Map<number, ProcessRow>();
+  const byGroup = new Map<number, ProcessRow[]>();
+  for (const row of rows) {
+    if (!byPid.has(row.pid)) byPid.set(row.pid, row);
+    const group = byGroup.get(row.pgid) ?? [];
+    group.push(row);
+    byGroup.set(row.pgid, group);
+  }
+  return { byPid, byGroup };
+}
+function treeOfIndexed(
+  index: ReturnType<typeof indexRows>,
   children: ReadonlyMap<number, ReadonlyArray<ProcessRow | undefined>>,
   rootPid: number,
 ) {
-  const root = rows.find((row) => row.pid === rootPid);
+  const root = index.byPid.get(rootPid);
   if (root === undefined || root.zombie) return undefined;
-  const pending = [root, ...rows.filter((row) => row.pgid === rootPid)];
+  const pending = [root, ...(index.byGroup.get(rootPid) ?? [])];
   const visited = new Set<number>();
   let rssBytes = 0;
   while (pending.length > 0) {
@@ -71,6 +82,13 @@ export function treeOf(
     for (const child of children.get(row.pid) ?? []) if (child !== undefined) pending.push(child);
   }
   return { rssBytes, processCount: visited.size, leader: root.pgid === rootPid };
+}
+export function treeOf(
+  rows: ReadonlyArray<ProcessRow>,
+  children: ReadonlyMap<number, ReadonlyArray<ProcessRow | undefined>>,
+  rootPid: number,
+) {
+  return treeOfIndexed(indexRows(rows), children, rootPid);
 }
 export const makeAgentMemoryGuard = Effect.fn("AgentMemoryGuard.make")(function* <E>(deps: {
   sample: Effect.Effect<ReadonlyArray<ProcessRow>, E>;
@@ -161,10 +179,11 @@ export const makeAgentMemoryGuard = Effect.fn("AgentMemoryGuard.make")(function*
       list.push(row);
       children.set(row.ppid, list);
     }
+    const index = indexRows(rows);
     const decisions = registrations.map(([pid, reg]) => ({
       pid,
       reg,
-      tree: treeOf(rows, children, pid),
+      tree: treeOfIndexed(index, children, pid),
     }));
     const results = yield* deps.inCheckPhase(() => {
       const killed: Array<{
