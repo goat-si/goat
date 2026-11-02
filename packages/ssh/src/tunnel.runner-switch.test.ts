@@ -39,6 +39,19 @@ const versionEntries = (...versions: string[]) =>
 describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
   "install before runner switch",
   () => {
+    it.live("stop removes a stale alias without executing it", () =>
+      Effect.gen(function* () {
+        const f = yield* fixture("none", { seed: false });
+        const alias = `${f.state}/run-goat.sh`;
+        const marker = `${f.home}/alias-executed`;
+        yield* f.fs.writeFileString(alias, `#!/bin/sh\ntouch '${marker}'\n`);
+        yield* f.fs.chmod(alias, 0o700);
+        const result = yield* shell(f.home, SshTunnel.buildRemoteStopScript(stateKey));
+        assert.equal(result.code, 0, result.stderr);
+        assert.isFalse(yield* f.fs.exists(alias));
+        assert.isFalse(yield* f.fs.exists(marker));
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
     it.live.each([false, true])(
       "repairs the runner alias after old-client publication (copy fallback=%s)",
       (copyFallback) =>
