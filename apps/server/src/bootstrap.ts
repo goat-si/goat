@@ -137,7 +137,7 @@ export const readBootstrapEnvelope = Effect.fn("readBootstrapEnvelope")(function
       resume(Effect.succeedNone);
     };
 
-    // readline re-emits its input's errors on the interface, so only the interface's listener hears them.
+    // readline re-emits its input's errors on the interface, which needs its own listener.
     input.on("error", handleError);
     input.once("line", handleLine);
     input.once("close", handleClose);

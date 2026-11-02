@@ -92,7 +92,7 @@ const pickAgent = (agents: ReadonlyArray<TriageAgent>) =>
         output: process.stdout,
       });
       // Closing the interface leaves a pending question unsettled, so a broken terminal rejects it here.
-      const broken = new Promise<never>((_, reject) => readline.once("error", reject));
+      const broken = new Promise<never>((_, reject) => readline.on("error", reject));
       try {
         const menu = agents
           .map((agent, index) => `  [${String(index + 1)}] ${agent.label}`)

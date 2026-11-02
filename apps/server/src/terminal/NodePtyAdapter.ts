@@ -21,7 +21,7 @@ type NodePtyTerminal = import("node-pty").IPty & {
 const hasOn = (pty: import("node-pty").IPty): pty is NodePtyTerminal =>
   "on" in pty && typeof pty.on === "function";
 
-// The socket error codes node-pty already tolerates (unixTerminal.js:101-123, windowsTerminal.js:97-100).
+// The socket error codes node-pty tolerates without rethrowing, per platform.
 const toleratedPtySocketCodes = (platform: NodeJS.Platform) =>
   platform === "win32" ? ["errno 5", "EIO"] : ["EAGAIN", "errno 5", "EIO"];
 
