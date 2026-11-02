@@ -446,8 +446,12 @@ const makeReader = Effect.fn("SqliteReader.make")(function* (
         Effect.gen(function* () {
           if (current === undefined) {
             yield* Effect.promise(() => retiring);
-            const remaining = Number(restart.retryAt - clock.monotonicTimeNanosUnsafe()) / 1e6;
-            if (remaining > 0) yield* Effect.sleep(Duration.millis(remaining));
+            // Another slot can push the shared deadline out while this one sleeps.
+            let remaining = Number(restart.retryAt - clock.monotonicTimeNanosUnsafe()) / 1e6;
+            while (remaining > 0) {
+              yield* Effect.sleep(Duration.millis(remaining));
+              remaining = Number(restart.retryAt - clock.monotonicTimeNanosUnsafe()) / 1e6;
+            }
           }
           const reader =
             current ??

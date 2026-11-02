@@ -628,6 +628,50 @@ it.effect("serves reads from a running slot while another slot waits out restart
   ),
 );
 
+it.effect("a slot waiting out restart backoff honors a deadline another slot extends", () =>
+  withReaderClient((sql) =>
+    Effect.gen(function* () {
+      const before = startedWorkers.length;
+      const releases = [Deferred.makeUnsafe<void>(), Deferred.makeUnsafe<void>()];
+      const entered = [Deferred.makeUnsafe<void>(), Deferred.makeUnsafe<void>()];
+      const held = [];
+      for (const [index, release] of releases.entries())
+        held.push(
+          yield* Effect.forkChild(
+            sql
+              .withTransaction(
+                Effect.gen(function* () {
+                  yield* countEntries(sql);
+                  yield* Deferred.succeed(entered[index]!, undefined);
+                  yield* Deferred.await(release);
+                }),
+              )
+              .pipe(SqliteClient.readOnly, Effect.exit),
+            { startImmediately: true },
+          ),
+        );
+      for (const started of entered) yield* Deferred.await(started);
+      yield* Deferred.succeed(releases[0]!, undefined);
+      yield* Fiber.join(held[0]!);
+      // Slot 0's worker dies: the shared deadline becomes 250ms and slot 1 stays busy.
+      yield* Effect.promise(() => startedWorkers[before]!.terminate());
+      const read = yield* Effect.forkChild(countEntries(sql).pipe(SqliteClient.readOnly), {
+        startImmediately: true,
+      });
+      yield* TestClock.adjust("100 millis");
+      // Slot 1's worker dies too, pushing the shared deadline to 600ms.
+      yield* Effect.promise(() => startedWorkers[before + 1]!.terminate());
+      yield* TestClock.adjust("150 millis");
+      assert.equal(startedWorkers.length, before + 2);
+      yield* TestClock.adjust("350 millis");
+      assert.equal(yield* Fiber.join(read), 1);
+      assert.equal(startedWorkers.length, before + 3);
+      yield* Deferred.succeed(releases[1]!, undefined);
+      yield* Fiber.join(held[1]!);
+    }),
+  ),
+);
+
 it.effect("replaces an intentionally cancelled reader without waiting for fault backoff", () =>
   withReaderClient((sql) =>
     Effect.gen(function* () {
