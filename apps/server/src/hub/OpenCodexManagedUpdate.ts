@@ -613,7 +613,9 @@ const make = Effect.gen(function* () {
       Effect.onExit((exit) =>
         Exit.isFailure(exit)
           ? Clock.currentTimeMillis.pipe(
-              Effect.flatMap((at) => Ref.set(nextAt, at + RETRY_INTERVAL_MS)),
+              Effect.flatMap((at) =>
+                Ref.update(nextAt, (due) => Math.min(due, at + RETRY_INTERVAL_MS)),
+              ),
             )
           : Effect.void,
       ),

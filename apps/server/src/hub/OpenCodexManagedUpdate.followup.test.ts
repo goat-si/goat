@@ -288,4 +288,31 @@ it.layer(NodeServices.layer)("OpenCodex SSH replacement follow-up", (it) => {
       expect(fleet.holds).toBe(0);
     }),
   );
+  it.effect("does not postpone an overdue retry after a late dispatch failure", () =>
+    Effect.gen(function* () {
+      const fleet = makeFleet({ homeOwnership: "adopted" });
+      fleet.orchestrated = true;
+      fleet.versions.set("mac-studio", "2.90.0");
+      const started = yield* Deferred.make<void>();
+      const fail = yield* Deferred.make<void>();
+      fleet.onApply = Effect.sync(() => {
+        fleet.inFlight = true;
+      }).pipe(
+        Effect.andThen(Deferred.succeed(started, undefined)),
+        Effect.andThen(Deferred.await(fail)),
+        Effect.andThen(Effect.die("late dispatch fault")),
+      );
+      const { update } = yield* setup(fleet);
+      const dispatch = yield* Effect.forkChild(update.check);
+      yield* Deferred.await(started);
+      yield* TestClock.adjust(49 * MINUTE);
+      yield* Deferred.succeed(fail, undefined);
+      yield* Fiber.join(dispatch);
+      yield* update.check;
+      expect(fleet.planReads).toBeGreaterThan(2);
+      yield* TestClock.adjust(MINUTE);
+      yield* update.admissionGuard;
+      expect(fleet.holds).toBe(0);
+    }),
+  );
 });
