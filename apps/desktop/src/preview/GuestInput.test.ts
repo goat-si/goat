@@ -38,6 +38,21 @@ const makeGuest = ({
 };
 
 describe("preview guest input", () => {
+  it("regression: keeps every syllable of Korean text typed into an unfocused guest", async () => {
+    const guest = makeGuest({ focused: false });
+    await guest.send("Input.insertText", { text: "오늘 날씨" });
+    expect(guest.webContents.insertText).toHaveBeenCalledTimes(1);
+    expect(guest.webContents.insertText).toHaveBeenCalledWith("오늘 날씨");
+    expect(guest.sendCommand).not.toHaveBeenCalledWith("Input.insertText", expect.anything());
+  });
+
+  it("regression: forwards every syllable of Korean text to a focused guest", async () => {
+    const guest = makeGuest({ focused: true });
+    await guest.send("Input.insertText", { text: "오늘 날씨" });
+    expect(guest.sendCommand).toHaveBeenCalledWith("Input.insertText", { text: "오늘 날씨" });
+    expect(guest.webContents.insertText).not.toHaveBeenCalled();
+  });
+
   it("types into an unfocused guest's own page, not the app's focused field", async () => {
     const guest = makeGuest({ focused: false });
     await guest.send("Input.insertText", { text: "pairing-code" });
@@ -84,16 +99,30 @@ describe("preview guest input", () => {
     expect(guest.webContents.sendInputEvent).not.toHaveBeenCalled();
   });
 
-  it("refuses input when a cross-site frame holds the unfocused page's focus", async () => {
+  it("regression: refuses Korean text and key input when a cross-site frame holds focus", async () => {
     const guest = makeGuest({ focused: false, focusedDocument: false });
-    await expect(guest.send("Input.insertText", { text: "secret" })).rejects.toThrow(
+    await expect(guest.send("Input.insertText", { text: "오늘 날씨" })).rejects.toThrow(
       /cross-site frame/,
     );
+    await expect(
+      guest.send("Input.dispatchKeyEvent", { type: "keyDown", key: "씨", text: "씨" }),
+    ).rejects.toThrow(/cross-site frame/);
     expect(guest.webContents.insertText).not.toHaveBeenCalled();
+    expect(guest.webContents.sendInputEvent).not.toHaveBeenCalled();
+    expect(guest.sendCommand.mock.calls.map(([method]) => method)).toEqual([
+      "Runtime.evaluate",
+      "Runtime.evaluate",
+    ]);
   });
 });
 
 describe("CDP key events as Electron input", () => {
+  it("regression: keeps every syllable in Korean char events", () => {
+    expect(toKeyboardInputEvents({ type: "char", text: "오늘 날씨" })).toEqual(
+      ["오", "늘", " ", "날", "씨"].map((keyCode) => ({ type: "char", keyCode, modifiers: [] })),
+    );
+  });
+
   it("sends a key's text as char events after its key down", () => {
     expect(toKeyboardInputEvents({ type: "keyDown", key: "Enter", text: "\r" })).toEqual([
       { type: "rawKeyDown", keyCode: "Enter", modifiers: [] },
