@@ -25,6 +25,7 @@ import {
 } from "../serverOwnerLock.ts";
 import { tryAcquireServerOwnerLock } from "../serverOwnerLockFile.ts";
 import { processExists, readSshRuntimeCompatibility } from "./sshRuntimeProbes.ts";
+import { serverWorkingDirectory } from "./serverWorkingDirectory.ts";
 
 /**
  * The supervisor's record of the last replacement it ran, in the launch state directory it
@@ -271,28 +272,35 @@ const superviseReplacement = async (
     ];
     const env = { GOAT_NO_BROWSER: "1", ...extraEnv };
     let pid: number | undefined;
-    if (input.platform === "win32") {
-      pid =
-        executable === undefined
-          ? undefined
-          : spawnWindowsDetached([executable, ...args], input.logFile, env);
-    } else {
-      const log = NodeFS.openSync(input.logFile, "a");
-      let cwd = NodeOS.homedir();
-      try {
-        NodeFS.accessSync(cwd, NodeFS.constants.X_OK);
-      } catch {
-        cwd = "/";
+    try {
+      if (input.platform === "win32") {
+        pid =
+          executable === undefined
+            ? undefined
+            : spawnWindowsDetached([executable, ...args], input.logFile, env);
+      } else {
+        const log = NodeFS.openSync(input.logFile, "a");
+        try {
+          const child = NodeChildProcess.spawn(runner, args, {
+            cwd: serverWorkingDirectory(NodeOS.homedir()),
+            detached: true,
+            stdio: ["ignore", log, log],
+            env: { ...process.env, ...env },
+          });
+          const spawned = await new Promise<boolean>((resolve) => {
+            child.once("error", () => resolve(false));
+            child.once("spawn", () => resolve(true));
+          });
+          if (spawned) {
+            child.unref();
+            pid = child.pid;
+          }
+        } finally {
+          NodeFS.closeSync(log);
+        }
       }
-      const child = NodeChildProcess.spawn(runner, args, {
-        cwd,
-        detached: true,
-        stdio: ["ignore", log, log],
-        env: { ...process.env, ...env },
-      });
-      NodeFS.closeSync(log);
-      child.unref();
-      pid = child.pid;
+    } catch {
+      return undefined;
     }
     if (pid === undefined) return undefined;
     const deadline = Date.now() + input.readyTimeoutMs;

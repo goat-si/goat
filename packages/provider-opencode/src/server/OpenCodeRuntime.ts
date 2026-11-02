@@ -621,7 +621,7 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
       if (yield* isWindowsCommandNotFound(exitCode, stderr)) {
         return yield* new OpenCodeRuntimeError({
           operation: "runOpenCodeCommand",
-          detail: `spawn ${input.binaryPath} ENOENT`,
+          ...OpenCodeSpawnFailure.notFound(input.binaryPath, exitCode, stdout, stderr),
         });
       }
       return {

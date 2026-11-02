@@ -30,6 +30,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import packageJson from "../../package.json" with { type: "json" };
 import { readSshReplacementRecord, SSH_REPLACEMENT_RECORD_FILE } from "../cli/sshHelper.ts";
+import { serverWorkingDirectory } from "../cli/serverWorkingDirectory.ts";
 import * as ServerConfig from "../config.ts";
 import * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import * as RuntimeAdmission from "../runtimeAdmission.ts";
@@ -594,7 +595,7 @@ export const make = Effect.fn("server.ssh_runtime_auto_update.make")(function* (
               script: buildRemoteLaunchScript(options, selection),
               args: [REMOTE_RUNTIME_STATE_KEY],
               env,
-              cwd: homeDir,
+              cwd: serverWorkingDirectory(homeDir),
             });
             const launched = Option.getOrUndefined(decodeLaunchResult(lastLine(result.stdout)));
             const status = launched?.status;

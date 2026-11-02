@@ -52,3 +52,15 @@ export function resolveFromOriginalWorkingDirectory(value: string, original?: st
     return value;
   return NodePath.resolve(original, trimmed);
 }
+
+export function serverWorkingDirectory(home: string): string {
+  try {
+    if (NodeFS.statSync(home).isDirectory()) {
+      NodeFS.accessSync(home, NodeFS.constants.X_OK);
+      return home;
+    }
+  } catch {
+    // Fall back when home cannot be searched.
+  }
+  return NodePath.parse(home).root || "/";
+}

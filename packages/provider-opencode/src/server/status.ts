@@ -16,6 +16,7 @@ import { compareSemverVersions } from "@goat/shared/semver";
 import {
   buildServerProvider,
   classifySpawnFailure,
+  isCommandMissingCause,
   spawnFailureMessage,
   COMPACT_SLASH_COMMAND,
   nonEmptyTrimmed,
@@ -125,13 +126,18 @@ function formatOpenCodeProbeError(input: {
     const message = spawnFailureMessage(failure, spawnCwd, input.binaryPath);
     if (message) return { installed: true, message };
   }
-  if (lower.includes("enoent") || lower.includes("notfound")) {
-    return {
-      installed: false,
-      message: "OpenCode CLI (`opencode`) is not installed or not on PATH.",
-    };
+  let cause = spawnCwd === undefined ? input.cause : undefined;
+  const seen = new Set<unknown>();
+  while (cause && typeof cause === "object" && !seen.has(cause)) {
+    seen.add(cause);
+    if (isCommandMissingCause(cause)) {
+      return {
+        installed: false,
+        message: "OpenCode CLI (`opencode`) is not installed or not on PATH.",
+      };
+    }
+    cause = "cause" in cause ? cause.cause : undefined;
   }
-
   if (lower.includes("quarantine")) {
     return {
       installed: true,
