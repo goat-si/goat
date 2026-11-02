@@ -6,6 +6,24 @@ import { describe, expect, it } from "vite-plus/test";
 import { makeThreadFixture } from "../../test-fixtures";
 import type { Thread } from "../../types";
 import { partitionSidebarThreads } from "./sidebarPartition";
+import { resolveNestedRowVariant } from "./settledLaunchShelf";
+
+describe("nested thread row variants", () => {
+  it("keeps settled children as cards under card parents", () => {
+    expect(resolveNestedRowVariant("settled", "card")).toBe("card");
+    expect(resolveNestedRowVariant("settled", "slim")).toBe("slim");
+    expect(resolveNestedRowVariant("settled")).toBe("slim");
+  });
+
+  it("preserves the existing variants for other sections", () => {
+    for (const section of ["priority", "pinned", "active"] as const) {
+      expect(resolveNestedRowVariant(section, "slim")).toBe("card");
+    }
+    for (const section of ["snoozed", "working"] as const) {
+      expect(resolveNestedRowVariant(section, "card")).toBe("slim");
+    }
+  });
+});
 
 const local = EnvironmentId.make("environment-local");
 
