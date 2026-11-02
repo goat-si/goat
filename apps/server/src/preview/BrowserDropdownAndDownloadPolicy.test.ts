@@ -54,7 +54,7 @@ describe("verifySelectOptionStickiness", () => {
     ["", "", 0],
     ["CA", "CA", 2],
   ])(
-    "accepts matching option value %j at index %s",
+    "accepts requested %j when the select holds %j at index %s",
     (requestedValue, observedValue, observedSelectedIndex) => {
       expect(
         verifySelectOptionStickiness({ requestedValue, observedValue, observedSelectedIndex }),
@@ -144,6 +144,7 @@ describe("classifyNetworkDownloadCandidate", () => {
 
   it.each([
     "ISO-8859-1''rates.csv",
+    "UTF-8''bad'value.csv",
     "US-ASCII''rates.csv",
     "UTF-8rates.csv",
     "UTF-8''%FF",

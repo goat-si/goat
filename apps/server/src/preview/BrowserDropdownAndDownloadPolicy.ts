@@ -131,7 +131,7 @@ const parseContentDisposition = (header: string): DispositionParameters => {
 
 /** RFC 8187: recipients must support UTF-8; other charsets fall back to filename=. */
 const decodeExtendedValue = (value: string) => {
-  const match = /^([^']*)'[^']*'(.*)$/.exec(value);
+  const match = /^([^']*)'[^']*'((?:%[0-9A-Fa-f]{2}|[A-Za-z0-9!#$&+\-.^_`|~])*)$/.exec(value);
   if (!match || match[1]?.toLowerCase() !== "utf-8") return undefined;
   try {
     return decodeURIComponent(match[2] ?? "");
