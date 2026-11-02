@@ -1,6 +1,5 @@
 import * as M from "@goat/contracts";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as MemoryAccess from "../../../memory/MemoryAccess.ts";
 import * as MemoryRecall from "../../../memory/MemoryRecall.ts";
@@ -176,9 +175,9 @@ const withCurrentSpace = (input: unknown) =>
   Effect.gen(function* () {
     if (typeof input !== "object" || input === null || "memorySpaceId" in input) return input;
     const sync = yield* MemorySyncService.MemorySyncService;
-    const readiness = yield* sync.readLocalReadiness().pipe(Effect.option);
-    const space = Option.getOrUndefined(readiness)?.memorySpaceId;
-    return space ? { ...input, memorySpaceId: space } : input;
+    const { memorySpaceId } = yield* sync.readLocalReadiness();
+    if (!memorySpaceId) return yield* new M.MemoryRpcError({ code: "hub_disabled" });
+    return { ...input, memorySpaceId };
   });
 const handlers = {
   memory_recall: McpToolAccess.reads((input) =>

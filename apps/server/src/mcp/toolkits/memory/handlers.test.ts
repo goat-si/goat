@@ -174,6 +174,14 @@ it.effect("read tools default to this server's memory space when memorySpaceId i
   }).pipe(Effect.provide(Fixture.layer)),
 );
 
+it.effect("an omitted space with no bound memory space is refused as hub_disabled", () =>
+  Effect.gen(function* () {
+    const { result, body } = yield* Fixture.call("goat_memory_search", { query: "synthetic" });
+    expect(result.isError).toBe(true);
+    expect(body).toMatchObject({ code: "hub_disabled" });
+  }).pipe(Effect.provide(Fixture.unboundLayer)),
+);
+
 it.effect.each(M.MEMORY_MCP_TOOLS.filter((name) => name !== "memory_read_source"))(
   "denies ungranted %s at the registered toolkit",
   (name) =>
