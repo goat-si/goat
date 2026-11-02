@@ -21,6 +21,7 @@ const probeElement = (node: unknown, at: readonly [number, number] | null) => {
   type PageNode = {
     readonly parentElement?: PageNode | null;
     readonly parentNode?: PageNode | null;
+    readonly assignedSlot?: PageNode | null;
     readonly host?: PageNode | null;
     readonly shadowRoot?: { elementFromPoint(x: number, y: number): PageNode | null } | null;
     getRootNode(): { readonly host?: PageNode | null };
@@ -69,7 +70,7 @@ const probeElement = (node: unknown, at: readonly [number, number] | null) => {
     for (
       let current: PageNode | null | undefined = hit;
       current;
-      current = current.parentNode ?? current.host
+      current = current.assignedSlot ?? current.parentNode ?? current.host
     ) {
       if (current === element) {
         inside = true;

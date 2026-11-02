@@ -201,7 +201,17 @@ const COVERS = `<body style="margin:0">
   <button style="position:absolute;left:300px;top:250px;width:80px;height:30px;padding:0;border:0">
     <span style="display:block;width:120px;height:50px;background:#fff">Own child</span>
   </button>
+  <div style="position:absolute;left:10px;top:400px;width:200px;font:16px/30px monospace">
+    <span style="position:relative;z-index:1;background:#fff">xxxxxxxxxxxxxxxxxxxx xxxxx</span>
+  </div>
+  <button style="position:absolute;left:110px;top:435px;width:60px;height:15px;padding:0;font-size:8px">Beside inline</button>
 </body>`;
+
+// The body's overflow clips here, since the root's is not visible; its cover cannot reach the button.
+const BODY_CLIP = `<html style="overflow:hidden"><body style="margin:0;position:absolute;width:50px;height:50px;overflow:hidden">
+  <div style="position:relative;z-index:2;width:200px;height:100px;background:#fff"></div>
+  <button style="position:fixed;z-index:1;left:100px;top:20px">Outside body</button>
+</body></html>`;
 
 it("a snapshot marks only a button under a solid later-painted cover [occluded], and none without paint data", async () => {
   const { browser, page } = await launch();
@@ -210,9 +220,17 @@ it("a snapshot marks only a button under a solid later-painted cover [occluded],
     const cdp = await page.context().newCDPSession(page);
     const tree = await snapshotTree(page, cdp);
     expect(lineOf(tree, "Buy")).toContain("[occluded]");
-    for (const name of ["Free", "Below accordion", "Under round clip", "Under translucent"])
+    for (const name of [
+      "Free",
+      "Below accordion",
+      "Under round clip",
+      "Under translucent",
+      "Beside inline",
+    ])
       expect(lineOf(tree, name)).not.toContain("[occluded]");
     expect(tree.match(/\[occluded\]/g)).toHaveLength(1);
+    await page.setContent(BODY_CLIP);
+    expect(lineOf(await snapshotTree(page, cdp), "Outside body")).not.toContain("[occluded]");
     const noPaint = {
       send: (method: string, params?: object) =>
         method === "DOMSnapshot.captureSnapshot"
@@ -244,8 +262,8 @@ it("a ref click lands in the largest fragment of a wrapped link, and inside a fr
       </script>`);
     const frame = page.frameLocator("iframe");
     await frame.locator("#half").evaluate((button) => {
-      button.addEventListener("click", (event) => {
-        (globalThis as { clickedAt?: number }).clickedAt = (event as { clientX: number }).clientX;
+      button.addEventListener("click", (event: { readonly clientX: number }) => {
+        (globalThis as { clickedAt?: number }).clickedAt = event.clientX;
       });
     });
     await ServerBrowserPage.click(page, { locator: "#link" });
@@ -281,6 +299,23 @@ it("a ref click on a covered target refuses before input, naming the cover, and 
       },
     });
     expect(await page.evaluate("window.clicks")).toEqual([]);
+  } finally {
+    await browser.close();
+  }
+});
+
+it("a ref click reaches a shadow button through the light-DOM text slotted into it", async () => {
+  const { browser, page } = await launch();
+  try {
+    await page.setContent(`<x-host><span>Slotted label</span></x-host>
+      <script>
+        window.pressed = false;
+        const root = document.querySelector("x-host").attachShadow({ mode: "open" });
+        root.innerHTML = '<button style="font-size:24px"><slot></slot></button>';
+        root.querySelector("button").addEventListener("click", () => (window.pressed = true));
+      </script>`);
+    await ServerBrowserPage.click(page, { locator: "x-host >> internal:role=button" });
+    expect(await page.evaluate("window.pressed")).toBe(true);
   } finally {
     await browser.close();
   }

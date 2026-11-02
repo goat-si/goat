@@ -6,6 +6,7 @@ const DEFAULTS: Readonly<Record<string, string>> = {
   "background-color": "rgba(0, 0, 0, 0)",
   opacity: "1",
   visibility: "visible",
+  display: "block",
   "background-clip": "border-box",
   "mix-blend-mode": "normal",
   "overflow-x": "visible",
@@ -42,7 +43,7 @@ const snapshotOf = (order: ReadonlyArray<string>, nodes: ReadonlyArray<Node>) =>
       at(
         name === "background-color" && node.background
           ? node.background
-          : (DEFAULTS[name] ?? (name.endsWith("radius") ? "0px" : "none")),
+          : (DEFAULTS[name] ?? (/radius|width$/.test(name) ? "0px" : "none")),
       ),
     );
   return {

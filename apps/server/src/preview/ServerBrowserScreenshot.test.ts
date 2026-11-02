@@ -58,7 +58,9 @@ const fixture = ({ width = 1500, height = 4000, deviceScale = 1 } = {}) => {
           ? Promise.resolve({ executionContextId: 1 })
           : method === "Runtime.evaluate"
             ? Promise.resolve({ result: { value: [] } })
-            : send(method, params),
+            : method === "DOMSnapshot.captureSnapshot"
+              ? Promise.reject(new Error("no paint snapshot in this fixture"))
+              : send(method, params),
   };
   const take = (fullPage?: boolean) =>
     snapshot({

@@ -10,10 +10,15 @@ const STYLES = [
   "background-color",
   "opacity",
   "visibility",
+  "display",
   "border-top-left-radius",
   "border-top-right-radius",
   "border-bottom-right-radius",
   "border-bottom-left-radius",
+  "border-top-width",
+  "border-right-width",
+  "border-bottom-width",
+  "border-left-width",
   "background-clip",
   "clip-path",
   "mask-image",
@@ -28,33 +33,33 @@ const STYLES = [
   "clip",
   "contain",
 ] as const;
-type Style = Readonly<Record<(typeof STYLES)[number], string>>;
+type StyleName = (typeof STYLES)[number];
+const at = Object.fromEntries(STYLES.map((name, index) => [name, index])) as Record<
+  StyleName,
+  number
+>;
+const RADII = STYLES.slice(4, 8).map((name) => at[name]);
+const UNALTERED = (
+  ["clip-path", "mask-image", "filter", "transform", "rotate", "scale", "translate"] as const
+).map((name) => at[name]);
+/** Covers are bucketed by this many CSS pixels, so a ref only meets the covers near it. */
+const CELL = 128;
+/** A cover spanning more cells than this, such as an endless page's background, is left out. */
+const MAX_COVER_CELLS = 20_000;
+
+type Style = ReadonlyArray<string>;
 type Painted = {
   readonly box: readonly [number, number, number, number];
   readonly bounds: PaintRect;
-  readonly padding: PaintRect;
   readonly paintOrder: number;
   readonly style: Style;
 };
-const RADII = STYLES.slice(3, 7);
-const UNTRANSFORMED = [
-  "clip-path",
-  "mask-image",
-  "filter",
-  "transform",
-  "rotate",
-  "scale",
-  "translate",
-] as const;
+type Cover = { readonly node: number; readonly rect: PaintRect; readonly paintOrder: number };
 
 /** The main document's layout in paint order; undefined when the browser cannot provide it. */
 export const capturePaint = (cdp: CDPSession): Promise<unknown> =>
   cdp
-    .send("DOMSnapshot.captureSnapshot", {
-      computedStyles: [...STYLES],
-      includePaintOrder: true,
-      includeDOMRects: true,
-    })
+    .send("DOMSnapshot.captureSnapshot", { computedStyles: [...STYLES], includePaintOrder: true })
     .catch(() => undefined);
 
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
@@ -87,65 +92,52 @@ const readDocument = (shot: unknown) => {
   const document: unknown = shot.documents[0];
   if (!isRecord(document) || !isRecord(document.nodes) || !isRecord(document.layout)) return;
   const { parentIndex, nodeType, nodeName } = document.nodes;
-  const { nodeIndex, bounds, clientRects, paintOrders, styles } = document.layout;
+  const { nodeIndex, bounds, paintOrders, styles } = document.layout;
   if (!Array.isArray(parentIndex) || !Array.isArray(nodeIndex)) return;
   const [count, entries] = [parentIndex.length, nodeIndex.length];
   if (!isIntegers(parentIndex, count) || !isIntegers(nodeIndex, entries)) return;
   if (parentIndex.some((parent, node) => parent < -1 || parent >= node)) return;
   if (!isIntegers(nodeType, count) || !isIntegers(nodeName, count)) return;
   if (nodeIndex.some((node) => node < 0 || node >= count)) return;
-  if (!isList(bounds, entries) || !isList(clientRects, entries)) return;
-  if (!isList(paintOrders, entries) || !isList(styles, entries)) return;
+  if (!isList(bounds, entries) || !isList(paintOrders, entries) || !isList(styles, entries)) return;
   const scrollX = scrollOffset(document.scrollOffsetX);
   const scrollY = scrollOffset(document.scrollOffsetY);
   if (!Number.isFinite(scrollX) || !Number.isFinite(scrollY)) return;
   const layouts = new Map<number, Painted>();
   for (let entry = 0; entry < entries; entry++) {
     const node = nodeIndex[entry] ?? -1;
-    // The document and text nodes have no element box: empty client rects, and no styles for the document.
+    // The document and text nodes have no element box, and the document no styles.
     if (nodeType[node] !== 1 || layouts.has(node)) continue;
-    const [box, client, paintOrder, indexes] = [
-      bounds[entry],
-      clientRects[entry],
-      paintOrders[entry],
-      styles[entry],
-    ];
-    if (!isRect(box) || typeof paintOrder !== "number") return;
-    if (!Number.isFinite(paintOrder) || !isIntegers(indexes, STYLES.length)) return;
-    const values = indexes.map((index) => strings[index]);
-    if (!values.every((value) => typeof value === "string")) return;
+    const [box, paintOrder, indexes] = [bounds[entry], paintOrders[entry], styles[entry]];
+    if (!isRect(box) || typeof paintOrder !== "number" || !Number.isFinite(paintOrder)) return;
+    if (!isIntegers(indexes, STYLES.length)) return;
+    const style: Array<string> = [];
+    for (const index of indexes) {
+      const value = strings[index];
+      if (typeof value !== "string") return;
+      style.push(value);
+    }
     const [x, y, width, height] = [box[0] - scrollX, box[1] - scrollY, box[2], box[3]];
-    // Without a client rect there is no padding box to clip to, so it clips everything away.
-    const [left, top, clientWidth, clientHeight] = isRect(client)
-      ? [x + client[0], y + client[1], client[2], client[3]]
-      : [x, y, 0, 0];
     layouts.set(node, {
       box: [x, y, width, height],
       bounds: { x1: x, y1: y, x2: x + width, y2: y + height },
-      padding: { x1: left, y1: top, x2: left + clientWidth, y2: top + clientHeight },
       paintOrder,
-      style: Object.fromEntries(STYLES.map((name, at) => [name, values[at]])) as Style,
+      style,
     });
   }
-  const names = nodeName.map((name) => strings[name]);
-  return { parents: parentIndex, layouts, names };
+  return { parents: parentIndex, layouts, names: nodeName.map((name) => strings[name]) };
 };
 
-/** Clips its descendants to its padding box; the root and body hand overflow to the viewport. */
-const clipsContents = (style: Style, name: unknown) =>
-  name !== "HTML" &&
-  name !== "BODY" &&
-  (style["overflow-x"] !== "visible" ||
-    style["overflow-y"] !== "visible" ||
-    /paint|strict|content/.test(style.contain));
-
-/** Paints itself and its descendants unaltered, and clips them, if at all, to a rectangle. */
-const isPlain = (style: Style, name: unknown) =>
-  style.opacity === "1" &&
-  style["mix-blend-mode"] === "normal" &&
-  style.clip === "auto" &&
-  UNTRANSFORMED.every((property) => style[property] === "none") &&
-  (!clipsContents(style, name) || RADII.every((radius) => style[radius] === "0px"));
+const px = (style: Style, name: StyleName) => Number.parseFloat(style[at[name]] ?? "") || 0;
+const visible = (style: Style) =>
+  style[at["overflow-x"]] === "visible" && style[at["overflow-y"]] === "visible";
+/** Content clips at the padding box, the overflow clip edge. */
+const paddingBox = ({ bounds, style }: Painted): PaintRect => ({
+  x1: bounds.x1 + px(style, "border-left-width"),
+  y1: bounds.y1 + px(style, "border-top-width"),
+  x2: bounds.x2 - px(style, "border-right-width"),
+  y2: bounds.y2 - px(style, "border-bottom-width"),
+});
 
 /** Native refs, such as e12, whose whole box lies under solid content painted above it. */
 export const occludedRefs = (shot: unknown, tree: string): ReadonlySet<string> => {
@@ -153,64 +145,108 @@ export const occludedRefs = (shot: unknown, tree: string): ReadonlySet<string> =
   const occluded = new Set<string>();
   if (document === undefined) return occluded;
   const { parents, layouts, names } = document;
-  const plainAbove: boolean[] = [];
+  // The root's overflow, and the body's while the root's is visible, apply to the viewport instead.
+  const clips = (node: number, { style }: Painted) => {
+    if (names[node] === "HTML") return false;
+    const parent = layouts.get(parents[node] ?? -1);
+    if (
+      names[node] === "BODY" &&
+      names[parents[node] ?? -1] === "HTML" &&
+      (!parent || visible(parent.style))
+    )
+      return false;
+    return !visible(style) || /paint|strict|content/.test(style[at.contain] ?? "");
+  };
+  /** Paints itself and its descendants unaltered, and clips them, if at all, to a rectangle. */
+  const plain = (node: number, layout: Painted) =>
+    layout.style[at.opacity] === "1" &&
+    layout.style[at["mix-blend-mode"]] === "normal" &&
+    layout.style[at.clip] === "auto" &&
+    UNALTERED.every((index) => layout.style[index] === "none") &&
+    (!clips(node, layout) || RADII.every((index) => layout.style[index] === "0px"));
+  const plainAbove: Array<boolean> = [];
   const clipAbove: Array<PaintRect | undefined> = [];
   for (let node = 0; node < parents.length; node++) {
     const parent = parents[node] ?? -1;
     const layout = layouts.get(parent);
     plainAbove[node] =
-      parent < 0 ||
-      ((plainAbove[parent] ?? false) && (!layout || isPlain(layout.style, names[parent])));
+      parent < 0 || ((plainAbove[parent] ?? false) && (!layout || plain(parent, layout)));
     clipAbove[node] =
-      layout && clipsContents(layout.style, names[parent])
-        ? intersect(layout.padding, clipAbove[parent])
+      layout && clips(parent, layout)
+        ? intersect(paddingBox(layout), clipAbove[parent])
         : clipAbove[parent];
   }
-  const covers: Array<{
-    readonly node: number;
-    readonly rect: PaintRect;
-    readonly paintOrder: number;
-  }> = [];
-  const byBox = new Map<string, number[]>();
-  for (const [node, { box, bounds, paintOrder, style }] of layouts) {
-    const key = box.map(Math.round).join(",");
-    byBox.set(key, [...(byBox.get(key) ?? []), node]);
+  const grid = new Map<string, Array<Cover>>();
+  const cells = (rect: PaintRect) => {
+    const keys: Array<string> = [];
+    for (let cx = Math.floor(rect.x1 / CELL); cx <= Math.floor(rect.x2 / CELL); cx++)
+      for (let cy = Math.floor(rect.y1 / CELL); cy <= Math.floor(rect.y2 / CELL); cy++)
+        keys.push(`${cx},${cy}`);
+    return keys;
+  };
+  const byBox = new Map<string, Array<number>>();
+  for (const [node, layout] of layouts) {
+    const key = layout.box.map(Math.round).join(",");
+    const same = byBox.get(key);
+    if (same) same.push(node);
+    else byBox.set(key, [node]);
+    const { style } = layout;
     const solid =
       (plainAbove[node] ?? false) &&
-      isPlain(style, names[node]) &&
-      /^rgb\(/.test(style["background-color"]) &&
-      style.visibility === "visible" &&
-      style["background-clip"] === "border-box" &&
-      RADII.every((radius) => style[radius] === "0px");
-    const rect = intersect(bounds, clipAbove[node]);
-    if (solid && rect.x2 > rect.x1 && rect.y2 > rect.y1) covers.push({ node, rect, paintOrder });
+      plain(node, layout) &&
+      // An inline box is the bounding box of its line fragments, not a painted rectangle.
+      style[at.display] !== "inline" &&
+      /^rgb\(/.test(style[at["background-color"]] ?? "") &&
+      style[at.visibility] === "visible" &&
+      style[at["background-clip"]] === "border-box" &&
+      RADII.every((index) => style[index] === "0px");
+    const rect = intersect(layout.bounds, clipAbove[node]);
+    if (!solid || rect.x2 <= rect.x1 || rect.y2 <= rect.y1) continue;
+    const cover = { node, rect, paintOrder: layout.paintOrder };
+    const spanned =
+      (Math.floor(rect.x2 / CELL) - Math.floor(rect.x1 / CELL) + 1) *
+      (Math.floor(rect.y2 / CELL) - Math.floor(rect.y1 / CELL) + 1);
+    if (spanned > MAX_COVER_CELLS) continue;
+    for (const cell of cells(rect)) {
+      const bucket = grid.get(cell);
+      if (bucket) bucket.push(cover);
+      else grid.set(cell, [cover]);
+    }
   }
+  if (grid.size === 0) return occluded;
   for (const [, ref, x, y, width, height] of tree.matchAll(
     /\[ref=(e\d+)\][^\n]*?\[box=(-?\d+),(-?\d+),(\d+),(\d+)\]/g,
   )) {
     const candidates = byBox.get(`${x},${y},${width},${height}`) ?? [];
-    const painted = candidates.flatMap((node) => layouts.get(node) ?? []);
-    if (ref === undefined || painted.length === 0) continue;
-    const first = Math.min(...candidates);
-    const top = Math.max(...painted.map((layout) => layout.paintOrder));
-    const enclosure = painted.reduce<PaintRect>(
-      (all, { bounds }) => ({
-        x1: Math.min(all.x1, bounds.x1),
-        y1: Math.min(all.y1, bounds.y1),
-        x2: Math.max(all.x2, bounds.x2),
-        y2: Math.max(all.y2, bounds.y2),
-      }),
-      { x1: Infinity, y1: Infinity, x2: -Infinity, y2: -Infinity },
-    );
+    if (ref === undefined || candidates.length === 0) continue;
+    let [first, top] = [Infinity, -Infinity];
+    let enclosure: PaintRect = { x1: Infinity, y1: Infinity, x2: -Infinity, y2: -Infinity };
+    for (const node of candidates) {
+      const layout = layouts.get(node);
+      if (!layout) continue;
+      first = Math.min(first, node);
+      top = Math.max(top, layout.paintOrder);
+      enclosure = {
+        x1: Math.min(enclosure.x1, layout.bounds.x1),
+        y1: Math.min(enclosure.y1, layout.bounds.y1),
+        x2: Math.max(enclosure.x2, layout.bounds.x2),
+        y2: Math.max(enclosure.y2, layout.bounds.y2),
+      };
+    }
     const descends = (node: number) => {
-      for (let at = parents[node] ?? -1; at >= first; at = parents[at] ?? -1)
-        if (candidates.includes(at)) return true;
+      for (let above = parents[node] ?? -1; above >= first; above = parents[above] ?? -1)
+        if (candidates.includes(above)) return true;
       return false;
     };
     const union = new RectUnion();
-    for (const cover of covers)
-      if (cover.paintOrder > top && overlaps(cover.rect, enclosure) && !descends(cover.node))
-        union.add(cover.rect);
+    const seen = new Set<Cover>();
+    for (const cell of cells(enclosure))
+      for (const cover of grid.get(cell) ?? []) {
+        if (seen.has(cover)) continue;
+        seen.add(cover);
+        if (cover.paintOrder > top && overlaps(cover.rect, enclosure) && !descends(cover.node))
+          union.add(cover.rect);
+      }
     if (union.contains(enclosure)) occluded.add(ref);
   }
   return occluded;
