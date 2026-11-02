@@ -12,9 +12,10 @@ export interface ReaderSlot {
   readonly state: () => ReaderSlotState;
 }
 
-// A free running slot serves first. While any slot waits out restart backoff, a failing slot
-// retries on its own schedule instead of new slots starting workers, so a shared startup fault
-// keeps one retry stream; otherwise an idle slot starts a worker.
+// A free running slot serves first. While any slot waits out restart backoff, a free failing slot
+// is reused before an idle slot starts a worker, so sequential reads keep one retry stream during
+// a shared startup fault; concurrent reads add at most one stream per slot, each with its own
+// capped backoff.
 const choose = (slots: ReadonlyArray<ReaderSlot>, leased: ReadonlySet<number>) => {
   const free = slots.flatMap((slot, index) => (leased.has(index) ? [] : [{ index, slot }]));
   const pick = (state: ReaderSlotState) => free.find(({ slot }) => slot.state() === state)?.index;

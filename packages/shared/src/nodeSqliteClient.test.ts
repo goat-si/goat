@@ -80,6 +80,7 @@ vi.mock("node:worker_threads", async (importOriginal) => {
 
 const withReaderClient = <A, E>(
   use: (sql: SqlClient.SqlClient) => Effect.Effect<A, E, SqlClient.SqlClient>,
+  config: Partial<SqliteClient.SqliteClientConfig> = {},
 ) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -92,7 +93,7 @@ const withReaderClient = <A, E>(
       yield* sql`CREATE TABLE entries(name TEXT NOT NULL)`;
       yield* sql`INSERT INTO entries VALUES ('first')`;
       return yield* use(sql);
-    }).pipe(Effect.provide(SqliteClient.layer({ filename, readerWorker: true })));
+    }).pipe(Effect.provide(SqliteClient.layer({ filename, readerWorker: true, ...config })));
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer));
 
 const countEntries = (sql: SqlClient.SqlClient) =>
@@ -638,26 +639,29 @@ it.effect("stops reader recovery retry on a changed error and never retries othe
 
 it.effect("releases reader requests and connection permits when recovery is interrupted", () =>
   withWorkerRecovery({ point: "statement", codes: [261] }, (_, attempted) =>
-    withReaderClient((sql) =>
-      Effect.gen(function* () {
-        const select = sql`SELECT 42 AS recovery_value`;
-        const values = yield* sql
-          .withTransaction(select.values)
-          .pipe(SqliteClient.readOnly, Effect.forkChild);
-        yield* attempted();
-        const waiter = yield* select.pipe(
-          SqliteClient.readOnly,
-          Effect.forkChild({ startImmediately: true }),
-        );
-        yield* Fiber.interrupt(waiter);
-        yield* Fiber.interrupt(values);
-        workerRecovery.config = undefined;
-        yield* TestClock.adjust("250 millis");
-        assert.deepEqual(yield* select.pipe(SqliteClient.readOnly), [{ recovery_value: 42 }]);
-        assert.deepEqual(yield* sql.withTransaction(select).pipe(SqliteClient.readOnly), [
-          { recovery_value: 42 },
-        ]);
-      }),
+    withReaderClient(
+      (sql) =>
+        Effect.gen(function* () {
+          const select = sql`SELECT 42 AS recovery_value`;
+          const values = yield* sql
+            .withTransaction(select.values)
+            .pipe(SqliteClient.readOnly, Effect.forkChild);
+          yield* attempted();
+          const waiter = yield* select.pipe(
+            SqliteClient.readOnly,
+            Effect.forkChild({ startImmediately: true }),
+          );
+          yield* Fiber.interrupt(waiter);
+          yield* Fiber.interrupt(values);
+          workerRecovery.config = undefined;
+          yield* TestClock.adjust("250 millis");
+          assert.deepEqual(yield* select.pipe(SqliteClient.readOnly), [{ recovery_value: 42 }]);
+          assert.deepEqual(yield* sql.withTransaction(select).pipe(SqliteClient.readOnly), [
+            { recovery_value: 42 },
+          ]);
+        }),
+      // One slot queues the waiter behind the transaction that is in recovery.
+      { readerPoolSize: 1 },
     ),
   ),
 );
