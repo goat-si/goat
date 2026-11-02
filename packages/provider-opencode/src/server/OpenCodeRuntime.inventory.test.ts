@@ -217,8 +217,8 @@ it.effect("reports deleted process cwd through OpenCode status", () => {
   );
   const layer = OpenCodeRuntime.layer.pipe(
     Layer.provide(OpenCodeServerLedger.layerTest),
-    Layer.provideMerge(NodeServices.layer),
     Layer.provide(Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner)),
+    Layer.provideMerge(NodeServices.layer),
   );
   return Effect.gen(function* () {
     const runtime = yield* OpenCodeRuntime.OpenCodeRuntime;
