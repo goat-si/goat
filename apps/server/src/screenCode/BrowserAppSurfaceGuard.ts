@@ -5,7 +5,7 @@
  * Not yet guarded: right_click, drag, scroll and hover.
  */
 
-export const BROWSER_SURFACE_NEXT_STEP =
+const BROWSER_SURFACE_NEXT_STEP =
   "Use screen.tab() or screen.openTab({ url }) to navigate and interact with web pages over CDP.";
 
 export interface SurfaceNode {
