@@ -19,7 +19,7 @@ import * as NodeEvents from "node:events";
 import * as NodeNet from "node:net";
 
 import { expect, it } from "@effect/vitest";
-import { vi } from "vitest";
+import { vi } from "vite-plus/test";
 import { NodeWS } from "@effect/platform-node/NodeSocket";
 import {
   AuthStandardClientScopes,
