@@ -717,6 +717,12 @@ describe("GOAT Bot sessions", () => {
       return Effect.gen(function* () {
         yield* setupBot;
         const config = yield* ServerConfig.ServerConfig;
+        const read: Array<string> = [];
+        const script = harness.script.current;
+        harness.script.current = (input) => {
+          if (input.mode === "input") read.push(input.inputText ?? "");
+          return script(input);
+        };
         const upload = (name: string) => {
           NodeFS.mkdirSync(config.attachmentsDir, { recursive: true });
           const id = ChatAttachmentId.make(createPendingAttachmentId());
@@ -734,6 +740,8 @@ describe("GOAT Bot sessions", () => {
         const first = yield* ask("look: what is in this photo", "m1", rpcContext, [
           upload("photo.png"),
         ]);
+        // The front desk reads which files came with the message, not only its text.
+        assert.strictEqual(read[0], "look: what is in this photo\n\nAttached: photo.png");
         const launched = harness.world.launches[0]?.initialMessage?.attachments ?? [];
         assert.deepStrictEqual(
           launched.map((attachment) => attachment.name),

@@ -48,3 +48,14 @@ export const CHANNEL_COPY = {
   approvalRemoteRefused:
     "I couldn't pass that approval on. That machine can't take approvals from here. Update GOAT there, or answer it in the thread.",
 } as const;
+
+/** What a model reads for a person's message: its text, then the names of the files sent with it. */
+export const inboundTextWithFiles = (message: {
+  readonly text: string;
+  readonly attachments: ReadonlyArray<{ readonly name: string }>;
+}) =>
+  message.attachments.length === 0
+    ? message.text
+    : [message.text.trim(), "Attached: " + message.attachments.map((file) => file.name).join(", ")]
+        .filter((part) => part !== "")
+        .join("\n\n");
