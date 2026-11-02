@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off -- Linux cgroup paths require POSIX normalization.
 import * as NodePath from "node:path";
 function decodeMountInfoPath(value: string): string {
   return value.replace(/\\([0-7]{3})/g, (_match, octal: string) =>

@@ -6,6 +6,7 @@ import { vi } from "vite-plus/test";
 import { handleAgentProcess, nodeChildAgentProcess } from "@goat/shared/AgentScope";
 import * as Effect from "effect/Effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { liveInCheckPhase } from "./checkPhase.ts";
 
 it.live("Node child liveness changes in its exit listener and remains false in check phase", () =>
   Effect.gen(function* () {
@@ -22,6 +23,7 @@ it.live("Node child liveness changes in its exit listener and remains false in c
     expect(process?.isRunning()).toBe(true);
     child.stdin.end();
     expect(yield* Effect.promise(() => exit)).toEqual([false, false]);
+    expect(yield* liveInCheckPhase(() => process?.isRunning())).toBe(false);
   }),
 );
 
@@ -45,5 +47,6 @@ it.live("effect child liveness changes on exit and remains false in check phase"
     });
     yield* handle.kill();
     expect(yield* Effect.promise(() => exited)).toEqual([false, false]);
+    expect(yield* liveInCheckPhase(() => process.isRunning())).toBe(false);
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );

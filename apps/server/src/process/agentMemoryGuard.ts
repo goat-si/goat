@@ -1,3 +1,4 @@
+import { liveInCheckPhase } from "./checkPhase.ts";
 import * as Effect from "effect/Effect";
 import type { AgentScopeShape } from "@goat/shared/AgentScope";
 import * as NodeOS from "node:os";
@@ -20,7 +21,7 @@ type Registration = {
 };
 const MAX_ENTRIES = 1000;
 const GiB = 1024 ** 3;
-export const automaticAgentMemoryLimitBytes = (totalBytes: number) =>
+const automaticAgentMemoryLimitBytes = (totalBytes: number) =>
   Math.min(Math.floor(totalBytes / 2), 16 * GiB);
 export const resolveAgentMemoryLimitBytes = (setting: number | null, totalBytes: number) =>
   setting === null
@@ -240,12 +241,6 @@ export const makeAgentMemoryGuard = Effect.fn("AgentMemoryGuard.make")(function*
     }),
   };
 });
-
-export const liveInCheckPhase = <A>(block: () => A) =>
-  Effect.callback<A>((resume) => {
-    const id = setImmediate(() => resume(Effect.succeed(block())));
-    return Effect.sync(() => clearImmediate(id));
-  });
 
 export const makeDarwinAgentScope = Effect.fn("AgentMemoryGuard.makeDarwinAgentScope")(
   function* () {
