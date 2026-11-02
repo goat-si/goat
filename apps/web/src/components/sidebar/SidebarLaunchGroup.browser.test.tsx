@@ -1,11 +1,42 @@
 import { scopeThreadRef, scopedThreadKey } from "@goat/client-runtime/environment";
-import { describe, expect, it } from "vite-plus/test";
+import { ThreadId } from "@goat/contracts";
+import { DEFAULT_CLIENT_SETTINGS } from "@goat/contracts/settings";
+import { createMemoryHistory } from "@tanstack/react-router";
+import * as DateTime from "effect/DateTime";
+import type * as Context from "effect/Context";
+import { describe, expect, it, vi } from "vite-plus/test";
+import { page } from "vite-plus/test/browser";
 
+import { AppRoot } from "~/AppRoot";
+import { __setClientSettingsForTests } from "~/hooks/useSettings";
+import { getRouter } from "~/router";
+import {
+  installFakeEnvironment,
+  threadWithHistory,
+  type FakeDriver,
+} from "../../../test/fakeEnvironment";
 import { render } from "../../../test/render";
 import { foldLaunchedThreads, type LaunchFoldThread } from "@goat/client-runtime/state/launch-fold";
 import { NOW, key, thread } from "@goat/client-runtime/state/launch-fold-fixtures";
 import { SidebarLaunchGroup } from "./SidebarLaunchGroup";
 import { resetLaunchGroupSession, useLaunchGroups } from "./useLaunchGroups";
+
+vi.mock(
+  "../../../../../packages/client-runtime/src/connection/driver.ts",
+  async (importOriginal) => {
+    const [actual, { fakeDriver }, Layer] = await Promise.all([
+      importOriginal<{ readonly ConnectionDriver: Context.Key<unknown, FakeDriver> }>(),
+      import("../../../test/fakeEnvironment"),
+      import("effect/Layer"),
+    ]);
+    return { ...actual, layer: Layer.succeed(actual.ConnectionDriver, fakeDriver) };
+  },
+);
+
+vi.mock(import("~/rpc/requestLatencyState"), async (original) => ({
+  ...(await original()),
+  trackRpcRequestSent: () => {},
+}));
 
 const keyOf = (entry: LaunchFoldThread) =>
   scopedThreadKey(scopeThreadRef(entry.environmentId, entry.id));
@@ -60,6 +91,73 @@ const lanes = (count: number, options: Parameters<typeof thread>[1] = {}) =>
   );
 
 describe("SidebarLaunchGroup", () => {
+  it("gives each launched row the variant of the row directly above it", async () => {
+    setup();
+    await page.viewport(1400, 900);
+    const at = DateTime.makeUnsafe("2026-03-17T19:12:28.000Z");
+    const launchedBy = (parent: string) => ({
+      kind: "launch" as const,
+      threadId: ThreadId.make(parent),
+      environmentId: null,
+      environmentLabel: null,
+      threadTitle: null,
+      via: "thread_launch" as const,
+    });
+    const fixture = (id: string, title: string) => ({ ...threadWithHistory(id, 0), title });
+    using _environment = installFakeEnvironment(
+      [
+        fixture("coordinator", "Coordinator"),
+        {
+          ...fixture("settled", "Settled lane"),
+          shell: {
+            launchedBy: launchedBy("coordinator"),
+            settledOverride: "settled",
+            settledAt: at,
+          },
+        },
+        {
+          ...fixture("snoozed", "Snoozed lane"),
+          shell: {
+            launchedBy: launchedBy("coordinator"),
+            snoozedAt: at,
+            snoozedUntil: DateTime.makeUnsafe("2099-01-01T00:00:00.000Z"),
+          },
+        },
+        {
+          ...fixture("sublane", "Settled sublane"),
+          shell: { launchedBy: launchedBy("snoozed"), settledOverride: "settled", settledAt: at },
+        },
+      ],
+      { capabilities: { threadSnooze: true, threadSettlement: true } },
+    );
+    __setClientSettingsForTests({
+      ...DEFAULT_CLIENT_SETTINGS,
+      onboardingCompletedAt: "2026-01-01T00:00:00.000Z",
+    });
+    const router = getRouter(createMemoryHistory({ initialEntries: ["/"] }));
+    await router.load();
+    await using screen = await render(<AppRoot router={router} />, {
+      // AppRoot brings its own router.
+      router: false,
+    });
+    await expect
+      .element(screen.getByRole("treeitem", { name: /^Coordinator/ }))
+      .toHaveAttribute("data-testid", "sidebar-row-card");
+    await screen.getByRole("button", { name: /^Launched threads/ }).click();
+    await expect
+      .element(screen.getByRole("treeitem", { name: /^Settled lane/ }))
+      .toHaveAttribute("data-testid", "sidebar-row-card");
+    await expect
+      .element(screen.getByRole("treeitem", { name: /^Snoozed lane/ }))
+      .toHaveAttribute("data-testid", "sidebar-row-slim");
+    await screen
+      .getByRole("button", { name: /^Launched threads/ })
+      .last()
+      .click();
+    await expect
+      .element(screen.getByRole("treeitem", { name: /^Settled sublane/ }))
+      .toHaveAttribute("data-testid", "sidebar-row-slim");
+  });
   it("folds launched threads into one line that expands into their rows", async () => {
     setup();
     const threads = [
