@@ -366,11 +366,30 @@ const make = Effect.gen(function* () {
         ),
       ),
     syncUpdatedMember: Effect.fn("OpenCodexSync.syncUpdatedMember")(
-      function* (alias, scope, options) {
-        yield* putUpdate({ alias, state: "syncing", restartCodex: true });
-        const done = yield* syncOne(alias, scope, everyone, options?.admissionHeld === true);
-        yield* putUpdate({ ...done, at: yield* Clock.currentTimeMillis });
-      },
+      (
+        alias: string | null,
+        scope: McpInvocationScope,
+        options?: { readonly admissionHeld?: boolean },
+      ) =>
+        Effect.gen(function* () {
+          yield* putUpdate({ alias, state: "syncing", restartCodex: true });
+          const done = yield* syncOne(alias, scope, everyone, options?.admissionHeld === true);
+          yield* putUpdate({ ...done, at: yield* Clock.currentTimeMillis });
+        }).pipe(
+          Effect.onInterrupt(() =>
+            Clock.currentTimeMillis.pipe(
+              Effect.flatMap((at) =>
+                putUpdate({
+                  alias,
+                  state: "failed",
+                  restartCodex: true,
+                  reason: "interrupted",
+                  at,
+                }),
+              ),
+            ),
+          ),
+        ),
     ),
   });
 });

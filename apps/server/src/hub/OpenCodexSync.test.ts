@@ -45,6 +45,7 @@ const makeFleet = () => ({
   ]),
   onMember: undefined as ((alias: string | null) => Effect.Effect<void>) | undefined,
   onSync: undefined as ((alias: string) => Effect.Effect<void>) | undefined,
+  onHomeSync: undefined as Effect.Effect<void> | undefined,
   homeExit: 0,
   contracts: { code: 64, stdout: "" } as OcxOutput,
   childContracts: new Map<string, OcxOutput>(),
@@ -108,19 +109,23 @@ const layer = (fleet: Fleet, seen: { latest?: Effect.Effect<unknown> }) =>
     Layer.provide(
       Layer.mock(HubOcx)({
         home: (args) =>
-          Effect.sync(() => {
-            if (args[0] === "capabilities") return fleet.contracts;
-            fleet.calls.push(`home ${args.join(" ")}`);
-            if (args[0] === "link") {
-              const alias = [...fleet.linkState.keys()].find(
-                (child) => linkIdOf(child as Child) === args[3],
-              );
-              if (alias !== undefined)
-                fleet.linkState.set(alias, fleet.reconnectTo.get(alias) ?? "connected");
-              return { code: 0, stdout: "{}" };
-            }
-            return { code: fleet.homeExit, stdout: "" };
-          }),
+          (args[0] === "sync" ? (fleet.onHomeSync ?? Effect.void) : Effect.void).pipe(
+            Effect.andThen(
+              Effect.sync(() => {
+                if (args[0] === "capabilities") return fleet.contracts;
+                fleet.calls.push(`home ${args.join(" ")}`);
+                if (args[0] === "link") {
+                  const alias = [...fleet.linkState.keys()].find(
+                    (child) => linkIdOf(child as Child) === args[3],
+                  );
+                  if (alias !== undefined)
+                    fleet.linkState.set(alias, fleet.reconnectTo.get(alias) ?? "connected");
+                  return { code: 0, stdout: "{}" };
+                }
+                return { code: fleet.homeExit, stdout: "" };
+              }),
+            ),
+          ),
         device: (alias) =>
           Effect.succeed(fleet.childContracts.get(alias) ?? { code: 64, stdout: "" }),
         syncDevice: (alias, options) =>
@@ -489,5 +494,24 @@ it.effect("does not acquire a second Home admission hold when the update owns it
     yield* sync.syncUpdatedMember(null, scope, { admissionHeld: true });
     expect(fleet.holdCalls).toBe(0);
     expect((yield* sync.lastUpdate)?.members[0]).toMatchObject({ state: "synced" });
+  }),
+);
+
+it.effect("marks an interrupted update sync as failed instead of leaving it syncing", () =>
+  Effect.gen(function* () {
+    const fleet = makeFleet();
+    const started = yield* Deferred.make<void>();
+    fleet.onHomeSync = Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never));
+    const { sync } = yield* setup(fleet);
+    yield* sync.beginUpdate("2.91.0");
+    const running = yield* Effect.forkChild(
+      sync.syncUpdatedMember(null, scope, { admissionHeld: true }),
+    );
+    yield* Deferred.await(started);
+    yield* Fiber.interrupt(running);
+    expect((yield* sync.lastUpdate)?.members[0]).toMatchObject({
+      state: "failed",
+      reason: "interrupted",
+    });
   }),
 );
