@@ -86,6 +86,22 @@ const restoreRunner = (input: SshRuntimeSupervisorInput) => {
   NodeFS.copyFileSync(input.previousRunnerFile, `${input.runnerFile}.restore`);
   NodeFS.chmodSync(`${input.runnerFile}.restore`, 0o700);
   NodeFS.renameSync(`${input.runnerFile}.restore`, input.runnerFile);
+  if (NodePath.basename(input.runnerFile) === "run-t3.sh") {
+    const alias = NodePath.join(NodePath.dirname(input.runnerFile), "run-goat.sh");
+    const next = `${alias}.next.${process.pid}`;
+    try {
+      NodeFS.rmSync(next, { force: true });
+      try {
+        NodeFS.linkSync(input.runnerFile, next);
+      } catch {
+        NodeFS.copyFileSync(input.runnerFile, next);
+        NodeFS.chmodSync(next, 0o700);
+      }
+      NodeFS.renameSync(next, alias);
+    } finally {
+      NodeFS.rmSync(next, { force: true });
+    }
+  }
 };
 
 export interface SshRuntimeSupervisorInput {
