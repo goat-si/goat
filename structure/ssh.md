@@ -148,8 +148,9 @@ keeps attachment blocked. An attach-only folded launch leaves this recovery to t
 or explicit refresh. Recovering the mutex or waiting ten minutes alone does not clear the fence.
 Clients predating this fence cannot enforce it.
 
-The runner keeps `run-t3.sh` because independently updated clients and retained supervisors
-use that path for reuse, replacement, and rollback. Its shell variables use `GOAT_*`;
+The runner's `run-goat.sh` name is an alias of `run-t3.sh`, the compatibility file independently
+updated clients and retained supervisors use for reuse, replacement, and rollback. New publishers
+and supervisors synchronize the alias from the compatibility file. Its shell variables use `GOAT_*`;
 only literal `T3_ARCHIVE_VERSION` and `T3_NODE_SCRIPT_PATH` declarations remain as metadata
 for older clients that inspect the file without sourcing it. New readers prefer GOAT
 declarations and also accept legacy runners.

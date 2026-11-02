@@ -358,6 +358,9 @@ previous version. Both refuse to restore over another server's writes. Once prob
 expires the new version is authoritative: a later downgrade is a new, deliberate
 update with its own migration check, never a stale client reconnecting.
 
+`run-goat.sh` is an alias synchronized from `run-t3.sh`, the compatibility file used
+by older clients and retained supervisors for runner identity and restoration.
+
 ## Server auto-update
 
 Launcher-managed servers and client-launched SSH runtimes enable

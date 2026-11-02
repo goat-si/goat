@@ -565,7 +565,9 @@ export const make = Effect.fn("server.ssh_runtime_auto_update.make")(function* (
             if (!(yield* idle)) return "busy" as const;
             const liveRunnerSha256 = yield* host.sha256(NodePath.join(stateDir, "run-t3.sh"));
             if (liveRunnerSha256 === undefined)
-              return yield* fail("The SSH runtime's run-t3.sh is missing.");
+              return yield* fail(
+                "The SSH runtime's run-goat.sh compatibility runner is unavailable.",
+              );
             const installedExecutableSha256 = yield* verifiedExecutableSha256(targetVersion);
             const candidateProtocol = protocols.get(targetVersion);
             if (candidateProtocol === undefined)
