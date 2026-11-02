@@ -14,6 +14,7 @@ import * as Stream from "effect/Stream";
 import * as Environment from "../environment/ServerEnvironment.ts";
 import * as AutomationHold from "../automationHold.ts";
 import * as Secrets from "../auth/ServerSecretStore.ts";
+import { environmentIdFitsForgetRecords } from "./MemoryCheckpointBound.ts";
 import * as Store from "./MemoryStore.ts";
 import * as Service from "./MemoryService.ts";
 import * as Quota from "./MemoryQuotaService.ts";
@@ -485,6 +486,11 @@ export const makeAdministrator = Effect.gen(function* () {
           }),
         );
       }
+      if (
+        request.action === "provisionMember" &&
+        !environmentIdFitsForgetRecords(request.environmentId)
+      )
+        return yield* new Store.MemoryStoreConflict({ code: "payload_too_large" });
       let record = yield* tx(permit, store.readHubAdminTx(request.requestId));
       // Recovery consumes the persisted, resolved action. Accept that exact action
       // as the alias of the original null-space request; other payloads still fail.
