@@ -59,7 +59,7 @@ import {
 import { SKILL_MENTION_PATTERN } from "@goat/shared/composerInlineTokens";
 import { appendGeneratedImageMarkdown } from "./CodexGeneratedImageMarkdown.ts";
 import { makeCodexSessionEvents } from "./CodexAppServerExit.ts";
-import { AgentScope } from "@goat/shared/AgentScope";
+import { AgentScope, handleAgentProcess } from "@goat/shared/AgentScope";
 import * as HostProcess from "@goat/shared/HostProcess";
 import {
   COMPUTER_USE_TOOL_SOURCE,
@@ -1621,6 +1621,11 @@ export const layerAppServerClientFactory: Layer.Layer<
               }),
           ),
         );
+        yield* agentScope.watch({
+          process: handleAgentProcess(handle),
+          threadId: input.threadId,
+          shared: true,
+        });
         const protocolLogger = makeCodexAppServerProtocolLogger({
           nativeEventLogger,
           threadId: input.threadId,

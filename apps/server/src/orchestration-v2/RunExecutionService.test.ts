@@ -1,3 +1,6 @@
+import { memoryRun, memoryMessage } from "./RunMemoryFixtures.testkit.ts";
+import { registerAgentOomRunCases } from "./RunExecutionService.oomCases.ts";
+import { AgentScope } from "@goat/shared/AgentScope";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as SqlClient from "effect/sql/SqlClient";
 import Migration0063 from "../persistence/Migrations/072_RemoteDispatches.ts";
@@ -13,7 +16,6 @@ import {
   CommandId,
   MessageId,
   NodeId,
-  type OrchestrationV2ConversationMessage,
   ScheduledTaskId,
   type OrchestrationV2AppThread,
   type OrchestrationV2CheckpointScope,
@@ -3136,8 +3138,9 @@ it.effect("keeps completed runs completed when pull request refresh fails", () =
   }),
 );
 
-function captureRootRunTermination(input: {
+export function captureRootRunTermination(input: {
   readonly key: string;
+  readonly oomKilled?: boolean;
   readonly shouldFinalizeRun: () => Effect.Effect<boolean, ProjectionStore.ProjectionStoreV2Error>;
   readonly rejectTerminalWrite?: boolean;
   readonly hasUnpairedRunInterruptRequest?: () => Effect.Effect<boolean, never>;
@@ -3197,6 +3200,10 @@ function captureRootRunTermination(input: {
     const layerTest = RunExecutionService.layer.pipe(
       Layer.provide(
         Layer.mergeAll(
+          Layer.succeed(AgentScope, {
+            ...AgentScope.defaultValue(),
+            oomKilled: () => Effect.succeed(input.oomKilled === true),
+          }),
           Layer.mock(McpAppModelContext.McpAppModelContext)({
             forThread: () => input.appContext ?? Effect.succeed([]),
           }),
@@ -3769,46 +3776,6 @@ it.effect.each(["accepted", "rejected", "skipped", "compact"] as const)(
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
 
-const memoryNow = DateTime.makeUnsafe("2026-10-15T00:00:00.000Z");
-const memoryRun = (
-  index: number,
-  fields: Partial<OrchestrationV2Run> = {},
-): OrchestrationV2Run => ({
-  id: RunId.make(`memory-run:${index}`),
-  threadId: ThreadId.make("memory-thread"),
-  ordinal: index,
-  providerInstanceId: ProviderInstanceId.make("codex"),
-  modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "test" },
-  providerThreadId: null,
-  userMessageId: MessageId.make(`memory-message:${index}`),
-  rootNodeId: null,
-  activeAttemptId: null,
-  status: "starting",
-  requestedAt: memoryNow,
-  startedAt: null,
-  completedAt: null,
-  checkpointId: null,
-  contextHandoffId: null,
-  ...fields,
-});
-const memoryMessage = (
-  run: OrchestrationV2Run,
-  fields: Partial<OrchestrationV2ConversationMessage> = {},
-): OrchestrationV2ConversationMessage => ({
-  id: run.userMessageId,
-  threadId: run.threadId,
-  runId: run.id,
-  nodeId: null,
-  role: "user",
-  text: "Synthetic",
-  attachments: [],
-  streaming: false,
-  createdBy: "user",
-  creationSource: "web",
-  createdAt: memoryNow,
-  updatedAt: memoryNow,
-  ...fields,
-});
 it.each([
   { name: "web user", source: "web", expected: null },
   { name: "mobile user", source: "mobile", expected: null },
@@ -3919,3 +3886,5 @@ it.each(["usageLimitContinuationOfRunId", "restartContinuationOfRunId"] as const
     );
   },
 );
+
+registerAgentOomRunCases(captureRootRunTermination, driver);

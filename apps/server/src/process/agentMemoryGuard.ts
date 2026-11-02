@@ -1,4 +1,8 @@
 import * as Effect from "effect/Effect";
+import type { AgentScopeShape } from "@goat/shared/AgentScope";
+import * as NodeOS from "node:os";
+import * as ProcessRunner from "../processRunner.ts";
+import * as ServerSettings from "../serverSettings.ts";
 
 export interface ProcessRow {
   readonly pid: number;
@@ -67,8 +71,8 @@ export function treeOf(
   }
   return { rssBytes, processCount: visited.size, leader: root.pgid === rootPid };
 }
-export const makeAgentMemoryGuard = Effect.fn("AgentMemoryGuard.make")(function* (deps: {
-  sample: Effect.Effect<ReadonlyArray<ProcessRow>, unknown>;
+export const makeAgentMemoryGuard = Effect.fn("AgentMemoryGuard.make")(function* <E>(deps: {
+  sample: Effect.Effect<ReadonlyArray<ProcessRow>, E>;
   limitBytes: Effect.Effect<number | null>;
   signal: (pid: number) => void;
   inCheckPhase: <A>(block: () => A) => Effect.Effect<A>;
@@ -139,6 +143,7 @@ export const makeAgentMemoryGuard = Effect.fn("AgentMemoryGuard.make")(function*
     if (watched.size === 0) return;
     const limit = yield* deps.limitBytes;
     if (limit === null) return;
+    const registrations = [...watched.entries()];
     const sampled = yield* Effect.result(deps.sample);
     if (sampled._tag === "Failure") {
       if (sampleFailed) yield* Effect.logDebug("Agent memory sample failed", sampled.failure);
@@ -155,7 +160,7 @@ export const makeAgentMemoryGuard = Effect.fn("AgentMemoryGuard.make")(function*
       list.push(row);
       children.set(row.ppid, list);
     }
-    const decisions = [...watched.entries()].map(([pid, reg]) => ({
+    const decisions = registrations.map(([pid, reg]) => ({
       pid,
       reg,
       tree: treeOf(rows, children, pid),
@@ -167,7 +172,9 @@ export const makeAgentMemoryGuard = Effect.fn("AgentMemoryGuard.make")(function*
         tree: NonNullable<ReturnType<typeof treeOf>>;
         partial: boolean;
       }> = [];
-      // libuv's poll phase completes the whole child exit callback batch before check phase; this requires the same Node loop to own and reap the children.
+      // libuv 1.52.1 uv__wait_children runs in uv__io_poll and completes the exit callback batch before check phase.
+      // Node sets exitCode/signalCode in onexit and the Effect spawner completes its exit Deferred in that callback.
+      // This holds only when this Node loop owns and reaps the child.
       for (const { pid, reg, tree } of decisions) {
         if (watched.get(pid) !== reg) continue;
         if (!reg.process.isRunning()) {
@@ -189,7 +196,12 @@ export const makeAgentMemoryGuard = Effect.fn("AgentMemoryGuard.make")(function*
         ) {
           marked.delete(reg.threadId);
           marked.add(reg.threadId);
-          trim(marked);
+          while (marked.size > MAX_ENTRIES) {
+            const oldest = marked.values().next();
+            if (oldest.done) break;
+            marked.delete(oldest.value);
+            pruneGeneration(oldest.value);
+          }
         }
         pruneGeneration(reg.threadId);
         let partial = false;
@@ -217,5 +229,58 @@ export const makeAgentMemoryGuard = Effect.fn("AgentMemoryGuard.make")(function*
   yield* Effect.forever(Effect.sleep("30 seconds").pipe(Effect.andThen(tick))).pipe(
     Effect.forkScoped,
   );
-  return { watch, clear, oomKilled: (threadId: string) => Effect.sync(() => marked.has(threadId)) };
+  return {
+    watch,
+    clear,
+    oomKilled: (threadId: string) => Effect.sync(() => marked.has(threadId)),
+    trackingCounts: () => ({
+      watched: watched.size,
+      generations: generations.size,
+      marked: marked.size,
+    }),
+  };
 });
+
+export const liveInCheckPhase = <A>(block: () => A) =>
+  Effect.callback<A>((resume) => {
+    const id = setImmediate(() => resume(Effect.succeed(block())));
+    return Effect.sync(() => clearImmediate(id));
+  });
+
+export const makeDarwinAgentScope = Effect.fn("AgentMemoryGuard.makeDarwinAgentScope")(
+  function* () {
+    const runner = yield* ProcessRunner.ProcessRunner;
+    const settings = yield* ServerSettings.ServerSettingsService;
+    const guard = yield* makeAgentMemoryGuard({
+      sample: runner
+        .run({ command: "ps", args: ["-axo", "pid=,ppid=,pgid=,rss=,stat="], timeout: "5 seconds" })
+        .pipe(
+          Effect.flatMap((output) =>
+            output.code === 0 && !output.stdoutTruncated && !output.stdoutInvalidUtf8
+              ? Effect.succeed(parseProcessTable(output.stdout))
+              : Effect.fail("ps output unavailable"),
+          ),
+        ),
+      limitBytes: settings.getSettings.pipe(
+        Effect.map((value) =>
+          resolveAgentMemoryLimitBytes(value.agentMemoryLimitGiB, NodeOS.totalmem()),
+        ),
+        Effect.orElseSucceed(() => automaticAgentMemoryLimitBytes(NodeOS.totalmem())),
+      ),
+      signal: (pid) => {
+        process.kill(pid, "SIGKILL");
+      },
+      inCheckPhase: liveInCheckPhase,
+    });
+    const scope: AgentScopeShape = {
+      watch: guard.watch,
+      clear: guard.clear,
+      oomKilled: guard.oomKilled,
+      wrap: ({ command, args }: { command: string; args: ReadonlyArray<string> }) =>
+        Effect.succeed({ command, args }),
+      stop: () => Effect.void,
+      kill: () => Effect.succeed(false),
+    };
+    return scope;
+  },
+);

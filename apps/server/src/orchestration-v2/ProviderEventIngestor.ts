@@ -1,3 +1,4 @@
+import { withAgentOom } from "./agentOomFailure.ts";
 import {
   NodeId,
   CommandId,
@@ -748,9 +749,9 @@ export const layer: Layer.Layer<
                 return dismissed;
               }
               const occurredAt = yield* DateTime.now;
-              const failure = (yield* agentScope.oomKilled(input.threadId))
-                ? { ...input.event.failure, message: "Killed: out of memory.", code: "oom_kill" }
-                : input.event.failure;
+              const failure = yield* withAgentOom(input.threadId, input.event.failure).pipe(
+                Effect.provideService(AgentScope, agentScope),
+              );
               return [
                 ...dismissed,
                 yield* makeDomainEvent(input, {

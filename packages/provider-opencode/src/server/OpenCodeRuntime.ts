@@ -1,3 +1,4 @@
+import { resolveOpenCodeConfigContent } from "./openCodeConfigContent.ts";
 import * as NodeURL from "node:url";
 
 import type { ChatAttachment, ProviderApprovalDecision, RuntimeMode } from "@goat/contracts";
@@ -38,12 +39,11 @@ import * as OpenCodeServerLedger from "./OpenCodeServerLedger.ts";
 import { collectStreamAsString } from "@goat/provider-core/server/snapshotProbe";
 import { classifyStartupExit, OpenCodeSpawnFailure, spawnFailureFor } from "./spawnFailure.ts";
 import * as NetService from "@goat/shared/Net";
-import { AgentScope } from "@goat/shared/AgentScope";
+import { AgentScope, handleAgentProcess } from "@goat/shared/AgentScope";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { compareSemverVersions, parseSemver } from "@goat/shared/semver";
 import { resolveSpawnCommand } from "@goat/shared/shell";
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
-const OPENCODE_EMPTY_CONFIG_CONTENT = "{}";
 
 export const MINIMUM_OPENCODE_VERSION = "1.14.19";
 const OPENCODE_HEALTH_TIMEOUT = "5 seconds";
@@ -53,17 +53,6 @@ const OpenCodeHealthSchema = Schema.Struct({
   version: Schema.String,
 });
 const decodeOpenCodeHealth = Schema.decodeUnknownEffect(OpenCodeHealthSchema);
-
-function resolveOpenCodeConfigContent(
-  inputEnvironment: Readonly<Record<string, string | undefined>> | undefined,
-  inheritedEnvironment: Readonly<Record<string, string | undefined>> = process.env,
-): string {
-  return (
-    inputEnvironment?.OPENCODE_CONFIG_CONTENT ??
-    inheritedEnvironment.OPENCODE_CONFIG_CONTENT ??
-    OPENCODE_EMPTY_CONFIG_CONTENT
-  );
-}
 
 export function resolveOpenCodeServerPassword(
   input: {
@@ -721,6 +710,8 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
             }),
         ),
       );
+
+    yield* agentScope.watch({ process: handleAgentProcess(child), shared: true });
 
     const killOpenCodeProcessGroup = (signal: NodeJS.Signals) =>
       hostPlatform === "win32"

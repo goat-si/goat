@@ -1320,7 +1320,7 @@ const layerMakeServer = Layer.unwrap(
       Layer.provide(HomeRoute.layer),
       Layer.provideMerge(FetchHttpClient.layer),
       Layer.provide(VcsProcess.layer),
-      Layer.provideMerge(AgentScopeLive.layer),
+      Layer.provideMerge(AgentScopeLive.layer.pipe(Layer.provide(layerServerSettings))),
       Layer.provideMerge(layerPlatformServices),
       Layer.provideMerge(PendingAttachmentSweep.layer),
     );

@@ -1,8 +1,15 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 
-import { makeAgentMemoryGuard, parseProcessTable, treeOf } from "./agentMemoryGuard.ts";
+import {
+  makeAgentMemoryGuard,
+  parseProcessTable,
+  treeOf,
+  resolveAgentMemoryLimitBytes,
+} from "./agentMemoryGuard.ts";
 
 const root = { pid: 10, ppid: 1, pgid: 10, rssBytes: 60, zombie: false };
 const descendant = { pid: 11, ppid: 10, pgid: 11, rssBytes: 50, zombie: false };
@@ -207,7 +214,9 @@ describe("agent memory guard", () => {
           threadId: `thread-${index}`,
         });
       }
+      expect(guard.trackingCounts()).toEqual({ watched: 1000, generations: 1000, marked: 0 });
       yield* TestClock.adjust("30 seconds");
+      expect(guard.trackingCounts()).toEqual({ watched: 0, generations: 1000, marked: 1000 });
       expect(signals.length).toBe(1000);
       expect(signals).not.toContain(10);
       expect(yield* guard.oomKilled("thread-1")).toBe(true);
@@ -216,6 +225,9 @@ describe("agent memory guard", () => {
       yield* TestClock.adjust("30 seconds");
       expect(yield* guard.oomKilled("thread-1")).toBe(false);
       expect(yield* guard.oomKilled("latest")).toBe(true);
+      expect(guard.trackingCounts()).toEqual({ watched: 0, generations: 1000, marked: 1000 });
+      yield* guard.clear("latest");
+      expect(guard.trackingCounts()).toEqual({ watched: 0, generations: 999, marked: 999 });
     }).pipe(Effect.scoped),
   );
 
@@ -239,6 +251,41 @@ describe("agent memory guard", () => {
       expect(yield* guard.oomKilled("thread")).toBe(false);
     }).pipe(Effect.scoped),
   );
+
+  it.effect("does not apply an earlier process snapshot to a newly registered child", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const signals: number[] = [];
+      const guard = yield* makeAgentMemoryGuard({
+        sample: Deferred.succeed(started, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.as([{ ...root, rssBytes: 101 }]),
+        ),
+        limitBytes: Effect.succeed(100),
+        signal: (pid) => {
+          signals.push(pid);
+        },
+        inCheckPhase: (block) => Effect.sync(block),
+      });
+      yield* guard.watch({ process: { pid: 99, isRunning: () => true }, threadId: "old" });
+      const clock = yield* TestClock.adjust("30 seconds").pipe(Effect.forkChild);
+      yield* Deferred.await(started);
+      yield* guard.watch({ process: { pid: 10, isRunning: () => true }, threadId: "new" });
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(clock);
+      expect(signals).toEqual([]);
+      expect(yield* guard.oomKilled("new")).toBe(false);
+    }).pipe(Effect.scoped),
+  );
+
+  it("resolves the automatic, disabled, and custom memory limits", () => {
+    const gib = 1024 ** 3;
+    expect(resolveAgentMemoryLimitBytes(null, 16 * gib)).toBe(8 * gib);
+    expect(resolveAgentMemoryLimitBytes(null, 128 * gib)).toBe(16 * gib);
+    expect(resolveAgentMemoryLimitBytes(0, 16 * gib)).toBeNull();
+    expect(resolveAgentMemoryLimitBytes(3, 16 * gib)).toBe(3 * gib);
+  });
 
   it("parses process rows and ignores malformed rows and zombie roots", () => {
     const rows = parseProcessTable("10 1 10 2 S\n11 10 11 3 Z+\ninvalid\n");

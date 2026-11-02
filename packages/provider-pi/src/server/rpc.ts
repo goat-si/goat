@@ -12,6 +12,7 @@ import * as Stream from "effect/Stream";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { AgentScope, handleAgentProcess } from "@goat/shared/AgentScope";
 import { resolveSpawnCommand } from "@goat/shared/shell";
 import {
   MAX_TOOL_OUTPUT_IMAGES,
@@ -66,6 +67,7 @@ export function parsePiModelSlug(slug: string): { provider: string; modelId: str
 }
 
 export interface PiRpcSpawnOptions {
+  readonly threadId?: string | undefined;
   readonly command: string;
   readonly args: ReadonlyArray<string>;
   readonly cwd: string | undefined;
@@ -189,6 +191,12 @@ export const makePiRpcConnection = Effect.fnUntraced(function* (options: PiRpcSp
       }),
     )
     .pipe(Effect.mapError((cause) => new PiRpcError({ operation: "spawn", cause })));
+
+  if (options.threadId !== undefined)
+    yield* (yield* AgentScope).watch({
+      process: handleAgentProcess(child),
+      threadId: options.threadId,
+    });
 
   let childExited = false;
   let diagnosingStdoutClose = false;
