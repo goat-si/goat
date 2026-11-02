@@ -784,49 +784,54 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
       backendOutputLog.recordStop,
     );
     recoveryStatus = "stopped";
-    const acquire = mutex.withPermits(1)(
-      Effect.gen(function* () {
-        const atNanos = yield* Clock.monotonicTimeNanos;
-        const result = yield* Ref.modify(state, (latest) => {
-          const active = Option.map(latest.active, (run) =>
-            run.exitObserved || run.stopRequested
-              ? run
-              : { ...run, stopRequested: true, stopRequest: Option.some({ reason, atNanos }) },
-          );
-          return [
-            {
-              active,
-              newStopRequest:
-                Option.isSome(latest.active) &&
-                !latest.active.value.exitObserved &&
-                !latest.active.value.stopRequested,
-              restartFiber: latest.restartFiber,
-              notifyShutdown: latest.ready,
-            },
-            {
-              ...latest,
-              desiredRunning: false,
-              ready: false,
-              active,
-              restartFiber: Option.none<Fiber.Fiber<void, never>>(),
-            },
-          ] as const;
+    const locked = Effect.gen(function* () {
+      const atNanos = yield* Clock.monotonicTimeNanos;
+      const result = yield* Ref.modify(state, (latest) => {
+        const active = Option.map(latest.active, (run) =>
+          run.exitObserved || run.stopRequested
+            ? run
+            : { ...run, stopRequested: true, stopRequest: Option.some({ reason, atNanos }) },
+        );
+        return [
+          {
+            active,
+            newStopRequest:
+              Option.isSome(latest.active) &&
+              !latest.active.value.exitObserved &&
+              !latest.active.value.stopRequested,
+            restartFiber: latest.restartFiber,
+            notifyShutdown: latest.ready,
+          },
+          {
+            ...latest,
+            desiredRunning: false,
+            ready: false,
+            active,
+            restartFiber: Option.none<Fiber.Fiber<void, never>>(),
+          },
+        ] as const;
+      });
+      const run = Option.getOrUndefined(result.active);
+      if (run && result.newStopRequest) {
+        yield* backendOutputLog.markStop;
+        yield* backendOutputLog.recordStop({
+          message: "backend stop requested",
+          level: "INFO",
+          details: `pid=${Option.match(run.pid, { onNone: () => "pending", onSome: String })} reason=${reason} graceMs=${Duration.toMillis(DEFAULT_BACKEND_TERMINATE_GRACE)} timeoutMs=${options?.timeout ? Duration.toMillis(options.timeout) : "none"}`,
         });
-        const run = Option.getOrUndefined(result.active);
-        if (run && result.newStopRequest) {
-          yield* backendOutputLog.markStop;
-          yield* backendOutputLog.recordStop({
-            message: "backend stop requested",
-            level: "INFO",
-            details: `pid=${Option.match(run.pid, { onNone: () => "pending", onSome: String })} reason=${reason} graceMs=${Duration.toMillis(DEFAULT_BACKEND_TERMINATE_GRACE)} timeoutMs=${options?.timeout ? Duration.toMillis(options.timeout) : "none"}`,
-          });
-        }
-        return result;
+      }
+      return result;
+    });
+    const budget = options?.timeout ? yield* remaining(options.timeout) : undefined;
+    const acquired = yield* Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const permit = budget
+          ? yield* restore(mutex.take(1)).pipe(Effect.timeoutOption(budget))
+          : Option.some(yield* restore(mutex.take(1)));
+        if (Option.isNone(permit)) return Option.none();
+        return Option.some(yield* locked.pipe(Effect.ensuring(mutex.release(1))));
       }),
     );
-    const acquired = options?.timeout
-      ? yield* acquire.pipe(Effect.timeoutOption(yield* remaining(options.timeout)))
-      : Option.some(yield* acquire);
     if (Option.isNone(acquired)) {
       yield* Ref.update(state, (latest) => ({ ...latest, desiredRunning: false }));
       yield* Effect.forkDetach(stop(reason));

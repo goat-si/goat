@@ -10,6 +10,7 @@ import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -30,6 +31,103 @@ export function registerBackendStopTests({
   makeProcess: typeof Harness.makeProcess;
   baseConfig: Parameters<typeof Harness.makeTestInstance>[0]["config"] & {};
 }) {
+  it.effect("PR 2418: stop cancels a pending backend restart", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        let attempts = 0;
+        const sleeping = yield* Deferred.make<void>();
+        const interrupted = yield* Deferred.make<void>();
+        const original = yield* Clock.Clock;
+        const clock: Clock.Clock = {
+          currentTimeMillisUnsafe: () => original.currentTimeMillisUnsafe(),
+          currentTimeMillis: original.currentTimeMillis,
+          currentTimeNanosUnsafe: () => original.currentTimeNanosUnsafe(),
+          currentTimeNanos: original.currentTimeNanos,
+          monotonicTimeNanosUnsafe: () => original.monotonicTimeNanosUnsafe(),
+          monotonicTimeNanos: original.monotonicTimeNanos,
+          sleep: (duration) =>
+            Deferred.succeed(sleeping, undefined).pipe(
+              Effect.andThen(original.sleep(duration)),
+              Effect.onInterrupt(() => Deferred.succeed(interrupted, undefined)),
+            ),
+        };
+        const instance = yield* makeTestInstance({
+          configResolve: Effect.sync(() => {
+            attempts++;
+            return {
+              ...baseConfig,
+              preflightFailure: Option.some({ reason: "not ready", fatal: false }),
+            };
+          }),
+          spawnerLayer: Layer.succeed(
+            ChildProcessSpawner.ChildProcessSpawner,
+            ChildProcessSpawner.make(() => Effect.die("unexpected spawn")),
+          ),
+        });
+        yield* instance.start.pipe(Effect.provideService(Clock.Clock, clock));
+        yield* Deferred.await(sleeping);
+        assert.isTrue((yield* instance.snapshot).restartScheduled);
+        yield* instance.stop("quit", { timeout: Duration.seconds(9) });
+        assert.isTrue(yield* Deferred.isDone(interrupted));
+        assert.isFalse((yield* instance.snapshot).restartScheduled);
+        yield* TestClock.adjust("32 seconds");
+        assert.equal(attempts, 1);
+      }),
+    ),
+  );
+  it.effect("PR 2418: a slow stop record does not discard the shutdown notification", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const ready = yield* Deferred.make<void>();
+        const recording = yield* Deferred.make<void>();
+        const allowRecord = yield* Deferred.make<void>();
+        const stopped = yield* Deferred.make<void>();
+        let shutdowns = 0;
+        const spawnerLayer = Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make(() =>
+            Effect.gen(function* () {
+              const exit = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
+              yield* Scope.addFinalizer(
+                yield* Scope.Scope,
+                Deferred.succeed(exit, ChildProcessSpawner.ExitCode(0)).pipe(
+                  Effect.andThen(Deferred.succeed(stopped, undefined)),
+                  Effect.asVoid,
+                ),
+              );
+              return makeProcess({ exitCode: Deferred.await(exit) });
+            }),
+          ),
+        );
+        const instance = yield* makeTestInstance({
+          spawnerLayer,
+          onReady: Deferred.succeed(ready, undefined).pipe(Effect.asVoid),
+          onShutdown: Effect.sync(() => {
+            shutdowns++;
+          }),
+          backendOutputLog: {
+            recordStop: ({ message }) =>
+              message === "backend stop requested"
+                ? Deferred.succeed(recording, undefined).pipe(
+                    Effect.andThen(Deferred.await(allowRecord)),
+                  )
+                : Effect.void,
+          },
+        });
+        yield* instance.start;
+        yield* Deferred.await(ready);
+        const stopping = yield* instance
+          .stop("quit", { timeout: BACKEND_STOP_TIMEOUT })
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(recording);
+        yield* TestClock.adjust(BACKEND_STOP_TIMEOUT);
+        yield* Deferred.succeed(allowRecord, undefined);
+        yield* Fiber.join(stopping);
+        yield* Deferred.await(stopped);
+        assert.equal(shutdowns, 1);
+      }),
+    ),
+  );
   it.effect("PR 2418: a blocked shutdown callback cannot extend the stop budget", () =>
     Effect.scoped(
       Effect.gen(function* () {
