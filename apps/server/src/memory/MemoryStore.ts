@@ -358,7 +358,7 @@ const make = Effect.gen(function* () {
   // The first delete of a known identity always lands, even past capacity: a member builds it
   // from its own reservation, which may cover evidence the hub never reserved. Later forgets
   // of that identity, and forgets of identities the hub never saw, are budgeted like writes.
-  const baseDelete = (op: M.MemoryOperation) =>
+  const baseDelete = (op: Parameters<MemoryStoreShape["appendHubEntryTx"]>[0]["operation"]) =>
     op.kind !== "forget"
       ? Effect.succeed(false)
       : Effect.map(
