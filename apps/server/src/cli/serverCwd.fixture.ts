@@ -21,8 +21,9 @@ process.chdir(cwd);
 if (scenario === "deleted") NodeFS.rmdirSync(cwd);
 else if (scenario !== "accessible" && process.getuid?.() !== 0) NodeFS.chmodSync(cwd, 0o000);
 if (scenario !== "deleted" && scenario !== "accessible") {
-  const access = NodeFS.default.accessSync;
-  NodeFS.default.accessSync = (path, mode) => {
+  const mutableFs = NodeModule.createRequire(import.meta.url)("node:fs") as typeof NodeFS;
+  const access = mutableFs.accessSync;
+  mutableFs.accessSync = (path, mode) => {
     if (
       (process.getuid?.() === 0 && String(path) === cwd) ||
       ((scenario === "fallback" || scenario === "both-fail") && String(path) === home) ||
