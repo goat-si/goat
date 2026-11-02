@@ -151,6 +151,7 @@ const makeHarness = Effect.fn("test.auto_update.harness")(function* (
   const sshRuntime = SshRuntimeAutoUpdate.SshRuntimeAutoUpdate.of({
     supported: options.sshRuntime === true,
     owned: Effect.sync(() => state.sshOwned),
+    replacedInto: Effect.sync((): string | undefined => undefined),
     isUpdating: Effect.sync(() => state.updating),
     failedTarget: Effect.sync(() => state.sshFailedTarget),
     prepare,

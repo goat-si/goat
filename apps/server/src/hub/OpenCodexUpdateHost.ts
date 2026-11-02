@@ -12,11 +12,23 @@ import { countHostThreads, interruptibleTurns, runningSubagents } from "../mcp/h
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import { GOAT_INSTALLS_OPENCODEX, quoteGoatExecutable } from "../opencodex/childPrepare.ts";
 import * as Installation from "../opencodex/OpenCodexInstallation.ts";
+import * as Inventory from "../opencodex/OpenCodexInventory.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as RuntimeAdmission from "../runtimeAdmission.ts";
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as HubParity from "./HubParity.ts";
+import { deviceScript, parseDeviceOutput } from "./HubOcx.ts";
+import {
+  applyArgs,
+  applyOutcome,
+  CONTRACTS_ARGS,
+  OCX_CONTRACT,
+  orchestratedPlanOf,
+  planArgs,
+  probeContracts,
+  type OrchestratedPlan,
+} from "./ocxContracts.ts";
 import { isStableOpenCodexVersion, type OpenCodexUpdateMember } from "./opencodexUpdatePlan.ts";
 
 const INSTALL_TIMEOUT_MS = 15 * 60_000;
@@ -40,6 +52,19 @@ export class OpenCodexUpdateHost extends Context.Service<
       alias: string | null,
       scope: McpInvocationScope,
     ) => Effect.Effect<OpenCodexUpdateMember>;
+    readonly orchestratedPlan: (
+      alias: string | null,
+      version: string,
+    ) => Effect.Effect<
+      | { readonly kind: "plan"; readonly plan: OrchestratedPlan }
+      | { readonly kind: "none" | "unknown" }
+    >;
+    readonly applyOrchestrated: (
+      alias: string | null,
+      version: string,
+      token: string,
+      notAfter: number,
+    ) => Effect.Effect<"applied" | "refused" | "rolled-back" | "uncertain">;
     /** Installs only a GOAT-pinned managed release and restarts its service. */
     readonly install: (alias: string | null, version: string) => Effect.Effect<boolean>;
     /**
@@ -68,6 +93,7 @@ const succeeded = (stdout: string) => EXIT.exec(stdout)?.[1] === "0";
 
 const makeHost = Effect.gen(function* () {
   const parity = yield* HubParity.HubParity;
+  const inventory = yield* Inventory.OpenCodexInventory;
   const hosts = yield* HostThreads.HostThreadsMcpService;
   const threads = yield* ThreadManagement.ThreadManagementService;
   const dispatch = yield* Dispatch.SshRemoteDispatch;
@@ -167,10 +193,74 @@ const makeHost = Effect.gen(function* () {
     return Option.isSome(output) && succeeded(output.value.stdout);
   });
 
+  const runOcx = Effect.fn("OpenCodexUpdateHost.runOcx")(function* (
+    alias: string | null,
+    args: ReadonlyArray<string>,
+    timeout: number,
+  ) {
+    if (alias === null) {
+      const snapshot = yield* inventory.read.pipe(Effect.option);
+      const binary = Option.isSome(snapshot) ? snapshot.value.binaries[0]?.path : undefined;
+      if (binary === undefined) return undefined;
+      const result = yield* runner
+        .run({
+          command: binary,
+          args,
+          env: environment,
+          cwd,
+          timeout,
+          maxOutputBytes: 64 * 1024,
+          timeoutBehavior: "timedOutResult",
+        })
+        .pipe(Effect.option);
+      return Option.isSome(result) &&
+        !result.value.stdoutTruncated &&
+        !result.value.stdoutInvalidUtf8
+        ? result.value
+        : undefined;
+    }
+    const result = yield* dispatch
+      .runHostScript({ host: alias, script: deviceScript(args), timeoutMs: timeout })
+      .pipe(Effect.option);
+    return Option.isSome(result) ? parseDeviceOutput(result.value.stdout) : undefined;
+  });
+  const orchestratedPlan = Effect.fn("OpenCodexUpdateHost.orchestratedPlan")(function* (
+    alias: string | null,
+    version: string,
+  ) {
+    if (!isStableOpenCodexVersion(version)) return { kind: "none" as const };
+    const contracts = probeContracts(yield* runOcx(alias, CONTRACTS_ARGS, 30_000));
+    if (contracts.kind === "unknown") return { kind: "unknown" as const };
+    if (!contracts.contracts.has(OCX_CONTRACT.updateOrchestrated)) return { kind: "none" as const };
+    const output = yield* runOcx(alias, planArgs(version), 60_000);
+    if (output === undefined || output.code !== 0 || ("timedOut" in output && output.timedOut))
+      return { kind: "unknown" as const };
+    const plan = orchestratedPlanOf(output.stdout);
+    return plan.kind === "legacy" ? { kind: "none" as const } : plan;
+  });
+  const applyOrchestrated = Effect.fn("OpenCodexUpdateHost.applyOrchestrated")(function* (
+    alias: string | null,
+    version: string,
+    token: string,
+    notAfter: number,
+  ) {
+    const output = yield* runOcx(alias, applyArgs(version, token, notAfter), INSTALL_TIMEOUT_MS);
+    return output === undefined
+      ? ("uncertain" as const)
+      : applyOutcome(
+          output.code,
+          "timedOut" in output ? output.timedOut : false,
+          output.stdout,
+          version,
+        );
+  });
+
   return OpenCodexUpdateHost.of({
     latestRelease,
     member,
     install,
+    orchestratedPlan,
+    applyOrchestrated,
     holdAdmission: (alias) =>
       alias === null ? admission.beginDrain.pipe(Effect.as(true)) : Effect.succeed(false),
     releaseAdmission: (alias) => (alias === null ? admission.resume : Effect.void),

@@ -1,247 +1,339 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
-import {
-  DEFAULT_SERVER_SETTINGS,
-  EnvironmentId,
-  type HubParityResult,
-  type OpenCodexInventorySnapshot,
-  type OpenCodexSyncReport,
-  type OpenCodexUpdateStatus,
-} from "@goat/contracts";
+import { EnvironmentId, OpenCodexUpdateMemberRecord } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Schema from "effect/Schema";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
-import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
-
 import * as ServerConfig from "../config.ts";
-import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as HostThreads from "../mcp/HostThreadsMcpService.ts";
 import * as Installation from "../opencodex/OpenCodexInstallation.ts";
+import * as Inventory from "../opencodex/OpenCodexInventory.ts";
 import { installedWorld, urlOf } from "../opencodex/OpenCodexInstallation.testkit.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as RuntimeAdmission from "../runtimeAdmission.ts";
-import * as Scheduler from "../scheduling/Scheduler.ts";
-import * as Settings from "../serverSettings.ts";
 import * as Dispatch from "../sshRemote/SshRemoteDispatch.ts";
 import * as HubParity from "./HubParity.ts";
-import * as ManagedUpdate from "./OpenCodexManagedUpdate.ts";
-import { OpenCodexSync } from "./OpenCodexSync.ts";
+import { makeFleet, MINUTE, phases, service, setup } from "./OpenCodexManagedUpdate.testkit.ts";
 import * as UpdateHost from "./OpenCodexUpdateHost.ts";
 import { fleetSnapshot } from "./parity.testkit.ts";
 
-const MINUTE = 60_000;
-const PUBLISHED_AT = "2026-10-01T00:00:00.000Z";
-const PUBLISHED = Date.parse(PUBLISHED_AT);
-
-/** Scripted devices: installs change versions, health and parity follow the script. */
-const makeFleet = (
-  overrides: { homeOwnership?: "managed" | "adopted"; childOwnership?: "managed" | "adopted" } = {},
-) => ({
-  versions: new Map<string | null, string>([
-    [null, "2.89.0"],
-    ["mac-studio", "2.86.0"],
-  ]),
-  ownership: new Map<string | null, OpenCodexInventorySnapshot["ownership"]>([
-    [null, overrides.homeOwnership ?? "managed"],
-    ["mac-studio", overrides.childOwnership ?? "managed"],
-  ]),
-  running: new Map<string | null, number | undefined>([
-    [null, 0],
-    ["mac-studio", 0],
-  ]),
-  installs: [] as Array<string>,
-  /** Installs and syncs in the order they ran, as `install:<member>` and `sync:<member>@<version>`. */
-  log: [] as Array<string>,
-  /** Members whose sync restarts their runtime, as a Child's can after applying Home settings. */
-  syncRestarts: new Set<string | null>(),
-  syncFails: new Set<string | null>(),
-  syncReport: undefined as OpenCodexSyncReport | undefined,
-  /** What the managed update last told the sync about its window. */
-  updating: undefined as boolean | undefined,
-  /** Hosts that cannot hold turn admission, and how many holds are open right now. */
-  noAdmission: new Set<string | null>(),
-  holds: 0,
-  unhealthyAt: new Set<string>(),
-  /** Installs of these `alias@version` fail once, as an unreachable host or npm error would. */
-  failOnce: new Set<string>(),
-  /** Process start per member; an install restarts it, a crash moves it without a version change. */
-  startedAt: new Map<string | null, number>([
-    [null, 1],
-    ["mac-studio", 1],
-  ]),
-  processId: new Map<string | null, number>([
-    [null, 100],
-    ["mac-studio", 200],
-  ]),
-  parity: new Map<string, HubParityResult["verdict"]>([["mac-studio", "ok"]]),
-  /** Connection-bound relay auth changes in 2.90.0; a pair on different sides of it is broken. */
-  relayAuth: false,
-  goatclaw: true,
-  hub: true,
-});
-type Fleet = ReturnType<typeof makeFleet>;
-
-const snapshotOf = (fleet: Fleet, alias: string | null): OpenCodexInventorySnapshot => {
-  const base = fleetSnapshot(alias === null ? "home" : "mac-studio");
-  const version = fleet.versions.get(alias)!;
-  return {
-    ...base,
-    ownership: fleet.ownership.get(alias)!,
-    service: { available: true, installed: true, running: true, backend: "launchd" },
-    runtime: {
-      ...base.runtime,
-      version,
-      healthy: !fleet.unhealthyAt.has(`${alias ?? "home"}@${version}`),
-    },
-    parityEvidence: {
-      ...base.parityEvidence!,
-      startedAt: fleet.startedAt.get(alias)!,
-      processId: fleet.processId.get(alias)!,
-    },
-    link: {
-      ...base.link,
-      links: base.link.links.filter((link) => link.alias === "mac-studio"),
-    },
-  };
-};
-
-const build = (fleet: Fleet, baseDir: string) =>
-  Layer.build(
-    ManagedUpdate.layerService.pipe(
-      Layer.provide(
-        Layer.succeed(OpenCodexSync, {
-          plan: () => Effect.die("A window never plans a manual sync."),
-          run: () => Effect.die("A window never runs a manual sync."),
-          latest: Effect.sync(() => fleet.syncReport),
-          lastUpdate: Effect.sync(() => fleet.syncReport),
-          changes: Stream.empty,
-          markUpdating: (open) =>
-            Effect.sync(() => {
-              fleet.updating = open;
-            }),
-          exclusive: (body) => body,
-          beginUpdate: (targetVersion) =>
-            Effect.sync(() => {
-              fleet.syncReport = { trigger: "update", checkedAt: 0, targetVersion, members: [] };
-            }),
-          syncUpdatedMember: (alias) =>
-            Effect.sync(() => {
-              fleet.log.push(`sync:${alias ?? "home"}@${fleet.versions.get(alias)}`);
-              if (fleet.syncRestarts.has(alias)) {
-                fleet.startedAt.set(alias, fleet.startedAt.get(alias)! + 5 * 60_000);
-                fleet.processId.set(alias, fleet.processId.get(alias)! + 1);
-              }
-              const failed = fleet.syncFails.has(alias);
-              fleet.syncReport = {
-                ...fleet.syncReport!,
-                members: [
-                  ...fleet.syncReport!.members,
-                  {
-                    alias,
-                    state: failed ? "failed" : "synced",
-                    restartCodex: true,
-                    ...(failed ? { reason: "exit-1" } : {}),
-                  },
-                ],
-              };
-            }),
-        }),
-      ),
-      Layer.provide(
-        Layer.succeed(UpdateHost.OpenCodexUpdateHost, {
-          latestRelease: Effect.succeed({
-            version: "2.90.0",
-            publishedAt: PUBLISHED_AT,
+const decodeOldState = Schema.decodeEffect(
+  Schema.fromJsonString(
+    Schema.Struct({
+      members: Schema.Array(OpenCodexUpdateMemberRecord),
+      failedTargets: Schema.Record(Schema.String, Schema.String),
+      window: Schema.Struct({
+        targetVersion: Schema.String,
+        children: Schema.Array(Schema.String),
+        steps: Schema.Array(
+          Schema.Struct({
+            alias: Schema.NullOr(Schema.String),
+            fromVersion: Schema.String,
+            restored: Schema.optional(Schema.Boolean),
           }),
-          member: (alias) =>
-            Effect.sync(() => ({
-              alias,
-              snapshot: snapshotOf(fleet, alias),
-              runningTurns: fleet.running.get(alias),
-            })),
-          install: (alias, version) =>
-            Effect.sync(() => {
-              const key = `${alias ?? "home"}@${version}`;
-              fleet.installs.push(key);
-              fleet.log.push(`install:${alias ?? "home"}`);
-              if (fleet.failOnce.delete(key)) return false;
-              fleet.versions.set(alias, version);
-              fleet.startedAt.set(alias, fleet.installs.length * 60_000);
-              fleet.processId.set(alias, 1_000 + fleet.installs.length);
-              return true;
-            }),
-          holdAdmission: (alias) =>
-            Effect.sync(() => {
-              if (fleet.noAdmission.has(alias)) return false;
-              fleet.holds += 1;
-              return true;
-            }),
-          releaseAdmission: () =>
-            Effect.sync(() => {
-              fleet.holds -= 1;
-            }),
-        }),
-      ),
-      Layer.provide(
-        Layer.mock(HubParity.HubParity)({
-          verify: (alias) =>
-            Effect.sync(() => ({
-              verdict:
-                fleet.relayAuth &&
-                (fleet.versions.get(alias) === "2.90.0") !== (fleet.versions.get(null) === "2.90.0")
-                  ? ("broken" as const)
-                  : (fleet.parity.get(alias) ?? "unproven"),
-              checkedAt: 0,
-              failingCheckIds: [],
-              checks: [],
-            })),
-        }),
-      ),
-      Layer.provide(
-        Layer.mock(Settings.ServerSettingsService)({
-          getSettings: Effect.sync(() => ({
-            ...DEFAULT_SERVER_SETTINGS,
-            goatclaw: { ...DEFAULT_SERVER_SETTINGS.goatclaw, enabled: fleet.goatclaw },
-            hub: { ...DEFAULT_SERVER_SETTINGS.hub, enabled: fleet.hub },
-          })),
-        }),
-      ),
-      Layer.provide(
-        Layer.mock(ServerEnvironment.ServerEnvironment)({
-          getEnvironmentId: Effect.succeed(EnvironmentId.make("hub-fixture")),
-        }),
-      ),
-      Layer.provide(Layer.mock(Scheduler.Scheduler)({ register: () => Effect.void })),
-      Layer.provide(ServerConfig.layerTest(process.cwd(), baseDir)),
-    ),
-  );
-
-const service = Effect.fn("OpenCodexManagedUpdateTest.service")(function* (
-  fleet: Fleet,
-  baseDir: string,
-) {
-  const context = yield* build(fleet, baseDir);
-  return yield* ManagedUpdate.OpenCodexManagedUpdate.pipe(Effect.provideContext(context));
-});
-
-const setup = Effect.fn("OpenCodexManagedUpdateTest.setup")(function* (fleet = makeFleet()) {
-  const fs = yield* FileSystem.FileSystem;
-  const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-opencodex-update-" });
-  // Long past the stable soak and rollout window, so every bucket is open.
-  yield* TestClock.setTime(PUBLISHED + 10 * 24 * 60 * MINUTE);
-  return { fleet, baseDir, update: yield* service(fleet, baseDir) };
-});
-
-const phases = (status: OpenCodexUpdateStatus | undefined) =>
-  status?.members.map(({ alias, phase, reason }) => [alias, phase, reason]);
+        ),
+        probationEndsAt: Schema.optional(Schema.Number),
+        baseline: Schema.Record(
+          Schema.String,
+          Schema.Literals(["ok", "degraded", "broken", "unproven"]),
+        ),
+        roles: Schema.Record(Schema.String, Schema.String),
+        startedAt: Schema.Record(Schema.String, Schema.Number),
+        processIds: Schema.Record(Schema.String, Schema.Int),
+        restoring: Schema.optional(Schema.String),
+        failedMember: Schema.optional(Schema.String),
+      }),
+    }),
+  ),
+);
 
 it.layer(NodeServices.layer)("OpenCodex managed update", (it) => {
+  it.effect("applies an adopted Home through its ocx and accepts after probation", () =>
+    Effect.gen(function* () {
+      const fleet = makeFleet({ homeOwnership: "adopted" });
+      fleet.orchestrated = true;
+      fleet.versions.set("mac-studio", "2.90.0");
+      const { update } = yield* setup(fleet);
+      yield* update.check;
+      expect(fleet.applyCalls).toBe(1);
+      expect(fleet.installs).toEqual([]);
+      expect(phases(yield* update.status)).toEqual([[null, "probation", undefined]]);
+      yield* TestClock.adjust(10 * MINUTE);
+      yield* update.check;
+      expect(phases(yield* update.status)).toEqual([[null, "accepted", undefined]]);
+    }),
+  );
+
+  it.effect("never installs over an adopted Home after ocx refuses", () =>
+    Effect.gen(function* () {
+      const fleet = makeFleet({ homeOwnership: "adopted" });
+      fleet.orchestrated = true;
+      fleet.applyResult = "refused";
+      fleet.versions.set("mac-studio", "2.90.0");
+      const { update } = yield* setup(fleet);
+      yield* update.check;
+      expect(fleet.applyCalls).toBe(1);
+      expect(fleet.installs).toEqual([]);
+      expect(phases(yield* update.status)).toEqual([[null, "rolled-back", "install-refused"]]);
+    }),
+  );
+
+  it.effect("holds admission for an uncertain apply until two fenced observations", () =>
+    Effect.gen(function* () {
+      const fleet = makeFleet({ homeOwnership: "adopted" });
+      fleet.orchestrated = true;
+      fleet.applyResult = "uncertain";
+      fleet.versions.set("mac-studio", "2.90.0");
+      const { update } = yield* setup(fleet);
+      yield* update.check;
+      expect(yield* update.status).toMatchObject({ decision: "wait", reason: "apply-uncertain" });
+      expect(fleet.holds).toBe(1);
+      yield* TestClock.adjust(20 * MINUTE);
+      yield* update.check;
+      expect(fleet.holds).toBe(1);
+      fleet.inFlight = false;
+      yield* TestClock.adjust(10 * MINUTE);
+      yield* update.check;
+      expect(fleet.holds).toBe(1);
+      yield* TestClock.adjust(10 * MINUTE);
+      yield* update.check;
+      expect(fleet.holds).toBe(0);
+      expect(fleet.installs).toEqual([]);
+      expect(phases(yield* update.status)).toEqual([[null, "rolled-back", "install-failed"]]);
+    }),
+  );
+
+  it.effect("does not fence an uncertain apply with two manual checks in one retry interval", () =>
+    Effect.gen(function* () {
+      const fleet = makeFleet({ homeOwnership: "adopted" });
+      fleet.orchestrated = true;
+      fleet.applyResult = "uncertain";
+      fleet.versions.set("mac-studio", "2.90.0");
+      const { update } = yield* setup(fleet);
+      yield* update.check;
+      fleet.inFlight = false;
+      yield* TestClock.adjust(20 * MINUTE);
+      yield* update.check;
+      yield* TestClock.adjust(1);
+      expect((yield* update.checkNow)?.reason).toBe("apply-uncertain");
+      expect(fleet.holds).toBe(1);
+      yield* TestClock.adjust(10 * MINUTE);
+      yield* update.check;
+      expect(fleet.holds).toBe(0);
+    }),
+  );
+
+  it.effect("re-holds admission for an uncertain persisted window after restart", () =>
+    Effect.gen(function* () {
+      const fleet = makeFleet({ homeOwnership: "adopted" });
+      fleet.orchestrated = true;
+      fleet.applyResult = "uncertain";
+      fleet.versions.set("mac-studio", "2.90.0");
+      const { update, baseDir } = yield* setup(fleet);
+      yield* update.check;
+      fleet.holds = 0;
+      const resumed = yield* service(fleet, baseDir);
+      expect(fleet.holds).toBe(1);
+      yield* resumed.check;
+      expect(yield* resumed.status).toMatchObject({ decision: "wait", reason: "apply-uncertain" });
+    }),
+  );
+
+  it.effect("refuses when the pre-apply token or binary identity changes", () =>
+    Effect.gen(function* () {
+      for (const changed of ["token", "servingPath", "cliPath"] as const) {
+        const fleet = makeFleet({ homeOwnership: "adopted" });
+        fleet.orchestrated = true;
+        fleet.changedOnRead = changed;
+        fleet.versions.set("mac-studio", "2.90.0");
+        const { update } = yield* setup(fleet);
+        yield* update.check;
+        expect(fleet.applyCalls).toBe(0);
+        expect(fleet.installs).toEqual([]);
+        expect(phases(yield* update.status)).toEqual([[null, "rolled-back", "install-refused"]]);
+      }
+    }),
+  );
+
+  it.effect("recovers an uncertain apply on the target into probation", () =>
+    Effect.gen(function* () {
+      const fleet = makeFleet({ homeOwnership: "adopted" });
+      fleet.orchestrated = true;
+      fleet.applyResult = "uncertain";
+      fleet.versions.set("mac-studio", "2.90.0");
+      const { update } = yield* setup(fleet);
+      yield* update.check;
+      fleet.versions.set(null, "2.90.0");
+      fleet.inFlight = false;
+      yield* TestClock.adjust(20 * MINUTE);
+      yield* update.check;
+      yield* TestClock.adjust(10 * MINUTE);
+      yield* update.check;
+      expect(fleet.holds).toBe(0);
+      expect(phases(yield* update.status)).toEqual([[null, "probation", undefined]]);
+      yield* TestClock.adjust(10 * MINUTE);
+      yield* update.check;
+      expect(phases(yield* update.status)).toEqual([[null, "accepted", undefined]]);
+    }),
+  );
+
+  it.effect("releases admission at the apply overrun ceiling without closing the window", () =>
+    Effect.gen(function* () {
+      const fleet = makeFleet({ homeOwnership: "adopted" });
+      fleet.orchestrated = true;
+      fleet.applyResult = "uncertain";
+      fleet.versions.set("mac-studio", "2.90.0");
+      const { update } = yield* setup(fleet);
+      yield* update.check;
+      yield* TestClock.adjust(50 * MINUTE);
+      yield* update.check;
+      expect(fleet.holds).toBe(0);
+      expect(yield* update.status).toMatchObject({
+        decision: "wait",
+        reason: "apply-uncertain",
+        members: [{ phase: "rollback-failed", reason: "apply-overrun" }],
+      });
+    }),
+  );
+
+  it.effect("advances a stored window even when this machine becomes a Child", () =>
+    Effect.gen(function* () {
+      const fleet = makeFleet({ homeOwnership: "adopted" });
+      fleet.orchestrated = true;
+      fleet.applyResult = "uncertain";
+      fleet.versions.set("mac-studio", "2.90.0");
+      const { update } = yield* setup(fleet);
+      yield* update.check;
+      fleet.childRole = true;
+      fleet.inFlight = false;
+      yield* TestClock.adjust(20 * MINUTE);
+      yield* update.check;
+      expect(yield* update.status).toMatchObject({ decision: "wait", reason: "apply-uncertain" });
+    }),
+  );
+
+  it.effect("runs an SSH follow-up with hub disabled and keeps unknown plans pending", () =>
+    Effect.gen(function* () {
+      const fleet = makeFleet({ homeOwnership: "adopted" });
+      fleet.versions.set("mac-studio", "2.90.0");
+      fleet.orchestrated = true;
+      fleet.planMode = "unknown";
+      fleet.automatic = true;
+      fleet.runtimeReplaced = "1.1.0";
+      fleet.hub = false;
+      const { update } = yield* setup(fleet);
+      yield* update.check;
+      expect(fleet.planReads).toBe(1);
+      fleet.planMode = "none";
+      yield* TestClock.adjust(10 * MINUTE);
+      yield* update.check;
+      expect(fleet.planReads).toBe(2);
+      yield* TestClock.adjust(6 * 60 * MINUTE);
+      yield* update.check;
+      expect(fleet.planReads).toBe(2);
+    }),
+  );
+
+  it.effect("clears a fenced uncertain window after a person reinstalls the previous version", () =>
+    Effect.gen(function* () {
+      const fleet = makeFleet({ homeOwnership: "adopted" });
+      fleet.orchestrated = true;
+      fleet.applyResult = "uncertain";
+      fleet.versions.set("mac-studio", "2.90.0");
+      const { update } = yield* setup(fleet);
+      yield* update.check;
+      fleet.versions.set(null, "2.88.0");
+      fleet.inFlight = false;
+      yield* TestClock.adjust(20 * MINUTE);
+      yield* update.check;
+      yield* TestClock.adjust(10 * MINUTE);
+      yield* update.check;
+      expect(yield* update.status).toMatchObject({
+        decision: "wait",
+        reason: "apply-uncertain",
+        members: [{ phase: "rollback-failed" }],
+      });
+      fleet.versions.set(null, "2.89.0");
+      yield* TestClock.adjust(10 * MINUTE);
+      yield* update.check;
+      expect(phases(yield* update.status)).toEqual([[null, "rolled-back", "install-failed"]]);
+      expect(fleet.installs).toEqual([]);
+    }),
+  );
+
+  it.effect("remembers ocx rollback and does not retry or use GOAT's installer", () =>
+    Effect.gen(function* () {
+      const fleet = makeFleet({ homeOwnership: "adopted" });
+      fleet.orchestrated = true;
+      fleet.applyResult = "rolled-back";
+      fleet.versions.set("mac-studio", "2.90.0");
+      const { update } = yield* setup(fleet);
+      yield* update.check;
+      expect(phases(yield* update.status)).toEqual([[null, "rolled-back", "install-failed"]]);
+      expect((yield* update.checkNow)?.reason).toBe("previous-failure");
+      expect(fleet.applyCalls).toBe(1);
+      expect(fleet.installs).toEqual([]);
+    }),
+  );
+
+  it.effect("re-holds a pending apply after the GOAT process stops during dispatch", () =>
+    Effect.gen(function* () {
+      const fleet = makeFleet({ homeOwnership: "adopted" });
+      fleet.orchestrated = true;
+      fleet.versions.set("mac-studio", "2.90.0");
+      const started = yield* Deferred.make<void>();
+      fleet.onApply = Effect.sync(() => {
+        fleet.inFlight = true;
+      }).pipe(Effect.andThen(Deferred.succeed(started, undefined)), Effect.andThen(Effect.never));
+      const { update, baseDir } = yield* setup(fleet);
+      const running = yield* Effect.forkChild(update.check);
+      yield* Deferred.await(started);
+      yield* Fiber.interrupt(running);
+      expect(fleet.holds).toBe(1);
+      fleet.holds = 0;
+      const resumed = yield* service(fleet, baseDir);
+      expect(fleet.holds).toBe(1);
+      yield* resumed.check;
+      expect(yield* resumed.status).toMatchObject({ decision: "wait", reason: "apply-uncertain" });
+      fleet.inFlight = false;
+      yield* TestClock.adjust(20 * MINUTE);
+      yield* resumed.check;
+      yield* TestClock.adjust(10 * MINUTE);
+      yield* resumed.check;
+      expect(fleet.holds).toBe(0);
+      expect(fleet.installs).toEqual([]);
+    }),
+  );
+
+  it.effect("writes adopted steps as restored for an older GOAT state decoder", () =>
+    Effect.gen(function* () {
+      const fleet = makeFleet({ homeOwnership: "adopted" });
+      fleet.orchestrated = true;
+      fleet.applyResult = "uncertain";
+      fleet.versions.set("mac-studio", "2.90.0");
+      const { update, baseDir } = yield* setup(fleet);
+      yield* update.check;
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const config = yield* ServerConfig.ServerConfig.pipe(
+        Effect.provide(ServerConfig.layerTest(process.cwd(), baseDir)),
+      );
+      const state = yield* decodeOldState(
+        yield* fs.readFileString(path.join(config.stateDir, "opencodex-update.json")),
+      );
+      expect(state.window.steps).toEqual([{ alias: null, fromVersion: "2.89.0", restored: true }]);
+    }),
+  );
+
   it.effect("moves the Home, then the Child, and accepts both after probation", () =>
     Effect.gen(function* () {
       const { fleet, update } = yield* setup();
@@ -671,6 +763,8 @@ it.effect(
       let inFlight = 1;
       const context = yield* Layer.build(
         UpdateHost.layerHost.pipe(
+          Layer.provide(Layer.mock(Inventory.OpenCodexInventory)({})),
+          Layer.provide(Layer.mock(Inventory.OpenCodexInventory)({})),
           Layer.provide(
             Layer.mock(HubParity.HubParity)({ readLocal: Effect.succeed(fleetSnapshot("home")) }),
           ),
@@ -718,6 +812,7 @@ it.live("managed update and rollback use only retained compiled release pins", (
     const remoteScripts: Array<string> = [];
     const context = yield* Layer.build(
       UpdateHost.layerHost.pipe(
+        Layer.provide(Layer.mock(Inventory.OpenCodexInventory)({})),
         Layer.provide(Layer.mock(HubParity.HubParity)({})),
         Layer.provide(Layer.mock(ThreadManagement.ThreadManagementService)({})),
         Layer.provide(Layer.mock(RuntimeAdmission.RuntimeAdmission)({})),
@@ -791,4 +886,99 @@ it.live("managed update and rollback use only retained compiled release pins", (
     Effect.scoped,
     Effect.provide(ProcessRunner.layer.pipe(Layer.provideMerge(NodeServices.layer))),
   ),
+);
+
+it.effect("uses bounded contract, plan and apply arguments through the OpenCodex host seam", () =>
+  Effect.gen(function* () {
+    const calls: Array<ProcessRunner.ProcessRunInput> = [];
+    let remoteOutput = "";
+    const planJson =
+      '{"schema":"ocx.update.plan/1","currentVersion":"2.89.0","targetVersion":"2.90.0","installer":"external","canApply":true,"planToken":"abcdefghijklmnop","updateInFlight":false,"mutationBoundMs":900000,"servingPath":null,"cliPath":"/bin/ocx"}';
+    const resultJson =
+      '{"schema":"ocx.update.result/1","applied":true,"toVersion":"2.90.0","healthy":true,"rolledBack":false}';
+    const context = yield* Layer.build(
+      UpdateHost.layerHost.pipe(
+        Layer.provide(
+          Layer.mock(Inventory.OpenCodexInventory)({
+            read: Effect.succeed({
+              ...fleetSnapshot("home"),
+              binaries: [{ path: "/bin/ocx", version: "2.89.0" }],
+            }),
+          }),
+        ),
+        Layer.provide(Layer.mock(HubParity.HubParity)({})),
+        Layer.provide(Layer.mock(ThreadManagement.ThreadManagementService)({})),
+        Layer.provide(Layer.mock(RuntimeAdmission.RuntimeAdmission)({})),
+        Layer.provide(Layer.mock(HostThreads.HostThreadsMcpService)({})),
+        Layer.provide(Layer.mock(Installation.OpenCodexInstallation)({})),
+        Layer.provide(
+          Layer.mock(Dispatch.SshRemoteDispatch)({
+            runHostScript: () => Effect.sync(() => ({ stdout: remoteOutput, stderr: "" })),
+          }),
+        ),
+        Layer.provide(
+          Layer.mock(ProcessRunner.ProcessRunner)({
+            run: (input) =>
+              Effect.sync(() => {
+                calls.push(input);
+                const stdout =
+                  input.args[0] === "capabilities"
+                    ? '{"contracts":["update.orchestrated/1"]}'
+                    : input.args.includes("--plan")
+                      ? planJson
+                      : resultJson;
+                return {
+                  code: ChildProcessSpawner.ExitCode(0),
+                  stdout,
+                  stderr: "",
+                  timedOut: false,
+                  stdoutTruncated: false,
+                  stderrTruncated: false,
+                  stdoutInvalidUtf8: false,
+                  stderrInvalidUtf8: false,
+                };
+              }),
+          }),
+        ),
+        Layer.provide(FetchHttpClient.layer),
+        Layer.provide(Layer.succeed(HostProcess.Environment, {})),
+        Layer.provide(Layer.succeed(HostProcess.WorkingDirectory, "/")),
+      ),
+    );
+    const host = yield* UpdateHost.OpenCodexUpdateHost.pipe(Effect.provideContext(context));
+    expect((yield* host.orchestratedPlan(null, "2.90.0")).kind).toBe("plan");
+    expect(yield* host.applyOrchestrated(null, "2.90.0", "abcdefghijklmnop", 123)).toBe("applied");
+    expect(
+      calls.map(({ args, timeout, maxOutputBytes }) => ({ args, timeout, maxOutputBytes })),
+    ).toEqual([
+      { args: ["capabilities", "--contracts", "--json"], timeout: 30000, maxOutputBytes: 65536 },
+      {
+        args: ["update", "--plan", "--json", "--version", "2.90.0"],
+        timeout: 60000,
+        maxOutputBytes: 65536,
+      },
+      {
+        args: [
+          "update",
+          "--yes",
+          "--json",
+          "--version",
+          "2.90.0",
+          "--expect-plan",
+          "abcdefghijklmnop",
+          "--not-after",
+          "123",
+        ],
+        timeout: 900000,
+        maxOutputBytes: 65536,
+      },
+    ]);
+    expect(yield* host.applyOrchestrated("child", "2.90.0", "abcdefghijklmnop", 123)).toBe(
+      "uncertain",
+    );
+    remoteOutput = `${resultJson}\n__goat_ocx_exit=0\n`;
+    expect(yield* host.applyOrchestrated("child", "2.90.0", "abcdefghijklmnop", 123)).toBe(
+      "applied",
+    );
+  }),
 );

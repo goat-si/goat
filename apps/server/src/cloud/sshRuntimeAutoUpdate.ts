@@ -21,9 +21,11 @@ import {
   type RemoteGoatRunnerOptions,
 } from "@goat/ssh/tunnel";
 import * as HostProcess from "@goat/shared/HostProcess";
+import * as Clock from "effect/Clock";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -351,6 +353,7 @@ export class SshRuntimeAutoUpdate extends Context.Service<
     readonly supported: boolean;
     /** The shared SSH runtime's launch records name this process as their managed server. */
     readonly owned: Effect.Effect<boolean>;
+    readonly replacedInto: Effect.Effect<string | undefined>;
     readonly isUpdating: Effect.Effect<boolean>;
     readonly failedTarget: Effect.Effect<string | undefined>;
     readonly prepare: (targetVersion: string) => Effect.Effect<void, ServerSelfUpdateError>;
@@ -370,6 +373,11 @@ export class SshRuntimeAutoUpdate extends Context.Service<
   }
 >()("goat/cloud/sshRuntimeAutoUpdate") {}
 
+const Marker = Schema.fromJsonString(
+  Schema.Struct({ targetVersion: Schema.String, at: Schema.Number }),
+);
+const decodeMarker = Schema.decodeUnknownOption(Marker);
+const encodeMarker = Schema.encodeSync(Marker);
 const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
 const decodeLaunchResult = Schema.decodeUnknownOption(
   Schema.fromJsonString(
@@ -393,6 +401,7 @@ export const make = Effect.fn("server.ssh_runtime_auto_update.make")(function* (
 }) {
   const config = yield* ServerConfig.ServerConfig;
   const host = yield* SshRuntimeHost;
+  const fs = yield* FileSystem.FileSystem;
   const admission = yield* RuntimeAdmission.RuntimeAdmission;
   const projections = yield* ProjectionStore.ProjectionStoreV2;
   const settings = yield* ServerSettings.ServerSettingsService;
@@ -421,6 +430,7 @@ export const make = Effect.fn("server.ssh_runtime_auto_update.make")(function* (
   // The protocol each prepared target speaks, read from its own binary.
   const protocols = new Map<string, { readonly ssh: number; readonly orchestration: number }>();
   const fail = (reason: string) => new ServerSelfUpdateError({ reason });
+  const markerFile = NodePath.join(config.stateDir, "ssh-runtime-auto-update.json");
   const { [SSH_REPLACEMENT_ID_ENV]: _replacementId, ...inherited } = process.env;
   // On Windows this is the native profile. Git Bash maps that HOME to a POSIX home as it
   // starts; converting it first would be rewritten a second time.
@@ -587,6 +597,13 @@ export const make = Effect.fn("server.ssh_runtime_auto_update.make")(function* (
             };
             if (shell === undefined)
               return yield* fail("This host has no Git Bash to update the SSH runtime.");
+            const at = yield* Clock.currentTimeMillis;
+            yield* fs
+              .writeFileString(`${markerFile}.tmp`, encodeMarker({ targetVersion, at }))
+              .pipe(
+                Effect.andThen(fs.rename(`${markerFile}.tmp`, markerFile)),
+                Effect.mapError(() => fail("Could not write the SSH runtime replacement marker.")),
+              );
             const result = yield* host.runDetached({
               shell,
               script: buildRemoteLaunchScript(options, selection),
@@ -640,6 +657,14 @@ export const make = Effect.fn("server.ssh_runtime_auto_update.make")(function* (
   return SshRuntimeAutoUpdate.of({
     supported,
     owned,
+    replacedInto: Effect.gen(function* () {
+      if (!(yield* owned)) return undefined;
+      const text = yield* fs.readFileString(markerFile).pipe(Effect.orElseSucceed(() => ""));
+      const parsed = decodeMarker(text);
+      return Option.isSome(parsed) && parsed.value.targetVersion === ownVersion
+        ? ownVersion
+        : undefined;
+    }),
     isUpdating: Ref.get(inFlight),
     failedTarget,
     prepare,
