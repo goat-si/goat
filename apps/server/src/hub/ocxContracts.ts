@@ -70,7 +70,7 @@ export const orchestratedPlanOf = (
   | { readonly kind: "legacy" | "unknown" } => {
   const parsed = decodePlan(stdout);
   if (Option.isNone(parsed)) return { kind: "unknown" };
-  const { planToken, updateInFlight, mutationBoundMs, ...plan } = parsed.value;
+  const { planToken, updateInFlight, mutationBoundMs, reason, ...plan } = parsed.value;
   if (
     typeof planToken !== "string" ||
     !TOKEN.test(planToken) ||
@@ -80,7 +80,16 @@ export const orchestratedPlanOf = (
     mutationBoundMs <= 0
   )
     return { kind: "legacy" };
-  return { kind: "plan", plan: { ...plan, planToken, updateInFlight, mutationBoundMs } };
+  return {
+    kind: "plan",
+    plan: {
+      ...plan,
+      ...(reason === undefined ? {} : { reason }),
+      planToken,
+      updateInFlight,
+      mutationBoundMs,
+    },
+  };
 };
 
 export const applyOutcome = (

@@ -145,17 +145,17 @@ const make = Effect.gen(function* () {
               member: { alias, state: "skipped", restartCodex: false, reason: "unreachable" },
             })),
           ),
-          Effect.catchCause((cause) =>
-            Cause.hasInterruptsOnly(cause)
-              ? Effect.failCause(cause)
-              : Effect.succeed({
-                  member: {
-                    alias,
-                    state: "skipped" as const,
-                    restartCodex: false,
-                    reason: "unreachable",
-                  },
-                }),
+          Effect.catchCauseIf(
+            (cause) => !Cause.hasInterrupts(cause),
+            () =>
+              Effect.succeed({
+                member: {
+                  alias,
+                  state: "skipped" as const,
+                  restartCodex: false,
+                  reason: "unreachable",
+                },
+              }),
           ),
         ),
       { concurrency: 4 },
@@ -313,15 +313,15 @@ const make = Effect.gen(function* () {
                     reason: "timed-out",
                   })),
                 ),
-                Effect.catchCause((cause) =>
-                  Cause.hasInterruptsOnly(cause)
-                    ? Effect.failCause(cause)
-                    : Effect.succeed({
-                        alias: member.alias,
-                        state: "failed" as const,
-                        restartCodex: true,
-                        reason: "unreachable",
-                      }),
+                Effect.catchCauseIf(
+                  (cause) => !Cause.hasInterrupts(cause),
+                  () =>
+                    Effect.succeed({
+                      alias: member.alias,
+                      state: "failed" as const,
+                      restartCodex: true,
+                      reason: "unreachable",
+                    }),
                 ),
               );
           yield* replace({ ...done, at: yield* Clock.currentTimeMillis });

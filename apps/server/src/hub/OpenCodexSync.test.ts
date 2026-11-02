@@ -475,7 +475,7 @@ it.effect("bounds a hanging Child permit or member read during planning", () =>
       yield* TestClock.adjust(30_000);
       const report = yield* Fiber.join(planning);
       expect(rows(report)[1]).toEqual(["macmini-ts", "skipped", "unreachable"]);
-      expect(rows(report)[2][1]).toBe("ready");
+      expect(rows(report)[2]?.[1]).toBe("ready");
     }
   }),
 );
