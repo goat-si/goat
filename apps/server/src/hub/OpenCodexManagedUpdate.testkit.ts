@@ -53,7 +53,16 @@ export const makeFleet = (
   cliPath: "/bin/ocx",
   applyCalls: 0,
   onApply: undefined as Effect.Effect<void> | undefined,
+  applyOverride: undefined as
+    | ((
+        alias: string | null,
+        version: string,
+        token: string,
+        notAfter: number,
+      ) => Effect.Effect<"applied" | "refused" | "rolled-back" | "uncertain">)
+    | undefined,
   planReads: 0,
+  planInFlight: [] as boolean[],
   changedOnRead: undefined as "token" | "servingPath" | "cliPath" | undefined,
   planMode: "plan" as "plan" | "none" | "unknown",
   runtimeReplaced: undefined as string | undefined,
@@ -90,7 +99,7 @@ export const makeFleet = (
   goatclaw: true,
   hub: true,
 });
-type Fleet = ReturnType<typeof makeFleet>;
+export type Fleet = ReturnType<typeof makeFleet>;
 
 const required = <A>(value: A | undefined): A => {
   if (value === undefined) throw new Error("Missing fleet fixture value");
@@ -183,6 +192,7 @@ const build = (fleet: Fleet, baseDir: string, scheduler?: Scheduler.Scheduler["S
           orchestratedPlan: (alias, version) =>
             Effect.sync(() => {
               fleet.planReads++;
+              fleet.planInFlight.push(fleet.inFlight);
               if (!fleet.orchestrated || fleet.planMode === "none")
                 return { kind: "none" as const };
               if (fleet.planMode === "unknown") return { kind: "unknown" as const };
@@ -204,6 +214,8 @@ const build = (fleet: Fleet, baseDir: string, scheduler?: Scheduler.Scheduler["S
           applyOrchestrated: (alias, version, token, notAfter) =>
             Effect.gen(function* () {
               fleet.applyCalls++;
+              if (fleet.applyOverride)
+                return yield* fleet.applyOverride(alias, version, token, notAfter);
               if (fleet.onApply) yield* fleet.onApply;
               if (
                 (yield* Clock.currentTimeMillis) > notAfter ||
