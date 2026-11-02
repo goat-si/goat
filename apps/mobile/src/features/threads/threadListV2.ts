@@ -576,9 +576,14 @@ export function buildThreadListV2Items(input: {
     routeAncestorKeys.includes(parentKey)
       ? groups?.routeCollapsed.has(parentKey) !== true
       : groups?.expanded[parentKey] === true;
-  const childItem = (thread: EnvironmentThreadShell, depth: number): ThreadListV2Item => {
+  const childItem = (
+    thread: EnvironmentThreadShell,
+    depth: number,
+    parent: ThreadListV2Item,
+  ): ThreadListV2Item => {
     const childSnoozed = threadListV2Snoozed(thread, lifecycle);
-    const slim = childSnoozed || threadListV2Settled(thread, lifecycle);
+    const slim =
+      childSnoozed || (threadListV2Settled(thread, lifecycle) && parent.variant === "slim");
     return {
       thread,
       variant: slim ? "slim" : "card",
