@@ -175,4 +175,15 @@ it.layer(NodeServices.layer)("OpenCodex SSH replacement follow-up", (it) => {
       expect(fleet.installs).toEqual([]);
     }),
   );
+  it.effect("keeps the window admission hold through sync after a conclusive adopted apply", () =>
+    Effect.gen(function* () {
+      const fleet = makeFleet({ homeOwnership: "adopted" });
+      fleet.orchestrated = true;
+      fleet.versions.set("mac-studio", "2.90.0");
+      const { update } = yield* setup(fleet);
+      yield* update.check;
+      expect(fleet.holdsDuringSync[0]).toBeGreaterThan(0);
+      expect(fleet.holds).toBe(0);
+    }),
+  );
 });

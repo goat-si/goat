@@ -70,6 +70,8 @@ export const makeFleet = (
   /** Hosts that cannot hold turn admission, and how many holds are open right now. */
   noAdmission: new Set<string | null>(),
   holds: 0,
+  homeHolds: 0,
+  holdsDuringSync: [] as number[],
   unhealthyAt: new Set<string>(),
   /** Installs of these `alias@version` fail once, as an unreachable host or npm error would. */
   failOnce: new Set<string>(),
@@ -141,6 +143,7 @@ const build = (fleet: Fleet, baseDir: string) =>
             }),
           syncUpdatedMember: (alias) =>
             Effect.sync(() => {
+              fleet.holdsDuringSync.push(fleet.homeHolds);
               fleet.log.push(`sync:${alias ?? "home"}@${fleet.versions.get(alias)}`);
               if (fleet.syncRestarts.has(alias)) {
                 fleet.startedAt.set(alias, required(fleet.startedAt.get(alias)) + 5 * 60_000);
@@ -232,11 +235,13 @@ const build = (fleet: Fleet, baseDir: string) =>
             Effect.sync(() => {
               if (fleet.noAdmission.has(alias)) return false;
               fleet.holds += 1;
+              if (alias === null) fleet.homeHolds += 1;
               return true;
             }),
-          releaseAdmission: () =>
+          releaseAdmission: (alias) =>
             Effect.sync(() => {
               fleet.holds -= 1;
+              if (alias === null) fleet.homeHolds -= 1;
             }),
         }),
       ),

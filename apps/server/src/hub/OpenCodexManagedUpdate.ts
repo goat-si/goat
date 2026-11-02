@@ -25,6 +25,7 @@ import * as HubParity from "./HubParity.ts";
 import { OpenCodexSync } from "./OpenCodexSync.ts";
 import {
   State,
+  type AdmissionOwnership,
   affectedBy,
   brokeAgainst,
   decodeState,
@@ -95,7 +96,7 @@ const make = Effect.gen(function* () {
   const state = yield* Ref.make<State>({ members: [], failedTargets: {} });
   // A person's check and the scheduler's must never open two windows at once.
   const checking = yield* Semaphore.make(1);
-  const retainedHome = yield* Ref.make(false);
+  const retainedHome = yield* Ref.make<AdmissionOwnership>("none");
 
   /** A file that exists but cannot be read must not erase the memory of a rolled-back target. */
   const readState = Effect.gen(function* () {
@@ -473,6 +474,7 @@ const make = Effect.gen(function* () {
     const stored = yield* readState;
     if (stored === undefined)
       return yield* publish(now, { decision: "wait", reason: "state-unreadable" });
+    yield* restoreAdmission(stored, host, retainedHome);
     yield* Ref.set(state, stored);
     yield* sync.markUpdating(stored.window !== undefined);
     const replaced = yield* sshRuntime.replacedInto;

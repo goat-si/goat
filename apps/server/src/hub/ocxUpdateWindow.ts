@@ -138,11 +138,12 @@ const PROBATION_CHECK_MS = MINUTE;
 const RESTART_TOLERANCE_MS = 2_000;
 
 type Host = Context.Service.Shape<typeof OpenCodexUpdateHost>;
+export type AdmissionOwnership = "none" | "held" | "retained" | "held-and-retained";
 type Step = Pick<OpenCodexUpdateStep, "alias" | "fromVersion">;
 type Failure = PlatformError.PlatformError;
 type WindowOps = {
   readonly host: Host;
-  readonly retainedHome: Ref.Ref<boolean>;
+  readonly retainedHome: Ref.Ref<AdmissionOwnership>;
   readonly nextAt: Ref.Ref<number>;
   readonly mutate: (change: (current: State, at: number) => State) => Effect.Effect<void, Failure>;
   readonly record: (
@@ -164,31 +165,55 @@ type WindowOps = {
   ) => Effect.Effect<boolean, Failure>;
 };
 
+const releaseRetained = Effect.fn("OpenCodexUpdateWindow.releaseRetained")(function* (
+  host: Host,
+  retainedHome: Ref.Ref<AdmissionOwnership>,
+) {
+  const ownership = yield* Ref.get(retainedHome);
+  if (ownership === "retained" || ownership === "held-and-retained") {
+    yield* host.releaseAdmission(null);
+    yield* Ref.set(retainedHome, ownership === "held-and-retained" ? "held" : "none");
+  }
+});
+
 export const restoreAdmission = Effect.fn("OpenCodexUpdateWindow.restoreAdmission")(function* (
   initial: State | undefined,
   host: Host,
-  retainedHome: Ref.Ref<boolean>,
+  retainedHome: Ref.Ref<AdmissionOwnership>,
 ) {
-  const pendingHome = initial?.window?.orchestrated?.[""];
-  if (pendingHome?.pending || pendingHome?.uncertain) {
+  if (initial === undefined) return;
+  const pending = initial.window?.orchestrated?.[""];
+  const unsettled = (pending?.pending || pending?.uncertain) && !pending.settled;
+  const ownership = yield* Ref.get(retainedHome);
+  if (!unsettled && (ownership === "retained" || ownership === "held-and-retained")) {
+    yield* releaseRetained(host, retainedHome).pipe(Effect.uninterruptible);
+  } else if (unsettled && ownership === "none") {
     const now = yield* Clock.currentTimeMillis;
-    if (now < pendingHome.notAfter + pendingHome.boundMs + OVERRUN_GRACE_MS)
-      yield* Ref.set(retainedHome, yield* host.holdAdmission(null));
+    if (now < pending.notAfter + pending.boundMs + OVERRUN_GRACE_MS)
+      yield* host.holdAdmission(null).pipe(
+        Effect.flatMap((held) => (held ? Ref.set(retainedHome, "retained") : Effect.void)),
+        Effect.uninterruptible,
+      );
   }
 });
 
 export const holdAffected = <A, E>(
   host: Host,
-  retainedHome: Ref.Ref<boolean>,
+  retainedHome: Ref.Ref<AdmissionOwnership>,
   affected: ReadonlyArray<string | null>,
   body: Effect.Effect<A, E>,
 ) => {
   const held: Array<string | null> = [];
   return Effect.gen(function* () {
     for (const alias of affected) {
-      if (alias === null && (yield* Ref.get(retainedHome))) continue;
-      if (!(yield* host.holdAdmission(alias))) return "admission-unsupported" as const;
-      held.push(alias);
+      if (alias === null && (yield* Ref.get(retainedHome)) !== "none") continue;
+      const acquired = yield* Effect.gen(function* () {
+        if (!(yield* host.holdAdmission(alias))) return false;
+        held.push(alias);
+        if (alias === null) yield* Ref.set(retainedHome, "held");
+        return true;
+      }).pipe(Effect.uninterruptible);
+      if (!acquired) return "admission-unsupported" as const;
     }
     return yield* body;
   }).pipe(
@@ -199,8 +224,16 @@ export const holdAffected = <A, E>(
           (alias) =>
             alias === null
               ? Ref.get(retainedHome).pipe(
-                  Effect.flatMap((retained) =>
-                    retained ? Effect.void : host.releaseAdmission(alias),
+                  Effect.flatMap((ownership) =>
+                    ownership === "held" || ownership === "held-and-retained"
+                      ? host
+                          .releaseAdmission(null)
+                          .pipe(
+                            Effect.andThen(
+                              Ref.set(retainedHome, ownership === "held" ? "none" : "retained"),
+                            ),
+                          )
+                      : Effect.void,
                   ),
                 )
               : host.releaseAdmission(alias),
@@ -238,7 +271,26 @@ export const applyOrchestratedStep = Effect.fn("OpenCodexUpdateWindow.apply")(fu
       orchestrated: { ...window.orchestrated, [key]: { ...base, pending: true } },
     })),
   );
-  if (step.alias === null) yield* Ref.set(retainedHome, true);
+  if (step.alias === null && (yield* Ref.get(retainedHome)) === "held") {
+    const retained = yield* host.holdAdmission(null).pipe(
+      Effect.flatMap((held) =>
+        held
+          ? Ref.set(retainedHome, "held-and-retained").pipe(Effect.as(true))
+          : Effect.succeed(false),
+      ),
+      Effect.uninterruptible,
+    );
+    if (!retained) {
+      yield* mutate((current) =>
+        withWindow(current, (window) => ({
+          ...window,
+          orchestrated: { ...window.orchestrated, [key]: { ...base, settled: true } },
+        })),
+      );
+      yield* rollBack("install-refused", false, scope, step.alias);
+      return "rolled-back" as const;
+    }
+  }
   const outcome = yield* host.applyOrchestrated(
     step.alias,
     targetVersion,
@@ -255,13 +307,15 @@ export const applyOrchestratedStep = Effect.fn("OpenCodexUpdateWindow.apply")(fu
     yield* Ref.set(nextAt, (yield* Clock.currentTimeMillis) + RETRY_INTERVAL_MS);
     return "uncertain" as const;
   }
-  yield* mutate((current) =>
-    withWindow(current, (window) => ({
-      ...window,
-      orchestrated: { ...window.orchestrated, [key]: { ...base, settled: true } },
-    })),
-  );
-  if (step.alias === null) yield* Ref.set(retainedHome, false);
+  yield* Effect.gen(function* () {
+    if (step.alias === null) yield* releaseRetained(host, retainedHome);
+    yield* mutate((current) =>
+      withWindow(current, (window) => ({
+        ...window,
+        orchestrated: { ...window.orchestrated, [key]: { ...base, settled: true } },
+      })),
+    );
+  }).pipe(Effect.uninterruptible);
   if (outcome === "refused" || outcome === "rolled-back") {
     yield* rollBack(
       outcome === "refused" ? "install-refused" : "install-failed",
@@ -318,18 +372,14 @@ export const recoverUncertain = Effect.fn("OpenCodexUpdateWindow.recover")(funct
       yield* Ref.set(nextAt, now + RETRY_INTERVAL_MS);
       return "uncertain" as const;
     }
-    const releaseHome = Effect.gen(function* () {
-      if (uncertain.alias === null && (yield* Ref.get(retainedHome))) {
-        yield* Ref.set(retainedHome, false);
-        yield* host.releaseAdmission(null);
-      }
-    });
+    const releaseHome =
+      uncertain.alias === null ? releaseRetained(host, retainedHome) : Effect.void;
     if (
       uncertain.alias === null &&
       now >= entry.notAfter + entry.boundMs + OVERRUN_GRACE_MS &&
       current.members.find((member) => member.alias === null)?.reason !== "apply-overrun"
     ) {
-      yield* releaseHome;
+      yield* releaseHome.pipe(Effect.uninterruptible);
       yield* record(uncertain, window.targetVersion, "rollback-failed", "apply-overrun");
       yield* Effect.logWarning("opencodex.update.apply-overrun", { alias: uncertain.alias });
     }
@@ -380,22 +430,24 @@ export const recoverUncertain = Effect.fn("OpenCodexUpdateWindow.recover")(funct
       yield* Ref.set(nextAt, observed.at + RETRY_INTERVAL_MS);
       return "uncertain" as const;
     }
-    yield* mutate((latest) =>
-      withWindow(latest, (open) => ({
-        ...open,
-        orchestrated: {
-          ...open.orchestrated,
-          [key]: {
-            fromVersion: entry.fromVersion,
-            planToken: entry.planToken,
-            notAfter: entry.notAfter,
-            boundMs: entry.boundMs,
-            settled: true,
+    yield* Effect.gen(function* () {
+      yield* releaseHome;
+      yield* mutate((latest) =>
+        withWindow(latest, (open) => ({
+          ...open,
+          orchestrated: {
+            ...open.orchestrated,
+            [key]: {
+              fromVersion: entry.fromVersion,
+              planToken: entry.planToken,
+              notAfter: entry.notAfter,
+              boundMs: entry.boundMs,
+              settled: true,
+            },
           },
-        },
-      })),
-    );
-    yield* releaseHome;
+        })),
+      );
+    }).pipe(Effect.uninterruptible);
     if (version === entry.fromVersion)
       return yield* closedOr(yield* rollBack("install-failed", true, scope, uncertain.alias));
     if (
