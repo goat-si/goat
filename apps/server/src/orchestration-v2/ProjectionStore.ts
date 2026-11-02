@@ -8,6 +8,7 @@ import { LEGACY_MCP_APP_OUTPUT_KEY } from "@goat/contracts/legacyT3Names";
 import { pendingGuestMessageCount } from "@goat/contracts";
 import { applyThreadPullRequestLinkUpdate } from "../sourceControl/threadPullRequests.ts";
 import { projectTurnItemForWire } from "./WireProjection.ts";
+import { readOnReaderOrWriter } from "./readerOverloadFallback.ts";
 import * as Stream from "effect/Stream";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import { makeThreadFind, findProjectedThreadItems } from "./ThreadFind.ts";
@@ -7357,7 +7358,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getRunMessage: readOnReader(getRunMessage),
       canStartQueuedRun: readOnReader(canStartQueuedRun),
       getHeldQueuedRuns: readOnReader(getHeldQueuedRuns),
-      getPendingNativeUserInputs: readOnReader(getPendingNativeUserInputs),
+      getPendingNativeUserInputs: readOnReaderOrWriter(getPendingNativeUserInputs),
       hasUnpairedRunInterruptRequest: readOnReader(hasUnpairedRunInterruptRequest),
       getServerActivityBlockers,
       getIgnoredActivity,
@@ -7365,17 +7366,14 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         getServerActivityBlockers(1).pipe(
           Effect.map((blockers) => (blockers.length > 0 ? ("busy" as const) : ("idle" as const))),
         ),
-      isNodeStored: (node) =>
-        readOnReader(isNodeStored)(node).pipe(
-          Effect.catchIf(NodeSqliteClient.isReaderAdmissionOverload, () => isNodeStored(node)),
-        ),
+      isNodeStored: readOnReaderOrWriter(isNodeStored),
       getMessageCount: readOnReader(getMessageCount),
       getNextTurnItemOrdinal: readOnReader(getNextTurnItemOrdinal),
-      getTurnItem: readOnReader(getTurnItem),
+      getTurnItem: readOnReaderOrWriter(getTurnItem),
       getThreadRecords: (threadId, fields, filter) =>
         getThreadRecords(threadId, fields, filter).pipe(NodeSqliteClient.readOnly),
       getRuntimeRequest: readOnReader(getRuntimeRequest),
-      getPlan: readOnReader(getPlan),
+      getPlan: readOnReaderOrWriter(getPlan),
       getProviderControlContext: readOnReader(getProviderControlContext),
       getLimitRecoveryCandidates: readOnReader(getLimitRecoveryCandidates),
       getRecoveryThreadIds: readOnReader(getRecoveryThreadIds),
