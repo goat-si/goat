@@ -157,4 +157,30 @@ describe("extractCleanMarkdown", () => {
     expect(result.stats.truncated).toBe(true);
     expect(result.stats.originalHtmlChars).toBe(html.length);
   });
+
+  it("removes overlapping JSON blob patterns without leaving marker characters", () => {
+    const blob = JSON.stringify({ $type: { longkey: { message: "x".repeat(150) } } });
+    const { markdown } = extractCleanMarkdown("<p>prefix " + blob + " suffix</p>");
+    expect(markdown).toBe("prefix }} suffix");
+  });
+
+  it("renders very long code spans, code blocks and tables without throwing", () => {
+    const tick = String.fromCharCode(96);
+    const code = extractCleanMarkdown("<code>" + (tick + "a").repeat(140_000) + "</code>");
+    expect(code.markdown.startsWith(tick.repeat(2) + " ")).toBe(true);
+    const fence = tick.repeat(3);
+    const block = extractCleanMarkdown("<pre>" + (fence + "a").repeat(140_000) + "</pre>");
+    expect(block.markdown.startsWith(tick.repeat(4) + "\n")).toBe(true);
+    const rows = "<tr><td>x</td></tr>".repeat(140_000);
+    const table = extractCleanMarkdown("<table>" + rows + "</table>", { maxChars: 100 });
+    expect(table.markdown.startsWith("|  |\n| --- |\n| x |")).toBe(true);
+  });
+
+  it("keeps inline code inside a link label unescaped", () => {
+    const tick = String.fromCharCode(96);
+    const { markdown } = extractCleanMarkdown('<a href="/x"><code>a[b]</code> c[d]</a>', {
+      extractLinks: true,
+    });
+    expect(markdown).toBe("[" + tick + "a[b]" + tick + " c\\[d\\]](/x)");
+  });
 });

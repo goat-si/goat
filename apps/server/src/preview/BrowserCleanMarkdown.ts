@@ -375,8 +375,57 @@ const escapeLabel = (label: string) => label.replace(/[\\[\]]/g, "\\$&");
 const collapse = (text: string) => text.replace(/[ \t\n\r\f]+/g, " ");
 const dropped = (text: string) => DROP_OPEN + text + DROP_CLOSE;
 
-const TYPE_BLOB = /\{"\$type":[^}]{100,}\}/g;
-const NESTED_BLOB = /\{"[^"]{5,}":\{[^}]{100,}\}/g;
+const longestRun = (text: string, char: string): number => {
+  let longest = 0;
+  let run = 0;
+  for (const current of text) {
+    run = current === char ? run + 1 : 0;
+    if (run > longest) longest = run;
+  }
+  return longest;
+};
+
+/** First index of char at or after from; callers query with non-decreasing from. */
+const forwardIndex = (text: string, char: string) => {
+  let found = -2;
+  return (from: number) => {
+    if (found !== -1 && found < from) found = text.indexOf(char, from);
+    return found;
+  };
+};
+
+/**
+ * Spans of browser-use's SPA blob patterns, {"$type":...} and {"key":{...}} with 100+ chars
+ * before the first "}", in linear time; overlapping matches merge so markers never nest.
+ */
+const blobSpans = (text: string): Array<[number, number]> => {
+  const spans: Array<[number, number]> = [];
+  const typeClose = forwardIndex(text, "}");
+  for (let at = text.indexOf('{"$type":'); at !== -1; at = text.indexOf('{"$type":', at + 1)) {
+    const end = typeClose(at + 9);
+    if (end === -1) break;
+    if (end - at - 9 >= 100) spans.push([at, end + 1]);
+  }
+  const keyEnd = forwardIndex(text, '"');
+  const nestedClose = forwardIndex(text, "}");
+  for (let at = text.indexOf('{"'); at !== -1; at = text.indexOf('{"', at + 1)) {
+    const quote = keyEnd(at + 2);
+    if (quote === -1) break;
+    if (quote - at - 2 < 5 || !text.startsWith('":{', quote)) continue;
+    const end = nestedClose(quote + 3);
+    if (end === -1) break;
+    if (end - quote - 3 >= 100) spans.push([at, end + 1]);
+  }
+  spans.sort((left, right) => left[0] - right[0]);
+  const merged: Array<[number, number]> = [];
+  for (const span of spans) {
+    const last = merged.at(-1);
+    if (last && span[0] <= last[1]) last[1] = Math.max(last[1], span[1]);
+    else merged.push(span);
+  }
+  return merged;
+};
+
 const isJson = (text: string) => {
   try {
     JSON.parse(text);
@@ -444,12 +493,21 @@ const renderMarkdown = (root: ElementNode, options: CleanMarkdownOptions) => {
     return out;
   };
 
-  const renderText = (value: string): string => {
+  /** Link labels escape their text here, so code spans inside a label stay as written. */
+  const renderText = (value: string, link: boolean): string => {
     const text = collapse(value);
+    const escape = link ? escapeLabel : (part: string) => part;
     const trimmed = text.trim();
     if (trimmed.length > 100 && "{[".includes(trimmed[0] ?? "") && isJson(trimmed))
-      return dropped(text);
-    return text.replace(TYPE_BLOB, dropped).replace(NESTED_BLOB, dropped);
+      return dropped(escape(text));
+    if (!text.includes('{"')) return escape(text);
+    let out = "";
+    let from = 0;
+    for (const [start, end] of blobSpans(text)) {
+      out += escape(text.slice(from, start)) + dropped(escape(text.slice(start, end)));
+      from = end;
+    }
+    return out + escape(text.slice(from));
   };
 
   const children = (parent: ElementNode, context: RenderContext) => {
@@ -528,7 +586,8 @@ const renderMarkdown = (root: ElementNode, options: CleanMarkdownOptions) => {
     if (context.inline)
       return " " + [caption, ...rows.flatMap((row) => row.cells)].filter(Boolean).join(" ") + " ";
     if (rows.length === 0) return block(caption, context);
-    const width = Math.min(MAX_COLSPAN, Math.max(...rows.map((row) => row.cells.length)));
+    let width = 0;
+    for (const row of rows) width = Math.max(width, Math.min(MAX_COLSPAN, row.cells.length));
     const line = (cells: ReadonlyArray<string>) =>
       "| " + Array.from({ length: width }, (_, index) => cells[index] ?? "").join(" | ") + " |";
     const separator = line(Array.from({ length: width }, () => "---"));
@@ -551,7 +610,7 @@ const renderMarkdown = (root: ElementNode, options: CleanMarkdownOptions) => {
   const inlineCode = (target: ElementNode) => {
     const code = collapse(textOf(target));
     if (!code.trim()) return code;
-    const longest = Math.max(0, ...(code.match(/`+/g) ?? []).map((run) => run.length));
+    const longest = longestRun(code, "`");
     const fence = "`".repeat(longest + 1);
     const pad = longest > 0 ? " " : "";
     const rendered = fence + pad + code + pad + fence;
@@ -560,15 +619,17 @@ const renderMarkdown = (root: ElementNode, options: CleanMarkdownOptions) => {
 
   const anchor = (target: ElementNode, context: RenderContext) => {
     if (!options.extractLinks || context.link) return children(target, context);
-    const inner = children(target, { ...context, link: true });
     const href = safeUrl(target.attrs.get("href"), LINK_SCHEMES);
-    if (href === undefined || inner.trim().includes("\n")) return inner;
-    return chomp(inner, (label) => "[" + escapeLabel(collapse(label)) + "](" + href + ")");
+    if (href === undefined) return children(target, context);
+    const inner = children(target, { ...context, link: true });
+    if (inner.trim().includes("\n")) return children(target, context);
+    return chomp(inner, (label) => "[" + collapse(label) + "](" + href + ")");
   };
 
   const image = (target: ElementNode, context: RenderContext) => {
     const alt = collapse(target.attrs.get("alt") ?? "").trim();
-    if (!options.extractImages || context.link) return alt;
+    if (context.link) return escapeLabel(alt);
+    if (!options.extractImages) return alt;
     const src = safeUrl(target.attrs.get("src"), IMAGE_SCHEMES);
     return src === undefined ? alt : "![" + escapeLabel(alt) + "](" + src + ")";
   };
@@ -626,7 +687,7 @@ const renderMarkdown = (root: ElementNode, options: CleanMarkdownOptions) => {
   };
 
   const node = (target: HtmlNode, context: RenderContext): string => {
-    if (target.kind === "text") return renderText(target.text);
+    if (target.kind === "text") return renderText(target.text, context.link);
     if (isNoise(target)) return "";
     if (context.depth > MAX_RENDER_DEPTH) {
       depthCut = true;
@@ -660,7 +721,7 @@ const restoreCode = (line: string, codeBlocks: ReadonlyArray<string>): string =>
   const prefix = line.slice(0, open);
   // List markers become spaces and quote markers stay, so the block remains in its container.
   const continuation = prefix.replace(/[^>\s]/g, " ");
-  const longest = Math.max(2, ...(code.match(/`{3,}/g) ?? []).map((run) => run.length));
+  const longest = Math.max(2, longestRun(code, "`"));
   const fence = "`".repeat(longest + 1);
   const body = code
     .split("\n")
