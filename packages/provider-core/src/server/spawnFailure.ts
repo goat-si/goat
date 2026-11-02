@@ -12,7 +12,7 @@ export type SpawnFailure =
 
 export function classifySpawnFailure(
   cause: unknown,
-  cwd: string,
+  cwd: string | undefined,
   accessDirectory = (path: string) => NodeFS.accessSync(path, NodeFS.constants.X_OK),
   command?: { binary: string; env?: NodeJS.ProcessEnv | undefined },
 ): SpawnFailure {
@@ -38,6 +38,7 @@ export function classifySpawnFailure(
   }
   if (code !== "ENOENT" && code !== "EACCES" && code !== "EPERM" && code !== "ENOTDIR")
     return "unknown";
+  if (cwd === undefined) return "cwd_inaccessible";
   try {
     if (!NodeFS.statSync(cwd).isDirectory()) return "cwd_inaccessible";
     accessDirectory(cwd);
@@ -85,14 +86,24 @@ function executableExists(binary: string, cwd: string, env: NodeJS.ProcessEnv): 
 
 export function spawnFailureMessage(
   failure: SpawnFailure,
-  cwd: string,
+  cwd: string | undefined,
   binary: string,
 ): string | undefined {
   if (failure === "cwd_inaccessible")
-    return `The GOAT server process cannot enter the working directory \`${cwd}\`.`;
+    return cwd === undefined
+      ? "The GOAT server process cannot access its working directory."
+      : `The GOAT server process cannot enter the working directory \`${cwd}\`.`;
   if (failure === "exec_failed")
     return `The executable \`${binary}\` exists but could not be started; its interpreter or loader may be missing.`;
   if (failure === "permission_denied")
     return `The GOAT server process does not have permission to execute \`${binary}\`.`;
   return undefined;
+}
+
+export function safeProcessCwd(): string | undefined {
+  try {
+    return process.cwd();
+  } catch {
+    return undefined;
+  }
 }

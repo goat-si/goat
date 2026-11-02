@@ -33,10 +33,10 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import { signalProcessGroup } from "@goat/provider-core/server/processGroup";
-import { isWindowsCommandNotFound } from "@goat/provider-core/server/snapshotProbe";
+import { isWindowsCommandNotFound, safeProcessCwd } from "@goat/provider-core/server/snapshotProbe";
 import * as OpenCodeServerLedger from "./OpenCodeServerLedger.ts";
 import { collectStreamAsString } from "@goat/provider-core/server/snapshotProbe";
-import { classifyStartupExit, OpenCodeSpawnFailure } from "./spawnFailure.ts";
+import { classifyStartupExit, OpenCodeSpawnFailure, spawnFailureFor } from "./spawnFailure.ts";
 import * as NetService from "@goat/shared/Net";
 import { AgentScope } from "@goat/shared/AgentScope";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -587,17 +587,17 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
   )(
     function* (input) {
       const spawnCommand = yield* resolveCommand(input.binaryPath, input.args, input.environment);
-      const spawnCwd = input.cwd ?? process.cwd();
+      const spawnCwd = input.cwd ?? safeProcessCwd();
       const child = yield* spawner
         .spawn(
           ChildProcess.make(spawnCommand.command, spawnCommand.args, {
             detached: hostPlatform !== "win32",
             shell: spawnCommand.shell,
-            cwd: spawnCwd,
+            ...(spawnCwd ? { cwd: spawnCwd } : {}),
             ...(input.environment ? { env: input.environment } : { extendEnv: true }),
           }),
         )
-        .pipe(Effect.mapError((cause) => new OpenCodeSpawnFailure({ spawnCwd, cause })));
+        .pipe(Effect.mapError(spawnFailureFor(spawnCwd, input.environment)));
       const terminateCommandGroup =
         hostPlatform === "win32"
           ? child.kill({ killSignal: "SIGKILL" }).pipe(Effect.asVoid)

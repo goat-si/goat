@@ -21,6 +21,7 @@ import {
   buildServerProvider,
   DEFAULT_TIMEOUT_MS,
   classifySpawnFailure,
+  safeProcessCwd,
   spawnFailureMessage,
   nonEmptyTrimmed,
   parseGenericCliVersion,
@@ -165,7 +166,7 @@ export const checkFxProviderStatus = Effect.fn("checkFxProviderStatus")(function
     });
   }
 
-  const spawnCwd = process.cwd();
+  const spawnCwd = safeProcessCwd();
   const versionResult = yield* runFxCli(settings, ["--version"], environment, spawnCwd).pipe(
     Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
     Effect.result,

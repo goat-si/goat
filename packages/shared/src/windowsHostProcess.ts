@@ -40,6 +40,7 @@ $ProgressPreference = 'SilentlyContinue'
 $words = @(([string]$env:GOAT_SPAWN_ARGS).Split([char]10) | Where-Object { $_ -ne '' })
 $assignments = @(([string]$env:GOAT_SPAWN_ENV).Split([char]10) | Where-Object { $_ -ne '' })
 $log = [string]$env:GOAT_SPAWN_LOG
+if (-not $env:GOAT_SPAWN_CWD) { $env:GOAT_SPAWN_CWD = (Get-Location).ProviderPath }
 if ($words.Count -eq 0 -or $log -eq '') { exit 2 }
 foreach ($value in $words + $assignments + @($log)) {
   if ($value -match '["%\r]') { [Console]::Error.WriteLine("cmd.exe cannot pass: $value"); exit 2 }

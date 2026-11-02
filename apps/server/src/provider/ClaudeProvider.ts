@@ -30,6 +30,7 @@ import {
   COMPACT_SLASH_COMMAND,
   DEFAULT_TIMEOUT_MS,
   classifySpawnFailure,
+  safeProcessCwd,
   spawnFailureMessage,
   parseGenericCliVersion,
   providerModelsFromSettings,
@@ -505,7 +506,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     });
   }
 
-  const spawnCwd = cwd ?? process.cwd();
+  const spawnCwd = cwd ?? safeProcessCwd();
   const versionProbe = yield* runClaudeCommand(
     claudeSettings,
     ["--version"],

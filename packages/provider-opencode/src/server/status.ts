@@ -27,7 +27,7 @@ import * as OpenCodeRuntime from "./OpenCodeRuntime.ts";
 import type { ProbedOpenCode } from "./versionProbe.ts";
 import type { Agent, ProviderListResponse } from "@opencode-ai/sdk/v2";
 import * as OpenCodeServerOwner from "./OpenCodeServerOwner.ts";
-import { findSpawnCwd } from "./spawnFailure.ts";
+import { findSpawnFailure } from "./spawnFailure.ts";
 
 const OPENCODE_PRESENTATION = {
   displayName: "OpenCode",
@@ -115,18 +115,21 @@ function formatOpenCodeProbeError(input: {
     };
   }
 
-  const spawnCwd = findSpawnCwd(input.cause);
-  if (spawnCwd !== undefined) {
-    const failure = classifySpawnFailure(input.cause, spawnCwd);
+  const spawn = findSpawnFailure(input.cause);
+  if (spawn !== undefined) {
+    const failure = classifySpawnFailure(input.cause, spawn.cwd, undefined, {
+      binary: input.binaryPath,
+      env: { PATH: spawn.path },
+    });
     if (failure === "missing")
       return {
         installed: false,
         message: "OpenCode CLI (`opencode`) is not installed or not on PATH.",
       };
-    const message = spawnFailureMessage(failure, spawnCwd, input.binaryPath);
+    const message = spawnFailureMessage(failure, spawn.cwd, input.binaryPath);
     if (message) return { installed: true, message };
   }
-  let cause = spawnCwd === undefined ? input.cause : undefined;
+  let cause = spawn === undefined ? input.cause : undefined;
   const seen = new Set<unknown>();
   while (cause && typeof cause === "object" && !seen.has(cause)) {
     seen.add(cause);

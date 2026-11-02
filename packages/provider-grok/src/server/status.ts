@@ -28,6 +28,7 @@ import {
   buildServerProvider,
   COMPACT_SLASH_COMMAND,
   classifySpawnFailure,
+  safeProcessCwd,
   spawnFailureMessage,
   parseGenericCliVersion,
   providerModelsFromSettings,
@@ -421,7 +422,7 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
   const probeEnvironment = grokProbeEnvironment(environment);
   const apiKey = environment[GROK_API_KEY_ENV]?.trim();
 
-  const spawnCwd = process.cwd();
+  const spawnCwd = safeProcessCwd();
   const versionResult = yield* runGrokCliCommand(
     grokSettings,
     ["--version"],

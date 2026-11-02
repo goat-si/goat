@@ -30,6 +30,7 @@ import * as ProviderLatestVersions from "@goat/provider-core/server/ProviderLate
 import {
   buildServerProvider,
   classifySpawnFailure,
+  safeProcessCwd,
   spawnFailureMessage,
   parseGenericCliVersion,
   providerModelsFromSettings,
@@ -229,7 +230,7 @@ export const discoverPiCommandsForCwd = Effect.fn("discoverPiCommandsForCwd")(
 const runPiVersionCommand = Effect.fn("PiProviderStatus.runPiVersionCommand")(function* (
   piSettings: PiSettings,
   environment: NodeJS.ProcessEnv,
-  cwd: string,
+  cwd?: string,
 ) {
   const command = piSettings.binaryPath || "pi";
   const spawnCommand = yield* resolveSpawnCommand(command, ["--version"], {
@@ -240,7 +241,7 @@ const runPiVersionCommand = Effect.fn("PiProviderStatus.runPiVersionCommand")(fu
     ChildProcess.make(spawnCommand.command, spawnCommand.args, {
       env: environment,
       shell: spawnCommand.shell,
-      cwd,
+      ...(cwd ? { cwd } : {}),
     }),
   );
 });
@@ -354,7 +355,7 @@ export const checkPiProviderStatus = Effect.fn("checkPiProviderStatus")(function
     });
   }
 
-  const spawnCwd = process.cwd();
+  const spawnCwd = safeProcessCwd();
   const versionResult = yield* runPiVersionCommand(piSettings, environment, spawnCwd).pipe(
     Effect.timeoutOption(VERSION_PROBE_TIMEOUT_MS),
     Effect.result,

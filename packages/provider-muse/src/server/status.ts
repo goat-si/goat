@@ -15,6 +15,7 @@ import {
   COMPACT_SLASH_COMMAND,
   DEFAULT_TIMEOUT_MS,
   classifySpawnFailure,
+  safeProcessCwd,
   spawnFailureMessage,
   providerModelsFromSettings,
   spawnAndCollect,
@@ -71,7 +72,7 @@ export const checkMuseProviderStatus = Effect.fn("checkMuseProviderStatus")(func
       slashCommands: [COMPACT_SLASH_COMMAND],
       probe,
     });
-  const spawnCwd = cwd ?? process.cwd();
+  const spawnCwd = cwd ?? safeProcessCwd();
   const versionResult = yield* Effect.gen(function* () {
     const spawnCommand = yield* resolveSpawnCommand(settings.binaryPath, ["--version"], {
       env: museEnvironment,
@@ -81,7 +82,7 @@ export const checkMuseProviderStatus = Effect.fn("checkMuseProviderStatus")(func
       ChildProcess.make(spawnCommand.command, spawnCommand.args, {
         env: museEnvironment,
         shell: spawnCommand.shell,
-        cwd: spawnCwd,
+        ...(spawnCwd ? { cwd: spawnCwd } : {}),
       }),
     );
   }).pipe(Effect.timeoutOption(DEFAULT_TIMEOUT_MS), Effect.result);
