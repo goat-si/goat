@@ -10,12 +10,47 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
 import {
+  classifySpawnFailure,
   collectStreamAsString,
   isCommandMissingCause,
   parseGenericCliVersion,
+  ProviderCommandNotFoundError,
   providerModelsFromSettings,
   spawnAndCollect,
 } from "./snapshotProbe.ts";
+
+describe("spawn failure diagnosis", () => {
+  it("distinguishes a missing executable from a missing working directory through nested causes", () => {
+    const failure = { cause: { cause: { code: "ENOENT" } } };
+    expect(classifySpawnFailure(failure, process.cwd())).toBe("missing");
+    expect(classifySpawnFailure(failure, "/goat-test-nonexistent-cwd-2819393")).toBe(
+      "cwd_inaccessible",
+    );
+  });
+
+  it("distinguishes executable permission from an unsearchable working directory", () => {
+    const failure = { cause: { code: "EACCES" } };
+    expect(classifySpawnFailure(failure, process.cwd())).toBe("permission_denied");
+    expect(classifySpawnFailure(failure, "/goat-test-nonexistent-cwd-2819393")).toBe(
+      "cwd_inaccessible",
+    );
+    expect(classifySpawnFailure({ code: "EPERM" }, process.cwd())).toBe("permission_denied");
+    expect(classifySpawnFailure({ code: "ENOTDIR" }, "/goat-test-nonexistent-cwd-2819393")).toBe(
+      "cwd_inaccessible",
+    );
+    expect(classifySpawnFailure({ code: "EIO" }, process.cwd())).toBe("unknown");
+  });
+
+  it("preserves Windows command-not-found evidence", () => {
+    const error = new ProviderCommandNotFoundError({
+      binaryPath: "codex.cmd",
+      exitCode: 9009,
+      stdoutLength: 0,
+      stderrLength: 0,
+    });
+    expect(classifySpawnFailure({ cause: error }, process.cwd())).toBe("missing");
+  });
+});
 
 const OPENCODE_CUSTOM_MODEL_CAPABILITIES: ModelCapabilities = createModelCapabilities({
   optionDescriptors: [
