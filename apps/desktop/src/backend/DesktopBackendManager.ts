@@ -852,8 +852,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
         level: "INFO",
         details: `pid=${Option.match(run.pid, { onNone: () => "pending", onSome: String })} reason=${reason} graceMs=${Duration.toMillis(DEFAULT_BACKEND_TERMINATE_GRACE)} timeoutMs=${options?.timeout ? Duration.toMillis(options.timeout) : "none"}`,
       });
-      if (options?.timeout)
-        yield* write.pipe(Effect.timeoutOption(yield* remaining(options.timeout)));
+      if (options?.timeout) yield* Effect.forkDetach(write);
       else yield* write;
     }
 

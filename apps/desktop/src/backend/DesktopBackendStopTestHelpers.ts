@@ -81,6 +81,7 @@ export function registerBackendStopTests({
         const ready = yield* Deferred.make<void>();
         const recording = yield* Deferred.make<void>();
         const allowRecord = yield* Deferred.make<void>();
+        const recordCompleted = yield* Deferred.make<void>();
         const killObserved = yield* Deferred.make<void>();
         let shutdowns = 0;
         const spawnerLayer = Layer.succeed(
@@ -109,6 +110,8 @@ export function registerBackendStopTests({
               message === "backend stop requested"
                 ? Deferred.succeed(recording, undefined).pipe(
                     Effect.andThen(Deferred.await(allowRecord)),
+                    Effect.andThen(Deferred.succeed(recordCompleted, undefined)),
+                    Effect.asVoid,
                   )
                 : message === "backend stop timed out"
                   ? Deferred.await(allowRecord)
@@ -121,12 +124,14 @@ export function registerBackendStopTests({
           .stop("quit", { timeout: BACKEND_STOP_TIMEOUT })
           .pipe(Effect.forkChild);
         yield* Deferred.await(recording);
+        yield* Deferred.await(killObserved);
         yield* TestClock.adjust(BACKEND_STOP_TIMEOUT);
         const returnedBeforeRelease = stopping.pollUnsafe() !== undefined;
         if (!returnedBeforeRelease) yield* Deferred.succeed(allowRecord, undefined);
         yield* Fiber.join(stopping);
         yield* Deferred.await(killObserved);
         yield* Deferred.succeed(allowRecord, undefined);
+        yield* Deferred.await(recordCompleted);
         assert.isTrue(returnedBeforeRelease);
         assert.equal(shutdowns, 1);
       }),
