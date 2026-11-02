@@ -11,6 +11,7 @@ import {
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ThreadShell,
 } from "@goat/contracts";
+import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -654,7 +655,7 @@ export const make = Effect.gen(function* () {
   // reads: clients hold it in Working only briefly, so a late settle makes it appear and then vanish.
   const admission = yield* SettlementAdmission.make({
     targeted: (threadId: ThreadId) => runSweep(null, threadId),
-    full: (refresh) => runSweep(null, undefined, refresh),
+    full: (refresh) => NodeSqliteClient.backgroundReads(runSweep(null, undefined, refresh)),
   });
   // The event consumer reads metadata only; restoring archived history would hold it behind the archive lock.
   const readThreadMetadata = (threadId: ThreadId) =>

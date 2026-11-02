@@ -35,6 +35,22 @@ const FailFastReaderAdmission = Context.Reference<boolean>("@goat/shared/FailFas
 export const failFastReaderAdmission = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   Effect.provideService(effect, FailFastReaderAdmission, true);
 
+export type ReaderLaneName = "interactive" | "background";
+/** Forked fibers inherit their parent's lane. */
+export const ReaderLane = Context.Reference<ReaderLaneName>("@goat/shared/ReaderLane", {
+  defaultValue: () => "interactive",
+});
+/** Periodic sweeps yield reader admissions and reader slots to reads a person is waiting on. */
+export const backgroundReads = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+  Effect.provideService(effect, ReaderLane, "background");
+export const BACKGROUND_READER_ADMISSION_TIMEOUT = Duration.seconds(10);
+/** A background waiter this old goes before newer interactive waiters, within its lane limit. */
+export const READER_LANE_AGING_MS = 5_000;
+
+export interface ReaderAdmissionToken {
+  readonly lane: ReaderLaneName;
+}
+
 export const readerAdmissionTimeout = (input: Duration.Input = "30 seconds") => {
   const duration = Duration.fromInputUnsafe(input);
   const nan =
@@ -50,10 +66,12 @@ export const readerAdmissionTimeout = (input: Duration.Input = "30 seconds") => 
 
 type Waiter = {
   state: "queued" | "granted" | "expired" | "cancelled" | "closed";
+  readonly token: ReaderAdmissionToken;
   readonly deferred: Deferred.Deferred<
-    void,
+    ReaderAdmissionToken,
     ReaderAdmissionOverloadError | ReaderAdmissionClosedError
   >;
+  readonly arrivedAt: bigint;
   readonly deadline: bigint | null;
   readonly clock: Clock.Clock;
   timer?: Fiber.Fiber<void>;
@@ -61,18 +79,24 @@ type Waiter = {
 
 export const makeReaderAdmission = Effect.fn("ReaderAdmission.make")(function* (options: {
   readonly limit: number;
+  readonly backgroundLimit: number;
   readonly timeout: Duration.Duration | null;
+  readonly backgroundTimeout: Duration.Duration | null;
   readonly honorFailFast: boolean;
+  readonly agingMs: number;
 }) {
   const scope = yield* Effect.scope;
   const context = yield* Effect.context<never>();
+  const agingNanos = BigInt(options.agingMs) * 1_000_000n;
   let held = 0;
+  let backgroundHeld = 0;
   let closed = false;
-  const queue: Waiter[] = [];
+  const queues: Record<ReaderLaneName, Array<Waiter>> = { interactive: [], background: [] };
   const stopTimer = (waiter: Waiter) => {
     if (waiter.timer !== undefined) Effect.runForkWith(context)(Fiber.interrupt(waiter.timer));
   };
   const remove = (waiter: Waiter) => {
+    const queue = queues[waiter.token.lane];
     const index = queue.indexOf(waiter);
     if (index >= 0) queue.splice(index, 1);
   };
@@ -83,42 +107,55 @@ export const makeReaderAdmission = Effect.fn("ReaderAdmission.make")(function* (
     // @effect-diagnostics-next-line globalErrorInEffectFailure:off -- Preserve the existing overload error identity.
     Deferred.doneUnsafe(waiter.deferred, Effect.fail(new ReaderAdmissionOverloadError()));
   };
+  const due = (waiter: Waiter) =>
+    waiter.deadline !== null && waiter.clock.monotonicTimeNanosUnsafe() >= waiter.deadline;
+  const grantable = (lane: ReaderLaneName) =>
+    held < options.limit && (lane === "interactive" || backgroundHeld < options.backgroundLimit);
+  const next = () => {
+    const interactive = queues.interactive[0];
+    const background = queues.background[0];
+    const aged =
+      background !== undefined &&
+      background.clock.monotonicTimeNanosUnsafe() - background.arrivedAt >= agingNanos;
+    if (aged && grantable("background")) return background;
+    if (interactive !== undefined && grantable("interactive")) return interactive;
+    return background !== undefined && grantable("background") ? background : undefined;
+  };
+  // The arriving waiter may take free capacity before its own deadline is checked.
   const pump = (arrival?: Waiter) => {
-    while (queue.length > 0) {
-      const waiter = queue[0];
-      if (waiter === undefined) break;
-      if (
-        waiter !== arrival &&
-        waiter.deadline !== null &&
-        waiter.clock.monotonicTimeNanosUnsafe() >= waiter.deadline
-      ) {
-        expire(waiter);
-        stopTimer(waiter);
-        continue;
+    for (;;) {
+      for (const queue of [queues.interactive, queues.background]) {
+        for (
+          let head = queue[0];
+          head !== undefined && head !== arrival && due(head);
+          head = queue[0]
+        ) {
+          expire(head);
+          stopTimer(head);
+        }
       }
-      if (held >= options.limit) break;
-      queue.shift();
+      const waiter = next();
+      if (waiter === undefined) break;
+      queues[waiter.token.lane].shift();
       waiter.state = "granted";
       held++;
+      if (waiter.token.lane === "background") backgroundHeld++;
       stopTimer(waiter);
-      Deferred.doneUnsafe(waiter.deferred, Effect.void);
+      Deferred.doneUnsafe(waiter.deferred, Effect.succeed(waiter.token));
     }
-    if (
-      arrival?.state === "queued" &&
-      arrival.deadline !== null &&
-      arrival.clock.monotonicTimeNanosUnsafe() >= arrival.deadline
-    )
-      expire(arrival);
+    if (arrival?.state === "queued" && due(arrival)) expire(arrival);
   };
-  const release = Effect.sync(() => {
+  const giveBack = (token: ReaderAdmissionToken) => {
     held--;
+    if (token.lane === "background") backgroundHeld--;
     pump();
-  });
+  };
+  const release = (token: ReaderAdmissionToken) => Effect.sync(() => giveBack(token));
   yield* Scope.addFinalizer(
     scope,
     Effect.sync(() => {
       closed = true;
-      for (const waiter of queue.splice(0)) {
+      for (const waiter of [...queues.interactive.splice(0), ...queues.background.splice(0)]) {
         waiter.state = "closed";
         stopTimer(waiter);
         // @effect-diagnostics-next-line globalErrorInEffectFailure:off -- The gate exposes a distinct closure error.
@@ -132,25 +169,27 @@ export const makeReaderAdmission = Effect.fn("ReaderAdmission.make")(function* (
         Effect.gen(function* () {
           // @effect-diagnostics-next-line globalErrorInEffectFailure:off -- The gate exposes a distinct closure error.
           if (closed) return yield* Effect.fail(new ReaderAdmissionClosedError());
+          const lane = fiber.getRef(ReaderLane);
           if (
             options.honorFailFast &&
             fiber.getRef(FailFastReaderAdmission) &&
-            (held >= options.limit || queue.length > 0)
+            (queues[lane].length > 0 || !grantable(lane))
           )
             // @effect-diagnostics-next-line globalErrorInEffectFailure:off -- Preserve the existing overload error identity.
             return yield* Effect.fail(new ReaderAdmissionOverloadError());
           const clock = fiber.getRef(Clock.Clock);
-          const deadline =
-            options.timeout === null
-              ? null
-              : clock.monotonicTimeNanosUnsafe() + Duration.toNanosUnsafe(options.timeout);
+          const arrivedAt = clock.monotonicTimeNanosUnsafe();
+          const timeout = lane === "interactive" ? options.timeout : options.backgroundTimeout;
+          const deadline = timeout === null ? null : arrivedAt + Duration.toNanosUnsafe(timeout);
           const waiter: Waiter = {
             state: "queued",
+            token: { lane },
             deferred: Deferred.makeUnsafe(),
+            arrivedAt,
             deadline,
             clock,
           };
-          queue.push(waiter);
+          queues[lane].push(waiter);
           pump(waiter);
           if (waiter.state === "queued" && deadline !== null) {
             const timer = Effect.gen(function* () {
@@ -169,10 +208,8 @@ export const makeReaderAdmission = Effect.fn("ReaderAdmission.make")(function* (
             (exit) =>
               Effect.sync(() => {
                 if (Exit.isSuccess(exit)) return;
-                if (waiter.state === "granted") {
-                  held--;
-                  pump();
-                } else if (waiter.state === "queued") {
+                if (waiter.state === "granted") giveBack(waiter.token);
+                else if (waiter.state === "queued") {
                   remove(waiter);
                   waiter.state = "cancelled";
                   stopTimer(waiter);
@@ -185,3 +222,14 @@ export const makeReaderAdmission = Effect.fn("ReaderAdmission.make")(function* (
     );
   return { acquire, release };
 });
+
+/** 64 reads may wait on the reader pool at once; background reads keep 16 of them free. */
+export const makeClientReaderAdmission = (timeout: Duration.Input | undefined) =>
+  makeReaderAdmission({
+    limit: 64,
+    backgroundLimit: 48,
+    timeout: readerAdmissionTimeout(timeout),
+    backgroundTimeout: BACKGROUND_READER_ADMISSION_TIMEOUT,
+    honorFailFast: true,
+    agingMs: READER_LANE_AGING_MS,
+  });
