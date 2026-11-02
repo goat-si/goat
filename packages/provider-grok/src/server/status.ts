@@ -377,11 +377,11 @@ export function grokSlashCommandsFromInitialize(
  */
 const discoverGrokMetadataViaAcpInitialize = Effect.fn(
   "GrokProviderStatus.discoverGrokMetadataViaAcpInitialize",
-)(function* (grokSettings: GrokSettings, environment: NodeJS.ProcessEnv) {
+)(function* (grokSettings: GrokSettings, environment: NodeJS.ProcessEnv, cwd: string) {
   const acp = yield* makeGrokAcpRuntime({
     grokSettings,
     environment,
-    cwd: process.cwd(),
+    cwd,
     clientInfo: { name: "t3-code-provider-probe", version: "0.0.0" },
   });
   const initialized = yield* acp.initialize();
@@ -423,6 +423,24 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
   const apiKey = environment[GROK_API_KEY_ENV]?.trim();
 
   const spawnCwd = safeProcessCwd();
+  if (spawnCwd === undefined)
+    return buildServerProvider({
+      presentation: GROK_PRESENTATION,
+      enabled: true,
+      checkedAt,
+      models: fallbackModels,
+      probe: {
+        installed: true,
+        version: null,
+        status: "error",
+        auth: { status: "unknown" },
+        message: spawnFailureMessage(
+          "cwd_inaccessible",
+          spawnCwd,
+          grokSettings.binaryPath || "grok",
+        ),
+      },
+    });
   const versionResult = yield* runGrokCliCommand(
     grokSettings,
     ["--version"],
@@ -521,10 +539,11 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
     Effect.orElseSucceed(() => []),
   );
 
-  const acpExit = yield* discoverGrokMetadataViaAcpInitialize(grokSettings, probeEnvironment).pipe(
-    Effect.timeoutOption(GROK_ACP_INITIALIZE_TIMEOUT_MS),
-    Effect.exit,
-  );
+  const acpExit = yield* discoverGrokMetadataViaAcpInitialize(
+    grokSettings,
+    probeEnvironment,
+    spawnCwd,
+  ).pipe(Effect.timeoutOption(GROK_ACP_INITIALIZE_TIMEOUT_MS), Effect.exit);
   const acpMetadata = Exit.isSuccess(acpExit) ? Option.getOrUndefined(acpExit.value) : undefined;
   const acpModels = acpMetadata?.models ?? [];
   const acpFailed = Exit.isFailure(acpExit) || Option.isNone(acpExit.value);

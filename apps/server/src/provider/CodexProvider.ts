@@ -50,6 +50,7 @@ import {
   COMPACT_SLASH_COMMAND,
   DEFAULT_TIMEOUT_MS,
   providerModelsFromSettings,
+  safeProcessCwd,
   spawnAndCollect,
   spawnFailureMessage,
   type ServerProviderDraft,
@@ -825,16 +826,22 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     });
   }
 
-  const routeInput = yield* HomeRoute.resolveCodexRouteContext({
-    settings: codexSettings,
-    binaryPath: codexSettings.binaryPath,
-    home: codexSettings.homePath,
-    cwd: process.cwd(),
-    environment: resolvedEnvironment,
-    configArgv: codexExecLaunchArgs(
-      resolveCodexLaunchArgs(codexSettings.launchArgs, resolvedEnvironment),
-    ),
-  }).pipe(Effect.result);
+  const probeCwd = safeProcessCwd();
+  const routeInput =
+    probeCwd === undefined
+      ? Result.fail({
+          message: spawnFailureMessage("cwd_inaccessible", undefined, codexSettings.binaryPath),
+        })
+      : yield* HomeRoute.resolveCodexRouteContext({
+          settings: codexSettings,
+          binaryPath: codexSettings.binaryPath,
+          home: codexSettings.homePath,
+          cwd: probeCwd,
+          environment: resolvedEnvironment,
+          configArgv: codexExecLaunchArgs(
+            resolveCodexLaunchArgs(codexSettings.launchArgs, resolvedEnvironment),
+          ),
+        }).pipe(Effect.result);
   if (Result.isFailure(routeInput))
     return buildStatus({
       presentation: CODEX_PRESENTATION,
@@ -881,7 +888,6 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
         },
       });
   }
-  const probeCwd = process.cwd();
   const probeResult = yield* probe({
     binaryPath: codexSettings.binaryPath,
     homePath: codexSettings.homePath,
