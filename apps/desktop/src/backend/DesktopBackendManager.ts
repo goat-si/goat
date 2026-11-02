@@ -21,6 +21,7 @@ export type { BackendStartupFailure } from "./DesktopBackendStartup.ts";
 import * as Brand from "effect/Brand";
 import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -114,6 +115,7 @@ export interface BackendInstanceSpec {
 interface ActiveBackendRun {
   readonly id: number;
   readonly scope: Scope.Closeable;
+  readonly spawnReady: Deferred.Deferred<void>;
   readonly fiber: Option.Option<Fiber.Fiber<void, never>>;
   readonly pid: Option.Option<number>;
   readonly exitObserved: boolean;
@@ -168,7 +170,10 @@ const closeRun = (
     onNone: () => Effect.void,
     onSome: (fiber) => Fiber.await(fiber).pipe(Effect.asVoid),
   });
-  const close = Scope.close(run.scope, Exit.void).pipe(Effect.andThen(waitForFiber));
+  const close = Deferred.await(run.spawnReady).pipe(
+    Effect.andThen(Scope.close(run.scope, Exit.void)),
+    Effect.andThen(waitForFiber),
+  );
   const timeout = options?.timeout;
 
   if (!timeout) {
@@ -391,6 +396,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
         }
 
         const runScope = yield* Scope.make("sequential");
+        const spawnReady = yield* Deferred.make<void>();
         const runId = yield* Ref.modify(state, (latest) => [
           latest.nextRunId,
           {
@@ -398,6 +404,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
             active: Option.some({
               id: latest.nextRunId,
               scope: runScope,
+              spawnReady,
               fiber: Option.none(),
               pid: Option.none(),
               exitObserved: false,
@@ -565,6 +572,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
               yield* desktopTelemetryPublisher.handleControlForSource(spec.id, message);
             },
           ),
+          onSpawnReady: Deferred.succeed(spawnReady, undefined).pipe(Effect.asVoid),
           onStarted: Effect.fn("desktop.backendInstance.onStarted")(function* (pid) {
             yield* mutex.withPermits(1)(
               Effect.gen(function* () {
@@ -671,6 +679,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
               .append(streamName, chunk)
               .pipe(Effect.andThen(backendOutputLog.writeOutputChunk(streamName, chunk))),
         }).pipe(
+          Effect.ensuring(Deferred.succeed(spawnReady, undefined).pipe(Effect.asVoid)),
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
           Effect.provideService(HttpClient.HttpClient, httpClient),
           Scope.provide(runScope),

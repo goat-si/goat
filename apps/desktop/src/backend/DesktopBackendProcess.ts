@@ -186,6 +186,7 @@ interface RunBackendProcessOptions extends DesktopBackendStartConfig {
   readonly readinessTimeout?: Duration.Duration;
   readonly outputDrainTimeout?: Duration.Duration;
   readonly terminateGrace?: Duration.Duration;
+  readonly onSpawnReady?: Effect.Effect<void>;
   readonly onStarted?: (pid: number) => Effect.Effect<void>;
   readonly onExitObserved?: () => Effect.Effect<void>;
   readonly onReady?: () => Effect.Effect<void>;
@@ -370,6 +371,7 @@ export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
             ).pipe(Effect.forkDetach),
           );
         }
+        yield* options.onSpawnReady ?? Effect.void;
         return handle;
       }),
     );

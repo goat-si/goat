@@ -273,6 +273,47 @@ export function registerBackendStopTests({
     ),
   );
 
+  it.effect("does not release a process before its spawn finishes", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const spawned = yield* Deferred.make<void>();
+        const allowSpawn = yield* Deferred.make<void>();
+        const exited = yield* Deferred.make<void>();
+        let spawnReturned = false;
+        let releasedAfterSpawn = false;
+        const layer = Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make(() =>
+            Effect.gen(function* () {
+              const scope = yield* Scope.Scope;
+              yield* Deferred.succeed(spawned, undefined);
+              yield* Deferred.await(allowSpawn);
+              yield* Scope.addFinalizer(
+                scope,
+                Effect.sync(() => {
+                  releasedAfterSpawn = spawnReturned;
+                }).pipe(Effect.andThen(Deferred.succeed(exited, undefined)), Effect.asVoid),
+              );
+              spawnReturned = true;
+              return makeProcess({
+                exitCode: Deferred.await(exited).pipe(Effect.as(ChildProcessSpawner.ExitCode(0))),
+              });
+            }),
+          ),
+        );
+        const instance = yield* makeTestInstance({ spawnerLayer: layer });
+        yield* instance.start;
+        yield* Deferred.await(spawned);
+        const stopping = yield* instance
+          .stop("quit")
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.succeed(allowSpawn, undefined);
+        yield* Fiber.join(stopping);
+        assert.isTrue(releasedAfterSpawn);
+      }),
+    ),
+  );
+
   it.effect.each([false, true])(
     "closing the instance's scope stops the run through stop(): sequential child=%s",
     (child) =>
