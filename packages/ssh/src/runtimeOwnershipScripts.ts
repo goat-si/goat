@@ -63,13 +63,20 @@ GOAT_WORDS
   # Starts a program outside the SSH session's job, appending its output to $1; prints its PID.
   # The program and arguments are passed as given, so callers convert paths with cygpath -w.
   windows_spawn_detached() {
+    win_cwd="$(cygpath -u "${"${USERPROFILE:-}"}" 2>/dev/null)" || win_cwd=
+    if [ -z "$win_cwd" ] || [ ! -d "$win_cwd" ]; then
+      [ -n "${"${SystemDrive:-}"}" ] || return 1
+      win_cwd="$(cygpath -u "$SystemDrive/")" || return 1
+      [ -d "$win_cwd" ] || return 1
+    fi
+    win_cwd="$(cygpath -w "$win_cwd")" || return 1
     win_log="$(cygpath -w "$1")" || return 1; shift
     win_args=
     for win_word in "$@"; do
       win_args="$win_args$win_word
 "
     done
-    win_pid="$(GOAT_SPAWN_LOG="$win_log" GOAT_SPAWN_ARGS="$win_args" GOAT_SPAWN_ENV='T3CODE_NO_BROWSER=1' MSYS2_ARG_CONV_EXCL='*' powershell.exe -NoProfile -NonInteractive -EncodedCommand '${encodePowerShellCommand(WINDOWS_DETACHED_SPAWN_POWERSHELL)}' </dev/null)" || return 1
+    win_pid="$(GOAT_SPAWN_CWD="$win_cwd" GOAT_SPAWN_LOG="$win_log" GOAT_SPAWN_ARGS="$win_args" GOAT_SPAWN_ENV='T3CODE_NO_BROWSER=1' MSYS2_ARG_CONV_EXCL='*' powershell.exe -NoProfile -NonInteractive -EncodedCommand '${encodePowerShellCommand(WINDOWS_DETACHED_SPAWN_POWERSHELL)}' </dev/null)" || return 1
     printf '%s\n' "$win_pid" | tr -d '\r'
   }
 else

@@ -47,7 +47,7 @@ foreach ($value in $words + $assignments + @($log)) {
 $prefix = ($assignments | ForEach-Object { 'set "' + $_ + '" && ' }) -join ''
 $command = ($words | ForEach-Object { '"' + $_ + '"' }) -join ' '
 $line = 'cmd.exe /d /s /c "' + $prefix + $command + ' >> "' + $log + '" 2>&1"'
-$created = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $line; CurrentDirectory = $env:USERPROFILE }
+$created = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $line; CurrentDirectory = $env:GOAT_SPAWN_CWD }
 if ($created.ReturnValue -ne 0) { [Console]::Error.WriteLine('Win32_Process.Create returned ' + $created.ReturnValue); exit 3 }
 $name = [IO.Path]::GetFileName($words[0])
 if (-not [IO.Path]::HasExtension($name)) { $name += '.exe' }
@@ -61,10 +61,7 @@ while ([DateTime]::UtcNow -lt $deadline) {
 exit 5
 `;
 
-export const WINDOWS_SUPERVISOR_SPAWN_POWERSHELL = WINDOWS_DETACHED_SPAWN_POWERSHELL.replace(
-  "CurrentDirectory = $env:USERPROFILE",
-  "CurrentDirectory = $env:GOAT_SPAWN_CWD",
-);
+export const WINDOWS_SUPERVISOR_SPAWN_POWERSHELL = WINDOWS_DETACHED_SPAWN_POWERSHELL;
 
 /** The `-EncodedCommand` form of a PowerShell program: base64 of its UTF-16LE bytes. */
 export function encodePowerShellCommand(script: string): string {

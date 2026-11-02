@@ -5,6 +5,7 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as NetService from "@goat/shared/Net";
+import { WINDOWS_DETACHED_SPAWN_POWERSHELL } from "@goat/shared/windowsHostProcess";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Crypto from "effect/Crypto";
@@ -26,6 +27,7 @@ import {
 } from "./tunnel.fixture.ts";
 import {
   buildRemoteHostDownloadScript,
+  buildRemoteLaunchScript,
   buildRemoteRuntimeProbeScript,
   remoteUploadCommand,
   SshEnvironmentManager,
@@ -94,6 +96,7 @@ describe("Windows SSH host", () => {
       yield* fs.makeDirectory(bin);
       yield* fs.makeDirectory(profile);
       yield* fs.makeDirectory(drive);
+      yield* fs.writeFileString(`${root}/file`, "not a directory");
       yield* fs.writeFileString(`${bin}/uname`, "#!/bin/sh\necho MINGW64\n");
       yield* fs.writeFileString(
         `${bin}/cygpath`,
@@ -110,6 +113,7 @@ if [ "$1" = -u ] && [ "$2" = 'D:/' ]; then printf '%s\n' "$TEST_DRIVE"; else pri
       for (const [userProfile, expected] of [
         [profile, profile],
         [`${root}/missing`, drive],
+        [`${root}/file`, drive],
         ["", drive],
       ]) {
         const result = NodeChildProcess.spawnSync(
@@ -129,7 +133,8 @@ if [ "$1" = -u ] && [ "$2" = 'D:/' ]; then printf '%s\n' "$TEST_DRIVE"; else pri
         assert.equal(result.status, 0, result.stderr);
         assert.equal(result.stdout.trim(), expected);
       }
-      const launch = buildRemoteRuntimeProbeScript("1.2.3", "fixture", true);
+      const launch = buildRemoteLaunchScript(ARCHIVE);
+      assert.include(WINDOWS_DETACHED_SPAWN_POWERSHELL, "CurrentDirectory = $env:GOAT_SPAWN_CWD");
       assert.include(launch, 'windows_spawn_detached "$SUPERVISE_LOG"');
       assert.include(launch, 'windows_spawn_detached "$LOG_FILE"');
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
