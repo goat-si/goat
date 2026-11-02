@@ -38,14 +38,6 @@ const makeGuest = ({
 };
 
 describe("preview guest input", () => {
-  it("regression: keeps every syllable of Korean text typed into an unfocused guest", async () => {
-    const guest = makeGuest({ focused: false });
-    await guest.send("Input.insertText", { text: "오늘 날씨" });
-    expect(guest.webContents.insertText).toHaveBeenCalledTimes(1);
-    expect(guest.webContents.insertText).toHaveBeenCalledWith("오늘 날씨");
-    expect(guest.sendCommand).not.toHaveBeenCalledWith("Input.insertText", expect.anything());
-  });
-
   it("regression: forwards every syllable of Korean text to a focused guest", async () => {
     const guest = makeGuest({ focused: true });
     await guest.send("Input.insertText", { text: "오늘 날씨" });
@@ -53,10 +45,11 @@ describe("preview guest input", () => {
     expect(guest.webContents.insertText).not.toHaveBeenCalled();
   });
 
-  it("types into an unfocused guest's own page, not the app's focused field", async () => {
+  it("regression: types every Korean syllable into an unfocused guest's own page, not the app's focused field", async () => {
     const guest = makeGuest({ focused: false });
-    await guest.send("Input.insertText", { text: "pairing-code" });
-    expect(guest.webContents.insertText).toHaveBeenCalledWith("pairing-code");
+    await guest.send("Input.insertText", { text: "오늘 날씨" });
+    expect(guest.webContents.insertText).toHaveBeenCalledTimes(1);
+    expect(guest.webContents.insertText).toHaveBeenCalledWith("오늘 날씨");
     expect(guest.sendCommand).not.toHaveBeenCalledWith("Input.insertText", expect.anything());
   });
 

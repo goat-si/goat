@@ -197,10 +197,11 @@ export const selectClickPoint = (input: {
     if (visibleArea > (best?.area ?? 0)) best = { visible, area: visibleArea };
   }
   if (!best || best.area < MIN_VISIBLE_AREA) return refuse("no_visible_area");
-  return { ok: true, point: vertexAverage(best.visible) };
+  const point = vertexAverage(best.visible);
+  // Finite inputs this large can still overflow to Infinity in the area or average.
+  return isFinite(best.area, point.x, point.y) ? { ok: true, point } : refuse("invalid_geometry");
 };
 
-/** Clicks only when the hit test proved the target, or its label or control, receives the point. */
 export const classifyOcclusionHitTest = (target: HitTest): OcclusionVerdict =>
   target.hitTestError === undefined &&
   (target.hitMatchesTargetOrDescendant || target.hitIsAssociatedLabelOrControl === true)
@@ -213,7 +214,6 @@ export const classifyOcclusionHitTest = (target: HitTest): OcclusionVerdict =>
         nothingSent: true,
       };
 
-/** A toggle is verified only by a read state that changed; an unverified one is never clicked again. */
 export const evaluateTogglePostcondition = (
   beforeChecked: boolean | undefined,
   afterChecked: boolean | undefined,

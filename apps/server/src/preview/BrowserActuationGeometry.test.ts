@@ -46,12 +46,17 @@ describe("click point selection", () => {
     });
   });
 
-  it("maps a nested frame's quad to the top viewport by adding iframe offsets and subtracting scroll", () => {
+  it("maps a nested frame's quad to the top viewport and clips it by every ancestor frame", () => {
     const outer = frame(100, 50, 400, 300, 0, 20);
     const inner = frame(10, 200, 100, 100, 0, 150);
     expect(
       selectClickPoint({ quads: [rect(10, 10, 30, 30)], viewport, frames: [outer, inner] }),
     ).toEqual({ ok: true, point: { x: 130, y: 100 } });
+    // The wide inner frame shows the whole target; the outer frame cuts it at x = 500.
+    const wideInner = frame(10, 200, 600, 100, 0, 150);
+    expect(
+      selectClickPoint({ quads: [rect(350, 10, 450, 30)], viewport, frames: [outer, wideInner] }),
+    ).toEqual({ ok: true, point: { x: 480, y: 100 } });
   });
 
   it("clips the target by its frame's visible rect, not just the viewport", () => {
@@ -129,6 +134,13 @@ describe("click point selection", () => {
       reason: "invalid_geometry",
       nothingSent: true,
     });
+  });
+
+  it("refuses finite geometry too large to give a finite point", () => {
+    const huge = { width: 1e308, height: 1e308 };
+    expect(
+      selectClickPoint({ box: { x: 0, y: 0, width: 1e308, height: 1e308 }, viewport: huge }),
+    ).toEqual({ ok: false, reason: "invalid_geometry", nothingSent: true });
   });
 
   it.each([
