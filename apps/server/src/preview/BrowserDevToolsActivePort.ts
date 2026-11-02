@@ -1,12 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off - effect/FileSystem has no O_NOFOLLOW open or handle fstat, and joins here target another platform's paths.
-/**
- * Finds a running Chrome-family browser through the DevToolsActivePort file it writes into its
- * user data directory, and limits a browser-wide CDP connection to the targets a session claimed.
- * Profile locations follow browser-use's browser-harness-js (sdk/session.ts) and chrome.py.
- */
+// Profile locations follow browser-use's browser-harness-js (sdk/session.ts) and chrome.py.
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 
 type BrowserChannel = "chrome" | "chrome-canary" | "brave" | "msedge" | "chromium";
@@ -111,6 +108,7 @@ export const parseDevToolsActivePort = (content: string): DevToolsActivePort => 
 type ReadRefusal =
   | "not_found"
   | "symlink_refused"
+  | "untrusted_owner"
   | "not_a_file"
   | "too_large"
   | "changed_during_read"
@@ -127,6 +125,16 @@ const OPEN_FLAGS =
 type Identity = { readonly dev: bigint; readonly ino: bigint; readonly ctimeNs: bigint };
 const sameInode = (left: Identity, right: Identity) =>
   left.dev === right.dev && left.ino === right.ino;
+
+type Ownership = { readonly uid: bigint; readonly mode: bigint };
+/**
+ * Node has no openat, so path checks cannot bind the file to its directory against repeated swaps.
+ * Requiring the server's user or root as owner, and no write access for others unless the folder is
+ * sticky, leaves those swaps to someone who could already write the file.
+ */
+const ownedBy = (stat: Ownership, uid: number) => stat.uid === 0n || stat.uid === BigInt(uid);
+const othersCannotWrite = (stat: Ownership) => (stat.mode & 0o022n) === 0n;
+const sticky = (stat: Ownership) => (stat.mode & 0o1000n) !== 0n;
 
 const errorCode = (error: unknown) =>
   typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
@@ -171,15 +179,29 @@ const readBounded = Effect.fn("BrowserDevToolsActivePort.readBounded")(function*
 });
 
 /**
- * Reads through one opened handle and then proves the directory and file names still lead to the
- * objects that were read, so a link or a swapped directory cannot supply the endpoint.
+ * Reads through one opened handle, then checks the directory and file names still lead to the
+ * objects that were read.
  */
 export const readDevToolsActivePort = Effect.fn("BrowserDevToolsActivePort.read")(
   function* (userDataDir: string) {
+    // Windows reports no uid; its ACLs are not modelled here.
+    const uid = yield* HostProcess.UserId;
     const file = NodePath.join(userDataDir, FILE_NAME);
+    const parent = yield* lstatOrRefuse(NodePath.dirname(userDataDir), "not_found");
     const dir = yield* lstatOrRefuse(userDataDir, "not_found");
     if (dir.isSymbolicLink()) return yield* refuse("symlink_refused");
     if (!dir.isDirectory()) return yield* refuse("not_a_file");
+    if (
+      uid !== undefined &&
+      !(
+        ownedBy(parent, uid) &&
+        (othersCannotWrite(parent) || sticky(parent)) &&
+        ownedBy(dir, uid) &&
+        othersCannotWrite(dir)
+      )
+    ) {
+      return yield* refuse("untrusted_owner");
+    }
     const entry = yield* lstatOrRefuse(file, "not_found");
     if (entry.isSymbolicLink()) return yield* refuse("symlink_refused");
     if (!entry.isFile()) return yield* refuse("not_a_file");
@@ -196,6 +218,13 @@ export const readDevToolsActivePort = Effect.fn("BrowserDevToolsActivePort.read"
       readBounded,
       (handle) => Effect.ignore(Effect.tryPromise(() => handle.close())),
     );
+    // Chrome keeps its profile at 0700, so a umask-widened file there is still out of others' reach.
+    if (
+      uid !== undefined &&
+      !(ownedBy(stat, uid) && (othersCannotWrite(stat) || (dir.mode & 0o077n) === 0n))
+    ) {
+      return yield* refuse("untrusted_owner");
+    }
     const dirAfter = yield* lstatOrRefuse(userDataDir, "changed_during_read");
     const fileAfter = yield* lstatOrRefuse(file, "changed_during_read");
     // Directory ctime moves whenever Chrome rewrites its other files, so only its inode counts.

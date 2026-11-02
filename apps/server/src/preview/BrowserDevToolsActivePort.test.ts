@@ -4,6 +4,7 @@ import * as NodePath from "node:path";
 import * as NodeOS from "node:os";
 import * as NodeChildProcess from "node:child_process";
 
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
@@ -221,7 +222,7 @@ describe("DevToolsActivePort reader", () => {
       Effect.gen(function* () {
         const dir = yield* tempDir;
         const profile = NodePath.join(dir, "profile");
-        yield* Effect.promise(() => NodeFSP.mkdir(profile));
+        yield* Effect.promise(() => NodeFSP.mkdir(profile, { mode: 0o700 }));
         const target = NodePath.join(dir, "target");
         yield* Effect.promise(() => NodeFSP.writeFile(target, valid));
         yield* Effect.promise(() =>
@@ -284,8 +285,8 @@ describe("DevToolsActivePort reader", () => {
         const profile = NodePath.join(dir, "profile");
         const original = NodePath.join(dir, "original");
         const substitute = NodePath.join(dir, "substitute");
-        yield* Effect.promise(() => NodeFSP.mkdir(profile));
-        yield* Effect.promise(() => NodeFSP.mkdir(substitute));
+        yield* Effect.promise(() => NodeFSP.mkdir(profile, { mode: 0o700 }));
+        yield* Effect.promise(() => NodeFSP.mkdir(substitute, { mode: 0o700 }));
         yield* Effect.promise(() =>
           NodeFSP.writeFile(NodePath.join(profile, "DevToolsActivePort"), valid),
         );
@@ -331,6 +332,63 @@ describe("DevToolsActivePort reader", () => {
       }),
     );
   });
+  // oxlint-disable-next-line goat/no-global-process-runtime -- POSIX owners exist only off Windows, and root owns nothing foreign.
+  it.effect.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "refuses a profile owned by another user",
+    () => {
+      setup();
+      return Effect.scoped(
+        Effect.gen(function* () {
+          const dir = yield* tempDir;
+          yield* Effect.promise(() =>
+            NodeFSP.writeFile(NodePath.join(dir, "DevToolsActivePort"), valid, { mode: 0o600 }),
+          );
+          const uid = yield* HostProcess.UserId;
+          expect(yield* readDevToolsActivePort(dir)).toEqual(success);
+          expect(
+            yield* readDevToolsActivePort(dir).pipe(
+              Effect.provideService(HostProcess.UserId, (uid ?? 0) + 1),
+            ),
+          ).toEqual({ ok: false, reason: "untrusted_owner" });
+        }),
+      );
+    },
+  );
+  // oxlint-disable-next-line goat/no-global-process-runtime -- POSIX modes exist only off Windows.
+  it.effect.skipIf(process.platform === "win32")(
+    "refuses a profile others could rewrite or swap unless its parent is sticky",
+    () => {
+      setup();
+      return Effect.scoped(
+        Effect.gen(function* () {
+          const dir = yield* tempDir;
+          const profile = NodePath.join(dir, "profile");
+          const file = NodePath.join(profile, "DevToolsActivePort");
+          yield* Effect.promise(() => NodeFSP.mkdir(profile, { mode: 0o700 }));
+          yield* Effect.promise(() => NodeFSP.writeFile(file, valid, { mode: 0o600 }));
+          const untrusted = { ok: false, reason: "untrusted_owner" };
+          const readWith = (modes: ReadonlyArray<readonly [string, number]>) =>
+            Effect.gen(function* () {
+              for (const [target, mode] of modes)
+                yield* Effect.promise(() => NodeFSP.chmod(target, mode));
+              return yield* readDevToolsActivePort(profile);
+            });
+          expect(yield* readWith([[profile, 0o770]])).toEqual(untrusted);
+          expect(
+            yield* readWith([
+              [profile, 0o700],
+              [file, 0o666],
+            ]),
+          ).toEqual(success);
+          expect(yield* readWith([[profile, 0o755]])).toEqual(untrusted);
+          expect(yield* readWith([[file, 0o644]])).toEqual(success);
+          expect(yield* readWith([[dir, 0o777]])).toEqual(untrusted);
+          expect(yield* readWith([[dir, 0o1777]])).toEqual(success);
+          yield* Effect.promise(() => NodeFSP.chmod(dir, 0o700));
+        }),
+      );
+    },
+  );
   it.effect("rejects growth beyond the limit after the opened file is inspected", () => {
     setup();
     return Effect.scoped(
