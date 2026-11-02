@@ -675,17 +675,18 @@ export const recoverUncertain = Effect.fn("OpenCodexUpdateWindow.recover")(funct
       return "uncertain" as const;
     });
     if (!forward) return yield* settle;
-    if (!postOverrun) return yield* sync.exclusive(settle);
-    const postOverrunRecovery = Effect.gen(function* () {
-      const permitted = yield* stateLock.withPermit(
-        Effect.gen(function* () {
-          if ((yield* Ref.get(state)) !== current || (yield* Ref.get(retainedHome)) !== "held")
-            return false;
-          const until = yield* Ref.get(recoveryHoldUntil);
-          return until !== undefined && (yield* Clock.currentTimeMillis) < until;
-        }),
-      );
-      if (!permitted) return "uncertain" as const;
+    const recoverForward = Effect.gen(function* () {
+      if (postOverrun) {
+        const permitted = yield* stateLock.withPermit(
+          Effect.gen(function* () {
+            if ((yield* Ref.get(state)) !== current || (yield* Ref.get(retainedHome)) !== "held")
+              return false;
+            const until = yield* Ref.get(recoveryHoldUntil);
+            return until !== undefined && (yield* Clock.currentTimeMillis) < until;
+          }),
+        );
+        if (!permitted) return "uncertain" as const;
+      }
       const affected = affectedBy(window.steps, window.children);
       const members = yield* Effect.forEach(affected, (alias) => host.member(alias, scope));
       if (members.some((member) => member.runningTurns !== 0)) {
@@ -694,12 +695,13 @@ export const recoverUncertain = Effect.fn("OpenCodexUpdateWindow.recover")(funct
       }
       return yield* settle;
     });
+    if (!postOverrun) return yield* sync.exclusive(recoverForward);
     const outcome = yield* sync.exclusive(
       holdAffected(
         host,
         retainedHome,
         affectedBy(window.steps, window.children),
-        postOverrunRecovery,
+        recoverForward,
         stateLock,
         state,
         recoveryHoldUntil,

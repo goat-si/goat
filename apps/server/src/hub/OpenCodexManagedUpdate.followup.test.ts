@@ -356,6 +356,47 @@ it.layer(NodeServices.layer)("OpenCodex SSH replacement follow-up", (it) => {
       });
     }),
   );
+  it.effect.each([
+    { alias: null, running: 1, label: "Home continuation" },
+    { alias: null, running: undefined, label: "unknown Home activity" },
+    { alias: "mac-studio", running: 1, label: "Child continuation" },
+    { alias: "mac-studio", running: undefined, label: "unknown Child activity" },
+  ])("defers pre-overrun forward recovery for $label", ({ alias, running }) =>
+    Effect.gen(function* () {
+      const fleet = makeFleet({ homeOwnership: "adopted" });
+      fleet.orchestrated = true;
+      fleet.applyResult = "uncertain";
+      fleet.versions.set("mac-studio", "2.90.0");
+      const { update, baseDir } = yield* setup(fleet);
+      yield* update.check;
+      fleet.versions.set(null, "2.90.0");
+      fleet.inFlight = false;
+      yield* TestClock.adjust(20 * MINUTE);
+      yield* update.check;
+      fleet.running.set(alias, running);
+      yield* TestClock.adjust(10 * MINUTE);
+      yield* update.check;
+      expect(fleet.log).toEqual([]);
+      expect(fleet.holds).toBeGreaterThan(0);
+      expect(phases(yield* update.status)).toEqual([[null, "installed", undefined]]);
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const config = yield* ServerConfig.ServerConfig.pipe(
+        Effect.provide(ServerConfig.layerTest(process.cwd(), baseDir)),
+      );
+      const state = Option.getOrThrow(
+        decodeState(yield* fs.readFileString(path.join(config.stateDir, "opencodex-update.json"))),
+      );
+      expect(state.window?.orchestrated?.[""]?.uncertain).toBe(true);
+      expect(state.window?.probationEndsAt).toBeUndefined();
+      fleet.running.set(alias, 0);
+      yield* TestClock.adjust(10 * MINUTE);
+      yield* update.check;
+      expect(fleet.log).toEqual(["sync:home@2.90.0"]);
+      expect(fleet.holds).toBe(0);
+      expect(phases(yield* update.status)).toEqual([[null, "probation", undefined]]);
+    }),
+  );
   it.effect("releases the ceiling while a plan read is blocked and rejects its stale result", () =>
     Effect.gen(function* () {
       const disk = yield* FileSystem.FileSystem;
