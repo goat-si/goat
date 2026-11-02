@@ -28,6 +28,16 @@ import {
 } from "./tunnel.fixture.ts";
 
 const target = { alias: "devbox", hostname: "devbox", username: null, port: null };
+it("rejects relative dev node scripts before constructing a runner or launch", () => {
+  for (const nodeScriptPath of ["cli.mjs", "./cli.mjs", "../cli.mjs", "C:cli.mjs"]) {
+    const input = { nodeScriptPath };
+    assert.throws(() => SshTunnel.buildRemoteGoatRunnerScript(input), /absolute/i);
+    assert.throws(() => SshTunnel.buildRemoteLaunchScript(input), /absolute/i);
+  }
+  for (const nodeScriptPath of ["/opt/goat/cli.mjs", "C:\\goat\\cli.mjs"]) {
+    assert.include(SshTunnel.buildRemoteGoatRunnerScript({ nodeScriptPath }), nodeScriptPath);
+  }
+});
 const REMOTE_HOME = "/home/alex";
 const executableOf = (version: string) =>
   `${REMOTE_HOME}/.goat/runtime/goat/versions/${version}/goat`;
