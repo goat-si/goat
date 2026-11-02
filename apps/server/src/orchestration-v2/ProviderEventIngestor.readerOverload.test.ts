@@ -160,6 +160,8 @@ it.effect.each([false, true])(
       const path = yield* Path.Path;
       const directory = yield* fs.makeTempDirectoryScoped({ prefix: "ingestor-overload-" });
       yield* Effect.gen(function* () {
+        // Workers that exist before the first read are not reader slots.
+        const nonReaders = new Set(workers);
         const now = yield* DateTime.now;
         const sql = yield* SqlClient.SqlClient;
         const eventSink = yield* EventSink.EventSinkV2;
@@ -204,12 +206,41 @@ it.effect.each([false, true])(
           updated_at: string;
         }>`SELECT updated_at FROM orchestration_v2_projection_threads WHERE thread_id = ${threadId}`;
         yield* TestClock.adjust("5 seconds");
-        yield* sql`SELECT 1`.pipe(NodeSqliteClient.readOnly);
-        const reader = workers.at(-1)!;
+        // Start every reader slot so that no idle slot can drain the saturated admissions.
+        const warmRelease = yield* Deferred.make<void>();
+        const warmEntered = Array.from({ length: 4 }, () => Deferred.makeUnsafe<void>());
+        const warm = [];
+        for (const entered of warmEntered)
+          warm.push(
+            yield* Effect.forkChild(
+              sql
+                .withTransaction(
+                  Effect.gen(function* () {
+                    yield* sql`SELECT 1`;
+                    yield* Deferred.succeed(entered, undefined);
+                    yield* Deferred.await(warmRelease);
+                  }),
+                )
+                .pipe(NodeSqliteClient.readOnly),
+              { startImmediately: true },
+            ),
+          );
+        for (const entered of warmEntered) yield* Deferred.await(entered);
+        yield* Deferred.succeed(warmRelease, undefined);
+        for (const fiber of warm) yield* Fiber.join(fiber);
+        const readers = workers.filter((worker) => !nonReaders.has(worker));
+        assert.lengthOf(readers, 4);
         const sent = yield* Deferred.make<void>();
-        using held = vi.spyOn(reader, "postMessage").mockImplementation(() => {
-          Deferred.doneUnsafe(sent, Effect.void);
-        });
+        const held = readers.map((reader) =>
+          vi.spyOn(reader, "postMessage").mockImplementation(() => {
+            Deferred.doneUnsafe(sent, Effect.void);
+          }),
+        );
+        using _held = {
+          [Symbol.dispose]: () => {
+            for (const spy of held) spy.mockRestore();
+          },
+        };
         const reads = [];
         for (let index = 0; index < 64; index++)
           reads.push(
@@ -283,7 +314,7 @@ it.effect.each([false, true])(
         const writerFailure = yield* projection.isNodeStored(node).pipe(Effect.flip);
         assert.equal(writerFailure._tag, "ProjectionStoreReadError");
         assert.isFalse(NodeSqliteClient.isReaderAdmissionOverload(writerFailure));
-        held.mockRestore();
+        for (const spy of held) spy.mockRestore();
         for (const read of reads) yield* Fiber.interrupt(read);
         assert.equal(yield* events.latestSequence({ threadId }), sequence + 1);
         const unrelated = yield* projection.isNodeStored(node).pipe(Effect.flip);

@@ -456,6 +456,8 @@ const workerRecovery = vi.hoisted(() => ({
         point: "statement" | "initialize";
         codes: Array<number>;
         repeat?: boolean;
+        // Each reader slot's worker injects the codes on its own.
+        expected?: number;
       }
     | undefined,
   onFailure: undefined as ((errcode: number) => void) | undefined,
@@ -472,9 +474,8 @@ const withWorkerRecovery = <A, E, R>(
 ) =>
   Effect.suspend(() => {
     const failures: Array<number> = [];
-    const milestones = Array.from({ length: config.repeat ? 501 : config.codes.length }, () =>
-      Deferred.makeUnsafe<void>(),
-    );
+    const length = config.repeat ? 501 : (config.expected ?? config.codes.length);
+    const milestones = Array.from({ length }, () => Deferred.makeUnsafe<void>());
     return Effect.acquireUseRelease(
       Effect.sync(() => {
         workerRecovery.config = config;
@@ -535,26 +536,22 @@ it.effect("waits for reader statement recovery with each request's result mode",
   }),
 );
 
-it.effect("serializes a reader's recovery wait against another transaction and result mode", () =>
+it.effect("a slot's recovery wait does not hold back a read on another slot", () =>
   withWorkerRecovery({ point: "statement", codes: [261] }, (_, attempted) =>
     withReaderClient((sql) =>
       Effect.gen(function* () {
-        const select = sql`SELECT 42 AS recovery_value`;
-        const entered = yield* Deferred.make<void>();
-        const values = yield* select.values.pipe(SqliteClient.readOnly, Effect.forkChild);
+        const values = yield* sql`SELECT 42 AS recovery_value`.values.pipe(
+          SqliteClient.readOnly,
+          Effect.forkChild,
+        );
         yield* attempted();
-        const transaction = yield* sql
-          .withTransaction(
-            Effect.gen(function* () {
-              yield* Deferred.succeed(entered, undefined);
-              return yield* select;
-            }),
-          )
-          .pipe(SqliteClient.readOnly, Effect.forkChild({ startImmediately: true }));
-        assert.equal(yield* Deferred.isDone(entered), false);
+        // The clock has not advanced, so this completes only on a slot the recovery wait does not hold.
+        const other = yield* sql
+          .withTransaction(sql<{ readonly value: number }>`SELECT 7 AS value`)
+          .pipe(SqliteClient.readOnly);
+        assert.deepEqual(other, [{ value: 7 }]);
         yield* TestClock.adjust("10 millis");
         assert.deepEqual(yield* Fiber.join(values), [[42]]);
-        assert.deepEqual(yield* Fiber.join(transaction), [{ recovery_value: 42 }]);
       }),
     ),
   ),
@@ -665,23 +662,26 @@ it.effect("releases reader requests and connection permits when recovery is inte
   ),
 );
 
-it.effect("keeps concurrent reader acquires on one startup through WAL recovery", () => {
+it.effect("recovers startup once on each concurrently started reader slot", () => {
   const { warnings, layer: logs } = captureWarnings();
-  return withWorkerRecovery({ point: "initialize", codes: [261] }, (failures, attempted) =>
+  const config = { point: "initialize" as const, codes: [261], expected: 2 };
+  return withWorkerRecovery(config, (failures, attempted) =>
     withReaderClient((sql) =>
       Effect.gen(function* () {
         const before = startedWorkers.length;
         const first = yield* countEntries(sql).pipe(SqliteClient.readOnly, Effect.forkChild);
         yield* attempted();
+        // The first slot is still starting, so the second read starts the next slot.
         const second = yield* countEntries(sql).pipe(
           SqliteClient.readOnly,
           Effect.forkChild({ startImmediately: true }),
         );
+        yield* attempted(1);
         yield* TestClock.adjust("10 millis");
         assert.equal(yield* Fiber.join(first), 1);
         assert.equal(yield* Fiber.join(second), 1);
-        assert.deepEqual(failures, [261]);
-        assert.equal(startedWorkers.length, before + 1);
+        assert.deepEqual(failures, [261, 261]);
+        assert.equal(startedWorkers.length, before + 2);
         const error = yield* sql`INSERT INTO entries VALUES ('forbidden')`.pipe(
           SqliteClient.readOnly,
           Effect.flip,
