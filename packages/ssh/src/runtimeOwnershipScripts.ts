@@ -65,7 +65,7 @@ GOAT_WORDS
   windows_spawn_detached() {
     win_cwd=
     if [ -n "${"${USERPROFILE:-}"}" ]; then win_cwd="$(cygpath -u "$USERPROFILE" 2>/dev/null)" || win_cwd=; fi
-    if [ -z "$win_cwd" ] || [ ! -d "$win_cwd" ]; then
+    if [ -z "$win_cwd" ] || [ ! -d "$win_cwd" ] || ! (cd "$win_cwd") 2>/dev/null; then
       [ -n "${"${SystemDrive:-}"}" ] || return 1
       win_cwd="$(cygpath -u "$SystemDrive/")" || return 1
       [ -d "$win_cwd" ] || return 1
