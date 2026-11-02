@@ -4587,9 +4587,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   AND EXISTS (
                     SELECT 1 FROM orchestration_v2_projection_nodes AS node
                     WHERE node.thread_id = subagents.child_thread_id
-                      AND node.run_id IS NULL
+                      -- Matches nodes_live_idx; +run_id keeps thread_run_idx from scanning settled nodes.
+                      AND node.status IN ('pending', 'starting', 'running', 'waiting')
+                      AND +node.run_id IS NULL
                       AND node.kind = 'root_turn'
-                      AND node.status IN ('pending', 'running', 'waiting')
                   )
                 UNION
                 -- Native tasks need process-loss cleanup; remote tasks can outlive their run.
