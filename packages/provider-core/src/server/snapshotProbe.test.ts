@@ -1,6 +1,7 @@
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- exercises real directory search permission.
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- builds a native permission-test fixture path.
 import * as NodePath from "node:path";
 import { it } from "@effect/vitest";
 import { describe, expect } from "vite-plus/test";

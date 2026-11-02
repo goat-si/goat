@@ -117,6 +117,11 @@ function formatOpenCodeProbeError(input: {
   const spawnCwd = findSpawnCwd(input.cause);
   if (spawnCwd !== undefined) {
     const failure = classifySpawnFailure(input.cause, spawnCwd);
+    if (failure === "missing")
+      return {
+        installed: false,
+        message: "OpenCode CLI (`opencode`) is not installed or not on PATH.",
+      };
     const message = spawnFailureMessage(failure, spawnCwd, input.binaryPath);
     if (message) return { installed: true, message };
   }
