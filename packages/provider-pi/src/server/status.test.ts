@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as PlatformError from "effect/PlatformError";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Sink from "effect/Sink";
@@ -123,6 +124,28 @@ const settings = {
 } as const;
 
 describe("PiProvider", () => {
+  it.effect("uses the inherited spawn cwd instead of the project cwd to diagnose permissions", () =>
+    Effect.gen(function* () {
+      const spawner = ChildProcessSpawner.make(() =>
+        Effect.fail(
+          PlatformError.systemError({
+            _tag: "PermissionDenied",
+            module: "ChildProcess",
+            method: "spawn",
+            cause: { code: "EACCES" },
+          }),
+        ),
+      );
+      const snapshot = yield* checkPiProviderStatus(
+        settings,
+        {},
+        "/goat-test-missing-project-4381",
+      ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
+      assert.equal(snapshot.installed, true);
+      assert.include(snapshot.message ?? "", "permission");
+      assert.notInclude(snapshot.message ?? "", "goat-test-missing-project");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
   it.effect("requires the first published Pi version with entries and settlement hooks", () =>
     Effect.gen(function* () {
       const snapshot = yield* checkPiProviderStatus(settings).pipe(

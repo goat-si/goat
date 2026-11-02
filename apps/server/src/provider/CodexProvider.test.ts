@@ -8,8 +8,38 @@ import { checkCodexProviderStatus } from "./CodexProvider.ts";
 // Recorded from the pinned Codex 0.156.1 config/read in an isolated home.
 import nativeConfigRead from "./testFixtures/codexHomeConfigRead.0.156.1.json" with { type: "json" };
 import { assert, it } from "@effect/vitest";
+import { vi } from "vite-plus/test";
 
 import { applyPreferredCodexDefaultModel, mapCodexModelCapabilities } from "./CodexProvider.ts";
+
+it.effect.each([
+  { code: "EACCES", cwd: "/goat-test-missing-cwd-38401", installed: true },
+  { code: "ENOENT", cwd: "/goat-test-missing-cwd-38401", installed: true },
+  { code: "ENOENT", cwd: null, installed: false },
+  { code: "EACCES", cwd: null, installed: true },
+])("diagnoses Codex spawn $code for cwd $cwd", ({ code, cwd, installed }) =>
+  Effect.gen(function* () {
+    const fixture = yield* routeFixture({ role: "home" });
+    const spawnCwd = cwd ?? process.cwd();
+    using _cwd = vi.spyOn(process, "cwd").mockReturnValue(spawnCwd);
+    const snapshot = yield* checkCodexProviderStatus(
+      { ...fixture.input.settings, binaryPath: "/goat-test-missing-codex" },
+      () =>
+        Effect.fail(
+          new CodexErrors.CodexAppServerSpawnError({ command: "codex", cause: { code } }),
+        ),
+      {},
+    ).pipe(Effect.provideService(HomeRoute.OpenCodexRoute, fixture.service));
+    assert.equal(snapshot.installed, installed);
+    assert.equal(snapshot.status, "error");
+    if (cwd) {
+      assert.include(snapshot.message ?? "", cwd);
+      assert.include(snapshot.message ?? "", "cannot enter");
+      assert.notInclude(snapshot.message ?? "", "Binary path");
+    } else if (code === "ENOENT") assert.include(snapshot.message ?? "", "Binary path");
+    else assert.include(snapshot.message ?? "", "permission");
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
 
 it("maps current Codex model capability fields", () => {
   const capabilities = mapCodexModelCapabilities({
