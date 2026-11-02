@@ -140,15 +140,16 @@ it("replacement and rollback start at root when home is an executable file", asy
   roots.push(root);
   const home = NodePath.join(root, "home-file");
   NodeFS.writeFileSync(home, "", { mode: 0o700 });
-  const previous = process.env.HOME;
-  process.env.HOME = home;
+  const homeKey = HostProcess.Platform.defaultValue() === "win32" ? "USERPROFILE" : "HOME";
+  const previous = process.env[homeKey];
+  process.env[homeKey] = home;
   try {
     const { result, workingDirectories } = await superviseFailedReplacement("trial");
     assert.equal(result.status, "failed");
-    assert.deepEqual(workingDirectories, ["/", "/"]);
+    assert.deepEqual(workingDirectories, [NodePath.parse(home).root, NodePath.parse(home).root]);
   } finally {
-    if (previous === undefined) delete process.env.HOME;
-    else process.env.HOME = previous;
+    if (previous === undefined) delete process.env[homeKey];
+    else process.env[homeKey] = previous;
   }
 });
 

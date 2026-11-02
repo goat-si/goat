@@ -344,7 +344,7 @@ it.layer(NodeServices.layer)("SSH runtime auto-update", (it) => {
       const h = yield* makeHarness({ homeIsFile: true });
       yield* h.runtime.prepare(target);
       expect(yield* h.runtime.activate(target)).toBe("requested");
-      expect(h.state.launches[0]?.cwd).toBe("/");
+      expect(h.state.launches[0]?.cwd).toBe(NodePath.parse(h.home).root);
     }),
   );
 
