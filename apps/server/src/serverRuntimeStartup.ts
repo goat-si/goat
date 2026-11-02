@@ -12,6 +12,7 @@ import {
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import { sshHostsRefusal } from "@goat/ssh/hostAccess";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Console from "effect/Console";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -526,6 +527,27 @@ const runOrderedV2StartupPhases = Effect.fn("serverRuntimeStartup.runOrderedV2St
   },
 );
 
+const timedShutdownPhase = Effect.fn("serverRuntimeStartup.timedShutdownPhase")(function* <A, E, R>(
+  phase: string,
+  effect: Effect.Effect<A, E, R>,
+) {
+  const start = yield* Clock.monotonicTimeNanos;
+  yield* Effect.logInfo("Server shutdown phase started", { phase });
+  return yield* effect.pipe(
+    Effect.onExit((exit) =>
+      Effect.gen(function* () {
+        const durationMs = Number(((yield* Clock.monotonicTimeNanos) - start) / 1_000_000n);
+        const outcome = Exit.isSuccess(exit)
+          ? "success"
+          : Cause.hasInterruptsOnly(exit.cause)
+            ? "interrupted"
+            : "failure";
+        yield* Effect.logInfo("Server shutdown phase finished", { phase, durationMs, outcome });
+      }),
+    ),
+  );
+});
+
 const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: StartupOptions) {
   const serverConfig = yield* ServerConfig.ServerConfig;
   const keybindings = yield* Keybindings.Keybindings;
@@ -556,12 +578,16 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
       );
       const workerFiber = yield* Ref.getAndSet(effectWorkerFiber, null);
       if (workerFiber !== null) {
-        yield* Fiber.interrupt(workerFiber).pipe(Effect.ignore);
+        yield* timedShutdownPhase("effectWorker", Fiber.interrupt(workerFiber).pipe(Effect.ignore));
       }
-      yield* providerRuntimeRecovery.prepareForShutdown.pipe(
-        Effect.ensuring(providerSessions.shutdown),
+      yield* timedShutdownPhase(
+        "prepareForShutdown",
+        providerRuntimeRecovery.prepareForShutdown,
+      ).pipe(Effect.ensuring(timedShutdownPhase("providerSessions", providerSessions.shutdown)));
+      const reconciliation = yield* timedShutdownPhase(
+        "reconcile",
+        providerRuntimeRecovery.reconcile("shutdown"),
       );
-      const reconciliation = yield* providerRuntimeRecovery.reconcile("shutdown");
       yield* Effect.logInfo("V2 orchestration shutdown reconciliation completed", reconciliation);
     }).pipe(
       Effect.catchCause((cause) =>
