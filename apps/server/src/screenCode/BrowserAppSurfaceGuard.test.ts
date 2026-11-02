@@ -345,13 +345,16 @@ describe("browser surface reads", () => {
     for (const bound of [
       holder(chromeState(), false),
       holder(chromeState({ degraded: true })),
-      holder(chromeState({ tree_markdown: "" })),
-      holder(chromeState({}, { 0: { role: "AXSheet" } })),
-      holder(chromeState({}, { 1: { parent_index: 4 } })),
+      holder(chromeState({}, { 1: { role: "AXLink" } })),
+      holder(chromeState({}, { 1: { parent_index: 6 } })),
     ]) {
       expect(verdict(bound, "click", 1)).toBe("unverified_target");
       expect(verdict(bound, "click", 3)).toBe("web_content");
     }
+    // Without tree text nothing shows the web area the driver's parent_index skips.
+    expect(verdict(holder(chromeState({ tree_markdown: "" })), "click", 3)).toBe(
+      "unverified_target",
+    );
     // The sheet comes from the driver's own parent_index, so a partial read still reaches it.
     expect(verdict(holder(chromeState(), false), "click", 5)).toBeUndefined();
   });
