@@ -197,6 +197,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
   | Scope.Scope
 > {
   const parentScope = yield* Scope.Scope;
+  const runsScope = yield* Scope.make("sequential");
   const fileSystem = yield* FileSystem.FileSystem;
   const backendOutputLogFactory = yield* DesktopObservability.DesktopBackendOutputLogFactory;
   const backendOutputLog = yield* backendOutputLogFactory.forInstance(spec.id);
@@ -506,12 +507,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
                         details: `${details} (the desktop sends SIGKILL if the server has not exited ${Duration.toMillis(DEFAULT_BACKEND_TERMINATE_GRACE)}ms after SIGTERM)`,
                       });
                     } else {
-                      yield* backendOutputLog.recordStop({
-                        message: "backend stopped",
-                        level: "INFO",
-                        details,
-                      });
-                      yield* backendOutputLog.discardSession;
+                      yield* backendOutputLog.persistStopOutput({ details });
                     }
                   } else if (exitObserved && !stopRequested) {
                     yield* backendOutputLog.persistFailure({
@@ -566,14 +562,17 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
             },
           ),
           onStarted: Effect.fn("desktop.backendInstance.onStarted")(function* (pid) {
-            yield* updateActiveRun(runId, (run) => ({
-              ...run,
-              pid: Option.some(pid),
-            }));
-            yield* startupFailure.reset;
-            yield* backendOutputLog.beginSession({
-              details: `pid=${pid} port=${config.value.bootstrap.port} cwd=${config.value.cwd}`,
-            });
+            yield* mutex.withPermits(1)(
+              Effect.gen(function* () {
+                yield* updateActiveRun(runId, (run) => ({ ...run, pid: Option.some(pid) }));
+                yield* startupFailure.reset;
+                yield* backendOutputLog.beginSession({
+                  details: `pid=${pid} port=${config.value.bootstrap.port} cwd=${config.value.cwd}`,
+                });
+                const active = Option.getOrUndefined((yield* Ref.get(state)).active);
+                if (active?.id === runId && active.stopRequested) yield* backendOutputLog.markStop;
+              }),
+            );
           }),
           onExitObserved: Effect.fn("desktop.backendInstance.onExitObserved")(function* () {
             const exitAtNanos = yield* Clock.monotonicTimeNanos;
@@ -673,7 +672,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
           Effect.ensuring(Scope.close(runScope, Exit.void).pipe(Effect.ignore)),
         );
 
-        const fiber = yield* Effect.forkIn(program, parentScope);
+        const fiber = yield* Effect.forkIn(program, runsScope);
         yield* updateActiveRun(runId, (run) => ({
           ...run,
           fiber: Option.some(fiber),
@@ -789,6 +788,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
         });
         const run = Option.getOrUndefined(result.active);
         if (run && result.newStopRequest) {
+          yield* backendOutputLog.markStop;
           yield* backendOutputLog.recordStop({
             message: "backend stop requested",
             level: "INFO",
@@ -811,7 +811,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
       // The enclosing operation owns the span for this inline handler.
       onSome: Effect.fnUntraced(function* (run) {
         const waitStarted = yield* Clock.monotonicTimeNanos;
-        const closed = yield* closeRun(run, parentScope, options);
+        const closed = yield* closeRun(run, runsScope, options);
         if (!closed) {
           const waitedMs = Number(((yield* Clock.monotonicTimeNanos) - waitStarted) / 1_000_000n);
           yield* backendOutputLog.recordStop({
@@ -900,7 +900,9 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
       }) ?? Effect.void
     );
   });
-  yield* Effect.addFinalizer(() => stop("instance-closed"));
+  yield* Effect.addFinalizer(() =>
+    stop("instance-closed").pipe(Effect.ensuring(Scope.close(runsScope, Exit.void))),
+  );
 
   return {
     id: spec.id,

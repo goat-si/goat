@@ -39,6 +39,8 @@ function layerPool(labelRef: Ref.Ref<string>): Layer.Layer<DesktopBackendPool.De
           forInstance: () =>
             Effect.succeed({
               recordStop: () => Effect.void,
+              markStop: Effect.void,
+              persistStopOutput: () => Effect.void,
               beginSession: () => Effect.void,
               writeOutputChunk: () => Effect.void,
               persistFailureSnapshot: () => Effect.void,

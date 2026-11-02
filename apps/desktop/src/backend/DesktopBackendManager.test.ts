@@ -25,6 +25,7 @@ import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import * as DesktopBackendManager from "./DesktopBackendManager.ts";
+import { registerBackendStopTests } from "./DesktopBackendStopTestHelpers.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
 import * as DesktopTelemetryPublisher from "../telemetry/DesktopTelemetryPublisher.ts";
 import * as DesktopBrowserHost from "../preview/DesktopBrowserHost.ts";
@@ -69,7 +70,7 @@ const configWithObservability: DesktopBackendBootstrapValue = {
   otlpTracesUrl: "http://127.0.0.1:4318/v1/traces",
 };
 
-function makeProcess(options?: {
+export function makeProcess(options?: {
   readonly stdout?: Stream.Stream<Uint8Array, PlatformError.PlatformError>;
   readonly stderr?: Stream.Stream<Uint8Array, PlatformError.PlatformError>;
   readonly exitCode?: Effect.Effect<ChildProcessSpawner.ExitCode, PlatformError.PlatformError>;
@@ -138,9 +139,11 @@ interface MakeInstanceInput {
   readonly pruneRuntimes?: (distro: string | null, runtimeId: string) => Effect.Effect<void>;
 }
 
-function makeTestInstance(input: MakeInstanceInput) {
+export function makeTestInstance(input: MakeInstanceInput) {
   const stubLog: DesktopObservability.DesktopBackendOutputLogShape = {
     recordStop: () => Effect.void,
+    markStop: Effect.void,
+    persistStopOutput: () => Effect.void,
     beginSession: () => Effect.void,
     writeOutputChunk: () => Effect.void,
     persistFailureSnapshot: () => Effect.void,
@@ -204,10 +207,11 @@ function makeTestInstance(input: MakeInstanceInput) {
 }
 
 describe("DesktopBackendManager", () => {
+  registerBackendStopTests({ makeTestInstance, makeProcess });
   it.effect.each([
     ["a requested stop that exits cleanly records reason and elapsed", false],
     ["stop with a timeout equal to the grace records that it gave up", true],
-  ] as const)("%s", (_name, timeout) =>
+  ] as const)("%s", ([_name, timeout]) =>
     Effect.scoped(
       Effect.gen(function* () {
         const started = yield* Deferred.make<void>();
@@ -215,7 +219,7 @@ describe("DesktopBackendManager", () => {
         const release = yield* Deferred.make<void>();
         const exited = yield* Deferred.make<void>();
         const records: Array<{ message: string; details: string }> = [];
-        let discarded = 0;
+        let stoppedDetails = "";
         const spawnerLayer = Layer.succeed(
           ChildProcessSpawner.ChildProcessSpawner,
           ChildProcessSpawner.make(() =>
@@ -243,9 +247,10 @@ describe("DesktopBackendManager", () => {
               Effect.sync(() => {
                 records.push(record);
               }),
-            discardSession: Effect.sync(() => {
-              discarded += 1;
-            }),
+            persistStopOutput: ({ details }: { details: string }) =>
+              Effect.sync(() => {
+                stoppedDetails = details;
+              }),
           },
         });
         yield* instance.start;
@@ -275,15 +280,8 @@ describe("DesktopBackendManager", () => {
             ),
           );
         } else {
-          assert.isTrue(
-            records.some(
-              (record) =>
-                record.message === "backend stopped" &&
-                record.details.includes("reason=recovery-stop") &&
-                record.details.includes("2000ms"),
-            ),
-          );
-          assert.equal(discarded, 1);
+          assert.include(stoppedDetails, "reason=recovery-stop");
+          assert.include(stoppedDetails, "2000ms");
         }
       }),
     ),
@@ -568,9 +566,10 @@ describe("DesktopBackendManager", () => {
               Effect.sync(() => {
                 persistedFailureCount += 1;
               }),
-            discardSession: Effect.sync(() => {
-              discardedSessionCount += 1;
-            }),
+            persistStopOutput: () =>
+              Effect.sync(() => {
+                discardedSessionCount += 1;
+              }),
           },
           desktopTelemetryPublisher: {
             removeControlSource: () =>
@@ -804,12 +803,16 @@ describe("DesktopBackendManager", () => {
           spawnerLayer: Layer.succeed(
             ChildProcessSpawner.ChildProcessSpawner,
             ChildProcessSpawner.make(() =>
-              Effect.succeed(
-                makeProcess({
+              Effect.gen(function* () {
+                const exited = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
+                yield* Effect.addFinalizer(() =>
+                  Deferred.succeed(exited, ChildProcessSpawner.ExitCode(0)),
+                );
+                return makeProcess({
                   stderr: Stream.make(new TextEncoder().encode("Server bootstrap stalled")),
-                  exitCode: Effect.never,
-                }),
-              ),
+                  exitCode: Deferred.await(exited),
+                });
+              }),
             ),
           ),
           httpClientLayer: layerHttpClient(() =>
