@@ -75,6 +75,7 @@ import {
 import { makeExistingServerRoutes, type ExistingServerRouteShape } from "./existingServer.ts";
 import { makeRemoteScripts, type RuntimeExecutableShape } from "./runtimeExecutable.ts";
 import {
+  absoluteRemoteNodeScriptPath,
   applyScriptPlaceholders,
   decodeRemoteJsonOutput,
   isNodeScriptRunner,
@@ -1200,7 +1201,6 @@ export class SshInvalidArchiveVersionError extends Schema.TaggedError<SshInvalid
 // metacharacters beyond what SemVer allows.
 const EXACT_ARCHIVE_VERSION =
   /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
-
 export class SshMissingRunnerError extends Schema.TaggedError<SshMissingRunnerError>()(
   "SshMissingRunnerError",
   {},
@@ -1211,7 +1211,7 @@ export class SshMissingRunnerError extends Schema.TaggedError<SshMissingRunnerEr
 }
 
 export function buildRemoteGoatRunnerScript(input?: RemoteGoatRunnerOptions): string {
-  const nodeScriptPath = input?.nodeScriptPath?.trim() || "";
+  const nodeScriptPath = absoluteRemoteNodeScriptPath(input);
   const archiveVersion = input?.archiveVersion?.trim() || "";
   if (nodeScriptPath === "" && archiveVersion === "") {
     throw new SshMissingRunnerError();

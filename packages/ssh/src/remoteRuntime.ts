@@ -200,6 +200,14 @@ export function isNodeScriptRunner(runner: RemoteGoatRunnerOptions | undefined):
   return Boolean(runner?.nodeScriptPath?.trim());
 }
 
+export function absoluteRemoteNodeScriptPath(runner: RemoteGoatRunnerOptions | undefined): string {
+  const path = runner?.nodeScriptPath?.trim() || "";
+  if (path && !/^(?:\/|[a-z]:[\\/]|\\\\)/i.test(path)) {
+    throw new Error("The remote node script path must be absolute.");
+  }
+  return path;
+}
+
 export interface SshRuntimeProgress {
   readonly target: DesktopSshEnvironmentTarget;
   readonly phase: SshRuntimePhase;
