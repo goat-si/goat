@@ -2,6 +2,7 @@ import {
   CHANNEL_GATEWAY_WS_METHODS,
   type ChannelBotRef,
   type ChannelIngestInput,
+  type ChatAttachment,
   SLACK_CHANNEL_WS_METHODS,
 } from "@goat/contracts";
 import { Atom } from "effect/reactivity";
@@ -81,6 +82,8 @@ export function createChannelEnvironmentAtoms<R, E>(
 export function goatBotIngestInput(input: {
   readonly bot: ChannelBotRef;
   readonly text: string;
+  /** Uploads this server already holds; the gateway refuses any other file. */
+  readonly attachments?: ReadonlyArray<ChatAttachment>;
   readonly clientMessageId: string;
   readonly receivedAt: string;
 }): ChannelIngestInput {
@@ -97,7 +100,7 @@ export function goatBotIngestInput(input: {
       threadId: input.bot.threadId,
     },
     text: input.text,
-    attachments: [],
+    attachments: input.attachments ?? [],
     receivedAt: input.receivedAt,
     intent: "message",
   };

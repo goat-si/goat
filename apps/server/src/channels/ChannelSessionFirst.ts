@@ -22,7 +22,7 @@ import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelWake from "./ChannelWake.ts";
 import { resolveSessionRun } from "./channelBotSessionRuns.ts";
-import { CHANNEL_COPY } from "./channelCopy.ts";
+import { CHANNEL_COPY, inboundTextWithFiles } from "./channelCopy.ts";
 import { deliveryIdFor, taskIdFor } from "./channelIds.ts";
 import { isSessionClaim, sealedSessionLine, sessionClaim } from "./channelSessionReceipt.ts";
 import { makeCreatedTasks } from "./channelTaskWrites.ts";
@@ -203,7 +203,7 @@ const make = Effect.gen(function* () {
         title:
           stored.message.text.trim().split(/\s+/u).slice(0, 12).join(" ").slice(0, 120) ||
           "Request",
-        instruction: stored.message.text,
+        instruction: inboundTextWithFiles(stored.message),
       },
       inputId,
       conversationId: stored.snapshot.conversationId,

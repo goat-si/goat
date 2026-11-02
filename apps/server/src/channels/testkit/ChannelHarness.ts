@@ -6,7 +6,6 @@
  *
  * @module ChannelHarness
  */
-import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   type ChannelIngestInput,
   type ChannelOutboundMessage,
@@ -38,7 +37,6 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 
-import * as ServerConfig from "../../config.ts";
 import * as UsageLimitSources from "../../usage/UsageLimitSources.ts";
 import * as ServerEnvironment from "../../environment/ServerEnvironment.ts";
 import * as MemoryService from "../../memory/MemoryService.ts";
@@ -64,6 +62,7 @@ import * as TerminalManager from "../../terminal/Manager.ts";
 import * as ProviderRegistryMock from "../../provider/testUtils/providerRegistryMock.ts";
 import * as ProviderInstanceRegistry from "../../provider/ProviderInstanceRegistry.ts";
 import * as ServerSettings from "../../serverSettings.ts";
+import * as AttachmentLifecycle from "../../assets/AttachmentLifecycle.testkit.ts";
 import * as SshRemoteDispatch from "../../sshRemote/SshRemoteDispatch.ts";
 import * as TextGeneration from "../../textGeneration/TextGeneration.ts";
 import * as ChannelGateway from "../ChannelGateway.ts";
@@ -751,10 +750,8 @@ export function makeHarness(
     }),
     layerSettings,
   ).pipe(
-    Layer.provideMerge(
-      ServerConfig.layerTest(process.cwd(), { prefix: "goat-channel-scenarios-" }),
-    ),
-    Layer.provideMerge(NodeServices.layer),
+    // Server config, platform services, and the attachment files the gateway claims into.
+    Layer.provideMerge(AttachmentLifecycle.layerFilesAt(process.cwd(), "goat-channel-scenarios-")),
   );
 
   const layerLaunchDependencies = Layer.mergeAll(

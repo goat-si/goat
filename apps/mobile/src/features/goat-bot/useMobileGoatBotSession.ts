@@ -36,13 +36,14 @@ import {
 } from "react";
 
 import { environmentCatalog } from "../../connection/catalog";
+import type { DraftComposerAttachment } from "../../lib/composerImages";
 import { uuidv4 } from "../../lib/uuid";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { channelEnvironment } from "../../state/channels";
 import { updateMobilePreferencesAtom } from "../../state/preferences";
 import { environmentThreadDetails } from "../../state/threads";
 import { useThreadVisibleTurnItems } from "../../state/use-thread-detail";
-import { useThreadShell } from "../../state/entities";
+import { useServerConfigs, useThreadShell } from "../../state/entities";
 import { useEnvironmentShellReadiness } from "../../state/shell";
 import { useReplying } from "./useReplying";
 import { useMobileGoatBotHomeMode } from "./useMobileGoatBotHomeMode";
@@ -61,7 +62,7 @@ interface Session {
   readonly bot: ChannelBotRef | null;
   readonly connected: boolean;
   readonly canOperate: boolean;
-  readonly queue: ReturnType<typeof createGoatBotSendQueue>;
+  readonly queue: ReturnType<typeof createGoatBotSendQueue<DraftComposerAttachment>>;
   readonly pending: ReadonlyArray<GoatBotPendingInput>;
 }
 
@@ -82,7 +83,9 @@ function update(environmentId: EnvironmentId, session: Session) {
 }
 
 function newSession(environmentId: EnvironmentId): Session {
-  const queue = createGoatBotSendQueue({
+  // A message's uploads, by its key, so a retry names the same files as the first attempt.
+  const uploads = new Map<string, ReadonlyArray<DraftComposerAttachment>>();
+  const queue = createGoatBotSendQueue<DraftComposerAttachment>({
     makeKey: uuidv4,
     onChange: () => {
       const current = sessions.get(environmentId);
@@ -98,7 +101,7 @@ function newSession(environmentId: EnvironmentId): Session {
         current.bot.threadId === bot.threadId
       );
     },
-    send: async ({ clientKey, text, receivedAt, bot }) => {
+    send: async ({ clientKey, text, attachments, receivedAt, bot }) => {
       const fullBot = sessions.get(environmentId)?.bot;
       if (
         !fullBot ||
@@ -107,11 +110,40 @@ function newSession(environmentId: EnvironmentId): Session {
       ) {
         throw new Error("GOAT Bot isn't available");
       }
+      // Upload code loads only for messages that carry files.
+      const files =
+        attachments.length === 0
+          ? []
+          : await (
+              await import("./goatBotAttachments")
+            ).uploadGoatBotAttachments({
+              environmentId,
+              attachments: uploads.get(clientKey) ?? attachments,
+              remember: (uploaded) => uploads.set(clientKey, uploaded),
+            });
       const result = await runAtomCommand(appAtomRegistry, channelEnvironment.ingest, {
         environmentId,
-        input: goatBotIngestInput({ bot: fullBot, text, clientMessageId: clientKey, receivedAt }),
+        input: goatBotIngestInput({
+          bot: fullBot,
+          text,
+          attachments: files,
+          clientMessageId: clientKey,
+          receivedAt,
+        }),
       });
       if (result._tag === "Failure") throw squashAtomCommandFailure(result);
+      if (attachments.length > 0) {
+        // The server keeps its own copy once it has the message; the local files can go.
+        const sent = uploads.get(clientKey) ?? attachments;
+        uploads.delete(clientKey);
+        void import("../../state/use-composer-drafts")
+          .then(({ releaseUnusedComposerAttachmentFiles }) =>
+            releaseUnusedComposerAttachmentFiles(sent),
+          )
+          .catch((error) =>
+            console.warn("[goat-bot] could not release sent attachment files", error),
+          );
+      }
       return {
         requestKey: result.value.inputId,
         ...(result.value.state === "rejected"
@@ -434,10 +466,17 @@ export function useMobileGoatBotSession(visible: boolean) {
       : resolved.kind;
   const canSend =
     visible && homeReady && canSendToGoatBot(resolved, canOperate) && confirmedBot !== null;
+  const configs = useServerConfigs();
+  const capabilities =
+    environmentId === null ? undefined : configs.get(environmentId)?.environment.capabilities;
+  const attachmentSupport =
+    capabilities?.goatBotAttachments === true && capabilities.attachmentUploads === true
+      ? { maxUploadBytes: capabilities.fileAttachments?.maxUploadBytes ?? null }
+      : null;
   const onSend = useCallback(
-    (text: string) => {
-      if (!canSend || !confirmedBot || !text.trim()) return false;
-      queue?.submit(text.trim(), confirmedBot);
+    (text: string, attachments: ReadonlyArray<DraftComposerAttachment> = []) => {
+      if (!canSend || !confirmedBot || (!text.trim() && attachments.length === 0)) return false;
+      queue?.submit(text.trim(), confirmedBot, attachments);
       return true;
     },
     [canSend, confirmedBot, queue],
@@ -466,6 +505,8 @@ export function useMobileGoatBotSession(visible: boolean) {
     replyingSince,
     activity,
     canSend,
+    /** Null when this server's GOAT Bot cannot take files. */
+    attachmentSupport,
     availability,
     homeKnown: resolved.kind === "home_offline" ? resolved.known : false,
     homeLabel: resolved.kind === "home_offline" ? resolved.label : null,

@@ -19,6 +19,12 @@ import { NativeScrollView } from "../../native/NativeScrollViewMarker";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { IOS_NAV_BAR_HEIGHT } from "../../lib/layoutMetrics";
+import type { DraftComposerAttachment } from "../../lib/composerImages";
+import {
+  GoatBotAttachButton,
+  GoatBotAttachmentStrip,
+  releaseGoatBotAttachments,
+} from "./GoatBotComposerAttachments";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import { useSelectWorkspaceDetail } from "../workspace/useSelectWorkspaceDetail";
 import { useRemoteConnectionStatus } from "../../state/use-remote-environment-registry";
@@ -216,9 +222,22 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
       <View className="items-end gap-1" style={{ marginTop: layout.marginTop }}>
         <GoatBotBubble side="out" tail={layout.tail}>
           {(textColor) => (
-            <Text selectable style={{ color: textColor, ...bodyText }}>
-              {row.text}
-            </Text>
+            <View className="gap-1">
+              {row.text ? (
+                <Text selectable style={{ color: textColor, ...bodyText }}>
+                  {row.text}
+                </Text>
+              ) : null}
+              {row.attachments?.map((file) => (
+                <Text
+                  key={file.id}
+                  numberOfLines={1}
+                  style={{ color: textColor, opacity: 0.85, ...bodyText }}
+                >
+                  {(file.type === "image" ? "Photo · " : "File · ") + file.name}
+                </Text>
+              ))}
+            </View>
           )}
         </GoatBotBubble>
         {row.showReceipt || delivery.state === "failed" ? (
@@ -372,6 +391,7 @@ export function GoatBotScreen(props: {
   // conversation by the header height and its last message starts below the composer's top.
   const listTopInset = hasBanner || homeError ? 0 : topInset;
   const [text, setText] = useState("");
+  const [attachments, setAttachments] = useState<ReadonlyArray<DraftComposerAttachment>>([]);
   const [inputHeight, setInputHeight] = useState(44);
   const inputMaxHeight = goatBotInputMaxHeight(useWindowDimensions().height);
   const renderItem = useCallback(
@@ -394,11 +414,18 @@ export function GoatBotScreen(props: {
     ],
   );
   const send = () => {
-    if (session.onSend(text)) {
+    if (session.onSend(text, attachments)) {
       setText("");
+      setAttachments([]);
       setInputHeight(44);
     }
   };
+  const support = session.attachmentSupport;
+  const removeAttachment = (id: string) => {
+    releaseGoatBotAttachments(attachments.filter((attachment) => attachment.id === id));
+    setAttachments((current) => current.filter((attachment) => attachment.id !== id));
+  };
+  const canSubmit = session.canSend && (text.trim().length > 0 || attachments.length > 0);
   return (
     <KeyboardAvoidingView className="flex-1 bg-screen" automaticOffset behavior="height">
       {hasBanner ? (
@@ -471,50 +498,65 @@ export function GoatBotScreen(props: {
         }
       />
       <Animated.View
-        className="flex-row items-end gap-2 border-t border-border px-4 pt-2"
+        className="gap-2 border-t border-border px-4 pt-2"
         style={composerPaddingStyle}
       >
-        <TextInput
-          accessibilityLabel="Message GOAT Bot"
-          placeholder="Message GOAT Bot"
-          placeholderTextColorClassName="accent-placeholder"
-          value={text}
-          onChangeText={setText}
-          multiline
-          editable={session.canSend}
-          onContentSizeChange={(event) =>
-            setInputHeight(Math.min(160, Math.max(44, event.nativeEvent.contentSize.height)))
-          }
-          className="flex-1 px-3 py-2 text-foreground"
-          style={{
-            height: Math.min(inputHeight, inputMaxHeight),
-            minHeight: 44,
-            borderRadius: 22,
-            borderWidth: 0.5,
-            borderColor: themeAppearance === "light" ? "#C6C6C8" : "#545458",
-            backgroundColor: themeAppearance === "light" ? "#F2F2F7" : "#1C1C1E",
-            ...bodyText,
-          }}
+        <GoatBotAttachmentStrip
+          environmentId={session.historyEnvironmentId}
+          attachments={attachments}
+          onRemove={removeAttachment}
         />
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Send message"
-          disabled={!session.canSend || !text.trim()}
-          onPress={send}
-          className="items-center justify-center"
-          style={{
-            width: 44,
-            height: 44,
-            opacity: session.canSend && text.trim() ? 1 : 0.45,
-          }}
-        >
-          <View
+        <View className="flex-row items-end gap-2">
+          {support ? (
+            <GoatBotAttachButton
+              disabled={!session.canSend}
+              existingCount={attachments.length}
+              maxUploadBytes={support.maxUploadBytes}
+              onPicked={(picked) => setAttachments((current) => [...current, ...picked])}
+            />
+          ) : null}
+          <TextInput
+            accessibilityLabel="Message GOAT Bot"
+            placeholder="Message GOAT Bot"
+            placeholderTextColorClassName="accent-placeholder"
+            value={text}
+            onChangeText={setText}
+            multiline
+            editable={session.canSend}
+            onContentSizeChange={(event) =>
+              setInputHeight(Math.min(160, Math.max(44, event.nativeEvent.contentSize.height)))
+            }
+            className="flex-1 px-3 py-2 text-foreground"
+            style={{
+              height: Math.min(inputHeight, inputMaxHeight),
+              minHeight: 44,
+              borderRadius: 22,
+              borderWidth: 0.5,
+              borderColor: themeAppearance === "light" ? "#C6C6C8" : "#545458",
+              backgroundColor: themeAppearance === "light" ? "#F2F2F7" : "#1C1C1E",
+              ...bodyText,
+            }}
+          />
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Send message"
+            disabled={!canSubmit}
+            onPress={send}
             className="items-center justify-center"
-            style={{ width: 28, height: 28, borderRadius: 14, backgroundColor: outgoingColor }}
+            style={{
+              width: 44,
+              height: 44,
+              opacity: canSubmit ? 1 : 0.45,
+            }}
           >
-            <Text className="text-xl font-semibold text-white">↑</Text>
-          </View>
-        </Pressable>
+            <View
+              className="items-center justify-center"
+              style={{ width: 28, height: 28, borderRadius: 14, backgroundColor: outgoingColor }}
+            >
+              <Text className="text-xl font-semibold text-white">↑</Text>
+            </View>
+          </Pressable>
+        </View>
       </Animated.View>
     </KeyboardAvoidingView>
   );
