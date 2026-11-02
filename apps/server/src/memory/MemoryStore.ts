@@ -443,7 +443,9 @@ const make = Effect.gen(function* () {
     loadAggregate: (space, id, payloads, history) =>
       transact(loadAggregate(space, id, payloads, history)),
     apply: (decision) =>
-      decision.admission.kind === "hubAdmission" && decision.operation.kind !== "forget"
+      // A forget within its reservation never grows the checkpoint bound, so only
+      // suppressions the hub did not reserve can meet this budget.
+      decision.admission.kind === "hubAdmission"
         ? transact(withHubBudget(applyDecision(decision)))
         : applyDecision(decision),
     reconnectParked: (decision, generation) => applyDecision(decision, generation),

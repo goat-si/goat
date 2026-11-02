@@ -26,6 +26,10 @@ export const checkpointBoundSql = (bytes: string, rows: string) =>
 // MemoryHubCheckpointBound.test.ts), plus suppressions the local forget keeps within reserve_bytes
 // minus the core. Removed live records are not credited, so live + reserve bounds the result.
 export const FORGET_RECORDS_MAX_BYTES = 6 * M.MEMORY_IDENTITY_CORE_MAX_BYTES;
+/** Hub membership enforces the environment id bound FORGET_RECORDS_MAX_BYTES assumes. */
+export const environmentIdFitsForgetRecords = (environmentId: string) =>
+  new TextEncoder().encode(JSON.stringify(environmentId)).length <=
+  M.MEMORY_IDENTITY_CORE_MAX_BYTES;
 export const futureForgetReserve = (reserveBytes: number, keys: number) => ({
   bytes: Math.max(0, reserveBytes - M.MEMORY_IDENTITY_CORE_MAX_BYTES) + FORGET_RECORDS_MAX_BYTES,
   rows: keys + 8,

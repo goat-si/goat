@@ -268,20 +268,26 @@ export const makeApplyDecision = (
             }>`INSERT INTO memory_events (protocol_version,memory_space_id,memory_id,operation_id,kind,origin_environment_id,operation_digest,metadata_json,receipt_json,created_at) VALUES (1,${op.memorySpaceId},${op.memoryId},${op.operationId},${op.kind},${op.originEnvironmentId},${decision.operationDigest},${eventMetadata},${eventReceipt},${op.kind === "forget" ? Date.parse(op.tombstone.deletedAtUtc) : Date.parse(op.revision.createdAtUtc)}) RETURNING sequence`,
           );
         const watermark = yield* nextWatermark(op.memorySpaceId);
+        // Every accepted revision renews the reservation: later evidence must stay deletable.
+        const reservation =
+          !reconnect && accepted && !tombstones.length && op.kind !== "forget"
+            ? yield* reservationForRevisions(
+                op,
+                (yield* loadAggregate(
+                  op.memorySpaceId,
+                  op.memoryId,
+                  { when: hasSourceEvidence },
+                  {},
+                )).revisions,
+                false,
+              )
+            : { bytes: 0, keys: 0 };
+        if (!reconnect && !decision.identity && reservation.keys + reservation.bytes > 0)
+          yield* stored(
+            "identity-reservation",
+            sql`UPDATE memory_identity_ledger SET reserve_bytes=max(reserve_bytes,${M.MEMORY_IDENTITY_CORE_MAX_BYTES + reservation.bytes}),reserve_keys=max(reserve_keys,${reservation.keys}) WHERE space=${op.memorySpaceId} AND memory_id=${op.memoryId} AND (reserve_bytes<${M.MEMORY_IDENTITY_CORE_MAX_BYTES + reservation.bytes} OR reserve_keys<${reservation.keys}) AND NOT EXISTS (SELECT 1 FROM memory_tombstones t WHERE t.space=memory_identity_ledger.space AND t.memory_id=memory_identity_ledger.memory_id)`,
+          );
         if (!reconnect && decision.identity) {
-          const reservation =
-            accepted && !tombstones.length && op.kind !== "forget"
-              ? yield* reservationForRevisions(
-                  op,
-                  (yield* loadAggregate(
-                    op.memorySpaceId,
-                    op.memoryId,
-                    { when: hasSourceEvidence },
-                    {},
-                  )).revisions,
-                  false,
-                )
-              : { bytes: 0, keys: 0 };
           yield* stored(
             "identity",
             sql`INSERT INTO memory_identity_ledger (space,memory_id,identity_json,fence_json,reserve_bytes,reserve_keys) VALUES (${op.memorySpaceId},${op.memoryId},${yield* identityCodec.encode(decision.identity)},${yield* fenceCodec.encode(decision.fence ?? { memorySpaceId: op.memorySpaceId, memoryId: op.memoryId, highestFencingToken: 0, activeLease: null })},${M.MEMORY_IDENTITY_CORE_MAX_BYTES + reservation.bytes},${reservation.keys}) ON CONFLICT(space,memory_id) DO UPDATE SET reserve_bytes=max(memory_identity_ledger.reserve_bytes,excluded.reserve_bytes),reserve_keys=max(memory_identity_ledger.reserve_keys,excluded.reserve_keys) WHERE NOT EXISTS (SELECT 1 FROM memory_tombstones t WHERE t.space=excluded.space AND t.memory_id=excluded.memory_id)`,

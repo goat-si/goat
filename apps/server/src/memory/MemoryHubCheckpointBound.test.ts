@@ -359,3 +359,103 @@ it.effect(
       }
     }).pipe(Effect.provide(layer)),
 );
+
+/** Fills checkpoint staging to its limit with a pinned publication, as a busy hub would. */
+const fillStaging = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const current = (yield* usage).stagingBytes;
+  yield* sql`INSERT INTO memory_hub_retention(space,published_pinned_bytes) VALUES (${space},${M.MEMORY_CHECKPOINT_STAGING_MAX_BYTES - current}) ON CONFLICT(space) DO UPDATE SET published_pinned_bytes=published_pinned_bytes+excluded.published_pinned_bytes`;
+  assert.strictEqual((yield* usage).stagingBytes, M.MEMORY_CHECKPOINT_STAGING_MAX_BYTES);
+});
+const messages = (prefix: string, count: number) =>
+  Array.from({ length: count }, (_, n) => `${prefix}-${n}`);
+
+it.effect(
+  "regression: at full staging a reserved deletion succeeds and unreserved suppressions are refused",
+  () =>
+    Effect.gen(function* () {
+      yield* join;
+      yield* admit(upsert({ memory: 40, operation: 41, text: "a", messages: ["a-0"] }));
+      yield* admit(upsert({ memory: 50, operation: 51, text: "b", messages: ["b-0"] }));
+      yield* fillStaging;
+      const stuffed = forget(40, 42, ["a-0"]);
+      if (stuffed.kind !== "forget") throw new Error("fixture kind");
+      const extra = {
+        ...stuffed,
+        tombstone: {
+          ...stuffed.tombstone,
+          suppressedSourceKeys: Array.from({ length: 99 }, (_, n) => ({
+            environmentId: env,
+            sourceId: M.MemoryImportSourceId.make(id(60)),
+            sourceItemKey: `${"k".repeat(480)}${n}`,
+          })),
+        },
+      };
+      const refused = yield* admit(extra).pipe(Effect.flip);
+      assert.deepInclude(refused, { _tag: "MemoryCapacityError", dimension: "checkpoint_staging" });
+      const before = (yield* usage).requiredCheckpointBoundBytes;
+      yield* admit(forget(50, 52, ["b-0"]));
+      assert.isAtMost((yield* usage).requiredCheckpointBoundBytes, before);
+    }).pipe(Effect.provide(layer)),
+);
+
+it.effect("regression: evidence added by a later revision stays deletable at full staging", () =>
+  Effect.gen(function* () {
+    yield* join;
+    const first = upsert({ memory: 70, operation: 71, text: "no evidence yet", messages: [] });
+    yield* admit(first);
+    if (first.kind !== "upsert") throw new Error("fixture kind");
+    const evidence = messages("later", 100);
+    yield* admit(
+      upsert({
+        memory: 70,
+        operation: 72,
+        text: "now with evidence",
+        messages: evidence,
+        parent: first.revision.revisionId,
+      }),
+    );
+    yield* fillStaging;
+    yield* admit(forget(70, 73, evidence));
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect(
+  "contract: hub membership refuses an environment id the forget allowance cannot cover",
+  () =>
+    Effect.gen(function* () {
+      const store = yield* Store.MemoryStore;
+      const environmentId = M.EnvironmentId.make("e".repeat(M.MEMORY_IDENTITY_CORE_MAX_BYTES));
+      const requestId = M.MemoryOperationId.make(id(80));
+      const requestDigest = "b".repeat(64);
+      yield* store.transact(
+        store.writeHubAdminTx({
+          record: {
+            requestId,
+            requestDigest,
+            expectedVersion: 1,
+            stage: "prepared",
+            action: { requestId, expectedVersion: 1, action: "provisionMember", environmentId },
+            secretName: "synthetic-member-key",
+            result: null,
+            memberVersion: null,
+          },
+          expectedStage: null,
+        }),
+      );
+      const refused = yield* store
+        .transact(
+          store.activateHubMemberTx({
+            requestId,
+            requestDigest,
+            memorySpaceId: space,
+            environmentId,
+            expectedCredentialVersion: null,
+            next: { credentialDigest: "a".repeat(64) },
+            now: 100,
+          }),
+        )
+        .pipe(Effect.flip);
+      assert.deepInclude(refused, { _tag: "MemoryStoreConflict", code: "payload_too_large" });
+    }).pipe(Effect.provide(layer)),
+);
