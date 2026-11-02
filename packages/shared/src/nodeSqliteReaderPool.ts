@@ -3,7 +3,7 @@ import * as Semaphore from "effect/Semaphore";
 import type { Connection } from "effect/sql/SqlConnection";
 import type { SqlError } from "effect/sql/SqlError";
 
-const READER_POOL_SIZE = 4;
+const DEFAULT_READER_POOL_SIZE = 4;
 
 // Startup failures usually share one cause, so every slot honors one restart backoff and one
 // restart runs at a time: slots waiting behind it re-check the deadline a failure extended.
@@ -47,13 +47,15 @@ export interface ReaderSlot {
 export const makeReaderPool = Effect.fn("SqliteReaderPool.make")(function* <R>(options: {
   readonly makeSlot: (restart: ReaderRestart) => Effect.Effect<ReaderSlot, never, R>;
   readonly available: Effect.Effect<void, SqlError> | undefined;
+  readonly size?: number | undefined;
 }) {
+  const size = options.size ?? DEFAULT_READER_POOL_SIZE;
   const restart = makeReaderRestart(yield* Semaphore.make(1));
-  const slots = yield* Effect.forEach(Array.from({ length: READER_POOL_SIZE }), () =>
+  const slots = yield* Effect.forEach(Array.from({ length: size }), () =>
     options.makeSlot(restart),
   );
   // Holding a permit guarantees a free slot, so choosing one never waits.
-  const permits = yield* Semaphore.make(READER_POOL_SIZE);
+  const permits = yield* Semaphore.make(size);
   const leased = new Set<number>();
   // Prefer a slot that can serve now; a slot that must restart during backoff is a last resort.
   const lease = () => {

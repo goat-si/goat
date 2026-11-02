@@ -52,6 +52,7 @@ export interface SqliteClientConfig {
   /** Ignored for in-memory databases, which cannot share a second connection. */
   readonly readerWorker?: boolean | undefined;
   readonly readerStartupTimeout?: Duration.Input | undefined;
+  readonly readerPoolSize?: number | undefined;
   /** Ignored for in-memory databases. */
   readonly checkpointWorker?: boolean | undefined;
   readonly writerWorker?: boolean | undefined;
@@ -1121,6 +1122,7 @@ const make = Effect.fn("makeWithDatabase")(function* (
       ? yield* makeReaderPool({
           makeSlot: (restart) => makeReader(options, restart),
           available: workerWriter?.available,
+          size: options.readerPoolSize,
         })
       : undefined;
   let admittedReaders = 0;

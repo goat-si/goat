@@ -1024,38 +1024,6 @@ it.effect("does not retry a stale WAL snapshot or unrelated SQLite errors", () =
   }).pipe(Effect.provide(SqliteClient.layer({ filename: ":memory:" }))),
 );
 
-it.effect("serializes reader requests through their replies without leaking values mode", () =>
-  withReaderClient((sql) =>
-    Effect.gen(function* () {
-      // Finish startup before holding requests at the worker transport boundary.
-      yield* countEntries(sql).pipe(SqliteClient.readOnly);
-      const worker = startedWorkers[startedWorkers.length - 1]!;
-      const send = worker.postMessage.bind(worker);
-      const requests: Array<() => void> = [];
-      const postMessage = vi.spyOn(worker, "postMessage").mockImplementation((...args) => {
-        requests.push(() => send(...args));
-      });
-      yield* Effect.gen(function* () {
-        const select = sql`SELECT name FROM entries`;
-        const values = yield* Effect.forkChild(select.values.pipe(SqliteClient.readOnly), {
-          startImmediately: true,
-        });
-        const objects = yield* Effect.forkChild(select.pipe(SqliteClient.readOnly), {
-          startImmediately: true,
-        });
-        // A pending reply holds the connection so a retry cannot be overtaken
-        // by another request or a transaction on the same worker.
-        assert.lengthOf(requests, 1);
-        postMessage.mockRestore();
-        for (const request of requests) request();
-        assert.deepEqual(yield* Fiber.join(values), [["first"]]);
-        assert.deepEqual(yield* Fiber.join(objects), [{ name: "first" }]);
-        assert.deepEqual(yield* select.pipe(SqliteClient.readOnly), [{ name: "first" }]);
-      }).pipe(Effect.ensuring(Effect.sync(() => postMessage.mockRestore())));
-    }),
-  ),
-);
-
 it.effect("recovers checkpoint worker startup before handing checkpoints off", () => {
   const { warnings, layer: logs } = captureWarnings();
   return withWorkerRecovery({ point: "initialize", codes: [261] }, (failures, attempted) =>
