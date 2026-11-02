@@ -463,7 +463,8 @@ sync_runner_alias() {
   if ! ln "$RUNNER_FILE" "$alias_next" 2>/dev/null; then
     cp "$RUNNER_FILE" "$alias_next" && chmod 700 "$alias_next" || { rm -f "$alias_next"; return 1; }
   fi
-  mv -f "$alias_next" "$STATE_DIR/run-goat.sh"
+  if [ "$alias_next" -ef "$STATE_DIR/run-goat.sh" ]; then rm -f "$alias_next"
+  else mv -f "$alias_next" "$STATE_DIR/run-goat.sh"; fi
 }
 trap 'runner_exit=$?; cleanup_runner_next; exit "$runner_exit"' EXIT
 trap 'exit 129' HUP
