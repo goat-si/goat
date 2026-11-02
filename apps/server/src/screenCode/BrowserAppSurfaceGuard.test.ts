@@ -378,7 +378,7 @@ const observeChrome = (apps = chromeApps) =>
   Effect.gen(function* () {
     const made = fixture({ list_apps: apps, get_window_state: chromeState() });
     const bound = yield* made.host.bindApp(
-      call("bind_app", { bundle_id: apps.apps[0]?.bundle_id, window_id: 7 }),
+      call("bind_app", { bundle_id: apps.apps[0]?.bundle_id ?? "", window_id: 7 }),
       context,
     );
     const ref = bound.value as ScreenTargetRef;

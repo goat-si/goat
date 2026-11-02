@@ -39,7 +39,7 @@ export interface BrowserSurfaceHolder {
   readonly appId: string;
   readonly bundleId?: string | undefined;
   readonly snapshotId?: string | undefined;
-  browserSurface?: Map<string, BrowserSurfaceRead>;
+  browserSurface?: Map<string, BrowserSurfaceRead> | undefined;
 }
 
 export interface BrowserSurfaceInput {
@@ -281,7 +281,7 @@ export const readBrowserSurface = (
   };
 };
 
-export const noteBrowserSurfaceRead = (
+const noteBrowserSurfaceRead = (
   bound: BrowserSurfaceHolder,
   tool: string,
   args: Record<string, unknown>,
