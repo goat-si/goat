@@ -146,6 +146,28 @@ const withTempDirectory = <A, E, R>(
   );
 
 describe("goat server command safety", () => {
+  it.each(["default", "start", "serve"])(
+    "%s recovers a deleted inherited cwd before validation",
+    async (mode) => {
+      const home = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-cwd-"));
+      try {
+        const result = NodeChildProcess.spawnSync(
+          process.execPath,
+          [NodePath.join(import.meta.dirname, "serverCwd.fixture.ts"), mode],
+          {
+            env: { HOME: home, PATH: process.env.PATH ?? "" },
+            encoding: "utf8",
+          },
+        );
+        expect(result.status).toBe(0);
+        expect(result.stdout).toContain(`CWD ${home}`);
+        if (mode === "default") expect(result.stdout).toContain("Unknown command");
+        else expect(result.stdout).toContain("not-a-directory");
+      } finally {
+        await NodeFSP.rm(home, { recursive: true, force: true });
+      }
+    },
+  );
   it.effect("rejects unknown command words without creating a home or project", () =>
     withTempDirectory("t3-cli-unknown-", (root) =>
       Effect.gen(function* () {
