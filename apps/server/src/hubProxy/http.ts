@@ -351,7 +351,7 @@ const proxyRead = Effect.fn("HubProxyHttp.proxyRead")(function* (
   return yield* attempt(false);
 });
 
-const openUpstreamSocket = (upstream: HubProxyUpstream, search: string) =>
+export const openUpstreamSocket = (upstream: HubProxyUpstream, search: string) =>
   Effect.suspend(() => {
     let status: number | undefined;
     let ws: NodeSocket.NodeWS.WebSocket | undefined;
@@ -380,6 +380,8 @@ const openUpstreamSocket = (upstream: HubProxyUpstream, search: string) =>
               typeof options === "object" && !Array.isArray(options) ? options.headers : undefined,
           },
         );
+        // Effect detaches its once-only listener before closing a still-connecting socket; without this, ws's teardown error would crash the process.
+        socket.on("error", () => {});
         ws = socket;
         // ws exposes the HTTP status only on this event, not on SocketOpenError.
         socket.on("unexpected-response", (_request, response) => {

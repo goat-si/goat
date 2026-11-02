@@ -13,8 +13,11 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as HubConnectAccess from "../auth/HubConnectAccess.ts";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- sends an oversized declared body without allocating it.
 import * as NodeHttp from "node:http";
+import * as NodeEvents from "node:events";
+import * as NodeNet from "node:net";
 
 import { expect, it } from "@effect/vitest";
+import { vi } from "vite-plus/test";
 import { NodeWS } from "@effect/platform-node/NodeSocket";
 import {
   AuthStandardClientScopes,
@@ -29,6 +32,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
+import { openUpstreamSocket } from "./http.ts";
 
 import {
   authLayer,
@@ -331,6 +335,82 @@ it.effect("hub:proxy is required even with every standard scope, before any node
     expect(hub.ssh.issues).toHaveLength(0);
     expect(hub.node.requests).toHaveLength(0);
   }).pipe(Effect.scoped, Effect.provide(authLayer)),
+);
+
+it.live(
+  "an upstream socket released while still connecting observes its teardown error instead of crashing the server",
+  () =>
+    Effect.gen(function* () {
+      const connected = Promise.withResolvers<void>();
+      const closed = Promise.withResolvers<void>();
+      const server = yield* Effect.acquireRelease(
+        Effect.promise(
+          () =>
+            new Promise<NodeNet.Server>((resolve) => {
+              const server = NodeNet.createServer((socket) => {
+                socket.on("error", () => {});
+                socket.resume();
+                connected.resolve();
+              });
+              server.listen(0, "127.0.0.1", () => resolve(server));
+            }),
+        ),
+        (server) =>
+          Effect.promise(() => new Promise<void>((resolve) => server.close(() => resolve()))),
+      );
+      const address = server.address();
+      if (address === null || typeof address === "string") throw new Error("Expected TCP address");
+      const baseUrl = `ws://127.0.0.1:${address.port}/`;
+      let listenerCount: number | undefined;
+      let targetCloseState: number | undefined;
+      const originalClose = NodeWS.WebSocket.prototype.close;
+      yield* Effect.acquireRelease(
+        Effect.sync(() =>
+          vi.spyOn(NodeWS.WebSocket.prototype, "close").mockImplementation(function (
+            this: NodeWS.WebSocket,
+            ...args
+          ) {
+            if (this.url === `${baseUrl}ws`) {
+              targetCloseState = this.readyState;
+              if (this.readyState === NodeWS.WebSocket.CONNECTING) {
+                this.once("close", () => closed.resolve());
+                this.once(NodeEvents.errorMonitor, () => {
+                  listenerCount = this.listenerCount("error");
+                  this.on("error", () => {});
+                });
+              }
+            }
+            return originalClose.apply(this, args);
+          }),
+        ),
+        (spy) => Effect.sync(() => spy.mockRestore()),
+      );
+      const fiber = yield* openUpstreamSocket(
+        {
+          nodeId: "node-1",
+          generation: 0,
+          httpBaseUrl: "http://127.0.0.1/",
+          wsBaseUrl: baseUrl,
+          token: "test-token",
+          scopes: [],
+        },
+        "",
+      ).pipe(Effect.scoped, Effect.forkScoped);
+      const first = yield* Effect.raceFirst(
+        Effect.promise(() => connected.promise).pipe(Effect.as("connected" as const)),
+        Fiber.await(fiber).pipe(Effect.as("fiber completed" as const)),
+      );
+      if (first !== "connected") throw new Error("Upstream fiber completed before TCP connected");
+      yield* Fiber.interrupt(fiber);
+      if (targetCloseState === undefined) throw new Error("Upstream socket close() was not called");
+      if (targetCloseState !== NodeWS.WebSocket.CONNECTING) {
+        throw new Error(
+          `Upstream socket close() called in state ${targetCloseState}, not CONNECTING`,
+        );
+      }
+      yield* Effect.promise(() => closed.promise);
+      expect(listenerCount).toBeGreaterThanOrEqual(1);
+    }).pipe(Effect.scoped),
 );
 
 it.effect("F12: an upstream open failure returns HTTP 503 before any client upgrade", () =>
