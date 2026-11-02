@@ -27,7 +27,8 @@ import {
   AUTH_PROBE_TIMEOUT_MS,
   buildServerProvider,
   COMPACT_SLASH_COMMAND,
-  isCommandMissingCause,
+  classifySpawnFailure,
+  spawnFailureMessage,
   parseGenericCliVersion,
   providerModelsFromSettings,
   spawnAndCollect,
@@ -289,6 +290,7 @@ const runGrokCliCommand = Effect.fn("GrokProviderStatus.runGrokCliCommand")(func
   grokSettings: GrokSettings,
   args: ReadonlyArray<string>,
   environment: NodeJS.ProcessEnv,
+  cwd?: string,
 ) {
   const command = grokSettings.binaryPath || "grok";
   const spawnCommand = yield* resolveSpawnCommand(command, args, { env: environment });
@@ -297,6 +299,7 @@ const runGrokCliCommand = Effect.fn("GrokProviderStatus.runGrokCliCommand")(func
     ChildProcess.make(spawnCommand.command, spawnCommand.args, {
       env: environment,
       shell: spawnCommand.shell,
+      ...(cwd ? { cwd } : {}),
     }),
   );
 });
@@ -418,14 +421,17 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
   const probeEnvironment = grokProbeEnvironment(environment);
   const apiKey = environment[GROK_API_KEY_ENV]?.trim();
 
+  const spawnCwd = process.cwd();
   const versionResult = yield* runGrokCliCommand(
     grokSettings,
     ["--version"],
     probeEnvironment,
+    spawnCwd,
   ).pipe(Effect.timeoutOption(VERSION_PROBE_TIMEOUT_MS), Effect.result);
 
   if (Result.isFailure(versionResult)) {
     const error = versionResult.failure;
+    const failure = classifySpawnFailure(error, spawnCwd);
     yield* Effect.logWarning("Grok CLI health check failed.", {
       errorTag: error._tag,
     });
@@ -435,13 +441,15 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
       checkedAt,
       models: fallbackModels,
       probe: {
-        installed: !isCommandMissingCause(error),
+        installed: failure !== "missing",
         version: null,
         status: "error",
         auth: { status: "unknown" },
-        message: isCommandMissingCause(error)
-          ? "Grok CLI (`grok`) is not installed or not on PATH."
-          : "Failed to execute Grok CLI health check.",
+        message:
+          failure === "missing"
+            ? "Grok CLI (`grok`) is not installed or not on PATH."
+            : (spawnFailureMessage(failure, spawnCwd, grokSettings.binaryPath || "grok") ??
+              "Failed to execute Grok CLI health check."),
       },
     });
   }
