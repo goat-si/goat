@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFS from "node:fs";
+import * as NodeModule from "node:module";
 import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NetService from "@goat/shared/Net";
@@ -12,11 +13,29 @@ import { makeCli } from "../binCli.ts";
 const home = process.env.HOME;
 if (!home) throw new Error("Fixture HOME is required");
 const cwd = NodePath.join(home, "deleted");
-NodeFS.mkdirSync(cwd);
-process.chdir(cwd);
-NodeFS.rmdirSync(cwd);
+const scenario = process.argv[3] ?? "deleted";
 const base = NodePath.join(home, "not-a-directory");
 NodeFS.writeFileSync(base, "fixture");
+NodeFS.mkdirSync(cwd);
+process.chdir(cwd);
+if (scenario === "deleted") NodeFS.rmdirSync(cwd);
+else if (scenario !== "accessible" && process.getuid?.() !== 0) NodeFS.chmodSync(cwd, 0o000);
+if (scenario !== "deleted" && scenario !== "accessible") {
+  const access = NodeFS.default.accessSync;
+  NodeFS.default.accessSync = (path, mode) => {
+    if (
+      (process.getuid?.() === 0 && String(path) === cwd) ||
+      ((scenario === "fallback" || scenario === "both-fail") && String(path) === home) ||
+      (scenario === "both-fail" && String(path) === "/")
+    ) {
+      const error = new Error("fixture access denied") as NodeJS.ErrnoException;
+      error.code = "EACCES";
+      throw error;
+    }
+    return access(path, mode);
+  };
+  NodeModule.syncBuiltinESMExports();
+}
 const mode = process.argv[2];
 if (!mode) throw new Error("Fixture command is required");
 const args =
@@ -37,3 +56,5 @@ try {
 } catch {
   process.stdout.write("CWD unavailable\n");
 }
+if (scenario !== "deleted" && scenario !== "accessible" && process.getuid?.() !== 0)
+  NodeFS.chmodSync(cwd, 0o700);
