@@ -1,10 +1,10 @@
 import { scopeThreadRef, scopedThreadKey } from "@goat/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/models";
 import type { LaunchFold } from "@goat/client-runtime/state/launch-fold";
-import type { SidebarSection } from "../Sidebar.logic";
+import type { ThreadListSection } from "@goat/client-runtime/state/thread-list-priority";
 
 export function resolveNestedRowVariant(
-  section: SidebarSection,
+  section: ThreadListSection,
   parentVariant?: "card" | "slim",
 ): "card" | "slim" {
   return section === "priority" ||
