@@ -37,9 +37,9 @@ export function classifySpawnFailure(
     if ("reason" in current) pending.push(current.reason);
     if ("error" in current) pending.push(current.error);
   }
+  if (cwd === undefined) return "cwd_inaccessible";
   if (code !== "ENOENT" && code !== "EACCES" && code !== "EPERM" && code !== "ENOTDIR")
     return "unknown";
-  if (cwd === undefined) return "cwd_inaccessible";
   try {
     if (!NodeFS.statSync(cwd).isDirectory()) return "cwd_inaccessible";
     accessDirectory(cwd);
