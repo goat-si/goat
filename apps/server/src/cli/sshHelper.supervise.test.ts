@@ -129,6 +129,23 @@ it("starts replacement and rollback from the home directory", async () => {
   assert.deepEqual(workingDirectories, [NodeOS.homedir(), NodeOS.homedir()]);
 });
 
+it("replacement and rollback start at root when home is an executable file", async () => {
+  const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-bad-home-"));
+  roots.push(root);
+  const home = NodePath.join(root, "home-file");
+  NodeFS.writeFileSync(home, "", { mode: 0o700 });
+  const previous = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    const { result, workingDirectories } = await superviseFailedReplacement("trial");
+    assert.equal(result.status, "failed");
+    assert.deepEqual(workingDirectories, ["/", "/"]);
+  } finally {
+    if (previous === undefined) delete process.env.HOME;
+    else process.env.HOME = previous;
+  }
+});
+
 it("restores the backup over a failed replacement's own writes", async () => {
   const { result, database, ran, record } = await superviseFailedReplacement("trial");
   assert.isTrue(ran, "the replacement ran");

@@ -64,3 +64,29 @@ it.effect("reports a missing executable from the nested spawn cause", () =>
     expect(snapshot.installed).toBe(false);
   }),
 );
+
+it.effect("does not report an EIO spawn error as missing when the path contains enoent", () =>
+  Effect.gen(function* () {
+    const error = new OpenCodeRuntime.OpenCodeRuntimeError({
+      operation: "runOpenCodeCommand",
+      detail: "spawn /tmp/enoent/opencode EIO",
+      cause: { spawnCwd: process.cwd(), cause: { code: "EIO" } },
+    });
+    const snapshot = yield* checkOpenCodeProviderStatus(
+      settings({ enabled: true }),
+      process.cwd(),
+      Effect.fail(error),
+      Effect.succeed([]),
+    ).pipe(
+      Effect.provideService(
+        OpenCodeRuntime.OpenCodeRuntime,
+        {} as OpenCodeRuntime.OpenCodeRuntime["Service"],
+      ),
+      Effect.provideService(
+        OpenCodeServerOwner.OpenCodeServerOwner,
+        {} as OpenCodeServerOwner.OpenCodeServerOwner["Service"],
+      ),
+    );
+    expect(snapshot.installed).toBe(true);
+  }),
+);

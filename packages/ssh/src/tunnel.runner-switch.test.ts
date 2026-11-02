@@ -52,6 +52,17 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         assert.isFalse(yield* f.fs.exists(marker));
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
     );
+    it.live("stop continues ownership checks when the stale alias cannot be removed", () =>
+      Effect.gen(function* () {
+        const f = yield* fixture("none", { seed: false });
+        const alias = `${f.state}/run-goat.sh`;
+        yield* f.fs.makeDirectory(alias);
+        yield* f.fs.writeFileString(`${alias}/child`, "");
+        const result = yield* shell(f.home, SshTunnel.buildRemoteStopScript(stateKey));
+        assert.equal(result.code, 0, result.stderr);
+        assert.include(result.stdout, '{"stopped":true}');
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
     it.live("launch replaces a stale alias without executing it", () =>
       Effect.gen(function* () {
         const f = yield* fixture("none", { seed: false });
