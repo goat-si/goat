@@ -234,48 +234,53 @@ it.effect.each(["statement", "transaction"] as const)(
     ),
 );
 
-it.effect("bounds reader admission before the connection semaphore", () =>
-  withReaderClient(
-    (sql) =>
-      Effect.gen(function* () {
-        yield* countEntries(sql).pipe(SqliteClient.readOnly);
-        const worker = startedWorkers.at(-1)!;
-        using _held = vi.spyOn(worker, "postMessage").mockImplementation(() => {});
-        const reads = [];
-        for (let index = 0; index < 64; index++) {
-          reads.push(
-            yield* Effect.forkChild(countEntries(sql).pipe(SqliteClient.readOnly), {
-              startImmediately: true,
-            }),
+it.effect.each(["statement", "transaction"] as const)(
+  "bounds reader admission before the connection semaphore: %s",
+  (shape) =>
+    withReaderClient(
+      (sql) =>
+        Effect.gen(function* () {
+          yield* countEntries(sql).pipe(SqliteClient.readOnly);
+          const worker = startedWorkers.at(-1)!;
+          using _held = vi.spyOn(worker, "postMessage").mockImplementation(() => {});
+          const reads = [];
+          for (let index = 0; index < 64; index++) {
+            reads.push(
+              yield* Effect.forkChild(countEntries(sql).pipe(SqliteClient.readOnly), {
+                startImmediately: true,
+              }),
+            );
+          }
+          const overflow = yield* Effect.forkChild(
+            (shape === "statement"
+              ? countEntries(sql)
+              : sql.withTransaction(countEntries(sql))
+            ).pipe(SqliteClient.readOnly, Effect.result),
+            { startImmediately: true },
           );
-        }
-        const overflow = yield* Effect.forkChild(
-          countEntries(sql).pipe(SqliteClient.readOnly, Effect.result),
-          { startImmediately: true },
-        );
-        const state = overflow.pollUnsafe();
-        assert.isDefined(state, "overflow must complete without joining the reader queue");
-        const result = yield* Fiber.join(overflow);
-        assert.equal(result._tag, "Failure");
-        if (result._tag !== "Failure") return;
-        const rejected = result.failure;
-        assert.equal(rejected._tag, "SqlError");
-        assert.include(String(rejected.reason.cause), "Reader admission limit reached");
-        assert.isTrue(SqliteClient.isReaderAdmissionOverload(rejected));
-        assert.isTrue(
-          SqliteClient.isReaderAdmissionOverload(new Error("wrapped", { cause: rejected })),
-        );
-        assert.isFalse(
-          SqliteClient.isReaderAdmissionOverload(new Error("Reader admission limit reached")),
-        );
-        const cycle = new Error("cycle");
-        Object.defineProperty(cycle, "cause", { value: cycle });
-        assert.isFalse(SqliteClient.isReaderAdmissionOverload(cycle));
-        for (const read of reads) yield* Fiber.interrupt(read);
-      }),
-    // One slot makes every admitted read queue on the held worker.
-    { readerPoolSize: 1 },
-  ),
+          assert.isUndefined(overflow.pollUnsafe(), "overflow waits for admission");
+          yield* TestClock.adjust("30 seconds");
+          const result = yield* Fiber.join(overflow);
+          assert.equal(result._tag, "Failure");
+          if (result._tag !== "Failure") return;
+          const rejected = result.failure;
+          assert.equal(rejected._tag, "SqlError");
+          assert.include(String(rejected.reason.cause), "Reader admission limit reached");
+          assert.isTrue(SqliteClient.isReaderAdmissionOverload(rejected));
+          assert.isTrue(
+            SqliteClient.isReaderAdmissionOverload(new Error("wrapped", { cause: rejected })),
+          );
+          assert.isFalse(
+            SqliteClient.isReaderAdmissionOverload(new Error("Reader admission limit reached")),
+          );
+          const cycle = new Error("cycle");
+          Object.defineProperty(cycle, "cause", { value: cycle });
+          assert.isFalse(SqliteClient.isReaderAdmissionOverload(cycle));
+          for (const read of reads) yield* Fiber.interrupt(read);
+        }),
+      // One slot makes every admitted read queue on the held worker.
+      { readerPoolSize: 1 },
+    ),
 );
 
 it.effect("keeps autocheckpoints disabled while a checkpoint worker recovers", () =>

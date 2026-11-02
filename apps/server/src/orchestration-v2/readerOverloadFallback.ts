@@ -11,23 +11,19 @@ const WriterFallback = Context.Reference<boolean>(
 export const withWriterFallback = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   Effect.provideService(effect, WriterFallback, true);
 
-/**
- * Reads on a reader. On reader admission overload it reruns once on the writer when `always` is set
- * or the caller opted in with `withWriterFallback`; other reads fail fast so a burst stays off the writer.
- */
+/** Reads wait for admission unless writer fallback is enabled, in which case overload retries on the writer. */
 export const readOnReader =
   <Args extends ReadonlyArray<unknown>, A, E, R>(
     method: (...args: Args) => Effect.Effect<A, E, R>,
     always = false,
   ) =>
   (...args: Args): Effect.Effect<A, E, R> =>
-    method(...args).pipe(
-      NodeSqliteClient.readOnly,
-      Effect.catchIf(NodeSqliteClient.isReaderAdmissionOverload, (error) =>
-        Effect.withFiber((fiber) =>
-          always || fiber.getRef(WriterFallback)
-            ? NodeSqliteClient.onWriter(method(...args))
-            : Effect.fail(error),
+    Effect.withFiber((fiber) => {
+      const read = NodeSqliteClient.readOnly(method(...args));
+      if (!always && !fiber.getRef(WriterFallback)) return read;
+      return NodeSqliteClient.failFastReaderAdmission(read).pipe(
+        Effect.catchIf(NodeSqliteClient.isReaderAdmissionOverload, () =>
+          NodeSqliteClient.onWriter(method(...args)),
         ),
-      ),
-    );
+      );
+    });
