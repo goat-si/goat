@@ -85,6 +85,17 @@ describe("frame session registry", () => {
     expect(registry.resolveSessionForNode({ frameId: "new" })).toEqual(session("s", "b"));
   });
 
+  it("keeps the old target live when a reattached session leaves another session behind", () => {
+    const registry = makeBrowserFrameSessionRegistry();
+    registry.onTargetAttached({ sessionId: "s1", targetId: "a", frameId: "f" });
+    registry.onTargetAttached({ sessionId: "s2", targetId: "a" });
+    registry.onTargetAttached({ sessionId: "s1", targetId: "b", frameId: "g" });
+    registry.onTargetDetached({ sessionId: "s1" });
+    expect(registry.resolveSessionForNode({ frameId: "f" })).toEqual(session("s2", "a"));
+    expect(registry.resolveSessionForNode({ frameId: "g" })).toEqual(none("frame-unknown"));
+    expect(registry.resolveSessionForNode({ sessionId: "s1" })).toEqual(none("session-detached"));
+  });
+
   it("preserves a moved frame when its former target detaches", () => {
     const registry = makeBrowserFrameSessionRegistry();
     registry.onTargetAttached({ sessionId: "sa", targetId: "a", frameId: "f" });
