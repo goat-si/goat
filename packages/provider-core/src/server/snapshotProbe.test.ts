@@ -29,9 +29,11 @@ describe("spawn failure diagnosis", () => {
     try {
       NodeFS.chmodSync(cwd, 0o000);
       if (process.getuid?.() === 0) {
-        expect(classifySpawnFailure({ code: "EACCES" }, NodePath.join(cwd, "missing"))).toBe(
-          "cwd_inaccessible",
-        );
+        expect(
+          classifySpawnFailure({ code: "EACCES" }, cwd, () => {
+            throw Object.assign(new Error("injected access failure"), { code: "EACCES" });
+          }),
+        ).toBe("cwd_inaccessible");
       } else {
         expect(classifySpawnFailure({ code: "EACCES" }, cwd)).toBe("cwd_inaccessible");
       }

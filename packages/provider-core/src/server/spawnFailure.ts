@@ -1,9 +1,14 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- FileSystem.access cannot test directory search permission.
 import * as NodeFS from "node:fs";
-import { isCommandMissingCause, ProviderCommandNotFoundError } from "./snapshotProbe.ts";
+import { isCommandMissingCause } from "./snapshotProbe.ts";
 
 export type SpawnFailure = "missing" | "cwd_inaccessible" | "permission_denied" | "unknown";
 
-export function classifySpawnFailure(cause: unknown, cwd: string): SpawnFailure {
+export function classifySpawnFailure(
+  cause: unknown,
+  cwd: string,
+  accessDirectory = (path: string) => NodeFS.accessSync(path, NodeFS.constants.X_OK),
+): SpawnFailure {
   const seen = new Set<unknown>();
   const pending: unknown[] = [cause];
   let code: string | undefined;
@@ -11,7 +16,12 @@ export function classifySpawnFailure(cause: unknown, cwd: string): SpawnFailure 
     const current = pending.pop();
     if (!current || typeof current !== "object" || seen.has(current)) continue;
     seen.add(current);
-    if (current instanceof ProviderCommandNotFoundError) return "missing";
+    if (
+      "_tag" in current &&
+      current._tag === "ProviderCommandNotFoundError" &&
+      isCommandMissingCause(current)
+    )
+      return "missing";
     if ("code" in current && typeof current.code === "string") code ??= current.code;
     if (isCommandMissingCause(current)) code ??= "ENOENT";
     if ("_tag" in current && current._tag === "PermissionDenied") code ??= "EACCES";
@@ -23,7 +33,7 @@ export function classifySpawnFailure(cause: unknown, cwd: string): SpawnFailure 
     return "unknown";
   try {
     if (!NodeFS.statSync(cwd).isDirectory()) return "cwd_inaccessible";
-    NodeFS.accessSync(cwd, NodeFS.constants.X_OK);
+    accessDirectory(cwd);
   } catch (error) {
     if (
       error &&
