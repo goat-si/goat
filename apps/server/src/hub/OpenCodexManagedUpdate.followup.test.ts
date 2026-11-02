@@ -349,6 +349,7 @@ it.layer(NodeServices.layer)("OpenCodex SSH replacement follow-up", (it) => {
       expect(fleet.log).toEqual(["sync:home@2.90.0"]);
       expect(phaseAtSync).toBe("installed");
       expect(fleet.holdsDuringSync[0]).toBeGreaterThan(0);
+      expect(fleet.exclusiveDuringSync).toEqual([1]);
       expect(yield* update.status).toMatchObject({
         members: [{ phase: "probation" }],
         sync: { members: [{ alias: null, state: "synced" }] },
@@ -414,6 +415,7 @@ it.layer(NodeServices.layer)("OpenCodex SSH replacement follow-up", (it) => {
       const checking = yield* Effect.forkChild(update.checkNow);
       yield* Deferred.await(entered);
       yield* TestClock.adjust(MINUTE);
+      const callsBeforeGuard = fleet.homeHoldCalls;
       const done = yield* Deferred.make<void>();
       const guarding = yield* Effect.forkChild(
         update.admissionGuard.pipe(Effect.andThen(Deferred.succeed(done, undefined))),
@@ -425,6 +427,7 @@ it.layer(NodeServices.layer)("OpenCodex SSH replacement follow-up", (it) => {
       yield* Fiber.join(guarding);
       expect(releasedBeforeResume).toBe(true);
       expect(fleet.holds).toBe(0);
+      expect(fleet.homeHoldCalls).toBe(callsBeforeGuard);
       expect(fleet.log).toEqual([]);
       const path = yield* Path.Path;
       const config = yield* ServerConfig.ServerConfig.pipe(

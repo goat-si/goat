@@ -82,6 +82,9 @@ export const makeFleet = (
   noAdmission: new Set<string | null>(),
   holds: 0,
   homeHolds: 0,
+  homeHoldCalls: 0,
+  exclusiveDepth: 0,
+  exclusiveDuringSync: [] as number[],
   holdsDuringSync: [] as number[],
   unhealthyAt: new Set<string>(),
   /** Installs of these `alias@version` fail once, as an unreachable host or npm error would. */
@@ -152,7 +155,17 @@ const build = (
             Effect.sync(() => {
               fleet.updating = open;
             }),
-          exclusive: (body) => body,
+          exclusive: (body) =>
+            Effect.sync(() => {
+              fleet.exclusiveDepth++;
+            }).pipe(
+              Effect.andThen(body),
+              Effect.ensuring(
+                Effect.sync(() => {
+                  fleet.exclusiveDepth--;
+                }),
+              ),
+            ),
           beginUpdate: (targetVersion) =>
             Effect.sync(() => {
               fleet.syncReport = { trigger: "update", checkedAt: 0, targetVersion, members: [] };
@@ -162,6 +175,7 @@ const build = (
               Effect.andThen(
                 Effect.sync(() => {
                   fleet.holdsDuringSync.push(fleet.homeHolds);
+                  fleet.exclusiveDuringSync.push(fleet.exclusiveDepth);
                   fleet.log.push(`sync:${alias ?? "home"}@${fleet.versions.get(alias)}`);
                   if (fleet.syncRestarts.has(alias)) {
                     fleet.startedAt.set(alias, required(fleet.startedAt.get(alias)) + 5 * 60_000);
@@ -262,7 +276,10 @@ const build = (
             Effect.sync(() => {
               if (fleet.noAdmission.has(alias)) return false;
               fleet.holds += 1;
-              if (alias === null) fleet.homeHolds += 1;
+              if (alias === null) {
+                fleet.homeHolds += 1;
+                fleet.homeHoldCalls += 1;
+              }
               return true;
             }),
           releaseAdmission: (alias) =>
