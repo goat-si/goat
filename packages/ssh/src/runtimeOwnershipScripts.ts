@@ -63,7 +63,8 @@ GOAT_WORDS
   # Starts a program outside the SSH session's job, appending its output to $1; prints its PID.
   # The program and arguments are passed as given, so callers convert paths with cygpath -w.
   windows_spawn_detached() {
-    win_cwd="$(cygpath -u "${"${USERPROFILE:-}"}" 2>/dev/null)" || win_cwd=
+    win_cwd=
+    if [ -n "${"${USERPROFILE:-}"}" ]; then win_cwd="$(cygpath -u "$USERPROFILE" 2>/dev/null)" || win_cwd=; fi
     if [ -z "$win_cwd" ] || [ ! -d "$win_cwd" ]; then
       [ -n "${"${SystemDrive:-}"}" ] || return 1
       win_cwd="$(cygpath -u "$SystemDrive/")" || return 1
