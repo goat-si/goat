@@ -28,7 +28,7 @@ import { Pressable, useWindowDimensions, View } from "react-native";
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 
 import type { ThreadListProvider } from "../../state/thread-list-environments";
-import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
+import { SymbolView } from "../../components/ui/AppSymbol";
 import { AppText as Text } from "../../components/ui/AppText";
 import { Menu } from "../../components/ui/Menu";
 import { EnvironmentMachineSymbol } from "../../components/EnvironmentMachineSymbol";
@@ -60,7 +60,6 @@ import {
   resolveThreadListV2ProviderDrivers,
   resolveThreadListV2SwipeActions,
   type ThreadListV2SnoozePresetSettings,
-  type ThreadListV2Status,
 } from "./threadListV2";
 import {
   CARD_MENU_ACTIONS,
@@ -74,7 +73,14 @@ import { QueuedMessageIcon } from "./queued-message-icon";
 import { shouldRecedeThreadRow } from "./thread-row-emphasis";
 import { ThreadSearchMatchExcerpt } from "./thread-search-match";
 import { ThreadListV2Duration } from "./thread-list-pane-clock";
-import { ThreadListV2RowOrigin, ThreadListV2WorkingSpinner } from "./thread-list-v2-row-meta";
+import {
+  DONE_STATUS_LABEL,
+  STATUS_LABEL_BY_STATUS,
+  folderName,
+  ThreadListV2RowOrigin,
+  ThreadListV2WorkingSpinner,
+  ThreadListV2WorktreeGlyph,
+} from "./thread-list-v2-row-meta";
 import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
 import { pullRequestStatus } from "../pull-requests/pullRequestStatus";
 
@@ -83,63 +89,6 @@ const TITLE_FAVICON_SIZE = 15;
 const TITLE_FAVICON_OFFSET = 4;
 // Lines below the title start where the title text does.
 const TITLE_TEXT_INSET = TITLE_FAVICON_SIZE + 8;
-
-interface StatusLabel {
-  readonly label: string;
-  readonly icon: AppSymbolName;
-  readonly className: string;
-  readonly iconTintClassName: string;
-}
-const STATUS_LABEL_BY_STATUS: Partial<Record<ThreadListV2Status, StatusLabel>> = {
-  approval: {
-    label: "Approval",
-    icon: "exclamationmark.shield",
-    className: "text-warning-foreground",
-    iconTintClassName: "accent-warning-foreground",
-  },
-  input: {
-    label: "Input",
-    icon: "questionmark.bubble",
-    className: "text-adaptive-indigo-600-300",
-    iconTintClassName: "accent-adaptive-indigo-600-300",
-  },
-  request: {
-    label: "Request",
-    icon: "person.crop.circle",
-    className: "text-adaptive-fuchsia-600-300",
-    iconTintClassName: "accent-adaptive-fuchsia-600-300",
-  },
-  working: {
-    label: "Working",
-    icon: "circle.dashed",
-    className: "text-adaptive-sky-600-400",
-    iconTintClassName: "accent-adaptive-sky-600-400",
-  },
-  waiting: {
-    label: "Waiting",
-    icon: "circle.dashed.inset.filled",
-    className: "text-foreground-muted",
-    iconTintClassName: "accent-foreground-muted",
-  },
-  failed: {
-    label: "Failed",
-    icon: "exclamationmark.circle",
-    className: "text-danger-foreground",
-    iconTintClassName: "accent-danger-foreground",
-  },
-  limited: {
-    label: "Limited",
-    icon: "exclamationmark.circle",
-    className: "text-warning-foreground",
-    iconTintClassName: "accent-warning-foreground",
-  },
-};
-const DONE_STATUS_LABEL: StatusLabel = {
-  label: "Done",
-  icon: "checkmark.circle",
-  className: "text-adaptive-emerald-700-300",
-  iconTintClassName: "accent-adaptive-emerald-700-300",
-};
 
 export function ThreadListV2Section(props: {
   readonly label: string;
@@ -613,7 +562,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       : workingLabel) ?? (isUnread ? DONE_STATUS_LABEL : undefined);
   const recede = shouldRecedeThreadRow({ status, selected });
   const isRegeneratingTitle = thread.titleRegeneration != null;
-  const rowAccessibilityLabel = `${thread.title}${props.hasQueuedMessages ? ", messages queued to send" : ""}${isRegeneratingTitle ? ", regenerating title" : ""}`;
+  const worktreeFolder = folderName(thread.worktreePath) ?? thread.worktreePath?.trim();
+  const rowAccessibilityLabel = `${thread.title}${props.hasQueuedMessages ? ", messages queued to send" : ""}${isRegeneratingTitle ? ", regenerating title" : ""}${worktreeFolder ? `, in worktree ${worktreeFolder}` : ""}`;
   const timeLabel = props.timeLabel;
 
   const visitThread = useAtomCommand(threadEnvironment.visit, { reportFailure: false });
@@ -1045,6 +995,24 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
             </Pressable>
           ) : statusLabel ? (
             <View className="flex-row items-center gap-1">
+              <Text
+                className={cn(
+                  "text-xs font-goat-bold",
+                  (status === "working" || status === "waiting") && "tabular-nums",
+                  selected ? selectedThreadRowColors.foregroundClassName : statusLabel.className,
+                )}
+              >
+                {statusLabel.label}
+                {status === "working" || status === "waiting" ? (
+                  <ThreadListV2Duration
+                    startedAt={
+                      status === "working"
+                        ? resolveThreadWorkingStartedAt(thread)
+                        : (thread.latestRun?.completedAt ?? null)
+                    }
+                  />
+                ) : null}
+              </Text>
               {status === "working" ? (
                 <ThreadListV2WorkingSpinner
                   tintClassName={
@@ -1066,24 +1034,6 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
                   weight="semibold"
                 />
               )}
-              <Text
-                className={cn(
-                  "text-xs font-goat-bold",
-                  (status === "working" || status === "waiting") && "tabular-nums",
-                  selected ? selectedThreadRowColors.foregroundClassName : statusLabel.className,
-                )}
-              >
-                {statusLabel.label}
-                {status === "working" || status === "waiting" ? (
-                  <ThreadListV2Duration
-                    startedAt={
-                      status === "working"
-                        ? resolveThreadWorkingStartedAt(thread)
-                        : (thread.latestRun?.completedAt ?? null)
-                    }
-                  />
-                ) : null}
-              </Text>
             </View>
           ) : (
             <Text
@@ -1110,6 +1060,14 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         </View>
       ) : null}
       <View className="mt-1 flex-row items-center gap-2" style={{ paddingLeft: titleTextInset }}>
+        <ThreadListV2WorktreeGlyph
+          thread={thread}
+          tintClassName={
+            selected
+              ? selectedThreadRowColors.mutedIconTintClassName
+              : rowAppearance.tertiaryIconTintClassName
+          }
+        />
         {(status === "failed" || status === "limited") && thread.runtime?.lastError ? (
           <Text
             className={cn(
@@ -1349,6 +1307,14 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
               />
             ) : null}
           </View>
+          <ThreadListV2WorktreeGlyph
+            thread={thread}
+            tintClassName={
+              selected
+                ? selectedThreadRowColors.mutedIconTintClassName
+                : rowAppearance.tertiaryIconTintClassName
+            }
+          />
           {props.hasQueuedMessages ? <QueuedMessageIcon selected={selected} /> : null}
           <Text
             className={cn(

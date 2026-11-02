@@ -303,6 +303,7 @@ export {
   type ThreadListV2SettledShelfListItem,
   type ThreadListV2SnoozedShelfListItem,
   type ThreadListV2ThreadListItem,
+  type ThreadListV2ThreadsHeaderListItem,
   type ThreadListV2WorkingShelfListItem,
 } from "./threadListV2ListItems";
 

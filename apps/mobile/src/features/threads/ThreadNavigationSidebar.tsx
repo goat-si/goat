@@ -59,6 +59,7 @@ import { DecisionInboxRow } from "../decisions/DecisionInboxRow";
 import {
   ThreadListV2PendingRow,
   ThreadListV2Row,
+  ThreadListV2SectionDivider,
   ThreadListV2SettledShelfHeader,
   ThreadListV2SnoozedShelfHeader,
   ThreadListV2WorkingShelfHeader,
@@ -682,6 +683,8 @@ function ThreadNavigationSidebarPane(
             onRestore={priorityRead.restore}
           />
         );
+      case "v2-threads-header":
+        return <ThreadListV2SectionDivider label="Threads" pane="sidebar" />;
       case "v2-working-shelf":
         return (
           <ThreadListV2WorkingShelfHeader

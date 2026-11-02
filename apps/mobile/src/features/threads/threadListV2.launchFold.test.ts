@@ -223,6 +223,7 @@ describe("mobile thread list launch folds", () => {
       "v2-priority-header",
       "v2-thread",
       "v2-launch-group",
+      "v2-threads-header",
       "v2-thread",
     ]);
   });

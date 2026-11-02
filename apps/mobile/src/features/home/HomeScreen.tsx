@@ -60,6 +60,7 @@ import { useQueuedThreadKeys } from "../../state/use-thread-outbox";
 import {
   ThreadListV2PendingRow,
   ThreadListV2Row,
+  ThreadListV2SectionDivider,
   ThreadListV2SettledShelfHeader,
   ThreadListV2SnoozedShelfHeader,
   ThreadListV2WorkingShelfHeader,
@@ -564,6 +565,11 @@ export function HomeScreen(props: HomeScreenProps) {
           onRelease={priorityRead.release}
           onRestore={priorityRead.restore}
         />
+      );
+    }
+    if (item.type === "v2-threads-header") {
+      return (
+        <ThreadListV2SectionDivider label="Threads" pane={primaryColumn ? "sidebar" : "screen"} />
       );
     }
     if (item.type === "v2-working-shelf") {
