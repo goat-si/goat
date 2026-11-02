@@ -40,6 +40,8 @@ const deadPid = () => {
   return Number(child.stdout.toString());
 };
 
+const spawnFailure = vi.hoisted(() => ({ sync: false }));
+
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   // These fixtures exercise replacement/rollback with real Node processes. Windows cannot
@@ -48,6 +50,10 @@ vi.mock("node:child_process", async (importOriginal) => {
     ...actual,
     spawn: (...input: Parameters<typeof actual.spawn>) => {
       const [command, args, options] = input;
+      if (spawnFailure.sync) {
+        spawnFailure.sync = false;
+        throw new Error("injected spawn failure");
+      }
       return HostProcess.Platform.defaultValue() === "win32" && command.endsWith(".mjs")
         ? actual.spawn(process.execPath, [command, ...(args ?? [])], options)
         : actual.spawn(...input);
@@ -466,6 +472,44 @@ it("rolls back to a previous version whose protocol does not overlap this build"
     }
   }
 });
+
+it.each(["sync", "async"] as const)(
+  "restores the runner after a %s spawn failure",
+  async (mode) => {
+    const { baseDir, stateDir, logFile } = tempSuperviseHome();
+    const runnerFile = NodePath.join(stateDir, "run-t3.mjs");
+    const previousRunnerFile = NodePath.join(stateDir, "previous.mjs");
+    const previous = `#!${process.execPath}\nprocess.exit(1);\n`;
+    NodeFS.writeFileSync(previousRunnerFile, previous, { mode: 0o700 });
+    if (mode === "sync") NodeFS.writeFileSync(runnerFile, previous, { mode: 0o700 });
+    spawnFailure.sync = mode === "sync";
+    try {
+      const result = await superviseSshRuntimeReplacement({
+        oldPid: deadPid(),
+        oldInstanceId: "old",
+        port: 1,
+        baseDir,
+        stateDir,
+        runnerFile,
+        previousRunnerFile,
+        targetVersion: "2.0.0",
+        previousVersion: "1.0.0",
+        identity: "new",
+        previousIdentity: "old",
+        exitTimeoutMs: 1000,
+        readyTimeoutMs: 5000,
+        logFile,
+      });
+      assert.deepEqual(result, {
+        status: "failed",
+        reason: "GOAT 2.0.0 and the previous 1.0.0 both failed to start.",
+      });
+      assert.equal(NodeFS.readFileSync(runnerFile, "utf8"), previous);
+    } finally {
+      spawnFailure.sync = false;
+    }
+  },
+);
 
 it("records a supervisor that throws as a failed replacement", async () => {
   const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-supervise-"));

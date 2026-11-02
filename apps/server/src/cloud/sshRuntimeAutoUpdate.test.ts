@@ -40,12 +40,7 @@ const makeHarness = Effect.fn("test.ssh_runtime_auto_update.harness")(function* 
   } = {},
 ) {
   const fs = yield* FileSystem.FileSystem;
-  const temp = yield* fs.makeTempDirectoryScoped({ prefix: "goat-ssh-auto-update-" });
-  const home = options.homeIsFile ? NodePath.join(temp, "home-file") : temp;
-  if (options.homeIsFile) {
-    yield* fs.writeFileString(home, "");
-    yield* fs.chmod(home, 0o700);
-  }
+  const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-ssh-auto-update-" });
   const goatHome = NodePath.join(home, ".goat");
   const stateDir = NodePath.join(goatHome, "ssh-launch", "runtime");
   const versionDir = (version: string) =>
@@ -186,6 +181,11 @@ const makeHarness = Effect.fn("test.ssh_runtime_auto_update.harness")(function* 
       getServerActivity: () => Effect.sync(() => state.activity),
     }),
   );
+  if (options.homeIsFile) {
+    yield* fs.remove(home, { recursive: true });
+    yield* fs.writeFileString(home, "");
+    yield* fs.chmod(home, 0o700);
+  }
   return {
     runtime,
     state,
