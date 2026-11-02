@@ -1,9 +1,11 @@
 import { expect, it } from "@effect/vitest";
 import { EnvironmentId } from "@goat/contracts";
+import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Ref from "effect/Ref";
+import * as Semaphore from "effect/Semaphore";
 import * as TestClock from "effect/testing/TestClock";
 import * as Stream from "effect/Stream";
 
@@ -97,13 +99,28 @@ const fixture = Effect.fn("OpenCodexWindowTest.fixture")(function* (blockSettlem
   const mutate = Effect.fn("OpenCodexWindowTest.mutate")(function* (
     change: (current: State, at: number) => State,
   ) {
-    const next = change(yield* Ref.get(state), 0);
+    const next = change(yield* Ref.get(state), yield* Clock.currentTimeMillis);
     yield* Ref.set(state, next);
     if (blockSettlement && next.window?.orchestrated?.[""]?.settled) {
       yield* Deferred.succeed(boundary, undefined);
       yield* Deferred.await(resume);
     }
   });
+  const stateLock = yield* Semaphore.make(1);
+  const overrunSignal = yield* Ref.make(yield* Deferred.make<void>());
+  const mutateIfCurrent = (
+    expected: State,
+    change: (current: State, at: number) => State,
+    after: Effect.Effect<void> = Effect.void,
+  ) =>
+    stateLock.withPermit(
+      Effect.gen(function* () {
+        if ((yield* Ref.get(state)) !== expected) return false;
+        yield* mutate(change);
+        yield* after;
+        return true;
+      }).pipe(Effect.uninterruptible),
+    );
   const sync = OpenCodexSync.of({
     plan: () => Effect.die("unused"),
     run: () => Effect.die("unused"),
@@ -118,6 +135,11 @@ const fixture = Effect.fn("OpenCodexWindowTest.fixture")(function* (blockSettlem
   const ops = {
     host,
     sync,
+    state,
+    stateLock,
+    overrunSignal,
+    mutateIfCurrent,
+    enforceOverrun: () => Effect.void,
     retainedHome,
     nextAt,
     mutate,
@@ -184,6 +206,7 @@ it.effect("reconciles a stale retained admission exactly once from durable state
 it.effect("retries forward recovery after interruption before the decision is persisted", () =>
   Effect.gen(function* () {
     const f = yield* fixture(false);
+    yield* TestClock.setTime(1_000_000);
     const reached = yield* Deferred.make<void>();
     const stop = yield* Deferred.make<void>();
     yield* Ref.update(f.state, (current) =>
@@ -199,7 +222,7 @@ it.effect("retries forward recovery after interruption before the decision is pe
                   planToken: plan.planToken,
                   notAfter: 0,
                   boundMs: 1,
-                  pending: true,
+                  pending: true as const,
                   observed: { version: "2.90.0", processId: 100, startedAt: 1, at: 1 },
                 },
               },
@@ -245,5 +268,138 @@ it.effect("retries forward recovery after interruption before the decision is pe
     expect((yield* Ref.get(f.state)).window?.probationEndsAt).toBeGreaterThan(1_000_000);
     expect(yield* Ref.get(f.rollbacks)).toBe(0);
     expect(yield* Ref.get(f.installs)).toBe(0);
+  }),
+);
+
+it.effect("retries a forward decision interrupted just before its atomic write", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture(false);
+    yield* Ref.update(f.state, (current): State =>
+      current.window === undefined
+        ? current
+        : {
+            ...current,
+            window: {
+              ...current.window,
+              orchestrated: {
+                "": {
+                  fromVersion: "2.89.0",
+                  planToken: plan.planToken,
+                  notAfter: 0,
+                  boundMs: 1,
+                  pending: true,
+                  observed: { version: "2.90.0", processId: 100, startedAt: 1, at: 1 },
+                },
+              },
+            },
+          },
+    );
+    const home = fleetSnapshot("home");
+    const host = OpenCodexUpdateHost.of({
+      ...f.ops.host,
+      member: (alias) =>
+        Effect.succeed({
+          alias,
+          runningTurns: 0,
+          snapshot: {
+            ...home,
+            runtime: { ...home.runtime, version: "2.90.0" },
+            parityEvidence: { ...home.parityEvidence, processId: 100, startedAt: 1, observedAt: 0 },
+          },
+        }),
+    });
+    const reached = yield* Deferred.make<void>();
+    const gate = yield* Deferred.make<void>();
+    const blocked = {
+      ...f.ops,
+      host,
+      mutateIfCurrent: (
+        expected: State,
+        change: (current: State, at: number) => State,
+        after?: Effect.Effect<void>,
+      ) =>
+        Deferred.succeed(reached, undefined).pipe(
+          Effect.andThen(Deferred.await(gate)),
+          Effect.andThen(f.ops.mutateIfCurrent(expected, change, after)),
+        ),
+    };
+    const running = yield* Effect.forkChild(
+      recoverUncertain(blocked, yield* Ref.get(f.state), 1_000_000, scope),
+    );
+    yield* Deferred.await(reached);
+    yield* Fiber.interrupt(running);
+    expect((yield* Ref.get(f.state)).window?.orchestrated?.[""]?.pending).toBe(true);
+    expect(
+      yield* recoverUncertain({ ...f.ops, host }, yield* Ref.get(f.state), 1_000_000, scope),
+    ).toBe("probation");
+    expect(yield* Ref.get(f.rollbacks)).toBe(0);
+    expect(yield* Ref.get(f.installs)).toBe(0);
+  }),
+);
+
+it.effect("cancels a blocked recovery sync when the ceiling guard releases admission", () =>
+  Effect.gen(function* () {
+    const f = yield* fixture(false);
+    yield* TestClock.setTime(1_000_000);
+    yield* Ref.update(f.state, (current): State =>
+      current.window === undefined
+        ? current
+        : {
+            ...current,
+            window: {
+              ...current.window,
+              orchestrated: {
+                "": {
+                  fromVersion: "2.89.0",
+                  planToken: plan.planToken,
+                  notAfter: 0,
+                  boundMs: 1,
+                  pending: true,
+                  observed: { version: "2.90.0", processId: 100, startedAt: 1, at: 1 },
+                },
+              },
+            },
+          },
+    );
+    const home = fleetSnapshot("home");
+    const host = OpenCodexUpdateHost.of({
+      ...f.ops.host,
+      member: (alias) =>
+        Effect.succeed({
+          alias,
+          runningTurns: 0,
+          snapshot: {
+            ...home,
+            runtime: { ...home.runtime, version: "2.90.0" },
+            parityEvidence: { ...home.parityEvidence, processId: 100, startedAt: 1, observedAt: 0 },
+          },
+        }),
+    });
+    const started = yield* Deferred.make<void>();
+    const cancelled = yield* Deferred.make<void>();
+    const sync = OpenCodexSync.of({
+      ...f.ops.sync,
+      syncUpdatedMember: () =>
+        Deferred.succeed(started, undefined).pipe(
+          Effect.andThen(Effect.never),
+          Effect.ensuring(Deferred.succeed(cancelled, undefined)),
+        ),
+    });
+    const running = yield* Effect.forkChild(
+      recoverUncertain({ ...f.ops, host, sync }, yield* Ref.get(f.state), 1_000_000, scope),
+    );
+    yield* Deferred.await(started);
+    yield* f.ops.stateLock.withPermit(
+      Effect.gen(function* () {
+        yield* Ref.update(f.state, (current) => ({ ...current, members: [] }));
+        yield* host.releaseAdmission(null);
+        yield* Ref.set(f.ops.retainedHome, "none");
+        yield* Deferred.succeed(yield* Ref.get(f.ops.overrunSignal), undefined);
+      }),
+    );
+    expect(yield* Fiber.join(running)).toBe("uncertain");
+    yield* Deferred.await(cancelled);
+    expect((yield* Ref.get(f.state)).window?.probationEndsAt).toBeUndefined();
+    expect(yield* Ref.get(f.holds)).toBe(0);
   }),
 );

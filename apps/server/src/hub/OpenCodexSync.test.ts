@@ -54,6 +54,7 @@ const makeFleet = () => ({
   calls: [] as Array<string>,
   reads: [] as Array<string>,
   holds: 0,
+  holdCalls: 0,
   /** A turn starts on this machine the moment a sync takes admission. */
   turnStartsOnHold: false,
   /** The row each device saw for itself while its own sync ran. */
@@ -94,6 +95,7 @@ const layer = (fleet: Fleet, seen: { latest?: Effect.Effect<unknown> }) =>
         holdAdmission: () =>
           Effect.sync(() => {
             fleet.holds += 1;
+            fleet.holdCalls += 1;
             if (fleet.turnStartsOnHold) fleet.running.set(null, 1);
             return true;
           }),
@@ -477,5 +479,15 @@ it.effect("bounds a hanging Child permit or member read during planning", () =>
       expect(rows(report)[1]).toEqual(["macmini-ts", "skipped", "unreachable"]);
       expect(rows(report)[2]?.[1]).toBe("ready");
     }
+  }),
+);
+
+it.effect("does not acquire a second Home admission hold when the update owns it", () =>
+  Effect.gen(function* () {
+    const { fleet, sync } = yield* setup();
+    yield* sync.beginUpdate("2.91.0");
+    yield* sync.syncUpdatedMember(null, scope, { admissionHeld: true });
+    expect(fleet.holdCalls).toBe(0);
+    expect((yield* sync.lastUpdate)?.members[0]).toMatchObject({ state: "synced" });
   }),
 );

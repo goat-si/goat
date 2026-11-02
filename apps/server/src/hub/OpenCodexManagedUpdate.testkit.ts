@@ -62,6 +62,7 @@ export const makeFleet = (
       ) => Effect.Effect<"applied" | "refused" | "rolled-back" | "uncertain">)
     | undefined,
   planReads: 0,
+  onPlan: undefined as Effect.Effect<void> | undefined,
   planInFlight: [] as boolean[],
   changedOnRead: undefined as "token" | "servingPath" | "cliPath" | undefined,
   planMode: "plan" as "plan" | "none" | "unknown",
@@ -132,7 +133,12 @@ const snapshotOf = (fleet: Fleet, alias: string | null): OpenCodexInventorySnaps
   };
 };
 
-const build = (fleet: Fleet, baseDir: string, scheduler?: Scheduler.Scheduler["Service"]) =>
+const build = (
+  fleet: Fleet,
+  baseDir: string,
+  fs: FileSystem.FileSystem,
+  scheduler?: Scheduler.Scheduler["Service"],
+) =>
   Layer.build(
     ManagedUpdate.layerService.pipe(
       Layer.provide(
@@ -195,27 +201,31 @@ const build = (fleet: Fleet, baseDir: string, scheduler?: Scheduler.Scheduler["S
               runningTurns: fleet.running.get(alias),
             })),
           orchestratedPlan: (alias, version) =>
-            Effect.sync(() => {
-              fleet.planReads++;
-              fleet.planInFlight.push(fleet.inFlight);
-              if (!fleet.orchestrated || fleet.planMode === "none")
-                return { kind: "none" as const };
-              if (fleet.planMode === "unknown") return { kind: "unknown" as const };
-              const changed = fleet.planReads > 1 ? fleet.changedOnRead : undefined;
-              return {
-                kind: "plan" as const,
-                plan: {
-                  currentVersion: fleet.versions.get(alias) ?? "",
-                  targetVersion: version,
-                  canApply: true,
-                  planToken: changed === "token" ? "different-token-1234" : fleet.planToken,
-                  updateInFlight: fleet.inFlight,
-                  mutationBoundMs: 900_000,
-                  servingPath: changed === "servingPath" ? "/other" : fleet.servingPath,
-                  cliPath: changed === "cliPath" ? "/other" : fleet.cliPath,
-                },
-              };
-            }),
+            (fleet.onPlan ?? Effect.void).pipe(
+              Effect.andThen(
+                Effect.sync(() => {
+                  fleet.planReads++;
+                  fleet.planInFlight.push(fleet.inFlight);
+                  if (!fleet.orchestrated || fleet.planMode === "none")
+                    return { kind: "none" as const };
+                  if (fleet.planMode === "unknown") return { kind: "unknown" as const };
+                  const changed = fleet.planReads > 1 ? fleet.changedOnRead : undefined;
+                  return {
+                    kind: "plan" as const,
+                    plan: {
+                      currentVersion: fleet.versions.get(alias) ?? "",
+                      targetVersion: version,
+                      canApply: true,
+                      planToken: changed === "token" ? "different-token-1234" : fleet.planToken,
+                      updateInFlight: fleet.inFlight,
+                      mutationBoundMs: 900_000,
+                      servingPath: changed === "servingPath" ? "/other" : fleet.servingPath,
+                      cliPath: changed === "cliPath" ? "/other" : fleet.cliPath,
+                    },
+                  };
+                }),
+              ),
+            ),
           applyOrchestrated: (alias, version, token, notAfter) =>
             Effect.gen(function* () {
               fleet.applyCalls++;
@@ -304,6 +314,7 @@ const build = (fleet: Fleet, baseDir: string, scheduler?: Scheduler.Scheduler["S
         }),
       ),
       Layer.provide(ServerConfig.layerTest(process.cwd(), baseDir)),
+      Layer.provide(Layer.succeed(FileSystem.FileSystem, fs)),
     ),
   );
 
@@ -311,17 +322,22 @@ export const service = Effect.fn("OpenCodexManagedUpdateTest.service")(function*
   fleet: Fleet,
   baseDir: string,
   scheduler?: Scheduler.Scheduler["Service"],
+  customFs?: FileSystem.FileSystem,
 ) {
-  const context = yield* build(fleet, baseDir, scheduler);
+  const fs = yield* FileSystem.FileSystem;
+  const context = yield* build(fleet, baseDir, customFs ?? fs, scheduler);
   return yield* ManagedUpdate.OpenCodexManagedUpdate.pipe(Effect.provideContext(context));
 });
 
-export const setup = Effect.fn("OpenCodexManagedUpdateTest.setup")(function* (fleet = makeFleet()) {
+export const setup = Effect.fn("OpenCodexManagedUpdateTest.setup")(function* (
+  fleet = makeFleet(),
+  customFs?: FileSystem.FileSystem,
+) {
   const fs = yield* FileSystem.FileSystem;
   const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-opencodex-update-" });
   // Long past the stable soak and rollout window, so every bucket is open.
   yield* TestClock.setTime(PUBLISHED + 10 * 24 * 60 * MINUTE);
-  return { fleet, baseDir, update: yield* service(fleet, baseDir) };
+  return { fleet, baseDir, update: yield* service(fleet, baseDir, undefined, customFs) };
 });
 
 export const phases = (status: OpenCodexUpdateStatus | undefined) =>

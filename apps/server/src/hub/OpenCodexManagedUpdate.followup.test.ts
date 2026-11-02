@@ -7,6 +7,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Ref from "effect/Ref";
 import * as ServerConfig from "../config.ts";
 import * as AutomationHold from "../automationHold.ts";
 import * as Scheduler from "../scheduling/Scheduler.ts";
@@ -352,6 +353,88 @@ it.layer(NodeServices.layer)("OpenCodex SSH replacement follow-up", (it) => {
         members: [{ phase: "probation" }],
         sync: { members: [{ alias: null, state: "synced" }] },
       });
+    }),
+  );
+  it.effect("releases the ceiling while a plan read is blocked and rejects its stale result", () =>
+    Effect.gen(function* () {
+      const disk = yield* FileSystem.FileSystem;
+      const files = yield* Ref.make(new Map<string, string>());
+      const relevant = (file: string) =>
+        file.endsWith("/opencodex-update.json") || file.endsWith("/opencodex-update.json.tmp");
+      const fs = FileSystem.FileSystem.of({
+        ...disk,
+        exists: (file) =>
+          relevant(file)
+            ? Ref.get(files).pipe(Effect.map((current) => current.has(file)))
+            : disk.exists(file),
+        readFileString: (file, options) =>
+          relevant(file)
+            ? Ref.get(files).pipe(
+                Effect.flatMap((current) =>
+                  current.has(file)
+                    ? Effect.succeed(current.get(file) ?? "")
+                    : disk.readFileString(file, options),
+                ),
+              )
+            : disk.readFileString(file, options),
+        writeFileString: (file, data, options) =>
+          relevant(file)
+            ? Ref.update(files, (current) => new Map(current).set(file, data))
+            : disk.writeFileString(file, data, options),
+        rename: (from, to) =>
+          relevant(from) && relevant(to)
+            ? Ref.update(files, (current) => {
+                const next = new Map(current);
+                const data = next.get(from);
+                if (data === undefined) throw new Error("Missing state");
+                next.set(to, data);
+                next.delete(from);
+                return next;
+              })
+            : disk.rename(from, to),
+        makeDirectory: (file, options) =>
+          file.endsWith("/userdata") ? Effect.void : disk.makeDirectory(file, options),
+      });
+      const fleet = makeFleet({ homeOwnership: "adopted" });
+      fleet.orchestrated = true;
+      fleet.applyResult = "uncertain";
+      fleet.versions.set("mac-studio", "2.90.0");
+      const { update, baseDir } = yield* setup(fleet, fs);
+      yield* update.check;
+      fleet.inFlight = false;
+      fleet.versions.set(null, "2.90.0");
+      yield* TestClock.adjust(20 * MINUTE);
+      yield* update.check;
+      yield* TestClock.adjust(29 * MINUTE);
+      const entered = yield* Deferred.make<void>();
+      const resume = yield* Deferred.make<void>();
+      fleet.onPlan = Deferred.succeed(entered, undefined).pipe(
+        Effect.andThen(Deferred.await(resume)),
+      );
+      const checking = yield* Effect.forkChild(update.checkNow);
+      yield* Deferred.await(entered);
+      yield* TestClock.adjust(MINUTE);
+      const done = yield* Deferred.make<void>();
+      const guarding = yield* Effect.forkChild(
+        update.admissionGuard.pipe(Effect.andThen(Deferred.succeed(done, undefined))),
+      );
+      yield* TestClock.adjust(1);
+      const releasedBeforeResume = yield* Deferred.isDone(done);
+      yield* Deferred.succeed(resume, undefined);
+      yield* Fiber.join(checking);
+      yield* Fiber.join(guarding);
+      expect(releasedBeforeResume).toBe(true);
+      expect(fleet.holds).toBe(0);
+      expect(fleet.log).toEqual([]);
+      const path = yield* Path.Path;
+      const config = yield* ServerConfig.ServerConfig.pipe(
+        Effect.provide(ServerConfig.layerTest(process.cwd(), baseDir)),
+      );
+      const state = Option.getOrThrow(
+        decodeState(yield* fs.readFileString(path.join(config.stateDir, "opencodex-update.json"))),
+      );
+      expect(state.members.find((member) => member.alias === null)?.reason).toBe("apply-overrun");
+      expect(state.window?.orchestrated?.[""]?.observed?.version).toBe("2.90.0");
     }),
   );
 });

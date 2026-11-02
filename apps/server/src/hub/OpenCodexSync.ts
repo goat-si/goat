@@ -61,6 +61,7 @@ export class OpenCodexSync extends Context.Service<
     readonly syncUpdatedMember: (
       alias: string | null,
       scope: McpInvocationScope,
+      options?: { readonly admissionHeld?: boolean },
     ) => Effect.Effect<void>;
   }
 >()("goat/hub/OpenCodexSync") {}
@@ -180,10 +181,13 @@ const make = Effect.gen(function* () {
    * This machine. New turns wait while Codex restarts, and the machine is judged again once they
    * do: a turn that started in between makes a Home skip the restart and a Child skip the sync.
    */
-  const syncHere = Effect.fn("OpenCodexSync.syncHere")(function* (scope: McpInvocationScope) {
+  const syncHere = Effect.fn("OpenCodexSync.syncHere")(function* (
+    scope: McpInvocationScope,
+    admissionHeld = false,
+  ) {
     const planned = planCoordinator(yield* host.member(null, scope)).member;
     if (planned.state !== "ready") return planned;
-    const held = planned.restartCodex && (yield* host.holdAdmission(null));
+    const held = planned.restartCodex && (admissionHeld || (yield* host.holdAdmission(null)));
     return yield* Effect.gen(function* () {
       const fresh = held ? planCoordinator(yield* host.member(null, scope)).member : planned;
       if (fresh.state !== "ready") return fresh;
@@ -215,7 +219,7 @@ const make = Effect.gen(function* () {
           ),
           Effect.catch((error) => Effect.succeed(unreachable(null, restartCodex, error))),
         );
-    }).pipe(Effect.ensuring(held ? host.releaseAdmission(null) : Effect.void));
+    }).pipe(Effect.ensuring(held && !admissionHeld ? host.releaseAdmission(null) : Effect.void));
   });
 
   /** One Child, judged again from fresh readings right before it runs. */
@@ -260,8 +264,12 @@ const make = Effect.gen(function* () {
       );
   });
 
-  const syncOne = (alias: string | null, scope: McpInvocationScope, permits: SyncPermits) =>
-    alias === null ? syncHere(scope) : syncChild(alias, scope, permits);
+  const syncOne = (
+    alias: string | null,
+    scope: McpInvocationScope,
+    permits: SyncPermits,
+    admissionHeld = false,
+  ) => (alias === null ? syncHere(scope, admissionHeld) : syncChild(alias, scope, permits));
 
   const plan = Effect.fn("OpenCodexSync.plan")(function* (
     scope: McpInvocationScope,
@@ -357,11 +365,13 @@ const make = Effect.gen(function* () {
           Ref.set(updateReport, opened).pipe(Effect.andThen(SubscriptionRef.set(report, opened))),
         ),
       ),
-    syncUpdatedMember: Effect.fn("OpenCodexSync.syncUpdatedMember")(function* (alias, scope) {
-      yield* putUpdate({ alias, state: "syncing", restartCodex: true });
-      const done = yield* syncOne(alias, scope, everyone);
-      yield* putUpdate({ ...done, at: yield* Clock.currentTimeMillis });
-    }),
+    syncUpdatedMember: Effect.fn("OpenCodexSync.syncUpdatedMember")(
+      function* (alias, scope, options) {
+        yield* putUpdate({ alias, state: "syncing", restartCodex: true });
+        const done = yield* syncOne(alias, scope, everyone, options?.admissionHeld === true);
+        yield* putUpdate({ ...done, at: yield* Clock.currentTimeMillis });
+      },
+    ),
   });
 });
 

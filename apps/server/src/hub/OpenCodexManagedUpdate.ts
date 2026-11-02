@@ -6,6 +6,7 @@ import {
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
@@ -99,7 +100,9 @@ const make = Effect.gen(function* () {
   const state = yield* Ref.make<State>({ members: [], failedTargets: {} });
   // A person's check and the scheduler's must never open two windows at once.
   const checking = yield* Semaphore.make(1);
+  const stateLock = yield* Semaphore.make(1);
   const retainedHome = yield* Ref.make<AdmissionOwnership>("none");
+  const overrunSignal = yield* Ref.make(yield* Deferred.make<void>());
 
   /** A file that exists but cannot be read must not erase the memory of a rolled-back target. */
   const readState = Effect.gen(function* () {
@@ -112,7 +115,7 @@ const make = Effect.gen(function* () {
   yield* sync.markUpdating(initial?.window !== undefined);
   yield* restoreAdmission(initial, host, retainedHome);
   /** Every change is one atomic write, so a GOAT restart sees either all of it or none. */
-  const mutate = Effect.fn("OpenCodexManagedUpdate.mutate")(function* (
+  const writeState = Effect.fn("OpenCodexManagedUpdate.writeState")(function* (
     change: (current: State, at: number) => State,
   ) {
     const next = change(yield* Ref.get(state), yield* Clock.currentTimeMillis);
@@ -123,6 +126,29 @@ const make = Effect.gen(function* () {
     yield* Ref.set(state, next);
     yield* sync.markUpdating(next.window !== undefined);
   });
+  const mutate = (change: (current: State, at: number) => State) =>
+    stateLock.withPermit(writeState(change).pipe(Effect.uninterruptible));
+  const mutateIfCurrent = (
+    expected: State,
+    change: (current: State, at: number) => State,
+    after: Effect.Effect<void> = Effect.void,
+  ) =>
+    stateLock.withPermit(
+      Effect.gen(function* () {
+        if ((yield* Ref.get(state)) !== expected) return false;
+        const pending = expected.window?.orchestrated?.[""];
+        if (
+          pending !== undefined &&
+          !pending.settled &&
+          (pending.pending || pending.uncertain) &&
+          (yield* Clock.currentTimeMillis) >= pending.notAfter + pending.boundMs + 30 * MINUTE
+        )
+          return false;
+        yield* writeState(change);
+        yield* after;
+        return true;
+      }).pipe(Effect.uninterruptible),
+    );
   const record = (
     step: Pick<OpenCodexUpdateStep, "alias" | "fromVersion">,
     targetVersion: string,
@@ -130,7 +156,40 @@ const make = Effect.gen(function* () {
     reason?: string,
   ) => mutate((current, at) => withRecords(current, at, [step], targetVersion, phase, reason));
   const holding = <A, E>(affected: ReadonlyArray<string | null>, body: Effect.Effect<A, E>) =>
-    holdAffected(host, retainedHome, affected, body);
+    holdAffected(host, retainedHome, affected, body, stateLock);
+
+  const enforceOverrun = Effect.fn("OpenCodexManagedUpdate.enforceOverrun")(function* () {
+    yield* stateLock.withPermit(
+      Effect.gen(function* () {
+        const current = yield* readState;
+        if (current === undefined) return;
+        yield* restoreAdmission(current, host, retainedHome);
+        const now = yield* Clock.currentTimeMillis;
+        if (!(yield* releaseOverrun(current, host, retainedHome, now))) return;
+        yield* Deferred.succeed(yield* Ref.get(overrunSignal), undefined);
+        const window = current.window;
+        const entry = window?.orchestrated?.[""];
+        if (
+          window === undefined ||
+          entry === undefined ||
+          current.members.find((member) => member.alias === null)?.reason === "apply-overrun"
+        )
+          return;
+        yield* Ref.set(state, current);
+        yield* writeState((latest, at) =>
+          withRecords(
+            latest,
+            at,
+            [{ alias: null, fromVersion: entry.fromVersion }],
+            window.targetVersion,
+            "rollback-failed",
+            "apply-overrun",
+          ),
+        );
+        yield* Effect.logWarning("opencodex.update.apply-overrun", { alias: null });
+      }).pipe(Effect.uninterruptible),
+    );
+  });
 
   /**
    * Children first, then the Home, so a Child is never left ahead of the Home it relays to. A
@@ -292,7 +351,21 @@ const make = Effect.gen(function* () {
     return true;
   });
 
-  const windowOps = { host, sync, retainedHome, nextAt, mutate, record, rollBack, healthProof };
+  const windowOps = {
+    host,
+    sync,
+    retainedHome,
+    nextAt,
+    mutate,
+    mutateIfCurrent,
+    state,
+    stateLock,
+    overrunSignal,
+    enforceOverrun,
+    record,
+    rollBack,
+    healthProof,
+  };
 
   /**
    * Home first, then each Child; any failure restores every member this window moved. Every
@@ -482,14 +555,21 @@ const make = Effect.gen(function* () {
 
   const runCheck = Effect.gen(function* () {
     const now = yield* Clock.currentTimeMillis;
-    const stored = yield* readState;
+    const stored = yield* stateLock.withPermit(
+      Effect.gen(function* () {
+        const current = yield* readState;
+        if (current !== undefined) {
+          yield* restoreAdmission(current, host, retainedHome);
+          yield* Ref.set(state, current);
+        }
+        return current;
+      }),
+    );
     if (stored === undefined)
       return yield* publish(now, { decision: "wait", reason: "state-unreadable" });
-    yield* restoreAdmission(stored, host, retainedHome);
     if (now < (yield* Ref.get(nextAt))) return;
     yield* Ref.set(nextAt, now + RETRY_INTERVAL_MS);
     const configured = yield* settings.getSettings.pipe(Effect.option);
-    yield* Ref.set(state, stored);
     yield* sync.markUpdating(stored.window !== undefined);
     const replaced = yield* sshRuntime.replacedInto;
     const followUp =
@@ -669,33 +749,9 @@ const make = Effect.gen(function* () {
       ? { ...current, sync: synced }
       : current;
   });
-  const admissionGuard = checking.withPermit(
-    Effect.gen(function* () {
-      const current = yield* readState;
-      if (current === undefined) return;
-      yield* restoreAdmission(current, host, retainedHome);
-      const now = yield* Clock.currentTimeMillis;
-      if (!(yield* releaseOverrun(current, host, retainedHome, now))) return;
-      const window = current.window;
-      const entry = window?.orchestrated?.[""];
-      if (
-        window === undefined ||
-        entry === undefined ||
-        current.members.find((member) => member.alias === null)?.reason === "apply-overrun"
-      )
-        return;
-      yield* Ref.set(state, current);
-      yield* record(
-        { alias: null, fromVersion: entry.fromVersion },
-        window.targetVersion,
-        "rollback-failed",
-        "apply-overrun",
-      );
-      yield* Effect.logWarning("opencodex.update.apply-overrun", { alias: null });
-    }).pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning("opencodex.update.admission-guard-failed", { cause }),
-      ),
+  const admissionGuard = enforceOverrun().pipe(
+    Effect.catchCause((cause) =>
+      Effect.logWarning("opencodex.update.admission-guard-failed", { cause }),
     ),
   );
   const check = checking.withPermit(runCheck);
