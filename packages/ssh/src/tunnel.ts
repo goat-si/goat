@@ -784,6 +784,7 @@ exec "$GOAT_RUNTIME_DIR/goat" "$@"
 `;
 
 const REMOTE_LAUNCH_SCRIPT = `set -eu
+cd "$HOME" 2>/dev/null || cd /
 @@GOAT_NODE_ENV_SCRIPT@@
 STATE_KEY="$1"
 STATE_DIR="$HOME/.goat/ssh-launch/$STATE_KEY"
@@ -1196,9 +1197,7 @@ export class SshInvalidArchiveVersionError extends Schema.TaggedError<SshInvalid
   }
 }
 
-// The version becomes a directory name the runner removes and recreates, so
-// it must be one exact SemVer segment: no separators, no `..`, no shell
-// metacharacters beyond what SemVer allows.
+// The version names a runtime directory, so it must be one exact SemVer segment.
 const EXACT_ARCHIVE_VERSION =
   /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
 export class SshMissingRunnerError extends Schema.TaggedError<SshMissingRunnerError>()(
