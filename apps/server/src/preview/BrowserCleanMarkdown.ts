@@ -40,8 +40,6 @@ const DROP_CLOSE = "\u0002";
 const INDENT = "\u0003";
 const MAX_RENDER_DEPTH = 400;
 const MAX_COLSPAN = 1000;
-/** Bounds each close search so adversarial nesting cannot make tree building quadratic. */
-const MAX_CLOSE_SCAN = 256;
 
 const set = (...tags: Array<string>): ReadonlySet<string> => new Set(tags);
 const words = (list: string) => set(...list.split(" "));
@@ -231,14 +229,24 @@ const makeElement = (
 const parseHtml = (html: string): ElementNode => {
   const root = makeElement("#root", new Map(), false);
   const stack: Array<ElementNode> = [root];
-  const openCounts = new Map<string, number>();
-  const counted = (tag: string, delta: number) =>
-    openCounts.set(tag, (openCounts.get(tag) ?? 0) + delta);
+  // Stack depths where each tag is open, so a close search costs O(tags), not O(depth).
+  const openAt = new Map<string, Array<number>>();
+  const push = (element: ElementNode) => {
+    stack.push(element);
+    const depths = openAt.get(element.tag) ?? [];
+    depths.push(stack.length - 1);
+    openAt.set(element.tag, depths);
+  };
   const popTo = (depth: number) => {
     while (stack.length > depth) {
       const removed = stack.pop();
-      if (removed) counted(removed.tag, -1);
+      if (removed) openAt.get(removed.tag)?.pop();
     }
+  };
+  const deepest = (tags: ReadonlySet<string>) => {
+    let depth = -1;
+    for (const tag of tags) depth = Math.max(depth, openAt.get(tag)?.at(-1) ?? -1);
+    return depth;
   };
   const top = () => stack.at(-1) ?? root;
   const addText = (text: string) => {
@@ -248,19 +256,10 @@ const parseHtml = (html: string): ElementNode => {
     if (last?.kind === "text") last.text += text;
     else parent.children.push({ kind: "text", text });
   };
+  /** Pops to the nearest open element in close unless an element in within is nearer. */
   const closeWithin = (close: ReadonlySet<string>, within: ReadonlySet<string>) => {
-    let isOpen = false;
-    for (const tag of close) isOpen ||= (openCounts.get(tag) ?? 0) > 0;
-    if (!isOpen) return;
-    const floor = Math.max(1, stack.length - MAX_CLOSE_SCAN);
-    for (let depth = stack.length - 1; depth >= floor; depth--) {
-      const tag = stack[depth]?.tag ?? "";
-      if (close.has(tag)) {
-        popTo(depth);
-        return;
-      }
-      if (within.has(tag)) return;
-    }
+    const target = deepest(close);
+    if (target >= 1 && target >= deepest(within)) popTo(target);
   };
   const open = (tag: StartTag) => {
     if (CLOSES_P.has(tag.name)) closeWithin(set("p"), P_SCOPE);
@@ -271,10 +270,7 @@ const parseHtml = (html: string): ElementNode => {
     const element = makeElement(tag.name, tag.attrs, foreign);
     parent.children.push(element);
     // HTML ignores "/>" on its own elements; only foreign content (svg, math) self-closes.
-    if (!VOID.has(tag.name) && !(tag.selfClosing && foreign)) {
-      stack.push(element);
-      counted(tag.name, 1);
-    }
+    if (!VOID.has(tag.name) && !(tag.selfClosing && foreign)) push(element);
     return element;
   };
 

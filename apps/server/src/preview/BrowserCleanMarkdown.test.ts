@@ -183,4 +183,9 @@ describe("extractCleanMarkdown", () => {
     });
     expect(markdown).toBe("[" + tick + "a[b]" + tick + " c\\[d\\]](/x)");
   });
+
+  it("closes an end tag's element however deep its unclosed descendants go", () => {
+    const html = "<div hidden>" + "<span>".repeat(260) + "</div><p>visible</p>";
+    expect(extractCleanMarkdown(html).markdown).toBe("visible");
+  });
 });
