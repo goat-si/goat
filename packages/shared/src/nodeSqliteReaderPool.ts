@@ -29,7 +29,7 @@ export const makeReaderRestart = (gate: Semaphore.Semaphore) => {
     },
     remainingMs: (now: bigint) => Number(retryAt - now) / 1e6,
     // A restart's startup outlives a cancelled request, so the next restart waits for its outcome,
-    // bounded by the startup deadline in case the worker never answers.
+    // which ends by the startup deadline fixed when that worker started.
     probe: () => probe,
     setProbe: (next: Effect.Effect<unknown>) => {
       probe = next;

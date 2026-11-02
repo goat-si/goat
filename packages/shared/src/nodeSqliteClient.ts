@@ -406,6 +406,15 @@ const makeReader = Effect.fn("SqliteReader.make")(function* (
           message: String(error.reason.cause),
         }),
       }),
+      // The deadline is fixed when the worker starts; late or repeated waiters never extend it.
+      Effect.timeoutOrElse({
+        duration: startupTimeout,
+        orElse: () =>
+          Effect.succeed<ReaderStartup>({
+            type: "unavailable",
+            message: "Reader startup deadline exceeded",
+          }),
+      }),
       Effect.forkIn(scope),
     );
     current = { worker, connection, started: Fiber.join(startup) };
@@ -449,27 +458,16 @@ const makeReader = Effect.fn("SqliteReader.make")(function* (
       const reader =
         current ??
         (yield* start().pipe(
-          Effect.tap((started) =>
-            Effect.sync(() =>
-              restart.setProbe(Effect.timeoutOption(started.started, startupTimeout)),
-            ),
-          ),
+          Effect.tap((started) => Effect.sync(() => restart.setProbe(started.started))),
           Effect.catch((cause) => {
             backoff();
             return retire(undefined, cause);
           }),
         ));
-      const startup = yield* Effect.timeoutOption(reader.started, startupTimeout);
+      const startup = yield* reader.started;
       if (current !== reader) return yield* retire(undefined, new Error("Reader epoch retired"));
-      if (Option.isSome(startup) && startup.value.type === "ready") return reader.connection;
-      return yield* retire(
-        reader,
-        new Error(
-          Option.isSome(startup) && startup.value.type === "unavailable"
-            ? startup.value.message
-            : "Reader startup deadline exceeded",
-        ),
-      );
+      if (startup.type === "ready") return reader.connection;
+      return yield* retire(reader, new Error(startup.message));
     });
     // A slot that must start a worker after a failure takes the shared gate: one restart at a time.
     const startOrReuse = Effect.suspend(() =>

@@ -276,3 +276,31 @@ it.effect(
       }),
     ),
 );
+
+it.effect("late or repeated waiters never extend a starting worker's deadline", () =>
+  withReaderClient((sql) =>
+    Effect.gen(function* () {
+      yield* failFirstStartup(sql);
+      // Slot 0's worker starts at 250ms and never answers; its deadline is 10.25s.
+      const restart = yield* holdRestart(sql);
+      yield* Fiber.interrupt(restart.read);
+      for (let index = 0; index < 2; index++) {
+        yield* TestClock.adjust("3000 millis");
+        const early = yield* Effect.forkChild(countEntries(sql).pipe(SqliteClient.readOnly), {
+          startImmediately: true,
+        });
+        yield* TestClock.adjust("0 millis");
+        yield* Fiber.interrupt(early);
+      }
+      yield* TestClock.adjust("3000 millis");
+      const late = yield* Effect.forkChild(
+        countEntries(sql).pipe(SqliteClient.readOnly, Effect.result),
+        { startImmediately: true },
+      );
+      yield* TestClock.adjust("1000 millis");
+      // A per-waiter timer would keep this read waiting until 19.25s.
+      assert.equal((yield* Fiber.join(late))._tag, "Failure");
+      yield* restart.release;
+    }),
+  ),
+);
