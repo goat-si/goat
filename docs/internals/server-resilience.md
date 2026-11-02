@@ -1,0 +1,75 @@
+# Server resilience
+
+One GOAT server process carries every session on the machine: the WebSocket clients, every
+provider adapter, the hub and device proxies, screen runs, and SQLite. Anything that kills that
+process drops every connected client and every in-flight turn at once; one unobserved `'error'`
+event has restarted the server 21 times in a day. The rules below are mandatory for code that
+runs in the server or the desktop main process. A review that finds a violation rejects the
+change.
+
+## Every error source has a listener from birth
+
+Node terminates the process when an `EventEmitter` emits `'error'` with no listener. Effect
+code does not protect you here: these events fire from callbacks outside any fiber.
+
+- Attach an `'error'` listener in the same statement or block that creates the emitter, before
+  any `await` or yield. This covers child processes **and** their `stdin`, `stdout` and
+  `stderr`, `ws` sockets and servers, `net`/`tls` sockets, `http`/`https` requests,
+  responses and servers, `fs` streams, `readline`, `zlib` and any piped stream, and
+  `worker_threads` workers.
+- A `child.once("error")` does not cover `child.stdin`. Writing to the stdin of a child that
+  closed its end raises `EPIPE` on the stdin stream.
+- A library may detach its own error listener before closing a resource. A `ws` socket released
+  while still connecting emits its teardown error after Effect's socket has stopped listening,
+  so the code that creates the socket keeps a listener for its whole life
+  ([hubProxy/http.ts](../../apps/server/src/hubProxy/http.ts)).
+- The listener routes the failure into that resource's cleanup path: fail the owning Effect,
+  close the session, mark the run. An empty listener is allowed only with a one-line comment
+  naming where the failure is otherwise observed.
+- Use `stream.pipeline` instead of chained `.pipe()`, so an error on any stage reaches one
+  callback.
+- A fix for a crash path ships a test that fails on `dev` with the escaped error.
+
+## Never resume after an uncaught exception
+
+Node does not guarantee consistent state after `uncaughtException`. Do not register
+`process.on("uncaughtException")` or `process.on("unhandledRejection")` anywhere except the
+server's single last-resort handler. That handler records the error and exits so the desktop
+supervisor restarts the server. It may continue only for codes that arrive after their
+resource was already torn down, such as `EPIPE`, `ECONNRESET` and `ERR_STREAM_DESTROYED`. Each
+code on that list needs a reviewed reason. Swallowing anything else hides state corruption.
+
+## Isolate by component, not by agent
+
+Each agent CLI is already its own OS process. Measured on the desktop runtime (Node 24.22.1):
+a separate Node process costs about 60 MB RSS, and a `worker_threads` worker costs about 8 MB
+with a 13 µs round trip.
+
+- Do not add a wrapper process or a worker per agent or per thread. At 100 agents that costs
+  6 GB or 830 MB for nothing.
+- Pure-JS work that can hold the event loop for more than about 100 ms belongs in a fixed-size
+  worker pool. Shell snapshot decoding, settlement sweeps and memory catch-up stalled the main
+  thread for up to 8.3 s. Set `resourceLimits`, pass large results as transferables, and never
+  load a native module in a worker: a native crash in a worker still kills the process.
+- Native or crash-prone helpers (computer-use drivers, screen-run children, device hubs, pty
+  hosts) run as separate processes. A helper that dies restarts with exponential backoff, and a
+  circuit breaker stops restarts after repeated failures in a short window, shows why, and
+  resets only when the helper reports ready.
+- An in-progress agent turn is never restarted in a loop. Recovery after a server restart goes
+  through [restart continuation](./server-updates.md#recovering-interrupted-threads), which is
+  bounded.
+
+## Every buffer the server holds has a bound
+
+A server dies of its own bookkeeping more often than of its children. Every queue, buffer,
+fan-out, cache and replay the server holds has an explicit byte or count limit, or pages from
+SQLite. Never keep a whole transcript, log or snapshot in memory to serve it later. A slow client
+gets dropped or coalesced updates; it never makes the server buffer more.
+
+## Database pressure degrades, never kills
+
+A saturated SQLite reader returns `ReaderAdmissionOverloadError`. That error must never end a
+running turn: provider ingestion retries the read once on the writer
+([readerOverloadFallback.ts](../../apps/server/src/orchestration-v2/readerOverloadFallback.ts)),
+and any new read on a turn's critical path must do the same or wait within a bound. Interactive
+reads take precedence over background sweeps.
