@@ -17,6 +17,10 @@ import {
   seed,
   seedDerivedSummary,
   incrementalSummary,
+  decodeMessage,
+  decodeRun,
+  encodeMessage,
+  encodeRun,
   seedRolledBackRegeneration,
 } from "./MemoryWorker.testkit.ts";
 import { redactGoatCredentials } from "../mcp/goatCredentialRedaction.ts";
@@ -120,11 +124,140 @@ describe("MemoryWorker summary quality", () => {
             false,
             0,
             false,
-            (input) => input.promote === true,
-            (input) => ({ project: null, user: cited(input, "Synthetic user preference") }),
+            (input) => input.previousSummary !== undefined,
+            (input) => ({
+              project: null,
+              user: input.previousSummary ? cited(input, "Synthetic user preference") : null,
+            }),
           ),
         ),
       ),
+  );
+  it.effect(
+    "an ordinary summary run promotes durable user and project memory before consolidation",
+    () =>
+      Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(now));
+        yield* seed;
+        const sql = yield* SqlClient.SqlClient;
+        const store = yield* Store.MemoryStore;
+        yield* sql`ALTER TABLE orchestration_v2_projection_threads ADD COLUMN project_id TEXT`;
+        yield* sql`UPDATE orchestration_v2_projection_threads SET project_id='project'`;
+        yield* sql`CREATE TABLE projection_projects (project_id TEXT PRIMARY KEY,workspace_root TEXT,deleted_at TEXT)`;
+        yield* sql`INSERT INTO projection_projects VALUES ('project','/synthetic/project',NULL)`;
+        const projectKey = { kind: "explicit" as const, sharedProjectId: "shared" };
+        yield* store.putProjectBinding(
+          {
+            memorySpaceId: space,
+            project: { environmentId, projectId: M.ProjectId.make("project") },
+            projectKey,
+            repositoryKey: null,
+            version: 0,
+          },
+          null,
+          Date.parse(now),
+        );
+        yield* (yield* Worker.MemoryWorker).sweepDue();
+        for (const [scope, destination] of [
+          [{ kind: "user" } as const, "user"],
+          [{ kind: "project", projectKey } as const, "project"],
+        ] as const) {
+          const items = yield* store.list({ memorySpaceId: space, scope, limit: 20 });
+          assert.deepStrictEqual(
+            items.map((item) => [item.memoryId, item.status]),
+            [
+              [
+                M.MemoryId.make(
+                  Service.memoryStableUuid(
+                    `${environmentId}:${threadId}:promotion:${destination === "project" ? `project:${JSON.stringify(projectKey)}` : destination}`,
+                  ),
+                ),
+                "active",
+              ],
+            ],
+          );
+        }
+      }).pipe(
+        Effect.provide(
+          live(false, undefined, false, 0, false, undefined, (input) => ({
+            project: cited(input, "Project convention"),
+            user: cited(input, "User preference"),
+          })),
+        ),
+      ),
+  );
+  it.effect.each([false, true])(
+    "a summary with nothing new fills only a missing promotion (existing=$0)",
+    (existing) => {
+      let calls = 0;
+      return Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(now));
+        yield* seed;
+        const sql = yield* SqlClient.SqlClient;
+        const store = yield* Store.MemoryStore;
+        const worker = yield* Worker.MemoryWorker;
+        yield* sql`ALTER TABLE orchestration_v2_projection_threads ADD COLUMN project_id TEXT`;
+        yield* worker.sweepDue();
+        const before = yield* store.loadAggregate(space, userPromotionId);
+        const message = yield* decodeMessage(
+          (yield* sql<{
+            payload_json: string;
+          }>`SELECT payload_json FROM orchestration_events WHERE sequence=1`)[0]!.payload_json,
+        );
+        const run = yield* decodeRun(
+          (yield* sql<{
+            payload_json: string;
+          }>`SELECT payload_json FROM orchestration_events WHERE sequence=2`)[0]!.payload_json,
+        );
+        const append = (n: number) =>
+          Effect.gen(function* () {
+            yield* sql`INSERT INTO orchestration_events VALUES (${n * 2 + 1},${id(9800 + n * 2)},${threadId},'message.updated',${encodeMessage({ ...message, id: M.MessageId.make(`next-${n}`), runId: null })},${now},2,'thread')`;
+            yield* sql`INSERT INTO orchestration_events VALUES (${n * 2 + 2},${id(9801 + n * 2)},${threadId},'run.updated',${encodeRun({ ...run, id: M.RunId.make(`run-${n}`) })},${now},2,'thread')`;
+            yield* worker.sweepDue();
+          });
+        yield* append(1);
+        const after = yield* store.loadAggregate(space, userPromotionId);
+        assert.strictEqual(yield* headText(userPromotionId), existing ? "first" : "second");
+        if (existing) assert.deepStrictEqual(after.heads, before.heads);
+        yield* append(2);
+        assert.strictEqual(yield* headText(userPromotionId), "third");
+        const items = yield* store.list({
+          memorySpaceId: space,
+          scope: { kind: "user" },
+          limit: 20,
+        });
+        assert.deepStrictEqual(
+          items.map((item) => item.memoryId),
+          [userPromotionId],
+        );
+      }).pipe(
+        Effect.provide(
+          live(
+            false,
+            () => {
+              calls++;
+            },
+            false,
+            0,
+            false,
+            () => calls === 2,
+            (input) => ({
+              project: null,
+              user:
+                calls === 1 && !existing
+                  ? null
+                  : calls === 2 && !existing
+                    ? {
+                        text: "second",
+                        assertionKind: "fact" as const,
+                        evidence: input.previousSummary!.evidence,
+                      }
+                    : cited(input, calls === 1 ? "first" : calls === 2 ? "second" : "third"),
+            }),
+          ),
+        ),
+      );
+    },
   );
   it.effect("forgets a summary that cites more than 100 messages of one run", () =>
     Effect.gen(function* () {
@@ -166,33 +299,43 @@ describe("MemoryWorker summary quality", () => {
       ),
     );
   });
-  it.effect("consolidation never overwrites a person's own memory at the promotion id", () =>
-    Effect.gen(function* () {
-      const manual = Effect.gen(function* () {
-        yield* (yield* Service.MemoryService).upsert(
-          {
-            memorySpaceId: space,
-            memoryId: userPromotionId,
-            operationId: M.MemoryOperationId.make(id(9500)),
-            expectedHeads: [],
-            scope: { kind: "user" },
-            assertionKind: "inference",
-            payload: { text: "written by hand", evidence: [], derivedFromMemoryRevisions: [] },
-            baseBoundary: null,
-          },
-          Effect.void,
-        );
-      }).pipe(Effect.orDie);
-      yield* summarizeThenConsolidate(manual);
-      assert.strictEqual(yield* headText(userPromotionId), "written by hand");
-    }).pipe(
-      Effect.provide(
-        live(false, undefined, false, 0, false, undefined, (input) => ({
-          project: null,
-          user: cited(input, "Synthetic user preference"),
-        })),
+  it.effect(
+    "summary and consolidation runs never overwrite a person's own memory at the promotion id",
+    () =>
+      Effect.gen(function* () {
+        const manual = Effect.gen(function* () {
+          yield* (yield* Service.MemoryService).upsert(
+            {
+              memorySpaceId: space,
+              memoryId: userPromotionId,
+              operationId: M.MemoryOperationId.make(id(9500)),
+              expectedHeads: [],
+              scope: { kind: "user" },
+              assertionKind: "inference",
+              payload: { text: "written by hand", evidence: [], derivedFromMemoryRevisions: [] },
+              baseBoundary: null,
+            },
+            Effect.void,
+          );
+        }).pipe(Effect.orDie);
+        yield* TestClock.setTime(Date.parse(now));
+        yield* seed;
+        yield* manual;
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`ALTER TABLE orchestration_v2_projection_threads ADD COLUMN project_id TEXT`;
+        const worker = yield* Worker.MemoryWorker;
+        yield* worker.sweepDue();
+        yield* TestClock.adjust(86400000 + Worker.MEMORY_CONTINUATION_SCAN_INTERVAL_MS);
+        yield* worker.sweepDue();
+        assert.strictEqual(yield* headText(userPromotionId), "written by hand");
+      }).pipe(
+        Effect.provide(
+          live(false, undefined, false, 0, false, undefined, (input) => ({
+            project: null,
+            user: cited(input, "Synthetic user preference"),
+          })),
+        ),
       ),
-    ),
   );
   it.effect("a consolidation with nothing new to summarize still promotes", () =>
     Effect.gen(function* () {
@@ -206,8 +349,11 @@ describe("MemoryWorker summary quality", () => {
           false,
           0,
           false,
-          (input) => input.promote === true,
-          (input) => ({ project: null, user: cited(input, "Synthetic user preference") }),
+          (input) => input.previousSummary !== undefined,
+          (input) => ({
+            project: null,
+            user: input.previousSummary ? cited(input, "Synthetic user preference") : null,
+          }),
         ),
       ),
     ),
@@ -301,8 +447,6 @@ describe("MemoryWorker summary quality", () => {
         yield* worker.sweepDue();
         const scoped = (scope: M.MemoryScope) =>
           store.list({ memorySpaceId: space, scope, limit: 20 });
-        // Ordinary per-run summaries never promote.
-        assert.deepStrictEqual(yield* scoped({ kind: "user" }), []);
         yield* TestClock.adjust(86400000 + Worker.MEMORY_CONTINUATION_SCAN_INTERVAL_MS);
         yield* worker.sweepDue();
         const project = yield* scoped({ kind: "project", projectKey });

@@ -31,7 +31,6 @@ import { catchUpWakes, terminalRunStatuses as terminal } from "./memoryCatchUpWa
 import { MemoryWorkerError } from "./MemoryWorkerError.ts";
 import { generateSummaryChunks, type SummaryPromotions } from "./memorySummaryChunks.ts";
 import { resolveThreadProject } from "./MemorySummaryCommit.ts";
-
 export { MemoryWorkerError };
 export class MemoryWorker extends Context.Service<
   MemoryWorker,
@@ -228,6 +227,7 @@ const make = Effect.gen(function* () {
     promotions: SummaryPromotions | undefined,
     thread: M.ScopedThreadRef,
     space: M.MemorySpaceId,
+    replace: boolean,
   ) =>
     promotions
       ? query(
@@ -236,7 +236,7 @@ const make = Effect.gen(function* () {
             thread,
             space,
           ),
-        ).pipe(Effect.map((project) => ({ ...promotions, project })))
+        ).pipe(Effect.map((project) => ({ ...promotions, project, replace })))
       : Effect.undefined;
   const summaryEvidenceValid = Effect.fn("MemoryWorker.summaryEvidenceValid")(function* (
     work: Store.MemoryWork,
@@ -638,8 +638,7 @@ const make = Effect.gen(function* () {
             throughSequence: meta.sourceWatermark.throughSequence,
             previousSummary,
             dependencies,
-            // Consolidation is the daily durability pass, so only it proposes promotions.
-            promote: work.kind === "consolidate" && !work.space.startsWith("_local:"),
+            promote: !work.space.startsWith("_local:"),
             buildInput: (chunk, previous, promote) =>
               query(
                 decodeInput(
@@ -752,6 +751,7 @@ const make = Effect.gen(function* () {
             generated.promotions,
             meta.sourceThread,
             M.MemorySpaceId.make(work.space),
+            work.kind === "consolidate" || summary !== undefined,
           ),
           recheckSource: recheckSource.pipe(
             Effect.asVoid,
