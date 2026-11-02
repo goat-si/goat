@@ -198,7 +198,27 @@ describe("DevToolsActivePort parsing", () => {
   });
 });
 
-describe("DevToolsActivePort reader", () => {
+describe("DevToolsActivePort reader without a known user", () => {
+  it.effect("fails closed where the server user is unknown, as on Windows", () => {
+    setup();
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const dir = yield* tempDir;
+        yield* Effect.promise(() =>
+          NodeFSP.writeFile(NodePath.join(dir, "DevToolsActivePort"), valid, { mode: 0o600 }),
+        );
+        expect(
+          yield* readDevToolsActivePort(dir).pipe(
+            Effect.provideService(HostProcess.UserId, undefined),
+          ),
+        ).toEqual({ ok: false, reason: "untrusted_owner" });
+      }),
+    );
+  });
+});
+
+// oxlint-disable-next-line goat/no-global-process-runtime -- owners, modes, links and FIFOs here are POSIX semantics.
+describe.skipIf(process.platform === "win32")("DevToolsActivePort reader", () => {
   it.effect("reads a valid file and reports missing directory or file", () => {
     setup();
     return Effect.scoped(
@@ -254,8 +274,7 @@ describe("DevToolsActivePort reader", () => {
       }),
     );
   });
-  // oxlint-disable-next-line goat/no-global-process-runtime -- FIFO availability depends on the actual host.
-  it.effect.skipIf(process.platform === "win32")("refuses a FIFO without blocking", () => {
+  it.effect("refuses a FIFO without blocking", () => {
     setup();
     return Effect.scoped(
       Effect.gen(function* () {
@@ -332,63 +351,81 @@ describe("DevToolsActivePort reader", () => {
       }),
     );
   });
-  // oxlint-disable-next-line goat/no-global-process-runtime -- POSIX owners exist only off Windows, and root owns nothing foreign.
-  it.effect.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
-    "refuses a profile owned by another user",
+  // Root's files are trusted, so as root no fixture can belong to someone else.
+  it.effect.skipIf(process.getuid?.() === 0)("refuses a profile owned by another user", () => {
+    setup();
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const dir = yield* tempDir;
+        yield* Effect.promise(() =>
+          NodeFSP.writeFile(NodePath.join(dir, "DevToolsActivePort"), valid, { mode: 0o600 }),
+        );
+        const uid = yield* HostProcess.UserId;
+        expect(yield* readDevToolsActivePort(dir)).toEqual(success);
+        expect(
+          yield* readDevToolsActivePort(dir).pipe(
+            Effect.provideService(HostProcess.UserId, (uid ?? 0) + 1),
+          ),
+        ).toEqual({ ok: false, reason: "untrusted_owner" });
+      }),
+    );
+  });
+  it.effect(
+    "refuses a folder above the profile that others could rename unless it is sticky",
     () => {
       setup();
       return Effect.scoped(
         Effect.gen(function* () {
           const dir = yield* tempDir;
+          const outer = NodePath.join(dir, "outer");
+          const profile = NodePath.join(outer, "inner", "profile");
+          yield* Effect.promise(() => NodeFSP.mkdir(profile, { recursive: true, mode: 0o700 }));
           yield* Effect.promise(() =>
-            NodeFSP.writeFile(NodePath.join(dir, "DevToolsActivePort"), valid, { mode: 0o600 }),
+            NodeFSP.writeFile(NodePath.join(profile, "DevToolsActivePort"), valid, { mode: 0o600 }),
           );
-          const uid = yield* HostProcess.UserId;
-          expect(yield* readDevToolsActivePort(dir)).toEqual(success);
-          expect(
-            yield* readDevToolsActivePort(dir).pipe(
-              Effect.provideService(HostProcess.UserId, (uid ?? 0) + 1),
-            ),
-          ).toEqual({ ok: false, reason: "untrusted_owner" });
+          expect(yield* readDevToolsActivePort(profile)).toEqual(success);
+          yield* Effect.promise(() => NodeFSP.chmod(outer, 0o777));
+          expect(yield* readDevToolsActivePort(profile)).toEqual({
+            ok: false,
+            reason: "untrusted_owner",
+          });
+          yield* Effect.promise(() => NodeFSP.chmod(outer, 0o1777));
+          expect(yield* readDevToolsActivePort(profile)).toEqual(success);
         }),
       );
     },
   );
-  // oxlint-disable-next-line goat/no-global-process-runtime -- POSIX modes exist only off Windows.
-  it.effect.skipIf(process.platform === "win32")(
-    "refuses a profile others could rewrite or swap unless its parent is sticky",
-    () => {
-      setup();
-      return Effect.scoped(
-        Effect.gen(function* () {
-          const dir = yield* tempDir;
-          const profile = NodePath.join(dir, "profile");
-          const file = NodePath.join(profile, "DevToolsActivePort");
-          yield* Effect.promise(() => NodeFSP.mkdir(profile, { mode: 0o700 }));
-          yield* Effect.promise(() => NodeFSP.writeFile(file, valid, { mode: 0o600 }));
-          const untrusted = { ok: false, reason: "untrusted_owner" };
-          const readWith = (modes: ReadonlyArray<readonly [string, number]>) =>
-            Effect.gen(function* () {
-              for (const [target, mode] of modes)
-                yield* Effect.promise(() => NodeFSP.chmod(target, mode));
-              return yield* readDevToolsActivePort(profile);
-            });
-          expect(yield* readWith([[profile, 0o770]])).toEqual(untrusted);
-          expect(
-            yield* readWith([
-              [profile, 0o700],
-              [file, 0o666],
-            ]),
-          ).toEqual(success);
-          expect(yield* readWith([[profile, 0o755]])).toEqual(untrusted);
-          expect(yield* readWith([[file, 0o644]])).toEqual(success);
-          expect(yield* readWith([[dir, 0o777]])).toEqual(untrusted);
-          expect(yield* readWith([[dir, 0o1777]])).toEqual(success);
-          yield* Effect.promise(() => NodeFSP.chmod(dir, 0o700));
-        }),
-      );
-    },
-  );
+  it.effect("refuses a profile others could rewrite or swap unless its parent is sticky", () => {
+    setup();
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const dir = yield* tempDir;
+        const profile = NodePath.join(dir, "profile");
+        const file = NodePath.join(profile, "DevToolsActivePort");
+        yield* Effect.promise(() => NodeFSP.mkdir(profile, { mode: 0o700 }));
+        yield* Effect.promise(() => NodeFSP.writeFile(file, valid, { mode: 0o600 }));
+        const untrusted = { ok: false, reason: "untrusted_owner" };
+        const readWith = (modes: ReadonlyArray<readonly [string, number]>) =>
+          Effect.gen(function* () {
+            for (const [target, mode] of modes)
+              yield* Effect.promise(() => NodeFSP.chmod(target, mode));
+            return yield* readDevToolsActivePort(profile);
+          });
+        expect(yield* readWith([[profile, 0o770]])).toEqual(untrusted);
+        expect(
+          yield* readWith([
+            [profile, 0o700],
+            [file, 0o666],
+          ]),
+        ).toEqual(success);
+        expect(yield* readWith([[profile, 0o755]])).toEqual(untrusted);
+        expect(yield* readWith([[file, 0o644]])).toEqual(success);
+        expect(yield* readWith([[dir, 0o777]])).toEqual(untrusted);
+        expect(yield* readWith([[dir, 0o1777]])).toEqual(success);
+        yield* Effect.promise(() => NodeFSP.chmod(dir, 0o700));
+      }),
+    );
+  });
   it.effect("rejects growth beyond the limit after the opened file is inspected", () => {
     setup();
     return Effect.scoped(

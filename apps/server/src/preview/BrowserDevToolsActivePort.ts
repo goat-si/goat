@@ -127,11 +127,6 @@ const sameInode = (left: Identity, right: Identity) =>
   left.dev === right.dev && left.ino === right.ino;
 
 type Ownership = { readonly uid: bigint; readonly mode: bigint };
-/**
- * Node has no openat, so path checks cannot bind the file to its directory against repeated swaps.
- * Requiring the server's user or root as owner, and no write access for others unless the folder is
- * sticky, leaves those swaps to someone who could already write the file.
- */
 const ownedBy = (stat: Ownership, uid: number) => stat.uid === 0n || stat.uid === BigInt(uid);
 const othersCannotWrite = (stat: Ownership) => (stat.mode & 0o022n) === 0n;
 const sticky = (stat: Ownership) => (stat.mode & 0o1000n) !== 0n;
@@ -149,6 +144,23 @@ const lstatOrRefuse = (target: string, missing: ReadRefusal) =>
     () => NodeFSP.lstat(target, { bigint: true }),
     (code) => (code === "ENOENT" || code === "ENOTDIR" ? missing : "unreadable"),
   );
+
+/**
+ * Node has no openat, so path checks alone cannot bind the file to its folder: whoever can rename
+ * any folder above it can swap it between checks. Every folder up to the root must belong to the
+ * server's user or root and be closed to others' writes, or be sticky so only owners rename.
+ */
+const requireTrustedAncestors = Effect.fn("BrowserDevToolsActivePort.requireTrustedAncestors")(
+  function* (start: string, uid: number) {
+    for (let folder = start; ; folder = NodePath.dirname(folder)) {
+      const stat = yield* lstatOrRefuse(folder, "not_found");
+      if (!ownedBy(stat, uid) || !(othersCannotWrite(stat) || sticky(stat))) {
+        return yield* refuse("untrusted_owner");
+      }
+      if (NodePath.dirname(folder) === folder) return;
+    }
+  },
+);
 
 const readBounded = Effect.fn("BrowserDevToolsActivePort.readBounded")(function* (
   handle: NodeFSP.FileHandle,
@@ -184,24 +196,24 @@ const readBounded = Effect.fn("BrowserDevToolsActivePort.readBounded")(function*
  */
 export const readDevToolsActivePort = Effect.fn("BrowserDevToolsActivePort.read")(
   function* (userDataDir: string) {
-    // Windows reports no uid; its ACLs are not modelled here.
-    const uid = yield* HostProcess.UserId;
-    const file = NodePath.join(userDataDir, FILE_NAME);
-    const parent = yield* lstatOrRefuse(NodePath.dirname(userDataDir), "not_found");
     const dir = yield* lstatOrRefuse(userDataDir, "not_found");
     if (dir.isSymbolicLink()) return yield* refuse("symlink_refused");
     if (!dir.isDirectory()) return yield* refuse("not_a_file");
-    if (
-      uid !== undefined &&
-      !(
-        ownedBy(parent, uid) &&
-        (othersCannotWrite(parent) || sticky(parent)) &&
-        ownedBy(dir, uid) &&
-        othersCannotWrite(dir)
-      )
-    ) {
-      return yield* refuse("untrusted_owner");
+    // Windows reports no uid, and its ACLs are not checked, so nothing there can be trusted yet.
+    const uid = yield* HostProcess.UserId;
+    if (uid === undefined) return yield* refuse("untrusted_owner");
+    const realParent = yield* attempt(
+      () => NodeFSP.realpath(NodePath.dirname(userDataDir)),
+      (code) => (code === "ENOENT" || code === "ENOTDIR" ? "not_found" : "unreadable"),
+    );
+    yield* requireTrustedAncestors(realParent, uid);
+    const profile = NodePath.join(realParent, NodePath.basename(userDataDir));
+    const realDir = yield* lstatOrRefuse(profile, "changed_during_read");
+    if (realDir.isSymbolicLink() || !sameInode(dir, realDir)) {
+      return yield* refuse("changed_during_read");
     }
+    if (!ownedBy(dir, uid) || !othersCannotWrite(dir)) return yield* refuse("untrusted_owner");
+    const file = NodePath.join(profile, FILE_NAME);
     const entry = yield* lstatOrRefuse(file, "not_found");
     if (entry.isSymbolicLink()) return yield* refuse("symlink_refused");
     if (!entry.isFile()) return yield* refuse("not_a_file");
@@ -219,13 +231,10 @@ export const readDevToolsActivePort = Effect.fn("BrowserDevToolsActivePort.read"
       (handle) => Effect.ignore(Effect.tryPromise(() => handle.close())),
     );
     // Chrome keeps its profile at 0700, so a umask-widened file there is still out of others' reach.
-    if (
-      uid !== undefined &&
-      !(ownedBy(stat, uid) && (othersCannotWrite(stat) || (dir.mode & 0o077n) === 0n))
-    ) {
+    if (!ownedBy(stat, uid) || !(othersCannotWrite(stat) || (dir.mode & 0o077n) === 0n)) {
       return yield* refuse("untrusted_owner");
     }
-    const dirAfter = yield* lstatOrRefuse(userDataDir, "changed_during_read");
+    const dirAfter = yield* lstatOrRefuse(profile, "changed_during_read");
     const fileAfter = yield* lstatOrRefuse(file, "changed_during_read");
     // Directory ctime moves whenever Chrome rewrites its other files, so only its inode counts.
     if (
