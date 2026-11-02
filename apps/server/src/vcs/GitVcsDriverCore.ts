@@ -3960,12 +3960,11 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       const prefix = sanitizedBranch.slice(0, 23).replace(/[\uD800-\uDBFF]$/, "");
       sanitizedBranch = `${prefix}-${Hex.encode(digest).slice(0, 16)}`;
     }
-    // resolve: a cwd like `<repo>/sub/..` must not name the folder `..`.
-
-    const repoName = path.basename(path.resolve(input.cwd));
     let worktreePath = input.path === null ? null : path.resolve(input.cwd, input.path);
     const progress = options?.progress;
     if (worktreePath == null) {
+      const repository = yield* resolveRepositoryPathsUncached(input.cwd);
+      const repoName = path.basename(repository?.worktreeRoot ?? path.resolve(input.cwd));
       const location = yield* resolveAvailableWorktreesDirectory(
         {
           setting: options?.worktreesDirectory ?? "",
