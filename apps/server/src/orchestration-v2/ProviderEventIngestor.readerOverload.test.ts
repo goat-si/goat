@@ -414,7 +414,7 @@ const withSaturatedReaders = <A, E, E2 = never>(
 const overloadTurnId = ProviderTurnId.make("provider-turn:overload");
 const ingestionReads: ReadonlyArray<{
   readonly name: string;
-  readonly seed?: (saturated: Saturated) => Effect.Effect<unknown, unknown>;
+  readonly seed?: (saturated: Saturated) => ReturnType<Saturated["ingest"]>;
   readonly event: (saturated: Saturated) => IngestEvent;
   readonly stored: ReadonlyArray<string>;
 }> = [
