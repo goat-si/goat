@@ -63,7 +63,10 @@ export interface DesktopBackendOutputLogShape {
   }) => Effect.Effect<void>;
   readonly markStop: Effect.Effect<void>;
   readonly persistStopOutput: (input: { readonly details: string }) => Effect.Effect<void>;
-  readonly beginSession: (input: { readonly details: string }) => Effect.Effect<void>;
+  readonly beginSession: (input: {
+    readonly details: string;
+    readonly preserve?: boolean;
+  }) => Effect.Effect<void>;
   readonly writeOutputChunk: (
     streamName: "stdout" | "stderr",
     chunk: Uint8Array,
@@ -81,7 +84,6 @@ export class DesktopBackendOutputLogFactory extends Context.Service<
 >()("@goat/desktop/app/DesktopObservability/DesktopBackendOutputLogFactory") {}
 
 const textEncoder = new TextEncoder();
-const textDecoder = new TextDecoder();
 
 export type DesktopLogAnnotations = Record<string, unknown>;
 
@@ -495,11 +497,17 @@ const makeBackendOutputLogShape = (
             details: session.startDetails,
           },
         });
+        const decoders = { stdout: new TextDecoder(), stderr: new TextDecoder() };
         const writeOutput = Effect.fn("desktop.observability.backendOutput.writeFailureChunk")(
           function* (output: {
             readonly streamName: "stdout" | "stderr";
             readonly chunk: Uint8Array;
+            readonly flush?: boolean;
           }) {
+            const text = decoders[output.streamName].decode(output.chunk, {
+              stream: !output.flush,
+            });
+            if (text.length === 0) return;
             yield* writeBackendChildLogRecord(logFile, {
               message: "backend child process output",
               level: output.streamName === "stderr" ? "ERROR" : "INFO",
@@ -508,7 +516,7 @@ const makeBackendOutputLogShape = (
                 runId: session.runId,
                 instanceId: id,
                 stream: output.streamName,
-                text: textDecoder.decode(output.chunk),
+                text,
               },
             });
           },
@@ -521,7 +529,14 @@ const makeBackendOutputLogShape = (
         if (Option.isSome(session.stop)) {
           const stop = stopOutputParts(session.stop.value);
           yield* Effect.forEach(stop.first, writeOutput, { discard: true });
-          if (stop.omittedBytes)
+          if (stop.omittedBytes) {
+            yield* Effect.forEach(
+              ["stdout", "stderr"] as const,
+              (streamName) => writeOutput({ streamName, chunk: new Uint8Array(), flush: true }),
+              { discard: true },
+            );
+            decoders.stdout = new TextDecoder();
+            decoders.stderr = new TextDecoder();
             yield* writeBackendChildLogRecord(logFile, {
               message: `… ${stop.omittedBytes} bytes of stop output omitted`,
               level: "INFO",
@@ -531,8 +546,14 @@ const makeBackendOutputLogShape = (
                 instanceId: id,
               },
             });
+          }
           yield* Effect.forEach(stop.last, writeOutput, { discard: true });
         }
+        yield* Effect.forEach(
+          ["stdout", "stderr"] as const,
+          (streamName) => writeOutput({ streamName, chunk: new Uint8Array(), flush: true }),
+          { discard: true },
+        );
         yield* writeBackendChildLogRecord(logFile, {
           message: "backend child process failure output end",
           level: "ERROR",
@@ -587,30 +608,49 @@ const makeBackendOutputLogShape = (
               annotations: { ...annotations, phase: "START" },
             });
             const stop = stopOutputParts(Option.getOrElse(session.value.stop, emptyStopBuffer));
+            const decoders = { stdout: new TextDecoder(), stderr: new TextDecoder() };
             const write = Effect.fn("desktop.observability.backendOutput.writeStopChunk")(
               function* (output: {
                 readonly streamName: "stdout" | "stderr";
                 readonly chunk: Uint8Array;
+                readonly flush?: boolean;
               }) {
+                const text = decoders[output.streamName].decode(output.chunk, {
+                  stream: !output.flush,
+                });
+                if (text.length === 0) return;
                 yield* writeBackendChildLogRecord(logFile, {
                   message: "backend child process output",
                   level: output.streamName === "stderr" ? "ERROR" : "INFO",
                   annotations: {
                     ...annotations,
                     stream: output.streamName,
-                    text: textDecoder.decode(output.chunk),
+                    text,
                   },
                 });
               },
             );
             yield* Effect.forEach(stop.first, write, { discard: true });
-            if (stop.omittedBytes)
+            if (stop.omittedBytes) {
+              yield* Effect.forEach(
+                ["stdout", "stderr"] as const,
+                (streamName) => write({ streamName, chunk: new Uint8Array(), flush: true }),
+                { discard: true },
+              );
+              decoders.stdout = new TextDecoder();
+              decoders.stderr = new TextDecoder();
               yield* writeBackendChildLogRecord(logFile, {
                 message: `… ${stop.omittedBytes} bytes of stop output omitted`,
                 level: "INFO",
                 annotations,
               });
+            }
             yield* Effect.forEach(stop.last, write, { discard: true });
+            yield* Effect.forEach(
+              ["stdout", "stderr"] as const,
+              (streamName) => write({ streamName, chunk: new Uint8Array(), flush: true }),
+              { discard: true },
+            );
             yield* writeBackendChildLogRecord(logFile, {
               message: "backend child process stop output end",
               level: "INFO",
@@ -620,17 +660,19 @@ const makeBackendOutputLogShape = (
         ),
         beginSession: Effect.fn("desktop.observability.backendOutput.beginSession")(function* ({
           details,
+          preserve,
         }) {
           const runId = yield* currentDesktopRunId;
-          yield* Ref.set(
-            sessionRef,
-            Option.some({
-              runId,
-              startDetails: sanitizeLogValue(details),
-              chunks: [],
-              byteLength: 0,
-              stop: Option.none(),
-            }),
+          yield* Ref.update(sessionRef, (current) =>
+            preserve && Option.isSome(current)
+              ? Option.some({ ...current.value, startDetails: sanitizeLogValue(details) })
+              : Option.some({
+                  runId,
+                  startDetails: sanitizeLogValue(details),
+                  chunks: [],
+                  byteLength: 0,
+                  stop: Option.none(),
+                }),
           );
         }),
         writeOutputChunk: Effect.fnUntraced(function* (streamName, chunk) {

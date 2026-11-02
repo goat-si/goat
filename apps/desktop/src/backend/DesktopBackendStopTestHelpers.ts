@@ -2,6 +2,7 @@ import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
 import * as ConfigProvider from "effect/ConfigProvider";
+import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -133,6 +134,145 @@ export function registerBackendStopTests({
     ),
   );
 
+  it.effect("persists output drained before startup acquires the manager lock", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const spawnEntered = yield* Deferred.make<void>();
+        const allowSpawn = yield* Deferred.make<void>();
+        const stopEntered = yield* Deferred.make<void>();
+        const allowStop = yield* Deferred.make<void>();
+        const outputObserved = yield* Deferred.make<void>();
+        const exited = yield* Deferred.make<void>();
+        let session = false;
+        let text = "";
+        let saved = "";
+        const layer = Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make(() =>
+            Effect.gen(function* () {
+              const scope = yield* Scope.Scope;
+              yield* Deferred.succeed(spawnEntered, undefined);
+              yield* Deferred.await(allowSpawn);
+              yield* Scope.addFinalizer(
+                scope,
+                Deferred.succeed(exited, undefined).pipe(Effect.asVoid),
+              );
+              return makeProcess({
+                stdout: Stream.make(new TextEncoder().encode("startup shutdown line")),
+                exitCode: Deferred.await(exited).pipe(Effect.as(ChildProcessSpawner.ExitCode(0))),
+              });
+            }),
+          ),
+        );
+        const instance = yield* makeTestInstance({
+          spawnerLayer: layer,
+          backendOutputLog: {
+            beginSession: () =>
+              Effect.sync(() => {
+                session = true;
+              }),
+            recordStop: () =>
+              Deferred.succeed(stopEntered, undefined).pipe(
+                Effect.andThen(Deferred.await(allowStop)),
+              ),
+            writeOutputChunk: (_stream, chunk) =>
+              Effect.sync(() => {
+                if (session) text += new TextDecoder().decode(chunk);
+              }).pipe(Effect.andThen(Deferred.succeed(outputObserved, undefined)), Effect.asVoid),
+            persistStopOutput: () =>
+              Effect.sync(() => {
+                saved = text;
+              }),
+          },
+        });
+        yield* instance.start;
+        yield* Deferred.await(spawnEntered);
+        const stopping = yield* instance.stop("quit").pipe(Effect.forkChild);
+        yield* Deferred.await(stopEntered);
+        yield* Deferred.succeed(allowSpawn, undefined);
+        yield* Deferred.await(outputObserved);
+        yield* Deferred.succeed(allowStop, undefined);
+        yield* Fiber.join(stopping);
+        assert.include(saved, "startup shutdown line");
+      }),
+    ),
+  );
+
+  it.effect("an exit observed before a concurrent stop remains unrequested", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const realClock = yield* Clock.Clock;
+        const readingExit = yield* Deferred.make<void>();
+        const allowExit = yield* Deferred.make<void>();
+        const spawned = yield* Deferred.make<void>();
+        const exited = yield* Deferred.make<void>();
+        let reads = 0;
+        const clock = {
+          currentTimeMillisUnsafe: () => realClock.currentTimeMillisUnsafe(),
+          currentTimeMillis: realClock.currentTimeMillis,
+          currentTimeNanosUnsafe: () => realClock.currentTimeNanosUnsafe(),
+          currentTimeNanos: realClock.currentTimeNanos,
+          monotonicTimeNanosUnsafe: () => realClock.monotonicTimeNanosUnsafe(),
+          sleep: realClock.sleep.bind(realClock),
+          monotonicTimeNanos: Effect.suspend(() =>
+            ++reads === 1
+              ? Deferred.succeed(readingExit, undefined).pipe(
+                  Effect.andThen(Deferred.await(allowExit)),
+                  Effect.as(10_000_000n),
+                )
+              : Effect.succeed(20_000_000n),
+          ),
+        } satisfies Clock.Clock;
+        const records: string[] = [];
+        let failure = "";
+        let stopped = "";
+        const layer = Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make(() =>
+            Effect.gen(function* () {
+              yield* Deferred.succeed(spawned, undefined);
+              return makeProcess({
+                exitCode: Deferred.await(exited).pipe(Effect.as(ChildProcessSpawner.ExitCode(0))),
+              });
+            }),
+          ),
+        );
+        const instance = yield* makeTestInstance({
+          spawnerLayer: layer,
+          backendOutputLog: {
+            recordStop: ({ message }) =>
+              Effect.sync(() => {
+                records.push(message);
+              }),
+            persistFailure: ({ details }) =>
+              Effect.sync(() => {
+                failure = details;
+              }),
+            persistStopOutput: ({ details }) =>
+              Effect.sync(() => {
+                stopped = details;
+              }),
+          },
+        }).pipe(Effect.provideService(Clock.Clock, clock));
+        yield* instance.start.pipe(Effect.provideService(Clock.Clock, clock));
+        yield* Deferred.await(spawned);
+        yield* Deferred.succeed(exited, undefined);
+        yield* Deferred.await(readingExit);
+        const stopping = yield* instance
+          .stop("quit")
+          .pipe(
+            Effect.provideService(Clock.Clock, clock),
+            Effect.forkChild({ startImmediately: true }),
+          );
+        yield* Deferred.succeed(allowExit, undefined);
+        yield* Fiber.join(stopping);
+        assert.equal(failure, "pid=123 code=0");
+        assert.equal(stopped, "");
+        assert.notInclude(records, "backend stop requested");
+      }),
+    ),
+  );
+
   it.effect.each([false, true])(
     "closing the instance's scope stops the run through stop(): sequential child=%s",
     (child) =>
@@ -250,5 +390,73 @@ export function registerBackendStopTests({
         ),
       ),
     ),
+  );
+  it.effect.each([false, true])(
+    "preserves Korean UTF-8 split across chunks, streams and buffer blocks: failure=%s",
+    (failure) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-stop-utf8-" });
+          const environment = DesktopEnvironment.layer({
+            dirname: "/repo/apps/desktop/dist-electron",
+            homeDirectory: baseDir,
+            platform: "darwin",
+            processArch: "arm64",
+            appVersion: "1.2.3",
+            appPath: "/repo",
+            isPackaged: false,
+            resourcesPath: "/repo/resources",
+            runningUnderArm64Translation: false,
+          }).pipe(
+            Layer.provide(
+              Layer.mergeAll(NodeServices.layer, DesktopConfig.layerTest({ GOAT_HOME: baseDir })),
+            ),
+          );
+          const path = yield* Effect.gen(function* () {
+            const env = yield* DesktopEnvironment.DesktopEnvironment;
+            return env.path.join(env.logDir, "server-child.log");
+          }).pipe(Effect.provide(environment));
+          yield* Effect.gen(function* () {
+            const log =
+              yield* (yield* DesktopObservability.DesktopBackendOutputLogFactory).forInstance(
+                "primary",
+              );
+            yield* log.beginSession({ details: "pid=123" });
+            yield* log.markStop;
+            const korean = new TextEncoder().encode("한");
+            yield* log.writeOutputChunk("stdout", new TextEncoder().encode("x".repeat(4095)));
+            yield* log.writeOutputChunk("stdout", korean.subarray(0, 1));
+            yield* log.beginSession({ details: "pid=123", preserve: true });
+            yield* log.writeOutputChunk("stderr", new TextEncoder().encode("국"));
+            yield* log.writeOutputChunk("stdout", korean.subarray(1));
+            yield* failure
+              ? log.persistFailure({ details: "done" })
+              : log.persistStopOutput({ details: "done" });
+          }).pipe(Effect.provide(DesktopObservability.layer.pipe(Layer.provideMerge(environment))));
+          const records = (yield* fs.readFileString(path))
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line));
+          const stdout = records
+            .filter((record) => record.annotations.stream === "stdout")
+            .map((record) => record.annotations.text)
+            .join("");
+          const stderr = records
+            .filter((record) => record.annotations.stream === "stderr")
+            .map((record) => record.annotations.text)
+            .join("");
+          assert.equal(stdout, "x".repeat(4095) + "한");
+          assert.equal(stderr, "국");
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              NodeServices.layer,
+              NodeHttpClient.layerUndici,
+              ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })),
+            ),
+          ),
+        ),
+      ),
   );
 }

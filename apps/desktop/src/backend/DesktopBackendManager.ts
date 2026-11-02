@@ -409,6 +409,9 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
           },
         ]);
 
+        yield* backendOutputLog.beginSession({
+          details: `pid=pending port=${config.value.bootstrap.port} cwd=${config.value.cwd}`,
+        });
         controlRun = runId;
         recoveryStatus = "starting";
         const finalizeRun = Effect.fn("desktop.backendInstance.finalizeRun")(function* (
@@ -517,6 +520,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
                     yield* backendOutputLog.discardSession;
                   }
                 }
+                if (Option.isNone(pid)) yield* backendOutputLog.discardSession;
                 if (wasReady) {
                   yield* spec.onShutdown?.() ?? Effect.void;
                 }
@@ -568,6 +572,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
                 yield* startupFailure.reset;
                 yield* backendOutputLog.beginSession({
                   details: `pid=${pid} port=${config.value.bootstrap.port} cwd=${config.value.cwd}`,
+                  preserve: true,
                 });
                 const active = Option.getOrUndefined((yield* Ref.get(state)).active);
                 if (active?.id === runId && active.stopRequested) yield* backendOutputLog.markStop;
@@ -575,12 +580,16 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
             );
           }),
           onExitObserved: Effect.fn("desktop.backendInstance.onExitObserved")(function* () {
-            const exitAtNanos = yield* Clock.monotonicTimeNanos;
-            yield* updateActiveRun(runId, (run) => ({
-              ...run,
-              exitObserved: true,
-              exitAtNanos: Option.some(exitAtNanos),
-            }));
+            yield* mutex.withPermits(1)(
+              Effect.gen(function* () {
+                const exitAtNanos = yield* Clock.monotonicTimeNanos;
+                yield* updateActiveRun(runId, (run) => ({
+                  ...run,
+                  exitObserved: true,
+                  exitAtNanos: Option.some(exitAtNanos),
+                }));
+              }),
+            );
           }),
           onReady: Effect.fn("desktop.backendInstance.onReady")(function* () {
             const isCurrentRun = yield* Ref.modify(state, (latest) => {

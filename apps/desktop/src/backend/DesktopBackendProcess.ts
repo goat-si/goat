@@ -330,17 +330,48 @@ export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
       ...(options.bootstrapDelivery === "fd3" ? { additionalFds } : {}),
     });
 
-    const handle = yield* spawner.spawn(command).pipe(
-      Effect.mapError(
-        (cause) =>
-          new BackendProcessSpawnError({
+    const handle = yield* Effect.uninterruptibleMask(() =>
+      Effect.gen(function* () {
+        const handle = yield* spawner.spawn(command).pipe(
+          Effect.mapError(
+            (cause) =>
+              new BackendProcessSpawnError({
+                executablePath: options.executablePath,
+                entryPath: options.entryPath,
+                cwd: options.cwd,
+                httpBaseUrl: options.httpBaseUrl,
+                cause,
+              }),
+          ),
+        );
+        if (options.captureOutput) {
+          const outputContext = {
             executablePath: options.executablePath,
             entryPath: options.entryPath,
             cwd: options.cwd,
             httpBaseUrl: options.httpBaseUrl,
-            cause,
-          }),
-      ),
+            pid: Number(handle.pid),
+          };
+          const onOutputFailure = options.onOutputFailure ?? (() => Effect.void);
+          outputFibers.push(
+            yield* drainBackendOutput(
+              outputContext,
+              "stdout",
+              handle.stdout,
+              onOutput,
+              onOutputFailure,
+            ).pipe(Effect.forkDetach),
+            yield* drainBackendOutput(
+              outputContext,
+              "stderr",
+              handle.stderr,
+              onOutput,
+              onOutputFailure,
+            ).pipe(Effect.forkDetach),
+          );
+        }
+        return handle;
+      }),
     );
     yield* options.onStarted?.(handle.pid) ?? Effect.void;
     if (
@@ -408,32 +439,6 @@ export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
           }),
         ),
         Effect.forkScoped,
-      );
-    }
-    if (options.captureOutput) {
-      const outputContext = {
-        executablePath: options.executablePath,
-        entryPath: options.entryPath,
-        cwd: options.cwd,
-        httpBaseUrl: options.httpBaseUrl,
-        pid: Number(handle.pid),
-      };
-      const onOutputFailure = options.onOutputFailure ?? (() => Effect.void);
-      outputFibers.push(
-        yield* drainBackendOutput(
-          outputContext,
-          "stdout",
-          handle.stdout,
-          onOutput,
-          onOutputFailure,
-        ).pipe(Effect.forkDetach),
-        yield* drainBackendOutput(
-          outputContext,
-          "stderr",
-          handle.stderr,
-          onOutput,
-          onOutputFailure,
-        ).pipe(Effect.forkDetach),
       );
     }
     // Cold WSL boots across /mnt/c can exceed one probe budget; retry while the backend is alive.
@@ -504,7 +509,7 @@ export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
     }
     return exit.value;
   }).pipe(
-    Effect.onInterrupt(() =>
+    Effect.ensuring(
       Effect.forEach(outputFibers, Fiber.interrupt, { concurrency: "unbounded", discard: true }),
     ),
   );
