@@ -80,6 +80,7 @@ import { type DesktopPages, type DesktopKeptTree, type DesktopRow } from "./Desk
 import { makeMenuBarExtras, makeSelectText } from "./DesktopSelectionExtras.ts";
 import { confirmByTree, type TreeBaseline } from "./DesktopTreeEffect.ts";
 import {
+  browserInputNeeds,
   browserPageRefusal,
   recordBrowserSurfaceReads,
   type BrowserSurfaceHolder,
@@ -803,7 +804,10 @@ export const createDesktopTargetHost = (deps: {
     bound.pointsStale ??= "input";
     if (admission.clickedTableCell !== undefined)
       bound.lastClickedTableCell = admission.clickedTableCell;
-    const needs = elementToken !== undefined ? "element" : pointerResolved.needs;
+    const needs =
+      elementToken !== undefined
+        ? "element"
+        : browserInputNeeds(bound, call.method, pointerResolved.needs);
     return yield* withInputEvidence(
       tool,
       forwarded,

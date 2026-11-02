@@ -343,6 +343,16 @@ export const browserSurfaceRefusal = (
       };
 };
 
+/** A guarded browser input rests on its read's evidence, so a driver restart refuses it like an element. */
+export const browserInputNeeds = <N extends string>(
+  bound: BrowserSurfaceHolder,
+  method: string,
+  needs: N,
+): N | "element" =>
+  browserAppName(bound.appId, bound.bundleId) !== undefined && GUARDED_METHODS.has(method)
+    ? "element"
+    : needs;
+
 /** The refusal for one host call on a bound window, before anything reaches the driver. */
 export const browserPageRefusal = (
   bound: BrowserSurfaceHolder,

@@ -374,9 +374,10 @@ const byIndex = (observed: unknown, index: number): ScreenElementRef => {
   if (!found) throw new Error("Missing element " + index);
   return found.ref;
 };
-const observeChrome = (apps = chromeApps) =>
+const observeChrome = (apps = chromeApps, state = chromeState()) =>
   Effect.gen(function* () {
-    const made = fixture({ list_apps: apps, get_window_state: chromeState() });
+    const connection = { id: "driver:1" };
+    const made = fixture({ list_apps: apps, get_window_state: state }, connection);
     const bound = yield* made.host.bindApp(
       call("bind_app", { bundle_id: apps.apps[0]?.bundle_id ?? "", window_id: 7 }),
       context,
@@ -387,10 +388,34 @@ const observeChrome = (apps = chromeApps) =>
       call(method, { elementRef: byIndex(observed, index), value: "x" }, ref);
     const clicks = () =>
       made.sent.filter((sent) => sent.tool === "click" || sent.tool === "set_value");
-    return { ...made, input, clicks };
+    return { ...made, ref, connection, input, clicks };
   });
 
 describe("DesktopTargetHost browser surface", () => {
+  it.effect(
+    "a driver restart refuses untargeted browser keys instead of sending them to the new driver",
+    () =>
+      Effect.gen(function* () {
+        const { host, sent, ref, connection } = yield* observeChrome(
+          chromeApps,
+          chromeState({}, { 1: { focused: true } }),
+        );
+        connection.id = "driver:2";
+        // The first attempt meets the restart; it also ended the read, so the next has nothing to stand on.
+        for (const [keys, code] of [
+          [call("press_key", { key: "a" }, ref), "stale_reference"],
+          [call("type_text", { text: "a" }, ref), "browser_surface_required"],
+        ] as const)
+          expect(yield* host.invoke(keys, context).pipe(Effect.flip)).toMatchObject({
+            code,
+            effectStarted: false,
+          });
+        expect(
+          sent.filter((each) => each.tool === "press_key" || each.tool === "type_text"),
+        ).toEqual([]);
+      }),
+  );
+
   it.effect(
     "refuses page and address bar input before the driver, then needs a new read after any input or launch",
     () =>
