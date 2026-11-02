@@ -39,6 +39,31 @@ const versionEntries = (...versions: string[]) =>
 describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
   "install before runner switch",
   () => {
+    it.live.each([false, true])(
+      "launch from a deleted cwd starts in home (upgrade=%s)",
+      (upgrade) =>
+        Effect.gen(function* () {
+          const f = yield* fixture("none", { seed: upgrade });
+          const vanished = `${f.home}/vanished`;
+          yield* f.fs.makeDirectory(vanished);
+          const result = yield* shell(
+            f.home,
+            `cd '${vanished}'\nrmdir '${vanished}'\n${f.scripts.launch}`,
+            [stateKey],
+          );
+          assert.equal(result.code, 0, result.stderr);
+          const events = yield* f.events;
+          const started = events.filter(
+            (event) => event.type === "start" && event.version === nextVersion,
+          );
+          assert.lengthOf(started, 1);
+          assert.equal(started[0]!.cwd, f.home);
+          if (upgrade) {
+            const supervised = events.find((event) => event.type === "supervise");
+            assert.equal(supervised?.cwd, f.home);
+          }
+        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
     it.live.each([
       { leaveRemoteServerRunning: true, action: "disconnect" },
       { leaveRemoteServerRunning: false, action: "disconnect" },
