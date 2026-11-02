@@ -56,6 +56,7 @@ const makeHarness = Effect.fn("test.ssh_runtime_auto_update.harness")(function* 
     installCode: 0,
     executableSha256: "exe-sha",
     preflight: undefined as Record<string, unknown> | undefined,
+    markerAtLaunch: undefined as string | undefined,
     launchOutput: '{"status":"ready","remotePort":3773}\n',
     installs: [] as string[],
     installCommands: [] as string[],
@@ -101,6 +102,9 @@ const makeHarness = Effect.fn("test.ssh_runtime_auto_update.harness")(function* 
       }),
     runDetached: (input) =>
       Effect.gen(function* () {
+        state.markerAtLaunch = yield* fs
+          .readFileString(NodePath.join(goatHome, "userdata", "ssh-runtime-auto-update.json"))
+          .pipe(Effect.orElseSucceed(() => undefined));
         state.launches.push(input);
         yield* Deferred.succeed(launchStarted, undefined);
         if (holdLaunch) yield* Deferred.await(launchGate);
@@ -184,6 +188,7 @@ const makeHarness = Effect.fn("test.ssh_runtime_auto_update.harness")(function* 
     state,
     files,
     stateDir,
+    configStateDir: config.stateDir,
     home,
     launchStarted,
     launchGate,
@@ -194,6 +199,38 @@ const makeHarness = Effect.fn("test.ssh_runtime_auto_update.harness")(function* 
 });
 
 it.layer(NodeServices.layer)("SSH runtime auto-update", (it) => {
+  it.effect("persists the replacement marker before launch and recognizes its own version", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness({ ownVersion: "1.0.0" });
+      yield* h.runtime.prepare(target);
+      expect(yield* h.runtime.activate(target)).toBe("requested");
+      expect(JSON.parse(h.state.markerAtLaunch ?? "null")).toMatchObject({
+        targetVersion: target,
+        at: expect.any(Number),
+      });
+      const fs = yield* FileSystem.FileSystem;
+      const marker = NodePath.join(h.configStateDir, "ssh-runtime-auto-update.json");
+      expect(yield* h.runtime.replacedInto).toBeUndefined();
+      yield* fs.writeFileString(marker, JSON.stringify({ targetVersion: "1.0.0", at: 1 }));
+      expect(yield* h.runtime.replacedInto).toBe("1.0.0");
+      h.files.set(NodePath.join(h.stateDir, "pid"), "1");
+      expect(yield* h.runtime.replacedInto).toBeUndefined();
+    }),
+  );
+
+  it.effect("does not launch when writing the replacement marker fails", () =>
+    Effect.gen(function* () {
+      const h = yield* makeHarness();
+      const fs = yield* FileSystem.FileSystem;
+      yield* h.runtime.prepare(target);
+      yield* fs.makeDirectory(NodePath.join(h.configStateDir, "ssh-runtime-auto-update.json"));
+      expect((yield* h.runtime.activate(target).pipe(Effect.flip))._tag).toBe(
+        "ServerSelfUpdateError",
+      );
+      expect(h.state.launches).toHaveLength(0);
+    }),
+  );
+
   it.effect("is owned only while the launch records name this managed process", () =>
     Effect.gen(function* () {
       const h = yield* makeHarness();
