@@ -442,12 +442,14 @@ const makeReader = Effect.fn("SqliteReader.make")(function* (
     const begin = Effect.gen(function* () {
       if (current === undefined) {
         yield* Effect.promise(() => retiring);
+        if (restart.failing()) yield* restart.probe();
         // Another slot can push the shared deadline out while this one waits.
         while (remaining() > 0) yield* Effect.sleep(Duration.millis(remaining()));
       }
       const reader =
         current ??
         (yield* start().pipe(
+          Effect.tap((started) => Effect.sync(() => restart.setProbe(started.started))),
           Effect.catch((cause) => {
             backoff();
             return retire(undefined, cause);
@@ -465,9 +467,9 @@ const makeReader = Effect.fn("SqliteReader.make")(function* (
         ),
       );
     });
-    // A slot that must restart during backoff takes the shared gate, so one restart runs at a time.
+    // A slot that must start a worker after a failure takes the shared gate: one restart at a time.
     const startOrReuse = Effect.suspend(() =>
-      current === undefined && remaining() > 0 ? restart.gate.withPermits(1)(begin) : begin,
+      current === undefined && restart.failing() ? restart.gate.withPermits(1)(begin) : begin,
     );
     return restore(starting.withPermits(1)(startOrReuse));
   });

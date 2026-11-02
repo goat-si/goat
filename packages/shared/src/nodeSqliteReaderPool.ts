@@ -10,18 +10,29 @@ const READER_POOL_SIZE = 4;
 export const makeReaderRestart = (gate: Semaphore.Semaphore) => {
   let retryAt = 0n;
   let retryMs = 250;
+  let failing = false;
+  let probe: Effect.Effect<unknown> = Effect.void;
   return {
     gate,
+    // From a failure until a read succeeds, restarts go through the gate one at a time.
+    failing: () => failing,
     // A later failure never shortens a deadline another slot already set.
     fail: (now: bigint) => {
       const next = now + BigInt(retryMs) * 1_000_000n;
       if (next > retryAt) retryAt = next;
       retryMs = Math.min(8_000, retryMs * 2);
+      failing = true;
     },
     succeed: () => {
       retryMs = 250;
+      failing = false;
     },
     remainingMs: (now: bigint) => Number(retryAt - now) / 1e6,
+    // A restart's startup outlives a cancelled request, so the next restart waits for its outcome.
+    probe: () => probe,
+    setProbe: (next: Effect.Effect<unknown>) => {
+      probe = next;
+    },
   };
 };
 export type ReaderRestart = ReturnType<typeof makeReaderRestart>;
