@@ -238,7 +238,7 @@ const make = Effect.gen(function* () {
    * process that passed the first check. A new process id or a moved start time means the
    * runtime crashed and was restarted; a member whose `/healthz` reports neither never passes.
    */
-  const healthy = Effect.fn("OpenCodexManagedUpdate.healthy")(function* (
+  const healthProof = Effect.fn("OpenCodexManagedUpdate.healthProof")(function* (
     alias: string | null,
     targetVersion: string,
     scope: McpInvocationScope,
@@ -259,15 +259,26 @@ const make = Effect.gen(function* () {
       processId !== undefined &&
       (expectedProcess === undefined || processId === expectedProcess) &&
       (expected === undefined || Math.abs(startedAt - expected) <= RESTART_TOLERANCE_MS);
-    if (ok && (expected === undefined || expectedProcess === undefined))
+    return ok ? { startedAt, processId } : undefined;
+  });
+  const healthy = Effect.fn("OpenCodexManagedUpdate.healthy")(function* (
+    alias: string | null,
+    targetVersion: string,
+    scope: McpInvocationScope,
+  ) {
+    const proof = yield* healthProof(alias, targetVersion, scope);
+    if (proof === undefined) return false;
+    const key = failedTargetKey(alias);
+    const window = (yield* Ref.get(state)).window;
+    if (window?.startedAt[key] === undefined || window.processIds[key] === undefined)
       yield* mutate((current) =>
         withWindow(current, (open) => ({
           ...open,
-          startedAt: { ...open.startedAt, [key]: startedAt },
-          processIds: { ...open.processIds, [key]: processId },
+          startedAt: { ...open.startedAt, [key]: proof.startedAt },
+          processIds: { ...open.processIds, [key]: proof.processId },
         })),
       );
-    return ok;
+    return true;
   });
   const paritySurvives = Effect.fn("OpenCodexManagedUpdate.paritySurvives")(function* (
     aliases: ReadonlyArray<string>,
@@ -281,7 +292,7 @@ const make = Effect.gen(function* () {
     return true;
   });
 
-  const windowOps = { host, retainedHome, nextAt, mutate, record, rollBack, healthy };
+  const windowOps = { host, retainedHome, nextAt, mutate, record, rollBack, healthProof };
 
   /**
    * Home first, then each Child; any failure restores every member this window moved. Every
