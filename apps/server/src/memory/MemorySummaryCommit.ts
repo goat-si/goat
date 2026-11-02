@@ -9,9 +9,10 @@ import { redactMemoryText, scanMemoryValue } from "./MemorySecretScanner.ts";
 import type { MemoryServiceError } from "./MemoryService.ts";
 
 export type SummaryPromotionCommit = {
-  /** The final chunk's input, which the candidates cite. */
+  /** The answering chunk's input, which the candidates cite. */
   readonly input: M.GenerateMemorySummaryInput;
   readonly candidates: NonNullable<M.GenerateMemorySummaryOutcome["promotions"]>;
+  readonly replace: boolean;
   readonly execution: M.MemoryGenerationExecution;
   /** The thread's project and the key it resolved to before the transaction, or null. */
   readonly project: {
@@ -151,6 +152,7 @@ export const makeCommitSummary = (deps: {
           (owner?.environmentId !== thread.environmentId || owner.threadId !== thread.threadId)
         )
           return;
+        if (head && !promotions.replace) return;
         const payload = yield* decode(
           decodeSummaryPayload(
             {
