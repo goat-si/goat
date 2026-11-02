@@ -67,10 +67,17 @@ export const memoryInputSchema = (schema: Schema.Top) => {
   };
 };
 
+/** Read tools fill an omitted memorySpaceId from the server's current space. */
+const spaceOptional = (schema: ReturnType<typeof memoryInputSchema>) => {
+  const required: unknown = Reflect.get(schema, "required");
+  return Array.isArray(required)
+    ? { ...schema, required: required.filter((key) => key !== "memorySpaceId") }
+    : schema;
+};
 const failure = Schema.Union([M.MemoryRpcError, M.OrchestratorMcpFailure]);
 const SearchTool = Tool.dynamic(agentSurfaceRegistry["memory.search"].name, {
   description: agentSurfaceRegistry["memory.search"].description,
-  parameters: memoryInputSchema(M.MemorySearchInput),
+  parameters: spaceOptional(memoryInputSchema(M.MemorySearchInput)),
   success: M.MemoryPage,
   failure,
   failureMode: "return",
@@ -94,7 +101,7 @@ const RecallTool = Tool.dynamic(agentSurfaceRegistry["memory.recall"].name, {
 
 const ListTool = Tool.dynamic(agentSurfaceRegistry["memory.list"].name, {
   description: agentSurfaceRegistry["memory.list"].description,
-  parameters: memoryInputSchema(M.MemoryListInput),
+  parameters: spaceOptional(memoryInputSchema(M.MemoryListInput)),
   success: M.MemoryPage,
   failure,
   failureMode: "return",
@@ -107,7 +114,7 @@ const ListTool = Tool.dynamic(agentSurfaceRegistry["memory.list"].name, {
 
 const ReadTool = Tool.dynamic(agentSurfaceRegistry["memory.read"].name, {
   description: agentSurfaceRegistry["memory.read"].description,
-  parameters: memoryInputSchema(M.MemoryReadInput),
+  parameters: spaceOptional(memoryInputSchema(M.MemoryReadInput)),
   success: M.MemoryItem,
   failure,
   failureMode: "return",
@@ -120,7 +127,7 @@ const ReadTool = Tool.dynamic(agentSurfaceRegistry["memory.read"].name, {
 
 const HistoryTool = Tool.dynamic(agentSurfaceRegistry["memory.history"].name, {
   description: agentSurfaceRegistry["memory.history"].description,
-  parameters: memoryInputSchema(M.MemoryHistoryInput),
+  parameters: spaceOptional(memoryInputSchema(M.MemoryHistoryInput)),
   success: M.MemoryHistoryPage,
   failure,
   failureMode: "return",

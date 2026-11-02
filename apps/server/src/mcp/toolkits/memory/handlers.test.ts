@@ -115,17 +115,19 @@ it.effect(
   "argument mistakes are refused as invalid_request naming the fields, never as invalid_output",
   () =>
     Effect.gen(function* () {
+      // An omitted space defaults to this server's; a malformed one still names sync_status.
       for (const [name, input, fields] of [
-        ["goat_memory_list", {}, ["memorySpaceId", "includeQuarantined"]],
-        ["goat_memory_list", { limit: 1 }, ["memorySpaceId", "includeQuarantined"]],
-        ["goat_memory_search", { query: "synthetic" }, ["memorySpaceId"]],
+        ["goat_memory_list", {}, ["includeQuarantined"]],
+        ["goat_memory_list", { limit: 1 }, ["includeQuarantined"]],
+        ["goat_memory_search", { memorySpaceId: "space", query: "x" }, ["memorySpaceId"]],
       ] as const) {
         const { result, body } = yield* Fixture.call(name, input);
         expect(result.isError).toBe(true);
         const refusal = yield* decodeRefusal(body);
         expect(refusal.code).toBe("invalid_request");
         for (const field of fields) expect(refusal.message).toContain(field);
-        expect(refusal.message).toContain("goat_memory_sync_status");
+        if (name === "goat_memory_search")
+          expect(refusal.message).toContain("goat_memory_sync_status");
         expect(yield* Fixture.callThroughGoatCall(name, input)).toMatchObject({
           status: "error",
           error: { code: "invalid_request", reason: "invalid_request", retryable: false },
@@ -154,6 +156,22 @@ it.effect(
       expect(nested.message).not.toContain(key);
       expect(nested.message).not.toContain(rejected);
     }).pipe(Effect.provide(Fixture.layer)),
+);
+
+it.effect("read tools default to this server's memory space when memorySpaceId is omitted", () =>
+  Effect.gen(function* () {
+    const service = yield* MemoryService.MemoryService;
+    yield* service.upsert(Fixture.upsert(), Effect.void);
+    const search = { query: "synthetic", mode: "substring" };
+    const found = yield* decodePage((yield* Fixture.call("goat_memory_search", search)).body);
+    expect(found.items.map((item) => item.memoryId)).toEqual([Fixture.memoryId]);
+    const listed = yield* Fixture.call("goat_memory_list", { includeQuarantined: false });
+    expect((yield* decodePage(listed.body)).items).toHaveLength(1);
+    const read = yield* Fixture.call("goat_memory_read", { memoryId: Fixture.memoryId });
+    expect(read.body).toMatchObject({ memoryId: Fixture.memoryId, status: "active" });
+    const history = yield* Fixture.call("goat_memory_history", { memoryId: Fixture.memoryId });
+    expect(history.result.isError).not.toBe(true);
+  }).pipe(Effect.provide(Fixture.layer)),
 );
 
 it.effect.each(M.MEMORY_MCP_TOOLS.filter((name) => name !== "memory_read_source"))(

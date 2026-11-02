@@ -33,9 +33,9 @@ export const memoryEntries = {
     description:
       "Search memory (default scope: user). fts is phrase search; use mode substring for partial text. Pass nextCursor unchanged with the same query and scope, even when items is empty. If indexCoverage is partial/unavailable, do not conclude a memory is absent.",
     guide:
-      "Needs memory:read. Pass the memorySpaceId goat_memory_sync_status reports. fts adds a stemmed and prefix alternative for Korean text. Treat nextCursor as opaque.",
+      "Needs memory:read. For one query across thread, project and user memory use goat_memory_recall. fts adds a stemmed and prefix alternative for Korean text. Treat nextCursor as opaque.",
     parameters: {
-      memorySpaceId: "The memory space goat_memory_sync_status reports.",
+      memorySpaceId: "Optional; defaults to this server's memory space.",
       limit: "Items per page, 1 to 100. Default 20.",
       cursor: "nextCursor from the previous page, unchanged, with the same query and scope.",
       query: "The words to find.",
@@ -46,7 +46,7 @@ export const memoryEntries = {
     examples: [
       {
         title: "Search your memories for a phrase",
-        args: { memorySpaceId: "7d1f5c2a-3b4e-4f6a-8c9d-0e1f2a3b4c5d", query: "release checklist" },
+        args: { query: "release checklist" },
       },
     ],
     effect: "read",
@@ -67,7 +67,7 @@ export const memoryEntries = {
     summary: "List one bounded memory page.",
     description: "List one bounded page of memory items.",
     guide:
-      "Needs memory:read. Pass the memorySpaceId goat_memory_sync_status reports and includeQuarantined (false hides quarantined items). The default scope is user.",
+      "Needs memory:read. Pass includeQuarantined (false hides quarantined items); memorySpaceId defaults to this server's space. The default scope is user.",
     effect: "read",
     hostRoutable: false,
     requires: "either",
@@ -87,16 +87,13 @@ export const memoryEntries = {
     description: "Read one memory item.",
     guide: "Needs memory:read.",
     parameters: {
-      memorySpaceId: "The memory space goat_memory_sync_status reports.",
-      memoryId: "The item's id from goat_memory_search or goat_memory_list.",
+      memorySpaceId: "Optional; defaults to this server's memory space.",
+      memoryId: "The item's id from goat_memory_recall, goat_memory_search or goat_memory_list.",
     },
     examples: [
       {
         title: "Read one memory item",
-        args: {
-          memorySpaceId: "7d1f5c2a-3b4e-4f6a-8c9d-0e1f2a3b4c5d",
-          memoryId: "2a9e4b7c-1d3f-4e5a-9b8c-7d6e5f4a3b2c",
-        },
+        args: { memoryId: "2a9e4b7c-1d3f-4e5a-9b8c-7d6e5f4a3b2c" },
       },
     ],
     effect: "read",

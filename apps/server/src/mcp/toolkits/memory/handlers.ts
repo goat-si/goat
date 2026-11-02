@@ -1,5 +1,6 @@
 import * as M from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as MemoryAccess from "../../../memory/MemoryAccess.ts";
 import * as MemoryRecall from "../../../memory/MemoryRecall.ts";
@@ -170,6 +171,15 @@ const callerThread = Effect.gen(function* () {
     ? { environmentId: caller.environmentId, threadId: caller.thread.threadId }
     : undefined;
 });
+/** Read tools default to this server's memory space, so a query or id alone is enough. */
+const withCurrentSpace = (input: unknown) =>
+  Effect.gen(function* () {
+    if (typeof input !== "object" || input === null || "memorySpaceId" in input) return input;
+    const sync = yield* MemorySyncService.MemorySyncService;
+    const readiness = yield* sync.readLocalReadiness().pipe(Effect.option);
+    const space = Option.getOrUndefined(readiness)?.memorySpaceId;
+    return space ? { ...input, memorySpaceId: space } : input;
+  });
 const handlers = {
   memory_recall: McpToolAccess.reads((input) =>
     Effect.gen(function* () {
@@ -185,7 +195,7 @@ const handlers = {
     Effect.gen(function* () {
       const service = yield* MemoryService.MemoryService;
       return yield* service.search(
-        yield* decodeSearch(input),
+        yield* decodeSearch(yield* withCurrentSpace(input)),
         yield* invocationPermit("read"),
         yield* callerThread,
       );
@@ -195,7 +205,7 @@ const handlers = {
     Effect.gen(function* () {
       const service = yield* MemoryService.MemoryService;
       return yield* service.list(
-        yield* decodeList(input),
+        yield* decodeList(yield* withCurrentSpace(input)),
         yield* invocationPermit("read"),
         yield* callerThread,
       );
@@ -205,7 +215,7 @@ const handlers = {
     Effect.gen(function* () {
       const service = yield* MemoryService.MemoryService;
       return yield* service.read(
-        yield* decodeRead(input),
+        yield* decodeRead(yield* withCurrentSpace(input)),
         yield* invocationPermit("read"),
         yield* callerThread,
       );
@@ -225,7 +235,7 @@ const handlers = {
     Effect.gen(function* () {
       const service = yield* MemoryService.MemoryService;
       return yield* service.history(
-        yield* decodeHistory(input),
+        yield* decodeHistory(yield* withCurrentSpace(input)),
         yield* invocationPermit("read"),
         yield* callerThread,
       );
