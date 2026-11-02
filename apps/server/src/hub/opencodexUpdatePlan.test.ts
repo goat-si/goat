@@ -55,9 +55,9 @@ describe("planOpenCodexUpdate", () => {
     });
     expect(plan).toMatchObject({ decision: "update", reason: "eligible", targetVersion: "2.90.0" });
     expect(plan.steps).toEqual([
-      { alias: null, fromVersion: "2.89.0" },
-      { alias: "mac-studio", fromVersion: "2.86.0" },
-      { alias: "macmini-ts", fromVersion: "2.83.0" },
+      { alias: null, fromVersion: "2.89.0", via: "managed" },
+      { alias: "mac-studio", fromVersion: "2.86.0", via: "managed" },
+      { alias: "macmini-ts", fromVersion: "2.83.0", via: "managed" },
     ]);
   });
 
@@ -215,4 +215,64 @@ describe("planOpenCodexUpdate", () => {
       }),
     ).toMatchObject({ decision: "none", reason: "unpublished-version" });
   });
+});
+
+it("plans an adopted Home only when its own orchestrated plan is eligible", () => {
+  const home = member("home", { version: "2.89.0", ownership: "adopted" });
+  const orch = {
+    canApply: true,
+    currentVersion: "2.89.0",
+    targetVersion: "2.90.0",
+    planToken: "abcdefghijklmnop",
+    updateInFlight: false,
+    mutationBoundMs: 900000,
+    servingPath: "/bin/ocx",
+    cliPath: "/bin/ocx",
+  };
+  const base = { home, children: [], targetVersion: "2.90.0", failedTargets: {} };
+  expect(planOpenCodexUpdate({ ...base, orchestrated: { "": orch } })).toMatchObject({
+    decision: "update",
+    advisories: [],
+    steps: [{ alias: null, fromVersion: "2.89.0", via: "ocx-update" }],
+  });
+  for (const change of [
+    { canApply: false },
+    { currentVersion: "2.88.0" },
+    { targetVersion: "2.91.0" },
+    { updateInFlight: true },
+  ]) {
+    expect(
+      planOpenCodexUpdate({ ...base, orchestrated: { "": { ...orch, ...change } } }),
+    ).toMatchObject({ decision: "none", reason: "advice-only", steps: [] });
+  }
+});
+
+it("orders an orchestrated Child after its Home and holds it behind an adopted Home", () => {
+  const orch = {
+    canApply: true,
+    currentVersion: "2.86.0",
+    targetVersion: "2.90.0",
+    planToken: "abcdefghijklmnop",
+    updateInFlight: false,
+    mutationBoundMs: 900000,
+    servingPath: null,
+    cliPath: "/bin/ocx",
+  };
+  const base = {
+    home: member("home", { version: "2.89.0" }),
+    children: [member("mac-studio", { version: "2.86.0", ownership: "adopted" })],
+    targetVersion: "2.90.0",
+    failedTargets: {},
+    orchestrated: { "mac-studio": orch },
+  };
+  expect(planOpenCodexUpdate(base).steps).toEqual([
+    { alias: null, fromVersion: "2.89.0", via: "managed" },
+    { alias: "mac-studio", fromVersion: "2.86.0", via: "ocx-update" },
+  ]);
+  expect(
+    planOpenCodexUpdate({
+      ...base,
+      home: member("home", { version: "2.89.0", ownership: "adopted" }),
+    }),
+  ).toMatchObject({ reason: "home-behind", steps: [] });
 });

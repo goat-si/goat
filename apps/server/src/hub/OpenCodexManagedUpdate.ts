@@ -146,7 +146,7 @@ const make = Effect.gen(function* () {
   const withRecords = (
     current: State,
     at: number,
-    steps: ReadonlyArray<OpenCodexUpdateStep>,
+    steps: ReadonlyArray<Pick<OpenCodexUpdateStep, "alias" | "fromVersion">>,
     targetVersion: string,
     phase: OpenCodexUpdateMemberRecord["phase"],
     reason?: string,
@@ -173,7 +173,7 @@ const make = Effect.gen(function* () {
     return next === undefined ? rest : { ...rest, window: next };
   };
   const record = (
-    step: OpenCodexUpdateStep,
+    step: Pick<OpenCodexUpdateStep, "alias" | "fromVersion">,
     targetVersion: string,
     phase: OpenCodexUpdateMemberRecord["phase"],
     reason?: string,
