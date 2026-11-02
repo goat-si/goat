@@ -51,6 +51,35 @@ it.effect.each([
   }).pipe(Effect.provide(NodeServices.layer)),
 );
 
+it.effect("reports an unsearchable Codex spawn directory as a probe error", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const fixture = yield* routeFixture({ role: "home" });
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-codex-cwd-" });
+      yield* fs.chmod(directory, 0o000);
+      yield* Effect.addFinalizer(() => fs.chmod(directory, 0o700).pipe(Effect.ignore));
+      const cwd = process.getuid?.() === 0 ? `${directory}/missing` : directory;
+      using _cwd = vi.spyOn(process, "cwd").mockReturnValue(cwd);
+      const snapshot = yield* checkCodexProviderStatus(
+        { ...fixture.input.settings, binaryPath: "/goat-test-missing-codex" },
+        () =>
+          Effect.fail(
+            new CodexErrors.CodexAppServerSpawnError({
+              command: "codex",
+              cause: { code: "EACCES" },
+            }),
+          ),
+        {},
+      ).pipe(Effect.provideService(HomeRoute.OpenCodexRoute, fixture.service));
+      assert.isTrue(snapshot.installed);
+      assert.include(snapshot.message ?? "", cwd);
+      assert.include(snapshot.message ?? "", "cannot enter");
+      assert.notInclude(snapshot.message ?? "", "Binary path");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  ),
+);
+
 it("maps current Codex model capability fields", () => {
   const capabilities = mapCodexModelCapabilities({
     additionalSpeedTiers: [],
