@@ -1,5 +1,12 @@
 import * as NodeAssert from "node:assert/strict";
 
+import { vi } from "vite-plus/test";
+import * as PlatformError from "effect/PlatformError";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import * as Schema from "effect/Schema";
+import { OpenCodeSettings } from "../settings.ts";
+import * as OpenCodeServerOwner from "./OpenCodeServerOwner.ts";
+import { checkOpenCodeProviderStatus } from "./status.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { createOpencodeClient, type OpencodeClient } from "@opencode-ai/sdk/v2";
 import { it } from "@effect/vitest";
@@ -194,3 +201,45 @@ it.live("drops oversized CLI skill output without losing the model inventory", (
     NodeAssert.equal(inventory.skills.length, 0);
   }).pipe(Effect.provide(layerTest)),
 );
+
+const decodeOpenCodeSettings = Schema.decodeSync(OpenCodeSettings);
+
+it.effect("reports deleted process cwd through OpenCode status", () => {
+  const spawner = ChildProcessSpawner.make(() =>
+    Effect.fail(
+      PlatformError.systemError({
+        _tag: "NotFound",
+        module: "ChildProcess",
+        method: "spawn",
+        cause: { code: "ENOENT" },
+      }),
+    ),
+  );
+  const layer = OpenCodeRuntime.layer.pipe(
+    Layer.provide(OpenCodeServerLedger.layerTest),
+    Layer.provideMerge(NodeServices.layer),
+    Layer.provide(Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner)),
+  );
+  return Effect.gen(function* () {
+    const runtime = yield* OpenCodeRuntime.OpenCodeRuntime;
+    using _cwd = vi.spyOn(process, "cwd").mockImplementation(() => {
+      throw Object.assign(new Error("deleted"), { code: "ENOENT" });
+    });
+    const error = yield* runtime
+      .runOpenCodeCommand({ binaryPath: "opencode", args: ["--version"] })
+      .pipe(Effect.flip);
+    const snapshot = yield* checkOpenCodeProviderStatus(
+      decodeOpenCodeSettings({ enabled: true }),
+      "/",
+      Effect.fail(error),
+      Effect.succeed([]),
+    ).pipe(
+      Effect.provideService(
+        OpenCodeServerOwner.OpenCodeServerOwner,
+        {} as OpenCodeServerOwner.OpenCodeServerOwner["Service"],
+      ),
+    );
+    NodeAssert.equal(snapshot.installed, true);
+    NodeAssert.match(snapshot.message ?? "", /working directory/);
+  }).pipe(Effect.provide(layer));
+});

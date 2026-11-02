@@ -62,6 +62,28 @@ const check = (statusJson: string) =>
   }).pipe(Effect.provide(NodeServices.layer));
 
 describe("checkFxProviderStatus", () => {
+  it.effect("reports a deleted process cwd as a working directory failure", () =>
+    Effect.gen(function* () {
+      using _cwd = vi.spyOn(process, "cwd").mockImplementation(() => {
+        throw Object.assign(new Error("deleted"), { code: "ENOENT" });
+      });
+      const spawner = ChildProcessSpawner.make(() =>
+        Effect.fail(
+          PlatformError.systemError({
+            _tag: "NotFound",
+            module: "ChildProcess",
+            method: "spawn",
+            cause: { code: "ENOENT" },
+          }),
+        ),
+      );
+      const snapshot = yield* checkFxProviderStatus(settings, {}).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      );
+      assert.equal(snapshot.installed, true);
+      assert.include(snapshot.message ?? "", "working directory");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
   it.effect("reports an inaccessible inherited cwd instead of a missing executable", () =>
     Effect.gen(function* () {
       const cwd = "/goat-test-missing-fx-cwd-497";

@@ -45,6 +45,29 @@ const fakeGrok = (directory: string, markerPath: string) =>
   });
 
 it.layer(layer)("checkGrokProviderStatus", (it) => {
+  it.effect("reports a deleted process cwd as a working directory failure", () =>
+    Effect.gen(function* () {
+      using _cwd = vi.spyOn(process, "cwd").mockImplementation(() => {
+        throw Object.assign(new Error("deleted"), { code: "ENOENT" });
+      });
+      const spawner = ChildProcessSpawner.make(() =>
+        Effect.fail(
+          PlatformError.systemError({
+            _tag: "NotFound",
+            module: "ChildProcess",
+            method: "spawn",
+            cause: { code: "ENOENT" },
+          }),
+        ),
+      );
+      const snapshot = yield* checkGrokProviderStatus(
+        decodeGrokSettings({ enabled: true }),
+        {},
+      ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
+      expect(snapshot.installed).toBe(true);
+      expect(snapshot.message).toContain("working directory");
+    }),
+  );
   it.effect("reports an inaccessible inherited cwd instead of a missing executable", () =>
     Effect.gen(function* () {
       const cwd = "/goat-test-missing-grok-cwd-497";

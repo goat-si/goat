@@ -1,3 +1,5 @@
+import * as PlatformError from "effect/PlatformError";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { MuseSettings } from "../settings.ts";
@@ -142,3 +144,27 @@ it.layer(NodeServices.layer)("Muse status", (it) => {
     ),
   );
 });
+
+it.effect("reports a deleted process cwd as a working directory failure", () =>
+  Effect.gen(function* () {
+    using _cwd = vi.spyOn(process, "cwd").mockImplementation(() => {
+      throw Object.assign(new Error("deleted"), { code: "ENOENT" });
+    });
+    const spawner = ChildProcessSpawner.make(() =>
+      Effect.fail(
+        PlatformError.systemError({
+          _tag: "NotFound",
+          module: "ChildProcess",
+          method: "spawn",
+          cause: { code: "ENOENT" },
+        }),
+      ),
+    );
+    const snapshot = yield* checkMuseProviderStatus(
+      settings({ enabled: true, binaryPath: "muse" }),
+      {},
+    ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
+    expect(snapshot.installed).toBe(true);
+    expect(snapshot.message).toContain("working directory");
+  }).pipe(Effect.provide(NodeServices.layer)),
+);

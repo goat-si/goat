@@ -14,6 +14,7 @@ import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import { lazyChildProcessSpawner } from "@goat/shared/testing/lazyChildProcessSpawner";
 
+import { vi } from "vite-plus/test";
 import { checkPiProviderStatus, MINIMUM_PI_VERSION } from "./status.ts";
 
 const encoder = new TextEncoder();
@@ -127,6 +128,28 @@ const settings = {
 } as const;
 
 describe("PiProvider", () => {
+  it.effect("reports a deleted process cwd as a working directory failure", () =>
+    Effect.gen(function* () {
+      using _cwd = vi.spyOn(process, "cwd").mockImplementation(() => {
+        throw Object.assign(new Error("deleted"), { code: "ENOENT" });
+      });
+      const spawner = ChildProcessSpawner.make(() =>
+        Effect.fail(
+          PlatformError.systemError({
+            _tag: "NotFound",
+            module: "ChildProcess",
+            method: "spawn",
+            cause: { code: "ENOENT" },
+          }),
+        ),
+      );
+      const snapshot = yield* checkPiProviderStatus(settings, {}).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      );
+      assert.equal(snapshot.installed, true);
+      assert.include(snapshot.message ?? "", "working directory");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
   it.live("reports an installed executable whose interpreter is missing", () =>
     Effect.gen(function* () {
       const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-pi-shebang-"));
