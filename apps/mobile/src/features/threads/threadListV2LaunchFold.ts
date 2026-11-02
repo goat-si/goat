@@ -255,7 +255,7 @@ export interface LaunchTreeContext<Item> {
   readonly showAll: (parentKey: string) => boolean;
   /** The selected thread and its launchers; their row stays listed past the limit. */
   readonly routeKeys: ReadonlySet<string>;
-  readonly childItem: (thread: EnvironmentThreadShell, depth: number) => Item;
+  readonly childItem: (thread: EnvironmentThreadShell, depth: number, parent: Item) => Item;
 }
 
 /** A launch line placed after the row at `afterIndex` in the layout's rows. */
@@ -300,7 +300,7 @@ export function appendWithLaunchChildren<
     appendWithLaunchChildren(
       items,
       markers,
-      context.childItem(child, (item.depth ?? 0) + 1),
+      context.childItem(child, (item.depth ?? 0) + 1, item),
       context,
     );
   }

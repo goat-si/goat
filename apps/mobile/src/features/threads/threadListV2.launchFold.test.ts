@@ -3,6 +3,7 @@ import { EnvironmentId, ProviderInstanceId, RunId, ThreadId } from "@goat/contra
 import { describe, expect, it } from "vite-plus/test";
 
 import { makeThreadShellFixture } from "../../test-fixtures";
+import { relativeTime } from "../../lib/time";
 import { threadArrangementSections } from "./threadArrangementSections";
 import {
   buildThreadListV2Items,
@@ -120,6 +121,62 @@ const rows = (layout: ReturnType<typeof layoutOf>) =>
   layout.items.map((item) => `${"  ".repeat(item.depth ?? 0)}${item.thread.id}`);
 
 describe("mobile thread list launch folds", () => {
+  it("keeps settled children of card rows as cards with the normal card time label", () => {
+    const child = {
+      ...shell("done", { launchedBy: "launcher", settled: true }),
+      latestUserMessageAt: "2026-06-01T08:00:00.000Z",
+    };
+    const layout = layoutOf([shell("launcher"), child], {
+      launchGroups: expandedFor("launcher"),
+    });
+    expect(layout.items.find((item) => item.thread.id === "done")).toMatchObject({
+      variant: "card",
+      wokeAt: null,
+    });
+    const list = buildThreadListV2ListItems({ items: layout.items, pendingTasks: [] });
+    const row = list.find((item) => item.key === `v2-thread:${key("done")}`);
+    expect(row?.type === "v2-thread" && row.timeLabel).toBe(
+      relativeTime(child.latestUserMessageAt),
+    );
+  });
+
+  it("keeps settled children of settled shelf rows and snoozed children slim", () => {
+    const settled = layoutOf(
+      [shell("parent", { settled: true }), shell("child", { launchedBy: "parent", settled: true })],
+      { launchGroups: expandedFor("parent"), settledShelfExpanded: true },
+    );
+    expect(settled.items.map((item) => item.variant)).toEqual(["slim", "slim"]);
+    const snoozed = layoutOf(
+      [
+        shell("parent"),
+        shell("child", { launchedBy: "parent", snoozedUntil: "2026-06-03T00:00:00.000Z" }),
+      ],
+      { launchGroups: expandedFor("parent") },
+    );
+    expect(snoozed.items.map((item) => item.variant)).toEqual(["card", "slim"]);
+  });
+
+  it("uses the direct parent's variant at each level of a launch tree", () => {
+    const underSnoozed = layoutOf(
+      [
+        shell("root"),
+        shell("middle", { launchedBy: "root", snoozedUntil: "2026-06-03T00:00:00.000Z" }),
+        shell("leaf", { launchedBy: "middle", settled: true }),
+      ],
+      { launchGroups: expandedFor("root", "middle") },
+    );
+    expect(underSnoozed.items.map((item) => item.variant)).toEqual(["card", "slim", "slim"]);
+    const underActive = layoutOf(
+      [
+        shell("root", { snoozedUntil: "2026-06-03T00:00:00.000Z" }),
+        shell("middle", { launchedBy: "root" }),
+        shell("leaf", { launchedBy: "middle", settled: true }),
+      ],
+      { launchGroups: expandedFor("root", "middle"), snoozedShelfExpanded: true },
+    );
+    expect(underActive.items.map((item) => item.variant)).toEqual(["slim", "card", "card"]);
+  });
+
   it("folds launched threads under their launcher behind one collapsed line", () => {
     const layout = layoutOf([
       shell("launcher"),
@@ -223,6 +280,7 @@ describe("mobile thread list launch folds", () => {
       "v2-priority-header",
       "v2-thread",
       "v2-launch-group",
+      "v2-threads-header",
       "v2-thread",
     ]);
   });
