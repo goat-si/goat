@@ -202,6 +202,34 @@ it.effect("retires cancelled native reader work before another reader can run", 
   ),
 );
 
+// Regression: one cancelled read failed every read already queued on the retired reader.
+it.effect.each(["statement", "transaction"] as const)(
+  "runs a %s queued behind a cancelled read on a fresh reader",
+  (shape) =>
+    withReaderClient((sql) =>
+      Effect.gen(function* () {
+        yield* countEntries(sql).pipe(SqliteClient.readOnly);
+        const worker = startedWorkers.at(-1)!;
+        const sent = yield* Deferred.make<void>();
+        using held = vi.spyOn(worker, "postMessage").mockImplementation(() => {
+          Deferred.doneUnsafe(sent, Effect.void);
+        });
+        const cancelled = yield* Effect.forkChild(countEntries(sql).pipe(SqliteClient.readOnly));
+        yield* Deferred.await(sent);
+        const queued = yield* Effect.forkChild(
+          (shape === "statement" ? countEntries(sql) : sql.withTransaction(countEntries(sql))).pipe(
+            SqliteClient.readOnly,
+          ),
+          { startImmediately: true },
+        );
+        yield* Fiber.interrupt(cancelled);
+        held.mockRestore();
+        yield* TestClock.adjust("250 millis");
+        assert.equal(yield* Fiber.join(queued), 1);
+      }),
+    ),
+);
+
 it.effect("bounds reader admission before the connection semaphore", () =>
   withReaderClient((sql) =>
     Effect.gen(function* () {
