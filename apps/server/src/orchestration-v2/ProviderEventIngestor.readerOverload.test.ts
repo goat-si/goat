@@ -2,8 +2,11 @@ import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   NodeId,
+  PlanId,
   ProviderDriverKind,
   ProviderInstanceId,
+  ProviderTurnId,
+  TurnItemId,
   type ModelSelection,
   type OrchestrationV2AppThread,
   type OrchestrationV2DomainEvent,
@@ -152,6 +155,50 @@ const layerFor = (filename: string, writerWorker: boolean) => {
   );
 };
 
+/** Starts every reader slot, then holds 64 admissions so the next reader read is rejected. */
+const saturateReaders = (nonReaders: ReadonlySet<NodeWorkerThreads.Worker>) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const warmRelease = yield* Deferred.make<void>();
+    const warmEntered = Array.from({ length: 4 }, () => Deferred.makeUnsafe<void>());
+    const warm = [];
+    for (const entered of warmEntered)
+      warm.push(
+        yield* Effect.forkChild(
+          sql
+            .withTransaction(
+              Effect.gen(function* () {
+                yield* sql`SELECT 1`;
+                yield* Deferred.succeed(entered, undefined);
+                yield* Deferred.await(warmRelease);
+              }),
+            )
+            .pipe(NodeSqliteClient.readOnly),
+          { startImmediately: true },
+        ),
+      );
+    for (const entered of warmEntered) yield* Deferred.await(entered);
+    yield* Deferred.succeed(warmRelease, undefined);
+    for (const fiber of warm) yield* Fiber.join(fiber);
+    const readers = workers.filter((worker) => !nonReaders.has(worker));
+    assert.lengthOf(readers, 4);
+    const sent = yield* Deferred.make<void>();
+    const held = readers.map((reader) =>
+      vi.spyOn(reader, "postMessage").mockImplementation(() => {
+        Deferred.doneUnsafe(sent, Effect.void);
+      }),
+    );
+    const reads = [];
+    for (let index = 0; index < 64; index++)
+      reads.push(
+        yield* Effect.forkChild(sql`SELECT 1`.pipe(NodeSqliteClient.readOnly), {
+          startImmediately: true,
+        }),
+      );
+    yield* Deferred.await(sent);
+    return { held, reads };
+  });
+
 it.effect.each([false, true])(
   "deduplicates under reader saturation with writerWorker=%s",
   (writerWorker) =>
@@ -206,49 +253,12 @@ it.effect.each([false, true])(
           updated_at: string;
         }>`SELECT updated_at FROM orchestration_v2_projection_threads WHERE thread_id = ${threadId}`;
         yield* TestClock.adjust("5 seconds");
-        // Start every reader slot so that no idle slot can drain the saturated admissions.
-        const warmRelease = yield* Deferred.make<void>();
-        const warmEntered = Array.from({ length: 4 }, () => Deferred.makeUnsafe<void>());
-        const warm = [];
-        for (const entered of warmEntered)
-          warm.push(
-            yield* Effect.forkChild(
-              sql
-                .withTransaction(
-                  Effect.gen(function* () {
-                    yield* sql`SELECT 1`;
-                    yield* Deferred.succeed(entered, undefined);
-                    yield* Deferred.await(warmRelease);
-                  }),
-                )
-                .pipe(NodeSqliteClient.readOnly),
-              { startImmediately: true },
-            ),
-          );
-        for (const entered of warmEntered) yield* Deferred.await(entered);
-        yield* Deferred.succeed(warmRelease, undefined);
-        for (const fiber of warm) yield* Fiber.join(fiber);
-        const readers = workers.filter((worker) => !nonReaders.has(worker));
-        assert.lengthOf(readers, 4);
-        const sent = yield* Deferred.make<void>();
-        const held = readers.map((reader) =>
-          vi.spyOn(reader, "postMessage").mockImplementation(() => {
-            Deferred.doneUnsafe(sent, Effect.void);
-          }),
-        );
+        const { held, reads } = yield* saturateReaders(nonReaders);
         using _held = {
           [Symbol.dispose]: () => {
             for (const spy of held) spy.mockRestore();
           },
         };
-        const reads = [];
-        for (let index = 0; index < 64; index++)
-          reads.push(
-            yield* Effect.forkChild(sql`SELECT 1`.pipe(NodeSqliteClient.readOnly), {
-              startImmediately: true,
-            }),
-          );
-        yield* Deferred.await(sent);
         assert.isTrue(yield* projection.isNodeStored(node));
         assert.isFalse(
           yield* projection.isNodeStored({ ...node, status: "completed", completedAt: now }),
@@ -324,4 +334,103 @@ it.effect.each([false, true])(
         assert.equal(normalizeError._tag, "ProviderEventNormalizeError");
       }).pipe(Effect.provide(layerFor(path.join(directory, "state.sqlite"), writerWorker)));
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+it.effect("ingests plan, screen row, and terminal events while reader admission is saturated", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const directory = yield* fs.makeTempDirectoryScoped({ prefix: "ingestor-overload-" });
+    yield* Effect.gen(function* () {
+      const nonReaders = new Set(workers);
+      const now = yield* DateTime.now;
+      const sql = yield* SqlClient.SqlClient;
+      const eventSink = yield* EventSink.EventSinkV2;
+      const ingestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
+      const allocator = yield* IdAllocator.IdAllocatorV2;
+      const thread = yield* threadCreatedEvent(now);
+      yield* eventSink.write({ events: [thread] });
+      const threadId = thread.threadId;
+      const providerSessionId = yield* allocator.allocate.providerSession({
+        providerInstanceId: modelSelection.instanceId,
+        threadId,
+      });
+      const ingest = (event: ProviderEventIngestor.ProviderEventIngestInput["event"]) =>
+        ingestor.ingestNormalized({
+          providerSessionId,
+          providerInstanceId: modelSelection.instanceId,
+          threadId,
+          event,
+        });
+      const providerTurnId = ProviderTurnId.make("provider-turn:overload");
+      const { held, reads } = yield* saturateReaders(nonReaders);
+      using _held = {
+        [Symbol.dispose]: () => {
+          for (const spy of held) spy.mockRestore();
+        },
+      };
+      const overflow = yield* sql`SELECT 1`.pipe(NodeSqliteClient.readOnly, Effect.flip);
+      assert.isTrue(NodeSqliteClient.isReaderAdmissionOverload(overflow));
+
+      const planned = yield* ingest({
+        type: "plan.updated",
+        driver: CODEX_DRIVER,
+        plan: {
+          id: PlanId.make(`${threadId}:plan`),
+          threadId,
+          runId: null,
+          nodeId: NodeId.make(`${threadId}:plan-node`),
+          status: "active",
+          kind: "todo_list",
+          steps: [{ id: "1", text: "Ingest under overload", status: "running" }],
+        },
+      });
+      assert.deepEqual(
+        planned.map((stored) => stored.event.type),
+        ["plan.updated"],
+      );
+      const screenRow = yield* ingest({
+        type: "turn_item.updated",
+        driver: CODEX_DRIVER,
+        turnItem: {
+          id: TurnItemId.make(`${threadId}:screen-row`),
+          type: "dynamic_tool",
+          threadId,
+          runId: null,
+          nodeId: null,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 1,
+          status: "running",
+          title: "goat screen run",
+          toolName: "goat.goat_screen_run",
+          input: { code: "..." },
+          startedAt: now,
+          completedAt: null,
+          updatedAt: now,
+        },
+      });
+      assert.deepEqual(
+        screenRow.map((stored) => stored.event.type),
+        ["turn-item.updated"],
+      );
+      const terminal = yield* ingest({
+        type: "turn.terminal",
+        driver: CODEX_DRIVER,
+        providerThreadId: allocator.derive.providerThread({
+          driver: CODEX_DRIVER,
+          nativeThreadId: "native-thread",
+        }),
+        providerTurnId,
+        runOrdinal: 1,
+        status: "completed",
+        failure: null,
+        threadDisposition: "reusable",
+      });
+      assert.isEmpty(terminal);
+      for (const spy of held) spy.mockRestore();
+      for (const read of reads) yield* Fiber.interrupt(read);
+    }).pipe(Effect.provide(layerFor(path.join(directory, "state.sqlite"), false)));
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
