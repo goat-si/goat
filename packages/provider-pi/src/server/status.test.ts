@@ -1,3 +1,6 @@
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
@@ -124,6 +127,20 @@ const settings = {
 } as const;
 
 describe("PiProvider", () => {
+  it.live("reports an installed executable whose interpreter is missing", () =>
+    Effect.gen(function* () {
+      const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-pi-shebang-"));
+      try {
+        const binaryPath = NodePath.join(dir, "pi");
+        NodeFS.writeFileSync(binaryPath, "#!/nonexistent/interpreter\n", { mode: 0o755 });
+        const snapshot = yield* checkPiProviderStatus({ ...settings, binaryPath });
+        assert.equal(snapshot.installed, true);
+        assert.include(snapshot.message ?? "", "could not be started");
+      } finally {
+        NodeFS.rmSync(dir, { recursive: true });
+      }
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
   it.effect("uses the inherited spawn cwd instead of the project cwd to diagnose permissions", () =>
     Effect.gen(function* () {
       const spawner = ChildProcessSpawner.make(() =>

@@ -25,6 +25,23 @@ import {
 } from "./snapshotProbe.ts";
 
 describe("spawn failure diagnosis", () => {
+  it("recognizes an existing executable with a missing interpreter, including PATH lookup", () => {
+    const cwd = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-broken-shebang-"));
+    try {
+      const binary = NodePath.join(cwd, "broken");
+      NodeFS.writeFileSync(binary, "#!/nonexistent/interpreter\n", { mode: 0o755 });
+      for (const name of [binary, "./broken", "broken"]) {
+        expect(
+          classifySpawnFailure({ code: "ENOENT" }, cwd, undefined, {
+            binary: name,
+            env: { PATH: cwd },
+          }),
+        ).toBe("exec_failed");
+      }
+    } finally {
+      NodeFS.rmSync(cwd, { recursive: true });
+    }
+  });
   it("recognizes a directory without search permission", () => {
     const cwd = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-spawn-permission-"));
     try {
