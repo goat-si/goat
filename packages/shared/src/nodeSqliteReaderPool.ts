@@ -5,42 +5,30 @@ import type { SqlError } from "effect/sql/SqlError";
 
 const DEFAULT_READER_POOL_SIZE = 4;
 
-// Startup failures usually share one cause, so every slot honors one restart backoff and workers
-// start one at a time: each start waits for the previous start's outcome, then the deadline.
-export const makeReaderRestart = (gate: Semaphore.Semaphore) => {
-  let retryAt = 0n;
-  let retryMs = 250;
-  let probe: Effect.Effect<unknown> = Effect.void;
-  return {
-    gate,
-    // A later failure never shortens a deadline another slot already set.
-    fail: (now: bigint) => {
-      const next = now + BigInt(retryMs) * 1_000_000n;
-      if (next > retryAt) retryAt = next;
-      retryMs = Math.min(8_000, retryMs * 2);
-    },
-    succeed: () => {
-      retryMs = 250;
-    },
-    remainingMs: (now: bigint) => Number(retryAt - now) / 1e6,
-    // A restart's startup outlives a cancelled request, so the next restart waits for its outcome,
-    // which ends by the startup deadline fixed when that worker started.
-    probe: () => probe,
-    setProbe: (next: Effect.Effect<unknown>) => {
-      probe = next;
-    },
-  };
-};
-export type ReaderRestart = ReturnType<typeof makeReaderRestart>;
+export type ReaderSlotState = "running" | "idle" | "backoff";
 
 export interface ReaderSlot {
   readonly acquire: Effect.Effect<Connection, SqlError>;
-  readonly backingOff: () => boolean;
+  readonly state: () => ReaderSlotState;
 }
+
+// A free running slot serves first. While any slot waits out restart backoff, a failing slot
+// retries on its own schedule instead of new slots starting workers, so a shared startup fault
+// keeps one retry stream; otherwise an idle slot starts a worker.
+const choose = (slots: ReadonlyArray<ReaderSlot>, leased: ReadonlySet<number>) => {
+  const free = slots.flatMap((slot, index) => (leased.has(index) ? [] : [{ index, slot }]));
+  const pick = (state: ReaderSlotState) => free.find(({ slot }) => slot.state() === state)?.index;
+  const anyBackoff = slots.some((slot) => slot.state() === "backoff");
+  return (
+    pick("running") ??
+    (anyBackoff ? (pick("backoff") ?? pick("idle")) : (pick("idle") ?? pick("backoff"))) ??
+    -1
+  );
+};
 
 // WAL readers run concurrently; one worker serialized every read behind the slowest transaction.
 export const makeReaderPool = Effect.fn("SqliteReaderPool.make")(function* <R>(options: {
-  readonly makeSlot: (restart: ReaderRestart) => Effect.Effect<ReaderSlot, never, R>;
+  readonly makeSlot: () => Effect.Effect<ReaderSlot, never, R>;
   readonly available: Effect.Effect<void, SqlError> | undefined;
   readonly size?: number | undefined;
 }) {
@@ -48,26 +36,14 @@ export const makeReaderPool = Effect.fn("SqliteReaderPool.make")(function* <R>(o
   if (!Number.isInteger(size) || size < 1) {
     return yield* Effect.die(new Error(`readerPoolSize must be a positive integer, got ${size}`));
   }
-  const restart = makeReaderRestart(yield* Semaphore.make(1));
-  const slots = yield* Effect.forEach(Array.from({ length: size }), () =>
-    options.makeSlot(restart),
-  );
+  const slots = yield* Effect.forEach(Array.from({ length: size }), () => options.makeSlot());
   // Holding a permit guarantees a free slot, so choosing one never waits.
   const permits = yield* Semaphore.make(size);
   const leased = new Set<number>();
-  // Prefer a slot that can serve now; a slot that must restart during backoff is a last resort.
   const lease = () => {
-    let fallback = -1;
-    for (const [index, slot] of slots.entries()) {
-      if (leased.has(index)) continue;
-      if (!slot.backingOff()) {
-        leased.add(index);
-        return index;
-      }
-      if (fallback < 0) fallback = index;
-    }
-    leased.add(fallback);
-    return fallback;
+    const index = choose(slots, leased);
+    leased.add(index);
+    return index;
   };
   const release = (index: number) => {
     leased.delete(index);

@@ -914,3 +914,38 @@ it.effect("serializes reader requests through their replies without leaking valu
     { readerPoolSize: 1 },
   ),
 );
+
+it.effect("serves reads from a running slot while another slot waits out restart backoff", () =>
+  withReaderClient((sql) =>
+    Effect.gen(function* () {
+      const before = startedWorkers.length;
+      const release = yield* Deferred.make<void>();
+      const entered = [Deferred.makeUnsafe<void>(), Deferred.makeUnsafe<void>()];
+      const held = [];
+      for (const started of entered)
+        held.push(
+          yield* Effect.forkChild(
+            sql
+              .withTransaction(
+                Effect.gen(function* () {
+                  yield* countEntries(sql);
+                  yield* Deferred.succeed(started, undefined);
+                  yield* Deferred.await(release);
+                }),
+              )
+              .pipe(SqliteClient.readOnly),
+            { startImmediately: true },
+          ),
+        );
+      for (const started of entered) yield* Deferred.await(started);
+      yield* Deferred.succeed(release, undefined);
+      for (const fiber of held) yield* Fiber.join(fiber);
+      assert.equal(startedWorkers.length, before + 2);
+      // The first slot's worker dies, so that slot must wait out restart backoff.
+      yield* Effect.promise(() => startedWorkers[before]!.terminate());
+      // The clock never advances: only the still-running slot can serve this read.
+      assert.equal(yield* countEntries(sql).pipe(SqliteClient.readOnly), 1);
+      assert.equal(startedWorkers.length, before + 2);
+    }),
+  ),
+);

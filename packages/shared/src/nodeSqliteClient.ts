@@ -28,7 +28,7 @@ import type { Borrower, Connection } from "effect/sql/SqlConnection";
 import { SqlError, classifySqliteError } from "effect/sql/SqlError";
 import * as Statement from "effect/sql/Statement";
 import { satisfiesSemverRange } from "./semver.ts";
-import { makeReaderPool, type ReaderRestart, type ReaderSlot } from "./nodeSqliteReaderPool.ts";
+import { makeReaderPool, type ReaderSlot } from "./nodeSqliteReaderPool.ts";
 import { connectionOwner, measureWriterSql, recordReaderSql } from "./slowSqlOperations.ts";
 export { recentSlowSql } from "./slowSqlOperations.ts";
 
@@ -242,10 +242,7 @@ const initializeWorker = (worker: NodeWorkerThreads.Worker) =>
 const endsReadTransaction = (sql: string) => /^\s*ROLLBACK\b|^\s*COMMIT\b/i.test(sql);
 
 // Bind transactions to one worker; fail after its exit instead of resuming outside the transaction on a replacement.
-const makeReader = Effect.fn("SqliteReader.make")(function* (
-  options: SqliteClientConfig,
-  restart: ReaderRestart,
-) {
+const makeReader = Effect.fn("SqliteReader.make")(function* (options: SqliteClientConfig) {
   const scope = yield* Effect.scope;
   const starting = yield* Semaphore.make(1);
   let current:
@@ -256,8 +253,13 @@ const makeReader = Effect.fn("SqliteReader.make")(function* (
       }
     | undefined;
   const clock = yield* Clock.Clock;
+  let retryAt = 0n;
+  let retryMs = 250;
   let retiring = Promise.resolve();
-  const backoff = () => restart.fail(clock.monotonicTimeNanosUnsafe());
+  const backoff = () => {
+    retryAt = clock.monotonicTimeNanosUnsafe() + BigInt(retryMs) * 1_000_000n;
+    retryMs = Math.min(8_000, retryMs * 2);
+  };
   let nextRequestId = 0;
 
   const start = Effect.fn("SqliteReader.start")(function* () {
@@ -310,7 +312,7 @@ const makeReader = Effect.fn("SqliteReader.make")(function* (
       recordReaderSql(request.owner, reply);
       pending.delete(reply.id);
       if (pending.size === 0) worker.unref();
-      if ("rows" in reply) restart.succeed();
+      if ("rows" in reply) retryMs = 250;
       request.resume(reply);
     });
     worker.on("error", (cause) => stop(`Database reader failed: ${cause.message}`));
@@ -408,15 +410,6 @@ const makeReader = Effect.fn("SqliteReader.make")(function* (
           message: String(error.reason.cause),
         }),
       }),
-      // The deadline is fixed when the worker starts; late or repeated waiters never extend it.
-      Effect.timeoutOrElse({
-        duration: startupTimeout,
-        orElse: () =>
-          Effect.succeed<ReaderStartup>({
-            type: "unavailable",
-            message: "Reader startup deadline exceeded",
-          }),
-      }),
       Effect.forkIn(scope),
     );
     current = { worker, connection, started: Fiber.join(startup) };
@@ -449,34 +442,43 @@ const makeReader = Effect.fn("SqliteReader.make")(function* (
 
   const acquire = Effect.withFiber((fiber) => {
     const restore = Context.get(fiber.context, ReadOnly) ?? identity;
-    const remaining = () => restart.remainingMs(clock.monotonicTimeNanosUnsafe());
-    // Workers start one at a time: each waits for the previous start's outcome and the shared deadline.
-    const startNext = restart.gate.withPermits(1)(
-      Effect.gen(function* () {
-        yield* Effect.promise(() => retiring);
-        yield* restart.probe();
-        while (remaining() > 0) yield* Effect.sleep(Duration.millis(remaining()));
-        return yield* start().pipe(
-          Effect.tap((started) => Effect.sync(() => restart.setProbe(started.started))),
-          Effect.catch((cause) => {
-            backoff();
-            return retire(undefined, cause);
-          }),
-        );
-      }),
+    return restore(
+      starting.withPermits(1)(
+        Effect.gen(function* () {
+          if (current === undefined) yield* Effect.promise(() => retiring);
+          const remaining = Number(retryAt - clock.monotonicTimeNanosUnsafe()) / 1e6;
+          if (remaining > 0) yield* Effect.sleep(Duration.millis(remaining));
+          const reader =
+            current ??
+            (yield* start().pipe(
+              Effect.catch((cause) => {
+                backoff();
+                return retire(undefined, cause);
+              }),
+            ));
+          const startup = yield* Effect.timeoutOption(reader.started, startupTimeout);
+          if (current !== reader)
+            return yield* retire(undefined, new Error("Reader epoch retired"));
+          if (Option.isSome(startup) && startup.value.type === "ready") return reader.connection;
+          return yield* retire(
+            reader,
+            new Error(
+              Option.isSome(startup) && startup.value.type === "unavailable"
+                ? startup.value.message
+                : "Reader startup deadline exceeded",
+            ),
+          );
+        }),
+      ),
     );
-    const begin = Effect.gen(function* () {
-      const reader = current ?? (yield* startNext);
-      const startup = yield* reader.started;
-      if (current !== reader) return yield* retire(undefined, new Error("Reader epoch retired"));
-      if (startup.type === "ready") return reader.connection;
-      return yield* retire(reader, new Error(startup.message));
-    });
-    return restore(starting.withPermits(1)(begin));
   });
-  const backingOff = () =>
-    current === undefined && restart.remainingMs(clock.monotonicTimeNanosUnsafe()) > 0;
-  return { acquire, backingOff } satisfies ReaderSlot;
+  const state = () =>
+    current !== undefined
+      ? ("running" as const)
+      : retryAt > clock.monotonicTimeNanosUnsafe()
+        ? ("backoff" as const)
+        : ("idle" as const);
+  return { acquire, state } satisfies ReaderSlot;
 });
 
 const CHECKPOINT_FRAMES = 1000;
@@ -1118,7 +1120,7 @@ const make = Effect.fn("makeWithDatabase")(function* (
   const readers =
     options.readerWorker && isFileDatabase
       ? yield* makeReaderPool({
-          makeSlot: (restart) => makeReader(options, restart),
+          makeSlot: () => makeReader(options),
           available: workerWriter?.available,
           size: options.readerPoolSize,
         })
