@@ -9,6 +9,8 @@ import { checkCodexProviderStatus } from "./CodexProvider.ts";
 import nativeConfigRead from "./testFixtures/codexHomeConfigRead.0.156.1.json" with { type: "json" };
 import { assert, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
+import { ProviderDriverKind, ProviderInstanceId } from "@goat/contracts";
+import { snapshotChecks } from "./ProviderDiagnosis.ts";
 
 import { applyPreferredCodexDefaultModel, mapCodexModelCapabilities } from "./CodexProvider.ts";
 
@@ -32,6 +34,14 @@ it.effect.each([
     ).pipe(Effect.provideService(HomeRoute.OpenCodexRoute, fixture.service));
     assert.equal(snapshot.installed, installed);
     assert.equal(snapshot.status, "error");
+    if (installed) {
+      const checks = snapshotChecks({
+        ...snapshot,
+        instanceId: ProviderInstanceId.make("codex"),
+        driver: ProviderDriverKind.make("codex"),
+      });
+      assert.isFalse(checks.some((check) => check.reason === "executable_missing"));
+    }
     if (cwd) {
       assert.include(snapshot.message ?? "", cwd);
       assert.include(snapshot.message ?? "", "cannot enter");

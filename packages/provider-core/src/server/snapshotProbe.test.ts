@@ -1,3 +1,7 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- exercises real directory search permission.
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 import { it } from "@effect/vitest";
 import { describe, expect } from "vite-plus/test";
 import type { ModelCapabilities } from "@goat/contracts";
@@ -20,6 +24,22 @@ import {
 } from "./snapshotProbe.ts";
 
 describe("spawn failure diagnosis", () => {
+  it("recognizes a directory without search permission", () => {
+    const cwd = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-spawn-permission-"));
+    try {
+      NodeFS.chmodSync(cwd, 0o000);
+      if (process.getuid?.() === 0) {
+        expect(classifySpawnFailure({ code: "EACCES" }, NodePath.join(cwd, "missing"))).toBe(
+          "cwd_inaccessible",
+        );
+      } else {
+        expect(classifySpawnFailure({ code: "EACCES" }, cwd)).toBe("cwd_inaccessible");
+      }
+    } finally {
+      NodeFS.chmodSync(cwd, 0o700);
+      NodeFS.rmdirSync(cwd);
+    }
+  });
   it("distinguishes a missing executable from a missing working directory through nested causes", () => {
     const failure = { cause: { cause: { code: "ENOENT" } } };
     expect(classifySpawnFailure(failure, process.cwd())).toBe("missing");
