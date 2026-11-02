@@ -14,7 +14,11 @@ export class OpenCodeSpawnFailure extends Data.TaggedError("OpenCodeSpawnFailure
 
 export const spawnFailureFor =
   (spawnCwd: string | undefined, environment?: NodeJS.ProcessEnv) => (cause: unknown) =>
-    new OpenCodeSpawnFailure({ spawnCwd, spawnPath: environment?.PATH ?? process.env.PATH, cause });
+    new OpenCodeSpawnFailure({
+      spawnCwd,
+      spawnPath: environment === undefined ? process.env.PATH : environment.PATH,
+      cause,
+    });
 
 export function findSpawnFailure(
   cause: unknown,
