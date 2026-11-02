@@ -56,6 +56,18 @@ const fakeCli = (source = 'process.stdout.write("muse 1.0.3-R2198.1\\n");') =>
   });
 
 it.layer(NodeServices.layer)("Muse status", (it) => {
+  it.effect("reports a missing probe cwd instead of a missing executable", () =>
+    Effect.gen(function* () {
+      const cwd = "/goat-test-missing-muse-cwd-497";
+      const snapshot = yield* checkMuseProviderStatus(
+        settings({ enabled: true, binaryPath: "muse" }),
+        {},
+        cwd,
+      );
+      expect(snapshot.installed).toBe(true);
+      expect(snapshot.message).toContain(cwd);
+    }),
+  );
   it.effect("does not expose CLI stderr or start an SDK host after a failed version check", () =>
     Effect.scoped(
       Effect.gen(function* () {
