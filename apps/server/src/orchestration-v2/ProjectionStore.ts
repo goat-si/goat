@@ -5404,7 +5404,6 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         (effect, threadId, _requestId, _resultId) =>
           effect.pipe(Effect.mapError(controlReadError(threadId))),
       );
-
     const isNodeStored: ProjectionStoreV2Shape["isNodeStored"] = Effect.fn(
       "ProjectionStore.isNodeStored",
     )(
@@ -5420,7 +5419,6 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       },
       (effect, node) => effect.pipe(Effect.mapError(controlReadError(node.threadId))),
     );
-
     const getRuntimeRequest: ProjectionStoreV2Shape["getRuntimeRequest"] = (threadId, requestId) =>
       sql
         .withTransaction(
@@ -7309,7 +7307,6 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       ) =>
       (...args: Args): Effect.Effect<A, E, R> =>
         method(...args).pipe(NodeSqliteClient.readOnly);
-
     return gateThreadReads(archiveGate, {
       apply,
       setCompletionNotification: (input) =>
@@ -7368,7 +7365,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         getServerActivityBlockers(1).pipe(
           Effect.map((blockers) => (blockers.length > 0 ? ("busy" as const) : ("idle" as const))),
         ),
-      isNodeStored: readOnReader(isNodeStored),
+      isNodeStored: (node) =>
+        readOnReader(isNodeStored)(node).pipe(
+          Effect.catchIf(NodeSqliteClient.isReaderAdmissionOverload, () => isNodeStored(node)),
+        ),
       getMessageCount: readOnReader(getMessageCount),
       getNextTurnItemOrdinal: readOnReader(getNextTurnItemOrdinal),
       getTurnItem: readOnReader(getTurnItem),

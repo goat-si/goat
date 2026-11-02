@@ -58,6 +58,9 @@ export interface SqliteClientConfig {
   readonly onFatalPersistence?: ((cause: SqlError) => void) | undefined;
 }
 
+export { isReaderAdmissionOverload } from "./readerAdmissionOverload.ts";
+import { ReaderAdmissionOverloadError } from "./readerAdmissionOverload.ts";
+
 // SqlClient masks transaction acquisition, so readOnly carries the caller's interruption policy.
 const ReadOnly = Context.Reference<typeof Effect.interruptible | undefined>(
   "@goat/shared/nodeSqliteClient/ReadOnly",
@@ -1113,11 +1116,7 @@ const make = Effect.fn("makeWithDatabase")(function* (
       if (target.name !== "reader") return Effect.void;
       if (admittedReaders >= 64)
         return Effect.fail(
-          failed(
-            new Error("Reader admission limit reached"),
-            "Database reader overloaded",
-            "acquire",
-          ),
+          failed(new ReaderAdmissionOverloadError(), "Database reader overloaded", "acquire"),
         );
       admittedReaders++;
       return Effect.void;

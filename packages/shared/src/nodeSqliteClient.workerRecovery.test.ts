@@ -256,6 +256,16 @@ it.effect("bounds reader admission before the connection semaphore", () =>
       const rejected = result.failure;
       assert.equal(rejected._tag, "SqlError");
       assert.include(String(rejected.reason.cause), "Reader admission limit reached");
+      assert.isTrue(SqliteClient.isReaderAdmissionOverload(rejected));
+      assert.isTrue(
+        SqliteClient.isReaderAdmissionOverload(new Error("wrapped", { cause: rejected })),
+      );
+      assert.isFalse(
+        SqliteClient.isReaderAdmissionOverload(new Error("Reader admission limit reached")),
+      );
+      const cycle = new Error("cycle");
+      Object.defineProperty(cycle, "cause", { value: cycle });
+      assert.isFalse(SqliteClient.isReaderAdmissionOverload(cycle));
       for (const read of reads) yield* Fiber.interrupt(read);
     }),
   ),
