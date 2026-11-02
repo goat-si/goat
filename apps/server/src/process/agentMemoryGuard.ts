@@ -87,8 +87,9 @@ export function treeOf(
   rows: ReadonlyArray<ProcessRow>,
   children: ReadonlyMap<number, ReadonlyArray<ProcessRow | undefined>>,
   rootPid: number,
+  index = indexRows(rows),
 ) {
-  return treeOfIndexed(indexRows(rows), children, rootPid);
+  return treeOfIndexed(index, children, rootPid);
 }
 export const makeAgentMemoryGuard = Effect.fn("AgentMemoryGuard.make")(function* <E>(deps: {
   sample: Effect.Effect<ReadonlyArray<ProcessRow>, E>;
@@ -183,7 +184,7 @@ export const makeAgentMemoryGuard = Effect.fn("AgentMemoryGuard.make")(function*
     const decisions = registrations.map(([pid, reg]) => ({
       pid,
       reg,
-      tree: treeOfIndexed(index, children, pid),
+      tree: treeOf(rows, children, pid, index),
     }));
     const results = yield* deps.inCheckPhase(() => {
       const killed: Array<{
