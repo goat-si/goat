@@ -351,7 +351,7 @@ const proxyRead = Effect.fn("HubProxyHttp.proxyRead")(function* (
   return yield* attempt(false);
 });
 
-const openUpstreamSocket = (upstream: HubProxyUpstream, search: string) =>
+export const openUpstreamSocket = (upstream: HubProxyUpstream, search: string) =>
   Effect.suspend(() => {
     let status: number | undefined;
     let ws: NodeSocket.NodeWS.WebSocket | undefined;
