@@ -67,13 +67,13 @@ import {
   answerForwardIdsFor,
   goatBotSessionSharingFor,
   goatBotSessionThreadIdFor,
-  questionIdFor,
   sessionLaunchIdsFor,
   sessionSendIdsFor,
   stopIdsFor,
   turnSteerIdsFor,
 } from "./channelIds.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
+import { refuseForward } from "./channelForwardRefusal.ts";
 import { turnInstruction } from "./channelWorkerBrief.ts";
 import { isThreadMissing } from "./channelWorkerObservation.ts";
 import {
@@ -158,7 +158,6 @@ const make = Effect.gen(function* () {
   // One binding decision at a time keeps generations and the one-current-row rule simple.
   const gate = yield* Semaphore.make(1);
   const nowIso = DateTime.now.pipe(Effect.map(DateTime.formatIso));
-
   const { currentRow, setState, touch, writeIntent, recordRun } = sessionStore(sql);
 
   const fail = (
@@ -605,31 +604,6 @@ const make = Effect.gen(function* () {
       .withPermits(1)(serveNow(initial, owner))
       .pipe(Effect.mapError(asLedgerError("serve")));
 
-  const askRequester = Effect.fn("ChannelBotSession.askRequester")(function* (
-    stored: ChannelLedger.ChannelStoredTask,
-    text: string,
-    owner: string,
-  ) {
-    return yield* commitTransition(
-      ledger,
-      stored,
-      {
-        type: "task.question.opened",
-        payload: {
-          question: {
-            questionId: questionIdFor(stored.task.taskId, stored.task.version + 1),
-            text,
-            askedAt: yield* nowIso,
-            ...(stored.task.requester.externalActorId === undefined
-              ? {}
-              : { requesterExternalActorId: stored.task.requester.externalActorId }),
-          },
-        },
-      },
-      { owner, narrate: true, pendingAnswerMessageId: null },
-    );
-  });
-
   /** One message into the task's own live run, else as the task's next run; never another's. */
   const sendForTask = Effect.fn("ChannelBotSession.sendForTask")(function* (
     stored: ChannelLedger.ChannelStoredTask,
@@ -663,9 +637,27 @@ const make = Effect.gen(function* () {
     `;
     const steeredInto = records.runs.find((run) => run.id === firstIntent[0]?.steered_into_run_id);
     if (steeredInto !== undefined) return { _tag: "sent", run: steeredInto } as const;
+    const accepted = records.messages.find(
+      (message) => message.id === ids.first.messageId || message.id === ids.queued.messageId,
+    );
+    if (accepted !== undefined) {
+      const run = records.runs.find((candidate) => candidate.id === accepted.runId);
+      if (run === undefined)
+        return yield* new ChannelLedger.ChannelLedgerError({
+          reason: "persistence",
+          detail: "The accepted session message's run is unavailable.",
+        });
+      yield* recordRun(threadId, accepted.id, run, true);
+      return { _tag: "sent", run } as const;
+    }
     // A person stopped this task's run in GOAT; sending would start it again.
     if (current?.status === "cancelled" && firstIntent.length === 0)
       return { _tag: "stopped", run: current } as const;
+    const requester = yield* requesterForDispatch(task).pipe(
+      Effect.provideService(ChannelLedger.ChannelLedger, ledger),
+      Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
+    );
+    if (requester === undefined) return { _tag: "permission_changed" } as const;
     const refused = yield* Ref.make<DispatchModeRefusal | undefined>(undefined);
     const attempt = (mode: "steer" | "queue", which: ReturnType<typeof turnSteerIdsFor>) =>
       writeIntent(threadId, which.messageId, task, "followup").pipe(
@@ -683,7 +675,7 @@ const make = Effect.gen(function* () {
               createdBy: "user",
               creationSource: "server",
             })
-            .pipe(modeLimit(task.requester, refused), Effect.result),
+            .pipe(modeLimit(requester, refused), Effect.result),
         ),
       );
     let which = ids.first;
@@ -768,22 +760,26 @@ const make = Effect.gen(function* () {
       yield* inputAttachments(event.payload.inputId),
     );
     const own = [ids.first.messageId, ids.queued.messageId];
-    if (result._tag === "failed") {
-      if (result.refusal === undefined && !rejected(result.failure)) {
+    if (result._tag === "failed" || result._tag === "permission_changed") {
+      if (result._tag === "failed" && result.refusal === undefined && !rejected(result.failure)) {
         yield* Effect.logWarning("GOAT Bot session follow-up failed; retrying", {
           taskId: event.taskId,
           cause: result.failure,
         });
         return;
       }
-      const asked = yield* askRequester(
-        (yield* ledger.getTask(event.taskId)) ?? stored,
-        "The session didn't take your follow-up (\"" +
-          event.payload.text +
-          '"). Say it again, or open the thread in GOAT.',
+      yield* refuseForward(
+        ledger,
+        stored,
+        result._tag === "permission_changed"
+          ? "The requester’s permission changed; your follow-up was not sent. Open the thread in GOAT."
+          : "The session didn't take your follow-up (\"" +
+              event.payload.text +
+              '"). Say it again, or open the thread in GOAT.',
         owner,
+        pending.sequence,
+        own,
       );
-      if (asked !== undefined) yield* done;
       return;
     }
     // A stopped run is not restarted: the follow-up is dropped and its fence lifted.
@@ -795,9 +791,17 @@ const make = Effect.gen(function* () {
     owner: string,
   ) {
     const event = pending.event;
-    const done = ledger.completeForward({ owner, sequence: pending.sequence });
+    const done = ledger.completeForward({
+      owner,
+      sequence: pending.sequence,
+      clearPendingAnswerMessageId: answerForwardIdsFor(event.eventId).messageId,
+    });
     const stored = yield* ledger.getTask(event.taskId);
-    if (event.type !== "task.question.answered" || stored?.task.worker === undefined)
+    if (
+      event.type !== "task.question.answered" ||
+      stored?.task.worker === undefined ||
+      (stored.task.status !== "running" && stored.task.status !== "waiting_input")
+    )
       return yield* done;
     const ids = answerForwardIdsFor(event.eventId);
     const result = yield* sendForTask(
@@ -806,16 +810,21 @@ const make = Effect.gen(function* () {
       "Answer from " + stored.task.requester.displayName + ": " + event.payload.answer,
       { first: ids, queued: ids },
     );
-    if (result._tag === "failed") {
-      if (result.refusal === undefined && !rejected(result.failure)) return;
-      const asked = yield* askRequester(
+    if (result._tag === "failed" || result._tag === "permission_changed") {
+      if (result._tag === "failed" && result.refusal === undefined && !rejected(result.failure))
+        return;
+      yield* refuseForward(
+        ledger,
         stored,
-        "The session didn't take your answer (\"" +
-          event.payload.answer +
-          '"). Answer again, or answer in the thread.',
+        result._tag === "permission_changed"
+          ? "The requester’s permission changed; your answer was not sent. Open the thread in GOAT."
+          : "The session didn't take your answer (\"" +
+              event.payload.answer +
+              '"). Answer again, or answer in the thread.',
         owner,
+        pending.sequence,
+        [ids.messageId],
       );
-      if (asked !== undefined) yield* done;
       return;
     }
     if (yield* bindAfterSend(event.taskId, [ids.messageId], result.run, owner)) yield* done;
@@ -964,6 +973,7 @@ const make = Effect.gen(function* () {
     function* (pending, owner) {
       const stored = yield* ledger.getTask(pending.event.taskId);
       if (stored === undefined || !isSessionTask(stored.task)) return false;
+      if (!(yield* ledger.isForwardPending(pending.sequence))) return true;
       const event = pending.event;
       if (event.type === "task.followup.received") yield* forwardFollowUp(pending, event, owner);
       else if (event.type === "task.cancelled")

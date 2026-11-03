@@ -146,6 +146,7 @@ export interface TransitionOptions {
   readonly amend?: (next: ChannelTask) => ChannelTask;
   /** A remote worker state change committed with the event. */
   readonly remoteWorker?: ChannelLedger.RemoteWorkerStateUpdate;
+  readonly completeForwardSequence?: number;
 }
 
 export const prepareTransition = (
@@ -201,12 +202,16 @@ export const commitTransition = Effect.fn("channel.commitTransition")(function* 
     });
     return undefined;
   }
-  yield* ledger.applyTaskEvent({
+  const sequence = yield* ledger.applyTaskEvent({
     owner: options.owner,
     write: prepared.write,
     deliveries: prepared.deliveries,
     ...(options.remoteWorker === undefined ? {} : { remoteWorker: options.remoteWorker }),
+    ...(options.completeForwardSequence === undefined
+      ? {}
+      : { completeForwardSequence: options.completeForwardSequence }),
   });
+  if (sequence === 0) return undefined;
   return prepared.next;
 });
 
