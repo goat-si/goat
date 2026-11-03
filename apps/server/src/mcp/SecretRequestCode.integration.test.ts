@@ -440,7 +440,7 @@ it.live("authenticator sentinels stay private through MCP and screen cells", () 
             expectedCode,
           );
           yield* Effect.promise(() => page.reload());
-          yield* Effect.promise(() => page.locator("#user").focus());
+          yield* Effect.promise(() => page.locator("#code").focus());
           const tabHost = yield* makePreviewTargetHost(broker);
           const screen = yield* Effect.gen(function* () {
             const service = yield* ScreenRunService;
