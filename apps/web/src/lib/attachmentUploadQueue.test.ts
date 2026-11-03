@@ -212,22 +212,28 @@ describe("attachmentUploadQueue", () => {
 
   it("logs a failed cancelled-mint deletion while the attachment stays removed", async () => {
     const image = makeImage("cancel-delete-failure");
-    const minted = Promise.withResolvers<unknown>();
-    const deletion = Promise.withResolvers<void>();
+    let resolveMint: (value: unknown) => void = () => {};
+    const minted = new Promise<unknown>((resolve) => {
+      resolveMint = resolve;
+    });
+    let resolveDeletion: () => void = () => {};
+    const deletion = new Promise<void>((resolve) => {
+      resolveDeletion = resolve;
+    });
     const error = new Error("delete failed");
     mocks.runAtomCommand.mockImplementation((_registry: unknown, command: unknown) => {
-      if (command === mocks.createUploadUrl) return minted.promise;
-      deletion.resolve();
+      if (command === mocks.createUploadUrl) return minted;
+      resolveDeletion();
       return Promise.resolve({ _tag: "Failure", error });
     });
     using warning = vi.spyOn(console, "warn").mockImplementation(() => {});
     startAttachmentUpload({ environmentId: firstEnvironment, image });
     releaseAttachmentUpload(image.id);
-    minted.resolve({
+    resolveMint({
       _tag: "Success",
       value: { attachmentId: "pending-failed-cleanup", relativeUrl: "/upload", expiresAt: 1 },
     });
-    await deletion.promise;
+    await deletion;
     await Promise.resolve();
     await Promise.resolve();
     await Promise.resolve();
