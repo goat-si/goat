@@ -23,7 +23,7 @@ export type ShellThreadRow = {
   readonly lineage_relationship: string | null;
   readonly lineage_parent_thread_id: string | null;
   readonly local_launcher_thread_id: string | null;
-  readonly has_pull_requests: number;
+  readonly has_pull_request_watch: number;
   readonly latest_run_id: string | null;
   readonly latest_run_status: string | null;
   readonly latest_run_requested_at: string | null;
@@ -118,7 +118,8 @@ export const makeShellThreadRows = (sql: SqlClient.SqlClient) => {
                 AND json_extract(t.payload_json, '$.launchedBy.via') IS NOT 'delegate_task'
                 AND json_extract(t.payload_json, '$.launchedBy.environmentId') IS NULL
                 THEN json_extract(t.payload_json, '$.launchedBy.threadId') ELSE NULL END AS local_launcher_thread_id,
-              coalesce(json_array_length(t.payload_json, '$.pullRequests'), 0) > 0 AS has_pull_requests,
+              EXISTS (SELECT 1 FROM json_each(t.payload_json, '$.pullRequests') e
+                WHERE json_extract(e.value, '$.watch') IS NOT NULL) AS has_pull_request_watch,
               presented.run_id AS latest_run_id,
               presented.status AS latest_run_status,
               presented.requested_at AS latest_run_requested_at,
@@ -333,7 +334,12 @@ export const makeShellThreadRows = (sql: SqlClient.SqlClient) => {
 export function selectShellDecodeRows(input: {
   readonly targetThreadIds: ReadonlySet<ThreadId>;
   readonly threadRows: ReadonlyArray<ShellThreadRow>;
-  readonly providerThreadRows: ReadonlyArray<{ readonly thread_id: string }>;
+  readonly providerThreadRows: ReadonlyArray<{
+    readonly thread_id: string;
+    readonly has_pending_background_tasks: number;
+    /** thread_id, or the payload's appThreadId when thread_id is empty (pendingBackgroundDataByThreadId). */
+    readonly owner_thread_id: string | null;
+  }>;
   readonly pendingTurnItemRows: ReadonlyArray<{ readonly thread_id: string }>;
 }) {
   const { targetThreadIds, threadRows, providerThreadRows, pendingTurnItemRows } = input;
@@ -349,7 +355,11 @@ export function selectShellDecodeRows(input: {
       ),
     ),
   };
-  const providerIds = new Set(providerThreadRows.map((row) => row.thread_id));
+  const providerIds = new Set(
+    providerThreadRows
+      .filter((row) => row.has_pending_background_tasks === 1)
+      .flatMap((row) => (row.owner_thread_id === null ? [] : [row.owner_thread_id])),
+  );
   const pendingIds = new Set(pendingTurnItemRows.map((row) => row.thread_id));
   const keep = new Set(
     threadRows
@@ -365,7 +375,7 @@ export function selectShellDecodeRows(input: {
             )) ||
           row.pending_request_payload_json !== null ||
           row.pending_secret_request_payload_json !== null ||
-          row.has_pull_requests === 1 ||
+          row.has_pull_request_watch === 1 ||
           providerIds.has(row.thread_id) ||
           pendingIds.has(row.thread_id),
       )

@@ -6496,13 +6496,27 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
 
     const selectShellProviderThreadRows = (threadIds?: ReadonlyArray<ThreadId>) =>
       threadIds === undefined
-        ? sql<PayloadRow & { readonly thread_id: string }>`
-            SELECT thread_id, payload_json
+        ? sql<
+            PayloadRow & {
+              readonly thread_id: string;
+              readonly has_pending_background_tasks: number;
+              readonly owner_thread_id: string | null;
+            }
+          >`
+            SELECT thread_id, payload_json, coalesce(json_array_length(payload_json, '$.pendingBackgroundTasks'), 0) > 0 AS has_pending_background_tasks,
+              coalesce(nullif(thread_id, ''), json_extract(payload_json, '$.appThreadId')) AS owner_thread_id
             FROM orchestration_v2_projection_provider_threads
             WHERE thread_id IS NOT NULL
           `
-        : sql<PayloadRow & { readonly thread_id: string }>`
-            SELECT thread_id, payload_json
+        : sql<
+            PayloadRow & {
+              readonly thread_id: string;
+              readonly has_pending_background_tasks: number;
+              readonly owner_thread_id: string | null;
+            }
+          >`
+            SELECT thread_id, payload_json, coalesce(json_array_length(payload_json, '$.pendingBackgroundTasks'), 0) > 0 AS has_pending_background_tasks,
+              coalesce(nullif(thread_id, ''), json_extract(payload_json, '$.appThreadId')) AS owner_thread_id
             FROM orchestration_v2_projection_provider_threads
             WHERE thread_id IN (SELECT value FROM json_each(${encodeIdList(threadIds)}))
           `;
@@ -7010,7 +7024,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         shellIndex = selected.shellIndex;
         const keep = selected.keep;
         retainedRows = threadRows.filter((row) => keep.has(row.thread_id));
-        retainedProviderRows = providerThreadRows.filter((row) => keep.has(row.thread_id));
+        retainedProviderRows = providerThreadRows.filter(
+          (row) => row.owner_thread_id === null || keep.has(row.owner_thread_id),
+        );
         retainedPendingRows = pendingTurnItemRows.filter((row) => keep.has(row.thread_id));
       }
       const { runOrdinalsByThreadId, itemCountsByThreadId } = runMapsByThreadId({

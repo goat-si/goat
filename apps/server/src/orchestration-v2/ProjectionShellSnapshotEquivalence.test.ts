@@ -6,6 +6,7 @@ import {
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  ProviderThreadId,
   RunId,
   RuntimeRequestId,
   ThreadId,
@@ -57,6 +58,7 @@ const createThread = Effect.fn("shellEquivalence.createThread")(function* (input
   readonly archived?: boolean;
   readonly settledAt?: DateTime.Utc;
   readonly watch?: boolean;
+  readonly unwatchedPr?: boolean;
 }) {
   const store = yield* ProjectionStore.ProjectionStoreV2;
   const threadId = id(input.name);
@@ -99,7 +101,7 @@ const createThread = Effect.fn("shellEquivalence.createThread")(function* (input
               via: "thread_launch" as const,
             },
           }),
-      ...(input.watch === true
+      ...(input.watch === true || input.unwatchedPr === true
         ? {
             pullRequests: [
               {
@@ -111,17 +113,21 @@ const createThread = Effect.fn("shellEquivalence.createThread")(function* (input
                 linkedAt: DateTime.formatIso(now),
                 snapshot: null,
                 stack: null,
-                watch: {
-                  startedAt: DateTime.formatIso(now),
-                  headSha: null,
-                  failedChecks: [],
-                  passed: false,
-                  passedChecks: [],
-                  remarksThrough: DateTime.formatIso(now),
-                  remarkIds: [],
-                  conflicting: false,
-                  wakes: 0,
-                },
+                ...(input.watch === true
+                  ? {
+                      watch: {
+                        startedAt: DateTime.formatIso(now),
+                        headSha: null,
+                        failedChecks: [],
+                        passed: false,
+                        passedChecks: [],
+                        remarksThrough: DateTime.formatIso(now),
+                        remarkIds: [],
+                        conflicting: false,
+                        wakes: 0,
+                      },
+                    }
+                  : {}),
               },
             ],
           }
@@ -133,6 +139,38 @@ const createThread = Effect.fn("shellEquivalence.createThread")(function* (input
       settledAt: input.settledAt ?? null,
       lastVisitedAt: null,
       deletedAt: null,
+    },
+  });
+});
+
+const addProviderThread = Effect.fn("shellEquivalence.addProviderThread")(function* (
+  name: string,
+  hasTask: boolean,
+) {
+  const store = yield* ProjectionStore.ProjectionStoreV2;
+  const threadId = id(name);
+  yield* store.apply({
+    id: EventId.make(`event:shell-equivalence:provider:${name}`),
+    type: "provider-thread.updated",
+    threadId,
+    occurredAt: now,
+    payload: {
+      id: ProviderThreadId.make(`provider:shell-equivalence:${name}`),
+      driver,
+      providerInstanceId,
+      providerSessionId: null,
+      appThreadId: threadId,
+      ownerNodeId: null,
+      nativeThreadRef: null,
+      nativeConversationHeadRef: null,
+      status: "idle",
+      firstRunOrdinal: 1,
+      lastRunOrdinal: 1,
+      handoffIds: [],
+      forkedFrom: null,
+      createdAt: now,
+      updatedAt: now,
+      pendingBackgroundTasks: hasTask ? [{ taskId: "native-task", kind: "subagent" }] : [],
     },
   });
 });
@@ -239,6 +277,9 @@ const cases = [
   "a local launcher and its subagent parent chain remain visible",
   "older settled filtering preserves the ancestor of a kept subagent",
   "an archived fork source does not add its active parent to the subagent index",
+  "an idle subagent with an empty provider roster is omitted",
+  "a settled subagent with provider background work remains visible",
+  "an idle subagent with an unwatched pull request is omitted",
 ] as const;
 
 it.effect.each(cases)(
@@ -288,7 +329,7 @@ it.effect.each(cases)(
             settledAt: DateTime.makeUnsafe(Date.UTC(2026, 9, n + 1)),
           });
         }
-      } else {
+      } else if (scenario === cases[6]) {
         yield* createThread({ name: "parent", parent: "root", root: "root" });
         yield* createThread({
           name: "archived-source",
@@ -299,6 +340,12 @@ it.effect.each(cases)(
         yield* createRun("archived-source");
         yield* addRunItem("archived-source");
         yield* createThread({ name: "target", fork: "archived-source" });
+      } else if (scenario === cases[7] || scenario === cases[8]) {
+        yield* createThread({ name: "provider-child", parent: "root", root: "root" });
+        yield* createRun("provider-child");
+        yield* addProviderThread("provider-child", scenario === cases[8]);
+      } else {
+        yield* createThread({ name: "unwatched", parent: "root", root: "root", unwatchedPr: true });
       }
 
       const full = yield* store.getShellSnapshot({ location: "active" });
@@ -339,13 +386,19 @@ it.effect.each(cases)(
       } else if (scenario === cases[5]) {
         assert.isTrue(visible.has(id("older-parent")));
         assert.isFalse(visible.has(id("older-removed")));
-      } else {
+      } else if (scenario === cases[6]) {
         assert.equal(
           expected.snapshot.threads.find((thread) => thread.id === id("target"))?.visibleItemCount,
           2,
         );
         assert.isFalse(visible.has(id("parent")));
         assert.isFalse(expected.subagentThreadIds.has(id("archived-source")));
+      } else if (scenario === cases[7] || scenario === cases[8]) {
+        assert.equal(visible.has(id("provider-child")), scenario === cases[8]);
+        assert.isTrue(expected.subagentThreadIds.has(id("provider-child")));
+      } else {
+        assert.isFalse(visible.has(id("unwatched")));
+        assert.isTrue(expected.subagentThreadIds.has(id("unwatched")));
       }
     }).pipe(Effect.provide(layerTest)),
 );
