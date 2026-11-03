@@ -12,6 +12,19 @@ export const REASONING_SELECT_DESCRIPTOR_IDS: ReadonlySet<string> = new Set([
   "thinking",
 ]);
 
+export function isReasoningControl(descriptor: ProviderOptionDescriptor): boolean {
+  return (
+    (descriptor.type === "select" && descriptor.role === "reasoning") ||
+    REASONING_SELECT_DESCRIPTOR_IDS.has(descriptor.id)
+  );
+}
+
+export function isReasoningSelect(
+  descriptor: ProviderOptionDescriptor,
+): descriptor is Extract<ProviderOptionDescriptor, { type: "select" }> {
+  return descriptor.type === "select" && isReasoningControl(descriptor);
+}
+
 export function replaceDescriptorCurrentValue(
   descriptors: ReadonlyArray<ProviderOptionDescriptor>,
   descriptorId: string,
@@ -144,11 +157,7 @@ export function buildTraitsTriggerDisplay(input: {
               input.reportedModelSelection,
             );
     if (typeof label === "string" && label.length > 0) {
-      if (
-        reasoningLabelIndex === -1 &&
-        descriptor.type === "select" &&
-        REASONING_SELECT_DESCRIPTOR_IDS.has(descriptor.id)
-      ) {
+      if (reasoningLabelIndex === -1 && isReasoningSelect(descriptor)) {
         reasoningLabelIndex = labels.length;
       }
       labels.push(label);
@@ -176,8 +185,7 @@ export function findReasoningDescriptor(
 ): SelectDescriptor | null {
   return (
     selectDescriptors.find(
-      (descriptor) =>
-        REASONING_SELECT_DESCRIPTOR_IDS.has(descriptor.id) && descriptor.options.length > 1,
+      (descriptor) => isReasoningSelect(descriptor) && descriptor.options.length > 1,
     ) ?? null
   );
 }
