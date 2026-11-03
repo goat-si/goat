@@ -81,6 +81,9 @@ function withFakeClaudeEnv<A, E, R>(
     expectSpawn?: boolean;
     directApi?: boolean;
     defaultEndpoint?: boolean;
+    rejectsNoSessionPersistence?: boolean;
+    rejectPersistenceAlways?: boolean;
+    expectSpawnCount?: number;
     exitCode?: number;
     stderr?: string;
     argsMustContain?: string;
@@ -99,6 +102,12 @@ function withFakeClaudeEnv<A, E, R>(
     const pathDelimiter = (yield* HostProcess.isWindows) ? ";" : ":";
     const updates = {
       PATH: `${binDir}${pathDelimiter}${process.env.PATH ?? ""}`,
+      GOAT_FAKE_CLAUDE_REJECTS_NO_SESSION_PERSISTENCE: input.rejectsNoSessionPersistence
+        ? "1"
+        : undefined,
+      GOAT_FAKE_CLAUDE_REJECT_PERSISTENCE_ALWAYS: input.rejectPersistenceAlways ? "1" : undefined,
+      GOAT_FAKE_CLAUDE_ATTEMPTS:
+        input.expectSpawnCount === undefined ? undefined : `${tempDir}/attempts`,
       GOAT_FAKE_CLAUDE_OUTPUT: input.output,
       GOAT_FAKE_CLAUDE_EXIT_CODE: input.exitCode === undefined ? undefined : String(input.exitCode),
       GOAT_FAKE_CLAUDE_STDERR: input.stderr,
@@ -184,6 +193,10 @@ function withFakeClaudeEnv<A, E, R>(
       Effect.provideService(HostProcess.Platform, input.platform ?? "linux"),
     );
     const result = yield* effectFn(textGeneration);
+    if (input.expectSpawnCount !== undefined) {
+      const attempts = yield* fs.readFileString(`${tempDir}/attempts`);
+      expect(attempts.trim().split("\n")).toHaveLength(input.expectSpawnCount);
+    }
     if (input.expectNoSpawn) expect(yield* fs.exists(`${tempDir}/spawned`)).toBe(false);
     if (input.expectSpawn) expect(yield* fs.exists(`${tempDir}/spawned`)).toBe(true);
     return result;
@@ -622,7 +635,7 @@ it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
         memoryRunnerContext: memoryContext,
         cwdMustNotBe: memorySummary.cwd,
         argsMustContain:
-          "--tools  --disable-slash-commands --strict-mcp-config --permission-mode dontAsk",
+          "--tools  --disable-slash-commands --no-session-persistence --strict-mcp-config --permission-mode dontAsk",
         stdinMustContain: "<untrusted_memory_data>",
       },
       (generation) =>
@@ -1039,6 +1052,62 @@ it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
     }),
   );
 
+  it.effect("retries without --no-session-persistence when the Claude CLI rejects it", () =>
+    withFakeClaudeEnv(
+      {
+        output: JSON.stringify({ structured_output: { title: "Reconnect failures" } }),
+        rejectsNoSessionPersistence: true,
+        expectSpawnCount: 2,
+      },
+      (textGeneration) =>
+        Effect.gen(function* () {
+          const generated = yield* textGeneration.generateThreadTitle({
+            cwd: process.cwd(),
+            message: "Investigate reconnect failures",
+            modelSelection: {
+              instanceId: ProviderInstanceId.make("claudeAgent"),
+              model: SYNTHETIC_CLAUDE_STANDARD_MODEL,
+            },
+          });
+
+          expect(generated.title).toBe("Reconnect failures");
+        }),
+    ),
+  );
+
+  it.effect.each([
+    {
+      stderr: "error: unknown option '--no-session-persistence-extra'",
+      always: false,
+      attempts: 1,
+    },
+    { stderr: "error: unknown option '--no-session-persistence'", always: true, attempts: 2 },
+  ])("only retries the exact unsupported option once", ({ stderr, always, attempts }) =>
+    withFakeClaudeEnv(
+      {
+        output: "",
+        stderr,
+        exitCode: 1,
+        rejectPersistenceAlways: always,
+        expectSpawnCount: attempts,
+      },
+      (generation) =>
+        Effect.gen(function* () {
+          const error = yield* Effect.flip(
+            generation.generateThreadTitle({
+              cwd: process.cwd(),
+              message: "test",
+              modelSelection: {
+                instanceId: ProviderInstanceId.make("claudeAgent"),
+                model: SYNTHETIC_CLAUDE_STANDARD_MODEL,
+              },
+            }),
+          );
+          expect(error.detail).toContain(stderr);
+        }),
+    ),
+  );
+
   it.effect.each([
     { verbose: false, label: "normal" },
     { verbose: true, label: "verbose" },
@@ -1149,6 +1218,14 @@ it.layer(layerClaudeTextGenerationTest)("ClaudeTextGeneration", (it) => {
       apiError,
     ],
     ["stderr when stdout has no error", "not json", wrapperNotice],
+    [
+      "a stdout error naming --no-session-persistence without retrying",
+      JSON.stringify({
+        is_error: true,
+        result: "error: unknown option '--no-session-persistence'",
+      }),
+      "error: unknown option '--no-session-persistence'",
+    ],
   ] as const)("reports %s when the Claude CLI fails", ([, output, expected]) =>
     withFakeClaudeEnv({ output, stderr: wrapperNotice, exitCode: 1 }, (textGeneration) =>
       Effect.gen(function* () {
