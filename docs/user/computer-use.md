@@ -91,6 +91,27 @@ The cursor mark shows where the agent is working; it does not prove an action
 succeeded. If an outcome is uncertain, ask the agent to inspect the target
 before it tries another action.
 
+## Let an agent use a tab in your browser
+
+An agent can work in one tab of your own Chrome or Edge, signed in as you, on
+only the sites you allow for that thread. When the agent asks, its request card
+shows the window title and site; approve the card to let it use the tab. You can
+also open **Your browser** in the thread's browser panel, or choose **Let GOAT
+Use a Browser Tab…** from the desktop menu, then pick a window and site.
+A client without permission to change settings can decline a request but cannot
+approve it.
+
+An attached tab shows **Agent attached**. Use **End** to end the attachment or
+**Revoke** to remove a site's permission. **Stop**, a move to a site outside the
+allowed sites or to a blocked site, and a GOAT driver restart also end the
+attachment. Pressing Esc stops desktop control, not a claimed tab; use **End**
+or **Stop** for that tab. Blocked browser hosts apply to claimed tabs too.
+
+The picker cannot list a browser that already has a claimed tab; end that claim
+first. It also cannot list a browser that computer use does not allow. This
+option requires a Computer Use driver that supports browser claims; otherwise
+it is unavailable.
+
 ## Site notes
 
 GOAT can remember short notes about a site's procedures and quirks for future browser work.

@@ -1,9 +1,7 @@
-import { BrainIcon } from "~/components/solar";
+import { browserClaimPaletteItem } from "./preview/browserClaimPaletteItem";
 import { validateMemorySettingsSearch } from "./settings/MemorySettings.logic";
-
 import { threadPullRequestLinkMode } from "@goat/client-runtime/thread-pull-request-compatibility";
 import { visibleThreadPullRequests } from "@goat/shared/threadPullRequests";
-
 import { scopedThreadKey, scopeProjectRef, scopeThreadRef } from "@goat/client-runtime/environment";
 import {
   canCreateProjectInEnvironment,
@@ -56,6 +54,7 @@ import { useLocation, useNavigate } from "@tanstack/react-router";
 import {
   ActivityIcon,
   BotIcon,
+  BrainIcon,
   CloudDownloadIcon,
   BellIcon,
   ArrowLeftIcon,
@@ -1225,8 +1224,9 @@ function OpenCommandPaletteDialog(props: {
     if (firstOption) startNewProject(firstOption.environmentId, null);
   };
 
-  const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
-
+  const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [
+    browserClaimPaletteItem(),
+  ];
   actionItems.push({
     kind: "action",
     value: "action:toggle-sidebar-activity",

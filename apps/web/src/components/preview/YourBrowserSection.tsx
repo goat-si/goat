@@ -1,4 +1,7 @@
-import { useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
+import { scopedThreadKey } from "@goat/client-runtime/environment";
+import { useBrowserClaimRequest } from "./browserClaimRequest";
+import { toastManager } from "~/components/ui/toast";
 import { BrowserClaimPicker } from "./BrowserClaimPicker";
 import { useAtomValue } from "@effect/atom-react";
 import type { BrowserClaimWindows, ScopedThreadRef } from "@goat/contracts";
@@ -8,7 +11,13 @@ import { previewEnvironment } from "~/state/preview";
 import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 
-export function YourBrowserSection({ threadRef }: { threadRef: ScopedThreadRef }) {
+export function YourBrowserSection({
+  threadRef,
+  available = true,
+}: {
+  threadRef: ScopedThreadRef;
+  available?: boolean;
+}) {
   const { environmentId, threadId } = threadRef;
   const [pickerOpen, setPickerOpen] = useState(false);
   const [listing, setListing] = useState<typeof BrowserClaimWindows.Type | null>(null);
@@ -32,11 +41,37 @@ export function YourBrowserSection({ threadRef }: { threadRef: ScopedThreadRef }
   }
   const canClaim = useAtomValue(previewEnvironment.claim.permissionAtom(environmentId));
   const result = useEnvironmentQuery(previewEnvironment.claimChanges({ environmentId, input: {} }));
+  const pendingRequest = useBrowserClaimRequest((state) => state.pending);
+  const handleRequest = useEffectEvent(() => {
+    if (!pendingRequest || pendingRequest.threadKey !== scopedThreadKey(threadRef)) return;
+    if (available && canClaim && canList && !result.isSuccess && !result.error) return;
+    if (!useBrowserClaimRequest.getState().consume(pendingRequest)) return;
+    if (!canClaim || !canList) {
+      toastManager.add({
+        type: "info",
+        title: "This client does not have permission to let an agent use a browser tab.",
+      });
+    } else if (!available || !result.isSuccess || result.data?.supported !== true) {
+      toastManager.add({
+        type: "info",
+        title: "Browser tab claims are unavailable in this environment.",
+      });
+    } else {
+      void openPicker();
+    }
+  });
+  // oxlint-disable-next-line goat/react-effect-budget -- consume a menu request after the panel and capability query are ready
+  useEffect(() => {
+    // oxlint-disable-next-line react/set-state-in-effect -- A queued menu request opens the picker once its panel is ready.
+    handleRequest();
+    // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Retry the queued request when permissions or the capability query change.
+  }, [pendingRequest, available, canClaim, canList, result.isSuccess, result.error, result.data]);
   const canEnd = useAtomValue(previewEnvironment.claimEnd.permissionAtom(environmentId));
   const canRevoke = useAtomValue(previewEnvironment.claimRevoke.permissionAtom(environmentId));
   const end = useAtomCommand(previewEnvironment.claimEnd, "end browser claim");
   const revoke = useAtomCommand(previewEnvironment.claimRevoke, "revoke browser grant");
-  if (!result.isSuccess || !result.data || result.data.supported === false) return null;
+  if (!available || !result.isSuccess || !result.data || result.data.supported === false)
+    return null;
   const claims = result.data.claims.filter((claim) => claim.threadId === threadId);
   const grants = result.data.grants.filter((grant) => grant.threadId === threadId);
   const pending = result.data.pending.filter((request) => request.threadId === threadId);
