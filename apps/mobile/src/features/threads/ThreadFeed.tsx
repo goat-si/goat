@@ -22,7 +22,11 @@ import {
 } from "../../lib/enrichedLinkPresentation";
 import { GOAT_CONTEXT_LINK_PROTOCOL } from "@goat/contracts/legacyT3Names";
 import { ThreadContextDivider } from "./thread-context-divider";
-import { ThreadHandoffDivider, ThreadHandoffRow } from "./thread-handoff-row";
+import {
+  ThreadHandoffDivider,
+  ThreadHandoffRow,
+  ThreadModelSwitchDivider,
+} from "./thread-handoff-row";
 import { GuestBubbleTint, GuestMessageName } from "./guestMessageStyle";
 import { ThreadGuestPendingMessage, useThreadGuestShare } from "./ThreadGuestShareBar";
 import { SecretRequestCard } from "./SecretRequestCard";
@@ -3039,6 +3043,16 @@ export const ThreadFeed = memo(function ThreadFeed({
               threadId={String(props.threadId)}
               messageId={String(info.item.message.id)}
               length={info.item.message.text.length}
+            />
+          ) : null}
+          {info.item.type === "message" &&
+          !isCompactionCommandFeedEntry(info.item) &&
+          info.item.message.projectedItem?.item.type === "user_message" &&
+          info.item.message.projectedItem.item.modelSwitch ? (
+            <ThreadModelSwitchDivider
+              environmentId={props.environmentId}
+              modelSwitch={info.item.message.projectedItem.item.modelSwitch}
+              iconColor={iconSubtleColor}
             />
           ) : null}
           {renderFeedEntry(info, {

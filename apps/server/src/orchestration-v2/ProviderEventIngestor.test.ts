@@ -322,6 +322,7 @@ it.effect("records accepted billed turn usage once without billing the context w
         inputTokens: 40,
         cachedInputTokens: 30,
         outputTokens: 10,
+        models: ["gpt-6-astra"],
       },
     };
     const input = {
@@ -372,7 +373,7 @@ it.effect("records accepted billed turn usage once without billing the context w
       inputTokens: 40,
       cachedInputTokens: 30,
       outputTokens: 10,
-      model: modelSelection.model,
+      model: "gpt-6-astra",
       mixedModels: false,
       runtimeMode: "full-access",
       interactionMode: "default",
@@ -382,6 +383,18 @@ it.effect("records accepted billed turn usage once without billing the context w
       subagent: true,
       durationMs: 120,
     });
+    const unknown = {
+      ...providerTurn,
+      id: idAllocator.derive.providerTurn({ driver: CODEX_DRIVER, nativeTurnId: "unknown-model" }),
+      ordinal: 2,
+      turnTokenUsage: { ...providerTurn.turnTokenUsage, models: ["private-model"] },
+    };
+    yield* ingestor.ingestNormalized({
+      ...input,
+      event: { ...input.event, providerTurn: unknown },
+    });
+    assert.lengthOf(recorded, 2);
+    assert.notProperty(recorded[1], "model");
   }).pipe(Effect.provide(layerTest.pipe(Layer.provide(layerAnalytics))));
 });
 

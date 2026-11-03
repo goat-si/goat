@@ -3851,6 +3851,7 @@ interface ActiveClaudeTurnContext {
   compactionFailure: { readonly message: string | undefined } | null;
   // Steers end segments whose usage is excluded from the final result; bill them too, oldest first.
   readonly steeredSegmentUsage: Array<SDKResultMessage["usage"]>;
+  readonly rootModels: Set<string>;
   readonly subagentsByTaskId: Map<string, ActiveClaudeSubagent>;
   readonly subagentsByToolUseId: Map<string, ActiveClaudeSubagent>;
   readonly subagentNodesByTaskId: Map<string, OrchestrationV2ExecutionNode["id"]>;
@@ -7458,6 +7459,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
                       input.context.subagentsByToolUseId.size > 0,
                     input.status,
                     input.context.steeredSegmentUsage,
+                    input.context.rootModels,
                   ),
                 },
               }),
@@ -8389,6 +8391,13 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
 
           if (message.type === "assistant" && input.replayed !== true) {
             if (message.parent_tool_use_id === null) {
+              if (
+                message.message.model &&
+                message.message.model !== "<synthetic>" &&
+                context.rootModels.size < 64
+              ) {
+                context.rootModels.add(message.message.model);
+              }
               // Subagent uuids exist only in the sidechain transcript, so resume and fork cannot target them.
               context.nativeMessageCursor = message.uuid;
               context.latestAssistantRateLimit =
@@ -10552,6 +10561,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               latestAssistantRateLimit: null,
               compactionFailure: null,
               steeredSegmentUsage: [],
+              rootModels: new Set(),
               subagentsByTaskId: new Map(),
               subagentsByToolUseId: new Map(),
               subagentNodesByTaskId: new Map(),

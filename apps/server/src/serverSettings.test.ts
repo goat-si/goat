@@ -973,6 +973,10 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         const saved = yield* serverSettings.updateSettings({
           usageModelAliases,
           usageLimitSources,
+          usageModelFilter: { include: [{ model: "example-model" }] },
+        });
+        yield* serverSettings.updateSettings({
+          usageModelFilter: { exclude: [{ model: "other" }] },
         });
         const updated = yield* serverSettings.updateSettings({
           storageCleanup: { worktreeSettledAfterDays: 0, worktreeKeepWhen: "any-local-files" },
@@ -981,6 +985,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         const persisted = yield* readPersisted;
         assert.deepStrictEqual(persisted.usagePriceOverrides, { "example-model": prices });
         assert.deepStrictEqual(persisted.usageModelAliases, usageModelAliases);
+        assert.deepStrictEqual(persisted.usageModelFilter, { exclude: [{ model: "other" }] });
         assert.deepStrictEqual(persisted.usageLimitSources, usageLimitSources);
         assert.equal(persisted.storageCleanup.worktreeSettledAfterDays, 0);
         assert.equal(persisted.storageCleanup.worktreeKeepWhen, "any-local-files");

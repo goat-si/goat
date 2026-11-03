@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off - Exercises guarded child pipes during SQLite startup.
 import * as TestClock from "effect/testing/TestClock";
 import * as Stream from "effect/Stream";
 
@@ -7,6 +8,7 @@ import * as Logger from "effect/Logger";
 import * as Layer from "effect/Layer";
 import * as Exit from "effect/Exit";
 import * as NodeSqlite from "node:sqlite";
+import * as NodeChildProcess from "node:child_process";
 import type * as NodeWorkerThreads from "node:worker_threads";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -21,6 +23,7 @@ import type * as Tracer from "effect/Tracer";
 import { vi } from "vite-plus/test";
 
 import * as SqliteClient from "./nodeSqliteClient.ts";
+import { guardChild } from "./errorGuards.ts";
 
 const startedWorkers = vi.hoisted((): Array<NodeWorkerThreads.Worker> => []);
 const silentWorkers = vi.hoisted(() => ({ on: false, readyOnTerminate: false }));
@@ -204,6 +207,91 @@ const makeTempDatabase = Effect.gen(function* () {
   });
   return { filename, other };
 });
+
+it.effect("configures the writer lock wait before probing the checkpoint database", () =>
+  Effect.gen(function* () {
+    const { filename } = yield* makeTempDatabase;
+    const original = NodeSqlite.DatabaseSync.prototype.prepare;
+    let initialWait: number | undefined;
+    using _probe = vi
+      .spyOn(NodeSqlite.DatabaseSync.prototype, "prepare")
+      .mockImplementation(function (this: NodeSqlite.DatabaseSync, query) {
+        if (query === "SELECT sqlite_version() AS version") {
+          initialWait = Number(original.call(this, "PRAGMA busy_timeout").get()?.timeout);
+        }
+        return original.call(this, query);
+      });
+    yield* Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      assert.deepEqual(yield* sql`SELECT value FROM counters`.values, [[0]]);
+      assert.equal(initialWait, 5000);
+    }).pipe(Effect.provide(SqliteClient.layer({ filename, checkpointWorker: true })));
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.live("opens a checkpoint database after another process releases its lock", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const directory = yield* fs.makeTempDirectoryScoped({ prefix: "goat-sqlite-open-" });
+    const filename = path.join(directory, "state.sqlite");
+    const seed = new NodeSqlite.DatabaseSync(filename);
+    seed.exec("PRAGMA journal_mode = WAL; CREATE TABLE entries(name TEXT NOT NULL)");
+    seed.close();
+    const failed = Promise.withResolvers<never>();
+    const holder = yield* Effect.acquireRelease(
+      Effect.sync(() =>
+        guardChild(
+          NodeChildProcess.spawn(
+            process.execPath,
+            [
+              "-e",
+              `
+          const db = new (require("node:sqlite").DatabaseSync)(process.argv[1]);
+          db.exec("PRAGMA locking_mode = EXCLUSIVE; BEGIN EXCLUSIVE");
+          process.stdout.write("held\\n");
+          process.stdin.once("data", () => { db.close(); process.exit(0); });
+        `,
+              filename,
+            ],
+            { stdio: ["pipe", "pipe", "pipe"] },
+          ),
+          (error) => failed.reject(error),
+        ),
+      ),
+      (child) =>
+        Effect.sync(() => {
+          child.stdin.end();
+          child.kill();
+        }),
+    );
+    yield* Effect.promise(() =>
+      Promise.race([
+        new Promise<void>((resolve, reject) => {
+          holder.stdout.once("data", () => resolve());
+          holder.once("exit", (code) =>
+            reject(new Error(`lock holder exited before ready: ${code}`)),
+          );
+        }),
+        failed.promise,
+      ]),
+    );
+    const original = NodeSqlite.DatabaseSync.prototype.prepare;
+    using _probe = vi
+      .spyOn(NodeSqlite.DatabaseSync.prototype, "prepare")
+      .mockImplementation(function (this: NodeSqlite.DatabaseSync, query) {
+        if (query === "SELECT sqlite_version() AS version") {
+          assert.equal(Number(original.call(this, "PRAGMA busy_timeout").get()?.timeout), 5000);
+          holder.stdin.write("release\n");
+        }
+        return original.call(this, query);
+      });
+    yield* Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      assert.deepEqual(yield* sql`SELECT COUNT(*) FROM entries`.values, [[0]]);
+    }).pipe(Effect.provide(SqliteClient.layer({ filename, checkpointWorker: true })));
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
 
 it.effect("keeps another connection from committing between a transaction's read and write", () =>
   Effect.gen(function* () {

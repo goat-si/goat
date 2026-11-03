@@ -175,3 +175,5 @@ If none of this helps, open an issue on
 - The text from **Copy diagnostics** in the environment's **Details**.
 - The output of `goat connect status` on the host.
 - The trace ID, if one is shown.
+- If the tunnel dropped earlier, the host's `relay-client.ndjson` tunnel log in the logs folder
+  (`~/.goat/userdata/logs` by default) records connections, warnings and restarts with the tunnel token removed.

@@ -6,7 +6,11 @@ import {
   type UsageSummary,
   type UsageSummaryInput,
 } from "@goat/contracts";
-import { needsCursorKeychainAccess, refreshUsage } from "@goat/client-runtime/state/usage";
+import {
+  needsCursorKeychainAccess,
+  refreshUsage,
+  usageSummaryInput,
+} from "@goat/client-runtime/state/usage";
 import { resolveUsageAccess } from "@goat/client-runtime/state/usage-access";
 import { mergeUsage, type EnvironmentUsage, type MergedUsage } from "@goat/shared/usageMerge";
 import * as Option from "effect/Option";
@@ -53,7 +57,15 @@ const usageByWindowAtom = Atom.family((windowKey: string) =>
         });
         continue;
       }
-      const result = get(serverEnvironment.usageSummary({ environmentId, input }));
+      const result = get(
+        serverEnvironment.usageSummary({
+          environmentId,
+          input: usageSummaryInput(
+            input,
+            get(serverEnvironment.usageModelFilterAtom(environmentId)),
+          ),
+        }),
+      );
       const summary = Option.getOrNull(AsyncResult.value(result));
       statuses.push({
         environmentId,

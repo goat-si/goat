@@ -4842,6 +4842,8 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             `.pipe(Effect.flatMap(decodeRows(decodeContextTransferPayload, threadId)));
             const turnItems = yield* sql<PayloadRow>`
               SELECT payload_json FROM orchestration_v2_projection_turn_items
+              -- Look up one run's items by key, not by walking the thread's whole history in ordinal order.
+              INDEXED BY orchestration_v2_projection_turn_items_run_ordinal_idx
               WHERE thread_id = ${threadId} AND run_id = ${runId} ORDER BY ordinal ASC, turn_item_id ASC
             `.pipe(Effect.flatMap(decodeRows(decodeTurnItemPayload, threadId)));
             const providerSessions = yield* sql<PayloadRow>`
@@ -5102,18 +5104,20 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             sql<PayloadRow>`
               SELECT provider_thread.payload_json
               FROM orchestration_v2_projection_provider_threads AS provider_thread
-              WHERE (
-                  provider_thread.thread_id = ${threadId}
-                  OR EXISTS (
-                    SELECT 1 FROM orchestration_v2_projection_nodes AS owner
-                    WHERE owner.node_id = provider_thread.owner_node_id
-                      AND owner.thread_id = ${threadId}
-                  )
-                  OR EXISTS (
-                    SELECT 1 FROM orchestration_v2_projection_subagents AS subagent
-                    WHERE subagent.provider_thread_id = provider_thread.provider_thread_id
-                      AND subagent.thread_id = ${threadId}
-                  )
+              WHERE provider_thread.provider_thread_id IN (
+                  SELECT provider_thread_id FROM orchestration_v2_projection_provider_threads
+                  WHERE thread_id = ${threadId}
+                  UNION
+                  -- Start with non-null owners; a thread can have a large settled node history.
+                  SELECT owned.provider_thread_id
+                  FROM orchestration_v2_projection_provider_threads AS owned
+                    INDEXED BY orchestration_v2_projection_provider_threads_owner_idx
+                  CROSS JOIN orchestration_v2_projection_nodes AS owner
+                    ON owner.node_id = owned.owner_node_id
+                  WHERE owned.owner_node_id IS NOT NULL AND owner.thread_id = ${threadId}
+                  UNION
+                  SELECT provider_thread_id FROM orchestration_v2_projection_subagents
+                  WHERE thread_id = ${threadId} AND provider_thread_id IS NOT NULL
                 )
                 AND (
                   provider_thread.status = 'active'
@@ -6283,11 +6287,16 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           ON item.thread_id = json_extract(wanted.value, '$.threadId')
             AND item.turn_item_id = json_extract(wanted.value, '$.id')`;
               const byIdentity = new Map(
-                payloads.map((row) => [`${row.thread_id}:${row.turn_item_id}`, row.payload_json]),
+                payloads.map((row) => [
+                  `${row.thread_id.length}:${row.thread_id}${row.turn_item_id}`,
+                  row.payload_json,
+                ]),
               );
               return yield* Effect.forEach(rows, (row) =>
                 Effect.gen(function* () {
-                  const payload = byIdentity.get(`${row.sourceThreadId}:${row.sourceItemId}`);
+                  const payload = byIdentity.get(
+                    `${row.sourceThreadId.length}:${row.sourceThreadId}${row.sourceItemId}`,
+                  );
                   const item =
                     row.synthetic ??
                     (payload === undefined
@@ -6353,6 +6362,27 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               options.tail === true
                 ? matching.slice(Math.max(0, matching.length - options.limit))
                 : matching.slice(0, options.limit);
+            const sources = yield* encodeTimelineSources(
+              page
+                .filter((row) => row.synthetic === undefined)
+                .map((row) => ({ threadId: row.sourceThreadId, id: row.sourceItemId })),
+            );
+            const payloads = yield* sql<{
+              thread_id: string;
+              turn_item_id: string;
+              payload_json: string;
+            }>`
+          SELECT item.thread_id, item.turn_item_id, item.payload_json
+          FROM orchestration_v2_projection_turn_items item JOIN json_each(${sources}) wanted
+          ON item.thread_id = json_extract(wanted.value, '$.threadId')
+            AND item.turn_item_id = json_extract(wanted.value, '$.id')`;
+            const byIdentity = new Map(
+              payloads.map((row) => [
+                `${row.thread_id.length}:${row.thread_id}${row.turn_item_id}`,
+                row.payload_json,
+              ]),
+            );
+
             const items = yield* Effect.forEach(page, (row) =>
               Effect.gen(function* () {
                 if (row.synthetic !== undefined)
@@ -6363,19 +6393,20 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                     visibility: row.visibility,
                     item: row.synthetic,
                   };
-                const payloads =
-                  yield* sql<PayloadRow>`SELECT payload_json FROM orchestration_v2_projection_turn_items
-          WHERE thread_id = ${row.sourceThreadId} AND turn_item_id = ${row.sourceItemId}`;
-                const decoded = yield* decodeRows(
-                  decodeTurnItemPayload,
-                  row.sourceThreadId,
-                )(payloads);
-                const item = decoded[0];
-                if (item === undefined)
+                const payload = byIdentity.get(
+                  `${row.sourceThreadId.length}:${row.sourceThreadId}${row.sourceItemId}`,
+                );
+                if (payload === undefined)
                   return yield* new ProjectionStoreReadError({
                     threadId,
                     cause: "Timeline item disappeared during snapshot",
                   });
+                const item = yield* decodeTurnItemPayload(payload).pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new ProjectionStoreReadError({ threadId: row.sourceThreadId, cause }),
+                  ),
+                );
                 return {
                   position: row.position,
                   sourceThreadId: row.sourceThreadId,

@@ -54,7 +54,9 @@ export function normalizeClaudeTurnTokenUsage(
   hasSubagents: boolean,
   terminalStatus: ProviderRuntimeTurnStatus,
   earlierSegmentUsage: ReadonlyArray<unknown> = [],
+  rootModels: ReadonlySet<string> = new Set(),
 ): TurnTokenUsage {
+  const models = rootModels.size > 0 ? { models: [...rootModels] } : {};
   const finalUsage = result?.usage as Record<string, unknown> | undefined;
   const usage = withEarlierSegmentUsage(finalUsage ?? {}, earlierSegmentUsage);
   const uncachedInputTokens = finiteNonNegativeInteger(usage.input_tokens);
@@ -89,10 +91,12 @@ export function normalizeClaudeTurnTokenUsage(
       usageStatus: "unavailable",
       usageScope: "main_agent",
       hasSubagents,
+      ...models,
     };
   }
 
   const commonUsage = {
+    ...models,
     usageScope: "main_agent",
     ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
     ...(cacheCreationTokens !== undefined ? { cacheCreationTokens } : {}),

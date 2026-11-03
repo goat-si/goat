@@ -9,6 +9,7 @@ import {
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -43,6 +44,8 @@ interface HarnessOptions {
   readonly mode?: "web" | "desktop";
   readonly managed?: boolean;
   readonly preflight?: "ready" | "blocked";
+  readonly preflightDuration?: Duration.Input;
+  readonly preflightStarted?: Deferred.Deferred<void>;
   readonly beforeDownload?: Effect.Effect<void>;
   readonly corruptChecksum?: boolean;
   readonly requestUpdate?: ServiceLauncherClient.ServiceLauncherClient["Service"]["requestUpdate"];
@@ -100,6 +103,21 @@ const makeHarness = Effect.fn("test.make_self_update_harness")(function* (
             stdoutInvalidUtf8: false,
             stderrInvalidUtf8: false,
           };
+        }
+        if (options.preflightStarted) yield* Deferred.succeed(options.preflightStarted, undefined);
+        if (options.preflightDuration !== undefined) {
+          // Like the real runner, fail once the caller's timeout elapses.
+          const timeout = Duration.fromInputUnsafe(input.timeout ?? "60 seconds");
+          const finished = yield* Effect.sleep(options.preflightDuration).pipe(
+            Effect.timeoutOption(timeout),
+          );
+          if (finished._tag === "None") {
+            return yield* new ProcessRunner.ProcessTimeoutError({
+              command: input.command,
+              argumentCount: input.args.length,
+              timeoutMs: Duration.toMillis(timeout),
+            });
+          }
         }
         order.push("preflight");
         const result =
@@ -693,6 +711,27 @@ it.layer(NodeServices.layer)("server self update", (it) => {
       );
       yield* Deferred.succeed(accepted, "launcher-id");
       expect((yield* Fiber.join(first)).updateId).toBe("launcher-id");
+    }),
+  );
+
+  // regression: #28198 a slow staged preflight on a loaded host no longer fails the update
+  it.effect("waits for a staged preflight that takes a minute on a loaded host", () =>
+    Effect.gen(function* () {
+      const preflightStarted = yield* Deferred.make<void>();
+      const { selfUpdate, order } = yield* makeHarness({
+        preflightDuration: "60 seconds",
+        preflightStarted,
+      });
+      const update = yield* Effect.forkChild(selfUpdate.update({ targetVersion: "1.1.0" }), {
+        startImmediately: true,
+      });
+      yield* Deferred.await(preflightStarted);
+      yield* TestClock.adjust("60 seconds");
+      const exit = yield* Fiber.await(update);
+      expect(exit._tag === "Failure" ? String(exit.cause) : "launcher handoff").toBe(
+        "launcher handoff",
+      );
+      expect(order).toEqual(["download", "extract", "preflight", "accept"]);
     }),
   );
 

@@ -62,6 +62,7 @@ import {
 } from "./baseSchemas.ts";
 import { CodexHomeSettingsFields, CodexModelRoute, ProviderHomeRouteFields } from "./codexRoute.ts";
 import { UsageLimitSourceId } from "./usageLimitSourceId.ts";
+import { UsageModelFilter } from "./usage.ts";
 import { EnvironmentMachineKind, ThreadEnvMode, WorktreeSubmodules } from "./environment.ts";
 import { KeybindingShortcut } from "./keybindings.ts";
 import {
@@ -1562,6 +1563,9 @@ export const ServerSettings = Schema.Struct({
   goatBotHome: Schema.NullOr(GoatBotHomeClaim).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
+
+  /** Sent by the Usage tab with each summary request to this environment; edit in settings.json. Invalid values are ignored. */
+  usageModelFilter: ForwardCompatibleOptional(UsageModelFilter),
 });
 export type ServerSettings = typeof ServerSettings.Type;
 
@@ -2020,6 +2024,7 @@ const ServerSettingsPatchFields = Schema.Struct({
   usageModelAliases: Schema.optionalKey(
     Schema.Record(TrimmedNonEmptyString, Schema.NullOr(TrimmedNonEmptyString)),
   ),
+  usageModelFilter: Schema.optional(UsageModelFilter),
   /** Kept only when it supersedes the stored claim (`goatBotHomeClaimSupersedes`). */
   goatBotHome: Schema.optionalKey(GoatBotHomeClaim),
 });
