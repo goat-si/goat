@@ -65,6 +65,25 @@ export function foldsUnderLauncher(thread: {
 }
 
 /**
+ * A task.create child running on another machine. Its parent lives on the launching machine, so
+ * no lineage links them here; clients treat it as that parent's subagent through the launch record.
+ */
+export function isRemoteDelegatedChild(thread: {
+  readonly launchedBy?:
+    | Pick<OrchestrationV2ThreadLauncher, "kind" | "via" | "environmentId">
+    | undefined;
+  readonly lineage: { readonly relationshipToParent: "fork" | "subagent" | null };
+}): boolean {
+  const launcher = thread.launchedBy;
+  return (
+    launcher?.kind === "launch" &&
+    launcher.via === "delegate_task" &&
+    launcher.environmentId != null &&
+    thread.lineage.relationshipToParent !== "subagent"
+  );
+}
+
+/**
  * Whether a launched thread stays folded under its launcher once both are known. Live work under
  * a snoozed launcher, or finished work the user has not settled under a settled one, keeps its
  * own place so nothing hides.

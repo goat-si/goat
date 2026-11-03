@@ -1,3 +1,6 @@
+import type { OrchestrationV2ThreadLauncher } from "@goat/contracts";
+import { isRemoteDelegatedChild } from "@goat/shared/threadLaunchState";
+
 import { scopeThreadRef, scopedThreadKey } from "../environment/scoped.ts";
 import type { EnvironmentThreadShell } from "./models.ts";
 
@@ -90,6 +93,14 @@ export function isThreadWoke(wokeAt: string | null, lastVisitedAt: string | unde
 export type ThreadPriorityInput = ThreadListStatusInput &
   Omit<UnseenCompletionInput, "lastVisitedAt"> & {
     readonly lastVisitedAt?: string | null | undefined;
+    readonly lineage?: Pick<EnvironmentThreadShell["lineage"], "relationshipToParent"> | undefined;
+    readonly source?:
+      | {
+          readonly launchedBy?:
+            | Pick<OrchestrationV2ThreadLauncher, "kind" | "via" | "environmentId">
+            | undefined;
+        }
+      | undefined;
   };
 
 /** 0: a request waits on the user; 1: work runs; 2: unread. Priority never changes lifecycle. */
@@ -103,6 +114,10 @@ export function resolveThreadPriorityRank(input: {
 }): ThreadPriorityRank | null {
   const status = resolveThreadListStatus(input.thread);
   if (status === "approval" || status === "input" || input.hasChildAttention) return 0;
+  // A task.create child on another machine is its parent's work; it takes a place only to ask.
+  const { lineage, source } = input.thread;
+  if (lineage !== undefined && isRemoteDelegatedChild({ lineage, launchedBy: source?.launchedBy }))
+    return null;
   if (status === "working" || status === "waiting") return 1;
   const lastVisitedAt = resolveThreadLastVisitedAt(
     input.thread.lastVisitedAt,

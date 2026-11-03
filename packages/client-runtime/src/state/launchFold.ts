@@ -1,6 +1,7 @@
 import type { EnvironmentId } from "@goat/contracts";
 import {
   foldsUnderLauncher,
+  isRemoteDelegatedChild,
   type LaunchChildState,
   type LaunchAttention,
   type LaunchLift,
@@ -61,11 +62,27 @@ type LaunchOwnerThread = Pick<LaunchFoldThread, "environmentId" | "id" | "lineag
 const keyOf = (thread: Pick<LaunchFoldThread, "environmentId" | "id">) =>
   scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
 
+const isRemoteTaskChild = (thread: Pick<LaunchFoldThread, "lineage" | "source">) =>
+  isRemoteDelegatedChild({ lineage: thread.lineage, launchedBy: thread.source.launchedBy });
+
+/** Whether a thread folds under its launcher's row: agent launches and remote task.create children. */
+export function foldsUnderLauncherRow(
+  thread: Pick<LaunchFoldThread, "lineage" | "source" | "pinnedAt">,
+): boolean {
+  const launchedBy = thread.source.launchedBy;
+  return (
+    foldsUnderLauncher({ lineage: thread.lineage, pinnedAt: thread.pinnedAt, launchedBy }) ||
+    (isRemoteTaskChild(thread) && thread.pinnedAt == null)
+  );
+}
+
+const attentionOnly = (lift: LaunchLift | null): LaunchLift | null =>
+  lift === "approval" || lift === "input" ? lift : null;
+
 /** The launcher row a thread folds under, when it folds under one at all. */
 function launcherKeyOf(thread: LaunchFoldThread): string | null {
   const launcher = thread.source.launchedBy;
-  if (launcher === undefined || !foldsUnderLauncher({ ...thread, launchedBy: launcher }))
-    return null;
+  if (launcher === undefined || !foldsUnderLauncherRow(thread)) return null;
   return scopedThreadKey(
     scopeThreadRef(launcher.environmentId ?? thread.environmentId, launcher.threadId),
   );
@@ -194,19 +211,23 @@ export function foldLaunchedThreads<T extends LaunchFoldThread>(input: {
       const child = visibleByKey.get(childKey);
       const childLift = decide(childKey);
       if (child === undefined) continue;
+      // A remote task.create child is its parent's subagent: only a request lifts the parent, and
+      // it leaves the parent's row only when that request would sit unseen under a snooze.
+      const remoteTask = isRemoteTaskChild(child);
+      const lift = remoteTask ? attentionOnly(childLift) : childLift;
       // Live work lifts a settled launcher into Priority; finished or unread work you have not
       // settled would sit in the closed settled shelf, so it keeps its row.
       if (
         !staysFoldedUnderLauncher({
-          childLift,
-          childSettled: settled(child),
+          childLift: lift,
+          childSettled: remoteTask || settled(child),
           launcherSnoozed: snoozed(thread),
           launcherSettled: settled(thread),
         })
       )
         continue;
       parentKeyByKey.set(childKey, key);
-      below = moreUrgentLaunchLift(below, childLift);
+      below = moreUrgentLaunchLift(below, lift);
     }
     if (below !== null) liftByKey.set(key, below);
     // Only a thread that may fold lifts as unread; a row's own unread is its own rank.

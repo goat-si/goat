@@ -6,7 +6,7 @@ import {
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/models";
 import { threadFamilyRead } from "@goat/client-runtime/state/threads";
 import type { EnvironmentId, OrchestrationV2ThreadFamily, ThreadId } from "@goat/contracts";
-import { foldsUnderLauncher } from "@goat/shared/threadLaunchState";
+import { foldsUnderLauncherRow } from "@goat/client-runtime/state/launch-fold";
 import { Atom, type AsyncResult, type AtomRegistry } from "effect/reactivity";
 
 type LaunchedThread = Pick<
@@ -56,7 +56,7 @@ export function createRemoteLauncherFamilies(deps: {
       const launcher = thread.source.launchedBy;
       if (
         launcher === undefined ||
-        !foldsUnderLauncher({ ...thread, launchedBy: launcher }) ||
+        !foldsUnderLauncherRow(thread) ||
         thread.archivedAt !== null ||
         thread.deletedAt !== null ||
         launcher.environmentId == null ||
