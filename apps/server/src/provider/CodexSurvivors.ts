@@ -579,7 +579,7 @@ export const prepareShutdownSurvivors = Effect.fn("CodexSurvivors.prepareShutdow
             ),
           ),
         ),
-      { concurrency: "unbounded", discard: true },
+      { concurrency: 4, discard: true },
     );
   },
 );
