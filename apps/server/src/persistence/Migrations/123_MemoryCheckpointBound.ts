@@ -17,6 +17,7 @@ const encodeKeys = Schema.encodeSync(
   Schema.fromJsonString(Schema.Array(Schema.Array(Schema.String))),
 );
 const encodeKey = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));
+const BATCH_MAX_BYTES = 8 * 1024 * 1024;
 
 /**
  * Re-measures every live identity's forget reservation without the old 64 KiB floor, so
@@ -30,10 +31,27 @@ export default Effect.gen(function* () {
     space: string;
     memory_id: string;
     create_operation_id: string;
-  }>`SELECT space,memory_id,json_extract(identity_json,'$.createOperationId') AS create_operation_id FROM memory_identity_ledger i
-    WHERE NOT EXISTS(SELECT 1 FROM memory_tombstones t WHERE t.space=i.space AND t.memory_id=i.memory_id)`;
-  for (let offset = 0; offset < identities.length; offset += 100) {
-    const chunk = identities.slice(offset, offset + 100);
+    revision_count: number;
+    body_bytes: number;
+    lineage_bytes: number;
+  }>`SELECT i.space,i.memory_id,json_extract(i.identity_json,'$.createOperationId') AS create_operation_id,
+      count(r.revision_id) AS revision_count,coalesce(sum(length(CAST(p.body_json AS BLOB))),0) AS body_bytes,
+      coalesce((SELECT sum(length(CAST(l.record_json AS BLOB))) FROM memory_import_lineage l WHERE l.space=i.space AND l.memory_id=i.memory_id),0) AS lineage_bytes
+    FROM memory_identity_ledger i
+    LEFT JOIN memory_revisions r ON r.space=i.space AND r.memory_id=i.memory_id
+    LEFT JOIN memory_payloads p ON p.space=r.space AND p.payload_ref=r.payload_ref
+    WHERE NOT EXISTS(SELECT 1 FROM memory_tombstones t WHERE t.space=i.space AND t.memory_id=i.memory_id)
+    GROUP BY i.space,i.memory_id ORDER BY i.space,i.memory_id`;
+  for (let offset = 0; offset < identities.length; ) {
+    const chunk = [];
+    let bytes = 0;
+    for (const row of identities.slice(offset, offset + 100)) {
+      const rowBytes = row.body_bytes + row.lineage_bytes + row.revision_count * 1024;
+      if (chunk.length > 0 && bytes + rowBytes > BATCH_MAX_BYTES) break;
+      chunk.push(row);
+      bytes += rowBytes;
+      offset++;
+    }
     const keys = encodeKeys(chunk.map((row) => [row.space, row.memory_id]));
     const revisions = yield* sql<
       RevisionRow & { space: string; memory_id: string; body_json: string | null }
