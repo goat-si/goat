@@ -136,6 +136,9 @@ const make = Effect.gen(function* () {
       if (item.secretStatus !== "pending") {
         return yield* new SecretRequestError({ reason: "already_answered" });
       }
+      if (item.requestKind === "card" || input.answer.type === "save_card") {
+        return yield* new SecretRequestError({ reason: "answer_mismatch" });
+      }
       if (
         input.answer.type !== "decline" &&
         (item.requestKind === "login") !== (input.answer.type === "save_login")

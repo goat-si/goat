@@ -294,3 +294,20 @@ it.effect("records the login kind and normalized origin on the request card", ()
     }),
   ),
 );
+
+it.effect("requires an origin for card requests and records the normalized origin", () =>
+  withRunningTurn(({ orchestrator, requestSecret }) =>
+    Effect.gen(function* () {
+      expect(
+        yield* requestSecret(scope, { ...input, kind: "card" }).pipe(Effect.flip),
+      ).toMatchObject({ code: "invalid_request" });
+      expect(
+        yield* requestSecret(scope, { ...input, kind: "card", origin: "https://example.com/pay" }),
+      ).toMatchObject({ status: "pending" });
+      const cards = (yield* orchestrator.getThreadProjection(threadId)).turnItems.filter(
+        (item) => item.type === "secret_request",
+      );
+      expect(cards).toMatchObject([{ requestKind: "card", siteOrigin: "https://example.com" }]);
+    }),
+  ),
+);

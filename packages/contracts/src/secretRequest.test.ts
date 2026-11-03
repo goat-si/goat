@@ -55,3 +55,18 @@ it("rejects invalid card details", () => {
   ])
     expect(normalizeCardDetails({ ...valid, ...invalid })).toBeUndefined();
 });
+
+it("decodes and normalizes a card answer and rejects invalid card details", () => {
+  const decode = Schema.decodeUnknownSync(SecretRequestAnswerInput);
+  const answer = {
+    type: "save_card",
+    number: "1234 5678-9012",
+    expiryMonth: "01",
+    expiryYear: "29",
+    cvc: "003",
+    name: "  Name  ",
+  };
+  const input = { threadId: "thread:card", turnItemId: "item:card", answer };
+  expect(decode(input).answer).toEqual({ ...answer, number: "123456789012", expiryYear: "2029" });
+  expect(() => decode({ ...input, answer: { ...answer, cvc: "x" } })).toThrow();
+});

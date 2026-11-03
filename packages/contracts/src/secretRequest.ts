@@ -1,4 +1,5 @@
 import * as Schema from "effect/Schema";
+import * as SchemaGetter from "effect/SchemaGetter";
 
 import { ThreadId, TrimmedNonEmptyString, TurnItemId } from "./baseSchemas.ts";
 import { goatCallText } from "./agentSurface/callText.ts";
@@ -24,6 +25,21 @@ export function normalizeCardDetails(input: CardDetails): CardDetails | undefine
   };
 }
 
+const CardAnswer = Schema.Struct({
+  type: Schema.Literal("save_card"),
+  number: Schema.String,
+  expiryMonth: Schema.String,
+  expiryYear: Schema.String,
+  cvc: Schema.String,
+  name: Schema.String,
+}).check(Schema.makeFilter((card) => normalizeCardDetails(card) !== undefined));
+const NormalizedCardAnswer = CardAnswer.pipe(
+  Schema.decodeTo(CardAnswer, {
+    decode: SchemaGetter.transform((card) => ({ ...card, ...normalizeCardDetails(card) })),
+    encode: SchemaGetter.transform((card) => card),
+  }),
+);
+
 /** Server stores the value under a one-use SecretRef; the thread learns only status. */
 export const SecretRequestAnswerInput = Schema.Struct({
   threadId: ThreadId,
@@ -35,6 +51,7 @@ export const SecretRequestAnswerInput = Schema.Struct({
       username: TrimmedNonEmptyString,
       password: Schema.String.check(Schema.isPattern(/\S/)),
     }),
+    NormalizedCardAnswer,
     Schema.Struct({ type: Schema.Literal("decline") }),
   ]),
 });
