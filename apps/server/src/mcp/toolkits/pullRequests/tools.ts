@@ -270,6 +270,23 @@ export const LinkPullRequestResult = Schema.Struct({
 });
 export type LinkPullRequestResult = typeof LinkPullRequestResult.Type;
 
+const PullRequestNumbersByRepository = Schema.Array(
+  Schema.Struct({
+    host: Schema.String,
+    repository: Schema.String,
+    numbers: Schema.Array(Schema.Int),
+  }),
+);
+
+export const LinkPullRequestsResult = Schema.Struct({
+  linked: PullRequestNumbersByRepository,
+  alreadyLinked: PullRequestNumbersByRepository,
+  linkedCount: Schema.Int,
+  invalidUrls: Schema.optional(Schema.Array(Schema.String)),
+  next: Schema.optional(Schema.String),
+});
+export type LinkPullRequestsResult = typeof LinkPullRequestsResult.Type;
+
 export const UnlinkPullRequestResult = Schema.Struct({
   host: Schema.String,
   repository: Schema.String,
@@ -338,6 +355,17 @@ const LinkPullRequestTool = Tool.make(agentSurfaceRegistry["pull_request.link"].
   failure: PullRequestToolError,
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["pull_request.link"]));
+
+const LinkPullRequestsTool = Tool.make(agentSurfaceRegistry["pull_request.link_many"].name, {
+  description: agentSurfaceRegistry["pull_request.link_many"].description,
+  parameters: Schema.Struct({
+    threadId: Schema.optional(ThreadId.annotate({ description: "Thread. Default: this thread." })),
+    urls: Schema.Array(TrimmedNonEmptyString).check(Schema.isMinLength(1)),
+  }),
+  success: LinkPullRequestsResult,
+  failure: PullRequestToolError,
+  dependencies,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["pull_request.link_many"]));
 
 const UnlinkPullRequestTool = Tool.make(agentSurfaceRegistry["pull_request.unlink"].name, {
   description: agentSurfaceRegistry["pull_request.unlink"].description,
@@ -576,6 +604,7 @@ const PullRequestFilterOptionsTool = Tool.make(
 export const PullRequestsToolkit = Toolkit.make(
   ...makeWriteTools(GuideTarget.fields, PullRequestToolError),
   LinkPullRequestTool,
+  LinkPullRequestsTool,
   UnlinkPullRequestTool,
   UnlinkPullRequestsTool,
   ListThreadPullRequestsTool,

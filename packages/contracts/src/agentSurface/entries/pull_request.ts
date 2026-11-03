@@ -32,6 +32,29 @@ export const pullRequestEntries = {
       openWorldHint: false,
     },
   }),
+  "pull_request.link_many": entry({
+    resource: "pull_request",
+    verb: "link_many",
+    name: "goat_pull_request_link_many",
+    toolkit: "pullRequests",
+    summary: "Link pull requests to thread",
+    description:
+      "Link several pull request URLs to a thread in one call. Invalid URLs are returned separately.",
+    guide:
+      "Provide URLs for each pull request and stack layer. Existing visible links remain linked.",
+    effect: "write",
+    capability: "pr.open",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    idempotencyReason: "Already linked pull requests are left unchanged.",
+    annotations: {
+      title: "Link pull requests to thread",
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  }),
   "pull_request.unlink": entry({
     resource: "pull_request",
     verb: "unlink",
