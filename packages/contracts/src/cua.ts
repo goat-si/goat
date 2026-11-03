@@ -721,7 +721,8 @@ export const ComputerUseRefusalDetail = Schema.Literals([
    * GOAT's capability manifest for the driver leaves this tool or resource out. The driver says
    * permission_denied, as for a missing macOS grant; no grant the person gives changes it.
    */
-  ...(["outside_manifest", "blocked_url"] as const),
+  "outside_manifest",
+  "blocked_url",
 ]);
 export type ComputerUseRefusalDetail = typeof ComputerUseRefusalDetail.Type;
 

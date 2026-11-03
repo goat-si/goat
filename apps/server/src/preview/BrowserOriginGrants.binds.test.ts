@@ -91,3 +91,47 @@ it.effect("returns the bind and revision in one snapshot", () =>
     yield* Fiber.join(answer);
   }),
 );
+
+it.effect("blocking an origin interrupts an approved bind without waiting for the driver", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    let hosts: ReadonlyArray<string> = [];
+    const service = yield* makeTestBrowserOriginGrants({
+      environmentId: EnvironmentId.make("environment:test"),
+      supported: () => true,
+      blockedHosts: Effect.sync(() => hosts),
+      publish: () => Effect.void,
+      bind: (request) =>
+        Deferred.succeed(entered, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.as({
+            targetId: "target",
+            tabId: "tab",
+            title: "Site",
+            url: request.origin,
+            driverGeneration: 1,
+          }),
+        ),
+    });
+    const threadId = ThreadId.make("thread:blocked");
+    const pending = yield* service.request({
+      threadId,
+      pid: 42,
+      windowId: 7,
+      origin: "https://example.test",
+      windowTitle: "Browser",
+    });
+    if (pending.status !== "pending") return assert.fail("expected pending");
+    const answering = yield* service
+      .answer(pending.claimId, true)
+      .pipe(Effect.forkChild({ startImmediately: true }));
+    yield* Deferred.await(entered);
+    hosts = ["example.test"];
+    yield* service.blockedHostsChanged(hosts);
+    const answer = yield* Fiber.join(answering);
+    assert.equal(answer.agentResult.status === "refused" && answer.agentResult.code, "declined");
+    assert.deepEqual(yield* service.list(threadId), { claims: [], grants: [] });
+    yield* Deferred.succeed(release, undefined);
+  }),
+);

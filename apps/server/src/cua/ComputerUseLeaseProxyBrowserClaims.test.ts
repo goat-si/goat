@@ -1,3 +1,5 @@
+import { reservationRefusal } from "./ComputerUseLeaseMessages.ts";
+import { classifyFailure } from "@goat/contracts/agentSurface/envelope";
 import { deniedCallApp } from "./ComputerUseCallSafety.ts";
 import { describe, expect, it } from "vite-plus/test";
 import {
@@ -625,3 +627,12 @@ effectIt.effect("a browser claim cannot override the organization app denylist",
     assert.equal(yield* h.driverQueued, 0);
   }),
 );
+
+it("explains a blocked site and classifies it as permission denied", () => {
+  expect(reservationRefusal("blocked_url", undefined)).toBe(
+    "This site is blocked in GOAT's browser settings.",
+  );
+  expect(classifyFailure("blocked_url", "blocked_url")).toMatchObject({
+    code: "permission_denied",
+  });
+});

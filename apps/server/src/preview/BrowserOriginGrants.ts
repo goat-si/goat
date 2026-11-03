@@ -291,6 +291,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
               personMessage: "blocked_url: This site is blocked in browser settings.",
             };
           }
+          if (pending.get(claimId) !== entry) return { agentResult: decline };
           if (originOf(tab.url) !== entry.origin) {
             yield* rollback;
             return { agentResult: decline, personMessage: `This tab is not on ${entry.origin}` };
@@ -415,6 +416,31 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
       ),
     );
   });
+  const blockedHostsChanged = Effect.fn("BrowserOriginGrants.blockedHostsChanged")(function* (
+    hosts: ReadonlyArray<string>,
+  ) {
+    const signals: Array<Deferred.Deferred<void>> = [];
+    let changed = false;
+    for (const [id, entry] of pending) {
+      if (!isBlockedBrowserUrl(entry.origin, hosts)) continue;
+      pending.delete(id);
+      ended.set(id, { threadId: entry.threadId, reason: "blocked_url" });
+      if (uncommittedGrants.delete(key(entry.threadId, entry.origin)))
+        grants.delete(key(entry.threadId, entry.origin));
+      signals.push(entry.stopped);
+      changed = true;
+    }
+    for (const [id, claim] of claims) {
+      if (!isBlockedBrowserUrl(claim.origin, hosts)) continue;
+      claims.delete(id);
+      ended.set(id, { threadId: claim.threadId, reason: "blocked_url" });
+      changed = true;
+    }
+    for (const signal of signals) yield* Deferred.succeed(signal, undefined);
+    if (changed) yield* advance;
+    if (changed || claims.size > 0 || [...pending.values()].some((entry) => entry.granted))
+      yield* shrink(union());
+  });
   const end = Effect.fn("BrowserOriginGrants.end")(
     (
       threadId: ThreadId,
@@ -519,6 +545,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     endPerson,
     revoke,
     stop,
+    blockedHostsChanged,
     end,
     endReason,
     driverRestarted,

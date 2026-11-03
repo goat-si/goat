@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { BrowserClaimBind } from "./BrowserClaimBind.ts";
@@ -17,6 +18,7 @@ class BrowserClaimBindUnavailable extends Schema.TaggedError<BrowserClaimBindUna
 const make = Effect.gen(function* () {
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const settings = yield* ServerSettings.ServerSettingsService;
+  const changes = yield* settings.subscribeChanges;
   const { environmentId } = yield* environment.getDescriptor;
   const manifest = yield* Effect.serviceOption(BrowserClaimManifest);
   const bind = yield* Effect.serviceOption(BrowserClaimBind);
@@ -55,6 +57,18 @@ const make = Effect.gen(function* () {
             new BrowserClaimBindUnavailable({ cause: "Browser claim binding is unavailable." }),
           ),
   });
+  yield* changes.pipe(
+    Stream.runForEach((value) =>
+      service
+        .blockedHostsChanged(value.blockedBrowserHosts)
+        .pipe(
+          Effect.catch((cause) =>
+            Effect.logError("Could not apply browser host settings", { cause }),
+          ),
+        ),
+    ),
+    Effect.forkScoped,
+  );
   const setDriverCapability = Effect.fn("BrowserOriginGrants.setDriverCapability")(function* (
     value: boolean,
   ) {
