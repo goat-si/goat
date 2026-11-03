@@ -71,6 +71,7 @@ export interface EventLoopReadings {
 }
 
 // Node skips the first gap after a reset, so a stall right at a sample boundary can be missed.
+/** @internal Exported for tests. */
 export const makeSampler = Effect.fn("EventLoopMonitor.makeSampler")(function* (
   read: () => RawSample,
 ) {
