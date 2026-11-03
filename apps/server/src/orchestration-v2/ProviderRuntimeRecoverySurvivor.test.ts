@@ -43,3 +43,8 @@ it.effect(
   "a paused goal remains fenced across a second startup before native turns are scanned",
   () => recoveryScenario("restart", false, "completed", false, "goal-release"),
 );
+
+it.effect(
+  "queued Codex starts on a shared instance do not block recovery or a same-thread survivor",
+  () => recoveryScenario("restart", false, "completed", true),
+);

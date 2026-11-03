@@ -1,3 +1,4 @@
+import { seedQueuedStarts, assertQueuedStarts } from "./ProviderRuntimeQueuedStart.testkit.ts";
 import { assert } from "@effect/vitest";
 import {
   CommandId,
@@ -208,9 +209,9 @@ export const recoveryScenario = (
         Effect.sync(() => {
           order.push("record-obligation");
         }),
-      blockThread: () =>
+      blockThread: (threadId) =>
         Effect.sync(() => {
-          order.push("block-thread");
+          order.push("block-thread", `block:${threadId}`);
         }),
       clearStopObligation: (_key, obligation) =>
         Effect.gen(function* () {
@@ -784,7 +785,9 @@ export const recoveryScenario = (
         yield* sql`UPDATE orchestration_v2_effect_outbox SET status = 'running', lease_owner = 'old-server' WHERE effect_id = 'survivor-start'`;
         yield* sql`UPDATE orchestration_v2_effect_outbox SET status = 'running', lease_owner = 'old-server' WHERE effect_id = 'unrelated-cleanup'`;
       }
+      if (mixed) yield* seedQueuedStarts(store, outboxBefore, now);
       yield* (yield* Recovery.ProviderRuntimeRecoveryService).recover;
+      if (mixed) yield* assertQueuedStarts(store, outboxBefore, order);
       if (reviewCase) {
         const salted = yield* store.getThreadProjection(ThreadId.make("salted"));
         const stopped = yield* store.getThreadProjection(ThreadId.make("stop"));
@@ -852,9 +855,7 @@ export const recoveryScenario = (
         if (reviewCase === "goal-release") {
           yield* (yield* Recovery.ProviderRuntimeRecoveryService).recover;
           assert.isEmpty(order.filter((item) => item === "read-goal" || item === "clear-goal"));
-          assert.isTrue(oldGoalBlocked);
-          assert.isFalse(pendingStop);
-          assert.equal(u.status, "running");
+          assert.deepEqual([oldGoalBlocked, pendingStop, u.status], [true, false, "running"]);
         }
         if (reviewCase === "goal-held")
           assert.isEmpty(order.filter((item) => item === "read-goal" || item === "clear-goal"));

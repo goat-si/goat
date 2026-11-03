@@ -9,6 +9,7 @@ import {
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as RecoveryFailure from "./CodexSurvivorRecoveryFailure.ts";
+import { hasNoNativeTurn } from "./CodexSurvivorQueuedStart.ts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -68,6 +69,17 @@ export const classifyRecovery = Effect.fn("CodexSurvivors.classifyRecovery")(fun
         (value) => value.id === run.providerThreadId,
       );
       if (providerThread?.driver !== "codex") continue;
+      if (run.status === "starting") {
+        const starts = yield* input.outbox.listNeverAttemptedStarts(threadId);
+        if (
+          starts.some(
+            (effect) =>
+              effect.request.type === "provider-turn.start" && effect.request.runId === run.id,
+          )
+        ) {
+          if (yield* hasNoNativeTurn(input.projections, threadId, run)) continue;
+        }
+      }
       if (globalBlock !== undefined) {
         if (input.survivors.blockThread) yield* input.survivors.blockThread(threadId);
         if (run.activeAttemptId) {
