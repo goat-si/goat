@@ -207,6 +207,9 @@ export class ComputerUseLeases extends Context.Service<
     readonly callReservation: (
       threadId: ThreadId,
       call: ComputerUseCallReservation,
+      judge?: (
+        call: Extract<ComputerUseCallReservation, { action: "reserve" }>,
+      ) => Effect.Effect<boolean>,
     ) => Effect.Effect<ComputerUseCallAdmission, ComputerUseLeaseError>;
     /** A control's proxy went away; the apps its calls leased are free at once (D17). */
     readonly releaseApps: (threadId: ThreadId, controlId: string) => Effect.Effect<void>;

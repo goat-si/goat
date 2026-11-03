@@ -124,6 +124,9 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
   const reserve = Effect.fn("ComputerUseLeases.callReservation")(function* (
     threadId: ThreadId,
     request: ComputerUseCallReservation,
+    judge?: (
+      call: Extract<ComputerUseCallReservation, { action: "reserve" }>,
+    ) => Effect.Effect<boolean>,
   ): Effect.fn.Return<ComputerUseCallAdmission, E> {
     if (request.action === "release" || request.action === "close") {
       const current = controls.get(threadId);
@@ -140,6 +143,10 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
         const call =
           request.action === "validate" ? reservations.lookup(threadId, request) : request;
         if (call === undefined) return { status: "refused", detail: "replaced" } as const;
+        if (judge !== undefined && !(yield* judge(call)))
+          return { status: "refused", detail: "outside_manifest" } as const;
+        if (request.action === "validate" && reservations.lookup(threadId, request) !== call)
+          return { status: "refused", detail: "replaced" } as const;
         if (request.action === "reserve" && markActed(controls, threadId, call)) yield* changed;
         const before = controls.get(threadId);
         const need = appNeed(call);

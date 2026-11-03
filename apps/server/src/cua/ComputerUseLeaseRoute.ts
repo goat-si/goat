@@ -510,23 +510,21 @@ const makeCallLayer = (serverScope: Scope.Scope) =>
         settings.value.cuaStrictInputGuards &&
         settings.value.cuaMovePointer !== "allowed" &&
         movesPersonPointer(call.value);
-      let outsideManifest = false;
-      if (call.value.action === "reserve" && deniedApp === undefined && !pointerLocked) {
-        const grants = yield* Effect.serviceOption(BrowserOriginGrants.BrowserOriginGrants);
-        const snapshot = Option.isSome(grants)
-          ? yield* grants.value.snapshotFor(threadId)
-          : { claims: [], bindings: [] };
-        outsideManifest = !serverAdmitsBrowserCall(call.value.name, call.value.args, snapshot);
-      }
+      const grants = yield* Effect.serviceOption(BrowserOriginGrants.BrowserOriginGrants);
+      const judge = (reserved: Extract<ComputerUseCallReservation, { action: "reserve" }>) =>
+        (Option.isSome(grants)
+          ? grants.value.snapshotFor(threadId)
+          : Effect.succeed({ claims: [], bindings: [] })
+        ).pipe(
+          Effect.map((snapshot) => serverAdmitsBrowserCall(reserved.name, reserved.args, snapshot)),
+        );
       const result = yield* Effect.gen(function* () {
         const result: ComputerUseCallAdmission =
           deniedApp !== undefined
             ? { status: "refused", detail: "app_not_allowed", app: deniedApp }
             : pointerLocked
               ? { status: "refused", detail: "pointer_locked" }
-              : outsideManifest
-                ? { status: "refused", detail: "outside_manifest" }
-                : yield* leases.callReservation(threadId, call.value);
+              : yield* leases.callReservation(threadId, call.value, judge);
         const stamp = historyStamp(yield* Clock.currentTimeMillis);
         if (call.value.action === "reserve" && result.status === "refused") {
           const sql = yield* Effect.serviceOption(SqlClient.SqlClient);

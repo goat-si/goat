@@ -14,6 +14,7 @@ import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import { HttpRouter, HttpServer, HttpServerRequest } from "effect/http";
 import * as NetAddress from "effect/net/NetAddress";
@@ -22,6 +23,7 @@ import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerSettings from "../serverSettings.ts";
 import { runMigrations } from "../persistence/Migrations.ts";
@@ -37,6 +39,7 @@ import { BrowserOriginGrants } from "../preview/BrowserOriginGrantsLayer.ts";
 import * as Grants from "../preview/BrowserOriginGrantsLayer.ts";
 import { BrowserClaimManifest } from "../preview/BrowserClaimManifest.ts";
 import { harness, call } from "./ComputerUseLeaseProxy.testkit.ts";
+import { database } from "./ComputerUseLeases.projection.testkit.ts";
 
 const decodeDescriptor = Schema.decodeSync(ExecutionEnvironmentDescriptor);
 const threadId = ThreadId.make("thread:bot");
@@ -142,6 +145,7 @@ const threadFixture = Effect.fn("LeaseRouteTest.threadFixture")(function* (
   options: {
     readonly livenessWindowMs?: number;
     readonly grants?: BrowserOriginGrants["Service"];
+    readonly leases?: ComputerUseLeases.ComputerUseLeases["Service"];
   } = {},
 ) {
   const registry = yield* McpSessionRegistry.__testing.make(options).pipe(
@@ -172,13 +176,22 @@ const threadFixture = Effect.fn("LeaseRouteTest.threadFixture")(function* (
       }
     | undefined
   >(undefined);
-  const leaseLayer = Layer.mock(ComputerUseLeases.ComputerUseLeases)({
+  let reservedCall:
+    | Extract<import("@goat/contracts").ComputerUseCallReservation, { action: "reserve" }>
+    | undefined;
+  const mockLeaseLayer = Layer.mock(ComputerUseLeases.ComputerUseLeases)({
     onAuthorityChange: () => () => {},
     releaseApps: (owner, id) => Effect.sync(() => released.push([owner, id])),
     streamOpened: () => Effect.void,
     proxy: undefined,
-    callReservation: () =>
-      Effect.succeed({ status: "admitted", reservationId: "reservation:test" } as const),
+    callReservation: (_thread, call, judge) =>
+      Effect.gen(function* () {
+        if (call.action === "reserve") reservedCall = call;
+        const reserved = call.action === "reserve" ? call : reservedCall;
+        if (reserved && judge && !(yield* judge(reserved)))
+          return { status: "refused", detail: "outside_manifest" } as const;
+        return { status: "admitted", reservationId: "reservation:test" } as const;
+      }),
     currentControl: () =>
       Ref.get(current).pipe(
         Effect.map((value) =>
@@ -219,6 +232,9 @@ const threadFixture = Effect.fn("LeaseRouteTest.threadFixture")(function* (
       Effect.tap(() => Deferred.succeed(subscribed, undefined)),
     ),
   });
+  const leaseLayer = options.leases
+    ? Layer.succeed(ComputerUseLeases.ComputerUseLeases, options.leases)
+    : mockLeaseLayer;
   const baseContext = yield* Layer.build(
     Layer.mergeAll(
       Layer.effectDiscard(runMigrations()).pipe(
@@ -285,12 +301,35 @@ const threadFixture = Effect.fn("LeaseRouteTest.threadFixture")(function* (
     yield* Deferred.await(subscribed);
     return Queue.take(updates).pipe(Effect.catchTags({ Done: () => Effect.undefined }));
   });
+  const postCall = (body: object) =>
+    handler.pipe(
+      Effect.provideService(
+        HttpServerRequest.HttpServerRequest,
+        HttpServerRequest.fromWeb(
+          new Request("http://goat.test/api/computer-use/lease/calls", {
+            method: "POST",
+            headers: {
+              authorization: credential.config.authorizationHeader,
+              "content-type": "application/json",
+            },
+            body: JSON.stringify(body),
+          }),
+        ),
+      ),
+      Effect.provideContext(context),
+      Effect.map((response): unknown =>
+        response.body._tag === "Uint8Array"
+          ? JSON.parse(new TextDecoder().decode(response.body.body))
+          : response.status,
+      ),
+    );
   return {
     registry,
     credential,
     context,
     channel: Context.get(context, ComputerUsePrimitiveChannel.ComputerUsePrimitiveChannel),
     request,
+    postCall,
     postPrimitive,
     reserve: (name: string, args: object) =>
       handler.pipe(
@@ -339,6 +378,100 @@ const threadFixture = Effect.fn("LeaseRouteTest.threadFixture")(function* (
 });
 
 describe("computer use lease route", () => {
+  it.effect("validation refuses a claim revoked while the call waited for admission", () =>
+    Effect.gen(function* () {
+      const context = yield* Layer.build(
+        ComputerUseLeases.layer.pipe(
+          Layer.provideMerge(
+            Layer.mergeAll(
+              database,
+              NodeServices.layer,
+              ServerSettings.layerTest({ enableCua: true, cuaStrictInputGuards: false }),
+            ),
+          ),
+        ),
+      );
+      yield* runMigrations().pipe(Effect.provideContext(context));
+      const sql = Context.get(context, SqlClient.SqlClient);
+      yield* sql`INSERT INTO orchestration_v2_projection_threads
+        (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
+        VALUES (${threadId}, 'project', 'thread', 'codex', 'full-access', 'default', '2026-01-01', '2026-01-01', '{}')`;
+      const leases = Context.get(context, ComputerUseLeases.ComputerUseLeases);
+      const control = Option.getOrThrow(yield* leases.everyAppControl(threadId, false));
+      const grants = yield* makeBrowserOriginGrants({
+        environmentId: EnvironmentId.make("environment:test"),
+        supported: () => true,
+        publish: () => Effect.void,
+        bind: () =>
+          Effect.succeed({
+            targetId: "target-1",
+            tabId: "tab",
+            title: "Site",
+            url: "https://example.test",
+            driverGeneration: 1,
+          }),
+      });
+      const pending = yield* grants.request({
+        threadId,
+        pid: 42,
+        windowId: 7,
+        origin: "https://example.test",
+        windowTitle: "Browser",
+      });
+      if (pending.status !== "pending") return assert.fail("expected pending");
+      yield* grants.answer(pending.claimId, true);
+      const route = yield* threadFixture({
+        grants: { ...grants, setDriverCapability: () => Effect.void },
+        leases,
+      });
+      const scoped = {
+        tab_id: "tab",
+        target_id: "target-1",
+        session: "goat-claim:" + pending.claimId,
+        origin_scope: ["https://example.test"],
+      };
+      const reserved = yield* route.postCall({
+        action: "reserve",
+        controlId: control.controlId,
+        connectionId: "driver:1",
+        callId: "one",
+        name: "browser_click",
+        args: scoped,
+        interruptions: 0,
+        idleEpoch: 0,
+      });
+      if (
+        typeof reserved !== "object" ||
+        reserved === null ||
+        !("reservationId" in reserved) ||
+        typeof reserved.reservationId !== "string"
+      )
+        return assert.fail("expected reservation");
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const holder = yield* leases
+        .serializeAdmission(
+          Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
+        )
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(entered);
+      const validation = yield* route
+        .postCall({
+          action: "validate",
+          controlId: control.controlId,
+          connectionId: "driver:1",
+          reservationId: reserved.reservationId,
+        })
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* grants.revoke(threadId, "https://example.test");
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(holder);
+      assert.deepEqual(yield* Fiber.join(validation), {
+        status: "refused",
+        detail: "outside_manifest",
+      });
+    }).pipe(Effect.scoped),
+  );
   it.effect(
     "thread capability reports cannot raise support and end only their thread's claims",
     () =>
