@@ -311,23 +311,22 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
           delivered = line;
         }
         yield* agentInput.ended(key);
-        const claimAllowed = yield* claims.judgeReply(message.result, request.browserClaim);
-        if (gone()) return;
-        if (request.cancelled) {
-          if (claimAllowed) yield* request.sink.recordOutcome?.(line) ?? Effect.void;
-          yield* drawOverlay({ type: "reply", id: key, failed: true });
-          yield* release(
+        if (
+          yield* claims.interceptReply({
             request,
-            true,
-            claimAllowed ? driverRefused(request.tool, message, request.args) : false,
-          );
-          if (gone() || paused !== undefined || idle) return;
-          outstanding.delete(key);
-          options.onCancelledRequestSettled?.(key);
+            key,
+            line,
+            result: message.result,
+            outstanding,
+            gone,
+            release,
+            paused: () => paused !== undefined || idle,
+            draw: () => drawOverlay({ type: "reply", id: key, failed: true }),
+            driverRefused: () => driverRefused(request.tool, message, request.args),
+            cancelled: options.onCancelledRequestSettled,
+          })
+        )
           return;
-        }
-        if (!claimAllowed)
-          return yield* claims.refuseReply(request, key, outstanding, gone, release);
         const session = message.result?.structuredContent?.session;
         if (request.method === "tools/call" && typeof session === "string") sessions.add(session);
         if (request.method === "tools/call") {

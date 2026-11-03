@@ -68,6 +68,11 @@ export const ComputerUseLeaseBrowserClaimReply = Schema.Struct({
   }),
 });
 export type ComputerUseLeaseBrowserClaimReply = typeof ComputerUseLeaseBrowserClaimReply.Type;
+export const ComputerUseLeaseBrowserReport = Schema.Union([
+  ComputerUseLeaseBrowserCapability,
+  ComputerUseLeaseBrowserClaimEnded,
+  ComputerUseLeaseBrowserClaimReply,
+]);
 
 export const BrowserClaimEndReason = Schema.Literals([
   "revoked",

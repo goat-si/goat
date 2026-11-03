@@ -21,9 +21,7 @@ import { needsHumanFields } from "./humanStepResult.ts";
 import { ComputerUseAgentCursor, AgentCursorReport } from "./computerUseOverlay.ts";
 import { PreviewSessionNoPicture } from "./previewSession.ts";
 import {
-  ComputerUseLeaseBrowserCapability,
-  ComputerUseLeaseBrowserClaimEnded,
-  ComputerUseLeaseBrowserClaimReply,
+  ComputerUseLeaseBrowserReport,
   LeaseBrowserClaim,
   PendingBrowserBind,
 } from "./browserClaims.ts";
@@ -292,9 +290,7 @@ export const ComputerUseLeaseReport = Schema.Union([
   ComputerUseLeaseAgentInput,
   ComputerUseLeaseCursor,
   ComputerUseLeaseDriverEnded,
-  ComputerUseLeaseBrowserCapability,
-  ComputerUseLeaseBrowserClaimEnded,
-  ComputerUseLeaseBrowserClaimReply,
+  ComputerUseLeaseBrowserReport,
 ]);
 export type ComputerUseLeaseReport = typeof ComputerUseLeaseReport.Type;
 

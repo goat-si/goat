@@ -407,6 +407,42 @@ export const makeProxyBrowserClaims = (
       "settled",
     );
   });
+  const interceptReply = Effect.fn("ComputerUseLeaseProxyBrowserClaims.interceptReply")(
+    function* (input: {
+      readonly request: OutstandingCall;
+      readonly key: string;
+      readonly line: string;
+      readonly result: unknown;
+      readonly outstanding: Map<string, OutstandingCall>;
+      readonly gone: () => boolean;
+      readonly paused: () => boolean;
+      readonly release: (
+        request: OutstandingCall,
+        completed: true,
+        notSent: boolean,
+      ) => Effect.Effect<void>;
+      readonly draw: () => Effect.Effect<void>;
+      readonly driverRefused: () => boolean;
+      readonly cancelled: ((key: string) => void) | undefined;
+    }) {
+      const { request, key } = input;
+      const allowed = yield* judgeReply(input.result, request.browserClaim);
+      if (input.gone()) return true;
+      if (request.cancelled) {
+        if (allowed) yield* request.sink.recordOutcome?.(input.line) ?? Effect.void;
+        yield* input.draw();
+        yield* input.release(request, true, allowed ? input.driverRefused() : false);
+        if (!input.gone() && !input.paused()) {
+          input.outstanding.delete(key);
+          input.cancelled?.(key);
+        }
+        return true;
+      }
+      if (allowed) return false;
+      yield* refuseReply(request, key, input.outstanding, input.gone, input.release);
+      return true;
+    },
+  );
   const attach = (
     request: OutstandingCall,
     selected: SelectedClaim | undefined,
@@ -429,5 +465,5 @@ export const makeProxyBrowserClaims = (
       "This driver does not support browser claims.",
     );
   });
-  return { update, gate, allowed, judgeReply, refuseReply, attach, unsupported, report };
+  return { update, gate, allowed, interceptReply, attach, unsupported, report };
 };
