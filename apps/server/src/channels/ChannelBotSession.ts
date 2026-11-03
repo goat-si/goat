@@ -347,14 +347,16 @@ const make = Effect.gen(function* () {
     const target = yield* requireTarget(task);
     const ids = sessionLaunchIdsFor(task.taskId, task.generation);
     const settings = yield* serverSettings.getSettings.pipe(Effect.orDie);
-    // Only a requester at full access may act through the supervisor's owner profile.
-    if (settings.goatclaw.enabled && requester.runtimeModeCeiling === "full-access") {
+    if (settings.goatclaw.enabled) {
       const binding = yield* permissions
         .bind(
           row.thread_id,
-          goatclawRoleTemplate("supervisor").profileId,
+          requester.runtimeModeCeiling === "full-access"
+            ? goatclawRoleTemplate("supervisor").profileId
+            : settings.goatclaw.defaultProfile,
           "channel:" + task.requester.ownerId,
           "supervisor",
+          requester.runtimeModeCeiling,
         )
         .pipe(Effect.result);
       if (binding._tag === "Failure") {

@@ -1,6 +1,6 @@
 import { assert, describe, it } from "@effect/vitest";
 import type { ChannelConversationId, ChannelTask } from "@goat/contracts";
-import { ProviderInstanceId, ThreadId } from "@goat/contracts";
+import { BUILTIN_PERMISSION_PROFILES, ProviderInstanceId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
@@ -23,6 +23,7 @@ import {
   environmentId,
   owner,
   projectId,
+  rpcContext,
   setupBot,
   slackContext,
   slackInput,
@@ -121,6 +122,80 @@ const claimedFromTeammate = (key: string, memoryGrantCeiling?: "read" | "read_wr
   });
 
 describe("GOAT Bot sessions under the requester's current authority", () => {
+  it.effect.each([
+    { runtimeMode: "auto", profile: "owner" },
+    { runtimeMode: "auto-accept-edits", profile: "owner" },
+    { runtimeMode: "auto", profile: "worker" },
+    { runtimeMode: "auto-accept-edits", profile: "worker" },
+  ] as const)(
+    "#2194: a $runtimeMode supervisor using $profile refuses direct PR writes within the requester's ceiling",
+    ({ runtimeMode, profile }) => {
+      const harness = sessionHarness();
+      return Effect.gen(function* () {
+        const settings = yield* ServerSettings.ServerSettingsService;
+        yield* settings.updateSettings({ goatclaw: { enabled: true, defaultProfile: profile } });
+        yield* setupBot;
+        const task = yield* ask("look: check merge", `low-supervisor-${runtimeMode}`, {
+          ...rpcContext,
+          runtimeModeCeiling: runtimeMode,
+        });
+        const thread = task.worker!.threadId;
+        const sql = yield* SqlClient.SqlClient;
+        const [binding] = yield* sql<{ ceiling: string; profile: string }>`
+          SELECT json_extract(ceiling_json, '$.runtimeModeCeiling') AS ceiling, profile_id AS profile
+          FROM goatclaw_thread_profiles WHERE thread_id = ${thread}`;
+        assert.deepStrictEqual(binding, { ceiling: runtimeMode, profile });
+        yield* sql`INSERT INTO orchestration_v2_projection_threads
+          (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
+          VALUES (${thread}, 'project', 'Session', 'codex', ${runtimeMode}, 'default', '2026-10-25', '2026-10-25', '{}')`;
+        const profiles = yield* Profiles.PermissionProfiles;
+        const scope: McpInvocationContext.McpInvocationScope = {
+          environmentId,
+          requestNamespace: `provider:${thread}`,
+          thread: {
+            threadId: thread,
+            providerSessionId: "session",
+            providerInstanceId: ProviderInstanceId.make("codex"),
+          },
+          client: undefined,
+          capabilities: new Set(["orchestration"]),
+          issuedAt: 0,
+        };
+        const effective = yield* profiles.resolve(scope);
+        assert.strictEqual(effective.runtimeMode, runtimeMode);
+        assert.strictEqual(effective.profile.runtimeModeCeiling, runtimeMode);
+        assert.strictEqual(effective.narrowing?.role, "supervisor");
+        assert.deepStrictEqual(
+          effective.profile.capabilities,
+          BUILTIN_PERMISSION_PROFILES[profile]!.capabilities,
+        );
+        const outcomes: string[] = [];
+        for (const path of ["pull_request.merge", "pull_request.close"]) {
+          outcomes.push(
+            yield* requireDeclaredCapability(profiles, path, "write", {}).pipe(
+              Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+              Effect.provideService(ChannelSessionReceiptGate.ChannelSessionReceiptGate, {
+                require: () => Effect.void,
+              }),
+              Effect.match({ onFailure: (error) => error.code, onSuccess: () => "admitted" }),
+            ),
+          );
+        }
+        assert.deepStrictEqual(outcomes, ["capability_denied", "capability_denied"]);
+      }).pipe(Effect.provide(Profiles.layer.pipe(Layer.provideMerge(harness.layer))));
+    },
+  );
+  it.effect("#2194: a session outside supervisor mode is not role-bound", () => {
+    const harness = sessionHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const task = yield* ask("look: non-supervisor", "ordinary-session");
+      const sql = yield* SqlClient.SqlClient;
+      const rows =
+        yield* sql`SELECT profile_id FROM goatclaw_thread_profiles WHERE thread_id = ${task.worker!.threadId}`;
+      assert.deepStrictEqual(rows, []);
+    }).pipe(Effect.provide(harness.layer));
+  });
   it.effect("#2194: a supervisor session does not launch if its role binding fails", () => {
     const harness = sessionHarness();
     return Effect.gen(function* () {
