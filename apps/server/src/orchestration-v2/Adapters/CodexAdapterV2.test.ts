@@ -1635,6 +1635,153 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       }).pipe(Effect.scoped, Effect.provide(layerAdapterTest)),
   );
 
+  it.effect("interrupts a late turn after its start request misses the deadline", () =>
+    Effect.gen(function* () {
+      const nativeThreadId = "deadline-orphan-thread";
+      const nativeTurnId = "deadline-orphan-turn";
+      const prompt = "Run a command.";
+      const sent = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const interrupted = yield* Deferred.make<void>();
+      const preamble = codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt });
+      const transcript = makeCodexReplayTranscript({
+        scenario: "deadline-orphan-turn",
+        entries: [
+          ...preamble.slice(0, -2),
+          {
+            type: "expect_outbound",
+            frame: { id: 4, method: "config/read", params: { cwd: null, includeLayers: false } },
+          },
+          {
+            type: "emit_inbound",
+            frame: { id: 4, error: { code: -32601, message: "probe reply" } },
+          },
+          {
+            type: "emit_inbound",
+            label: "late-start",
+            frame: {
+              id: 3,
+              result: { turn: makeCodexReplayTurn({ id: nativeTurnId, status: "inProgress" }) },
+            },
+          },
+          {
+            type: "expect_outbound",
+            frame: {
+              id: 5,
+              method: "turn/interrupt",
+              params: { threadId: nativeThreadId, turnId: nativeTurnId },
+            },
+          },
+          { type: "emit_inbound", frame: { id: 5, result: {} } },
+        ],
+      });
+      const harness = yield* makeCodexReplayHarness(
+        transcript,
+        () => Effect.void,
+        (method) =>
+          method === "turn/start"
+            ? Deferred.succeed(sent, undefined).pipe(Effect.asVoid)
+            : method === "turn/interrupt"
+              ? Deferred.succeed(interrupted, undefined).pipe(Effect.asVoid)
+              : Effect.void,
+        undefined,
+        (entry) => (entry.label === "late-start" ? Deferred.await(release) : Effect.void),
+      );
+      const start = yield* harness.runtime
+        .startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("deadline-orphan-attempt"),
+            text: prompt,
+          }),
+        )
+        .pipe(Effect.exit, Effect.forkScoped);
+      yield* Deferred.await(sent);
+      yield* TestClock.adjust("61 seconds");
+      assert.equal((yield* Fiber.join(start))._tag, "Failure");
+      yield* Deferred.succeed(release, undefined);
+      yield* Deferred.await(interrupted);
+    }).pipe(Effect.scoped, Effect.provide(layerAdapterTest)),
+  );
+
+  it.effect("leaves a late turn running when a retry on its thread adopts it", () =>
+    Effect.gen(function* () {
+      const nativeThreadId = "deadline-retry-thread";
+      const nativeTurnId = "deadline-retry-turn";
+      const prompt = "Run a command.";
+      const starts = yield* Queue.unbounded<void>();
+      const releaseRetry = yield* Deferred.make<void>();
+      const methods: Array<string> = [];
+      const preamble = codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt });
+      const turnStart = preamble.at(-3);
+      const answer = (id: number) => ({
+        type: "emit_inbound" as const,
+        frame: {
+          id,
+          result: { turn: makeCodexReplayTurn({ id: nativeTurnId, status: "inProgress" }) },
+        },
+      });
+      const started = preamble.at(-1);
+      if (turnStart?.type !== "expect_outbound" || started === undefined)
+        return yield* Effect.die("missing turn/start");
+      const transcript = makeCodexReplayTranscript({
+        scenario: "deadline-retry-turn",
+        entries: [
+          ...preamble.slice(0, -2),
+          {
+            type: "expect_outbound",
+            frame: { id: 4, method: "config/read", params: { cwd: null, includeLayers: false } },
+          },
+          {
+            type: "emit_inbound",
+            frame: { id: 4, error: { code: -32601, message: "probe reply" } },
+          },
+          { ...turnStart, frame: { ...(turnStart.frame as object), id: 5 } },
+          answer(3),
+          { ...answer(5), label: "retry-answer" },
+          started,
+        ],
+      });
+      const harness = yield* makeCodexReplayHarness(
+        transcript,
+        () => Effect.void,
+        (method) =>
+          Effect.sync(() => methods.push(method)).pipe(
+            Effect.andThen(method === "turn/start" ? Queue.offer(starts, undefined) : Effect.void),
+            Effect.asVoid,
+          ),
+        undefined,
+        (entry) => (entry.label === "retry-answer" ? Deferred.await(releaseRetry) : Effect.void),
+      );
+      const startTurn = (attempt: string) =>
+        Effect.flatMap(DateTime.now, (now) =>
+          harness.runtime.startTurn(
+            makeCodexTestTurnInput({
+              threadId: harness.threadId,
+              providerThread: harness.providerThread,
+              now,
+              attemptId: RunAttemptId.make(attempt),
+              text: prompt,
+            }),
+          ),
+        );
+      const first = yield* startTurn("deadline-retry-first").pipe(Effect.exit, Effect.forkScoped);
+      yield* Queue.take(starts);
+      yield* TestClock.adjust("61 seconds");
+      assert.equal((yield* Fiber.join(first))._tag, "Failure");
+      const second = yield* startTurn("deadline-retry-second").pipe(Effect.forkScoped);
+      yield* Queue.take(starts);
+      // The first start's late answer is handled while the retry's answer is held back.
+      yield* TestClock.adjust("1 second");
+      assert.notInclude(methods, "turn/interrupt");
+      yield* Deferred.succeed(releaseRetry, undefined);
+      yield* Fiber.join(second);
+      assert.notInclude(methods, "turn/interrupt");
+    }).pipe(Effect.scoped, Effect.provide(layerAdapterTest)),
+  );
+
   it.effect("waits for native start before interrupting an acknowledged queued turn", () =>
     Effect.gen(function* () {
       const nativeThreadId = "early-stop-thread";
