@@ -52,6 +52,22 @@ const stagePendingUpload = Effect.fn("test.stagePendingUpload")(function* (input
 });
 
 describe("AttachmentClaims", () => {
+  it.effect("marks a missing pending upload as expired (#2388)", () =>
+    Effect.gen(function* () {
+      const pending = yield* stagePendingUpload({
+        name: "expired.png",
+        bytes: new Uint8Array([1]),
+        mimeType: "image/png",
+      });
+      const config = yield* ServerConfig.ServerConfig;
+      NodeFS.unlinkSync(NodePath.join(config.attachmentsDir, `${pending.id}.png`));
+      const error = yield* Effect.flip(
+        claimPendingAttachments({ threadId: "thread-expired", attachments: [pending] }),
+      );
+      expect(error).toMatchObject({ attachmentProblem: "expired" });
+    }).pipe(Effect.provide(layerTest)),
+  );
+
   it.effect("copies a pending document's extraction without parsing it again", () =>
     Effect.gen(function* () {
       const config = yield* ServerConfig.ServerConfig;
