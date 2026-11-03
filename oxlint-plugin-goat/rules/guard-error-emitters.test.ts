@@ -76,7 +76,7 @@ describe("goat/guard-error-emitters", () => {
       "nested creation",
       `import { guardChild } from "@goat/shared/errorGuards"; import * as CP from "node:child_process"; guardChild(CP.spawn(CP.spawn("x")), route);`,
     ],
-  ]) {
+  ] as const) {
     rule.invalid(name, source, (output) => assert.match(output, message));
   }
 });

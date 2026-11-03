@@ -22,7 +22,7 @@ export default defineRule({
   create(context) {
     const bindings = new Map<Variable, string>();
     const guards = new Set<Variable>();
-    const variable = (id: ESTree.IdentifierReference): Variable | undefined => {
+    const variable = (id: ESTree.Node & { name: string }): Variable | undefined => {
       let scope = context.sourceCode.getScope(id);
       while (true) {
         const found = scope.set.get(id.name);
@@ -129,7 +129,7 @@ export default defineRule({
         callee.property.name === "bind";
       if (bind || !guarded(node)) report(node);
     };
-    const value = (node: ESTree.IdentifierReference | ESTree.MemberExpression) => {
+    const value = (node: ESTree.Node) => {
       if (!isTracked(node)) return;
       const owner = node.parent;
       if (
@@ -140,7 +140,7 @@ export default defineRule({
         return;
       let current: ESTree.Node = node;
       while (current.parent) {
-        const parent = current.parent;
+        const parent: ESTree.Node = current.parent;
         if (
           parent.type.startsWith("TS") &&
           parent.type !== "TSAsExpression" &&
@@ -220,7 +220,8 @@ export default defineRule({
         if (!base) return;
         const variables = context.sourceCode.getDeclaredVariables(node);
         if (node.id.type === "Identifier") {
-          const binding = variables.find((item) => item.name === node.id.name);
+          const name = node.id.name;
+          const binding = variables.find((item) => item.name === name);
           if (binding) bindings.set(binding, base);
         } else if (node.id.type === "ObjectPattern") {
           for (const property of node.id.properties) {
@@ -230,7 +231,8 @@ export default defineRule({
               property.value.type !== "Identifier"
             )
               continue;
-            const binding = variables.find((item) => item.name === property.value.name);
+            const local = property.value.name;
+            const binding = variables.find((item) => item.name === local);
             if (binding) bindings.set(binding, `${base}.${property.key.name}`);
           }
         }
