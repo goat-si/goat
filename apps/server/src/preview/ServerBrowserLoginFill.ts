@@ -66,6 +66,7 @@ export const fillLogin = async (input: {
   readonly origin: string;
   readonly login: { readonly username: string; readonly password: string };
   readonly register: (value: string) => void;
+  readonly protect: (field: { readonly objectId: string; readonly value: string }) => () => void;
 }) => {
   const found = await input.send("Runtime.callFunctionOn", {
     functionDeclaration: FIND_FIELDS,
@@ -83,35 +84,72 @@ export const fillLogin = async (input: {
       code: typeof code === "string" ? code : "no_form",
     };
   }
+  const pending = new Set<string>();
+  const release = (id: string) =>
+    input.send("Runtime.releaseObject", { objectId: id }).catch(() => {});
   try {
+    const getField = async (name: "username" | "password", value: string) => {
+      const field = await input.send("Runtime.callFunctionOn", {
+        objectId,
+        functionDeclaration:
+          name === "username"
+            ? "function () { return this.username; }"
+            : "function () { return this.password; }",
+        returnByValue: false,
+      });
+      const id = field.result?.objectId;
+      if (field.exceptionDetails || !id) throw new Error("Could not retain the sign-in field.");
+      pending.add(id);
+      return { objectId: id, value };
+    };
+    const username = await getField("username", input.login.username);
+    const password = await getField("password", input.login.password);
+    const fields: Array<{ readonly objectId: string; readonly value: string }> = [];
     input.register(input.login.username);
     input.register(input.login.password);
-    const mutate = async (which: "username" | "password", value: string) => {
+    const mutate = async (
+      which: "username" | "password",
+      field: { readonly objectId: string; readonly value: string },
+    ) => {
+      const unprotect = input.protect(field);
+      pending.delete(field.objectId);
       const reply = await input.send("Runtime.callFunctionOn", {
         objectId,
         functionDeclaration: MUTATE,
         arguments: [
           { value: which },
-          { value },
+          { value: field.value },
           { value: input.origin },
           { value: input.login.username },
         ],
         returnByValue: true,
       });
       if (reply.exceptionDetails) throw new Error("Login input delivery is uncertain.");
-      if (reply.result?.value === true) return true;
-      if (reply.result?.value === "changed" || reply.result?.value === "account") return false;
+      if (reply.result?.value === true) {
+        fields.push(field);
+        return true;
+      }
+      if (reply.result?.value === "changed" || reply.result?.value === "account") {
+        unprotect();
+        await release(field.objectId);
+        return false;
+      }
       throw new Error("Login input delivery is uncertain.");
     };
-    if (!(await mutate("username", input.login.username)))
+    if (!(await mutate("username", username)))
       return {
         usernameFilled: false,
         passwordFilled: false,
         verdict: "refused" as const,
         code: "form_changed",
       };
-    if (!(await mutate("password", input.login.password)))
-      return { usernameFilled: true, passwordFilled: false, verdict: "unverifiable" as const };
+    if (!(await mutate("password", password)))
+      return {
+        usernameFilled: true,
+        passwordFilled: false,
+        verdict: "unverifiable" as const,
+        fields,
+      };
     const checked = await input
       .send("Runtime.callFunctionOn", {
         objectId,
@@ -127,12 +165,14 @@ export const fillLogin = async (input: {
     return {
       usernameFilled: true,
       passwordFilled: true,
+      fields,
       verdict:
         checked !== undefined && !checked.exceptionDetails && checked.result?.value === true
           ? ("confirmed" as const)
           : ("unverifiable" as const),
     };
   } finally {
-    await input.send("Runtime.releaseObject", { objectId }).catch(() => {});
+    for (const id of pending) await release(id);
+    await release(objectId);
   }
 };

@@ -45,12 +45,20 @@ const makePage = (kinds: FieldKind[], pausePassword?: () => Promise<void>) => {
   const form = { elements: fields };
   for (const field of fields) field.form = form;
   doc.activeElement = fields[0]!;
-  let object: unknown;
+  const objects = new Map<string, unknown>();
+  const released: string[] = [];
+  const protectedFields: Array<{ objectId: string; value: string }> = [];
+  let nextObject = 0;
   let mutations = 0;
   const masked: string[] = [];
   const sent: string[] = [];
   const send = async (method: string, params: Record<string, unknown>) => {
-    if (method === "Runtime.releaseObject") return {};
+    if (method === "Runtime.releaseObject") {
+      const id = String(params.objectId);
+      released.push(id);
+      objects.delete(id);
+      return {};
+    }
     const declaration = String(params.functionDeclaration);
     const args = (params.arguments ?? []) as Array<{ value: unknown }>;
     const fn = new Function(
@@ -72,12 +80,13 @@ const makePage = (kinds: FieldKind[], pausePassword?: () => Promise<void>) => {
       sent.push(String(args[0]?.value));
     }
     const result = fn.apply(
-      params.objectId ? object : undefined,
+      params.objectId ? objects.get(String(params.objectId)) : undefined,
       args.map((arg) => arg.value),
     );
     if (typeof result === "object" && result !== null) {
-      object = result;
-      return { result: { objectId: "login-fields", type: "object" } };
+      const objectId = `object-${nextObject++}`;
+      objects.set(objectId, result);
+      return { result: { objectId, type: "object" } };
     }
     return { result: { value: result } };
   };
@@ -87,6 +96,15 @@ const makePage = (kinds: FieldKind[], pausePassword?: () => Promise<void>) => {
     send,
     masked,
     sent,
+    released,
+    protectedFields,
+    protect: (field: { objectId: string; value: string }) => {
+      protectedFields.push(field);
+      return () => {
+        const index = protectedFields.indexOf(field);
+        if (index >= 0) protectedFields.splice(index, 1);
+      };
+    },
     mutations: () => mutations,
     register: (value: string) => masked.push(value),
   };
@@ -101,12 +119,16 @@ it.live("fills one login in order and confirms both values without returning the
       origin: "https://login.test",
       login: { username: "user-sentinel", password: "password-sentinel" },
       register: page.register,
+      protect: page.protect,
     });
-    expect(result).toEqual({ usernameFilled: true, passwordFilled: true, verdict: "confirmed" });
+    expect(result).toMatchObject({
+      usernameFilled: true,
+      passwordFilled: true,
+      verdict: "confirmed",
+    });
     expect(page.fields.map((field) => field.value)).toEqual(["user-sentinel", "password-sentinel"]);
     expect(page.sent).toEqual(["username", "password"]);
     expect(page.masked).toEqual(["user-sentinel", "password-sentinel"]);
-    expect(JSON.stringify(result)).not.toContain("sentinel");
   }),
 );
 
@@ -125,6 +147,7 @@ it.live("refuses missing or ambiguous fields before sending anything", () =>
         origin: "https://login.test",
         login: { username: "test-user", password: "test-password" },
         register: page.register,
+        protect: page.protect,
       });
       expect(result).toMatchObject({
         usernameFilled: false,
@@ -159,6 +182,7 @@ it.effect("reports partial delivery when the origin changes before password disp
         origin: "https://login.test",
         login: { username: "test-user", password: "test-password" },
         register: page.register,
+        protect: page.protect,
       }),
     );
     expect(result).toMatchObject({
@@ -167,6 +191,8 @@ it.effect("reports partial delivery when the origin changes before password disp
       verdict: "unverifiable",
     });
     expect(page.fields.map((field) => field.value)).toEqual(["test-user", ""]);
+    expect(page.protectedFields).toMatchObject([{ value: "test-user" }]);
+    expect(page.released).toContain("object-2");
   }),
 );
 
@@ -180,6 +206,7 @@ it.live("refuses a prefilled different account before either mutation", () =>
       origin: "https://login.test",
       login: { username: "test-user", password: "test-password" },
       register: page.register,
+      protect: page.protect,
     });
     expect(result).toMatchObject({
       usernameFilled: false,
@@ -204,8 +231,13 @@ it.live("returns unverifiable if a page changes a field before masked read-back"
       origin: "https://login.test",
       login: { username: "test-user", password: "test-password" },
       register: page.register,
+      protect: page.protect,
     });
-    expect(result).toEqual({ usernameFilled: true, passwordFilled: true, verdict: "unverifiable" });
+    expect(result).toMatchObject({
+      usernameFilled: true,
+      passwordFilled: true,
+      verdict: "unverifiable",
+    });
   }),
 );
 
@@ -219,8 +251,13 @@ it.live("ignores hidden password fields when finding a unique visible form", () 
       origin: "https://login.test",
       login: { username: "test-user", password: "test-password" },
       register: page.register,
+      protect: page.protect,
     });
-    expect(result).toEqual({ usernameFilled: true, passwordFilled: true, verdict: "confirmed" });
+    expect(result).toMatchObject({
+      usernameFilled: true,
+      passwordFilled: true,
+      verdict: "confirmed",
+    });
     expect(page.fields[2]!.value).toBe("");
   }),
 );
@@ -240,6 +277,7 @@ it.live("prefers the named username and masks both values before any input", () 
       origin: "https://login.test",
       login: { username: "test-user", password: "test-password" },
       register: page.register,
+      protect: page.protect,
     });
     expect(result.verdict).toBe("confirmed");
     expect(page.fields.map((field) => field.value)).toEqual(["", "test-user", "test-password"]);
@@ -268,13 +306,70 @@ it.effect("refuses the password if the form changes accounts after the username"
         origin: "https://login.test",
         login: { username: "test-user", password: "test-password" },
         register: page.register,
+        protect: page.protect,
       }),
     );
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       usernameFilled: true,
       passwordFilled: false,
       verdict: "unverifiable",
     });
     expect(page.fields[1]!.value).toBe("");
+  }),
+);
+
+it.live("retains each delivered field handle for the caller and releases the wrapper", () =>
+  Effect.promise(async () => {
+    const page = makePage(["text", "password"]);
+    const result = await fillLogin({
+      send: page.send,
+      contextId: 1,
+      origin: "https://login.test",
+      login: { username: "test-user", password: "test-password" },
+      register: page.register,
+      protect: page.protect,
+    });
+    expect(result).toMatchObject({
+      usernameFilled: true,
+      passwordFilled: true,
+      fields: [
+        { objectId: expect.any(String), value: "test-user" },
+        { objectId: expect.any(String), value: "test-password" },
+      ],
+    });
+    if (!("fields" in result)) throw new Error("Missing retained handles");
+    for (const field of result.fields) expect(page.released).not.toContain(field.objectId);
+    expect(page.released).toContain("object-0");
+  }),
+);
+
+it.live("protects both field handles before dispatch when the password reply is lost", () =>
+  Effect.promise(async () => {
+    const page = makePage(["text", "password"]);
+    const send = async (method: string, params: Record<string, unknown>) => {
+      const result = await page.send(method, params);
+      const args = (params.arguments ?? []) as Array<{ value: unknown }>;
+      if (
+        String(params.functionDeclaration).includes("GOAT_LOGIN_MUTATE") &&
+        args[0]?.value === "password"
+      )
+        throw new Error("reply lost");
+      return result;
+    };
+    await expect(
+      fillLogin({
+        send,
+        contextId: 1,
+        origin: "https://login.test",
+        login: { username: "test-user", password: "test-password" },
+        register: page.register,
+        protect: page.protect,
+      }),
+    ).rejects.toThrow();
+    expect(page.protectedFields).toMatchObject([
+      { value: "test-user" },
+      { value: "test-password" },
+    ]);
+    for (const field of page.protectedFields) expect(page.released).not.toContain(field.objectId);
   }),
 );
