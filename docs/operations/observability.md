@@ -132,7 +132,14 @@ stall. A larger value could indicate computation, but other work in the window c
 The host's one-minute `loadAverage` above `cpuCount` is a clue that CPU contention prevented the
 thread from running; a lower load is a clue toward synchronous waiting. Neither establishes what
 happened during a particular stall. Load average is absent on Windows, so it cannot provide that clue
-there. Page faults and context switches can provide further context.
+there. Read process CPU together with page faults:
+
+- High `cpuSystemMs` with many page faults means memory pressure. Major faults are reads from disk or swap.
+  On macOS, reads from compressed memory are minor faults plus system CPU.
+- High `cpuUserMs` with few page faults means JavaScript work or garbage collection.
+- Low CPU with few major page faults points at synchronous disk I/O, such as SQLite reads or trace
+  file writes.
+- Many `involuntaryContextSwitches` mean other processes were competing for the CPU.
 
 ### Related Artifacts
 
