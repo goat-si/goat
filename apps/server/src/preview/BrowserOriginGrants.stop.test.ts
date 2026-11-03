@@ -4,13 +4,199 @@ import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
+import * as Scheduler from "effect/Scheduler";
 import { makeTestBrowserOriginGrants } from "./BrowserOriginGrants.testkit.ts";
-import { makeBrowserOriginGrants } from "./BrowserOriginGrants.ts";
+import { makeBrowserOriginGrants, type Union } from "./BrowserOriginGrants.ts";
 
 class NarrowWriteFailure extends Schema.TaggedError<NarrowWriteFailure>()(
   "NarrowWriteFailure",
   {},
 ) {}
+
+it.effect("a queued block cannot restore a claim stopped before its write", () =>
+  Effect.gen(function* () {
+    const manifests: Union[] = [];
+    const stoppedWrite = yield* Deferred.make<void>();
+    const service = yield* makeTestBrowserOriginGrants({
+      environmentId: EnvironmentId.make("environment:test"),
+      supported: () => true,
+      publish: (value) =>
+        Effect.sync(() => {
+          manifests.push(value);
+        }).pipe(
+          Effect.andThen(
+            value.existingProfiles.length === 0
+              ? Deferred.succeed(stoppedWrite, undefined)
+              : Effect.void,
+          ),
+          Effect.asVoid,
+        ),
+      bind: (input) =>
+        Effect.succeed({
+          targetId: "target",
+          tabId: `tab-${input.windowId}`,
+          title: "Site",
+          url: input.origin,
+          driverGeneration: 1,
+        }),
+    });
+    const a = ThreadId.make("thread:a");
+    const b = ThreadId.make("thread:b");
+    for (const [threadId, windowId, origin] of [
+      [a, 7, "https://a.test"],
+      [b, 8, "https://b.test"],
+    ] as const) {
+      const result = yield* service.claim({
+        threadId,
+        pid: 42,
+        windowId,
+        origin,
+        windowTitle: "Browser",
+      });
+      assert.equal(result.agentResult.status, "attached");
+    }
+    yield* service.blockOrigins(["a.test"]);
+    yield* service.stop(b);
+    yield* Deferred.await(stoppedWrite);
+    assert.deepEqual(manifests.at(-1), { existingProfiles: [], origins: [] });
+    yield* service.settled;
+    assert.deepEqual(manifests.at(-1), { existingProfiles: [], origins: [] });
+    assert.lengthOf(manifests, 3);
+  }).pipe(Effect.provideService(Scheduler.PreventSchedulerYield, true)),
+);
+
+it.effect("a queued block cannot remove an approved claim added before its write", () =>
+  Effect.gen(function* () {
+    const manifests: Union[] = [];
+    const approvedWrite = yield* Deferred.make<void>();
+    const service = yield* makeTestBrowserOriginGrants({
+      environmentId: EnvironmentId.make("environment:test"),
+      supported: () => true,
+      publish: (value) =>
+        Effect.sync(() => {
+          manifests.push(value);
+        }).pipe(
+          Effect.andThen(
+            value.origins.includes("https://c.test")
+              ? Deferred.succeed(approvedWrite, undefined)
+              : Effect.void,
+          ),
+          Effect.asVoid,
+        ),
+      bind: (input) =>
+        Effect.succeed({
+          targetId: "target",
+          tabId: `tab-${input.windowId}`,
+          title: "Site",
+          url: input.origin,
+          driverGeneration: 1,
+        }),
+    });
+    const a = ThreadId.make("thread:a");
+    const b = ThreadId.make("thread:b");
+    const c = ThreadId.make("thread:c");
+    for (const [threadId, windowId, origin] of [
+      [a, 7, "https://a.test"],
+      [b, 8, "https://b.test"],
+    ] as const) {
+      const result = yield* service.claim({
+        threadId,
+        pid: 42,
+        windowId,
+        origin,
+        windowTitle: "Browser",
+      });
+      assert.equal(result.agentResult.status, "attached");
+    }
+    const request = yield* service.request({
+      threadId: c,
+      pid: 42,
+      windowId: 9,
+      origin: "https://c.test",
+      windowTitle: "Browser",
+    });
+    if (request.status !== "pending") return assert.fail("expected pending");
+    yield* service.blockOrigins(["a.test"]);
+    const answer = yield* service.answer(request.claimId, true);
+    assert.equal(answer.agentResult.status, "attached");
+    yield* Deferred.await(approvedWrite);
+    yield* service.settled;
+    assert.deepEqual(manifests.at(-1), {
+      existingProfiles: [
+        { pid: 42, windowId: 8 },
+        { pid: 42, windowId: 9 },
+      ],
+      origins: ["https://b.test", "https://c.test"],
+    });
+    assert.lengthOf(yield* service.claimsFor(c), 1);
+    assert.lengthOf(manifests, 3);
+  }).pipe(Effect.provideService(Scheduler.PreventSchedulerYield, true)),
+);
+
+it.effect("direct stop writes use the live union after waiting for another write", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const manifests: Union[] = [];
+    let hold = false;
+    const service = yield* makeTestBrowserOriginGrants({
+      environmentId: EnvironmentId.make("environment:test"),
+      supported: () => true,
+      publish: (value) =>
+        Effect.gen(function* () {
+          manifests.push(value);
+          if (hold) {
+            hold = false;
+            yield* Deferred.succeed(entered, undefined);
+            yield* Deferred.await(release);
+          }
+        }),
+      bind: (input) =>
+        Effect.succeed({
+          targetId: "target",
+          tabId: `tab-${input.windowId}`,
+          title: "Site",
+          url: input.origin,
+          driverGeneration: 1,
+        }),
+    });
+    const threads = [
+      ThreadId.make("thread:a"),
+      ThreadId.make("thread:b"),
+      ThreadId.make("thread:c"),
+    ];
+    for (const [index, threadId] of threads.entries()) {
+      const result = yield* service.claim({
+        threadId,
+        pid: 42,
+        windowId: index + 1,
+        origin: `https://site${index}.test`,
+        windowTitle: "Browser",
+      });
+      assert.equal(result.agentResult.status, "attached");
+    }
+    hold = true;
+    const first = yield* service
+      .stop(threads[0]!)
+      .pipe(Effect.forkChild({ startImmediately: true }));
+    yield* Deferred.await(entered);
+    const second = yield* service
+      .stop(threads[1]!)
+      .pipe(Effect.forkChild({ startImmediately: true }));
+    const third = yield* service
+      .stop(threads[2]!)
+      .pipe(Effect.forkChild({ startImmediately: true }));
+    assert.deepEqual(yield* service.claimsFor(threads[2]!), []);
+    yield* Deferred.succeed(release, undefined);
+    yield* Fiber.join(first);
+    yield* Fiber.join(second);
+    yield* Fiber.join(third);
+    assert.deepEqual(manifests.slice(-2), [
+      { existingProfiles: [], origins: [] },
+      { existingProfiles: [], origins: [] },
+    ]);
+  }),
+);
 
 it.effect("interrupting a held narrowing write still fences the driver", () =>
   Effect.gen(function* () {

@@ -117,19 +117,39 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
         applied: boolean;
       }
     | undefined;
-  const write = (value: Union, narrowing: boolean) =>
+  let lastWritten:
+    | { readonly sha: string; readonly number: number; readonly value: Union }
+    | undefined;
+  const subset = (newer: Union, older: Union) =>
+    newer.origins.every((origin) => older.origins.includes(origin)) &&
+    newer.existingProfiles.every((profile) =>
+      older.existingProfiles.some(
+        (old) => old.pid === profile.pid && old.windowId === profile.windowId,
+      ),
+    );
+  const write = (narrowing: boolean, skipUnchanged: boolean) =>
     writeLock.withPermits(1)(
       Effect.gen(function* () {
+        const value = union();
+        if (
+          skipUnchanged &&
+          latest?.applied &&
+          lastWritten !== undefined &&
+          subset(value, lastWritten.value) &&
+          subset(lastWritten.value, value)
+        )
+          return { ...lastWritten, skipped: true as const };
         const entry = { number: ++writes, value, narrowing, applied: false };
         latest = entry;
         yield* advance;
         const sha = yield* deps.publish(value);
         entry.applied = true;
-        return { sha, number: entry.number };
+        lastWritten = { sha, number: entry.number, value };
+        return { ...lastWritten, skipped: false as const };
       }),
     );
-  const publish = Effect.fn("BrowserOriginGrants.publishExpansion")(function* (value: Union) {
-    yield* confirm((yield* write(value, false)).sha);
+  const publish = Effect.fn("BrowserOriginGrants.publishExpansion")(function* () {
+    yield* confirm((yield* write(false, false)).sha);
   });
   let confirming: Deferred.Deferred<void> | undefined;
   type Confirmation = {
@@ -139,13 +159,6 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
   };
   let activeConfirmation: Confirmation | undefined;
   let pendingConfirmation: Confirmation | undefined;
-  const subset = (newer: Union, older: Union) =>
-    newer.origins.every((origin) => older.origins.includes(origin)) &&
-    newer.existingProfiles.every((profile) =>
-      older.existingProfiles.some(
-        (old) => old.pid === profile.pid && old.windowId === profile.windowId,
-      ),
-    );
   const fence = (cause: unknown) =>
     Effect.logWarning("Browser manifest narrowing was not applied; restarting the driver", {
       cause,
@@ -190,12 +203,13 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     },
     (effect, done) => effect.pipe(Effect.ensuring(Deferred.succeed(done, undefined))),
   );
-  const shrink = Effect.fn("BrowserOriginGrants.publishShrink")(function* (value: Union) {
-    const result = yield* write(value, true).pipe(Effect.result);
+  const shrink = Effect.fn("BrowserOriginGrants.publishShrink")(function* (skipUnchanged: boolean) {
+    const result = yield* write(true, skipUnchanged).pipe(Effect.result);
     if (result._tag === "Failure") return yield* fence(result.failure);
+    if (result.success.skipped) return;
     const done = yield* Deferred.make<void>();
     const decision = yield* Effect.sync(() => {
-      const next: Confirmation = { ...result.success, value };
+      const next: Confirmation = result.success;
       let unsafe = false;
       if (pendingConfirmation !== undefined) {
         const newer = next.number > pendingConfirmation.number ? next : pendingConfirmation;
@@ -216,39 +230,42 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     if (decision.start)
       yield* confirmNarrowings(done).pipe(Effect.forkDetach({ startImmediately: true }));
   }, Effect.uninterruptible);
-  let pendingNarrowing: { readonly value: Union; readonly unsafe: boolean } | undefined;
+  let pendingNarrowing = false;
   let narrowingWorker = false;
+  let narrowingDone: Deferred.Deferred<void> | undefined;
   const publishNarrowings = Effect.fn("BrowserOriginGrants.publishNarrowings")(function* () {
     while (true) {
       const next = yield* Effect.sync(() => {
-        const item = pendingNarrowing;
-        pendingNarrowing = undefined;
-        if (item === undefined) narrowingWorker = false;
-        return item;
+        const pending = pendingNarrowing;
+        pendingNarrowing = false;
+        if (!pending) narrowingWorker = false;
+        return pending;
       });
-      if (next === undefined) return;
-      if (next.unsafe) yield* fence("A pending narrowing was superseded by a wider union");
-      yield* shrink(next.value).pipe(Effect.catchCause(fence));
+      if (!next) return;
+      yield* shrink(true).pipe(Effect.catchCause(fence));
     }
   });
-  const scheduleNarrowing = Effect.fn("BrowserOriginGrants.scheduleNarrowing")(function* (
-    value: Union,
-  ) {
+  const scheduleNarrowing = Effect.fn("BrowserOriginGrants.scheduleNarrowing")(function* () {
+    const done = yield* Deferred.make<void>();
     const start = yield* Effect.sync(() => {
-      pendingNarrowing = {
-        value,
-        unsafe:
-          pendingNarrowing !== undefined &&
-          (pendingNarrowing.unsafe || !subset(value, pendingNarrowing.value)),
-      };
+      pendingNarrowing = true;
       if (narrowingWorker) return false;
       narrowingWorker = true;
+      narrowingDone = done;
       return true;
     });
-    if (start) yield* publishNarrowings().pipe(Effect.forkDetach);
+    if (start)
+      yield* publishNarrowings().pipe(
+        Effect.ensuring(Deferred.succeed(done, undefined)),
+        Effect.forkDetach,
+      );
   });
   const settled = Effect.suspend(() =>
-    confirming === undefined ? Effect.void : Deferred.await(confirming),
+    (narrowingDone === undefined ? Effect.void : Deferred.await(narrowingDone)).pipe(
+      Effect.andThen(
+        Effect.suspend(() => (confirming === undefined ? Effect.void : Deferred.await(confirming))),
+      ),
+    ),
   );
   const pending = new Map<string, Pending>();
   const claims = new Map<string, LiveTabClaim>();
@@ -366,10 +383,10 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
             grants.delete(grantKey);
             uncommittedGrants.delete(grantKey);
           }
-          yield* shrink(union());
+          yield* shrink(false);
         }).pipe(Effect.uninterruptible);
         const result = yield* Effect.gen(function* () {
-          const applied = yield* untilRestart(publish(union()), signal, entry.stopped);
+          const applied = yield* untilRestart(publish(), signal, entry.stopped);
           if (Option.isNone(applied)) return { agentResult: decline };
           if (epoch !== driverEpoch) return { agentResult: decline };
           if (!deps.supported()) return yield* rollback.pipe(Effect.as({ agentResult: decline }));
@@ -466,7 +483,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
         const claim = claims.get(claimId);
         if (!claim) return false;
         claims.delete(claimId);
-        yield* shrink(union());
+        yield* shrink(false);
         return true;
       }).pipe(Effect.uninterruptible),
     ),
@@ -480,7 +497,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
           if (entry.threadId === threadId && entry.origin === origin) pending.delete(id);
         for (const [id, claim] of claims)
           if (claim.threadId === threadId && claim.origin === origin) claims.delete(id);
-        yield* shrink(union());
+        yield* shrink(false);
       }).pipe(Effect.uninterruptible),
     ),
   );
@@ -510,7 +527,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
       });
       if (!stopped.changed) return;
       for (const signal of stopped.signals) yield* Deferred.succeed(signal, undefined);
-      yield* shrink(union());
+      yield* shrink(false);
     }).pipe(Effect.uninterruptible),
   );
   const blockOrigins = Effect.fn("BrowserOriginGrants.blockOrigins")(
@@ -557,7 +574,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
       if (!result.changed) return;
       yield* advance;
       for (const signal of result.signals) yield* Deferred.succeed(signal, undefined);
-      yield* scheduleNarrowing(union());
+      yield* scheduleNarrowing();
     },
     (effect) =>
       effect.pipe(
@@ -573,7 +590,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
           if (claim?.threadId !== threadId || claim.claimGeneration !== generation) return false;
           claims.delete(claimId);
           ended.set(claimId, { threadId, reason });
-          yield* shrink(union());
+          yield* shrink(false);
           return true;
         }).pipe(Effect.uninterruptible),
       ),
@@ -608,7 +625,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
       uncommittedGrants.clear();
     });
     yield* Deferred.succeed(previousSignal, undefined);
-    yield* shrink(union());
+    yield* shrink(false);
   }, Effect.uninterruptible);
   const bindingValues = (threadId: ThreadId) =>
     [...pending.values()]
@@ -678,7 +695,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     });
     if (judgment === "ended") {
       yield* advance;
-      yield* scheduleNarrowing(union());
+      yield* scheduleNarrowing();
     }
     return judgment === "allowed";
   }, Effect.uninterruptible);
