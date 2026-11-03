@@ -527,6 +527,11 @@ describe.skipIf(!chromiumInstalled)("server browser element refs", () => {
     expect(cut.slice(-8)).toBe("xxx•••••");
   });
 
+  it("redacts the payload of a data page URL in a snapshot", async () => {
+    await page.goto("data:text/html,<title>Key</title>PAYLOAD");
+    expect((await takeSnapshot()).url).toBe("data:text/html,…");
+  });
+
   it("shows a data: link or blocked data: navigation by media type only", async () => {
     // Chromium keeps raw spaces and quotes in both, so a payload can't be cut at either.
     await page.setContent(`

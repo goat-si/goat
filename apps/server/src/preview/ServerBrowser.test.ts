@@ -1392,6 +1392,43 @@ it.live("a tab opened to a file the browser cannot show reports the file to down
   ).pipe(Effect.provide(layer)),
 );
 
+it.effect("redacts data page payloads from current and sibling tab status", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { broker, tabId } = yield* ready;
+      const sibling = yield* broker.invoke<PreviewAutomationStatus>({
+        scope: asSession("agent-b"),
+        operation: "open",
+        input: { reuseExistingTab: false, show: false },
+      });
+      yield* Effect.promise(() => contexts[1]!.page.goto("data:text/html,SIBLING-SECRET"));
+      const manager = yield* Manager.PreviewManager;
+      const events = yield* manager.subscribeEvents;
+      yield* Effect.promise(() => contexts[0]!.page.goto("data:text/html,SECRET-KEY"));
+      let event = yield* PubSub.take(events);
+      while (
+        event.type !== "navigated" ||
+        event.tabId !== tabId ||
+        event.snapshot.navStatus._tag !== "Success"
+      ) {
+        event = yield* PubSub.take(events);
+      }
+      expect(event.snapshot.navStatus).toMatchObject({ url: "data:text/html,…" });
+      const status = yield* broker.invoke<PreviewAutomationStatus>({
+        scope,
+        tabId,
+        operation: "status",
+        input: {},
+      });
+      expect(status.url).toBe("data:text/html,…");
+      expect(status.tabs?.find((entry) => entry.tabId === sibling.tabId)?.url).toBe(
+        "data:text/html,…",
+      );
+      expect(JSON.stringify(status)).not.toContain("SECRET");
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
 it.live(
   "a late failure from a request that predates tracking leaves a newer navigation loading",
   () =>
