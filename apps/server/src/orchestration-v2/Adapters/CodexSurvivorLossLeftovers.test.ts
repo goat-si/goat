@@ -82,6 +82,7 @@ it.effect("retained survivor fence remains while process leftovers are possible"
       retainingFence: true,
       fenceWriteFailed: false,
       conflicts: new Map(),
+      stops: { pending: new Map(), done: new Set(), running: false },
     };
     const waiting = new Map([[binding.nativeThreadId, entry]]);
     yield* clearDeadSurvivorFences({ entries: [entry], waiting });

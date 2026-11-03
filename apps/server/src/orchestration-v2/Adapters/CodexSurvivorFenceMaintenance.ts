@@ -14,6 +14,7 @@ import type {
 } from "../../provider/CodexSurvivors.ts";
 import { isVerifiedCodexProcessLoss } from "./CodexSurvivorSessionLoss.ts";
 import { clearConflictFences, releaseEndedConflicts } from "./CodexSurvivorConflictFence.ts";
+import type { SurvivorRequestStops } from "./CodexSurvivorRequestStops.ts";
 
 export type SurvivorSignal =
   | { readonly type: "End" | "Stop" | "Goal" | "SessionLost" }
@@ -35,6 +36,7 @@ export type SurvivorEntry = {
   fenceWriteFailed: boolean;
   /** Newer native turns fenced after the survivor ended, with whether each stop is durable. */
   readonly conflicts: Map<string, boolean>;
+  readonly stops: SurvivorRequestStops;
 };
 export type SurvivorWaiting = Map<string, SurvivorEntry>;
 

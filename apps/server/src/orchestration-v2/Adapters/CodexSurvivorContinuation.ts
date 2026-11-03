@@ -33,6 +33,7 @@ import {
   type GoalMaintenance,
 } from "./CodexSurvivorFenceMaintenance.ts";
 import { fenceConflictingTurns, releaseEndedConflicts } from "./CodexSurvivorConflictFence.ts";
+import { makeSurvivorRequestStops, queueSurvivorStop } from "./CodexSurvivorRequestStops.ts";
 
 export function mapCodexTurnStatus(
   status: CodexSchema.V2TurnCompletedNotification__TurnStatus,
@@ -89,6 +90,7 @@ export const makeSurvivorNotifications = Effect.fn("CodexSurvivorContinuation.no
           retainingFence: false,
           fenceWriteFailed: false,
           conflicts: new Map(),
+          stops: makeSurvivorRequestStops(),
         };
         waiting.set(binding.nativeThreadId, entry);
         tracked.set(binding.nativeThreadId, entry);
@@ -166,51 +168,16 @@ export const makeSurvivorNotifications = Effect.fn("CodexSurvivorContinuation.no
                 typeof payload.turnId === "string"
               ? payload.turnId
               : undefined;
-        {
-          const target =
+        yield* queueSurvivorStop({
+          client,
+          scope: input.scope,
+          waiting,
+          entry,
+          target:
             turnId === undefined
               ? entry.binding
-              : { ...entry.binding, nativeThreadId: threadId, nativeTurnId: turnId };
-          const selected = entry;
-          yield* selected.gate
-            .withPermits(1)(
-              Effect.gen(function* () {
-                if (waiting.get(selected.binding.nativeThreadId) !== selected) return;
-                if (
-                  target.nativeThreadId === selected.binding.nativeThreadId &&
-                  selected.interruptSent
-                )
-                  return;
-                yield* interruptSurvivor({
-                  binding: target,
-                  recordStop: (record, obligation) =>
-                    selected.service.recordStopObligation(record, obligation).pipe(
-                      Effect.tap(() =>
-                        Effect.sync(() => {
-                          if (
-                            target.nativeThreadId === selected.binding.nativeThreadId &&
-                            target.nativeTurnId === selected.nativeTurnId
-                          )
-                            selected.stopRecorded = true;
-                        }),
-                      ),
-                    ),
-                  interrupt: (nativeThreadId, nativeTurnId) =>
-                    client
-                      .request("turn/interrupt", { threadId: nativeThreadId, turnId: nativeTurnId })
-                      .pipe(Effect.asVoid),
-                });
-                if (target.nativeThreadId === selected.binding.nativeThreadId)
-                  selected.interruptSent = true;
-              }),
-            )
-            .pipe(
-              Effect.catch((cause) =>
-                Effect.logWarning("Failed to stop a survivor request", { cause }),
-              ),
-              Effect.forkIn(input.scope, { startImmediately: true }),
-            );
-        }
+              : { ...entry.binding, nativeThreadId: threadId, nativeTurnId: turnId },
+        });
         return yield* CodexErrors.CodexAppServerRequestError.invalidRequest(
           "Request belongs to a turn running across a restart",
         );
@@ -400,6 +367,7 @@ export const adoptSurvivor = Effect.fn("CodexSurvivorContinuation.adopt")(functi
     retainingFence: false,
     fenceWriteFailed: false,
     conflicts: new Map(),
+    stops: makeSurvivorRequestStops(),
   };
   input.waiting.waiting.set(binding.nativeThreadId, entry);
   input.waiting.tracked.set(binding.nativeThreadId, entry);
