@@ -2364,6 +2364,7 @@ describe("OpenCodeAdapterV2", () => {
         };
         yield* sessions.set(config);
         const registrations: unknown[] = [];
+        const nativeSession = { id: "memory-root", time: { created: 1, updated: 1 } };
         const harness = yield* makeOpenCodeRuntimeHarness(
           suffix,
           "memory-root",
@@ -2376,10 +2377,9 @@ describe("OpenCodeAdapterV2", () => {
               },
             },
             session: {
-              create: async () => ({
-                data: { id: "memory-root", time: { created: 1, updated: 1 } },
-              }),
-              get: async () => ({ data: { id: "memory-root", time: { created: 1, updated: 1 } } }),
+              create: async () => ({ data: nativeSession }),
+              get: async () => ({ data: nativeSession }),
+              update: async () => ({ data: nativeSession }),
               promptAsync: async (input: { system?: string; messageID: string }) => {
                 payloads.push(input);
                 return { data: true };

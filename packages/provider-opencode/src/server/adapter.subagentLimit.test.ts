@@ -12,7 +12,11 @@ import * as Stream from "effect/Stream";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import { openCodePermissionRules } from "./adapter.ts";
-import { asyncEventStream, makeOpenCodeRuntimeHarness } from "./adapter.harness.testkit.ts";
+import {
+  asyncEventStream,
+  makeOpenCodeRuntimeHarness,
+  runtimePolicy,
+} from "./adapter.harness.testkit.ts";
 
 type Rule = { permission: string; pattern: string; action: string };
 type Update = {
@@ -122,14 +126,16 @@ describe("OpenCode native subagent limit", () => {
         "fork-permission",
         (permission) => ({ permission }),
       );
+      const targetPolicy = runtimePolicy("approval-required", { cwd: "/workspace" });
       const fork = yield* harness.runtime.forkThread({
         sourceProviderThread: harness.providerThread,
         targetThreadId: ThreadId.make("fork-target"),
+        runtimePolicy: targetPolicy,
       });
       yield* sessions.set({ ...config, nativeSubagentLimit: 0 });
       yield* harness.startTurn("work", fork);
       const sessionID = `${root}-fork`;
-      const rules = openCodePermissionRules(harness.policy);
+      const rules = openCodePermissionRules(targetPolicy);
       assert.deepEqual(calls, [
         { sessionID, permission: rules },
         { sessionID, permission: [...rules, DENY] },
@@ -139,6 +145,50 @@ describe("OpenCode native subagent limit", () => {
       Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
       Effect.scoped,
     ),
+  );
+
+  it.effect.each(["resume", "adopt"] as const)(
+    "restores GOAT rules before the first prompt when resuming or adopting (#2239): %s",
+    (mode) =>
+      Effect.gen(function* () {
+        const { calls, harness, root, sessions, config } = yield* limitHarness(
+          `resume-permission-${mode}`,
+          (permission) => ({ permission }),
+        );
+        const sessionID = `${root}-existing`;
+        const existing = {
+          ...harness.providerThread,
+          nativeThreadRef: {
+            driver: harness.runtime.driver,
+            nativeId: sessionID,
+            strength: "strong" as const,
+          },
+        };
+        const targetPolicy = runtimePolicy("approval-required", { cwd: "/workspace" });
+        const resumed = yield* mode === "resume"
+          ? harness.runtime.resumeThread({ providerThread: existing, runtimePolicy: targetPolicy })
+          : harness.runtime.ensureThread({
+              threadId: harness.threadId,
+              modelSelection: {
+                instanceId: config.providerInstanceId,
+                model: "anthropic/claude-sonnet",
+                options: [],
+              },
+              runtimePolicy: targetPolicy,
+              existingProviderThread: existing,
+            });
+        yield* sessions.set({ ...config, nativeSubagentLimit: 0 });
+        yield* harness.startTurn("work", resumed);
+        const rules = openCodePermissionRules(targetPolicy);
+        assert.deepEqual(calls, [
+          { sessionID, permission: rules },
+          { sessionID, permission: [...rules, DENY] },
+          { sessionID },
+        ]);
+      }).pipe(
+        Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
+        Effect.scoped,
+      ),
   );
 
   it.effect("adds and removes only GOAT's task deny, keeping the session's own rules", () =>

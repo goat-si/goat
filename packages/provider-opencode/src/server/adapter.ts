@@ -3009,6 +3009,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
               if (threadInput.existingProviderThread?.nativeThreadRef != null) {
                 return yield* runtimeSession.resumeThread({
                   providerThread: threadInput.existingProviderThread,
+                  runtimePolicy: threadInput.runtimePolicy,
                 });
               }
               // OpenCode generates a title only when session.create leaves it unset.
@@ -3061,6 +3062,12 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 client.session.get({ sessionID: sessionId }),
               );
               const nativeSession = unwrapData("session.get", response);
+              const permission = openCodePermissionRules(
+                threadInput.runtimePolicy ?? input.runtimePolicy,
+              );
+              yield* sdkCall("session.update", { sessionID: sessionId }, () =>
+                client.session.update({ sessionID: sessionId, permission }),
+              );
               const resumedAt = yield* DateTime.now;
               const providerThread = {
                 ...threadInput.providerThread,
@@ -3068,7 +3075,10 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 status: "idle" as const,
                 updatedAt: dateTimeFromEpoch(nativeSession.time.updated, resumedAt),
               };
-              registerThread(nativeSession, providerThread, null);
+              Object.assign(registerThread(nativeSession, providerThread, null), {
+                permission,
+                subagentsDenied: false,
+              });
               return providerThread;
             },
             (effect, threadInput) =>
