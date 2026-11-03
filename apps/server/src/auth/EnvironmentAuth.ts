@@ -686,14 +686,10 @@ export function selectRequestCredential(
   cookieName: string,
   legacyCookieName: string | undefined,
 ) {
-  const cookieToken =
-    request.cookies[cookieName] ?? request.cookies[legacyScopedSessionCookieName(cookieName)];
-  if (cookieToken) {
-    return {
-      token: cookieToken,
-      source: request.cookies[cookieName] !== undefined ? "cookie" : "legacy-cookie",
-    } as const;
-  }
+  const primaryCookie = request.cookies[cookieName];
+  if (primaryCookie) return { token: primaryCookie, source: "cookie" } as const;
+  const scopedLegacyCookie = request.cookies[legacyScopedSessionCookieName(cookieName)];
+  if (scopedLegacyCookie) return { token: scopedLegacyCookie, source: "legacy-cookie" } as const;
 
   const bearerToken = parseBearerToken(request);
   if (bearerToken !== null) {
