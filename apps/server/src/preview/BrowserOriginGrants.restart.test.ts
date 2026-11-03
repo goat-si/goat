@@ -212,6 +212,111 @@ class NarrowingWriteFailure extends Schema.TaggedError<NarrowingWriteFailure>()(
   {},
 ) {}
 
+const noHostFixture = Effect.fn("BrowserOriginGrantsTest.noHostFixture")(function* () {
+  const probed = yield* Deferred.make<void>();
+  const base = Layer.mergeAll(
+    ServerSettings.layerTest({ enableCua: true }),
+    Layer.mock(ServerEnvironment.ServerEnvironment)({
+      getDescriptor: Effect.succeed(
+        decodeDescriptor({
+          environmentId: EnvironmentId.make("environment:test"),
+          label: "Test",
+          platform: { os: "linux", arch: "x64" },
+          serverVersion: "test",
+          capabilities: { repositoryIdentity: true },
+        }),
+      ),
+    }),
+    manifestLayer,
+    Layer.succeed(BrowserClaimBind, { bind: (request) => Effect.succeed(bound(request.windowId)) }),
+  );
+  const context = yield* Layer.build(Grants.layer.pipe(Layer.provideMerge(base)));
+  const grants = Context.get(context, Grants.BrowserOriginGrants);
+  const manifest = Context.get(context, BrowserClaimManifest);
+  let failWrites = true;
+  let writes = 0;
+  const driver = yield* CuaDriver.make(
+    () =>
+      Effect.succeed({
+        start: Effect.succeed({ command: "/fake", args: [], environment: [] }),
+        stop: Effect.void,
+        waitForExit: Effect.never,
+        hostGeneration: () => 1,
+        stoppedGeneration: () => 1,
+      }),
+    Effect.succeed({ capability: "available", reason: "test", environment: [] }),
+    {
+      publishBrowserManifest: () =>
+        Effect.suspend(() => {
+          writes++;
+          return failWrites ? Effect.fail(new NarrowingWriteFailure()) : Effect.succeed(hash);
+        }),
+      readBrowserConfig: () =>
+        Effect.succeed({
+          capability_manifest: { sha256: hash, file_sha256: hash, reload_error: null },
+        }),
+      probeBrowserClaims: () =>
+        Deferred.succeed(probed, undefined).pipe(
+          Effect.as({
+            tools: [
+              { name: "get_browser_state", inputSchema: { properties: { origin_scope: {} } } },
+            ],
+          }),
+        ),
+      setDriverCapability: (value) => grants.setDriverCapability(value),
+    },
+  ).pipe(Effect.provideContext(context));
+  if (!driver.publishBrowserManifest || !driver.readBrowserConfig)
+    return yield* Effect.die("missing manifest driver");
+  yield* manifest.install(
+    driver.publishBrowserManifest,
+    Effect.succeed({
+      capability_manifest: { sha256: hash, file_sha256: hash, reload_error: null },
+    }),
+    driver.fenceBrowserManifest,
+    driver.afterBrowserFenceFailure,
+    driver.markBrowserFence,
+  );
+  return {
+    grants,
+    driver,
+    probed,
+    writes: () => writes,
+    setFailWrites: (value: boolean) =>
+      Effect.sync(() => {
+        failWrites = value;
+      }),
+  };
+});
+
+it.effect("a no-op revoke before desktop start does not prevent its probe enabling claims", () =>
+  Effect.gen(function* () {
+    const f = yield* noHostFixture();
+    yield* f.grants.revoke(threadId, input.origin);
+    yield* f.setFailWrites(false);
+    yield* f.driver.acquire;
+    yield* Deferred.await(f.probed);
+    assert.equal((yield* f.grants.request(input)).status, "pending");
+    assert.equal(f.writes(), 0);
+  }).pipe(Effect.provideService(Scheduler.PreventSchedulerYield, true), Effect.scoped),
+);
+
+it.effect("a real narrowing failure without a host still prevents later claims", () =>
+  Effect.gen(function* () {
+    const f = yield* noHostFixture();
+    yield* f.setFailWrites(false);
+    yield* f.grants.setDriverCapability(true);
+    assert.equal((yield* f.grants.claim(input)).agentResult.status, "attached");
+    yield* f.setFailWrites(true);
+    yield* f.grants.revoke(threadId, input.origin);
+    yield* f.setFailWrites(false);
+    yield* f.driver.acquire;
+    yield* Deferred.await(f.probed);
+    assert.equal((yield* f.grants.request(input)).status, "refused");
+    assert.isAbove(f.writes(), 1);
+  }).pipe(Effect.provideService(Scheduler.PreventSchedulerYield, true), Effect.scoped),
+);
+
 it.effect.each([
   { name: "an older fence fails", oldStopped: false },
   { name: "an older fence succeeds", oldStopped: true },
@@ -446,6 +551,17 @@ it.effect("a concurrent failure with no current host fences unknown generations"
     assert.equal((yield* grants.claim({ ...input, windowId: 8 })).agentResult.status, "attached");
     yield* Deferred.succeed(replacementExited, undefined);
     yield* Deferred.await(replacementStopped);
+    yield* manifest.install(
+      driver.publishBrowserManifest,
+      Effect.succeed({
+        capability_manifest: { sha256: hash, file_sha256: hash, reload_error: null },
+      }),
+      driver.fenceBrowserManifest,
+      driver.afterBrowserFenceFailure,
+      driver.markBrowserFence,
+    );
+    yield* grants.setDriverCapability(true);
+    assert.equal((yield* grants.claim({ ...input, windowId: 9 })).agentResult.status, "attached");
     failWrites = true;
     yield* grants.revoke(threadId, input.origin);
     yield* Deferred.succeed(releaseOldStop, undefined);

@@ -153,6 +153,17 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
           ...current,
           origins: current.origins.filter((origin) => !isBlockedBrowserUrl(origin, hosts)),
         };
+        if (
+          narrowing &&
+          (latest?.applied
+            ? subset(latest.value, value)
+            : latest === undefined &&
+              value.origins.length === 0 &&
+              value.existingProfiles.length === 0)
+        ) {
+          yield* advance;
+          return undefined;
+        }
         const entry = { number: ++writes, value, narrowing, applied: false };
         latest = entry;
         yield* advance;
@@ -162,7 +173,9 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
       }),
     );
   const publish = Effect.fn("BrowserOriginGrants.publishExpansion")(function* () {
-    yield* confirm((yield* write(false)).sha);
+    const result = yield* write(false);
+    if (result === undefined) return yield* new BrowserManifestNotApplied();
+    yield* confirm(result.sha);
   });
   let fencing = false;
   let fenceOwner = 0;
@@ -243,8 +256,10 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
   const shrink = Effect.fn("BrowserOriginGrants.publishShrink")(function* () {
     const result = yield* write(true).pipe(Effect.result);
     if (result._tag === "Failure") return yield* fence(result.failure);
+    if (result.success === undefined) return;
+    const written = result.success;
     const decision = yield* Effect.sync(() => {
-      const next: Confirmation = result.success;
+      const next: Confirmation = written;
       let unsafe = false;
       if (pendingConfirmation !== undefined) {
         const newer = next.number > pendingConfirmation.number ? next : pendingConfirmation;
@@ -514,12 +529,19 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
   const revoke = Effect.fn("BrowserOriginGrants.revoke")((threadId: ThreadId, origin: string) =>
     lock.withPermits(1)(
       Effect.gen(function* () {
-        grants.delete(key(threadId, origin));
-        uncommittedGrants.delete(key(threadId, origin));
+        let removed = grants.delete(key(threadId, origin));
+        if (uncommittedGrants.delete(key(threadId, origin))) removed = true;
         for (const [id, entry] of pending)
-          if (entry.threadId === threadId && entry.origin === origin) pending.delete(id);
+          if (entry.threadId === threadId && entry.origin === origin) {
+            pending.delete(id);
+            removed = true;
+          }
         for (const [id, claim] of claims)
-          if (claim.threadId === threadId && claim.origin === origin) claims.delete(id);
+          if (claim.threadId === threadId && claim.origin === origin) {
+            claims.delete(id);
+            removed = true;
+          }
+        if (!removed) return;
         yield* shrink();
       }).pipe(Effect.uninterruptible),
     ),
