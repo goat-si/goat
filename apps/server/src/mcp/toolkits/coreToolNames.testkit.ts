@@ -84,6 +84,7 @@ export const CORE_GOAT_TOOL_NAMES = [
   "goat_permission_profile_get",
   "goat_preview_close",
   "goat_preview_fetch",
+  "goat_preview_fill_login",
   "goat_preview_fill_secret",
   "goat_preview_list",
   "goat_preview_read",

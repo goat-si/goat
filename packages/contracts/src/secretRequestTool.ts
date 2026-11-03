@@ -4,7 +4,10 @@ import { SecretRef, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { needsHumanFields } from "./humanStepResult.ts";
 
 export const OrchestratorMcpRequestSecretInput = Schema.Struct({
-  kind: Schema.optional(Schema.Literal("login")),
+  kind: Schema.optional(Schema.Literal("login")).annotate({
+    description:
+      "Request a username and password for a browser sign-in; requires origin. Omit for one secret.",
+  }),
   label: TrimmedNonEmptyString.annotate({
     description: "Card title, such as 'GitHub webhook secret'.",
   }),
@@ -18,7 +21,7 @@ export const OrchestratorMcpRequestSecretInput = Schema.Struct({
   }),
   origin: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(2048))).annotate({
     description:
-      "For a browser sign-in: the page's origin, such as https://github.com (a URL is reduced to its origin). The card shows it, and only goat_preview_fill_secret can use the ref, on that origin. Not with delivery file.",
+      "For a browser sign-in: the page's origin, such as https://github.com (a URL is reduced to its origin). The card shows it; use the matching browser fill tool on that origin. Not with delivery file.",
   }),
   timeoutMs: Schema.optional(
     Schema.Int.check(Schema.isBetween({ minimum: 1_000, maximum: 60 * 60 * 1_000 })),

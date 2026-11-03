@@ -287,6 +287,26 @@ export const previewEntries = {
       openWorldHint: true,
     },
   }),
+  "preview.fill_login": entry({
+    resource: "preview",
+    verb: "fill_login",
+    name: "goat_preview_fill_login",
+    toolkit: "preview",
+    summary: "Fill a saved login into a sign-in page",
+    description: "Fill a saved login on its requested origin without exposing its values.",
+    guide:
+      "Call request_secret with kind login and its origin, focus the form, then pass its reference. A complete fill consumes the reference. A partial fill reports which field was filled and keeps the reference. Observe before retrying an unverifiable result.",
+    effect: "destructive",
+    capability: "none",
+    capabilityReason: "Drives the calling thread's own browser preview.",
+    idempotencyReason:
+      "A login reference can be consumed; inspect partial or uncertain delivery before retrying.",
+    hostRoutable: false,
+    requires: "thread",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: { title: "Fill a saved login", idempotentHint: false, openWorldHint: true },
+  }),
   "preview.hover": entry({
     resource: "preview",
     verb: "hover",

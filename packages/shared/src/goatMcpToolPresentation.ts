@@ -343,6 +343,11 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     "browser",
     "browser",
   ),
+  goat_preview_fill_login: tool(
+    ["Fill", "Filling", "Filled", "a saved login"],
+    "browser",
+    "browser",
+  ),
   goat_preview_fill_secret: tool(
     ["Fill", "Filling", "Filled", "a saved password"],
     "browser",
