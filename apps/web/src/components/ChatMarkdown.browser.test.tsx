@@ -160,7 +160,7 @@ describe("ChatMarkdown context references", () => {
     const references = [
       ...paragraph.querySelectorAll<HTMLElement>("[data-context-chip-appearance=link]"),
     ];
-    expect(references.map((reference) => reference.textContent)).toEqual(["Babysit", "notes.md"]);
+    expect(references.map((reference) => reference.textContent)).toEqual(["babysit", "notes.md"]);
     const sentenceSize = getComputedStyle(paragraph).fontSize;
     for (const reference of references) {
       const style = getComputedStyle(reference);
