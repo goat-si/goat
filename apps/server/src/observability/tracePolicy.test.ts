@@ -8,6 +8,7 @@ import * as Statement from "effect/sql/Statement";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
+import { parseSync } from "vite-plus";
 import { HOT_SPANS, SQL_SPANS, makeLocalSpanPolicy } from "./tracePolicy.ts";
 
 const parent = Tracer.externalSpan({ traceId: "trace", spanId: "parent" });
@@ -61,45 +62,123 @@ it("marks a recorded child whose fast parent already ended (#2465)", () => {
   assert.isTrue(child.attributes.get("trace.parent_omitted"));
 });
 
-const spanNames = (source: string) =>
-  new Set(
-    Array.from(
-      source.matchAll(/\b(?:Effect\.)?(?:fn|withSpan|useSpan)\(\s*["']([^"']+)["']/g),
-      (match) => match[1],
-    ),
+const productionSource = (file: string) =>
+  !/(?:^|\/)(?:__tests__|__fixtures__|tests?|testing|testkits?|fixtures?|test[-_]?utils|[^/]*-testing)(?:\/|\.)/i.test(
+    file,
+  ) &&
+  !/(?:\.test(?:\.|$)|\.spec(?:\.|$)|testkit|fixtures?|test[-_]?utils|^test)/i.test(
+    NodePath.basename(file),
   );
 
+const nodes = (source: string, filename = "source.ts") => {
+  const parsed = parseSync(filename, source);
+  assert.deepEqual(parsed.errors, [], filename);
+  const result: Record<string, unknown>[] = [];
+  const pending: unknown[] = [parsed.program];
+  while (pending.length > 0) {
+    const value = pending.pop();
+    if (Array.isArray(value)) pending.push(...value);
+    else if (value && typeof value === "object") {
+      const node = value as Record<string, unknown>;
+      if (typeof node.type === "string") result.push(node);
+      pending.push(...Object.values(node));
+    }
+  }
+  return result;
+};
+
+const object = (value: unknown): Record<string, unknown> =>
+  value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+
+const spanNames = (source: string, filename = "source.ts") => {
+  const names = new Set<string>();
+  for (const node of nodes(source, filename)) {
+    if (node.type !== "CallExpression" || !Array.isArray(node.arguments)) continue;
+    const callee = object(node.callee);
+    const receiver = object(callee.object);
+    const property = object(callee.property);
+    const declaration =
+      (callee.type === "MemberExpression" &&
+        !callee.computed &&
+        receiver.name === "Effect" &&
+        ["fn", "withSpan", "useSpan"].includes(String(property.name))) ||
+      (callee.type === "Identifier" && ["withSpan", "useSpan"].includes(String(callee.name)));
+    const argument = object(node.arguments[0]);
+    if (declaration && argument.type === "Literal" && typeof argument.value === "string") {
+      names.add(argument.value);
+    }
+  }
+  return names;
+};
+
 it("does not count a policy span name that appears only in a comment (#2483)", () => {
-  const names = spanNames('// Effect.fn("SqliteWriter.send")');
+  const names = spanNames(`
+    // Effect.fn("SqliteWriter.send")
+    /* Effect.withSpan("SqliteWriter.send") */
+    const text = 'Effect.fn("SqliteWriter.send")';
+    Effect.fnUntraced("SqliteWriter.send");
+    Effect.fn("real")(() => {});
+    Effect.withSpan("also-real");
+  `);
   assert.isFalse(names.has("SqliteWriter.send"));
+  assert.deepEqual([...names].sort(), ["also-real", "real"]);
+});
+
+it("only scans production sources for policy spans (#2483)", () => {
+  for (const file of [
+    "apps/server/src/example.test.ts",
+    "apps/server/src/example.testkit.ts",
+    "apps/server/src/example.fixture.ts",
+    "apps/server/src/testing/example.ts",
+    "apps/server/src/testkit/example.ts",
+    "apps/server/src/__fixtures__/example.ts",
+    "packages/provider-testing/src/example.ts",
+  ])
+    assert.isFalse(productionSource(file), file);
+  assert.isTrue(productionSource("apps/server/src/observability/Observability.ts"));
 });
 
 it("keeps policy names aligned with span names in source (#2465)", () => {
   const root = NodePath.resolve(import.meta.dirname, "../../../..");
-  const files = NodeFS.globSync(["apps/server/src/**/*.ts", "packages/*/src/**/*.ts"], {
+  const files = NodeFS.globSync(["apps/server/src/**/*.{ts,tsx}", "packages/*/src/**/*.{ts,tsx}"], {
     cwd: root,
     exclude: ["**/*.test.ts", "**/tracePolicy.ts"],
   });
   const names = new Set<string>();
   for (const file of files) {
+    if (!productionSource(file)) continue;
     const source = NodeFS.readFileSync(NodePath.join(root, file), "utf8");
-    for (const name of spanNames(source)) if (name) names.add(name);
+    if (![...HOT_SPANS].some((name) => source.includes(name))) continue;
+    for (const name of spanNames(source, file)) names.add(name);
   }
   for (const name of HOT_SPANS) assert.isTrue(names.has(name), name);
+  const sqlNames = new Set<string>();
   const sqlite = NodeFS.readFileSync(
     NodePath.join(root, "packages/shared/src/nodeSqliteClient.ts"),
     "utf8",
   );
-  assert.match(sqlite, /\[ATTR_DB_SYSTEM_NAME,\s*["']sqlite["']\]/);
-  names.add(Statement.spanName([["db.system.name", "sqlite"]]));
+  assert.isTrue(
+    nodes(sqlite).some((node) => {
+      if (node.type !== "Property" || object(node.key).name !== "spanAttributes") return false;
+      const value = object(node.value);
+      if (value.type !== "ArrayExpression" || !Array.isArray(value.elements)) return false;
+      return value.elements.some((element) => {
+        const pair = object(element);
+        if (pair.type !== "ArrayExpression" || !Array.isArray(pair.elements)) return false;
+        return (
+          object(pair.elements[0]).name === "ATTR_DB_SYSTEM_NAME" &&
+          object(pair.elements[1]).value === "sqlite"
+        );
+      });
+    }),
+  );
+  sqlNames.add(Statement.spanName([["db.system.name", "sqlite"]]));
   const sqlClient = NodeFS.readFileSync(
     NodeURL.fileURLToPath(import.meta.resolve("effect/sql/SqlClient")),
     "utf8",
   );
-  for (const match of sqlClient.matchAll(/\b(?:Effect\.)?useSpan\(\s*["']([^"']+)["']/g)) {
-    if (match[1]) names.add(match[1]);
-  }
-  for (const name of SQL_SPANS) assert.isTrue(names.has(name), name);
+  for (const name of spanNames(sqlClient, "SqlClient.js")) sqlNames.add(name);
+  for (const name of SQL_SPANS) assert.isTrue(sqlNames.has(name), name);
 });
 
 it("leaves out only fast successful hot spans and uncontended SQL", () => {
