@@ -1,6 +1,36 @@
-import { describe, expect, it } from "vite-plus/test";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+import { describe, expect, it, vi } from "vite-plus/test";
 
-import { nondeterministic, renderComparison } from "./render-metrics.ts";
+import { nondeterministic, renderComparison, runOnce } from "./render-metrics.ts";
+
+vi.mock("node:child_process", () => ({
+  spawnSync: (
+    _command: string,
+    _args: string[],
+    options: { env: { GOAT_RENDER_REPORT_DIR: string } },
+  ) => {
+    NodeFS.writeFileSync(
+      NodePath.join(options.env.GOAT_RENDER_REPORT_DIR, "mount.json"),
+      JSON.stringify({ commits: 2, renders: 10, components: { Row: 10 } }),
+    );
+    return { status: 0 };
+  },
+}));
+
+it("collects reports when the home cache directory is missing (#28274)", () => {
+  const home = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-render-test-"));
+  vi.stubEnv("HOME", home);
+  vi.stubEnv("USERPROFILE", home);
+  try {
+    expect(runOnce()).toEqual({ mount: { commits: 2, renders: 10, components: { Row: 10 } } });
+    expect(NodeFS.readdirSync(NodePath.join(home, ".cache"))).toEqual([]);
+  } finally {
+    vi.unstubAllEnvs();
+    NodeFS.rmSync(home, { recursive: true, force: true });
+  }
+});
 
 describe("nondeterministic", () => {
   it("names only the scenarios whose counts differ between runs", () => {
