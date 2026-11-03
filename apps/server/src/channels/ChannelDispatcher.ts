@@ -1116,7 +1116,11 @@ const make = Effect.gen(function* () {
           stored.task.status === "failed" ||
           stored.task.status === "cancelled")
       ) {
-        yield* ledger.completeForward({ owner, sequence: pending.sequence });
+        yield* ledger.completeForward({
+          owner,
+          sequence: pending.sequence,
+          clearPendingAnswerMessageId: answerForwardIdsFor(event.eventId).messageId,
+        });
         return;
       }
       if (worker?.host !== undefined) return yield* remoteWorkers.forward(pending, owner);
@@ -1153,6 +1157,7 @@ const make = Effect.gen(function* () {
           "The requester’s permission changed; your answer was not sent. Open the thread in GOAT.",
           owner,
           pending.sequence,
+          ids.messageId,
         ).pipe(
           Effect.mapError(
             (cause) =>
@@ -1202,6 +1207,7 @@ const make = Effect.gen(function* () {
               "\"). Lower the thread's mode in GOAT and answer again, or answer in the thread.",
             owner,
             pending.sequence,
+            ids.messageId,
           );
           return;
         }

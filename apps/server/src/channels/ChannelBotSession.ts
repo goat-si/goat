@@ -791,7 +791,11 @@ const make = Effect.gen(function* () {
     owner: string,
   ) {
     const event = pending.event;
-    const done = ledger.completeForward({ owner, sequence: pending.sequence });
+    const done = ledger.completeForward({
+      owner,
+      sequence: pending.sequence,
+      clearPendingAnswerMessageId: answerForwardIdsFor(event.eventId).messageId,
+    });
     const stored = yield* ledger.getTask(event.taskId);
     if (
       event.type !== "task.question.answered" ||
@@ -819,6 +823,7 @@ const make = Effect.gen(function* () {
               '"). Answer again, or answer in the thread.',
         owner,
         pending.sequence,
+        ids.messageId,
       );
       return;
     }

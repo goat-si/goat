@@ -3,9 +3,10 @@ import * as Effect from "effect/Effect";
 import type * as SqlClient from "effect/sql/SqlClient";
 import type { ChannelLedgerError } from "./ChannelLedger.ts";
 
-export const forwardQueries = (
+export const forwardQueries = <E>(
   sql: SqlClient.SqlClient,
   toLedgerError: (detail: string) => (cause: unknown) => ChannelLedgerError,
+  fence: (owner: string) => Effect.Effect<void, E>,
 ) => ({
   hasPendingForward: (taskId: ChannelTaskId) =>
     sql<{ readonly found: number }>`
@@ -35,4 +36,27 @@ export const forwardQueries = (
       Effect.map((rows) => rows.length > 0),
       Effect.mapError(toLedgerError("isForwardPending")),
     ),
+  completeForward: (input: {
+    readonly owner: string;
+    readonly sequence: number;
+    readonly clearPendingAnswerMessageId?: string | undefined;
+  }) =>
+    sql
+      .withTransaction(
+        Effect.gen(function* () {
+          yield* fence(input.owner);
+          const completed = yield* sql<{ readonly task_id: ChannelTaskId }>`
+        UPDATE channel_task_events SET forward_state = 'done'
+        WHERE sequence = ${input.sequence} AND forward_state = 'pending' RETURNING task_id
+      `;
+          if (completed[0] !== undefined && input.clearPendingAnswerMessageId !== undefined) {
+            yield* sql`
+          UPDATE channel_tasks SET pending_answer_message_id = NULL
+          WHERE task_id = ${completed[0].task_id}
+            AND pending_answer_message_id = ${input.clearPendingAnswerMessageId}
+        `;
+          }
+        }),
+      )
+      .pipe(Effect.mapError(toLedgerError("completeForward"))),
 });

@@ -5357,6 +5357,7 @@ it.effect.each(turnStartMemoryCases)(
           });
           if (testCase.kind === "channel") {
             const taskId = ChannelTaskId.make("memory-channel-task");
+            let forwardPending = true;
             const dispatcherLayer = ChannelDispatcher.layer.pipe(
               Layer.provide(Layer.mock(UsageLimitSources.UsageLimitSources)({})),
               Layer.provide(
@@ -5369,15 +5370,23 @@ it.effect.each(turnStartMemoryCases)(
                         completionHold: undefined,
                         task: {
                           taskId,
+                          status: "running",
+                          originAddress: { kind: "goat", environmentId: "fixture", threadId },
                           worker: { threadId },
                           target: { projectId: ProjectId.make("project-1") },
                           requester: {
                             displayName: "Requester",
                             runtimeModeCeiling: "full-access",
+                            grantedScopes: ["orchestration:operate"],
                           },
                         },
                       } as ChannelLedger.ChannelStoredTask),
-                    completeForward: () => Effect.void,
+                    isForwardPending: (sequence) =>
+                      Effect.succeed(sequence === 1 && forwardPending),
+                    completeForward: ({ sequence }) =>
+                      Effect.sync(() => {
+                        if (sequence === 1) forwardPending = false;
+                      }),
                   }),
                   Layer.mock(ThreadManagement.ThreadManagementService)({
                     sendToThread: (input) =>

@@ -31,6 +31,7 @@ import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
+import { answerForwardIdsFor, taskEventIdFor } from "./channelIds.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import {
   defaultScript,
@@ -45,56 +46,75 @@ import {
   slackInput,
 } from "./testkit/ChannelHarness.ts";
 
-it.effect("#2193 drops a revoked answer when its non-session task was cancelled", () => {
-  const harness = makeHarness();
-  return Effect.gen(function* () {
-    yield* setupBot;
-    yield* linkSlackUser();
-    const gateway = yield* ChannelGateway.ChannelGateway;
-    const runtime = yield* ChannelRuntime.ChannelRuntime;
-    const ledger = yield* ChannelLedger.ChannelLedger;
-    const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
-    yield* gateway.ingest(slackInput("do: inspect the build", "cancel-worker-1"), slackContext);
-    yield* runtime.drain;
-    const task = yield* onlyTask;
-    const questionId = ChannelQuestionId.make("question:cancel-worker");
-    yield* commitTransition(
-      ledger,
-      (yield* ledger.getTask(task.taskId))!,
-      {
-        type: "task.question.opened",
-        payload: { question: { questionId, text: "Which?", askedAt: task.updatedAt } },
-      },
-      { owner: runtime.ownerToken },
-    );
-    yield* commitTransition(
-      ledger,
-      (yield* ledger.getTask(task.taskId))!,
-      {
-        type: "task.question.answered",
-        payload: { questionId, answer: "the big one" },
-      },
-      { owner: runtime.ownerToken, forward: true, pendingAnswerMessageId: "answer-fence" },
-    );
-    yield* commitTransition(
-      ledger,
-      (yield* ledger.getTask(task.taskId))!,
-      {
-        type: "task.cancelled",
-        payload: { reason: "Stopped." },
-      },
-      { owner: runtime.ownerToken },
-    );
-    const sql = yield* SqlClient.SqlClient;
-    yield* sql`UPDATE channel_identities SET granted_scopes_json = '[]' WHERE connection_id = 'slack-1' AND external_actor_id = 'U1'`;
-    const [pending] = yield* ledger.listPendingForwards(10);
-    yield* dispatcher.forward(pending!, runtime.ownerToken);
-    assert.lengthOf(yield* ledger.listPendingForwards(10), 0);
-    assert.strictEqual((yield* onlyTask).status, "cancelled");
-    assert.lengthOf((yield* onlyTask).openQuestions, 0);
-    assert.lengthOf(harness.world.sends, 0);
-  }).pipe(Effect.provide(harness.layer));
-});
+it.effect.each([true, false])(
+  "#2193 drops a revoked answer on a cancelled non-session task, owns fence: %s",
+  (ownsFence) => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* linkSlackUser();
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+      yield* gateway.ingest(slackInput("do: inspect the build", "cancel-worker-1"), slackContext);
+      yield* runtime.drain;
+      const task = yield* onlyTask;
+      const questionId = ChannelQuestionId.make("question:cancel-worker");
+      yield* commitTransition(
+        ledger,
+        (yield* ledger.getTask(task.taskId))!,
+        {
+          type: "task.question.opened",
+          payload: { question: { questionId, text: "Which?", askedAt: task.updatedAt } },
+        },
+        { owner: runtime.ownerToken },
+      );
+      const answerEventId = taskEventIdFor(
+        task.taskId,
+        (yield* ledger.getTask(task.taskId))!.task.version + 1,
+      );
+      const answerFence = answerForwardIdsFor(answerEventId).messageId;
+      const fence = ownsFence ? answerFence : "later-answer-fence";
+      yield* commitTransition(
+        ledger,
+        (yield* ledger.getTask(task.taskId))!,
+        {
+          type: "task.question.answered",
+          payload: { questionId, answer: "the big one" },
+        },
+        {
+          owner: runtime.ownerToken,
+          forward: true,
+          eventId: answerEventId,
+          pendingAnswerMessageId: fence,
+        },
+      );
+      yield* commitTransition(
+        ledger,
+        (yield* ledger.getTask(task.taskId))!,
+        {
+          type: "task.cancelled",
+          payload: { reason: "Stopped." },
+        },
+        { owner: runtime.ownerToken },
+      );
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`UPDATE channel_identities SET granted_scopes_json = '[]' WHERE connection_id = 'slack-1' AND external_actor_id = 'U1'`;
+      const [pending] = yield* ledger.listPendingForwards(10);
+      assert.strictEqual((yield* ledger.getTask(task.taskId))!.pendingAnswerMessageId, fence);
+      yield* dispatcher.forward(pending!, runtime.ownerToken);
+      assert.lengthOf(yield* ledger.listPendingForwards(10), 0);
+      assert.strictEqual(
+        (yield* ledger.getTask(task.taskId))!.pendingAnswerMessageId,
+        ownsFence ? undefined : fence,
+      );
+      assert.strictEqual((yield* onlyTask).status, "cancelled");
+      assert.lengthOf((yield* onlyTask).openQuestions, 0);
+      assert.lengthOf(harness.world.sends, 0);
+    }).pipe(Effect.provide(harness.layer));
+  },
+);
 
 it.effect.each([
   ["followup", false],

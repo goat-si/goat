@@ -424,6 +424,7 @@ export class ChannelLedger extends Context.Service<
     readonly completeForward: (input: {
       readonly owner: string;
       readonly sequence: number;
+      readonly clearPendingAnswerMessageId?: string | undefined;
     }) => Effect.Effect<void, ChannelLedgerError>;
     readonly enqueueDeliveries: (
       deliveries: ReadonlyArray<ChannelOutboxInsert>,
@@ -1599,18 +1600,7 @@ const make = Effect.gen(function* () {
             Effect.mapError(toLedgerError("outcomeDeliveries")),
           ),
 
-    ...forwardQueries(sql, toLedgerError),
-
-    completeForward: (input) =>
-      sql
-        .withTransaction(
-          fence(input.owner).pipe(
-            Effect.andThen(
-              sql`UPDATE channel_task_events SET forward_state = 'done' WHERE sequence = ${input.sequence}`,
-            ),
-          ),
-        )
-        .pipe(Effect.asVoid, Effect.mapError(toLedgerError("completeForward"))),
+    ...forwardQueries(sql, toLedgerError, fence),
 
     enqueueDeliveries: (deliveries, now) =>
       insertDeliveries(deliveries, now).pipe(Effect.mapError(toLedgerError("enqueueDeliveries"))),

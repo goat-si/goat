@@ -10,6 +10,7 @@ export const refuseForward = Effect.fn("channel.refuseForward")(function* (
   text: string,
   owner: string,
   sequence: number,
+  answerMessageId?: string,
 ) {
   const latest = (yield* ledger.getTask(stored.task.taskId)) ?? stored;
   if (
@@ -17,7 +18,11 @@ export const refuseForward = Effect.fn("channel.refuseForward")(function* (
     latest.task.status === "failed" ||
     latest.task.status === "cancelled"
   ) {
-    yield* ledger.completeForward({ owner, sequence });
+    yield* ledger.completeForward({
+      owner,
+      sequence,
+      clearPendingAnswerMessageId: answerMessageId,
+    });
     return;
   }
   yield* commitTransition(
@@ -36,6 +41,13 @@ export const refuseForward = Effect.fn("channel.refuseForward")(function* (
         },
       },
     },
-    { owner, narrate: true, pendingAnswerMessageId: null, completeForwardSequence: sequence },
+    {
+      owner,
+      narrate: true,
+      ...(answerMessageId !== undefined && latest.pendingAnswerMessageId !== answerMessageId
+        ? {}
+        : { pendingAnswerMessageId: null }),
+      completeForwardSequence: sequence,
+    },
   );
 });

@@ -12,7 +12,14 @@ import * as ChannelIdentityService from "./ChannelIdentityService.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
-import { goatBotSessionThreadIdFor, taskIdFor, turnSteerIdsFor } from "./channelIds.ts";
+import { refuseForward } from "./channelForwardRefusal.ts";
+import {
+  answerForwardIdsFor,
+  goatBotSessionThreadIdFor,
+  taskEventIdFor,
+  taskIdFor,
+  turnSteerIdsFor,
+} from "./channelIds.ts";
 import { commitTransition, prepareTransition } from "./channelTaskWrites.ts";
 import * as SqlClient from "effect/sql/SqlClient";
 import {
@@ -117,53 +124,100 @@ const claimedFromTeammate = (key: string, memoryGrantCeiling?: "read" | "read_wr
   });
 
 describe("GOAT Bot sessions under the requester's current authority", () => {
-  it.effect("#2193 drops a revoked answer when its session task was cancelled", () => {
-    const harness = sessionHarness();
-    return Effect.gen(function* () {
-      yield* setupBot;
-      yield* linkTeammate;
-      const task = yield* dispatchNow(yield* receiveFromTeammate("look: task", "cancel-session-1"));
-      const ledger = yield* ChannelLedger.ChannelLedger;
-      const runtime = yield* ChannelRuntime.ChannelRuntime;
-      const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
-      const questionId = ChannelQuestionId.make("question:cancel-session");
-      yield* commitTransition(
-        ledger,
-        (yield* ledger.getTask(task.taskId))!,
-        {
-          type: "task.question.opened",
-          payload: { question: { questionId, text: "Which?", askedAt: task.updatedAt } },
-        },
-        { owner: runtime.ownerToken },
-      );
-      yield* commitTransition(
-        ledger,
-        (yield* ledger.getTask(task.taskId))!,
-        {
-          type: "task.question.answered",
-          payload: { questionId, answer: "the big one" },
-        },
-        { owner: runtime.ownerToken, forward: true, pendingAnswerMessageId: "answer-fence" },
-      );
-      yield* commitTransition(
-        ledger,
-        (yield* ledger.getTask(task.taskId))!,
-        {
-          type: "task.cancelled",
-          payload: { reason: "Stopped." },
-        },
-        { owner: runtime.ownerToken },
-      );
-      const sql = yield* SqlClient.SqlClient;
-      yield* sql`UPDATE channel_identities SET granted_scopes_json = '[]' WHERE connection_id = 'slack-1' AND external_actor_id = 'U2'`;
-      const [pending] = yield* ledger.listPendingForwards(10);
-      yield* dispatcher.forward(pending!, runtime.ownerToken);
-      assert.lengthOf(yield* ledger.listPendingForwards(10), 0);
-      assert.strictEqual((yield* current(task.taskId)).status, "cancelled");
-      assert.lengthOf((yield* current(task.taskId)).openQuestions, 0);
-      assert.lengthOf(harness.world.sends, 0);
-    }).pipe(Effect.provide(harness.layer));
-  });
+  it.effect.each([
+    [true, false, false],
+    [false, false, false],
+    [true, true, false],
+    [false, true, false],
+    [true, false, true],
+  ] as const)(
+    "#2193 drops a revoked answer on a cancelled session task %s",
+    ([ownsFence, viaRefusal, failFenceWrite]) => {
+      const harness = sessionHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        yield* linkTeammate;
+        const task = yield* dispatchNow(
+          yield* receiveFromTeammate("look: task", "cancel-session-1"),
+        );
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+        const questionId = ChannelQuestionId.make("question:cancel-session");
+        yield* commitTransition(
+          ledger,
+          (yield* ledger.getTask(task.taskId))!,
+          {
+            type: "task.question.opened",
+            payload: { question: { questionId, text: "Which?", askedAt: task.updatedAt } },
+          },
+          { owner: runtime.ownerToken },
+        );
+        const answerEventId = taskEventIdFor(
+          task.taskId,
+          (yield* ledger.getTask(task.taskId))!.task.version + 1,
+        );
+        const answerFence = answerForwardIdsFor(answerEventId).messageId;
+        const fence = ownsFence ? answerFence : "later-answer-fence";
+        yield* commitTransition(
+          ledger,
+          (yield* ledger.getTask(task.taskId))!,
+          {
+            type: "task.question.answered",
+            payload: { questionId, answer: "the big one" },
+          },
+          {
+            owner: runtime.ownerToken,
+            forward: true,
+            eventId: answerEventId,
+            pendingAnswerMessageId: fence,
+          },
+        );
+        const beforeCancellation = (yield* ledger.getTask(task.taskId))!;
+        yield* commitTransition(
+          ledger,
+          (yield* ledger.getTask(task.taskId))!,
+          {
+            type: "task.cancelled",
+            payload: { reason: "Stopped." },
+          },
+          { owner: runtime.ownerToken },
+        );
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`UPDATE channel_identities SET granted_scopes_json = '[]' WHERE connection_id = 'slack-1' AND external_actor_id = 'U2'`;
+        const [pending] = yield* ledger.listPendingForwards(10);
+        assert.strictEqual((yield* ledger.getTask(task.taskId))!.pendingAnswerMessageId, fence);
+        if (failFenceWrite) {
+          yield* sql`CREATE TEMP TRIGGER fail_answer_fence BEFORE UPDATE OF pending_answer_message_id ON channel_tasks WHEN NEW.pending_answer_message_id IS NULL BEGIN SELECT RAISE(ABORT, 'injected fence failure'); END`;
+          const failed = yield* dispatcher
+            .forward(pending!, runtime.ownerToken)
+            .pipe(Effect.result);
+          assert.strictEqual(failed._tag, "Failure");
+          assert.isTrue(yield* ledger.isForwardPending(pending!.sequence));
+          assert.strictEqual((yield* ledger.getTask(task.taskId))!.pendingAnswerMessageId, fence);
+          yield* sql`DROP TRIGGER fail_answer_fence`;
+        }
+        if (viaRefusal)
+          yield* refuseForward(
+            ledger,
+            beforeCancellation,
+            "permission changed",
+            runtime.ownerToken,
+            pending!.sequence,
+            answerFence,
+          );
+        else yield* dispatcher.forward(pending!, runtime.ownerToken);
+        assert.lengthOf(yield* ledger.listPendingForwards(10), 0);
+        assert.strictEqual(
+          (yield* ledger.getTask(task.taskId))!.pendingAnswerMessageId,
+          ownsFence ? undefined : fence,
+        );
+        assert.strictEqual((yield* current(task.taskId)).status, "cancelled");
+        assert.lengthOf((yield* current(task.taskId)).openQuestions, 0);
+        assert.lengthOf(harness.world.sends, 0);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
 
   it.effect(
     "#2193 rolls back forward completion when the refusal question loses a version race",
