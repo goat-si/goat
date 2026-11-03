@@ -1,3 +1,4 @@
+import * as NodeCrypto from "node:crypto";
 import * as Cache from "effect/Cache";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
@@ -12,7 +13,8 @@ const PLAIN_SECTION_HEADER = /^\s*\[[A-Za-z0-9.-]+(?:\s+"(?:[^"\\]|\\.)*")?\]\s*
 const ORDER_SENSITIVE_SECTION = /^\s*\[\s*(?:include|includeif|branch\s*\.)/i;
 const CONFIG_SECTION_MEMO_CAPACITY = 256;
 const CONFIG_SECTION_MAX_BYTES = 256 * 1024;
-const CONFIG_MTIME_GRANULARITY_MS = 1_000;
+// FAT/exFAT mtimes have two-second resolution; network filesystems may be coarser.
+const CONFIG_MTIME_GRANULARITY_MS = 2_000;
 
 /**
  * Splits a git config into the text outside exact \`[branch "<name>"]\` sections and each such
@@ -71,7 +73,7 @@ export const makeGitMetadataFingerprint = Effect.fn("GitMetadataFingerprint.make
   const readBounded = Effect.fnUntraced(
     function* (file: string) {
       const handle = yield* fs.open(file, { flag: "r" });
-      const decoder = new TextDecoder();
+      const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
       let text = "";
       let bytes = 0;
       while (bytes <= CONFIG_SECTION_MAX_BYTES) {
@@ -91,30 +93,41 @@ export const makeGitMetadataFingerprint = Effect.fn("GitMetadataFingerprint.make
       readonly stamp: string;
       readonly reusable: boolean;
       readonly sections: ReturnType<typeof splitBranchSections>;
+      readonly fallback: string;
     }
   >();
+  let racyRead = 0;
   const configSections = Effect.fnUntraced(function* (
     file: string,
     fileStamp: { value: string; mtime: number | null },
   ) {
     const memo = sectionsByConfig.get(file);
-    if (memo?.stamp === fileStamp.value && memo.reusable) return memo.sections;
+    if (memo?.stamp === fileStamp.value && memo.reusable) return memo;
     const readAt = yield* Clock.currentTimeMillis;
     const text = fileStamp.value === "missing" ? null : yield* readBounded(file);
     const sections = text === null ? null : splitBranchSections(text);
+    const reusable =
+      fileStamp.value === "missing" ||
+      (fileStamp.mtime !== null && readAt - fileStamp.mtime > CONFIG_MTIME_GRANULARITY_MS);
+    const fallback =
+      text !== null && sections === null
+        ? `${fileStamp.value}:content:${NodeCrypto.createHash("sha256").update(text).digest("hex")}`
+        : !reusable && text === null
+          ? `${fileStamp.value}:racy:${++racyRead}`
+          : fileStamp.value;
     sectionsByConfig.delete(file);
     if (sectionsByConfig.size >= CONFIG_SECTION_MEMO_CAPACITY) {
       const oldest = sectionsByConfig.keys().next().value;
       if (oldest !== undefined) sectionsByConfig.delete(oldest);
     }
-    sectionsByConfig.set(file, {
+    const entry = {
       stamp: fileStamp.value,
-      reusable:
-        fileStamp.value === "missing" ||
-        (fileStamp.mtime !== null && readAt - fileStamp.mtime > CONFIG_MTIME_GRANULARITY_MS),
+      reusable,
       sections,
-    });
-    return sections;
+      fallback,
+    };
+    sectionsByConfig.set(file, entry);
+    return entry;
   });
   const directories = yield* Cache.makeWith(
     (cwd: string) =>
@@ -187,16 +200,20 @@ export const makeGitMetadataFingerprint = Effect.fn("GitMetadataFingerprint.make
       const repositoryStamps = stamps.slice(0, repositoryFiles.length).map((entry) => entry.value);
       const refStamps = stamps.slice(repositoryFiles.length).map((entry) => entry.value);
       const configIndex = repositoryFiles.length - 1;
-      const sections =
+      const config =
         branch === undefined
           ? null
           : yield* configSections(
               configFile,
               stamps[configIndex] ?? { value: "missing", mtime: null },
             );
-      if (branch !== undefined && sections !== null) {
-        repositoryStamps[configIndex] = `shared:${sections.shared}`;
-        refStamps.push(`branch:${sections.branches.get(branch) ?? "none"}`);
+      if (branch !== undefined && config !== null) {
+        if (config.sections !== null) {
+          repositoryStamps[configIndex] = `shared:${config.sections.shared}`;
+          refStamps.push(`branch:${config.sections.branches.get(branch) ?? "none"}`);
+        } else {
+          repositoryStamps[configIndex] = config.fallback;
+        }
       }
       return {
         root: dirs.root,
