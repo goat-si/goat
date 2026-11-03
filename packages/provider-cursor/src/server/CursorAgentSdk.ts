@@ -88,7 +88,10 @@ export interface CursorAgentSdkOpenInput {
 export interface CursorAgentSdkSendInput<Error> {
   readonly message: string | SDKUserMessage;
   /** Process-local admission for recovery sends; message is the prepared first admission. */
-  readonly prepareMessage?: () => Effect.Effect<string | SDKUserMessage, CursorAgentSdkRunnerError>;
+  readonly prepareMessage?: () => Effect.Effect<
+    { readonly message: string | SDKUserMessage; readonly mcpServers: SendOptions["mcpServers"] },
+    CursorAgentSdkRunnerError
+  >;
   readonly options?: Omit<SendOptions, "onDelta">;
   readonly onDelta?: (update: InteractionUpdate) => Effect.Effect<void, Error>;
   readonly summarize?: boolean;
@@ -463,19 +466,29 @@ export const makeCursorAgentSdkRunner = Effect.fn("makeCursorAgentSdkRunner")(fu
 
           const startRun = (recovering = false) =>
             Effect.gen(function* () {
-              const message =
+              const prepared =
                 recovering && sendInput.prepareMessage
                   ? yield* sendInput
                       .prepareMessage()
                       .pipe(Effect.mapError((cause) => runnerError(cause, "run.prepareMessage")))
-                  : sendInput.message;
+                  : undefined;
+              const message = prepared?.message ?? sendInput.message;
+              const { mcpServers: _originalMcpServers, ...otherOptions } = sendInput.options ?? {};
+              const options =
+                prepared === undefined
+                  ? sendInput.options
+                  : {
+                      ...otherOptions,
+                      // An omitted override falls back to the agent's original servers.
+                      mcpServers: prepared.mcpServers ?? {},
+                    };
               yield* log({
                 direction: "outgoing",
                 stage: "decoded",
                 payload: {
                   type: "run.start",
                   message,
-                  options: loggedCursorSendOptions(sendInput.options),
+                  options: loggedCursorSendOptions(options),
                 },
               });
               return yield* Effect.tryPromise({
@@ -483,7 +496,7 @@ export const makeCursorAgentSdkRunner = Effect.fn("makeCursorAgentSdkRunner")(fu
                   sendInput.summarize === true
                     ? agent.summarize()
                     : agent.send(message, {
-                        ...sendInput.options,
+                        ...options,
                         onDelta: async ({ update }) => {
                           if (!callbacksReady) {
                             pendingUpdates.push(update);

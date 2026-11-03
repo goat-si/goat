@@ -1,7 +1,6 @@
 import type {
   AgentMessage,
   InteractionUpdate,
-  McpServerConfig,
   RunResult,
   SDKUserMessage,
   ToolCall,
@@ -2211,7 +2210,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
         let cursorSkillNames: ReadonlySet<string> | undefined;
         const resolveUserMessage = Effect.fnUntraced(function* (
           turnInput: ProviderAdapter.ProviderAdapterV2TurnInput,
-          mcpServers: Record<string, McpServerConfig> | undefined,
+          config: McpProviderSession.McpProviderSessionConfig | undefined,
           memoryClaim: { claimed: boolean },
         ) {
           const rawText = turnInput.message.text;
@@ -2243,8 +2242,8 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
               resolveExtractedTextPath: host.resolveExtractedTextPath,
             }),
             runOrdinal: turnInput.runOrdinal,
-            hasGoatMcp: mcpServers !== undefined,
-            browser: (yield* mcpSessions.read(turnInput.threadId))?.browserToolsAvailable,
+            hasGoatMcp: config !== undefined,
+            browser: config?.browserToolsAvailable,
           });
           const images = yield* Effect.forEach(
             turnInput.message.attachments.filter(isProviderNativeImageAttachment),
@@ -2295,15 +2294,8 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                       detail: "Invalid memory context frame",
                     }),
                 });
-          const config = yield* mcpSessions.read(turnInput.threadId);
           const agent = yield* Ref.get(liveAgent);
-          const availability = McpProviderSession.memoryToolAvailability(
-            config?.authorizationHeader === agent?.mcpAuthorization &&
-              config?.endpoint === agent?.mcpEndpoint &&
-              turnInput.runtimePolicy.cwd === agent?.cwd
-              ? config
-              : undefined,
-          );
+          const availability = McpProviderSession.memoryToolAvailability(config);
           const hasMemoryTools = availability.read || availability.write || availability.source;
           const nativeId = agent!.nativeThreadId;
           const announceMemoryTools = hasMemoryTools || memoryClaim.claimed;
@@ -2355,10 +2347,11 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
               modelSelection: turnInput.modelSelection,
               runtimePolicy: turnInput.runtimePolicy,
             });
-            const mcpServers = cursorMcpServers(yield* mcpSessions.read(turnInput.threadId));
+            const mcpSession = yield* mcpSessions.read(turnInput.threadId);
+            const mcpServers = cursorMcpServers(mcpSession);
             // Keep the correction owed by this turn across native active-run recovery.
             const memoryClaim = { claimed: memoryToolClaims.has(agent.nativeThreadId) };
-            const message = yield* resolveUserMessage(turnInput, mcpServers, memoryClaim);
+            const message = yield* resolveUserMessage(turnInput, mcpSession, memoryClaim);
             const compacted = message === "/compress";
             const pendingUpdates: Array<InteractionUpdate> = [];
             let context: ActiveCursorTurn | null = null;
@@ -2368,10 +2361,11 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                 summarize: compacted,
                 prepareMessage: () =>
                   Effect.gen(function* () {
-                    const mcpServers = cursorMcpServers(
-                      yield* mcpSessions.read(turnInput.threadId),
-                    );
-                    return yield* resolveUserMessage(turnInput, mcpServers, memoryClaim);
+                    const config = yield* mcpSessions.read(turnInput.threadId);
+                    return {
+                      message: yield* resolveUserMessage(turnInput, config, memoryClaim),
+                      mcpServers: cursorMcpServers(config),
+                    };
                   }).pipe(
                     Effect.mapError(
                       (cause) =>
@@ -2384,7 +2378,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                 options: {
                   model: cursorSdkModelSelection(turnInput.modelSelection),
                   mode: turnInput.runtimePolicy.interactionMode === "plan" ? "plan" : "agent",
-                  ...(mcpServers === undefined ? {} : { mcpServers }),
+                  mcpServers: mcpServers ?? {},
                 },
                 onDelta: (update) => {
                   if (context === null) {

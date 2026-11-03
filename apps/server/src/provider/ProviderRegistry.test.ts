@@ -1974,8 +1974,11 @@ it.layer(
         } as const satisfies ServerProvider;
         const siblingChanges = yield* PubSub.unbounded<ServerProvider>();
         const cloudRefreshes = yield* Ref.make(0);
+        const siblingSnapshot = yield* Ref.make<ServerProvider>(sibling);
+        const cloudSnapshot = yield* Ref.make<ServerProvider>(cloud);
         const makeInstance = (
           provider: ServerProvider,
+          snapshotRef: Ref.Ref<ServerProvider>,
           changes: Stream.Stream<ServerProvider>,
           refresh: Effect.Effect<ServerProvider>,
         ): ProviderInstance => ({
@@ -1995,8 +1998,8 @@ it.layer(
                   packageName: null,
                 }),
               ),
-            getSnapshot: Effect.succeed(provider),
-            refresh,
+            getSnapshot: Ref.get(snapshotRef),
+            refresh: refresh.pipe(Effect.tap((next) => Ref.set(snapshotRef, next))),
             streamChanges: changes,
             applyUsageLimits: () => Effect.void,
           },
@@ -2004,9 +2007,15 @@ it.layer(
           textGeneration: {} as ProviderInstance["textGeneration"],
         });
         const instances = [
-          makeInstance(sibling, Stream.fromPubSub(siblingChanges), Effect.succeed(sibling)),
+          makeInstance(
+            sibling,
+            siblingSnapshot,
+            Stream.fromPubSub(siblingChanges),
+            Effect.succeed(sibling),
+          ),
           makeInstance(
             cloud,
+            cloudSnapshot,
             Stream.empty,
             Ref.update(cloudRefreshes, (count) => count + 1).pipe(Effect.as(cloudReady)),
           ),
