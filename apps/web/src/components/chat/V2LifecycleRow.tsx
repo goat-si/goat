@@ -103,7 +103,7 @@ export function V2LifecycleRow(props: {
   }
   if (item.type === "run_interrupt_result") {
     return (
-      <TimelineSystemDivider label="Run interrupted" detail={item.message} icon={SquareIcon} />
+      <TimelineSystemDivider label="Run interrupted" detail={item.message} icon={SquareIcon} wrapDetail />
     );
   }
   if (item.type === "compaction") {
