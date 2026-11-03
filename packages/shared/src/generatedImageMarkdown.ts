@@ -34,11 +34,14 @@ function chatMarkdownImageSources(markdown: string): string[] {
   const sources: string[] = [];
   const visit = (node: ImageNode) => {
     if (node.type === "element" && node.tagName === "img") {
-      const { src, dataLocalSrc } = node.properties ?? {};
+      const { src, dataLocalSrc, dataDarkSrc, dataLightSrc } = node.properties ?? {};
       if (typeof dataLocalSrc === "string") {
         sources.push(normalizeMarkdownLinkDestination(dataLocalSrc).replaceAll("\\", "/"));
       } else if (typeof src === "string") {
         sources.push(normalizeMarkdownLinkDestination(src));
+      }
+      for (const variant of [dataDarkSrc, dataLightSrc]) {
+        if (typeof variant === "string") sources.push(normalizeMarkdownLinkDestination(variant));
       }
     }
     node.children?.forEach(visit);

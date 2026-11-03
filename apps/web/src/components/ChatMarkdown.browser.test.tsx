@@ -77,6 +77,22 @@ vi.mock(import("./chat/MermaidDiagram"), async (original) => {
   };
 });
 
+const appearance = vi.hoisted(() => ({
+  value: "light" as "light" | "dark",
+  listeners: new Set<() => void>(),
+}));
+vi.mock(import("../hooks/useTheme"), async (original) => {
+  const { useSyncExternalStore } = await import("react");
+  const subscribe = (listener: () => void) => {
+    appearance.listeners.add(listener);
+    return () => appearance.listeners.delete(listener);
+  };
+  return {
+    ...(await original()),
+    useRenderedAppearance: () => useSyncExternalStore(subscribe, () => appearance.value),
+  };
+});
+
 const settingsOverrides = vi.hoisted(() => ({ mathRenderingEnabled: false }));
 vi.mock(import("../hooks/useSettings"), async (original) => {
   const actual = await original();
@@ -114,6 +130,7 @@ it("keeps compact audio playback loaded across signed URL renewals", async () =>
 });
 
 function setup() {
+  appearance.value = "light";
   parsedSources.length = 0;
   settingsOverrides.mathRenderingEnabled = false;
   renderDiagram.mockReset();
@@ -204,6 +221,21 @@ it("shows unavailable audio when a workspace embed has no thread", async () => {
   expect(screen.container.textContent).toContain("Audio unavailable");
   expect(screen.container.textContent).not.toContain("Loading audio");
   expect(screen.container.querySelector("audio")).toBeNull();
+});
+
+it("selects the picture source for the current theme", async () => {
+  setup();
+  const light = `${location.origin}/light.png`;
+  const dark = `${location.origin}/dark.png`;
+  await using screen = await render(
+    <ChatMarkdown cwd={undefined} text={`<picture><source media="(prefers-color-scheme: dark)" srcset="${dark}"><img src="${light}" alt="Shot"></picture>`} />,
+  );
+  expect(screen.container.querySelector("img")?.getAttribute("src")).toBe(light);
+  await act(() => {
+    appearance.value = "dark";
+    for (const listener of appearance.listeners) listener();
+  });
+  expect(screen.container.querySelector("img")?.getAttribute("src")).toBe(dark);
 });
 
 it("reuses the parse of a streaming reply's finished blocks when it remounts", async () => {
