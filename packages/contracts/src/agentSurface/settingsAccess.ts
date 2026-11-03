@@ -118,6 +118,7 @@ export const SETTINGS_ACCESS = {
   cursorKeychainUsageEnabled: person("It reads the system keychain."),
   usagePriceOverrides: agent,
   usageModelAliases: agent,
+  usageModelFilter: agent,
   goatBotHome: path("channel.bot_home_claim"),
 } as const satisfies { readonly [K in SettingsKey]-?: SettingsAccess };
 
