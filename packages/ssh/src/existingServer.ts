@@ -5,6 +5,7 @@ import {
   RuntimeSessionRevokeResult,
 } from "@goat/contracts";
 import * as NetService from "@goat/shared/Net";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
@@ -16,6 +17,7 @@ import {
   appServerSessionRequest,
   issueExistingServerCredential,
   probeExistingServer,
+  readForwardEnvironment,
 } from "./appServer.ts";
 import { targetConnectionKey } from "./command.ts";
 import { SshLaunchError, SshPairingError } from "./errors.ts";
@@ -75,6 +77,18 @@ const decodeRevokeResult = Schema.decodeUnknownEffect(
   Schema.fromJsonString(RuntimeSessionRevokeResult),
 );
 
+/** How long a route verified over SSH is reused before ownership on disk is probed again. */
+const OWNER_RECHECK_MS = 5 * 60_000;
+
+interface VerifiedRoute {
+  readonly kind: "app" | "managed";
+  readonly port: number;
+  readonly target: DesktopSshEnvironmentTarget;
+  readonly key: string;
+  readonly httpBaseUrl: string;
+  readonly verifiedAt: number;
+}
+
 export function makeExistingServerRoutes(input: {
   readonly managerScope: Scope.Scope;
   readonly tunnels: Map<string, SshTunnelEntry>;
@@ -97,10 +111,14 @@ export function makeExistingServerRoutes(input: {
     string,
     { readonly kind: "app" | "managed"; readonly entry: SshTunnelEntry }
   >();
+  // Routes verified over SSH, by sidecar key; a reuse still needs its forward to answer.
+  const routes = new Map<string, VerifiedRoute>();
   const sidecarKey = (key: string, environmentId: string) => `${key}\u0000${environmentId}`;
   const close = (entry: SshTunnelEntry) => Scope.close(entry.scope, Exit.void).pipe(Effect.ignore);
 
   const closeFor = Effect.fn("ssh/tunnel.closeSidecarsFor")(function* (key: string) {
+    for (const sideKey of routes.keys())
+      if (sideKey.startsWith(`${key}\u0000`)) routes.delete(sideKey);
     for (const [sideKey, sidecar] of sidecars) {
       if (!sideKey.startsWith(`${key}\u0000`)) continue;
       sidecars.delete(sideKey);
@@ -110,22 +128,29 @@ export function makeExistingServerRoutes(input: {
   const closeAll = Effect.fn("ssh/tunnel.closeSidecars")(function* () {
     const entries = [...sidecars.values()];
     sidecars.clear();
+    routes.clear();
     yield* Effect.forEach(entries, ({ entry }) => close(entry), { concurrency: "unbounded" });
   });
 
+  /**
+   * Probes the host's GOAT servers over SSH for the one that owns `environmentId` on disk,
+   * starting with the kind that owned it last time; each probe is a new SSH connection.
+   */
   const existingOwner = Effect.fn("ssh/tunnel.existingOwner")(function* (
     target: DesktopSshEnvironmentTarget,
     environmentId: EnvironmentId,
+    first: "app" | "managed" = "app",
   ) {
     const known = input.resolvedTargets.get(targetConnectionKey(target)) ?? target;
     const key = targetConnectionKey(known);
     const auth = input.authFor(key);
-    const app = yield* probeExistingServer(known, "app", auth);
-    if (app.kind === "live" && app.environmentId === environmentId)
-      return { kind: "app" as const, owner: app, target: known, key };
-    const managed = yield* probeExistingServer(known, "managed", auth);
-    if (managed.kind === "live" && managed.environmentId === environmentId)
-      return { kind: "managed" as const, owner: managed, target: known, key };
+    for (const kind of first === "app"
+      ? (["app", "managed"] as const)
+      : (["managed", "app"] as const)) {
+      const owner = yield* probeExistingServer(known, kind, auth);
+      if (owner.kind === "live" && owner.environmentId === environmentId)
+        return { kind, owner, target: known, key };
+    }
     return yield* new SshLaunchError({
       message: `GOAT environment ${environmentId} on ${target.alias} is unavailable.`,
       stdout: "",
@@ -153,28 +178,91 @@ export function makeExistingServerRoutes(input: {
         : { kind: "absent" as const };
   });
 
-  const existingEnvironment = Effect.fn("ssh/tunnel.existingEnvironment")(function* (
+  /** The open forward a verified route still uses, if it is the same one. */
+  const forwardFor = (route: VerifiedRoute, sideKey: string) => {
+    const primary = input.tunnels.get(route.key);
+    if (
+      primary?.httpBaseUrl === route.httpBaseUrl &&
+      primary.remotePort === route.port &&
+      primary.remoteServerKind === route.kind
+    )
+      return primary;
+    const sidecar = sidecars.get(sideKey);
+    return sidecar?.kind === route.kind &&
+      sidecar.entry.httpBaseUrl === route.httpBaseUrl &&
+      sidecar.entry.remotePort === route.port
+      ? sidecar.entry
+      : undefined;
+  };
+
+  /**
+   * A route verified over SSH within OWNER_RECHECK_MS whose forward still answers for the same
+   * environment. It costs one HTTP request through that forward, never a new SSH connection.
+   */
+  const reuseRoute = Effect.fn("ssh/tunnel.existingEnvironment.reuse")(function* (
+    sideKey: string,
+    environmentId: EnvironmentId,
+  ) {
+    const route = routes.get(sideKey);
+    if (route === undefined) return undefined;
+    if ((yield* Clock.currentTimeMillis) - route.verifiedAt >= OWNER_RECHECK_MS) return undefined;
+    const forward = forwardFor(route, sideKey);
+    if (
+      forward === undefined ||
+      !(yield* forward.process.isRunning.pipe(Effect.orElseSucceed(() => false)))
+    )
+      return undefined;
+    const live = yield* readForwardEnvironment(
+      forward.httpBaseUrl,
+      forward.readiness.probeTimeoutMs,
+    );
+    return live?.environmentId === environmentId ? { ...route, version: live.version } : undefined;
+  });
+
+  const resolveRoute = Effect.fn("ssh/tunnel.existingEnvironment.route")(function* (
     target: DesktopSshEnvironmentTarget,
     environmentId: EnvironmentId,
   ) {
     const known = input.resolvedTargets.get(targetConnectionKey(target)) ?? target;
     const key = targetConnectionKey(known);
+    const sideKey = sidecarKey(key, environmentId);
+    if (input.isClosed())
+      return yield* new SshLaunchError({ message: "SSH manager is closed.", stdout: "" });
+    const reused = yield* reuseRoute(sideKey, environmentId);
+    if (reused !== undefined) return reused;
     return yield* input.withTargetLock(
       key,
       Effect.gen(function* () {
         if (input.isClosed())
           return yield* new SshLaunchError({ message: "SSH manager is closed.", stdout: "" });
-        const selected = yield* Effect.result(existingOwner(target, environmentId));
+        const selected = yield* Effect.result(
+          existingOwner(target, environmentId, routes.get(sideKey)?.kind),
+        );
         if (selected._tag === "Failure") {
-          const staleKey = sidecarKey(key, environmentId);
-          const stale = sidecars.get(staleKey);
+          routes.delete(sideKey);
+          const stale = sidecars.get(sideKey);
           if (stale !== undefined) {
-            sidecars.delete(staleKey);
+            sidecars.delete(sideKey);
             yield* close(stale.entry);
           }
           return yield* Effect.fail(selected.failure);
         }
         const { owner, kind } = selected.success;
+        const verified = (httpBaseUrl: string) =>
+          Clock.currentTimeMillis.pipe(
+            Effect.map((verifiedAt) => {
+              const route = {
+                kind,
+                port: owner.port,
+                target: selected.success.target,
+                key,
+                httpBaseUrl,
+                verifiedAt,
+              };
+              routes.set(sideKey, route);
+              return { ...route, version: owner.version };
+            }),
+          );
         const primary = input.tunnels.get(key);
         if (
           primary !== undefined &&
@@ -182,8 +270,7 @@ export function makeExistingServerRoutes(input: {
           primary.remoteServerKind === kind &&
           (yield* primary.process.isRunning.pipe(Effect.orElseSucceed(() => false)))
         )
-          return { httpBaseUrl: primary.httpBaseUrl, remoteServerVersion: owner.version };
-        const sideKey = sidecarKey(key, environmentId);
+          return yield* verified(primary.httpBaseUrl);
         const previous = sidecars.get(sideKey);
         if (previous !== undefined) {
           if (
@@ -191,7 +278,7 @@ export function makeExistingServerRoutes(input: {
             previous.entry.remotePort === owner.port &&
             (yield* previous.entry.process.isRunning.pipe(Effect.orElseSucceed(() => false)))
           )
-            return { httpBaseUrl: previous.entry.httpBaseUrl, remoteServerVersion: owner.version };
+            return yield* verified(previous.entry.httpBaseUrl);
           sidecars.delete(sideKey);
           yield* close(previous.entry);
         }
@@ -239,9 +326,17 @@ export function makeExistingServerRoutes(input: {
             .pipe(Effect.ignore),
         );
         sidecars.set(sideKey, { kind, entry });
-        return { httpBaseUrl: entry.httpBaseUrl, remoteServerVersion: owner.version };
+        return yield* verified(entry.httpBaseUrl);
       }),
     );
+  });
+
+  const existingEnvironment = Effect.fn("ssh/tunnel.existingEnvironment")(function* (
+    target: DesktopSshEnvironmentTarget,
+    environmentId: EnvironmentId,
+  ) {
+    const route = yield* resolveRoute(target, environmentId);
+    return { httpBaseUrl: route.httpBaseUrl, remoteServerVersion: route.version };
   });
 
   const issueExistingMcpSession = Effect.fn("ssh/tunnel.issueExistingMcpSession")(function* (
@@ -249,8 +344,8 @@ export function makeExistingServerRoutes(input: {
     environmentId: EnvironmentId,
     sessionOptions: RemoteMcpClientSessionOptions,
   ) {
-    const selected = yield* existingOwner(target, environmentId);
-    yield* existingEnvironment(target, environmentId);
+    // The host's credential script checks the owner's port and environment again.
+    const selected = yield* resolveRoute(target, environmentId);
     const request = appServerSessionRequest(mcpSessionRequestInput(sessionOptions));
     if (Option.isNone(request))
       return yield* new SshPairingError({
@@ -260,7 +355,7 @@ export function makeExistingServerRoutes(input: {
     const body = yield* issueExistingServerCredential(
       selected.target,
       selected.kind,
-      selected.owner.port,
+      selected.port,
       request.value,
       input.authFor(selected.key),
       environmentId,
@@ -291,12 +386,11 @@ export function makeExistingServerRoutes(input: {
     environmentId: EnvironmentId,
     sessionId: AuthSessionId,
   ) {
-    const selected = yield* existingOwner(target, environmentId);
-    yield* existingEnvironment(target, environmentId);
+    const selected = yield* resolveRoute(target, environmentId);
     const body = yield* issueExistingServerCredential(
       selected.target,
       selected.kind,
-      selected.owner.port,
+      selected.port,
       { kind: "revoke", sessionId },
       input.authFor(selected.key),
       environmentId,
