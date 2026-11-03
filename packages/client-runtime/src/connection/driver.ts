@@ -157,9 +157,22 @@ export const connectOverRoutes = Effect.fn("ConnectionDriver.connectOverRoutes")
     if (result._tag === "Success") return result.success;
     if (result.failure.reason === "unsupported") return yield* result.failure;
   }
+  // A direct route that may come back keeps the retry; the hub's refusal says why the hub route can't help.
+  if (transient !== undefined && hubPermission !== undefined)
+    return yield* new ConnectionTransientError({
+      reason: transient.reason,
+      detail: `${transient.detail} Through the hub: ${hubPermission.detail}`,
+      ...(transient.retryAfterMillis === undefined
+        ? {}
+        : { retryAfterMillis: transient.retryAfterMillis }),
+      ...(transient.traceId === undefined ? {} : { traceId: transient.traceId }),
+      ...(transient.hop === undefined ? {} : { hop: transient.hop }),
+      ...(transient.via === undefined ? {} : { via: transient.via }),
+      ...(transient.failureCause === undefined ? {} : { failureCause: transient.failureCause }),
+      ...(transient.httpStatus === undefined ? {} : { httpStatus: transient.httpStatus }),
+    });
   return yield* (
-    hubPermission ??
-      transient ??
+    transient ??
       blocked ??
       new ConnectionTransientError({
         reason: "endpoint-unavailable",

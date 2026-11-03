@@ -100,7 +100,7 @@ const makeRegistry = Effect.gen(function* () {
   return { registry, entries, removed, registered, registrations };
 });
 
-it.effect("keeps known hub nodes on the reachable route when its session lacks hub access", () =>
+it.effect("leaves hub device routes alone when the hub session lacks hub access", () =>
   Effect.gen(function* () {
     const h = yield* makeRegistry;
     yield* watchHubProxyDiscovery(
@@ -114,12 +114,7 @@ it.effect("keeps known hub nodes on the reachable route when its session lacks h
       }),
     ).pipe(Effect.provideService(EnvironmentRegistry, h.registry));
     expect(yield* Deferred.isDone(h.removed)).toBe(false);
-    expect(h.registrations).toHaveLength(1);
-    expect(h.registrations[0]?._tag).toBe("HubProxyConnectionRegistration");
-    const registration = h.registrations[0];
-    if (registration?._tag !== "HubProxyConnectionRegistration")
-      throw new Error("Expected hub route");
-    expect(registration.profile.hubConnectionId).toBe("another-route");
+    expect(h.registrations).toEqual([]);
   }),
 );
 
@@ -134,12 +129,18 @@ const makeConnectedDiscovery = Effect.fn(function* (options: {
   readonly bearerOverTailscale?: boolean;
   /** Makes the active route a Tailscale route learned through route "a" at this LAN address. */
   readonly learnedFromLan?: string;
+  /** Session reads with the hub-access token that fail before one answers. */
+  readonly failStrongReads?: number;
+  /** Runs when the hub-access token is checked, before the hub answers. */
+  readonly onStrongRead?: (stored: Map<string, BearerConnectionCredential>) => void;
 }) {
   const h = yield* makeRegistry;
   const firstRead = yield* Deferred.make<void>();
   const subscribed = yield* Deferred.make<void>();
   const reconciled = yield* Deferred.make<void>();
+  const strongRead = yield* Deferred.make<void>();
   let reads = 0;
+  let strongReads = 0;
   let subscriptions = 0;
   const primary = new PrimaryConnectionTarget({
     environmentId: HUB,
@@ -286,9 +287,15 @@ const makeConnectedDiscovery = Effect.fn(function* (options: {
       yield* Deferred.succeed(firstRead, undefined);
       const header = request.headers.authorization ?? "";
       requests.push(header);
+      if (header === "Bearer strong") {
+        strongReads++;
+        options.onStrongRead?.(stored);
+        yield* Deferred.succeed(strongRead, undefined);
+      }
       return HttpClientResponse.fromWeb(
         request,
-        reads <= (options.failReads ?? 0)
+        reads <= (options.failReads ?? 0) ||
+          (header === "Bearer strong" && strongReads <= (options.failStrongReads ?? 0))
           ? new Response("unavailable", { status: 503 })
           : Response.json(
               header === "Bearer strong" ? { ...auth, scopes: [AuthHubProxyScope] } : auth,
@@ -328,6 +335,7 @@ const makeConnectedDiscovery = Effect.fn(function* (options: {
     counts: () => ({ reads, subscriptions }),
     stored,
     requests,
+    strongRead,
   };
 });
 
@@ -340,7 +348,7 @@ describe("a hub reached with a session that lacks hub:proxy", () => {
       }),
     );
 
-  it.effect("switches the active route to the saved credential that has hub access", () =>
+  it.effect("saves the pairing that has hub access for the active route", () =>
     Effect.gen(function* () {
       const h = yield* makeConnectedDiscovery({
         scopes: [],
@@ -349,7 +357,40 @@ describe("a hub reached with a session that lacks hub:proxy", () => {
       });
       yield* Deferred.await(h.subscribed);
       expect(h.stored.get("a")?.token).toBe("strong");
-      expect(yield* preparedToken(h)).toBe("strong");
+      // The live socket keeps its own session, so its permissions stay what the server enforces.
+      expect(yield* preparedToken(h)).toBe("weak");
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("retries a hub-access check that failed for a moment", () =>
+    Effect.gen(function* () {
+      const h = yield* makeConnectedDiscovery({
+        scopes: [],
+        bearerAddress: "http://100.100.1.1:3773/",
+        bearerOverTailscale: true,
+        failStrongReads: 1,
+      });
+      yield* Deferred.await(h.strongRead);
+      yield* TestClock.adjust("1 second");
+      yield* Deferred.await(h.subscribed);
+      expect(h.stored.get("a")?.token).toBe("strong");
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("keeps a pairing saved while the hub-access check was running", () =>
+    Effect.gen(function* () {
+      const h = yield* makeConnectedDiscovery({
+        scopes: [],
+        bearerAddress: "http://100.100.1.1:3773/",
+        bearerOverTailscale: true,
+        onStrongRead: (stored) => {
+          stored.set("a", new BearerConnectionCredential({ token: "fresh" }));
+        },
+      });
+      yield* Deferred.await(h.strongRead);
+      yield* TestClock.adjust("1 minute");
+      expect(h.stored.get("a")?.token).toBe("fresh");
+      expect(h.counts().subscriptions).toBe(0);
     }).pipe(Effect.scoped),
   );
 
@@ -359,7 +400,8 @@ describe("a hub reached with a session that lacks hub:proxy", () => {
         scopes: [],
         bearerAddress: "http://192.168.1.5:3773/",
       });
-      yield* Deferred.await(h.reconciled);
+      yield* Deferred.await(h.firstRead);
+      yield* TestClock.adjust("1 minute");
       expect(h.requests).not.toContain("Bearer strong");
       expect(h.stored.get("a")?.token).toBe("weak");
       expect(yield* preparedToken(h)).toBe("weak");
@@ -373,7 +415,8 @@ describe("a hub reached with a session that lacks hub:proxy", () => {
         bearerAddress: "http://100.100.1.1:3773/",
         learnedFromLan: "http://192.168.1.5:3773/",
       });
-      yield* Deferred.await(h.reconciled);
+      yield* Deferred.await(h.firstRead);
+      yield* TestClock.adjust("1 minute");
       expect(h.requests).not.toContain("Bearer strong");
       expect(h.stored.get("a")?.token).toBe("weak");
     }).pipe(Effect.scoped),
@@ -560,7 +603,7 @@ describe("hub proxy discovery coordinator", () => {
   );
 
   it.effect.each([
-    { scopes: [] as readonly AuthEnvironmentScope[], capability: true, registered: [NODE] },
+    { scopes: [] as readonly AuthEnvironmentScope[], capability: true, registered: [] },
     { scopes: [AuthHubProxyScope], capability: false, registered: [] },
     { scopes: [AuthHubProxyScope], capability: true, registered: [EnvironmentId.make("new")] },
   ])(

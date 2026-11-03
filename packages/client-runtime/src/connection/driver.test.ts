@@ -61,7 +61,7 @@ function driverWith(prepare: Resolver.ConnectionResolver["Service"]["prepare"]) 
 }
 
 describe("SSH driver routing", () => {
-  it.effect("reports a hub permission refusal when the direct route is unreachable", () =>
+  it.effect("keeps retrying an unreachable direct route and names the hub's refusal", () =>
     Effect.gen(function* () {
       const refusal = hubProxyRefusal({ requiredScope: "hub:proxy" });
       const error = yield* Driver.connectOverRoutes(
@@ -86,7 +86,11 @@ describe("SSH driver routing", () => {
                 new ConnectionTransientError({ reason: "endpoint-unavailable", detail: "Offline" }),
               ),
       ).pipe(Effect.flip);
-      expect(error).toBe(refusal);
+      expect(error).toMatchObject({
+        _tag: "ConnectionTransientError",
+        reason: "endpoint-unavailable",
+      });
+      expect(error.detail).toContain(refusal.detail);
     }),
   );
   it.effect("stops a neutral attempt before trying a fallback route", () =>

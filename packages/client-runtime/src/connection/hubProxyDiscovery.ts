@@ -137,31 +137,14 @@ export const watchHubProxyDiscovery = <E, R>(
             update.config?.environment.capabilities.hubProxy === true;
           const entries = yield* SubscriptionRef.get(registry.entries);
           if (!entries.has(update.hubEnvironmentId)) return;
-          const missingHubAccess =
-            !authorized && update.config?.environment.capabilities.hubProxy === true;
-          if (
-            (authorized || missingHubAccess) &&
-            (yield* registry.state(update.hubEnvironmentId)).phase !== "connected"
-          )
+          // Without hub:proxy, device routes stay as they are: one bound to another pairing may
+          // still work, and one bound to this route shows the hub's refusal.
+          if (!authorized && update.config?.environment.capabilities.hubProxy === true) return;
+          if (authorized && (yield* registry.state(update.hubEnvironmentId)).phase !== "connected")
             return;
-          const knownNodes = missingHubAccess
-            ? [...entries.values()].flatMap(connectionRoutes).flatMap((route) => {
-                const profile = Option.getOrNull(route.profile);
-                return profile?._tag === "HubProxyConnectionProfile" &&
-                  profile.hubEnvironmentId === update.hubEnvironmentId
-                  ? [
-                      {
-                        nodeId: profile.nodeId,
-                        environmentId: profile.environmentId,
-                        label: profile.label,
-                      },
-                    ]
-                  : [];
-              })
-            : [];
           const changes = reconcileHubProxyRoutes({
             ...update,
-            nodes: authorized ? update.nodes : knownNodes,
+            nodes: authorized ? update.nodes : [],
             existing: [...entries.values()],
           });
           for (const id of changes.remove) {
@@ -248,9 +231,9 @@ export const watchConnectedHubProxyDiscovery = Effect.gen(function* () {
   const remoteAuthorization = yield* Effect.serviceOption(RemoteEnvironmentAuthorization);
   // Pairing the hub again at another address saves a second session beside the first, and route
   // order can pick the one without hub:proxy. The active credential then takes the saved one that
-  // has it, so both routes keep hub access, unless that token would travel over plain HTTP.
+  // has it unless that token would travel over plain HTTP. Device routes read it from the store;
+  // the live socket keeps its session, and with it its permissions, until it reconnects.
   const adoptSavedHubAccess = Effect.fn("HubProxyDiscovery.adoptSavedHubAccess")(function* (
-    supervisor: EnvironmentSupervisor["Service"],
     prepared: PreparedConnection,
   ) {
     const target = prepared.target;
@@ -263,26 +246,31 @@ export const watchConnectedHubProxyDiscovery = Effect.gen(function* () {
     const sharing = routes.filter(
       (route) => credentialConnectionId(connectionRouteId(route.target)) === activeCredentialId,
     );
-    const tried = new Set([activeCredentialId]);
-    for (const route of routes) {
-      const credentialId = credentialConnectionId(connectionRouteId(route.target));
-      if (route.target._tag !== "BearerConnectionTarget" || tried.has(credentialId)) continue;
-      tried.add(credentialId);
+    // The active credential comes first: an earlier adoption may already have replaced it.
+    const candidates = new Set([
+      activeCredentialId,
+      ...routes.flatMap((route) =>
+        route.target._tag === "BearerConnectionTarget"
+          ? [credentialConnectionId(connectionRouteId(route.target))]
+          : [],
+      ),
+    ]);
+    for (const credentialId of candidates) {
       if (sharing.some((shared) => sendsTokenInClear(routes, shared, undefined, credentialId)))
         continue;
       const saved = Option.getOrUndefined(
         yield* credentials.get(credentialId).pipe(Effect.orElseSucceed(() => Option.none())),
       );
       if (saved === undefined || saved.token === current.token) continue;
-      const authorization = { _tag: "Bearer" as const, token: saved.token };
       const state = yield* fetchEnvironmentSessionState({
-        prepared: { ...prepared, httpAuthorization: authorization },
+        prepared: { ...prepared, httpAuthorization: { _tag: "Bearer", token: saved.token } },
         signer,
         remoteAuthorization,
-      }).pipe(Effect.option);
-      if (Option.isNone(state) || !state.value.authenticated) continue;
-      const scopes = state.value.permissions ?? state.value.scopes ?? [];
+      }).pipe(Effect.catchIf(isTerminalDiscoveryError, () => Effect.void));
+      if (state === undefined || !state.authenticated) continue;
+      const scopes = state.permissions ?? state.scopes ?? [];
       if (!scopes.includes(AuthHubProxyScope)) continue;
+      if (credentialId === activeCredentialId) return Option.some(scopes);
       const written = yield* credentials.put(activeCredentialId, saved, current.token).pipe(
         Effect.andThen(credentials.get(activeCredentialId)),
         Effect.map((stored) => Option.isSome(stored) && stored.value.token === saved.token),
@@ -293,11 +281,6 @@ export const watchConnectedHubProxyDiscovery = Effect.gen(function* () {
         ),
       );
       if (!written) return Option.none<ReadonlyArray<AuthEnvironmentScope>>();
-      yield* SubscriptionRef.update(supervisor.prepared, (live) =>
-        Option.isSome(live) && live.value.target === target
-          ? Option.some({ ...live.value, httpAuthorization: authorization })
-          : live,
-      );
       yield* Effect.logInfo("Using the saved hub credential that has hub access.", {
         environmentId: target.environmentId,
         connectionId: activeCredentialId,
@@ -421,7 +404,7 @@ export const watchConnectedHubProxyDiscovery = Effect.gen(function* () {
                       const sessionScopes = ownScopes.includes(AuthHubProxyScope)
                         ? ownScopes
                         : Option.getOrElse(
-                            yield* adoptSavedHubAccess(supervisor, prepared.value),
+                            yield* adoptSavedHubAccess(prepared.value),
                             () => ownScopes,
                           );
                       if (!sessionScopes.includes(AuthHubProxyScope))
