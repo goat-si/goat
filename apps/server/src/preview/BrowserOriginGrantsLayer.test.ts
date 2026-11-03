@@ -312,7 +312,16 @@ it.effect("a settings change ends blocked claims and pending requests without a 
     assert.deepEqual((yield* base.getSettings).blockedBrowserHosts, ["example.test"]);
     yield* Queue.offer(events, undefined);
     if (subscribed) yield* Deferred.await(processed);
-    assert.deepEqual((yield* service.list(threadId)).claims, []);
+    const listed = yield* service.list(threadId);
+    assert.deepEqual(listed.claims, []);
+    assert.includeDeepMembers(listed.ended ?? [], [
+      { claimId: claim.claimId, reason: "blocked_url" },
+    ]);
+    assert.notInclude(
+      (listed.ended ?? []).map((item) => item.claimId),
+      pending.claimId,
+    );
+    assert.isUndefined((yield* service.list(ThreadId.make("thread:other"))).ended);
     assert.equal(yield* service.endReason(threadId, claim.claimId), "blocked_url");
     const snapshot = yield* service.snapshotFor(threadId);
     assert.deepEqual(snapshot.claims, []);

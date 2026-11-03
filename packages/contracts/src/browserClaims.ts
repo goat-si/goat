@@ -109,4 +109,12 @@ export const BrowserClaimResult = Schema.Union([
 export const BrowserClaimsSnapshot = Schema.Struct({
   claims: Schema.Array(LiveTabClaim),
   grants: Schema.Array(BrowserOriginGrant),
+  ended: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        claimId: TrimmedNonEmptyString,
+        reason: BrowserClaimEndReason,
+      }),
+    ).check(Schema.isMaxLength(50)),
+  ),
 });

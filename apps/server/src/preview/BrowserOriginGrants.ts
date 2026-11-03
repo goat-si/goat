@@ -156,6 +156,12 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
   const targets = new WeakMap<LiveTabClaim, string>();
   const grants = new Map<string, BrowserOriginGrant>();
   const uncommittedGrants = new Set<string>();
+  const blockedClaimEnds = new Map<string, ThreadId>();
+  const rememberBlockedClaim = (claimId: string, threadId: ThreadId) => {
+    blockedClaimEnds.set(claimId, threadId);
+    if (blockedClaimEnds.size > 50)
+      blockedClaimEnds.delete(blockedClaimEnds.keys().next().value ?? "");
+  };
   const ended = new Map<
     string,
     {
@@ -326,13 +332,21 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     ),
   );
   const list = Effect.fn("BrowserOriginGrants.list")((threadId: ThreadId) =>
-    Effect.sync(() => ({
-      claims: [...claims.values()].filter((claim) => claim.threadId === threadId),
-      grants: [...grants.values()].filter(
-        (grant) =>
-          grant.threadId === threadId && !uncommittedGrants.has(key(grant.threadId, grant.origin)),
-      ),
-    })),
+    Effect.sync(() => {
+      const endedClaims = [...blockedClaimEnds]
+        .filter(([, owner]) => owner === threadId)
+        .slice(-50)
+        .map(([claimId]) => ({ claimId, reason: "blocked_url" as const }));
+      return {
+        claims: [...claims.values()].filter((claim) => claim.threadId === threadId),
+        grants: [...grants.values()].filter(
+          (grant) =>
+            grant.threadId === threadId &&
+            !uncommittedGrants.has(key(grant.threadId, grant.origin)),
+        ),
+        ...(endedClaims.length === 0 ? {} : { ended: endedClaims }),
+      };
+    }),
   );
   const claim = Effect.fn("BrowserOriginGrants.claim")(function* (input: Request) {
     const result = yield* request(input);
@@ -434,6 +448,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
       if (!isBlockedBrowserUrl(claim.origin, hosts)) continue;
       claims.delete(id);
       ended.set(id, { threadId: claim.threadId, reason: "blocked_url" });
+      rememberBlockedClaim(id, claim.threadId);
       changed = true;
     }
     for (const signal of signals) yield* Deferred.succeed(signal, undefined);
@@ -454,6 +469,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
           if (claim?.threadId !== threadId || claim.claimGeneration !== generation) return false;
           claims.delete(claimId);
           ended.set(claimId, { threadId, reason });
+          if (reason === "blocked_url") rememberBlockedClaim(claimId, threadId);
           yield* shrink(union());
           return true;
         }),

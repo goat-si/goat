@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
-import { BrowserOrigin } from "./browserClaims.ts";
+import { BrowserOrigin, BrowserClaimsSnapshot } from "./browserClaims.ts";
+
+const decodeClaimsSnapshot = Schema.decodeUnknownSync(BrowserClaimsSnapshot);
 
 describe("BrowserOrigin", () => {
   it("accepts only canonical HTTP origins without credentials, paths, queries or fragments", () => {
@@ -20,4 +22,13 @@ describe("BrowserOrigin", () => {
     ])
       expect(() => decode(origin), origin).toThrow();
   });
+});
+
+it("keeps blocked claim endings in the agent-facing snapshot", () => {
+  const snapshot = {
+    claims: [],
+    grants: [],
+    ended: [{ claimId: "claim-1", reason: "blocked_url" }],
+  };
+  expect(decodeClaimsSnapshot(snapshot)).toEqual(snapshot);
 });
