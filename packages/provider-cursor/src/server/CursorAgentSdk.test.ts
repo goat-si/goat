@@ -33,7 +33,7 @@ import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import { packMemoryContext } from "@goat/provider-core/server/memoryContext";
 import * as TestProviderHost from "@goat/provider-testing/TestProviderHost";
 import { CursorSettings } from "../settings.ts";
-import { makeCursorAdapterV2 } from "./adapter.ts";
+import { cursorMcpServers, makeCursorAdapterV2 } from "./adapter.ts";
 
 const decodeCursorSettings = Schema.decodeEffect(CursorSettings);
 
@@ -61,7 +61,10 @@ const cursorSdkMock = vi.hoisted(() => {
   const send = vi.fn(
     async (
       message: string | { text: string },
-      options: { readonly onDelta?: (input: { readonly update: unknown }) => Promise<void> },
+      options: {
+        readonly onDelta?: (input: { readonly update: unknown }) => Promise<void>;
+        readonly mcpServers?: unknown;
+      },
     ) => {
       runOperations.push("run.start");
       sentMessages.push(typeof message === "string" ? message : message.text);
@@ -125,6 +128,7 @@ const cursorSdkMock = vi.hoisted(() => {
 });
 
 vi.mock("./sdk.ts", () => ({
+  isCursorSdkError: () => false,
   loadCursorSdk: () => ({
     Agent: {
       create: cursorSdkMock.create,
@@ -355,10 +359,8 @@ describe("CursorAgentSdkRunner", () => {
             attachments: [],
           },
           refreshMemoryContext: () =>
-            Effect.gen(function* () {
+            Effect.sync(() => {
               refreshes++;
-              if (refreshes === 3 && restoreGrant) yield* sessions.set(retryAttachment);
-              // Recovery must refresh the snapshot rather than reuse the first message.
               return refreshes === 3 ? snapshot : undefined;
             }),
         };
@@ -379,7 +381,25 @@ describe("CursorAgentSdkRunner", () => {
         yield* finishTurn(1);
         assert.include(cursorSdkMock.sentMessages[0]!, "read=true, write=false, source=false");
         yield* sessions.clear(threadId);
-        if (restoreGrant) yield* sessions.set({ ...retryAttachment, grantedScopes: [] });
+        yield* sessions.set({
+          ...attachment,
+          authorizationHeader: "Bearer prior-recovery",
+          grantedScopes: [],
+        });
+        const cancelled = Promise.withResolvers<void>();
+        const releaseCancel = Promise.withResolvers<void>();
+        cursorSdkMock.cancelRun.mockImplementationOnce(async () => {
+          cursorSdkMock.runOperations.push("agent.cancelRun");
+          cancelled.resolve();
+          await releaseCancel.promise;
+          cursorSdkMock.setStaleRunActive(false);
+        });
+        yield* Effect.gen(function* () {
+          yield* Effect.promise(() => cancelled.promise);
+          if (restoreGrant) yield* sessions.set(retryAttachment);
+          else yield* sessions.clear(threadId);
+          releaseCancel.resolve();
+        }).pipe(Effect.forkScoped);
         cursorSdkMock.setStaleRunActive(true);
         cursorSdkMock.runOperations.length = 0;
         yield* finishTurn(2);
@@ -396,6 +416,10 @@ describe("CursorAgentSdkRunner", () => {
         assert.include(
           cursorSdkMock.sentMessages[2]!,
           `read=${restoreGrant}, write=false, source=false`,
+        );
+        assert.deepEqual(
+          cursorSdkMock.send.mock.calls[2]?.[1].mcpServers,
+          restoreGrant ? cursorMcpServers(retryAttachment) : {},
         );
         assert.equal(refreshes, 3);
         yield* sessions.clear(threadId);

@@ -10,12 +10,24 @@ import { loadCursorSdk, loadCursorSqlite } from "./sdk.ts";
  * a promise nothing awaits. If that stream has already closed, the write rejects.
  * The SDK's class is minified, so only its name and message identify it.
  */
-const classifyCursorRejection = (reason: unknown) =>
-  reason instanceof Error &&
-  reason.name === "WriteIterableClosedError" &&
-  reason.message === "WritableIterable is closed"
-    ? "Cursor SDK wrote to a closed exec stream."
-    : undefined;
+const classifyCursorRejection = (reason: unknown) => {
+  if (!(reason instanceof Error)) return undefined;
+  if (
+    reason.name === "WriteIterableClosedError" &&
+    reason.message === "WritableIterable is closed"
+  ) {
+    return "Cursor SDK wrote to a closed exec stream.";
+  }
+  if (
+    reason.name === "ConnectError" &&
+    Reflect.get(reason, "code") === 10 &&
+    reason.cause instanceof Error &&
+    Reflect.get(reason.cause, "code") === "ERR_STREAM_WRITE_AFTER_END"
+  ) {
+    return "Cursor SDK wrote to an ended request stream.";
+  }
+  return undefined;
+};
 
 /** Keeps Cursor's rejection classifier registered while in-process agents run. */
 export class CursorSdk extends Context.Service<

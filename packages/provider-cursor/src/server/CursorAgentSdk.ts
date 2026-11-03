@@ -88,9 +88,13 @@ export interface CursorAgentSdkOpenInput {
 export interface CursorAgentSdkSendInput<Error> {
   readonly message: string | SDKUserMessage;
   /** Process-local admission for recovery sends; message is the prepared first admission. */
-  readonly prepareMessage?: () => Effect.Effect<string | SDKUserMessage, CursorAgentSdkRunnerError>;
+  readonly prepareMessage?: () => Effect.Effect<
+    { readonly message: string | SDKUserMessage; readonly mcpServers: SendOptions["mcpServers"] },
+    CursorAgentSdkRunnerError
+  >;
   readonly options?: Omit<SendOptions, "onDelta">;
   readonly onDelta?: (update: InteractionUpdate) => Effect.Effect<void, Error>;
+  readonly summarize?: boolean;
 }
 
 export interface CursorAgentSdkRun {
@@ -141,6 +145,8 @@ export interface CursorAgentSdkLoggedAgentOptions {
 export interface CursorAgentSdkLoggedSendOptions {
   readonly model?: SendOptions["model"];
   readonly mode?: SendOptions["mode"];
+  readonly hasMcpServers?: boolean;
+  readonly mcpServerNames?: ReadonlyArray<string>;
   readonly local?: {
     readonly force?: boolean;
     readonly hasCustomTools?: boolean;
@@ -270,6 +276,9 @@ export function loggedCursorAgentOptions(options: AgentOptions): CursorAgentSdkL
     ...(options.model === undefined ? {} : { model: options.model }),
     ...(options.name === undefined ? {} : { hasName: true }),
     ...(options.mode === undefined ? {} : { mode: options.mode }),
+    ...(options.mcpServers === undefined
+      ? {}
+      : { hasMcpServers: true, mcpServerNames: Object.keys(options.mcpServers).toSorted() }),
     ...(options.local === undefined
       ? {}
       : {
@@ -457,33 +466,45 @@ export const makeCursorAgentSdkRunner = Effect.fn("makeCursorAgentSdkRunner")(fu
 
           const startRun = (recovering = false) =>
             Effect.gen(function* () {
-              const message =
+              const prepared =
                 recovering && sendInput.prepareMessage
                   ? yield* sendInput
                       .prepareMessage()
                       .pipe(Effect.mapError((cause) => runnerError(cause, "run.prepareMessage")))
-                  : sendInput.message;
+                  : undefined;
+              const message = prepared?.message ?? sendInput.message;
+              const { mcpServers: _originalMcpServers, ...otherOptions } = sendInput.options ?? {};
+              const options =
+                prepared === undefined
+                  ? sendInput.options
+                  : {
+                      ...otherOptions,
+                      // An omitted override falls back to the agent's original servers.
+                      mcpServers: prepared.mcpServers ?? {},
+                    };
               yield* log({
                 direction: "outgoing",
                 stage: "decoded",
                 payload: {
                   type: "run.start",
                   message,
-                  options: loggedCursorSendOptions(sendInput.options),
+                  options: loggedCursorSendOptions(options),
                 },
               });
               return yield* Effect.tryPromise({
                 try: () =>
-                  agent.send(message, {
-                    ...sendInput.options,
-                    onDelta: async ({ update }) => {
-                      if (!callbacksReady) {
-                        pendingUpdates.push(update);
-                        return;
-                      }
-                      await dispatchUpdate(update);
-                    },
-                  }),
+                  sendInput.summarize === true
+                    ? agent.summarize()
+                    : agent.send(message, {
+                        ...options,
+                        onDelta: async ({ update }) => {
+                          if (!callbacksReady) {
+                            pendingUpdates.push(update);
+                            return;
+                          }
+                          await dispatchUpdate(update);
+                        },
+                      }),
                 catch: (cause) => runnerError(cause, "run.start"),
               });
             });

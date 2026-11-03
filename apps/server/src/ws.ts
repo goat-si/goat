@@ -147,8 +147,6 @@ import { withWebSocketIdleTimeout } from "./wsIdleTimeout.ts";
 
 import * as AcpRegistryRuntimeCoordinator from "@goat/provider-acp-registry/server/AcpRegistryRuntimeCoordinator";
 import * as AcpRegistrySupport from "@goat/provider-acp-registry/server/AcpRegistrySupport";
-import * as ProviderLatestVersions from "@goat/provider-core/server/ProviderLatestVersions";
-import { latestProviderVersionCacheKeys } from "@goat/provider-core/server/maintenanceResolver";
 import * as RelayClient from "@goat/shared/relayClient";
 import { isTelemetryIdHash } from "@goat/shared/telemetryId";
 import { withUsageLimitsCommands } from "@goat/shared/usageLimits";
@@ -285,7 +283,6 @@ import * as ProjectService from "./project/ProjectService.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as WorktreeSetupTracker from "./project/WorktreeSetupTracker.ts";
 import { threadWorkspaceRoot } from "./project/threadWorkspaceRoot.ts";
-import * as ModelManifest from "./provider/ModelManifest.ts";
 import * as CloudProviderAutoSetup from "./provider/CloudProviderAutoSetup.ts";
 import * as ProviderAuthService from "./provider/ProviderAuthService.ts";
 import * as ProviderInstanceRegistry from "./provider/ProviderInstanceRegistry.ts";
@@ -1418,8 +1415,6 @@ export const layerWsRpc = (
       const previewManager = yield* PreviewManager.PreviewManager;
       const portDiscovery = yield* PortScanner.PortDiscovery;
       const providerRegistry = yield* ProviderRegistry.ProviderRegistry;
-      const modelManifest = yield* ModelManifest.ModelManifest;
-      const providerLatestVersions = yield* ProviderLatestVersions.ProviderLatestVersions;
       const providerInstances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
       const cloudAutoSetup = yield* CloudProviderAutoSetup.CloudProviderAutoSetup;
       const acpRegistryCatalog = yield* AcpRegistrySupport.AcpRegistryCatalog;
@@ -2521,30 +2516,11 @@ export const layerWsRpc = (
           /* Request instrumentation already owns the span; keep this helper in that context. */
           Effect.fnUntraced(function* (input) {
             if (input.refreshModels) {
-              yield* modelManifest.forceRefresh;
-              const instances = yield* providerInstances.listInstances;
-              yield* Effect.forEach(
-                instances.filter(
-                  (instance) =>
-                    input.instanceId === undefined || input.instanceId === instance.instanceId,
-                ),
-                (instance) =>
-                  Effect.gen(function* () {
-                    yield* instance.invalidateCaches ?? Effect.void;
-                    const maintenance = yield* instance.snapshot.resolveMaintenance({
-                      fresh:
-                        input.instanceId !== undefined &&
-                        input.cwd !== undefined &&
-                        input.fresh !== true,
-                    });
-                    yield* Effect.forEach(
-                      latestProviderVersionCacheKeys(maintenance),
-                      providerLatestVersions.invalidate,
-                      { discard: true },
-                    );
-                  }),
-                { concurrency: "unbounded", discard: true },
-              );
+              yield* providerRegistry.invalidateModelCaches({
+                instanceId: input.instanceId,
+                cwd: input.cwd,
+                fresh: input.fresh,
+              });
             }
             // Await refresh; RPC scope closure would interrupt a fork before the hub answered.
             if (input.instanceId === undefined) {
