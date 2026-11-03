@@ -69,9 +69,13 @@ describe("sidebar project scope", () => {
     const search = page.getByRole("combobox", { name: "Search projects" });
     await userEvent.fill(search, "Al");
     await userEvent.keyboard("{Shift>}");
-    await userEvent.click(page.getByRole("option", { name: "Alpha" }));
+    await userEvent.click(
+      page.getByRole("option", { name: "Alpha" }).getByText("Alpha", { exact: true }),
+    );
     await expect.element(search).toHaveValue("Al");
-    await userEvent.click(page.getByRole("option", { name: "Alpine" }));
+    await userEvent.click(
+      page.getByRole("option", { name: "Alpine" }).getByText("Alpine", { exact: true }),
+    );
     await userEvent.keyboard("{/Shift}");
     await expect.element(search).toHaveValue("Al");
     const trigger = screen.getByRole("combobox", {
