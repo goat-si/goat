@@ -524,6 +524,21 @@ it("streams an isolated server-rendered tab on the desktop once its background t
   await expect.element(card.getByRole("button", { name: "Take over" })).toBeInTheDocument();
 });
 
+it("fits an enlarged browser card including its toolbar in a height-limited viewport", async () => {
+  setup([browserTab()]);
+  await page.viewport(1400, 501);
+  using _pane = paneOf(1400);
+  await using screen = await render(<Cards />);
+  const card = screen.getByRole("article", { name: "GOAT (Dev): Agent controlling" });
+  await userEvent.click(card.getByRole("button", { name: "Enlarge" }), { force: true });
+  await expect.element(card).toHaveAttribute("data-size", "large");
+  const scroll = card.element().closest("[data-agent-cards-scroll]");
+  expect(scroll).not.toBeNull();
+  expect(card.element().getBoundingClientRect().bottom).toBeLessThanOrEqual(
+    scroll!.getBoundingClientRect().bottom,
+  );
+});
+
 it("reveals the main desktop window when a floating card opens its tab in the panel", async () => {
   setup([browserTab()]);
   state.nativeDesktop = true;
