@@ -1765,7 +1765,6 @@ it.effect.each([false, true])(
     }),
 );
 
-// #858: the recheck right before the remote launch compares the grant the claim made.
 it.effect("SSH supervisor launch from a caller that cannot merge keeps pr.merge and launches", () =>
   Effect.gen(function* () {
     const { response, launchInputs } = yield* launchRaw({
@@ -1775,5 +1774,6 @@ it.effect("SSH supervisor launch from a caller that cannot merge keeps pr.merge 
     });
     expect(response).toHaveProperty("threadId", "remote-thread");
     expect(launchInputs[0]?.permissionProfileCeiling?.capabilities).toContain("pr.merge");
+    expect(launchInputs[0]).toHaveProperty("goatclawRole", "supervisor");
   }),
 );

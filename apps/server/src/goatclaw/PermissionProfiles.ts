@@ -546,7 +546,7 @@ export const layer = Layer.effect(
           return yield* refusal("goatclaw is off, so role launches are unavailable.");
         return effective;
       }
-      let granted = effective;
+      let granted = input.role === undefined ? directWriteProfile(effective) : effective;
       // The profile the child is bound under before any ceiling narrows it.
       let base = effective.narrowing?.named ?? effective.profile;
       if (input.role !== undefined) {
@@ -670,6 +670,17 @@ export const layer = Layer.effect(
               );
               // A send rebinds an existing role thread under the grant assertTarget admitted it
               // with, so the capabilities its role keeps survive the narrowing.
+              const previousRole =
+                previous === undefined
+                  ? undefined
+                  : (yield* decodeBindingRole(previous.ceiling_json).pipe(
+                      Effect.mapError(storageFailure),
+                    )).goatclawRole;
+              const resumeGrant =
+                previousRole !== undefined &&
+                missingRoleCapabilities(previousRole, effective.profile).length === 0
+                  ? effective
+                  : granted;
               const inherited =
                 previous === undefined
                   ? { ...granted.profile, ...(narrower === undefined ? {} : { id: narrower.id }) }
@@ -678,15 +689,9 @@ export const layer = Layer.effect(
                         Effect.mapError(storageFailure),
                       ),
                       input.role === undefined
-                        ? yield* reachGrant(previous.profile_id, granted)
+                        ? yield* reachGrant(previous.profile_id, resumeGrant)
                         : granted.profile,
                     );
-              const previousRole =
-                previous === undefined
-                  ? undefined
-                  : (yield* decodeBindingRole(previous.ceiling_json).pipe(
-                      Effect.mapError(storageFailure),
-                    )).goatclawRole;
               const bindingRole = previousRole ?? input.role;
               const bindingJson = encodeBinding({
                 ...inherited,

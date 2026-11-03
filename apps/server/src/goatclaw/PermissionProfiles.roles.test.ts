@@ -134,6 +134,78 @@ it.effect("#2194: an ordinary owner retains direct PR writes", () =>
   }).pipe(Effect.provide(fixture("owner"))),
 );
 
+it.effect("#2194: a roleless child cannot inherit a supervisor's kept capability", () =>
+  Effect.gen(function* () {
+    const profiles = yield* PermissionProfiles;
+    yield* seed("person", "auto");
+    yield* profiles.claim(threadScope("person"), {
+      id: "supervisor",
+      childThreadId: ThreadId.make("supervisor"),
+      runtimeMode: "auto",
+      role: "supervisor",
+    });
+    yield* seed("supervisor", "auto");
+    yield* profiles.claim(threadScope("supervisor"), {
+      id: "child",
+      childThreadId: ThreadId.make("child"),
+      runtimeMode: "auto",
+    });
+    yield* seed("child", "auto");
+    const result = yield* requireDeclaredCapability(
+      profiles,
+      "pull_request.merge",
+      "write",
+      {},
+    ).pipe(
+      Effect.provideService(McpInvocationContext.McpInvocationContext, threadScope("child")),
+      Effect.match({ onFailure: (error) => error.code, onSuccess: () => "admitted" }),
+    );
+    expect(result).toBe("capability_denied");
+  }).pipe(Effect.provide(fixture("worker"))),
+);
+
+it.effect("#2194: resuming a merge manager preserves its merge authority", () =>
+  Effect.gen(function* () {
+    const profiles = yield* PermissionProfiles;
+    yield* seed("person", "auto");
+    yield* profiles.claim(threadScope("person"), {
+      id: "supervisor",
+      childThreadId: ThreadId.make("supervisor"),
+      runtimeMode: "auto",
+      role: "supervisor",
+    });
+    yield* seed("supervisor", "auto");
+    yield* profiles.claim(threadScope("supervisor"), {
+      id: "merger",
+      childThreadId: ThreadId.make("merger"),
+      runtimeMode: "auto",
+      role: "merge-manager",
+    });
+    yield* seed("merger", "auto");
+    yield* profiles.assertTarget(
+      threadScope("supervisor"),
+      ThreadId.make("merger"),
+      "auto",
+      "auto",
+    );
+    yield* profiles.claim(threadScope("supervisor"), {
+      id: "resume-merger",
+      childThreadId: ThreadId.make("merger"),
+      runtimeMode: "auto",
+    });
+    const result = yield* requireDeclaredCapability(
+      profiles,
+      "pull_request.merge",
+      "write",
+      {},
+    ).pipe(
+      Effect.provideService(McpInvocationContext.McpInvocationContext, threadScope("merger")),
+      Effect.match({ onFailure: (error) => error.code, onSuccess: () => "admitted" }),
+    );
+    expect(result).toBe("admitted");
+  }).pipe(Effect.provide(fixture("worker"))),
+);
+
 it.effect("#2194: a supervisor can launch a merge manager locally and over SSH", () =>
   Effect.gen(function* () {
     const profiles = yield* PermissionProfiles;
@@ -157,6 +229,44 @@ it.effect("#2194: a supervisor can launch a merge manager locally and over SSH",
       expect(granted.profile.capabilities).toContain("pr.merge");
       yield* profiles.recheck(threadScope("supervisor"), granted, { role: "merge-manager", host });
     }
+  }).pipe(Effect.provide(fixture("manager"))),
+);
+
+it.effect("#2194: a forwarded supervisor binds its role and can launch a merge manager", () =>
+  Effect.gen(function* () {
+    const profiles = yield* PermissionProfiles;
+    const settings = yield* ServerSettings.ServerSettingsService;
+    const origin = yield* profiles.claim(outside, {
+      id: "origin",
+      runtimeMode: "full-access",
+      role: "supervisor",
+      host: "box",
+    });
+    yield* settings.updateSettings({ goatclaw: { defaultProfile: "worker" } });
+    yield* profiles.claim(outside, {
+      id: "remote",
+      childThreadId: ThreadId.make("remote"),
+      runtimeMode: "auto",
+      role: "supervisor",
+      forwarded: origin.profile,
+    });
+    yield* seed("remote", "auto");
+    const direct = yield* requireDeclaredCapability(
+      profiles,
+      "pull_request.merge",
+      "write",
+      {},
+    ).pipe(
+      Effect.provideService(McpInvocationContext.McpInvocationContext, threadScope("remote")),
+      Effect.match({ onFailure: (error) => error.code, onSuccess: () => "admitted" }),
+    );
+    expect(direct).toBe("capability_denied");
+    const merger = yield* profiles.claim(threadScope("remote"), {
+      id: "remote-merger",
+      runtimeMode: "auto",
+      role: "merge-manager",
+    });
+    expect(merger.profile.capabilities).toContain("pr.merge");
   }).pipe(Effect.provide(fixture("manager"))),
 );
 

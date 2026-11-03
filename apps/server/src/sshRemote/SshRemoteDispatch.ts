@@ -1,4 +1,5 @@
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
+import { remoteRoleMessage } from "./SshRemoteRole.ts";
 import * as Invocation from "../mcp/McpInvocationContext.ts";
 import { advertisesMemoryTools, remoteToolName, toolRefusal } from "./remoteToolNames.ts";
 export { refusedByRemote } from "./remoteRefusal.ts";
@@ -19,6 +20,7 @@ import {
   OrchestratorMcpCapabilitiesResult,
   type ProjectScript,
   type DesktopSshEnvironmentTarget,
+  type GoatclawRole,
   type ModelSelection,
   type OrchestrationV2ThreadLaunchWorkspaceStrategy,
   type OrchestrationV2ThreadLauncher,
@@ -148,6 +150,7 @@ export type SshLaunchInput = SshDispatchDestination & {
   /** Use only a cached session; never prepare a host, issue a session, or register a project. */
   readonly existingSessionOnly?: true;
   readonly permissionProfileCeiling?: import("@goat/contracts").PermissionProfile;
+  readonly goatclawRole?: GoatclawRole | undefined;
   readonly memoryGrantCeiling?: import("@goat/contracts").MemoryTaskGrantCeiling;
   readonly cwd: string;
   readonly workspace: SshLaunchWorkspace;
@@ -1419,8 +1422,9 @@ const make = Effect.gen(function* () {
       if (input.existingSessionOnly || input.requireReady) yield* beforeLaunch;
       const { capabilities, declared } = yield* remoteLaunchArguments(remote);
       if (
-        input.permissionProfileCeiling !== undefined &&
-        capabilities?.declared.has("permissionProfileCeiling") !== true
+        (input.permissionProfileCeiling !== undefined &&
+          capabilities?.declared.has("permissionProfileCeiling") !== true) ||
+        (input.goatclawRole !== undefined && capabilities?.declared.has("goatclawRole") !== true)
       )
         return yield* new SshRemoteDispatchError({
           reason: "remote_refused",
@@ -1510,10 +1514,7 @@ const make = Effect.gen(function* () {
     const forwardReport =
       input.report !== undefined &&
       (declared === undefined || declared.size === 0 || declared.has("report"));
-    const message =
-      forwardReport && input.reportNote !== undefined && input.message?.trim()
-        ? `${input.message}\n\n${input.reportNote}`
-        : input.message;
+    const message = remoteRoleMessage(input, forwardReport);
     const projectId = project.id;
     const preparedIds: string[] = [];
     return yield* Effect.gen(function* () {
@@ -1536,6 +1537,7 @@ const make = Effect.gen(function* () {
             title: input.title,
             workspaceStrategy,
             runtimeMode: input.runtimeMode,
+            ...(input.goatclawRole === undefined ? {} : { goatclawRole: input.goatclawRole }),
             ...(input.permissionProfileCeiling === undefined
               ? {}
               : { permissionProfileCeiling: input.permissionProfileCeiling }),

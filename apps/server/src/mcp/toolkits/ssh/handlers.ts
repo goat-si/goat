@@ -468,6 +468,7 @@ export const layer = McpToolAccess.toLayer(SshToolkit, {
               cwd: input.cwd,
               workspace: sshLaunchWorkspace(input.workspace),
               title: input.title,
+              ...(role === undefined ? {} : { goatclawRole: role }),
               message:
                 role === undefined || referenceMessage === undefined
                   ? referenceMessage
