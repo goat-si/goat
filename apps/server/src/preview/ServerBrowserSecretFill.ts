@@ -1,3 +1,4 @@
+import { makeLoginOperation } from "./ServerBrowserLoginOperation.ts";
 import { FILL, IDENTIFIER, IDENTIFIER_NAME } from "./secretFillAccountScripts.ts";
 import { FOCUSED, SELECTED } from "./secretFillTargetScripts.ts";
 import { STILL_FILLED } from "./secretFillStillFilled.ts";
@@ -9,6 +10,7 @@ import { STILL_FILLED } from "./secretFillStillFilled.ts";
  */
 import {
   PreviewAutomationFillSecretInput,
+  SecretRequestError,
   type PreviewAutomationFillSecretResult,
   type PreviewAutomationRequest,
   type PreviewSignInField,
@@ -751,6 +753,50 @@ export const make = Effect.gen(function* () {
     };
   };
 
+  const fillLogin = makeLoginOperation({
+    debugLogging: playwrightDebugLogging,
+    reserve: reserving,
+    recording: (tab) => {
+      track(tab);
+      return [...(contextTabs.get(tab.page.context()) ?? [])].some(
+        (each) => each.recording !== null || each.recordingStart !== null,
+      );
+    },
+    register: (tab, thread, value) => {
+      const context = tab.page.context();
+      contextValues.set(context, (contextValues.get(context) ?? new Set<string>()).add(value));
+      joinContext(thread, context);
+      for (const each of contextThreads.get(context) ?? []) addValues(each, [value]);
+      rememberSecret(tab.page, value);
+    },
+    protect: (tab, thread, origin, session, field) => {
+      filledOrigins.set(thread, (filledOrigins.get(thread) ?? new Set<string>()).add(origin));
+      contextOrigins.set(
+        tab.page.context(),
+        (contextOrigins.get(tab.page.context()) ?? new Set<string>()).add(origin),
+      );
+      markFilled(tab.page);
+      const entry = { session, ...field };
+      watch(session);
+      fences.set(tab.page, [...(fences.get(tab.page) ?? []), entry]);
+      return () =>
+        fences.set(
+          tab.page,
+          (fences.get(tab.page) ?? []).filter((each) => each !== entry),
+        );
+    },
+    use: (input, run, signal) =>
+      runPromise(
+        secretRequests.useLogin(input, (login) =>
+          Effect.tryPromise({
+            try: () => run(login),
+            catch: () => new SecretRequestError({ reason: "consume_failed" }),
+          }),
+        ),
+        { signal },
+      ),
+  });
+
   /** Whether a tab may show a password GOAT filled in pixels: its site, or a fill under way, says no. */
   const pixelsOff = (tab: SecretFillTab, threadId: ThreadId) => {
     if ((filling.get(tab.page.context()) ?? 0) > 0) return FILLING;
@@ -921,6 +967,18 @@ export const make = Effect.gen(function* () {
 
   return {
     fill,
+    fillLogin,
+    fillRequest: <T extends SecretFillTab>(
+      tab: T,
+      request: PreviewAutomationRequest,
+      deadline: number,
+      record: RecordAction<T>,
+      gate: Parameters<typeof fill>[4],
+      around: Parameters<typeof fill>[5],
+    ) =>
+      request.operation === "fillLogin"
+        ? fillLogin(tab, request, deadline, record, gate, around)
+        : fill(tab, request, deadline, record, gate, around),
     guard,
     assertPixels,
     historyField,
