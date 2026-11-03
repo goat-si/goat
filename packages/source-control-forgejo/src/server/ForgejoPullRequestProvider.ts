@@ -104,11 +104,13 @@ export const make = Effect.gen(function* () {
                 ? "missing-tool"
                 : error.reason === "authentication"
                   ? "unauthenticated"
-                  : error.reason === "rate-limit"
-                    ? "rate-limited"
-                    : error.reason === "not-found"
-                      ? "not-found"
-                      : "failed",
+                  : error.reason === "forbidden"
+                    ? "forbidden"
+                    : error.reason === "rate-limit"
+                      ? "rate-limited"
+                      : error.reason === "not-found"
+                        ? "not-found"
+                        : "failed",
           }),
       ),
     );
