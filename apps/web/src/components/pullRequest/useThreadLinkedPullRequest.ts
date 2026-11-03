@@ -5,6 +5,7 @@ import {
   type ThreadLinkedPullRequest,
   type VcsStatusResult,
 } from "@goat/contracts";
+import { sourceControlClients } from "@goat/client-runtime/source-control-clients";
 import { scopedThreadKey } from "@goat/client-runtime/environment";
 import {
   isAtomCommandInterrupted,
@@ -12,6 +13,7 @@ import {
 } from "@goat/client-runtime/state/runtime";
 import { useEffect, useRef } from "react";
 import { selectActiveRightPanelSurface, useRightPanelStore } from "../../rightPanelStore";
+import { useQuietThreadShell } from "../../state/entities";
 import { threadEnvironment } from "../../state/threads";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { useLinkedThreadPullRequest } from "../ThreadStatusIndicators";
@@ -34,6 +36,13 @@ export function useThreadLinkedPullRequest(input: {
   });
   const persistedStatus = useLinkedThreadPullRequest(input.environmentId, persisted);
   const detected = gitStatus?.pr;
+  const branchPullRequest = useQuietThreadShell(serverThreadRef)?.branchPullRequest;
+  const detectedRepository =
+    detected &&
+    branchPullRequest &&
+    sourceControlClients.isSameChangeRequest(detected.url, branchPullRequest.url)
+      ? branchPullRequest.repository
+      : projectRepository;
   const replacement: ThreadLinkedPullRequest | null =
     persisted === null ||
     (persistedStatus?.pr.state !== "merged" && persistedStatus?.pr.state !== "closed") ||
@@ -41,12 +50,12 @@ export function useThreadLinkedPullRequest(input: {
     detected?.state !== "open" ||
     detected.headRef !== threadBranch ||
     projectId === null ||
-    projectRepository === null ||
+    detectedRepository === null ||
     (persisted.projectId === projectId &&
-      persisted.repository.toLowerCase() === projectRepository.toLowerCase() &&
+      persisted.repository.toLowerCase() === detectedRepository.toLowerCase() &&
       persisted.number === detected.number)
       ? null
-      : { projectId, repository: projectRepository, number: detected.number, url: detected.url };
+      : { projectId, repository: detectedRepository, number: detected.number, url: detected.url };
 
   const relinkKeysRef = useRef(new Map<string, string>());
   const relinkWriteRef = useRef(Promise.resolve());

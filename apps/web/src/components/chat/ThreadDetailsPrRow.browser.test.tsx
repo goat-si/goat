@@ -155,7 +155,50 @@ it("shows the detected fork PR instead of an upstream PR with the same number (#
     />,
   );
   await expect.element(screen.getByText("Fork work")).toBeVisible();
-  expect(screen.queryByText("Unrelated upstream work")).toBeNull();
+  expect(screen.container.textContent).not.toContain("Unrelated upstream work");
+});
+
+it("keeps an explicit upstream reference and the older server fallback on upstream (#2464)", async () => {
+  state.repositoryTitles = { "fork/project": "Fork work", "upstream/project": "Upstream work" };
+  const project = {
+    id: ProjectId.make("project"),
+    repositoryIdentity: {
+      canonicalKey: "github.com/upstream/project",
+      provider: "github",
+      owner: "upstream",
+      name: "project",
+    },
+  } as never;
+  const row = (explicit: boolean) => (
+    <ThreadDetailsPrRow
+      environmentId={EnvironmentId.make("environment")}
+      pr={
+        explicit
+          ? {
+              number: 1,
+              title: "Fork work",
+              url: "https://github.com/fork/project/pull/1",
+              state: "open",
+              baseRef: "main",
+              headRef: "feature",
+            }
+          : null
+      }
+      number={1}
+      reference={
+        explicit ? { repository: "upstream/project", number: 1, host: "github.com" } : null
+      }
+      status={null}
+      project={project}
+      label="PR #1"
+      openAriaLabel="Open PR"
+      onOpen={vi.fn()}
+    />
+  );
+  await using screen = await renderUi(row(true));
+  await expect.element(screen.getByText("Upstream work")).toBeVisible();
+  await screen.rerender(row(false));
+  await expect.element(screen.getByText("Upstream work")).toBeVisible();
 });
 
 it("merges with the last selected merge method", async () => {
