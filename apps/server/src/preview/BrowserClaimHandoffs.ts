@@ -217,6 +217,7 @@ export const makeBrowserClaimHandoffs = Effect.fn("BrowserClaimHandoffs.make")(f
                   }),
                 ),
               ),
+              Effect.catch(watchFailed),
               Effect.forkIn(scope, { startImmediately: true }),
             );
           }
