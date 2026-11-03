@@ -13,6 +13,7 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/compat";
 import * as NodeBuffer from "node:buffer";
+import { toolPriorityLaunch, toolPriorityShellLaunch } from "@goat/shared/toolPriority";
 
 const MAX_LIVE_TERMINALS = 16;
 const MAX_UNRELEASED_TERMINALS = 64;
@@ -132,6 +133,8 @@ export interface AcpClientTerminalsOptions {
     | ((sessionId: string) => NodeJS.ProcessEnv | undefined)
     | undefined;
   readonly forceKillAfter?: Duration.Input | undefined;
+  /** System `nice` (see resolveNice); tools run at normal priority without it. */
+  readonly nice?: string | undefined;
 }
 
 function acpTerminalCommand(input: {
@@ -140,11 +143,19 @@ function acpTerminalCommand(input: {
   readonly defaultCwd: string;
   readonly environment?: NodeJS.ProcessEnv | undefined;
   readonly forceKillAfter: Duration.Input;
+  readonly nice: string | undefined;
 }) {
-  return ChildProcess.make(input.request.command, input.request.args ?? [], {
+  const launch =
+    input.shellCommands === true && (input.request.args?.length ?? 0) === 0
+      ? toolPriorityShellLaunch(input.nice, input.request.command)
+      : {
+          ...toolPriorityLaunch(input.nice, input.request.command, input.request.args ?? []),
+          shell: false,
+        };
+  return ChildProcess.make(launch.command, launch.args, {
     cwd: input.request.cwd ?? input.defaultCwd,
     ...(input.environment === undefined ? {} : { env: input.environment }),
-    shell: input.shellCommands === true && (input.request.args?.length ?? 0) === 0,
+    shell: launch.shell,
     forceKillAfter: input.forceKillAfter,
   });
 }
@@ -242,6 +253,7 @@ export const makeAcpClientTerminals = Effect.fn("makeAcpClientTerminals")(functi
                   defaultCwd: options.defaultCwd,
                   environment,
                   forceKillAfter,
+                  nice: options.nice,
                 }),
               )
               .pipe(
