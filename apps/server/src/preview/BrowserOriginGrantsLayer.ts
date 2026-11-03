@@ -58,9 +58,11 @@ const make = Effect.gen(function* () {
           ),
   });
   yield* changes.pipe(
-    Stream.runForEach((value) =>
+    Stream.map((value) => value.blockedBrowserHosts),
+    Stream.changesWith((a, b) => a.length === b.length && a.every((host, i) => host === b[i])),
+    Stream.runForEach((hosts) =>
       service
-        .blockedHostsChanged(value.blockedBrowserHosts)
+        .blockedHostsChanged(hosts)
         .pipe(
           Effect.catch((cause) =>
             Effect.logError("Could not apply browser host settings", { cause }),
