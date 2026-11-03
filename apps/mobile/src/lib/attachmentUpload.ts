@@ -278,7 +278,7 @@ export async function prepareTurnAttachments(input: {
   readonly supportsImageUploads?: boolean;
   readonly signal?: AbortSignal;
   readonly leavePendingUploadsOnAbort?: boolean;
-  readonly onLocalTransfer?: (transfer: Promise<void>) => void;
+  readonly onLocalTransfer?: (transfer: Promise<void>, attachment: DraftComposerAttachment) => void;
   readonly onUploadProgress?: (attachmentId: string, progress: number) => void;
   readonly persistUploadedReferences?: (
     draftAttachments: ReadonlyArray<DraftComposerAttachment>,
@@ -388,7 +388,7 @@ export async function prepareTurnAttachments(input: {
               ? (progress) => input.onUploadProgress?.(attachment.id, progress)
               : undefined,
           );
-          input.onLocalTransfer?.(done);
+          input.onLocalTransfer?.(done, attachment);
           return { done, abort };
         },
         onMinted: (attachmentId) => {

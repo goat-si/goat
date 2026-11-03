@@ -11,7 +11,7 @@ export async function uploadGoatBotAttachments(input: {
   readonly environmentId: EnvironmentId;
   readonly attachments: ReadonlyArray<DraftComposerAttachment>;
   readonly signal?: AbortSignal;
-  readonly onLocalTransfer?: (transfer: Promise<void>) => void;
+  readonly onLocalTransfer?: (transfer: Promise<void>, attachment: DraftComposerAttachment) => void;
   readonly remember: (attachments: ReadonlyArray<DraftComposerAttachment>) => void;
 }): Promise<ReadonlyArray<ChatAttachment>> {
   if (input.attachments.length === 0) return [];

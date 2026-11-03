@@ -38,6 +38,7 @@ import {
 import { environmentCatalog } from "../../connection/catalog";
 import type { DraftComposerAttachment } from "../../lib/composerImages";
 import {
+  composerAttachmentFileReferenceKey,
   retainComposerAttachmentFile,
   retainComposerAttachmentUpload,
 } from "../../lib/composerAttachmentFiles";
@@ -99,12 +100,17 @@ export async function disposeMobileGoatBotEnvironment(environmentId: Environment
 function newSession(environmentId: EnvironmentId): Session {
   // A message's uploads, by its key, so a retry names the same files as the first attempt.
   const uploads = new Map<string, ReadonlyArray<DraftComposerAttachment>>();
-  const retained = new Map<string, ReadonlyArray<() => void>>();
+  const retained = new Map<
+    string,
+    ReadonlyArray<{ readonly fileKey: string | null; readonly release: () => void }>
+  >();
   const retainedUploadKeys = new Map<string, Set<string>>();
-  const pendingCleanup = new Set<Promise<void>>();
+  let cleanupModule: Promise<typeof import("../../state/use-composer-drafts")> | undefined;
   let activeUpload: {
     readonly controller: AbortController;
+    readonly clientKey: string;
     transfer: Promise<void> | null;
+    fileKey: string | null;
   } | null = null;
   let disposed = false;
   const retainUploads = (key: string, attachments: ReadonlyArray<DraftComposerAttachment>) => {
@@ -119,18 +125,23 @@ function newSession(environmentId: EnvironmentId): Session {
       const id = JSON.stringify([attachment.uploadEnvironmentId, attachment.uploadedAttachmentId]);
       if (ids.has(id)) continue;
       ids.add(id);
-      releases.push(
-        retainComposerAttachmentUpload(
+      releases.push({
+        fileKey: null,
+        release: retainComposerAttachmentUpload(
           attachment.uploadEnvironmentId,
           attachment.uploadedAttachmentId,
         ),
-      );
+      });
     }
     retained.set(key, releases);
     retainedUploadKeys.set(key, ids);
   };
   const cleanup = (files: ReadonlyArray<DraftComposerAttachment>) => {
-    const task = import("../../state/use-composer-drafts")
+    cleanupModule ??= import("../../state/use-composer-drafts").catch((error: unknown) => {
+      cleanupModule = undefined;
+      throw error;
+    });
+    void cleanupModule
       .then(({ releaseUnusedComposerAttachmentFiles }) =>
         releaseUnusedComposerAttachmentFiles(
           disposed
@@ -139,16 +150,48 @@ function newSession(environmentId: EnvironmentId): Session {
         ),
       )
       .catch((error) => console.warn("[goat-bot] could not release attachment files", error));
-    pendingCleanup.add(task);
-    void task.finally(() => pendingCleanup.delete(task));
   };
   const forget = (key: string, attachments: ReadonlyArray<DraftComposerAttachment>) => {
     const files = uploads.get(key) ?? attachments;
     uploads.delete(key);
-    for (const release of retained.get(key) ?? []) release();
+    const upload = disposed && activeUpload?.clientKey === key ? activeUpload : null;
+    const heldKey = upload?.transfer ? upload.fileKey : null;
+    const held = (retained.get(key) ?? []).filter(
+      (item) => heldKey !== null && item.fileKey === heldKey,
+    );
+    for (const item of retained.get(key) ?? []) if (!held.includes(item)) item.release();
     retained.delete(key);
     retainedUploadKeys.delete(key);
-    cleanup(files);
+    const heldFiles =
+      heldKey === null
+        ? []
+        : files.filter(
+            (file) =>
+              file.fileUri !== undefined &&
+              composerAttachmentFileReferenceKey(file.fileUri) === heldKey,
+          );
+    const otherFiles =
+      heldKey === null
+        ? files
+        : files.filter(
+            (file) =>
+              file.fileUri === undefined ||
+              composerAttachmentFileReferenceKey(file.fileUri) !== heldKey,
+          );
+    if (otherFiles.length > 0 || files.length === 0) cleanup(otherFiles);
+    if (upload?.transfer && held.length > 0) {
+      // A transfer that ignores abort keeps only its own file while it is still in use.
+      void upload.transfer
+        .then(
+          () => undefined,
+          () => undefined,
+        )
+        .then(() => {
+          for (const item of held) item.release();
+          cleanup(heldFiles);
+        })
+        .catch((error) => console.warn("[goat-bot] could not release attachment files", error));
+    }
   };
   const queue = createGoatBotSendQueue<DraftComposerAttachment>({
     onForget: forget,
@@ -183,14 +226,30 @@ function newSession(environmentId: EnvironmentId): Session {
         files = [];
       } else {
         const controller = new AbortController();
-        const upload: NonNullable<typeof activeUpload> = { controller, transfer: null };
+        const upload: NonNullable<typeof activeUpload> = {
+          controller,
+          clientKey,
+          transfer: null,
+          fileKey: null,
+        };
         activeUpload = upload;
         const settled = import("./goatBotAttachments").then(({ uploadGoatBotAttachments }) =>
           uploadGoatBotAttachments({
             environmentId,
             signal: controller.signal,
-            onLocalTransfer: (transfer) => {
+            onLocalTransfer: (transfer, attachment) => {
               upload.transfer = transfer;
+              upload.fileKey =
+                attachment.fileUri === undefined
+                  ? null
+                  : composerAttachmentFileReferenceKey(attachment.fileUri);
+              const clear = () => {
+                if (upload.transfer === transfer) {
+                  upload.transfer = null;
+                  upload.fileKey = null;
+                }
+              };
+              void transfer.then(clear, clear);
             },
             attachments: uploads.get(clientKey) ?? attachments,
             remember: (uploaded) => {
@@ -246,21 +305,20 @@ function newSession(environmentId: EnvironmentId): Session {
         attachments.flatMap((attachment) =>
           attachment.fileUri === undefined
             ? []
-            : [retainComposerAttachmentFile(attachment.fileUri, () => {})],
+            : [
+                {
+                  fileKey: composerAttachmentFileReferenceKey(attachment.fileUri),
+                  release: retainComposerAttachmentFile(attachment.fileUri, () => {}),
+                },
+              ],
         ),
       );
       retainUploads(key, attachments);
     },
     dispose: () => {
       disposed = true;
-      const upload = activeUpload;
-      upload?.controller.abort();
-      void (async () => {
-        if (upload?.transfer) await upload.transfer.catch(() => undefined);
-        await Promise.all(pendingCleanup);
-        queue.dispose();
-        await Promise.all(pendingCleanup);
-      })().catch((error) => console.warn("[goat-bot] could not release attachment files", error));
+      activeUpload?.controller.abort();
+      queue.dispose();
     },
   };
 }
