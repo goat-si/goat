@@ -66,6 +66,48 @@ it("requires both login fields and builds a private login answer", () => {
   });
 });
 
+it("keeps an optional authenticator key while trimming surrounding whitespace", () => {
+  const item = { id: "turn-item:login", threadId: "thread:login" } as never;
+  expect(
+    secretRequestAnswerInput(item, {
+      type: "save_login",
+      username: "user",
+      password: "password",
+      authenticatorSetupKey: "  abcd efgh  ",
+    }),
+  ).toEqual({
+    threadId: "thread:login",
+    turnItemId: "turn-item:login",
+    answer: {
+      type: "save_login",
+      username: "user",
+      password: "password",
+      authenticatorSetupKey: "abcd efgh",
+    },
+  });
+  expect(
+    secretRequestAnswerInput(item, {
+      type: "save_login",
+      username: "user",
+      password: "password",
+      authenticatorSetupKey: "  ",
+    })?.answer,
+  ).toEqual({ type: "save_login", username: "user", password: "password" });
+  expect(
+    secretRequestAnswerInput(item, {
+      type: "save_login",
+      username: "user",
+      password: "password",
+      authenticatorSetupKey: " otpauth://totp/x?secret=ABCD ",
+    })?.answer,
+  ).toEqual({
+    type: "save_login",
+    username: "user",
+    password: "password",
+    authenticatorSetupKey: " otpauth://totp/x?secret=ABCD ",
+  });
+});
+
 it("explains that the agent receives only a reference to the site-bound login", () => {
   expect(
     secretRequestPrivacyNote({ requestKind: "login", siteOrigin: "https://example.com" }),

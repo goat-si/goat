@@ -84,6 +84,7 @@ function PendingSecretRequestForm(props: {
   };
   const inputId = useId();
   const passwordId = useId();
+  const setupKeyId = useId();
   const errorId = useId();
   const privacyId = useId();
   const answer = useAtomCommand(serverEnvironment.answerSecretRequest, {
@@ -94,6 +95,7 @@ function PendingSecretRequestForm(props: {
   });
   const [secret, setSecret] = useState("");
   const [username, setUsername] = useState("");
+  const [setupKey, setSetupKey] = useState("");
   const [cardValues, setCardValues] = useState(EMPTY_CARD);
   const login = item.requestKind === "login";
   const card = item.requestKind === "card";
@@ -116,6 +118,7 @@ function PendingSecretRequestForm(props: {
     if (result._tag === "Success") {
       setSecret("");
       setUsername("");
+      setSetupKey("");
       setCardValues(EMPTY_CARD);
       return;
     }
@@ -130,7 +133,7 @@ function PendingSecretRequestForm(props: {
       card
         ? cardReply
         : login
-          ? { type: "save_login", username, password: secret }
+          ? { type: "save_login", username, password: secret, authenticatorSetupKey: setupKey }
           : { type: "save", secret },
     );
   };
@@ -241,6 +244,24 @@ function PendingSecretRequestForm(props: {
             aria-invalid={error !== null || undefined}
             aria-describedby={error !== null ? `${privacyId} ${errorId}` : privacyId}
             onChange={(event) => setSecret(event.currentTarget.value)}
+          />
+          <label htmlFor={setupKeyId} className="text-sm text-foreground">
+            Authenticator setup key (optional)
+          </label>
+          <Input
+            id={setupKeyId}
+            type="text"
+            style={{ WebkitTextSecurity: "disc" } as CSSProperties}
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
+            data-1p-ignore
+            data-lpignore="true"
+            data-bwignore
+            value={setupKey}
+            disabled={!canAnswer || submitting}
+            onChange={(event) => setSetupKey(event.currentTarget.value)}
           />
           <Button
             type="submit"
