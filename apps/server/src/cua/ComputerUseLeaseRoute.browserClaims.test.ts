@@ -1,5 +1,4 @@
 import { assert, describe, it } from "@effect/vitest";
-import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   type ComputerUsePauseReason,
   EnvironmentId,
@@ -20,10 +19,8 @@ import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-import * as SqlClient from "effect/sql/SqlClient";
 
 import * as ServerSettings from "../serverSettings.ts";
-import { runMigrations } from "../persistence/Migrations.ts";
 import { leaseUpdates } from "./ComputerUseLeaseRoute.ts";
 import * as LeaseRoute from "./ComputerUseLeaseRoute.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
@@ -35,8 +32,11 @@ import { BrowserOriginGrants } from "../preview/BrowserOriginGrantsLayer.ts";
 import * as Grants from "../preview/BrowserOriginGrantsLayer.ts";
 import { BrowserClaimManifest } from "../preview/BrowserClaimManifest.ts";
 import { harness, call } from "./ComputerUseLeaseProxy.testkit.ts";
-import { database } from "./ComputerUseLeases.projection.testkit.ts";
-import { threadFixture } from "./ComputerUseLeaseRoute.browserClaims.testkit.ts";
+import {
+  admissionFixture,
+  claimedAdmissionFixture,
+  threadFixture,
+} from "./ComputerUseLeaseRoute.browserClaims.testkit.ts";
 import {
   claimBindArgs,
   reservationViaRoute,
@@ -145,26 +145,120 @@ const fixture = Effect.fnUntraced(function* (
 });
 
 describe("computer use lease route", () => {
+  it.effect(
+    "reservation reports blocked_url when a selected claim is blocked during admission",
+    () =>
+      Effect.gen(function* () {
+        const { leases, control, route, scoped, selected, block } =
+          yield* claimedAdmissionFixture();
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const holder = yield* leases
+          .serializeAdmission(
+            Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
+          )
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(entered);
+        const reservation = yield* route
+          .postCall({
+            action: "reserve",
+            controlId: control.controlId,
+            connectionId: "driver:1",
+            callId: "blocked",
+            name: "browser_click",
+            args: scoped,
+            interruptions: 0,
+            idleEpoch: 0,
+          })
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.await(selected);
+        yield* block;
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(holder);
+        assert.deepEqual(yield* Fiber.join(reservation), {
+          status: "refused",
+          detail: "blocked_url",
+        });
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect("validation reports blocked_url when its claim ends during admission", () =>
+    Effect.gen(function* () {
+      const { leases, control, route, scoped, block } = yield* claimedAdmissionFixture();
+      const reserved = yield* route.postCall({
+        action: "reserve",
+        controlId: control.controlId,
+        connectionId: "driver:1",
+        callId: "blocked-validation",
+        name: "browser_click",
+        args: scoped,
+        interruptions: 0,
+        idleEpoch: 0,
+      });
+      if (
+        typeof reserved !== "object" ||
+        reserved === null ||
+        !("reservationId" in reserved) ||
+        typeof reserved.reservationId !== "string"
+      )
+        return assert.fail("expected reservation");
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const holder = yield* leases
+        .serializeAdmission(
+          Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
+        )
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(entered);
+      const validation = yield* route
+        .postCall({
+          action: "validate",
+          controlId: control.controlId,
+          connectionId: "driver:1",
+          reservationId: reserved.reservationId,
+        })
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* block;
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(holder);
+      assert.deepEqual(yield* Fiber.join(validation), { status: "refused", detail: "blocked_url" });
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("validation refuses a claim whose origin is currently blocked", () =>
+    Effect.gen(function* () {
+      const { control, route, scoped, setBlocked } = yield* claimedAdmissionFixture();
+      const reserved = yield* route.postCall({
+        action: "reserve",
+        controlId: control.controlId,
+        connectionId: "driver:1",
+        callId: "current-block",
+        name: "browser_click",
+        args: scoped,
+        interruptions: 0,
+        idleEpoch: 0,
+      });
+      if (
+        typeof reserved !== "object" ||
+        reserved === null ||
+        !("reservationId" in reserved) ||
+        typeof reserved.reservationId !== "string"
+      )
+        return assert.fail("expected reservation");
+      yield* setBlocked;
+      const validation = yield* route.postCall({
+        action: "validate",
+        controlId: control.controlId,
+        connectionId: "driver:1",
+        reservationId: reserved.reservationId,
+      });
+      assert.deepEqual(validation, { status: "refused", detail: "blocked_url" });
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("validation refuses a claim revoked while the call waited for admission", () =>
     Effect.gen(function* () {
-      const context = yield* Layer.build(
-        ComputerUseLeases.layer.pipe(
-          Layer.provideMerge(
-            Layer.mergeAll(
-              database,
-              NodeServices.layer,
-              ServerSettings.layerTest({ enableCua: true, cuaStrictInputGuards: false }),
-            ),
-          ),
-        ),
-      );
-      yield* runMigrations().pipe(Effect.provideContext(context));
-      const sql = Context.get(context, SqlClient.SqlClient);
-      yield* sql`INSERT INTO orchestration_v2_projection_threads
-        (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
-        VALUES (${threadId}, 'project', 'thread', 'codex', 'full-access', 'default', '2026-01-01', '2026-01-01', '{}')`;
-      const leases = Context.get(context, ComputerUseLeases.ComputerUseLeases);
-      const control = Option.getOrThrow(yield* leases.everyAppControl(threadId, false));
+      const { leases, control } = yield* admissionFixture();
       const grants = yield* makeBrowserOriginGrants({
         environmentId: EnvironmentId.make("environment:test"),
         supported: () => true,

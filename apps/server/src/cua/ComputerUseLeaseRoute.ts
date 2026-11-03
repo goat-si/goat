@@ -70,7 +70,10 @@ import {
   settlementHistoryKey,
 } from "./ComputerUseHistoryBackground.ts";
 import { deniedCallApp } from "./ComputerUseCallSafety.ts";
-import { serverAdmitsBrowserCall } from "./ComputerUseLeaseProxyBrowserClaims.ts";
+import {
+  browserClaimSession,
+  serverAdmitsBrowserCall,
+} from "./ComputerUseLeaseProxyBrowserClaims.ts";
 
 const encodeUpdate = Schema.encodeSync(Schema.fromJsonString(ComputerUseLeaseUpdate));
 const encodeThreadUpdate = Schema.encodeSync(Schema.fromJsonString(ComputerUseLeaseThreadUpdate));
@@ -522,12 +525,46 @@ const makeCallLayer = (serverScope: Scope.Scope) =>
         movesPersonPointer(call.value);
       let outsideManifest = false;
       let blockedBrowser = false;
+      let blockedByJudge = false;
       let selectedClaim: { readonly claimId: string; readonly claimGeneration: number } | undefined;
       let selectedBind: { readonly claimId: string; readonly origin: string } | undefined;
       const grants = yield* Effect.serviceOption(BrowserOriginGrants.BrowserOriginGrants);
       const judge = Effect.fn("ComputerUseLeaseRoute.judgeBrowserCall")(function* (
         reserved: Extract<ComputerUseCallReservation, { action: "reserve" }>,
       ) {
+        if (call.value.action === "validate" && Option.isSome(grants)) {
+          const checked = yield* grants.value
+            .admitClaimCall(
+              threadId,
+              reserved.name,
+              reserved.args,
+              settings.value.blockedBrowserHosts,
+              undefined,
+              reserved.authority,
+            )
+            .pipe(Effect.option);
+          if (Option.isNone(checked)) return false;
+          if (checked.value.status === "blocked") {
+            blockedByJudge = true;
+            return false;
+          }
+          if (checked.value.status === "outside") {
+            const args = reserved.args;
+            const prefix = browserClaimSession("");
+            if (
+              typeof args === "object" &&
+              args !== null &&
+              "session" in args &&
+              typeof args.session === "string" &&
+              args.session.startsWith(prefix)
+            ) {
+              blockedByJudge =
+                (yield* grants.value.endReason(threadId, args.session.slice(prefix.length))) ===
+                "blocked_url";
+            }
+            return false;
+          }
+        }
         const snapshot = Option.isSome(grants)
           ? yield* grants.value.snapshotFor(threadId)
           : { claims: [], bindings: [] };
@@ -569,10 +606,13 @@ const makeCallLayer = (serverScope: Scope.Scope) =>
                 : outsideManifest
                   ? { status: "refused", detail: "outside_manifest" }
                   : yield* leases.callReservation(threadId, call.value, judge);
+        if (result.status === "refused" && result.detail === "outside_manifest" && blockedByJudge)
+          result = { status: "refused", detail: "blocked_url" };
         if (
           call.value.action === "reserve" &&
           (selectedClaim || selectedBind) &&
-          result.status === "admitted" &&
+          (result.status === "admitted" ||
+            (result.status === "refused" && result.detail === "outside_manifest")) &&
           Option.isSome(grants)
         ) {
           const verified = yield* (
@@ -595,7 +635,7 @@ const makeCallLayer = (serverScope: Scope.Scope) =>
                 )
           ).pipe(Effect.option);
           if (Option.isNone(verified) || verified.value.status !== "admit") {
-            if (result.reservationId !== null)
+            if (result.status === "admitted" && result.reservationId !== null)
               yield* leases.callReservation(threadId, {
                 action: "release",
                 controlId: call.value.controlId,

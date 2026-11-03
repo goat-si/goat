@@ -15,14 +15,17 @@ import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as ServerSettings from "../serverSettings.ts";
 import { runMigrations } from "../persistence/Migrations.ts";
 import * as LeaseRoute from "./ComputerUseLeaseRoute.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
+import { database } from "./ComputerUseLeases.projection.testkit.ts";
 import * as ComputerUsePrimitiveChannel from "./ComputerUsePrimitiveChannel.ts";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { BrowserOriginGrants } from "../preview/BrowserOriginGrantsLayer.ts";
+import { makeTestBrowserOriginGrants } from "../preview/BrowserOriginGrants.testkit.ts";
 const threadId = ThreadId.make("thread:bot");
 const expiresAt = DateTime.makeUnsafe(10 * 60_000);
 
@@ -254,3 +257,94 @@ export const threadFixture = Effect.fn("LeaseRouteTest.threadFixture")(function*
       ),
   };
 });
+
+export const admissionFixture = Effect.fn("LeaseRouteTest.admissionFixture")(function* () {
+  const context = yield* Layer.build(
+    ComputerUseLeases.layer.pipe(
+      Layer.provideMerge(
+        Layer.mergeAll(
+          database,
+          NodeServices.layer,
+          ServerSettings.layerTest({ enableCua: true, cuaStrictInputGuards: false }),
+        ),
+      ),
+    ),
+  );
+  yield* runMigrations().pipe(Effect.provideContext(context));
+  const sql = Context.get(context, SqlClient.SqlClient);
+  yield* sql`INSERT INTO orchestration_v2_projection_threads
+    (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
+    VALUES (${threadId}, 'project', 'thread', 'codex', 'full-access', 'default', '2026-01-01', '2026-01-01', '{}')`;
+  const leases = Context.get(context, ComputerUseLeases.ComputerUseLeases);
+  const control = Option.getOrThrow(yield* leases.everyAppControl(threadId, false));
+  return { leases, control };
+});
+
+export const claimedAdmissionFixture = Effect.fn("LeaseRouteTest.claimedAdmissionFixture")(
+  function* () {
+    const { leases, control } = yield* admissionFixture();
+    let hosts: ReadonlyArray<string> = [];
+    const grants = yield* makeTestBrowserOriginGrants({
+      blockedHosts: Effect.sync(() => hosts),
+      environmentId: EnvironmentId.make("environment:test"),
+      supported: () => true,
+      publish: () => Effect.void,
+      bind: () =>
+        Effect.succeed({
+          targetId: "target-1",
+          tabId: "tab",
+          title: "Site",
+          url: "https://example.test",
+          driverGeneration: 1,
+        }),
+    });
+    const pending = yield* grants.request({
+      threadId,
+      pid: 42,
+      windowId: 7,
+      origin: "https://example.test",
+      windowTitle: "Browser",
+    });
+    if (pending.status !== "pending") return yield* Effect.die("expected pending");
+    yield* grants.answer(pending.claimId, true);
+    const selected = yield* Deferred.make<void>();
+    const route = yield* threadFixture({
+      grants: {
+        ...grants,
+        setDriverCapability: () => Effect.void,
+        admitClaimCall: (...args) =>
+          grants
+            .admitClaimCall(...args)
+            .pipe(
+              Effect.tap((result) =>
+                result.status === "admit" && "claim" in result
+                  ? Deferred.succeed(selected, undefined).pipe(Effect.asVoid)
+                  : Effect.void,
+              ),
+            ),
+      },
+      leases,
+    });
+    const scoped = {
+      tab_id: "tab",
+      target_id: "target-1",
+      session: "goat-claim:" + pending.claimId,
+      origin_scope: ["https://example.test"],
+    };
+    return {
+      grants,
+      leases,
+      control,
+      route,
+      scoped,
+      selected,
+      setBlocked: Effect.sync(() => {
+        hosts = ["example.test"];
+      }),
+      block: Effect.suspend(() => {
+        hosts = ["example.test"];
+        return grants.blockedHostsChanged(hosts);
+      }),
+    };
+  },
+);
