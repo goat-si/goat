@@ -774,6 +774,80 @@ it.effect.each(
     }).pipe(Effect.scoped, Effect.provide(layerGitContract)),
 );
 
+it.effect("reuses a non-sparse index when sparse-excluded records exceed 1 MiB", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const liveProcess = yield* VcsProcess.VcsProcess;
+    const driver = yield* GitVcsDriver.makeVcsDriverShape();
+    const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "goat-large-sparse-index-" });
+    const { git, checkpointRef } = yield* makeCheckpointFixture(driver, cwd);
+    yield* fs.makeDirectory(path.join(cwd, "excluded"));
+    yield* fs.makeDirectory(path.join(cwd, "included"));
+    yield* fs.writeFileString(path.join(cwd, "excluded/file"), "preserved\n");
+    yield* fs.writeFileString(path.join(cwd, "included/file"), "original\n");
+    yield* git(["add", "."]);
+    yield* git(["commit", "-m", "sparse fixture"]);
+    yield* git(["sparse-checkout", "set", "--cone", "--no-sparse-index", "included"]);
+    yield* fs.writeFileString(path.join(cwd, "included/file"), "changed\n");
+    const entries = (yield* git([
+      "ls-files",
+      "--full-name",
+      "--sparse",
+      "--stage",
+      "-v",
+      "-z",
+    ])).stdout.split("\0");
+    const skipped = entries.find(
+      (entry) => entry.startsWith("S ") && entry.endsWith("excluded/file"),
+    );
+    assert.isDefined(skipped);
+    if (skipped === undefined) return yield* Effect.die("missing sparse-excluded record");
+    const extraRecords = Buffer.from(
+      (skipped + "\0").repeat(Math.ceil((2 * 1024 * 1024) / (skipped.length + 1))),
+    );
+    assert.isAbove(extraRecords.length, 1024 * 1024);
+    let injected = false;
+    let freshReadTrees = 0;
+    const captureDriver = yield* GitVcsDriver.makeVcsDriverShape().pipe(
+      Effect.provideService(VcsProcess.VcsProcess, {
+        run: (input) => {
+          if (
+            input.args.includes("read-tree") &&
+            (input.args.includes("index.sparse=true") || !input.args.includes("--reset"))
+          )
+            freshReadTrees++;
+          return liveProcess.run(
+            input.args.includes("ls-files") && input.args.includes("--stage")
+              ? {
+                  ...input,
+                  onStdoutChunk: (chunk) => {
+                    if (!injected) {
+                      injected = true;
+                      input.onStdoutChunk?.(extraRecords);
+                    }
+                    input.onStdoutChunk?.(chunk);
+                  },
+                }
+              : input,
+          );
+        },
+      }),
+    );
+    yield* captureDriver.checkpoints.captureCheckpoint({ cwd, checkpointRef });
+    assert.isTrue(injected);
+    assert.strictEqual(freshReadTrees, 0);
+    assert.strictEqual(
+      (yield* git(["show", `${checkpointRef}:excluded/file`])).stdout,
+      "preserved\n",
+    );
+    assert.strictEqual(
+      (yield* git(["show", `${checkpointRef}:included/file`])).stdout,
+      "changed\n",
+    );
+  }).pipe(Effect.scoped, Effect.provide(layerGitContract)),
+);
+
 it.effect.each([1_700_000_000, 1_700_000_000.9999])(
   "checkpoint capture preserves same-size edits with racy index timestamps (%s)",
   (timestamp) =>

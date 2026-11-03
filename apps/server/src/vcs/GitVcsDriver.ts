@@ -1062,6 +1062,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
           yield* fileSystem.utimes(tempIndexPath, indexTime, indexTime);
           let fallback = false;
           let flaggedBytes = 0;
+          let skippedBytes = 0;
           let recordStart = true;
           let collect: "flagged" | "skipped" | undefined;
           let record: Uint8Array[] = [];
@@ -1096,8 +1097,12 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
                 if (collect !== undefined && !fallback) {
                   const piece = chunk.subarray(start, end === -1 ? undefined : end);
                   record.push(Buffer.from(piece));
-                  if ((flaggedBytes += piece.length) > FLAGGED_INDEX_ENTRIES_MAX_BYTES)
+                  if (collect === "flagged") {
+                    if ((flaggedBytes += piece.length) > FLAGGED_INDEX_ENTRIES_MAX_BYTES)
+                      fallback = true;
+                  } else if ((skippedBytes += piece.length) > WORKSPACE_FILES_MAX_OUTPUT_BYTES) {
                     fallback = true;
+                  }
                   if (end !== -1 && !fallback) {
                     const full = Buffer.concat(record);
                     record = [];
@@ -1132,7 +1137,11 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
             });
             const selected = new Set(rules.stdout.split("\0"));
             for (const entry of skipped) {
-              if (selected.has(entry.slice(entry.indexOf("\t") + 1))) flagged.push(entry);
+              if (selected.has(entry.slice(entry.indexOf("\t") + 1))) {
+                flaggedBytes += Buffer.byteLength(entry) + 1;
+                if (flaggedBytes > FLAGGED_INDEX_ENTRIES_MAX_BYTES) return false;
+                flagged.push(entry);
+              }
             }
           }
           if (flagged.length > 0) {

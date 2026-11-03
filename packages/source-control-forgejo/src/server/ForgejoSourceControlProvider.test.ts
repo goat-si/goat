@@ -377,6 +377,21 @@ it.effect.each([
   }).pipe(Effect.provide(requiredChecksLayer(Effect.fail(cause))));
 });
 
+it.effect("reports forbidden pull request reads as permanent refusals", () => {
+  const cause = new ForgejoCli.ForgejoCliError({
+    command: "fj",
+    cwd: "/repo",
+    detail: "forbidden",
+    reason: "forbidden",
+    httpStatus: 403,
+  });
+  return Effect.gen(function* () {
+    const provider = yield* ForgejoPullRequestProvider.make;
+    const error = yield* provider.getChangeRequest(requiredChecksInput).pipe(Effect.flip);
+    assert.strictEqual(error.reason, "forbidden");
+  }).pipe(Effect.provide(Layer.mock(ForgejoCli.ForgejoCli)({ api: () => Effect.fail(cause) })));
+});
+
 it.effect("reads Forgejo jobs that did not run as finished checks", () =>
   Effect.gen(function* () {
     const provider = yield* ForgejoPullRequestProvider.make;

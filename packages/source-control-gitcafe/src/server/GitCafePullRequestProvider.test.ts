@@ -500,7 +500,9 @@ describe("GitCafePullRequestProvider", () => {
     Effect.gen(function* () {
       for (const [status, reason] of [
         [401, "unauthenticated"],
+        [403, "forbidden"],
         [429, "rate-limited"],
+        [503, "failed"],
       ] as const) {
         const server = fakeGitCafe(
           { "GET /repos/owner/repo/pulls/7/stack": { stack: null } },
