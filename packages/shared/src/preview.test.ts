@@ -29,6 +29,15 @@ describe("blocked browser hosts", () => {
     }
   });
 
+  it("blob: and ws: frame URLs are matched by their origin host", () => {
+    const hosts = ["blocked.example"];
+    expect(isBlockedBrowserUrl("blob:https://blocked.example/uuid", hosts)).toBe(true);
+    expect(isBlockedBrowserUrl("ws://blocked.example/socket", hosts)).toBe(true);
+    expect(isBlockedBrowserUrl("wss://sub.blocked.example/", hosts)).toBe(true);
+    expect(isBlockedBrowserUrl("blob:https://allowed.example/x", hosts)).toBe(false);
+    expect(isBlockedBrowserUrl("data:text/plain,blocked.example", hosts)).toBe(false);
+  });
+
   it("matches hosts and subdomains on every port, with exact IP matching", () => {
     expect(isBlockedBrowserUrl("https://a.example.com:8443/", ["example.com"])).toBe(true);
     expect(isBlockedBrowserUrl("http://example.com./", ["example.com"])).toBe(true);
