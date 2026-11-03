@@ -1,6 +1,10 @@
 import { assert, it } from "@effect/vitest";
 import { EnvironmentId, ExecutionEnvironmentDescriptor, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
+import * as PubSub from "effect/PubSub";
+import * as Stream from "effect/Stream";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
@@ -10,6 +14,95 @@ import { BrowserClaimManifest } from "./BrowserClaimManifest.ts";
 import { BrowserClaimBind } from "./BrowserClaimBind.ts";
 
 const decodeDescriptor = Schema.decodeSync(ExecutionEnvironmentDescriptor);
+
+it.effect("a block followed by an unblock still ends an existing claim", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const processed = yield* Deferred.make<void>();
+    const updates = yield* PubSub.unbounded<import("@goat/contracts").ServerSettings>();
+    const base = Context.get(
+      yield* Layer.build(ServerSettings.layerTest()),
+      ServerSettings.ServerSettingsService,
+    );
+    const settings = {
+      ...base,
+      subscribeChanges: PubSub.subscribe(updates).pipe(
+        Effect.map((subscription) =>
+          Stream.fromSubscription(subscription).pipe(
+            Stream.mapEffect((value) =>
+              value.blockedBrowserHosts.length > 0
+                ? Deferred.succeed(entered, undefined).pipe(
+                    Effect.andThen(Deferred.await(release)),
+                    Effect.as(value),
+                  )
+                : Deferred.succeed(processed, undefined).pipe(Effect.as(value)),
+            ),
+          ),
+        ),
+      ),
+    };
+    const hash = "a".repeat(64);
+    const context = yield* Layer.build(
+      Grants.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.succeed(ServerSettings.ServerSettingsService, settings),
+            Layer.mock(ServerEnvironment.ServerEnvironment)({
+              getDescriptor: Effect.succeed(
+                decodeDescriptor({
+                  environmentId: EnvironmentId.make("environment:test"),
+                  label: "Test",
+                  platform: { os: "linux", arch: "x64" },
+                  serverVersion: "test",
+                  capabilities: { repositoryIdentity: true },
+                }),
+              ),
+            }),
+            Layer.succeed(BrowserClaimManifest, {
+              publish: () => Effect.succeed(hash),
+              readConfig: Effect.succeed({
+                capability_manifest: { sha256: hash, file_sha256: hash, reload_error: null },
+              }),
+              install: () => Effect.void,
+            }),
+            Layer.succeed(BrowserClaimBind, {
+              bind: (input) =>
+                Effect.succeed({
+                  targetId: "target",
+                  tabId: "tab",
+                  title: "Site",
+                  url: input.origin,
+                  driverGeneration: 1,
+                }),
+            }),
+          ),
+        ),
+      ),
+    );
+    const service = Context.get(context, Grants.BrowserOriginGrants);
+    yield* service.setDriverCapability(true);
+    const threadId = ThreadId.make("thread:test");
+    const request = yield* service.request({
+      threadId,
+      pid: 42,
+      windowId: 7,
+      origin: "https://example.test",
+      windowTitle: "Browser",
+    });
+    if (request.status !== "pending") return assert.fail("expected pending");
+    yield* service.answer(request.claimId, true);
+    const blocked = yield* settings.updateSettings({ blockedBrowserHosts: ["example.test"] });
+    yield* PubSub.publish(updates, blocked);
+    yield* Deferred.await(entered);
+    const unblocked = yield* settings.updateSettings({ blockedBrowserHosts: [] });
+    yield* PubSub.publish(updates, unblocked);
+    yield* Deferred.succeed(release, undefined);
+    yield* Deferred.await(processed);
+    assert.equal(yield* service.endReason(threadId, request.claimId), "origin_changed");
+    assert.deepEqual(yield* service.claimsFor(threadId), []);
+  }).pipe(Effect.scoped),
+);
 
 it.effect("reports unsupported capability as unavailable and removes claims from snapshots", () =>
   Effect.gen(function* () {

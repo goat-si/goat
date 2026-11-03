@@ -76,7 +76,9 @@ const make = Effect.gen(function* () {
   if (Option.isSome(settings)) {
     const changes = yield* settings.value.subscribeChanges;
     yield* changes.pipe(
-      Stream.runForEach(() => service.blockOrigins(blockedHosts())),
+      Stream.runForEach((value) =>
+        service.blockOrigins(blockedHosts() === undefined ? undefined : value.blockedBrowserHosts),
+      ),
       Effect.forkScoped({ startImmediately: true }),
     );
     yield* service.blockOrigins(blockedHosts());
