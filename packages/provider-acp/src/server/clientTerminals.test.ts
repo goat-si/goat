@@ -9,6 +9,8 @@ import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { resolveNice } from "@goat/shared/toolPriority";
+import * as NodeOS from "node:os";
 
 import {
   makeAcpClientTerminals,
@@ -16,10 +18,18 @@ import {
   type AcpClientTerminals,
 } from "./clientTerminals.ts";
 
-const withTerminals = <A, E>(use: (terminals: AcpClientTerminals) => Effect.Effect<A, E>) =>
+// `nice -n 10` is relative to the test runner's own priority and capped at 19.
+const loweredPriority = () => Math.min(19, NodeOS.getPriority() + 10);
+
+const withTerminals = <A, E>(
+  use: (terminals: AcpClientTerminals) => Effect.Effect<A, E>,
+  environment?: NodeJS.ProcessEnv,
+) =>
   Effect.gen(function* () {
     const terminals = yield* makeAcpClientTerminals({
       defaultCwd: process.cwd(),
+      environment,
+      nice: yield* resolveNice(yield* HostProcess.Platform),
     });
     return yield* use(terminals).pipe(Effect.ensuring(terminals.disposeAll));
   }).pipe(Effect.provide(NodeServices.layer), Effect.scoped);
@@ -109,11 +119,29 @@ describe("AcpClientTerminals", () => {
         const request = { sessionId: "session", terminalId: created.terminalId };
         expect((yield* terminals.waitForExit(request)).exitCode).toBe(3);
         expect(JSON.parse((yield* terminals.output(request)).output)).toEqual([
-          10,
-          "10",
+          loweredPriority(),
+          String(loweredPriority()),
           ["a b", "'quoted'", ""],
         ]);
       }),
+    ),
+  );
+  it.live("a restricted tool PATH still launches through the system nice", () =>
+    withTerminals(
+      (terminals) =>
+        Effect.gen(function* () {
+          const created = yield* terminals.create({
+            sessionId: "session",
+            command: process.execPath,
+            args: ["-e", "console.log(require('node:os').getPriority())"],
+          });
+          const request = { sessionId: "session", terminalId: created.terminalId };
+          expect((yield* terminals.waitForExit(request)).exitCode).toBe(0);
+          const platform = yield* HostProcess.Platform;
+          const expected = platform === "darwin" || platform === "linux" ? loweredPriority() : 0;
+          expect((yield* terminals.output(request)).output.trim()).toBe(String(expected));
+        }),
+      { PATH: "/nonexistent" },
     ),
   );
   it.effect.each([
@@ -258,6 +286,7 @@ describe("AcpClientTerminals", () => {
       const terminals = yield* makeAcpClientTerminals({
         defaultCwd: process.cwd(),
         shellCommands: true,
+        nice: yield* resolveNice(platform),
       });
       yield* Effect.addFinalizer(() => terminals.disposeAll);
       const terminal = yield* terminals.create({
@@ -267,7 +296,7 @@ describe("AcpClientTerminals", () => {
       const exit = yield* terminals.waitForExit({ sessionId: "devin", ...terminal });
       const output = yield* terminals.output({ sessionId: "devin", ...terminal });
       expect(exit.exitCode).toBe(0);
-      expect(output.output.trim()).toBe("10");
+      expect(output.output.trim()).toBe(String(loweredPriority()));
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 

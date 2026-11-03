@@ -72,6 +72,8 @@ import type * as EffectAcpProtocol from "effect-acp/protocol";
 import type * as EffectAcpSchema from "effect-acp/compat";
 
 import { formatReadToolLabel, formatSearchToolLabel } from "@goat/shared/toolActivity";
+import { resolveNice } from "@goat/shared/toolPriority";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import { makeAcpMcpOverAcpBridge, type AcpMcpOverAcpBridge } from "./mcpOverAcpBridge.ts";
 import { mcpToolPresentation } from "@goat/provider-core/server/mcpToolPresentation";
@@ -1310,6 +1312,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
 ) {
   const crypto = yield* Crypto.Crypto;
   const fileSystem = yield* FileSystem.FileSystem;
+  const toolNice = yield* resolveNice(yield* HostProcess.Platform);
   const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const agentScope = yield* AgentScope;
   const idAllocator = yield* IdAllocator.IdAllocatorV2;
@@ -1425,6 +1428,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             ? undefined
             : yield* makeAcpClientTerminals({
                 defaultCwd: input.runtimePolicy.cwd ?? process.cwd(),
+                nice: toolNice,
                 environment: options.clientTerminals.environment,
                 shellCommands: options.clientTerminals.shellCommands,
                 environmentForSession: (sessionId) => {
