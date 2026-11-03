@@ -820,6 +820,7 @@ describe("soak input safety", () => {
           Symbol.asyncIterator
         ]();
         let pgid: number | undefined;
+        const failures: unknown[] = [];
         try {
           const line = await lines.next();
           expect(line.done).toBe(false);
@@ -829,17 +830,23 @@ describe("soak input safety", () => {
           expect(await exited).toBe("SIGKILL");
           expect((await lines.next()).done).toBe(true);
           expect(() => process.kill(-pgid!, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
-        } finally {
+        } catch (error) {
+          failures.push(error);
+        }
+        try {
           if (driver.exitCode === null && driver.signalCode === null) driver.kill("SIGKILL");
           await exited;
-          if (pgid !== undefined) {
-            try {
-              process.kill(-pgid, "SIGKILL");
-            } catch (error) {
-              if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
-            }
+        } catch (error) {
+          failures.push(error);
+        }
+        if (pgid !== undefined) {
+          try {
+            process.kill(-pgid, "SIGKILL");
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ESRCH") failures.push(error);
           }
         }
+        if (failures.length) throw failures[0];
       }),
   );
 
