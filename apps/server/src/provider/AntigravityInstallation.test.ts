@@ -235,16 +235,16 @@ const expectPreviousRelease = Effect.fn("test.expectPreviousAntigravityRelease")
 });
 
 it.layer(NodeServices.layer)("Antigravity installation", (it) => {
-  it.effect("requests runtime 1.4.1 for the default managed install", () =>
+  it.effect("requests runtime 1.4.5 for the default managed install", () =>
     Effect.gen(function* () {
       const { installation, requests } = yield* makeHarness({ useBundledRelease: true });
       const started = yield* installation.start;
-      expect(started.version).toBe("1.4.1");
+      expect(started.version).toBe("1.4.5");
       yield* terminalState(installation);
       expect(requests).toEqual([
         hostPlatform === "win32"
-          ? "https://dl.google.com/agy-extensions/releases/windows/agy-acp-server-1.4.1-windows-x86_64.zip"
-          : "https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-1.4.1-linux-x86_64.zip",
+          ? "https://dl.google.com/agy-extensions/releases/windows/agy-acp-server-1.4.5-windows-x86_64.zip"
+          : "https://dl.google.com/agy-extensions/releases/linux/agy-acp-server-1.4.5-linux-x86_64.zip",
       ]);
     }),
   );
