@@ -17,7 +17,10 @@ import * as Ref from "effect/Ref";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { DispatchModeLimit } from "../orchestration-v2/DispatchModeLimit.ts";
+import {
+  type DispatchModeRefusal,
+  DispatchModeLimit,
+} from "../orchestration-v2/DispatchModeLimit.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import { channelBotFilesFor } from "./channelBotNotes.ts";
 
@@ -160,7 +163,7 @@ it.effect.each([
           const limit = yield* DispatchModeLimit;
           if (limit?.refused === undefined)
             return yield* Effect.die("missing mode refusal reference");
-          yield* Ref.set(limit.refused, {
+          yield* Ref.set<DispatchModeRefusal | undefined>(limit.refused, {
             threadId: input.threadId,
             runtimeMode: "auto-accept-edits",
             interactionMode: "default",
