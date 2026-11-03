@@ -135,6 +135,7 @@ export function sshRuntimeStatusText(status: SshHostStatus): string {
     case "update_waiting":
       return `Update waits for running work${runtime}`;
     case "update_blocked": {
+      if (status.detail !== undefined) return status.detail;
       const order =
         status.runtimeVersion === null
           ? undefined
