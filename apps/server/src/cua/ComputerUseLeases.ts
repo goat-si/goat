@@ -428,7 +428,7 @@ const make = Effect.gen(function* () {
         if (Option.isSome(settings) && settings.value.committedPolicy !== undefined) {
           // @effect-diagnostics-next-line runEffectInsideEffect:off -- Admission must read this Ref without yielding.
           const policy = Effect.runSync(settings.value.committedPolicy);
-          if (policy._tag !== "committed" || !policy.enableCua) return Effect.succeed(undefined);
+          if (policy._tag !== "committed" || !policy.enableCua) return Effect.void;
         }
         const unblocked = blockedTurns.delete(threadId);
         const existing = controls.get(threadId);

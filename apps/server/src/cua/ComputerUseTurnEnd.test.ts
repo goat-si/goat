@@ -53,6 +53,7 @@ it.effect("a disable committed during startup revalidation is not missed", () =>
           Layer.mergeAll(
             Layer.succeed(ServerSettings.ServerSettingsService, controlled),
             Layer.mock(ComputerUseLeases.ComputerUseLeases)({
+              proxy: undefined,
               disable: Deferred.succeed(disabled, undefined).pipe(Effect.asVoid),
             }),
             Layer.mock(Orchestrator.OrchestratorV2)({ streamDomainEvents: Stream.empty }),
