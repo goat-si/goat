@@ -286,6 +286,45 @@ it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
     }).pipe(Effect.provide(Logger.layer([logger], { mergeWithExisting: false })));
   });
 
+  it.effect("shutdown warns about a failed batch and remaining buffered events", () => {
+    const logs: Array<unknown> = [];
+    const logger = Logger.make(({ message }) => {
+      logs.push(message);
+    });
+    return Effect.gen(function* () {
+      const client = HttpClient.make(respondWithStatus(503));
+      const runtimeLayer = AnalyticsService.layer.pipe(
+        Layer.provideMerge(
+          ServerConfig.ServerConfig.layerTest(process.cwd(), {
+            prefix: "goat-telemetry-failed-shutdown-",
+          }),
+        ),
+        Layer.provide(
+          ConfigProvider.layer(
+            ConfigProvider.fromUnknown({
+              GOAT_TELEMETRY_ENABLED: true,
+              GOAT_TELEMETRY_FLUSH_BATCH_SIZE: 2,
+            }),
+          ),
+        ),
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.succeed(HostProcess.Platform, "linux"),
+            Layer.succeed(HostProcess.Architecture, "x64"),
+            Layer.succeed(HttpClient.HttpClient, client),
+          ),
+        ),
+      );
+      const scope = yield* Scope.make();
+      const context = yield* Layer.buildWithScope(runtimeLayer, scope);
+      const analytics = Context.get(context, AnalyticsService.AnalyticsService);
+      for (let index = 0; index < 3; index++)
+        yield* analytics.record("test.shutdown.failure", { index });
+      yield* Scope.close(scope, Exit.void);
+      assert.deepInclude(logs, ["Dropped telemetry events at shutdown deadline", { events: 3 }]);
+    }).pipe(Effect.provide(Logger.layer([logger], { mergeWithExisting: false })));
+  });
+
   it.effect("flush drains all buffered events across multiple batches", () =>
     Effect.gen(function* () {
       const capturedRequests: Array<RecordedBatchRequest> = [];

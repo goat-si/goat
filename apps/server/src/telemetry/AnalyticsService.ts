@@ -354,11 +354,11 @@ export const make = Effect.gen(function* () {
       "analyticsFlush",
       Effect.gen(function* () {
         const result = yield* Effect.interruptible(flush.pipe(Effect.timeoutOption("1 second")));
-        if (Option.isNone(result)) {
-          const buffered = yield* Ref.get(bufferRef);
-          const delivery = yield* Ref.get(deliveryRef);
-          const inFlight = yield* Ref.get(inFlightRef);
-          const dropped = buffered.length + Math.max(delivery.failedBatch.length, inFlight.length);
+        const buffered = yield* Ref.get(bufferRef);
+        const delivery = yield* Ref.get(deliveryRef);
+        const inFlight = yield* Ref.get(inFlightRef);
+        const dropped = buffered.length + Math.max(delivery.failedBatch.length, inFlight.length);
+        if (dropped > 0 || Option.isNone(result)) {
           yield* Effect.logWarning("Dropped telemetry events at shutdown deadline", {
             events: dropped,
           });
