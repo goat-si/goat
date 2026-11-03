@@ -220,3 +220,20 @@ it.effect("a goal-block process outlives its session and reconnects on the next 
     assert.deepEqual(signals, []);
   }).pipe(Effect.scoped),
 );
+
+it.effect("a status probe still open when shutdown begins leaves the process alone", () =>
+  Effect.gen(function* () {
+    const record = recordFixture("codex-hhhhhhhhhhhh", 1008, { providerSessionId: sessionA });
+    const { service, signals, exists } = yield* harness([record]);
+    yield* service.loadRecords;
+    yield* service.preserveForRecovery(record.name);
+    yield* Effect.gen(function* () {
+      yield* service.connectExisting("codex", record.name);
+      yield* service.beginServerShutdown;
+    }).pipe(Effect.scoped);
+    assert.deepEqual(signals, []);
+    assert.isTrue(yield* exists(record.name));
+    yield* service.connectExisting("codex", record.name, sessionA).pipe(Effect.scoped);
+    assert.deepEqual(signals, [{ pgid: 1008, signal: "SIGTERM" }]);
+  }).pipe(Effect.scoped),
+);

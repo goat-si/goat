@@ -93,7 +93,10 @@ export const bootstrapRecordSessions = Effect.fn("CodexRecordSessions.bootstrap"
   },
 );
 
-/** A fence whose thread or provider thread is gone falls back to the instance's shared session, as goal recovery does. */
+/**
+ * A fence whose thread or provider thread is gone falls back to the instance's shared session, as
+ * goal recovery does; a provider thread without a session gives no evidence (null).
+ */
 const fenceSessions = Effect.fn("CodexRecordSessions.fenceSessions")(function* (
   projections: ProjectionStore.ProjectionStoreV2["Service"],
   instanceId: string,
@@ -104,14 +107,14 @@ const fenceSessions = Effect.fn("CodexRecordSessions.fenceSessions")(function* (
   const sessions = new Set<ProviderSessionId | null>();
   for (const fence of fences) {
     const session = yield* projections.getThreadRecords(fence.threadId, ["providerThreads"]).pipe(
-      Effect.map(
-        (records) =>
-          records.providerThreads.find(
-            (thread) =>
-              thread.providerInstanceId === providerInstanceId &&
-              thread.nativeThreadRef?.nativeId === fence.nativeThreadId,
-          )?.providerSessionId ?? shared,
-      ),
+      Effect.map((records) => {
+        const thread = records.providerThreads.find(
+          (item) =>
+            item.providerInstanceId === providerInstanceId &&
+            item.nativeThreadRef?.nativeId === fence.nativeThreadId,
+        );
+        return thread === undefined ? shared : thread.providerSessionId;
+      }),
       Effect.catchTags({ ProjectionStoreThreadNotFoundError: () => Effect.succeed(shared) }),
       Effect.option,
     );

@@ -883,8 +883,8 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
   );
 
   /**
-   * Without a session this is a status probe. A session adopts the process: closing it outside
-   * shutdown stops the process like an owned one, unless a goal still runs there.
+   * Without a session this is a status probe, whose close never touches the process. A session
+   * adopts it: closing outside shutdown stops it like an owned one, unless a goal still runs there.
    */
   const connectExisting = Effect.fn("CodexDetachedAppServers.connectExisting")(function* (
     instanceId: string,
@@ -917,10 +917,9 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
       });
     yield* Effect.addFinalizer(() =>
       Effect.gen(function* () {
-        const shutdown = yield* Ref.get(shuttingDown);
+        if (adoptedClosed.has(name) || providerSessionId === undefined) return;
         const current = { ...(fences.get(name) ?? record), pgid: after.pgid };
-        if (adoptedClosed.has(name) || (!shutdown && providerSessionId === undefined)) return;
-        if (!shutdown && (current.goalBlocks?.length ?? 0) > 0) return;
+        if (!(yield* Ref.get(shuttingDown)) && (current.goalBlocks?.length ?? 0) > 0) return;
         adoptedClosed.add(name);
         yield* close(current).pipe(
           Effect.catch(() => markBlocked(current)),

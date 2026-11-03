@@ -40,7 +40,7 @@ const driver = ProviderDriverKind.make("codex");
 
 const seedThread = Effect.fn("CodexRecordSessionsTest.seedThread")(function* (input: {
   readonly threadId: string;
-  readonly sessionId: string;
+  readonly sessionId: string | null;
   readonly running: boolean;
   readonly instanceId?: ProviderInstanceId;
 }) {
@@ -49,7 +49,7 @@ const seedThread = Effect.fn("CodexRecordSessionsTest.seedThread")(function* (in
   const instance = input.instanceId ?? codex;
   const threadId = ThreadId.make(input.threadId);
   const model = { instanceId: instance, model: "gpt-5.4" };
-  const sessionId = ProviderSessionId.make(input.sessionId);
+  const sessionId = input.sessionId === null ? null : ProviderSessionId.make(input.sessionId);
   const providerThreadId = ProviderThreadId.make("provider-" + input.threadId);
   const at = (suffix: string) => EventId.make("event:" + input.threadId + ":" + suffix);
   yield* store.apply(
@@ -59,26 +59,27 @@ const seedThread = Effect.fn("CodexRecordSessionsTest.seedThread")(function* (in
       now,
     }),
   );
-  yield* store.apply({
-    id: at("session"),
-    type: "provider-session.attached",
-    threadId,
-    driver,
-    providerInstanceId: instance,
-    occurredAt: now,
-    payload: {
-      id: sessionId,
+  if (sessionId !== null)
+    yield* store.apply({
+      id: at("session"),
+      type: "provider-session.attached",
+      threadId,
       driver,
       providerInstanceId: instance,
-      status: "ready",
-      cwd: "/workspace",
-      model: model.model,
-      capabilities: CodexProviderCapabilitiesV2,
-      createdAt: now,
-      updatedAt: now,
-      lastError: null,
-    },
-  });
+      occurredAt: now,
+      payload: {
+        id: sessionId,
+        driver,
+        providerInstanceId: instance,
+        status: "ready",
+        cwd: "/workspace",
+        model: model.model,
+        capabilities: CodexProviderCapabilitiesV2,
+        createdAt: now,
+        updatedAt: now,
+        lastError: null,
+      },
+    });
   yield* store.apply({
     id: at("provider-thread"),
     type: "provider-thread.updated",
@@ -342,5 +343,17 @@ it.effect("records from before the upgrade without one clear owner stay unassign
     assert.deepEqual(recovered.boundRecords, {});
     assert.deepEqual(recovered.fenced, ["codex-ffffffffffff:shared", "codex-gggggggggggg:shared"]);
     assert.deepEqual([...recovered.result.blockedThreads], ["shared"]);
+  }).pipe(Effect.provide(layer), Effect.scoped),
+);
+
+it.effect("a fenced record whose thread runs without a session stays unassigned", () =>
+  Effect.gen(function* () {
+    yield* seedThread({ threadId: "unknown", sessionId: null, running: false });
+    const recovered = yield* recover([
+      record("codex-iiiiiiiiiiii", 1009, {
+        goalBlocks: [{ threadId: ThreadId.make("unknown"), nativeThreadId: "native-unknown" }],
+      }),
+    ]);
+    assert.isUndefined(yield* recovered.sessionOf("codex-iiiiiiiiiiii"));
   }).pipe(Effect.provide(layer), Effect.scoped),
 );

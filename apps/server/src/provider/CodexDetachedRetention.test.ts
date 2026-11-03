@@ -230,6 +230,7 @@ it.effect.each(["restart", "quit"] as const)(
             version: 1,
             name,
             instanceId: "codex",
+            providerSessionId: session,
             socketPath: socket,
             pgid: 4321,
             bootId: "boot",
@@ -258,7 +259,7 @@ it.effect.each(["restart", "quit"] as const)(
       yield* service.loadRecords;
       yield* service.preserveForRecovery(name);
       yield* Effect.gen(function* () {
-        yield* service.connectExisting("codex", name);
+        yield* service.connectExisting("codex", name, session);
         if (stopKind === "restart")
           yield* service.retainOnClose(name, { setting: "restart", stopKind, prepared: true });
         yield* service.beginServerShutdown;
