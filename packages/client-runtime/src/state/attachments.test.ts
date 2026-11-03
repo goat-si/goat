@@ -56,6 +56,23 @@ const uploadInput: AttachmentCreateUploadUrlInput = {
 };
 
 describe("runAttachmentUploadCycle", () => {
+  it("leaves a fresh mint to expire when its environment was removed", async () => {
+    removeCalls.length = 0;
+    const result = await runAttachmentUploadCycle({
+      registry,
+      createUploadUrl: makeCreateUploadUrl("pending-abandoned"),
+      remove,
+      environmentId,
+      upload: uploadInput,
+      resolveUploadUrl: () => "https://environment.test/upload",
+      transport: () => {
+        throw new Error("transport must not run after removal");
+      },
+      onMinted: () => "abandon" as const,
+    });
+    expect(result).toEqual({ status: "cancelled", attachmentId: "pending-abandoned" });
+    expect(removeCalls).toEqual([]);
+  });
   it("reports a failed deletion of a cancelled mint", async () => {
     const failure = new Error("delete denied");
     const result = await runAttachmentUploadCycle({

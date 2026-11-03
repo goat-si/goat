@@ -336,7 +336,16 @@ describe("mobile GOAT Bot session selection", () => {
     await act(async () => {
       await botSessions.disposeMobileGoatBotEnvironment(env);
     });
-    expect(harness.release).toHaveBeenCalledWith([file]);
+    expect(harness.release).toHaveBeenCalledWith([
+      {
+        id: file.id,
+        type: file.type,
+        name: file.name,
+        mimeType: file.mimeType,
+        sizeBytes: file.sizeBytes,
+        fileUri: file.fileUri,
+      },
+    ]);
     expect(fileOwnership.isComposerAttachmentFileRetained(file.fileUri)).toBe(false);
   });
   it("retries an ambiguous send with the same uploaded references and client key (#2388)", async () => {
