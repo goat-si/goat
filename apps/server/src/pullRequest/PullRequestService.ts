@@ -71,12 +71,17 @@ import {
   type PullRequestThreadCommentsInput,
   type PullRequestThreadCommentsResult,
   type PullRequestUpdateInput,
-  type SourceControlProviderInfo,
   SourceControlProviderKind,
   type ThreadPullRequestKey,
 } from "@goat/contracts";
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
+import {
+  httpRemoteHost,
+  projectRepositories,
+  remoteHostKey,
+  type ProjectRepository,
+} from "./projectRepositories.ts";
 
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -311,6 +316,8 @@ export interface SupportedProject {
   /** Unlike Azure repository names, remotes are unique across an organization. */
   readonly remote: string;
   readonly repositoryKey: string | null;
+  /** The upstream a fork was made from, listed only when asked for. */
+  readonly upstream: boolean;
 }
 
 interface WorkspaceProjects {
@@ -667,21 +674,6 @@ function rankFilterOptions<A>(
   };
 }
 
-const remoteHostKey = (recognized: SourceControlProviderInfo, remoteUrl: string) =>
-  `${recognized.baseUrl}\n${isSshRemoteUrl(remoteUrl) ? "ssh" : "web"}`;
-
-/** An HTTP remote names its server's web host, port included. */
-function httpRemoteHost(remoteUrl: string): string | null {
-  try {
-    const remote = new URL(remoteUrl);
-    return remote.protocol === "http:" || remote.protocol === "https:"
-      ? remote.host.toLowerCase()
-      : null;
-  } catch {
-    return null;
-  }
-}
-
 // Capture before the provider read so a slow response keeps its original freshness through caches.
 const observeRead = Effect.fnUntraced(function* <A, E, R>(read: Effect.Effect<A, E, R>) {
   const observedAt = yield* Clock.currentTimeMillis;
@@ -712,7 +704,7 @@ export const make = Effect.gen(function* () {
    * of them.
    */
   const resolveRemoteHosts = Effect.fn("PullRequestService.resolveRemoteHosts")(function* (
-    projects: ReadonlyArray<OrchestrationProjectShell>,
+    repositories: ReadonlyArray<ProjectRepository>,
     filter: Pick<PullRequestListInput, "projectId" | "host">,
   ) {
     type Candidate = {
@@ -720,9 +712,8 @@ export const make = Effect.gen(function* () {
       readonly context: SourceControlProviderContext;
     };
     const candidatesByKey = new Map<string, Candidate[]>();
-    for (const project of projects) {
+    for (const { project, identity } of repositories) {
       if (filter.projectId !== undefined && project.id !== filter.projectId) continue;
-      const identity = project.repositoryIdentity;
       if (
         !identity ||
         identity.provider === undefined ||
@@ -860,12 +851,13 @@ export const make = Effect.gen(function* () {
           { concurrency: REPOSITORY_CONCURRENCY },
         ),
       ),
-      Effect.flatMap((projects) =>
-        resolveRemoteHosts(projects, filter).pipe(
-          Effect.map((remoteHosts) => ({ remoteHosts, projects })),
+      Effect.map(projectRepositories),
+      Effect.flatMap((repositories) =>
+        resolveRemoteHosts(repositories, filter).pipe(
+          Effect.map((remoteHosts) => ({ remoteHosts, repositories })),
         ),
       ),
-      Effect.map(({ remoteHosts, projects }) => {
+      Effect.map(({ remoteHosts, repositories }) => {
         const supported: SupportedProject[] = [];
         const unimplemented = new Map<
           string,
@@ -873,14 +865,11 @@ export const make = Effect.gen(function* () {
         >();
         const viewerRoots = new Map<string, string[]>();
         const seen = new Set<string>();
-        for (const project of projects) {
+        for (const { project, identity, upstream } of repositories) {
           if (filter.projectId !== undefined && project.id !== filter.projectId) continue;
           if (filter.projectIds !== undefined && !filter.projectIds.includes(project.id)) continue;
-          const identity = project.repositoryIdentity;
           let kind = identity?.provider;
-          const repository = sourceControlDefinitions.repositorySelector(
-            project.repositoryIdentity,
-          );
+          const repository = sourceControlDefinitions.repositorySelector(identity);
           if (!identity || kind === undefined || repository === null) continue;
           const recognized = sourceControlDefinitions.recognizeRemote(identity.locator.remoteUrl);
           const remote =
@@ -902,7 +891,7 @@ export const make = Effect.gen(function* () {
           const repositoryKey =
             api?.repositoryKey?.({ canonicalKey: identity.canonicalKey }) ?? null;
           const key = listCursorKey(host, repositoryKey ?? repository);
-          if (seen.has(key)) continue;
+          if (seen.has(key) || (api === null && upstream)) continue;
           seen.add(key);
           if (api === null) {
             const counted = unimplemented.get(host);
@@ -923,6 +912,7 @@ export const make = Effect.gen(function* () {
               repositoryKey === null
                 ? null
                 : sourceControlDefinitions.canonicalRepositoryKey(repositoryKey.toLowerCase()),
+            upstream,
           });
         }
         return { supported, unimplemented, viewerRoots };
@@ -933,14 +923,16 @@ export const make = Effect.gen(function* () {
   const requireProject = (ref: PullRequestRef): Effect.Effect<SupportedProject, PullRequestError> =>
     listWorkspaceProjects({ projectId: ref.projectId }).pipe(
       Effect.flatMap(({ supported }): Effect.Effect<SupportedProject, PullRequestError> => {
-        const own = supported[0];
         const repository = ref.repository.trim();
         const host = ref.host?.trim().toLowerCase();
-        if (own !== undefined && own.repository.toLowerCase() === repository.toLowerCase()) {
-          if (host === undefined || host === own.host) return Effect.succeed(own);
-        }
+        const own = supported.find(
+          (candidate) =>
+            candidate.repository.toLowerCase() === repository.toLowerCase() &&
+            (host === undefined || host === candidate.host),
+        );
+        if (own !== undefined) return Effect.succeed(own);
         if (host === undefined) {
-          if (own === undefined) {
+          if (supported.length === 0) {
             return Effect.fail(new PullRequestUnavailableError({ reason: "provider-unsupported" }));
           }
           return Effect.fail(
@@ -997,6 +989,7 @@ export const make = Effect.gen(function* () {
                         `https://${host}/${repository}`,
                       ),
                       repositoryKey: null,
+                      upstream: false,
                     };
                   }
                 }
@@ -1229,7 +1222,9 @@ export const make = Effect.gen(function* () {
   )(function* (input) {
     const involvement = input.involvement ?? "all";
     const continuation = yield* decodeCursors(input.cursors);
-    const { supported: projects, unimplemented, viewerRoots } = yield* listWorkspaceProjects(input);
+    const workspace = yield* listWorkspaceProjects(input);
+    const { unimplemented, viewerRoots } = workspace;
+    const projects = workspace.supported.filter((item) => input.includeUpstream || !item.upstream);
     const projectCounts = new Map<string, number>();
     for (const { host } of projects) {
       projectCounts.set(host, (projectCounts.get(host) ?? 0) + 1);
@@ -2514,7 +2509,9 @@ export const make = Effect.gen(function* () {
     const { supported } = yield* listWorkspaceProjects(input);
     // Worktrees of one checkout are separate projects over the same repository.
     const repositories = [
-      ...new Map(supported.map((project) => [project.cursorKey, project])).values(),
+      ...new Map(
+        supported.filter((item) => !item.upstream).map((project) => [project.cursorKey, project]),
+      ).values(),
     ];
     const refOf = (project: SupportedProject) => ({
       cwd: project.project.workspaceRoot,
@@ -2639,20 +2636,18 @@ export const make = Effect.gen(function* () {
   )(function* (input) {
     if (input.refs.length === 0) return { stats: [] };
     const { supported } = yield* listWorkspaceProjects({});
-    const byProject = new Map(supported.map((project) => [project.project.id, project]));
+    const statKey = (projectId: string, repository: string) =>
+      `${projectId} ${repository.trim().toLowerCase()}`;
+    const byRepository = new Map(
+      supported.map((project) => [statKey(project.project.id, project.repository), project]),
+    );
     const wanted = new Map<
       string,
       { readonly project: SupportedProject; readonly number: number }
     >();
     for (const ref of input.refs) {
-      const project = byProject.get(ref.projectId);
-      if (
-        project === undefined ||
-        project.api.listChangeRequestStats === undefined ||
-        project.repository.toLowerCase() !== ref.repository.trim().toLowerCase()
-      ) {
-        continue;
-      }
+      const project = byRepository.get(statKey(ref.projectId, ref.repository));
+      if (project === undefined || project.api.listChangeRequestStats === undefined) continue;
       wanted.set(`${project.project.id} ${ref.number}`, { project, number: ref.number });
     }
     const byHost = new Map<string, Array<{ project: SupportedProject; number: number }>>();
@@ -2993,6 +2988,7 @@ export const make = Effect.gen(function* () {
         limit,
         query,
         cursorEntries,
+        includeUpstream,
       ] = JSON.parse(key) as [
         number,
         string,
@@ -3004,6 +3000,7 @@ export const make = Effect.gen(function* () {
         number | null,
         string | null,
         ReadonlyArray<[string, string]> | null,
+        boolean,
       ];
       return listUncached({
         state,
@@ -3015,6 +3012,7 @@ export const make = Effect.gen(function* () {
         ...(limit === null ? {} : { limit }),
         ...(query === null ? {} : { query }),
         ...(cursorEntries === null ? {} : { cursors: Object.fromEntries(cursorEntries) }),
+        ...(includeUpstream ? { includeUpstream } : {}),
       } as PullRequestListInput);
     },
     {
@@ -3045,6 +3043,7 @@ export const make = Effect.gen(function* () {
       input.cursors === undefined
         ? null
         : Object.entries(input.cursors).toSorted(([left], [right]) => left.localeCompare(right)),
+      input.includeUpstream === true,
     ]);
     // A replacement reader can join a lookup still finishing its previous reader's cancellation.
     return Cache.get(listCache, key).pipe(

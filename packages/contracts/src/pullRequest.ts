@@ -358,6 +358,8 @@ export const PullRequestListInput = Schema.Struct({
   projectId: Schema.optional(ProjectId),
   projectIds: Schema.optional(Schema.Array(ProjectId).check(Schema.isMaxLength(100))),
   host: Schema.optional(TrimmedNonEmptyString),
+  /** Also list the upstream repositories forks were made from. */
+  includeUpstream: Schema.optional(Schema.Boolean),
   limit: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 500 }))),
   cursors: Schema.optional(PullRequestListCursors),
   query: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(200))),

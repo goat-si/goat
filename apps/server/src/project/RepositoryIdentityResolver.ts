@@ -106,7 +106,7 @@ function buildRepositoryIdentity(input: {
   readonly remoteName: string;
   readonly remoteUrl: string;
   readonly originUrl: string | undefined;
-  readonly rootPath: string;
+  readonly rootPath: string | undefined;
 }): RepositoryIdentity {
   const canonicalKey = sourceControlDefinitions.repositoryKeyFromRemote(input.remoteUrl);
   const sourceControlProvider = sourceControlDefinitions.recognizeRemote(input.remoteUrl);
@@ -123,13 +123,30 @@ function buildRepositoryIdentity(input: {
       remoteName: input.remoteName,
       remoteUrl: input.remoteUrl,
     },
-    rootPath: input.rootPath,
+    ...(input.rootPath === undefined ? {} : { rootPath: input.rootPath }),
     ...(repositoryPath ? { displayName: repositoryPath } : {}),
     ...(sourceControlProvider ? { provider: sourceControlProvider.kind } : {}),
     ...(owner ? { owner } : {}),
     ...(repositoryName ? { name: repositoryName } : {}),
     ...(origin ? { origin } : {}),
   };
+}
+
+/** A fork's own repository, when its primary remote is the upstream it was forked from. */
+export function ownRepositoryIdentity(identity: RepositoryIdentity): RepositoryIdentity | null {
+  const remoteUrl = identity.origin?.remoteUrl;
+  if (remoteUrl === undefined) return null;
+  const own = buildRepositoryIdentity({
+    remoteName: "origin",
+    remoteUrl,
+    originUrl: undefined,
+    rootPath: identity.rootPath,
+  });
+  // A host only discovery could name serves the fork as it serves the upstream.
+  const sameHost = own.canonicalKey.split("/")[0] === identity.canonicalKey.split("/")[0];
+  return own.provider === undefined && identity.provider !== undefined && sameHost
+    ? { ...own, provider: identity.provider }
+    : own;
 }
 
 class RepositoryIdentityCacheKey extends Data.Class<{
