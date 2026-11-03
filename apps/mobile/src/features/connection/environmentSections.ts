@@ -5,14 +5,23 @@ import type { EnvironmentId } from "@goat/contracts";
 import type { RelayClientEnvironmentRecord } from "@goat/contracts/relay";
 import type { ConnectedEnvironmentSummary } from "../../state/remote-runtime-types";
 
-export interface EnvironmentSectionsInput {
-  readonly connectedEnvironments: ReadonlyArray<ConnectedEnvironmentSummary>;
+type EnvironmentSectionEntry = Pick<
+  ConnectedEnvironmentSummary,
+  "environmentId" | "isRelayManaged"
+>;
+
+export interface EnvironmentSectionsInput<
+  T extends EnvironmentSectionEntry = ConnectedEnvironmentSummary,
+> {
+  readonly connectedEnvironments: ReadonlyArray<T>;
   readonly cloudEnvironments: ReadonlyArray<RelayClientEnvironmentRecord> | null;
 }
 
-export interface EnvironmentSections {
-  readonly localEnvironments: ReadonlyArray<ConnectedEnvironmentSummary>;
-  readonly connectedCloudEnvironments: ReadonlyArray<ConnectedEnvironmentSummary>;
+export interface EnvironmentSections<
+  T extends EnvironmentSectionEntry = ConnectedEnvironmentSummary,
+> {
+  readonly localEnvironments: ReadonlyArray<T>;
+  readonly connectedCloudEnvironments: ReadonlyArray<T>;
   readonly availableCloudEnvironments: ReadonlyArray<RelayClientEnvironmentRecord>;
 }
 
@@ -29,7 +38,9 @@ export function relayManagedEnvironmentIds(
   );
 }
 
-export function splitEnvironmentSections(input: EnvironmentSectionsInput): EnvironmentSections {
+export function splitEnvironmentSections<T extends EnvironmentSectionEntry>(
+  input: EnvironmentSectionsInput<T>,
+): EnvironmentSections<T> {
   if (!isGoatConnectEnabled()) {
     return {
       localEnvironments: input.connectedEnvironments,

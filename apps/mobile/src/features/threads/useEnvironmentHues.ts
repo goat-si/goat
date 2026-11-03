@@ -1,21 +1,22 @@
 import { useMemo } from "react";
 import { useEnvironments } from "../../state/environments";
-import { selectHubEnvironmentId } from "../connection/hubEnvironment";
-import { assignMobileEnvironmentHues } from "./environmentHues";
 import { useStoredHubEnvironment } from "../connection/useStoredHubEnvironment";
+import { mobileEnvironmentHueKey, mobileEnvironmentHuesFromKey } from "./environmentHues";
 
 export function useEnvironmentHues() {
   const { environments } = useEnvironments();
   const { storedHubId, loaded } = useStoredHubEnvironment();
-  return useMemo(() => {
-    if (!loaded) return new Map<string, string>();
-    const hub = selectHubEnvironmentId(
-      environments.filter((environment) => !environment.relayManaged),
-      storedHubId,
-    );
-    return assignMobileEnvironmentHues(
-      environments.map((environment) => environment.environmentId),
-      hub,
-    );
-  }, [environments, storedHubId, loaded]);
+  const key = loaded
+    ? mobileEnvironmentHueKey(
+        environments.map(({ environmentId, relayManaged }) => ({
+          environmentId,
+          isRelayManaged: relayManaged,
+        })),
+        storedHubId,
+      )
+    : null;
+  return useMemo(
+    () => (key === null ? new Map<string, string>() : mobileEnvironmentHuesFromKey(key)),
+    [key],
+  );
 }
