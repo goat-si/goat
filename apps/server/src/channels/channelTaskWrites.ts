@@ -66,6 +66,7 @@ export const makeTaskEvent = (
 
 const chipFor = (task: ChannelTask): ChannelTaskChip => ({
   taskId: task.taskId,
+  ...(task.kind === undefined ? {} : { kind: task.kind }),
   conversationId: task.conversationId,
   taskVersion: task.version,
   title: task.title,

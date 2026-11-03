@@ -1,8 +1,9 @@
-import type {
-  ChannelKind,
-  ChannelMessageKind,
-  ChannelTaskChip,
-  ChannelTaskStatus,
+import {
+  type ChannelKind,
+  type ChannelMessageKind,
+  type ChannelTaskChip,
+  type ChannelTaskStatus,
+  isGoatBotSessionThreadId,
 } from "@goat/contracts";
 import {
   channelEvidenceIsMeaningful,
@@ -172,5 +173,17 @@ export const goatBotItemReaders: GoatBotItemReaders = {
       ...(meta.options === undefined || meta.options.length === 0 ? {} : { options: meta.options }),
     };
   },
-  taskCard: (item) => (item.ledgerTask === undefined ? null : presentTaskChip(item.ledgerTask)),
+  taskCard: (item) =>
+    item.ledgerTask === undefined || isGoatBotTurn(item.ledgerTask)
+      ? null
+      : presentTaskChip(item.ledgerTask),
 };
+
+/** GOAT Bot answering in its own session; the conversation already shows that as its reply. */
+function isGoatBotTurn(chip: ChannelTaskChip): boolean {
+  // Older chips lack their kind, but a turn's worker is always the bot's session thread.
+  return (
+    chip.kind === "turn" ||
+    (chip.worker !== undefined && isGoatBotSessionThreadId(chip.worker.threadId))
+  );
+}

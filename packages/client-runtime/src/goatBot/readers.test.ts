@@ -396,6 +396,32 @@ describe("goatBotItemReaders", () => {
     expect(goatBotItemReaders.taskCard(plain)).toBeNull();
     expect(goatBotItemReaders.taskCard(unknownStatus)).toBeNull();
   });
+
+  it("shows coding work as a card but not GOAT Bot's own turns in its session", () => {
+    const notification = (ledgerTask: ChannelTaskChip) => {
+      const item = decodeItem({
+        ...baseJson,
+        type: "notification",
+        source: { kind: "background_task" },
+        outcome: "updated",
+        summary: "Work updated",
+        ledgerTask,
+      });
+      if (item.type !== "notification") throw new Error("expected a notification");
+      return item;
+    };
+    const session = {
+      environmentId: EnvironmentId.make("env"),
+      threadId: ThreadId.make("goat-bot-session:abc"),
+    };
+    expect(goatBotItemReaders.taskCard(notification(chip({ kind: "work" })))).not.toBeNull();
+    expect(goatBotItemReaders.taskCard(notification(chip()))).not.toBeNull();
+    expect(goatBotItemReaders.taskCard(notification(chip({ kind: "turn" })))).toBeNull();
+    const { worker: _worker, ...unbound } = chip({ kind: "turn" });
+    expect(goatBotItemReaders.taskCard(notification(unbound))).toBeNull();
+    // Chips stored before chips carried their kind still name the session as their worker.
+    expect(goatBotItemReaders.taskCard(notification(chip({ worker: session })))).toBeNull();
+  });
 });
 
 // Exercise the real codec → reader → row chain used by both renderers.
