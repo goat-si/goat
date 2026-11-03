@@ -234,6 +234,8 @@ it.effect("a settings change ends blocked claims and pending requests without a 
     );
     const events = yield* Queue.unbounded<void>();
     const processed = yield* Deferred.make<void>();
+    const fenced = yield* Deferred.make<void>();
+    let failPublish = false;
     const stream = Stream.fromQueue(events).pipe(
       Stream.mapEffect(() => base.getSettings.pipe(Effect.orDie)),
     );
@@ -258,9 +260,13 @@ it.effect("a settings change ends blocked claims and pending requests without a 
     });
     const manifest = Layer.succeed(BrowserClaimManifest, {
       publish: (union) =>
-        (union.origins.length === 0 ? Deferred.succeed(processed, undefined) : Effect.void).pipe(
-          Effect.as("a".repeat(64)),
-        ),
+        (failPublish
+          ? Effect.fail(new Error("manifest unavailable"))
+          : union.origins.length === 0
+            ? Deferred.succeed(processed, undefined)
+            : Effect.void
+        ).pipe(Effect.as("a".repeat(64))),
+      fence: Deferred.succeed(fenced, undefined).pipe(Effect.as(true)),
       readConfig: Effect.succeed({
         capability_manifest: {
           sha256: "a".repeat(64),
@@ -271,12 +277,12 @@ it.effect("a settings change ends blocked claims and pending requests without a 
       install: () => Effect.void,
     });
     const bind = Layer.succeed(BrowserClaimBind, {
-      bind: () =>
+      bind: (request) =>
         Effect.succeed({
           targetId: "target-1",
           tabId: "tab",
           title: "Site",
-          url: "https://example.test",
+          url: request.origin,
           driverGeneration: 1,
         }),
     });
@@ -339,5 +345,16 @@ it.effect("a settings change ends blocked claims and pending requests without a 
         snapshot,
       ),
     );
+    const other = yield* service.claim({ ...input, origin: "https://other.test" });
+    if (other.agentResult.status !== "attached") return assert.fail("expected other claim");
+    failPublish = true;
+    yield* settings.updateSettings({ blockedBrowserHosts: ["other.test"] });
+    yield* Queue.offer(events, undefined);
+    yield* Deferred.await(fenced);
+    assert.equal(
+      yield* service.endReason(threadId, other.agentResult.claim.claimId),
+      "blocked_url",
+    );
+    assert.deepEqual((yield* service.snapshotFor(threadId)).claims, []);
   }).pipe(Effect.scoped),
 );
