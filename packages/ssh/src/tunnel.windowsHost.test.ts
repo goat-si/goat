@@ -4,7 +4,10 @@ import * as NodeChildProcess from "node:child_process";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
-import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
+import {
+  ORCHESTRATION_PROTOCOL_VERSION,
+  type DesktopSshEnvironmentReadyOrPending,
+} from "@goat/contracts";
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import * as NetService from "@goat/shared/Net";
 import { WINDOWS_DETACHED_SPAWN_POWERSHELL } from "@goat/shared/windowsHostProcess";
@@ -56,6 +59,9 @@ const runWithDoubles = (bin: string, body: string) =>
     encoding: "utf8",
     env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
   });
+
+const remotePortOf = (result: DesktopSshEnvironmentReadyOrPending) =>
+  "type" in result ? undefined : result.remotePort;
 
 describe("Windows SSH host", () => {
   const nativeRuntime = (scenario: "older" | "moved" | "missing" | "mismatch") => {
@@ -151,7 +157,7 @@ describe("Windows SSH host", () => {
         if (scenario === "moved") {
           yield* manager.readyEnvironment(uploadTarget).pipe(Effect.flip);
           assert.equal(
-            (yield* manager.ensureEnvironment(uploadTarget, { keyOnly: true })).remotePort,
+            remotePortOf(yield* manager.ensureEnvironment(uploadTarget, { keyOnly: true })),
             3883,
           );
         }

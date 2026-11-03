@@ -1,5 +1,9 @@
 import { assert, describe, it } from "@effect/vitest";
-import { ORCHESTRATION_PROTOCOL_VERSION, SshHostProviders } from "@goat/contracts";
+import {
+  ORCHESTRATION_PROTOCOL_VERSION,
+  SshHostProviders,
+  type DesktopSshEnvironmentReadyOrPending,
+} from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SshTunnel from "./tunnel.ts";
@@ -24,6 +28,9 @@ const live = (version: string) => ({
   liveSignals: signals(version),
   liveBinarySignals: signals(version),
 });
+
+const remotePortOf = (result: DesktopSshEnvironmentReadyOrPending) =>
+  "type" in result ? undefined : result.remotePort;
 
 describe("compatible SSH runtime", () => {
   it.effect.each([
@@ -80,7 +87,7 @@ describe("compatible SSH runtime", () => {
       assert.equal(successfulStatus(yield* manager.status(uploadTarget)).state, "ready");
       yield* manager.readyEnvironment(uploadTarget).pipe(Effect.flip);
       assert.equal(
-        (yield* manager.ensureEnvironment(uploadTarget, { keyOnly: true })).remotePort,
+        remotePortOf(yield* manager.ensureEnvironment(uploadTarget, { keyOnly: true })),
         3883,
       );
     }).pipe(Effect.provide(f.layer), Effect.scoped);
@@ -99,7 +106,7 @@ describe("compatible SSH runtime", () => {
     return Effect.gen(function* () {
       const manager = yield* SshTunnel.SshEnvironmentManager;
       assert.equal(
-        (yield* manager.ensureEnvironment(uploadTarget, { keyOnly: true })).remotePort,
+        remotePortOf(yield* manager.ensureEnvironment(uploadTarget, { keyOnly: true })),
         3773,
       );
       f.setProbe({ ...live("1.2.2"), liveOwned: false, livePort: 3883 });
@@ -107,7 +114,7 @@ describe("compatible SSH runtime", () => {
       assert.equal(successfulStatus(yield* manager.status(uploadTarget)).state, "ready");
       yield* manager.readyEnvironment(uploadTarget).pipe(Effect.flip);
       assert.equal(
-        (yield* manager.ensureEnvironment(uploadTarget, { keyOnly: true })).remotePort,
+        remotePortOf(yield* manager.ensureEnvironment(uploadTarget, { keyOnly: true })),
         3883,
       );
       assert.equal((yield* manager.readyEnvironment(uploadTarget)).remotePort, 3883);
