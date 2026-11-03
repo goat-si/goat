@@ -277,6 +277,51 @@ class ManifestConfirmationMismatch extends Schema.TaggedError<ManifestConfirmati
   {},
 ) {}
 
+it.effect("restarts the driver when a narrower manifest cannot be written", () =>
+  Effect.gen(function* () {
+    let failWrites = false;
+    let fences = 0;
+    const service = yield* makeUnconfirmedGrants({
+      environmentId: EnvironmentId.make("environment:test"),
+      supported: () => true,
+      publish: () =>
+        failWrites
+          ? Effect.fail(new ManifestConfirmationMismatch())
+          : Effect.succeed("a".repeat(64)),
+      confirm: (sha) =>
+        Effect.succeed({
+          capability_manifest: { sha256: sha, file_sha256: sha, reload_error: null },
+        }),
+      fence: () =>
+        Effect.sync(() => {
+          fences++;
+          return true;
+        }),
+      bind: (input) =>
+        Effect.succeed({
+          targetId: "target-1",
+          tabId: "tab-1",
+          title: "Site",
+          url: input.origin,
+          driverGeneration: 1,
+        }),
+    });
+    const threadId = ThreadId.make("thread:test");
+    const request = yield* service.request({
+      threadId,
+      pid: 42,
+      windowId: 7,
+      origin: "https://example.test",
+      windowTitle: "Browser",
+    });
+    if (request.status !== "pending") return assert.fail("expected pending request");
+    yield* service.answer(request.claimId, true);
+    failWrites = true;
+    yield* service.revoke(threadId, "https://example.test").pipe(Effect.result);
+    assert.equal(fences, 1);
+  }),
+);
+
 it.effect("refuses a claim when manifest confirmation fails and restores the previous union", () =>
   Effect.gen(function* () {
     const published: Array<ReadonlyArray<{ readonly pid: number; readonly windowId: number }>> = [];

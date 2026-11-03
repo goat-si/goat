@@ -109,25 +109,22 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
   const publish = Effect.fn("BrowserOriginGrants.publishExpansion")(function* (value: Union) {
     yield* confirm(yield* write(value));
   });
+  const fence = (cause: unknown) =>
+    Effect.logWarning("Browser manifest narrowing was not applied; restarting the driver", {
+      cause,
+    }).pipe(
+      Effect.andThen(deps.fence?.() ?? Effect.succeed(false)),
+      Effect.flatMap((fenced) =>
+        fenced ? Effect.void : Effect.logError("No driver fence is available"),
+      ),
+    );
   const shrink = Effect.fn("BrowserOriginGrants.publishShrink")(function* (value: Union) {
-    const sha = yield* write(value);
+    const result = yield* write(value).pipe(Effect.result);
+    if (result._tag === "Failure") return yield* fence(result.failure);
+    const sha = result.success;
     // Narrowing never waits on the driver, but a driver that keeps a wider manifest is
     // restarted: its old browser windows and origins must not outlive the claims that named them.
-    yield* confirm(sha).pipe(
-      Effect.catch((cause) =>
-        Effect.logWarning("Browser manifest shrink was not confirmed; restarting the driver", {
-          cause,
-        }).pipe(
-          Effect.andThen(deps.fence?.() ?? Effect.succeed(false)),
-          Effect.flatMap((fenced) =>
-            fenced
-              ? Effect.void
-              : Effect.logError("Browser manifest shrink was not confirmed and no fence exists"),
-          ),
-        ),
-      ),
-      Effect.forkDetach({ startImmediately: true }),
-    );
+    yield* confirm(sha).pipe(Effect.catch(fence), Effect.forkDetach({ startImmediately: true }));
   });
   const pending = new Map<string, Pending>();
   const claims = new Map<string, LiveTabClaim>();
@@ -374,11 +371,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
       return signals;
     });
     for (const signal of stopped) yield* Deferred.succeed(signal, undefined);
-    yield* shrink(union()).pipe(
-      Effect.catch((cause) =>
-        Effect.logWarning("Could not publish stopped browser claims", { cause }),
-      ),
-    );
+    yield* shrink(union());
   });
   const end = Effect.fn("BrowserOriginGrants.end")(
     (threadId: ThreadId, claimId: string, generation: number, reason: "origin_changed") =>
