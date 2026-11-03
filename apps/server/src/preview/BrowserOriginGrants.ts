@@ -555,6 +555,48 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     });
   };
   const pidValues = () => [...new Set([...claims.values()].map((claim) => claim.tab.pid))];
+  const judgeReply = Effect.fn("BrowserOriginGrants.judgeReply")(function* (
+    threadId: ThreadId,
+    claimId: string,
+    generation: number,
+    urls: ReadonlyArray<string>,
+    outside: boolean,
+  ) {
+    const judgment = yield* Effect.sync(() => {
+      const claim = claims.get(claimId);
+      if (claim?.threadId !== threadId || claim.claimGeneration !== generation)
+        return "refused" as const;
+      const current = claimValues(threadId).find(
+        (entry) => entry.claimId === claimId && entry.claimGeneration === generation,
+      );
+      if (current === undefined) return "refused" as const;
+      const hosts = blockedHosts();
+      if (hosts === undefined && !outside) return "refused" as const;
+      const bad =
+        outside ||
+        urls.some((url) => {
+          try {
+            return (
+              !current.origins.includes(new URL(url).origin) ||
+              hosts === undefined ||
+              isBlockedBrowserUrl(url, hosts)
+            );
+          } catch {
+            return true;
+          }
+        });
+      if (!bad) return "allowed" as const;
+      claims.delete(claimId);
+      ended.set(claimId, { threadId, reason: "origin_changed" });
+      sequence++;
+      return "ended" as const;
+    });
+    if (judgment === "ended") {
+      yield* advance;
+      yield* shrink(union());
+    }
+    return judgment === "allowed";
+  });
   const bindingsFor = Effect.fn("BrowserOriginGrants.bindingsFor")((threadId: ThreadId) =>
     Effect.sync(() => bindingValues(threadId)),
   );
@@ -590,6 +632,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     claimedPids,
     blockedHosts,
     blockOrigins,
+    judgeReply,
     settled,
     revision: SubscriptionRef.get(version),
     changes: SubscriptionRef.changes(version),

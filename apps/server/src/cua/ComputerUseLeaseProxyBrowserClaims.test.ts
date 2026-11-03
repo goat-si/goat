@@ -285,6 +285,210 @@ const supportedDriver = Effect.fn(function* (h: Effect.Success<ReturnType<typeof
   assert.equal((yield* h.nextToProvider).id, 99);
 });
 
+effectIt.effect(
+  "a rejected reply is withheld and a dispatched browser write remains possibly committed",
+  () =>
+    Effect.gen(function* () {
+      const reports: Array<unknown> = [];
+      const h = yield* harness({
+        judgeBrowserClaimReply: (report) =>
+          Effect.sync(() => {
+            reports.push(report);
+            return false;
+          }),
+      });
+      yield* h.push({
+        ...active(),
+        browserClaims: [
+          {
+            claimId: "claim-1",
+            claimGeneration: 2,
+            pid: 42,
+            windowId: 7,
+            targetId: "target-1",
+            tabId: "tab-1",
+            origins: ["https://example.test"],
+          },
+        ],
+      });
+      yield* h.applied;
+      yield* supportedDriver(h);
+      yield* h.send(call(3, "browser_click", { tab_id: "tab-1" }));
+      yield* h.nextToDriver;
+      yield* h.reply(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 3,
+          result: { structuredContent: { tab_id: "tab-1", url: "https://example.test/secret" } },
+        }),
+      );
+      const reply = yield* h.nextToProvider;
+      assert.isFalse(JSON.stringify(reply).includes("secret"));
+      assert.deepInclude(reply.result?.structuredContent, { effect: "unverifiable" });
+      assert.deepEqual(reports, [
+        {
+          browserClaimReply: {
+            claimId: "claim-1",
+            claimGeneration: 2,
+            urls: ["https://example.test/secret"],
+          },
+        },
+      ]);
+      const released = h.reservations.filter((item) => item.action === "release");
+      assert.lengthOf(released, 1);
+      assert.notEqual(released[0]?.action === "release" ? released[0].notSent : undefined, true);
+    }),
+);
+
+effectIt.effect("a claimed reply without a URL still receives a liveness judgment", () =>
+  Effect.gen(function* () {
+    const reports: Array<unknown> = [];
+    const h = yield* harness({
+      judgeBrowserClaimReply: (report) =>
+        Effect.sync(() => {
+          reports.push(report);
+          return true;
+        }),
+    });
+    yield* h.push({
+      ...active(),
+      browserClaims: [
+        {
+          claimId: "claim-1",
+          claimGeneration: 2,
+          pid: 42,
+          windowId: 7,
+          targetId: "target-1",
+          tabId: "tab-1",
+          origins: ["https://example.test"],
+        },
+      ],
+    });
+    yield* h.applied;
+    yield* supportedDriver(h);
+    yield* h.send(call(3, "get_browser_state", { tab_id: "tab-1" }));
+    yield* h.nextToDriver;
+    yield* h.reply(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 3,
+        result: { structuredContent: { tab_id: "tab-1", title: "Allowed" } },
+      }),
+    );
+    assert.include(JSON.stringify(yield* h.nextToProvider), "Allowed");
+    assert.deepEqual(reports, [
+      { browserClaimReply: { claimId: "claim-1", claimGeneration: 2, urls: [] } },
+    ]);
+  }),
+);
+
+effectIt.effect("a cancelled call during the reply report releases its write as sent", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const gate = yield* Deferred.make<void>();
+    const h = yield* harness({
+      judgeBrowserClaimReply: () =>
+        Deferred.succeed(entered, undefined).pipe(
+          Effect.andThen(Deferred.await(gate)),
+          Effect.as(false),
+        ),
+    });
+    yield* h.push({
+      ...active(),
+      browserClaims: [
+        {
+          claimId: "claim-1",
+          claimGeneration: 2,
+          pid: 42,
+          windowId: 7,
+          targetId: "target-1",
+          tabId: "tab-1",
+          origins: ["https://example.test"],
+        },
+      ],
+    });
+    yield* h.applied;
+    yield* supportedDriver(h);
+    yield* h.send(call(3, "browser_click", { tab_id: "tab-1" }));
+    yield* h.nextToDriver;
+    yield* h.nextReservation;
+    yield* h.reply(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 3,
+        result: { structuredContent: { tab_id: "tab-1", url: "https://example.test/secret" } },
+      }),
+    );
+    yield* Deferred.await(entered);
+    yield* h.send(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        method: "notifications/cancelled",
+        params: { requestId: 3 },
+      }),
+    );
+    yield* h.nextToDriver;
+    yield* Deferred.succeed(gate, undefined);
+    const released = yield* h.nextReservation;
+    assert.equal(released.action, "release");
+    if (released.action === "release") assert.notEqual(released.notSent, true);
+    assert.equal(yield* h.providerQueued, 0);
+  }),
+);
+
+effectIt.effect.each([
+  { name: "malformed", value: { tab_id: "tab-1", url: "not a URL" } },
+  { name: "non-string", value: { tab_id: "tab-1", url: null } },
+  {
+    name: "too many URLs",
+    value: {
+      tabs: Array.from({ length: 17 }, () => ({
+        tab_id: "tab-1",
+        url: "https://example.test/secret",
+      })),
+    },
+  },
+  { name: "driver refusal", value: { code: "browser_origin_outside_scope" } },
+])("a $name claimed reply is withheld and ends its generation", ({ value }) =>
+  Effect.gen(function* () {
+    const reports: Array<unknown> = [];
+    const h = yield* harness({
+      judgeBrowserClaimReply: (report) =>
+        Effect.sync(() => {
+          reports.push(report);
+          return true;
+        }),
+    });
+    yield* h.push({
+      ...active(),
+      browserClaims: [
+        {
+          claimId: "claim-1",
+          claimGeneration: 2,
+          pid: 42,
+          windowId: 7,
+          targetId: "target-1",
+          tabId: "tab-1",
+          origins: ["https://example.test"],
+        },
+      ],
+    });
+    yield* h.applied;
+    yield* supportedDriver(h);
+    yield* h.send(call(3, "get_browser_state", { tab_id: "tab-1" }));
+    yield* h.nextToDriver;
+    yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 3, result: { structuredContent: value } }));
+    const reply = yield* h.nextToProvider;
+    assert.isTrue(reply.result?.isError);
+    assert.deepEqual(reports, [
+      { browserClaimReply: { claimId: "claim-1", claimGeneration: 2, urls: [], outside: true } },
+    ]);
+    const released = h.reservations.filter((item) => item.action === "release");
+    assert.lengthOf(released, 1);
+    assert.equal(released[0]?.action === "release" ? released[0].notSent : undefined, true);
+  }),
+);
+
 effectIt.effect("the proxy replaces a caller origin scope for its claimed tab", () =>
   Effect.gen(function* () {
     const h = yield* harness();
@@ -448,7 +652,14 @@ effectIt.effect(
   () =>
     Effect.gen(function* () {
       const reports: Array<unknown> = [];
-      const h = yield* harness({ onBrowserClaimReport: (report) => reports.push(report) });
+      const h = yield* harness({
+        onBrowserClaimReport: (report) => reports.push(report),
+        judgeBrowserClaimReply: (report) =>
+          Effect.sync(() => {
+            reports.push(report);
+            return false;
+          }),
+      });
       yield* h.push({
         ...active(),
         browserClaims: [
@@ -478,7 +689,14 @@ effectIt.effect(
       yield* h.nextToProvider;
       assert.deepEqual(reports, [
         { browserClaimsSupported: true },
-        { browserClaimEnded: { claimId: "claim-1", claimGeneration: 2, reason: "origin_changed" } },
+        {
+          browserClaimReply: {
+            claimId: "claim-1",
+            claimGeneration: 2,
+            urls: ["https://other.test/secret"],
+            outside: true,
+          },
+        },
       ]);
     }),
 );

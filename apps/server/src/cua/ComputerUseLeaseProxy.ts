@@ -117,7 +117,10 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
   let foreground: ReadonlyArray<Contracts.ComputerUseForegroundGrant> = [];
   const lifecycleLock = yield* Semaphore.make(1);
   const flags = makeLeaseFlags();
-  const claims = makeProxyBrowserClaims(options.onBrowserClaimReport);
+  const claims = makeProxyBrowserClaims(
+    options.onBrowserClaimReport,
+    options.judgeBrowserClaimReply,
+  );
   const fences = makeLeaseFences(options.controlId);
   let ownRequests = 0;
   let interruptionsSeen: number | undefined;
@@ -268,7 +271,6 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
       let sink = providerSink;
       if (message?.id !== undefined && message.id !== null && message.method === undefined) {
         const own = typeof message.id === "string" && message.id.startsWith(OWN_ID);
-        // Only the answer to a list_apps request still waiting for it says which app a pid is.
         const listing = own
           ? String(message.id).startsWith(`${OWN_ID}apps:`) && ownAnswers.has(String(message.id))
           : outstanding.get(JSON.stringify(message.id))?.tool === "list_apps";
@@ -286,7 +288,6 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         }
         const key = JSON.stringify(message.id);
         const request = outstanding.get(key);
-        // A reply to a request the provider cancelled, or never made, is stale.
         if (request === undefined) return;
         rememberDriverReply(request, message);
         if (personStop.beginLock(message)) {
@@ -294,7 +295,6 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
         }
         identities.forget(message, request.args);
         if (request.hops !== undefined) request.hops.lineAt = yield* Clock.currentTimeMillis;
-        // Stopped, ended, or answered by a pause or cancellation meanwhile.
         const gone = () =>
           finished !== undefined ||
           personStop.pending() ||
@@ -311,22 +311,27 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
           delivered = line;
         }
         yield* agentInput.ended(key);
+        const claimAllowed = yield* claims.judgeReply(message.result, request.browserClaim);
+        if (gone()) return;
         if (request.cancelled) {
-          yield* request.sink.recordOutcome?.(line) ?? Effect.void;
+          if (claimAllowed) yield* request.sink.recordOutcome?.(line) ?? Effect.void;
           yield* drawOverlay({ type: "reply", id: key, failed: true });
-          yield* release(request, true, driverRefused(request.tool, message, request.args));
+          yield* release(
+            request,
+            true,
+            claimAllowed ? driverRefused(request.tool, message, request.args) : false,
+          );
           if (gone() || paused !== undefined || idle) return;
           outstanding.delete(key);
           options.onCancelledRequestSettled?.(key);
           return;
         }
-        if (claims.outside(message.result, request.browserClaim))
+        if (!claimAllowed)
           return yield* claims.refuseReply(request, key, outstanding, gone, release);
         const session = message.result?.structuredContent?.session;
         if (request.method === "tools/call" && typeof session === "string") sessions.add(session);
         if (request.method === "tools/call") {
           const verdict = yield* checkReply(message, request.tool, request.unfiltered === true);
-          // Stopped, paused or cancelled while it was checked: that already answered it.
           if (gone()) return;
           // Before the checks below, so a pause during GOAT's own capture drops it (#1677).
           if (options.screenshots && verdict !== "other" && verdict !== "unknown") {
@@ -337,9 +342,6 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
             if (admitted === undefined) return;
             delivered = admitted;
           }
-          // Every answered call updates the overlay, a display refusal as failed, while the call
-          // is still outstanding: a stop or pause during the draw answers it, and the check below
-          // drops this reply.
           const failed =
             message.error !== undefined ||
             message.result?.isError === true ||
@@ -352,7 +354,6 @@ export const runLeaseProxy = Effect.fn("ComputerUseLeaseProxy.run")(function* <E
             ...(image ? { image } : {}),
             ...(failed ? { failed: true } : {}),
           });
-          // A reply that shows the screen waits out a drop; the cut-off answers its call.
           const heldReply = () =>
             Transport.heldByTransport(options.transportHeld, request.method, request.tool);
           if (gone() || paused !== undefined || heldReply()) return;

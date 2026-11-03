@@ -242,6 +242,19 @@ const makeReportLayer = (serverScope?: Scope.Scope) =>
       const report = yield* request.text.pipe(Effect.flatMap(decodeReport), Effect.option);
       if (Option.isNone(report)) return HttpServerResponse.empty({ status: 400 });
       const value = report.value;
+      if ("browserClaimReply" in value) {
+        const grants = yield* Effect.serviceOption(BrowserOriginGrants.BrowserOriginGrants);
+        if (Option.isNone(grants)) return HttpServerResponse.empty({ status: 503 });
+        const reply = value.browserClaimReply;
+        const allowed = yield* grants.value.judgeReply(
+          threadId,
+          reply.claimId,
+          reply.claimGeneration,
+          reply.urls,
+          reply.outside === true,
+        );
+        return HttpServerResponse.empty({ status: allowed ? 204 : 409 });
+      }
       if ("browserClaimsSupported" in value || "browserClaimEnded" in value) {
         const grants = yield* Effect.serviceOption(BrowserOriginGrants.BrowserOriginGrants);
         if (Option.isNone(grants)) return HttpServerResponse.empty({ status: 503 });

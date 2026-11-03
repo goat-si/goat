@@ -23,6 +23,7 @@ import { PreviewSessionNoPicture } from "./previewSession.ts";
 import {
   ComputerUseLeaseBrowserCapability,
   ComputerUseLeaseBrowserClaimEnded,
+  ComputerUseLeaseBrowserClaimReply,
   LeaseBrowserClaim,
   PendingBrowserBind,
 } from "./browserClaims.ts";
@@ -260,7 +261,6 @@ export const ComputerUseDriverEndReason = Schema.Literals([
 ]);
 export type ComputerUseDriverEndReason = typeof ComputerUseDriverEndReason.Type;
 
-// The host counts unexpected driver endings until a successful first handshake.
 export const ComputerUseLeaseDriverEnded = Schema.Struct({
   // A fact about the host's helper, not one control: thread-mode proxies report it as well.
   driverEnded: Schema.Union([
@@ -294,6 +294,7 @@ export const ComputerUseLeaseReport = Schema.Union([
   ComputerUseLeaseDriverEnded,
   ComputerUseLeaseBrowserCapability,
   ComputerUseLeaseBrowserClaimEnded,
+  ComputerUseLeaseBrowserClaimReply,
 ]);
 export type ComputerUseLeaseReport = typeof ComputerUseLeaseReport.Type;
 

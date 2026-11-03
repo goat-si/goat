@@ -124,7 +124,7 @@ it.effect("blocking one origin ends every claim that includes it", () =>
     }
     yield* service.blockOrigins(["other.test"]);
     assert.deepEqual(yield* service.claimsFor(threadId), []);
-    assert.equal(yield* service.endReason(threadId, ids[0]), "origin_changed");
+    assert.equal(yield* service.endReason(threadId, ids[0]!), "origin_changed");
     assert.deepEqual(
       (yield* service.list(threadId)).grants.map((grant) => grant.origin),
       ["https://example.test"],
@@ -168,6 +168,110 @@ it.effect("a held bind for an origin that gets blocked is refused at once and ne
     assert.deepEqual(yield* service.bindingsFor(threadId), []);
     yield* Deferred.succeed(release, undefined);
     assert.deepEqual(yield* service.list(threadId), { claims: [], grants: [] });
+  }),
+);
+
+it.effect("a held bind does not block the reply judge", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const service = yield* makeBrowserOriginGrants({
+      environmentId: EnvironmentId.make("environment:test"),
+      supported: () => true,
+      publish: () => Effect.void,
+      bind: (input) =>
+        input.windowId === 8
+          ? Deferred.succeed(entered, undefined).pipe(
+              Effect.andThen(Deferred.await(release)),
+              Effect.as({
+                targetId: "target-8",
+                tabId: "tab-8",
+                title: "Site",
+                url: input.origin,
+                driverGeneration: 1,
+              }),
+            )
+          : Effect.succeed({
+              targetId: "target-7",
+              tabId: "tab-7",
+              title: "Site",
+              url: input.origin,
+              driverGeneration: 1,
+            }),
+    });
+    const threadId = ThreadId.make("thread:test");
+    const first = yield* service.request({
+      threadId,
+      pid: 42,
+      windowId: 7,
+      origin: "https://example.test",
+      windowTitle: "Browser",
+    });
+    if (first.status !== "pending") return assert.fail("expected pending");
+    const attached = yield* service.answer(first.claimId, true);
+    if (attached.agentResult.status !== "attached") return assert.fail("expected attached");
+    const next = yield* service.request({
+      threadId,
+      pid: 42,
+      windowId: 8,
+      origin: "https://other.test",
+      windowTitle: "Browser",
+    });
+    if (next.status !== "pending") return assert.fail("expected pending");
+    const answering = yield* service.answer(next.claimId, true).pipe(Effect.forkChild);
+    yield* Deferred.await(entered);
+    assert.isTrue(
+      yield* service.judgeReply(
+        threadId,
+        first.claimId,
+        attached.agentResult.claim.claimGeneration,
+        [],
+        false,
+      ),
+    );
+    yield* Deferred.succeed(release, undefined);
+    yield* Fiber.join(answering);
+  }),
+);
+
+it.effect("an unavailable committed policy refuses the reply judge", () =>
+  Effect.gen(function* () {
+    let available = true;
+    const service = yield* makeBrowserOriginGrants({
+      environmentId: EnvironmentId.make("environment:test"),
+      supported: () => true,
+      blockedHosts: () => (available ? [] : undefined),
+      publish: () => Effect.void,
+      bind: (input) =>
+        Effect.succeed({
+          targetId: "target",
+          tabId: "tab",
+          title: "Site",
+          url: input.origin,
+          driverGeneration: 1,
+        }),
+    });
+    const threadId = ThreadId.make("thread:test");
+    const pending = yield* service.request({
+      threadId,
+      pid: 42,
+      windowId: 7,
+      origin: "https://example.test",
+      windowTitle: "Browser",
+    });
+    if (pending.status !== "pending") return assert.fail("expected pending");
+    const answer = yield* service.answer(pending.claimId, true);
+    if (answer.agentResult.status !== "attached") return assert.fail("expected attached");
+    available = false;
+    assert.isFalse(
+      yield* service.judgeReply(
+        threadId,
+        pending.claimId,
+        answer.agentResult.claim.claimGeneration,
+        [],
+        false,
+      ),
+    );
   }),
 );
 
