@@ -15,6 +15,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import {
   hostEnvironmentIdScript,
+  issueExistingServerCredential,
   parseAppServerProbe,
   parseExistingServerProbe,
   probeAppServer,
@@ -102,6 +103,7 @@ const makeHost = Effect.fn("test.appServer.host")(function* (record: {
   readonly port: number;
   /** Home-relative state directory. Defaults to the packaged stable layout. */
   readonly stateDir?: string;
+  readonly windows?: boolean;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const real = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -113,6 +115,17 @@ const makeHost = Effect.fn("test.appServer.host")(function* (record: {
     `${JSON.stringify({ version: 1, pid: record.pid, port: record.port, origin: `http://127.0.0.1:${record.port}`, startedAt: "2026-10-26T00:00:00.000Z", serverVersion: attachableDescriptor.serverVersion })}\n`,
   );
   yield* fs.writeFileString(`${userdata}/runtime-control.token`, `${TOKEN}\n`);
+  if (record.windows) {
+    yield* fs.makeDirectory(`${home}/bin`);
+    yield* fs.writeFileString(`${home}/bin/uname`, "#!/bin/sh\nprintf 'MINGW64_NT-10.0\\n'\n", {
+      mode: 0o755,
+    });
+    yield* fs.writeFileString(
+      `${home}/bin/tasklist.exe`,
+      `#!/bin/sh\nprintf '"goat.exe","${record.pid}","Console","1","1 K"\\n'\n`,
+      { mode: 0o755 },
+    );
+  }
   const scripts: Array<string> = [];
   const spawner = ChildProcessSpawner.make((command) =>
     Effect.gen(function* () {
@@ -136,7 +149,7 @@ const makeHost = Effect.fn("test.appServer.host")(function* (record: {
       );
       return yield* real.spawn(
         ChildProcess.make(remoteShell, ["-s"], {
-          env: { HOME: home, PATH: process.env.PATH ?? "/usr/bin:/bin" },
+          env: { HOME: home, PATH: `${home}/bin:${process.env.PATH ?? "/usr/bin:/bin"}` },
           extendEnv: false,
           stdin: { stream: Stream.fromIterable(bytes), endOnDone: true },
         }),
@@ -148,6 +161,66 @@ const makeHost = Effect.fn("test.appServer.host")(function* (record: {
     scripts,
     spawner: Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
   };
+});
+
+describe("Git Bash managed server", () => {
+  it.live("probes and issues a credential only for the requested live environment", () =>
+    Effect.gen(function* () {
+      const id = "11111111-1111-4111-8111-111111111111";
+      const server = yield* startAppServer({ ...attachableDescriptor, environmentId: id });
+      const host = yield* makeHost({
+        pid: 55140,
+        port: server.port,
+        stateDir: ".goat/userdata",
+        windows: true,
+      });
+      const fs = yield* FileSystem.FileSystem;
+      const dir = `${host.home}/.goat/userdata`;
+      yield* fs.writeFileString(`${dir}/environment-id`, `${id}\n`);
+      const probe = () =>
+        probeExistingServer(uploadTarget, "managed").pipe(Effect.provide(host.spawner));
+      expect(yield* probe()).toMatchObject({ kind: "live", environmentId: id, port: server.port });
+      const request = {
+        kind: "session" as const,
+        subject: "mcp-client" as const,
+        scopes: ["orchestration:read" as const],
+        ttl: "12h" as const,
+        label: "test",
+      };
+      const issue = (port: number, expected = id) =>
+        issueExistingServerCredential(uploadTarget, "managed", port, request, {}, expected).pipe(
+          Effect.provide(host.spawner),
+        );
+      expect(yield* issue(server.port)).toContain("app-session-token");
+      expect(server.sessions).toHaveLength(1);
+      yield* issue(server.port + 1).pipe(Effect.flip);
+      yield* fs.writeFileString(`${dir}/environment-id`, "22222222-2222-4222-8222-222222222222\n");
+      expect((yield* probe()).kind).toBe("unusable");
+      yield* issue(server.port).pipe(Effect.flip);
+      yield* fs.writeFileString(`${dir}/environment-id`, `${id}\n`);
+      yield* issue(server.port, "22222222-2222-4222-8222-222222222222").pipe(Effect.flip);
+      yield* fs.remove(`${dir}/runtime-control.token`);
+      yield* issue(server.port).pipe(Effect.flip);
+      yield* fs.writeFileString(`${dir}/runtime-control.token`, TOKEN);
+      yield* fs.writeFileString(`${host.home}/bin/tasklist.exe`, "#!/bin/sh\nexit 1\n", {
+        mode: 0o755,
+      });
+      expect(yield* probe()).toEqual({ kind: "unusable", reason: "dead-pid" });
+      yield* issue(server.port).pipe(Effect.flip);
+      expect(server.sessions).toHaveLength(1);
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+  it("accepts only bounded known probe reasons", () => {
+    expect(parseExistingServerProbe("GOAT_EXISTING=absent\n")).toEqual({ kind: "absent" });
+    expect(parseExistingServerProbe("GOAT_EXISTING=unusable\n")).toEqual({ kind: "unusable" });
+    expect(parseExistingServerProbe("GOAT_EXISTING=unusable no-token\n")).toEqual({
+      kind: "unusable",
+      reason: "no-token",
+    });
+    expect(parseExistingServerProbe("GOAT_EXISTING=unusable secret-output\n")).toEqual({
+      kind: "unusable",
+    });
+  });
 });
 
 describe("GOAT app server attachment", () => {
