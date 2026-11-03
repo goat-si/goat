@@ -1,12 +1,13 @@
 // @effect-diagnostics nodeBuiltinImport:off - The fixture exercises Node WebSocket frames over a real Unix socket.
 import * as NodeFSP from "node:fs/promises";
 import * as NodeHttp from "node:http";
+import * as NodeNet from "node:net";
 import * as NodePath from "node:path";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
-import { assert, it } from "@effect/vitest";
-import { WebSocketServer } from "ws";
+import { assert, it, vi } from "@effect/vitest";
+import WebSocket, { WebSocketServer } from "ws";
 import { connectCodexAppServerSocket } from "./CodexAppServerSocket.ts";
 
 it.live("fragments large messages without interleaving and preserves split UTF-8", () =>
@@ -164,5 +165,34 @@ it.live("a stalled reader drops a flood of empty messages", () =>
     for (let index = 0; index < 3; index++) socket.send("");
     const error = yield* channel.closed;
     assert.include(String(error.cause), "had not processed");
+  }).pipe(Effect.scoped),
+);
+
+it.live("interrupted connecting sockets have lifetime error listeners before release", () =>
+  Effect.gen(function* () {
+    const dir = yield* Effect.promise(() => NodeFSP.mkdtemp("/tmp/gcs-"));
+    const server = NodeNet.createServer();
+    server.on("error", () => {});
+    yield* Effect.addFinalizer(() =>
+      Effect.promise(async () => {
+        server.close();
+        await NodeFSP.rm(dir, { recursive: true, force: true });
+      }),
+    );
+    const path = NodePath.join(dir, "socket");
+    server.listen(path);
+    yield* Effect.promise(() => new Promise<void>((resolve) => server.once("listening", resolve)));
+    const accepted = new Promise<NodeNet.Socket>((resolve) => server.once("connection", resolve));
+    using spy = vi.spyOn(WebSocket.prototype, "on");
+    const connecting = yield* connectCodexAppServerSocket(path).pipe(
+      Effect.scoped,
+      Effect.forkScoped,
+    );
+    const socket = yield* Effect.promise(() => accepted);
+    socket.on("error", () => {});
+    yield* Fiber.interrupt(connecting);
+    socket.destroy();
+    const listeners = spy.mock.calls.map((args) => args[0]);
+    assert.isBelow(listeners.indexOf("error"), listeners.indexOf("message"));
   }).pipe(Effect.scoped),
 );

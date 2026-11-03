@@ -34,20 +34,6 @@ export const connectCodexAppServerSocket = Effect.fn("CodexAppServerSocket.conne
   >();
   const closed = yield* Deferred.make<CodexError.CodexAppServerError>();
   const gate = yield* Semaphore.make(1);
-  const ws = yield* Effect.acquireRelease(
-    Effect.sync(
-      () =>
-        new WebSocket(`ws+unix://${socketPath}:/`, {
-          perMessageDeflate: false,
-          maxPayload: 80 * 1024 * 1024,
-        }),
-    ),
-    (socket) =>
-      Effect.sync(() => {
-        socket.close(1000);
-        if (socket.readyState !== WebSocket.CLOSED) socket.terminate();
-      }),
-  );
   const finish = (cause: unknown) => {
     const error = new CodexError.CodexAppServerTransportError({
       operation: "read-input-stream",
@@ -56,6 +42,24 @@ export const connectCodexAppServerSocket = Effect.fn("CodexAppServerSocket.conne
     Deferred.doneUnsafe(closed, Effect.succeed(error));
     Queue.endUnsafe(incoming);
   };
+  const ws = yield* Effect.acquireRelease(
+    Effect.sync(() => {
+      const socket = new WebSocket(`ws+unix://${socketPath}:/`, {
+        perMessageDeflate: false,
+        maxPayload: 80 * 1024 * 1024,
+      });
+      socket.on("error", (error) => finish(error));
+      socket.on("close", (code, reason) =>
+        finish(new Error(`WebSocket closed (${code}): ${reason.toString()}`)),
+      );
+      return socket;
+    }),
+    (socket) =>
+      Effect.sync(() => {
+        socket.close(1000);
+        if (socket.readyState !== WebSocket.CLOSED) socket.terminate();
+      }),
+  );
   ws.on("message", (data) => {
     const text = data.toString();
     const bytes = Buffer.byteLength(text);
@@ -72,10 +76,6 @@ export const connectCodexAppServerSocket = Effect.fn("CodexAppServerSocket.conne
     pendingMessages++;
     Queue.offerUnsafe(incoming, { text, bytes });
   });
-  ws.on("close", (code, reason) =>
-    finish(new Error(`WebSocket closed (${code}): ${reason.toString()}`)),
-  );
-  ws.on("error", (error) => finish(error));
   yield* Effect.callback<void, CodexAppServerSocketError>((resume) => {
     ws.once("open", () => resume(Effect.void));
     ws.once("error", (cause) => resume(Effect.fail(new CodexAppServerSocketError({ cause }))));
