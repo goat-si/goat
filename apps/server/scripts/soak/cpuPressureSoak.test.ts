@@ -70,3 +70,83 @@ describe("soak Codex fixture", () => {
     }
   });
 });
+
+import { DetailWriter, LogTail, Observations, counter, providerRestarts } from "./observations.ts";
+
+describe("soak observations", () => {
+  it("writes detail as separate JSON lines", () => {
+    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-detail-"));
+    try {
+      const path = NodePath.join(dir, "detail");
+      const writer = new DetailWriter(path);
+      writer.write({ n: 1 });
+      writer.write({ n: 2 });
+      writer.close();
+      expect(
+        NodeFS.readFileSync(path, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line)),
+      ).toEqual([{ n: 1 }, { n: 2 }]);
+    } finally {
+      NodeFS.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+  it("tails partial lines once and reports truncation and invalid records", () => {
+    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-tail-"));
+    const path = NodePath.join(dir, "events");
+    try {
+      NodeFS.writeFileSync(path, '{"n":1}\n{"n":');
+      const values: unknown[] = [];
+      const tail = new LogTail(path, (value) => values.push(value));
+      tail.read();
+      expect(values).toEqual([{ n: 1 }]);
+      expect(tail.hasPartialLine).toBe(true);
+      NodeFS.appendFileSync(path, "2}\ninvalid\n");
+      tail.read();
+      tail.read();
+      expect(values).toEqual([{ n: 1 }, { n: 2 }]);
+      expect(tail.gaps).toContain("invalid line or consumer failure");
+      NodeFS.writeFileSync(path, "{}\n");
+      tail.read();
+      expect(tail.gaps).toContain("file rotated or truncated");
+    } finally {
+      NodeFS.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("deduplicates socket episodes and terminal runs and reports unknown coverage", () => {
+    const observations = new Observations();
+    observations.recordSocket("one", false);
+    observations.recordSocket("one", false);
+    observations.recordSocket("teardown", true);
+    observations.issueRun("one");
+    observations.recordRun("one", "completed");
+    observations.recordRun("one", "failed");
+    observations.issueRun("pending");
+    const report = observations.report(["stream gap"], counter(), counter());
+    expect(report.result).toBe("fail");
+    expect(report.counters.clientDisconnects).toMatchObject({ observed: 1, value: null });
+    expect(report.runs).toMatchObject({ completed: 1, failed: 0, incomplete: 1 });
+    expect(new Observations().report(["missing telemetry"], counter(), counter()).result).toBe(
+      "inconclusive",
+    );
+  });
+
+  it("joins replay restarts and deduplicates a provider death", () => {
+    const lines = [
+      { event: "start" as const, pid: 1, instance: "devReplay", at: "1" },
+      { event: "session" as const, pid: 1, instance: "devReplay", at: "1", thread: "native" },
+      { event: "start" as const, pid: 2, instance: "devReplay", at: "3" },
+      { event: "session" as const, pid: 2, instance: "devReplay", at: "3", thread: "native" },
+    ];
+    const joined = new Map([["native", "thread"]]);
+    const death = [{ thread: "thread", instance: "devReplay", at: "2" }];
+    expect(providerRestarts(lines, joined, [], death, []).counter.value).toBe(1);
+    expect(
+      providerRestarts(lines, joined, [{ thread: "thread", at: "2", status: "stopped" }], [], [])
+        .counter.value,
+    ).toBe(0);
+    expect(providerRestarts(lines, new Map(), [], [], []).counter.value).toBeNull();
+  });
+});
