@@ -9,6 +9,7 @@ import * as Effect from "effect/Effect";
 import {
   emptyRecoveryRecord,
   recordRestart,
+  pruneSlowCrash,
   type RecoveryRecord,
 } from "./DesktopBackendRecoveryPolicy.ts";
 
@@ -20,6 +21,15 @@ const RecoveryRecordSchema = Schema.Struct({
   pause: Schema.NullOr(Schema.Literals(["crash-loop", "blocked", "record-unavailable"])),
   generation: Schema.String.check(Schema.isMaxLength(128)),
   outcome: Schema.String.check(Schema.isMaxLength(256)),
+  history: Schema.optionalKey(
+    Schema.Array(
+      Schema.Struct({
+        at: Schema.Number.check(Schema.isFinite()),
+        outcome: Schema.String.check(Schema.isMaxLength(64)),
+      }),
+    ).check(Schema.isMaxLength(8)),
+  ),
+  notifiedKey: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(64))),
 });
 const encodeRecoveryRecord = Schema.encodeSync(Schema.fromJsonString(RecoveryRecordSchema));
 const decodeRecoveryRecord = Schema.decodeUnknownEffect(
@@ -84,15 +94,23 @@ export const makeRecoveryBudget = Effect.fn("DesktopBackendRecovery.makeRecovery
       (now: number, generation: string, outcome: string) =>
         lock.withPermits(1)(
           Effect.gen(function* () {
+            const previous = pruneSlowCrash(record, now);
             record = recordRestart(record, now, generation, outcome);
+            const notify =
+              record.notifiedKey !== undefined && record.notifiedKey !== previous.notifiedKey;
             yield* write;
-            return record;
+            return { record, notify };
           }),
         ),
     );
     const reset = lock.withPermits(1)(
       Effect.gen(function* () {
-        record = emptyRecoveryRecord();
+        const { history, notifiedKey } = record;
+        record = {
+          ...emptyRecoveryRecord(),
+          ...(history === undefined ? {} : { history }),
+          ...(notifiedKey === undefined ? {} : { notifiedKey }),
+        };
         storageFailed = false;
         yield* write;
         return !storageFailed;
@@ -106,6 +124,21 @@ export const makeRecoveryBudget = Effect.fn("DesktopBackendRecovery.makeRecovery
         }),
       ),
     );
-    return { initialize, fail, reset, pause, current: Effect.sync(() => record) };
+    const currentAt = Effect.fn("DesktopBackendRecovery.currentAt")((now: number) =>
+      lock.withPermits(1)(
+        Effect.gen(function* () {
+          const next = pruneSlowCrash(record, now);
+          if (
+            next.notifiedKey !== record.notifiedKey ||
+            next.history?.length !== record.history?.length
+          ) {
+            record = next;
+            yield* write;
+          }
+          return record;
+        }),
+      ),
+    );
+    return { initialize, fail, reset, pause, currentAt, current: Effect.sync(() => record) };
   },
 );

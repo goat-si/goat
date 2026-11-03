@@ -1,4 +1,5 @@
 import { registerStartupProgressTests } from "./DesktopBackendStartupProgressTestHelpers.ts";
+import { registerSlowCrashTests } from "./DesktopBackendSlowCrashTestHelpers.ts";
 import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
@@ -35,6 +36,7 @@ export function registerBackendStopTests({
 }) {
   registerStopIntentTests({ makeTestInstance, makeProcess, baseConfig });
   registerStartupProgressTests({ makeTestInstance, makeProcess });
+  registerSlowCrashTests({ makeTestInstance, makeProcess, baseConfig });
   it.effect("PR 2418: stop cancels a pending backend restart", () =>
     Effect.scoped(
       Effect.gen(function* () {

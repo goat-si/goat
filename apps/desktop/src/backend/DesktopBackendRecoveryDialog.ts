@@ -23,6 +23,20 @@ export const makeRecoveryDialog = (
       if (showing) return;
       showing = true;
       yield* Effect.gen(function* () {
+        if (actions.reason === "slow-crash" && actions.history !== undefined) {
+          const latest = actions.history.at(-1)?.outcome ?? "unknown";
+          const choice = yield* dialog.showMessageBox({
+            type: "info",
+            title: "Server recovery",
+            message: `${actions.label}: the server keeps restarting`,
+            detail: `${actions.history.length} exits in the last 6 hours (latest: ${latest}).\n\nLogs: ${actions.logPath}`,
+            buttons: ["Open logs", "Close"],
+            cancelId: 1,
+            defaultId: 1,
+          });
+          if (choice.response === 0) yield* openLogs(actions.logPath);
+          return;
+        }
         const choice = yield* dialog.showMessageBox({
           type: "error",
           title: "Server recovery paused",
