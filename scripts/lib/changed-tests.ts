@@ -118,6 +118,22 @@ export function testsForChanges(
   code: ReadonlyArray<string>,
   changed: ReadonlyArray<string> = code,
 ): ReadonlySet<string> {
+  if (changed.includes("packages/shared/src/testing/providerEnv.ts")) {
+    return new Set(
+      git(root, [
+        "ls-files",
+        "--cached",
+        "--others",
+        "--exclude-standard",
+        "--",
+        "apps",
+        "packages",
+        "scripts",
+        ".github/scripts",
+        "infra",
+      ]).filter((file) => TEST.test(file) && NodeFS.existsSync(NodePath.join(root, file))),
+    );
+  }
   const present = code.filter((file) => NodeFS.existsSync(NodePath.join(root, file)));
   const tests = new Set(present.filter((file) => TEST.test(file)));
   if (changed.some((file) => INGEST_SUITE_TRIGGER.test(file))) {

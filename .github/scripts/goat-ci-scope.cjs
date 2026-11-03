@@ -98,6 +98,7 @@ const SERVER_RUN_CONFIG = [
   "vite.config.ts",
   "apps/server/vite.config.ts",
   "packages/shared/src/testing/longTempDir.ts",
+  "packages/shared/src/testing/providerEnv.ts",
   "apps/server/src/testUtils/gitConfig.setup.ts",
 ];
 /** Selected server tests carrying at least this share of the suite's time run as the full suite. */
@@ -389,6 +390,7 @@ function selectTasks(files, workspace, { graph, weights = {} } = {}) {
   };
   const changed = new Map();
   for (const file of files) {
+    if (file === "packages/shared/src/testing/providerEnv.ts") return everything(file);
     if (isDocument(file)) continue;
     // A dependency change can move any task, and the release version check reads every manifest.
     if (path.posix.basename(file) === "package.json") return everything(file);

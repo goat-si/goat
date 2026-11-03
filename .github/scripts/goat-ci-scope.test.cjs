@@ -45,6 +45,19 @@ function fakeGraph(files, edges = []) {
 }
 
 describe("selectTasks", () => {
+  it("runs every package when the shared provider environment scrubber changes", () => {
+    const file = "packages/shared/src/testing/providerEnv.ts";
+    const legacy = require("./ci-changes.cjs").decide(
+      [file],
+      require("./ci-changes.cjs").readWorkspace(),
+      false,
+    );
+    assert.equal(legacy.outputs.test_packages, "");
+    const result = select(file);
+    assert.equal(result.full, true);
+    assert.equal(result.server.mode, "full");
+  });
+
   it("runs only check for documentation", () => {
     assert.deepEqual(
       tasksFor("docs/user/memory.md", "devlog/_chase/README.md", "AGENTS.md", "structure/ci.md"),
