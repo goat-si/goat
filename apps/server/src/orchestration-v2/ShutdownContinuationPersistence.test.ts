@@ -16,6 +16,8 @@ import {
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
@@ -253,6 +255,50 @@ it.effect(
         const projection = yield* projections.getRuntimeRecoveryProjection(id);
         assert.isDefined(restartContinuationRun(projection, now), id);
       }
+      const eventSink = yield* EventSink.EventSinkV2;
+      const blockedId = ThreadId.make("thread:recovery:shutdown-completed");
+      const started = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const committed = yield* Deferred.make<void>();
+      const isolatedRecovery = yield* ProviderRuntimeRecovery.make.pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            ServerSettings.layerTest({ continueThreadsAfterServerUpdate: true }),
+            Layer.succeed(ProjectionStore.ProjectionStoreV2, {
+              ...projections,
+              getRuntimeRecoveryProjection: (id) =>
+                id === blockedId
+                  ? Deferred.succeed(started, undefined).pipe(
+                      Effect.andThen(Deferred.await(release)),
+                      Effect.andThen(
+                        Effect.fail(
+                          new ProjectionStore.ProjectionStoreThreadNotFoundError({ threadId: id }),
+                        ),
+                      ),
+                    )
+                  : projections.getRuntimeRecoveryProjection(id),
+            }),
+            Layer.succeed(EventSink.EventSinkV2, {
+              ...eventSink,
+              writeWithEffects: (input) =>
+                eventSink
+                  .writeWithEffects(input)
+                  .pipe(Effect.tap(() => Deferred.succeed(committed, undefined))),
+            }),
+          ),
+        ),
+      );
+      const preparing = yield* isolatedRecovery.prepareForShutdown.pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.await(started);
+      yield* Deferred.await(committed);
+      const committedRows = yield* sql<{
+        readonly thread_id: string;
+      }>`SELECT thread_id FROM orchestration_v2_effect_outbox WHERE effect_type = 'provider-runtime.continue'`;
+      assert.isAtLeast(committedRows.length, 1);
+      yield* Deferred.succeed(release, undefined);
+      assert.deepEqual(yield* Fiber.join(preparing), { candidates: 3, continued: 2 });
       const summary = yield* recovery.prepareForShutdown;
       assert.deepEqual(summary, { candidates: 3, continued: 3 });
       const rows = yield* sql<{
