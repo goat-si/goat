@@ -202,6 +202,7 @@ import {
 import { ComposerCards, ComposerSlot, useSettledComposerHeight } from "./ComposerSlot";
 import { ComposerPopoverHost } from "./ComposerPopoverHost";
 import { ThreadFeed, type ThreadFeedHandle, type ThreadFeedHistoryControls } from "./ThreadFeed";
+import { WorkspaceMutationIdProvider } from "./WorkspaceMutationIdProvider";
 import { useThreadTurnSubagents } from "./ThreadAgentsSheet";
 import { ComposerQueuedEditBanner } from "./ComposerQueuedEdit";
 import { useThreadQueuedCount } from "./ThreadQueueControl";
@@ -1436,56 +1437,58 @@ function ThreadDetailBody(
               />
             )}
           >
-            <ThreadFeed
-              environmentId={props.environmentId}
-              threadId={props.selectedThread.id}
-              detailRef={props.selectedThreadDetailRef}
-              workspaceRoot={props.threadCwd}
-              feed={props.selectedThreadFeed}
-              pendingHandoff={props.pendingHandoff}
-              worktreeSetup={props.worktreeSetup}
-              setupWorkingStartedAt={props.setupWorkingStartedAt}
-              queuedMessages={props.queuedMessages}
-              dispatchingMessageId={props.dispatchingMessageId}
-              onEditPendingMessage={
-                isProviderSubagent || activeUserInputRequestId !== null
-                  ? null
-                  : handleEditPendingMessage
-              }
-              contentPresentation={props.contentPresentation}
-              agentLabel={agentLabel}
-              threadTitle={props.selectedThread.title}
-              latestRun={props.activityRun}
-              activeWorkStartedAt={props.activeWorkStartedAt}
-              runlessWorkActive={props.runlessWorkActive ?? false}
-              listRef={listRef}
-              freeze={freeze}
-              anchorMessageId={anchorMessageId}
-              jumpToMessageId={jumpMessageLoaded ? jumpMessageId : null}
-              onJumpedToMessage={() => finishThreadMessageJump(selectedThreadKey)}
-              ref={feedRef}
-              contentInsetEndAdjustment={combinedContentInsetEndAdjustment}
-              keyboardOffset={composerKeyboardOffset}
-              sendingWithKeyboard={sendingWithKeyboard}
-              fitShortFeedToViewport={questionInFlow && !isKeyboardVisible}
-              contentTopInset={0}
-              contentBottomInset={
-                questionInFlow
-                  ? 0
-                  : estimatedOverlayHeight +
-                    (showFloatingStatus ? FLOATING_WORKING_CONTROL_COVERAGE : 0)
-              }
-              placeholderKeyboardLift={placeholderKeyboardLift}
-              contentMaxWidth={contentMaxWidth}
-              historyControls={props.historyControls}
-              contentSideInsets={nativeMetrics?.safeArea}
-              layoutVariant={layoutVariant}
-              usesAutomaticContentInsets={props.usesAutomaticContentInsets}
-              onHeaderMaterialVisibilityChange={props.onHeaderMaterialVisibilityChange}
-              onEndFollowEnabledChange={handleEndFollowEnabledChange}
-              skills={selectedProviderSkills}
-              onUseArtifactTemplate={handleUseArtifactTemplate}
-            />
+            <WorkspaceMutationIdProvider threadRef={props.selectedThreadDetailRef}>
+              <ThreadFeed
+                environmentId={props.environmentId}
+                threadId={props.selectedThread.id}
+                detailRef={props.selectedThreadDetailRef}
+                workspaceRoot={props.threadCwd}
+                feed={props.selectedThreadFeed}
+                pendingHandoff={props.pendingHandoff}
+                worktreeSetup={props.worktreeSetup}
+                setupWorkingStartedAt={props.setupWorkingStartedAt}
+                queuedMessages={props.queuedMessages}
+                dispatchingMessageId={props.dispatchingMessageId}
+                onEditPendingMessage={
+                  isProviderSubagent || activeUserInputRequestId !== null
+                    ? null
+                    : handleEditPendingMessage
+                }
+                contentPresentation={props.contentPresentation}
+                agentLabel={agentLabel}
+                threadTitle={props.selectedThread.title}
+                latestRun={props.activityRun}
+                activeWorkStartedAt={props.activeWorkStartedAt}
+                runlessWorkActive={props.runlessWorkActive ?? false}
+                listRef={listRef}
+                freeze={freeze}
+                anchorMessageId={anchorMessageId}
+                jumpToMessageId={jumpMessageLoaded ? jumpMessageId : null}
+                onJumpedToMessage={() => finishThreadMessageJump(selectedThreadKey)}
+                ref={feedRef}
+                contentInsetEndAdjustment={combinedContentInsetEndAdjustment}
+                keyboardOffset={composerKeyboardOffset}
+                sendingWithKeyboard={sendingWithKeyboard}
+                fitShortFeedToViewport={questionInFlow && !isKeyboardVisible}
+                contentTopInset={0}
+                contentBottomInset={
+                  questionInFlow
+                    ? 0
+                    : estimatedOverlayHeight +
+                      (showFloatingStatus ? FLOATING_WORKING_CONTROL_COVERAGE : 0)
+                }
+                placeholderKeyboardLift={placeholderKeyboardLift}
+                contentMaxWidth={contentMaxWidth}
+                historyControls={props.historyControls}
+                contentSideInsets={nativeMetrics?.safeArea}
+                layoutVariant={layoutVariant}
+                usesAutomaticContentInsets={props.usesAutomaticContentInsets}
+                onHeaderMaterialVisibilityChange={props.onHeaderMaterialVisibilityChange}
+                onEndFollowEnabledChange={handleEndFollowEnabledChange}
+                skills={selectedProviderSkills}
+                onUseArtifactTemplate={handleUseArtifactTemplate}
+              />
+            </WorkspaceMutationIdProvider>
           </RenderErrorBoundary>
         </View>
       ) : (
