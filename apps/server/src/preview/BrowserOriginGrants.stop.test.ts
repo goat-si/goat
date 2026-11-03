@@ -247,9 +247,10 @@ it.effect("a coalesced narrowing fences when a later union is not its subset", (
     yield* service.stop(threads[1]!);
     yield* attach(3);
     yield* service.stop(threads[2]!);
+    const fencedBeforeRelease = fences;
     yield* Deferred.succeed(release, undefined);
     yield* service.settled;
-    assert.equal(fences, 1);
+    assert.equal(fencedBeforeRelease, 1);
   }),
 );
 

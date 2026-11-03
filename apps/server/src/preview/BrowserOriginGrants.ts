@@ -135,7 +135,6 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     readonly sha: string;
     readonly number: number;
     readonly value: Union;
-    readonly unsafe: boolean;
   };
   let activeConfirmation: Confirmation | undefined;
   let pendingConfirmation: Confirmation | undefined;
@@ -174,10 +173,6 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
           return item;
         });
         if (next === undefined) return;
-        if (next.unsafe) {
-          yield* fence("A coalesced narrowing was superseded by a wider union");
-          continue;
-        }
         yield* confirm(next.sha).pipe(
           Effect.catchCause((cause) => {
             const newer = latest;
@@ -198,24 +193,27 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     const result = yield* write(value, true).pipe(Effect.result);
     if (result._tag === "Failure") return yield* fence(result.failure);
     const done = yield* Deferred.make<void>();
-    const start = yield* Effect.sync(() => {
-      const next: Confirmation = { ...result.success, value, unsafe: false };
+    const decision = yield* Effect.sync(() => {
+      const next: Confirmation = { ...result.success, value };
+      let unsafe = false;
       if (pendingConfirmation !== undefined) {
         const newer = next.number > pendingConfirmation.number ? next : pendingConfirmation;
         const older = next.number > pendingConfirmation.number ? pendingConfirmation : next;
-        pendingConfirmation = {
-          ...newer,
-          unsafe: pendingConfirmation.unsafe || !subset(newer.value, older.value),
-        };
+        unsafe = !subset(newer.value, older.value);
+        pendingConfirmation = newer;
       } else if (activeConfirmation !== undefined && activeConfirmation.number > next.number) {
-        if (!subset(activeConfirmation.value, next.value))
-          pendingConfirmation = { ...next, unsafe: true };
+        if (!subset(activeConfirmation.value, next.value)) {
+          pendingConfirmation = next;
+          unsafe = true;
+        }
       } else pendingConfirmation = next;
-      if (confirming !== undefined) return false;
+      if (confirming !== undefined) return { start: false, unsafe };
       confirming = done;
-      return true;
+      return { start: true, unsafe };
     });
-    if (start) yield* confirmNarrowings(done).pipe(Effect.forkDetach({ startImmediately: true }));
+    if (decision.unsafe) yield* fence("A coalesced narrowing was superseded by a wider union");
+    if (decision.start)
+      yield* confirmNarrowings(done).pipe(Effect.forkDetach({ startImmediately: true }));
   }, Effect.uninterruptible);
   const settled = Effect.suspend(() =>
     confirming === undefined ? Effect.void : Deferred.await(confirming),
