@@ -1,4 +1,4 @@
-export function joinWindowsPath(...parts: ReadonlyArray<string>): string {
+function joinWindowsPath(...parts: ReadonlyArray<string>): string {
   return parts
     .map((part, index) => {
       if (index === 0) return part.replace(/[\\/]+$/g, "");

@@ -48,7 +48,7 @@ it.layer(
           authorize: Effect.void,
         });
         expect(ptyAdapter.spawnInputs[0]?.shell).toBe("/bin/sh");
-      expect(ptyAdapter.spawnInputs[1]?.shell).toMatch(/^\/(usr\/)?bin\/nice$/);
+        expect(ptyAdapter.spawnInputs[1]?.shell).toMatch(/^\/(usr\/)?bin\/nice$/);
         expect(ptyAdapter.spawnInputs[1]?.args?.slice(0, 3)).toEqual(["-n", "10", "/bin/sh"]);
         yield* manager.restart({ ...input, terminalId: agent.terminalId });
         expect(ptyAdapter.spawnInputs[2]?.shell).toBe("/bin/sh");
