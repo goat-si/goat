@@ -217,7 +217,12 @@ describe("resolveGoatMcpItemCall", () => {
 });
 
 it("presents the direct GOAT wait tool", () => {
-  for (const name of ["goatdirect.goat_thread_wait", "mcp__goatdirect__goat_thread_wait"]) {
+  for (const name of [
+    "goatdirect.goat_thread_wait",
+    "mcp__goatdirect__goat_thread_wait",
+    "goat-direct.goat_thread_wait",
+    "mcp__goat_direct__goat_thread_wait",
+  ]) {
     expect(resolveGoatMcpToolDefinition(name)?.summaryAction).toBe("thread-wait");
   }
 });

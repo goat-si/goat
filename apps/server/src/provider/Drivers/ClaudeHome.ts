@@ -56,7 +56,7 @@ export const mergeClaudeProcessEnvironment = Effect.fn("mergeClaudeProcessEnviro
 ) {
   const environment = yield* mergeProviderInstanceEnvironment(instanceEnvironment, {
     ...hostEnvironment,
-    CLAUDE_CODE_ENTRYPOINT: "t3-code",
+    CLAUDE_CODE_ENTRYPOINT: "t3-code", // goat-rename: legacy -- Claude integration identifier
   });
   const settingsEntrypoint = (yield* readClaudeSettingsEnv(config, undefined, environment))
     .CLAUDE_CODE_ENTRYPOINT;

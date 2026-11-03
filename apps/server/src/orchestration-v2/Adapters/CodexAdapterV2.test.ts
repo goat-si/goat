@@ -2210,7 +2210,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               tool_timeout_sec: 3900,
               http_headers: { Authorization: attachment.authorizationHeader },
             },
-            "mcp_servers.goatdirect": {
+            "mcp_servers.goat-direct": {
               url: attachment.endpoint,
               tool_timeout_sec: 3900,
               http_headers: { Authorization: attachment.authorizationHeader },
@@ -9908,7 +9908,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
               tool_timeout_sec: 3_900,
               http_headers: { Authorization: "Bearer secret-codex-token" },
             },
-            "mcp_servers.goatdirect": {
+            "mcp_servers.goat-direct": {
               url: "http://127.0.0.1:43123/mcp",
               tool_timeout_sec: 3_900,
               http_headers: { Authorization: "Bearer secret-codex-token" },

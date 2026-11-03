@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { classifyTextGenerationFailure, sanitizeCommitSubject, sanitizeThreadTitle } from "./textGenerationUtils.ts";
+import {
+  classifyTextGenerationFailure,
+  sanitizeCommitSubject,
+  sanitizeThreadTitle,
+} from "./textGenerationUtils.ts";
 
 describe("sanitizeCommitSubject", () => {
   // regression: #19181 truncation split grapheme clusters at the subject limit

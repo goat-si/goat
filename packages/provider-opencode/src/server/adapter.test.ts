@@ -1279,7 +1279,12 @@ describe("OpenCodeAdapterV2", () => {
       let status: "idle" | "busy" = "busy";
       let promptCalls = 0;
       let statusCalls = 0;
-      const promptInputs: Array<{ readonly messageID?: string; readonly agent?: string; readonly variant?: string; readonly system?: string }> = [];
+      const promptInputs: Array<{
+        readonly messageID?: string;
+        readonly agent?: string;
+        readonly variant?: string;
+        readonly system?: string;
+      }> = [];
       const client = {
         event: {
           subscribe: async (_input: unknown, options: { signal?: AbortSignal }) => {
@@ -1295,7 +1300,12 @@ describe("OpenCodeAdapterV2", () => {
             data: { id: "native-opencode-race", time: { created: 1, updated: 1 } },
           }),
           promptAsync: async (
-            input: { readonly messageID?: string; readonly agent?: string; readonly variant?: string; readonly system?: string },
+            input: {
+              readonly messageID?: string;
+              readonly agent?: string;
+              readonly variant?: string;
+              readonly system?: string;
+            },
             options?: { readonly signal?: AbortSignal },
           ) => {
             promptInputs.push(input);
@@ -1493,8 +1503,16 @@ describe("OpenCodeAdapterV2", () => {
       assert.equal(promptInputs[0]?.variant, "high");
       assert.isTrue((promptInputs[0]?.system ?? "").length > 0);
       assert.deepEqual(
-        { agent: promptInputs[1]?.agent, variant: promptInputs[1]?.variant, system: promptInputs[1]?.system },
-        { agent: promptInputs[0]?.agent, variant: promptInputs[0]?.variant, system: promptInputs[0]?.system },
+        {
+          agent: promptInputs[1]?.agent,
+          variant: promptInputs[1]?.variant,
+          system: promptInputs[1]?.system,
+        },
+        {
+          agent: promptInputs[0]?.agent,
+          variant: promptInputs[0]?.variant,
+          system: promptInputs[0]?.system,
+        },
       );
       steerPrompt.resolve();
       yield* Fiber.join(steer);

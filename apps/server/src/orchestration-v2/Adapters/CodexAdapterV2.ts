@@ -1401,7 +1401,7 @@ export function codexThreadRuntimeParams(input: {
                 Authorization: mcpSession.authorizationHeader,
               },
             },
-            "mcp_servers.goatdirect": {
+            "mcp_servers.goat-direct": {
               url: mcpSession.endpoint,
               tool_timeout_sec: CODEX_GOAT_MCP_TOOL_TIMEOUT_SEC,
               http_headers: { Authorization: mcpSession.authorizationHeader },

@@ -14,7 +14,15 @@ export interface GoatMcpToolPresentation {
   readonly logo: GoatMcpToolLogo;
 }
 
-const GOAT_MCP_SERVER_ALIASES = new Set(["goat", "goatdirect", "t3-code", "t3_code", "t3code"]);
+const GOAT_MCP_SERVER_ALIASES = new Set([
+  "goat",
+  "goatdirect",
+  "goat-direct",
+  "goat_direct",
+  "t3-code",
+  "t3_code",
+  "t3code",
+]);
 
 const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
   ...lifecycleToolDefinitions(tool),
@@ -800,14 +808,17 @@ function resolveGoatMcpToolName(value: string): string | null {
   }
 
   const namespaceMatch =
-    /^(?<server>goatdirect|goat|t3-code|t3_code|t3code)(?:[.:/]|\s*·\s*)(?<tool>.+)$/i.exec(label);
+    /^(?<server>goat[-_]direct|goatdirect|goat|t3-code|t3_code|t3code)(?:[.:/]|\s*·\s*)(?<tool>.+)$/i.exec(
+      label,
+    );
   if (namespaceMatch?.groups) {
     return namespaceMatch.groups.tool ?? null;
   }
 
-  const prefixed = /^(?:mcp[-_]{1,2})?(?:goat|t3[-_ ]?code)(?:__|[-_.:/ ])(?<tool>.+)$/i.exec(
-    label,
-  );
+  const prefixed =
+    /^(?:mcp[-_]{1,2})?(?:goat[-_]direct|goatdirect|goat|t3[-_ ]?code)(?:__|[-_.:/ ])(?<tool>.+)$/i.exec(
+      label,
+    );
   const candidate = prefixed?.groups?.tool ?? label;
   if (GOAT_MCP_TOOL_NAMES.has(candidate)) return candidate;
   // OpenCode 2 registers `goat-<thread>`; persisted `t3-code-<thread>` names
