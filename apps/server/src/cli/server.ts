@@ -1,5 +1,6 @@
 import * as HostProcess from "@goat/shared/HostProcess";
 import { ignoreClosedPipe } from "@goat/shared/closedPipe";
+import { installProcessErrorNet } from "@goat/shared/processErrorNet";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
@@ -49,6 +50,8 @@ const runServerCommand = Effect.fn("server.runServerCommand")(function* (
     readonly originalCwd?: string | undefined;
   },
 ) {
+  // For the process lifetime: shutdown tears down pipes and sockets, when teardown errors cluster.
+  yield* Effect.sync(installProcessErrorNet);
   const originalCwd = (yield* prepareWorkingDirectory()) ?? options?.originalCwd;
   const logLevel = yield* GlobalFlag.LogLevel;
   const config = yield* resolveServerConfig(flags, logLevel, { ...options, originalCwd });

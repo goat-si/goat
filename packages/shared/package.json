@@ -659,6 +659,10 @@
       "types": "./src/mcpResponsePayloads.ts",
       "import": "./src/mcpResponsePayloads.ts"
     },
+    "./processErrorNet": {
+      "types": "./src/processErrorNet.ts",
+      "import": "./src/processErrorNet.ts"
+    },
     "./PtyAdapter": {
       "types": "./src/PtyAdapter.ts",
       "import": "./src/PtyAdapter.ts"
