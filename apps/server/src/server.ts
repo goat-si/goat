@@ -604,8 +604,7 @@ const layerServerEnvironment = ServerEnvironment.layer.pipe(
 const layerBrowserOriginGrants = Layer.provide(
   BrowserOriginGrants.layer,
   Layer.mergeAll(
-    layerServerEnvironment,
-    layerServerSettings,
+    Layer.merge(layerServerEnvironment, layerServerSettings),
     BrowserClaimManifestModule.layer,
     BrowserClaimBindModule.layer,
   ),
