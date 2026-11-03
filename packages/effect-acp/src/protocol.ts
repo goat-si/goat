@@ -179,7 +179,7 @@ const makeStrictNdJsonRpcParser = () => {
         if (pendingCharacters > maxFrameCharacters) {
           throw new Error("ACP frame exceeds the maximum size");
         }
-        fragments.push(fragment);
+        if (fragment.length > 0) fragments.push(fragment);
         if (index < lines.length - 1) {
           decoded.push(...codec.decode(fragments.join("")));
           fragments = [];
