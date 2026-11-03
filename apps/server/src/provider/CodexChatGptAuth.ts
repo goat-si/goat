@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - OAuth loopback listener and PKCE use Node APIs.
 import * as NodeCrypto from "node:crypto";
 import * as NodeHttp from "node:http";
+import { listenForCallback } from "./codexChatGptCallbackServer.ts";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import {
   ProviderSetupError,
@@ -470,30 +471,22 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
       codexAuthReturnUrl(context.returnUrl) ?? codexAuthReturnUrl(options.defaultReturnUrl);
     const pageNonce = NodeCrypto.randomBytes(24).toString("base64url");
     const callback = Promise.withResolvers<{ url: URL; response?: NodeHttp.ServerResponse }>();
+    void callback.promise.catch(() => undefined); // A server error after listening ends sign-in.
     const clientCallback = context.callbackMode === "client";
     let used = false;
+    const answerCallback: NodeHttp.RequestListener = (request, response) => {
+      const url = new URL(request.url ?? "/", "http://127.0.0.1");
+      if (request.method !== "GET" || url.pathname !== "/auth/callback")
+        return void response.writeHead(404).end();
+      if (used) return void response.writeHead(410).end("Sign-in is no longer active.");
+      used = true;
+      callback.resolve({ url, response });
+    };
     const server = clientCallback
       ? undefined
       : yield* Effect.acquireRelease(
           Effect.tryPromise({
-            try: () =>
-              new Promise<NodeHttp.Server>((resolve, reject) => {
-                const server = NodeHttp.createServer((request, response) => {
-                  const url = new URL(request.url ?? "/", "http://127.0.0.1");
-                  if (request.method !== "GET" || url.pathname !== "/auth/callback") {
-                    response.writeHead(404).end();
-                    return;
-                  }
-                  if (used) {
-                    response.writeHead(410).end("Sign-in is no longer active.");
-                    return;
-                  }
-                  used = true;
-                  callback.resolve({ url, response });
-                });
-                server.once("error", reject);
-                server.listen(0, "127.0.0.1", () => resolve(server));
-              }),
+            try: () => listenForCallback(answerCallback, callback.reject),
             catch: () =>
               failure("callback", "Could not start the local sign-in callback. Try again."),
           }),

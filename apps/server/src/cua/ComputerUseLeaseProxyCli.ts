@@ -27,6 +27,7 @@ import {
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { ignoreClosedPipe } from "@goat/shared/closedPipe";
+import { guardErrors } from "@goat/shared/errorGuards";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Queue from "effect/Queue";
@@ -399,9 +400,10 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
           drivers.delete(child);
           send(watch.exited(code ?? undefined));
         });
-        const lines = NodeReadline.createInterface({ input: child.stdout, crlfDelay: Infinity });
-        // A broken driver stdout ends the driver; its exit handler reports it.
-        lines.on("error", () => killDriverGroup(platform, child, "SIGKILL"));
+        const lines = guardErrors(
+          NodeReadline.createInterface({ input: child.stdout, crlfDelay: Infinity }),
+          () => killDriverGroup(platform, child, "SIGKILL"),
+        );
         // Keep early replies buffered for the proxy while the watch observes the same frames.
         const incoming = lines[Symbol.asyncIterator]();
         lines.on("line", (line) => send(watch.received(line)));
@@ -759,6 +761,7 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
         ),
       bundleIds: platform === "darwin",
       input: Stream.fromAsyncIterable(
+        // oxlint-disable-next-line goat/guard-error-emitters -- Async iteration rejects when readline emits an error.
         NodeReadline.createInterface({ input: process.stdin, crlfDelay: Infinity }),
         () => undefined,
       ).pipe(Stream.catchCause(() => Stream.empty)),

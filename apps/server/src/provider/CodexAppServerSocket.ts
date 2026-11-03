@@ -8,6 +8,7 @@ import * as Stream from "effect/Stream";
 import * as CodexError from "effect-codex-app-server/errors";
 import type { CodexAppServerMessageChannel } from "effect-codex-app-server/client";
 import WebSocket from "ws";
+import { guardErrors } from "@goat/shared/errorGuards";
 
 const MAX_MESSAGE_BYTES = 64 * 1024 * 1024;
 const FRAGMENT_BYTES = 8 * 1024 * 1024;
@@ -44,11 +45,13 @@ export const connectCodexAppServerSocket = Effect.fn("CodexAppServerSocket.conne
   };
   const ws = yield* Effect.acquireRelease(
     Effect.sync(() => {
-      const socket = new WebSocket(`ws+unix://${socketPath}:/`, {
-        perMessageDeflate: false,
-        maxPayload: 80 * 1024 * 1024,
-      });
-      socket.on("error", (error) => finish(error));
+      const socket = guardErrors(
+        new WebSocket(`ws+unix://${socketPath}:/`, {
+          perMessageDeflate: false,
+          maxPayload: 80 * 1024 * 1024,
+        }),
+        (error) => finish(error),
+      );
       socket.on("close", (code, reason) =>
         finish(new Error(`WebSocket closed (${code}): ${reason.toString()}`)),
       );

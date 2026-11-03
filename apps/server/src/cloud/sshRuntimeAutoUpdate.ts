@@ -21,6 +21,7 @@ import {
   type RemoteGoatRunnerOptions,
 } from "@goat/ssh/tunnel";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { guardChild, type ErrorRoute } from "@goat/shared/errorGuards";
 import * as Clock from "effect/Clock";
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
@@ -106,19 +107,31 @@ export class SshRuntimeHost extends Context.Service<
   }
 >()("goat/cloud/sshRuntimeAutoUpdate/SshRuntimeHost") {}
 
-const collect = (child: NodeChildProcess.ChildProcess) =>
+// A failed spawn emits 'error' and then 'close' with a negative errno; `failed` is set before that close.
+type SpawnFailure = PromiseWithResolvers<Error> & { failed: boolean };
+const spawnFailureLatch = (): SpawnFailure => ({
+  failed: false,
+  ...Promise.withResolvers<Error>(),
+});
+
+const collect = (child: NodeChildProcess.ChildProcess, spawnFailure: SpawnFailure) =>
   new Promise<SshRuntimeProcessResult>((resolve) => {
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     child.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk));
     child.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk));
-    child.once("error", () => resolve({ code: null, stdout: "", stderr: "" }));
+    const failed = { code: null, stdout: "", stderr: "" };
+    void spawnFailure.promise.then(() => resolve(failed));
     child.once("close", (code) =>
-      resolve({
-        code,
-        stdout: Buffer.concat(stdout).toString("utf8"),
-        stderr: Buffer.concat(stderr).toString("utf8"),
-      }),
+      resolve(
+        spawnFailure.failed
+          ? failed
+          : {
+              code,
+              stdout: Buffer.concat(stdout).toString("utf8"),
+              stderr: Buffer.concat(stderr).toString("utf8"),
+            },
+      ),
     );
   });
 
@@ -140,24 +153,38 @@ const stopProcessTree = (child: NodeChildProcess.ChildProcess, signal: NodeJS.Si
   child.kill(signal);
 };
 
+// No pid means the spawn failed; a live child whose pipe broke is stopped and fails once it closes.
+const endOnError =
+  (spawnFailure: SpawnFailure, onPipeFailure = () => {}) =>
+  (error: Error, child: NodeChildProcess.ChildProcess) => {
+    if (child.pid === undefined) {
+      spawnFailure.failed = true;
+      return spawnFailure.resolve(error);
+    }
+    onPipeFailure();
+    stopProcessTree(child, "SIGKILL");
+  };
+
 const spawnOwnedCommand = async (
   command: string,
   args: ReadonlyArray<string>,
   options: NodeChildProcess.SpawnOptions & { env: NodeJS.ProcessEnv },
+  onError: (error: Error, child: NodeChildProcess.ChildProcess) => void,
+  onStdinError: ErrorRoute = () => {},
   signal?: AbortSignal,
 ) => {
   signal?.throwIfAborted();
-  // Yield on both platforms: a synchronous spawn from a macrotask can emit its nextTick
-  // error before callers' Promise continuations attach their listeners.
   const owned = await (HostProcess.Platform.defaultValue() === "win32"
     ? windowsJobCommand({ command, args, env: options.env })
     : { command, args, dispose: async () => {} });
   try {
     signal?.throwIfAborted();
-    return {
-      child: NodeChildProcess.spawn(owned.command, [...owned.args], options),
-      dispose: owned.dispose,
-    };
+    const child: NodeChildProcess.ChildProcess = guardChild(
+      NodeChildProcess.spawn(owned.command, [...owned.args], options),
+      (error) => onError(error, child),
+      onStdinError,
+    );
+    return { child, dispose: owned.dispose };
   } catch (error) {
     await owned.dispose();
     throw error;
@@ -170,6 +197,8 @@ export const layerHost = Layer.succeed(SshRuntimeHost, {
       // Its own process group, so a timeout or an interruption also stops the downloader the
       // install script waits on, and with it the install lock.
       const controller = new AbortController();
+      const spawnFailure = spawnFailureLatch();
+      let pipeFailed = false;
       const started = spawnOwnedCommand(
         input.command,
         input.args.map((arg) => bashScriptArg(input.command, arg)),
@@ -179,6 +208,10 @@ export const layerHost = Layer.succeed(SshRuntimeHost, {
           windowsHide: true,
           stdio: ["pipe", "pipe", "pipe"],
         },
+        endOnError(spawnFailure, () => {
+          pipeFailed = true;
+        }),
+        undefined,
         controller.signal,
       );
       // Done means every process holding the output has exited, which the leader alone does not
@@ -187,8 +220,7 @@ export const layerHost = Layer.succeed(SshRuntimeHost, {
       let bound: ReturnType<typeof setTimeout> | undefined;
       const closed = started
         .then(async ({ child, dispose }) => {
-          const result = collect(child);
-          child.stdin?.on("error", () => undefined);
+          const result = collect(child, spawnFailure);
           child.stdin?.end(input.stdin ?? "");
           bound = setTimeout(() => {
             if (done || child.pid === undefined) return;
@@ -198,7 +230,9 @@ export const layerHost = Layer.succeed(SshRuntimeHost, {
             }, 5_000).unref();
           }, input.timeoutMs);
           try {
-            return await result;
+            const settled = await result;
+            // Output lost to a broken pipe cannot vouch for success, even after a clean leader exit.
+            return pipeFailed ? { ...settled, code: null } : settled;
           } finally {
             await dispose();
           }
@@ -254,6 +288,7 @@ export const layerHost = Layer.succeed(SshRuntimeHost, {
           // Detached leaves the script outside libuv's kill-on-close job, so it outlives the drain.
           const scriptArg = bashScriptArg(input.shell, scriptFile);
           let stderr: number | undefined;
+          const spawnFailure = spawnFailureLatch();
           const { child, dispose } = await (async () => {
             try {
               stderr = NodeFS.openSync(stderrFile, "w", 0o600);
@@ -267,6 +302,8 @@ export const layerHost = Layer.succeed(SshRuntimeHost, {
                   env: input.env,
                   stdio: ["ignore", stdout, stderr],
                 },
+                endOnError(spawnFailure),
+                undefined,
                 controller.signal,
               );
             } finally {
@@ -280,8 +317,8 @@ export const layerHost = Layer.succeed(SshRuntimeHost, {
           // The detached process now owns the update. Cancellation can no longer stop it.
           if (child.pid !== undefined) preparation.resolve();
           const code = await new Promise<number | null>((resolve) => {
-            child.once("error", () => resolve(null));
-            child.once("close", resolve);
+            void spawnFailure.promise.then(() => resolve(null));
+            child.once("close", (code) => resolve(spawnFailure.failed ? null : code));
             // Still alive here means the script never drained this server: it is stuck before the
             // swap, so stopping it (its trap releases the replacement lock) cannot strand the host.
             const bound = setTimeout(() => {

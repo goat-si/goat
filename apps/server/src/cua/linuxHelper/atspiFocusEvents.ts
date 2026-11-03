@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off -- The Linux helper is its own Node process; D-Bus needs a raw socket.
 // @effect-diagnostics globalTimers:off -- Request deadlines at socket callback boundaries.
 import * as NodeNet from "node:net";
+import { guardErrors } from "@goat/shared/errorGuards";
 
 /**
  * Focus changes from the AT-SPI bus, as they happen (#1638). The focus probe (atspiFocus.ts)
@@ -280,7 +281,8 @@ function connectOnce(
   onFocus: () => void,
   onClose: () => void,
 ): { readonly socket: NodeNet.Socket; readonly ready: Promise<void> } {
-  const socket = NodeNet.createConnection({ path });
+  let failConnection = (_error: Error) => {};
+  const socket = guardErrors(NodeNet.createConnection({ path }), (error) => failConnection(error));
   const ready = new Promise<void>((resolve, reject) => {
     let settled = false;
     let authenticated = false;
@@ -300,6 +302,7 @@ function connectOnce(
         reject(error);
       }
     };
+    failConnection = fail;
     const call = (
       destination: string,
       objectPath: string,
@@ -415,7 +418,6 @@ function connectOnce(
         fail(error instanceof Error ? error : new Error(String(error)));
       }
     });
-    socket.on("error", (error) => fail(error));
     socket.on("close", () => {
       fail(new Error("The accessibility bus connection closed."));
       onClose();

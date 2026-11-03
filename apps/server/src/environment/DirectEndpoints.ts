@@ -12,6 +12,7 @@ import * as Option from "effect/Option";
 import { HttpClient } from "effect/http";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as NodeNet from "node:net";
+import { guardErrors } from "@goat/shared/errorGuards";
 import * as NodeOS from "node:os";
 
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -96,11 +97,6 @@ const CLOUD_METADATA_ADDRESS = "169.254.169.254";
 const CLOUD_METADATA_TIMEOUT_MS = 300;
 
 const probeCloudMetadata = Effect.callback<boolean>((resume) => {
-  const socket = NodeNet.connect({
-    host: CLOUD_METADATA_ADDRESS,
-    port: 80,
-    timeout: CLOUD_METADATA_TIMEOUT_MS,
-  });
   let settled = false;
   const settle = (found: boolean) => {
     if (settled) return;
@@ -108,9 +104,16 @@ const probeCloudMetadata = Effect.callback<boolean>((resume) => {
     socket.destroy();
     resume(Effect.succeed(found));
   };
+  const socket = guardErrors(
+    NodeNet.connect({
+      host: CLOUD_METADATA_ADDRESS,
+      port: 80,
+      timeout: CLOUD_METADATA_TIMEOUT_MS,
+    }),
+    () => settle(false),
+  );
   socket.once("connect", () => settle(true));
   socket.once("timeout", () => settle(false));
-  socket.once("error", () => settle(false));
   return Effect.sync(() => socket.destroy());
 });
 

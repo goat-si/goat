@@ -490,6 +490,7 @@ export function runAcpMcpStdioBridge(options: AcpMcpStdioBridgeOptions): Effect.
       return yield* launch(task);
     });
 
+    // oxlint-disable-next-line goat/guard-error-emitters -- Async iteration rejects when readline emits an error.
     const reader = NodeReadline.createInterface({ input: options.input });
     yield* Stream.runForEach(Stream.fromAsyncIterable(reader, bridgeError), dispatch).pipe(
       Effect.ignoreCause,

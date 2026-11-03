@@ -3,6 +3,7 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeNet from "node:net";
+import { guardChild, guardErrors } from "@goat/shared/errorGuards";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
@@ -97,12 +98,7 @@ const layer = Layer.effect(
     // Only "nothing there" and "nobody listening" prove a dead socket; any other failure is unverifiable.
     const socketAccepts = (path: string) =>
       Effect.callback<boolean, CodexDetachedAppServerError>((resume) => {
-        const socket = NodeNet.connect({ path });
-        socket.once("connect", () => {
-          socket.destroy();
-          resume(Effect.succeed(true));
-        });
-        socket.once("error", (cause: NodeJS.ErrnoException) => {
+        const socket = guardErrors(NodeNet.connect({ path }), (cause: NodeJS.ErrnoException) => {
           socket.destroy();
           resume(
             cause.code === "ENOENT" || cause.code === "ECONNREFUSED"
@@ -111,6 +107,10 @@ const layer = Layer.effect(
                   new CodexDetachedAppServerError({ detail: "Codex socket probe failed.", cause }),
                 ),
           );
+        });
+        socket.once("connect", () => {
+          socket.destroy();
+          resume(Effect.succeed(true));
         });
         return Effect.sync(() => socket.destroy());
       }).pipe(
@@ -173,25 +173,27 @@ const layer = Layer.effect(
             0o600,
           );
           try {
-            const child = NodeChildProcess.spawn(
-              "/bin/sh",
-              [
-                "-c",
-                PID_HANDSHAKE_SCRIPT,
-                "goat-codex",
-                input.pidFile,
-                input.command,
-                ...input.args,
-              ],
-              {
-                cwd: input.cwd,
-                env: input.env,
-                detached: true,
-                stdio: ["ignore", "ignore", stderr],
-              },
+            const child = guardChild(
+              NodeChildProcess.spawn(
+                "/bin/sh",
+                [
+                  "-c",
+                  PID_HANDSHAKE_SCRIPT,
+                  "goat-codex",
+                  input.pidFile,
+                  input.command,
+                  ...input.args,
+                ],
+                {
+                  cwd: input.cwd,
+                  env: input.env,
+                  detached: true,
+                  stdio: ["ignore", "ignore", stderr],
+                },
+              ),
+              () => Deferred.doneUnsafe(exited, Effect.succeed(null)),
             );
             child.once("exit", (code) => Deferred.doneUnsafe(exited, Effect.succeed(code)));
-            child.on("error", () => Deferred.doneUnsafe(exited, Effect.succeed(null)));
             return child;
           } finally {
             NodeFS.closeSync(stderr);

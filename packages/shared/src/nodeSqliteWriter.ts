@@ -1,4 +1,5 @@
 import * as NodeWorkerThreads from "node:worker_threads";
+import { guardErrors } from "./errorGuards.ts";
 import { identity } from "effect/Function";
 import * as Context from "effect/Context";
 import * as Cause from "effect/Cause";
@@ -78,24 +79,40 @@ export const makeWriter = Effect.fn("SqliteWriter.make")(function* (
   let closing = false;
   let retirement: Promise<number> | undefined;
   const retire = (worker: NodeWorkerThreads.Worker) => (retirement ??= worker.terminate());
+  let stopped: SqlError | undefined;
+  let pending: { readonly id: number; readonly resume: (reply: Reply) => void } | undefined;
+  const failPending = (cause: unknown) => {
+    if (stopped !== undefined) return;
+    stopped = failure(cause, "execute");
+    if (!closing) options.onFatalPersistence?.(stopped);
+    const request = pending;
+    pending = undefined;
+    request?.resume({
+      id: request.id,
+      error: { operation: "execute", message: "Writer exited; commit status may be unknown" },
+    });
+  };
   const worker = yield* Effect.acquireRelease(
     Effect.try({
       try: () =>
-        new NodeWorkerThreads.Worker(writerWorkerSource, {
-          eval: true,
-          workerData: {
-            filename: options.filename,
-            readonly: options.readonly ?? false,
-            allowExtension: options.allowExtension ?? false,
-            checkpoint: isFileDatabase && Boolean(options.checkpointWorker),
-            protectJournal:
-              isFileDatabase && Boolean(options.readerWorker || options.checkpointWorker),
-            prepareCacheSize: options.prepareCacheSize ?? 200,
-            prepareCacheTTL: Duration.toMillis(
-              Duration.fromInputUnsafe(options.prepareCacheTTL ?? "10 minutes"),
-            ),
-          },
-        }),
+        guardErrors(
+          new NodeWorkerThreads.Worker(writerWorkerSource, {
+            eval: true,
+            workerData: {
+              filename: options.filename,
+              readonly: options.readonly ?? false,
+              allowExtension: options.allowExtension ?? false,
+              checkpoint: isFileDatabase && Boolean(options.checkpointWorker),
+              protectJournal:
+                isFileDatabase && Boolean(options.readerWorker || options.checkpointWorker),
+              prepareCacheSize: options.prepareCacheSize ?? 200,
+              prepareCacheTTL: Duration.toMillis(
+                Duration.fromInputUnsafe(options.prepareCacheTTL ?? "10 minutes"),
+              ),
+            },
+          }),
+          failPending,
+        ),
       catch: (cause) => {
         const error = failure(cause, "open");
         options.onFatalPersistence?.(error);
@@ -111,7 +128,6 @@ export const makeWriter = Effect.fn("SqliteWriter.make")(function* (
   const requests = yield* Semaphore.make(1);
   let sequence = 0;
   let owner = 0;
-  let stopped: SqlError | undefined;
   let pressureSince: number | undefined;
   let pressureDegraded = false;
   const clearPressure = Effect.suspend(() => {
@@ -120,19 +136,6 @@ export const makeWriter = Effect.fn("SqliteWriter.make")(function* (
     pressureDegraded = false;
     return recovered ? Effect.logInfo("SQLite writer WAL admission recovered") : Effect.void;
   });
-  let pending: { readonly id: number; readonly resume: (reply: Reply) => void } | undefined;
-  const failPending = (cause: unknown) => {
-    if (stopped !== undefined) return;
-    stopped = failure(cause, "execute");
-    if (!closing) options.onFatalPersistence?.(stopped);
-    const request = pending;
-    pending = undefined;
-    request?.resume({
-      id: request.id,
-      error: { operation: "execute", message: "Writer exited; commit status may be unknown" },
-    });
-  };
-  worker.on("error", failPending);
   worker.on("exit", (code) => failPending(new Error(`Writer exited with code ${code}`)));
   worker.on("message", (reply: Reply | Startup | Notice) => {
     if ("type" in reply) {

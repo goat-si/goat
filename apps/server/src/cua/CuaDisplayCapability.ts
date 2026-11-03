@@ -3,6 +3,7 @@ import * as NodeNet from "node:net";
 
 import type { CuaDisplayCapability } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { guardErrors } from "@goat/shared/errorGuards";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
@@ -452,10 +453,9 @@ const x11Handshake = (socketPath: string, cookie: Uint8Array | null) =>
       socket.destroy();
       resume(Effect.succeed(outcome));
     };
-    const socket = NodeNet.createConnection(socketPath);
+    const socket = guardErrors(NodeNet.createConnection(socketPath), () => finish("unreachable"));
     socket.once("connect", () => socket.write(x11SetupRequest(cookie)));
     socket.once("data", (chunk: Buffer) => finish(x11SetupOutcome(chunk[0])));
-    socket.once("error", () => finish("unreachable"));
     socket.once("close", () => finish("unreachable"));
     return Effect.sync(() => socket.destroy());
   }).pipe(
@@ -489,13 +489,12 @@ export const chooseX11Auth = Effect.fnUntraced(function* (
 /** Whether something accepts connections on a Unix socket, such as a Wayland compositor. */
 export const unixSocketAccepts = (socketPath: string) =>
   Effect.callback<boolean>((resume) => {
-    const socket = NodeNet.createConnection(socketPath);
     const finish = (accepted: boolean) => {
       socket.destroy();
       resume(Effect.succeed(accepted));
     };
+    const socket = guardErrors(NodeNet.createConnection(socketPath), () => finish(false));
     socket.once("connect", () => finish(true));
-    socket.once("error", () => finish(false));
     return Effect.sync(() => socket.destroy());
   }).pipe(Effect.timeoutOrElse({ duration: "2 seconds", orElse: () => Effect.succeed(false) }));
 

@@ -11,6 +11,7 @@ import {
 import * as NodeFS from "node:fs";
 import * as NodeHttp from "node:http";
 import * as NodeNet from "node:net";
+import { guardErrors } from "@goat/shared/errorGuards";
 
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -58,42 +59,45 @@ const readProtocolDescriptor = (port: number) =>
     };
     let request: NodeHttp.ClientRequest;
     const send = (path: string) => {
-      request = NodeHttp.get({ hostname: "127.0.0.1", port, path, timeout: 1000 }, (response) => {
-        if (response.statusCode === 404 && path === GOAT_ENVIRONMENT_PATH) {
-          response.resume();
-          send(LEGACY_ENVIRONMENT_PATH);
-          return;
-        }
-        const chunks: Buffer[] = [];
-        let bytes = 0;
-        response.on("data", (chunk: Buffer) => {
-          bytes += chunk.length;
-          if (bytes > 65536) {
-            const cause = new Error("SSH runtime descriptor exceeds 64 KiB");
-            response.destroy(cause);
-            request.destroy(cause);
-            finish(cause);
+      request = guardErrors(
+        NodeHttp.get({ hostname: "127.0.0.1", port, path, timeout: 1000 }, (response) => {
+          if (response.statusCode === 404 && path === GOAT_ENVIRONMENT_PATH) {
+            response.resume();
+            send(LEGACY_ENVIRONMENT_PATH);
             return;
           }
-          chunks.push(chunk);
-        });
-        response.once("error", finish);
-        response.once("end", () => {
-          try {
-            if (response.statusCode !== 200) throw new Error("SSH runtime descriptor unavailable");
-            // The live descriptor is decoded by the caller.
-            finish(undefined, JSON.parse(Buffer.concat(chunks).toString("utf8")));
-          } catch (cause) {
-            finish(cause);
-          }
-        });
-      });
+          const chunks: Buffer[] = [];
+          let bytes = 0;
+          response.on("data", (chunk: Buffer) => {
+            bytes += chunk.length;
+            if (bytes > 65536) {
+              const cause = new Error("SSH runtime descriptor exceeds 64 KiB");
+              response.destroy(cause);
+              request.destroy(cause);
+              finish(cause);
+              return;
+            }
+            chunks.push(chunk);
+          });
+          response.once("error", finish);
+          response.once("end", () => {
+            try {
+              if (response.statusCode !== 200)
+                throw new Error("SSH runtime descriptor unavailable");
+              // The live descriptor is decoded by the caller.
+              finish(undefined, JSON.parse(Buffer.concat(chunks).toString("utf8")));
+            } catch (cause) {
+              finish(cause);
+            }
+          });
+        }),
+        finish,
+      );
       request.once("timeout", () => {
         const cause = new Error("SSH descriptor timed out");
         request.destroy(cause);
         finish(cause);
       });
-      request.once("error", finish);
     };
     const deadline = setTimeout(() => {
       const cause = new Error("SSH descriptor deadline exceeded");
@@ -139,7 +143,6 @@ export const processExists = (pid: number) => {
 };
 const hasLoopbackListener = (port: number) =>
   new Promise<boolean>((resolve) => {
-    const socket = NodeNet.createConnection({ host: "127.0.0.1", port });
     let settled = false;
     const finish = (present: boolean) => {
       if (settled) return;
@@ -148,9 +151,11 @@ const hasLoopbackListener = (port: number) =>
       socket.destroy();
       resolve(present);
     };
+    const socket = guardErrors(NodeNet.createConnection({ host: "127.0.0.1", port }), () =>
+      finish(false),
+    );
     const deadline = setTimeout(() => finish(false), 1000);
     socket.once("connect", () => finish(true));
-    socket.once("error", () => finish(false));
   });
 const rememberedInteger = (file: string | undefined) => {
   if (file === undefined || !NodeFS.existsSync(file)) return 0;
@@ -379,42 +384,44 @@ export const readSshServerActivity = async (
     };
     let request: NodeHttp.ClientRequest | undefined;
     const send = (path: string) => {
-      request = NodeHttp.get({ hostname: "127.0.0.1", port, path }, (response) => {
-        if (response.statusCode === 404 && path === GOAT_ACTIVITY_PATH) {
-          response.resume();
-          send(LEGACY_ACTIVITY_PATH);
-          return;
-        }
-        const chunks: Buffer[] = [];
-        let bytes = 0;
-        response.on("data", (chunk: Buffer) => {
-          bytes += chunk.length;
-          if (bytes > 4096) {
-            finish("unknown");
+      request = guardErrors(
+        NodeHttp.get({ hostname: "127.0.0.1", port, path }, (response) => {
+          if (response.statusCode === 404 && path === GOAT_ACTIVITY_PATH) {
+            response.resume();
+            send(LEGACY_ACTIVITY_PATH);
             return;
           }
-          chunks.push(chunk);
-        });
-        response.once("error", () => finish("unknown"));
-        response.once("end", () => {
-          try {
-            const value = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-            if (
-              response.statusCode !== 200 ||
-              !value ||
-              !["idle", "busy"].includes(value.activity) ||
-              !protocolVersion(value.serverVersion) ||
-              !protocolInteger(value.pid) ||
-              (pid !== undefined && value.pid !== pid)
-            )
+          const chunks: Buffer[] = [];
+          let bytes = 0;
+          response.on("data", (chunk: Buffer) => {
+            bytes += chunk.length;
+            if (bytes > 4096) {
               finish("unknown");
-            else finish(value.activity);
-          } catch {
-            finish("unknown");
-          }
-        });
-      });
-      request.once("error", () => finish("unknown"));
+              return;
+            }
+            chunks.push(chunk);
+          });
+          response.once("error", () => finish("unknown"));
+          response.once("end", () => {
+            try {
+              const value = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+              if (
+                response.statusCode !== 200 ||
+                !value ||
+                !["idle", "busy"].includes(value.activity) ||
+                !protocolVersion(value.serverVersion) ||
+                !protocolInteger(value.pid) ||
+                (pid !== undefined && value.pid !== pid)
+              )
+                finish("unknown");
+              else finish(value.activity);
+            } catch {
+              finish("unknown");
+            }
+          });
+        }),
+        () => finish("unknown"),
+      );
     };
     const deadline = setTimeout(() => finish("unknown"), 1500);
     send(GOAT_ACTIVITY_PATH);
@@ -565,46 +572,48 @@ export const requestSshRuntimeDrain = (input: {
       request.destroy();
       resolve(value);
     };
-    const request = NodeHttp.request(
-      {
-        hostname: "127.0.0.1",
-        port: input.port,
-        path: GOAT_RUNTIME_DRAIN_PATH,
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "content-length": Buffer.byteLength(body),
-          [GOAT_RUNTIME_CONTROL_HEADER]: token,
+    const request = guardErrors(
+      NodeHttp.request(
+        {
+          hostname: "127.0.0.1",
+          port: input.port,
+          path: GOAT_RUNTIME_DRAIN_PATH,
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "content-length": Buffer.byteLength(body),
+            [GOAT_RUNTIME_CONTROL_HEADER]: token,
+          },
         },
-      },
-      (response) => {
-        const chunks: Buffer[] = [];
-        let bytes = 0;
-        response.on("data", (chunk: Buffer) => {
-          bytes += chunk.length;
-          if (bytes > 4096) finish("unknown");
-          else chunks.push(chunk);
-        });
-        response.once("error", () => finish("unknown"));
-        response.once("end", () => {
-          try {
-            if (response.statusCode !== 200) throw new Error("drain refused");
-            const result = Schema.decodeUnknownSync(RuntimeDrainResult)(
-              JSON.parse(Buffer.concat(chunks).toString("utf8")),
-            );
-            // A drain is only proven for the start the caller named.
-            if (result.status !== "instance-changed" && result.instanceId !== input.instanceId)
+        (response) => {
+          const chunks: Buffer[] = [];
+          let bytes = 0;
+          response.on("data", (chunk: Buffer) => {
+            bytes += chunk.length;
+            if (bytes > 4096) finish("unknown");
+            else chunks.push(chunk);
+          });
+          response.once("error", () => finish("unknown"));
+          response.once("end", () => {
+            try {
+              if (response.statusCode !== 200) throw new Error("drain refused");
+              const result = Schema.decodeUnknownSync(RuntimeDrainResult)(
+                JSON.parse(Buffer.concat(chunks).toString("utf8")),
+              );
+              // A drain is only proven for the start the caller named.
+              if (result.status !== "instance-changed" && result.instanceId !== input.instanceId)
+                finish("unknown");
+              else finish(result.status);
+            } catch {
               finish("unknown");
-            else finish(result.status);
-          } catch {
-            finish("unknown");
-          }
-        });
-      },
+            }
+          });
+        },
+      ),
+      () => finish("unknown"),
     );
     // The server answers when the window closes; allow it the full window plus slack.
     const deadline = setTimeout(() => finish("unknown"), (graceSeconds + 30) * 1000);
-    request.once("error", () => finish("unknown"));
     request.end(body);
   });
 

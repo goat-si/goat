@@ -95,6 +95,7 @@ export async function runScreenChild(
   input: NodeJS.ReadableStream,
   output: NodeJS.WritableStream,
 ): Promise<void> {
+  // oxlint-disable-next-line goat/guard-error-emitters -- Async iteration rejects when readline emits an error.
   const lines = NodeReadline.createInterface({ input, crlfDelay: Infinity });
   const iterator = lines[Symbol.asyncIterator]();
   const first = await iterator.next();

@@ -2,6 +2,7 @@
 // @effect-diagnostics globalTimers:off -- Request deadlines at socket callback boundaries.
 import * as NodeFSP from "node:fs/promises";
 import * as NodeNet from "node:net";
+import { guardErrors } from "@goat/shared/errorGuards";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
@@ -273,7 +274,6 @@ export async function openX11HumanInput(
     (bytes) => xauthorityCookie(bytes, display),
     () => null,
   );
-  const socket = NodeNet.createConnection(observe.socketPath ?? "/tmp/.X11-unix/X" + display);
   let buffer = new Uint8Array(0);
   let closed = false;
   let latest: HumanInput | undefined;
@@ -292,10 +292,13 @@ export async function openX11HumanInput(
     setup?.(undefined);
     for (const wake of waiting.splice(0)) wake(undefined, ledger.changes());
   };
+  const socket = guardErrors(
+    NodeNet.createConnection(observe.socketPath ?? "/tmp/.X11-unix/X" + display),
+    close,
+  );
   const count = (input: HumanInput) => {
     if (latest === undefined || input.order > latest.order) latest = input;
   };
-  socket.on("error", close);
   socket.on("close", close);
   socket.on("data", (chunk: Buffer) => {
     const next = new Uint8Array(buffer.length + chunk.length);

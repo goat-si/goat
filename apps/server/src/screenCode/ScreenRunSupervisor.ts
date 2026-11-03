@@ -2,6 +2,7 @@
 import * as NodeChildProcess from "node:child_process";
 import * as NodePath from "node:path";
 import { BoundedLines } from "@goat/shared/boundedLines";
+import { guardChild } from "@goat/shared/errorGuards";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -157,11 +158,15 @@ export function createScreenRunSupervisor(deps: {
     for (const name of ["PATH", "TMPDIR", "TEMP", "TMP", "SYSTEMROOT", "WINDIR", "LANG", "LC_ALL"])
       if (process.env[name] !== undefined) env[name] = process.env[name];
     if (isElectron) env.ELECTRON_RUN_AS_NODE = "1";
-    const child = NodeChildProcess.spawn(command, [...args], {
-      stdio: ["pipe", "pipe", "pipe"],
-      env,
-      windowsHide: true,
-    });
+    const child = guardChild(
+      NodeChildProcess.spawn(command, [...args], {
+        stdio: ["pipe", "pipe", "pipe"],
+        env,
+        windowsHide: true,
+      }),
+      // Errors arrive on a later tick, after onProcessEnd below exists.
+      () => onProcessEnd(),
+    );
     const session: Session = {
       child,
       lines: new BoundedLines(child.stdout, MAX_FRAME_BYTES),
@@ -191,9 +196,6 @@ export function createScreenRunSupervisor(deps: {
       close(session);
     };
     child.once("exit", onProcessEnd);
-    child.once("error", onProcessEnd);
-    // A live child that closed its stdin fails the next write with EPIPE; unheard, it ends the server.
-    child.stdin.on("error", onProcessEnd);
     const boot: ScreenRunBoot = {
       t: "boot",
       limits: { ...deps.limits, turnWasmBytes },

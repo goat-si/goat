@@ -25,6 +25,17 @@ const closed = (child: ReturnType<typeof pairLike>) =>
   Effect.promise(() => new Promise<void>((resolve) => child.stdout.once("close", resolve)));
 
 describe.skipIf(platform === "win32")("lease proxy driver processes", () => {
+  it.live("ends a live driver when its stdout fails", () =>
+    Effect.gen(function* () {
+      const child = pairLike();
+      yield* started(child);
+      const exited = new Promise<NodeJS.Signals | null>((resolve) =>
+        child.once("exit", (_code, signal) => resolve(signal)),
+      );
+      child.stdout.destroy(new Error("broken"));
+      assert.strictEqual(yield* Effect.promise(() => exited), "SIGKILL");
+    }),
+  );
   it.live("stopping one connection ends its child and grandchild, and only that connection's", () =>
     Effect.gen(function* () {
       const stopped = pairLike();

@@ -4,6 +4,7 @@ import * as NodePath from "node:path";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
+import { guardChild } from "@goat/shared/errorGuards";
 
 // Before cleanup readiness this supervisor owns the only non-inheritable job handle.
 // After readiness the cleanup process also holds one, so it can reclaim the executable
@@ -184,21 +185,23 @@ Add-Type -TypeDefinition ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64S
   );
   try {
     await new Promise<void>((resolve, reject) => {
-      const compiler = NodeChildProcess.spawn(
-        powershell,
-        [
-          "-NoProfile",
-          "-NonInteractive",
-          "-EncodedCommand",
-          Buffer.from(script, "utf16le").toString("base64"),
-        ],
-        { env: input.env, windowsHide: true, stdio: "ignore" },
-      );
       let failedToStart = false;
       let timedOut = false;
-      compiler.once("error", () => {
-        failedToStart = true;
-      });
+      const compiler = guardChild(
+        NodeChildProcess.spawn(
+          powershell,
+          [
+            "-NoProfile",
+            "-NonInteractive",
+            "-EncodedCommand",
+            Buffer.from(script, "utf16le").toString("base64"),
+          ],
+          { env: input.env, windowsHide: true, stdio: "ignore" },
+        ),
+        () => {
+          failedToStart = true;
+        },
+      );
       const deadline = setTimeout(() => {
         timedOut = true;
         compiler.kill();

@@ -2,6 +2,7 @@
 import * as NodeChildProcess from "node:child_process";
 import * as NodeTimers from "node:timers";
 
+import { guardChild } from "@goat/shared/errorGuards";
 import { ChannelGatewayError } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
@@ -42,27 +43,31 @@ export function makeOsascriptImessageSender(
           return;
         }
         let child: NodeChildProcess.ChildProcessWithoutNullStreams;
-        try {
-          child = (input.spawnProcess ?? NodeChildProcess.spawn)(
-            "/usr/bin/osascript",
-            ["-l", "AppleScript", "-", chatGuid, text],
-            { shell: false, stdio: ["pipe", "pipe", "pipe"] },
-          ) as NodeChildProcess.ChildProcessWithoutNullStreams;
-        } catch {
-          resolve({ outcome: "not_sent", code: "unknown" });
-          return;
-        }
         let done = false;
         let started = false;
-        let stderr = "";
+        let timer: ReturnType<typeof NodeTimers.setTimeout> | undefined;
         const finish = (result: { readonly acceptedAt: string } | ImessageSendFailure) => {
           if (done) return;
           done = true;
           NodeTimers.clearTimeout(timer);
           resolve(result);
         };
+        try {
+          child = guardChild(
+            (input.spawnProcess ?? NodeChildProcess.spawn)(
+              "/usr/bin/osascript",
+              ["-l", "AppleScript", "-", chatGuid, text],
+              { shell: false, stdio: ["pipe", "pipe", "pipe"] },
+            ) as NodeChildProcess.ChildProcessWithoutNullStreams,
+            () => finish({ outcome: started ? "unknown" : "not_sent", code: "unknown" }),
+          );
+        } catch {
+          resolve({ outcome: "not_sent", code: "unknown" });
+          return;
+        }
+        let stderr = "";
         // @effect-diagnostics-next-line globalTimers:off -- this Promise owns one spawned process and clears its timer on completion.
-        const timer = NodeTimers.setTimeout(() => {
+        timer = NodeTimers.setTimeout(() => {
           finish({ outcome: "unknown", code: "timeout" });
           try {
             child.kill();
@@ -77,12 +82,6 @@ export function makeOsascriptImessageSender(
           stderr = (stderr + chunk.toString("utf8")).slice(-4096);
         });
         child.stdout.on("data", () => {});
-        child.stdin.once("error", () =>
-          finish({ outcome: started ? "unknown" : "not_sent", code: "unknown" }),
-        );
-        child.once("error", () =>
-          finish({ outcome: started ? "unknown" : "not_sent", code: "unknown" }),
-        );
         child.once("close", (code) => {
           if (done) return;
           if (code === 0) {
