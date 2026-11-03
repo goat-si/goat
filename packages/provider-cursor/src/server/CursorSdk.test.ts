@@ -34,6 +34,21 @@ describe("CursorSdk unhandled rejection guard", () => {
     }),
   );
 
+  it.effect("keeps the server running when the SDK writes after its request stream ended", () =>
+    Effect.gen(function* () {
+      // Shaped like `ConnectError.from(e, Code.Aborted)` from the SDK's connect-node body pump.
+      const cause = Object.assign(new Error("write after end"), {
+        code: "ERR_STREAM_WRITE_AFTER_END",
+      });
+      const reason = Object.assign(new Error("[aborted] write after end", { cause }), {
+        name: "ConnectError",
+        code: 10,
+        rawMessage: "write after end",
+      });
+      assert.deepStrictEqual(yield* rejectThroughGuard(reason), []);
+    }),
+  );
+
   it.effect("still exits on other rejections", () =>
     Effect.gen(function* () {
       assert.deepStrictEqual(yield* rejectThroughGuard(new Error("WritableIterable is closed")), [
@@ -58,6 +73,17 @@ describe("CursorSdk unhandled rejection guard", () => {
       const before = process.listenerCount("unhandledRejection");
       yield* Layer.build(CursorSdk.layer).pipe(Effect.scoped);
       assert.strictEqual(process.listenerCount("unhandledRejection"), before);
+    }),
+  );
+
+  it.effect("still exits on aborted requests other than a write after end", () =>
+    Effect.gen(function* () {
+      const cause = Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
+      const reason = Object.assign(new Error("[aborted] socket hang up", { cause }), {
+        name: "ConnectError",
+        code: 10,
+      });
+      assert.deepStrictEqual(yield* rejectThroughGuard(reason), [[1]]);
     }),
   );
 });
