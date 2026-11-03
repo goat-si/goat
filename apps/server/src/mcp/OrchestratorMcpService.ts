@@ -1194,7 +1194,7 @@ const make = Effect.gen(function* () {
             ),
           );
 
-  const loadTargetThread = Effect.fn("OrchestratorMcpService.loadTargetThread")(function* (
+  const targetShell = Effect.fn("OrchestratorMcpService.targetShell")(function* (
     threadId: ThreadId,
   ) {
     const shell = yield* threadManagement
@@ -1203,7 +1203,7 @@ const make = Effect.gen(function* () {
     if (shell === null || shell.deletedAt !== null) {
       return yield* threadNotFound(threadManagement, threadId, `Thread ${threadId} was not found.`);
     }
-    return yield* loadProjectThread(shell.projectId, threadId);
+    return shell;
   });
 
   const loadScopedThread = Effect.fn("OrchestratorMcpService.loadScopedThread")(function* (
@@ -1214,7 +1214,27 @@ const make = Effect.gen(function* () {
     const target =
       caller.parent !== undefined && threadId === caller.parent.thread.id
         ? caller.parent
-        : yield* loadTargetThread(threadId);
+        : yield* targetShell(threadId).pipe(
+            Effect.flatMap((shell) => loadProjectThread(shell.projectId, threadId)),
+          );
+    return { ...caller, target } as const;
+  });
+
+  const loadScopedWaitThread = Effect.fn("OrchestratorMcpService.loadScopedWaitThread")(function* (
+    scope: McpInvocationScope,
+    threadId: ThreadId,
+  ) {
+    const caller = yield* loadCaller(scope);
+    const target =
+      caller.parent !== undefined && threadId === caller.parent.thread.id
+        ? caller.parent
+        : yield* targetShell(threadId).pipe(
+            Effect.flatMap((shell) =>
+              threadManagement
+                .getProjectThreadRecords({ projectId: shell.projectId, threadId }, [])
+                .pipe(Effect.mapError(threadManagementFailure)),
+            ),
+          );
     return { ...caller, target } as const;
   });
 
@@ -3810,7 +3830,7 @@ const make = Effect.gen(function* () {
       } satisfies OrchestratorMcpThreadSendDelivered;
     }),
     waitForThread: Effect.fn("OrchestratorMcpService.waitForThread")(function* (scope, input) {
-      const { parent, target } = yield* loadScopedThread(scope, input.threadId);
+      const { parent, target } = yield* loadScopedWaitThread(scope, input.threadId);
       const result = yield* threadManagement
         .waitForThread({
           projectId: target.thread.projectId,
