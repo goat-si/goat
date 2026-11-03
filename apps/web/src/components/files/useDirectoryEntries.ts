@@ -107,14 +107,6 @@ export function useDirectoryEntries(environmentId: EnvironmentId, cwd: string) {
     return startRequest(directoryPath, refresh);
   };
 
-  useEffect(() => {
-    active.current = true;
-    if (!requests.current.has("") && !loaded.current.has("")) void startRequest("", false);
-    return () => {
-      active.current = false;
-    };
-  }, [startRequest]);
-
   // A folder read fails at once while its environment is unreachable; read it again once a new
   // session is up rather than leaving the error until someone retries by hand.
   const sessionGeneration = environmentCatalog.sessionGenerationAtom(environmentId);
@@ -137,6 +129,16 @@ export function useDirectoryEntries(environmentId: EnvironmentId, cwd: string) {
     "",
     ...entries.filter((entry) => entry.kind === "directory").map((entry) => entry.path),
   ]);
+  const reachableDirectoriesRef = useRef(reachableDirectories);
+
+  useEffect(() => {
+    reachableDirectoriesRef.current = reachableDirectories;
+    active.current = true;
+    if (!requests.current.has("") && !loaded.current.has("")) void startRequest("", false);
+    return () => {
+      active.current = false;
+    };
+  }, [startRequest, reachableDirectories]);
 
   const refresh = () => {
     if (refreshing.current) {
@@ -147,7 +149,9 @@ export function useDirectoryEntries(environmentId: EnvironmentId, cwd: string) {
     const run = async () => {
       do {
         refreshAgain.current = false;
-        const paths = [...requested.current].filter((path) => reachableDirectories.has(path));
+        const paths = [...requested.current].filter((path) =>
+          reachableDirectoriesRef.current.has(path),
+        );
         const worker = async () => {
           while (active.current) {
             const path = paths.shift();

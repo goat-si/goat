@@ -40,9 +40,7 @@ ACP Registry agents run their own tools in their own mode; GOAT answers their ap
 by the permission mode. See [ACP Registry permissions](./providers-acp.md#permissions-and-terminals).
 
 Claude can still ask in **Full access** when its settings disable bypass permissions or require
-approval for an action. Dangerous-removal safety checks in bypass mode reject the command with
-the original warning. Claude can use a safe rewrite when the warning supplies one; otherwise it
-continues without the removal and tells you what it skipped.
+approval for an action.
 While a Claude approval is pending, type a text reply to decline that request and give feedback
 directly to the agent that asked, including a subagent. Other pending requests stay unanswered.
 

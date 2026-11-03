@@ -144,6 +144,23 @@ it("shares the follow-up promise and does not resolve callers before the final l
   expect(completed).toBe(true);
 });
 
+it("does not refresh a removed directory in a queued follow-up sweep", async () => {
+  const state = setup();
+  // The hook probe does not navigate.
+  await using _screen = await render(<state.Probe />, { router: false });
+  await state.settle(0, [{ path: "removed", kind: "directory" }]);
+  await act(async () => void state.view.load("removed"));
+  await state.settle(1);
+  await act(async () => state.view.refresh());
+  expect(state.calls.slice(2).map((call) => call.path)).toEqual(["", "removed"]);
+  await act(async () => state.view.refresh());
+  await state.settle(2);
+  await state.settle(3);
+  expect(state.calls.slice(4).map((call) => call.path)).toEqual([""]);
+  await state.settle(4);
+  expect(state.view.isPending).toBe(false);
+});
+
 it("retains the four-query concurrency bound across directories and refreshes", async () => {
   const folders = Array.from({ length: 8 }, (_, index) => ({
     path: `folder-${index}`,
