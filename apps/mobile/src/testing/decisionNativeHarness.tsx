@@ -10,6 +10,8 @@ vi.mock("../native/NativeScrollViewMarker", () => ({
 }));
 vi.mock("../features/threads/useEnvironmentHues", () => ({ useEnvironmentHues: () => new Map() }));
 vi.mock("../features/home/ThreadUndoNotice", () => ({ ThreadUndoNotice: () => null }));
+// Launcher family reads go through the live connection runtime.
+vi.mock("../features/threads/remoteLauncherReads", () => ({ useRemoteLauncherReads: () => {} }));
 vi.mock("react-native-reanimated", () => ({
   default: { View: Box },
   Easing: { out: (value: unknown) => value, cubic: "cubic" },
