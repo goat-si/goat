@@ -59,6 +59,7 @@ import {
   type OrchestrationV2ExecutionNode,
   type OrchestrationV2ProviderThread,
   type OrchestrationV2ProviderTurn,
+  type OrchestrationV2ModelSwitch,
   type OrchestrationV2Run,
   type OrchestrationV2RunTerminationCause,
   type OrchestrationV2RunAttempt,
@@ -83,6 +84,7 @@ import {
 } from "@goat/contracts";
 import { modelSelectionsEqual } from "@goat/shared/model";
 import { recordThreadOpen } from "@goat/shared/paletteSearch";
+import { modelSwitchSince } from "./modelSwitch.ts";
 import {
   backgroundWorkHoldsCompletion,
   derivePendingBackgroundWork,
@@ -2079,6 +2081,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         startedAt: now,
         completedAt: now,
         updatedAt: now,
+        ...(activeHandoff === null ? modelSwitchSince(projection, queuedRun.modelSelection) : {}),
       };
       const handoffTurnItem: OrchestrationV2TurnItem | null =
         activeHandoff === null
@@ -4781,6 +4784,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         readonly providerTurnId: typeof providerTurn.id | null;
         readonly providerThreadId: OrchestrationV2ProviderThread["id"];
         readonly providerInstanceId: ProviderInstanceId;
+        readonly modelSwitch?: OrchestrationV2ModelSwitch | undefined;
       }) {
         const message: OrchestrationV2ConversationMessage = {
           createdBy: input.createdBy,
@@ -4836,6 +4840,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           text: input.text,
           attachments: input.attachments,
           ...(input.context ? { context: input.context } : {}),
+          ...(messageInput.modelSwitch === undefined
+            ? {}
+            : { modelSwitch: messageInput.modelSwitch }),
         };
         yield* emitEvent({
           type: "message.updated",
@@ -5316,6 +5323,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       providerTurnId: null,
       providerThreadId: restartProviderThread.id,
       providerInstanceId: input.modelSelection.instanceId,
+      // Measured on the pre-restart projection, so the rewritten run is not its own baseline.
+      ...(restartHandoff === null ? modelSwitchSince(input.projection, input.modelSelection) : {}),
     });
     const interruptedAttemptId = targetRun.activeAttemptId;
     if (interruptedAttemptId === null) {
@@ -6526,6 +6535,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         text: startText,
         ...(command.context ? { context: command.context } : {}),
         attachments: command.attachments,
+        ...(run.contextHandoffId === null ? modelSwitchSince(projection, modelSelection) : {}),
       };
       const preparationTurnItem: OrchestrationV2TurnItem | null =
         dispatchMode.type === "defer_start"
@@ -7221,6 +7231,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       text: startText,
       ...(command.context ? { context: command.context } : {}),
       attachments: command.attachments,
+      ...(run.contextHandoffId === null
+        ? modelSwitchSince(projection, modelSelection, sourceRun?.modelSelection)
+        : {}),
     };
     const activeHandoff = portableForkHandoff ?? mergeBackHandoff ?? providerSwitchHandoff;
     const handoffSourceRuns =
@@ -8945,7 +8958,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         "runtimeRequests",
         "subagents",
       ],
-      { turnItemTypes: [], messageRoles: ["user"] },
+      // User messages measure a restart's model switch.
+      { turnItemTypes: ["user_message"], messageRoles: ["user"] },
     );
     if (projection.thread.archivedAt !== null || projection.thread.deletedAt !== null) {
       return yield* new OrchestratorDispatchError({
