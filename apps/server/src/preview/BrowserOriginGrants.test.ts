@@ -6,6 +6,9 @@ import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
 import * as Context from "effect/Context";
 import * as Layer from "effect/Layer";
+import * as PubSub from "effect/PubSub";
+import * as Queue from "effect/Queue";
+import * as Stream from "effect/Stream";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { BrowserClaimManifest } from "./BrowserClaimManifest.ts";
@@ -15,6 +18,158 @@ import { makeTestBrowserOriginGrants as makeBrowserOriginGrants } from "./Browse
 import { makeBrowserOriginGrants as makeUnconfirmedGrants } from "./BrowserOriginGrants.ts";
 
 const decodeDescriptor = Schema.decodeSync(ExecutionEnvironmentDescriptor);
+
+it.effect("a settings change ends claims whose origin becomes blocked", () =>
+  Effect.gen(function* () {
+    const base = Context.get(
+      yield* Layer.build(ServerSettings.layerTest()),
+      ServerSettings.ServerSettingsService,
+    );
+    const updates = yield* PubSub.unbounded<import("@goat/contracts").ServerSettings>();
+    const settings = {
+      ...base,
+      subscribeChanges: PubSub.subscribe(updates).pipe(Effect.map(Stream.fromSubscription)),
+    };
+    const hash = "a".repeat(64);
+    const context = yield* Layer.build(
+      Grants.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.succeed(ServerSettings.ServerSettingsService, settings),
+            Layer.mock(ServerEnvironment.ServerEnvironment)({
+              getDescriptor: Effect.succeed(
+                decodeDescriptor({
+                  environmentId: EnvironmentId.make("environment:test"),
+                  label: "Test",
+                  platform: { os: "linux", arch: "x64" },
+                  serverVersion: "test",
+                  capabilities: { repositoryIdentity: true },
+                }),
+              ),
+            }),
+            Layer.succeed(BrowserClaimManifest, {
+              publish: () => Effect.succeed(hash),
+              readConfig: Effect.succeed({
+                capability_manifest: { sha256: hash, file_sha256: hash, reload_error: null },
+              }),
+              install: () => Effect.void,
+            }),
+            Layer.succeed(BrowserClaimBind, {
+              bind: (input) =>
+                Effect.succeed({
+                  targetId: "target",
+                  tabId: "tab",
+                  title: "Site",
+                  url: input.origin,
+                  driverGeneration: 1,
+                }),
+            }),
+          ),
+        ),
+      ),
+    );
+    const service = Context.get(context, Grants.BrowserOriginGrants);
+    yield* service.setDriverCapability(true);
+    const threadId = ThreadId.make("thread:test");
+    const pending = yield* service.request({
+      threadId,
+      pid: 42,
+      windowId: 7,
+      origin: "https://example.test",
+      windowTitle: "Browser",
+    });
+    if (pending.status !== "pending") return assert.fail("expected pending");
+    yield* service.answer(pending.claimId, true);
+    const changes = yield* service.changes.pipe(Stream.toQueue({ capacity: "unbounded" }));
+    yield* Queue.take(changes);
+    const updated = yield* settings.updateSettings({ blockedBrowserHosts: ["example.test"] });
+    yield* PubSub.publish(updates, updated);
+    yield* Queue.take(changes);
+    assert.deepEqual(yield* service.claimsFor(threadId), []);
+    assert.equal(yield* service.endReason(threadId, pending.claimId), "origin_changed");
+  }).pipe(Effect.scoped),
+);
+
+it.effect("blocking one origin ends every claim that includes it", () =>
+  Effect.gen(function* () {
+    const service = yield* makeBrowserOriginGrants({
+      environmentId: EnvironmentId.make("environment:test"),
+      supported: () => true,
+      publish: () => Effect.void,
+      bind: (input) =>
+        Effect.succeed({
+          targetId: "target",
+          tabId: "tab-" + input.windowId,
+          title: "Site",
+          url: input.origin,
+          driverGeneration: 1,
+        }),
+    });
+    const threadId = ThreadId.make("thread:test");
+    const ids: string[] = [];
+    for (const [windowId, origin] of [
+      [7, "https://example.test"],
+      [8, "https://other.test"],
+    ] as const) {
+      const request = yield* service.request({
+        threadId,
+        pid: 42,
+        windowId,
+        origin,
+        windowTitle: "Browser",
+      });
+      if (request.status !== "pending") return assert.fail("expected pending");
+      ids.push(request.claimId);
+      yield* service.answer(request.claimId, true);
+    }
+    yield* service.blockOrigins(["other.test"]);
+    assert.deepEqual(yield* service.claimsFor(threadId), []);
+    assert.equal(yield* service.endReason(threadId, ids[0]), "origin_changed");
+    assert.deepEqual(
+      (yield* service.list(threadId)).grants.map((grant) => grant.origin),
+      ["https://example.test"],
+    );
+  }),
+);
+
+it.effect("a held bind for an origin that gets blocked is refused at once and never attaches", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const service = yield* makeBrowserOriginGrants({
+      environmentId: EnvironmentId.make("environment:test"),
+      supported: () => true,
+      publish: () => Effect.void,
+      bind: (input) =>
+        Deferred.succeed(entered, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.as({
+            targetId: "target",
+            tabId: "tab",
+            title: "Site",
+            url: input.origin,
+            driverGeneration: 1,
+          }),
+        ),
+    });
+    const threadId = ThreadId.make("thread:test");
+    const request = yield* service.request({
+      threadId,
+      pid: 42,
+      windowId: 7,
+      origin: "https://example.test",
+      windowTitle: "Browser",
+    });
+    if (request.status !== "pending") return assert.fail("expected pending");
+    const answering = yield* service.answer(request.claimId, true).pipe(Effect.forkChild);
+    yield* Deferred.await(entered);
+    yield* service.blockOrigins(["example.test"]);
+    assert.equal((yield* Fiber.join(answering)).agentResult.status, "refused");
+    assert.deepEqual(yield* service.bindingsFor(threadId), []);
+    yield* Deferred.succeed(release, undefined);
+    assert.deepEqual(yield* service.list(threadId), { claims: [], grants: [] });
+  }),
+);
 
 it.effect("a blocked origin cannot be granted or bound", () =>
   Effect.gen(function* () {

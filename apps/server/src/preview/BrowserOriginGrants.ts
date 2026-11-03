@@ -435,6 +435,53 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     for (const signal of stopped) yield* Deferred.succeed(signal, undefined);
     yield* shrink(union());
   });
+  const blockOrigins = Effect.fn("BrowserOriginGrants.blockOrigins")(function* (
+    hosts: ReadonlyArray<string> | undefined,
+  ) {
+    const result = yield* Effect.sync(() => {
+      const blockedOrigin = (origin: string) =>
+        hosts === undefined || isBlockedBrowserUrl(origin, hosts);
+      const affected = new Set(
+        [...grants.values()]
+          .filter(
+            (grant) =>
+              !uncommittedGrants.has(key(grant.threadId, grant.origin)) &&
+              blockedOrigin(grant.origin),
+          )
+          .map((grant) => grant.threadId),
+      );
+      const signals: Array<Deferred.Deferred<void>> = [];
+      let changed = false;
+      for (const [id, entry] of pending)
+        if (blockedOrigin(entry.origin)) {
+          pending.delete(id);
+          ended.set(id, { threadId: entry.threadId, reason: "origin_changed" });
+          if (uncommittedGrants.delete(key(entry.threadId, entry.origin)))
+            grants.delete(key(entry.threadId, entry.origin));
+          signals.push(entry.stopped);
+          sequence++;
+          changed = true;
+        }
+      for (const [id, claim] of claims)
+        if (affected.has(claim.threadId)) {
+          claims.delete(id);
+          ended.set(id, { threadId: claim.threadId, reason: "origin_changed" });
+          sequence++;
+          changed = true;
+        }
+      for (const [id, grant] of grants)
+        if (blockedOrigin(grant.origin)) {
+          grants.delete(id);
+          uncommittedGrants.delete(id);
+          changed = true;
+        }
+      return { signals, changed };
+    });
+    if (!result.changed) return;
+    yield* advance;
+    for (const signal of result.signals) yield* Deferred.succeed(signal, undefined);
+    yield* shrink(union());
+  });
   const end = Effect.fn("BrowserOriginGrants.end")(
     (threadId: ThreadId, claimId: string, generation: number, reason: "origin_changed") =>
       lock.withPermits(1)(
@@ -542,6 +589,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     claimsFor,
     claimedPids,
     blockedHosts,
+    blockOrigins,
     settled,
     revision: SubscriptionRef.get(version),
     changes: SubscriptionRef.changes(version),

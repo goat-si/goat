@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { BrowserClaimBind } from "./BrowserClaimBind.ts";
@@ -71,6 +72,14 @@ const make = Effect.gen(function* () {
       });
   });
   disable = () => setDriverCapability(false);
+  if (Option.isSome(settings)) {
+    const changes = yield* settings.value.subscribeChanges;
+    yield* changes.pipe(
+      Stream.runForEach(() => service.blockOrigins(blockedHosts())),
+      Effect.forkScoped({ startImmediately: true }),
+    );
+    yield* service.blockOrigins(blockedHosts());
+  }
   return { ...service, blockedHosts, setDriverCapability };
 });
 
