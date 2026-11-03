@@ -171,6 +171,20 @@ function permissionRejectedToolCallId(request: LogicalFrame, answer: unknown): s
   return rejected ? params.toolCall?.toolCallId : undefined;
 }
 
+export function isSoakExitPrompt(prompt: unknown): boolean {
+  return (
+    Array.isArray(prompt) &&
+    prompt.some(
+      (part: unknown) =>
+        typeof part === "object" &&
+        part !== null &&
+        "text" in part &&
+        typeof part.text === "string" &&
+        part.text.includes("GOAT_SOAK_EXIT"),
+    )
+  );
+}
+
 function runAgent(): void {
   const lifecycleLog = process.env.GOAT_SOAK_PROVIDER_LIFECYCLE_LOG;
   const lifecycle = (event: string, extra: Record<string, unknown> = {}) => {
@@ -334,18 +348,7 @@ function runAgent(): void {
         const sessionId = String(params.sessionId);
         const session = sessions.get(sessionId);
         if (session === undefined) throw new Error(`Unknown session ${sessionId}`);
-        if (
-          lifecycleLog !== undefined &&
-          Array.isArray(params.prompt) &&
-          params.prompt.some(
-            (part: unknown) =>
-              typeof part === "object" &&
-              part !== null &&
-              "text" in part &&
-              part.text === "GOAT_SOAK_EXIT",
-          )
-        )
-          process.exit(1);
+        if (lifecycleLog !== undefined && isSoakExitPrompt(params.prompt)) process.exit(1);
         const turns = loadTurns(session.model);
         const turn = turns[session.promptCount % Math.max(turns.length, 1)];
         session.promptCount += 1;

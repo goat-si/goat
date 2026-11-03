@@ -6,8 +6,13 @@ import * as NodePath from "node:path";
 import * as NodeReadline from "node:readline";
 import { guardChild } from "@goat/shared/errorGuards";
 import { describe, expect, it } from "@effect/vitest";
+import { isSoakExitPrompt } from "../dev-replay-agent.ts";
 
 describe("soak Codex fixture", () => {
+  it("recognizes the self-check marker embedded in a Replay prompt", () => {
+    expect(isSoakExitPrompt([{ type: "text", text: "user request: GOAT_SOAK_EXIT" }])).toBe(true);
+    expect(isSoakExitPrompt([{ type: "text", text: "ordinary prompt" }])).toBe(false);
+  });
   it("keeps concurrent threads and turn notifications distinct", async () => {
     const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-codex-soak-"));
     const script = NodePath.join(dir, "script.json");
