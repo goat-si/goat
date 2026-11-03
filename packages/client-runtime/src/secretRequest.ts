@@ -7,13 +7,15 @@ export type SecretRequestItem = Extract<
 
 /** A `file` request lets the agent's commands read the value, so its card must not promise more. */
 export const secretRequestPrivacyNote = (
-  item: Pick<SecretRequestItem, "delivery" | "siteOrigin">,
+  item: Pick<SecretRequestItem, "delivery" | "siteOrigin" | "requestKind">,
 ) =>
-  item.siteOrigin
-    ? `The agent gets only a reference. GOAT types it into a password field on ${item.siteOrigin}`
-    : item.delivery === "file"
-      ? "Kept out of chat, in a private file this agent's commands can read for 24 hours"
-      : "Stored securely, never shown to the agent";
+  item.siteOrigin && item.requestKind === "login"
+    ? `The agent gets only a reference. GOAT fills this login on ${item.siteOrigin}`
+    : item.siteOrigin
+      ? `The agent gets only a reference. GOAT types it into a password field on ${item.siteOrigin}`
+      : item.delivery === "file"
+        ? "Kept out of chat, in a private file this agent's commands can read for 24 hours"
+        : "Stored securely, never shown to the agent";
 export const SECRET_REQUEST_DEFAULT_PLACEHOLDER = "Paste the secret";
 
 export type SecretRequestDisplay =

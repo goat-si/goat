@@ -88,13 +88,18 @@ function PendingSecretRequestForm(props: {
     reportDefect: false,
   });
   const [secret, setSecret] = useState("");
+  const [username, setUsername] = useState("");
+  const login = item.requestKind === "login";
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Submit then a tap can both run before a re-render; this guard is synchronous.
   const inFlight = useRef(false);
 
   const send = async (
-    reply: { readonly type: "save"; readonly secret: string } | { readonly type: "decline" },
+    reply:
+      | { readonly type: "save"; readonly secret: string }
+      | { readonly type: "save_login"; readonly username: string; readonly password: string }
+      | { readonly type: "decline" },
   ) => {
     const input = secretRequestAnswerInput(item, reply);
     if (input === null || inFlight.current) return;
@@ -107,6 +112,7 @@ function PendingSecretRequestForm(props: {
     });
     if (result._tag === "Success") {
       setSecret("");
+      setUsername("");
       return;
     }
     if (!isAtomCommandInterrupted(result)) {
@@ -124,9 +130,25 @@ function PendingSecretRequestForm(props: {
           </Text>
         ) : null}
       </View>
+      {login ? (
+        <TextInput
+          accessibilityLabel="Username"
+          placeholder="Username"
+          value={username}
+          onChangeText={setUsername}
+          editable={canAnswer && !submitting}
+          onFocus={markOpened}
+          autoCorrect={false}
+          autoCapitalize="none"
+          autoComplete="off"
+          textContentType="none"
+          importantForAutofill="no"
+          spellCheck={false}
+        />
+      ) : null}
       <TextInput
-        accessibilityLabel={item.label}
-        placeholder={item.placeholder ?? SECRET_REQUEST_DEFAULT_PLACEHOLDER}
+        accessibilityLabel={login ? "Password" : item.label}
+        placeholder={login ? "Password" : (item.placeholder ?? SECRET_REQUEST_DEFAULT_PLACEHOLDER)}
         value={secret}
         onChangeText={setSecret}
         editable={canAnswer && !submitting}
@@ -139,7 +161,11 @@ function PendingSecretRequestForm(props: {
         importantForAutofill="no"
         spellCheck={false}
         returnKeyType="done"
-        onSubmitEditing={() => void send({ type: "save", secret })}
+        onSubmitEditing={() =>
+          void send(
+            login ? { type: "save_login", username, password: secret } : { type: "save", secret },
+          )
+        }
       />
       {error !== null ? (
         <Text
@@ -154,8 +180,17 @@ function PendingSecretRequestForm(props: {
         label="Save securely"
         tone="primary"
         fullWidth
-        disabled={!canAnswer || submitting || secret.trim().length === 0}
-        onPress={() => void send({ type: "save", secret })}
+        disabled={
+          !canAnswer ||
+          submitting ||
+          secret.trim().length === 0 ||
+          (login && username.trim().length === 0)
+        }
+        onPress={() =>
+          void send(
+            login ? { type: "save_login", username, password: secret } : { type: "save", secret },
+          )
+        }
       />
       <View className="flex-row items-center justify-between gap-2">
         <View className="flex-1 flex-row items-center gap-1.5">

@@ -74,6 +74,7 @@ function PendingSecretRequestForm(props: {
     }
   };
   const inputId = useId();
+  const passwordId = useId();
   const errorId = useId();
   const privacyId = useId();
   const answer = useAtomCommand(serverEnvironment.answerSecretRequest, {
@@ -83,13 +84,18 @@ function PendingSecretRequestForm(props: {
     reportDefect: false,
   });
   const [secret, setSecret] = useState("");
+  const [username, setUsername] = useState("");
+  const login = item.requestKind === "login";
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Enter and click can both submit before a render.
   const inFlight = useRef(false);
 
   const send = async (
-    reply: { readonly type: "save"; readonly secret: string } | { readonly type: "decline" },
+    reply:
+      | { readonly type: "save"; readonly secret: string }
+      | { readonly type: "save_login"; readonly username: string; readonly password: string }
+      | { readonly type: "decline" },
   ) => {
     const input = secretRequestAnswerInput(item, reply);
     if (input === null || inFlight.current) return;
@@ -102,6 +108,7 @@ function PendingSecretRequestForm(props: {
     });
     if (result._tag === "Success") {
       setSecret("");
+      setUsername("");
       return;
     }
     if (!isAtomCommandInterrupted(result)) {
@@ -111,7 +118,9 @@ function PendingSecretRequestForm(props: {
 
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    void send({ type: "save", secret });
+    void send(
+      login ? { type: "save_login", username, password: secret } : { type: "save", secret },
+    );
   };
 
   return (
@@ -132,37 +141,83 @@ function PendingSecretRequestForm(props: {
       }}
     >
       <div className="flex min-w-0 flex-col gap-1">
-        <label htmlFor={inputId} className="text-sm font-medium text-foreground">
-          {item.label}
-        </label>
+        {login ? (
+          <div className="text-sm font-medium text-foreground">{item.label}</div>
+        ) : (
+          <label htmlFor={inputId} className="text-sm font-medium text-foreground">
+            {item.label}
+          </label>
+        )}
         {item.reason.trim() ? <p className="text-sm text-muted-foreground">{item.reason}</p> : null}
       </div>
-      <div className="flex min-w-0 items-center gap-2">
-        <div className="min-w-0 flex-1">
+      {login ? (
+        <div className="flex min-w-0 flex-col gap-2">
+          <label htmlFor={inputId} className="text-sm text-foreground">
+            Username
+          </label>
           <Input
             id={inputId}
-            // Password fields prompt to save credentials; this secret is not a login.
-            type="text"
-            className="[-webkit-text-security:disc]"
             autoComplete="off"
             autoCorrect="off"
             autoCapitalize="off"
             spellCheck={false}
-            data-1p-ignore
-            data-lpignore="true"
-            data-bwignore
-            placeholder={item.placeholder ?? SECRET_REQUEST_DEFAULT_PLACEHOLDER}
+            value={username}
+            disabled={!canAnswer || submitting}
+            onChange={(event) => setUsername(event.currentTarget.value)}
+          />
+          <label htmlFor={passwordId} className="text-sm text-foreground">
+            Password
+          </label>
+          <Input
+            id={passwordId}
+            type="password"
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
             value={secret}
             disabled={!canAnswer || submitting}
             aria-invalid={error !== null || undefined}
             aria-describedby={error !== null ? `${privacyId} ${errorId}` : privacyId}
             onChange={(event) => setSecret(event.currentTarget.value)}
           />
+          <Button
+            type="submit"
+            disabled={
+              !canAnswer || submitting || username.trim().length === 0 || secret.trim().length === 0
+            }
+          >
+            Save securely
+          </Button>
         </div>
-        <Button type="submit" disabled={!canAnswer || submitting || secret.trim().length === 0}>
-          Save securely
-        </Button>
-      </div>
+      ) : (
+        <div className="flex min-w-0 items-center gap-2">
+          <div className="min-w-0 flex-1">
+            <Input
+              id={inputId}
+              // Password fields prompt to save credentials; this secret is not a login.
+              type="text"
+              className="[-webkit-text-security:disc]"
+              autoComplete="off"
+              autoCorrect="off"
+              autoCapitalize="off"
+              spellCheck={false}
+              data-1p-ignore
+              data-lpignore="true"
+              data-bwignore
+              placeholder={item.placeholder ?? SECRET_REQUEST_DEFAULT_PLACEHOLDER}
+              value={secret}
+              disabled={!canAnswer || submitting}
+              aria-invalid={error !== null || undefined}
+              aria-describedby={error !== null ? `${privacyId} ${errorId}` : privacyId}
+              onChange={(event) => setSecret(event.currentTarget.value)}
+            />
+          </div>
+          <Button type="submit" disabled={!canAnswer || submitting || secret.trim().length === 0}>
+            Save securely
+          </Button>
+        </div>
+      )}
       {error !== null ? (
         <p id={errorId} role="alert" className="text-xs text-destructive">
           {error}

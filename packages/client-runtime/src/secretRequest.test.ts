@@ -65,3 +65,9 @@ it("requires both login fields and builds a private login answer", () => {
     answer: { type: "save_login", username: "user", password: "password" },
   });
 });
+
+it("explains that the agent receives only a reference to the site-bound login", () => {
+  expect(
+    secretRequestPrivacyNote({ requestKind: "login", siteOrigin: "https://example.com" }),
+  ).toBe("The agent gets only a reference. GOAT fills this login on https://example.com");
+});
