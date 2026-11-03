@@ -6,6 +6,7 @@ const connectingSeen = new WeakSet<HeartbeatWebSocket>();
 
 export class HeartbeatWebSocket extends NodeWS.WebSocket {
   private terminating = false;
+  private pingPending = false;
 
   constructor(address: null);
   constructor(address: string | URL, options?: NodeWS.WebSocket.ClientOptions);
@@ -22,7 +23,20 @@ export class HeartbeatWebSocket extends NodeWS.WebSocket {
     super(address as string, protocols as string | string[], options);
     this.on("error", () => this.terminateOnce());
     live.add(this);
-    this.once("close", () => live.delete(this));
+    this.once("close", () => {
+      live.delete(this);
+      this.pingPending = false;
+    });
+  }
+
+  // A peer that stops reading would otherwise grow the send buffer by one ping per tick.
+  heartbeatPing() {
+    if (this.pingPending) return;
+    this.pingPending = true;
+    this.ping(undefined, undefined, (error) => {
+      this.pingPending = false;
+      if (error) this.terminateOnce();
+    });
   }
 
   terminateOnce() {
@@ -37,9 +51,7 @@ export const heartbeat = Effect.sleep("30 seconds").pipe(
     Effect.sync(() => {
       for (const socket of live) {
         if (socket.readyState === NodeWS.WebSocket.OPEN) {
-          socket.ping(undefined, undefined, (error) => {
-            if (error) socket.terminateOnce();
-          });
+          socket.heartbeatPing();
         } else if (
           socket.readyState !== NodeWS.WebSocket.CONNECTING ||
           connectingSeen.has(socket)

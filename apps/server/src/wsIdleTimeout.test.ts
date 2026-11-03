@@ -19,7 +19,7 @@ import { withWebSocketIdleTimeout } from "./wsIdleTimeout.ts";
 
 const group = RpcGroup.make(Rpc.make("stream", { success: Schema.String, stream: true }));
 
-const startServer = Effect.fnUntraced(function* (sendOutput = false) {
+const startServer = Effect.fnUntraced(function* (sendOutput = false, drain?: Effect.Effect<void>) {
   const streamClosed = yield* Deferred.make<void>();
   const connected =
     yield* Deferred.make<ReturnType<typeof NodeHttpServerRequest.toIncomingMessage>["socket"]>();
@@ -52,7 +52,7 @@ const startServer = Effect.fnUntraced(function* (sendOutput = false) {
             connected,
             NodeHttpServerRequest.toIncomingMessage(request).socket,
           );
-          return yield* withWebSocketIdleTimeout(httpEffect);
+          return yield* withWebSocketIdleTimeout(httpEffect, drain);
         }),
       );
     }),
@@ -235,5 +235,43 @@ it.effect("pong bytes keep a quiet client alive, then silence closes it once", (
     yield* TestClock.adjust("6 seconds");
     yield* closed;
     assert.equal(destroy.mock.calls.length, 1);
+  }),
+);
+
+it.effect("bytes read during the drain after a late sample tick keep the socket open", () =>
+  Effect.gen(function* () {
+    let hold: Deferred.Deferred<void> | undefined;
+    const entered = yield* Deferred.make<void>();
+    const left = yield* Deferred.make<void>();
+    const drain = Effect.suspend(() =>
+      hold === undefined
+        ? Effect.void
+        : Deferred.succeed(entered, undefined).pipe(
+            Effect.andThen(Deferred.await(hold)),
+            Effect.andThen(Deferred.succeed(left, undefined)),
+          ),
+    );
+    const server = yield* startServer(false, drain);
+    const { client, closed } = yield* connect(server.url);
+    const transport = yield* Deferred.await(server.connected);
+    yield* TestClock.adjust("295 seconds");
+    assert.isFalse(transport.destroyed);
+    const gate = yield* Deferred.make<void>();
+    hold = gate;
+    yield* TestClock.adjust("5 seconds");
+    yield* Deferred.await(entered);
+    yield* TestClock.adjust("60 seconds");
+    yield* Effect.callback<void>((resume) => {
+      transport.once("data", () => resume(Effect.void));
+      client.ping();
+    });
+    hold = undefined;
+    yield* Deferred.succeed(gate, undefined);
+    yield* Deferred.await(left);
+    assert.isFalse(transport.destroyed);
+    yield* TestClock.adjust("299 seconds");
+    assert.isFalse(transport.destroyed);
+    yield* TestClock.adjust("6 seconds");
+    yield* closed;
   }),
 );

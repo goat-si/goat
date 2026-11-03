@@ -15,6 +15,7 @@ export const withWebSocketIdleTimeout = Effect.fn("WebSocket.withIdleTimeout")(f
     never,
     Scope.Scope | HttpServerRequest.HttpServerRequest
   >,
+  drain: Effect.Effect<void> = drainIo,
 ) {
   const request = yield* HttpServerRequest.HttpServerRequest;
   const transport = NodeHttpServerRequest.toIncomingMessage(request).socket;
@@ -26,7 +27,7 @@ export const withWebSocketIdleTimeout = Effect.fn("WebSocket.withIdleTimeout")(f
     Effect.sync(() => transport.on("data", onData)),
     () => Effect.sync(() => transport.off("data", onData)),
   );
-  const idle = awaitQuiet({ windowMs: 300_000, activity: () => generation, drainIo }).pipe(
+  const idle = awaitQuiet({ windowMs: 300_000, activity: () => generation, drainIo: drain }).pipe(
     Effect.andThen(
       Effect.logInfo(
         "Closing idle RPC WebSocket after 300 seconds without inbound traffic, pongs included",

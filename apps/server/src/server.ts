@@ -390,7 +390,7 @@ const layerRelayClient = Layer.unwrap(
     return RelayClient.layerCloudflared({ baseDir: config.baseDir });
   }),
 );
-const layerHttpServer = Layer.unwrap(
+export const layerHttpServer = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
     yield* Effect.forkScoped(heartbeat);

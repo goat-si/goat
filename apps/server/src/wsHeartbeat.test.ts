@@ -6,13 +6,19 @@ import * as Socket from "effect/socket/Socket";
 import { vi } from "vite-plus/test";
 import { heartbeat, HeartbeatWebSocket } from "./wsHeartbeat.ts";
 
+// @types/ws types the ping callback's error as required; ws calls it with undefined on success.
+const acknowledge = (callback: ((err: Error) => void) | undefined) =>
+  (callback as ((err?: Error) => void) | undefined)?.();
+
 it.effect("pings open sockets and contains a failed ping", () =>
   Effect.gen(function* () {
     const good = new HeartbeatWebSocket(null as unknown as string, undefined, {});
     const bad = new HeartbeatWebSocket(null as unknown as string, undefined, {});
     Object.defineProperty(good, "readyState", { value: NodeWS.WebSocket.OPEN });
     Object.defineProperty(bad, "readyState", { value: NodeWS.WebSocket.OPEN });
-    const ping = vi.spyOn(good, "ping").mockImplementation(() => {});
+    const ping = vi
+      .spyOn(good, "ping")
+      .mockImplementation((_data, _mask, callback) => acknowledge(callback));
     vi.spyOn(bad, "ping").mockImplementation((_data, _mask, callback) =>
       callback?.(new Error("write")),
     );
@@ -85,6 +91,24 @@ it.effect("contains errors after the Effect reader is disposed", () =>
     socket.emit("error", new Error("after disposal"));
     socket.emit("error", new Error("again"));
     assert.equal(terminate.mock.calls.length, 1);
+    socket.emit("close");
+  }),
+);
+
+it.effect("keeps at most one heartbeat ping outstanding per socket", () =>
+  Effect.gen(function* () {
+    const socket = new HeartbeatWebSocket(null as unknown as string, undefined, {});
+    Object.defineProperty(socket, "readyState", { value: NodeWS.WebSocket.OPEN });
+    const callbacks: Array<(err: Error) => void> = [];
+    const ping = vi.spyOn(socket, "ping").mockImplementation((_data, _mask, callback) => {
+      if (callback) callbacks.push(callback);
+    });
+    yield* Effect.forkScoped(heartbeat);
+    yield* TestClock.adjust("90 seconds");
+    assert.equal(ping.mock.calls.length, 1);
+    acknowledge(callbacks[0]);
+    yield* TestClock.adjust("30 seconds");
+    assert.equal(ping.mock.calls.length, 2);
     socket.emit("close");
   }),
 );
