@@ -79,7 +79,7 @@ function update(environmentId: EnvironmentId, session: Session) {
   }));
 }
 
-export function disposeWebGoatBotEnvironment(environmentId: EnvironmentId): void {
+function disposeWebGoatBotEnvironment(environmentId: EnvironmentId): void {
   const session = useSessions.getState().sessions.get(environmentId);
   if (!session) return;
   useSessions.setState((state) => {
