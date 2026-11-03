@@ -20,7 +20,7 @@ export const credentialRefusalMessage = (
     case "revoked":
       return `GOAT refused this call: GOAT closed the provider session this thread's GOAT credential belonged to. ${RETRY_AT_NEXT_TURN}`;
     case "earlier_server":
-      return "GOAT refused this call: the GOAT server restarted while this turn kept running, so GOAT tools are unavailable for the rest of this turn. Do not retry this tool in this turn; continue without GOAT tools. GOAT installs a fresh credential when the next turn starts.";
+      return "GOAT refused this call: this GOAT tool credential is from before the GOAT server restarted or updated, so GOAT tools are unavailable for the rest of this turn. Do not retry this tool in this turn; GOAT installs a fresh credential when a later turn starts.";
     case "missing":
     case "unknown":
       return GENERIC_REFUSAL;
