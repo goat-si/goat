@@ -1,4 +1,9 @@
 import { HumanHandoffCard } from "./HumanHandoffCard";
+import {
+  AssistantMarkdownBlocks,
+  type MarkdownLinkHandlers,
+  type MarkdownStyleSet,
+} from "./AssistantMarkdownBlocks";
 import { Button } from "../../components/ui/Button";
 import * as Dialog from "../../components/ui/Dialog";
 import { useOpenPullRequest } from "../../native/useOpenPullRequest";
@@ -68,10 +73,7 @@ import {
 } from "@goat/shared/composerContextReferences";
 import { ComposerContextSheet } from "../../components/ComposerContextSheet";
 import { writeComposerContextClipboard } from "../../lib/composerContextClipboard";
-import {
-  codexArtifactTemplatePresentationLabel,
-  type CodexArtifactTemplate,
-} from "@goat/shared/codexArtifactTemplates";
+import type { CodexArtifactTemplate } from "@goat/shared/codexArtifactTemplates";
 import { resolveAssetUrl } from "@goat/client-runtime/state/assets";
 import { formatAttachmentSize } from "@goat/client-runtime/state/attachments";
 import {
@@ -84,14 +86,10 @@ import {
   markdownImageSourceFragment,
 } from "@goat/client-runtime/markdown-images";
 import { resolveViewedImageAsset } from "@goat/client-runtime/work-log/presentation";
-import {
-  renderCodexInlineDirectivesAsMarkdown,
-  splitCodexArtifactTemplateMarkdown,
-} from "@goat/shared/codexMarkdownDirectives";
 import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@goat/shared/chatList";
 import { imageMimeType } from "@goat/shared/image";
 import { videoMimeType } from "@goat/shared/video";
-import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
+import { SymbolView } from "../../components/ui/AppSymbol";
 import { HeaderHeightContext } from "@react-navigation/elements";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import { useNativeWorkspaceColumnsSupported } from "../../native/NativeWorkspaceColumns";
@@ -149,11 +147,7 @@ import { downloadAndShareAttachment } from "../../lib/attachmentDownload";
 import { hasWideMarkdownBlock } from "../../lib/wideMarkdownBlocks";
 import {
   SelectableMarkdownText,
-  type MarkdownFileContextMenu,
   type MarkdownImageRenderer,
-  type MarkdownImageSourceResolver,
-  type MarkdownLinkCustomization,
-  type NativeMarkdownTextStyle,
   type SelectableMarkdownSkill,
 } from "../../native/SelectableMarkdownText";
 
@@ -836,81 +830,9 @@ function ThreadMediaVisibility(props: { readonly children: ReactNode }) {
   return <ThreadMediaVisibleContext value={visible}>{props.children}</ThreadMediaVisibleContext>;
 }
 
-interface MarkdownLinkHandlers {
-  readonly onLinkPress: (href: string) => void;
-  readonly fileContextMenu: (href: string) => MarkdownFileContextMenu | undefined;
-  readonly onFileContextMenuAction: (href: string, actionId: string) => void;
-  readonly onImagePress?: (href: string) => void;
-  readonly resolveImageSource?: MarkdownImageSourceResolver;
-  readonly fileEmbedLabel?: (href: string, standalone: boolean) => string | null;
-  readonly linkCustomization?: (href: string) => MarkdownLinkCustomization | undefined;
-}
-
 interface MarkdownStyleSets {
   readonly user: MarkdownStyleSet;
   readonly assistant: MarkdownStyleSet;
-}
-
-interface MarkdownStyleSet {
-  readonly nativeTextStyle: NativeMarkdownTextStyle;
-}
-
-const ARTIFACT_TEMPLATE_SYMBOL_BY_KIND: Record<
-  CodexArtifactTemplate["artifactKind"],
-  AppSymbolName
-> = {
-  document: "doc.text",
-  presentation: "chart.bar.xaxis",
-  spreadsheet: "chart.bar.xaxis",
-  site: "safari",
-  "google-docs": "doc.text",
-  "google-slides": "chart.bar.xaxis",
-  "google-sheets": "chart.bar.xaxis",
-  image: "camera",
-  email: "text.bubble",
-  slack: "text.bubble",
-};
-
-function ArtifactTemplateCard(props: {
-  readonly template: CodexArtifactTemplate;
-  readonly onUse?: ((template: CodexArtifactTemplate) => void) | undefined;
-}) {
-  return (
-    <View className="my-2 min-w-0 flex-row items-center gap-3 rounded-2xl border border-border bg-card px-3 py-3">
-      <View className="relative h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-border bg-subtle">
-        <SymbolView
-          name={ARTIFACT_TEMPLATE_SYMBOL_BY_KIND[props.template.artifactKind]}
-          size={20}
-          tintColorClassName="accent-foreground-muted"
-          type="monochrome"
-        />
-        <View className="absolute -right-1 -bottom-1 h-4 w-4 items-center justify-center rounded-full bg-fuchsia-500">
-          <SymbolView
-            name={{ ios: "sparkles", android: "auto_awesome" }}
-            size={9}
-            tintColor="white"
-            type="monochrome"
-          />
-        </View>
-      </View>
-      <View className="min-w-0 flex-1">
-        <Text className="font-goat-bold text-sm text-foreground" numberOfLines={1}>
-          {props.template.displayName}
-        </Text>
-        <Text className="text-xs text-foreground-muted">
-          {codexArtifactTemplatePresentationLabel(props.template.artifactKind)}
-        </Text>
-      </View>
-      {props.onUse ? (
-        <Button
-          label="Use template"
-          tone="secondary"
-          accessibilityLabel={`Use ${props.template.displayName} template`}
-          onPress={() => props.onUse?.(props.template)}
-        />
-      ) : null}
-    </View>
-  );
 }
 
 const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
@@ -922,8 +844,8 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
   readonly renderImage: MarkdownImageRenderer;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill> | undefined;
 }) {
+  const iconSubtleColor = useUniwindTheme()["--color-icon-subtle"];
   const liveMarkdown = useLiveThreadLinkLabels(props.markdown, props.environmentId);
-  const segments = useMemo(() => splitCodexArtifactTemplateMarkdown(liveMarkdown), [liveMarkdown]);
   const threadIcons = useThreadChipIcons(props.environmentId, liveMarkdown);
   const linkHandlers: MarkdownLinkHandlers = {
     ...props.linkHandlers,
@@ -931,30 +853,17 @@ const AssistantMarkdownContent = memo(function AssistantMarkdownContent(props: {
       withChipIcon(props.linkHandlers.linkCustomization?.(href), threadIcons.get(href)),
   };
 
-  return segments.map((segment) => {
-    if (segment.kind === "artifact-template") {
-      return (
-        <ArtifactTemplateCard
-          key={`artifact-template:${segment.sourceOffset}`}
-          template={segment.template}
-          onUse={props.onUseArtifactTemplate}
-        />
-      );
-    }
-    if (segment.markdown.trim().length === 0) return null;
-
-    const markdown = renderCodexInlineDirectivesAsMarkdown(segment.markdown);
-    return (
-      <SelectableMarkdownText
-        key={`markdown:${segment.sourceOffset}`}
-        markdown={markdown}
-        skills={props.skills}
-        textStyle={props.markdownStyles.nativeTextStyle}
-        {...linkHandlers}
-        renderImage={props.renderImage}
-      />
-    );
-  });
+  return (
+    <AssistantMarkdownBlocks
+      markdown={liveMarkdown}
+      iconSubtleColor={iconSubtleColor}
+      markdownStyles={props.markdownStyles}
+      linkHandlers={linkHandlers}
+      onUseArtifactTemplate={props.onUseArtifactTemplate}
+      renderImage={props.renderImage}
+      skills={props.skills}
+    />
+  );
 });
 
 function useMarkdownStyles(): MarkdownStyleSets {

@@ -14,7 +14,7 @@ import { threadSearchMatchKey } from "@goat/client-runtime/state/thread-search";
 import { type EnvironmentId, type SidebarProjectGroupingMode } from "@goat/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { useFocusEffect } from "@react-navigation/native";
-import { use, useEffect, useRef, useState, type ComponentProps } from "react";
+import { use, useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import {
   Platform,
   ScrollView,
@@ -372,11 +372,16 @@ export function HomeScreen(props: HomeScreenProps) {
     onScrollBeginDrag: handleScrollBeginDrag,
   });
 
-  const projectScopes = buildHomeProjectScopes({
-    projects: props.projects,
-    environmentId: props.selectedEnvironmentId,
-    projectGroupingMode: props.projectGroupingMode,
-  });
+  const { projects, selectedEnvironmentId, projectGroupingMode } = props;
+  const projectScopes = useMemo(
+    () =>
+      buildHomeProjectScopes({
+        projects,
+        environmentId: selectedEnvironmentId,
+        projectGroupingMode,
+      }),
+    [projects, selectedEnvironmentId, projectGroupingMode],
+  );
   const hasSearchQuery = props.searchQuery.trim().length > 0;
   const projectByKey = (() => {
     const map = new Map<string, EnvironmentProject>();
@@ -914,6 +919,8 @@ export function HomeScreen(props: HomeScreenProps) {
                 // the list in the same frame as the bar.
                 contentInsetAdjustmentBehavior="automatic"
                 contentInsetStartAdjustment={Platform.OS === "ios" ? insets.top : 0}
+                // Programmatic offsets need to account for the automatic bar inset.
+                scrollToOverflowEnabled
                 initialScrollOffset={
                   initialScrollOffset > 0
                     ? initialScrollOffset - (Platform.OS === "ios" ? insets.top : 0)
