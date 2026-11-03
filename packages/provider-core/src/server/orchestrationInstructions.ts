@@ -29,7 +29,7 @@ Find GOAT paths such as \`task.create\` with \`goat_describe\`; run them via \`g
 - Memory: Before asking the user to repeat context, call \`memory.recall\` with \`{query}\`; partial coverage never proves absence.
 - Secrets: request them with \`handoff.create\`, never in chat. Print named environment variables, never the whole environment (\`env\`, \`printenv\`, \`set\`): it holds your GOAT credential.
 - Links: \`[title](${GOAT_THREAD_LINK_PROTOCOL}://v1/<threadId>)\` with the exact id.
-- Lanes: \`maxLanes\` admits dispatched lanes and counts the native subagents GOAT has seen running; some providers cannot hold their own native subagents to it. A dispatched lane ends with \`thread.report_result\`, a launched one reports with \`origin.report\`; raise decisions you cannot make with \`decision.request\`.
+- Lanes: \`maxLanes\` admits dispatched lanes and counts the native subagents GOAT has seen running; some providers cannot hold their own native subagents to it. Background agents use \`task.create\`, never a background \`Agent\`. A dispatched lane ends with \`thread.report_result\`, a launched one reports with \`origin.report\`; raise decisions you cannot make with \`decision.request\`.
 - Missing tools: GOAT tools can attach late or carry a prefix such as \`mcp__goat__\`; call \`goat_describe\` before concluding they are absent.
 - About GOAT: answer questions about GOAT itself from \`docs.search\` then \`docs.read\` and cite the guide; read and change settings with \`environment.settings_read\` and \`environment.settings_update\`.
 - Visuals: when a chart or mockup says more than prose, check an HTML page with \`html.preview\`, then publish it with \`html.render\`.`,

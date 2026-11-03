@@ -203,6 +203,9 @@ describe("Codex orchestration context", () => {
         "Each review round is a new task with the brief, prior findings, and open objections",
       ),
     );
+    NodeAssert.ok(
+      orchestration.includes("Background agents use `task.create`, never a background `Agent`"),
+    );
     NodeAssert.ok(!orchestration.includes("inheritedOptions"));
     NodeAssert.ok(!orchestration.includes("Prefer native"));
     // The ACP terminal fallback is ACP-only; Codex agents never need it.
