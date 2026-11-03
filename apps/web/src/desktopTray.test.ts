@@ -32,10 +32,17 @@ function shell(
       readonly threadTitle: null;
     };
   } = {},
-): Shell & { source: { launchedBy?: NonNullable<Parameters<typeof shell>[1]>["launchedBy"] } } {
+): Shell & {
+  source: {
+    pendingRuntimeRequest: null;
+    launchedBy?: NonNullable<Parameters<typeof shell>[1]>["launchedBy"];
+  };
+} {
   const status = options.status === undefined ? null : options.status;
   return {
-    source: options.launchedBy ? { launchedBy: options.launchedBy } : {},
+    source: options.launchedBy
+      ? { pendingRuntimeRequest: null, launchedBy: options.launchedBy }
+      : { pendingRuntimeRequest: null },
     environmentId: options.environmentId ?? local,
     id: ThreadId.make(id),
     projectId: project,
@@ -70,6 +77,10 @@ function shell(
       : { parentThreadId: null, relationshipToParent: null, rootThreadId: ThreadId.make(id) },
     pinnedAt: options.pinOrderKey === undefined ? null : "2026-10-27T00:00:00.000Z",
     pinOrderKey: options.pinOrderKey ?? null,
+    latestUserMessageAt: null,
+    settledOverride: null,
+    snoozedUntil: null,
+    snoozedAt: null,
     createdAt: "2026-10-27T00:00:00.000Z",
     updatedAt: options.updatedAt ?? "2026-10-27T00:00:00.000Z",
   };

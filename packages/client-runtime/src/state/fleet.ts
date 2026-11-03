@@ -8,11 +8,14 @@ import type {
   RemoteLaunch,
   ScopedThreadRef,
 } from "@goat/contracts";
+import { isRemoteDelegatedChild } from "@goat/shared/threadLaunchState";
+import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import { Atom } from "effect/reactivity";
 
 import { identifyBoatMachine, type BoatMachineIdentity } from "../cloudMachines.ts";
-import { scopeThreadRef } from "../environment/scoped.ts";
+import { scopeThreadRef, scopedThreadKey } from "../environment/scoped.ts";
+import { foldLaunchedThreads, type LaunchFoldThread } from "./launchFold.ts";
 import { threadRuntimeIsActive, type EnvironmentThreadShell } from "./models.ts";
 import { findRemoteShell, presentRemoteLaunches } from "./remoteLaunches.ts";
 
@@ -28,25 +31,26 @@ import { findRemoteShell, presentRemoteLaunches } from "./remoteLaunches.ts";
 /** "attention" is a pending approval or question: the thread needs the user. */
 export type FleetThreadState = "running" | "attention";
 
-export type FleetShell = Pick<
-  EnvironmentThreadShell,
-  | "environmentId"
-  | "id"
-  | "title"
-  | "providerInstanceId"
-  | "runtime"
-  | "hasPendingApprovals"
-  | "hasPendingUserInput"
-  | "pendingSubagentRequest"
-  | "pendingBackgroundTasks"
-  | "nativeSubagents"
-  | "archivedAt"
-  | "deletedAt"
-  | "sideChatOf"
-  | "lineage"
-  | "createdAt"
-  | "updatedAt"
-> & { readonly source: Pick<OrchestrationV2ThreadShell, "launchedBy"> };
+export type FleetShell = LaunchFoldThread &
+  Pick<
+    EnvironmentThreadShell,
+    | "environmentId"
+    | "id"
+    | "title"
+    | "providerInstanceId"
+    | "runtime"
+    | "hasPendingApprovals"
+    | "hasPendingUserInput"
+    | "pendingSubagentRequest"
+    | "pendingBackgroundTasks"
+    | "nativeSubagents"
+    | "archivedAt"
+    | "deletedAt"
+    | "sideChatOf"
+    | "lineage"
+    | "createdAt"
+    | "updatedAt"
+  > & { readonly source: Pick<OrchestrationV2ThreadShell, "launchedBy" | "pendingRuntimeRequest"> };
 
 /**
  * Whether a thread is in the Fleet now; null means it has finished or never
@@ -96,6 +100,66 @@ export function classifyFleetThread(
     return "running";
   }
   return null;
+}
+
+export function fleetThreadStates<
+  T extends LaunchFoldThread &
+    Pick<FleetShell, "archivedAt" | "deletedAt" | "sideChatOf" | "pendingSubagentRequest">,
+>(shells: readonly T[]): ReadonlyMap<string, FleetThreadState | null> {
+  const visible = shells.filter(
+    (shell) =>
+      shell.archivedAt === null &&
+      shell.deletedAt === null &&
+      shell.sideChatOf == null &&
+      shell.lineage.relationshipToParent !== "subagent",
+  );
+  const key = (shell: T) => scopedThreadKey(scopeThreadRef(shell.environmentId, shell.id));
+  const states = new Map(visible.map((shell) => [key(shell), classifyFleetThread(shell)]));
+  const remoteChildren = visible.filter((child) =>
+    isRemoteDelegatedChild({ lineage: child.lineage, launchedBy: child.source.launchedBy }),
+  );
+  if (remoteChildren.length === 0) return states;
+  const delegatedAttentionByKey = new Map(
+    visible.flatMap((shell) =>
+      shell.pendingSubagentRequest == null
+        ? []
+        : [
+            [
+              key(shell),
+              shell.pendingSubagentRequest === "approval"
+                ? ("approval" as const)
+                : ("input" as const),
+            ] as const,
+          ],
+    ),
+  );
+  const fold = foldLaunchedThreads({
+    visible,
+    all: shells,
+    now: DateTime.formatIso(DateTime.nowUnsafe()),
+    delegatedAttentionByKey,
+  });
+  const remoteParents = new Map<string, string>();
+  for (const child of remoteChildren) {
+    const childKey = key(child);
+    const parentKey = fold.parentKeyByKey.get(childKey);
+    if (parentKey === undefined) continue;
+    remoteParents.set(childKey, parentKey);
+    states.delete(childKey);
+  }
+  for (const [childKey, parentKey] of remoteParents) {
+    if (fold.stateByKey.get(childKey) !== "attention") continue;
+    let target = parentKey;
+    for (
+      let next = remoteParents.get(target);
+      next !== undefined;
+      next = remoteParents.get(target)
+    ) {
+      target = next;
+    }
+    states.set(target, "attention");
+  }
+  return states;
 }
 
 export interface FleetEnvironment {
@@ -207,12 +271,16 @@ export function summarizeFleet(
   );
   let running = 0;
   let attention = 0;
+  const liveIds = new Set(
+    environments.filter((env) => env.connected !== false).map((env) => env.environmentId),
+  );
+  const states = fleetThreadStates(shells.filter((shell) => liveIds.has(shell.environmentId)));
   for (const shell of shells) {
     const owner = owners.get(shell.environmentId);
     const machine = owner === undefined ? undefined : counts.get(owner);
     if (machine === undefined) continue;
-    const state = classifyFleetThread(shell);
-    if (state === null) continue;
+    const state = states.get(scopedThreadKey(scopeThreadRef(shell.environmentId, shell.id)));
+    if (state == null) continue;
     machine[state] += 1;
     if (state === "running") running += 1;
     else attention += 1;
@@ -486,9 +554,10 @@ export function buildFleet(input: {
   const scopeOf = (environmentId: EnvironmentId) =>
     scopes.get(environmentId) ?? "environment:" + environmentId;
 
+  const states = fleetThreadStates(connectedShells);
   for (const shell of connectedShells) {
-    const state = classifyFleetThread(shell);
-    if (state === null) continue;
+    const state = states.get(scopedThreadKey(scopeThreadRef(shell.environmentId, shell.id)));
+    if (state == null) continue;
     const machine = nodeOf(shell.environmentId);
     if (machine === undefined) continue;
     const agent = agentOf(shell, machine);

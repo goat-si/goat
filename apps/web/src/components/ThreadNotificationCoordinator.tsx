@@ -1,3 +1,6 @@
+import { scopeThreadRef, scopedThreadKey } from "@goat/client-runtime/environment";
+import { foldLaunchedThreads, launchRootKey } from "@goat/client-runtime/state/launch-fold";
+import { isRemoteDelegatedChild } from "@goat/shared/threadLaunchState";
 import {
   type PendingSubagentRequest,
   type EnvironmentThreadShell,
@@ -21,6 +24,7 @@ import { getClientSettings, subscribeClientSettings } from "../hooks/useSettings
 import { isWindowsPlatform } from "../lib/utils";
 import { environmentSummaries } from "../state/presentation";
 import { environmentShell } from "../state/shell";
+import { threadFamilies } from "../state/threads";
 import {
   hasDesktopNotifications,
   hasNotificationSound,
@@ -79,7 +83,41 @@ export function startThreadNotifications(
     state: NotificationState,
     kind: ThreadNotificationKind,
   ) => {
-    const { thread, status } = state;
+    let { thread } = state;
+    const { status } = state;
+    if (isRemoteDelegatedChild({ lineage: thread.lineage, launchedBy: thread.source.launchedBy })) {
+      const all: EnvironmentThreadShell[] = [];
+      for (const id of registry.get(environmentSummaries.environmentIdsAtom)) {
+        const shell = registry.get(environmentShell.stateValueAtom(id));
+        if (shell.status !== "live" || Option.isNone(shell.snapshot)) continue;
+        const snapshot = registry.get(threadFamilies.snapshotAtom(id)) ?? shell.snapshot.value;
+        const requests = pendingSubagentRequestsByThread(snapshot.threads);
+        for (const raw of snapshot.threads) {
+          all.push(presentThreadShell(id, raw, requests.get(raw.id) ?? null));
+        }
+      }
+      const visible = all.filter(
+        (item) =>
+          item.archivedAt === null &&
+          item.deletedAt === null &&
+          !isSideChatThread(item.source) &&
+          item.lineage.relationshipToParent !== "subagent",
+      );
+      const fold = foldLaunchedThreads({ visible, all, now: new Date().toISOString() });
+      const key = scopedThreadKey(scopeThreadRef(environmentId, thread.id));
+      const parentKey = fold.parentKeyByKey.get(key);
+      if (parentKey !== undefined) {
+        if (kind === "completion") return;
+        const root = launchRootKey(fold, parentKey);
+        const parent = visible.find(
+          (item) => scopedThreadKey(scopeThreadRef(item.environmentId, item.id)) === root,
+        );
+        if (parent !== undefined) {
+          thread = parent;
+          environmentId = parent.environmentId;
+        }
+      }
+    }
     const { notificationMode: mode, inAppNotificationsEnabled } = getClientSettings();
     const active = (router.state.matches.at(-1)?.params ?? {}) as {
       environmentId?: string;

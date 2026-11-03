@@ -22,6 +22,7 @@ import { useAdaptiveWorkspaceLayout } from "../../layout/adaptive-workspace-cont
 import { HubAccessNotice } from "../../settings/HubAccessNotice";
 import { openSettings } from "../../settings/settings-navigation";
 import { useSelectWorkspaceDetail } from "../../workspace/useSelectWorkspaceDetail";
+import { useRemoteLauncherReads } from "../../threads/remoteLauncherReads";
 import { useAppearancePreferences } from "../../settings/appearance/AppearancePreferencesProvider";
 import { showsFleetGraph } from "./fleetGraphText";
 import { UsageFleetGraph } from "./UsageFleetGraph";
@@ -48,6 +49,7 @@ export default function UsageFleetSection() {
 }
 
 function FleetContent() {
+  useRemoteLauncherReads();
   const { snapshot, connections, loading } = useAtomValue(mobileFleet.fleetPageAtom);
   const cloudAgents = useAtomValue(mobileFleet.fleetCloudAgentsAtom);
   const presentations = useAtomValue(environmentPresentations.presentationsAtom);

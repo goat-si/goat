@@ -84,9 +84,17 @@ function shell(environmentId: EnvironmentId, id: string, options: ShellOptions =
       title: "task " + nativeId,
       status: status ?? "running",
     })),
+    latestUserMessageAt: null,
+    pinnedAt: null,
+    settledOverride: null,
+    snoozedUntil: null,
+    snoozedAt: null,
     createdAt: options.createdAt ?? "2026-10-17T00:00:00.000Z",
     updatedAt: options.updatedAt ?? "2026-10-17T00:00:00.000Z",
-    source: options.launchedBy === undefined ? {} : { launchedBy: options.launchedBy },
+    source:
+      options.launchedBy === undefined
+        ? { pendingRuntimeRequest: null }
+        : { pendingRuntimeRequest: null, launchedBy: options.launchedBy },
   };
 }
 
@@ -220,6 +228,42 @@ describe("createFleetSummaryAtom", () => {
 });
 
 describe("remote delegated children", () => {
+  it("resolves a subagent launcher, leaves remote running work folded, and retains an orphan", () => {
+    const child = shell(remote, "child", {
+      launchedBy: {
+        kind: "launch",
+        via: "delegate_task",
+        threadId: ThreadId.make("launcher"),
+        environmentId: local,
+        environmentLabel: null,
+        threadTitle: null,
+      },
+    });
+    const parent = shell(local, "parent", { status: "idle" });
+    const launcher = shell(local, "launcher", { subagentOf: "parent", status: "idle" });
+    const environments = [env(local, "Mac"), env(remote, "Box")];
+    const input = {
+      environments,
+      primaryEnvironmentId: local,
+      shells: [parent, launcher, child],
+      remote: [],
+    };
+    expect(buildFleet(input).threads).toEqual([]);
+    const asking = { ...child, hasPendingUserInput: true };
+    expect(
+      buildFleet({ ...input, shells: [parent, launcher, asking] }).threads.map(
+        ({ title, state }) => [title, state],
+      ),
+    ).toEqual([["parent", "attention"]]);
+    expect(
+      buildFleet({
+        ...input,
+        environments: [{ ...environments[0]!, connected: false }, environments[1]!],
+        shells: [parent, launcher, asking],
+      }).threads.map(({ title, state }) => [title, state]),
+    ).toEqual([["child", "attention"]]);
+  });
+
   it("folds a remote child into its live parent and lifts its request", () => {
     const child = shell(remote, "child", {
       approval: true,

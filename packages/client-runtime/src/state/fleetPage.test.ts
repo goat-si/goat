@@ -40,9 +40,14 @@ function running(environmentId: EnvironmentId, id: string): FleetShell {
     lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: ThreadId.make(id) },
     pendingSubagentRequest: null,
     nativeSubagents: [],
+    latestUserMessageAt: null,
+    pinnedAt: null,
+    settledOverride: null,
+    snoozedUntil: null,
+    snoozedAt: null,
     createdAt: "2026-10-30T00:00:00.000Z",
     updatedAt: "2026-10-30T00:00:00.000Z",
-    source: {},
+    source: { pendingRuntimeRequest: null },
   };
 }
 

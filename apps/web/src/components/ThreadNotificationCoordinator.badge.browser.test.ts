@@ -473,5 +473,43 @@ it("suppresses a remote child's completion under a live parent but keeps its app
   await vi.advanceTimersByTimeAsync(WORKING_EXIT_GRACE_MS);
   expect(TestNotification.sent).toEqual([]);
   state.shells.set("two", shell({ ...child, hasPendingApprovals: true }));
-  expect(TestNotification.sent.map(({ title }) => title)).toEqual(["Approval needed"]);
+  expect(TestNotification.sent.map(({ title, options }) => [title, options.body])).toEqual([
+    ["Approval needed", "Test thread"],
+  ]);
+  TestNotification.sent[0]!.dispatchEvent(new Event("click"));
+  expect(state.navigate).toHaveBeenCalledWith({
+    to: "/$environmentId/$threadId",
+    params: { environmentId: "one", threadId: "thread" },
+  });
+});
+
+it("notifies for a remote child when the parent environment is offline", async () => {
+  await using app = setup();
+  const child = {
+    id: "child",
+    title: "Child",
+    launchedBy: {
+      kind: "launch" as const,
+      via: "delegate_task" as const,
+      threadId: "thread",
+      environmentId: "one",
+      environmentLabel: null,
+      threadTitle: null,
+    },
+  };
+  state.shells.set("one", { ...shell(), status: "cached" });
+  state.shells.set("two", shell(child));
+  app.start();
+  using _timers = fakeTimers();
+  state.shells.set(
+    "two",
+    shell({
+      ...child,
+      latestTurn: { turnId: "turn", state: "completed", completedAt: "2026-09-13T07:01:00.000Z" },
+    }),
+  );
+  await vi.advanceTimersByTimeAsync(WORKING_EXIT_GRACE_MS);
+  expect(TestNotification.sent.map(({ title, options }) => [title, options.body])).toEqual([
+    ["Thread completed", "Child"],
+  ]);
 });

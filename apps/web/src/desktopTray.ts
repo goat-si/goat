@@ -1,5 +1,7 @@
 import type { DesktopBridge } from "@goat/contracts";
-import { classifyFleetThread } from "@goat/client-runtime/state/fleet";
+import { fleetThreadStates } from "@goat/client-runtime/state/fleet";
+import { scopeThreadRef, scopedThreadKey } from "@goat/client-runtime/environment";
+import type { LaunchFoldThread } from "@goat/client-runtime/state/launch-fold";
 import type { EnvironmentProject, EnvironmentThreadShell } from "@goat/client-runtime/state/models";
 import { runAtomCommand } from "@goat/client-runtime/state/runtime";
 import { sortPinnedThreadsByOrderKey } from "@goat/client-runtime/state/thread-sort";
@@ -29,27 +31,28 @@ const TEXT_LIMIT = 200;
 
 const bounded = (text: string) => Array.from(text).slice(0, TEXT_LIMIT).join("");
 
-type TrayShell = Pick<
-  EnvironmentThreadShell,
-  | "environmentId"
-  | "id"
-  | "projectId"
-  | "title"
-  | "runtime"
-  | "hasPendingApprovals"
-  | "hasPendingUserInput"
-  | "pendingSubagentRequest"
-  | "pendingGuestMessageCount"
-  | "pendingBackgroundTasks"
-  | "archivedAt"
-  | "deletedAt"
-  | "sideChatOf"
-  | "lineage"
-  | "pinnedAt"
-  | "pinOrderKey"
-  | "createdAt"
-  | "updatedAt"
->;
+type TrayShell = LaunchFoldThread &
+  Pick<
+    EnvironmentThreadShell,
+    | "environmentId"
+    | "id"
+    | "projectId"
+    | "title"
+    | "runtime"
+    | "hasPendingApprovals"
+    | "hasPendingUserInput"
+    | "pendingSubagentRequest"
+    | "pendingGuestMessageCount"
+    | "pendingBackgroundTasks"
+    | "archivedAt"
+    | "deletedAt"
+    | "sideChatOf"
+    | "lineage"
+    | "pinnedAt"
+    | "pinOrderKey"
+    | "createdAt"
+    | "updatedAt"
+  >;
 
 const newestFirst = (left: TrayShell, right: TrayShell) =>
   right.updatedAt.localeCompare(left.updatedAt);
@@ -76,6 +79,9 @@ export function deriveTrayMenu(
   const attention: TrayShell[] = [];
   const running: TrayShell[] = [];
   const pinned: TrayShell[] = [];
+  const states = fleetThreadStates(
+    threads.filter((thread) => liveEnvironmentIds.has(thread.environmentId)),
+  );
   for (const thread of threads) {
     if (
       thread.archivedAt !== null ||
@@ -86,7 +92,9 @@ export function deriveTrayMenu(
       continue;
     }
     const live = liveEnvironmentIds.has(thread.environmentId);
-    const state = live ? classifyFleetThread(thread) : null;
+    const key = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+    if (live && !states.has(key)) continue;
+    const state = live ? states.get(key) : null;
     if (state === "attention" || (live && (thread.pendingGuestMessageCount ?? 0) > 0)) {
       attention.push(thread);
     } else if (state === "running") {
