@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import type { ThreadPullRequestLink } from "@goat/contracts";
 
 import {
+  composerPullRequestRepository,
   composerPullRequestsFromLinks,
   filterComposerPullRequestMatches,
   withLinkedComposerPullRequestsFirst,
@@ -101,5 +102,22 @@ describe("linked pull requests", () => {
         limit: 10,
       }),
     ).toEqual([linked[0], entry(8, "2026-01-03"), entry(9, "2026-01-05")]);
+  });
+});
+
+describe("composerPullRequestRepository", () => {
+  const choose = (listed: ReadonlyArray<{ projectId: string; repository: string }>) =>
+    composerPullRequestRepository({
+      own: "goat-si/goat",
+      selected: "pingdotgg/t3code",
+      projectId: "p1",
+      listed,
+    });
+
+  it("searches a fork's own repository, or the upstream a server from before forks listed", () => {
+    expect(choose([])).toBe("goat-si/goat");
+    expect(choose([{ projectId: "p1", repository: "goat-si/goat" }])).toBe("goat-si/goat");
+    expect(choose([{ projectId: "p1", repository: "pingdotgg/t3code" }])).toBe("pingdotgg/t3code");
+    expect(choose([{ projectId: "p2", repository: "pingdotgg/t3code" }])).toBe("goat-si/goat");
   });
 });

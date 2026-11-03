@@ -20,6 +20,7 @@ import type {
   ComputerUseApp,
 } from "@goat/contracts";
 import {
+  composerPullRequestRepository,
   composerPullRequestsFromLinks,
   filterComposerPullRequestMatches,
   withLinkedComposerPullRequestsFirst,
@@ -105,7 +106,7 @@ export function useComposerMenuItems({
     pullRequestProjectId === null ? null : scopeProjectRef(environmentId, pullRequestProjectId),
   );
   // The server lists a fork's own origin repository, not the upstream its identity selects.
-  const pullRequestRepository =
+  const ownRepository =
     selectedRepository === null
       ? null
       : (pullRequestProject?.repositoryIdentity?.origin?.displayName ?? selectedRepository);
@@ -174,6 +175,12 @@ export function useComposerMenuItems({
           },
         ];
   const pullRequestLookup = usePullRequestList(pullRequestListTargets);
+  const pullRequestRepository = composerPullRequestRepository({
+    own: ownRepository,
+    selected: selectedRepository,
+    projectId: pullRequestProjectId,
+    listed: pullRequestLookup.data?.entries ?? [],
+  });
   const pullRequestTriggerNumber = (() => {
     if (composerTrigger?.kind !== "pull-request" || composerTrigger.query.length === 0) {
       return null;

@@ -353,6 +353,7 @@ export function useComposerCommandMenu({
     environmentId,
     projectId: pullRequestProjectId,
     repository: pullRequestRepository,
+    selectedRepository: pullRequestRepositoryIdentity?.displayName ?? null,
     threadPullRequests,
     query: trigger?.kind === "pull-request" ? trigger.query : null,
   });
@@ -375,7 +376,7 @@ export function useComposerCommandMenu({
         },
         label: `#${entry.number}`,
         description: `${entry.isDraft ? "Draft" : entry.state} · ${
-          entry.repository.toLowerCase() === pullRequestRepository?.toLowerCase()
+          entry.repository.toLowerCase() === pullRequestSearch.repository?.toLowerCase()
             ? ""
             : `${entry.repository} · `
         }${entry.title}`,
