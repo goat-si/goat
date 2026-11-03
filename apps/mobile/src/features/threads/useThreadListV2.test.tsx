@@ -33,6 +33,8 @@ vi.mock("../../state/olderSettledShelf", () => ({
   useOlderSettledShelf: () => ({ isListed: () => true, unloadedCount: () => 0 }),
   useOlderSettledShelfGrowth: () => {},
 }));
+// Launcher family reads go through the live connection runtime.
+vi.mock("./remoteLauncherReads", () => ({ useRemoteLauncherReads: () => {} }));
 
 import { mobilePreferencesAtom } from "../../state/preferences";
 import { environmentThreadShells } from "../../state/threads";
