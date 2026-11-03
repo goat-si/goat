@@ -210,12 +210,7 @@ export default defineRule({
         }
       },
       VariableDeclarator(node) {
-        if (
-          !node.init ||
-          node.parent.type !== "VariableDeclaration" ||
-          node.parent.kind !== "const"
-        )
-          return;
+        if (!node.init) return;
         const base = path(node.init);
         if (!base) return;
         const variables = context.sourceCode.getDeclaredVariables(node);

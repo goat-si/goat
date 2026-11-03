@@ -54,6 +54,10 @@ describe("goat/guard-error-emitters", () => {
     ["computed member", `import * as CP from "node:child_process"; CP["spawn"]("x");`],
     ["exported alias", `import * as CP from "node:child_process"; export const run = CP.spawn;`],
     ["let alias", `import * as CP from "node:child_process"; let run = CP.spawn; run("x");`],
+    [
+      "let destructure",
+      `import * as CP from "node:child_process"; let { spawn } = CP; spawn("x");`,
+    ],
     ["destructure", `import * as CP from "node:child_process"; const { fork } = CP; fork("x");`],
     ["require", `const CP = require("node:child_process"); CP.spawn("x");`],
     ["dynamic import", `const CP = await import("node:child_process"); CP.spawn("x");`],
