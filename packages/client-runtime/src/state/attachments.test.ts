@@ -55,6 +55,41 @@ const uploadInput: AttachmentCreateUploadUrlInput = {
 };
 
 describe("runAttachmentUploadCycle", () => {
+  it("waits for pending upload deletion when cancelled after minting", async () => {
+    const started = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    let settled = false;
+    const result = runAttachmentUploadCycle({
+      registry,
+      createUploadUrl: makeCreateUploadUrl("pending-held"),
+      remove: {
+        label: "test:remove-held",
+        run: async () => {
+          started.resolve();
+          await finish.promise;
+          return AsyncResult.success(undefined);
+        },
+      },
+      environmentId,
+      upload: uploadInput,
+      resolveUploadUrl: () => "https://environment.test/upload",
+      transport: () => {
+        throw new Error("transport must not run after cancel");
+      },
+      onMinted: () => "cancel",
+    }).then((value) => {
+      settled = true;
+      return value;
+    });
+    await started.promise;
+    await Promise.resolve();
+    try {
+      expect(settled).toBe(false);
+    } finally {
+      finish.resolve();
+    }
+    expect(await result).toEqual({ status: "cancelled", attachmentId: "pending-held" });
+  });
   it("deletes the fresh mint when the caller cancels at onMinted", async () => {
     removeCalls.length = 0;
     const result = await runAttachmentUploadCycle({
