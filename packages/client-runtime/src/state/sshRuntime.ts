@@ -58,6 +58,15 @@ export function sshRuntimeBuildOrder(status: SshHostStatus) {
       );
 }
 
+/** Whether the host can accept a runtime update from this app. */
+export function sshRuntimeCanBeUpdated(status: SshHostStatus) {
+  return !(
+    (status.state === "ready" || status.state === "providers_not_ready") &&
+    status.detail &&
+    !status.refreshDeferred
+  );
+}
+
 export function sshRuntimePhaseText(phase: SshRuntimePhase): string {
   switch (phase) {
     case "connecting":
