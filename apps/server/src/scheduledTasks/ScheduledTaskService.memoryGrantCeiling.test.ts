@@ -6,6 +6,7 @@ import {
   ProviderDriverKind,
   EnvironmentAuthorizationError,
   EnvironmentId,
+  GitCommandError,
   Project,
   ProviderInstanceId,
   ScheduledTaskId,
@@ -231,6 +232,16 @@ it.effect(
           databaseLayer,
           Layer.mock(Git.GitVcsDriver)({
             listWorktreePaths: () => Effect.succeed([project.workspaceRoot]),
+            resolvePrimaryRemoteName: (cwd) =>
+              Effect.fail(
+                new GitCommandError({
+                  operation: "GitVcsDriver.testkit",
+                  command: "git remote",
+                  cwd,
+                  detail: "No remote in the test fixture.",
+                }),
+              ),
+            resolveCommit: () => Effect.succeed({ commitSha: "testkit-base" }),
           }),
           NodeServices.layer,
           delivery,
