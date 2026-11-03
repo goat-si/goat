@@ -24,6 +24,7 @@ import { resolveServiceLauncherMode } from "../cloud/serviceLauncherClient.ts";
 import * as ServerConfig from "../config.ts";
 import { expandHomePath, resolveBaseDir } from "../os-jank.ts";
 import { isProcessAlive, readPersistedServerRuntimeState } from "../serverRuntimeState.ts";
+import { resolveFromOriginalWorkingDirectory } from "./serverWorkingDirectory.ts";
 
 const modeFlag = Flag.Literals("mode", ServerConfig.RuntimeMode.literals).pipe(
   Flag.withDescription("Runtime mode. `desktop` keeps loopback defaults unless overridden."),
@@ -87,7 +88,7 @@ export const traceFileConfig = Config.String("GOAT_TRACE_FILE").pipe(
   Config.option,
   Config.map(Option.getOrUndefined),
 );
-export const traceMaxFilesConfig = Config.Int("GOAT_TRACE_MAX_FILES").pipe(Config.withDefault(10));
+export const traceMaxFilesConfig = Config.Int("GOAT_TRACE_MAX_FILES").pipe(Config.withDefault(30));
 
 const EnvServerConfig = Config.all({
   logLevel: Config.LogLevel("GOAT_LOG_LEVEL").pipe(Config.withDefault("Info")),
@@ -251,6 +252,7 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
     readonly startupPresentation?: ServerConfig.StartupPresentation;
     readonly forceAutoBootstrapProjectFromCwd?: boolean;
     readonly rejectRunningServer?: boolean;
+    readonly originalCwd?: string | undefined;
   },
 ) {
   const { findAvailablePort } = yield* NetService.NetService;
@@ -313,18 +315,28 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
     normalizedFlags.baseDir,
     Option.fromUndefinedOr(env.goatHome),
   ).pipe(Option.filter((value) => value.trim().length > 0));
-  const baseDir = yield* resolveBaseDir(
-    Option.getOrUndefined(
-      resolveOptionPrecedence(
-        explicitBaseDir,
-        Option.fromUndefinedOr(bootstrap?.[GOAT_DESKTOP_BOOTSTRAP_HOME_KEY]),
-      ),
+  const rawBaseDir = Option.getOrUndefined(
+    resolveOptionPrecedence(
+      explicitBaseDir,
+      Option.fromUndefinedOr(bootstrap?.[GOAT_DESKTOP_BOOTSTRAP_HOME_KEY]),
     ),
+  );
+  const baseDir = yield* resolveBaseDir(
+    rawBaseDir === undefined
+      ? undefined
+      : resolveFromOriginalWorkingDirectory(rawBaseDir, options?.originalCwd),
     // Same rule as deriveServerPaths: an implicit dev run reads <home>/dev.
     devUrl !== undefined && Option.isNone(explicitBaseDir) ? "dev" : "userdata",
   );
   const rawCwd = Option.getOrElse(normalizedFlags.cwd, () => process.cwd());
-  const cwd = path.resolve(yield* expandHomePath(rawCwd.trim()));
+  const cwd = path.resolve(
+    yield* expandHomePath(
+      resolveFromOriginalWorkingDirectory(
+        rawCwd.trim(),
+        Option.isSome(normalizedFlags.cwd) ? options?.originalCwd : undefined,
+      ),
+    ),
+  );
   const derivedPaths = yield* ServerConfig.deriveServerPaths(baseDir, devUrl, {
     baseDirIsExplicit: Option.isSome(explicitBaseDir),
   });
@@ -365,6 +377,7 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
   const desktopBootstrapToken = bootstrap?.desktopBootstrapToken;
   const desktopBootstrapSecret = bootstrap?.desktopBootstrapSecret;
   const shellEnvironmentPrepared = bootstrap?.shellEnvironmentPrepared;
+  const desktopStopIntentPath = bootstrap?.desktopStopIntentPath;
   const desktopTelemetryFd = bootstrap?.desktopTelemetryFd;
   const desktopTelemetryControlFd = bootstrap?.desktopTelemetryControlFd;
   const desktopBrowserFd = bootstrap?.desktopBrowserFd;
@@ -495,6 +508,7 @@ export const resolveServerConfig = Effect.fn("config.resolveServerConfig")(funct
     desktopBootstrapToken,
     ...(desktopBootstrapSecret === undefined ? {} : { desktopBootstrapSecret }),
     ...(shellEnvironmentPrepared === undefined ? {} : { shellEnvironmentPrepared }),
+    desktopStopIntentPath,
     desktopTelemetryFd,
     desktopTelemetryControlFd,
     desktopBrowserFd,

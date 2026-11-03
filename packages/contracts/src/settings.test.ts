@@ -952,3 +952,12 @@ describe("destination rail client settings", () => {
     expect(encodeClientSettings(settings).destinationRail).toEqual(saved);
   });
 });
+
+it("validates the per-agent memory limit setting", () => {
+  expect(decodeServerSettings({}).agentMemoryLimitGiB).toBeNull();
+  expect(decodeServerSettingsPatch({ agentMemoryLimitGiB: 0 }).agentMemoryLimitGiB).toBe(0);
+  expect(decodeServerSettingsPatch({ agentMemoryLimitGiB: 1024 }).agentMemoryLimitGiB).toBe(1024);
+  expect(() => decodeServerSettingsPatch({ agentMemoryLimitGiB: -1 })).toThrow();
+  expect(() => decodeServerSettingsPatch({ agentMemoryLimitGiB: 1025 })).toThrow();
+  expect(() => decodeServerSettingsPatch({ agentMemoryLimitGiB: 1.5 })).toThrow();
+});

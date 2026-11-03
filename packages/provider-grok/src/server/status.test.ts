@@ -6,6 +6,9 @@ import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import { writeFakeCli } from "@goat/provider-testing/fakeCli";
 import * as TestProviderHost from "@goat/provider-testing/TestProviderHost";
 import * as Effect from "effect/Effect";
+import * as PlatformError from "effect/PlatformError";
+import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import { vi } from "vite-plus/test";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
@@ -42,6 +45,51 @@ const fakeGrok = (directory: string, markerPath: string) =>
   });
 
 it.layer(layer)("checkGrokProviderStatus", (it) => {
+  it.effect("reports a deleted process cwd as a working directory failure", () =>
+    Effect.gen(function* () {
+      using _cwd = vi.spyOn(process, "cwd").mockImplementation(() => {
+        throw Object.assign(new Error("deleted"), { code: "ENOENT" });
+      });
+      const spawner = ChildProcessSpawner.make(() =>
+        Effect.fail(
+          PlatformError.systemError({
+            _tag: "NotFound",
+            module: "ChildProcess",
+            method: "spawn",
+            cause: { code: "ENOENT" },
+          }),
+        ),
+      );
+      const snapshot = yield* checkGrokProviderStatus(
+        decodeGrokSettings({ enabled: true }),
+        {},
+      ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
+      expect(snapshot.installed).toBe(true);
+      expect(snapshot.message).toContain("working directory");
+    }),
+  );
+  it.effect("reports an inaccessible inherited cwd instead of a missing executable", () =>
+    Effect.gen(function* () {
+      const cwd = "/goat-test-missing-grok-cwd-497";
+      using _cwd = vi.spyOn(process, "cwd").mockReturnValue(cwd);
+      const spawner = ChildProcessSpawner.make(() =>
+        Effect.fail(
+          PlatformError.systemError({
+            _tag: "NotFound",
+            module: "ChildProcess",
+            method: "spawn",
+            cause: { code: "ENOENT" },
+          }),
+        ),
+      );
+      const snapshot = yield* checkGrokProviderStatus(
+        decodeGrokSettings({ enabled: true }),
+        {},
+      ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
+      expect(snapshot.installed).toBe(true);
+      expect(snapshot.message).toContain(cwd);
+    }),
+  );
   it.effect("reports ready enough to sign in when a stored key is injected", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

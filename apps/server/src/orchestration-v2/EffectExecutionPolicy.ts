@@ -1,12 +1,12 @@
 import type { OrchestrationEffectRequestV2 } from "./EffectOutbox.ts";
 
-export type EffectLane = "general" | "control" | "cleanup";
+export type EffectLane = "general" | "control" | "cleanup" | "start";
 
 export const EFFECT_LANES = {
   "provider-runtime.continue": "general",
   "provider-session.detach": "control",
   "provider-turn.reattach": "general",
-  "provider-turn.start": "general",
+  "provider-turn.start": "start",
   "provider-turn.interrupt": "control",
   "provider-turn.steer": "general",
   "provider-turn.restart": "general",

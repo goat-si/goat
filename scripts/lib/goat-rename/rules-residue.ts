@@ -238,6 +238,7 @@ export const RESIDUE_KEEP_RULES: readonly KeepRule[] = [
     [
       "packages/ssh/src/runtimeMaintenanceScripts.ts",
       "packages/ssh/src/tunnel.ts",
+      "apps/server/src/cli/sshRuntimeSupervisor.ts",
       "apps/server/src/cloud/sshRuntimeAutoUpdate.ts",
       "docs/internals/remote-updates.md",
       "structure/ssh.md",

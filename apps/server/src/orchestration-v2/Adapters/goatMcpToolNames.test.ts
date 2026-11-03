@@ -99,6 +99,8 @@ describe("Claude approval of GOAT tools", () => {
 
   it("holds a memory tool to this credential's grants, directly or through goat_call", () => {
     const cases = [
+      ["goat_memory_recall", true, grants.none, "deny"],
+      ["goat_memory_recall", true, grants.read, "allow"],
       ["goat_memory_search", true, grants.none, "deny"],
       ["goat_memory_search", true, grants.read, "allow"],
       ["goat_memory_search", false, grants.read, "ask"],

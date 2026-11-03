@@ -15,6 +15,7 @@ import {
   threadPullRequestKeyOf,
 } from "../sourceControl/threadPullRequests.ts";
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
+import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -718,7 +719,10 @@ export const make = Effect.gen(function* () {
     forkParked(
       hold.awaitRelease.pipe(
         Effect.andThen(
-          sweep.pipe(Effect.repeat(Schedule.spaced(`${SWEEP_MINUTES} minutes`)), Effect.asVoid),
+          NodeSqliteClient.backgroundReads(sweep).pipe(
+            Effect.repeat(Schedule.spaced(`${SWEEP_MINUTES} minutes`)),
+            Effect.asVoid,
+          ),
         ),
       ),
     );

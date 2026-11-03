@@ -27,14 +27,21 @@ import {
   type ChannelOutboundMessage,
   type ChannelReplyAddress,
   type ChannelRequester,
+  type ChatAttachment,
+  getProviderAttachmentLimitError,
   type RuntimeMode,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import type * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 
+import type * as AttachmentFileLeases from "../assets/AttachmentFileLeases.ts";
+import type * as ServerConfig from "../config.ts";
+import * as AttachmentClaims from "../orchestration-v2/AttachmentClaims.ts";
+import type * as DocumentText from "../provider/DocumentText.ts";
 import * as ChannelBotTimeline from "./ChannelBotTimeline.ts";
 import type { ChannelConnectionOwner, ChannelIngressContext } from "./ChannelIngressContext.ts";
 import * as ChannelBotHome from "./ChannelBotHome.ts";
@@ -57,6 +64,15 @@ export const GOAT_CONNECTION_ID = "goat";
 export const MCP_CONNECTION_ID = "mcp";
 /** The owner's GOAT bot is one conversation, also across a bot thread replaced after deletion. */
 const GOAT_CONVERSATION_KEY = "goat-bot";
+
+/**
+ * The GOAT bot takes only files this server just received as uploads: a node hands the provider
+ * any stored attachment it is named, so another thread's file must not be named here.
+ */
+const admitsGoatAttachments = (attachments: ReadonlyArray<ChatAttachment>) =>
+  attachments.every(AttachmentClaims.attachmentIsPendingUpload) &&
+  new Set(attachments.map((attachment) => attachment.id)).size === attachments.length &&
+  getProviderAttachmentLimitError(attachments) === undefined;
 
 export class ChannelGateway extends Context.Service<
   ChannelGateway,
@@ -240,6 +256,28 @@ const make = Effect.gen(function* () {
   const registry = yield* ChannelTransport.ChannelTransportRegistry;
   const timeline = yield* ChannelBotTimeline.ChannelBotTimeline;
   const wake = yield* ChannelWake.ChannelWake;
+  const attachmentServices = yield* Effect.context<
+    | ServerConfig.ServerConfig
+    | FileSystem.FileSystem
+    | DocumentText.DocumentText
+    | AttachmentFileLeases.AttachmentFileLeases
+  >();
+
+  /** Copies a person's uploads into the bot thread, so the bot and its session keep them. */
+  const claimForBot = (threadId: string, attachments: ReadonlyArray<ChatAttachment>) =>
+    AttachmentClaims.claimPendingAttachments({ threadId, attachments }).pipe(
+      Effect.tapError((cause) =>
+        Effect.logWarning("GOAT bot attachment claim failed", { cause: cause.message }),
+      ),
+      Effect.mapError(() => new ChannelGatewayError({ reason: "invalid_input" })),
+      Effect.provideContext(attachmentServices),
+    );
+  const releaseClaims = (claimed: AttachmentClaims.ClaimedAttachments | undefined) =>
+    claimed === undefined
+      ? Effect.void
+      : AttachmentClaims.releaseClaimedAttachments(claimed.claimedPaths).pipe(
+          Effect.provideContext(attachmentServices),
+        );
 
   /** Checks that the caller may speak for this channel, conversation, and reply address. */
   const checkCaller = (input: ChannelIngestInput, context: ChannelIngressContext) =>
@@ -258,7 +296,7 @@ const make = Effect.gen(function* () {
             return yield* forbidden();
           }
           if (input.conversationKey !== address.threadId) return yield* forbidden();
-          if (input.attachments.length > 0) {
+          if (!admitsGoatAttachments(input.attachments)) {
             return yield* new ChannelGatewayError({ reason: "invalid_input" });
           }
           return;
@@ -349,6 +387,7 @@ const make = Effect.gen(function* () {
             type: "message",
             role: "user",
             text: input.text,
+            ...(input.attachments.length === 0 ? {} : { attachments: input.attachments }),
             meta: {
               conversationId: result.conversationId,
               originKind: "goat",
@@ -389,13 +428,28 @@ const make = Effect.gen(function* () {
         idempotencyKey: stored.idempotencyKey,
       });
       const acceptedAt = DateTime.formatIso(yield* DateTime.now);
+      // An input not stored yet claims its uploads first, so the stored copy names files that
+      // last; the content hash stays over the uploads as sent, so a retry is the same input.
+      const known =
+        stored.kind === "goat" && stored.attachments.length > 0
+          ? yield* ledger.getInput(inputId).pipe(Effect.mapError(ledgerFailure))
+          : undefined;
+      const claimed =
+        stored.kind === "goat" &&
+        stored.replyAddress.kind === "goat" &&
+        stored.attachments.length > 0 &&
+        known === undefined
+          ? yield* claimForBot(stored.replyAddress.threadId, stored.attachments)
+          : undefined;
+      const message =
+        claimed === undefined ? stored : { ...stored, attachments: claimed.attachments };
       const result = yield* ledger
         .acceptInput({
           ownerId: context.ownerId,
           inputId,
           conversationId,
           bindingId: bindingIdFor(conversationId, replyAddressKey(input.replyAddress)),
-          message: stored,
+          message,
           contentHash: contentHashFor(stored),
           requester,
           acceptedAt,
@@ -411,12 +465,22 @@ const make = Effect.gen(function* () {
               }
             : {}),
         })
-        .pipe(Effect.mapError(ledgerFailure));
+        .pipe(
+          Effect.mapError(ledgerFailure),
+          Effect.tapError(() => releaseClaims(claimed)),
+        );
+      if (result.duplicate || result.state === "rejected") yield* releaseClaims(claimed);
+      const recordedMessage =
+        known?.message ??
+        (result.duplicate && stored.attachments.length > 0
+          ? (yield* ledger.getInput(result.inputId).pipe(Effect.mapError(ledgerFailure)))?.message
+          : undefined) ??
+        message;
       // A retry after a crash between storing and recording finds no sequence and records again;
       // the record's ids are fixed, so the bot shows the message once.
       const recorded =
         result.timelineSequence === undefined && result.state !== "rejected"
-          ? yield* recordBotInput(input, result)
+          ? yield* recordBotInput(recordedMessage, result)
           : result;
       yield* wake.wake;
       return recorded;

@@ -1,154 +1,28 @@
-import * as Settings from "../serverSettings.ts";
 import { assert, it } from "@effect/vitest";
 import * as M from "@goat/contracts";
 import * as Renderer from "@goat/provider-core/server/memoryContext";
-import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
-import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as TestClock from "effect/testing/TestClock";
-import * as Projection from "../orchestration-v2/ProjectionStore.ts";
-import * as Environment from "../environment/ServerEnvironment.ts";
-import * as Repository from "../project/RepositoryIdentityResolver.ts";
-import { runMigrations } from "../persistence/Migrations.ts";
 import * as Store from "./MemoryStore.ts";
 import * as Service from "./MemoryService.ts";
-import * as Quota from "./MemoryQuotaService.ts";
-import * as Sync from "./MemorySyncService.ts";
 import * as Snapshot from "./MemorySnapshot.ts";
+import {
+  id,
+  space,
+  environmentId,
+  threadId,
+  runId,
+  projectId,
+  input,
+  fixture,
+  project,
+} from "./MemorySnapshot.testkit.ts";
 
 const encodeSnapshotJson = Schema.encodeEffect(Schema.fromJsonString(M.MemoryContextSnapshot));
-const id = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
-const space = M.MemorySpaceId.make(id(1));
-const environmentId = M.EnvironmentId.make("fixture");
-const threadId = M.ThreadId.make("thread");
-const runId = M.RunId.make("run");
-const projectId = M.ProjectId.make("project");
-const input = (n: number, scope: M.MemoryScope = { kind: "user" }): M.MemoryUpsertInput => ({
-  memorySpaceId: space,
-  memoryId: M.MemoryId.make(id(n)),
-  operationId: M.MemoryOperationId.make(id(n + 10000)),
-  expectedHeads: [],
-  scope,
-  assertionKind: "inference",
-  payload: { text: "synthetic & <memory> " + n, evidence: [], derivedFromMemoryRevisions: [] },
-  baseBoundary: null,
-});
-const fixture = (
-  options: {
-    repository?: M.RepositoryIdentity;
-    foreignRevisionSpace?: M.MemorySpaceId;
-  } = {},
-) => {
-  let pageReads = 0;
-  const pageScopes: M.MemoryScope["kind"][] = [];
-  let policy: Snapshot.MemorySnapshotPolicy = { grant: "read", policyEpoch: 1 };
-  let active = true;
-  let currentRunId = runId;
-  let ready = true;
-  // The projection boundary supplies only the shell fields read by this service.
-  const shell = {
-    id: threadId,
-    projectId,
-    activeRunId: runId,
-    activityRunStatus: "running",
-  } as M.OrchestrationV2ThreadShell;
-  const database = Layer.effectDiscard(runMigrations()).pipe(
-    Layer.provideMerge(NodeSqliteClient.layer({ filename: ":memory:" })),
-  );
-  const store = Store.layer.pipe(Layer.provideMerge(database));
-  const identity = Layer.succeed(Environment.ServerEnvironmentIdentity, {
-    getEnvironmentId: Effect.succeed(environmentId),
-  });
-  const serviceBase = Service.layer.pipe(
-    Layer.provide(
-      Layer.succeed(Settings.MemoryHubCommittedSettings, {
-        read: Effect.succeed({
-          provenance: null,
-          settings: { mode: "hub" as const, memorySpaceId: space },
-          version: 1,
-        }),
-      }),
-    ),
-    Layer.provideMerge(Quota.layer.pipe(Layer.provideMerge(store))),
-    Layer.provideMerge(identity),
-    Layer.provide(
-      Layer.mock(Repository.RepositoryIdentityResolver)({
-        resolve: () => Effect.succeed(options.repository ?? null),
-      }),
-    ),
-  );
-  const service = Layer.effect(
-    Service.MemoryService,
-    Effect.gen(function* () {
-      const original = yield* Service.MemoryService;
-      return Service.MemoryService.of({
-        ...original,
-        readContextRevisions: (space, ids, permit) =>
-          original
-            .readContextRevisions(space, ids, permit)
-            .pipe(
-              Effect.map((page) =>
-                options.foreignRevisionSpace
-                  ? { ...page, memorySpaceId: options.foreignRevisionSpace }
-                  : page,
-              ),
-            ),
-        readContextCandidates: (input, permit) =>
-          Effect.sync(() => {
-            pageReads++;
-            pageScopes.push(input.scope?.kind ?? "user");
-          }).pipe(Effect.andThen(original.readContextCandidates(input, permit))),
-      });
-    }),
-  ).pipe(Layer.provideMerge(serviceBase));
-  const live = Snapshot.layer.pipe(
-    Layer.provideMerge(service),
-    Layer.provide(
-      Layer.mock(Projection.ProjectionStoreV2)({
-        getThreadShell: (requested) =>
-          Effect.sync(() =>
-            active ? { ...shell, id: requested, activeRunId: currentRunId } : null,
-          ),
-      }),
-    ),
-    Layer.provide(
-      Layer.mock(Sync.MemorySyncService)({
-        readLocalReadiness: () =>
-          Effect.sync(() => ({
-            memorySpaceId: space,
-            bootstrap: ready ? ("ready" as const) : ("staging" as const),
-          })),
-      }),
-    ),
-  );
-  return {
-    live,
-    pageReads: () => pageReads,
-    pageScopes,
-    policy: () => policy,
-    currentPolicy: Effect.sync(() => policy),
-    setPolicy: (value: Snapshot.MemorySnapshotPolicy) => {
-      policy = value;
-    },
-    end: () => {
-      active = false;
-    },
-    changeRun: () => {
-      currentRunId = M.RunId.make("replacement-run");
-    },
-    unready: () => {
-      ready = false;
-    },
-  };
-};
-const project = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient;
-  yield* sql`INSERT INTO projection_projects(project_id,title,workspace_root,scripts_json,created_at,updated_at) VALUES (${projectId},'synthetic','/synthetic','[]','2026-10-15','2026-10-15')`;
-});
 it.effect(
   "selects thread/project/user in order, restores only survivors, and fences policy/identity/TTL",
   () => {
@@ -261,6 +135,23 @@ it.effect(
   },
 );
 
+it.effect("delivers the recall briefing without memories and records no lineage for it", () => {
+  const f = fixture();
+  return Effect.gen(function* () {
+    const snapshots = yield* Snapshot.MemorySnapshot;
+    const store = yield* Store.MemoryStore;
+    yield* project;
+    const briefing = yield* snapshots.forThread(threadId, f.policy(), f.currentPolicy);
+    assert.deepStrictEqual(briefing!.items, []);
+    assert.include(Renderer.memoryContextText(briefing), Renderer.MEMORY_BRIEFING);
+    assert.deepStrictEqual(
+      (yield* store.readThreadLineage({ environmentId, threadId }, space)).revisions,
+      [],
+    );
+    const restored = yield* snapshots.revalidate(briefing!, { threadId, runId }, f.currentPolicy);
+    assert.strictEqual(Renderer.memoryContextText(restored), Renderer.memoryContextText(briefing));
+  }).pipe(Effect.provide(f.live));
+});
 it.effect("bounds excluded candidates to ten pages and follows the unfiltered row cursor", () => {
   const f = fixture();
   return Effect.gen(function* () {
@@ -278,7 +169,7 @@ it.effect("bounds excluded candidates to ten pages and follows the unfiltered ro
     assert.deepStrictEqual(omitted!.items, []);
     assert.include(
       Renderer.memoryContextText(omitted),
-      'More GOAT memories exist than fit here; use goat_call {path:"memory.search"} or goat_call {path:"memory.read"} to find them.',
+      'More GOAT memories exist than fit here; use goat_call {path:"memory.recall"} to find them.',
     );
     assert.strictEqual(f.pageReads(), 10);
     // Remove all but a single excluded first page; the next page must reach the eligible row.
@@ -337,7 +228,7 @@ it.effect(
       const framed = Renderer.memoryContextText(selected);
       assert.include(
         framed,
-        'More GOAT memories exist than fit here; use goat_call {path:"memory.search"} or goat_call {path:"memory.read"} to find them.',
+        'More GOAT memories exist than fit here; use goat_call {path:"memory.recall"} to find them.',
       );
       const restored = yield* snapshots.revalidate(selected!, { threadId, runId }, f.currentPolicy);
       assert.strictEqual(Renderer.memoryContextText(restored), framed);
@@ -434,7 +325,12 @@ it.effect(
       }));
       Object.assign(selected!, {
         items: alteredText,
-        renderedText: Renderer.renderMemoryContext(alteredText),
+        renderedText: Renderer.renderMemoryContext(
+          alteredText,
+          false,
+          selected!.protocolVersion,
+          space,
+        ),
       });
       const restored = yield* snapshot.revalidate(selected!, { threadId, runId }, f.currentPolicy);
       assert.strictEqual(restored!.items[0]!.text, input(2).payload.text);
@@ -445,7 +341,12 @@ it.effect(
       )).items.filter((i) => i.memoryId === id(3));
       Object.assign(restored!, {
         items: replacement,
-        renderedText: Renderer.renderMemoryContext(replacement),
+        renderedText: Renderer.renderMemoryContext(
+          replacement,
+          false,
+          restored!.protocolVersion,
+          space,
+        ),
       });
       assert.isUndefined(
         yield* snapshot.revalidate(restored!, { threadId, runId }, f.currentPolicy),
@@ -536,7 +437,15 @@ it.effect("rejects a caller space swap with identical IDs, revisions, scopes and
     assert.strictEqual(foreign.projectionWatermark, selected!.projectionWatermark);
     assert.strictEqual(foreign.items[0]!.revisionId, selected!.items[0]!.revisionId);
     assert.strictEqual(foreign.items[0]!.text, "synthetic foreign body");
-    Object.assign(selected!, { memorySpaceId: other });
+    Object.assign(selected!, {
+      memorySpaceId: other,
+      renderedText: Renderer.renderMemoryContext(
+        selected!.items,
+        false,
+        selected!.protocolVersion,
+        other,
+      ),
+    });
     assert.isUndefined(
       yield* snapshots.revalidate(selected!, { threadId, runId }, f.currentPolicy),
     );

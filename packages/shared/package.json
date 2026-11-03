@@ -3,6 +3,18 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./timedShutdownPhase": {
+      "types": "./src/timedShutdownPhase.ts",
+      "import": "./src/timedShutdownPhase.ts"
+    },
+    "./toolPriority": {
+      "types": "./src/toolPriority.ts",
+      "import": "./src/toolPriority.ts"
+    },
+    "./stallAwareQuiet": {
+      "types": "./src/stallAwareQuiet.ts",
+      "import": "./src/stallAwareQuiet.ts"
+    },
     "./urlCredentialRedaction": {
       "types": "./src/urlCredentialRedaction.ts",
       "import": "./src/urlCredentialRedaction.ts"
@@ -307,6 +319,10 @@
       "types": "./src/cliArgs.ts",
       "import": "./src/cliArgs.ts"
     },
+    "./closedPipe": {
+      "types": "./src/closedPipe.ts",
+      "import": "./src/closedPipe.ts"
+    },
     "./connectAuth": {
       "types": "./src/connectAuth.ts",
       "import": "./src/connectAuth.ts"
@@ -523,6 +539,10 @@
       "types": "./src/nodeSqliteClient.ts",
       "import": "./src/nodeSqliteClient.ts"
     },
+    "./readerAdmission": {
+      "types": "./src/readerAdmission.ts",
+      "import": "./src/readerAdmission.ts"
+    },
     "./orchestrationV2BoundedSnapshot": {
       "types": "./src/orchestrationV2BoundedSnapshot.ts",
       "import": "./src/orchestrationV2BoundedSnapshot.ts"
@@ -654,6 +674,14 @@
     "./mcpResponsePayloads": {
       "types": "./src/mcpResponsePayloads.ts",
       "import": "./src/mcpResponsePayloads.ts"
+    },
+    "./processErrorNet": {
+      "types": "./src/processErrorNet.ts",
+      "import": "./src/processErrorNet.ts"
+    },
+    "./errorGuards": {
+      "types": "./src/errorGuards.ts",
+      "import": "./src/errorGuards.ts"
     },
     "./PtyAdapter": {
       "types": "./src/PtyAdapter.ts",

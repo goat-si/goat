@@ -1,3 +1,5 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeOS from "node:os";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -84,6 +86,11 @@ export const runDaemonWithOptions = (options: OrchestrationEffectDaemonOptions =
         [
           ...Array.from({ length: concurrency }, () =>
             runWorker(worker.runGeneralOnce, worker.nextGeneralClaimableAt, worker.awaitWork),
+          ),
+          ...Array.from(
+            { length: Math.max(2, Math.floor(NodeOS.availableParallelism() / 2)) },
+            () =>
+              runWorker(worker.runStartOnce, worker.nextStartClaimableAt, worker.awaitStartWork),
           ),
           runWorker(worker.runControlOnce, worker.nextControlClaimableAt, worker.awaitControlWork),
           runWorker(worker.runCleanupOnce, worker.nextCleanupClaimableAt, worker.awaitCleanupWork),

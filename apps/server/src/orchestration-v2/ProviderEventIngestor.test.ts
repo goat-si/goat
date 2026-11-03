@@ -1,3 +1,15 @@
+import {
+  modelSelection,
+  CODEX_DRIVER,
+  threadCreatedEvent,
+} from "./ProviderEventIngestor.fixtures.ts";
+export {
+  modelSelection,
+  CODEX_DRIVER,
+  threadCreatedEvent,
+} from "./ProviderEventIngestor.fixtures.ts";
+import { registerAgentOomIngestorCases } from "./ProviderEventIngestor.oomCases.ts";
+import { AgentScope } from "@goat/shared/AgentScope";
 import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
@@ -6,7 +18,6 @@ import {
   CheckpointScopeId,
   MessageId,
   GitCommandError,
-  type ModelSelection,
   NodeId,
   type OrchestrationV2AppThread,
   type OrchestrationV2DomainEvent,
@@ -63,7 +74,7 @@ const layerTestStores = Layer.merge(EventStore.layer, ProjectionStore.layer).pip
   Layer.provide(layerTestDatabase),
 );
 
-const layerTestEventSink = EventSink.layer.pipe(
+export const layerTestEventSink = EventSink.layer.pipe(
   Layer.provide(Layer.mergeAll(layerTestStores, layerTestDatabase)),
 );
 
@@ -72,13 +83,14 @@ const layerGit = GitVcsDriver.layer.pipe(
   Layer.provideMerge(NodeServices.layer),
 );
 
-const layerEmptyInstances = Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
+export const layerEmptyInstances = Layer.mock(ProviderInstanceRegistry.ProviderInstanceRegistry)({
   // @effect-diagnostics-next-line effectSucceedWithVoid:off - Optional instances require undefined rather than void.
   getInstance: () => Effect.succeed(undefined),
 });
-const makeLayerTest = <E>(
+export const makeLayerTest = <E>(
   ingestorEventSink: Layer.Layer<EventSink.EventSinkV2, E>,
   instances = layerEmptyInstances,
+  oomKilled = false,
 ) =>
   Layer.mergeAll(
     instances,
@@ -91,6 +103,10 @@ const makeLayerTest = <E>(
     ProviderEventIngestor.layer.pipe(
       Layer.provide(
         Layer.mergeAll(
+          Layer.succeed(AgentScope, {
+            ...AgentScope.defaultValue(),
+            oomKilled: () => Effect.succeed(oomKilled),
+          }),
           instances,
           layerTestStores,
           ingestorEventSink,
@@ -162,72 +178,6 @@ const makeSharedWorktree = Effect.gen(function* () {
   yield* command(repo, ["worktree", "add", "-b", "t3/abcd1234", worktreePath]);
   return { repo, worktreePath, command };
 });
-const modelSelection = {
-  instanceId: ProviderInstanceId.make("codex"),
-  model: "gpt-5.4",
-} satisfies ModelSelection;
-const CODEX_DRIVER = ProviderDriverKind.make("codex");
-
-function threadCreatedEvent(
-  now: DateTime.Utc,
-): Effect.Effect<
-  OrchestrationV2DomainEvent,
-  IdAllocator.IdAllocatorV2Error,
-  IdAllocator.IdAllocatorV2
-> {
-  return Effect.gen(function* () {
-    const idAllocator = yield* IdAllocator.IdAllocatorV2;
-    const projectId = yield* idAllocator.allocate.project({
-      fixtureName: "provider-event-ingestor",
-    });
-    const threadId = yield* idAllocator.allocate.thread({
-      fixtureName: "provider-event-ingestor",
-      projectId,
-    });
-    const providerThreadId = idAllocator.derive.providerThread({
-      driver: CODEX_DRIVER,
-      nativeThreadId: "native-thread",
-    });
-    const thread: OrchestrationV2AppThread = {
-      createdBy: "user",
-      creationSource: "web",
-      id: threadId,
-      projectId,
-      title: "Provider event ingestor",
-      providerInstanceId: modelSelection.instanceId,
-      modelSelection: modelSelection,
-      runtimeMode: "full-access",
-      interactionMode: "default",
-      branch: null,
-      worktreePath: null,
-      branchPullRequest: null,
-      activeOrderKey: null,
-      activeProviderThreadId: providerThreadId,
-      lineage: {
-        parentThreadId: null,
-        relationshipToParent: null,
-        rootThreadId: threadId,
-      },
-      forkedFrom: null,
-      createdAt: now,
-      updatedAt: now,
-      archivedAt: null,
-      settledOverride: null,
-      settledAt: null,
-      lastVisitedAt: null,
-      deletedAt: null,
-    };
-
-    return {
-      id: yield* idAllocator.allocate.event({ threadId }),
-      type: "thread.created",
-      threadId,
-      occurredAt: now,
-      payload: thread,
-    };
-  });
-}
-
 const layer = it.layer(layerTest);
 
 it.effect("refreshes the failing instance snapshot after a committed usage_limit terminal", () =>
@@ -2517,3 +2467,12 @@ it.effect.each([
     assert.isEmpty(persisted);
   }).pipe(Effect.provide(layerFailingWrites(errors))),
 );
+
+registerAgentOomIngestorCases({
+  makeLayerTest,
+  layerTestEventSink,
+  layerEmptyInstances,
+  threadCreatedEvent,
+  modelSelection,
+  CODEX_DRIVER,
+});

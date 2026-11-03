@@ -49,6 +49,7 @@ export const fixture = (
   let probeFailure: string | undefined;
   let toolFixProbe = "1000\nLinux\nID=debian\n";
   let launchVersion = ARCHIVE.archiveVersion as string;
+  let launchPort = 3773;
   let drainPending = false;
   let drainReplacement: "older" | "capability" = "older";
   let launchDefect = false;
@@ -140,7 +141,7 @@ export const fixture = (
         JSON.stringify({
           status: "ready",
           selectedVersion: launchVersion,
-          remotePort: 3773,
+          remotePort: launchPort,
           serverKind: "managed",
           ...(drainPending
             ? {
@@ -174,6 +175,9 @@ export const fixture = (
     },
     setLaunchVersion: (value: string) => {
       launchVersion = value;
+    },
+    setLaunchPort: (value: number) => {
+      launchPort = value;
     },
     /** The next launches die with a defect, the one failure no typed handler sees. */
     dieOnLaunch: () => {

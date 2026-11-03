@@ -1,3 +1,4 @@
+import { UPDATES_SETTINGS_SEARCH_ITEMS } from "./settingsSearchUpdatesItems";
 import { GOAT_CONNECT_COMING_SOON, isGoatConnectEnabled } from "@goat/shared/goatConnect";
 import { isElectron } from "~/env";
 import { isMacPlatform, isWindowsPlatform, normalizeSearchText } from "~/lib/utils";
@@ -594,38 +595,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
     searchTerms: ["queue steer running turn send default behavior composer"],
   },
-  {
-    id: "provider-update-checks",
-    title: "Provider update checks",
-    to: "/settings/general",
-    searchTerms: ["installed cli versions newer available codex claude cursor grok fx opencode"],
-    scope: "environment-defaults",
-  },
-  {
-    id: "automatic-server-updates",
-    title: "Automatic server updates",
-    to: "/settings/general",
-    scope: "environment-defaults",
-    searchTerms: ["background service stable nightly channel idle automatic update"],
-  },
-  {
-    id: "continue-threads-after-server-update",
-    title: "Continue threads after restarts",
-    to: "/settings/general",
-    scope: "project-defaults",
-    searchTerms: [
-      "resume running active interrupted work restart reboot machine crash desktop update automatically",
-    ],
-  },
-  {
-    id: "background-activity",
-    title: "Background activity",
-    to: "/settings/general",
-    scope: "environment-defaults",
-    searchTerms: [
-      "balanced performance battery saver advanced git fetch provider health refresh host power monitor idle policy",
-    ],
-  },
+  ...UPDATES_SETTINGS_SEARCH_ITEMS,
   {
     id: "new-threads",
     title: "New threads",

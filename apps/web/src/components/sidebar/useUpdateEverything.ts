@@ -20,6 +20,7 @@ import { sshRuntime } from "~/state/sshRuntime";
 import { savedConnectionSshRoute } from "../settings/ConnectionsSettings.logic";
 import { getProviderUpdateRunOutcome } from "../ProviderUpdateLaunchNotification.logic";
 import { openCodexSyncNotes } from "../opencodex/openCodexSync.logic";
+import { sshRuntimeUpdateOutcome } from "./sshRuntimeUpdateOutcome";
 import { useCheckForUpdateWhenHostIsNewer } from "./newerHostUpdateCheck";
 import { useProviderUpdates } from "../ProviderUpdatesAction";
 import {
@@ -107,21 +108,8 @@ export async function updateSshRuntimeWhenIdle(
     if (value === null) return { status: "skipped" };
     if (value.kind === "error") return { status: "failed", message: value.message };
     const status = value.status;
-    if (status?.state === "failed") {
-      return { status: "failed", message: status.failure?.reason ?? "The runtime update failed." };
-    }
-    if (status?.state === "ready" && status.runtimeVersion === status.requestedVersion) {
-      return { status: "updated" };
-    }
-    if (status?.state === "ready" || status?.state === "update_blocked") {
-      return {
-        status: "failed",
-        message:
-          status.state === "update_blocked"
-            ? "Another GOAT server is running on that host."
-            : `Still on ${status.runtimeVersion ?? "an older runtime"}`,
-      };
-    }
+    const outcome = sshRuntimeUpdateOutcome(status);
+    if (outcome !== null) return outcome;
     // `update_waiting` and `preparing`: the host waits for idle or is mid-install.
     const waiting = status?.state === "update_waiting";
     const key = runtime.environmentId;

@@ -79,6 +79,12 @@ import { runDesktopObserve } from "./DesktopObserveLatency.ts";
 import { type DesktopPages, type DesktopKeptTree, type DesktopRow } from "./DesktopObserveRead.ts";
 import { makeMenuBarExtras, makeSelectText } from "./DesktopSelectionExtras.ts";
 import { confirmByTree, type TreeBaseline } from "./DesktopTreeEffect.ts";
+import {
+  browserInputNeeds,
+  browserPageRefusal,
+  recordBrowserSurfaceReads,
+  type BrowserSurfaceHolder,
+} from "./BrowserAppSurfaceGuard.ts";
 const isJson = Schema.is(Schema.Json);
 /** Whether args fit the primitive channel's byte cap, measured as its schema measures them. */
 const withinPrimitiveCap = (args: Record<string, unknown>) =>
@@ -136,6 +142,8 @@ export interface BoundWindow {
   frames?: ReadonlyMap<string, Placed>;
   /** Element roles, labels and table-cell ancestry from the tree behind observationId. */
   elementsByToken?: ReadonlyMap<string, GuardElement>;
+  /** A browser's tree reads by driver snapshot for its page guard; input to the process ends them. */
+  browserSurface?: BrowserSurfaceHolder["browserSurface"];
   /** Set when the previous input on this window clicked a table cell. */
   lastClickedTableCell?: number | string;
   sheetTrigger?: SheetTrigger;
@@ -343,6 +351,7 @@ export const createDesktopTargetHost = (deps: {
     delete bound.pages;
     delete bound.lastTree;
     delete bound.elementsByToken;
+    delete bound.browserSurface;
     bound.screenshots?.clear();
     delete bound.latestScreenshot;
     bound.pointsStale = "restart";
@@ -604,7 +613,7 @@ export const createDesktopTargetHost = (deps: {
   const observeDeps = {
     observations,
     targets,
-    boundRequest,
+    boundRequest: recordBrowserSurfaceReads(boundRequest),
     listWindows: (bound: BoundWindow, call: ScreenHostCall, context: ScreenHostContext) =>
       request("list_windows", { pid: bound.pid }, call, context),
     knownWindows: (bound: BoundWindow, context: ScreenHostContext) =>
@@ -645,12 +654,15 @@ export const createDesktopTargetHost = (deps: {
       for (const each of targets.values()) {
         delete each.fullRows;
         delete each.lastTree;
+        delete each.browserSurface;
       }
       return yield* launch(call, callArgs(call.args), context);
     }
     const bound = resolve(call, context);
     if (!bound) return yield* Effect.fail(staleTarget(call.targetRef?.id));
     bound.strictInputGuards = strict();
+    const pageInput = browserPageRefusal(bound, call, (el) => tokenOf(el, bound));
+    if (pageInput) return yield* Effect.fail(pageInput);
     // Any call here may change this process's windows, so only an input right after a read of its
     // own window compares with it; another binding's input on the process voids that read too.
     const baseline = bound.fullRows;
@@ -658,6 +670,7 @@ export const createDesktopTargetHost = (deps: {
       if (each.pid === bound.pid) {
         delete each.fullRows;
         delete each.lastTree;
+        delete each.browserSurface;
       }
     if (call.method === "select_text")
       return yield* selectText(bound, callArgs(call.args), call, context);
@@ -791,7 +804,10 @@ export const createDesktopTargetHost = (deps: {
     bound.pointsStale ??= "input";
     if (admission.clickedTableCell !== undefined)
       bound.lastClickedTableCell = admission.clickedTableCell;
-    const needs = elementToken !== undefined ? "element" : pointerResolved.needs;
+    const needs =
+      elementToken !== undefined
+        ? "element"
+        : browserInputNeeds(bound, call.method, pointerResolved.needs);
     return yield* withInputEvidence(
       tool,
       forwarded,
@@ -879,9 +895,15 @@ export const createDesktopTargetHost = (deps: {
     "DesktopTargetHost.dispatchBatch",
   )(function* (calls, context, markDispatched) {
     const guarded = strict();
+    let inspected = 0;
     const refused = preflightDesktopBatch(calls, (call) => {
       const member = resolve(call, context);
       if (member) member.strictInputGuards = guarded;
+      // Members after the first meet a tree the earlier ones may have changed.
+      const fresh = inspected++ === 0;
+      const pageInput =
+        member && browserPageRefusal(member, call, (el) => tokenOf(el, member), fresh);
+      if (pageInput) return { ok: false as const, error: pageInput };
       return inspectBatchMember(call.method, callArgs(call.args), member, deps.platform, tokenOf);
     });
     if (refused !== undefined) return refused;

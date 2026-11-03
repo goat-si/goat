@@ -17,7 +17,7 @@ import {
   findProjectForRepository,
   findScopedProject,
   matchesPullRequestFilters,
-  pullRequestDiffStatKey,
+  pullRequestDiffStatOf,
   pullRequestEntryKey,
   pullRequestEntryViewer,
   pullRequestEnvironmentSetKey,
@@ -293,7 +293,8 @@ export function usePullRequestDisplayGroups({
       sort,
       text,
       (entry) =>
-        entry.additions + entry.deletions > 0 || statsByRow.has(pullRequestDiffStatKey(entry)),
+        entry.additions + entry.deletions > 0 ||
+        pullRequestDiffStatOf(statsByRow, entry) !== undefined,
       involvement,
     );
   })();

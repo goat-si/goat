@@ -63,13 +63,21 @@ GOAT_WORDS
   # Starts a program outside the SSH session's job, appending its output to $1; prints its PID.
   # The program and arguments are passed as given, so callers convert paths with cygpath -w.
   windows_spawn_detached() {
+    win_cwd=
+    if [ -n "${"${USERPROFILE:-}"}" ]; then win_cwd="$(cygpath -u "$USERPROFILE" 2>/dev/null)" || win_cwd=; fi
+    if [ -z "$win_cwd" ] || [ ! -d "$win_cwd" ] || ! (cd "$win_cwd") 2>/dev/null; then
+      [ -n "${"${SystemDrive:-}"}" ] || return 1
+      win_cwd="$(cygpath -u "$SystemDrive/")" || return 1
+      [ -d "$win_cwd" ] || return 1
+    fi
+    win_cwd="$(cygpath -w "$win_cwd")" || return 1
     win_log="$(cygpath -w "$1")" || return 1; shift
     win_args=
     for win_word in "$@"; do
       win_args="$win_args$win_word
 "
     done
-    win_pid="$(GOAT_SPAWN_LOG="$win_log" GOAT_SPAWN_ARGS="$win_args" GOAT_SPAWN_ENV='T3CODE_NO_BROWSER=1' MSYS2_ARG_CONV_EXCL='*' powershell.exe -NoProfile -NonInteractive -EncodedCommand '${encodePowerShellCommand(WINDOWS_DETACHED_SPAWN_POWERSHELL)}' </dev/null)" || return 1
+    win_pid="$(GOAT_SPAWN_CWD="$win_cwd" GOAT_SPAWN_LOG="$win_log" GOAT_SPAWN_ARGS="$win_args" GOAT_SPAWN_ENV='T3CODE_NO_BROWSER=1' MSYS2_ARG_CONV_EXCL='*' powershell.exe -NoProfile -NonInteractive -EncodedCommand '${encodePowerShellCommand(WINDOWS_DETACHED_SPAWN_POWERSHELL)}' </dev/null)" || return 1
     printf '%s\n' "$win_pid" | tr -d '\r'
   }
 else
@@ -454,8 +462,18 @@ cleanup_runner_next() {
   release_recovery_lock
   release_replacement_lock
   rm -f "$RUNNER_CANDIDATE_FILE" "$RUNNER_CANDIDATE_FILE.pin" "$RUNNER_CANDIDATE_FILE.restore"
+  rm -f "$STATE_DIR/run-goat.next.$$" || :
   [ -z "$LEGACY_IDENTITY_LINK" ] || rm -f "$LEGACY_IDENTITY_LINK"
   [ -z "$RETAINED_SNAPSHOT_FILE" ] || rm -f "$RETAINED_SNAPSHOT_FILE"
+}
+sync_runner_alias() {
+  alias_next="$STATE_DIR/run-goat.next.$$"
+  rm -f "$alias_next" || return 1
+  if ! ln "$RUNNER_FILE" "$alias_next" 2>/dev/null; then
+    cp "$RUNNER_FILE" "$alias_next" && chmod 700 "$alias_next" || { rm -f "$alias_next" || :; return 1; }
+  fi
+  if [ "$alias_next" -ef "$STATE_DIR/run-goat.sh" ]; then rm -f "$alias_next"
+  else mv -f "$alias_next" "$STATE_DIR/run-goat.sh" || { rm -f "$alias_next" || :; return 1; }; fi
 }
 trap 'runner_exit=$?; cleanup_runner_next; exit "$runner_exit"' EXIT
 trap 'exit 129' HUP
@@ -518,6 +536,7 @@ publish_selected_runner() {
   }
   check_retained_runner
 @@GOAT_RUNNER_INSTALL@@
+  sync_runner_alias || :
   RUNNER_PUBLISHED=1
 }
 pending_attachment_safe() {

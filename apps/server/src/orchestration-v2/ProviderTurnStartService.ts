@@ -1,3 +1,6 @@
+import { isRegisteredAttach } from "./providerTurnStartHelpers.ts";
+import { withAgentOom } from "./agentOomFailure.ts";
+import { AgentScope } from "@goat/shared/AgentScope";
 import { makeRecreateMissingWorktree } from "./goat/RecreateWorktree.ts";
 import { makeProviderTurnHandoffRecovery } from "./goat/ProviderTurnHandoffRecovery.ts";
 import * as MemorySnapshot from "../memory/MemorySnapshot.ts";
@@ -89,24 +92,15 @@ const isProviderAdapterOpenSessionError = Schema.is(
 export interface ProviderTurnStartServiceV2Shape {
   /**
    * Starts the run's provider turn. When `willRetry` is true, a session open
-   * failure is returned so the caller can retry. A workspace lease deadline
-   * gives contention its own wait budget, independent of normal failures.
+   * failure is returned so the caller can retry. Workspace contention is always returned.
    */
   readonly start: (input: {
     readonly threadId: ThreadId;
     readonly runId: RunId;
     readonly willRetry?: boolean;
-    readonly workspaceLeaseDeadline?: DateTime.Utc;
     readonly reattach?: boolean;
   }) => Effect.Effect<void, ProviderTurnStartError>;
 }
-
-/** A registered cloud task whose first run has not started: that run attaches, never submits. */
-const isRegisteredAttach = (thread: OrchestrationV2ProviderThread | undefined) =>
-  thread?.cloudTask?.attach === "registered" &&
-  thread.firstRunOrdinal === null &&
-  thread.nativeThreadRef !== null &&
-  (thread.cloudTask.status === "running" || thread.cloudTask.status === "submitting");
 
 export class ProviderTurnStartServiceV2 extends Context.Service<
   ProviderTurnStartServiceV2,
@@ -133,6 +127,7 @@ export const layer: Layer.Layer<
 > = Layer.effect(
   ProviderTurnStartServiceV2,
   Effect.gen(function* () {
+    const agentScope = yield* AgentScope;
     const eventSink = yield* EventSink.EventSinkV2;
     const prepareHandoffRecovery = yield* makeProviderTurnHandoffRecovery;
     const idAllocator = yield* IdAllocator.IdAllocatorV2;
@@ -291,7 +286,6 @@ export const layer: Layer.Layer<
       readonly threadId: ThreadId;
       readonly runId: RunId;
       readonly willRetry?: boolean;
-      readonly workspaceLeaseDeadline?: DateTime.Utc;
       readonly reattach?: boolean;
       /** Called once this start attaches a registered cloud task instead of submitting. */
       readonly onAttach?: () => void;
@@ -640,18 +634,21 @@ export const layer: Layer.Layer<
             item: {
               type: "error",
               title: failed.title,
-              failure: makeProviderFailure({
-                cause: failed.error,
-                message:
-                  failed.message ??
-                  knownProviderFailureMessage(failed.error) ??
-                  (nestedCause instanceof Error
-                    ? nestedCause.message
-                    : typeof nestedCause === "string"
-                      ? nestedCause
-                      : failed.error.message),
-                class: "provider_error",
-              }),
+              failure: yield* withAgentOom(
+                input.threadId,
+                makeProviderFailure({
+                  cause: failed.error,
+                  message:
+                    failed.message ??
+                    knownProviderFailureMessage(failed.error) ??
+                    (nestedCause instanceof Error
+                      ? nestedCause.message
+                      : typeof nestedCause === "string"
+                        ? nestedCause
+                        : failed.error.message),
+                  class: "provider_error",
+                }),
+              ).pipe(Effect.provideService(AgentScope, agentScope)),
             },
           });
         },
@@ -688,36 +685,10 @@ export const layer: Layer.Layer<
           }).pipe(Effect.result),
         );
         if (Option.isNone(prepared)) {
-          const reason =
-            "The workspace is busy with checkout removal or preparation. Retry the turn when it finishes.";
-          const now = yield* DateTime.now;
-          const deadlineExceeded =
-            input.workspaceLeaseDeadline !== undefined &&
-            DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(input.workspaceLeaseDeadline);
-          if (
-            !deadlineExceeded &&
-            (input.workspaceLeaseDeadline !== undefined ||
-              input.willRetry === true ||
-              input.reattach === true)
-          ) {
-            return yield* new ProviderTurnStartError({
-              runId,
-              cause: new WorkspaceLeaseBusyError({}),
-            });
-          }
-          yield* settleRunBeforeStart({
-            signal: "workspace-lease-busy",
-            status: "failed",
-            now,
-            providerInstanceId: run.providerInstanceId,
-            itemProviderThreadId: providerThread.id,
-            item: {
-              type: "error",
-              title: "Workspace is busy",
-              failure: makeProviderFailure({ message: reason, class: "validation_error" }),
-            },
+          return yield* new ProviderTurnStartError({
+            runId,
+            cause: new WorkspaceLeaseBusyError({}),
           });
-          return;
         }
         if (prepared.value._tag === "Failure") {
           if (input.willRetry === true) return yield* prepared.value.failure;

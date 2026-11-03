@@ -92,6 +92,72 @@ function makePendingTask(id: string): PendingNewTask {
 }
 
 describe("threadListV2 Priority", () => {
+  const layout = buildThreadListV2Items({
+    threads: [
+      makeThread("active"),
+      makeThread("settled", { settledOverride: "settled", settledAt: NOW }),
+    ],
+    environmentId: null,
+    searchQuery: "",
+    now: NOW,
+  });
+
+  it("marks where the regular roster starts below Priority", () => {
+    const items = buildThreadListV2ListItems({
+      items: [...layout.items, layout.items[0]!],
+      priorityCount: 1,
+      pendingTasks: [],
+    });
+    expect(items.map((item) => item.type)).toEqual([
+      "v2-priority-header",
+      "v2-thread",
+      "v2-threads-header",
+      "v2-thread",
+      "v2-thread",
+    ]);
+    expect(items[1]).toMatchObject({ showTrailingDivider: false });
+  });
+
+  it("puts Threads before pending-only drafts and after a priority launch marker", () => {
+    const items = buildThreadListV2ListItems({
+      items: layout.items.slice(0, 1),
+      priorityCount: 1,
+      pendingTasks: [makePendingTask("draft")],
+      launchMarkers: [
+        { afterIndex: 0, entry: { kind: "launch-more", parentKey: "parent", depth: 0, hidden: 2 } },
+      ],
+    });
+    expect(items.map((item) => item.type)).toEqual([
+      "v2-priority-header",
+      "v2-thread",
+      "v2-launch-more",
+      "v2-threads-header",
+      "v2-pending",
+    ]);
+    expect(items.at(-1)).toMatchObject({ showPendingDivider: true });
+  });
+
+  it("adds no Threads header without Priority or with only shelf rows after Priority", () => {
+    const withoutPriority = buildThreadListV2ListItems({ items: layout.items, pendingTasks: [] });
+    const shelfOnly = buildThreadListV2ListItems({
+      items: layout.items,
+      pendingTasks: [],
+      priorityCount: 1,
+      settledCount: 1,
+      settledShelfHeaderIndex: 1,
+    });
+    const allPriority = buildThreadListV2ListItems({
+      items: layout.items.slice(0, 1),
+      pendingTasks: [],
+      priorityCount: 1,
+      settledCount: 1,
+      settledShelfHeaderIndex: 1,
+    });
+    for (const items of [withoutPriority, shelfOnly, allPriority]) {
+      expect(items.map((item) => item.type)).not.toContain("v2-threads-header");
+    }
+  });
+
   it("keeps a thread listed when it starts running, with the default collapsed Working shelf", () => {
     const listedIds = (threads: EnvironmentThreadShell[]) =>
       buildThreadListV2Items({
@@ -126,7 +192,13 @@ describe("threadListV2 Priority", () => {
         [`${environmentId}:idle`, { canMoveUp: true, canMoveDown: true }],
       ]),
     });
-    expect(list.map(label)).toEqual(["v2-priority-header", "busy", "queued", "idle"]);
+    expect(list.map(label)).toEqual([
+      "v2-priority-header",
+      "busy",
+      "v2-threads-header",
+      "queued",
+      "idle",
+    ]);
     // Priority orders by urgency, so its rows offer no manual moves.
     expect(list.filter((item) => item.type === "v2-thread").map((item) => item.canMoveUp)).toEqual([
       false,

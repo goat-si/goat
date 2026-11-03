@@ -2,6 +2,7 @@ import { makeDesktopControlWriter } from "./DesktopControlWriter.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeFS from "node:fs";
 import * as NodeNet from "node:net";
+import { guardErrors } from "@goat/shared/errorGuards";
 
 import * as NodeStream from "@effect/platform-node/NodeStream";
 import {
@@ -577,7 +578,9 @@ export const make = Effect.fn("resourceTelemetry.desktopTelemetryReceiver.make")
     // The parent waits before closing; use cancellable socket reads so filesystem reads cannot block exit.
     const readable = yield* Effect.acquireRelease(
       Effect.try({
-        try: () => new NodeNet.Socket({ fd, readable: true, writable: false }),
+        // fromReadable reports errors while reading; the socket is destroyed on release.
+        try: () =>
+          guardErrors(new NodeNet.Socket({ fd, readable: true, writable: false }), () => {}),
         catch: (cause) => new DesktopTelemetryStreamFailed({ fd, cause }),
       }),
       (stream) =>

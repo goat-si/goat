@@ -32,6 +32,7 @@ import type * as SqlClient from "effect/sql/SqlClient";
 import * as Stream from "effect/Stream";
 
 import { keepLocalLaunchers } from "./goat/shellLaunchKeep.ts";
+import type { ShellSnapshotIndex, ShellSnapshotRead } from "./ProjectionStore.ts";
 import { bufferLatestLiveStream } from "./LiveStreamBudget.ts";
 
 type ShellDelta = Extract<OrchestrationV2ShellStreamItem, { readonly sequence: number }>;
@@ -79,13 +80,17 @@ export function buildActiveShellSnapshot(input: {
  */
 export function omitIdleSubagentShells(
   threads: ReadonlyArray<OrchestrationV2ThreadShell>,
+  indexedParentIds?: ReadonlySet<string>,
 ): ReadonlyArray<OrchestrationV2ThreadShell> {
-  const parentIds = new Set<string>();
-  for (const thread of threads) {
-    if (thread.lineage.relationshipToParent === "subagent" && thread.lineage.parentThreadId) {
-      parentIds.add(thread.lineage.parentThreadId);
-    }
-  }
+  const parentIds =
+    indexedParentIds ??
+    new Set(
+      threads.flatMap((thread) =>
+        thread.lineage.relationshipToParent === "subagent" && thread.lineage.parentThreadId
+          ? [thread.lineage.parentThreadId]
+          : [],
+      ),
+    );
   return threads.filter(
     (thread) =>
       thread.lineage.relationshipToParent !== "subagent" ||
@@ -101,16 +106,20 @@ export function omitIdleSubagentShells(
 export function activeShellRowsForSubscriber(
   threads: ReadonlyArray<OrchestrationV2ThreadShell>,
   omitIdleSubagents: boolean,
+  index?: ShellSnapshotIndex,
 ): {
   readonly threads: ReadonlyArray<OrchestrationV2ThreadShell>;
   readonly subagentThreadIds: Set<string>;
 } {
   return {
-    threads: omitIdleSubagents ? omitIdleSubagentShells(threads) : threads,
+    threads: omitIdleSubagents
+      ? omitIdleSubagentShells(threads, index?.subagentParentIds)
+      : threads,
     subagentThreadIds: new Set(
-      threads
-        .filter((thread) => thread.lineage.relationshipToParent === "subagent")
-        .map((thread) => thread.id),
+      index?.subagentThreadIds ??
+        threads
+          .filter((thread) => thread.lineage.relationshipToParent === "subagent")
+          .map((thread) => thread.id),
     ),
   };
 }
@@ -181,11 +190,12 @@ export function shellSnapshotForSubscriber(
     readonly omitOlderSettled: boolean;
     readonly now: DateTime.Utc;
   },
+  index?: ShellSnapshotIndex,
 ): {
   readonly snapshot: OrchestrationV2ShellSnapshot;
   readonly subagentThreadIds: Set<string>;
 } {
-  const rows = activeShellRowsForSubscriber(base.threads, options.omitIdleSubagents);
+  const rows = activeShellRowsForSubscriber(base.threads, options.omitIdleSubagents, index);
   if (!options.omitOlderSettled) {
     return {
       snapshot: { ...base, threads: keepLocalLaunchers(base.threads, rows.threads) },
@@ -219,7 +229,7 @@ export const loadShellSnapshotParts = Effect.fn("ShellStream.loadShellSnapshotPa
   E4,
 >(input: {
   readonly sql: SqlClient.SqlClient;
-  readonly readThreads: Effect.Effect<Effect.Effect<OrchestrationV2ThreadShellSnapshot, E2>, E1>;
+  readonly readThreads: Effect.Effect<Effect.Effect<ShellSnapshotRead, E2>, E1>;
   readonly listProjects: Effect.Effect<ReadonlyArray<OrchestrationProjectShell>, E3>;
   readonly latestSequence: Effect.Effect<number, E4>;
 }) {
@@ -232,9 +242,11 @@ export const loadShellSnapshotParts = Effect.fn("ShellStream.loadShellSnapshotPa
       }),
     )
     .pipe(NodeSqliteClient.readOnly);
+  const threads = yield* read.decodeThreads;
   return {
     projects: read.projects,
-    threads: yield* read.decodeThreads,
+    threads,
+    shellIndex: threads.shellIndex,
     snapshotSequence: read.snapshotSequence,
   };
 });

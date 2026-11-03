@@ -39,6 +39,132 @@ const versionEntries = (...versions: string[]) =>
 describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
   "install before runner switch",
   () => {
+    it.live("stop removes a stale alias without executing it", () =>
+      Effect.gen(function* () {
+        const f = yield* fixture("none", { seed: false });
+        const alias = `${f.state}/run-goat.sh`;
+        const marker = `${f.home}/alias-executed`;
+        yield* f.fs.writeFileString(alias, `#!/bin/sh\ntouch '${marker}'\n`);
+        yield* f.fs.chmod(alias, 0o700);
+        const result = yield* shell(f.home, SshTunnel.buildRemoteStopScript(stateKey));
+        assert.equal(result.code, 0, result.stderr);
+        assert.isFalse(yield* f.fs.exists(alias));
+        assert.isFalse(yield* f.fs.exists(marker));
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+    it.live("stop continues ownership checks when the stale alias cannot be removed", () =>
+      Effect.gen(function* () {
+        const f = yield* fixture("none", { seed: false });
+        const alias = `${f.state}/run-goat.sh`;
+        yield* f.fs.makeDirectory(alias);
+        yield* f.fs.writeFileString(`${alias}/child`, "");
+        const result = yield* shell(f.home, SshTunnel.buildRemoteStopScript(stateKey));
+        assert.equal(result.code, 0, result.stderr);
+        assert.include(result.stdout, '{"stopped":true}');
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+    it.live("launch replaces a stale alias without executing it", () =>
+      Effect.gen(function* () {
+        const f = yield* fixture("none", { seed: false });
+        const alias = `${f.state}/run-goat.sh`;
+        const marker = `${f.home}/alias-executed`;
+        yield* f.fs.writeFileString(alias, `#!/bin/sh\ntouch '${marker}'\n`);
+        yield* f.fs.chmod(alias, 0o700);
+        const result = yield* shell(f.home, f.scripts.launch, [stateKey]);
+        assert.equal(result.code, 0, result.stderr);
+        assert.isFalse(yield* f.fs.exists(marker));
+        assert.equal(
+          yield* f.fs.readFileString(alias),
+          yield* f.fs.readFileString(`${f.state}/run-t3.sh`),
+        );
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+    it.live("launch succeeds when publishing the runner alias fails", () =>
+      Effect.gen(function* () {
+        const f = yield* fixture("none", { seed: false });
+        const mv = `${f.home}/.test/identity-bin/mv`;
+        yield* f.fs.makeDirectory(`${f.home}/.test/identity-bin`);
+        yield* f.fs.writeFileString(
+          mv,
+          `#!/bin/sh\nfor arg do [ "$arg" != '${f.state}/run-goat.sh' ] || exit 1; done\nexec /bin/mv "$@"\n`,
+        );
+        yield* f.fs.chmod(mv, 0o700);
+        const result = yield* shell(f.home, f.scripts.launch, [stateKey]);
+        assert.equal(result.code, 0, result.stderr);
+        assert.equal(yield* f.fs.readFileString(`${f.state}/run-t3.sh`), f.scripts.runner + "\n");
+        assert.deepEqual(
+          (yield* f.fs.readDirectory(f.state)).filter((name) => name.startsWith("run-goat.next.")),
+          [],
+        );
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+    it.live.each([false, true])(
+      "repairs the runner alias after old-client publication (copy fallback=%s)",
+      (copyFallback) =>
+        Effect.gen(function* () {
+          const f = yield* fixture("none", { identical: true });
+          if (copyFallback) {
+            const shim = `${f.home}/.test/identity-bin/ln`;
+            yield* f.fs.writeFileString(
+              shim,
+              '#!/bin/sh\n[ "$1" = -s ] || exit 1\nexec /bin/ln "$@"\n',
+            );
+            yield* f.fs.chmod(shim, 0o700);
+          }
+          const protocol = `${f.state}/run-t3.sh`;
+          const alias = `${f.state}/run-goat.sh`;
+          let result = yield* shell(f.home, f.scripts.launch, [stateKey]);
+          assert.equal(result.code, 0, result.stderr);
+          assert.equal(yield* f.fs.readFileString(alias), yield* f.fs.readFileString(protocol));
+          if (!copyFallback)
+            assert.deepEqual((yield* f.fs.stat(alias)).ino, (yield* f.fs.stat(protocol)).ino);
+          yield* f.fs.copyFile(protocol, `${protocol}.old-client`);
+          yield* f.fs.rename(`${protocol}.old-client`, protocol);
+          yield* f.fs.writeFileString(alias, "stale alias\n");
+          result = yield* shell(f.home, f.scripts.launch, [stateKey]);
+          assert.equal(result.code, 0, result.stderr);
+          assert.equal(yield* f.fs.readFileString(alias), yield* f.fs.readFileString(protocol));
+          if (!copyFallback)
+            assert.deepEqual((yield* f.fs.stat(alias)).ino, (yield* f.fs.stat(protocol)).ino);
+        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+    it.live.each([false, true])(
+      "launch from a deleted cwd starts in home (upgrade=%s)",
+      (upgrade) =>
+        Effect.gen(function* () {
+          const f = yield* fixture("none", { seed: upgrade });
+          const vanished = `${f.home}/vanished`;
+          yield* f.fs.makeDirectory(vanished);
+          const result = yield* shell(
+            f.home,
+            `cd '${vanished}'\nrmdir '${vanished}'\n${f.scripts.launch}`,
+            [stateKey],
+          );
+          assert.equal(result.code, 0, result.stderr);
+          const events = yield* f.events;
+          const started = events.filter(
+            (event) => event.type === "start" && event.version === nextVersion,
+          );
+          assert.lengthOf(started, 1);
+          assert.equal(started[0]!.cwd, f.home);
+          if (upgrade) {
+            const supervised = events.find((event) => event.type === "supervise");
+            assert.equal(supervised?.cwd, f.home);
+          }
+        }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
+    it.live("launch falls back to the filesystem root when home cannot be entered", () =>
+      Effect.gen(function* () {
+        const f = yield* fixture("none", { seed: false });
+        const vanished = `${f.home}/vanished`;
+        yield* f.fs.makeDirectory(vanished);
+        const prefix = `cd '${vanished}'\nrmdir '${vanished}'\ncd() { [ "$1" != "$HOME" ] || return 1; command cd "$@"; }\n`;
+        const result = yield* shell(f.home, prefix + f.scripts.launch, [stateKey]);
+        assert.equal(result.code, 0, result.stderr);
+        const started = (yield* f.events).find((event) => event.type === "start");
+        assert.equal(started?.cwd, "/");
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    );
     it.live.each([
       { leaveRemoteServerRunning: true, action: "disconnect" },
       { leaveRemoteServerRunning: false, action: "disconnect" },

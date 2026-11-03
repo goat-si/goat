@@ -27,7 +27,9 @@ import {
   AUTH_PROBE_TIMEOUT_MS,
   buildServerProvider,
   COMPACT_SLASH_COMMAND,
-  isCommandMissingCause,
+  classifySpawnFailure,
+  safeProcessCwd,
+  spawnFailureMessage,
   parseGenericCliVersion,
   providerModelsFromSettings,
   spawnAndCollect,
@@ -289,6 +291,7 @@ const runGrokCliCommand = Effect.fn("GrokProviderStatus.runGrokCliCommand")(func
   grokSettings: GrokSettings,
   args: ReadonlyArray<string>,
   environment: NodeJS.ProcessEnv,
+  cwd?: string,
 ) {
   const command = grokSettings.binaryPath || "grok";
   const spawnCommand = yield* resolveSpawnCommand(command, args, { env: environment });
@@ -297,6 +300,7 @@ const runGrokCliCommand = Effect.fn("GrokProviderStatus.runGrokCliCommand")(func
     ChildProcess.make(spawnCommand.command, spawnCommand.args, {
       env: environment,
       shell: spawnCommand.shell,
+      ...(cwd ? { cwd } : {}),
     }),
   );
 });
@@ -373,11 +377,11 @@ export function grokSlashCommandsFromInitialize(
  */
 const discoverGrokMetadataViaAcpInitialize = Effect.fn(
   "GrokProviderStatus.discoverGrokMetadataViaAcpInitialize",
-)(function* (grokSettings: GrokSettings, environment: NodeJS.ProcessEnv) {
+)(function* (grokSettings: GrokSettings, environment: NodeJS.ProcessEnv, cwd: string) {
   const acp = yield* makeGrokAcpRuntime({
     grokSettings,
     environment,
-    cwd: process.cwd(),
+    cwd,
     clientInfo: { name: "t3-code-provider-probe", version: "0.0.0" },
   });
   const initialized = yield* acp.initialize();
@@ -418,14 +422,34 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
   const probeEnvironment = grokProbeEnvironment(environment);
   const apiKey = environment[GROK_API_KEY_ENV]?.trim();
 
+  const spawnCwd = safeProcessCwd();
+  if (spawnCwd === undefined)
+    return buildServerProvider({
+      presentation: GROK_PRESENTATION,
+      enabled: true,
+      checkedAt,
+      models: fallbackModels,
+      probe: {
+        installed: true,
+        version: null,
+        status: "error",
+        auth: { status: "unknown" },
+        message: "The GOAT server process cannot access its working directory.",
+      },
+    });
   const versionResult = yield* runGrokCliCommand(
     grokSettings,
     ["--version"],
     probeEnvironment,
+    spawnCwd,
   ).pipe(Effect.timeoutOption(VERSION_PROBE_TIMEOUT_MS), Effect.result);
 
   if (Result.isFailure(versionResult)) {
     const error = versionResult.failure;
+    const failure = classifySpawnFailure(error, spawnCwd, undefined, {
+      binary: grokSettings.binaryPath || "grok",
+      env: probeEnvironment,
+    });
     yield* Effect.logWarning("Grok CLI health check failed.", {
       errorTag: error._tag,
     });
@@ -435,13 +459,15 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
       checkedAt,
       models: fallbackModels,
       probe: {
-        installed: !isCommandMissingCause(error),
+        installed: failure !== "missing",
         version: null,
         status: "error",
         auth: { status: "unknown" },
-        message: isCommandMissingCause(error)
-          ? "Grok CLI (`grok`) is not installed or not on PATH."
-          : "Failed to execute Grok CLI health check.",
+        message:
+          failure === "missing"
+            ? "Grok CLI (`grok`) is not installed or not on PATH."
+            : (spawnFailureMessage(failure, spawnCwd, grokSettings.binaryPath || "grok") ??
+              "Failed to execute Grok CLI health check."),
       },
     });
   }
@@ -509,10 +535,11 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
     Effect.orElseSucceed(() => []),
   );
 
-  const acpExit = yield* discoverGrokMetadataViaAcpInitialize(grokSettings, probeEnvironment).pipe(
-    Effect.timeoutOption(GROK_ACP_INITIALIZE_TIMEOUT_MS),
-    Effect.exit,
-  );
+  const acpExit = yield* discoverGrokMetadataViaAcpInitialize(
+    grokSettings,
+    probeEnvironment,
+    spawnCwd,
+  ).pipe(Effect.timeoutOption(GROK_ACP_INITIALIZE_TIMEOUT_MS), Effect.exit);
   const acpMetadata = Exit.isSuccess(acpExit) ? Option.getOrUndefined(acpExit.value) : undefined;
   const acpModels = acpMetadata?.models ?? [];
   const acpFailed = Exit.isFailure(acpExit) || Option.isNone(acpExit.value);

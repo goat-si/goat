@@ -114,6 +114,10 @@ import {
   layerPausingAttachEventSink,
   layerBeforeUnchangedWriteEventSink,
 } from "./ProviderSessionManager.persistence.testkit.ts";
+import {
+  turnStartMemoryCases,
+  type TurnStartMemoryCase,
+} from "./ProviderSessionManager.memoryCases.testkit.ts";
 
 const CodexCapabilities: OrchestrationV2ProviderCapabilities = CodexProviderCapabilitiesV2;
 const ExclusiveCapabilities: OrchestrationV2ProviderCapabilities = {
@@ -4492,10 +4496,13 @@ it.effect(
         const initialAdapterRotation = yield* Queue.take(adapterChanges);
         assert.equal(initialAdapterRotation.threadId, threadId);
         assert.equal(initialAdapterRotation.providerInstanceId, modelSelection.instanceId);
+        const adapterPolicy = yield* admission.currentPolicy(threadId);
+        const managerPolicy = yield* manager.currentMemoryPolicy!(threadId);
         assert.deepEqual(
-          yield* admission.currentPolicy(threadId),
-          yield* manager.currentMemoryPolicy!(threadId),
+          { grant: adapterPolicy.grant, policyEpoch: adapterPolicy.policyEpoch },
+          { grant: managerPolicy.grant, policyEpoch: managerPolicy.policyEpoch },
         );
+        assert.isDefined(adapterPolicy.finalAuthority);
         assert.equal((yield* admission.currentPolicy(threadId)).grant, "read_write");
         const readScope = () =>
           Effect.gen(function* () {
@@ -4537,6 +4544,9 @@ it.effect(
           modelSelection,
           runtimePolicy,
         });
+        const runningPolicy = yield* admission.currentPolicy(threadId);
+        assert.isDefined(runningPolicy.finalAuthority);
+        assert.isTrue(yield* runningPolicy.finalAuthority!);
         const savedMemory = yield* MemoryToolkitFixture.call(
           "memory_upsert",
           MemoryToolkitFixture.upsert(),
@@ -4564,6 +4574,7 @@ it.effect(
             providerInstanceId: modelSelection.instanceId,
             ...(ceiling === undefined ? {} : { memoryGrantCeiling: ceiling }),
           });
+          assert.isFalse(yield* runningPolicy.finalAuthority!);
           const admitted = yield* readScope();
           assert.equal(admitted.memoryPolicy?.grant, grant);
           assert.equal(admitted.grantedScopes?.includes("orchestration:read"), true);
@@ -4601,6 +4612,8 @@ it.effect(
         yield* Queue.clear(changes);
         yield* Queue.clear(adapterChanges);
         const old = yield* configs.read(threadId);
+        const beforeRevoke = yield* admission.currentPolicy(threadId);
+        assert.isDefined(beforeRevoke.finalAuthority);
         const offReady = yield* Deferred.make<ProviderSessionManager.McpCredentialRotation>();
         yield* manager.mcpCredentialRotations!.pipe(
           Stream.filter((event) => event.memoryPolicy.grant === "none"),
@@ -4609,6 +4622,7 @@ it.effect(
           Effect.forkScoped({ startImmediately: true }),
         );
         yield* settings.updateSettings({ enableAgentMemoryAccess: false });
+        assert.isFalse(yield* beforeRevoke.finalAuthority!);
         assert.equal(
           (yield* registry.resolve(old!.authorizationHeader.replace(/^Bearer\s+/, "")))
             ?.memoryPolicy?.grant,
@@ -5084,67 +5098,6 @@ it.effect.each(["failure", "interrupt"] as const)(
 
 // Exercise recovery admission through the real turn-start service and manager.
 // The provider fixture resumes a native thread; run delivery is an explicit milestone.
-const turnStartMemoryCases = [
-  { name: "ordinary", kind: "ordinary", ceiling: undefined, expected: "read_write" },
-  { name: "channel reply", kind: "channel", ceiling: undefined, expected: "none" },
-  {
-    name: "usage-limit ordinary",
-    kind: "ordinary",
-    ceiling: undefined,
-    expected: "read_write",
-    continuation: true,
-  },
-  {
-    name: "usage-limit delegated read",
-    kind: "delegated",
-    ceiling: "read",
-    expected: "read",
-    continuation: true,
-  },
-  ...(["scheduled", "delegated"] as const).flatMap((kind) =>
-    (["none", "read", "read_write"] as const).map(
-      (ceiling) =>
-        ({
-          name: `${kind} ${ceiling}`,
-          kind,
-          ceiling,
-          expected: ceiling,
-        }) as const,
-    ),
-  ),
-  { name: "legacy task", kind: "delegated", ceiling: undefined, expected: "none" },
-  {
-    name: "read-only sandbox",
-    kind: "ordinary",
-    ceiling: undefined,
-    expected: "read",
-    readOnly: true,
-  },
-  {
-    name: "pending admission",
-    kind: "delegated",
-    ceiling: "none",
-    expected: "read",
-    pending: true,
-  },
-  {
-    name: "pending admission plus read-only sandbox",
-    kind: "delegated",
-    ceiling: "none",
-    expected: "read",
-    pending: true,
-    readOnly: true,
-  },
-  {
-    name: "missing message",
-    kind: "ordinary",
-    ceiling: undefined,
-    expected: "none",
-    missingMessage: true,
-  },
-] as const;
-
-type TurnStartMemoryCase = (typeof turnStartMemoryCases)[number];
 
 it.effect.each(turnStartMemoryCases)(
   "turn-start memory admission: $name",
@@ -5590,7 +5543,15 @@ it.effect.each(turnStartMemoryCases)(
                 forThread: (_threadId, issued, current) =>
                   Effect.gen(function* () {
                     selections++;
-                    assert.deepEqual(issued, yield* current);
+                    const live = yield* current;
+                    assert.deepEqual(
+                      { grant: issued.grant, policyEpoch: issued.policyEpoch },
+                      { grant: live.grant, policyEpoch: live.policyEpoch },
+                    );
+                    assert.isDefined(issued.finalAuthority);
+                    assert.isDefined(live.finalAuthority);
+                    assert.isTrue(yield* issued.finalAuthority!);
+                    assert.isTrue(yield* live.finalAuthority!);
                     return frame;
                   }),
               }),
@@ -5665,9 +5626,11 @@ it.effect.each(turnStartMemoryCases)(
                 ? ["memory:read"]
                 : ["memory:read", "memory:write"];
           const admission = yield* AdapterInfrastructure.ProviderMemoryAdmission;
+          const adapterPolicy = yield* admission.currentPolicy(threadId);
+          const managerPolicy = yield* manager.currentMemoryPolicy!(threadId);
           assert.deepEqual(
-            yield* admission.currentPolicy(threadId),
-            yield* manager.currentMemoryPolicy!(threadId),
+            { grant: adapterPolicy.grant, policyEpoch: adapterPolicy.policyEpoch },
+            { grant: managerPolicy.grant, policyEpoch: managerPolicy.policyEpoch },
           );
           assert.equal((yield* admission.currentPolicy(threadId)).grant, testCase.expected);
           const fenced = yield* admission.fence(config);

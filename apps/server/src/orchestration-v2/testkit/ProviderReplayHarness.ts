@@ -209,6 +209,7 @@ export function runOrchestratorV2ProviderReplayScenario<
     readonly runContinuationWorker?: boolean;
     readonly recoverOnStartup?: boolean;
     readonly continueThreadsAfterServerUpdate?: boolean;
+    readonly afterSteps?: Effect.Effect<void>;
   } = {},
 ): Effect.Effect<
   OrchestratorV2ScenarioResult,
@@ -242,6 +243,7 @@ export function runOrchestratorV2ProviderReplayScenario<
     return yield* Effect.gen(function* () {
       const result = yield* runOrchestratorV2Scenario(scenario, {
         replayGate,
+        ...(options.afterSteps === undefined ? {} : { afterSteps: options.afterSteps }),
         awaitReplayTurnComplete: (nativeTurnId) => Deferred.await(completions.get(nativeTurnId)!),
       });
       const recorder = yield* CommandOutputRecorder.CommandOutputRecorder;

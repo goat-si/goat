@@ -2,6 +2,7 @@
 // @effect-diagnostics nodeBuiltinImport:off preferSchemaOverJson:off
 import * as NodeReadline from "node:readline";
 
+import { ignoreClosedPipe } from "@goat/shared/closedPipe";
 import { discardResponseBody, responsePayloads } from "@goat/shared/mcpResponsePayloads";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
@@ -489,6 +490,7 @@ export function runAcpMcpStdioBridge(options: AcpMcpStdioBridgeOptions): Effect.
       return yield* launch(task);
     });
 
+    // oxlint-disable-next-line goat/guard-error-emitters -- Async iteration rejects when readline emits an error.
     const reader = NodeReadline.createInterface({ input: options.input });
     yield* Stream.runForEach(Stream.fromAsyncIterable(reader, bridgeError), dispatch).pipe(
       Effect.ignoreCause,
@@ -511,6 +513,8 @@ export async function runAcpMcpBridgeFastPath(): Promise<void> {
     process.exitCode = 2;
     return;
   }
+  // The ACP agent that reads replies may leave first; its stdin EOF still ends the bridge.
+  process.stdout.on("error", ignoreClosedPipe);
   await Effect.runPromise(
     runAcpMcpStdioBridge({
       endpoint,

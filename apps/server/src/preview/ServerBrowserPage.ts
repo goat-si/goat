@@ -37,6 +37,8 @@ import { withRefAnnotations } from "./annotateRefs.ts";
 import { codeLocator } from "./codeLocator.ts";
 import { dragBetween, inViewport, wheelAt } from "./pointerInput.ts";
 import { aimClick, type ClickEffect, releaseAim, watchClick } from "./clickEffect.ts";
+import { aimClickPoint } from "./clickAim.ts";
+import { capturePaint, occludedRefs } from "./paintOcclusion.ts";
 import { resolvePageScope, scopeHidden } from "./pageScope.ts";
 import { pageChanged, runSnapshot, tooBusy, transientCapture } from "./snapshotRetry.ts";
 import {
@@ -577,6 +579,7 @@ const capture = async (
     readLayersHeader(input.page),
     input.annotate ? Promise.resolve(undefined) : captureImage(),
     tabCookies(input.page),
+    capturePaint(input.cdp),
   ]);
   void pageAndScreenshot.catch(constVoid);
   let tree: string;
@@ -625,7 +628,7 @@ const capture = async (
     await pageAndScreenshot.catch(constVoid);
     throw cause;
   }
-  const [captured, layersLine, capturedImage, cookies] = await pageAndScreenshot;
+  const [captured, layersLine, capturedImage, cookies, paint] = await pageAndScreenshot;
   // Checked after the reads: an embedding frame element can be hidden while they run.
   const hidden = scoped ? await scopeHidden(scoped) : false;
   const page = hidden ? { ...captured, visibleText: "" } : captured;
@@ -651,6 +654,7 @@ const capture = async (
     unread,
     generation,
     refs: state.refs,
+    occluded: occludedRefs(paint, tree),
   });
   return snapshotOptionsResult(
     input.page,
@@ -693,10 +697,17 @@ export const click = async (
   const timeout = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const deadline = actionDeadline(timeout, gate.deadline);
   const locator = targetLocator(page, input);
-  const point = await targetPoint(page, locator, input, deadline, gate);
+  const rough = await targetPoint(page, locator, input, deadline, gate);
+  if (locator !== null) await settled(locator, deadline, true, gate);
+  const aimed =
+    locator === null
+      ? { point: rough }
+      : await aimClickPoint(page, locator, deadline, gate).catch((cause: unknown) => {
+          throw unsentOnTimeout(cause);
+        });
+  const { point } = aimed;
   await pointer(point, "click");
   const button = input.button ?? "left";
-  if (locator !== null) await settled(locator, deadline, true, gate);
   let sent = false;
   let dialog = false;
   let onDialog = constVoid;
@@ -739,7 +750,11 @@ export const click = async (
       return locator === null
         ? requireEvaluationChannel(gate).call(() => page.mouse.click(point.x, point.y, { button }))
         : requireEvaluationChannel(gate).call(() =>
-            locator.click({ button, ...dispatched(deadline) }),
+            locator.click({
+              button,
+              ...("position" in aimed ? { position: aimed.position } : {}),
+              ...dispatched(deadline),
+            }),
           );
     return subsequentClick(gate, point, button, count);
   };

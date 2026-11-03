@@ -621,12 +621,13 @@ export const mockExecution = () => ({
   retireAdmission: () => Effect.void,
   admitClaim: () => Effect.void,
   setGeneralCapacity: () => Effect.void,
-  snapshot: Effect.succeed({
-    fullLanes: [],
-    titleThreads: [],
-    mainThreads: [],
-    stoppingThreads: [],
-  }),
+  snapshotWith: () =>
+    Effect.succeed({
+      fullLanes: [],
+      titleThreads: [],
+      mainThreads: [],
+      stoppingThreads: [],
+    }),
 });
 
 export const idleEffectWorker = () =>
@@ -635,14 +636,17 @@ export const idleEffectWorker = () =>
     awaitWork: Effect.void,
     awaitControlWork: Effect.void,
     awaitCleanupWork: Effect.void,
+    awaitStartWork: Effect.void,
     runOnce: Effect.succeed(false),
     runRecoveryOnce: Effect.succeed(false),
     runGeneralOnce: Effect.succeed(false),
     runControlOnce: Effect.succeed(false),
     runCleanupOnce: Effect.succeed(false),
+    runStartOnce: Effect.succeed(false),
     nextClaimableAt: Effect.succeedNone,
     nextGeneralClaimableAt: Effect.succeedNone,
     nextControlClaimableAt: Effect.succeedNone,
     nextCleanupClaimableAt: Effect.succeedNone,
+    nextStartClaimableAt: Effect.succeedNone,
     drain: () => Effect.succeed(0),
   });

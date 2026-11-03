@@ -11,7 +11,7 @@ import {
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as NodeURL from "node:url";
-import { chromium } from "playwright-core";
+import { type CDPSession, chromium, type Page } from "playwright-core";
 import type { PreviewAutomationBroker } from "../mcp/PreviewAutomationBroker.ts";
 import { makePreviewTargetHost } from "../screenCode/PreviewTargetHost.ts";
 import { createScreenDispatchRouter } from "../screenCode/ScreenDispatchRouter.ts";
@@ -153,3 +153,185 @@ it.live(
       expect(yield* Effect.promise(() => page.evaluate("hits"))).toEqual([[30, 20]]);
     }).pipe(Effect.scoped),
 );
+
+const launch = async () => {
+  expect(chromiumInstalled).toBe(true);
+  const browser = await chromium.launch({ headless: true });
+  const page = await (
+    await browser.newContext({ viewport: { width: 800, height: 600 } })
+  ).newPage();
+  return { browser, page };
+};
+
+const snapshotTree = async (page: Page, cdp: CDPSession) =>
+  String(
+    (
+      await ServerBrowserPage.snapshot({
+        page,
+        cdp,
+        renderScale: 1,
+        captureImage: false,
+        consoleEntries: [],
+        networkEntries: [],
+        actionTimeline: [],
+        timeoutMs: 15_000,
+      })
+    ).accessibilityTree,
+  );
+const lineOf = (tree: string, name: string) =>
+  tree.split("\n").find((line) => line.includes(`button "${name}"`)) ?? `no "${name}" in ${tree}`;
+
+// Every cover but the first is one paint order alone cannot prove solid, so only Buy is marked.
+const COVERS = `<body style="margin:0">
+  <button style="position:absolute;left:10px;top:10px">Buy</button>
+  <div style="position:fixed;left:0;top:0;width:200px;height:60px;background:#fff"></div>
+  <button style="position:absolute;left:300px;top:10px">Free</button>
+  <div style="position:absolute;left:10px;top:100px;max-height:0;overflow:hidden">
+    <div style="width:300px;height:100px;background:#fff"></div>
+  </div>
+  <button style="position:absolute;left:10px;top:120px">Below accordion</button>
+  <div style="position:absolute;left:10px;top:250px;width:120px;height:120px;border-radius:50%;overflow:hidden;z-index:1">
+    <div style="width:120px;height:120px;background:#fff"></div>
+  </div>
+  <button style="position:absolute;left:10px;top:250px">Under round clip</button>
+  <div style="position:absolute;left:300px;top:100px;opacity:0.5;z-index:1">
+    <div style="width:200px;height:60px;background:#fff"></div>
+  </div>
+  <button style="position:absolute;left:300px;top:110px">Under translucent</button>
+  <button style="position:absolute;left:300px;top:250px;width:80px;height:30px;padding:0;border:0">
+    <span style="display:block;width:120px;height:50px;background:#fff">Own child</span>
+  </button>
+  <div style="position:absolute;left:10px;top:400px;width:200px;font:16px/30px monospace">
+    <span style="position:relative;z-index:1;background:#fff">xxxxxxxxxxxxxxxxxxxx xxxxx</span>
+  </div>
+  <button style="position:absolute;left:110px;top:435px;width:60px;height:15px;padding:0;font-size:8px">Beside inline</button>
+  <div style="position:absolute;left:500px;top:400px;width:220px;height:100px;columns:2;column-gap:20px;z-index:1">
+    <div style="height:200px;background:#fff"></div>
+  </div>
+  <button style="position:absolute;left:602px;top:410px;width:16px;height:20px;padding:0;font-size:6px">In column gap</button>
+</body>`;
+
+// Zoom doubles the border to 20px, so the cover is clipped short of the button in the border strip.
+const ZOOM_CLIP = `<body style="margin:0">
+  <div style="position:relative;z-index:1;zoom:2;width:100px;height:50px;border:10px solid transparent;overflow:hidden">
+    <div style="margin-left:-10px;width:110px;height:50px;background:#fff"></div>
+  </div>
+  <button style="position:absolute;left:12px;top:30px;width:6px;height:20px;padding:0;font-size:4px">Zoomed border</button>
+</body>`;
+
+// The body's overflow clips here, since the root's is not visible; its cover cannot reach the button.
+const BODY_CLIP = `<html style="overflow:hidden"><body style="margin:0;position:absolute;width:50px;height:50px;overflow:hidden">
+  <div style="position:relative;z-index:2;width:200px;height:100px;background:#fff"></div>
+  <button style="position:fixed;z-index:1;left:100px;top:20px">Outside body</button>
+</body></html>`;
+
+it("a snapshot marks only a button under a solid later-painted cover [occluded], and none without paint data", async () => {
+  const { browser, page } = await launch();
+  try {
+    await page.setContent(COVERS);
+    const cdp = await page.context().newCDPSession(page);
+    const tree = await snapshotTree(page, cdp);
+    expect(lineOf(tree, "Buy")).toContain("[occluded]");
+    for (const name of [
+      "Free",
+      "Below accordion",
+      "Under round clip",
+      "Under translucent",
+      "Beside inline",
+      "In column gap",
+    ])
+      expect(lineOf(tree, name)).not.toContain("[occluded]");
+    expect(tree.match(/\[occluded\]/g)).toHaveLength(1);
+    await page.setContent(BODY_CLIP);
+    expect(lineOf(await snapshotTree(page, cdp), "Outside body")).not.toContain("[occluded]");
+    await page.setContent(ZOOM_CLIP);
+    expect(lineOf(await snapshotTree(page, cdp), "Zoomed border")).not.toContain("[occluded]");
+    const noPaint = {
+      send: (method: string, params?: object) =>
+        method === "DOMSnapshot.captureSnapshot"
+          ? Promise.reject(new Error("unsupported"))
+          : cdp.send(method as "Runtime.evaluate", params as never),
+    } as unknown as CDPSession;
+    expect(await snapshotTree(page, noPaint)).not.toContain("[occluded]");
+  } finally {
+    await browser.close();
+  }
+});
+
+it("a ref click lands in the largest fragment of a wrapped link, and inside a frame's visible part", async () => {
+  const { browser, page } = await launch();
+  try {
+    // The link's first fragment is one short word at the end of the first line.
+    await page.setContent(`<p style="width:200px;font:16px/20px monospace;margin:0">xxxxxxxxxxxxxxxx
+      <a id="link" href="#">ab cdefghijklmnop qrstuvwxyz</a></p>
+      <iframe style="position:absolute;left:300px;top:0;width:200px;height:100px;border:10px solid #000;padding:5px"
+        srcdoc='<html style="overflow:clip"><body style="margin:0"><button id="half" style="position:absolute;left:150px;top:10px;width:100px;height:30px">Half</button></body></html>'></iframe>
+      <script>
+        link.addEventListener("click", (event) => {
+          event.preventDefault();
+          const rects = [...link.getClientRects()];
+          const areas = rects.map((rect) => rect.width * rect.height);
+          window.landed = { fragments: rects.length, largest: areas.indexOf(Math.max(...areas)),
+            at: rects.findIndex((rect) => event.clientX >= rect.left && event.clientX <= rect.right && event.clientY >= rect.top && event.clientY <= rect.bottom) };
+        });
+      </script>`);
+    const frame = page.frameLocator("iframe");
+    await frame.locator("#half").evaluate((button) => {
+      button.addEventListener("click", (event: { readonly clientX: number }) => {
+        (globalThis as { clickedAt?: number }).clickedAt = event.clientX;
+      });
+    });
+    await ServerBrowserPage.click(page, { locator: "#link" });
+    // Playwright alone clicks the first fragment; the click lands in the largest one instead.
+    const landed = (await page.evaluate("window.landed")) as Record<string, number>;
+    expect(landed.fragments).toBeGreaterThan(1);
+    expect(landed.largest).toBeGreaterThan(0);
+    expect(landed.at).toBe(landed.largest);
+    await ServerBrowserPage.click(page, {
+      locator: "iframe >> internal:control=enter-frame >> #half",
+    });
+    // The frame shows x 0..200 of its document; the button spans 150..250, so its visible centre is 175.
+    expect(
+      await frame.locator("body").evaluate(() => (globalThis as { clickedAt?: number }).clickedAt),
+    ).toBe(175);
+  } finally {
+    await browser.close();
+  }
+});
+
+it("a ref click on a covered target refuses before input, naming the cover, and nothing receives a click", async () => {
+  const { browser, page } = await launch();
+  try {
+    await page.setContent(`<button id="b">Save</button>
+      <div id="consent" role="dialog" style="position:fixed;inset:0;background:#fff"></div>
+      <script>window.clicks = []; addEventListener("pointerdown", (event) => clicks.push(event.target.id), true);</script>`);
+    await expect(ServerBrowserPage.click(page, { locator: "#b" })).rejects.toMatchObject({
+      tag: "PreviewAutomationExecutionError",
+      detail: {
+        beforeInput: true,
+        kind: "occluded_refused",
+        interceptedBy: "Now at the target: <div> (dialog) #consent.",
+      },
+    });
+    expect(await page.evaluate("window.clicks")).toEqual([]);
+  } finally {
+    await browser.close();
+  }
+});
+
+it("a ref click reaches a shadow button through the light-DOM text slotted into it", async () => {
+  const { browser, page } = await launch();
+  try {
+    await page.setContent(`<x-host><span>Slotted label</span></x-host>
+      <script>
+        window.pressed = false;
+        const root = document.querySelector("x-host").attachShadow({ mode: "open" });
+        root.innerHTML = '<button style="font-size:24px"><slot></slot></button>';
+        root.querySelector("button").addEventListener("click", () => (window.pressed = true));
+      </script>`);
+    await ServerBrowserPage.click(page, { locator: "x-host >> internal:role=button" });
+    expect(await page.evaluate("window.pressed")).toBe(true);
+  } finally {
+    await browser.close();
+  }
+});

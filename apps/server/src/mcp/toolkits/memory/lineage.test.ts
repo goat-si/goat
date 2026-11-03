@@ -9,6 +9,7 @@ import * as Snapshot from "../../../memory/MemorySnapshot.ts";
 import * as Sync from "../../../memory/MemorySyncService.ts";
 import * as Projection from "../../../orchestration-v2/ProjectionStore.ts";
 import * as Environment from "../../../environment/ServerEnvironment.ts";
+import * as Settings from "../../../serverSettings.ts";
 import { liveThreadShell } from "../../McpToolAccess.testkit.ts";
 import * as Service from "../../../memory/MemoryService.ts";
 import * as Store from "../../../memory/MemoryStore.ts";
@@ -31,6 +32,12 @@ const ref = (name = "r5-caller") => ({
 const setup = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   yield* sql`CREATE TABLE orchestration_events(application_event_version INTEGER,aggregate_kind TEXT,stream_id TEXT,event_type TEXT,payload_json TEXT)`;
+  yield* sql`CREATE TABLE orchestration_v2_projection_threads(thread_id TEXT PRIMARY KEY,project_id TEXT,deleted_at TEXT,archived_at TEXT,updated_at TEXT)`;
+  yield* sql`CREATE TABLE orchestration_v2_projection_runs(run_id TEXT,thread_id TEXT,ordinal INTEGER,status TEXT,payload_json TEXT)`;
+  yield* sql`CREATE TABLE orchestration_v2_projection_messages(message_id TEXT,role TEXT,payload_json TEXT)`;
+  yield* sql`CREATE TABLE orchestration_v2_projection_turn_items(thread_id TEXT,run_id TEXT,type TEXT,status TEXT)`;
+  yield* sql`INSERT INTO orchestration_v2_projection_threads VALUES ('r5-caller','project:mcp-test',NULL,NULL,'2026-01-01')`;
+  yield* sql`INSERT INTO orchestration_v2_projection_runs VALUES ('run:mcp-test','r5-caller',1,'running','{}')`;
 });
 const admitSnapshot = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -39,7 +46,7 @@ const admitSnapshot = Effect.gen(function* () {
   yield* sql`CREATE TABLE IF NOT EXISTS projection_projects(project_id TEXT,workspace_root TEXT,deleted_at TEXT)`;
   yield* sql`INSERT INTO projection_projects SELECT 'project:mcp-test','/synthetic',NULL WHERE NOT EXISTS(SELECT 1 FROM projection_projects)`;
   return yield* Effect.gen(function* () {
-    const policy = { grant: "read" as const, policyEpoch: 1 };
+    const policy = { grant: "read" as const, policyEpoch: 1, finalAuthority: Effect.succeed(true) };
     return yield* (yield* Snapshot.MemorySnapshot).forThread(
       ref().threadId,
       policy,
@@ -48,6 +55,15 @@ const admitSnapshot = Effect.gen(function* () {
   }).pipe(
     Effect.provide(
       Snapshot.layer.pipe(
+        Layer.provide(
+          Layer.succeed(Settings.MemoryHubCommittedSettings, {
+            read: Effect.succeed({
+              provenance: null,
+              settings: { mode: "hub" as const, memorySpaceId: Fixture.space },
+              version: 1,
+            }),
+          }),
+        ),
         Layer.provide(Layer.succeed(Service.MemoryService, service)),
         Layer.provide(Layer.succeed(Store.MemoryStore, store)),
         Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
@@ -64,6 +80,7 @@ const admitSnapshot = Effect.gen(function* () {
         ),
         Layer.provide(
           Layer.mock(Projection.ProjectionStoreV2)({
+            getRunMessage: () => Effect.sync(() => undefined),
             getThreadShell: (threadId) =>
               Effect.succeed({
                 ...liveThreadShell(threadId),

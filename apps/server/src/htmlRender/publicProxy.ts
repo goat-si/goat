@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - Effect has no SOCKS proxy or address block list.
 import * as NodeDnsPromises from "node:dns/promises";
 import * as NodeNet from "node:net";
+import { guardErrors } from "@goat/shared/errorGuards";
 import * as NodeOS from "node:os";
 
 import * as Effect from "effect/Effect";
@@ -126,68 +127,73 @@ export const publicProxy = Effect.acquireRelease(
       socket.on("error", () => socket.destroy());
       return socket;
     };
-    const server = NodeNet.createServer((client) => {
-      track(client);
-      let data = Buffer.alloc(0);
-      let greeted = false;
-      const onData = (chunk: Buffer) => {
-        data = Buffer.concat([data, chunk]);
-        if (!greeted) {
-          if (data.length < 2 || data.length < 2 + data[1]!) return;
-          if (data[0] !== 5 || !data.subarray(2, 2 + data[1]!).includes(0)) {
-            return void client.end(Buffer.from([5, 0xff]));
-          }
-          data = data.subarray(2 + data[1]!);
-          greeted = true;
-          client.write(Buffer.from([5, 0]));
-        }
-        const request = readRequest(data);
-        if (request === "short") return;
-        client.off("data", onData);
-        if (request === undefined || request.command !== 1 || request.port === 0) {
-          return refuse(client, 7);
-        }
-        const early: Array<Buffer> = [request.rest];
-        let earlyBytes = request.rest.length;
-        const holdEarly = (chunk: Buffer) => {
-          earlyBytes += chunk.length;
-          if (earlyBytes > MAX_EARLY_BYTES) return void client.destroy();
-          early.push(chunk);
-        };
-        client.on("data", holdEarly);
-        void publicAddresses(request.host).then((addresses) => {
-          if (client.destroyed) return;
-          client.off("data", holdEarly);
-          if (addresses === undefined) return refuse(client, 2);
-          client.pause();
-          // Try all checked addresses so broken IPv6 routes do not block IPv4 access.
-          const upstream = track(
-            NodeNet.connect({
-              host: request.host,
-              port: request.port,
-              autoSelectFamily: true,
-              lookup: (_host, options, callback) =>
-                options.all
-                  ? callback(null, addresses)
-                  : callback(null, addresses[0]!.address, addresses[0]!.family),
-            }),
-          );
-          upstream.once("connect", () => {
-            client.write(reply(0));
-            for (const chunk of early) upstream.write(chunk);
-            upstream.pipe(client);
-            client.pipe(upstream);
-          });
-          upstream.on("close", () => client.destroy());
-          client.on("close", () => upstream.destroy());
-        });
-      };
-      client.on("data", onData);
-    });
     let listening = false;
-    server.on("error", (error) => {
-      if (!listening) resume(Effect.fail(error));
-    });
+    const server = guardErrors(
+      NodeNet.createServer((client) => {
+        track(client);
+        let data = Buffer.alloc(0);
+        let greeted = false;
+        const onData = (chunk: Buffer) => {
+          data = Buffer.concat([data, chunk]);
+          if (!greeted) {
+            if (data.length < 2 || data.length < 2 + data[1]!) return;
+            if (data[0] !== 5 || !data.subarray(2, 2 + data[1]!).includes(0)) {
+              return void client.end(Buffer.from([5, 0xff]));
+            }
+            data = data.subarray(2 + data[1]!);
+            greeted = true;
+            client.write(Buffer.from([5, 0]));
+          }
+          const request = readRequest(data);
+          if (request === "short") return;
+          client.off("data", onData);
+          if (request === undefined || request.command !== 1 || request.port === 0) {
+            return refuse(client, 7);
+          }
+          const early: Array<Buffer> = [request.rest];
+          let earlyBytes = request.rest.length;
+          const holdEarly = (chunk: Buffer) => {
+            earlyBytes += chunk.length;
+            if (earlyBytes > MAX_EARLY_BYTES) return void client.destroy();
+            early.push(chunk);
+          };
+          client.on("data", holdEarly);
+          void publicAddresses(request.host).then((addresses) => {
+            if (client.destroyed) return;
+            client.off("data", holdEarly);
+            if (addresses === undefined) return refuse(client, 2);
+            client.pause();
+            // Try all checked addresses so broken IPv6 routes do not block IPv4 access.
+            const upstream = track(
+              guardErrors(
+                NodeNet.connect({
+                  host: request.host,
+                  port: request.port,
+                  autoSelectFamily: true,
+                  lookup: (_host, options, callback) =>
+                    options.all
+                      ? callback(null, addresses)
+                      : callback(null, addresses[0]!.address, addresses[0]!.family),
+                }),
+                () => upstream.destroy(),
+              ),
+            );
+            upstream.once("connect", () => {
+              client.write(reply(0));
+              for (const chunk of early) upstream.write(chunk);
+              upstream.pipe(client);
+              client.pipe(upstream);
+            });
+            upstream.on("close", () => client.destroy());
+            client.on("close", () => upstream.destroy());
+          });
+        };
+        client.on("data", onData);
+      }),
+      (error) => {
+        if (!listening) resume(Effect.fail(error));
+      },
+    );
     server.listen(0, "127.0.0.1", () => {
       listening = true;
       resume(Effect.succeed({ server, sockets }));

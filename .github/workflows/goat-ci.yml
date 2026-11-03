@@ -3,7 +3,7 @@ name: goat-ci
 # goat fork CI; every upstream workflow is disabled. Trusted runs (a manual run, or a pull request
 # from a branch of this repository) run on the EPYC self-hosted runners, which hosted concurrency on
 # the free plan cannot match. A pull request from a fork runs on GitHub-hosted ubuntu-24.04, so fork
-# code never reaches EPYC (#426); close-outside-prs.yml closes those pull requests anyway. Each ci
+# code never reaches EPYC (#426). goat-ci skips fork pull requests for now. Each ci
 # matrix entry names its pool: the heavy tasks take the epyc runners, and the short Node-only tasks
 # (HOSTED_TASKS in goat-ci-scope.cjs) take ubuntu-24.04 so they never queue behind server shards.
 # test-windows takes hosted windows-2025 for any run, so Windows-only failures show up (#1385).
@@ -70,7 +70,7 @@ concurrency:
 jobs:
   scope:
     name: ${{ (github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != '') && 'goat-scope' || 'goat-ci (event ignored)' }}
-    # Outside pull requests are closed (close-outside-prs.yml), so a fork's run would only spend minutes.
+    # Fork pull requests do not run goat-ci yet; a maintainer runs it on a copy of the branch.
     if: (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != '')
     runs-on: ${{ (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","goat","epyc-light"]') || 'ubuntu-24.04' }}
     timeout-minutes: 10

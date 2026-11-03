@@ -5,6 +5,7 @@ import * as NodeFS from "node:fs";
 import * as NodeHttp from "node:http";
 import * as NodeNet from "node:net";
 
+import { guardErrors } from "@goat/shared/errorGuards";
 import * as Effect from "effect/Effect";
 import { Argument, Command } from "effect/cli";
 import { sshRuntimeHelperCommands } from "./sshRuntimeHelperCommands.ts";
@@ -13,9 +14,8 @@ export * from "./sshRuntimeHelperCommands.ts";
 
 const canBind = (port: number) =>
   new Promise<boolean>((resolve) => {
-    const server = NodeNet.createServer();
+    const server = guardErrors(NodeNet.createServer(), () => resolve(false));
     server.unref();
-    server.once("error", () => resolve(false));
     server.listen(port, "127.0.0.1", () => {
       server.close((error) => resolve(!error));
     });
@@ -24,7 +24,7 @@ const canBind = (port: number) =>
 // macOS permits this bind over a wildcard listener, so also check loopback connectivity.
 const answersOnLoopback = (port: number) =>
   new Promise<boolean>((resolve) => {
-    const socket = NodeNet.connect({ port, host: "127.0.0.1" });
+    const socket = guardErrors(NodeNet.connect({ port, host: "127.0.0.1" }), () => resolve(false));
     socket.setTimeout(1000);
     socket.once("connect", () => {
       socket.destroy();
@@ -34,7 +34,6 @@ const answersOnLoopback = (port: number) =>
       socket.destroy();
       resolve(true);
     });
-    socket.once("error", () => resolve(false));
   });
 
 const pickPort = Command.make("pick-port", {
@@ -60,21 +59,23 @@ const pickPort = Command.make("pick-port", {
 
 const probe = (port: number, probeTimeoutMs: number) =>
   new Promise<boolean>((resolve) => {
-    const request = NodeHttp.get(
-      { hostname: "127.0.0.1", port, path: "/", timeout: probeTimeoutMs },
-      (response) => {
-        response.resume();
-        response.once("end", () => {
-          const status = response.statusCode ?? 0;
-          resolve(status >= 200 && status < 300);
-        });
-      },
+    const request = guardErrors(
+      NodeHttp.get(
+        { hostname: "127.0.0.1", port, path: "/", timeout: probeTimeoutMs },
+        (response) => {
+          response.resume();
+          response.once("end", () => {
+            const status = response.statusCode ?? 0;
+            resolve(status >= 200 && status < 300);
+          });
+        },
+      ),
+      () => resolve(false),
     );
     request.once("timeout", () => {
       request.destroy();
       resolve(false);
     });
-    request.once("error", () => resolve(false));
   });
 
 const waitReady = Command.make("wait-ready", {

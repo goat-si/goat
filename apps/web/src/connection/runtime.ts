@@ -36,6 +36,19 @@ type ConnectionLayerSource =
 const layerProvidedClientConnection = layerSnapshotLoader.pipe(
   Layer.provideMerge(
     Connection.layerWithOptions({
+      drainIo: Effect.callback<void>((resume) => {
+        const channel = new MessageChannel();
+        const close = () => {
+          channel.port1.close();
+          channel.port2.close();
+        };
+        channel.port1.onmessage = () => {
+          close();
+          resume(Effect.void);
+        };
+        channel.port2.postMessage(undefined);
+        return Effect.sync(close);
+      }),
       environmentThemes: true,
       usageLimitSources: true,
       usageLimitsCommand: true,

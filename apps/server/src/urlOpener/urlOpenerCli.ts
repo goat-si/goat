@@ -6,6 +6,7 @@
 // @effect-diagnostics nodeBuiltinImport:off globalTimers:off
 import * as NodeChildProcess from "node:child_process";
 
+import { guardChild } from "@goat/shared/errorGuards";
 import type { AgentSurfaceResult } from "@goat/contracts/agentSurface/envelope";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
@@ -198,20 +199,23 @@ const openWithSystem: UrlOpenerIo["openWithSystem"] = async (url, env) => {
   const { buildBrowserLaunch } = await import("../process/externalLauncher.ts");
   const launch = buildBrowserLaunch(url, HostProcess.Platform.defaultValue(), env);
   return new Promise<boolean>((resolve) => {
-    const child = NodeChildProcess.spawn(launch.command, [...launch.args], {
-      detached: launch.options.detached === true,
-      stdio: "ignore",
-      shell: false,
-      env,
-    });
-    const timer = setTimeout(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const child = guardChild(
+      NodeChildProcess.spawn(launch.command, [...launch.args], {
+        detached: launch.options.detached === true,
+        stdio: "ignore",
+        shell: false,
+        env,
+      }),
+      () => {
+        clearTimeout(timer);
+        resolve(false);
+      },
+    );
+    timer = setTimeout(() => {
       child.unref();
       resolve(true);
     }, SYSTEM_OPENER_SETTLE_MS);
-    child.once("error", () => {
-      clearTimeout(timer);
-      resolve(false);
-    });
     child.once("exit", (code) => {
       clearTimeout(timer);
       resolve(code === 0);

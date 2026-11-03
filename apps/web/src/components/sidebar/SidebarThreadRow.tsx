@@ -572,7 +572,6 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
     threadId: thread.id,
   });
   const terminalStatus = terminalStatusFromRunningIds(runningTerminalIds);
-  const terminalProcessCount = runningTerminalIds.length;
   const hasUnsentDraft = useThreadHasUnsentDraft(threadRef) && !props.isRouteThread;
   const handleDiscardDraftClick = (event: ReactMouseEvent) => {
     event.preventDefault();
@@ -715,7 +714,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
       modelLabel={modelLabel}
       branchMismatch={branchMismatch}
       terminalStatus={terminalStatus}
-      terminalProcessCount={terminalProcessCount}
+      terminalProcessCount={runningTerminalIds.length}
     />
   );
 
@@ -1261,6 +1260,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
               {externalLauncherBadge}
               {historyArchiveHint}
               {pinIndicator}
+              {terminalStatusIcon}
               {isRegeneratingTitle ? (
                 <span role="status" className="sr-only">
                   Regenerating title

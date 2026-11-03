@@ -6,6 +6,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
+import * as Redacted from "effect/Redacted";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
 
@@ -28,6 +29,7 @@ import {
   usableRoutes,
 } from "./routes.ts";
 import * as RpcSession from "../rpc/session.ts";
+import { issueRemoteWebSocketTicket } from "../authorization/remote.ts";
 import { fetchRemoteEnvironmentDescriptor } from "../environment/descriptor.ts";
 import { withSshConnectionTiming } from "./sshTiming.ts";
 
@@ -47,6 +49,14 @@ export type ConnectionDriverProgress =
 export interface EnvironmentConnectionLease {
   readonly prepared: PreparedConnection;
   readonly session: RpcSession.RpcSession;
+  readonly openProbeSocket: Effect.Effect<
+    {
+      readonly probe: Effect.Effect<void, ConnectionAttemptError>;
+      readonly drainIo: Effect.Effect<void>;
+    },
+    ConnectionAttemptError,
+    Scope.Scope
+  >;
 }
 
 export type RouteCheck = "answered" | "silent" | "unchecked";
@@ -102,6 +112,7 @@ export const connectOverRoutes = Effect.fn("ConnectionDriver.connectOverRoutes")
   const attemptScope = yield* Scope.Scope;
   let transient: ConnectionTransientError | undefined;
   let blocked: ConnectionBlockedError | undefined;
+  let hubPermission: ConnectionBlockedError | undefined;
   // Each route gets its own scope so a half-open session closes before the next try.
   const attempt = Effect.fnUntraced(function* (route: ConnectionRoute) {
     const routeScope = yield* Scope.fork(attemptScope);
@@ -113,7 +124,14 @@ export const connectOverRoutes = Effect.fn("ConnectionDriver.connectOverRoutes")
     if (result._tag === "Failure") {
       if (result.failure._tag === "ConnectionAttemptSuperseded") return yield* result.failure;
       if (result.failure._tag === "ConnectionTransientError") transient ??= result.failure;
-      else blocked ??= result.failure;
+      else {
+        blocked ??= result.failure;
+        if (
+          route.target._tag === "HubProxyConnectionTarget" &&
+          result.failure.reason === "permission"
+        )
+          hubPermission ??= result.failure;
+      }
     }
     return result;
   });
@@ -149,6 +167,20 @@ export const connectOverRoutes = Effect.fn("ConnectionDriver.connectOverRoutes")
     if (result._tag === "Success") return result.success;
     if (result.failure.reason === "unsupported") return yield* result.failure;
   }
+  // A direct route that may come back keeps the retry; the hub's refusal says why the hub route can't help.
+  if (transient !== undefined && hubPermission !== undefined)
+    return yield* new ConnectionTransientError({
+      reason: transient.reason,
+      detail: `${transient.detail} Through the hub: ${hubPermission.detail}`,
+      ...(transient.retryAfterMillis === undefined
+        ? {}
+        : { retryAfterMillis: transient.retryAfterMillis }),
+      ...(transient.traceId === undefined ? {} : { traceId: transient.traceId }),
+      ...(transient.hop === undefined ? {} : { hop: transient.hop }),
+      ...(transient.via === undefined ? {} : { via: transient.via }),
+      ...(transient.failureCause === undefined ? {} : { failureCause: transient.failureCause }),
+      ...(transient.httpStatus === undefined ? {} : { httpStatus: transient.httpStatus }),
+    });
   return yield* (
     transient ??
       blocked ??
@@ -242,7 +274,63 @@ export const make = Effect.gen(function* () {
               ? withSshConnectionTiming("ready")(effect)
               : effect,
           );
-          return { prepared, session } satisfies EnvironmentConnectionLease;
+          const openProbeSocket = Effect.gen(function* () {
+            let fresh = prepared;
+            if (route.target._tag === "HubProxyConnectionTarget") {
+              // The hub serves the node descriptor only to an authenticated caller; prepare checks it.
+              fresh = yield* resolver.prepare(routeEntry(entry, route));
+              if (
+                fresh.environmentId !== prepared.environmentId ||
+                fresh.httpBaseUrl !== prepared.httpBaseUrl
+              )
+                return yield* new ConnectionTransientError({
+                  reason: "endpoint-unavailable",
+                  detail: "Probe endpoint changed.",
+                });
+            } else {
+              const check = yield* checkDescriptor(prepared.httpBaseUrl, prepared.environmentId);
+              if (check !== "answered")
+                return yield* new ConnectionTransientError({
+                  reason: "endpoint-unavailable",
+                  detail: "Probe endpoint identity could not be verified.",
+                });
+              if (prepared.httpAuthorization?._tag === "Bearer") {
+                const issued = yield* issueRemoteWebSocketTicket({
+                  httpBaseUrl: prepared.httpBaseUrl,
+                  bearerToken: prepared.httpAuthorization.token,
+                  use: "rpc",
+                }).pipe(
+                  Effect.provideService(HttpClient.HttpClient, httpClient),
+                  Effect.mapError(
+                    () =>
+                      new ConnectionTransientError({
+                        reason: "endpoint-unavailable",
+                        detail: "Probe ticket could not be issued.",
+                      }),
+                  ),
+                );
+                const url = new URL(prepared.socketUrl);
+                url.searchParams.set("wsTicket", Redacted.value(issued.ticket));
+                fresh = { ...prepared, socketUrl: url.toString() };
+              } else if (
+                prepared.httpAuthorization !== null ||
+                route.target._tag === "RelayConnectionTarget"
+              ) {
+                fresh = yield* resolver.prepare(routeEntry(entry, route));
+                if (fresh.httpBaseUrl !== prepared.httpBaseUrl)
+                  return yield* new ConnectionTransientError({
+                    reason: "endpoint-unavailable",
+                    detail: "Probe endpoint changed.",
+                  });
+              }
+            }
+            const config = yield* session.initialConfig;
+            return yield* sessions.openProbe(
+              fresh,
+              config.environment.capabilities.connectionProbe === true,
+            );
+          });
+          return { prepared, session, openProbeSocket } satisfies EnvironmentConnectionLease;
         },
         (effect, route) =>
           route.target._tag === "SshConnectionTarget"

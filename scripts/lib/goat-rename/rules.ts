@@ -586,7 +586,7 @@ export const DROP_RULES: readonly DropRule[] = [
     category: "hygiene",
     find: /^(?:\.agents\/skills\/contribution-triage\/|\.github\/(?:TRIAGE_EXEMPTIONS|VOUCHED)\.td$|\.github\/triage\/PLAYBOOK\.md$)/,
     reason:
-      "Upstream's contribution triage and the support playbook its CLI fetches; GOAT closes outside PRs with close-outside-prs.yml and embeds its own goat triage playbook.",
+      "Upstream's contribution triage and the support playbook its CLI fetches; GOAT embeds its own goat triage playbook.",
   },
   {
     id: "cursor-rules",

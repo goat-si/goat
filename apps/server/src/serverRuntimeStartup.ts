@@ -1,3 +1,4 @@
+import { timedShutdownPhase } from "@goat/shared/timedShutdownPhase";
 import {
   CommandId,
   DEFAULT_MODEL,
@@ -12,6 +13,7 @@ import {
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import { sshHostsRefusal } from "@goat/ssh/hostAccess";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Console from "effect/Console";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -27,6 +29,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 
 import * as ServerConfig from "./config.ts";
+import * as DesktopStopIntentReader from "./desktopStopIntent.ts";
 import * as PersistenceRecoveryOwner from "./persistence/PersistenceRecoveryOwner.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import { flushCompileCache } from "./compileCache.ts";
@@ -37,6 +40,7 @@ import * as LegacyV1ThreadImporter from "./orchestration-v2/legacy/LegacyV1Threa
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
 import * as ProviderRuntimeRecovery from "./orchestration-v2/ProviderRuntimeRecoveryService.ts";
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
+import * as CodexDetachedAppServerLive from "./provider/CodexDetachedAppServerLive.ts";
 import * as ThreadLaunch from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "./orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "./project/ProjectService.ts";
@@ -508,17 +512,21 @@ const runOrderedV2StartupPhases = Effect.fn("serverRuntimeStartup.runOrderedV2St
     ImportContext,
     RecoveryContext,
     DelegationContext,
+    CleanupContext,
     WorkerContext,
     BootstrapContext,
   >(input: {
     readonly importLegacyShells: Effect.Effect<Import, ImportError, ImportContext>;
     readonly recover: Effect.Effect<Recovery, RecoveryError, RecoveryContext>;
+    readonly cleanupDetachedProviders: Effect.Effect<void, never, CleanupContext>;
     readonly recoverDelegatedTasks: Effect.Effect<void, DelegationError, DelegationContext>;
     readonly startEffectWorker: Effect.Effect<void, WorkerError, WorkerContext>;
     readonly autoBootstrap: Effect.Effect<Bootstrap, BootstrapError, BootstrapContext>;
   }) {
     yield* input.importLegacyShells;
     const recovery = yield* input.recover;
+    // Before any session opens: processes a crashed run left behind must be stopped or blocked first.
+    yield* input.cleanupDetachedProviders;
     yield* input.recoverDelegatedTasks;
     yield* input.startEffectWorker;
     const bootstrap = yield* input.autoBootstrap;
@@ -528,11 +536,13 @@ const runOrderedV2StartupPhases = Effect.fn("serverRuntimeStartup.runOrderedV2St
 
 const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: StartupOptions) {
   const serverConfig = yield* ServerConfig.ServerConfig;
+  const intentReader = yield* DesktopStopIntentReader.DesktopStopIntentReader;
   const keybindings = yield* Keybindings.Keybindings;
   const legacyV1ThreadImporter = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter;
   const providerRuntimeRecovery = yield* ProviderRuntimeRecovery.ProviderRuntimeRecoveryService;
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
+  const codexDetached = yield* CodexDetachedAppServerLive.CodexDetachedAppServers;
   const agentAwarenessRelay = yield* AgentAwarenessRelay.AgentAwarenessRelay;
   const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
@@ -546,6 +556,11 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
 
   yield* Effect.addFinalizer(() =>
     Effect.gen(function* () {
+      const intent = yield* intentReader.atShutdown;
+      yield* Effect.logInfo("Server shutdown intent", {
+        reason: Option.match(intent, { onNone: () => "unknown", onSome: (value) => value.reason }),
+        requestedAt: Option.getOrUndefined(Option.map(intent, (value) => value.requestedAt)),
+      });
       yield* commandGate.failCommandReady(
         new ServerRuntimeStartupError({
           mode: serverConfig.mode,
@@ -556,12 +571,18 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
       );
       const workerFiber = yield* Ref.getAndSet(effectWorkerFiber, null);
       if (workerFiber !== null) {
-        yield* Fiber.interrupt(workerFiber).pipe(Effect.ignore);
+        yield* timedShutdownPhase("effectWorker", Fiber.interrupt(workerFiber).pipe(Effect.ignore));
       }
-      yield* providerRuntimeRecovery.prepareForShutdown.pipe(
-        Effect.ensuring(providerSessions.shutdown),
+      yield* codexDetached.beginServerShutdown;
+      yield* timedShutdownPhase(
+        "prepareForShutdown",
+        providerRuntimeRecovery.prepareForShutdown,
+        (summary) => summary,
+      ).pipe(Effect.ensuring(timedShutdownPhase("providerSessions", providerSessions.shutdown)));
+      const reconciliation = yield* timedShutdownPhase(
+        "reconcile",
+        providerRuntimeRecovery.reconcile("shutdown"),
       );
-      const reconciliation = yield* providerRuntimeRecovery.reconcile("shutdown");
       yield* Effect.logInfo("V2 orchestration shutdown reconciliation completed", reconciliation);
     }).pipe(
       Effect.catchCause((cause) =>
@@ -572,7 +593,26 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
     ),
   );
 
+  const startupPhase = yield* Ref.make("starting keybindings runtime");
+  const startupStarted = yield* Clock.monotonicTimeNanos;
+  const heartbeat =
+    serverConfig.mode === "desktop"
+      ? yield* Effect.forkScoped(
+          Effect.gen(function* () {
+            yield* Effect.sleep("15 seconds");
+            yield* Effect.logInfo("Server still starting", {
+              phase: yield* Ref.get(startupPhase),
+              elapsedMs: Number(((yield* Clock.monotonicTimeNanos) - startupStarted) / 1_000_000n),
+            });
+          }).pipe(Effect.forever),
+          { startImmediately: true },
+        )
+      : null;
+  const stopHeartbeat =
+    heartbeat === null ? Effect.void : Fiber.interrupt(heartbeat).pipe(Effect.asVoid);
+
   const startup = Effect.gen(function* () {
+    yield* Ref.set(startupPhase, "starting keybindings runtime");
     yield* Effect.logDebug("startup phase: starting keybindings runtime");
     yield* runStartupPhase(
       "keybindings.start",
@@ -587,6 +627,7 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
       ),
     );
 
+    yield* Ref.set(startupPhase, "starting server settings runtime");
     yield* Effect.logDebug("startup phase: starting server settings runtime");
     yield* runStartupPhase(
       "settings.start",
@@ -602,6 +643,11 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
         ),
       ),
     );
+
+    yield* Ref.set(startupPhase, "waiting for http listener");
+    yield* Effect.logDebug("startup phase: waiting for http listener");
+    yield* runStartupPhase("http.wait", Deferred.await(httpListening));
+    yield* runStartupPhase("auxiliary-roots.parked", options?.awaitAuxiliaryParked ?? Effect.void);
 
     const welcomeBase = yield* resolveWelcomeBase;
     const environment = yield* serverEnvironment.getDescriptor;
@@ -628,6 +674,20 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
         ),
       ),
       recover: runStartupPhase("orchestration-v2.recovery", providerRuntimeRecovery.recover),
+      cleanupDetachedProviders: runStartupPhase(
+        "codex.detached-cleanup",
+        codexDetached.cleanup.pipe(
+          Effect.tap((outcomes) =>
+            outcomes.length === 0
+              ? Effect.void
+              : Effect.logInfo("Codex app-servers from an earlier run handled", { outcomes }),
+          ),
+          Effect.catchCause((cause) =>
+            Effect.logWarning("Codex app-server cleanup failed", { cause: Cause.pretty(cause) }),
+          ),
+          Effect.asVoid,
+        ),
+      ),
       recoverDelegatedTasks: runStartupPhase(
         "orchestration-v2.delegated-tasks.recover",
         orchestrator.recoverDelegatedTasks,
@@ -716,12 +776,9 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
       }),
     );
 
-    yield* Effect.logDebug("startup phase: waiting for http listener");
-    yield* runStartupPhase("http.wait", Deferred.await(httpListening));
-    yield* runStartupPhase("auxiliary-roots.parked", options?.awaitAuxiliaryParked ?? Effect.void);
-
     const updateOutcome = yield* launcher.prepareTrial;
 
+    yield* Ref.set(startupPhase, "publishing welcome event");
     yield* Effect.logDebug("startup phase: publishing welcome event", {
       environmentId: environment.environmentId,
       cwd: welcomeBase.cwd,
@@ -745,6 +802,8 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
     yield* options?.activate ?? Effect.void;
     yield* Effect.logDebug("Accepting commands");
     yield* commandGate.signalCommandReady;
+    yield* stopHeartbeat;
+    yield* Ref.set(startupPhase, "publishing ready event");
     yield* Effect.logDebug("startup phase: publishing ready event");
     yield* runStartupPhase(
       "ready.publish",
@@ -758,6 +817,7 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
         },
       }),
     );
+    yield* Ref.set(startupPhase, "complete");
     yield* Effect.logDebug("startup phase: complete");
     yield* flushCompileCache;
   }).pipe(
@@ -773,7 +833,7 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
   );
 
   yield* Effect.forkScoped(
-    Effect.exit(startup).pipe(
+    Effect.exit(startup.pipe(Effect.ensuring(stopHeartbeat))).pipe(
       Effect.flatMap((startupExit) => {
         if (Exit.isSuccess(startupExit)) return Effect.void;
         const error = new ServerRuntimeStartupError({
@@ -801,3 +861,7 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
 
 export const layerWithOptions = (options?: StartupOptions) =>
   Layer.effect(ServerRuntimeStartup, make(options));
+
+/** Shares the Codex process service with the provider factory, so cleanup and shutdown see one state. */
+export const layerLiveWithOptions = (options?: StartupOptions) =>
+  layerWithOptions(options).pipe(Layer.provide(CodexDetachedAppServerLive.layerLive));

@@ -146,6 +146,82 @@ const withTempDirectory = <A, E, R>(
   );
 
 describe("goat server command safety", () => {
+  it.each(["default", "start", "serve"])(
+    "%s recovers a deleted inherited cwd before validation",
+    async (mode) => {
+      const home = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-cwd-"));
+      try {
+        const result = NodeChildProcess.spawnSync(
+          process.execPath,
+          [NodePath.join(import.meta.dirname, "serverCwd.fixture.ts"), mode],
+          {
+            env: { HOME: home, PATH: process.env.PATH ?? "" },
+            encoding: "utf8",
+          },
+        );
+        expect(result.status).toBe(0);
+        expect(result.stdout.split("\n")).toContain(`CWD ${home}`);
+        if (mode === "default") expect(result.stdout).toContain("Unknown command");
+        else expect(result.stdout).toContain("not-a-directory");
+      } finally {
+        await NodeFSP.rm(home, { recursive: true, force: true });
+      }
+    },
+  );
+  it.each([
+    { scenario: "accessible", expected: "deleted" },
+    { scenario: "inaccessible", expected: "home" },
+    { scenario: "fallback", expected: "root" },
+    { scenario: "both-fail", expected: "failure" },
+  ])("handles $scenario working directories", async ({ scenario, expected }) => {
+    const home = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-cwd-"));
+    try {
+      const result = NodeChildProcess.spawnSync(
+        process.execPath,
+        [NodePath.join(import.meta.dirname, "serverCwd.fixture.ts"), "default", scenario],
+        {
+          env: { HOME: home, PATH: process.env.PATH ?? "" },
+          encoding: "utf8",
+        },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      if (expected === "failure")
+        expect(result.stdout).toContain("Cannot access the current working directory");
+      else
+        expect(result.stdout.split("\n")).toContain(
+          `CWD ${expected === "root" ? "/" : expected === "home" ? home : NodePath.join(home, "deleted")}`,
+        );
+    } finally {
+      await NodeFSP.chmod(NodePath.join(home, "deleted"), 0o700).catch(() => undefined);
+      await NodeFSP.rm(home, { recursive: true, force: true });
+    }
+  });
+  it.each(["cwd", "flag", "env", "bootstrap"])(
+    "resolves relative %s against the inaccessible original cwd",
+    async (source) => {
+      const home = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-cwd-"));
+      try {
+        const result = NodeChildProcess.spawnSync(
+          process.execPath,
+          [
+            NodePath.join(import.meta.dirname, "serverCwd.fixture.ts"),
+            "start",
+            `relative-${source}`,
+          ],
+          {
+            env: { HOME: home, PATH: process.env.PATH ?? "" },
+            encoding: "utf8",
+          },
+        );
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stdout).toContain(NodePath.join(home, "deleted", "relative"));
+        expect(result.stdout.split("\n")).toContain(`CWD ${home}`);
+      } finally {
+        await NodeFSP.chmod(NodePath.join(home, "deleted"), 0o700).catch(() => undefined);
+        await NodeFSP.rm(home, { recursive: true, force: true });
+      }
+    },
+  );
   it.effect("rejects unknown command words without creating a home or project", () =>
     withTempDirectory("t3-cli-unknown-", (root) =>
       Effect.gen(function* () {

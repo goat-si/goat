@@ -88,6 +88,7 @@ export interface GoatBotPendingInput {
   /** Made once per submission and reused by every retry of it. */
   readonly clientKey: string;
   readonly text: string;
+  readonly attachments?: ReadonlyArray<GoatBotAttachmentLabel>;
   readonly createdAt: string;
   readonly state: "queued" | "sending" | "accepted" | "failed";
   /** The server's identity for the input once it has accepted it. */
@@ -106,6 +107,13 @@ export type GoatBotDelivery =
 
 export type GoatBotGroupPosition = "single" | "first" | "middle" | "last";
 
+/** A file the person sent with a message, as its bubble names it. */
+export interface GoatBotAttachmentLabel {
+  readonly id: string;
+  readonly type: string;
+  readonly name: string;
+}
+
 export type GoatBotRow =
   | { readonly kind: "day"; readonly id: string; readonly at: string }
   | {
@@ -119,6 +127,7 @@ export type GoatBotRow =
        */
       readonly requestKey: string | null;
       readonly text: string;
+      readonly attachments?: ReadonlyArray<GoatBotAttachmentLabel>;
       readonly createdAt: string;
       readonly delivery: GoatBotDelivery;
       readonly firstInGroup: boolean;
@@ -175,7 +184,7 @@ export function goatBotConversationPreview(input: {
   return {
     text:
       last.kind === "user"
-        ? `You: ${last.text}`
+        ? `You: ${last.text.trim() || (last.attachments ?? []).map((file) => file.name).join(", ")}`
         : last.kind === "bot"
           ? last.text
           : `${last.card.statusLabel}: ${last.card.title}`,
@@ -216,6 +225,13 @@ function side(row: UngroupedRow): "user" | "bot" {
   return row.kind === "user" ? "user" : "bot";
 }
 
+const attachmentLabels = (
+  attachments: ReadonlyArray<GoatBotAttachmentLabel> | undefined,
+): { readonly attachments?: ReadonlyArray<GoatBotAttachmentLabel> } =>
+  attachments === undefined || attachments.length === 0
+    ? {}
+    : { attachments: attachments.map(({ id, type, name }) => ({ id, type, name })) };
+
 /**
  * When GOAT Bot started reading the newest message it has not answered yet, or null.
  * Reception replies to every input it reads, even when it fails, so an input stays
@@ -255,7 +271,7 @@ export function buildGoatBotTimeline(input: {
 
   for (const { item } of input.visibleTurnItems) {
     if (item.type === "user_message") {
-      if (item.text.trim().length === 0) continue;
+      if (item.text.trim().length === 0 && item.attachments.length === 0) continue;
       const presentation = input.readers.message(item);
       if (presentation?.requestKey) {
         committedRequestKeys.add(presentation.requestKey);
@@ -269,6 +285,7 @@ export function buildGoatBotTimeline(input: {
         sendKey: null,
         requestKey: presentation?.requestKey ?? null,
         text: item.text,
+        ...attachmentLabels(item.attachments),
         createdAt: itemCreatedAt(item),
         delivery: presentation?.readAt
           ? { state: "read", readAt: presentation.readAt }
@@ -329,6 +346,7 @@ export function buildGoatBotTimeline(input: {
       sendKey: entry.clientKey,
       requestKey: entry.requestKey,
       text: entry.text,
+      ...attachmentLabels(entry.attachments),
       createdAt: entry.createdAt,
       delivery:
         entry.state === "failed"

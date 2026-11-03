@@ -3,97 +3,79 @@ import * as Context from "effect/Context";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Tracer from "effect/Tracer";
-import { keepLocalSqlSpan } from "./tracePolicy.ts";
+import { keepLocalSpan } from "./tracePolicy.ts";
 
-it("keeps failed, slow, waiting, eventful and root SQL spans and suppresses only fast successes", () => {
-  const parent = Tracer.externalSpan({ traceId: "trace", spanId: "parent" });
-  const make = (name = "sqlite", root = false) => {
-    const span = new Tracer.NativeSpan({
-      name,
-      parent: root ? Option.none() : Option.some(parent),
-      annotations: Context.empty(),
-      links: [],
-      startTime: 0n,
-      kind: "client",
-      sampled: true,
-    });
-    span.attribute("db.lock_wait_ms", 0);
-    return span;
-  };
-  const fast = make();
-  fast.attribute("db.lock_wait_ms", 0);
-  fast.end(1_000_000n, Exit.void);
-  assert.isFalse(keepLocalSqlSpan(fast, fast.events.length));
-  const tx = make("sql.transaction");
-  tx.attribute("db.lock_wait_ms", 0);
-  tx.end(1_000_000n, Exit.void);
-  assert.isFalse(keepLocalSqlSpan(tx, tx.events.length));
-  const slow = make();
-  slow.attribute("db.lock_wait_ms", 0);
-  slow.end(10_000_000n, Exit.void);
-  const failed = make();
-  failed.attribute("db.lock_wait_ms", 0);
-  failed.end(1n, Exit.fail("fixture"));
-  const interrupted = make();
-  interrupted.end(1n, Exit.interrupt());
-  const waiting = make();
-  waiting.attribute("db.lock_wait_ms", 1);
-  waiting.end(1n, Exit.void);
-  const root = make("sqlite", true);
-  root.end(1n, Exit.void);
-  const service = make("service");
-  service.end(1n, Exit.void);
-  const eventful = make();
-  eventful.attribute("db.lock_wait_ms", 0);
-  eventful.event("warning", 0n, {});
-  eventful.end(1n, Exit.void);
-  const unknownWait = make();
-  unknownWait.attributes.delete("db.lock_wait_ms");
-  unknownWait.end(1n, Exit.void);
-  const unfinished = make();
-  const negative = make();
-  negative.end(-1n, Exit.void);
-  for (const wait of [NaN, Infinity, -1, "0", null]) {
-    const invalid = make();
-    invalid.attribute("db.lock_wait_ms", wait);
-    invalid.end(1n, Exit.void);
-    assert.isTrue(keepLocalSqlSpan(invalid, invalid.events.length));
-  }
-  for (const span of [
-    slow,
-    failed,
-    interrupted,
-    waiting,
-    root,
-    service,
-    eventful,
-    unknownWait,
-    unfinished,
-    negative,
-  ]) {
-    assert.isTrue(keepLocalSqlSpan(span, span.events.length));
-  }
-});
-
-it("retains event evidence without reading an unsupported Span event collection", () => {
+const parent = Tracer.externalSpan({ traceId: "trace", spanId: "parent" });
+const span = (
+  name: string,
+  options: {
+    readonly root?: boolean;
+    readonly wait?: unknown;
+    readonly endNanos?: bigint;
+    readonly exit?: Exit.Exit<unknown, unknown>;
+    readonly events?: ReadonlyArray<string>;
+    readonly attributes?: Record<string, unknown>;
+    readonly unfinished?: boolean;
+  } = {},
+) => {
   const native = new Tracer.NativeSpan({
-    name: "sqlite",
-    parent: Option.some(Tracer.externalSpan({ traceId: "trace", spanId: "parent" })),
+    name,
+    parent: options.root ? Option.none() : Option.some(parent),
     annotations: Context.empty(),
     links: [],
     startTime: 0n,
-    kind: "client",
+    kind: "internal",
     sampled: true,
   });
-  native.attribute("db.lock_wait_ms", 0);
-  native.end(1_000_000n, Exit.void);
-  const span: Tracer.Span = new Proxy(native, {
-    get(target, key, receiver) {
-      if (key === "events") throw new Error("Span does not expose an event collection");
-      return Reflect.get(target, key, receiver);
-    },
-  });
-  const policy: (span: Tracer.Span, eventCount: number) => boolean = keepLocalSqlSpan;
-  assert.isFalse(policy(span, 0));
-  assert.isTrue(policy(span, 1));
+  if ("wait" in options) native.attribute("db.lock_wait_ms", options.wait);
+  for (const [key, value] of Object.entries(options.attributes ?? {})) native.attribute(key, value);
+  for (const event of options.events ?? []) native.event(event, 0n, {});
+  if (!options.unfinished) native.end(options.endNanos ?? 1_000_000n, options.exit ?? Exit.void);
+  return native;
+};
+const keep = (native: Tracer.NativeSpan) => keepLocalSpan(native, native.events);
+
+it("leaves out only fast successful hot spans and uncontended SQL", () => {
+  assert.isFalse(keep(span("SqliteWriter.send")));
+  assert.isFalse(keep(span("OpenCodexQuotaPool.routeOf")));
+  assert.isFalse(keep(span("sqlite", { wait: 0 })));
+  assert.isFalse(
+    keep(span("sql.transaction", { wait: 0.5, events: ["effect.sql.transaction.commit"] })),
+  );
+  assert.isFalse(
+    keep(span("sql.transaction", { wait: 0, events: ["effect.sql.transaction.savepoint"] })),
+  );
+});
+
+it("keeps every span that carries evidence", () => {
+  const kept = {
+    "an unlisted name": span("ProviderTurnStartService.start"),
+    "a slow hot span": span("SqliteWriter.send", { endNanos: 10_000_000n }),
+    "a failed hot span": span("SqliteWriter.send", { exit: Exit.fail("fixture") }),
+    "an interrupted hot span": span("ThreadLiveEventCoalescer.offerAll", {
+      exit: Exit.interrupt(),
+    }),
+    "a root hot span": span("SqliteWriter.send", { root: true }),
+    "a hot span with an event": span("SqliteWriter.send", { events: ["warning"] }),
+    "a hot span with a routine SQL event name": span("SqliteWriter.send", {
+      events: ["effect.sql.transaction.commit"],
+    }),
+    "a hot span with heap growth": span("SqliteWriter.send", {
+      attributes: { "memory.heap_growth_bytes": 20_000_000 },
+    }),
+    "an unfinished hot span": span("SqliteWriter.send", { unfinished: true }),
+    "a negative duration": span("SqliteWriter.send", { endNanos: -1n }),
+    "a rolled back transaction": span("sql.transaction", {
+      wait: 0,
+      events: ["effect.sql.transaction.rollback"],
+    }),
+    "a lock wait": span("sqlite", { wait: 1 }),
+    "a slow statement": span("sqlite", { wait: 0, endNanos: 10_000_000n }),
+    "a root statement": span("sqlite", { wait: 0, root: true }),
+    "a statement without a recorded wait": span("sqlite"),
+  };
+  for (const [label, native] of Object.entries(kept)) assert.isTrue(keep(native), label);
+  for (const wait of [NaN, Infinity, -1, "0", null]) {
+    assert.isTrue(keep(span("sqlite", { wait })), String(wait));
+  }
 });

@@ -423,6 +423,10 @@
       "types": "./src/state/subagentRuntime.ts",
       "default": "./src/state/subagentRuntime.ts"
     },
+    "./state/environment-hue": {
+      "types": "./src/state/environmentHue.ts",
+      "default": "./src/state/environmentHue.ts"
+    },
     "./state/thread-sort": {
       "types": "./src/state/threadSort.ts",
       "default": "./src/state/threadSort.ts"
@@ -526,6 +530,10 @@
     "./state/launch-fold-fixtures": {
       "types": "./src/state/launchFold.fixtures.ts",
       "default": "./src/state/launchFold.fixtures.ts"
+    },
+    "./state/remote-launcher-families": {
+      "types": "./src/state/remoteLauncherFamilies.ts",
+      "default": "./src/state/remoteLauncherFamilies.ts"
     },
     "./state/thread-search": {
       "types": "./src/state/threadSearch.ts",

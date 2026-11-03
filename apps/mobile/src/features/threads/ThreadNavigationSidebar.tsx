@@ -1,3 +1,4 @@
+import { useEnvironmentHues } from "./useEnvironmentHues";
 import { useActiveNewTask } from "../../state/active-new-task";
 import { ThreadUndoNotice } from "../home/ThreadUndoNotice";
 import { useAndroidControlSizing } from "../../components/ui/useAndroidControlSizing";
@@ -59,6 +60,7 @@ import { DecisionInboxRow } from "../decisions/DecisionInboxRow";
 import {
   ThreadListV2PendingRow,
   ThreadListV2Row,
+  ThreadListV2SectionDivider,
   ThreadListV2SettledShelfHeader,
   ThreadListV2SnoozedShelfHeader,
   ThreadListV2WorkingShelfHeader,
@@ -290,6 +292,7 @@ function ThreadNavigationSidebarPane(
     const id = setInterval(() => setNow(new Date().toISOString()), 60_000);
     return () => clearInterval(id);
   }, []);
+  const environmentHues = useEnvironmentHues();
   const listEnvironments = useAtomValue(threadListEnvironmentsAtom);
   const {
     providersByEnvironmentId,
@@ -497,6 +500,7 @@ function ThreadNavigationSidebarPane(
     projectTitleByProjectKey,
     savedConnectionsById,
     listEnvironments,
+    environmentHues,
     threadSearchMatchByKey,
     workingShelfEnabled,
   };
@@ -553,6 +557,7 @@ function ThreadNavigationSidebarPane(
                 ? (savedConnectionsById[item.pendingTask.environmentId]?.environmentLabel ?? null)
                 : null
             }
+            environmentHue={environmentHues.get(item.pendingTask.environmentId)}
             environmentMachine={machineByEnvironmentId.get(item.pendingTask.environmentId)}
             pane="sidebar"
             showPendingDivider={item.showPendingDivider}
@@ -590,6 +595,7 @@ function ThreadNavigationSidebarPane(
                   ? (savedConnectionsById[thread.environmentId]?.environmentLabel ?? null)
                   : null
               }
+              environmentHue={environmentHues.get(thread.environmentId)}
               environmentMachine={machineByEnvironmentId.get(thread.environmentId)}
               searchMatch={
                 // Only rows listed for their messages show one and open at it.
@@ -682,6 +688,8 @@ function ThreadNavigationSidebarPane(
             onRestore={priorityRead.restore}
           />
         );
+      case "v2-threads-header":
+        return <ThreadListV2SectionDivider label="Threads" pane="sidebar" />;
       case "v2-working-shelf":
         return (
           <ThreadListV2WorkingShelfHeader

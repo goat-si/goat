@@ -3,6 +3,7 @@ import * as NodeFS from "node:fs";
 import * as NodeTty from "node:tty";
 
 import * as HostProcess from "@goat/shared/HostProcess";
+import { guardErrors } from "@goat/shared/errorGuards";
 
 /**
  * Electron's Windows launcher (`goat.cmd`) has no stdin; Node substitutes a non-console NUL device.
@@ -53,7 +54,7 @@ export function attachConsoleStdin(): number | undefined {
     NodeFS.closeSync(fd);
     return undefined;
   }
-  const stdin = new NodeTty.ReadStream(fd);
+  const stdin = guardErrors(new NodeTty.ReadStream(fd), () => stdin.destroy());
   // Like Node's built-in stdin, release pending console reads before a child takes over.
   stdin.on("pause", () => {
     const internal = stdin as unknown as {

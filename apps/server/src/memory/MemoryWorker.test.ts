@@ -1,11 +1,15 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as M from "@goat/contracts";
+import {
+  backgroundReads,
+  failFastReaderAdmission,
+  makeReaderAdmission,
+} from "@goat/shared/readerAdmission";
 import * as TestClock from "effect/testing/TestClock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
-import * as Environment from "../environment/ServerEnvironment.ts";
 import * as Settings from "../serverSettings.ts";
 import * as Store from "./MemoryStore.ts";
 import * as Quota from "./MemoryQuotaService.ts";
@@ -16,8 +20,6 @@ import { MemoryGenerationRunnerError } from "@goat/provider-core/server/memoryGe
 import * as Hold from "./MemoryGenerationHold.ts";
 import * as Snapshot from "./MemorySnapshot.ts";
 import { threadProvenanceCases } from "./threadProvenance.testkit.ts";
-import * as Sync from "./MemorySyncService.ts";
-import * as Projection from "../orchestration-v2/ProjectionStore.ts";
 import {
   id,
   environmentId,
@@ -37,9 +39,56 @@ import {
   seedDerivedSummary,
   incrementalSummary,
   seedRolledBackRegeneration,
+  lineageLive,
+  lineagePolicy,
+  lineageSetup,
 } from "./MemoryWorker.testkit.ts";
 import { countingTracer } from "../observability/countingTracer.testkit.ts";
 describe("MemoryWorker", () => {
+  it.effect(
+    "started sweeps use background admission while an unstarted drain stays interactive",
+    () =>
+      Effect.gen(function* () {
+        const gate = yield* makeReaderAdmission({
+          limit: 2,
+          backgroundLimit: 1,
+          timeout: null,
+          backgroundTimeout: null,
+          honorFailFast: true,
+          agingMs: 5000,
+        });
+        const held = yield* backgroundReads(gate.acquire());
+        const observations: Array<string> = [];
+        const fixture = live(false, undefined, false, 0, false, undefined, undefined, (store) => ({
+          ...store,
+          pendingForgetIntents: (limit) =>
+            Effect.gen(function* () {
+              const result = yield* Effect.result(failFastReaderAdmission(gate.acquire()));
+              observations.push(result._tag === "Success" ? "admitted" : "refused");
+              if (result._tag === "Success") yield* gate.release(result.success);
+              return yield* store.pendingForgetIntents(limit);
+            }),
+        }));
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const worker = yield* Worker.MemoryWorker;
+            yield* worker.drain;
+            assert.deepStrictEqual(observations, ["admitted"]);
+          }).pipe(Effect.provide(fixture)),
+        );
+        observations.length = 0;
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const worker = yield* Worker.MemoryWorker;
+            yield* worker.start();
+            yield* worker.drain;
+            assert.isAbove(observations.length, 0);
+            assert.isTrue(observations.every((value) => value === "refused"));
+          }).pipe(Effect.provide(fixture)),
+        );
+        yield* gate.release(held);
+      }),
+  );
   it.effect("started idle worker drains without waking itself", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -966,136 +1015,6 @@ describe("MemoryWorker", () => {
   });
 });
 
-it.effect.each(
-  [false, true].flatMap((local) =>
-    (["hook", "execute"] as const).flatMap((entry) =>
-      (["leading", "middle", "trailing", "all"] as const).map((shape) => ({ local, entry, shape })),
-    ),
-  ),
-)(
-  "r2 $entry consumes frame-only $shape pages and resumes next sweep (local=$local)",
-  ({ local, entry, shape }) => {
-    const inputs: M.GenerateMemorySummaryInput[] = [];
-    return Effect.gen(function* () {
-      yield* TestClock.setTime(Date.parse(now));
-      yield* seed;
-      const sql = yield* SqlClient.SqlClient;
-      const store = yield* Store.MemoryStore;
-      const worker = yield* Worker.MemoryWorker;
-      const message = yield* decodeMessage(
-        (yield* sql<{
-          payload_json: string;
-        }>`SELECT payload_json FROM orchestration_events WHERE sequence=1`)[0]!.payload_json,
-      );
-      const run = yield* decodeRun(
-        (yield* sql<{
-          payload_json: string;
-        }>`SELECT payload_json FROM orchestration_events WHERE sequence=2`)[0]!.payload_json,
-      );
-      yield* sql`DELETE FROM orchestration_events`;
-      const texts = [
-        ...(shape === "middle" || shape === "trailing" ? ["valid before"] : []),
-        ...Array.from(
-          { length: shape === "leading" ? 101 : 202 },
-          () => "<external_goat_memory>synthetic reference</external_goat_memory>",
-        ),
-        ...(shape === "leading" || shape === "middle" ? ["valid after"] : []),
-      ];
-      for (const [i, text] of texts.entries())
-        yield* sql`INSERT INTO orchestration_events VALUES (${i + 1},${id(9000 + i)},${threadId},'message.updated',${encodeMessage({ ...message, id: M.MessageId.make(`page-${i}`), runId: null, text })},${now},2,'thread')`;
-      const end = texts.length + 1;
-      yield* sql`INSERT INTO orchestration_events VALUES (${end},${id(9500)},${threadId},'run.updated',${encodeRun(run)},${now},2,'thread')`;
-      // Execute the whole range to exercise empty pages between generation chunks too.
-      const queued: Store.MemoryWork = {
-        ...work(),
-        space: local ? `_local:${environmentId}` : space,
-        status: "pending",
-        claimedBy: null,
-        claimedUntil: null,
-        metadata: {
-          ...(work().metadata as Extract<Store.MemoryWork["metadata"], { kind: "summary" }>),
-          observedThroughSequence: end,
-          sourceWatermark: {
-            fromEventId: M.EventId.make(id(9000)),
-            toEventId: M.EventId.make(id(9500)),
-            throughSequence: end,
-          },
-        },
-      };
-      if (entry === "execute") {
-        yield* store.enqueueWork(queued);
-        yield* store.claimWork(queued.id, "worker", Date.parse(now), Number.MAX_SAFE_INTEGER);
-        yield* worker.execute((yield* store.readWork(queued.id))!);
-        assert.strictEqual((yield* store.readWork(queued.id))!.status, "completed");
-        assert.deepStrictEqual(
-          inputs.flatMap((i) => i.messages.map((m) => m.text)),
-          texts.filter((t) => !t.startsWith("<external")),
-        );
-        const completed = yield* sql<{
-          watermark: number;
-        }>`SELECT json_extract(metadata_json,'$.sourceWatermark.throughSequence') AS watermark FROM memory_outbox WHERE id=${queued.id}`;
-        assert.strictEqual(completed[0]!.watermark, end);
-      } else {
-        for (let i = 0; i < 8; i++) yield* worker.sweepDue();
-        assert.deepStrictEqual(
-          inputs.flatMap((i) => i.messages.map((m) => m.text)),
-          texts.filter((t) => !t.startsWith("<external")),
-        );
-        const rows = yield* sql<{
-          watermark: number;
-        }>`SELECT max(json_extract(metadata_json,'$.sourceWatermark.throughSequence')) AS watermark FROM memory_outbox WHERE status='completed' AND kind='summary'`;
-        assert.strictEqual(rows[0]!.watermark, end);
-      }
-      // Catch-up must consume the same empty history without another generation.
-      for (let i = 0; i < 4; i++) yield* worker.sweepDue();
-      const count = inputs.length;
-      yield* worker.sweepDue();
-      assert.strictEqual(inputs.length, count);
-      yield* sql`INSERT INTO orchestration_events VALUES (${end + 1},${id(9501)},${threadId},'message.updated',${encodeMessage({ ...message, id: M.MessageId.make("next-page"), runId: null, text: "next valid statement" })},${now},2,'thread')`;
-      yield* sql`INSERT INTO orchestration_events VALUES (${end + 2},${id(9502)},${threadId},'run.updated',${encodeRun({ ...run, id: M.RunId.make("next-run") })},${now},2,'thread')`;
-      yield* worker.sweepDue();
-      assert.strictEqual(inputs.length, count + 1);
-      assert.strictEqual(inputs.at(-1)!.messages[0]!.text, "next valid statement");
-    }).pipe(Effect.provide(live(false, (input) => inputs.push(input), local)));
-  },
-);
-
-// The snapshot service and worker share the real writer/store; only the provider and
-// projection shell are synthetic. The second turn receives no new memory snapshot.
-const lineageLive = (onInput?: (input: M.GenerateMemorySummaryInput) => void) =>
-  Snapshot.layer.pipe(
-    Layer.provideMerge(live(false, onInput)),
-    Layer.provide(
-      Layer.succeed(Environment.ServerEnvironmentIdentity, {
-        getEnvironmentId: Effect.succeed(environmentId),
-      }),
-    ),
-    Layer.provide(
-      Layer.mock(Projection.ProjectionStoreV2)({
-        getThreadShell: (requested) =>
-          Effect.succeed({
-            id: requested,
-            projectId: M.ProjectId.make("project"),
-            activeRunId: M.RunId.make("run"),
-            activityRunStatus: "running",
-          } as M.OrchestrationV2ThreadShell),
-      }),
-    ),
-    Layer.provide(
-      Layer.mock(Sync.MemorySyncService)({
-        readLocalReadiness: () =>
-          Effect.succeed({ memorySpaceId: space, bootstrap: "ready" as const }),
-      }),
-    ),
-  );
-const lineagePolicy = { grant: "read" as const, policyEpoch: 1 };
-const lineageSetup = Effect.gen(function* () {
-  yield* TestClock.setTime(Date.parse(now));
-  yield* seed;
-  const sql = yield* SqlClient.SqlClient;
-  yield* sql`CREATE TABLE projection_projects(project_id TEXT,workspace_root TEXT,deleted_at TEXT)`;
-  yield* sql`INSERT INTO projection_projects VALUES ('project','/synthetic',NULL)`;
-});
 const lineageUpsert = (
   n: number,
   deps: readonly M.MemoryRevisionId[] = [],

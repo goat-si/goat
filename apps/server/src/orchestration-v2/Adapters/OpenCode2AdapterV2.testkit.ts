@@ -317,9 +317,12 @@ const layerReplayHostWithAttachments = (
     }),
   ).pipe(Layer.provide(layerReplayHost));
 
-function layerRegistry(
+export function layerRegistry(
   transcript: OpenCode2ReplayTranscript,
-  options?: { readonly replayGate?: ProviderReplayGate },
+  options?: {
+    readonly replayGate?: ProviderReplayGate;
+    readonly onHang?: (operation: string) => void;
+  },
 ) {
   return Layer.unwrap(
     makeReplayAdapter(transcript, { external: true, ...options }).pipe(

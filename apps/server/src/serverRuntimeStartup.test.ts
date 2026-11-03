@@ -1,5 +1,6 @@
 import { assert, it } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   DEFAULT_SERVER_SETTINGS,
   ProjectId,
@@ -8,6 +9,7 @@ import {
   CommandId,
   EnvironmentId,
   type ServerLifecycleStreamEvent,
+  type DesktopStopIntent,
 } from "@goat/contracts";
 import { DEFAULT_SIGNAL_EXPORT } from "@goat/shared/observability";
 import * as OtelEnvironment from "@goat/shared/otelEnvironment";
@@ -21,11 +23,16 @@ import * as Fiber from "effect/Fiber";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
+import * as TestClock from "effect/testing/TestClock";
+import * as Stream from "effect/Stream";
 import * as Path from "effect/Path";
+import * as Option from "effect/Option";
 
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 
 import * as ServerConfig from "./config.ts";
+import * as DesktopStopIntentReader from "./desktopStopIntent.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
@@ -44,16 +51,31 @@ import * as ProjectService from "./project/ProjectService.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import { ServerActivation } from "./serverActivation.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
+import * as CodexDetachedAppServerLive from "./provider/CodexDetachedAppServerLive.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 
-it.effect.each([
-  "disabled-codex",
-  "disabled-default",
-  "launch-failure",
-  "project-failure",
-] as const)("keeps bootstrap launch failures separate from project failures: %s", (scenario) =>
+type BootstrapScenario =
+  | "disabled-codex"
+  | "disabled-default"
+  | "launch-failure"
+  | "project-failure";
+
+const bootstrapScenario = (
+  scenario: BootstrapScenario,
+  shutdown: Effect.Effect<void> = Effect.void,
+  ordering?: {
+    log: string[];
+    settings: Deferred.Deferred<void>;
+    auxiliary: Deferred.Deferred<void>;
+    checkHeartbeat?: Effect.Effect<void>;
+    checkStopped?: Effect.Effect<void>;
+  },
+  intent: Option.Option<DesktopStopIntent> = Option.none(),
+  readerEffect: Effect.Effect<Option.Option<DesktopStopIntent>> = Effect.succeed(intent),
+  hold: Effect.Effect<void> = Effect.void,
+) =>
   Effect.scoped(
     Effect.gen(function* () {
       const projectId = ProjectId.make("bootstrap-project");
@@ -70,6 +92,9 @@ it.effect.each([
       };
       const imports = { importedThreadCount: 0, importedMessageCount: 0 };
       const dependencies = Layer.mergeAll(
+        Layer.succeed(DesktopStopIntentReader.DesktopStopIntentReader, {
+          atShutdown: readerEffect,
+        }),
         NodeCrypto.layer,
         Path.layer,
         Layer.mock(ServerConfig.ServerConfig)({
@@ -96,7 +121,7 @@ it.effect.each([
           logWebSocketEvents: false,
           tailscaleServeEnabled: false,
           tailscaleServePort: 443,
-          mode: "web",
+          mode: ordering?.checkHeartbeat ? "desktop" : "web",
           cwd: "/bootstrap-project",
           host: "localhost",
           port: 3773,
@@ -108,33 +133,48 @@ it.effect.each([
         Layer.mock(Keybindings.Keybindings)({ start: Effect.void }),
         Layer.mock(LegacyV1ThreadImporter.LegacyV1ThreadImporter)({
           pendingThreadCount: Effect.succeed(0),
-          reconcileShells: Effect.succeed(imports),
+          reconcileShells: Effect.sync(() => {
+            ordering?.log.push("legacy-import");
+            return imports;
+          }),
           importPendingTranscripts: Effect.succeed(imports),
         }),
         Layer.mock(ProviderRuntimeRecovery.ProviderRuntimeRecoveryService)({
-          recover: Effect.succeed(recovery),
-          prepareForShutdown: Effect.void,
+          recover: Effect.sync(() => {
+            ordering?.log.push("recovery");
+            return recovery;
+          }),
+          prepareForShutdown: Effect.succeed({ candidates: 0, continued: 0 }),
           reconcile: () => Effect.succeed(recovery),
         }),
         Layer.mock(Orchestrator.OrchestratorV2)({ recoverDelegatedTasks: Effect.void }),
-        Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({ shutdown: Effect.void }),
+        Layer.mock(CodexDetachedAppServerLive.CodexDetachedAppServers)({
+          cleanup: Effect.succeed([]),
+          beginServerShutdown: Effect.void,
+          socketTransportEnabled: false,
+        }),
+        Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({ shutdown }),
         Layer.mock(AgentAwarenessRelay.AgentAwarenessRelay)({ start: () => Effect.void }),
         Layer.mock(EffectWorker.OrchestrationEffectWorkerV2)({
           configureConcurrency: () => Effect.void,
           runGeneralOnce: Effect.never,
           runControlOnce: Effect.never,
           runCleanupOnce: Effect.never,
+          runStartOnce: Effect.never,
         }),
         Layer.mock(ServerLifecycleEvents.ServerLifecycleEvents)({
           publish: (event) =>
             Effect.sync(() => {
               const published = { ...event, sequence: events.length + 1 };
               events.push(published);
+              if (event.type === "ready") ordering?.log.push("ready");
               return published;
             }),
         }),
         Layer.mock(ServerSettings.ServerSettingsService)({
-          start: Effect.void,
+          start: ordering
+            ? Deferred.succeed(ordering.settings, undefined).pipe(Effect.asVoid)
+            : Effect.void,
           getSettings: Effect.succeed({
             ...DEFAULT_SERVER_SETTINGS,
             defaultModelSelection:
@@ -229,9 +269,31 @@ it.effect.each([
       );
       yield* Effect.gen(function* () {
         const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
-        yield* startup.markHttpListening;
+        if (ordering) {
+          yield* Deferred.await(ordering.settings);
+          yield* TestClock.adjust(0);
+          assert.notInclude(ordering.log, "legacy-import");
+          ordering.log.push("listening");
+          yield* startup.markHttpListening;
+          yield* TestClock.adjust(0);
+          assert.include(ordering.log, "aux-parked");
+          assert.notInclude(ordering.log, "legacy-import");
+          yield* ordering.checkHeartbeat ?? Effect.void;
+          yield* Deferred.succeed(ordering.auxiliary, undefined);
+        } else yield* startup.markHttpListening;
         const ready = yield* Effect.exit(startup.awaitCommandReady);
+        yield* ordering?.checkStopped ?? Effect.void;
         assert.equal(Exit.isSuccess(ready), scenario !== "project-failure");
+        if (ordering && scenario !== "project-failure") {
+          yield* TestClock.adjust(0);
+          assert.deepStrictEqual(ordering.log, [
+            "listening",
+            "aux-parked",
+            "legacy-import",
+            "recovery",
+            "ready",
+          ]);
+        }
         const welcome = events.find((event) => event.type === "welcome");
         if (scenario === "project-failure") {
           assert.isUndefined(welcome);
@@ -242,12 +304,284 @@ it.effect.each([
             assert.isUndefined(welcome.payload.bootstrapThreadId);
           }
         }
+        yield* hold;
       }).pipe(
-        Effect.provide(ServerRuntimeStartup.layerWithOptions().pipe(Layer.provide(dependencies))),
+        Effect.provide(
+          ServerRuntimeStartup.layerWithOptions(
+            ordering
+              ? {
+                  awaitAuxiliaryParked: Effect.sync(() => {
+                    ordering.log.push("aux-parked");
+                  }).pipe(Effect.andThen(Deferred.await(ordering.auxiliary))),
+                }
+              : undefined,
+          ).pipe(Layer.provide(dependencies)),
+        ),
         Effect.provideService(ServerActivation, Effect.never),
       );
     }),
-  ),
+  );
+
+it.effect("waits for the HTTP listener and routes before legacy import and recovery", () =>
+  Effect.gen(function* () {
+    const settings = yield* Deferred.make<void>();
+    const auxiliary = yield* Deferred.make<void>();
+    yield* bootstrapScenario("disabled-codex", Effect.void, { log: [], settings, auxiliary });
+  }),
+);
+
+it.effect.each(["disabled-codex", "project-failure"] as const)(
+  "desktop startup heartbeat stops after %s",
+  (scenario) =>
+    Effect.gen(function* () {
+      const settings = yield* Deferred.make<void>();
+      const auxiliary = yield* Deferred.make<void>();
+      const messages: unknown[] = [];
+      const logger = Logger.make(({ message }) => {
+        messages.push(message);
+      });
+      const checkHeartbeat = Effect.gen(function* () {
+        yield* TestClock.adjust("30 seconds");
+        const heartbeats = messages.filter(
+          (message) => Array.isArray(message) && message[0] === "Server still starting",
+        );
+        assert.equal(heartbeats.length, 2);
+        assert.deepStrictEqual(
+          heartbeats.map((message) => (Array.isArray(message) ? message[1]?.elapsedMs : undefined)),
+          [15000, 30000],
+        );
+        assert.isTrue(
+          heartbeats.every(
+            (message) =>
+              Array.isArray(message) && message[1]?.phase === "waiting for http listener",
+          ),
+        );
+      });
+      const checkStopped = Effect.gen(function* () {
+        const count = messages.filter(
+          (message) => Array.isArray(message) && message[0] === "Server still starting",
+        ).length;
+        yield* TestClock.adjust("30 seconds");
+        assert.equal(
+          messages.filter(
+            (message) => Array.isArray(message) && message[0] === "Server still starting",
+          ).length,
+          count,
+        );
+      });
+      yield* bootstrapScenario(scenario, Effect.void, {
+        log: [],
+        settings,
+        auxiliary,
+        checkHeartbeat,
+        checkStopped,
+      }).pipe(Effect.provide(Logger.layer([logger], { mergeWithExisting: false })));
+      const count = messages.length;
+      yield* TestClock.adjust("30 seconds");
+      assert.equal(messages.length, count);
+    }),
+);
+
+it.effect.each([
+  "disabled-codex",
+  "disabled-default",
+  "launch-failure",
+  "project-failure",
+] as const)("keeps bootstrap launch failures separate from project failures: %s", (scenario) =>
+  bootstrapScenario(scenario),
+);
+
+it.effect.each(["relaunch", "unknown"] as const)("records shutdown intent: %s", (reason) =>
+  Effect.gen(function* () {
+    const messages: unknown[] = [];
+    const logger = Logger.make(({ message }) => {
+      messages.push(message);
+    });
+    const intent =
+      reason === "relaunch"
+        ? Option.some({
+            version: 1 as const,
+            pid: 123,
+            reason: "relaunch" as const,
+            requestedAt: "2026-01-01T00:00:00Z",
+          })
+        : Option.none();
+    yield* bootstrapScenario("disabled-codex", Effect.void, undefined, intent).pipe(
+      Effect.provide(Logger.layer([logger], { mergeWithExisting: false })),
+    );
+    assert.isTrue(
+      messages.some(
+        (message) =>
+          Array.isArray(message) &&
+          message[0] === "Server shutdown intent" &&
+          message[1]?.reason === reason &&
+          message[1]?.requestedAt === (reason === "relaunch" ? "2026-01-01T00:00:00Z" : undefined),
+      ),
+    );
+  }),
+);
+
+it.effect("an interrupted startup fiber logs the relaunch intent from the file", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = (yield* Path.Path).join(yield* fs.makeTempDirectoryScoped(), "intent.json");
+    yield* fs.writeFileString(
+      path,
+      JSON.stringify({
+        version: 1,
+        pid: 123,
+        reason: "relaunch",
+        requestedAt: "2026-01-01T00:00:00Z",
+      }),
+    );
+    const ready = yield* Deferred.make<void>();
+    const messages: unknown[] = [];
+    const logger = Logger.make(({ message }) => {
+      messages.push(message);
+    });
+    yield* Effect.gen(function* () {
+      const reader = yield* DesktopStopIntentReader.DesktopStopIntentReader;
+      const fiber = yield* bootstrapScenario(
+        "disabled-codex",
+        Effect.void,
+        undefined,
+        Option.none(),
+        reader.atShutdown,
+        Deferred.succeed(ready, undefined).pipe(Effect.andThen(Effect.never)),
+      ).pipe(
+        Effect.provide(Logger.layer([logger], { mergeWithExisting: false })),
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.await(ready);
+      yield* Fiber.interrupt(fiber);
+      assert.isTrue(
+        messages.some(
+          (message) =>
+            Array.isArray(message) &&
+            message[0] === "Server shutdown intent" &&
+            message[1]?.reason === "relaunch",
+        ),
+      );
+    }).pipe(Effect.provide(DesktopStopIntentReader.layer(path, 123)));
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("an interrupted startup bounds a stalled intent read to one second", () =>
+  Effect.gen(function* () {
+    const ready = yield* Deferred.make<void>();
+    const started = yield* Deferred.make<void>();
+    const messages: unknown[] = [];
+    const logger = Logger.make(({ message }) => {
+      messages.push(message);
+    });
+    const fs = FileSystem.layerNoop({
+      stream: () =>
+        Stream.fromEffect(Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never))),
+    });
+    yield* Effect.gen(function* () {
+      const reader = yield* DesktopStopIntentReader.DesktopStopIntentReader;
+      const fiber = yield* bootstrapScenario(
+        "disabled-codex",
+        Effect.void,
+        undefined,
+        Option.none(),
+        reader.atShutdown,
+        Deferred.succeed(ready, undefined).pipe(Effect.andThen(Effect.never)),
+      ).pipe(
+        Effect.provide(Logger.layer([logger], { mergeWithExisting: false })),
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.await(ready);
+      const interrupt = yield* Fiber.interrupt(fiber).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* TestClock.adjust(0);
+      const didStart = yield* Deferred.isDone(started);
+      if (didStart) {
+        yield* TestClock.adjust("999 millis");
+        assert.isUndefined(interrupt.pollUnsafe());
+        yield* TestClock.adjust("1 millis");
+      }
+      yield* Fiber.join(interrupt);
+      assert.isTrue(didStart);
+      assert.isTrue(
+        messages.some(
+          (message) =>
+            Array.isArray(message) &&
+            message[0] === "Server shutdown intent" &&
+            message[1]?.reason === "unknown",
+        ),
+      );
+    }).pipe(Effect.provide(DesktopStopIntentReader.layer("/intent", 123).pipe(Layer.provide(fs))));
+  }),
+);
+
+it.effect("shutdown finalizer bounds stalled intent I/O and logs unknown", () =>
+  Effect.gen(function* () {
+    const started = yield* Deferred.make<void>();
+    const messages: unknown[] = [];
+    const logger = Logger.make(({ message }) => {
+      messages.push(message);
+    });
+    const fs = FileSystem.layerNoop({
+      stream: () =>
+        Stream.fromEffect(Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never))),
+    });
+    yield* Effect.gen(function* () {
+      const reader = yield* DesktopStopIntentReader.DesktopStopIntentReader;
+      const fiber = yield* bootstrapScenario(
+        "disabled-codex",
+        Effect.void,
+        undefined,
+        Option.none(),
+        reader.atShutdown,
+      ).pipe(
+        Effect.provide(Logger.layer([logger], { mergeWithExisting: false })),
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.await(started);
+      yield* TestClock.adjust("1 second");
+      yield* Fiber.join(fiber);
+      assert.isTrue(
+        messages.some(
+          (message) =>
+            Array.isArray(message) &&
+            message[0] === "Server shutdown intent" &&
+            message[1]?.reason === "unknown",
+        ),
+      );
+    }).pipe(Effect.provide(DesktopStopIntentReader.layer("/intent", 123).pipe(Layer.provide(fs))));
+  }),
+);
+
+it.effect("records the duration of provider session shutdown", () =>
+  Effect.gen(function* () {
+    const started = yield* Deferred.make<void>();
+    const messages: unknown[] = [];
+    const logger = Logger.make(({ message }) => {
+      messages.push(message);
+    });
+    const shutdown = Deferred.succeed(started, undefined).pipe(
+      Effect.andThen(Effect.sleep("3 seconds")),
+    );
+    const fiber = yield* bootstrapScenario("disabled-codex", shutdown).pipe(
+      Effect.provide(Logger.layer([logger], { mergeWithExisting: false })),
+      Effect.forkChild,
+    );
+    yield* Deferred.await(started);
+    yield* TestClock.adjust("3 seconds");
+    yield* Fiber.join(fiber);
+    assert.isTrue(
+      messages.some(
+        (message) =>
+          Array.isArray(message) &&
+          message[0] === "Server shutdown phase finished" &&
+          message[1]?.phase === "providerSessions" &&
+          message[1]?.durationMs === 3000 &&
+          message[1]?.outcome === "success",
+      ),
+    );
+  }),
 );
 
 it.effect("interrupts the effect worker when awareness relay startup fails", () =>

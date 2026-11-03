@@ -60,6 +60,7 @@ export const GOAT_MIGRATION_NAMES: ReadonlySet<string> = new Set([
   "ComputerUseSessionApprovals",
   "ComputerUseNamedApprovals",
   "ComputerUseInputHistory",
+  "MemoryCheckpointBound",
 ]);
 
 type MigrationEntry<E> = readonly [

@@ -144,6 +144,7 @@ vi.mock("../../state/threads", async () => {
             reorderRoutes: unexpected,
             removeRelayEnvironments: unexpected,
             retryNow: () => Effect.void,
+            reconnect: () => Effect.void,
             setEnabled: unexpected,
             setCompatibility: unexpected,
             state: () => SubscriptionRef.get(supervisor.state),

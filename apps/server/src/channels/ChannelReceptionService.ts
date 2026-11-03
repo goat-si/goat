@@ -96,7 +96,7 @@ import {
   taskDigest,
   threadDigest,
 } from "./channelBotRecall.ts";
-import { CHANNEL_COPY } from "./channelCopy.ts";
+import { CHANNEL_COPY, inboundTextWithFiles } from "./channelCopy.ts";
 import {
   approvalCard,
   approvalChoiceLabels,
@@ -1232,7 +1232,7 @@ const make = Effect.gen(function* () {
                   mode: "input",
                   conversationId,
                   originKind: message.kind,
-                  inputText: message.text,
+                  inputText: inboundTextWithFiles(message),
                   tail: boundTail(
                     tail.flatMap((entry) =>
                       entry.inputId === inputId

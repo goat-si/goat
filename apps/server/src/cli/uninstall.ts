@@ -1,6 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off
 // Windows cleanup must outlive this executable to delete its directory; scoped ChildProcess kills children on exit.
 import * as NodeChildProcess from "node:child_process";
+import * as NodeFS from "node:fs";
+import { guardChild } from "@goat/shared/errorGuards";
 
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Console from "effect/Console";
@@ -78,25 +80,32 @@ export const findOwnedLauncher = Effect.fn("cli.uninstall.find_launcher")(functi
 });
 
 // cmd.exe needs verbatim quoting and a literal path, with delayed expansion disabled.
-export function spawnWindowsRemoval(comspec: string, dir: string) {
-  return NodeChildProcess.spawn(
-    comspec,
-    [
-      "/d",
-      "/v:off",
-      "/s",
-      "/c",
-      '"ping -n 3 127.0.0.1 >nul & rmdir /s /q "%GOAT_UNINSTALL_RUNTIME%""',
-    ],
-    {
-      env: { ...process.env, GOAT_UNINSTALL_RUNTIME: dir },
-      windowsVerbatimArguments: true,
-      detached: true,
-      stdio: "ignore",
-      windowsHide: true,
-    },
+export function spawnWindowsRemoval(comspec: string, dir: string, onError: (error: Error) => void) {
+  // A missing shell fails after spawn returns, when the uninstall has already finished.
+  return guardChild(
+    NodeChildProcess.spawn(
+      comspec,
+      [
+        "/d",
+        "/v:off",
+        "/s",
+        "/c",
+        '"ping -n 3 127.0.0.1 >nul & rmdir /s /q "%GOAT_UNINSTALL_RUNTIME%""',
+      ],
+      {
+        env: { ...process.env, GOAT_UNINSTALL_RUNTIME: dir },
+        windowsVerbatimArguments: true,
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true,
+      },
+    ),
+    onError,
   );
 }
+
+const removalNotScheduled = (dir: string) =>
+  `Could not schedule removal of ${dir}. Delete it yourself once this window is closed.`;
 
 const planUninstall = Effect.fn("cli.uninstall.plan")(function* (input: {
   readonly baseDir: string;
@@ -228,11 +237,16 @@ const runUninstall = Effect.fn("cli.uninstall.run")(function* (input: {
       const runtimeDir = plan.runtimeDir;
       const comspec = environment["ComSpec"] ?? environment["COMSPEC"] ?? "cmd.exe";
       yield* Effect.try({
-        try: () => spawnWindowsRemoval(comspec, runtimeDir).unref(),
-        catch: () =>
-          new CliUninstallError({
-            reason: `Could not schedule removal of ${runtimeDir}. Delete it yourself once this window is closed.`,
-          }),
+        try: () =>
+          spawnWindowsRemoval(comspec, runtimeDir, () => {
+            process.exitCode = 1;
+            try {
+              NodeFS.writeSync(2, `${removalNotScheduled(runtimeDir)}\n`);
+            } catch {
+              // stderr is gone as well; the exit code still reports the failure.
+            }
+          }).unref(),
+        catch: () => new CliUninstallError({ reason: removalNotScheduled(runtimeDir) }),
       });
       yield* Console.log(`${runtimeDir} will be removed once goat exits.`);
     } else {

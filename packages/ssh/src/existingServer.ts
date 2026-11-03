@@ -152,7 +152,7 @@ export function makeExistingServerRoutes(input: {
         return { kind, owner, target: known, key };
     }
     return yield* new SshLaunchError({
-      message: `GOAT environment ${environmentId} on ${target.alias} is unavailable.`,
+      message: `GOAT environment ${environmentId} on ${target.alias} is unavailable (app: ${app.kind}${app.kind !== "live" && app.reason ? ` ${app.reason}` : ""}; managed: ${managed.kind}${managed.kind !== "live" && managed.reason ? ` ${managed.reason}` : ""}).`,
       stdout: "",
     });
   });

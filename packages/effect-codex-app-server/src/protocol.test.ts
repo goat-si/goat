@@ -2,6 +2,8 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
+import * as PlatformError from "effect/PlatformError";
+import * as Sink from "effect/Sink";
 import * as Schema from "effect/Schema";
 import * as Stdio from "effect/Stdio";
 import * as Stream from "effect/Stream";
@@ -760,3 +762,80 @@ it.layer(NodeServices.layer)("effect-codex-app-server protocol", (it) => {
     }),
   );
 });
+
+it.effect(
+  "an outgoing message over the cap fails only its own request and the connection stays usable",
+  () =>
+    Effect.gen(function* () {
+      const { stdio, input, output } = yield* makeInMemoryStdio();
+      const transport = yield* CodexProtocol.makeCodexAppServerPatchedProtocol({
+        stdio,
+        maxOutgoingMessageBytes: 100,
+      });
+      const result = yield* Effect.race(
+        transport.request("large", { text: "x".repeat(150) }).pipe(
+          Effect.match({
+            onFailure: (error) => ({ error }),
+            onSuccess: () => ({ message: "unexpected response" }),
+          }),
+        ),
+        Queue.take(output).pipe(Effect.map((message) => ({ message }))),
+      );
+      assert.property(result, "error");
+      if (!("error" in result)) throw new Error("oversized request was sent");
+      const error = result.error;
+      assert.instanceOf(error, CodexError.CodexAppServerTransportError);
+      assert.equal(error.operation, "encode-outgoing-message");
+      const request = yield* transport.request("small").pipe(Effect.forkScoped);
+      const message = JSON.parse(yield* Queue.take(output));
+      yield* Queue.offer(input, encodeJsonl({ id: message.id, result: "ok" }));
+      assert.equal(yield* Fiber.join(request), "ok");
+    }).pipe(Effect.scoped),
+);
+
+it.effect("a failing output sink fails every pending request with the transport error", () =>
+  Effect.gen(function* () {
+    const { stdio } = yield* makeInMemoryStdio();
+    const trigger = yield* Deferred.make<void>();
+    const original = new CodexError.CodexAppServerTransportError({
+      operation: "encode-outgoing-message",
+      cause: new Error("write failed"),
+    });
+    const failing = Stdio.make({
+      args: stdio.args,
+      stdin: stdio.stdin,
+      stderr: stdio.stderr,
+      stdout: () =>
+        Sink.forEach(() =>
+          Deferred.await(trigger).pipe(
+            Effect.andThen(
+              Effect.fail(
+                PlatformError.badArgument({ module: "test", method: "write", cause: original }),
+              ),
+            ),
+          ),
+        ),
+    });
+    const ended = yield* Deferred.make<CodexError.CodexAppServerError>();
+    const transport = yield* CodexProtocol.makeCodexAppServerPatchedProtocol({
+      stdio: failing,
+      onTermination: (error) => Deferred.succeed(ended, error).pipe(Effect.asVoid),
+    });
+    const first = yield* transport
+      .request("first")
+      .pipe(
+        Effect.match({ onFailure: (error) => error, onSuccess: () => undefined }),
+        Effect.forkScoped,
+      );
+    const second = yield* transport
+      .request("second")
+      .pipe(
+        Effect.match({ onFailure: (error) => error, onSuccess: () => undefined }),
+        Effect.forkScoped,
+      );
+    yield* Deferred.succeed(trigger, undefined);
+    assert.strictEqual(yield* Fiber.join(first), original);
+    assert.strictEqual(yield* Fiber.join(second), original);
+    assert.strictEqual(yield* Deferred.await(ended), original);
+  }).pipe(Effect.scoped),
+);

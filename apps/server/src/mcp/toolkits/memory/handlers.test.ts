@@ -1,3 +1,4 @@
+import * as RecallFixture from "../../../memory/MemoryRecall.ts";
 import { expect, it } from "@effect/vitest";
 import * as M from "@goat/contracts";
 import * as Effect from "effect/Effect";
@@ -114,17 +115,19 @@ it.effect(
   "argument mistakes are refused as invalid_request naming the fields, never as invalid_output",
   () =>
     Effect.gen(function* () {
+      // An omitted space defaults to this server's; a malformed one still names sync_status.
       for (const [name, input, fields] of [
-        ["goat_memory_list", {}, ["memorySpaceId", "includeQuarantined"]],
-        ["goat_memory_list", { limit: 1 }, ["memorySpaceId", "includeQuarantined"]],
-        ["goat_memory_search", { query: "synthetic" }, ["memorySpaceId"]],
+        ["goat_memory_list", {}, ["includeQuarantined"]],
+        ["goat_memory_list", { limit: 1 }, ["includeQuarantined"]],
+        ["goat_memory_search", { memorySpaceId: "space", query: "x" }, ["memorySpaceId"]],
       ] as const) {
         const { result, body } = yield* Fixture.call(name, input);
         expect(result.isError).toBe(true);
         const refusal = yield* decodeRefusal(body);
         expect(refusal.code).toBe("invalid_request");
         for (const field of fields) expect(refusal.message).toContain(field);
-        expect(refusal.message).toContain("goat_memory_sync_status");
+        if (name === "goat_memory_search")
+          expect(refusal.message).toContain("goat_memory_sync_status");
         expect(yield* Fixture.callThroughGoatCall(name, input)).toMatchObject({
           status: "error",
           error: { code: "invalid_request", reason: "invalid_request", retryable: false },
@@ -155,6 +158,30 @@ it.effect(
     }).pipe(Effect.provide(Fixture.layer)),
 );
 
+it.effect("read tools default to this server's memory space when memorySpaceId is omitted", () =>
+  Effect.gen(function* () {
+    const service = yield* MemoryService.MemoryService;
+    yield* service.upsert(Fixture.upsert(), Effect.void);
+    const search = { query: "synthetic", mode: "substring" };
+    const found = yield* decodePage((yield* Fixture.call("goat_memory_search", search)).body);
+    expect(found.items.map((item) => item.memoryId)).toEqual([Fixture.memoryId]);
+    const listed = yield* Fixture.call("goat_memory_list", { includeQuarantined: false });
+    expect((yield* decodePage(listed.body)).items).toHaveLength(1);
+    const read = yield* Fixture.call("goat_memory_read", { memoryId: Fixture.memoryId });
+    expect(read.body).toMatchObject({ memoryId: Fixture.memoryId, status: "active" });
+    const history = yield* Fixture.call("goat_memory_history", { memoryId: Fixture.memoryId });
+    expect(history.result.isError).not.toBe(true);
+  }).pipe(Effect.provide(Fixture.layer)),
+);
+
+it.effect("an omitted space with no bound memory space is refused as hub_disabled", () =>
+  Effect.gen(function* () {
+    const { result, body } = yield* Fixture.call("goat_memory_search", { query: "synthetic" });
+    expect(result.isError).toBe(true);
+    expect(body).toMatchObject({ code: "hub_disabled" });
+  }).pipe(Effect.provide(Fixture.unboundLayer)),
+);
+
 it.effect.each(M.MEMORY_MCP_TOOLS.filter((name) => name !== "memory_read_source"))(
   "denies ungranted %s at the registered toolkit",
   (name) =>
@@ -162,29 +189,31 @@ it.effect.each(M.MEMORY_MCP_TOOLS.filter((name) => name !== "memory_read_source"
       const input =
         name === "memory_upsert"
           ? Fixture.upsert()
-          : name === "memory_list"
-            ? { memorySpaceId: Fixture.space, includeQuarantined: false }
-            : name === "memory_search"
-              ? { memorySpaceId: Fixture.space, query: "synthetic" }
-              : name === "memory_sync_status"
-                ? {}
-                : name === "memory_forget"
-                  ? {
-                      memorySpaceId: Fixture.space,
-                      memoryId: Fixture.memoryId,
-                      operationId: M.MemoryOperationId.make(Fixture.id(4)),
-                      expectedHeads: [],
-                    }
-                  : name === "memory_revert_resolution"
+          : name === "goat_memory_remember"
+            ? { memorySpaceId: Fixture.space, text: "synthetic", scope: "user" }
+            : name === "memory_list"
+              ? { memorySpaceId: Fixture.space, includeQuarantined: false }
+              : name === "memory_search" || name === "memory_recall"
+                ? { memorySpaceId: Fixture.space, query: "synthetic" }
+                : name === "memory_sync_status"
+                  ? {}
+                  : name === "memory_forget"
                     ? {
                         memorySpaceId: Fixture.space,
                         memoryId: Fixture.memoryId,
-                        operationId: M.MemoryOperationId.make(Fixture.id(5)),
-                        resolutionId: M.MemoryResolutionId.make(Fixture.id(6)),
-                        restoredRevisionId: M.MemoryRevisionId.make(Fixture.id(7)),
-                        expectedHeads: [M.MemoryRevisionId.make(Fixture.id(8))],
+                        operationId: M.MemoryOperationId.make(Fixture.id(4)),
+                        expectedHeads: [],
                       }
-                    : { memorySpaceId: Fixture.space, memoryId: Fixture.memoryId };
+                    : name === "memory_revert_resolution"
+                      ? {
+                          memorySpaceId: Fixture.space,
+                          memoryId: Fixture.memoryId,
+                          operationId: M.MemoryOperationId.make(Fixture.id(5)),
+                          resolutionId: M.MemoryResolutionId.make(Fixture.id(6)),
+                          restoredRevisionId: M.MemoryRevisionId.make(Fixture.id(7)),
+                          expectedHeads: [M.MemoryRevisionId.make(Fixture.id(8))],
+                        }
+                      : { memorySpaceId: Fixture.space, memoryId: Fixture.memoryId };
       expect((yield* Fixture.call(name, input, Fixture.scope([]))).body).toMatchObject({
         code: "unavailable",
       });
@@ -270,6 +299,7 @@ it.effect(
         }),
       ).pipe(Layer.provideMerge(Fixture.core));
       const toolkit = McpHttpServer.layerMemoryToolkit.pipe(
+        Layer.provide(Layer.mock(RecallFixture.MemoryRecall)({})),
         Layer.provide(McpToolAccessTestkit.layerPermissionProfilesOff),
         Layer.provideMerge(observed),
         Layer.provideMerge(McpServer.McpServer.layer),
@@ -756,4 +786,101 @@ it.effect(
       ).not.toBe(true);
       expect(yield* service.read(input, Effect.void)).toMatchObject({ status: "forgotten" });
     }).pipe(Effect.provide(Fixture.layerWithProfiles)),
+);
+
+it.effect("memory recall through the registered toolkit honors the read grant", () =>
+  Effect.gen(function* () {
+    const service = yield* MemoryService.MemoryService;
+    const store = yield* Store.MemoryStore;
+    yield* service.upsert(Fixture.upsert(), Effect.void);
+    const aggregate = yield* store.loadAggregate(Fixture.space, Fixture.memoryId);
+    if (aggregate.item?.status !== "active") throw new Error("fixture item is not active");
+    yield* store.index({
+      memorySpaceId: Fixture.space,
+      memoryId: Fixture.memoryId,
+      revisionId: aggregate.item.revision.revisionId,
+      generation: aggregate.generation,
+    });
+    const allowed = yield* Fixture.call(
+      "memory_recall",
+      { query: "synthetic memory" },
+      Fixture.scope(["memory:read"]),
+    );
+    expect(allowed.result.isError).not.toBe(true);
+    expect(allowed.body).toMatchObject({
+      items: [{ memoryId: Fixture.memoryId, relation: "user" }],
+    });
+    const denied = yield* Fixture.call(
+      "memory_recall",
+      { query: "synthetic memory" },
+      Fixture.scope([]),
+    );
+    expect(denied.body).toMatchObject({ code: "unavailable" });
+  }).pipe(Effect.provide(Fixture.layer)),
+);
+
+it.effect("remember saves text and a scope as a fact this conversation backs, once", () =>
+  Effect.gen(function* () {
+    const store = yield* Store.MemoryStore;
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`CREATE TABLE orchestration_events(sequence INTEGER PRIMARY KEY, event_id TEXT, application_event_version INTEGER, aggregate_kind TEXT, stream_id TEXT, event_type TEXT, payload_json TEXT)`;
+    yield* sql`CREATE TABLE orchestration_v2_projection_threads(thread_id TEXT PRIMARY KEY, project_id TEXT)`;
+    const threadId = M.ThreadId.make("remember-thread");
+    yield* sql`INSERT INTO orchestration_events VALUES (7, 'event-first', 2, 'thread', ${threadId}, 'thread.created', '{}'), (9, 'event-last', 2, 'thread', ${threadId}, 'message.sent', '{}')`;
+    yield* sql`INSERT INTO orchestration_v2_projection_threads VALUES (${threadId}, NULL)`;
+    const caller = {
+      ...Fixture.scope(),
+      client: undefined,
+      thread: {
+        threadId,
+        providerSessionId: "synthetic",
+        providerInstanceId: M.ProviderInstanceId.make("codex"),
+      },
+    };
+    const input = { text: "Jun reviews Korean summaries first.", scope: "user" };
+    const first = yield* decodeReceipt(
+      (yield* Fixture.call("goat_memory_remember", input, caller)).body,
+    );
+    expect(first.outcome).toBe("accepted");
+    const saved = yield* store.loadAggregate(Fixture.space, first.memoryId);
+    if (saved.item?.status !== "active") throw new Error("remembered memory is not active");
+    expect(saved.item.scope).toEqual({ kind: "user" });
+    expect(saved.item.revision.assertionKind).toBe("fact");
+    expect(saved.item.payload.evidence).toEqual([
+      {
+        origin: "thread",
+        sourceThread: { environmentId: caller.environmentId, threadId },
+        watermark: { fromEventId: "event-first", toEventId: "event-last", throughSequence: 9 },
+        messageIds: [],
+      },
+    ]);
+
+    const again = yield* decodeReceipt(
+      (yield* Fixture.call("goat_memory_remember", input, caller)).body,
+    );
+    expect(again.memoryId).toBe(first.memoryId);
+    expect(yield* sql`SELECT DISTINCT memory_id FROM memory_revisions`).toHaveLength(1);
+
+    const replaced = yield* decodeReceipt(
+      (yield* Fixture.call(
+        "goat_memory_remember",
+        { text: "Jun reviews English summaries first.", memoryId: first.memoryId },
+        caller,
+      )).body,
+    );
+    expect(replaced.memoryId).toBe(first.memoryId);
+    const current = yield* store.loadAggregate(Fixture.space, first.memoryId);
+    if (current.item?.status !== "active") throw new Error("replaced memory is not active");
+    expect(current.heads).toHaveLength(1);
+    expect(current.item.scope).toEqual({ kind: "user" });
+    expect(current.item.payload.text).toBe("Jun reviews English summaries first.");
+
+    const noProject = yield* Fixture.call(
+      "goat_memory_remember",
+      { text: "This repository ships nightly.", scope: "project" },
+      caller,
+    );
+    expect(noProject.result.isError).toBe(true);
+    expect((yield* decodeRefusal(noProject.body)).message).toContain("no project memory");
+  }).pipe(Effect.provide(Fixture.layer)),
 );

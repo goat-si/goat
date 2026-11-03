@@ -21,6 +21,7 @@ import {
   pullRequestStatsKeysToRequest,
   pullRequestStatsRefreshBatches,
   mergePullRequestDiffStats,
+  withDiffStat,
   partitionPullRequestsWithPriority,
   pullRequestAuthorChoices,
   selectedPullRequestAuthor,
@@ -84,6 +85,7 @@ describe("visible pull request line-count targets", () => {
       {
         environmentId: ENV_1,
         projectId: "project-1",
+        repository: "goat-si/goat",
         number: 1,
         additions: 1,
         deletions: 1,
@@ -98,8 +100,50 @@ describe("visible pull request line-count targets", () => {
     );
     expect([...keys]).toEqual([secondKey]);
     expect(pullRequestStatsBatches(entriesByKey, keys)[0]?.input.refs).toEqual([
-      { projectId: "project-1", repository: "goat-si/goat", number: 2 },
+      { projectId: "project-1", host: "github.com", repository: "goat-si/goat", number: 2 },
     ]);
+  });
+
+  it("keeps line counts apart for a fork's own and upstream pull requests with one number", () => {
+    const stats = mergePullRequestDiffStats(new Map(), [
+      {
+        environmentId: ENV_1,
+        projectId: "project-1",
+        repository: "goat-si/goat",
+        number: 1,
+        additions: 3,
+        deletions: 0,
+      },
+      {
+        environmentId: ENV_1,
+        projectId: "project-1",
+        repository: "pingdotgg/t3code",
+        number: 1,
+        additions: 9,
+        deletions: 0,
+      },
+    ]);
+    const counted = (repository: string) =>
+      withDiffStat(entry({ number: 1, repository, additions: 0, deletions: 0 }), stats).additions;
+    expect([counted("goat-si/goat"), counted("pingdotgg/t3code")]).toEqual([3, 9]);
+  });
+
+  it("keeps line counts apart for one repository path on two hosts, and reads host-less answers", () => {
+    const stat = {
+      environmentId: ENV_1,
+      projectId: "project-1",
+      repository: "goat-si/goat",
+      number: 1,
+    };
+    const stats = mergePullRequestDiffStats(new Map(), [
+      { ...stat, host: "git.cafe", additions: 3, deletions: 0 },
+      { ...stat, host: "github.com", additions: 9, deletions: 0 },
+    ]);
+    const counted = (host: string, from = stats) =>
+      withDiffStat(entry({ number: 1, host, additions: 0, deletions: 0 }), from).additions;
+    expect([counted("git.cafe"), counted("github.com")]).toEqual([3, 9]);
+    const older = mergePullRequestDiffStats(new Map(), [{ ...stat, additions: 5, deletions: 0 }]);
+    expect(counted("github.com", older)).toBe(5);
   });
 
   it("keeps every per-environment batch within the stats contract limit", () => {
@@ -720,6 +764,26 @@ describe("findProjectForRepository", () => {
         scopedEnvironmentId: ENV_2,
       }),
     ).toBe(payments);
+  });
+
+  it("finds a fork by its own origin repository on the origin's host", () => {
+    const fork = {
+      id: "p1",
+      environmentId: ENV_1,
+      repositoryIdentity: {
+        canonicalKey: "github.com/pingdotgg/t3code",
+        locator: { source: "git-remote" as const, remoteName: "upstream", remoteUrl: "" },
+        provider: SourceControlProviderKind.make("github"),
+        displayName: "pingdotgg/t3code",
+        origin: { canonicalKey: "git.cafe/goat-si/goat", displayName: "goat-si/goat" },
+      },
+    };
+    expect(findProjectForRepository([fork], { repository: "goat-si/goat", host: "git.cafe" })).toBe(
+      fork,
+    );
+    expect(
+      findProjectForRepository([fork], { repository: "goat-si/goat", host: "github.com" }),
+    ).toBeUndefined();
   });
 
   it("keeps repository matches on the selected environment when project IDs overlap", () => {

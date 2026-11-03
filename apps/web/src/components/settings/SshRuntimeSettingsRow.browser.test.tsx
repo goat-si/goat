@@ -160,6 +160,23 @@ describe("saved SSH runtime row", () => {
       expect(button("Retry update")).toBeUndefined();
     },
   );
+  it("shows why a compatible runtime cannot update without offering update actions", async () => {
+    const detail = "Update GOAT on the host or stop it there, then reconnect.";
+    await render({ ...base, state: "ready", detail });
+    expect(container.textContent).toContain(detail);
+    expect(button("Update runtime")).toBeUndefined();
+    expect(button("Update now")).toBeUndefined();
+  });
+  it("offers an update when a ready runtime has a deferred refresh", async () => {
+    const detail = "Refresh deferred";
+    await render({
+      ...base,
+      state: "ready",
+      detail,
+      refreshDeferred: { reason: "archive_unavailable", requestedVersion: "0.4.3", detail },
+    });
+    expect(button("Update runtime")).toBeDefined();
+  });
   it("keeps blocked-runtime actions in the canonical subtitle", async () => {
     await render({ ...base, state: "update_blocked", runtimeVersion: "0.5.0", detail: "newer" });
     expect(container.textContent).not.toContain("runs a newer GOAT");

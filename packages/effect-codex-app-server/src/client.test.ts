@@ -1,3 +1,4 @@
+import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
@@ -8,6 +9,9 @@ import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as References from "effect/References";
 import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
+import * as Cause from "effect/Cause";
+import * as Fiber from "effect/Fiber";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -244,4 +248,64 @@ it.live("reports the stderr error when the process exits before initialize", () 
       "Codex App Server process exited with code 1: Error: Missing optional dependency @openai/codex-darwin-arm64. Reinstall Codex: npm install -g @openai/codex@latest",
     );
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect(
+  "message channels round trip and peer EOF fails pending requests with the closed error",
+  () =>
+    Effect.gen(function* () {
+      const incoming = yield* Queue.unbounded<string, Cause.Done<void>>();
+      const outgoing = yield* Queue.unbounded<string>();
+      const closed = yield* Deferred.make<CodexError.CodexAppServerError>();
+      const context = yield* Layer.build(
+        CodexClient.layerMessageChannel({
+          incoming: Stream.fromQueue(incoming),
+          send: (message) => Queue.offer(outgoing, message).pipe(Effect.asVoid),
+          closed: Deferred.await(closed),
+        }),
+      );
+      const client = Context.get(context, CodexClient.CodexAppServerClient);
+      if (!client) throw new Error("client missing");
+      const first = yield* client.raw.request("hello").pipe(Effect.forkScoped);
+      const request = JSON.parse(yield* Queue.take(outgoing));
+      yield* Queue.offer(incoming, JSON.stringify({ id: request.id, result: "ok" }));
+      assert.equal(yield* Fiber.join(first), "ok");
+      const pending = yield* client.raw
+        .request("pending")
+        .pipe(
+          Effect.match({ onFailure: (error) => error, onSuccess: () => undefined }),
+          Effect.forkScoped,
+        );
+      yield* Queue.take(outgoing);
+      const error = new CodexError.CodexAppServerInputStreamEndedError({});
+      yield* Deferred.succeed(closed, error);
+      yield* Queue.end(incoming);
+      assert.strictEqual(yield* Fiber.join(pending), error);
+    }).pipe(Effect.scoped),
+);
+
+it.effect("message channel stream errors and raw newlines terminate the client", () =>
+  Effect.gen(function* () {
+    const original = new CodexError.CodexAppServerTransportError({
+      operation: "read-input-stream",
+      cause: new Error("stream failure"),
+    });
+    const channel = {
+      incoming: Stream.fail(original),
+      send: () => Effect.void,
+      closed: Effect.never,
+    };
+    const context = yield* Layer.build(CodexClient.layerMessageChannel(channel));
+    const client = Context.get(context, CodexClient.CodexAppServerClient);
+    if (!client) throw new Error("client missing");
+    assert.strictEqual(yield* client.terminated, original);
+    const context2 = yield* Layer.build(
+      CodexClient.layerMessageChannel({ ...channel, incoming: Stream.make("one\ntwo") }),
+    );
+    const client2 = Context.get(context2, CodexClient.CodexAppServerClient);
+    if (!client2) throw new Error("client missing");
+    const error = yield* client2.terminated;
+    assert.instanceOf(error, CodexError.CodexAppServerTransportError);
+    assert.equal(error.operation, "read-input-stream");
+  }).pipe(Effect.scoped),
 );

@@ -427,8 +427,8 @@ describe("SSH runtime status", () => {
     // A newer runtime that speaks this app's protocols serves it; nothing waits on an update.
     { version: "99.0.0", owned: true, expected: "ready" },
     { version: "99.0.0", owned: false, expected: "ready" },
-    { version: "1.2.2", owned: false, expected: "update_blocked" },
-    { version: "1.2.3-dev.deadbeef", owned: true, expected: "update_blocked" },
+    { version: "1.2.2", owned: false, expected: "ready" },
+    { version: "1.2.3-dev.deadbeef", owned: true, expected: "ready" },
   ])("classifies live $version owned=$owned as $expected", ({ version, owned, expected }) => {
     const f = fixture({
       ...stopped,
@@ -437,6 +437,7 @@ describe("SSH runtime status", () => {
       liveOwned: owned,
       liveDrain: true,
       liveSignals: signals(version),
+      liveBinarySignals: signals(version),
     });
     return Effect.gen(function* () {
       const manager = yield* SshTunnel.SshEnvironmentManager;
@@ -444,27 +445,11 @@ describe("SSH runtime status", () => {
       yield* decodeSshHostResult(result);
       assert.equal(successfulStatus(result).state, expected);
       assert.equal(successfulStatus(result).runtimeVersion, version);
+      if ((version === "1.2.2" && !owned) || version === "1.2.3-dev.deadbeef")
+        assert.include(successfulStatus(result).detail ?? "", "didn't start or cannot replace");
+      if (version === "1.2.3-dev.deadbeef")
+        assert.include(successfulStatus(result).detail ?? "", "suggests no update");
       assert.equal(f.calls.launches, 0);
-    }).pipe(Effect.provide(f.layer), Effect.scoped);
-  });
-
-  it.effect("blocks a newer runtime only when it no longer speaks this app's protocol", () => {
-    const f = fixture({
-      ...stopped,
-      liveStatus: "live",
-      liveVersion: "99.0.0",
-      liveOwned: true,
-      liveDrain: true,
-      liveSignals: {
-        ...signals("99.0.0"),
-        orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION + 1,
-      },
-    });
-    return Effect.gen(function* () {
-      const manager = yield* SshTunnel.SshEnvironmentManager;
-      const status = successfulStatus(yield* manager.status(uploadTarget));
-      assert.equal(status.state, "update_blocked");
-      assert.include(status.detail ?? "", "runs a newer GOAT (99.0.0)");
     }).pipe(Effect.provide(f.layer), Effect.scoped);
   });
 
@@ -981,21 +966,18 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           if ("type" in reused) throw new Error("Expected freshly verified runtime");
           assert.equal(launches(), beforeReuse + 1);
           assert.isUndefined(reused.pendingReplacement);
-          assert.isTrue(
-            Result.isFailure(yield* Effect.result(manager.readyEnvironment(uploadTarget))),
-          );
-          assert.isTrue(
-            Result.isFailure(
-              yield* Effect.result(
-                manager.issueMcpClientSession(uploadTarget, {
-                  requireReady: true,
-                  label: "ownership-loss",
-                  ttl: "1h",
-                  runtimeModeCeiling: null,
-                }),
-              ),
-            ),
-          );
+          yield* manager.readyEnvironment(uploadTarget);
+          yield* manager.issueMcpClientSession(uploadTarget, {
+            requireReady: true,
+            label: "ownership-loss",
+            ttl: "1h",
+            runtimeModeCeiling: null,
+          });
+          const status = successfulStatus(yield* manager.status(uploadTarget));
+          assert.equal(status.state, "ready", JSON.stringify(status));
+          assert.include(status.detail ?? "", "didn't start or cannot replace");
+          assert.equal((yield* f.fs.readFileString(`${f.state}/managed`)).trim(), "external");
+          assert.equal(launches(), beforeReuse + 1);
         }).pipe(
           Effect.provide(
             Layer.mergeAll(

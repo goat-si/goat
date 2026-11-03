@@ -5,19 +5,11 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
-import * as NodeHttp from "node:http";
 import * as NodePath from "node:path";
 import * as NodeUtil from "node:util";
+import { guardChild, type ErrorRoute } from "@goat/shared/errorGuards";
 
-import {
-  adoptLegacyEnv,
-  GOAT_ENVIRONMENT_PATH,
-  withLegacyEnvNames,
-} from "@goat/contracts/legacyT3Names";
-import {
-  compareRuntimeProtocols,
-  type RuntimeProtocolRanges,
-} from "@goat/shared/sshRuntimeProtocol";
+import { adoptLegacyEnv, withLegacyEnvNames } from "@goat/contracts/legacyT3Names";
 
 import type {
   PendingServiceUpdate,
@@ -40,6 +32,7 @@ import {
   SERVICE_STOP_MARKER_FILE,
 } from "./cloud/serviceProtocol.ts";
 import { tryAcquireServerOwnerLock } from "./serverOwnerLockFile.ts";
+import { smokeProbe } from "./serviceLauncherSmokeProbe.ts";
 
 const HANDOFF_DELAY_MS = 2_000;
 /**
@@ -48,7 +41,6 @@ const HANDOFF_DELAY_MS = 2_000;
  */
 const PREPARED_TIMEOUT_MS = 30 * 60_000;
 export const PROBATION_MS = 10 * 60_000;
-export const SMOKE_TIMEOUT_MS = 30_000;
 const TERMINATE_GRACE_MS = 5_000;
 const RESTORE_RETRY_MS = 5_000;
 // Match SERVER_EXIT_CODE_STATE_DIR_OWNED and SERVER_EXIT_CODE_DATABASE_AHEAD
@@ -519,66 +511,6 @@ const stopMarkerPath = (baseDir: string) =>
 const restartPendingPath = (baseDir: string) =>
   NodePath.join(baseDir, "runtime", SERVICE_RESTART_PENDING_FILE);
 
-/** A wildcard listener answers on loopback of its family; a specific address only on itself. */
-export function smokeProbeHostname(host: string | undefined): string {
-  if (host === undefined || host === "0.0.0.0" || host === "localhost") return "127.0.0.1";
-  if (host === "::" || host === "::0") return "::1";
-  return host;
-}
-
-function smokeProbe(
-  port: number,
-  host: string | undefined,
-  targetVersion: string,
-): Promise<string | undefined> {
-  return new Promise((resolve) => {
-    const finish = (reason?: string) => {
-      clearTimeout(timeout);
-      request.destroy();
-      resolve(reason);
-    };
-    const request = NodeHttp.get(
-      { hostname: smokeProbeHostname(host), port, path: GOAT_ENVIRONMENT_PATH, agent: false },
-      (response) => {
-        if (response.statusCode !== 200) {
-          finish(`http-${response.statusCode}`);
-          return;
-        }
-        let body = "";
-        response.setEncoding("utf8");
-        response.on("data", (chunk: string) => {
-          body += chunk;
-        });
-        response.on("error", () => finish("response-error"));
-        response.on("end", () => {
-          try {
-            const descriptor = JSON.parse(body) as {
-              serverVersion?: unknown;
-              protocol?: RuntimeProtocolRanges;
-            } | null;
-            if (descriptor?.serverVersion !== targetVersion) return finish("version");
-            const protocol = descriptor.protocol;
-            // Compare the advertised ranges with themselves: smoke requires valid ranges,
-            // not compatibility with the old build embedded in this surviving launcher.
-            if (
-              protocol === undefined ||
-              compareRuntimeProtocols(protocol, { protocol }) !== "compatible"
-            ) {
-              return finish("protocol");
-            }
-            finish();
-          } catch {
-            finish("descriptor");
-          }
-        });
-      },
-    );
-    // One deadline covers connection, headers and the entire JSON body, even a trickle.
-    const timeout = setTimeout(() => finish("timeout"), SMOKE_TIMEOUT_MS);
-    request.on("error", () => finish("request-error"));
-  });
-}
-
 export class Launcher {
   readonly #baseDir: string;
   readonly #statePath: string;
@@ -785,22 +717,24 @@ export class Launcher {
         : {}),
     };
     const spawnArguments = runtimeSpawnArguments(paths);
-    const child = NodeChildProcess.spawn(spawnArguments.command, spawnArguments.args, {
-      env: {
-        ...this.#environment,
-        ...withLegacyEnvNames({ [SERVICE_LAUNCHER_CONTEXT_ENV]: JSON.stringify(context) }),
-      },
-      stdio: ["inherit", "inherit", "inherit", "ipc"],
+    const spawned = Promise.withResolvers<void>();
+    // Fails the start until the child spawns; afterwards an error is queued like its other events.
+    let onChildError: ErrorRoute = spawned.reject;
+    const child = guardChild(
+      NodeChildProcess.spawn(spawnArguments.command, spawnArguments.args, {
+        env: {
+          ...this.#environment,
+          ...withLegacyEnvNames({ [SERVICE_LAUNCHER_CONTEXT_ENV]: JSON.stringify(context) }),
+        },
+        stdio: ["inherit", "inherit", "inherit", "ipc"],
+      }),
+      (error) => onChildError(error),
+    );
+    child.once("spawn", () => {
+      onChildError = (error) => this.#enqueue(() => Promise.reject(error));
+      spawned.resolve();
     });
-    await new Promise<void>((resolve, reject) => {
-      const onError = (error: Error) => reject(error);
-      child.once("error", onError);
-      child.once("spawn", () => {
-        child.removeListener("error", onError);
-        child.on("error", (error) => this.#enqueue(() => Promise.reject(error)));
-        resolve();
-      });
-    });
+    await spawned.promise;
     if (this.#stopping) {
       await terminateChild(child);
       return;

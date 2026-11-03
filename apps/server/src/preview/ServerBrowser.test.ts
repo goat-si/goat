@@ -41,7 +41,7 @@ import * as PreviewAgentActivity from "./PreviewAgentActivity.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
 import * as PreviewBrowser from "./PreviewBrowser.ts";
 import { unusedPreviewBrowser } from "./PreviewBrowser.testkit.ts";
-import { makeFrame, makeSession, type MockFrame, mockCopy } from "./ServerBrowserTestFixtures.ts";
+import { makeFrame, makeSession, mockCopy, refClickTarget } from "./ServerBrowserTestFixtures.ts";
 
 vi.mock("./ServerBrowserContexts.ts", () => ({
   presentAsChrome: async () => {},
@@ -174,7 +174,7 @@ function makeContext(onClose?: (context: BrowserContext) => void) {
     cookies: async () => [],
     newCDPSession: async (target: unknown) => {
       const session = makeSession(
-        target === page ? undefined : (target as MockFrame),
+        target === page ? undefined : (target as ReturnType<typeof makeFrame>),
         () => desktopSizeAnswer?.() ?? Promise.resolve({ result: { value: { ...cssViewport } } }),
       );
       sessions.push(session);
@@ -542,18 +542,15 @@ it.live("logs read filtered diagnostics without page capture or invalidating sna
       expect(page.evaluate).not.toHaveBeenCalled();
       expect(page.ariaSnapshot).not.toHaveBeenCalled();
       expect(cdp.send).not.toHaveBeenCalled();
-      const box = async () => ({ x: 0, y: 0, width: 10, height: 10 });
-      const no = async () => null;
-      const element = { boundingBox: box, waitForElementState: box, dispose: box, ownerFrame: no };
-      const locator = { scrollIntoViewIfNeeded: box, boundingBox: box, click: box };
-      const handle = { elementHandle: async () => element, count: async () => 1 };
-      page.locator.mockImplementation(() => ({ ...locator, ...handle }) as never);
+      const target = refClickTarget();
+      page.locator.mockImplementation(() => target as never);
       yield* broker.invoke({
         scope,
         tabId,
         operation: "click",
         input: { locator: `aria-ref=${ref}` },
       });
+      expect(target.click.mock.calls[0]?.[0]).toMatchObject({ position: { x: 5, y: 5 } });
     }),
   ).pipe(Effect.provide(layer)),
 );

@@ -1,3 +1,4 @@
+import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
 import { IsoDateTime, NonNegativeInt, PositiveInt, TrimmedNonEmptyString } from "./baseSchemas.ts";
@@ -161,3 +162,16 @@ export const HostPlacementRanking = Schema.Struct({
   suggestion: Schema.String,
 });
 export type HostPlacementRanking = typeof HostPlacementRanking.Type;
+
+/** Null chooses half of RAM up to 16 GiB; zero disables the limit. */
+export const AgentMemoryLimitGiB = Schema.Int.check(
+  Schema.isBetween({ minimum: 0, maximum: 1024 }),
+);
+export const AgentMemoryLimitSettingsFields = {
+  agentMemoryLimitGiB: Schema.NullOr(AgentMemoryLimitGiB).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+};
+export const AgentMemoryLimitSettingsPatchFields = {
+  agentMemoryLimitGiB: Schema.optionalKey(Schema.NullOr(AgentMemoryLimitGiB)),
+};

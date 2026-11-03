@@ -137,6 +137,7 @@ function run(
       reorderRoutes: unused,
       removeRelayEnvironments: unused,
       retryNow: unused,
+      reconnect: unused,
       setEnabled: unused,
       setCompatibility: unused,
       state: unused,

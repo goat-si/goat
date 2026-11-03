@@ -1,3 +1,4 @@
+import { timedShutdownPhase } from "@goat/shared/timedShutdownPhase";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's Crypto digest is effectful; a sync hash keeps historyPath a plain function.
 import * as NodeCrypto from "node:crypto";
 
@@ -59,6 +60,8 @@ import { makeKeyedCoalescingWorker } from "@goat/shared/KeyedCoalescingWorker";
 import * as KeyedLock from "@goat/shared/KeyedLock";
 import { AgentScope } from "@goat/shared/AgentScope";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { resolveNice, toolPriorityLaunch } from "@goat/shared/toolPriority";
+import { windowsCmdPath, windowsPowerShellPath } from "./windowsShellPaths.ts";
 import { mergePathEntries } from "@goat/shared/shell";
 
 import { acpRegistryManagedBinaryDirectories } from "@goat/provider-acp-registry/server";
@@ -560,16 +563,6 @@ function basenameForPlatform(command: string, platform: NodeJS.Platform): string
   return parts.at(-1) ?? normalized;
 }
 
-function joinWindowsPath(...parts: ReadonlyArray<string>): string {
-  return parts
-    .map((part, index) => {
-      if (index === 0) return part.replace(/[\\/]+$/g, "");
-      return part.replace(/^[\\/]+|[\\/]+$/g, "");
-    })
-    .filter((part) => part.length > 0)
-    .join("\\");
-}
-
 function shellCandidateFromCommand(
   command: string | null,
   platform: NodeJS.Platform,
@@ -583,24 +576,6 @@ function shellCandidateFromCommand(
     return { shell: command, args: ["-o", "nopromptsp"] };
   }
   return { shell: command };
-}
-
-function windowsSystemRoot(env: NodeJS.ProcessEnv): string {
-  return env.SystemRoot?.trim() || env.windir?.trim() || "C:\\Windows";
-}
-
-function windowsPowerShellPath(env: NodeJS.ProcessEnv): string {
-  return joinWindowsPath(
-    windowsSystemRoot(env),
-    "System32",
-    "WindowsPowerShell",
-    "v1.0",
-    "powershell.exe",
-  );
-}
-
-function windowsCmdPath(env: NodeJS.ProcessEnv): string {
-  return joinWindowsPath(windowsSystemRoot(env), "System32", "cmd.exe");
 }
 
 function formatShellCandidate(candidate: ShellCandidate): string {
@@ -1039,6 +1014,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   const historyLineLimit = options.historyLineLimit ?? DEFAULT_HISTORY_LINE_LIMIT;
   const historyByteLimit = options.historyByteLimit ?? DEFAULT_HISTORY_BYTE_LIMIT;
   const platform = yield* HostProcess.Platform;
+  const nice = yield* resolveNice(platform);
   const architecture = yield* HostProcess.Architecture;
   const agentScope = yield* AgentScope;
   // Inherit the full environment minus createTerminalSpawnEnv's blocklist; allowlists silently drop user tooling variables.
@@ -1905,8 +1881,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     }
 
     const launch = yield* agentScope.wrap({
-      command: candidate.shell,
-      args: candidate.args ?? [],
+      ...toolPriorityLaunch(nice, candidate.shell, candidate.args, session.agentOwner !== null),
       name: "terminal",
       env: spawnEnv,
       survivesRestart: true,
@@ -2350,32 +2325,35 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   ).pipe(Effect.forkIn(workerScope));
 
   yield* Effect.addFinalizer(() =>
-    Effect.gen(function* () {
-      const sessions = yield* modifyManagerState(
-        (state) =>
-          [
-            [...state.sessions.values()],
-            {
-              ...state,
-              sessions: new Map(),
-            },
-          ] as const,
-      );
+    timedShutdownPhase(
+      "terminalSessions",
+      Effect.gen(function* () {
+        const sessions = yield* modifyManagerState(
+          (state) =>
+            [
+              [...state.sessions.values()],
+              {
+                ...state,
+                sessions: new Map(),
+              },
+            ] as const,
+        );
 
-      const cleanupSession = Effect.fn("terminal.cleanupSession")(function* (
-        session: TerminalSessionState,
-      ) {
-        cleanupProcessHandles(session);
-        if (!session.process) return;
-        yield* clearKillFiber(session.process);
-        yield* runKillEscalation(session.process, session.threadId, session.terminalId);
-      });
+        const cleanupSession = Effect.fn("terminal.cleanupSession")(function* (
+          session: TerminalSessionState,
+        ) {
+          cleanupProcessHandles(session);
+          if (!session.process) return;
+          yield* clearKillFiber(session.process);
+          yield* runKillEscalation(session.process, session.threadId, session.terminalId);
+        });
 
-      yield* Effect.forEach(sessions, cleanupSession, {
-        concurrency: "unbounded",
-        discard: true,
-      });
-    }).pipe(Effect.ignoreCause({ log: true })),
+        yield* Effect.forEach(sessions, cleanupSession, {
+          concurrency: "unbounded",
+          discard: true,
+        });
+      }).pipe(Effect.ignoreCause({ log: true })),
+    ),
   );
 
   /** Runs under the checkout's lease; claims of other GOAT servers that cannot be read fail like an unreachable cwd. */

@@ -2,6 +2,7 @@
 // @effect-diagnostics globalTimers:off -- One bounded exchange at a socket callback boundary.
 import * as NodeFSP from "node:fs/promises";
 import * as NodeNet from "node:net";
+import { guardErrors } from "@goat/shared/errorGuards";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
@@ -52,7 +53,7 @@ const request = (opcode: number, data: number, words: number, fill: (view: DataV
 };
 
 /** Replies in order; an error answers its request with undefined, a lost connection all of them. */
-function connection(socket: NodeNet.Socket) {
+function connection(socket: NodeNet.Socket, installFail: (fail: () => void) => void) {
   let buffer = new Uint8Array(0);
   let closed = false;
   let setup: ((reply: Uint8Array | undefined) => void) | undefined;
@@ -63,7 +64,7 @@ function connection(socket: NodeNet.Socket) {
     setup = undefined;
     for (const wake of waiting.splice(0)) wake(undefined);
   };
-  socket.on("error", fail);
+  installFail(fail);
   socket.on("close", fail);
   socket.on("data", (chunk: Buffer) => {
     const next = new Uint8Array(buffer.length + chunk.length);
@@ -123,10 +124,20 @@ export function makeX11WindowPlacement(
       (bytes) => xauthorityCookie(bytes, number),
       () => null,
     );
-    const socket = NodeNet.createConnection(socketPath ?? "/tmp/.X11-unix/X" + number);
+    let fail = () => {};
+    const socket = guardErrors(
+      NodeNet.createConnection(socketPath ?? "/tmp/.X11-unix/X" + number),
+      () => fail(),
+    );
     const timer = setTimeout(() => socket.destroy(), ASK_TIMEOUT_MS);
     try {
-      return await place(connection(socket), cookie, windows);
+      return await place(
+        connection(socket, (route) => {
+          fail = route;
+        }),
+        cookie,
+        windows,
+      );
     } finally {
       clearTimeout(timer);
       socket.destroy();

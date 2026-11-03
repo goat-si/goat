@@ -1,3 +1,4 @@
+import { withAgentOom } from "./agentOomFailure.ts";
 import {
   NodeId,
   CommandId,
@@ -48,6 +49,7 @@ import { stripUnservedToolOutputImageBytes } from "./toolOutputImageBytes.ts";
 import { ComputerUseCallApps } from "../cua/ComputerUseCallApps.ts";
 import { boundFileChangeForStorage } from "./WireProjection.ts";
 import { withFileChangeLineCounts } from "./fileChangeLineCounts.ts";
+import { withWriterFallback } from "./readerOverloadFallback.ts";
 
 export class ProviderEventNormalizeError extends Schema.TaggedError<ProviderEventNormalizeError>()(
   "ProviderEventNormalizeError",
@@ -747,9 +749,9 @@ export const layer: Layer.Layer<
                 return dismissed;
               }
               const occurredAt = yield* DateTime.now;
-              const failure = (yield* agentScope.oomKilled(input.threadId))
-                ? { ...input.event.failure, message: "Killed: out of memory.", code: "oom_kill" }
-                : input.event.failure;
+              const failure = yield* withAgentOom(input.threadId, input.event.failure).pipe(
+                Effect.provideService(AgentScope, agentScope),
+              );
               return [
                 ...dismissed,
                 yield* makeDomainEvent(input, {
@@ -775,6 +777,7 @@ export const layer: Layer.Layer<
         },
         (effect, input) =>
           effect.pipe(
+            withWriterFallback,
             Effect.mapError(
               (cause) =>
                 new ProviderEventNormalizeError({
@@ -942,6 +945,7 @@ export const layer: Layer.Layer<
                 input.event.type === "app_thread.created"
                   ? threadCommands.withLock(input.event.appThread.id, effect)
                   : effect,
+              withWriterFallback,
             ),
         ),
     });

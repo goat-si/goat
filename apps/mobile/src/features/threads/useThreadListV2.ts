@@ -10,6 +10,7 @@ import { useOlderSettledShelf, useOlderSettledShelfGrowth } from "../../state/ol
 import { launchSubagentRowsAtom } from "../../state/threads";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import { hiddenGoatBotThreadKeysAtom } from "./goatBotThreadVisibility";
+import { useRemoteLauncherReads } from "./remoteLauncherReads";
 import {
   buildThreadListV2Items,
   buildThreadListV2ListItems,
@@ -120,6 +121,7 @@ export function useThreadListV2(input: {
   const hiddenBotThreadKeys = useAtomValue(hiddenGoatBotThreadKeysAtom);
   const launchOwners = useAtomValue(launchSubagentRowsAtom);
   const launchGroups = useThreadListV2LaunchGroups(input.selectedThreadKey);
+  useRemoteLauncherReads();
   const priority = usePriorityHolds();
   // Other lists' held rows; this list's own Priority rows come from its layout below.
   useSyncExternalStore(subscribeHeldPriorityKeys, () => heldPriorityKeys(priority.listId));

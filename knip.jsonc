@@ -71,6 +71,8 @@
         "src/provider/testFixtures/*.mjs",
         // sshRuntimeSpawn.test.ts spawns it by path as a separate process.
         "src/cloud/sshRuntimeSpawn.fixture.ts",
+        // app.test.ts runs the cwd fixture in an isolated process.
+        "src/cli/serverCwd.fixture.ts",
         // graphqlgen reads its config.
         "graphql.config.ts",
       ],

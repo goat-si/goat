@@ -43,6 +43,7 @@ source alone does not explain. Most code changes do not need an internal documen
 
 - [Architecture overview](./internals/overview.md)
 - [Glossary](./internals/glossary.md)
+- [Server resilience](./internals/server-resilience.md)
 - [Connection runtime](./internals/connection-runtime.md)
 - [SSH reconnect](./internals/ssh-reconnect.md)
 - [SSH hardening references](./internals/ssh-hardening-references.md)

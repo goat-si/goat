@@ -1,5 +1,5 @@
+import { BACKEND_STOP_TIMEOUT } from "../backend/DesktopBackendProcess.ts";
 import * as Cause from "effect/Cause";
-import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -152,13 +152,19 @@ const handleFatalStartupError = Effect.fn("desktop.startup.handleFatalStartupErr
 const fatalStartupCause = <E>(stage: string, cause: Cause.Cause<E>) =>
   handleFatalStartupError(stage, Cause.pretty(cause)).pipe(Effect.andThen(Effect.failCause(cause)));
 
-const stopAllPoolInstances = Effect.fn("desktop.app.stopAllPoolInstances")(
-  function* (): Effect.fn.Return<void, never, DesktopBackendPool.DesktopBackendPool> {
+export const stopAllPoolInstances = Effect.fn("desktop.app.stopAllPoolInstances")(
+  function* (): Effect.fn.Return<
+    void,
+    never,
+    DesktopBackendPool.DesktopBackendPool | DesktopState.DesktopState
+  > {
     const pool = yield* DesktopBackendPool.DesktopBackendPool;
+    const state = yield* DesktopState.DesktopState;
+    const reason = yield* Ref.get(state.stopReason);
     const instances = yield* pool.list;
     yield* Effect.forEach(
       instances,
-      (instance) => instance.stop({ timeout: Duration.seconds(5) }),
+      (instance) => instance.stop(reason, { timeout: BACKEND_STOP_TIMEOUT }),
       { concurrency: "unbounded" },
     );
   },

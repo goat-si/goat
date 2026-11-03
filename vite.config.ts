@@ -751,6 +751,23 @@ export default defineConfig({
         rules: { "goat/no-raw-resize-observer": "error" },
       },
       {
+        // Error emitters need their owner's failure route from creation.
+        files: ["apps/server/src/**", "packages/*/src/**"],
+        excludeFiles: [
+          "**/*.{test,spec}.{ts,tsx,mts,cts}",
+          "**/*.testkit.ts",
+          "**/*Testkit*.ts",
+          "**/*.{fixture,fixtures}.ts",
+          "**/*{Fixture,Fixtures,fixture,fixtures}*.ts",
+          "**/*Harness*.ts",
+          "**/{test,tests,testkit,testing,testUtils,fixtures,integration,__tests__}/**",
+          "**/testFixtures/**",
+          "packages/provider-testing/**",
+          "packages/source-control-testing/**",
+        ],
+        rules: { "goat/guard-error-emitters": "error" },
+      },
+      {
         files: ["apps/web/src/**"],
         rules: { "shadcn/no-unknown-classes": "error" },
       },

@@ -1,7 +1,30 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import type { ChildProcessSpawner } from "effect/process";
+
+export interface AgentProcess {
+  readonly pid: number;
+  readonly isRunning: () => boolean;
+}
+
+export const nodeChildAgentProcess = (child: {
+  readonly pid?: number | undefined;
+  readonly exitCode: number | null;
+  readonly signalCode?: NodeJS.Signals | null | undefined;
+}): AgentProcess | undefined =>
+  child.pid === undefined || child.signalCode === undefined
+    ? undefined
+    : { pid: child.pid, isRunning: () => child.exitCode === null && child.signalCode === null };
+export const handleAgentProcess = (
+  handle: ChildProcessSpawner.ChildProcessHandle,
+): AgentProcess => ({ pid: Number(handle.pid), isRunning: () => Effect.runSync(handle.isRunning) });
 
 export interface AgentScopeShape {
+  readonly watch: (input: {
+    readonly process: AgentProcess;
+    readonly threadId?: string | undefined;
+    readonly shared?: boolean | undefined;
+  }) => Effect.Effect<void>;
   readonly wrap: (input: {
     readonly command: string;
     readonly args: ReadonlyArray<string>;
@@ -45,6 +68,7 @@ export interface AgentScopeCommand {
 
 export const AgentScope = Context.Reference<AgentScopeShape>("@goat/shared/AgentScope", {
   defaultValue: () => ({
+    watch: () => Effect.void,
     wrap: ({ command, args }) => Effect.succeed({ command, args }),
     oomKilled: () => Effect.succeed(false),
     stop: () => Effect.void,

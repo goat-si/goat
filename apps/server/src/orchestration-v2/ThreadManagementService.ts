@@ -7,8 +7,9 @@ import type {
   ProjectionRecordField,
   ProjectionRecordFilter,
   ProjectionRecords,
-  ShellSnapshotOptions,
+  ShellSnapshotRead,
 } from "./ProjectionStore.ts";
+import type { ShellSubscriberOptions } from "./ProjectionShellThreadRows.ts";
 import {
   type ChatAttachment,
   CommandId,
@@ -27,7 +28,6 @@ import {
   type OrchestrationV2CreationSource,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2Run,
-  type OrchestrationV2ThreadShellSnapshot,
   type OrchestrationV2ThreadProjection,
   type OrchestrationV2ThreadTranscript,
   type OrchestrationV2ThreadShell,
@@ -478,9 +478,9 @@ export interface ThreadManagementServiceShape {
   readonly countThreads: Orchestrator.OrchestratorV2["Service"]["countThreads"];
   readonly listOlderSettledThreads: Orchestrator.OrchestratorV2["Service"]["listOlderSettledThreads"];
   readonly readShellSnapshot: (
-    options?: Pick<ShellSnapshotOptions, "location" | "familyOf" | "worktreePath" | "threadIds">,
+    options?: ShellSubscriberOptions,
   ) => Effect.Effect<
-    Effect.Effect<OrchestrationV2ThreadShellSnapshot, Orchestrator.OrchestratorV2Error>,
+    Effect.Effect<ShellSnapshotRead, Orchestrator.OrchestratorV2Error>,
     Orchestrator.OrchestratorV2Error
   >;
   readonly getThreadShell: Orchestrator.OrchestratorV2["Service"]["getThreadShell"];

@@ -1,3 +1,4 @@
+import * as ShellSnapshotLoads from "./orchestration-v2/ShellSnapshotLoads.ts";
 import * as DecisionService from "./goatclaw/DecisionService.ts";
 import * as ChannelBotDirectory from "./channels/ChannelBotDirectory.ts";
 import * as ChannelBotRegistry from "./channels/ChannelBotRegistry.ts";
@@ -163,10 +164,8 @@ import {
   WS_RPC_SERVER_OPTIONS,
 } from "./ws.ts";
 import { withLateEditorConfig } from "./serverConfigUpdates.ts";
-
 const snapshotConfig = (fields: Partial<ServerConfig>) =>
   ({ availableEditors: [], settings: {}, ...fields }) as unknown as ServerConfig;
-
 const settingsUpdated = (settings: object): ServerConfigStreamEvent => ({
   version: 1,
   type: "settingsUpdated",
@@ -374,11 +373,9 @@ it.effect("SSH workspace handlers delegate once and preserve typed errors", () =
     assert.lengthOf(fetches, 2);
   }).pipe(Effect.scoped),
 );
-
 const ReplayTestLayer = OrchestrationEventStore.layer.pipe(
   Layer.provideMerge(SqlitePersistence.layerMemory),
 );
-
 it.live.each(["thread", "shell"] as const)(
   "%s resume skips unknown types, synchronizes, and receives the live tail",
   (scope) =>
@@ -453,6 +450,9 @@ it.live.each(["thread", "shell"] as const)(
             }).pipe(Effect.flatMap(consume));
       });
       const items = yield* subscription.pipe(
+        Effect.provideService(ShellSnapshotLoads.ShellSnapshotLoads, {
+          active: () => Effect.die("unexpected snapshot"),
+        }),
         Effect.provideService(ThreadManagement.ThreadManagementService, {
           ensureLegacyTranscript: () => Effect.void,
           getReviewLedgerEntries: () => Effect.die("unused review ledger query"),
@@ -585,7 +585,6 @@ it.effect("coalesces streaming replay before synchronization and the live tail",
     );
   }).pipe(Effect.scoped, Effect.provide(ReplayTestLayer)),
 );
-
 it.effect("shell snapshots omit idle children and older settled threads only on request", () =>
   Effect.gen(function* () {
     const shell = (
@@ -625,6 +624,7 @@ it.effect("shell snapshots omit idle children and older settled threads only on 
       subscribeOrchestrationV2Shell(input).pipe(
         Effect.flatMap((stream) => stream.pipe(Stream.take(1), Stream.runCollect)),
         Effect.map(([item]) => (item?.kind === "snapshot" ? item.snapshot : null)),
+        Effect.provide(ShellSnapshotLoads.layer),
         Effect.provideService(ThreadManagement.ThreadManagementService, {
           readShellSnapshot: () =>
             Effect.succeed(
@@ -677,7 +677,6 @@ it.effect("shell snapshots omit idle children and older settled threads only on 
     ]);
   }).pipe(Effect.scoped, Effect.provide(ReplayTestLayer)),
 );
-
 const layerConfigEnvironment = Layer.mock(ServerEnvironment.ServerEnvironment)({
   getEnvironmentId: Effect.succeed(EnvironmentId.make("config-test")),
   getDescriptor: Effect.succeed({
@@ -691,6 +690,7 @@ const layerConfigEnvironment = Layer.mock(ServerEnvironment.ServerEnvironment)({
 
 // Build the production RPC layer; unrelated capabilities fail if this test calls them.
 const layerUnusedConfigRpcServices = Layer.mergeAll(
+  Layer.mock(ShellSnapshotLoads.ShellSnapshotLoads)({}),
   Layer.mock(MemoryService.MemoryService)({
     importPorts: {} as MemoryService.MemoryService["Service"]["importPorts"],
   }),

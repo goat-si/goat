@@ -1,6 +1,10 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
 import { assert, describe, it } from "@effect/vitest";
 import type { ChannelTask, RunId } from "@goat/contracts";
 import {
+  ChatAttachmentId,
   isGoatBotSessionThreadId,
   MessageId,
   NodeId,
@@ -13,6 +17,14 @@ import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
+import {
+  createAttachmentId,
+  createPendingAttachmentId,
+  PENDING_ATTACHMENT_THREAD_SEGMENT,
+  parseThreadSegmentFromAttachmentId,
+  resolveAttachmentPath,
+} from "../attachmentStore.ts";
+import * as ServerConfig from "../config.ts";
 import { SESSION_PREFIX_HEADINGS } from "./channelBotSessionBrief.ts";
 import * as ChannelBotSession from "./ChannelBotSession.ts";
 import * as ChannelChildWork from "./ChannelChildWork.ts";
@@ -695,6 +707,100 @@ describe("GOAT Bot sessions", () => {
       yield* settle;
       assert.lengthOf((yield* current(a.taskId)).observed?.needsYou ?? [], 1);
       assert.lengthOf((yield* current(b.taskId)).observed?.needsYou ?? [], 0);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect(
+    "hands photos sent to GOAT Bot to the session's turns and shows them on the person's messages",
+    () => {
+      const harness = sessionHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const config = yield* ServerConfig.ServerConfig;
+        const read: Array<string> = [];
+        const script = harness.script.current;
+        harness.script.current = (input) => {
+          if (input.mode === "input") read.push(input.inputText ?? "");
+          return script(input);
+        };
+        const upload = (name: string) => {
+          NodeFS.mkdirSync(config.attachmentsDir, { recursive: true });
+          const id = ChatAttachmentId.make(createPendingAttachmentId());
+          NodeFS.writeFileSync(
+            NodePath.join(config.attachmentsDir, id + ".png"),
+            new Uint8Array([1, 2, 3]),
+          );
+          return { type: "image" as const, id, name, mimeType: "image/png", sizeBytes: 3 };
+        };
+        const stored = (attachment: Parameters<typeof resolveAttachmentPath>[0]["attachment"]) =>
+          NodeFS.existsSync(
+            resolveAttachmentPath({ attachmentsDir: config.attachmentsDir, attachment }) ?? "",
+          );
+
+        const first = yield* ask("look: what is in this photo", "m1", rpcContext, [
+          upload("photo.png"),
+        ]);
+        // The front desk reads which files came with the message, not only its text.
+        assert.strictEqual(read[0], "look: what is in this photo\n\nAttached: photo.png");
+        const launched = harness.world.launches[0]?.initialMessage?.attachments ?? [];
+        assert.deepStrictEqual(
+          launched.map((attachment) => attachment.name),
+          ["photo.png"],
+        );
+        // The session gets the bot's stored copy, not the upload that expires.
+        assert.notStrictEqual(
+          parseThreadSegmentFromAttachmentId(launched[0]!.id),
+          PENDING_ATTACHMENT_THREAD_SEGMENT,
+        );
+        assert.isTrue(stored(launched[0]!));
+        const mine = (yield* botMessages).messages.filter((message) => message.role === "user");
+        assert.deepStrictEqual(
+          mine.map((message) => message.attachments.map((attachment) => attachment.id)),
+          [[launched[0]!.id]],
+        );
+
+        const thread = first.worker!.threadId;
+        yield* ask("look: and this one", "m2", rpcContext, [upload("screen.png")]);
+        yield* ask("more:" + first.taskId + " compare with this", "m3", rpcContext, [
+          upload("before.png"),
+        ]);
+        const sent = harness.world.sends.filter((send) => send.threadId === thread);
+        assert.deepStrictEqual(
+          sent.map((send) => [send.mode, send.attachments.map((attachment) => attachment.name)]),
+          [
+            ["queue", ["screen.png"]],
+            ["steer", ["before.png"]],
+          ],
+        );
+        assert.isTrue(sent.every((send) => send.attachments.every(stored)));
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect("refuses a GOAT Bot attachment that is not a fresh upload", () => {
+    const harness = sessionHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const refused = yield* Effect.flip(
+        gateway.ingest(
+          {
+            ...goatInput("look: someone else's file", "x1"),
+            attachments: [
+              {
+                type: "image",
+                id: ChatAttachmentId.make(createAttachmentId("another-thread")!),
+                name: "theirs.png",
+                mimeType: "image/png",
+                sizeBytes: 3,
+              },
+            ],
+          },
+          rpcContext,
+        ),
+      );
+      assert.strictEqual(refused.reason, "invalid_input");
+      assert.lengthOf(harness.world.launches, 0);
     }).pipe(Effect.provide(harness.layer));
   });
 });

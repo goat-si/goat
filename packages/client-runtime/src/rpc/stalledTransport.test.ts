@@ -75,11 +75,9 @@ const decodeMessage = Schema.decodeUnknownSync(
 );
 const encodeConfig = Schema.encodeSync(ServerConfig);
 
-// The desktop's own server shares this device: its silence is a busy event loop, so it gets a
-// minute. A remote host (here a relay standing in for one) keeps the 15 s budget.
 it.effect.each([
-  ["a remote host", "https://stalled.example.test/", 15],
-  ["this device's own server", "", 60],
+  ["a remote host", "https://stalled.example.test/", 300],
+  ["this device's own server", "", 300],
 ] as const)("leaves connected after %s exceeds its RPC silence budget", ([, remote, seconds]) =>
   Effect.gen(function* () {
     const peer = yield* makeWebSocketPeer((message) => {
@@ -129,7 +127,7 @@ it.effect.each([
         Effect.andThen(Scope.close(sessionScope, Exit.void)),
       ),
     );
-    const factory = yield* RpcSession.make().pipe(
+    const factory = yield* RpcSession.make({ drainIo: Effect.void }).pipe(
       Effect.provideService(Socket.WebSocketConstructor, (url) => {
         const socket = new WebSocket(url);
         sockets.push(socket);
@@ -148,7 +146,7 @@ it.effect.each([
           connect: (_entry, reportProgress) =>
             reportProgress({ stage: "synchronizing", prepared }).pipe(
               Effect.andThen(session.ready),
-              Effect.as({ prepared, session }),
+              Effect.as({ prepared, session, openProbeSocket: Effect.never }),
             ),
           checkHost: () => Effect.succeed("unchecked"),
           checkRoute: () => Effect.succeed("unchecked"),
@@ -195,13 +193,13 @@ it.effect.each([
     expect(sockets[0]?.readyState).toBe(WebSocket.OPEN);
     expect((yield* SubscriptionRef.get(supervisor.state)).phase).toBe("connected");
     const disconnected = yield* session.closed.pipe(Effect.flip, Effect.forkChild);
-    // The silence budget is checked on 5 s ticks and expires on the first tick beyond it.
+    // The first tick after the final frame resets the quiet budget.
     expect(PING_TIMEOUT).toBe("15 seconds");
     yield* TestClock.adjust("5 seconds");
     const failure = yield* Fiber.join(disconnected);
     expect(failure).toMatchObject({
       reason: "transport",
-      detail: `Stalled environment stopped responding for ${seconds}s. It may be overloaded, asleep, or off the network.`,
+      detail: `Stalled environment stopped responding for 300s. It may be overloaded, asleep, or off the network.`,
     });
     expect(yield* SubscriptionRef.get(supervisor.state)).toMatchObject({
       phase: "backoff",

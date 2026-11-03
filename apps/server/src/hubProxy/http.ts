@@ -18,6 +18,7 @@ import {
   type AuthEnvironmentScope,
 } from "@goat/contracts";
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
+import { guardErrors } from "@goat/shared/errorGuards";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -351,7 +352,7 @@ const proxyRead = Effect.fn("HubProxyHttp.proxyRead")(function* (
   return yield* attempt(false);
 });
 
-const openUpstreamSocket = (upstream: HubProxyUpstream, search: string) =>
+export const openUpstreamSocket = (upstream: HubProxyUpstream, search: string) =>
   Effect.suspend(() => {
     let status: number | undefined;
     let ws: NodeSocket.NodeWS.WebSocket | undefined;
@@ -372,13 +373,19 @@ const openUpstreamSocket = (upstream: HubProxyUpstream, search: string) =>
       return { reader, sink: relaySink(ws) };
     }).pipe(
       Effect.provideService(Socket.WebSocketConstructor, (url, options) => {
-        const socket = new NodeSocket.NodeWS.WebSocket(
-          url,
-          typeof options === "object" && !Array.isArray(options) ? options.protocols : options,
-          {
-            headers:
-              typeof options === "object" && !Array.isArray(options) ? options.headers : undefined,
-          },
+        // Effect detaches its listener before closing a still-connecting socket.
+        const socket = guardErrors(
+          new NodeSocket.NodeWS.WebSocket(
+            url,
+            typeof options === "object" && !Array.isArray(options) ? options.protocols : options,
+            {
+              headers:
+                typeof options === "object" && !Array.isArray(options)
+                  ? options.headers
+                  : undefined,
+            },
+          ),
+          () => {},
         );
         ws = socket;
         // ws exposes the HTTP status only on this event, not on SocketOpenError.

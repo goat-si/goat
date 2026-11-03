@@ -5,8 +5,51 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import { detachStackFrame } from "../git/detachStackFrame.ts";
 
+const BRANCH_SECTION_HEADER = /^\s*\[branch\s+"((?:[^"\\]|\\.)*)"\]\s*$/i;
+const PLAIN_SECTION_HEADER = /^\s*\[[A-Za-z0-9.-]+(?:\s+"(?:[^"\\]|\\.)*")?\]\s*$/;
+// Includes and legacy [branch.x] headers can set a branch's values from outside its own section.
+const ORDER_SENSITIVE_SECTION = /^\s*\[\s*(?:include|includeif|branch\s*\.)/i;
+const CONFIG_SECTION_MEMO_CAPACITY = 256;
+const CONFIG_SECTION_MAX_BYTES = 256 * 1024;
+
+/**
+ * Splits a git config into the text outside exact \`[branch "<name>"]\` sections and each such
+ * section's text. Returns null whenever a value or section outside the branch's own section could
+ * still change it (continued values, includes, legacy or inline headers); callers then stamp the
+ * whole file.
+ */
+export function splitBranchSections(
+  text: string,
+): { readonly shared: string; readonly branches: ReadonlyMap<string, string> } | null {
+  const shared: string[] = [];
+  const branches = new Map<string, string[]>();
+  let target = shared;
+  for (const line of text.split(/\r?\n/)) {
+    if (line.endsWith("\\")) return null;
+    // Blank lines carry nothing, and the file's last one would move with every appended section.
+    if (line.trim().length === 0) continue;
+    if (/^\s*\[/.test(line)) {
+      const name = BRANCH_SECTION_HEADER.exec(line)?.[1]?.replace(/\\(.)/g, "$1");
+      if (name !== undefined) {
+        target = branches.get(name) ?? [];
+        branches.set(name, target);
+        continue;
+      }
+      if (ORDER_SENSITIVE_SECTION.test(line) || !PLAIN_SECTION_HEADER.test(line)) return null;
+      target = shared;
+    }
+    target.push(line);
+  }
+  return {
+    shared: shared.join("\n"),
+    branches: new Map([...branches].map(([name, lines]) => [name, lines.join("\n")])),
+  };
+}
+
 // Gitfiles and commondir make linked worktrees share config while keeping their own HEAD.
 // Unknown layouts or inaccessible metadata disable reuse; git remains authoritative.
+// A branch-scoped read leaves other branches' config sections out: a repository with many
+// worktrees rewrites its shared config whenever any of them publishes a branch.
 export const makeGitMetadataFingerprint = Effect.fn("GitMetadataFingerprint.make")(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -19,6 +62,42 @@ export const makeGitMetadataFingerprint = Effect.fn("GitMetadataFingerprint.make
       ),
       Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed("missing")),
     );
+  });
+  // Reads at most the cap even if the file grows while it is read; null means stamp the whole file.
+  const readBounded = Effect.fnUntraced(
+    function* (file: string) {
+      const handle = yield* fs.open(file, { flag: "r" });
+      const decoder = new TextDecoder();
+      let text = "";
+      let bytes = 0;
+      while (bytes <= CONFIG_SECTION_MAX_BYTES) {
+        const chunk = yield* handle.readAlloc(64 * 1024);
+        if (Option.isNone(chunk)) return text + decoder.decode();
+        bytes += chunk.value.length;
+        text += decoder.decode(chunk.value, { stream: true });
+      }
+      return null;
+    },
+    Effect.scoped,
+    Effect.orElseSucceed(() => null),
+  );
+  const sectionsByConfig = new Map<
+    string,
+    { readonly stamp: string; readonly sections: ReturnType<typeof splitBranchSections> }
+  >();
+  // Parses only when the file's stamp moves, so steady lookups cost one stat as before.
+  const configSections = Effect.fnUntraced(function* (file: string, fileStamp: string) {
+    const memo = sectionsByConfig.get(file);
+    if (memo?.stamp === fileStamp) return memo.sections;
+    const text = fileStamp === "missing" ? null : yield* readBounded(file);
+    const sections = text === null ? null : splitBranchSections(text);
+    sectionsByConfig.delete(file);
+    if (sectionsByConfig.size >= CONFIG_SECTION_MEMO_CAPACITY) {
+      const oldest = sectionsByConfig.keys().next().value;
+      if (oldest !== undefined) sectionsByConfig.delete(oldest);
+    }
+    sectionsByConfig.set(file, { stamp: fileStamp, sections });
+    return sections;
   });
   const directories = yield* Cache.makeWith(
     (cwd: string) =>
@@ -58,10 +137,11 @@ export const makeGitMetadataFingerprint = Effect.fn("GitMetadataFingerprint.make
     function* (cwd: string, branch?: string) {
       const dirs = yield* detachStackFrame(Cache.get(directories, path.resolve(cwd)));
       if (dirs === null) return null;
+      const configFile = path.join(dirs.commonDir, "config");
       const repositoryFiles = [
         path.join(dirs.gitDir, "HEAD"),
         path.join(dirs.gitDir, "config.worktree"),
-        path.join(dirs.commonDir, "config"),
+        configFile,
       ];
       // Remote-tracking refs change on fetch and push without touching the branch or config.
       const remotes =
@@ -87,10 +167,21 @@ export const makeGitMetadataFingerprint = Effect.fn("GitMetadataFingerprint.make
       const stamps = yield* Effect.forEach([...repositoryFiles, ...refFiles], stamp, {
         concurrency: "unbounded",
       });
+      const repositoryStamps = stamps.slice(0, repositoryFiles.length);
+      const refStamps = stamps.slice(repositoryFiles.length);
+      const configIndex = repositoryFiles.length - 1;
+      const sections =
+        branch === undefined
+          ? null
+          : yield* configSections(configFile, repositoryStamps[configIndex] ?? "missing");
+      if (branch !== undefined && sections !== null) {
+        repositoryStamps[configIndex] = `shared:${sections.shared}`;
+        refStamps.push(`branch:${sections.branches.get(branch) ?? "none"}`);
+      }
       return {
         root: dirs.root,
-        repository: `${dirs.gitDir}\u0000${stamps.slice(0, repositoryFiles.length).join("\u0000")}`,
-        refs: stamps.slice(repositoryFiles.length).join("\u0000"),
+        repository: `${dirs.gitDir}\u0000${repositoryStamps.join("\u0000")}`,
+        refs: refStamps.join("\u0000"),
       };
     },
     Effect.orElseSucceed(() => null),

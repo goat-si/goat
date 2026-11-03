@@ -11,6 +11,7 @@ export * from "./environment.ts";
 export * from "./environmentHttp.ts";
 export * from "./relayClient.ts";
 export * from "./desktopBootstrap.ts";
+export * from "./desktopStopIntent.ts";
 export * from "./cua.ts";
 export * from "./computerUseHistory.ts";
 export * from "./desktopCuaManifest.ts";
@@ -136,6 +137,9 @@ export * from "./clientRpcPermissions.ts";
 
 export * from "./memory.ts";
 export * from "./siteNotes.ts";
+export * from "./memoryRecall.ts";
+export * from "./memoryRemember.ts";
+export * from "./memoryMcpTools.ts";
 export * from "./memoryGeneration.ts";
 
 export * from "./handoff.ts";

@@ -1,3 +1,4 @@
+import type { EstablishmentProgress, SetupPreparation } from "./establishmentProgress.ts";
 import { makeConnectedLeaseMonitor } from "./connectedLease.ts";
 import type { DesktopSshPreparationProgress } from "@goat/contracts";
 import { withRelayClientTracing } from "@goat/shared/relayTracing";
@@ -102,28 +103,6 @@ type AttemptOutcome =
       readonly slowSetupTimeout?: SetupPreparation;
       readonly failureOrigin?: ConnectionFailureOrigin;
     };
-
-interface SetupPreparation {
-  readonly routeId: string | undefined;
-  readonly startedAt: bigint;
-}
-
-interface EstablishmentProgress {
-  readonly preparation: SetupPreparation;
-  readonly pendingPreparations: ReadonlyMap<string, bigint>;
-  readonly synchronizedRoutes: number;
-  readonly hostAnswered: boolean;
-  readonly setup: { readonly routeId: string; readonly elapsedMs: number } | null;
-  readonly stage: "preparing" | "opening" | "synchronizing";
-  readonly ordinaryStartedAt: bigint;
-  readonly sshPreparation: {
-    readonly operationId: string;
-    readonly deadline: bigint;
-    readonly phase: ConnectionSshPreparation["phase"];
-    readonly hostAnswered: boolean;
-  } | null;
-  readonly wake: Queue.Queue<void>;
-}
 
 type EstablishmentEvent =
   | {
@@ -543,6 +522,22 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
             synchronizedRoutes:
               current.synchronizedRoutes + (progress.stage === "synchronizing" ? 1 : 0),
           };
+          const advanced =
+            routeChanged ||
+            (!current.hostAnswered && next.hostAnswered) ||
+            (current.stage !== next.stage &&
+              (next.stage === "opening" || next.stage === "synchronizing")) ||
+            (next.stage === "synchronizing" &&
+              routeId !== undefined &&
+              !current.synchronizedRouteIds.has(routeId));
+          next = {
+            ...next,
+            lastProgressAt: advanced ? now : current.lastProgressAt,
+            synchronizedRouteIds:
+              next.stage === "synchronizing" && routeId !== undefined
+                ? new Set([...current.synchronizedRouteIds, routeId])
+                : current.synchronizedRouteIds,
+          };
           let visible = yield* Ref.get(evidence);
           if (routeChanged) {
             const { sshPreparation: _preparation, sshRuntimeReady: _ready, ...rest } = visible;
@@ -598,7 +593,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
                 sshPreparation: null,
                 ...(terminal === undefined
                   ? {
-                      ordinaryStartedAt: now,
+                      lastProgressAt: now,
                       preparation: { routeId, startedAt: now },
                       setup: null,
                     }
@@ -635,7 +630,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
               next = {
                 ...next,
                 sshPreparation: null,
-                ordinaryStartedAt: now,
+                lastProgressAt: now,
                 preparation: { routeId, startedAt: now },
               };
             }
@@ -829,6 +824,8 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     target,
     loopback,
     currentRoutes,
+    // The OS lookup behind connectivity.status can hang on mobile; intent mirrors every change.
+    currentNetwork: Ref.get(intent).pipe(Effect.map((current) => current.network)),
     signals,
     resetRetryState,
     probeUnanswered,
@@ -867,7 +864,8 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
       hostAnswered: false,
       setup: null,
       stage: "preparing",
-      ordinaryStartedAt: startedAt,
+      lastProgressAt: startedAt,
+      synchronizedRouteIds: new Set(),
       sshPreparation: null,
       wake: yield* Queue.sliding<void>(1),
     });
@@ -912,14 +910,14 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
           const setup = Duration.toNanosUnsafe(
             Duration.millis(loopbackBudgetMs(loopback, answered) * routeCount),
           );
-          const synchronized = BigInt(progress.synchronizedRoutes);
           const active = progress.sshPreparation;
           const preparing = active !== null && active.hostAnswered && active.phase !== "connecting";
           const deadline = preparing
             ? active.deadline
-            : progress.ordinaryStartedAt +
-              setup +
-              synchronized * Duration.toNanosUnsafe(SYNCHRONIZATION_TIMEOUT);
+            : progress.lastProgressAt +
+              (progress.stage === "synchronizing"
+                ? Duration.toNanosUnsafe(SYNCHRONIZATION_TIMEOUT)
+                : setup);
           const remaining = deadline - (yield* Clock.monotonicTimeNanos);
           if (remaining <= 0n) {
             return {

@@ -1,3 +1,4 @@
+import { claudePromptCacheTtlMs, type ClaudeCacheCreation } from "./claudeCacheTtl.ts";
 import { buildAssistantArtifacts } from "./ClaudeAssistantArtifacts.ts";
 import { makeClaudeAssistantTextProjector } from "./ClaudeAssistantText.ts";
 import { sealAssistantTextEvent } from "./AssistantTextBoundary.ts";
@@ -89,11 +90,12 @@ import type {
   AskUserQuestionInput,
   WebSearchOutput,
 } from "@anthropic-ai/claude-agent-sdk/sdk-tools";
-// @effect-diagnostics-next-line nodeBuiltinImport:off -- the SDK takes a Node ChildProcess for the CLI.
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- the SDK's spawned CLI is a Node ChildProcess.
 import * as NodeChildProcess from "node:child_process";
+import { spawnClaudeProcessGroup, spawnClaudeWindowsProcess } from "./ClaudeProcessSpawn.ts";
 import { parseCliArgs } from "@goat/shared/cliArgs";
 import { fromLenientJson } from "@goat/shared/schemaJson";
-import { AgentScope } from "@goat/shared/AgentScope";
+import { AgentScope, nodeChildAgentProcess } from "@goat/shared/AgentScope";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { applyClaudePromptEffortPrefix } from "@goat/shared/model";
 import {
@@ -182,7 +184,6 @@ import * as ServerConfig from "../../config.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import { expandHomePath } from "@goat/provider-core/server/pathExpansion";
 import { spawnAndCollect } from "@goat/provider-core/server/snapshotProbe";
-import { signalProcessGroup } from "@goat/provider-core/server/processGroup";
 import {
   claudeSignedOutMessage,
   makeClaudeEnvironment,
@@ -258,20 +259,6 @@ function claudeContextWindow(modelSelection: ModelSelection): number | null {
   return (
     resolveClaudeCatalogContextWindowTokens(BUNDLED_CLAUDE_MODEL_CATALOG, modelSelection) ?? null
   );
-}
-
-interface ClaudeCacheCreation {
-  readonly ephemeral_1h_input_tokens: number;
-  readonly ephemeral_5m_input_tokens: number;
-}
-
-function claudePromptCacheTtlMs(
-  cacheCreation: ClaudeCacheCreation | null | undefined,
-): number | undefined {
-  if (!cacheCreation) return undefined;
-  if (cacheCreation.ephemeral_1h_input_tokens > 0) return 60 * 60_000;
-  if (cacheCreation.ephemeral_5m_input_tokens > 0) return 5 * 60_000;
-  return undefined;
 }
 
 // Claude caps the window at the model's context, so a setting at or above it never applies.
@@ -373,41 +360,6 @@ const WORKFLOW_MEMBER_TRANSCRIPT_FLUSH_MS = 500;
 const BACKGROUND_MOVE_TIMEOUT_MS = 5_000;
 // How long a Stop waits for the CLI to exit before the user is offered Force stop.
 const CLAUDE_STOP_CONFIRM_TIMEOUT_MS = 10_000;
-
-const CLAUDE_GROUP_WATCH_SCRIPT = [
-  "{ trap '' TERM; read -r _ <&3; kill -TERM 0; sleep 5; kill -KILL 0; } </dev/null >/dev/null 2>&1 &",
-  'exec "$@" 3<&-',
-].join("\n");
-
-/**
- * Kill the CLI's group on exit to stop MCP grandchildren; `onExit` stops its agent scope for
- * setsid daemons. The CLI keeps working after its pipes close, so a watcher stops the group on
- * EOF from a pipe only this server holds, including when the server crashes.
- */
-export function spawnClaudeProcessGroup(
-  options: ClaudeSpawnOptions,
-  onExit?: () => void,
-): ClaudeSpawnedProcess {
-  const child = NodeChildProcess.spawn(
-    "/bin/sh",
-    ["-c", CLAUDE_GROUP_WATCH_SCRIPT, "goat-claude", options.command, ...options.args],
-    {
-      cwd: options.cwd,
-      env: options.env,
-      signal: options.signal,
-      stdio: ["pipe", "pipe", "ignore", "pipe"],
-      detached: true,
-    },
-  );
-  child.once("exit", () => {
-    try {
-      signalProcessGroup(child.pid ?? 0, "SIGKILL");
-    } catch {}
-    onExit?.();
-  });
-  // Node's typings make stdin and stdout nullable once stdio has a fourth entry; both are pipes.
-  return child as ClaudeSpawnedProcess;
-}
 
 export const ClaudeProviderCapabilitiesV2 = {
   sessions: {
@@ -1009,17 +961,7 @@ export const layerQueryRunner: Layer.Layer<
             options.spawnClaudeCodeProcess ??
             ((spawnOptions: ClaudeSpawnOptions) => {
               if (platform !== "win32") return spawnClaudeProcessGroup(spawnOptions, stopScope);
-              const child = NodeChildProcess.spawn(spawnOptions.command, spawnOptions.args, {
-                cwd: spawnOptions.cwd,
-                env: spawnOptions.env,
-                signal: spawnOptions.signal,
-                windowsHide: true,
-                stdio: ["pipe", "pipe", "pipe"],
-              });
-              child.stderr
-                .setEncoding("utf8")
-                .on("data", (chunk: string) => options.stderr?.(chunk));
-              return child;
+              return spawnClaudeWindowsProcess(spawnOptions, (chunk) => options.stderr?.(chunk));
             });
           let spawnedProcess: ClaudeSpawnedProcess | undefined;
           let processExited = false;
@@ -1027,6 +969,11 @@ export const layerQueryRunner: Layer.Layer<
           const spawnClaudeCodeProcess = (spawnOptions: ClaudeSpawnOptions) => {
             const child = spawnProcess(spawnOptions);
             spawnedProcess = child;
+            const watched =
+              child instanceof NodeChildProcess.ChildProcess
+                ? nodeChildAgentProcess(child)
+                : undefined;
+            if (watched) runFork(agentScope.watch({ process: watched, threadId: input.threadId }));
             processExited = child.exitCode !== null || child.signalCode != null;
             processExit = new Promise<void>((resolve) => {
               if (processExited) resolve();

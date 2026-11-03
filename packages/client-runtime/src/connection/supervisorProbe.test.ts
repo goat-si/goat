@@ -85,54 +85,23 @@ describe("connected session health probes", () => {
       }).pipe(Effect.provide(TestClock.layer())),
   );
 
-  it.effect(
-    "reconnects an unanswered probe-capable loopback session at 60 seconds despite an answering descriptor and subsequent signals",
-    () =>
-      Effect.gen(function* () {
-        const started = yield* Deferred.make<void>();
-        const reconnectStarted = yield* Deferred.make<void>();
-        const allowReconnect = yield* Deferred.make<void>();
-        const harness = yield* makeHarness({
-          initialConfig: () => Effect.succeed(PROBE_CAPABLE_CONFIG),
-          checkHost: () => Effect.succeed("answered"),
-          prepare: (attempt) =>
-            attempt === 1
-              ? Effect.succeed(LOOPBACK_PREPARED)
-              : Deferred.succeed(reconnectStarted, undefined).pipe(
-                  Effect.andThen(Deferred.await(allowReconnect)),
-                  Effect.as(LOOPBACK_PREPARED),
-                ),
-          probe: () => Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
-        });
-        const supervisor = yield* EnvironmentSupervisor.make(LOOPBACK_ENTRY, {
-          initiallyDesired: true,
-        }).pipe(Effect.provide(harness.dependencies));
-        const connected = yield* awaitState(
-          supervisor.state,
-          (state) => state.phase === "connected",
-        );
-
-        yield* harness.wake("application-active-probe");
-        yield* Deferred.await(started);
-        yield* TestClock.adjust(1_000);
-        yield* harness.wake("application-active-probe");
-        yield* supervisor.retryNow;
-        yield* harness.wake("network-changed");
-        yield* TestClock.adjust(58_999);
-        expect(yield* SubscriptionRef.get(supervisor.state)).toEqual(connected);
-        expect(yield* Ref.get(harness.releaseCount)).toBe(0);
-
-        yield* TestClock.adjust(1);
-        yield* Deferred.await(reconnectStarted);
-        expect(yield* Ref.get(harness.releaseCount)).toBe(1);
-        expect(Option.isNone(yield* SubscriptionRef.get(supervisor.session))).toBe(true);
-        yield* Deferred.succeed(allowReconnect, undefined);
-        yield* awaitState(
-          supervisor.state,
-          (state) => state.phase === "connected" && state.generation === 2,
-        );
-        expect(yield* Ref.get(harness.sessionCount)).toBe(2);
-      }).pipe(Effect.provide(TestClock.layer())),
+  it.effect("keeps an unanswered loopback probe after its deadline", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const harness = yield* makeHarness({
+        prepare: () => Effect.succeed(LOOPBACK_PREPARED),
+        probe: () => Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
+      });
+      const supervisor = yield* EnvironmentSupervisor.make(LOOPBACK_ENTRY, {
+        initiallyDesired: true,
+      }).pipe(Effect.provide(harness.dependencies));
+      yield* awaitState(supervisor.state, (state) => state.phase === "connected");
+      yield* harness.wake("application-active-probe");
+      yield* Deferred.await(started);
+      yield* TestClock.adjust("65 seconds");
+      expect(yield* Ref.get(harness.sessionCount)).toBe(1);
+      expect(yield* Ref.get(harness.releaseCount)).toBe(0);
+    }).pipe(Effect.provide(TestClock.layer())),
   );
 
   it.effect("reconnects immediately when the loopback socket closes during a pending probe", () =>
@@ -159,35 +128,24 @@ describe("connected session health probes", () => {
     }).pipe(Effect.provide(TestClock.layer())),
   );
 
-  it.effect.each([
-    { reason: "application-active-probe", timeoutMs: 15_000, shorten: false },
-    { reason: "application-active", timeoutMs: 15_000, shorten: false },
-    { reason: "application-active", timeoutMs: 4_000, shorten: true },
-  ] as const)("keeps remote probe deadline $timeoutMs ms ($reason, shorten=$shorten)", (test) =>
-    Effect.gen(function* () {
-      const started = yield* Deferred.make<void>();
-      const harness = yield* makeHarness({
-        probe: () => Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
-      });
-      const supervisor = yield* EnvironmentSupervisor.make(
-        { target: TARGET, profile: Option.none(), enabled: true },
-        { initiallyDesired: true },
-      ).pipe(Effect.provide(harness.dependencies));
-      const connected = yield* awaitState(supervisor.state, (state) => state.phase === "connected");
-      yield* harness.wake(test.reason);
-      yield* Deferred.await(started);
-      yield* TestClock.adjust(1_000);
-      if (test.shorten) yield* harness.wake("application-active-long");
-      yield* TestClock.adjust(test.timeoutMs - 1_001);
-      expect(yield* SubscriptionRef.get(supervisor.state)).toEqual(connected);
-      expect(yield* Ref.get(harness.releaseCount)).toBe(0);
-      yield* TestClock.adjust(1);
-      yield* awaitState(
-        supervisor.state,
-        (state) => state.phase === "connected" && state.generation === 2,
-      );
-      expect(yield* Ref.get(harness.sessionCount)).toBe(2);
-      expect(yield* Ref.get(harness.releaseCount)).toBe(1);
-    }).pipe(Effect.provide(TestClock.layer())),
+  it.effect.each(["application-active-probe", "application-active"] as const)(
+    "keeps an unanswered remote %s probe after its deadline",
+    (reason) =>
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>();
+        const harness = yield* makeHarness({
+          probe: () => Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
+        });
+        const supervisor = yield* EnvironmentSupervisor.make(
+          { target: TARGET, profile: Option.none(), enabled: true },
+          { initiallyDesired: true },
+        ).pipe(Effect.provide(harness.dependencies));
+        yield* awaitState(supervisor.state, (state) => state.phase === "connected");
+        yield* harness.wake(reason);
+        yield* Deferred.await(started);
+        yield* TestClock.adjust("20 seconds");
+        expect(yield* Ref.get(harness.sessionCount)).toBe(1);
+        expect(yield* Ref.get(harness.releaseCount)).toBe(0);
+      }).pipe(Effect.provide(TestClock.layer())),
   );
 });

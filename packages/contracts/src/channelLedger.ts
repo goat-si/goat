@@ -23,6 +23,7 @@ import {
   ChannelTaskId,
 } from "./channelCommon.ts";
 import { ChannelTaskBrief, ChannelTaskMemoryDelivered } from "./channelBrief.ts";
+import { ChatAttachment } from "./chatAttachment.ts";
 import { ModelSelection } from "./modelSelection.ts";
 import { MemoryTaskGrantCeiling } from "./memory.ts";
 import { ProviderInteractionMode, RuntimeMode } from "./providerPolicy.ts";
@@ -442,6 +443,8 @@ export const ChannelTimelineRecord = Schema.Struct({
       type: Schema.Literal("message"),
       role: Schema.Literals(["user", "assistant"]),
       text: Schema.String,
+      /** Files the person sent with the message, already stored for the bot thread. */
+      attachments: Schema.optional(Schema.Array(ChatAttachment)),
       meta: ChannelMessageMeta,
     }),
     Schema.Struct({

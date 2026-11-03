@@ -1,3 +1,4 @@
+import { markStartClaimed } from "./StartLaneRecovery.testkit.ts";
 import * as Option from "effect/Option";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
@@ -42,7 +43,6 @@ import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
@@ -203,7 +203,7 @@ const layerTest = Layer.mergeAll(
 ).pipe(
   Layer.provide(McpSessionRegistryTestkit.layer),
   Layer.provide(McpProviderSessions.layer),
-  Layer.provide(SqlitePersistence.layerMemory),
+  Layer.provideMerge(SqlitePersistence.layerMemory),
   Layer.provide(layerCheckpointStoreTest),
   Layer.provide(layerServerConfig),
   Layer.provide(
@@ -1350,7 +1350,6 @@ it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
     });
     return { requestId, nodeId, itemId };
   });
-
   it.effect.each([
     { trigger: "startup", scope: "run" },
     { trigger: "shutdown", scope: "session" },
@@ -1464,6 +1463,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive", (it) => {
             },
           ],
         });
+        if (scope === "run") yield* markStartClaimed(threadId);
         yield* recovery.reconcile(trigger);
         const recovered = yield* orchestrator.getThreadProjection(threadId);
         if (scope === "run") {
@@ -6116,7 +6116,6 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         assert.lengthOf(yield* retriesOf, stopped ? 0 : 1);
       }),
   );
-
   it.effect.each(["startup", "shutdown"] as const)(
     "preserves and holds queued messages across %s until explicitly resumed",
     (trigger) =>
@@ -6155,6 +6154,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         const before = yield* orchestrator.getThreadProjection(threadId);
         const queued = before.runs.filter((run) => run.status === "queued");
         assert.equal(queued.length, 2);
+        yield* markStartClaimed(threadId);
         yield* recovery.reconcile(trigger);
         yield* recovery.reconcile("startup");
         const maintenance = yield* ProjectionMaintenance.ProjectionMaintenanceV2;
@@ -6215,7 +6215,6 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         assert.equal(resumed.runs.length, 3, "resume retries must not duplicate messages or runs");
       }),
   );
-
   it.effect("starts a provider wake queued beside a held queue", () =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;
@@ -6251,6 +6250,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         });
       yield* send(0, "Active");
       yield* send(1, "Queued before the restart");
+      yield* markStartClaimed(threadId);
       yield* recovery.reconcile("startup");
       yield* send(2, "First background task completed.", "provider");
       yield* send(3, "Background task completed.", "provider");

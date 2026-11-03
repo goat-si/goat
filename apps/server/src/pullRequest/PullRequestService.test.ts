@@ -3146,15 +3146,11 @@ it.effect("fills in the line counts for the rows it is given", () =>
       ],
     });
 
-    assert.deepStrictEqual(asked, [
-      [
-        { repository: "acme/web", number: 1 },
-        { repository: "acme/web", number: 2 },
-      ],
-    ]);
+    assert.deepStrictEqual(asked, [[1, 2].map((number) => ({ repository: "acme/web", number }))]);
     assert.deepStrictEqual(result.stats, [
       {
         projectId: "p1" as ProjectId,
+        host: "github.com",
         repository: "acme/web",
         number: 1,
         additions: 12,

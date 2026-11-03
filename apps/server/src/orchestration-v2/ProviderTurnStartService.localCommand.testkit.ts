@@ -1,3 +1,4 @@
+import { AgentScope } from "@goat/shared/AgentScope";
 /** The native-account-command harness for ProviderTurnStartService tests. */
 import * as MemorySnapshot from "../memory/MemorySnapshot.ts";
 import { expect, vi } from "vite-plus/test";
@@ -53,6 +54,7 @@ export const layerWorktreeLocation = (worktreesDir = managedWorktreesDir) =>
   );
 
 export function makeLocalCommandHarness(input: {
+  readonly oomKilled?: boolean;
   readonly text: string;
   readonly worktreePath?: string;
   readonly worktreesDir?: string;
@@ -501,6 +503,10 @@ export function makeLocalCommandHarness(input: {
   const layer = ProviderTurnStart.layer.pipe(
     Layer.provide(
       Layer.mergeAll(
+        Layer.succeed(AgentScope, {
+          ...AgentScope.defaultValue(),
+          oomKilled: () => Effect.succeed(input.oomKilled === true),
+        }),
         Layer.mock(ContextHandoffService.ContextHandoffServiceV2)({
           prepareProviderHandoff: () => Effect.die("history read must fail first"),
         }),

@@ -1,10 +1,10 @@
+import { createRemoteLauncherFamilies } from "@goat/client-runtime/state/remote-launcher-families";
 import { Atom } from "effect/reactivity";
 import { useEffect } from "react";
 
 import { environmentCatalog } from "../../connection/catalog";
 import { appAtomRegistry } from "../../rpc/atomRegistry";
 import { environmentThreadShells, threadFamilies } from "../../state/threads";
-import { createRemoteLauncherFamilies } from "./remoteLauncherFamilies";
 
 const readyGenerationAtom = Atom.family((id: Parameters<typeof threadFamilies.generationAtom>[0]) =>
   Atom.make((get) =>

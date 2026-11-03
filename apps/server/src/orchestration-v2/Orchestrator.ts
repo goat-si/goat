@@ -63,7 +63,6 @@ import {
   type OrchestrationV2RunTerminationCause,
   type OrchestrationV2RunAttempt,
   type OrchestrationV2ThreadShell,
-  type OrchestrationV2ThreadShellSnapshot,
   type OrchestrationV2StoredEvent,
   type OrchestrationV2Subagent,
   type OrchestrationV2ThreadProjection,
@@ -114,6 +113,7 @@ import {
   goalCommandStopsActiveRun,
   isNativeMaintenanceCommand,
   resolveMessageDispatchIntent,
+  shouldClearActiveOrder,
 } from "./CommandPolicy.ts";
 import { CommandReceiptStoreV2 } from "./CommandReceiptStore.ts";
 import { makeReviewLedger, OrchestratorReviewLedgerError } from "./goat/ReviewLedger.ts";
@@ -176,6 +176,7 @@ import {
   type OlderSettledThreadsListing,
   type OlderSettledThreadsQuery,
   type ShellSnapshotOptions,
+  type ShellSnapshotRead,
 } from "./ProjectionStore.ts";
 import { ProviderAdapterRegistryV2 } from "./ProviderAdapterRegistry.ts";
 import type { ProjectionLaunchEdge } from "./ProjectionLaunchEdges.ts";
@@ -455,7 +456,7 @@ export interface OrchestratorV2Shape {
   >;
   readonly getShellSnapshot: (
     options?: ShellSnapshotOptions,
-  ) => Effect.Effect<OrchestrationV2ThreadShellSnapshot, OrchestratorV2Error>;
+  ) => Effect.Effect<ShellSnapshotRead, OrchestratorV2Error>;
   readonly listActiveSubagentThreadIds: () => Effect.Effect<
     ReadonlyArray<ThreadId>,
     OrchestratorV2Error
@@ -471,10 +472,7 @@ export interface OrchestratorV2Shape {
   ) => Effect.Effect<OlderSettledThreadsListing, OrchestratorV2Error>;
   readonly readShellSnapshot: (
     options?: ShellSnapshotOptions,
-  ) => Effect.Effect<
-    Effect.Effect<OrchestrationV2ThreadShellSnapshot, OrchestratorV2Error>,
-    OrchestratorV2Error
-  >;
+  ) => Effect.Effect<Effect.Effect<ShellSnapshotRead, OrchestratorV2Error>, OrchestratorV2Error>;
   readonly getLaunchedPendingQuestions: (
     input: Parameters<ProjectionStoreV2["Service"]["getLaunchedPendingQuestions"]>[0],
   ) => Effect.Effect<
@@ -5487,7 +5485,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       });
       projection = applyToProjection(projection, event, { deferNotificationCursor: true });
     }
-
     const continuedTaskId = projection.runs.find(
       (run) => run.id === command.restartContinuationOfRunId,
     )?.delegatedTaskId;
@@ -5516,23 +5513,23 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       });
       projection = yield* getProjectionWithPendingEvents(command.threadId, events);
     }
-    // Background wakes and delegated completions continue work the user already snoozed, so
-    // only a message someone actually sent ends the snooze.
+    // Background wakes and delegated completions preserve snooze.
     const automaticWake =
       command.notification !== undefined || command.delegatedCompletion !== undefined;
-    if (projection.thread.snoozedUntil != null && !automaticWake) {
+    const unsnooze = projection.thread.snoozedUntil != null && !automaticWake;
+    const clearOrder = shouldClearActiveOrder(command, projection.thread.activeOrderKey);
+    if (unsnooze || clearOrder) {
       const now = yield* DateTime.now;
       const thread: OrchestrationV2AppThread = {
         ...projection.thread,
-        snoozedUntil: null,
-        snoozedAt: null,
-        updatedAt: now,
+        ...(unsnooze ? { snoozedUntil: null, snoozedAt: null, updatedAt: now } : {}),
+        ...(clearOrder ? { activeOrderKey: null } : {}),
       };
       yield* emit(
         events,
         command,
       )({
-        type: "thread.unsnoozed",
+        type: unsnooze ? "thread.unsnoozed" : "thread.active-reordered",
         threadId: command.threadId,
         providerInstanceId: thread.providerInstanceId,
         occurredAt: now,

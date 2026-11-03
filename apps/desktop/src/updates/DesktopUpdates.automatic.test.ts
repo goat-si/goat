@@ -200,6 +200,34 @@ describe("DesktopUpdates automatic coordinator", () => {
       }),
   );
 
+  it.effect("continues polling after an escaped defect and stops when its scope closes", () =>
+    Effect.gen(function* () {
+      let checks = 0;
+      const harness = makeHarness({
+        checkForUpdates: Effect.suspend(() => {
+          checks += 1;
+          return checks === 2 ? Effect.die(new Error("poll defect")) : Effect.void;
+        }),
+      });
+      yield* Effect.gen(function* () {
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const updates = yield* DesktopUpdates.DesktopUpdates;
+            yield* updates.configure;
+            yield* TestClock.adjust("15 seconds");
+            assert.equal(harness.checkCount(), 1);
+            yield* TestClock.adjust("225 seconds");
+            assert.equal(harness.checkCount(), 2);
+            yield* TestClock.adjust("4 minutes");
+            assert.equal(harness.checkCount(), 3);
+          }),
+        ).pipe(Effect.provide(harness.layer));
+        yield* TestClock.adjust("4 minutes");
+        assert.equal(harness.checkCount(), 3);
+      }).pipe(Effect.provide(TestClock.layer()));
+    }),
+  );
+
   it.effect(
     "a poll that finds a newer build than the downloaded one downloads it and keeps it ready to restart",
     () =>

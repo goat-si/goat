@@ -72,6 +72,8 @@ import type * as EffectAcpProtocol from "effect-acp/protocol";
 import type * as EffectAcpSchema from "effect-acp/compat";
 
 import { formatReadToolLabel, formatSearchToolLabel } from "@goat/shared/toolActivity";
+import { resolveNice } from "@goat/shared/toolPriority";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import { makeAcpMcpOverAcpBridge, type AcpMcpOverAcpBridge } from "./mcpOverAcpBridge.ts";
 import { mcpToolPresentation } from "@goat/provider-core/server/mcpToolPresentation";
@@ -95,6 +97,7 @@ import {
   type AcpToolCallState,
 } from "./runtimeModel.ts";
 import { acpNoticeContent, isReplayedAcpNotice } from "./noticeProjection.ts";
+import { textFromUnknown } from "./toolOutputText.ts";
 import {
   acpClientExecuteDisposition,
   acpMcpToolApprovalElicitationDisposition,
@@ -744,69 +747,6 @@ function nonEmptyText(value: unknown, fallback: string): string {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : fallback;
 }
 
-function decodeByteText(value: unknown): string | undefined {
-  if (!Array.isArray(value) || value.length === 0) return undefined;
-  if (!value.every((entry) => typeof entry === "number" && Number.isInteger(entry))) {
-    return undefined;
-  }
-  try {
-    const text = new TextDecoder().decode(Uint8Array.from(value as number[]));
-    return text.length > 0 ? text : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function textFromUnknown(value: unknown): string | undefined {
-  if (typeof value === "string") {
-    return value;
-  }
-  const fromBytes = decodeByteText(value);
-  if (fromBytes !== undefined) {
-    return fromBytes;
-  }
-  if (Array.isArray(value)) {
-    const parts = value.flatMap((entry) => {
-      const text = textFromUnknown(entry);
-      return text === undefined || text.length === 0 ? [] : [text];
-    });
-    return parts.length === 0 ? undefined : parts.join("\n");
-  }
-  const record = unknownRecord(value);
-  if (record === undefined) {
-    return undefined;
-  }
-  for (const key of [
-    "output_for_prompt",
-    "stdout",
-    "stderr",
-    "output",
-    "combinedOutput",
-    "combined_output",
-    "content",
-    "text",
-    "message",
-  ]) {
-    const direct = record[key];
-    if (typeof direct === "string" && direct.length > 0) {
-      return direct;
-    }
-    const decoded = decodeByteText(direct);
-    if (decoded !== undefined) {
-      return decoded;
-    }
-    const text = textFromUnknown(direct);
-    if (text !== undefined && text.length > 0) {
-      return text;
-    }
-  }
-  const result = unknownRecord(record.Result) ?? unknownRecord(record.result);
-  if (result !== undefined) {
-    return textFromUnknown(result);
-  }
-  return undefined;
-}
-
 function commandExitCode(value: unknown): number | undefined {
   const record = unknownRecord(value);
   for (const key of ["exitCode", "exit_code", "code"]) {
@@ -1310,6 +1250,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
 ) {
   const crypto = yield* Crypto.Crypto;
   const fileSystem = yield* FileSystem.FileSystem;
+  const toolNice = yield* resolveNice(yield* HostProcess.Platform);
   const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const agentScope = yield* AgentScope;
   const idAllocator = yield* IdAllocator.IdAllocatorV2;
@@ -1425,6 +1366,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             ? undefined
             : yield* makeAcpClientTerminals({
                 defaultCwd: input.runtimePolicy.cwd ?? process.cwd(),
+                nice: toolNice,
                 environment: options.clientTerminals.environment,
                 shellCommands: options.clientTerminals.shellCommands,
                 environmentForSession: (sessionId) => {

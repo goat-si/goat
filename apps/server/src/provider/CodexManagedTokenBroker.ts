@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - Server-owned private pipe/Unix socket, never a public listener.
 import * as NodeFSP from "node:fs/promises";
 import * as NodeNet from "node:net";
+import { guardErrors } from "@goat/shared/errorGuards";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeCrypto from "node:crypto";
@@ -126,64 +127,66 @@ const acquireListener = Effect.gen(function* () {
       onExcessProperty: "error",
     },
   );
-  const server = NodeNet.createServer((socket) => {
-    socket.on("error", () => {});
-    if (closing || sockets.size >= MAX_CONNECTIONS) {
-      socket.destroy();
-      return;
-    }
-    sockets.add(socket);
-    socket.once("close", () => sockets.delete(socket));
-    let transferred = false;
-    runConnection(
-      Effect.gen(function* () {
-        // Windows pipes permit read-only peers by default; send no bytes until a complete request.
-        const request = yield* Protocol.readFrame(
-          socket,
-          Protocol.REQUEST_BYTES,
-          Protocol.SOCKET_IDLE_MS,
-        ).pipe(Effect.flatMap(decode));
-        if (closing || admitted >= MAX_JOBS || request.environmentId !== environmentId) return;
-        admitted++;
-        transferred = true;
-        runJob(
-          Effect.scoped(
-            Effect.gen(function* () {
-              const auth = yield* makeCodexChatGptAuth({
-                instanceId: request.instanceId,
-                expectedProfileKey: request.profileKey,
-              });
-              // Retire abandoned permit waits; access saves a started rotation before honoring interruption.
-              const credentials = yield* auth.access.pipe(
-                Effect.timeout(Protocol.COMMAND_TIMEOUT_MS),
-              );
-              yield* Protocol.writeFrame(
-                socket,
-                encodeResponse({ token: credentials.accessToken }),
-                Protocol.RESPONSE_BYTES,
-              );
-            }),
-          ).pipe(
-            Effect.ignoreCause,
-            Effect.ensuring(
-              Effect.sync(() => {
-                admitted--;
-                socket.destroy();
+  const server = guardErrors(
+    NodeNet.createServer((socket) => {
+      socket.on("error", () => {});
+      if (closing || sockets.size >= MAX_CONNECTIONS) {
+        socket.destroy();
+        return;
+      }
+      sockets.add(socket);
+      socket.once("close", () => sockets.delete(socket));
+      let transferred = false;
+      runConnection(
+        Effect.gen(function* () {
+          // Windows pipes permit read-only peers by default; send no bytes until a complete request.
+          const request = yield* Protocol.readFrame(
+            socket,
+            Protocol.REQUEST_BYTES,
+            Protocol.SOCKET_IDLE_MS,
+          ).pipe(Effect.flatMap(decode));
+          if (closing || admitted >= MAX_JOBS || request.environmentId !== environmentId) return;
+          admitted++;
+          transferred = true;
+          runJob(
+            Effect.scoped(
+              Effect.gen(function* () {
+                const auth = yield* makeCodexChatGptAuth({
+                  instanceId: request.instanceId,
+                  expectedProfileKey: request.profileKey,
+                });
+                // Retire abandoned permit waits; access saves a started rotation before honoring interruption.
+                const credentials = yield* auth.access.pipe(
+                  Effect.timeout(Protocol.COMMAND_TIMEOUT_MS),
+                );
+                yield* Protocol.writeFrame(
+                  socket,
+                  encodeResponse({ token: credentials.accessToken }),
+                  Protocol.RESPONSE_BYTES,
+                );
               }),
+            ).pipe(
+              Effect.ignoreCause,
+              Effect.ensuring(
+                Effect.sync(() => {
+                  admitted--;
+                  socket.destroy();
+                }),
+              ),
             ),
+          );
+        }).pipe(
+          Effect.ignoreCause,
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (!transferred) socket.destroy();
+            }),
           ),
-        );
-      }).pipe(
-        Effect.ignoreCause,
-        Effect.ensuring(
-          Effect.sync(() => {
-            if (!transferred) socket.destroy();
-          }),
         ),
-      ),
-    );
-  });
-  server.on("error", () => {});
+      );
+    }),
+    () => {},
+  );
   // Drain accepted rotations before the FiberSet finalizers interrupt their fibers.
   yield* Effect.addFinalizer(() =>
     Effect.gen(function* () {

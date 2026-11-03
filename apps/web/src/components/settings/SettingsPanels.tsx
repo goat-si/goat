@@ -1,3 +1,5 @@
+import { ProviderUpdateChecksSetting } from "./ProviderUpdateChecksSetting";
+import { AgentMemoryLimitSetting } from "./AgentMemoryLimitSetting";
 import { SettingsGroup } from "./SettingsGroup";
 import { NotificationSettings } from "./NotificationSettings";
 import { PRIVACY_POLICY_URL } from "../../legalLinks";
@@ -554,6 +556,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       ? ["Continue threads after restarts"]
       : []),
     ...(isBackgroundActivityDirty ? ["Background activity"] : []),
+    ...(settings.agentMemoryLimitGiB !== null ? ["Agent memory limit"] : []),
     ...(settings.defaultThreadEnvMode !== DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode
       ? ["New thread mode"]
       : []),
@@ -674,6 +677,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
       automaticServerUpdates: DEFAULT_UNIFIED_SETTINGS.automaticServerUpdates,
       continueThreadsAfterServerUpdate: DEFAULT_UNIFIED_SETTINGS.continueThreadsAfterServerUpdate,
+      agentMemoryLimitGiB: DEFAULT_UNIFIED_SETTINGS.agentMemoryLimitGiB,
       backgroundActivity: DEFAULT_UNIFIED_SETTINGS.backgroundActivity,
       backgroundActivityProfile: DEFAULT_UNIFIED_SETTINGS.backgroundActivityProfile,
       automaticGitFetchInterval: DEFAULT_UNIFIED_SETTINGS.automaticGitFetchInterval,
@@ -1269,35 +1273,8 @@ export function GeneralSettingsPanel() {
       <ComposerSettingsSection />
 
       <SettingsSection id="updates" title="Updates and background">
-        <SettingsRow
-          serverScoped
-          settingKeys={["enableProviderUpdateChecks"]}
-          {...searchableSetting("provider-update-checks")}
-          description="Check installed provider CLIs for newer available versions and fetch model catalog updates. When off, new models may not appear."
-          resetAction={
-            settings.enableProviderUpdateChecks !==
-            DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks ? (
-              <SettingResetButton
-                label="provider update checks"
-                onClick={() =>
-                  updateSettings({
-                    enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <ScopedSwitch
-              settingKeys={["enableProviderUpdateChecks"]}
-              checked={settings.enableProviderUpdateChecks}
-              onCheckedChange={(checked) =>
-                updateSettings({ enableProviderUpdateChecks: Boolean(checked) })
-              }
-              aria-label="Check provider versions"
-            />
-          }
-        />
+        <ProviderUpdateChecksSetting />
+        <AgentMemoryLimitSetting />
 
         <SettingsRow
           {...searchableSetting("automatic-server-updates")}

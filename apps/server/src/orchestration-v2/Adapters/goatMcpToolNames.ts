@@ -7,11 +7,18 @@ import type { MemoryToolAvailability } from "@goat/provider-core/server/mcpSessi
 const listed = (path: AgentSurfacePath) => listedToolName(agentSurfaceRegistry[path]);
 
 const GOAT_MEMORY_READ_TOOL_NAMES: ReadonlyArray<string> = (
-  ["memory.list", "memory.search", "memory.read", "memory.history", "memory.sync_status"] as const
+  [
+    "memory.list",
+    "memory.search",
+    "memory.recall",
+    "memory.read",
+    "memory.history",
+    "memory.sync_status",
+  ] as const
 ).map(listed);
 const GOAT_MEMORY_SOURCE_TOOL_NAME = listed("memory.source_read");
 const GOAT_MEMORY_WRITE_TOOL_NAMES: ReadonlyArray<string> = (
-  ["memory.upsert", "memory.forget", "memory.revert_resolution"] as const
+  ["memory.remember", "memory.upsert", "memory.forget", "memory.revert_resolution"] as const
 ).map(listed);
 
 /** The memory tools a session without these grants must not offer, by their listed names. */

@@ -1,4 +1,5 @@
 import {
+  ChatAttachmentId,
   EnvironmentId,
   MessageId,
   MemoryId,
@@ -596,5 +597,42 @@ describe("memory report rows", () => {
     );
     expect(result[0]).toMatchObject({ kind: "bot", memory, options: [] });
     expect(result[1]).not.toHaveProperty("memory");
+  });
+});
+
+describe("attachments on the person's messages", () => {
+  it("shows a photo sent without text, sent and pending, and previews it by name", () => {
+    const photo = {
+      type: "image" as const,
+      id: ChatAttachmentId.make("thread-bot-1"),
+      name: "photo.png",
+      mimeType: "image/png",
+      sizeBytes: 3,
+    };
+    const rows = content(
+      buildGoatBotTimeline({
+        visibleTurnItems: rowsOf([
+          { ...user("u", "2026-10-12T12:00:00Z", ""), attachments: [photo] },
+        ]),
+        pendingInputs: [
+          {
+            clientKey: "k",
+            text: "",
+            attachments: [{ id: "draft-1", type: "file", name: "log.txt" }],
+            createdAt: "2026-10-12T12:00:01Z",
+            state: "sending",
+            requestKey: null,
+          },
+        ],
+        readers: readers(),
+      }),
+    );
+    expect(rows.map((row) => row.kind === "user" && row.attachments)).toEqual([
+      [{ id: "thread-bot-1", type: "image", name: "photo.png" }],
+      [{ id: "draft-1", type: "file", name: "log.txt" }],
+    ]);
+    expect(goatBotConversationPreview({ rows, lastVisitedAt: null, active: true })?.text).toBe(
+      "You: log.txt",
+    );
   });
 });

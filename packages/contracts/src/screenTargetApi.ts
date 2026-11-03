@@ -3,12 +3,12 @@
  * A thread gets it with its first result, after a reset, a new provider session or a version
  * change, and when a surface first becomes available; it names only the surfaces the turn has.
  */
-export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/32";
+export const SCREEN_TARGET_CONTRACT_VERSION = "screen-target/33";
 
 const HEADER = `// goat_screen_run cell API, contract ${SCREEN_TARGET_CONTRACT_VERSION}. Await every call, alone or in one Promise.all; the cell's return value comes back as JSON.
 // At most 4 calls wait for answers at once (pendingCalls); one more throws pending_limit with nothing sent, so await some before starting more.
 // Every target, tab or app, goes: observe, confirm it is the right target, act, observe the effect, check the task, then hand back or finish.
-// An app input answers unverifiable when it went out and no proof of its effect was found: that is a success, so carry on and observe when you need to see the result. Observe before sending the same input again. Stop from the person ends the cell at once.`;
+// Stop from the person ends the cell at once.`;
 
 const COMMON = `type ElementHandle = { readonly elementHandle: string }; // a copy is refused
 type Target = ElementHandle | number | string | { window: [x: number, y: number] } | [x: number, y: number] | { role?: string; name: string } | { id: string };
@@ -28,9 +28,9 @@ type ReadTime = { ms?: number; phases?: { driverMs: number; parseMs: number; ren
 type Shot = { imageRef: string; pixelWidth: number; pixelHeight: number; omitted?: boolean; [k: string]: unknown };
 // The picture comes back as an image beside the cell's JSON, under its imageRef; [x, y] count its pixels from the top-left. omitted: it did not fit the cell's image limit.
 // An option, query or tab condition key a method below does not take is refused unsent (invalid_argument), naming the keys it takes.
-// Diagnostic value includes observed evidence and window reports when available; read other elements with observe().
+// Diagnostic value: observed evidence and window reports when available.
 // confirmed: the effect is proven. unverifiable: the input was sent and no proof of its effect was found; it may already have taken effect,
-// so observe before sending it again. Nothing waits on it: go on with the next step and observe when you need the result. A refused or failed call, in any call form, throws
+// so observe before sending it again. It is a success: go on with the next step and observe when you need the result. A refused or failed call, in any call form, throws
 // ScreenError { code, message, nothingSent, effectStarted?, nextStep?, safety?, refused?, detail? };
 // after nothingSent the cell goes on as before. Only with strict input guards on (Settings > Computer use) does GOAT
 // refuse on its own: a failed write that may have landed stops later input, and chat sends without { send: true },
@@ -58,7 +58,7 @@ interface TargetBase { kind: "app" | "tab"; identity: string; environment: strin
   capabilities: string[]; note?: string; // note: GOAT's own notes for this app or site
   observe(o?: { diff?: boolean; screenshot?: boolean; interactiveOnly?: boolean }): Promise<Observation>; // a diff after the first; app numbers from the latest full read remain valid until rows are added, removed or renumbered; then apply diffs and use the latest observation, or diff: false for the whole tree
   screenshot(): Promise<ReadTime & Shot>; // tabs: the image of observe({ screenshot: true }), no options; element numbers then need a new observe()
-  click(t: Target, o?: { button?: "right"; count?: number; send?: boolean; timeoutMs?: number; action?: "press" | "show_menu" | "pick" | "confirm" | "cancel" | "open" | "show_alternate_ui" | "show_default_ui" | string; modifiers?: ("cmd" | "shift" | "alt" | "ctrl")[]; verify?: boolean }): Promise<Done>; // tabs: count 1, 2 or 3; timeoutMs (tabs only) waits for the target, 5 s; action and modifiers are apps only; tabs refuse modifiers. Tab verify includes diagnostics without extra reads. verify: true reads the app's window list before and after the input, run side by side with the acted element's read when a unique label with text or selection names it (a 60 ms settle follows that first read when the cell has time); with no new window it lists them up to three more times, 100 ms apart (four for one that opens or closes a window). Element changes are evidence only; a window it proves opened or closed makes the verdict confirmed. A suspected_noop right after a whole observe gets one more read of the window, and changed rows confirm it (never a close); that read replaces earlier numbers
+  click(t: Target, o?: { button?: "right"; count?: number; send?: boolean; timeoutMs?: number; action?: "press" | "show_menu" | "pick" | "confirm" | "cancel" | "open" | "show_alternate_ui" | "show_default_ui" | string; modifiers?: ("cmd" | "shift" | "alt" | "ctrl")[]; verify?: boolean }): Promise<Done>; // tabs: count 1, 2 or 3; timeoutMs (tabs only) waits for the target, 5 s; action and modifiers are apps only; tabs refuse modifiers. Tab verify includes diagnostics without extra reads. verify: true reads the app's window list before and after the input, run side by side with the acted element's read when a unique label with text or selection names it; with no new window it lists them up to three more times, 100 ms apart (four for one that opens or closes a window). Element changes are evidence only; a window it proves opened or closed makes the verdict confirmed. A suspected_noop right after a whole observe gets one more read of the window, and changed rows confirm it (never a close); that read replaces earlier numbers
   type(text: string, t?: Target, o?: { send?: boolean; verify?: boolean }): Promise<Done>; // verify: as on click
   press(key: string, t?: Target, o?: { send?: boolean; verify?: boolean; holdMs?: number }): Promise<Done>; // "Enter", "cmd+a"; apps focus the target, tabs click it first; holdMs 0..30000 needs a supporting app driver; tabs refuse it
   scroll(t: Target | null, direction: "up" | "down" | "left" | "right", amount?: number): Promise<Done>;
@@ -70,6 +70,8 @@ interface TargetBase { kind: "app" | "tab"; identity: string; environment: strin
 const TAB = `// Tab Condition: { text } | { url } | { load: "load" | "domContentLoaded" | "networkIdle" } | { target } | { role, name? },
 // and with target or role: enabled?, value?, checked?, selected? (true/false or exact value of the one match) and state?: "attached" | "detached" | "visible" | "hidden".
 // text is visible page text, not the title. After goto, back, forward or reload the same tab acts on the new page.
+// Web pages in any browser are Tab work. Never click a file input: upload() it. Custom dropdown: click, observe(), click the option.
+// Read typed CJK or autocomplete text back before Enter.
 // A canvas, map or drawing has no elements inside it: click its spot at [x, y] from tab.screenshot(). Any input but a click retires those points (stale_reference): take a new one. scroll may leave the page moving.
 // A selector that still matches nothing 2 s after its page loaded throws target_missing with nothing sent; waitFor({ target }) waits for an element that appears later.
 interface Tab extends TargetBase { status(): Promise<object>; claim(): Promise<object>; // tabs you opened need no claim
@@ -102,9 +104,10 @@ interface App extends TargetBase { menu(path: string[], o?: { send?: boolean; ve
   // unless a zero-based occurrence picks one (prefix and suffix narrow the matches); cursor_before or cursor_after places the caret there instead.
   windowId?: number; launched: boolean } // launched: screen.app started or reopened it`;
 
-const SCREEN_TAB = `  tab(q: string | { tabId?: string; url?: string; mentionId?: string }): Promise<Tab>; // a string is a tab id or URL
+const SCREEN_TAB = `  tab(q: string | { tabId?: string; url?: string; mentionId?: string }): Promise<Tab>; // a string is a tab id or URL; reuse a matching open tab
   openTab(q: { url: string }): Promise<Tab>; // http(s) only; serve local files over http://127.0.0.1; an address that does not connect throws and closes its tab, or names it if it could not`;
-const SCREEN_APP = `  // app() without window_id: a running app with one window on screen binds it, never opening another; several
+const SCREEN_APP = `  // Native apps and browser dialogs only; web pages in any browser go through tab()/openTab(), never app().
+  // app() without window_id: a running app with one window on screen binds it, never opening another; several
   // windows or processes are ambiguous; for a minimized or hidden window, check screen.discover() for its window_id and title and pass window_id explicitly instead of opening a new window.
   // A closed app is launched in the background and bound to its first window in the same call; a running
   // one is never launched again, so with no window yet it throws: call app() again once it shows one. It is looked for during 5 s, and a

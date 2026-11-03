@@ -1,5 +1,8 @@
 import type { OpenCodexInventorySnapshot, OpenCodexUpdateStatus } from "@goat/contracts";
 
+import type { OrchestratedPlan } from "./ocxContracts.ts";
+export type { OrchestratedPlan } from "./ocxContracts.ts";
+
 /** OpenCodex's latest channel publishes plain releases; previews never update automatically. */
 const STABLE = /^(\d+)\.(\d+)\.(\d+)$/u;
 
@@ -28,6 +31,7 @@ export interface OpenCodexUpdateMember {
 export interface OpenCodexUpdateStep {
   readonly alias: string | null;
   readonly fromVersion: string;
+  readonly via: "managed" | "ocx-update";
 }
 
 export type OpenCodexUpdatePlan = Pick<
@@ -54,13 +58,23 @@ function verdictOf(
   member: OpenCodexUpdateMember,
   target: string,
   failedTargets: Readonly<Record<string, string>>,
+  orchestrated: Readonly<Record<string, OrchestratedPlan>>,
 ): MemberVerdict {
   const snapshot = member.snapshot;
   if (!snapshot?.runtime.healthy) return "unreachable";
   const version = snapshot.runtime.version;
   if (!isStableOpenCodexVersion(version)) return "unpublished-version";
   if (compareOpenCodexVersions(target, version) <= 0) return "current";
-  if (snapshot.ownership !== "managed") return "adopted";
+  if (snapshot.ownership !== "managed") {
+    const plan = orchestrated[failedTargetKey(member.alias)];
+    if (
+      !plan?.canApply ||
+      plan.targetVersion !== target ||
+      plan.currentVersion !== version ||
+      plan.updateInFlight
+    )
+      return "adopted";
+  }
   if (failedTargets[failedTargetKey(member.alias)] === target) return "previous-failure";
   // Without OpenCodex's service status (OCX-10) a restart's effect cannot be predicted.
   if (!snapshot.service.available || snapshot.service.running !== true) return "service-unknown";
@@ -84,6 +98,7 @@ export function planOpenCodexUpdate(input: {
   readonly children: ReadonlyArray<OpenCodexUpdateMember>;
   readonly targetVersion: string | undefined;
   readonly failedTargets: Readonly<Record<string, string>>;
+  readonly orchestrated?: Readonly<Record<string, OrchestratedPlan>>;
 }): OpenCodexUpdatePlan {
   const target = input.targetVersion;
   const result = (
@@ -100,7 +115,8 @@ export function planOpenCodexUpdate(input: {
   });
   if (!isStableOpenCodexVersion(target)) return result("no-target");
 
-  const verdict = (member: OpenCodexUpdateMember) => verdictOf(member, target, input.failedTargets);
+  const verdict = (member: OpenCodexUpdateMember) =>
+    verdictOf(member, target, input.failedTargets, input.orchestrated ?? {});
   const members = [input.home, ...input.children];
   const advisories = members.flatMap((member) =>
     verdict(member) === "adopted"
@@ -156,6 +172,7 @@ export function planOpenCodexUpdate(input: {
     steps: moving.map((member) => ({
       alias: member.alias,
       fromVersion: member.snapshot!.runtime.version!,
+      via: member.snapshot?.ownership === "managed" ? "managed" : "ocx-update",
     })),
   });
 }

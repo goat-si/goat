@@ -540,6 +540,7 @@ describe("DesktopLifecycle", () => {
           appListeners.get("before-quit")?.(event);
 
           yield* Deferred.await(shutdownRequested);
+          assert.equal(yield* Ref.get((yield* DesktopState.DesktopState).stopReason), "quit");
           const eventsBeforeCleanup = [...events];
           yield* Deferred.succeed(allowShutdown, undefined);
           yield* Deferred.await(quitRequested);
@@ -548,6 +549,38 @@ describe("DesktopLifecycle", () => {
           assert.deepEqual(events, ["flush", "destroy", "request", "quit"]);
         }),
       ).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("relaunch marks the backend stop reason before shutdown", () =>
+    Effect.gen(function* () {
+      const requested = yield* Deferred.make<void>();
+      const layer = Layer.mergeAll(
+        DesktopLifecycle.layer,
+        DesktopState.layer,
+        layerElectronApp(new Map()),
+        layerElectronTheme,
+        layerElectronWindow(),
+        layerDesktopWindow(),
+        Layer.succeed(DesktopEnvironment.DesktopEnvironment, {
+          platform: "darwin",
+          isDevelopment: true,
+        } as DesktopEnvironment.DesktopEnvironment["Service"]),
+        Layer.succeed(DesktopShutdown.DesktopShutdown, {
+          request: Deferred.succeed(requested, undefined).pipe(Effect.asVoid),
+          awaitRequest: Deferred.await(requested),
+          markComplete: Effect.void,
+          awaitComplete: Effect.void,
+          isComplete: Effect.succeed(true),
+        }),
+      );
+      yield* Effect.gen(function* () {
+        const state = yield* DesktopState.DesktopState;
+        assert.equal(yield* Ref.get(state.stopReason), "quit");
+        yield* (yield* DesktopLifecycle.DesktopLifecycle).relaunch("test");
+        yield* Deferred.await(requested);
+        assert.equal(yield* Ref.get(state.stopReason), "relaunch");
+      }).pipe(Effect.provide(layer));
     }),
   );
 

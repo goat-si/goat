@@ -45,6 +45,7 @@ const identity = (stat: NodeFS.BigIntStats) =>
 
 const sha256 = async (path: string) => {
   const hash = NodeCrypto.createHash("sha256");
+  // oxlint-disable-next-line goat/guard-error-emitters -- Pipeline listens for stream errors and rejects.
   await NodeStreamPromises.pipeline(NodeFS.createReadStream(path), hash);
   return hash.digest("hex");
 };

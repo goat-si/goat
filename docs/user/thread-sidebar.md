@@ -396,6 +396,11 @@ finished, on this machine or a connected one. On web and desktop, follow them un
 it, or choose **Promote to thread** from its menu to make it a regular thread. While a subagent
 is open, it shows beneath the thread that started it until you navigate away.
 
+A subagent delegated to another machine folds under the thread that delegated it, like a
+launched thread (see below), but only its approvals and questions raise that thread. It enters
+**Priority** on its own only while it waits for you. When this app is not connected to the
+delegating machine, it keeps an ordinary row in the list.
+
 On mobile, open a subagent from its conversation card or **Agents**. On iOS
 layouts with an inspector, its thread opens beside the parent. Maximize it to
 fill the screen; close the full-screen view to return to the parent and inspector.

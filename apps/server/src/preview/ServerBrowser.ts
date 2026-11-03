@@ -1,3 +1,4 @@
+import { timedShutdownPhase } from "@goat/shared/timedShutdownPhase";
 import * as ServerBrowserLimits from "./serverBrowserLimits.ts";
 // @effect-diagnostics nodeBuiltinImport:off globalDate:off globalTimers:off - Playwright callbacks run outside the Effect runtime.
 // Screencasts ignore emulated device scale; real 2x keeps captures sharp.
@@ -1389,7 +1390,6 @@ const make = Effect.gen(function* () {
     if (status.url === null || tab.dialog) return status;
     return { ...status, title: (await tab.page.title().catch(() => "")) || null };
   };
-
   const startRecording = (
     tab: ServerTab,
     channel: import("./actionChannel.ts").ActionChannel,
@@ -1503,7 +1503,6 @@ const make = Effect.gen(function* () {
       },
       deadlineMs,
     );
-
   const stopRecording = (tab: ServerTab) =>
     withCaptureLock(tab, async () => {
       const recording = tab.recording;
@@ -2659,11 +2658,13 @@ const make = Effect.gen(function* () {
     Effect.forkScoped,
   );
   yield* Effect.addFinalizer(() =>
-    Effect.promise(async () => {
-      await contexts.close();
-    }),
+    timedShutdownPhase(
+      "browserContexts",
+      Effect.promise(async () => {
+        await contexts.close();
+      }),
+    ),
   );
-
   const clearProfile = (profileId: string) =>
     Effect.tryPromise({
       try: () => contexts.clearProfile(profileId),

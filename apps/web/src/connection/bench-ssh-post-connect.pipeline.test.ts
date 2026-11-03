@@ -215,6 +215,7 @@ const makeHarness = Effect.fn("TestSshAuthorization.makeHarness")(function* (opt
   const driver = yield* Driver.make.pipe(
     Effect.provideService(Resolver.ConnectionResolver, resolver),
     Effect.provideService(Session.RpcSessionFactory, {
+      openProbe: () => Effect.die("unused"),
       connect: (prepared) =>
         Effect.sync(() => {
           state.sockets.push(prepared.socketUrl);

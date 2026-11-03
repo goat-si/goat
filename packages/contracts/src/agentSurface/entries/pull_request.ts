@@ -251,6 +251,8 @@ export const pullRequestEntries = {
       filters:
         "{draft?, review?, checks?, labels?, excludedLabels?, author?} as the Pull requests view filters.",
       projectId: "One project to search. Default: every project.",
+      includeUpstream:
+        "Also search the upstream repository a fork was made from. Default: only the fork's own repository.",
       query: "Text to match in titles.",
       limit: "Rows per repository, 1 to 50. Default 10.",
       cursors: "nextCursors from the previous result, with the same arguments.",

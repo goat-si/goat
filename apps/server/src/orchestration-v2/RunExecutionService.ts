@@ -1,3 +1,10 @@
+import {
+  isTerminalProviderTurnStatus,
+  isSettledTurnItemStatus,
+  isSettledRunEligibleForInheritedBackground,
+} from "./providerTurnStatus.ts";
+import { withAgentOom } from "./agentOomFailure.ts";
+import { AgentScope } from "@goat/shared/AgentScope";
 import { repairSchedule } from "../retryJitter.ts";
 import { continuationOrigin } from "./ContinuationChain.ts";
 import { runTurnPrepareInput } from "./RunTurnPrepareInput.ts";
@@ -103,15 +110,6 @@ type ProviderTerminalEvent = Extract<
   { readonly type: "turn.terminal" }
 >;
 
-function isTerminalProviderTurnStatus(status: OrchestrationV2ProviderTurn["status"]): boolean {
-  return (
-    status === "completed" ||
-    status === "interrupted" ||
-    status === "failed" ||
-    status === "cancelled"
-  );
-}
-
 function isSettledSubagentStatus(status: OrchestrationV2Subagent["status"]): boolean {
   return !isOrchestrationV2WorkActive(status);
 }
@@ -129,14 +127,6 @@ const backgroundCapableTurnItemTypes: ReadonlySet<OrchestrationV2TurnItem["type"
   "dynamic_tool",
   "subagent",
 ]);
-
-function isSettledTurnItemStatus(status: OrchestrationV2TurnItem["status"]): boolean {
-  return !isOrchestrationV2WorkActive(status);
-}
-
-function isSettledRunEligibleForInheritedBackground(status: OrchestrationV2Run["status"]): boolean {
-  return status === "interrupted" || status === "failed" || status === "cancelled";
-}
 
 /** Use durable provider-thread lineage; sessions can host multiple threads. */
 export function selectInheritedBackgroundTurnItems(input: {
@@ -661,6 +651,7 @@ export const layer: Layer.Layer<
 > = Layer.effect(
   RunExecutionServiceV2,
   Effect.gen(function* () {
+    const agentScope = yield* AgentScope;
     const scope = yield* Effect.scope;
     const checkpointService = yield* CheckpointService.CheckpointServiceV2;
     const eventSink = yield* EventSink.EventSinkV2;
@@ -1800,13 +1791,16 @@ export const layer: Layer.Layer<
                     ? "provider_process_exit"
                     : "provider_error",
                   terminal: makeFailedTerminalEvent(
-                    makeProviderFailure({
-                      cause: squashed,
-                      message:
-                        knownProviderFailureMessage(squashed) ??
-                        userFacingDatabaseErrorMessage(squashed),
-                      class: "unknown",
-                    }),
+                    yield* withAgentOom(
+                      input.run.threadId,
+                      makeProviderFailure({
+                        cause: squashed,
+                        message:
+                          knownProviderFailureMessage(squashed) ??
+                          userFacingDatabaseErrorMessage(squashed),
+                        class: "unknown",
+                      }),
+                    ).pipe(Effect.provideService(AgentScope, agentScope)),
                     latestItemOrdinal + 1,
                   ),
                   failureItemPersisted: false,
@@ -2141,31 +2135,36 @@ export const layer: Layer.Layer<
                       Effect.flatMap((openSubagents) =>
                         Ref.get(liveRootProviderTurn).pipe(
                           Effect.flatMap((liveProviderTurn) =>
-                            writeFinalRunEvents({
-                              run: input.run,
-                              rootNode: input.rootNode,
-                              checkpointScope: input.checkpointScope,
-                              providerThread,
-                              ...(liveProviderTurn === null ? {} : { liveProviderTurn }),
-                              attempt: input.attempt,
-                              writeIfRunCurrent: {
-                                activeAttemptId: input.attempt.id,
-                                expectedStatus: "running",
-                              },
-                              openRunOwnedSubagents: openSubagents,
-                              terminationCause: providerProcessExitCause(Cause.squash(cause))
-                                ? "provider_process_exit"
-                                : "provider_error",
-                              terminal: makeFailedTerminalEvent(
-                                makeProviderFailure({
-                                  cause: Cause.squash(cause),
-                                  class: Exit.isFailure(shouldStart) ? "unknown" : "provider_error",
+                            withAgentOom(
+                              input.run.threadId,
+                              makeProviderFailure({
+                                cause: Cause.squash(cause),
+                                class: Exit.isFailure(shouldStart) ? "unknown" : "provider_error",
+                              }),
+                            ).pipe(
+                              Effect.provideService(AgentScope, agentScope),
+                              Effect.flatMap((failure) =>
+                                writeFinalRunEvents({
+                                  run: input.run,
+                                  rootNode: input.rootNode,
+                                  checkpointScope: input.checkpointScope,
+                                  providerThread,
+                                  ...(liveProviderTurn === null ? {} : { liveProviderTurn }),
+                                  attempt: input.attempt,
+                                  writeIfRunCurrent: {
+                                    activeAttemptId: input.attempt.id,
+                                    expectedStatus: "running",
+                                  },
+                                  openRunOwnedSubagents: openSubagents,
+                                  terminationCause: providerProcessExitCause(Cause.squash(cause))
+                                    ? "provider_process_exit"
+                                    : "provider_error",
+                                  terminal: makeFailedTerminalEvent(failure, latestItemOrdinal + 1),
+                                  failureItemPersisted: false,
+                                  refreshAfterTurn,
                                 }),
-                                latestItemOrdinal + 1,
                               ),
-                              failureItemPersisted: false,
-                              refreshAfterTurn,
-                            }),
+                            ),
                           ),
                         ),
                       ),

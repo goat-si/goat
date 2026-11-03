@@ -1,7 +1,29 @@
 import { entry } from "../entry.ts";
-import { MEMORY_OPERATION_ID } from "../idempotencyReasons.ts";
+import { MEMORY_OPERATION_ID, MEMORY_REMEMBER_CONTENT } from "../idempotencyReasons.ts";
 
 export const memoryEntries = {
+  "memory.recall": entry({
+    resource: "memory",
+    verb: "recall",
+    name: "memory_recall",
+    toolkit: "memory",
+    summary: "Recall related memories.",
+    description:
+      "Find memories with one natural-language query (any language). Searches this thread, this project's other threads, project and user memory; ranked by relevance and recency; flags weak matches. Use before asking the user to repeat context.",
+    guide: "Needs memory:read. Results can be stale; verify changeable facts.",
+    parameters: {
+      query: "One natural-language query.",
+      limit: "Maximum hits, 1 to 20; default 8.",
+      memorySpaceId: "Optional current memory space.",
+    },
+    examples: [{ title: "Recall a prior decision", args: { query: "release checklist decision" } }],
+    effect: "read",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: { idempotentHint: false, openWorldHint: false },
+  }),
   "memory.search": entry({
     resource: "memory",
     verb: "search",
@@ -11,9 +33,9 @@ export const memoryEntries = {
     description:
       "Search memory (default scope: user). fts is phrase search; use mode substring for partial text. Pass nextCursor unchanged with the same query and scope, even when items is empty. If indexCoverage is partial/unavailable, do not conclude a memory is absent.",
     guide:
-      "Needs memory:read. Pass the memorySpaceId goat_memory_sync_status reports. fts adds a stemmed and prefix alternative for Korean text. Treat nextCursor as opaque.",
+      "Needs memory:read. For one query across thread, project and user memory use goat_memory_recall. fts adds a stemmed and prefix alternative for Korean text. Treat nextCursor as opaque.",
     parameters: {
-      memorySpaceId: "The memory space goat_memory_sync_status reports.",
+      memorySpaceId: "Optional; defaults to this server's memory space.",
       limit: "Items per page, 1 to 100. Default 20.",
       cursor: "nextCursor from the previous page, unchanged, with the same query and scope.",
       query: "The words to find.",
@@ -24,7 +46,7 @@ export const memoryEntries = {
     examples: [
       {
         title: "Search your memories for a phrase",
-        args: { memorySpaceId: "7d1f5c2a-3b4e-4f6a-8c9d-0e1f2a3b4c5d", query: "release checklist" },
+        args: { query: "release checklist" },
       },
     ],
     effect: "read",
@@ -45,7 +67,7 @@ export const memoryEntries = {
     summary: "List one bounded memory page.",
     description: "List one bounded page of memory items.",
     guide:
-      "Needs memory:read. Pass the memorySpaceId goat_memory_sync_status reports and includeQuarantined (false hides quarantined items). The default scope is user.",
+      "Needs memory:read. Pass includeQuarantined (false hides quarantined items); memorySpaceId defaults to this server's space. The default scope is user.",
     effect: "read",
     hostRoutable: false,
     requires: "either",
@@ -65,16 +87,13 @@ export const memoryEntries = {
     description: "Read one memory item.",
     guide: "Needs memory:read.",
     parameters: {
-      memorySpaceId: "The memory space goat_memory_sync_status reports.",
-      memoryId: "The item's id from goat_memory_search or goat_memory_list.",
+      memorySpaceId: "Optional; defaults to this server's memory space.",
+      memoryId: "The item's id from goat_memory_recall, goat_memory_search or goat_memory_list.",
     },
     examples: [
       {
         title: "Read one memory item",
-        args: {
-          memorySpaceId: "7d1f5c2a-3b4e-4f6a-8c9d-0e1f2a3b4c5d",
-          memoryId: "2a9e4b7c-1d3f-4e5a-9b8c-7d6e5f4a3b2c",
-        },
+        args: { memoryId: "2a9e4b7c-1d3f-4e5a-9b8c-7d6e5f4a3b2c" },
       },
     ],
     effect: "read",
@@ -123,6 +142,38 @@ export const memoryEntries = {
       idempotentHint: false,
       openWorldHint: false,
     },
+  }),
+  "memory.remember": entry({
+    resource: "memory",
+    verb: "remember",
+    name: "goat_memory_remember",
+    toolkit: "memory",
+    summary: "Save a memory from text and a scope.",
+    description:
+      "Save one lasting fact, decision or preference for later conversations. Choose scope user for every project, project for this conversation's project, or thread for this conversation only. Pass memoryId to replace an existing memory instead of adding another. Do not save progress reports, tool output or execution summaries.",
+    guide:
+      "Needs memory:write and a session allowed to write. GOAT fills the memory space, ids, current revision, project key and this conversation as evidence.",
+    parameters: {
+      text: "The memory, written to stand on its own.",
+      scope:
+        "user (every project), project (this conversation's project) or thread. Required unless memoryId is set.",
+      memoryId: "Optional id from goat_memory_recall to replace that memory; it keeps its scope.",
+      memorySpaceId: "Optional current memory space.",
+    },
+    examples: [
+      {
+        title: "Save a preference for every project",
+        args: { text: "Jun reviews Korean summaries before English ones.", scope: "user" },
+      },
+    ],
+    effect: "write",
+    capability: "threads.launch",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    idempotencyReason: MEMORY_REMEMBER_CONTENT,
+    annotations: { idempotentHint: true, openWorldHint: false },
   }),
   "memory.upsert": entry({
     resource: "memory",

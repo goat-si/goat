@@ -18,10 +18,11 @@ export function toSortableTimestamp(iso: string | undefined): number | null {
   return Number.isFinite(ms) ? ms : null;
 }
 
-export type ThreadLastPromptInput = Pick<
-  EnvironmentThreadShell,
-  "createdAt" | "latestUserMessageAt" | "latestUserAuthoredMessageAt"
->;
+export type ThreadLastPromptInput = {
+  readonly createdAt: string;
+  readonly latestUserMessageAt?: string | null | undefined;
+  readonly latestUserAuthoredMessageAt?: string | null | undefined;
+};
 
 /**
  * When the user last sent the thread a prompt, else when it was created. Wakes and agent
@@ -156,12 +157,13 @@ export function getThreadSortTimestamp(
   return getLatestUserMessageTimestamp(thread);
 }
 
-function activeThreadAnchorTimestampMs(thread: {
-  readonly createdAt: string;
-  readonly unsettledAt?: string | null | undefined;
-}): number {
+function activeThreadAnchorTimestampMs(
+  thread: ThreadLastPromptInput & {
+    readonly unsettledAt?: string | null | undefined;
+  },
+): number {
   return Math.max(
-    toSortableTimestamp(thread.createdAt) ?? 0,
+    threadLastPromptAt(thread),
     toSortableTimestamp(thread.unsettledAt ?? undefined) ?? 0,
   );
 }
@@ -343,6 +345,8 @@ export function sortActiveThreadsByOrderKey<
     readonly id: string;
     readonly createdAt: string;
     readonly unsettledAt?: string | null | undefined;
+    readonly latestUserMessageAt?: string | null | undefined;
+    readonly latestUserAuthoredMessageAt?: string | null | undefined;
     readonly activeOrderKey?: string | null | undefined;
     readonly environmentId?: string | undefined;
   },

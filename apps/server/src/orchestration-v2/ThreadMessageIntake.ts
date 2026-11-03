@@ -71,10 +71,6 @@ const dispatchToBot = Effect.fn("ThreadMessageIntake.dispatchToBot")(function* (
   owner: ChannelConnectionOwner | undefined,
 ) {
   if (owner === undefined) return yield* new ChannelGatewayError({ reason: "forbidden" });
-  // The bot timeline has no attachment field yet, so the bot takes text only.
-  if (command.attachments.length > 0) {
-    return yield* new ChannelGatewayError({ reason: "invalid_input" });
-  }
   const ledgerOption = yield* Effect.serviceOption(ChannelLedger.ChannelLedger);
   const gatewayOption = yield* Effect.serviceOption(ChannelGateway.ChannelGateway);
   if (Option.isNone(ledgerOption) || Option.isNone(gatewayOption)) {
@@ -103,7 +99,8 @@ const dispatchToBot = Effect.fn("ThreadMessageIntake.dispatchToBot")(function* (
         threadId: command.threadId,
       },
       text: command.text,
-      attachments: [],
+      // The gateway admits only fresh uploads and claims them for the bot thread.
+      attachments: command.attachments,
       receivedAt,
       intent: "message",
     },

@@ -259,6 +259,25 @@ describe("generateSpreadPinOrderKeys", () => {
 });
 
 describe("sortActiveThreadsByOrderKey", () => {
+  it("moves user prompts up while streaming and automatic wakes keep their places", () => {
+    const older = {
+      id: "older",
+      createdAt: "2026-03-01T00:00:00Z",
+      updatedAt: "2026-03-04T00:00:00Z",
+      latestUserMessageAt: "2026-03-04T00:00:00Z",
+      latestUserAuthoredMessageAt: null as string | null | undefined,
+    };
+    const newer = { id: "newer", createdAt: "2026-03-02T00:00:00Z" };
+    const ids = (thread: typeof older) =>
+      sortActiveThreadsByOrderKey([thread, newer]).map((item) => item.id);
+    expect(ids(older)).toEqual(["newer", "older"]);
+    expect(ids({ ...older, latestUserAuthoredMessageAt: "2026-03-03T00:00:00Z" })).toEqual([
+      "older",
+      "newer",
+    ]);
+    expect(ids({ ...older, latestUserAuthoredMessageAt: undefined })).toEqual(["older", "newer"]);
+  });
+
   it("keeps new and reopened threads ahead of the saved order", () => {
     const sorted = sortActiveThreadsByOrderKey([
       {

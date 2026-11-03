@@ -803,77 +803,72 @@ describe("RpcSessionFactory", () => {
           frozen = false;
           yield* Deferred.succeed(resumed, undefined);
           yield* clock.adjust(0);
-          if (lateByMs <= 2_000) {
-            expect(yield* Fiber.join(closed)).toMatchObject({ _tag: "Failure" });
-            return;
-          }
           expect(closed.pollUnsafe()).toBeUndefined();
           expect(socket.readyState).toBe(TestWebSocket.OPEN);
           yield* clock.adjust("15 seconds");
           expect(closed.pollUnsafe()).toBeUndefined();
 
           socket.serverMessage(encodeJson({ _tag: "Pong" }));
-          yield* clock.adjust("15 seconds");
+          yield* clock.adjust("299 seconds");
           expect(closed.pollUnsafe()).toBeUndefined();
-          yield* clock.adjust("5 seconds");
+          yield* clock.adjust("6 seconds");
           expect(yield* Fiber.join(closed)).toMatchObject({ _tag: "Failure" });
         }).pipe(Effect.provideService(Clock.Clock, frozenClock));
       }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
   );
 
-  it.effect.each([false, true])(
-    "limits consecutive late timers to one grace per frame (pong: %s)",
-    (pong) =>
-      Effect.gen(function* () {
-        const clock = yield* TestClock.testClockWith(Effect.succeed);
-        let resumed = yield* Deferred.make<void>();
-        let frozen = false;
-        const frozenClock: Clock.Clock = {
-          ...clock,
-          sleep: (duration) =>
-            clock
-              .sleep(duration)
-              .pipe(
-                Effect.andThen(
-                  Effect.suspend(() => (frozen ? Deferred.await(resumed) : Effect.void)),
-                ),
+  it.effect.each([false, true])("credits consecutive late timers (pong: %s)", (pong) =>
+    Effect.gen(function* () {
+      const clock = yield* TestClock.testClockWith(Effect.succeed);
+      let resumed = yield* Deferred.make<void>();
+      let frozen = false;
+      const frozenClock: Clock.Clock = {
+        ...clock,
+        sleep: (duration) =>
+          clock
+            .sleep(duration)
+            .pipe(
+              Effect.andThen(
+                Effect.suspend(() => (frozen ? Deferred.await(resumed) : Effect.void)),
               ),
-        };
-        const lateTick = Effect.gen(function* () {
-          resumed = yield* Deferred.make<void>();
-          frozen = true;
-          yield* clock.adjust("20 seconds");
-          frozen = false;
-          yield* Deferred.succeed(resumed, undefined);
+            ),
+      };
+      const lateTick = Effect.gen(function* () {
+        resumed = yield* Deferred.make<void>();
+        frozen = true;
+        yield* clock.adjust("20 seconds");
+        frozen = false;
+        yield* Deferred.succeed(resumed, undefined);
+        yield* clock.adjust(0);
+      });
+      yield* Effect.gen(function* () {
+        const { factory, sockets } = yield* makeFactory();
+        const session = yield* factory.connect(PREPARED);
+        const ready = yield* Effect.forkChild(session.ready);
+        const closed = yield* session.closed.pipe(Effect.exit, Effect.forkChild);
+        const socket = yield* awaitSocket(sockets);
+        socket.open();
+        yield* completeInitialConfig(socket);
+        yield* Fiber.join(ready);
+        yield* lateTick;
+        expect(closed.pollUnsafe()).toBeUndefined();
+
+        if (pong) {
+          socket.serverMessage(encodeJson({ _tag: "Pong" }));
           yield* clock.adjust(0);
-        });
-        yield* Effect.gen(function* () {
-          const { factory, sockets } = yield* makeFactory();
-          const session = yield* factory.connect(PREPARED);
-          const ready = yield* Effect.forkChild(session.ready);
-          const closed = yield* session.closed.pipe(Effect.exit, Effect.forkChild);
-          const socket = yield* awaitSocket(sockets);
-          socket.open();
-          yield* completeInitialConfig(socket);
-          yield* Fiber.join(ready);
           yield* lateTick;
           expect(closed.pollUnsafe()).toBeUndefined();
-
-          if (pong) {
-            socket.serverMessage(encodeJson({ _tag: "Pong" }));
-            yield* clock.adjust(0);
-            yield* lateTick;
-            expect(closed.pollUnsafe()).toBeUndefined();
-            expect(socket.readyState).toBe(TestWebSocket.OPEN);
-          }
-          yield* lateTick;
-          expect(closed.pollUnsafe()).toBeDefined();
-          expect(yield* Fiber.join(closed)).toMatchObject({ _tag: "Failure" });
-        }).pipe(Effect.provideService(Clock.Clock, frozenClock));
-      }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
+          expect(socket.readyState).toBe(TestWebSocket.OPEN);
+        }
+        yield* lateTick;
+        expect(closed.pollUnsafe()).toBeUndefined();
+        yield* clock.adjust("305 seconds");
+        expect(yield* Fiber.join(closed)).toMatchObject({ _tag: "Failure" });
+      }).pipe(Effect.provideService(Clock.Clock, frozenClock));
+    }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
   );
 
-  it.effect("does not let empty decoded frames extend the silence budget", () =>
+  it.effect("empty decoded frames reset the silence budget", () =>
     Effect.gen(function* () {
       const { factory, sockets } = yield* makeFactory();
       const session = yield* factory.connect(PREPARED);
@@ -885,11 +880,13 @@ describe("RpcSessionFactory", () => {
       yield* Fiber.join(ready);
       yield* TestClock.adjust("10 seconds");
       socket.serverMessage("[]");
-      yield* TestClock.adjust("10 seconds");
+      yield* TestClock.adjust("299 seconds");
+      expect(closed.pollUnsafe()).toBeUndefined();
+      yield* TestClock.adjust("6 seconds");
       expect(yield* Fiber.join(closed)).toMatchObject({
         reason: "transport",
         detail:
-          "Test environment stopped responding for 15s. It may be overloaded, asleep, or off the network.",
+          "Test environment stopped responding for 300s. It may be overloaded, asleep, or off the network.",
       });
     }).pipe(Effect.scoped, Effect.provide(TestClock.layer())),
   );

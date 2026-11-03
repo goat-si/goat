@@ -2,6 +2,7 @@
 import * as NodeChildProcess from "node:child_process";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- acquisition validates absolute server paths.
 import * as NodePath from "node:path";
+import { guardChild } from "@goat/shared/errorGuards";
 import { MemoryImportRpcError, type MemoryImportIssue } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import { scanMemoryValue } from "../MemorySecretScanner.ts";
@@ -100,20 +101,25 @@ export const execute = (
 ) =>
   Effect.callback<{ code: number; bytes: Buffer }, MemoryImportRpcError>((resume) => {
     let child: NodeChildProcess.ChildProcessWithoutNullStreams;
+    let failed = false;
     try {
-      child = NodeChildProcess.spawn(executable, [...args], {
-        cwd,
-        env: environment(cwd, gitDir),
-        shell: false,
-        stdio: ["pipe", "pipe", "pipe"],
-      });
+      child = guardChild(
+        NodeChildProcess.spawn(executable, [...args], {
+          cwd,
+          env: environment(cwd, gitDir),
+          shell: false,
+          stdio: ["pipe", "pipe", "pipe"],
+        }),
+        () => {
+          failed = true;
+        },
+      );
     } catch {
       resume(Effect.fail(error("source_unreadable")));
       return;
     }
     child.stdin.end();
     let size = 0;
-    let failed = false;
     const chunks: Buffer[] = [];
     const stop = () => {
       failed = true;
@@ -131,9 +137,6 @@ export const execute = (
     child.stderr.on("data", (chunk: Buffer) => {
       stderr += chunk.length;
       if (stderr > maxBytes) stop();
-    });
-    child.on("error", () => {
-      failed = true;
     });
     let ended = false;
     const waiters: (() => void)[] = [];

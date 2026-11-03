@@ -38,6 +38,8 @@ import { layerMemoryDefaultStarted } from "./server.ts";
 import { ServerActivation } from "./serverActivation.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
+import * as CodexDetachedAppServerLive from "./provider/CodexDetachedAppServerLive.ts";
+import * as DesktopStopIntentReader from "./desktopStopIntent.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
@@ -91,6 +93,7 @@ it.effect.each([
         const dependencies: Layer.Layer<
           Layer.Services<ReturnType<typeof ServerRuntimeStartup.layerWithOptions>>
         > = Layer.mergeAll(
+          DesktopStopIntentReader.layerNone,
           Layer.mock(ServerConfig.ServerConfig)({
             ...(yield* ServerConfig.deriveServerPaths(cwd, undefined).pipe(
               Effect.provide(Path.layer),
@@ -132,10 +135,15 @@ it.effect.each([
           }),
           Layer.mock(ProviderRuntimeRecovery.ProviderRuntimeRecoveryService)({
             recover: Effect.succeed(recovery),
-            prepareForShutdown: Effect.void,
+            prepareForShutdown: Effect.succeed({ candidates: 0, continued: 0 }),
             reconcile: () => Effect.succeed(recovery),
           }),
           Layer.mock(Orchestrator.OrchestratorV2)({ recoverDelegatedTasks: Effect.void }),
+          Layer.mock(CodexDetachedAppServerLive.CodexDetachedAppServers)({
+            cleanup: Effect.succeed([]),
+            beginServerShutdown: Effect.void,
+            socketTransportEnabled: false,
+          }),
           Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
             shutdown: Effect.void,
           }),
@@ -145,6 +153,7 @@ it.effect.each([
             runGeneralOnce: Effect.never,
             runControlOnce: Effect.never,
             runCleanupOnce: Effect.never,
+            runStartOnce: Effect.never,
           }),
           Layer.mock(ServerLifecycleEvents.ServerLifecycleEvents)({
             publish: (event) => Effect.succeed({ ...event, sequence: 1 }),

@@ -4,7 +4,10 @@ import {
   type OpenCodexInventorySnapshot,
   type OpenCodexSyncReport,
 } from "@goat/contracts";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
 import * as Layer from "effect/Layer";
 
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
@@ -40,13 +43,19 @@ const makeFleet = () => ({
     [null, 0],
     ...CHILDREN.map((alias) => [alias, 0] as const),
   ]),
+  onMember: undefined as ((alias: string | null) => Effect.Effect<void>) | undefined,
+  onSync: undefined as ((alias: string) => Effect.Effect<void>) | undefined,
+  onHomeSync: undefined as Effect.Effect<void> | undefined,
   homeExit: 0,
+  contracts: { code: 64, stdout: "" } as OcxOutput,
+  childContracts: new Map<string, OcxOutput>(),
   deviceOutput: new Map<string, OcxOutput | "unreachable">(),
   /** What reconnecting each link leaves it in; connected unless named. */
   reconnectTo: new Map<string, "failed">(),
   calls: [] as Array<string>,
   reads: [] as Array<string>,
   holds: 0,
+  holdCalls: 0,
   /** A turn starts on this machine the moment a sync takes admission. */
   turnStartsOnHold: false,
   /** The row each device saw for itself while its own sync ran. */
@@ -72,7 +81,8 @@ const layer = (fleet: Fleet, seen: { latest?: Effect.Effect<unknown> }) =>
     Layer.provide(
       Layer.mock(OpenCodexUpdateHost)({
         member: (alias) =>
-          Effect.sync(() => {
+          Effect.gen(function* () {
+            if (fleet.onMember) yield* fleet.onMember(alias);
             fleet.reads.push(alias ?? "home");
             return {
               alias,
@@ -86,6 +96,7 @@ const layer = (fleet: Fleet, seen: { latest?: Effect.Effect<unknown> }) =>
         holdAdmission: () =>
           Effect.sync(() => {
             fleet.holds += 1;
+            fleet.holdCalls += 1;
             if (fleet.turnStartsOnHold) fleet.running.set(null, 1);
             return true;
           }),
@@ -98,20 +109,28 @@ const layer = (fleet: Fleet, seen: { latest?: Effect.Effect<unknown> }) =>
     Layer.provide(
       Layer.mock(HubOcx)({
         home: (args) =>
-          Effect.sync(() => {
-            fleet.calls.push(`home ${args.join(" ")}`);
-            if (args[0] === "link") {
-              const alias = [...fleet.linkState.keys()].find(
-                (child) => linkIdOf(child as Child) === args[3],
-              );
-              if (alias !== undefined)
-                fleet.linkState.set(alias, fleet.reconnectTo.get(alias) ?? "connected");
-              return { code: 0, stdout: "{}" };
-            }
-            return { code: fleet.homeExit, stdout: "" };
-          }),
+          (args[0] === "sync" ? (fleet.onHomeSync ?? Effect.void) : Effect.void).pipe(
+            Effect.andThen(
+              Effect.sync(() => {
+                if (args[0] === "capabilities") return fleet.contracts;
+                fleet.calls.push(`home ${args.join(" ")}`);
+                if (args[0] === "link") {
+                  const alias = [...fleet.linkState.keys()].find(
+                    (child) => linkIdOf(child as Child) === args[3],
+                  );
+                  if (alias !== undefined)
+                    fleet.linkState.set(alias, fleet.reconnectTo.get(alias) ?? "connected");
+                  return { code: 0, stdout: "{}" };
+                }
+                return { code: fleet.homeExit, stdout: "" };
+              }),
+            ),
+          ),
+        device: (alias) =>
+          Effect.succeed(fleet.childContracts.get(alias) ?? { code: 64, stdout: "" }),
         syncDevice: (alias, options) =>
           Effect.gen(function* () {
+            if (fleet.onSync) yield* fleet.onSync(alias);
             fleet.calls.push(
               `device ${alias} ${options.linkId}${options.restartCodex ? " --restart-codex" : ""}`,
             );
@@ -365,5 +384,134 @@ it.effect("fills one update report across the window's steps", () =>
       [null, "synced", undefined],
       ["mac-studio", "failed", "exit-1"],
     ]);
+  }),
+);
+
+it.effect("keeps Home sync local only when ocx advertises fanout", () =>
+  Effect.gen(function* () {
+    const fleet = makeFleet();
+    fleet.contracts = { code: 0, stdout: JSON.stringify({ contracts: ["sync.home-fanout/1"] }) };
+    const { sync } = yield* setup(fleet);
+    yield* sync.run(scope);
+    expect(fleet.calls[0]).toBe("home sync --restart-codex --local-only");
+    yield* sync.beginUpdate("2.91.0");
+    yield* sync.syncUpdatedMember(null, scope);
+    expect(fleet.calls.at(-1)).toBe("home sync --restart-codex --local-only");
+  }),
+);
+
+it.effect("does not sync Home when contracts are unknown but still syncs Children", () =>
+  Effect.gen(function* () {
+    const fleet = makeFleet();
+    fleet.contracts = { code: 0, stdout: "bad" };
+    const { sync } = yield* setup(fleet);
+    const report = yield* sync.run(scope);
+    expect(rows(report)[0]).toEqual([null, "failed", "unreachable"]);
+    expect(fleet.calls.filter((call) => call.startsWith("device "))).toHaveLength(3);
+    expect(fleet.calls.some((call) => call.startsWith("home sync"))).toBe(false);
+  }),
+);
+
+it.effect("recognizes exit 7 only for members advertising orchestrated updates", () =>
+  Effect.gen(function* () {
+    const fleet = makeFleet();
+    fleet.homeExit = 7;
+    fleet.contracts = { code: 0, stdout: JSON.stringify({ contracts: ["update.orchestrated/1"] }) };
+    fleet.deviceOutput.set("macmini-ts", { code: 7, stdout: "" });
+    fleet.deviceOutput.set("lidge-ts", { code: 7, stdout: "" });
+    fleet.childContracts.set("macmini-ts", fleet.contracts);
+    const { sync } = yield* setup(fleet);
+    expect(rows(yield* sync.run(scope)).slice(0, 3)).toEqual([
+      [null, "skipped", "updating"],
+      ["macmini-ts", "skipped", "updating"],
+      ["lidge-ts", "failed", "exit-7"],
+    ]);
+    fleet.contracts = { code: 64, stdout: "" };
+    expect(rows(yield* sync.run(scope))[0]).toEqual([null, "failed", "exit-7"]);
+  }),
+);
+
+it.effect("continues other Children while one sync hangs and times out", () =>
+  Effect.gen(function* () {
+    const fleet = makeFleet();
+    const blocked = yield* Deferred.make<void>();
+    const other = yield* Deferred.make<void>();
+    fleet.onSync = (alias) =>
+      alias === "macmini-ts"
+        ? Deferred.succeed(blocked, undefined).pipe(Effect.andThen(Effect.never))
+        : alias === "lidge-ts"
+          ? Deferred.succeed(other, undefined).pipe(Effect.asVoid)
+          : Effect.void;
+    const { sync } = yield* setup(fleet);
+    const running = yield* Effect.forkChild(sync.run(scope));
+    yield* Deferred.await(blocked);
+    yield* Deferred.await(other);
+    yield* TestClock.adjust(330_000);
+    const report = yield* Fiber.join(running);
+    expect(rows(report)[1]).toEqual(["macmini-ts", "failed", "timed-out"]);
+    expect(rows(report)[2]).toEqual(["lidge-ts", "synced", undefined]);
+  }),
+);
+
+it.effect("isolates a dying Child sync", () =>
+  Effect.gen(function* () {
+    const fleet = makeFleet();
+    fleet.onSync = (alias) => (alias === "macmini-ts" ? Effect.die("broken") : Effect.void);
+    const { sync } = yield* setup(fleet);
+    const report = yield* sync.run(scope);
+    expect(rows(report)[1]).toEqual(["macmini-ts", "failed", "unreachable"]);
+    expect(rows(report)[2]).toEqual(["lidge-ts", "synced", undefined]);
+  }),
+);
+
+it.effect("bounds a hanging Child permit or member read during planning", () =>
+  Effect.gen(function* () {
+    for (const source of ["permit", "member"] as const) {
+      const fleet = makeFleet();
+      const started = yield* Deferred.make<void>();
+      const hang = Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never));
+      if (source === "member")
+        fleet.onMember = (alias) => (alias === "macmini-ts" ? hang : Effect.void);
+      const { sync } = yield* setup(fleet);
+      const planning = yield* Effect.forkChild(
+        sync.plan(scope, (alias) =>
+          source === "permit" && alias === "macmini-ts" ? hang : Effect.succeed(true),
+        ),
+      );
+      yield* Deferred.await(started);
+      yield* TestClock.adjust(30_000);
+      const report = yield* Fiber.join(planning);
+      expect(rows(report)[1]).toEqual(["macmini-ts", "skipped", "unreachable"]);
+      expect(rows(report)[2]?.[1]).toBe("ready");
+    }
+  }),
+);
+
+it.effect("does not acquire a second Home admission hold when the update owns it", () =>
+  Effect.gen(function* () {
+    const { fleet, sync } = yield* setup();
+    yield* sync.beginUpdate("2.91.0");
+    yield* sync.syncUpdatedMember(null, scope, { admissionHeld: true });
+    expect(fleet.holdCalls).toBe(0);
+    expect((yield* sync.lastUpdate)?.members[0]).toMatchObject({ state: "synced" });
+  }),
+);
+
+it.effect("marks an interrupted update sync as failed instead of leaving it syncing", () =>
+  Effect.gen(function* () {
+    const fleet = makeFleet();
+    const started = yield* Deferred.make<void>();
+    fleet.onHomeSync = Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never));
+    const { sync } = yield* setup(fleet);
+    yield* sync.beginUpdate("2.91.0");
+    const running = yield* Effect.forkChild(
+      sync.syncUpdatedMember(null, scope, { admissionHeld: true }),
+    );
+    yield* Deferred.await(started);
+    yield* Fiber.interrupt(running);
+    expect((yield* sync.lastUpdate)?.members[0]).toMatchObject({
+      state: "failed",
+      reason: "interrupted",
+    });
   }),
 );

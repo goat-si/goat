@@ -130,7 +130,7 @@ const UpdateAlias = Schema.NullOr(Schema.String);
  * One machine's row in an `ocx sync` run. `ready` exists only in a plan. `reason` is a code:
  * busy (Codex was not restarted, or a Child skipped), not-connected, not-permitted, unreachable,
  * not-installed, updating, stale (the Home did not answer; the last remote catalog was kept),
- * connection-changed, timed-out or exit-<n>.
+ * connection-changed, timed-out, interrupted or exit-<n>.
  */
 export const OpenCodexSyncMember = Schema.Struct({
   alias: UpdateAlias,
@@ -167,7 +167,7 @@ export const OpenCodexUpdateMemberRecord = Schema.Struct({
 });
 export type OpenCodexUpdateMemberRecord = typeof OpenCodexUpdateMemberRecord.Type;
 
-/** The coordinator's last managed-update decision; adopted installs only ever get advice. */
+/** The coordinator's last managed-update decision; adopted installs get advice unless their ocx applies updates itself (update.orchestrated/1). */
 export const OpenCodexUpdateStatus = Schema.Struct({
   checkedAt: Schema.Number,
   decision: Schema.Literals(["none", "wait", "update"]),
