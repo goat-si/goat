@@ -32,7 +32,14 @@ it("requires a username and masked password before saving a login", async () => 
   const password = screen.getByLabelText("Password");
   const save = screen.getByRole("button", { name: "Save securely" });
   await expect.element(user).toBeVisible();
-  await expect.element(password).toHaveAttribute("type", "password");
+  // Password managers must not fill or save these credentials under GOAT's own site.
+  for (const field of [user, password]) {
+    await expect.element(field).toHaveAttribute("autocomplete", "off");
+    await expect.element(field).toHaveAttribute("data-1p-ignore");
+    await expect.element(field).toHaveAttribute("data-lpignore", "true");
+    await expect.element(field).toHaveAttribute("data-bwignore");
+  }
+  await expect.element(password).toHaveAttribute("type", "text");
   await expect.element(save).toBeDisabled();
   await user.fill("test-user");
   await expect.element(save).toBeDisabled();

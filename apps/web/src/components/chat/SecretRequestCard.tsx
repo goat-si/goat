@@ -161,6 +161,9 @@ function PendingSecretRequestForm(props: {
             autoCorrect="off"
             autoCapitalize="off"
             spellCheck={false}
+            data-1p-ignore
+            data-lpignore="true"
+            data-bwignore
             value={username}
             disabled={!canAnswer || submitting}
             onChange={(event) => setUsername(event.currentTarget.value)}
@@ -170,11 +173,16 @@ function PendingSecretRequestForm(props: {
           </label>
           <Input
             id={passwordId}
-            type="password"
+            // A password field would offer to save this login under GOAT's own site.
+            type="text"
+            className="[-webkit-text-security:disc]"
             autoComplete="off"
             autoCorrect="off"
             autoCapitalize="off"
             spellCheck={false}
+            data-1p-ignore
+            data-lpignore="true"
+            data-bwignore
             value={secret}
             disabled={!canAnswer || submitting}
             aria-invalid={error !== null || undefined}
