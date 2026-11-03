@@ -2844,6 +2844,7 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
           });
           const driver = yield* makeGitVcsDriverCore().pipe(
             Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+            Effect.provide(layerServerConfig),
           );
           yield* git(cwd, ["branch", "-M", "main"]);
           yield* git(cwd, ["checkout", "-b", "feature/many-untracked"]);
@@ -4878,7 +4879,9 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         const fs = yield* FileSystem.FileSystem;
         const lock = (yield* Path.Path).join(cwd, ".git", "index.lock");
         yield* fs.writeFileString(lock, "");
-        const error = yield* driver.commit(cwd, "Add a", "", { stage: { filePaths: ["a.txt"] } }).pipe(Effect.flip);
+        const error = yield* driver
+          .commit(cwd, "Add a", "", { stage: { filePaths: ["a.txt"] } })
+          .pipe(Effect.flip);
         yield* fs.remove(lock);
         assert.equal(error.operation, "GitVcsDriver.commit.reset");
         assert.equal(yield* git(cwd, ["rev-parse", "HEAD"]), head);
