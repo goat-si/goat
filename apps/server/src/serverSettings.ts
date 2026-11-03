@@ -1,4 +1,5 @@
 import * as ServerSettingsWatcher from "./serverSettingsWatcher.ts";
+import * as NodeUtil from "node:util";
 import * as ConnectHubSettings from "./auth/ConnectHubSettings.ts";
 import { settingsLayers } from "./serverSettingsLayers.ts";
 import { cleanAllowedApps, rejectProtectedAllowedApps } from "./serverSettingsAllowedApps.ts";
@@ -34,6 +35,7 @@ import {
   type ProviderInstanceMutation,
   resolveProviderInstanceEnabled,
   ResponseStreamingMode,
+  SecretProviderConfigWrite,
   ServerSettingsError,
   type ServerSettingsPatch,
   globalIdleCompaction,
@@ -101,6 +103,8 @@ export {
 } from "@goat/shared/serverSettings";
 
 import { MemoryHubProvenance, MemoryHubSettingsSnapshot } from "./memory/MemoryHubSettings.ts";
+
+const isSecretProviderConfigWrite = Schema.is(SecretProviderConfigWrite);
 
 const ServerSettings = Schema.Struct({
   ...ClientServerSettings.fields,
@@ -205,11 +209,33 @@ export function redactServerSettingsForClient(
 ): ClientServerSettings {
   // Persistence-only origin must not reach settings snapshots or streams.
   const { memoryHubProvenance: _provenance, ...clientSettings } = settings as ServerSettings;
-  return mapSettingsSecrets(clientSettings, (secret) =>
+  const redacted = mapSettingsSecrets(clientSettings, (secret) =>
     secret.sensitive
       ? { value: "", redacted: secret.redacted || secret.value.length > 0 }
       : { value: secret.value, redacted: false },
   );
+  return {
+    ...redacted,
+    secretProviders: Object.fromEntries(
+      Object.entries(redacted.secretProviders).map(([id, entry]) => {
+        const config = entry.config;
+        const account =
+          typeof config === "object" && config !== null && "account" in config
+            ? config.account
+            : undefined;
+        return [
+          id,
+          {
+            kind: entry.kind,
+            label: entry.label,
+            ...(entry.kind === "one_password" && typeof account === "string"
+              ? { config: { account } }
+              : {}),
+          },
+        ];
+      }),
+    ),
+  };
 }
 
 export function applyProviderInstanceMutation(
@@ -1889,6 +1915,17 @@ const make = Effect.gen(function* () {
         });
       }
       const updated = yield* update(current);
+      for (const [id, provider] of Object.entries(updated.secretProviders)) {
+        if (
+          !NodeUtil.isDeepStrictEqual(
+            provider,
+            current.secretProviders[id as keyof typeof current.secretProviders],
+          ) &&
+          !isSecretProviderConfigWrite(provider)
+        ) {
+          return yield* new ServerSettingsError({ settingsPath, operation: "normalize" });
+        }
+      }
       yield* rejectProtectedAllowedApps(current, updated);
       if (Option.isSome(routeState)) yield* routeState.value.validate(current, updated);
       if (CodexRoute.instanceFingerprint(current) === CodexRoute.instanceFingerprint(updated))

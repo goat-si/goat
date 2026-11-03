@@ -839,6 +839,37 @@ export const UsageLimitSourceConfig = Schema.Struct({
 });
 export type UsageLimitSourceConfig = typeof UsageLimitSourceConfig.Type;
 
+const SecretProviderSlug = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(64),
+  Schema.isPattern(/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/),
+);
+export const SecretProviderId = SecretProviderSlug.pipe(Schema.brand("SecretProviderId"));
+export type SecretProviderId = typeof SecretProviderId.Type;
+export const SecretProviderKind = SecretProviderSlug.pipe(Schema.brand("SecretProviderKind"));
+export type SecretProviderKind = typeof SecretProviderKind.Type;
+export const OnePasswordAccount = Schema.String.check(
+  Schema.isMaxLength(253),
+  Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._-]*$/),
+).pipe(Schema.brand("OnePasswordAccount"));
+export const OnePasswordSecretProviderConfig = Schema.Struct({ account: OnePasswordAccount });
+const isOnePasswordSecretProviderConfig = Schema.is(OnePasswordSecretProviderConfig);
+export const SecretProviderConfig = Schema.Struct({
+  kind: SecretProviderKind,
+  label: TrimmedNonEmptyString,
+  config: Schema.optionalKey(Schema.Unknown),
+});
+export type SecretProviderConfig = typeof SecretProviderConfig.Type;
+export const SecretProviderConfigWrite = Schema.Struct({
+  ...SecretProviderConfig.fields,
+  label: TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
+}).check(
+  Schema.makeFilter((entry) =>
+    entry.kind === "one_password" && isOnePasswordSecretProviderConfig(entry.config)
+      ? true
+      : "Unsupported secret provider or invalid configuration.",
+  ),
+);
+
 export const SourceControlHostSettings = Schema.Record(Schema.String, Schema.Unknown);
 export type SourceControlHostSettings = typeof SourceControlHostSettings.Type;
 
@@ -1548,6 +1579,9 @@ export const ServerSettings = Schema.Struct({
   usageLimitSources: Schema.Record(UsageLimitSourceId, UsageLimitSourceConfig).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
+  secretProviders: Schema.Record(SecretProviderId, SecretProviderConfig).pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
   cursorKeychainUsageEnabled: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
@@ -2014,6 +2048,9 @@ const ServerSettingsPatchFields = Schema.Struct({
   // Merge per source to avoid racing other edits; null removes an entry.
   usageLimitSources: Schema.optionalKey(
     Schema.Record(UsageLimitSourceId, Schema.NullOr(UsageLimitSourceConfig)),
+  ),
+  secretProviders: Schema.optionalKey(
+    Schema.Record(SecretProviderId, Schema.NullOr(SecretProviderConfigWrite)),
   ),
   cursorKeychainUsageEnabled: Schema.optionalKey(Schema.Boolean),
 
