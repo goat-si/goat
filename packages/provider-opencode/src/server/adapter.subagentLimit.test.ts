@@ -37,6 +37,7 @@ const limitHarness = Effect.fn("limitHarness")(function* (
   const root = `${suffix}-root`;
   const payloads: Array<{ messageID: string }> = [];
   const updates: Array<Update> = [];
+  const calls: Array<{ sessionID: string; permission?: ReadonlyArray<Rule> }> = [];
   const updated = yield* Queue.unbounded<Update>();
   const config = {
     environmentId: EnvironmentId.make("fixture"),
@@ -61,15 +62,20 @@ const limitHarness = Effect.fn("limitHarness")(function* (
           time: { created: 2, updated: 2 },
         },
       }),
+      fork: async () => ({
+        data: { id: `${root}-fork`, time: { created: 2, updated: 2 }, permission: [] },
+      }),
       update: async (input: Update) => {
         if (input.sessionID !== root && options.childUpdateFails?.() === true)
           throw new Error("child update refused");
         updates.push(input);
+        calls.push({ sessionID: input.sessionID, permission: input.permission });
         Queue.offerUnsafe(updated, input);
         return { data: { id: input.sessionID, time: { created: 1, updated: 1 } } };
       },
-      promptAsync: async (input: { messageID: string }) => {
+      promptAsync: async (input: { messageID: string; sessionID: string }) => {
         payloads.push(input);
+        calls.push({ sessionID: input.sessionID });
         return { data: true };
       },
       abort: async () => ({ data: true }),
@@ -106,10 +112,35 @@ const limitHarness = Effect.fn("limitHarness")(function* (
       yield* push(status(root, "idle"));
       yield* Fiber.join(terminal);
     });
-  return { harness, payloads, push, root, sessions, config, status, turn, updated, updates };
+  return { calls, harness, payloads, push, root, sessions, config, status, turn, updated, updates };
 });
 
 describe("OpenCode native subagent limit", () => {
+  it.effect("installs GOAT rules on a fork before its first prompt (#2239)", () =>
+    Effect.gen(function* () {
+      const { calls, harness, root, sessions, config } = yield* limitHarness(
+        "fork-permission",
+        (permission) => ({ permission }),
+      );
+      const fork = yield* harness.runtime.forkThread({
+        sourceProviderThread: harness.providerThread,
+        targetThreadId: ThreadId.make("fork-target"),
+      });
+      yield* sessions.set({ ...config, nativeSubagentLimit: 0 });
+      yield* harness.startTurn("work", fork);
+      const sessionID = `${root}-fork`;
+      const rules = openCodePermissionRules(harness.policy);
+      assert.deepEqual(calls, [
+        { sessionID, permission: rules },
+        { sessionID, permission: [...rules, DENY] },
+        { sessionID },
+      ]);
+    }).pipe(
+      Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
+      Effect.scoped,
+    ),
+  );
+
   it.effect("adds and removes only GOAT's task deny, keeping the session's own rules", () =>
     Effect.gen(function* () {
       const own = [{ permission: "task", pattern: "reviewer", action: "allow" }, DENY];
