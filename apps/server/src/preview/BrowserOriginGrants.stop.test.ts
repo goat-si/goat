@@ -64,6 +64,126 @@ it.effect("interrupting a held narrowing write still fences the driver", () =>
   }),
 );
 
+it.effect("repeated stops do not publish or confirm when no claims remain", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    let hold = false;
+    let writes = 0;
+    let confirmations = 0;
+    const hash = "a".repeat(64);
+    const service = yield* makeBrowserOriginGrants({
+      environmentId: EnvironmentId.make("environment:test"),
+      supported: () => true,
+      publish: () =>
+        Effect.sync(() => {
+          writes++;
+          return hash;
+        }),
+      confirm: () =>
+        hold
+          ? Effect.sync(() => {
+              confirmations++;
+            }).pipe(
+              Effect.andThen(Deferred.succeed(entered, undefined)),
+              Effect.andThen(Deferred.await(release)),
+              Effect.as({
+                capability_manifest: { sha256: hash, file_sha256: hash, reload_error: null },
+              }),
+            )
+          : Effect.succeed({
+              capability_manifest: { sha256: hash, file_sha256: hash, reload_error: null },
+            }),
+      fence: () => Effect.succeed(true),
+      bind: (input) =>
+        Effect.succeed({
+          targetId: "target",
+          tabId: "tab",
+          title: "Site",
+          url: input.origin,
+          driverGeneration: 1,
+        }),
+    });
+    const threadId = ThreadId.make("thread:first");
+    const claim = yield* service.claim({
+      threadId,
+      pid: 42,
+      windowId: 7,
+      origin: "https://example.test",
+      windowTitle: "Browser",
+    });
+    assert.equal(claim.agentResult.status, "attached");
+    hold = true;
+    yield* service.stop(threadId);
+    yield* Deferred.await(entered);
+    for (let i = 0; i < 3; i++) yield* service.stop(threadId);
+    const observed = { writes, confirmations };
+    yield* Deferred.succeed(release, undefined);
+    yield* service.settled;
+    assert.deepEqual(observed, { writes: 2, confirmations: 1 });
+  }),
+);
+
+it.effect("concurrent narrowings keep at most one confirmation in flight", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    let writes = 0;
+    let active = 0;
+    let peak = 0;
+    const confirmed: string[] = [];
+    const service = yield* makeBrowserOriginGrants({
+      environmentId: EnvironmentId.make("environment:test"),
+      supported: () => true,
+      publish: () => Effect.sync(() => String(++writes).padStart(64, "0")),
+      confirm: (sha) =>
+        Effect.gen(function* () {
+          active++;
+          peak = Math.max(peak, active);
+          confirmed.push(sha);
+          if (sha === String(4).padStart(64, "0")) {
+            yield* Deferred.succeed(entered, undefined);
+            yield* Deferred.await(release);
+          }
+          active--;
+          return { capability_manifest: { sha256: sha, file_sha256: sha, reload_error: null } };
+        }),
+      fence: () => Effect.succeed(true),
+      bind: (input) =>
+        Effect.succeed({
+          targetId: "target",
+          tabId: "tab-" + input.windowId,
+          title: "Site",
+          url: input.origin,
+          driverGeneration: 1,
+        }),
+    });
+    const threads = [
+      ThreadId.make("thread:a"),
+      ThreadId.make("thread:b"),
+      ThreadId.make("thread:c"),
+    ];
+    for (const [index, threadId] of threads.entries()) {
+      const result = yield* service.claim({
+        threadId,
+        pid: 42,
+        windowId: index + 1,
+        origin: `https://site${index}.test`,
+        windowTitle: "Browser",
+      });
+      assert.equal(result.agentResult.status, "attached");
+    }
+    yield* service.stop(threads[0]!);
+    yield* Deferred.await(entered);
+    yield* service.stop(threads[1]!);
+    yield* service.stop(threads[2]!);
+    yield* Deferred.succeed(release, undefined);
+    yield* service.settled;
+    assert.equal(peak, 1);
+    assert.equal(confirmed.at(-1), String(6).padStart(64, "0"));
+  }),
+);
+
 it.effect("stopping one thread ends its claims and preserves other claims and grants", () =>
   Effect.gen(function* () {
     const service = yield* makeTestBrowserOriginGrants({

@@ -130,12 +130,19 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
   const publish = Effect.fn("BrowserOriginGrants.publishExpansion")(function* (value: Union) {
     yield* confirm((yield* write(value, false)).sha);
   });
-  const confirming = new Set<Deferred.Deferred<void>>();
+  let confirming: Deferred.Deferred<void> | undefined;
+  let pendingConfirmation:
+    | { readonly sha: string; readonly number: number; readonly value: Union }
+    | undefined;
   const fence = (cause: unknown) =>
     Effect.logWarning("Browser manifest narrowing was not applied; restarting the driver", {
       cause,
     }).pipe(
-      Effect.andThen(deps.fence?.() ?? Effect.succeed(false)),
+      Effect.andThen(
+        Effect.suspend(() => deps.fence?.() ?? Effect.succeed(false)).pipe(
+          Effect.catchCause(() => Effect.succeed(false)),
+        ),
+      ),
       Effect.flatMap((fenced) =>
         fenced
           ? Effect.void
@@ -144,39 +151,50 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
             ),
       ),
     );
+  const confirmNarrowings = Effect.fn("BrowserOriginGrants.confirmNarrowings")(
+    function* (_done: Deferred.Deferred<void>) {
+      while (true) {
+        const next = yield* Effect.sync(() => {
+          const item = pendingConfirmation;
+          pendingConfirmation = undefined;
+          if (item === undefined) confirming = undefined;
+          return item;
+        });
+        if (next === undefined) return;
+        yield* confirm(next.sha).pipe(
+          Effect.catchCause((cause) => {
+            const newer = latest;
+            const subset =
+              newer !== undefined &&
+              newer.value.origins.every((origin) => next.value.origins.includes(origin)) &&
+              newer.value.existingProfiles.every((profile) =>
+                next.value.existingProfiles.some(
+                  (old) => old.pid === profile.pid && old.windowId === profile.windowId,
+                ),
+              );
+            return newer && newer.number > next.number && newer.narrowing && newer.applied && subset
+              ? Effect.void
+              : fence(cause);
+          }),
+        );
+      }
+    },
+    (effect, done) => effect.pipe(Effect.ensuring(Deferred.succeed(done, undefined))),
+  );
   const shrink = Effect.fn("BrowserOriginGrants.publishShrink")(function* (value: Union) {
     const result = yield* write(value, true).pipe(Effect.result);
     if (result._tag === "Failure") return yield* fence(result.failure);
-    const { sha, number } = result.success;
     const done = yield* Deferred.make<void>();
-    confirming.add(done);
-    // Narrowing never waits on the driver, but a driver that keeps a wider manifest is
-    // restarted: its old browser windows and origins must not outlive the claims that named them.
-    yield* confirm(sha).pipe(
-      Effect.catch((cause) => {
-        const newer = latest;
-        const subset =
-          newer !== undefined &&
-          newer.value.origins.every((origin) => value.origins.includes(origin)) &&
-          newer.value.existingProfiles.every((profile) =>
-            value.existingProfiles.some(
-              (old) => old.pid === profile.pid && old.windowId === profile.windowId,
-            ),
-          );
-        return newer && newer.number > number && newer.narrowing && newer.applied && subset
-          ? Effect.void
-          : fence(cause);
-      }),
-      Effect.ensuring(
-        Effect.sync(() => confirming.delete(done)).pipe(
-          Effect.andThen(Deferred.succeed(done, undefined)),
-        ),
-      ),
-      Effect.forkDetach({ startImmediately: true }),
-    );
-  });
+    const start = yield* Effect.sync(() => {
+      pendingConfirmation = { ...result.success, value };
+      if (confirming !== undefined) return false;
+      confirming = done;
+      return true;
+    });
+    if (start) yield* confirmNarrowings(done).pipe(Effect.forkDetach({ startImmediately: true }));
+  }, Effect.uninterruptible);
   const settled = Effect.suspend(() =>
-    Effect.forEach([...confirming], Deferred.await, { discard: true }),
+    confirming === undefined ? Effect.void : Deferred.await(confirming),
   );
   const pending = new Map<string, Pending>();
   const claims = new Map<string, LiveTabClaim>();
@@ -415,6 +433,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
   const stop = Effect.fn("BrowserOriginGrants.stop")(function* (threadId?: ThreadId) {
     const stopped = yield* Effect.sync(() => {
       const signals: Array<Deferred.Deferred<void>> = [];
+      let removed = false;
       for (const [id, entry] of pending)
         if (threadId === undefined || entry.threadId === threadId) {
           pending.delete(id);
@@ -423,16 +442,19 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
             grants.delete(key(entry.threadId, entry.origin));
           signals.push(entry.stopped);
           sequence++;
+          removed = true;
         }
       for (const [id, claim] of claims)
         if (threadId === undefined || claim.threadId === threadId) {
           claims.delete(id);
           ended.set(id, { threadId: claim.threadId, reason: "stopped" });
           sequence++;
+          removed = true;
         }
-      return signals;
+      return { signals, changed: removed };
     });
-    for (const signal of stopped) yield* Deferred.succeed(signal, undefined);
+    if (!stopped.changed) return;
+    for (const signal of stopped.signals) yield* Deferred.succeed(signal, undefined);
     yield* shrink(union());
   }, Effect.uninterruptible);
   const blockOrigins = Effect.fn("BrowserOriginGrants.blockOrigins")(function* (
