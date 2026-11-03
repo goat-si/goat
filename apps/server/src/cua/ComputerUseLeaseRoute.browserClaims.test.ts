@@ -478,6 +478,7 @@ describe("computer use lease route", () => {
       Effect.gen(function* () {
         const grantContext = yield* Layer.build(
           Grants.layer.pipe(
+            Layer.provide(ServerSettings.layerTest()),
             Layer.provide(
               Layer.merge(
                 Layer.mock(ServerEnvironment.ServerEnvironment)({

@@ -607,6 +607,7 @@ const layerBrowserOriginGrants = Layer.provide(
     layerServerEnvironment,
     BrowserClaimManifestModule.layer,
     BrowserClaimBindModule.layer,
+    layerServerSettings,
   ),
 );
 const layerCuaDriver = CuaDriver.layer.pipe(

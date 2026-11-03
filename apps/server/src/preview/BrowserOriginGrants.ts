@@ -13,6 +13,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as SubscriptionRef from "effect/SubscriptionRef";
+import { isBlockedBrowserUrl } from "@goat/shared/preview";
 import { manifestApplied } from "../cua/ComputerUseLeaseProxyBrowserClaims.ts";
 
 export interface Request {
@@ -38,6 +39,7 @@ export interface Union {
 interface Dependencies {
   readonly environmentId: EnvironmentId;
   readonly supported: () => boolean;
+  readonly blockedHosts?: () => ReadonlyArray<string> | undefined;
   readonly bindAvailable?: () => boolean;
   readonly publish: (union: Union) => Effect.Effect<string, Error>;
   readonly confirm: (sha256: string) => Effect.Effect<unknown, Error>;
@@ -206,6 +208,11 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     );
   });
   const key = (threadId: ThreadId, origin: string) => JSON.stringify([threadId, origin]);
+  const blockedHosts = () => (deps.blockedHosts ? deps.blockedHosts() : []);
+  const blocked = (origin: string) => {
+    const hosts = blockedHosts();
+    return hosts === undefined || isBlockedBrowserUrl(origin, hosts);
+  };
   const union = (): Union => {
     const live = [...claims.values()].map((claim) => ({
       threadId: claim.threadId,
@@ -237,6 +244,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
       Effect.gen(function* () {
         if (!deps.supported()) return unavailable;
         if (!isOrigin(input.origin)) return invalidOrigin;
+        if (blocked(input.origin)) return unavailable;
         const createdAt = yield* Clock.currentTimeMillis;
         const claimId = `browser-claim:${++sequence}`;
         const stopped = yield* Deferred.make<void>();
@@ -259,7 +267,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     lock.withPermits(1)(
       Effect.gen(function* () {
         const entry = pending.get(claimId);
-        if (entry === undefined || !approved || !deps.supported()) {
+        if (entry === undefined || !approved || !deps.supported() || blocked(entry.origin)) {
           if (pending.delete(claimId)) yield* advance;
           return { agentResult: decline };
         }
@@ -293,6 +301,8 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
           if (Option.isNone(applied)) return { agentResult: decline };
           if (epoch !== driverEpoch) return { agentResult: decline };
           if (!deps.supported()) return yield* rollback.pipe(Effect.as({ agentResult: decline }));
+          if (blocked(entry.origin))
+            return yield* rollback.pipe(Effect.as({ agentResult: decline }));
           const bindingVersion = yield* SubscriptionRef.get(version);
           const bound = yield* untilRestart(
             deps.bind({ ...entry, bindingVersion }),
@@ -303,6 +313,8 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
           const tab = bound.value;
           if (epoch !== driverEpoch) return { agentResult: decline };
           if (!deps.supported()) return yield* rollback.pipe(Effect.as({ agentResult: decline }));
+          if (blocked(entry.origin))
+            return yield* rollback.pipe(Effect.as({ agentResult: decline }));
           if (originOf(tab.url) !== entry.origin) {
             yield* rollback;
             return { agentResult: decline, personMessage: `This tab is not on ${entry.origin}` };
@@ -529,6 +541,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     snapshotFor,
     claimsFor,
     claimedPids,
+    blockedHosts,
     settled,
     revision: SubscriptionRef.get(version),
     changes: SubscriptionRef.changes(version),

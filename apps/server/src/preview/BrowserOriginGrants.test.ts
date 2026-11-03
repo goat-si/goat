@@ -7,6 +7,7 @@ import * as Schema from "effect/Schema";
 import * as Context from "effect/Context";
 import * as Layer from "effect/Layer";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import { BrowserClaimManifest } from "./BrowserClaimManifest.ts";
 import { BrowserClaimBind } from "./BrowserClaimBind.ts";
 import * as Grants from "./BrowserOriginGrantsLayer.ts";
@@ -14,6 +15,46 @@ import { makeTestBrowserOriginGrants as makeBrowserOriginGrants } from "./Browse
 import { makeBrowserOriginGrants as makeUnconfirmedGrants } from "./BrowserOriginGrants.ts";
 
 const decodeDescriptor = Schema.decodeSync(ExecutionEnvironmentDescriptor);
+
+it.effect("a blocked origin cannot be granted or bound", () =>
+  Effect.gen(function* () {
+    let hosts: ReadonlyArray<string> = ["example.test"];
+    let binds = 0;
+    const service = yield* makeBrowserOriginGrants({
+      environmentId: EnvironmentId.make("environment:test"),
+      supported: () => true,
+      blockedHosts: () => hosts,
+      publish: () => Effect.void,
+      bind: (input) =>
+        Effect.sync(() => {
+          binds++;
+          return {
+            targetId: "target",
+            tabId: "tab",
+            title: "Site",
+            url: input.origin,
+            driverGeneration: 1,
+          };
+        }),
+    });
+    const input = {
+      threadId: ThreadId.make("thread:test"),
+      pid: 42,
+      windowId: 7,
+      origin: "https://example.test",
+      windowTitle: "Browser",
+    };
+    assert.equal((yield* service.request(input)).status, "refused");
+    hosts = [];
+    const pending = yield* service.request(input);
+    if (pending.status !== "pending") return assert.fail("expected pending");
+    hosts = ["example.test"];
+    assert.equal((yield* service.answer(pending.claimId, true)).agentResult.status, "refused");
+    assert.equal(binds, 0);
+    assert.deepEqual(yield* service.list(input.threadId), { grants: [], claims: [] });
+    assert.deepEqual(yield* service.bindingsFor(input.threadId), []);
+  }),
+);
 
 it.effect("does not bind before approval and hides a mismatch as a decline", () =>
   Effect.gen(function* () {
@@ -450,6 +491,7 @@ it.effect("a failed fence stops new claims", () =>
     const hash = "a".repeat(64);
     const context = yield* Layer.build(
       Grants.layer.pipe(
+        Layer.provide(ServerSettings.layerTest()),
         Layer.provide(
           Layer.mergeAll(
             Layer.mock(ServerEnvironment.ServerEnvironment)({

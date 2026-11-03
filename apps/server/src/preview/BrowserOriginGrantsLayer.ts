@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import { BrowserClaimBind } from "./BrowserClaimBind.ts";
 import { BrowserClaimManifest } from "./BrowserClaimManifest.ts";
 import { makeBrowserOriginGrants } from "./BrowserOriginGrants.ts";
@@ -18,11 +19,18 @@ const make = Effect.gen(function* () {
   const { environmentId } = yield* environment.getDescriptor;
   const manifest = yield* Effect.serviceOption(BrowserClaimManifest);
   const bind = yield* Effect.serviceOption(BrowserClaimBind);
+  const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
+  const blockedHosts = () => {
+    if (Option.isNone(settings) || !settings.value.committedPolicy) return undefined;
+    const policy = Effect.runSync(settings.value.committedPolicy);
+    return policy._tag === "committed" ? policy.blockedBrowserHosts : undefined;
+  };
   let supported = false;
   let disable = () => Effect.void;
   const service = yield* makeBrowserOriginGrants({
     environmentId,
     supported: () => supported && Option.isSome(manifest),
+    blockedHosts,
     bindAvailable: () => Option.isSome(bind),
     publish: (union) =>
       Option.isSome(manifest)
@@ -63,7 +71,7 @@ const make = Effect.gen(function* () {
       });
   });
   disable = () => setDriverCapability(false);
-  return { ...service, setDriverCapability };
+  return { ...service, blockedHosts, setDriverCapability };
 });
 
 export class BrowserOriginGrants extends Context.Service<
