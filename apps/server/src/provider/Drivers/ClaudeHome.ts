@@ -1,11 +1,14 @@
-import type { ClaudeSettings } from "@goat/contracts";
+import type { ClaudeSettings, ProviderInstanceEnvironment } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
+import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
 import { expandHomePath } from "@goat/provider-core/server/pathExpansion";
 import * as HostProcess from "@goat/shared/HostProcess";
+
+import { readClaudeSettingsEnv } from "./ClaudeSkills.ts";
 
 const quotePath = Schema.encodeSync(Schema.fromJsonString(Schema.String));
 
@@ -40,6 +43,26 @@ export const makeClaudeEnvironment = Effect.fn("makeClaudeEnvironment")(function
     // Changing HOME hides macOS Keychain credentials; use CLAUDE_CONFIG_DIR to keep login access.
     CLAUDE_CONFIG_DIR: resolvedHomePath,
   };
+});
+
+/**
+ * Base env for the Claude processes GOAT runs, before `makeClaudeEnvironment`.
+ * Claude Code reads its entrypoint from the process env, not its settings `env`, so GOAT applies that override itself.
+ */
+export const mergeClaudeProcessEnvironment = Effect.fn("mergeClaudeProcessEnvironment")(function* (
+  config: Pick<ClaudeSettings, "homePath">,
+  instanceEnvironment: ProviderInstanceEnvironment | undefined,
+  hostEnvironment: NodeJS.ProcessEnv,
+) {
+  const environment = yield* mergeProviderInstanceEnvironment(instanceEnvironment, {
+    ...hostEnvironment,
+    CLAUDE_CODE_ENTRYPOINT: "t3-code",
+  });
+  const settingsEntrypoint = (yield* readClaudeSettingsEnv(config, undefined, environment))
+    .CLAUDE_CODE_ENTRYPOINT;
+  return settingsEntrypoint
+    ? { ...environment, CLAUDE_CODE_ENTRYPOINT: settingsEntrypoint }
+    : environment;
 });
 
 /** managed-mcp.json excludes other MCP config and forbids --strict-mcp-config; omit the flag when present. */
