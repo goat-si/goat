@@ -93,9 +93,20 @@ it("checks untracked source locally, excludes ignored files and keeps explicit r
       path.join(dir, "scripts/lib/goat-rename"),
       { recursive: true },
     );
-    for (const script of ["goat-rename.ts", "check-changed.ts", "lib/changed-tests.ts"]) {
+    for (const script of [
+      "goat-rename.ts",
+      "check-changed.ts",
+      "check-changed-command.ts",
+      "lib/changed-tests.ts",
+      "lib/split-tests.ts",
+    ]) {
       fs.copyFileSync(path.join(root, "scripts", script), path.join(dir, "scripts", script));
     }
+    fs.mkdirSync(path.join(dir, "packages/shared/src"), { recursive: true });
+    fs.copyFileSync(
+      path.join(root, "packages/shared/src/errorGuards.ts"),
+      path.join(dir, "packages/shared/src/errorGuards.ts"),
+    );
     fs.mkdirSync(path.join(dir, ".github/scripts"), { recursive: true });
     // changed-tests.ts loads goat-ci-imports.cjs to follow imports.
     for (const script of ["ci-changes.cjs", "goat-ci-imports.cjs"]) {
@@ -123,7 +134,7 @@ it("checks untracked source locally, excludes ignored files and keeps explicit r
     assert.equal(explicit.status, 0, explicit.stdout + explicit.stderr);
     const changed = run("scripts/check-changed.ts", ["missing-ref"]);
     assert.equal(changed.status, 1, changed.stdout + changed.stderr);
-    assert.match(changed.stdout, /apps\/web\/src\/untracked.ts:1:/);
+    assert.match(changed.stdout, /apps\/web\/src\/untracked.ts:1:/, changed.stderr);
     assert.doesNotMatch(changed.stdout + changed.stderr, /no merge base|> vp/);
     fs.unlinkSync(file);
     const ignored = run("scripts/goat-rename.ts", ["--check"]);

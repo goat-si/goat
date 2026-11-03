@@ -22,7 +22,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { guardChild } from "../packages/shared/src/errorGuards.ts";
 import { decide, readWorkspace } from "../.github/scripts/ci-changes.cjs";
-import { vitePlusCommand } from "./check-changed-command.ts";
+import { lintChangedArgs, vitePlusCommand } from "./check-changed-command.ts";
 import { testsForChanges } from "./lib/changed-tests.ts";
 import { splitTests } from "./lib/split-tests.ts";
 
@@ -239,7 +239,7 @@ const steps = [
     name: "format",
     args: ["fmt", "--check", "--no-error-on-unmatched-pattern", ...present],
   },
-  code.length > 0 && { name: "lint", args: ["lint", ...code] },
+  code.length > 0 && { name: "lint", args: lintChangedArgs(code) },
   ...(runKnip ? knipPasses : []),
   ...graphql.map((dir) => ({
     name: `graphql (${dir})`,

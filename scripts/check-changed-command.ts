@@ -17,3 +17,7 @@ export function vitePlusCommand(
   }
   return ["vp", [...args]];
 }
+
+export function lintChangedArgs(files: ReadonlyArray<string>): Array<string> {
+  return ["lint", "--no-error-on-unmatched-pattern", ...files];
+}
