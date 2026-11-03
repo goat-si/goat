@@ -82,13 +82,17 @@ export function pullRequestListErrorMessages(
     readonly unreachable?: boolean;
   }[],
   environmentLabels: ReadonlyMap<EnvironmentId, string>,
+  includeErrorLabels = true,
 ): string[] {
   const unreachable = new Map<EnvironmentId, string>();
   const messages: string[] = [];
   for (const error of errors) {
     const label = environmentLabels.get(error.environmentId) || "Environment";
     if (error.unreachable) unreachable.set(error.environmentId, label);
-    else messages.push(`${error.projectTitle || label}: ${error.message}`);
+    else
+      messages.push(
+        includeErrorLabels ? `${error.projectTitle || label}: ${error.message}` : error.message,
+      );
   }
   if (unreachable.size) {
     const labelCounts = new Map<string, number>();

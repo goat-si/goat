@@ -148,7 +148,11 @@ export function PullRequestsScreen(
         })),
     [environments, environmentId, configs, controls, query],
   );
-  const result = usePullRequestList(targets);
+  const environmentLabels = useMemo(
+    () => new Map(environments.map((item) => [item.environmentId, item.environmentLabel])),
+    [environments],
+  );
+  const result = usePullRequestList(targets, environmentLabels);
   const connectedTargets = targets.filter((target) =>
     environments.some(
       (environment) =>
@@ -340,10 +344,7 @@ export function PullRequestsScreen(
             {result.data?.errors.length ? (
               <PullRequestListErrors
                 key={JSON.stringify(targets)}
-                messages={pullRequestListErrorMessages(
-                  result.data.errors,
-                  new Map(environments.map((item) => [item.environmentId, item.environmentLabel])),
-                )}
+                messages={pullRequestListErrorMessages(result.data.errors, environmentLabels)}
               />
             ) : null}
           </>

@@ -21,6 +21,7 @@ import {
   withShownPullRequestStats,
   retainPullRequestStatsAnswers,
   scopedPullRequestListKey,
+  pullRequestListErrorMessages,
   type EnvironmentPullRequestListEntry,
 } from "./pullRequestList";
 
@@ -50,7 +51,10 @@ const sessionsFamily = Atom.family((scopeKey: string) =>
   ),
 );
 
-export function usePullRequestList(targets: readonly ListTarget[]) {
+export function usePullRequestList(
+  targets: readonly ListTarget[],
+  environmentLabels: ReadonlyMap<EnvironmentId, string>,
+) {
   const registry = use(RegistryContext);
   const scopeKey = JSON.stringify(targets);
   const activeScope = useRef(scopeKey);
@@ -342,7 +346,7 @@ export function usePullRequestList(targets: readonly ListTarget[]) {
   return {
     data: listing,
     entries,
-    error: errors.map((error) => error.message).join("\n") || null,
+    error: pullRequestListErrorMessages(errors, environmentLabels, false).join("\n") || null,
     isPending: sources.some(({ result }) => result.waiting) && !data.entries.length,
     continued: data.continued,
     loadMore,
