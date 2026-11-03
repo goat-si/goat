@@ -8,6 +8,7 @@ import * as Schema from "effect/Schema";
 import type { CDPSession } from "playwright-core";
 import { fillLogin } from "./ServerBrowserLoginFill.ts";
 import type { SecretFillTab } from "./ServerBrowserSecretFill.ts";
+import type { LoginDelivery } from "../secrets/SecretRequests.ts";
 import { makeActionChannel } from "./actionChannel.ts";
 import { ServerBrowserOperationError } from "./browserOperationError.ts";
 import { SessionControl } from "./SessionControl.ts";
@@ -51,8 +52,8 @@ export const makeLoginOperation =
         readonly threadId: ThreadId;
         readonly origin: string;
       },
-      run: (login: Login) => Promise<boolean>,
-    ) => Promise<boolean>;
+      run: (login: Login) => Promise<LoginDelivery>,
+    ) => Promise<LoginDelivery>;
   }) =>
   async <T extends SecretFillTab>(
     tab: T,
@@ -103,6 +104,7 @@ export const makeLoginOperation =
               });
               let result: LoginFillResult | undefined;
               let notSent = false;
+              let uncertain = false;
               await deps.use(
                 { ref: input.secretRef, threadId: request.threadId, origin },
                 async (login) => {
@@ -151,17 +153,25 @@ export const makeLoginOperation =
                       verdict: output.verdict,
                       ...(output.verdict === "refused" ? { code: output.code } : {}),
                     };
-                    return output.usernameFilled && output.passwordFilled;
-                  } catch (cause) {
-                    if (dispatched) throw cause;
+                    return output.usernameFilled && output.passwordFilled
+                      ? "complete"
+                      : output.usernameFilled || output.passwordFilled
+                        ? "partial"
+                        : "none";
+                  } catch {
+                    if (dispatched) {
+                      uncertain = true;
+                      return "uncertain";
+                    }
                     notSent = true;
-                    return false;
+                    return "none";
                   } finally {
                     if (onAbort) signal.removeEventListener("abort", onAbort);
                   }
                 },
               );
               if (notSent) throw refusal("Login fill stopped before any input was sent.");
+              if (uncertain) throw new Error("Login delivery is uncertain. Request a new login.");
               if (!result) throw new Error("Login fill did not return a result.");
               return result;
             }),

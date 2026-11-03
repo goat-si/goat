@@ -62,6 +62,8 @@ const decodeLogin = Schema.decodeUnknownOption(LoginItem);
 const encodeStored = Schema.encodeEffect(StoredSecret);
 const decodeStored = Schema.decodeUnknownOption(StoredSecret);
 
+export type LoginDelivery = "none" | "partial" | "complete" | "uncertain";
+
 export class SecretRequests extends Context.Service<
   SecretRequests,
   {
@@ -93,8 +95,8 @@ export class SecretRequests extends Context.Service<
       use: (item: {
         readonly username: string;
         readonly password: string;
-      }) => Effect.Effect<boolean, E, R>,
-    ) => Effect.Effect<boolean, SecretRequestError | E, R>;
+      }) => Effect.Effect<LoginDelivery, E, R>,
+    ) => Effect.Effect<LoginDelivery, SecretRequestError | E, R>;
     /** Moves a saved `file` request's value to an owner-only file and returns its path. */
     readonly saveToFile: (input: {
       readonly threadId: ThreadId;
@@ -356,15 +358,22 @@ const make = Effect.gen(function* () {
           yield* writeLoginRef(input.ref, { ...stored, loginInFlight: true });
           return { stored, login: login.value };
         }).pipe(consumeLock.withPermits(1));
-        const complete = yield* restore(use(login));
+        const delivery = yield* restore(use(login)).pipe(
+          Effect.catchCause((cause) =>
+            removeLogged(storeName(input.ref)).pipe(
+              consumeLock.withPermits(1),
+              Effect.andThen(Effect.failCause(cause)),
+            ),
+          ),
+        );
         return yield* Effect.gen(function* () {
-          if (!complete) {
+          if (delivery === "none") {
             yield* writeLoginRef(input.ref, stored);
-            return false;
+            return delivery;
           }
           if (!(yield* removeLogged(storeName(input.ref))))
             return yield* new SecretRequestError({ reason: "consume_failed" });
-          return true;
+          return delivery;
         }).pipe(consumeLock.withPermits(1));
       }),
     ).pipe(Effect.withSpan("SecretRequests.useLogin"));

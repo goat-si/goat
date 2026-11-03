@@ -295,7 +295,7 @@ export const previewEntries = {
     summary: "Fill a saved login into a sign-in page",
     description: "Fill a saved login on its requested origin without exposing its values.",
     guide:
-      "Call request_secret with kind login and its origin, focus the form, then pass its reference. A complete fill consumes the reference. A partial fill reports which field was filled and keeps the reference. Observe before retrying an unverifiable result.",
+      "Call request_secret with kind login and its origin, focus the form, then pass its reference. A fill that sets either field consumes the reference. A partial fill reports which field was filled and needs a new login request. After an unverifiable result, observe the page before asking for a new login.",
     effect: "destructive",
     capability: "none",
     capabilityReason: "Drives the calling thread's own browser preview.",

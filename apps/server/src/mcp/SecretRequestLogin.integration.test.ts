@@ -502,10 +502,60 @@ it.live("login sentinels stay out of agent results, thread events and browser di
           fault.password = true;
           const afterUsername = yield* callFill(thirdSaved.secretRef);
           expect(afterUsername.isError).toBe(true);
+          expect(Option.isNone(yield* secrets.savedRef({ threadId, turnItemId: card3.id }))).toBe(
+            true,
+          );
           expect(yield* Effect.promise(() => page.locator("#user").inputValue())).toBe(username);
           const retry = yield* callFill(thirdSaved.secretRef);
           expect(retry.isError).toBe(true);
+          yield* Effect.promise(() => page.reload());
+          yield* Effect.promise(() => page.locator("#user").focus());
+          const partialInput = { ...input, clientRequestId: "login-ask-partial" };
+          const partialPending = yield* requestSecret(scope, partialInput);
+          yield* worker.drain();
+          const partialProjection = yield* orchestrator.getThreadProjection(threadId);
+          const partialCard = partialProjection.turnItems.find(
+            (item) =>
+              item.type === "secret_request" &&
+              item.id !== card.id &&
+              item.id !== card2.id &&
+              item.id !== card3.id,
+          );
+          if (!partialCard) return yield* Effect.die("partial login card missing");
+          yield* handoffs.answerSecret(
+            {
+              threadId,
+              turnItemId: partialCard.id,
+              answer: { type: "save_login", username, password },
+            },
+            sessionId,
+          );
+          yield* worker.drain();
+          const partialSaved = yield* requestSecret(scope, partialInput);
+          if (partialSaved.status !== "saved" || !("secretRef" in partialSaved))
+            return yield* Effect.die("partial login ref missing");
+          yield* Effect.promise(() =>
+            page.evaluate(
+              `document.querySelector("#user").addEventListener("input", () => document.querySelector("#pw").remove(), { once: true })`,
+            ),
+          );
+          const partialFill = yield* callFill(partialSaved.secretRef);
+          expect(partialFill.isError).not.toBe(true);
+          expect(partialFill.structuredContent).toMatchObject({
+            usernameFilled: true,
+            passwordFilled: false,
+            verdict: "unverifiable",
+          });
+          expect(
+            Option.isNone(yield* secrets.savedRef({ threadId, turnItemId: partialCard.id })),
+          ).toBe(true);
+          const partialRetry = yield* callFill(partialSaved.secretRef);
+          expect(partialRetry.isError).toBe(true);
           return {
+            partialPending,
+            partialSaved,
+            partialFill,
+            partialRetry,
             thirdPending,
             thirdSaved,
             afterUsername,

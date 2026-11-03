@@ -43,9 +43,9 @@ it.live(
               return Effect.fail(new SecretRequestError({ reason: "origin_mismatch" }));
             available = false;
             return use({ username: "example-user", password: "example-password" }).pipe(
-              Effect.tap((complete) =>
+              Effect.tap((delivery) =>
                 Effect.sync(() => {
-                  if (!complete) available = true;
+                  if (delivery === "none") available = true;
                 }),
               ),
             );
@@ -262,7 +262,15 @@ it.live(
           passwordFilled: false,
           verdict: "unverifiable",
         });
-        expect(available).toBe(true);
+        expect(available).toBe(false);
+        const partialRetry = yield* Effect.promise(() =>
+          fill.fillLogin(tab, request, Number.POSITIVE_INFINITY, record, blocked).then(
+            () => false,
+            () => true,
+          ),
+        );
+        expect(partialRetry).toBe(true);
+        available = true;
         yield* Effect.promise(() => page.goto("https://login.test/"));
         yield* Effect.promise(() => page.locator("#user").focus());
         const result = yield* Effect.promise(() =>
