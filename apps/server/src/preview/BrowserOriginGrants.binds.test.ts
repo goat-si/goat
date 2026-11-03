@@ -43,6 +43,25 @@ it.effect("exposes binding authority only after approval and only to the owning 
     assert.deepEqual(yield* service.bindingsFor(threadId), [
       { claimId: request.claimId, pid: 42, windowId: 7, origin: "https://example.test" },
     ]);
+    const admitted = yield* Deferred.make<void>();
+    const bindCall = yield* service
+      .admitClaimCall(
+        threadId,
+        "get_browser_state",
+        {
+          pid: 42,
+          window_id: 7,
+          origin_scope: ["https://example.test"],
+          session: `goat-claim:${request.claimId}`,
+        },
+        [],
+      )
+      .pipe(
+        Effect.tap(() => Deferred.succeed(admitted, undefined)),
+        Effect.forkChild({ startImmediately: true }),
+      );
+    assert.isTrue(Option.isSome(yield* Deferred.poll(admitted)));
+    assert.equal((yield* Fiber.join(bindCall)).status, "admit");
     assert.deepEqual(yield* service.bindingsFor(ThreadId.make("thread:other")), []);
     yield* Deferred.succeed(release, undefined);
     assert.equal((yield* Fiber.join(answer)).agentResult.status, "attached");
