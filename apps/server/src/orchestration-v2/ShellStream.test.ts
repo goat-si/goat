@@ -29,6 +29,7 @@ import {
   shouldPublishShellApplicationEvent,
   skipUnchangedThreadShells,
   subagentLineageOrder,
+  subagentShellState,
 } from "./ShellStream.ts";
 
 const emptyShellSnapshot = {
@@ -321,7 +322,14 @@ describe("omitIdleSubagentShells", () => {
       };
       const first = shellSnapshotForSubscriber(snapshot, options, index);
       const joined = shellSnapshotForSubscriber(snapshot, options, index);
-      const firstSubagents = new Set(first.subagentThreadIds);
+      const firstState = subagentShellState(
+        [...first.subagentThreadIds],
+        snapshot.snapshotSequence,
+      );
+      const joinedState = subagentShellState(
+        [...joined.subagentThreadIds],
+        snapshot.snapshotSequence,
+      );
       const promotion = {
         sequence: 6,
         event: {
@@ -330,11 +338,15 @@ describe("omitIdleSubagentShells", () => {
           payload: { lineage: { relationshipToParent: null } },
         },
       } as ApplicationStoredEvent;
-      shouldPublishShellApplicationEvent(promotion, firstSubagents, subagentLineageOrder(5));
-      expect(firstSubagents.has("child")).toBe(false);
-      expect(first.subagentThreadIds.has("child")).toBe(true);
-      expect(joined.subagentThreadIds.has("child")).toBe(true);
-      expect(index.subagentThreadIds).toEqual(["child"]);
+      const transcript = {
+        sequence: 7,
+        event: { threadId: "child", type: "message.updated" },
+      } as ApplicationStoredEvent;
+      expect(shouldPublishShellApplicationEvent(promotion, firstState.ids, firstState)).toBe(true);
+      expect(shouldPublishShellApplicationEvent(transcript, firstState.ids, firstState)).toBe(true);
+      expect(shouldPublishShellApplicationEvent(transcript, joinedState.ids, joinedState)).toBe(
+        false,
+      );
     }),
   );
 });
