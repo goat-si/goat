@@ -1,5 +1,5 @@
 import * as Profiles from "../goatclaw/PermissionProfiles.ts";
-import { remoteRoleMessage } from "./SshRemoteRole.ts";
+import { remoteRoleMessage, remoteRoleRefusal } from "./SshRemoteRole.ts";
 import * as Invocation from "../mcp/McpInvocationContext.ts";
 import { advertisesMemoryTools, remoteToolName, toolRefusal } from "./remoteToolNames.ts";
 export { refusedByRemote } from "./remoteRefusal.ts";
@@ -1428,9 +1428,7 @@ const make = Effect.gen(function* () {
       )
         return yield* new SshRemoteDispatchError({
           reason: "remote_refused",
-          remoteCode: "permission_profile_unsupported",
-          message:
-            "Remote GOAT cannot preserve a permission profile ceiling; enable goatclaw on an updated destination.",
+          ...remoteRoleRefusal(input, capabilities?.declared),
         });
       if (capabilities === null && input.memoryGrantCeiling !== undefined)
         return yield* memoryRefusal("Remote task memory admission could not be verified.");

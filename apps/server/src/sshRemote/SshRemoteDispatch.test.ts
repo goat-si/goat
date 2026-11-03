@@ -1967,6 +1967,7 @@ describe("SSH dispatch launch lineage", () => {
         } else {
           expect(supported).toBe(false);
           expect(attempts).toBe(0);
+          expect(result.failure.message).toContain("role");
         }
       }),
   );
