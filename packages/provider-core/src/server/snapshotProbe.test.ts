@@ -4,7 +4,7 @@ import * as NodeOS from "node:os";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- builds a native permission-test fixture path.
 import * as NodePath from "node:path";
 import { it } from "@effect/vitest";
-import { describe, expect } from "vite-plus/test";
+import { describe, expect, vi } from "vite-plus/test";
 import type { ModelCapabilities } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { createModelCapabilities } from "@goat/shared/model";
@@ -25,7 +25,7 @@ import {
 } from "./snapshotProbe.ts";
 
 describe("spawn failure diagnosis", () => {
-  it.effect("does not attribute spawn failures to an unspecified working directory", () =>
+  it.effect("a spawn failure with no cwd keeps its real cause (#2415)", () =>
     Effect.sync(() => {
       const missing = { binary: NodePath.join(NodeOS.tmpdir(), "goat-no-such-binary-2415") };
       const existing = { binary: process.execPath };
@@ -36,6 +36,19 @@ describe("spawn failure diagnosis", () => {
         classifySpawnFailure({ code: "EPERM" }, undefined, undefined, existing),
         classifySpawnFailure({ code: "EIO" }, undefined),
       ]).toEqual(["missing", "unknown", "unknown", "unknown", "unknown"]);
+    }),
+  );
+
+  it.effect("does not report a missing binary when its path cannot be inspected (#2415)", () =>
+    Effect.sync(() => {
+      using _stat = vi.spyOn(NodeFS, "statSync").mockImplementation(() => {
+        throw Object.assign(new Error("stat failed"), { code: "EACCES" });
+      });
+      expect(
+        classifySpawnFailure({ code: "ENOENT" }, undefined, undefined, {
+          binary: NodePath.join(NodeOS.tmpdir(), "provider-cli"),
+        }),
+      ).toBe("unknown");
     }),
   );
 
