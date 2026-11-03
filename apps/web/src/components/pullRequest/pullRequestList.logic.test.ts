@@ -117,7 +117,7 @@ describe("visible pull request line-count targets", () => {
       {
         environmentId: ENV_1,
         projectId: "project-1",
-        repository: "upstream-owner/upstream-repo",
+        repository: "pingdotgg/t3code",
         number: 1,
         additions: 9,
         deletions: 0,
@@ -125,7 +125,7 @@ describe("visible pull request line-count targets", () => {
     ]);
     const counted = (repository: string) =>
       withDiffStat(entry({ number: 1, repository, additions: 0, deletions: 0 }), stats).additions;
-    expect([counted("goat-si/goat"), counted("upstream-owner/upstream-repo")]).toEqual([3, 9]);
+    expect([counted("goat-si/goat"), counted("pingdotgg/t3code")]).toEqual([3, 9]);
   });
 
   it("keeps line counts apart for one repository path on two hosts, and reads host-less answers", () => {
@@ -771,10 +771,10 @@ describe("findProjectForRepository", () => {
       id: "p1",
       environmentId: ENV_1,
       repositoryIdentity: {
-        canonicalKey: "github.com/upstream-owner/upstream-repo",
+        canonicalKey: "github.com/pingdotgg/t3code",
         locator: { source: "git-remote" as const, remoteName: "upstream", remoteUrl: "" },
         provider: SourceControlProviderKind.make("github"),
-        displayName: "upstream-owner/upstream-repo",
+        displayName: "pingdotgg/t3code",
         origin: { canonicalKey: "git.cafe/goat-si/goat", displayName: "goat-si/goat" },
       },
     };
