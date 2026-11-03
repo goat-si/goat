@@ -111,6 +111,8 @@ it.effect("person claim and end attach once and keep the approved grant", () =>
     });
     if (answer.agentResult.status !== "attached") return assert.fail("expected attached");
     assert.equal(binds, 1);
+    assert.equal((yield* service.listAll()).claims[0]?.windowTitle, "Browser");
+    assert.equal((yield* service.listAll()).claims[0]?.title, "Site");
     assert.isTrue(yield* service.endPerson(answer.agentResult.claim.claimId));
     assert.deepEqual((yield* service.list(threadId)).claims, []);
     assert.lengthOf((yield* service.list(threadId)).grants, 1);

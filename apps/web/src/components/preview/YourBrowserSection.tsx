@@ -27,7 +27,7 @@ export function YourBrowserSection({ threadRef }: { threadRef: ScopedThreadRef }
       {claims.map((claim) => (
         <div key={claim.claimId} className="flex items-center gap-2">
           <div className="min-w-0 flex-1">
-            <div className="truncate">{claim.title}</div>
+            <div className="truncate">{claim.windowTitle ?? claim.title}</div>
             <div className="truncate text-muted-foreground">{claim.origin}</div>
           </div>
           <Badge variant="secondary">Agent attached</Badge>
