@@ -184,6 +184,10 @@ Open **Pull requests** to review changes and comments, request reviewers, check 
 or merge. You can edit review titles and descriptions and your own comments where the host allows it.
 GitLab calls these merge requests.
 
+For a fork whose checkout also has an `upstream` remote, the list shows pull requests from the
+fork's own `origin` repository. Turn on **Include upstream repos** in the filters to add the
+repository it was forked from.
+
 Ask an agent to edit a PR, comment, submit a review, reply to or resolve a review thread,
 manage reactions, labels and reviewers, or change its state through GOAT's MCP tools. The
 repository must be a project in the connected environment. Outside MCP clients need the
