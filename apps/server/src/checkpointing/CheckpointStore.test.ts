@@ -427,10 +427,11 @@ it.layer(layerTest)("CheckpointStore.layer", (it) => {
         ]);
       }),
     );
-    it.effect("limits a diff to repository paths from a subdirectory workspace", () =>
+    it.effect("reads repository paths from a subdirectory workspace under diff.relative", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();
         yield* initRepoWithCommit(tmp);
+        yield* git(tmp, ["config", "diff.relative", "true"]);
         const fileSystem = yield* FileSystem.FileSystem;
         const cwd = NodePath.join(tmp, "app");
         yield* fileSystem.makeDirectory(cwd);
@@ -443,6 +444,8 @@ it.layer(layerTest)("CheckpointStore.layer", (it) => {
         };
         yield* checkpointStore.captureCheckpoint({ cwd, checkpointRef: refs.fromCheckpointRef });
         yield* writeTextFile(NodePath.join(cwd, "kept.txt"), "kept\n");
+        yield* git(cwd, ["add", "kept.txt"]);
+        yield* git(cwd, ["commit", "-m", "kept"]);
         yield* writeTextFile(NodePath.join(tmp, "README.md"), "# hidden\n");
         yield* checkpointStore.captureCheckpoint({ cwd, checkpointRef: refs.toCheckpointRef });
 
@@ -451,8 +454,10 @@ it.layer(layerTest)("CheckpointStore.layer", (it) => {
           ignoreWhitespace: false,
           filePaths: ["app/kept.txt"],
         });
+        expect(patch).toContain("+++ b/app/kept.txt");
         expect(patch).toContain("+kept");
         expect(patch).not.toContain("hidden");
+        expect(yield* checkpointStore.listAuthoredPaths(refs)).toEqual(new Set(["app/kept.txt"]));
       }),
     );
   });

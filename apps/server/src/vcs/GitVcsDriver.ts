@@ -331,6 +331,11 @@ export interface GitFetchWorktreeBaseCommitInput {
   onOutputLine?: ((line: string) => Effect.Effect<void, never>) | undefined;
 }
 
+export interface GitWorktreeBaseRemote {
+  remoteName: string;
+  branchName: string;
+}
+
 export interface GitSetBranchUpstreamInput {
   cwd: string;
   branch: string;
@@ -449,10 +454,13 @@ export class GitVcsDriver extends Context.Service<
     ) => Effect.Effect<GitResolveRemoteTrackingCommitResult, GitCommandError>;
     readonly resolveWorktreeBaseRemote: (
       input: GitFetchWorktreeBaseCommitInput,
-    ) => Effect.Effect<{ remoteName: string; branchName: string } | null, GitCommandError>;
-    /** Fetches the configured upstream, explicit remote ref, or origin; null uses the local base. */
+    ) => Effect.Effect<GitWorktreeBaseRemote | null, GitCommandError>;
+    /**
+     * Fetches the configured upstream, explicit remote ref, or origin; null uses the local base.
+     * A caller that already ran `resolveWorktreeBaseRemote` passes its result as `remote`.
+     */
     readonly fetchWorktreeBaseCommit: (
-      input: GitFetchWorktreeBaseCommitInput,
+      input: GitFetchWorktreeBaseCommitInput & { readonly remote?: GitWorktreeBaseRemote },
     ) => Effect.Effect<GitResolveRemoteTrackingCommitResult | null, GitCommandError>;
     readonly fetchRemoteBranch: (
       input: GitFetchRemoteBranchInput,
@@ -1617,6 +1625,9 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         operation,
         cwd: input.cwd,
         args: [
+          // Not --no-relative, which Git before 2.28 rejects.
+          "-c",
+          "diff.relative=false",
           "diff",
           ...(input.format === "numstat" ? ["--numstat", "-z"] : ["--patch"]),
           "--no-color",
@@ -1673,7 +1684,15 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         execute({
           operation,
           cwd: input.cwd,
-          args: [...args, "--name-only", "-z", "--no-renames", "--no-ext-diff"],
+          args: [
+            "-c",
+            "diff.relative=false",
+            ...args,
+            "--name-only",
+            "-z",
+            "--no-renames",
+            "--no-ext-diff",
+          ],
           maxOutputBytes: VcsDriver.CHECKPOINT_DIFF_MAX_OUTPUT_BYTES,
           outputMode: "error",
         }).pipe(Effect.map((result) => result.stdout.split("\0")));
