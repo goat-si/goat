@@ -104,3 +104,20 @@ it.effect("a failed stop-fence write keeps admission blocked despite other recor
     }),
   ),
 );
+
+it.effect("removing an unreadable record lets the next admission through without a restart", () =>
+  withRecordDirectory((directory) =>
+    Effect.gen(function* () {
+      const records = NodePath.join(directory, "codex-app-servers");
+      yield* Effect.promise(() => NodeFSP.mkdir(records, { recursive: true }));
+      const broken = NodePath.join(records, "broken.json");
+      yield* Effect.promise(() => NodeFSP.writeFile(broken, "null"));
+      const service = yield* openService(directory, {});
+      yield* service.cleanup;
+      const threadId = ThreadId.make("thread-after-repair");
+      assert.equal((yield* service.ensureAdmission(threadId).pipe(Effect.exit))._tag, "Failure");
+      yield* Effect.promise(() => NodeFSP.rm(broken));
+      yield* service.ensureAdmission(threadId);
+    }),
+  ),
+);

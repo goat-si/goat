@@ -596,26 +596,6 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
       ),
     ]),
   ]);
-  const ensureAdmission = Effect.fn("CodexDetachedAppServers.ensureAdmission")(function* (
-    threadId: ThreadId,
-    options?: { readonly allowGoalControl?: boolean },
-  ) {
-    const global = yield* Ref.get(globallyBlocked);
-    if (global !== undefined) return yield* new CodexDetachedAppServerError({ detail: global });
-    const goal = yield* hasGoalBlock(threadId);
-    const stopped =
-      [...failedFences.values()].includes(threadId) ||
-      [...fences.values()].some((record) =>
-        record.stopObligations?.some((entry) => entry.threadId === threadId),
-      );
-    if (stopped || (goal && !options?.allowGoalControl))
-      return yield* new CodexDetachedAppServerError({
-        detail: stopped
-          ? "Codex is running work on this thread from before the restart."
-          : "Codex is still running a goal on this thread from before the restart. Send /goal pause or /goal clear to continue here.",
-      });
-  });
-
   const loadRecords = Effect.gen(function* () {
     yield* Ref.set(globallyBlocked, "Codex process records have not been loaded.");
     const entries = yield* tryIo("Could not list Codex process records.", async () => {
@@ -696,12 +676,17 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
     return outcomes;
   }).pipe(Effect.withSpan("CodexDetachedAppServers.cleanup"));
 
+  /** A removed or repaired record clears the global block on the next check, without a restart. */
+  const retryGlobalBlock = Effect.gen(function* () {
+    if ((yield* Ref.get(globallyBlocked)) !== undefined)
+      yield* cleanup.pipe(Effect.catchCause(() => Effect.void));
+    return yield* Ref.get(globallyBlocked);
+  });
+
   const ensureNotBlocked = Effect.fn("CodexDetachedAppServers.ensureNotBlocked")(function* (
     instanceId: string,
   ) {
-    if ((yield* Ref.get(globallyBlocked)) !== undefined)
-      yield* cleanup.pipe(Effect.catchCause(() => Effect.void));
-    const global = yield* Ref.get(globallyBlocked);
+    const global = yield* retryGlobalBlock;
     if (global !== undefined)
       return yield* new CodexDetachedAppServerError({
         detail:
@@ -722,6 +707,26 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
         });
     }
   }, Effect.asVoid);
+
+  const ensureAdmission = Effect.fn("CodexDetachedAppServers.ensureAdmission")(function* (
+    threadId: ThreadId,
+    options?: { readonly allowGoalControl?: boolean },
+  ) {
+    const global = yield* retryGlobalBlock;
+    if (global !== undefined) return yield* new CodexDetachedAppServerError({ detail: global });
+    const goal = yield* hasGoalBlock(threadId);
+    const stopped =
+      [...failedFences.values()].includes(threadId) ||
+      [...fences.values()].some((record) =>
+        record.stopObligations?.some((entry) => entry.threadId === threadId),
+      );
+    if (stopped || (goal && !options?.allowGoalControl))
+      return yield* new CodexDetachedAppServerError({
+        detail: stopped
+          ? "Codex is running work on this thread from before the restart."
+          : "Codex is still running a goal on this thread from before the restart. Send /goal pause or /goal clear to continue here.",
+      });
+  });
 
   /** Server shutdown signals and moves on; any other close waits for the group to exit. */
   const close = Effect.fn("CodexDetachedAppServers.close")(function* (
