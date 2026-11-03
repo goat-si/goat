@@ -1,3 +1,4 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off - static JPEG test fixtures are read outside the Effect runtime.
 import * as NodeFS from "node:fs";
 import * as NodeEvents from "node:events";
 import * as NodeVM from "node:vm";
