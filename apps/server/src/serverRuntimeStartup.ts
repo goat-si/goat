@@ -38,6 +38,7 @@ import * as LegacyV1ThreadImporter from "./orchestration-v2/legacy/LegacyV1Threa
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
 import * as ProviderRuntimeRecovery from "./orchestration-v2/ProviderRuntimeRecoveryService.ts";
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
+import * as CodexDetachedAppServerLive from "./provider/CodexDetachedAppServerLive.ts";
 import * as ThreadLaunch from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "./orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "./project/ProjectService.ts";
@@ -509,17 +510,21 @@ const runOrderedV2StartupPhases = Effect.fn("serverRuntimeStartup.runOrderedV2St
     ImportContext,
     RecoveryContext,
     DelegationContext,
+    CleanupContext,
     WorkerContext,
     BootstrapContext,
   >(input: {
     readonly importLegacyShells: Effect.Effect<Import, ImportError, ImportContext>;
     readonly recover: Effect.Effect<Recovery, RecoveryError, RecoveryContext>;
+    readonly cleanupDetachedProviders: Effect.Effect<void, never, CleanupContext>;
     readonly recoverDelegatedTasks: Effect.Effect<void, DelegationError, DelegationContext>;
     readonly startEffectWorker: Effect.Effect<void, WorkerError, WorkerContext>;
     readonly autoBootstrap: Effect.Effect<Bootstrap, BootstrapError, BootstrapContext>;
   }) {
     yield* input.importLegacyShells;
     const recovery = yield* input.recover;
+    // Before any session opens: processes a crashed run left behind must be stopped or blocked first.
+    yield* input.cleanupDetachedProviders;
     yield* input.recoverDelegatedTasks;
     yield* input.startEffectWorker;
     const bootstrap = yield* input.autoBootstrap;
@@ -555,6 +560,7 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
   const providerRuntimeRecovery = yield* ProviderRuntimeRecovery.ProviderRuntimeRecoveryService;
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
+  const codexDetached = yield* CodexDetachedAppServerLive.CodexDetachedAppServers;
   const agentAwarenessRelay = yield* AgentAwarenessRelay.AgentAwarenessRelay;
   const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
@@ -580,6 +586,7 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
       if (workerFiber !== null) {
         yield* timedShutdownPhase("effectWorker", Fiber.interrupt(workerFiber).pipe(Effect.ignore));
       }
+      yield* codexDetached.beginServerShutdown;
       yield* timedShutdownPhase(
         "prepareForShutdown",
         providerRuntimeRecovery.prepareForShutdown,
@@ -654,6 +661,20 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
         ),
       ),
       recover: runStartupPhase("orchestration-v2.recovery", providerRuntimeRecovery.recover),
+      cleanupDetachedProviders: runStartupPhase(
+        "codex.detached-cleanup",
+        codexDetached.cleanup.pipe(
+          Effect.tap((outcomes) =>
+            outcomes.length === 0
+              ? Effect.void
+              : Effect.logInfo("Codex app-servers from an earlier run handled", { outcomes }),
+          ),
+          Effect.catchCause((cause) =>
+            Effect.logWarning("Codex app-server cleanup failed", { cause: Cause.pretty(cause) }),
+          ),
+          Effect.asVoid,
+        ),
+      ),
       recoverDelegatedTasks: runStartupPhase(
         "orchestration-v2.delegated-tasks.recover",
         orchestrator.recoverDelegatedTasks,
@@ -827,3 +848,7 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
 
 export const layerWithOptions = (options?: StartupOptions) =>
   Layer.effect(ServerRuntimeStartup, make(options));
+
+/** Shares the Codex process service with the provider factory, so cleanup and shutdown see one state. */
+export const layerLiveWithOptions = (options?: StartupOptions) =>
+  layerWithOptions(options).pipe(Layer.provide(CodexDetachedAppServerLive.layerLive));
