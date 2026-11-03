@@ -458,9 +458,13 @@ const make = Effect.gen(function* () {
         yield* standing.end(input.threadId, input.handoffId, endsApproved);
       yield* PersonStop.markPersonStopped(input, record, savePrivate);
       const retire = standing.end(input.threadId, input.handoffId, false);
+      const outcome =
+        input.action === "completed" && browserClaimResult?.answer.agentResult.status === "refused"
+          ? "declined"
+          : input.action;
       const result = yield* transition(
         input,
-        input.action,
+        outcome,
         { type: "client", label },
         isGrant && !isHandoffPending(record.state),
         input.computerUseScope,
@@ -481,7 +485,7 @@ const make = Effect.gen(function* () {
       if (isGrant && Option.isSome(computerUseLeases)) yield* computerUseLeases.value.changed;
       if (isGrant) yield* continuations.answered(input.handoffId);
       if (result.state === "expired") return yield* new HandoffError({ reason: "expired" });
-      if (result.state !== input.action) return yield* new HandoffError({ reason: "conflict" });
+      if (result.state !== outcome) return yield* new HandoffError({ reason: "conflict" });
       return result;
     },
     lock.withPermits(1),
