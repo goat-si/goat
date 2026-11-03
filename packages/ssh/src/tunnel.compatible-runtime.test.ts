@@ -33,6 +33,21 @@ const remotePortOf = (result: DesktopSshEnvironmentReadyOrPending) =>
   "type" in result ? undefined : result.remotePort;
 
 describe("compatible SSH runtime", () => {
+  it.effect(
+    "keeps an unverified unowned newer runtime blocked after an archive acquisition failure",
+    () => {
+      const f = fixture(retained);
+      f.setLaunchVersion("1.2.2");
+      return Effect.gen(function* () {
+        const manager = yield* SshTunnel.SshEnvironmentManager;
+        yield* manager.ensureEnvironment(uploadTarget);
+        f.setProbe({ ...live("1.2.4"), liveOwned: false, liveBinarySignals: signals("1.2.3") });
+        const status = successfulStatus(yield* manager.status(uploadTarget));
+        assert.equal(status.state, "update_blocked");
+        assert.isUndefined(status.failure);
+      }).pipe(Effect.provide(f.layer), Effect.scoped);
+    },
+  );
   it.effect.each([
     ["owned undrainable older", "1.2.2", true, false, true],
     ["unowned older", "1.2.2", false, false, true],
