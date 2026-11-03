@@ -8,6 +8,9 @@ delegation.
 Google Antigravity is available through its official `antigravity-acp` Registry entry. Add it like
 any other Registry agent; it does not need an Antigravity-specific GOAT provider.
 
+GOAT also supports [fx](https://fx.sh) through ACP. Install and sign in to fx on the machine
+running the GOAT server, then enable it in **Settings → Providers**.
+
 GOAT prefers the current ACP v2 preview protocol and uses its richer messages, usage, plans,
 configuration, compaction, and agent-terminal updates when the agent supports them. It also
 negotiates ACP v1 for Registry agents that have not migrated yet, so agents such as Pi continue to
