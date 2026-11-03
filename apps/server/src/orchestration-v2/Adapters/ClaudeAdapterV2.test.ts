@@ -5888,11 +5888,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             )
           : null,
       );
-    }).pipe(
-      Effect.provide(
-        layerAdapterTest,
-      ),
-    ),
+    }).pipe(Effect.provide(layerAdapterTest)),
   );
 
   it.effect("keeps the measured context when a usage limit ends the turn", () =>
@@ -8103,11 +8099,12 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             terminalReason: "aborted_streaming",
           }),
         );
-        yield* harness.awaitUntil(() =>
-          harness.events.some(
-            (event) =>
-              event.type === "provider_turn.updated" && event.providerTurn.status === "running",
-          ),
+        yield* harness.awaitUntil(
+          () =>
+            harness.events.some(
+              (event) =>
+                event.type === "provider_turn.updated" && event.providerTurn.status === "running",
+            ),
           "running turn",
         );
         const active = harness.events.find(
@@ -8124,11 +8121,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         assert.equal((yield* Queue.take(harness.terminalReceipts)).status, "interrupted");
         assert.equal(closes, 1);
         assert.lengthOf(harness.terminalEvents(), 1);
-      }).pipe(
-        Effect.provide(
-          layerAdapterTest,
-        ),
-      ),
+      }).pipe(Effect.provide(layerAdapterTest)),
     ),
   );
 
@@ -8156,11 +8149,12 @@ describe("ClaudeAdapterV2 background wake turns", () => {
             attachments: [],
           }),
         );
-        yield* harness.awaitUntil(() =>
-          harness.events.some(
-            (event) =>
-              event.type === "provider_turn.updated" && event.providerTurn.status === "running",
-          ),
+        yield* harness.awaitUntil(
+          () =>
+            harness.events.some(
+              (event) =>
+                event.type === "provider_turn.updated" && event.providerTurn.status === "running",
+            ),
           "running turn",
         );
         const active = harness.events.find(
@@ -8183,11 +8177,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         assert.equal((yield* Queue.take(harness.terminalReceipts)).status, "interrupted");
         assert.equal(closes, 1);
         assert.lengthOf(harness.terminalEvents(), 1);
-      }).pipe(
-        Effect.provide(
-          layerAdapterTest,
-        ),
-      ),
+      }).pipe(Effect.provide(layerAdapterTest)),
     ),
   );
 
@@ -9351,11 +9341,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
         assert.equal(statusOf("runtime_request.updated"), "cancelled");
         assert.equal(statusOf("node.updated"), "cancelled");
         assert.equal(statusOf("turn_item.updated"), "cancelled");
-      }).pipe(
-        Effect.provide(
-          layerAdapterTest,
-        ),
-      ),
+      }).pipe(Effect.provide(layerAdapterTest)),
     ),
   );
 
@@ -12232,11 +12218,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           settled = yield* Queue.take(harness.subagentReceipts);
         }
         assert.equal(settled.subagent.result, "FORK-DONE");
-      }).pipe(
-        Effect.provide(
-          layerAdapterTest,
-        ),
-      ),
+      }).pipe(Effect.provide(layerAdapterTest)),
     ),
   );
 

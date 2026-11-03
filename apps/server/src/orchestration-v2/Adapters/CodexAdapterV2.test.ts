@@ -3430,12 +3430,7 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             { status: "interrupted", reason: undefined },
           ],
         );
-      }).pipe(
-        Effect.scoped,
-        Effect.provide(
-          layerAdapterTest,
-        ),
-      ),
+      }).pipe(Effect.scoped, Effect.provide(layerAdapterTest)),
   );
 
   it.effect("resumes a provider thread without requesting or decoding its history", () =>
