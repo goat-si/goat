@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import { BrowserClaimBind } from "./BrowserClaimBind.ts";
 import { BrowserClaimManifest } from "./BrowserClaimManifest.ts";
 import { makeBrowserOriginGrants } from "./BrowserOriginGrants.ts";
@@ -15,12 +16,16 @@ class BrowserClaimBindUnavailable extends Schema.TaggedError<BrowserClaimBindUna
 
 const make = Effect.gen(function* () {
   const environment = yield* ServerEnvironment.ServerEnvironment;
+  const settings = yield* ServerSettings.ServerSettingsService;
   const { environmentId } = yield* environment.getDescriptor;
   const manifest = yield* Effect.serviceOption(BrowserClaimManifest);
   const bind = yield* Effect.serviceOption(BrowserClaimBind);
   let supported = false;
   const service = yield* makeBrowserOriginGrants({
     environmentId,
+    blockedHosts:
+      settings.blockedBrowserHostsSnapshot ??
+      settings.getSettings.pipe(Effect.map((value) => value.blockedBrowserHosts)),
     supported: () => supported && Option.isSome(manifest),
     bindAvailable: () => Option.isSome(bind),
     publish: (union) =>

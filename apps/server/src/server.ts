@@ -605,6 +605,7 @@ const layerBrowserOriginGrants = Layer.provide(
   BrowserOriginGrants.layer,
   Layer.mergeAll(
     layerServerEnvironment,
+    layerServerSettings,
     BrowserClaimManifestModule.layer,
     BrowserClaimBindModule.layer,
   ),

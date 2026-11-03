@@ -13,6 +13,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as SubscriptionRef from "effect/SubscriptionRef";
+import { isBlockedBrowserUrl } from "@goat/shared/preview";
 import { manifestApplied } from "../cua/ComputerUseLeaseProxyBrowserClaims.ts";
 
 export interface Request {
@@ -38,6 +39,7 @@ export interface Union {
 interface Dependencies {
   readonly environmentId: EnvironmentId;
   readonly supported: () => boolean;
+  readonly blockedHosts?: Effect.Effect<ReadonlyArray<string>, Error>;
   readonly bindAvailable?: () => boolean;
   readonly publish: (union: Union) => Effect.Effect<string, Error>;
   readonly confirm: (sha256: string) => Effect.Effect<unknown, Error>;
@@ -80,6 +82,11 @@ const invalidOrigin = {
   code: "invalid_origin",
   message: "Expected a canonical HTTP origin.",
 } as const;
+const blocked = {
+  status: "refused",
+  code: "blocked_url",
+  message: "This site is blocked in browser settings.",
+} as const;
 const isOrigin = Schema.is(BrowserOrigin);
 const originOf = (url: string) => {
   try {
@@ -93,6 +100,11 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
   deps: Dependencies,
 ) {
   const lock = yield* Semaphore.make(1);
+  const blockedUrl = (url: string) =>
+    (deps.blockedHosts ?? Effect.succeed([])).pipe(
+      Effect.map((hosts) => isBlockedBrowserUrl(url, hosts)),
+      Effect.orElseSucceed(() => true),
+    );
   const writeLock = yield* Semaphore.make(1);
   const version = yield* SubscriptionRef.make(0);
   let currentRevision = 0;
@@ -190,6 +202,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
       Effect.gen(function* () {
         if (!deps.supported()) return unavailable;
         if (!isOrigin(input.origin)) return invalidOrigin;
+        if (yield* blockedUrl(input.origin)) return blocked;
         const createdAt = yield* Clock.currentTimeMillis;
         const claimId = `browser-claim:${++sequence}`;
         const stopped = yield* Deferred.make<void>();
@@ -204,6 +217,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
   ) {
     if (!deps.supported()) return unavailable;
     if (!isOrigin(input.origin)) return invalidOrigin;
+    if (yield* blockedUrl(input.origin)) return blocked;
     if (!deps.windowTitle) return yield* new BrowserManifestNotApplied();
     const windowTitle = yield* deps.windowTitle(input);
     return yield* request({ ...input, windowTitle });
@@ -215,6 +229,11 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
         if (entry === undefined || !approved || !deps.supported()) {
           if (pending.delete(claimId)) yield* advance;
           return { agentResult: decline };
+        }
+        if (yield* blockedUrl(entry.origin)) {
+          pending.delete(claimId);
+          yield* advance;
+          return { agentResult: blocked };
         }
         if (deps.bindAvailable?.() === false) {
           pending.delete(claimId);
@@ -256,6 +275,13 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
           const tab = bound.value;
           if (epoch !== driverEpoch) return { agentResult: decline };
           if (!deps.supported()) return yield* rollback.pipe(Effect.as({ agentResult: decline }));
+          if ((yield* blockedUrl(entry.origin)) || (yield* blockedUrl(tab.url))) {
+            yield* rollback;
+            return {
+              agentResult: decline,
+              personMessage: "blocked_url: This site is blocked in browser settings.",
+            };
+          }
           if (originOf(tab.url) !== entry.origin) {
             yield* rollback;
             return { agentResult: decline, personMessage: `This tab is not on ${entry.origin}` };
