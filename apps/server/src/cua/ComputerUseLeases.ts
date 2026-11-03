@@ -417,7 +417,7 @@ const make = Effect.gen(function* () {
     const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
     // Checked and claimed with no yield between, so two unattended turns cannot both pass.
     if (everyApp === "unattended" && unattendedEveryApp(threadId, now) !== undefined)
-      return undefined;
+      return Option.none<ComputerUseControl>();
     const handoffId = Option.isSome(lease) ? lease.value.handoffId : undefined;
     // A driver started for this thread after all; the session list drops the blocked entry.
     // Read, decision, state change and notice are one synchronous, uninterruptible step: a Stop
@@ -428,7 +428,7 @@ const make = Effect.gen(function* () {
         if (Option.isSome(settings) && settings.value.committedPolicy !== undefined) {
           // @effect-diagnostics-next-line runEffectInsideEffect:off -- Admission must read this Ref without yielding.
           const policy = Effect.runSync(settings.value.committedPolicy);
-          if (policy._tag !== "committed" || !policy.enableCua) return Effect.void;
+          if (policy._tag !== "committed" || !policy.enableCua) return Effect.succeedNone;
         }
         const unblocked = blockedTurns.delete(threadId);
         const existing = controls.get(threadId);
@@ -457,7 +457,7 @@ const make = Effect.gen(function* () {
             implyFocus(reused) || existing.idle === true || moved || identityChanged || unblocked
               ? changed
               : Effect.void;
-          return Effect.as(notice, reused as ComputerUseControl);
+          return Effect.as(notice, Option.some(reused));
         }
         const next: ControlRecord = {
           controlId: `control:${NodeCrypto.randomUUID()}`,
@@ -488,13 +488,13 @@ const make = Effect.gen(function* () {
           everyApp === undefined ? handoffId : undefined,
         );
         implyFocus(next);
-        return Effect.as(changed, next as ComputerUseControl);
+        return Effect.as(changed, Option.some(next));
       }),
     ).pipe(Effect.provideService(Scheduler.PreventSchedulerYield, true));
   });
 
   const control = (threadId: ThreadId, lease: Option.Option<ComputerUseLease>, runId?: RunId) =>
-    mint(threadId, lease, undefined, runId).pipe(Effect.map(Option.fromNullishOr));
+    mint(threadId, lease, undefined, runId);
 
   const everyAppControl = Effect.fn("ComputerUseLeases.everyAppControl")(function* (
     threadId: ThreadId,
@@ -502,16 +502,12 @@ const make = Effect.gen(function* () {
     run?: { readonly runId?: RunId; readonly nonPerson?: boolean },
   ) {
     if (!unattended)
-      return Option.fromNullishOr(
-        yield* mint(threadId, Option.none(), "person", run?.runId, run?.nonPerson),
-      );
+      return yield* mint(threadId, Option.none(), "person", run?.runId, run?.nonPerson);
     return yield* admission.withPermits(1)(
       Effect.gen(function* () {
         if ((yield* live(undefined, true)).some((lease) => lease.threadId !== threadId))
           return Option.none<ComputerUseControl>();
-        return Option.fromNullishOr(
-          yield* mint(threadId, Option.none(), "unattended", run?.runId, true),
-        );
+        return yield* mint(threadId, Option.none(), "unattended", run?.runId, true);
       }),
     );
   });
