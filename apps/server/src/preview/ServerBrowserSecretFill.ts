@@ -2,6 +2,7 @@ import { makeLoginOperation } from "./ServerBrowserLoginOperation.ts";
 import { FILL, IDENTIFIER, IDENTIFIER_NAME } from "./secretFillAccountScripts.ts";
 import { FOCUSED, SELECTED } from "./secretFillTargetScripts.ts";
 import { STILL_FILLED } from "./secretFillStillFilled.ts";
+import { makeCodeOperationWithStore } from "./ServerBrowserCodeOperation.ts";
 import { makeCardOperationWithStore } from "./ServerBrowserCardOperation.ts";
 // @effect-diagnostics globalTimers:off -- The privacy settle wait runs inside a Promise-based browser operation.
 /**
@@ -447,7 +448,6 @@ export const make = Effect.gen(function* () {
   const contextValues = new WeakMap<BrowserContext, Set<string>>();
   /** Fills under way per context: no recording there starts meanwhile. */
   const filling = new WeakMap<BrowserContext, number>();
-  /** The field each tab last took a password into, and where it went. */
   const lastFill = new WeakMap<
     Page,
     Target & {
@@ -511,7 +511,6 @@ export const make = Effect.gen(function* () {
   };
   const signIns = new WeakMap<Page, SignInRecord>();
   const watchedForSignIn = new WeakSet<Page>();
-  /** Orders submissions and hand backs; only which came first matters. */
   let signInOrder = 0;
   const noteSignIn = (page: Page, change: Partial<SignInRecord>) =>
     signIns.set(page, { ...signIns.get(page), ...change });
@@ -804,7 +803,7 @@ export const make = Effect.gen(function* () {
   });
 
   const fillCard = makeCardOperationWithStore(multiFieldDeps, secretRequests, runPromise);
-  /** Whether a tab may show a password GOAT filled in pixels: its site, or a fill under way, says no. */
+  const fillOneTimeCode = makeCodeOperationWithStore(multiFieldDeps, secretRequests, runPromise);
   const pixelsOff = (tab: SecretFillTab, threadId: ThreadId) => {
     if ((filling.get(tab.page.context()) ?? 0) > 0) return FILLING;
     const origins = filledOrigins.get(threadId);
@@ -855,7 +854,6 @@ export const make = Effect.gen(function* () {
     if (off !== null) throw refused(off);
   };
 
-  /** Checks the fields GOAT filled on a page, dropping those that let go. */
   const fenceState = async (page: Page) => {
     let unconfirmed = false;
     let shown = false;
@@ -959,7 +957,6 @@ export const make = Effect.gen(function* () {
     };
   };
 
-  /** The tab's sign-in facts, from the page and from what GOAT saw it send. */
   const signInStateOf = async (tab: SecretFillTab, threadId: ThreadId) => {
     const page = await readSignInPage(tab);
     // Masked before the cut, so a cut never leaves the start of a value.
@@ -976,6 +973,7 @@ export const make = Effect.gen(function* () {
     fill,
     fillLogin,
     fillCard,
+    fillOneTimeCode,
     fillRequest: <T extends SecretFillTab>(
       tab: T,
       request: PreviewAutomationRequest,
@@ -984,11 +982,13 @@ export const make = Effect.gen(function* () {
       gate: Parameters<typeof fill>[4],
       around: Parameters<typeof fill>[5],
     ) =>
-      request.operation === "fillCard"
-        ? fillCard(tab, request, deadline, record, gate, around)
-        : request.operation === "fillLogin"
-          ? fillLogin(tab, request, deadline, record, gate, around)
-          : fill(tab, request, deadline, record, gate, around),
+      request.operation === "fillOneTimeCode"
+        ? fillOneTimeCode(tab, request, deadline, record, gate, around)
+        : request.operation === "fillCard"
+          ? fillCard(tab, request, deadline, record, gate, around)
+          : request.operation === "fillLogin"
+            ? fillLogin(tab, request, deadline, record, gate, around)
+            : fill(tab, request, deadline, record, gate, around),
     guard,
     assertPixels,
     historyField,

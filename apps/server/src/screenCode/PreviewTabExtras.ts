@@ -3,6 +3,8 @@ import {
   PreviewAutomationFillSecretInput,
   PreviewAutomationFillCardInput,
   PreviewAutomationFillCardResult,
+  PreviewAutomationFillOneTimeCodeInput,
+  PreviewAutomationFillOneTimeCodeResult,
   PreviewAutomationFillLoginInput,
   PreviewAutomationFillLoginResult,
   PreviewAutomationLogsInput,
@@ -182,18 +184,62 @@ const fillTabCard = Effect.fn("PreviewTargetHost.fillCard")(function* (
   };
 });
 
+const isCode = Schema.is(PreviewAutomationFillOneTimeCodeInput);
+const isCodeResult = Schema.is(PreviewAutomationFillOneTimeCodeResult);
+const fillTabCode = Effect.fn("PreviewTargetHost.fillOneTimeCode")(function* (
+  arg: Record<string, unknown>,
+  invoke: (input: unknown) => Effect.Effect<unknown, ScreenRunError>,
+) {
+  const input = { secretRef: arg.secretRef };
+  if (!isCode(input))
+    return yield* Effect.fail({
+      code: "invalid_argument" as const,
+      effectStarted: false,
+      nextStep: "Provide a login reference.",
+    });
+  const value = yield* invoke(input);
+  if (!isCodeResult(value) || (value.verdict === "confirmed" && !value.filled))
+    return yield* Effect.fail({
+      code: "unknown_outcome" as const,
+      effectStarted: true,
+      nextStep: "Inspect the page before retrying.",
+    });
+  const confirmed = value.verdict === "confirmed";
+  return {
+    value,
+    category: confirmed ? ("confirmed" as const) : ("unverifiable" as const),
+    evidence: ["Code fill completed"],
+    outcome: {
+      dispatch: value.verdict === "refused" ? ("refused" as const) : ("confirmed" as const),
+      effect: confirmed ? ("confirmed" as const) : ("unknown" as const),
+    },
+  };
+});
+
 export function dispatchTabExtra(
   method: string,
   arg: Record<string, unknown>,
   invalidatePoints: () => void,
   invalidateTarget: () => void,
   invoke: (
-    operation: "logs" | "fillSecret" | "fillLogin" | "fillCard" | "dialog" | "evaluate" | "upload",
+    operation:
+      | "logs"
+      | "fillSecret"
+      | "fillLogin"
+      | "fillCard"
+      | "fillOneTimeCode"
+      | "dialog"
+      | "evaluate"
+      | "upload",
     input: unknown,
     documentGeneration?: number,
   ) => Effect.Effect<unknown, ScreenRunError>,
   upload?: { locator: string | undefined; documentGeneration: number | undefined },
 ) {
+  if (method === "tab_fill_one_time_code") {
+    invalidatePoints();
+    return fillTabCode(arg, (input) => invoke("fillOneTimeCode", input));
+  }
   if (method === "tab_fill_card") {
     invalidatePoints();
     return fillTabCard(arg, (input) => invoke("fillCard", input));

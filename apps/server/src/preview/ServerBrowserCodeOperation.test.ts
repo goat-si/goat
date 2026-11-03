@@ -3,9 +3,12 @@ import { SecretRef, ThreadId, type PreviewAutomationRequest } from "@goat/contra
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
 import { chromium } from "playwright-core";
 import { expect } from "vite-plus/test";
 import { makeCodeOperation } from "./ServerBrowserCodeOperation.ts";
+import * as ServerBrowserSecretFill from "./ServerBrowserSecretFill.ts";
+import * as SecretRequests from "../secrets/SecretRequests.ts";
 import { SessionControl } from "./SessionControl.ts";
 
 const threadId = ThreadId.make("code-operation-thread");
@@ -20,6 +23,65 @@ const request = {
 } satisfies PreviewAutomationRequest;
 const record = <T, A>(_tab: T, _action: string, run: () => Promise<A>) => run();
 const blocked = Object.assign(async () => {}, { isFenced: () => false, blockedFrame: () => false });
+
+it.live("a filled code protects evaluation and screenshots", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const secrets = Layer.mock(SecretRequests.SecretRequests)({
+        useOneTimeCode: (_input, use) =>
+          use({ secret: "JBSWY3DP", algorithm: "SHA1", digits: 6, period: 30 }),
+      });
+      const fill = yield* ServerBrowserSecretFill.make.pipe(Effect.provide(secrets));
+      const browser = yield* Effect.acquireRelease(
+        Effect.promise(() => chromium.launch({ headless: true })),
+        (b) => Effect.promise(() => b.close()),
+      );
+      const page = yield* Effect.promise(async () => {
+        const context = await browser.newContext();
+        await context.route("**/*", (route) =>
+          route.fulfill({
+            contentType: "text/html",
+            body: '<form><input id="code" autocomplete="one-time-code"></form>',
+          }),
+        );
+        const page = await context.newPage();
+        await page.goto("https://code.test/");
+        await page.locator("#code").focus();
+        return page;
+      });
+      const cdp = yield* Effect.promise(() => page.context().newCDPSession(page));
+      const tab = {
+        page,
+        cdp,
+        frameSessions: new Map(),
+        control: new SessionControl("agent-a"),
+        recording: null,
+        recordingStart: null,
+      };
+      expect(
+        yield* Effect.promise(() =>
+          fill.fillOneTimeCode(tab, request, Number.POSITIVE_INFINITY, record, blocked),
+        ),
+      ).toMatchObject({ filled: true, verdict: "confirmed" });
+      const code = yield* Effect.promise(() => page.locator("#code").inputValue());
+      expect(code).toMatch(/^\d{6}$/);
+      expect(fill.maskText(threadId)(code)).not.toContain(code);
+      for (const guarded of [
+        { ...request, operation: "evaluate" as const },
+        { ...request, operation: "snapshot" as const, input: { captureImage: true } },
+      ]) {
+        expect(
+          yield* Effect.promise(() =>
+            fill.guard(tab, guarded).then(
+              () => false,
+              () => true,
+            ),
+          ),
+        ).toBe(true);
+      }
+    }),
+  ),
+);
 
 it.live("navigation before code dispatch refuses without using a fill", () =>
   Effect.scoped(

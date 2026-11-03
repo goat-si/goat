@@ -1807,7 +1807,7 @@ const make = Effect.gen(function* () {
         "This tab belongs to another agent session. You can read it, but open your own tab to act.",
         "agentMismatch",
       );
-    if (["fillSecret", "fillLogin", "fillCard"].includes(request.operation)) {
+    if (["fillSecret", "fillLogin", "fillCard", "fillOneTimeCode"].includes(request.operation)) {
       const gate = secretBlockedGate(tab, request.runId, blockedTabs, operationSignal);
       return secretFill.fillRequest(tab, request, deadlineMs, recordAction, gate, (run) =>
         AgentTabState.attributeSecretFill(
