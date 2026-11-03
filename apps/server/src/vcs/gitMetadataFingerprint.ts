@@ -1,16 +1,21 @@
 import * as Cache from "effect/Cache";
+import * as Clock from "effect/Clock";
+import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
+import * as Hex from "effect/encoding/Hex";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import { detachStackFrame } from "../git/detachStackFrame.ts";
 
-const BRANCH_SECTION_HEADER = /^\s*\[branch\s+"((?:[^"\\]|\\.)*)"\]\s*$/i;
+const BRANCH_SECTION_HEADER = /^\s*\[branch\s+"((?:[^"\\]|\\.)*)"\]\s*(?:[#;].*)?$/i;
 const PLAIN_SECTION_HEADER = /^\s*\[[A-Za-z0-9.-]+(?:\s+"(?:[^"\\]|\\.)*")?\]\s*$/;
 // Includes and legacy [branch.x] headers can set a branch's values from outside its own section.
 const ORDER_SENSITIVE_SECTION = /^\s*\[\s*(?:include|includeif|branch\s*\.)/i;
 const CONFIG_SECTION_MEMO_CAPACITY = 256;
 const CONFIG_SECTION_MAX_BYTES = 256 * 1024;
+// FAT/exFAT mtimes have two-second resolution; network filesystems may be coarser.
+const CONFIG_MTIME_GRANULARITY_MS = 2_000;
 
 /**
  * Splits a git config into the text outside exact \`[branch "<name>"]\` sections and each such
@@ -53,28 +58,38 @@ export function splitBranchSections(
 export const makeGitMetadataFingerprint = Effect.fn("GitMetadataFingerprint.make")(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const crypto = yield* Crypto.Crypto;
   // The outer read span owns validation; tracing every stat would multiply hot-path spans.
   const stamp = Effect.fnUntraced(function* (file: string) {
     return yield* fs.stat(file).pipe(
-      Effect.map(
-        (info) =>
-          `${Option.getOrNull(info.ino)}:${info.size}:${Option.getOrNull(info.mtime)?.getTime()}`,
+      Effect.map((info) => ({
+        value: `${Option.getOrNull(info.ino)}:${info.size}:${Option.getOrNull(info.mtime)?.getTime()}`,
+        mtime: Option.getOrNull(info.mtime)?.getTime() ?? null,
+      })),
+      Effect.catchReason("PlatformError", "NotFound", () =>
+        Effect.succeed({ value: "missing", mtime: null }),
       ),
-      Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed("missing")),
     );
   });
   // Reads at most the cap even if the file grows while it is read; null means stamp the whole file.
   const readBounded = Effect.fnUntraced(
     function* (file: string) {
       const handle = yield* fs.open(file, { flag: "r" });
-      const decoder = new TextDecoder();
-      let text = "";
+      const chunks: Uint8Array[] = [];
       let bytes = 0;
       while (bytes <= CONFIG_SECTION_MAX_BYTES) {
         const chunk = yield* handle.readAlloc(64 * 1024);
-        if (Option.isNone(chunk)) return text + decoder.decode();
+        if (Option.isNone(chunk)) {
+          const result = new Uint8Array(bytes);
+          let offset = 0;
+          for (const part of chunks) {
+            result.set(part, offset);
+            offset += part.length;
+          }
+          return result;
+        }
         bytes += chunk.value.length;
-        text += decoder.decode(chunk.value, { stream: true });
+        chunks.push(chunk.value);
       }
       return null;
     },
@@ -83,21 +98,51 @@ export const makeGitMetadataFingerprint = Effect.fn("GitMetadataFingerprint.make
   );
   const sectionsByConfig = new Map<
     string,
-    { readonly stamp: string; readonly sections: ReturnType<typeof splitBranchSections> }
+    {
+      readonly stamp: string;
+      readonly reusable: boolean;
+      readonly sections: ReturnType<typeof splitBranchSections>;
+      readonly fallback: string;
+    }
   >();
-  // Parses only when the file's stamp moves, so steady lookups cost one stat as before.
-  const configSections = Effect.fnUntraced(function* (file: string, fileStamp: string) {
+  let racyRead = 0;
+  const configSections = Effect.fnUntraced(function* (
+    file: string,
+    fileStamp: { value: string; mtime: number | null },
+  ) {
     const memo = sectionsByConfig.get(file);
-    if (memo?.stamp === fileStamp) return memo.sections;
-    const text = fileStamp === "missing" ? null : yield* readBounded(file);
+    if (memo?.stamp === fileStamp.value && memo.reusable) return memo;
+    const readAt = yield* Clock.currentTimeMillis;
+    const bytes = fileStamp.value === "missing" ? null : yield* readBounded(file);
+    const text =
+      bytes === null
+        ? null
+        : yield* Effect.try(() =>
+            new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes),
+          ).pipe(Effect.orElseSucceed(() => null));
     const sections = text === null ? null : splitBranchSections(text);
+    const reusable =
+      fileStamp.value === "missing" ||
+      (fileStamp.mtime !== null && readAt - fileStamp.mtime > CONFIG_MTIME_GRANULARITY_MS);
+    const fallback =
+      bytes !== null && sections === null
+        ? `${fileStamp.value}:content:${Hex.encode(yield* crypto.digest("SHA-256", bytes))}`
+        : !reusable && bytes === null
+          ? `${fileStamp.value}:racy:${++racyRead}`
+          : fileStamp.value;
     sectionsByConfig.delete(file);
     if (sectionsByConfig.size >= CONFIG_SECTION_MEMO_CAPACITY) {
       const oldest = sectionsByConfig.keys().next().value;
       if (oldest !== undefined) sectionsByConfig.delete(oldest);
     }
-    sectionsByConfig.set(file, { stamp: fileStamp, sections });
-    return sections;
+    const entry = {
+      stamp: fileStamp.value,
+      reusable,
+      sections,
+      fallback,
+    };
+    sectionsByConfig.set(file, entry);
+    return entry;
   });
   const directories = yield* Cache.makeWith(
     (cwd: string) =>
@@ -167,16 +212,23 @@ export const makeGitMetadataFingerprint = Effect.fn("GitMetadataFingerprint.make
       const stamps = yield* Effect.forEach([...repositoryFiles, ...refFiles], stamp, {
         concurrency: "unbounded",
       });
-      const repositoryStamps = stamps.slice(0, repositoryFiles.length);
-      const refStamps = stamps.slice(repositoryFiles.length);
+      const repositoryStamps = stamps.slice(0, repositoryFiles.length).map((entry) => entry.value);
+      const refStamps = stamps.slice(repositoryFiles.length).map((entry) => entry.value);
       const configIndex = repositoryFiles.length - 1;
-      const sections =
+      const config =
         branch === undefined
           ? null
-          : yield* configSections(configFile, repositoryStamps[configIndex] ?? "missing");
-      if (branch !== undefined && sections !== null) {
-        repositoryStamps[configIndex] = `shared:${sections.shared}`;
-        refStamps.push(`branch:${sections.branches.get(branch) ?? "none"}`);
+          : yield* configSections(
+              configFile,
+              stamps[configIndex] ?? { value: "missing", mtime: null },
+            );
+      if (branch !== undefined && config !== null) {
+        if (config.sections !== null) {
+          repositoryStamps[configIndex] = `shared:${config.sections.shared}`;
+          refStamps.push(`branch:${config.sections.branches.get(branch) ?? "none"}`);
+        } else {
+          repositoryStamps[configIndex] = config.fallback;
+        }
       }
       return {
         root: dirs.root,
