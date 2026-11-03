@@ -205,7 +205,7 @@ it("explains when the client cannot approve a browser tab", async () => {
   await vi.waitFor(() =>
     expect(toast).toHaveBeenCalledWith(
       expect.objectContaining({
-        title: "This client cannot change settings to allow a browser tab.",
+        title: "This client does not have permission to let an agent use a browser tab.",
       }),
     ),
   );

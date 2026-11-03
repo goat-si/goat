@@ -49,7 +49,7 @@ export function YourBrowserSection({
     if (!canClaim || !canList) {
       toastManager.add({
         type: "info",
-        title: "This client cannot change settings to allow a browser tab.",
+        title: "This client does not have permission to let an agent use a browser tab.",
       });
     } else if (!available || !result.isSuccess || result.data?.supported !== true) {
       toastManager.add({
