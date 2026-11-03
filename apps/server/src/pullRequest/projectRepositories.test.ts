@@ -68,9 +68,9 @@ describe("statTargets", () => {
     assert.deepStrictEqual(
       statTargets(repositories, [{ ...ref, host: "git.cafe" }]).map(({ project, projectIds }) => [
         project.host,
-        projectIds,
+        projectIds.join(","),
       ]),
-      [["git.cafe", ["c"]]],
+      [["git.cafe", "c"]],
     );
   });
 });
