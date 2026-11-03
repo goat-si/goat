@@ -77,7 +77,7 @@ import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import { makeProviderFailure } from "@goat/provider-core/server/failure";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
-import { makeScopeCloser } from "./ProviderSessionScopeClose.ts";
+import { makeScopeCloser, type ReopenLatch } from "./ProviderSessionScopeClose.ts";
 import { prepareScreenTurn, sameScreenBindingHints } from "./ScreenSkills.ts";
 import { instanceUrlOpener } from "../urlOpener/UrlOpenerShim.ts";
 
@@ -1354,6 +1354,8 @@ export const layerWithOptions = (
         closeWithin: closeScopeWithin,
         trackRelease,
         awaitPendingReleases,
+        holdReopen,
+        awaitReopen,
       } = makeScopeCloser(RELEASE_SCOPE_CLOSE_TIMEOUT_MS);
 
       const releaseEntryNow = (input: {
@@ -1365,9 +1367,12 @@ export const layerWithOptions = (
         readonly onlyIfIdleGeneration?: number;
         readonly keepIfBusyOtherThan?: ReadonlyArray<string>;
         readonly gracefulSubscribers?: boolean;
+        readonly latch: ReopenLatch;
       }) =>
         Effect.acquireUseRelease(
-          removeLiveEntry(input),
+          removeLiveEntry(input).pipe(
+            Effect.tap(([entry]) => input.latch.keepFor(Option.getOrUndefined(entry)?.runtime)),
+          ),
           ([entry, releasedAt]) =>
             Option.match(entry, {
               onNone: () => Effect.void,
@@ -1396,6 +1401,7 @@ export const layerWithOptions = (
                   const closeExit = yield* closeScopeWithin(entry.scope, {
                     providerSessionId: input.providerSessionId,
                     reason: input.reason,
+                    latch: input.latch,
                   });
                   const records = {
                     entry,
@@ -1470,8 +1476,10 @@ export const layerWithOptions = (
             ),
           ),
         );
-      const releaseEntry = (input: Parameters<typeof releaseEntryNow>[0]) =>
-        trackRelease(releaseEntryNow(input));
+      const releaseEntry = (input: Omit<Parameters<typeof releaseEntryNow>[0], "latch">) =>
+        holdReopen(sessionKey(input.providerSessionId), (latch) =>
+          trackRelease(releaseEntryNow({ ...input, latch })),
+        );
 
       const releaseIfStillIdle = Effect.fn("ProviderSessionManager.releaseIfStillIdle")(
         function* (input: {
@@ -1496,10 +1504,18 @@ export const layerWithOptions = (
               : yield* probedRuntime.hasPendingBackgroundWork.pipe(
                   Effect.catchCause(() => Effect.succeed(false)),
                 );
-          if (hasPendingWork) {
-            const now = yield* Clock.currentTimeMillis;
-            const pinnedSinceMs = entry.pinnedSinceMs ?? now;
-            if (now - pinnedSinceMs < maxIdlePinMs) {
+          const now = yield* Clock.currentTimeMillis;
+          const pinnedSinceMs = entry.pinnedSinceMs ?? now;
+          const pastPinCeiling = now - pinnedSinceMs >= maxIdlePinMs;
+          // Live work holds past the ceiling; a probe that cannot answer counts as held.
+          const held =
+            (!hasPendingWork || pastPinCeiling) &&
+            probedRuntime.holdsLiveWork !== undefined &&
+            (yield* probedRuntime
+              .holdsLiveWork({ pastPinCeiling })
+              .pipe(Effect.catchCause(() => Effect.succeed(true))));
+          if (hasPendingWork || held) {
+            if (!pastPinCeiling || held) {
               const shouldContinuePin = yield* Ref.modify(sessions, (latest) => {
                 const latestEntry = latest.get(key);
                 if (
@@ -1517,10 +1533,12 @@ export const layerWithOptions = (
               if (!shouldContinuePin) {
                 return;
               }
-              yield* Effect.logInfo("orchestration-v2.driver-session.idle-release-deferred", {
-                providerSessionId: input.providerSessionId,
-                pinnedForMs: now - pinnedSinceMs,
-              });
+              yield* Effect.logInfo(
+                held
+                  ? "orchestration-v2.driver-session.idle-release-held"
+                  : "orchestration-v2.driver-session.idle-release-deferred",
+                { providerSessionId: input.providerSessionId, pinnedForMs: now - pinnedSinceMs },
+              );
               // Recheck on this fiber; scheduleIdleReleaseInternal would interrupt it and self-deadlock.
               yield* Effect.sleep(Duration.millis(idleTimeoutMs));
               return yield* releaseIfStillIdle(input);
@@ -2609,6 +2627,12 @@ export const layerWithOptions = (
                   }
                 }
                 const key = sessionKey(input.providerSessionId);
+                if (!(yield* awaitReopen(key)))
+                  return yield* new ProviderSessionOpenError({
+                    instanceId: input.modelSelection.instanceId,
+                    providerSessionId: input.providerSessionId,
+                    cause: "The previous session for this thread is still stopping.",
+                  });
                 const existing = (yield* Ref.get(sessions)).get(key);
                 if (existing !== undefined) {
                   const attached = existing.attachedThreadIds.has(input.threadId);
