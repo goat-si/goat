@@ -36,11 +36,22 @@ const forwardingHttpClient = (forwards: ReadonlyMap<number, number>) =>
     const empty = HttpClientResponse.fromWeb(request, new Response("", { status: 200 }));
     if (remote === undefined || url.pathname !== "/.well-known/goat/environment")
       return Effect.succeed(empty);
-    url.port = String(remote);
-    return Effect.tryPromise(() => fetch(url)).pipe(
-      Effect.map((response) => HttpClientResponse.fromWeb(request, response)),
-      Effect.orElseSucceed(() => empty),
-    );
+    return Effect.callback<HttpClientResponse.HttpClientResponse>((resume) => {
+      NodeHttp.get(`http://127.0.0.1:${remote}${url.pathname}`, (response) => {
+        let body = "";
+        response.on("data", (chunk) => (body += String(chunk)));
+        response.on("end", () =>
+          resume(
+            Effect.succeed(
+              HttpClientResponse.fromWeb(
+                request,
+                new Response(body, { status: response.statusCode ?? 500 }),
+              ),
+            ),
+          ),
+        );
+      }).on("error", () => resume(Effect.succeed(empty)));
+    });
   });
 
 const recordForwards = (
