@@ -28,7 +28,7 @@ export function AgentMemoryLimitSetting() {
       parsed <= 1024 &&
       parsed !== value
     )
-      update({ agentMemoryLimitGiB: parsed });
+      update({ agentMemoryLimitGiB: parsed }, { onFailed: () => setDraft(String(value ?? 16)) });
     else setDraft(String(value ?? 16));
   };
   return (
@@ -61,7 +61,8 @@ export function AgentMemoryLimitSetting() {
             max={1024}
             step={1}
             className="w-24"
-            value={draft}
+            value={value === null ? "" : draft}
+            placeholder={value === null ? "Auto" : undefined}
             disabled={!allowed || value === null}
             aria-label="Agent memory limit in GiB"
             onChange={(event) => setDraft(event.target.value)}
