@@ -19,6 +19,7 @@ type Registration = {
   readonly threadId: string | undefined;
   readonly shared: boolean;
   readonly generation: number | undefined;
+  warned: boolean;
 };
 const MAX_ENTRIES = 1000;
 const GiB = 1024 ** 3;
@@ -143,6 +144,7 @@ export const makeAgentMemoryGuard = Effect.fn("AgentMemoryGuard.make")(function*
         threadId: input.threadId,
         shared: input.shared === true,
         generation,
+        warned: false,
       });
       while (watched.size > MAX_ENTRIES) {
         const first = watched.entries().next();
@@ -194,6 +196,7 @@ export const makeAgentMemoryGuard = Effect.fn("AgentMemoryGuard.make")(function*
         tree: NonNullable<ReturnType<typeof treeOf>>;
         partial: boolean;
       }> = [];
+      const warnings: Array<{ pid: number; tree: NonNullable<ReturnType<typeof treeOf>> }> = [];
       // libuv 1.52.1 uv__wait_children runs in uv__io_poll and completes the exit callback batch before check phase.
       // Node sets exitCode/signalCode in onexit and the Effect spawner completes its exit Deferred in that callback.
       // This holds only when this Node loop owns and reaps the child.
@@ -204,7 +207,16 @@ export const makeAgentMemoryGuard = Effect.fn("AgentMemoryGuard.make")(function*
           pruneGeneration(reg.threadId);
           continue;
         }
-        if (tree === undefined || tree.rssBytes <= limit) continue;
+        if (tree === undefined) continue;
+        if (reg.shared) {
+          if (tree.rssBytes < limit) reg.warned = false;
+          else if (tree.rssBytes > limit && !reg.warned) {
+            reg.warned = true;
+            warnings.push({ pid, tree });
+          }
+          continue;
+        }
+        if (tree.rssBytes <= limit) continue;
         try {
           deps.signal(pid);
         } catch {
@@ -235,9 +247,34 @@ export const makeAgentMemoryGuard = Effect.fn("AgentMemoryGuard.make")(function*
           }
         killed.push({ pid, reg, tree, partial });
       }
-      return killed;
+      return { killed, warnings };
     });
-    for (const { pid, reg, tree, partial } of results)
+    for (const { pid, tree } of results.warnings) {
+      const largestChildSubtrees = (children.get(pid) ?? [])
+        .map((child) => {
+          const pending = [child];
+          const visited = new Set<number>([pid]);
+          let rssBytes = 0;
+          while (pending.length > 0) {
+            const row = pending.pop();
+            if (row === undefined || visited.has(row.pid)) continue;
+            visited.add(row.pid);
+            rssBytes += row.rssBytes;
+            pending.push(...(children.get(row.pid) ?? []));
+          }
+          return { pid: child.pid, rssBytes };
+        })
+        .sort((a, b) => b.rssBytes - a.rssBytes)
+        .slice(0, 3);
+      yield* Effect.logWarning("Agent memory limit exceeded (shared provider, not stopped)", {
+        pid,
+        rssBytes: tree.rssBytes,
+        limitBytes: limit,
+        processCount: tree.processCount,
+        largestChildSubtrees,
+      });
+    }
+    for (const { pid, reg, tree, partial } of results.killed)
       yield* Effect.logWarning("Agent memory limit exceeded", {
         pid,
         threadId: reg.threadId,
