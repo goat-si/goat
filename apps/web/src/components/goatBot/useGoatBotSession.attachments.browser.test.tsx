@@ -21,6 +21,10 @@ const mocks = vi.hoisted(() => ({
   uploads: [] as Array<ReadonlyArray<{ readonly name: string }>>,
   released: [] as Array<ReadonlyArray<string>>,
   connected: true,
+  staged: null as import("./goatBotAttachments").GoatBotDraftAttachment | null,
+  uploadGate: null as Promise<void> | null,
+  uploadStarted: () => {},
+  uploadFinished: () => {},
   session: null as ReturnType<typeof import("./useGoatBotSession").useGoatBotSession> | null,
 }));
 
@@ -74,6 +78,10 @@ vi.mock("./goatBotAttachments", async (importOriginal) => {
   const original = await importOriginal<typeof import("./goatBotAttachments")>();
   return {
     ...original,
+    stageGoatBotFiles: async (...args: Parameters<typeof original.stageGoatBotFiles>) =>
+      mocks.staged === null
+        ? original.stageGoatBotFiles(...args)
+        : { staged: [mocks.staged], error: null },
     releaseGoatBotAttachments: (
       attachments: Parameters<typeof original.releaseGoatBotAttachments>[0],
     ) => {
@@ -85,6 +93,9 @@ vi.mock("./goatBotAttachments", async (importOriginal) => {
       attachments: ReadonlyArray<{ readonly name: string; readonly mimeType: string }>,
     ): Promise<ReadonlyArray<ChatAttachment>> => {
       mocks.uploads.push(attachments);
+      mocks.uploadStarted();
+      if (mocks.uploadGate) await mocks.uploadGate;
+      mocks.uploadFinished();
       return attachments.map((attachment, index) => ({
         type: "file",
         id: `uploaded-${index}`,
@@ -97,10 +108,11 @@ vi.mock("./goatBotAttachments", async (importOriginal) => {
 });
 
 import { useGlobalAgentStore } from "~/globalAgentStore";
+import { readAttachmentUpload, useAttachmentUploadStore } from "~/lib/attachmentUploadQueue";
 import { GoatBotChatView } from "./GoatBotChatView";
 import { GoatBotChannelContext, type GoatBotChannelPort } from "./goatBotChannelPort";
-import * as sessions from "./useGoatBotSession";
 import * as attachments from "./goatBotAttachments";
+import { disposeGoatBotEnvironment } from "./goatBotEnvironmentLifecycle";
 import { useGoatBotSession } from "./useGoatBotSession";
 
 const environmentId = EnvironmentId.make("bot-home");
@@ -109,6 +121,11 @@ const decodeItem = Schema.decodeUnknownSync(OrchestrationV2TurnItemJson);
 function setup(goatBotAttachments: boolean) {
   mocks.goatBotAttachments = goatBotAttachments;
   mocks.connected = true;
+  mocks.staged = null;
+  mocks.uploadGate = null;
+  mocks.uploadStarted = () => {};
+  mocks.uploadFinished = () => {};
+  mocks.session = null;
   mocks.uploads.length = 0;
   mocks.released.length = 0;
   useGlobalAgentStore.setState({ ref: null, botRef: null, mode: "bot" });
@@ -224,29 +241,75 @@ it("keeps a shared attachment until both failed messages are discarded", async (
   expect(revoked).toHaveBeenCalledExactlyOnceWith(file.previewUrl);
 });
 
-it("keeps a draft's shared attachment when a failed message is discarded", async () => {
-  const port = setup(true);
-  vi.mocked(port.ingest).mockRejectedValue(new Error("connection lost"));
+it.each(["discarded", "sent"] as const)(
+  "keeps a draft's shared attachment when a message is %s",
+  async (outcome) => {
+    const port = setup(true);
+    if (outcome === "discarded")
+      vi.mocked(port.ingest).mockRejectedValue(new Error("connection lost"));
+    using revoked = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    await using screen = await render(
+      <GoatBotChannelContext value={port}>
+        <Session />
+      </GoatBotChannelContext>,
+    );
+    await expect.element(screen.getByRole("textbox", { name: "Message GOAT Bot" })).toBeEnabled();
+    const file = image("shared-draft");
+    mocks.staged = file;
+    const input = screen.container.querySelector<HTMLInputElement>('input[type="file"]');
+    if (input === null) throw new Error("expected the file picker");
+    await userEvent.upload(input, file.file);
+    await expect
+      .element(screen.getByRole("list", { name: "Attachments" }))
+      .toHaveTextContent(file.name);
+    await act(() => {
+      mocks.session?.onSend("one", [file]);
+    });
+    await vi.waitFor(() => expect(port.ingest).toHaveBeenCalledTimes(1));
+    const key = vi.mocked(port.ingest).mock.calls[0]![1].idempotencyKey;
+    if (outcome === "discarded") await act(() => mocks.session?.onDiscardInput(key));
+    else await vi.waitFor(() => expect(mocks.released).toContainEqual([file.name]));
+    expect(revoked).not.toHaveBeenCalledWith(file.previewUrl);
+    await userEvent.click(screen.getByRole("button", { name: `Remove ${file.name}` }));
+    expect(revoked).toHaveBeenCalledExactlyOnceWith(file.previewUrl);
+  },
+);
+
+it("keeps a preview shared by distinct attachment IDs until the last owner releases it", () => {
   using revoked = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
-  await using screen = await render(
-    <GoatBotChannelContext value={port}>
-      <Session />
-    </GoatBotChannelContext>,
-  );
-  await expect.element(screen.getByRole("textbox", { name: "Message GOAT Bot" })).toBeEnabled();
-  const file = image("shared-draft");
-  const retain = Reflect.get(attachments, "retainGoatBotAttachments");
-  expect(retain).toBeTypeOf("function");
-  retain([file]);
-  await act(() => {
-    mocks.session?.onSend("one", [file]);
+  const first = image("preview-first");
+  const second = { ...image("preview-second"), previewUrl: first.previewUrl };
+  attachments.retainGoatBotAttachments([first, second]);
+  attachments.releaseGoatBotAttachments([first]);
+  expect(revoked).not.toHaveBeenCalledWith(first.previewUrl);
+  attachments.releaseGoatBotAttachments([second]);
+  expect(revoked).toHaveBeenCalledExactlyOnceWith(first.previewUrl);
+});
+
+it("keeps a pending upload shared by different attachment IDs until the last owner releases it", () => {
+  const first = {
+    id: "upload-alias-a",
+    type: "file" as const,
+    name: "shared.txt",
+    mimeType: "text/plain",
+    sizeBytes: 5,
+    file: new File(["notes"], "shared.txt"),
+    uploadedAttachmentId: "pending-shared",
+    uploadEnvironmentId: environmentId,
+  };
+  const second = { ...first, id: "upload-alias-b" };
+  useAttachmentUploadStore.setState({
+    uploadsByImageId: {
+      [first.id]: { status: "ready", environmentId, attachmentId: "pending-shared" },
+      [second.id]: { status: "ready", environmentId, attachmentId: "pending-shared" },
+    },
   });
-  await vi.waitFor(() => expect(port.ingest).toHaveBeenCalledTimes(1));
-  const key = vi.mocked(port.ingest).mock.calls[0]![1].idempotencyKey;
-  await act(() => mocks.session?.onDiscardInput(key));
-  expect(revoked).not.toHaveBeenCalledWith(file.previewUrl);
-  attachments.releaseGoatBotAttachments([file]);
-  expect(revoked).toHaveBeenCalledExactlyOnceWith(file.previewUrl);
+  attachments.retainGoatBotAttachments([first, second]);
+  attachments.releaseGoatBotAttachments([first]);
+  expect(readAttachmentUpload(first.id)?.status).toBe("ready");
+  attachments.releaseGoatBotAttachments([second]);
+  expect(readAttachmentUpload(first.id)).toBeUndefined();
+  expect(readAttachmentUpload(second.id)).toBeUndefined();
 });
 
 it("keeps failed attachments on disconnect and releases them on environment removal", async () => {
@@ -271,10 +334,52 @@ it("keeps failed attachments on disconnect and releases them on environment remo
     </GoatBotChannelContext>,
   );
   expect(revoked).not.toHaveBeenCalledWith(file.previewUrl);
-  const dispose = Reflect.get(sessions, "disposeWebGoatBotEnvironment");
-  expect(dispose).toBeTypeOf("function");
-  await act(() => dispose(environmentId));
+  await expect.element(screen.getByText("Not Delivered")).toBeVisible();
+  await screen.unmount();
+  await act(() => disposeGoatBotEnvironment(environmentId));
   expect(revoked).toHaveBeenCalledExactlyOnceWith(file.previewUrl);
+});
+
+it("removes an environment without waiting for an upload or sending after it finishes", async () => {
+  const port = setup(true);
+  using revoked = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+  let start!: () => void;
+  let finish!: () => void;
+  let unblock!: () => void;
+  const started = new Promise<void>((resolve) => {
+    start = resolve;
+  });
+  const finished = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  mocks.uploadGate = new Promise<void>((resolve) => {
+    unblock = resolve;
+  });
+  mocks.uploadStarted = start;
+  mocks.uploadFinished = finish;
+  await using screen = await render(
+    <GoatBotChannelContext value={port}>
+      <Session />
+    </GoatBotChannelContext>,
+  );
+  await expect.element(screen.getByRole("textbox", { name: "Message GOAT Bot" })).toBeEnabled();
+  const file = image("in-flight-removal");
+  await act(async () => {
+    mocks.session?.onSend("one", [file]);
+    await started;
+  });
+  await screen.unmount();
+  try {
+    await act(() => disposeGoatBotEnvironment(environmentId));
+    expect(revoked).toHaveBeenCalledExactlyOnceWith(file.previewUrl);
+    expect(port.ingest).not.toHaveBeenCalled();
+  } finally {
+    await act(async () => {
+      unblock();
+      await finished;
+    });
+  }
+  expect(port.ingest).not.toHaveBeenCalled();
 });
 
 it("releases a failed message's attachments when its committed projection arrives", async () => {

@@ -13,6 +13,7 @@ import { ComposerAttachAction } from "../chat/ComposerAttachAction";
 import { toastManager } from "../ui/toast";
 import {
   releaseGoatBotAttachments,
+  retainGoatBotAttachments,
   stageGoatBotFiles,
   type GoatBotAttachmentSupport,
   type GoatBotDraftAttachment,
@@ -61,7 +62,9 @@ export function GoatBotComposer({
     if (!canSubmit) return;
     if (onSend(trimmed, attachments) === false) return;
     setText("");
-    setAttachments(() => []);
+    draftRef.current = [];
+    setDraftAttachments([]);
+    releaseGoatBotAttachments(attachments);
   };
   const addFiles = async (files: ReadonlyArray<File>) => {
     if (attachmentSupport === null || files.length === 0) return false;
@@ -69,7 +72,10 @@ export function GoatBotComposer({
       existingCount: draftRef.current.length,
       support: attachmentSupport,
     });
-    if (staged.length > 0) setAttachments((current) => [...current, ...staged]);
+    if (staged.length > 0) {
+      retainGoatBotAttachments(staged);
+      setAttachments((current) => [...current, ...staged]);
+    }
     if (error !== null) toastManager.add({ type: "error", title: error });
     return false;
   };

@@ -45,12 +45,14 @@ import {
 } from "@goat/client-runtime/goatBot";
 import {
   releaseGoatBotAttachments,
+  retainGoatBotAttachments,
   uploadGoatBotAttachments,
   type GoatBotAttachmentSupport,
   type GoatBotDraftAttachment,
 } from "./goatBotAttachments";
 import { GoatBotChannelContext, type GoatBotChannelPort } from "./goatBotChannelPort";
 import { useGoatBotEnvironments } from "./goatBotHooks";
+import { registerGoatBotEnvironmentDisposal } from "./goatBotEnvironmentLifecycle";
 
 interface Session {
   readonly homeKey: string;
@@ -77,10 +79,35 @@ function update(environmentId: EnvironmentId, session: Session) {
   }));
 }
 
+export function disposeWebGoatBotEnvironment(environmentId: EnvironmentId): void {
+  const session = useSessions.getState().sessions.get(environmentId);
+  if (!session) return;
+  useSessions.setState((state) => {
+    const sessions = new Map(state.sessions);
+    sessions.delete(environmentId);
+    return { sessions };
+  });
+  session.queue.dispose();
+}
+
+registerGoatBotEnvironmentDisposal(disposeWebGoatBotEnvironment);
+
 function newQueue(environmentId: EnvironmentId) {
-  return createGoatBotSendQueue<GoatBotDraftAttachment>({
+  const owned = new Map<string, ReadonlyArray<GoatBotDraftAttachment>>();
+  let disposed = false;
+  const forget = (key: string) => {
+    const attachments = owned.get(key);
+    if (attachments === undefined) return;
+    owned.delete(key);
+    releaseGoatBotAttachments(attachments);
+  };
+  const queue = createGoatBotSendQueue<GoatBotDraftAttachment>({
     onChange: changed,
-    onDiscard: (_key, attachments) => releaseGoatBotAttachments(attachments),
+    onSubmit: (key, attachments) => {
+      retainGoatBotAttachments(attachments);
+      owned.set(key, attachments);
+    },
+    onForget: (key) => forget(key),
     makeKey: randomUUID,
     canDispatch: (bot) => {
       const session = useSessions.getState().sessions.get(environmentId);
@@ -98,6 +125,7 @@ function newQueue(environmentId: EnvironmentId) {
       const port = useSessions.getState().sessions.get(environmentId)?.port;
       if (!port) throw new Error("GOAT Bot isn't available");
       const files = await uploadGoatBotAttachments(bot.environmentId, attachments);
+      if (disposed) throw new Error("GOAT Bot environment was removed");
       const result = await port.ingest(bot.environmentId, {
         kind: "goat",
         connectionId: "goat",
@@ -113,12 +141,19 @@ function newQueue(environmentId: EnvironmentId) {
       });
       // The server keeps its own copy of each file once it has the message, and a rejected
       // message is never sent again.
-      releaseGoatBotAttachments(attachments);
+      forget(clientKey);
       if (result.state === "rejected")
         return { requestKey: result.inputId, rejected: "GOAT Bot did not accept this message" };
       return { requestKey: result.inputId };
     },
   });
+  return {
+    ...queue,
+    dispose: () => {
+      disposed = true;
+      queue.dispose();
+    },
+  };
 }
 
 /** Sidebar observers also track reconnects while the bot screen is closed. */

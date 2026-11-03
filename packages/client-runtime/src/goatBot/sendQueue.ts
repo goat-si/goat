@@ -33,8 +33,8 @@ export interface GoatBotSendQueueOptions<
   /** Checked right before every attempt; when false the queue stops and waits for a retry. */
   readonly canDispatch: (bot: GoatBotRef) => boolean;
   readonly onChange: () => void;
+  readonly onSubmit?: (clientKey: string, attachments: ReadonlyArray<A>) => void;
   readonly onForget?: (clientKey: string, attachments: ReadonlyArray<A>) => void;
-  readonly onDiscard?: (clientKey: string, attachments: ReadonlyArray<A>) => void;
   readonly makeKey: () => string;
   readonly now?: () => string;
 }
@@ -149,6 +149,7 @@ export function createGoatBotSendQueue<A extends GoatBotAttachmentLabel = GoatBo
           rejectionReason: null,
         },
       ];
+      options.onSubmit?.(clientKey, attachments);
       changed();
       pump();
       return clientKey;
@@ -164,7 +165,6 @@ export function createGoatBotSendQueue<A extends GoatBotAttachmentLabel = GoatBo
       const entry = entries.find((candidate) => candidate.clientKey === clientKey);
       if (entry?.state !== "failed") return;
       entries = entries.filter((candidate) => candidate !== entry);
-      options.onDiscard?.(entry.clientKey, entry.attachments);
       options.onForget?.(entry.clientKey, entry.attachments);
       changed();
     },
