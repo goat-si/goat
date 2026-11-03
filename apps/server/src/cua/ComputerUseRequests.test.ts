@@ -31,6 +31,43 @@ import {
   withRequests,
 } from "./ComputerUseRequests.testkit.ts";
 
+it.effect("non-person full access refuses terminal catalog aliases", () =>
+  withHarness(({ orchestrator }) =>
+    Effect.gen(function* () {
+      const runId = (yield* orchestrator.getThreadProjection(threadId)).runs.at(-1)!.id;
+      yield* withRequests(
+        orchestrator,
+        supported,
+        ({ request, leases }) =>
+          Effect.gen(function* () {
+            yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+              cuaStrictInputGuards: true,
+            });
+            yield* leases.everyAppControl(threadId, false, { runId });
+            for (const app of ["org.example.shell", "/opt/shell-binary"]) {
+              assert.deepInclude(yield* request({ apps: [app] }), {
+                kind: "refused",
+                code: "app_not_allowed",
+                unknownApps: [app],
+              });
+            }
+          }),
+        undefined,
+        undefined,
+        undefined,
+        Option.none(),
+        undefined,
+        "remote",
+        undefined,
+        [
+          { id: "org.example.shell", name: "GNOME Terminal" },
+          { id: "org.gnome.Terminal", name: "Shell", executables: ["/opt/shell-binary"] },
+        ],
+      );
+    }),
+  ),
+);
+
 it.effect("non-person full access refuses Linux and Windows terminal requests", () =>
   withHarness(({ orchestrator }) =>
     Effect.gen(function* () {

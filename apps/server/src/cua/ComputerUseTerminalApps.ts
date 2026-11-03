@@ -10,6 +10,12 @@ const terminals = new Set([
   "com.github.wez.wezterm",
   "co.zeit.hyper",
   "org.tabby",
+  "org.gnome.terminal",
+  "org.gnome.console",
+  "org.gnome.ptyxis",
+  "org.kde.konsole",
+  "org.wezfurlong.wezterm",
+  "microsoft.windowsterminal",
   "terminal",
   "iterm",
   "iterm2",
@@ -22,6 +28,11 @@ const terminals = new Set([
   "hyper",
   "tabby",
   "gnome-terminal",
+  "gnome terminal",
+  "console",
+  "windows terminal",
+  "windows powershell",
+  "command prompt",
   "gnome-terminal-server",
   "kgx",
   "ptyxis",
@@ -50,5 +61,9 @@ export const isTerminalCuaApplication = (app: string): boolean => {
     .at(-1)
     ?.toLowerCase()
     .replace(/\.exe$/u, "");
-  return terminals.has(key) || (basename !== undefined && terminals.has(basename));
+  return (
+    terminals.has(key) ||
+    /^microsoft\.windowsterminal_[^!\\/]+!app$/u.test(key) ||
+    (basename !== undefined && terminals.has(basename))
+  );
 };
