@@ -12,6 +12,131 @@ class NarrowWriteFailure extends Schema.TaggedError<NarrowWriteFailure>()(
   {},
 ) {}
 
+it.effect("concurrent narrowings keep at most one confirmation in flight", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    let writes = 0;
+    let active = 0;
+    let peak = 0;
+    const service = yield* makeBrowserOriginGrants({
+      environmentId: EnvironmentId.make("environment:test"),
+      supported: () => true,
+      publish: () => Effect.sync(() => String(++writes).padStart(64, "0")),
+      confirm: (sha) =>
+        Effect.gen(function* () {
+          active++;
+          peak = Math.max(peak, active);
+          if (sha === String(4).padStart(64, "0")) {
+            yield* Deferred.succeed(entered, undefined);
+            yield* Deferred.await(release);
+          }
+          active--;
+          return { capability_manifest: { sha256: sha, file_sha256: sha, reload_error: null } };
+        }),
+      fence: () => Effect.succeed(true),
+      bind: (input) =>
+        Effect.succeed({
+          targetId: "target",
+          tabId: `tab-${input.windowId}`,
+          title: "Site",
+          url: input.origin,
+          driverGeneration: 1,
+        }),
+    });
+    const threads = [
+      ThreadId.make("thread:a"),
+      ThreadId.make("thread:b"),
+      ThreadId.make("thread:c"),
+    ];
+    for (const [index, threadId] of threads.entries()) {
+      const result = yield* service.claim({
+        threadId,
+        pid: 42,
+        windowId: index + 1,
+        origin: `https://site${index}.test`,
+        windowTitle: "Browser",
+      });
+      assert.equal(result.agentResult.status, "attached");
+    }
+    yield* service.stop(threads[0]!);
+    yield* Deferred.await(entered);
+    yield* service.stop(threads[1]!);
+    yield* service.stop(threads[2]!);
+    const observed = peak;
+    yield* Deferred.succeed(release, undefined);
+    assert.equal(observed, 1);
+  }),
+);
+
+it.effect("direct stop writes use the live union after waiting for another write", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const manifests: Array<{
+      readonly existingProfiles: ReadonlyArray<{ readonly pid: number; readonly windowId: number }>;
+      readonly origins: ReadonlyArray<string>;
+    }> = [];
+    let hold = false;
+    const service = yield* makeTestBrowserOriginGrants({
+      environmentId: EnvironmentId.make("environment:test"),
+      supported: () => true,
+      publish: (value) =>
+        Effect.gen(function* () {
+          manifests.push(value);
+          if (hold) {
+            hold = false;
+            yield* Deferred.succeed(entered, undefined);
+            yield* Deferred.await(release);
+          }
+        }),
+      bind: (input) =>
+        Effect.succeed({
+          targetId: "target",
+          tabId: `tab-${input.windowId}`,
+          title: "Site",
+          url: input.origin,
+          driverGeneration: 1,
+        }),
+    });
+    const threads = [
+      ThreadId.make("thread:a"),
+      ThreadId.make("thread:b"),
+      ThreadId.make("thread:c"),
+    ];
+    for (const [index, threadId] of threads.entries()) {
+      const result = yield* service.claim({
+        threadId,
+        pid: 42,
+        windowId: index + 1,
+        origin: `https://site${index}.test`,
+        windowTitle: "Browser",
+      });
+      assert.equal(result.agentResult.status, "attached");
+    }
+    hold = true;
+    const first = yield* service
+      .stop(threads[0]!)
+      .pipe(Effect.forkChild({ startImmediately: true }));
+    yield* Deferred.await(entered);
+    const second = yield* service
+      .stop(threads[1]!)
+      .pipe(Effect.forkChild({ startImmediately: true }));
+    const third = yield* service
+      .stop(threads[2]!)
+      .pipe(Effect.forkChild({ startImmediately: true }));
+    assert.deepEqual(yield* service.claimsFor(threads[2]!), []);
+    yield* Deferred.succeed(release, undefined);
+    yield* Fiber.join(first);
+    yield* Fiber.join(second);
+    yield* Fiber.join(third);
+    assert.deepEqual(manifests.slice(-2), [
+      { existingProfiles: [], origins: [] },
+      { existingProfiles: [], origins: [] },
+    ]);
+  }),
+);
+
 it.effect("repeated stops do not rewrite an unchanged manifest", () =>
   Effect.gen(function* () {
     let writes = 0;
