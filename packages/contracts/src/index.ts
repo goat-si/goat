@@ -11,6 +11,7 @@ export * from "./environment.ts";
 export * from "./environmentHttp.ts";
 export * from "./relayClient.ts";
 export * from "./desktopBootstrap.ts";
+export * from "./desktopStopIntent.ts";
 export * from "./cua.ts";
 export * from "./computerUseHistory.ts";
 export * from "./desktopCuaManifest.ts";
