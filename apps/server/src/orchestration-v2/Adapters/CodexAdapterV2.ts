@@ -1395,11 +1395,18 @@ export function codexThreadRuntimeParams(input: {
             // Override only GOAT's server so launch-argument MCP servers survive.
             "mcp_servers.goat": {
               url: mcpSession.endpoint,
-              disabled_tools: disabledMemoryTools,
+              disabled_tools: [...disabledMemoryTools, "goat_thread_wait"],
               tool_timeout_sec: CODEX_GOAT_MCP_TOOL_TIMEOUT_SEC,
               http_headers: {
                 Authorization: mcpSession.authorizationHeader,
               },
+            },
+            "mcp_servers.goatdirect": {
+              url: mcpSession.endpoint,
+              tool_timeout_sec: CODEX_GOAT_MCP_TOOL_TIMEOUT_SEC,
+              http_headers: { Authorization: mcpSession.authorizationHeader },
+              enabled_tools: ["goat_thread_wait"],
+              omit_tools_from: ["code_mode", "deferred"],
             },
             // Its own path too: a dotted override replaces only this server,
             // including a user's `cua-driver` when the decision overrides it.

@@ -14,7 +14,7 @@ export interface GoatMcpToolPresentation {
   readonly logo: GoatMcpToolLogo;
 }
 
-const GOAT_MCP_SERVER_ALIASES = new Set(["goat", "t3-code", "t3_code", "t3code"]);
+const GOAT_MCP_SERVER_ALIASES = new Set(["goat", "goatdirect", "t3-code", "t3_code", "t3code"]);
 
 const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
   ...lifecycleToolDefinitions(tool),
@@ -800,7 +800,7 @@ function resolveGoatMcpToolName(value: string): string | null {
   }
 
   const namespaceMatch =
-    /^(?<server>goat|t3-code|t3_code|t3code)(?:[.:/]|\s*·\s*)(?<tool>.+)$/i.exec(label);
+    /^(?<server>goatdirect|goat|t3-code|t3_code|t3code)(?:[.:/]|\s*·\s*)(?<tool>.+)$/i.exec(label);
   if (namespaceMatch?.groups) {
     return namespaceMatch.groups.tool ?? null;
   }
