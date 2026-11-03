@@ -274,6 +274,7 @@ function accumulateOpenCodeStepUsage(
 }
 
 interface ActiveOpenCodeTurn {
+  promptOptions?: { readonly agent?: string; readonly variant?: string; readonly system: string };
   readonly usage: OpenCodeTurnTokenUsageAccumulator;
   readonly isRoot: boolean;
   readonly threadId: ThreadId;
@@ -3284,6 +3285,11 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 turnInput.modelSelection,
                 "variant",
               );
+              turn.promptOptions = {
+                ...(agent === undefined ? {} : { agent }),
+                ...(variant === undefined ? {} : { variant }),
+                system: systemPrompt,
+              };
               yield* submitPrompt(
                 state,
                 turn,
@@ -3291,9 +3297,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                   sessionID: sessionId,
                   messageID: turn.admissionMessageId!,
                   model: parsedModel,
-                  ...(agent === undefined ? {} : { agent }),
-                  ...(variant === undefined ? {} : { variant }),
-                  system: systemPrompt,
+                  ...turn.promptOptions,
                   parts,
                 },
                 admissionAbortController!,
@@ -3405,6 +3409,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                   sessionID: sessionId,
                   messageID: turn.admissionMessageId,
                   model: parsedModel,
+                  ...turn.promptOptions,
                   parts,
                 },
                 admissionAbortController!,
