@@ -17,6 +17,7 @@ import {
 import { constVoid } from "effect/Function";
 import * as NodeCrypto from "node:crypto";
 import type { CDPSession, ConsoleMessage, Frame, Locator, Page } from "playwright-core";
+import { shrinkPng, shrinkJpegWithin } from "./ServerBrowserImage.ts";
 import { pointerInterception } from "./pointerInterception.ts";
 import { subsequentClick } from "./actionClick.ts";
 import { evaluationExpired, requireEvaluationChannel } from "./actionEvaluation.ts";
@@ -420,41 +421,13 @@ export const captureViewport = async (
   return data;
 };
 
-/** Runs in the page's own isolated world, as the server has no image library. */
-const SHRINK_PNG = `async function (png, width, height) {
-  const bytes = Uint8Array.from(atob(png), (char) => char.charCodeAt(0));
-  const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
-  // Namespaced, as an XML document's createElement makes a plain element with no getContext.
-  const canvas = document.createElementNS("http://www.w3.org/1999/xhtml", "canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const context = canvas.getContext("2d");
-  context.imageSmoothingQuality = "high";
-  context.drawImage(bitmap, 0, 0, width, height);
-  bitmap.close();
-  return canvas.toDataURL("image/png").slice("data:image/png;base64,".length);
-}`;
-
-const shrinkPng = async (cdp: CDPSession, png: string, scale: number) => {
-  const size = pngSize(png);
-  const { frameTree } = await cdp.send("Page.getFrameTree");
-  const { executionContextId } = await cdp.send("Page.createIsolatedWorld", {
-    frameId: frameTree.frame.id,
-    worldName: "goat-preview-screenshot",
-  });
-  const { result, exceptionDetails } = await cdp.send("Runtime.callFunctionOn", {
-    functionDeclaration: SHRINK_PNG,
-    executionContextId,
-    arguments: [
-      { value: png },
-      { value: Math.round(size.width * scale) },
-      { value: Math.round(size.height * scale) },
-    ],
-    awaitPromise: true,
-    returnByValue: true,
-  });
-  if (exceptionDetails) throw new Error("The snapshot could not shrink its screenshot.");
-  return result.value as string;
+export const captureViewportWithin = async (
+  cdp: CDPSession,
+  quality: number,
+  bounds: { readonly maxWidth: number; readonly maxHeight: number },
+) => {
+  const data = await captureViewport(cdp, { format: "jpeg", quality });
+  return (await shrinkJpegWithin(cdp, data, quality, bounds)) ?? data;
 };
 
 // Bounds, PNG checks, and scale retries adapted from Emanuele-web04/synara @ 566efb1b1.
