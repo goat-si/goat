@@ -25,7 +25,7 @@ export function admitLive(
   return {
     restricted,
     /** This app cannot move it, so no archive retry or acquisition failure applies. */
-    unreplaceable: restricted || (live.binaryVerified && (live.blocked || unowned || newerBuild)),
+    unreplaceable: restricted || (live.binaryVerified && (unowned || newerBuild)),
     explainsUpdate: !restricted && live.blocked && (live.order === undefined || live.order < 0),
     newer: newerBuild && !live.compatible,
     staleEntry: !restricted && unowned && moved ? entry : undefined,

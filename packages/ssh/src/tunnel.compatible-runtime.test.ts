@@ -49,7 +49,6 @@ describe("compatible SSH runtime", () => {
     },
   );
   it.effect.each([
-    ["owned undrainable older", "1.2.2", true, false, true],
     ["unowned older", "1.2.2", false, false, true],
     ["unowned equal", ARCHIVE.archiveVersion, false, false, false],
     ["unowned newer", "1.2.4", false, false, false],
