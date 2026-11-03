@@ -24,7 +24,9 @@ export interface DesktopAppsListed {
  * approvals check against; `catalog` names them (with icons) for people, and is empty from a
  * desktop that sends no names.
  */
-export const makeDesktopAppsRequest = Effect.fn("CuaDriver.makeDesktopAppsRequest")(function* () {
+export const makeDesktopAppsRequest = Effect.fn("CuaDriver.makeDesktopAppsRequest")(function* (
+  requireCatalog = false,
+) {
   const receiver = yield* DesktopTelemetryReceiver.DesktopTelemetryReceiver;
   const crypto = yield* Crypto.Crypto;
   const ask: Effect.Effect<Option.Option<DesktopAppsListed>> = Effect.gen(function* () {
@@ -41,7 +43,7 @@ export const makeDesktopAppsRequest = Effect.fn("CuaDriver.makeDesktopAppsReques
         report.requestId === requestId
           ? Deferred.succeed(
               ready,
-              report.status === "listed"
+              report.status === "listed" && (!requireCatalog || report.catalog !== undefined)
                 ? Option.some({ apps: report.apps, catalog: report.catalog ?? [] })
                 : Option.none(),
             )

@@ -686,7 +686,7 @@ const make = Effect.gen(function* () {
 
   const driver = yield* Effect.serviceOption(CuaDriver.CuaDriver);
   const [appCatalog] = yield* Effect.cachedInvalidateWithTTL(
-    Option.isSome(driver) ? driver.value.appCatalog : Effect.succeed([]),
+    Option.isSome(driver) ? driver.value.availableAppCatalog : Effect.succeedNone,
     "5 seconds",
   );
   const { desktop, linuxHelper, detection } = yield* makeLeaseSafety(changed);

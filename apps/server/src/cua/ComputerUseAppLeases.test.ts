@@ -692,7 +692,7 @@ describe("call admission after an app lease check (D17)", () => {
       ]);
       const reserve = makeCallReservation({
         admission: yield* Semaphore.make(1),
-        appCatalog: Effect.succeed([]),
+        appCatalog: Effect.succeedSome([]),
         controls,
         reservations: makeCallReservations(),
         changed: Effect.void,
@@ -755,7 +755,7 @@ describe("call admission after an app lease check (D17)", () => {
         ]);
         const calls = makeCallReservation({
           admission: yield* Semaphore.make(1),
-          appCatalog: Effect.succeed([]),
+          appCatalog: Effect.succeedSome([]),
           controls,
           reservations: makeCallReservations(),
           changed: Effect.void,
@@ -815,7 +815,7 @@ describe("call admission after an app lease check (D17)", () => {
         ]);
         const calls = makeCallReservation({
           admission: yield* Semaphore.make(1),
-          appCatalog: Effect.succeed([]),
+          appCatalog: Effect.succeedSome([]),
           controls,
           reservations: makeCallReservations(),
           changed: Effect.void,

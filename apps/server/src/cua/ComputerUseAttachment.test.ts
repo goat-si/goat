@@ -148,6 +148,7 @@ const fakeDriver = (input: {
     }),
     listedApps: Effect.succeedNone,
     appCatalog: Effect.succeed([]),
+    availableAppCatalog: Effect.succeedSome([]),
     lastFailure: Effect.succeed(Option.fromUndefinedOr(input.failure)),
     block: Effect.succeed(undefined),
     status: Effect.succeed({ platform: "darwin", running: input.running }),

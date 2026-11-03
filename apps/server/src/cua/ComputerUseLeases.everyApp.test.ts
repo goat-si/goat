@@ -45,6 +45,7 @@ const everyAppLayer = ComputerUseLeases.layer.pipe(
         enableCua: true,
         cuaFullAccessAutoAdmit: false,
       }),
+      Layer.mock(CuaDriver.CuaDriver)({ availableAppCatalog: Effect.succeedSome([]) }),
     ),
   ),
 );
@@ -337,6 +338,62 @@ it.effect(
     }).pipe(Effect.provide(everyAppLayer)),
 );
 
+it.effect.each([
+  { available: false, strict: true, expected: "refused", reads: 1 },
+  { available: true, strict: true, expected: "admitted", reads: 1 },
+  { available: false, strict: false, expected: "admitted", reads: 0 },
+] as const)(
+  "catalog availability $available with strict guards $strict controls admission",
+  ({ available, strict, expected, reads }) => {
+    let count = 0;
+    const layer = ComputerUseLeases.layer.pipe(
+      Layer.provideMerge(
+        Layer.mergeAll(
+          database,
+          NodeServices.layer,
+          ServerSettings.ServerSettingsService.layerTest({ enableCua: true, cuaFullAccessAutoAdmit: false }),
+          Layer.mock(CuaDriver.CuaDriver)({
+            appCatalog: Effect.sync(() => {
+              count++;
+              return [];
+            }),
+            availableAppCatalog: Effect.sync(() => {
+              count++;
+              return available ? Option.some([]) : Option.none();
+            }),
+          }),
+        ),
+      ),
+    );
+    return Effect.gen(function* () {
+      yield* runMigrations();
+      yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+        cuaStrictInputGuards: strict,
+      });
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      const owner = ThreadId.make("thread-catalog-availability");
+      yield* threadIn(owner, "full-access");
+      const control = Option.getOrThrow(
+        yield* leases.everyAppControl(owner, false, { nonPerson: true }),
+      );
+      const result = yield* leases.callReservation(owner, {
+        action: "reserve",
+        controlId: control.controlId,
+        connectionId: "connection",
+        callId: "one",
+        interruptions: 0,
+        idleEpoch: 0,
+        name: "click",
+        args: { pid: 42, window_id: 7 },
+        app: "org.example.editor",
+      });
+      assert.equal(result.status, expected);
+      if (result.status === "refused") assert.equal(result.detail, "reconnecting");
+      assert.equal(count, reads);
+    }).pipe(Effect.provide(layer));
+  },
+);
+
 it.effect("non-person call admission shares a catalog listing until its short expiry", () => {
   let listings = 0;
   const layer = ComputerUseLeases.layer.pipe(
@@ -344,11 +401,11 @@ it.effect("non-person call admission shares a catalog listing until its short ex
       Layer.mergeAll(
         database,
         NodeServices.layer,
-        ServerSettings.ServerSettingsService.layerTest({ cuaFullAccessAutoAdmit: false }),
+        ServerSettings.ServerSettingsService.layerTest({ enableCua: true, cuaFullAccessAutoAdmit: false }),
         Layer.mock(CuaDriver.CuaDriver)({
-          appCatalog: Effect.sync(() => {
+          availableAppCatalog: Effect.sync(() => {
             listings++;
-            return [{ id: "org.example.shell", name: "GNOME Terminal" }];
+            return Option.some([{ id: "org.example.shell", name: "GNOME Terminal" }]);
           }),
         }),
       ),
@@ -419,9 +476,11 @@ it.effect("server admission refuses a terminal known only through its catalog al
           Layer.mergeAll(
             database,
             NodeServices.layer,
-            ServerSettings.ServerSettingsService.layerTest({ cuaFullAccessAutoAdmit: false }),
+            ServerSettings.ServerSettingsService.layerTest({ enableCua: true, cuaFullAccessAutoAdmit: false }),
             Layer.mock(CuaDriver.CuaDriver)({
-              appCatalog: Effect.succeed([{ id: "org.example.shell", name: "GNOME Terminal" }]),
+              availableAppCatalog: Effect.succeedSome([
+                { id: "org.example.shell", name: "GNOME Terminal" },
+              ]),
             }),
           ),
         ),

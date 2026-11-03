@@ -39,6 +39,7 @@ export const prepareThreadAttachment = Effect.fn("ThreadAttachmentTest.prepare")
     enabled: Effect.succeed(true),
     listedApps: Effect.succeedNone,
     appCatalog: Effect.succeed([]),
+    availableAppCatalog: Effect.succeedSome([]),
     acquire: Effect.succeedSome(mcp),
     x11Display: Effect.succeed(Option.fromUndefinedOr(x11Display)),
     lastFailure: Effect.succeedNone,

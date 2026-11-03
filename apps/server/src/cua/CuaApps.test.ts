@@ -37,10 +37,11 @@ const fixture = Effect.fnUntraced(function* (
   synchronous = false,
   failSend = false,
   advertised: Option.Option<DesktopCuaReadinessReport> = Option.some(readiness(true)),
+  requireCatalog = false,
 ) {
   const reports = yield* PubSub.unbounded<DesktopCuaAppsReport>();
   const requests = yield* Queue.unbounded<string>();
-  const request = yield* DesktopAppsListing.makeDesktopAppsRequest().pipe(
+  const request = yield* DesktopAppsListing.makeDesktopAppsRequest(requireCatalog).pipe(
     Effect.provide(
       Layer.mergeAll(
         NodeCrypto.layer,
@@ -70,6 +71,37 @@ const fixture = Effect.fnUntraced(function* (
   const listing = request.pipe(Effect.map(Option.map((listed) => listed.apps)));
   return { listing, request, requests, reports };
 });
+
+it.effect(
+  "catalog-required desktop listings distinguish missing, empty and timed out answers",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture(false, false, Option.some(readiness(true)), true);
+      const missing = yield* f.request.pipe(Effect.forkChild);
+      yield* PubSub.publish(f.reports, {
+        version: 1,
+        type: "cuaApps",
+        requestId: yield* Queue.take(f.requests),
+        status: "listed",
+        apps: [],
+      });
+      expect(yield* Fiber.join(missing)).toEqual(Option.none());
+      const empty = yield* f.request.pipe(Effect.forkChild);
+      yield* PubSub.publish(f.reports, {
+        version: 1,
+        type: "cuaApps",
+        requestId: yield* Queue.take(f.requests),
+        status: "listed",
+        apps: [],
+        catalog: [],
+      });
+      expect(yield* Fiber.join(empty)).toEqual(Option.some({ apps: [], catalog: [] }));
+      const timed = yield* f.request.pipe(Effect.forkChild);
+      yield* Queue.take(f.requests);
+      yield* TestClock.adjust("10 seconds");
+      expect(yield* Fiber.join(timed)).toEqual(Option.none());
+    }).pipe(Effect.scoped),
+);
 
 it.effect("subscribes before requesting a fresh list, including synchronous desktop replies", () =>
   Effect.gen(function* () {
