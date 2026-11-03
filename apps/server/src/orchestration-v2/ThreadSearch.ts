@@ -210,7 +210,10 @@ export const messageHitsQuery = (
           WHERE orchestration_v2_message_search MATCH ${match}
             AND orchestration_v2_message_search.rowid >= coalesce((
               SELECT orchestration_v2_message_search.rowid FROM orchestration_v2_message_search
+              INNER JOIN orchestration_v2_projection_messages AS legacy_messages
+                ON legacy_messages.rowid = orchestration_v2_message_search.rowid
               WHERE orchestration_v2_message_search MATCH ${match}
+                AND ${nonPlaceholderMessageCondition(sql, "legacy_messages")}
               ORDER BY orchestration_v2_message_search.rowid DESC
               LIMIT 1 OFFSET ${MESSAGE_CANDIDATE_LIMIT - 1}
             ), 0)

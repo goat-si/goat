@@ -248,6 +248,18 @@ it.effect("ThreadSearch excludes legacy placeholders still in the index", () =>
       (yield* search.search({ query: "context" })).matches.map((match) => match.messageId),
       [MessageId.make("ordinary")],
     );
+    yield* sql`
+      WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 10000)
+      INSERT INTO orchestration_v2_projection_messages
+        (message_id, thread_id, role, streaming, created_at, updated_at, payload_json)
+      SELECT 'legacy-placeholder:' || i, ${threadId}, 'user', 0,
+        ${DateTime.formatIso(at(5))}, ${DateTime.formatIso(at(5))},
+        json_object('text', ${ATTACHMENT_ONLY_BOOTSTRAP_PROMPT}) FROM n
+    `;
+    assert.deepEqual(
+      (yield* search.search({ query: "context" })).matches.map((match) => match.messageId),
+      [MessageId.make("ordinary")],
+    );
   }).pipe(Effect.provide(layerTest)),
 );
 

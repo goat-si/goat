@@ -1,4 +1,5 @@
 import { type EnvironmentId, type EnvironmentMachineKind } from "@goat/contracts";
+import { pickableProjectGroups } from "@goat/client-runtime/state/project-grouping";
 import { FolderIcon, ListFilterIcon, SettingsIcon } from "~/components/solar";
 import {
   useReducer,
@@ -62,7 +63,10 @@ export function SidebarProjectScope(props: {
   );
   const projectScopeItems = [
     { value: "all", label: "All projects" },
-    ...projectGroups.map((project) => ({ value: project.projectKey, label: project.displayName })),
+    ...pickableProjectGroups(projectGroups).map((project) => ({
+      value: project.projectKey,
+      label: project.displayName,
+    })),
   ];
   const selectedProjectScopeItem =
     projectScopeKeys.length > 1

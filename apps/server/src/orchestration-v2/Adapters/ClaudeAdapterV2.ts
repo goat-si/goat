@@ -4948,8 +4948,8 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
           });
         });
 
-        // Claude has no recovered frame; the next assistant message proves recovery.
-        const completeProviderRetry = Effect.fn("ClaudeAdapterV2.completeProviderRetry")(function* (
+        // Claude has no recovered frame; the next assistant message proves recovery. Untraced per frame.
+        const completeProviderRetry = Effect.fnUntraced(function* (
           context: ActiveClaudeTurnContext,
           updatedAt: DateTime.Utc,
         ) {
@@ -4982,7 +4982,7 @@ export const makeClaudeAdapterV2 = Effect.fn("makeClaudeAdapterV2")(function* (
               startedAt: providerRetry.startedAt,
               updatedAt,
             }),
-          });
+          }).pipe(Effect.withSpan("ClaudeAdapterV2.completeProviderRetry"));
         });
 
         const rememberProviderThread =
