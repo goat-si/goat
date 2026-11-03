@@ -8,8 +8,10 @@ import { createModelSelection } from "@goat/shared/model";
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import { useNavigate } from "@tanstack/react-router";
 
-import { mergeEnvironmentSettings } from "../../hooks/useSettings";
+import { mergeEnvironmentSettings, useClientSettings } from "../../hooks/useSettings";
 import {
+  defaultModelSelectionsAreMixed,
+  resolveProjectDefaultProviderModelSelection,
   getCustomModelOptionsByInstance,
   resolveEffectiveDefaultModelSelection,
 } from "../../modelSelection";
@@ -54,6 +56,7 @@ function isWorktreeSubmodules(value: string | null): value is WorktreeSubmodules
 export function ProjectDefaultsSettings({ category }: { category: ProjectSettingsCategory }) {
   const { scope, target, targets, connectedEnvironments } = useSettingsScope();
   const settings = useScopedSettings();
+  const clientSettings = useClientSettings();
   const updateSettings = useUpdateScopedSettings();
   const navigate = useNavigate();
   const { environments } = useEnvironments();
@@ -65,10 +68,10 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
     (representative?.serverConfig
       ? providersByEnvironment.get(representative.environmentId)
       : undefined) ?? EMPTY_SERVER_PROVIDERS;
-  const storedSelection = resolveDefaultProviderModelSelection(
-    providers,
-    settings.defaultModelSelection,
-  );
+  const storedSelection =
+    settings.defaultModelSelection === null
+      ? resolveProjectDefaultProviderModelSelection(providers, settings, target?.projectId ?? null)
+      : resolveDefaultProviderModelSelection(providers, settings.defaultModelSelection);
   const selection = storedSelection
     ? resolveEffectiveDefaultModelSelection(settings, providers, storedSelection)
     : null;
@@ -86,7 +89,17 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
     selection?.model,
   );
   const activeEntry = entries.find((entry) => entry.instanceId === selection?.instanceId);
-  const mixedModel = useScopedSettingsMixed(["defaultModelSelection"]);
+  const mixedModel = defaultModelSelectionsAreMixed(
+    clientSettings,
+    targets.map((candidate) => ({
+      projectId: candidate.projectId,
+      settings: candidate.settings,
+      providers: providersByEnvironment.get(candidate.environmentId) ?? EMPTY_SERVER_PROVIDERS,
+    })),
+  );
+  const automaticModel =
+    targets.length > 0 &&
+    targets.every((candidate) => candidate.settings.defaultModelSelection === null);
   const mixedPermissions = useScopedSettingsMixed(["defaultRuntimeMode"]);
   const PermissionIcon = runtimeModeConfig[settings.defaultRuntimeMode].icon;
   const mixedWorkspace = useScopedSettingsMixed(["defaultThreadEnvMode"]);
@@ -130,6 +143,10 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
     return null;
   }
 
+  const effortDisabledReason = selection
+    ? modelDisabledReason(selection.instanceId, selection.model)
+    : null;
+
   const setModel = (value: ModelSelection | null) => {
     const reason = value ? modelDisabledReason(value.instanceId, value.model) : null;
     if (reason) {
@@ -149,12 +166,14 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
       description={
         isProjectScope
           ? "Model for new threads in this project."
-          : !unavailable &&
-              !mixedModel &&
-              modelSource !== "project" &&
-              settings.defaultModelSelection === null
+          : !unavailable && modelSource !== "project" && automaticModel
             ? "Default model for new threads, selected automatically. Projects can override it."
             : "Default model for new threads. Projects can override it."
+      }
+      status={
+        mixedModel
+          ? `${automaticModel ? "Automatic defaults differ." : "Defaults differ."} Select one environment or choose a shared model to edit effort.`
+          : effortDisabledReason
       }
       resetAction={
         settings.defaultModelSelection !== null ? (
@@ -172,7 +191,9 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
               instanceEntries={entries}
               modelOptionsByInstance={modelOptions}
               triggerClassName={SETTINGS_PICKER_TRIGGER_CLASSNAME}
-              {...(mixedModel ? { triggerLabel: "Mixed" } : {})}
+              {...(mixedModel
+                ? { triggerLabel: automaticModel ? "Automatic (mixed)" : "Mixed" }
+                : {})}
               getModelDisabledReason={modelDisabledReason}
               onOpenProviderSetup={(instanceId) => {
                 if (representative)
@@ -185,7 +206,7 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
                 setModel(createModelSelection(instanceId, model))
               }
             />
-            {!mixedModel ? (
+            {!mixedModel && !effortDisabledReason ? (
               <TraitsPicker
                 provider={activeEntry.driverKind}
                 models={activeEntry.models}
@@ -201,7 +222,9 @@ export function ProjectDefaultsSettings({ category }: { category: ProjectSetting
             ) : null}
           </div>
         ) : (
-          <span className="text-sm text-muted-foreground">No providers available</span>
+          <span className="text-sm text-muted-foreground">
+            {mixedModel ? "Mixed" : "No providers available"}
+          </span>
         )
       }
     />

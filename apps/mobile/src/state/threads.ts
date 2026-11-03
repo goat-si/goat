@@ -1,4 +1,5 @@
 import { createDecisionInboxAtoms } from "@goat/client-runtime/state/decision-inbox";
+import { createChildThreadApprovalsAtom } from "@goat/client-runtime/state/thread-requests";
 import { useAtomValue } from "@effect/atom-react";
 import { parseThreadKey, threadKey } from "@goat/client-runtime/state/entities";
 import {
@@ -78,6 +79,10 @@ export const environmentThreadDetails = createEnvironmentThreadDetailAtoms(creat
 export const environmentThreadShells = createEnvironmentThreadShellAtoms({
   catalogValueAtom: environmentCatalog.catalogValueAtom,
   snapshotAtom: threadEnvironment.snapshotAtom,
+});
+export const childThreadApprovalsAtom = createChildThreadApprovalsAtom({
+  childThreadInputsAtom: environmentThreadShells.childThreadInputsAtom,
+  pendingRequestsAtom: environmentThreadDetails.pendingRequestsAtom,
 });
 
 let previousLaunchSubagentRows: ReadonlyArray<LaunchSubagentRow> = [];
