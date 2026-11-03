@@ -361,14 +361,16 @@ export const makeProxyBrowserClaims = (
     const allowed =
       judge === undefined
         ? false
-        : yield* judge({
-            browserClaimReply: {
-              claimId: claim.claimId,
-              claimGeneration: claim.claimGeneration,
-              urls: malformed ? [] : urls,
-              ...(outside ? { outside: true as const } : {}),
-            },
-          }).pipe(Effect.catchCause(() => Effect.succeed(false)));
+        : yield* Effect.suspend(() =>
+            judge({
+              browserClaimReply: {
+                claimId: claim.claimId,
+                claimGeneration: claim.claimGeneration,
+                urls: malformed ? [] : urls,
+                ...(outside ? { outside: true as const } : {}),
+              },
+            }),
+          ).pipe(Effect.catchCause(() => Effect.succeed(false)));
     if (outside || !allowed) invalid.add(key(claim));
     return !outside && allowed;
   });

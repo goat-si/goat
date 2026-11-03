@@ -19,6 +19,52 @@ import { makeBrowserOriginGrants as makeUnconfirmedGrants } from "./BrowserOrigi
 
 const decodeDescriptor = Schema.decodeSync(ExecutionEnvironmentDescriptor);
 
+it.effect("a missing committed policy refuses a browser claim", () =>
+  Effect.gen(function* () {
+    const base = Context.get(
+      yield* Layer.build(ServerSettings.layerTest()),
+      ServerSettings.ServerSettingsService,
+    );
+    const noPolicy = { ...base };
+    delete noPolicy.committedPolicy;
+    const context = yield* Layer.build(
+      Grants.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.succeed(ServerSettings.ServerSettingsService, noPolicy),
+            Layer.mock(ServerEnvironment.ServerEnvironment)({
+              getDescriptor: Effect.succeed(
+                decodeDescriptor({
+                  environmentId: EnvironmentId.make("environment:test"),
+                  label: "Test",
+                  platform: { os: "linux", arch: "x64" },
+                  serverVersion: "test",
+                  capabilities: { repositoryIdentity: true },
+                }),
+              ),
+            }),
+            Layer.succeed(BrowserClaimManifest, {
+              publish: () => Effect.succeed("a".repeat(64)),
+              readConfig: Effect.succeed({}),
+              install: () => Effect.void,
+            }),
+          ),
+        ),
+      ),
+    );
+    const service = Context.get(context, Grants.BrowserOriginGrants);
+    yield* service.setDriverCapability(true);
+    const result = yield* service.request({
+      threadId: ThreadId.make("thread:test"),
+      pid: 42,
+      windowId: 7,
+      origin: "https://example.test",
+      windowTitle: "Browser",
+    });
+    assert.equal(result.status, "refused");
+  }).pipe(Effect.scoped),
+);
+
 it.effect("a settings change ends claims whose origin becomes blocked", () =>
   Effect.gen(function* () {
     const base = Context.get(

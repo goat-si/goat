@@ -382,6 +382,42 @@ effectIt.effect("a claimed reply without a URL still receives a liveness judgmen
   }),
 );
 
+effectIt.effect("a reply report transport failure withholds the claimed reply", () =>
+  Effect.gen(function* () {
+    const h = yield* harness({
+      judgeBrowserClaimReply: () => Effect.die("transport failed"),
+    });
+    yield* h.push({
+      ...active(),
+      browserClaims: [
+        {
+          claimId: "claim-1",
+          claimGeneration: 2,
+          pid: 42,
+          windowId: 7,
+          targetId: "target-1",
+          tabId: "tab-1",
+          origins: ["https://example.test"],
+        },
+      ],
+    });
+    yield* h.applied;
+    yield* supportedDriver(h);
+    yield* h.send(call(3, "get_browser_state", { tab_id: "tab-1" }));
+    yield* h.nextToDriver;
+    yield* h.reply(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 3,
+        result: { structuredContent: { tab_id: "tab-1", url: "https://example.test/secret" } },
+      }),
+    );
+    const reply = yield* h.nextToProvider;
+    assert.isTrue(reply.result?.isError);
+    assert.notInclude(JSON.stringify(reply), "secret");
+  }),
+);
+
 effectIt.effect("a cancelled call during the reply report releases its write as sent", () =>
   Effect.gen(function* () {
     const entered = yield* Deferred.make<void>();
