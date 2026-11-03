@@ -95,3 +95,29 @@ it.effect("records queued replacement when a waiting message becomes Steer", () 
     assert.equal(projection.runs[1]?.terminationCause?.kind, "queued_replaced");
   }).pipe(Effect.scoped, Effect.provide(Layer.merge(NodeServices.layer, IdAllocator.layer))),
 );
+
+it.effect("fails fast when a promotion has no steer effect (#2473)", () =>
+  Effect.gen(function* () {
+    const name = "opencode2-missing-steer-effect";
+    const thread = threadCommands({ name, worktreePath: yield* checkpointWorkspace(name) });
+    const transcript = yield* OpenCode2OrchestratorReplayHarness.decodeTranscript({
+      provider: OPENCODE_PROVIDER,
+      protocol: OPENCODE2_HTTP_PROTOCOL,
+      version: "2.0.18",
+      scenario: name,
+      entries: [],
+    });
+    const options = {
+      steerGuard: { commandId: thread.command("promote"), arrival: Effect.never },
+    };
+    const outcome = yield* runOrchestratorV2ProviderReplayScenario(
+      { name, transcript, commands: [], steps: [] },
+      OpenCode2OrchestratorReplayHarness,
+      options,
+    ).pipe(provideDeterministicTestRuntime, Effect.exit);
+    assert.equal(outcome._tag, "Failure", "a missing steer effect must fail the scenario");
+    if (outcome._tag === "Failure") {
+      assert.include(String(outcome.cause), "no steer effect");
+    }
+  }).pipe(Effect.scoped, Effect.provide(Layer.merge(NodeServices.layer, IdAllocator.layer))),
+);
