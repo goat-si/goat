@@ -23,9 +23,9 @@ import {
   threadCommands,
 } from "./OpenCode2OrchestratorV2.testkit.ts";
 
-it.effect("records queued replacement when a waiting message becomes Steer", () =>
+const queuedReplacementScenario = (steerFails: boolean) =>
   Effect.gen(function* () {
-    const name = "opencode2-queued-replaced";
+    const name = steerFails ? "opencode2-steer-fails" : "opencode2-queued-replaced";
     const steerSent = Promise.withResolvers<void>();
     const cwd = yield* checkpointWorkspace(name);
     const thread = threadCommands({ name, worktreePath: cwd });
@@ -63,7 +63,10 @@ it.effect("records queued replacement when a waiting message becomes Steer", () 
           },
         }),
         out("session.prompt", { sessionID: SESSION, text: "<any>" }),
-        reply("session.prompt", "<hang>"),
+        reply(
+          "session.prompt",
+          steerFails ? { status: 500, body: { error: "steer failed" } } : "<hang>",
+        ),
         out("session.interrupt", { sessionID: SESSION }),
         reply("session.interrupt", { interrupted: true }),
       ],
@@ -94,9 +97,25 @@ it.effect("records queued replacement when a waiting message becomes Steer", () 
         },
       },
     ).pipe(provideDeterministicTestRuntime);
-    const projection = result.projections.get(thread.threadId);
+    return { result, threadId: thread.threadId };
+  });
+
+it.effect("records queued replacement when a waiting message becomes Steer", () =>
+  Effect.gen(function* () {
+    const { result, threadId } = yield* queuedReplacementScenario(false);
+    const projection = result.projections.get(threadId);
     assert.isDefined(projection);
     assert.equal(projection.runs[1]?.terminationCause?.kind, "queued_replaced");
+  }).pipe(Effect.scoped, Effect.provide(Layer.merge(NodeServices.layer, IdAllocator.layer))),
+);
+
+it.effect("fails fast when the queued steer attempt fails (#2473)", () =>
+  Effect.gen(function* () {
+    const outcome = yield* queuedReplacementScenario(true).pipe(Effect.exit);
+    assert.equal(outcome._tag, "Failure");
+    if (outcome._tag === "Failure") {
+      assert.include(String(outcome.cause), "steer attempt failed before reaching OpenCode");
+    }
   }).pipe(Effect.scoped, Effect.provide(Layer.merge(NodeServices.layer, IdAllocator.layer))),
 );
 
