@@ -240,7 +240,7 @@ function literalBackticksBefore($pos: ResolvedPos): number {
     }
     if (node.marks.some((mark) => mark.type.spec.code)) return;
 
-    const text = node.text!.slice(0, $pos.parentOffset - offset);
+    const text = (node.text ?? "").slice(0, $pos.parentOffset - offset);
     count += [...text.matchAll(/(?<!`)`(?!`)/g)].length;
   });
   return count;

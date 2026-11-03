@@ -238,7 +238,9 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Artifacts and logs",
     to: "/settings/storage",
     scope: "environment-defaults",
-    searchTerms: ["disk storage delete old browser artifacts screenshots captures rotated logs cleanup retention"],
+    searchTerms: [
+      "disk storage delete old browser artifacts screenshots captures rotated logs cleanup retention",
+    ],
   },
   {
     id: "project-defaults",
