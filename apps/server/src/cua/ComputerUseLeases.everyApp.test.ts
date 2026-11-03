@@ -127,11 +127,17 @@ it.effect.each(["reserve", "validate"] as const)(
           : reserve;
       const entered = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
+      let reads = 0;
       const heldSettings = ServerSettings.ServerSettingsService.of({
         ...settings,
         getSettings: settings.getSettings.pipe(
           Effect.tap(() =>
-            Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
+            Effect.suspend(() => {
+              reads++;
+              return reads === 2
+                ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)))
+                : Effect.void;
+            }),
           ),
         ),
       });
