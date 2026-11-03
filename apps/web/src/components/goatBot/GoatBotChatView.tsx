@@ -47,6 +47,7 @@ export interface GoatBotChatViewProps {
   /** What GOAT Bot's server takes with a message; null when it takes no files. */
   readonly attachmentSupport?: GoatBotAttachmentSupport | null | undefined;
   readonly onRetryInput: (clientKey: string) => void;
+  readonly onDiscardInput?: (clientKey: string) => void;
   /** Asks the server for its bot again, after a failure or a busy global agent. */
   readonly onRetryAvailability?: (() => void) | undefined;
   /** The old global agent, which keeps its coding view and history. */
@@ -74,6 +75,7 @@ export function GoatBotChatView({
   onSend,
   attachmentSupport = null,
   onRetryInput,
+  onDiscardInput,
   onRetryAvailability,
   legacyAgentRoute,
   removal = null,
@@ -169,6 +171,7 @@ export function GoatBotChatView({
           environmentId={environmentId}
           replyingSince={removed ? null : replyingSince}
           onRetry={onRetryInput}
+          onDiscard={onDiscardInput}
           onPick={canSend ? (answer) => onSend(answer) : undefined}
         />
       ) : removal !== null ? (

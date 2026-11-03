@@ -5,6 +5,13 @@ import { assert, describe, it } from "@effect/vitest";
 import type { ChannelTask, RunId } from "@goat/contracts";
 import {
   ChatAttachmentId,
+  CHANNEL_GATEWAY_WS_METHODS,
+  ChannelDeliveryErrorCode,
+  ChannelGatewayErrorReason,
+  EnvironmentAuthorizationError,
+  EnvironmentId,
+  PositiveInt,
+  WsChannelRpcGroup,
   isGoatBotSessionThreadId,
   MessageId,
   NodeId,
@@ -14,7 +21,11 @@ import {
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as PlatformError from "effect/PlatformError";
+import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
+import { vi } from "vite-plus/test";
 
 import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
 import {
@@ -37,6 +48,7 @@ import * as ChannelWorkerReports from "./ChannelWorkerReports.ts";
 import { turnSteerIdsFor } from "./channelIds.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as SqlClient from "effect/sql/SqlClient";
+import { createGoatBotSendQueue } from "../../../../packages/client-runtime/src/goatBot/sendQueue.ts";
 import { botMessages, goatInput, owner, rpcContext, setupBot } from "./testkit/ChannelHarness.ts";
 import {
   ask,
@@ -89,6 +101,119 @@ const reportFrom = (
   );
 
 describe("GOAT Bot sessions", () => {
+  it.effect(
+    "carries expired uploads through ingest, RPC codecs and the failed queue row (#2388)",
+    () => {
+      const harness = sessionHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const attachment = {
+          type: "image" as const,
+          id: ChatAttachmentId.make(createPendingAttachmentId()),
+          name: "expired.png",
+          mimeType: "image/png",
+          sizeBytes: 3,
+        };
+        const error = yield* Effect.flip(
+          gateway.ingest(
+            { ...goatInput("hello", "expired"), attachments: [attachment] },
+            rpcContext,
+          ),
+        );
+        const rpc = WsChannelRpcGroup.requests.get(CHANNEL_GATEWAY_WS_METHODS.ingest);
+        assert.isDefined(rpc);
+        if (!rpc) throw new Error("missing channel ingest RPC");
+        const codec = Schema.toCodecJson(rpc.errorSchema);
+        const encoded = yield* Schema.encodeEffect(codec)(error);
+        const decoded = yield* Schema.decodeEffect(codec)(encoded);
+        class PreviousChannelGatewayError extends Schema.TaggedError<PreviousChannelGatewayError>()(
+          "ChannelGatewayError",
+          {
+            reason: ChannelGatewayErrorReason,
+            retryAfterSeconds: Schema.optionalKey(PositiveInt),
+            deliveryOutcome: Schema.optionalKey(Schema.Literals(["not_sent", "unknown"])),
+            deliveryErrorCode: Schema.optionalKey(ChannelDeliveryErrorCode),
+            homeEnvironmentId: Schema.optionalKey(EnvironmentId),
+          },
+        ) {}
+        const previousRpcError = Schema.Union([
+          PreviousChannelGatewayError,
+          EnvironmentAuthorizationError,
+        ]);
+        assert.deepInclude(yield* Schema.decodeUnknownEffect(previousRpcError)(encoded), {
+          _tag: "ChannelGatewayError",
+          reason: "invalid_input",
+        });
+        assert.deepInclude(decoded, {
+          _tag: "ChannelGatewayError",
+          reason: "invalid_input",
+          attachmentProblem: "expired",
+        });
+        const settled = Promise.withResolvers<void>();
+        const queue = createGoatBotSendQueue({
+          makeKey: () => "expired",
+          canDispatch: () => true,
+          send: async () => {
+            throw decoded;
+          },
+          onChange: () => {
+            if (queue.pendingInputs()[0]?.state === "failed") settled.resolve();
+          },
+        });
+        queue.submit("hello", {
+          environmentId: EnvironmentId.make("env"),
+          threadId: ThreadId.make("bot"),
+        });
+        yield* Effect.promise(() => settled.promise);
+        assert.strictEqual(
+          queue.pendingInputs()[0]?.rejectionReason,
+          "Attachment expired. Please re-attach the file.",
+        );
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect("keeps attachment permission and I/O failures generic at ingest (#2388)", () => {
+    const harness = sessionHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const config = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const stat = fileSystem.stat.bind(fileSystem);
+      for (const reason of ["PermissionDenied", "Unknown"] as const) {
+        const id = ChatAttachmentId.make(createPendingAttachmentId());
+        const path = NodePath.join(config.attachmentsDir, `${id}.png`);
+        NodeFS.writeFileSync(path, new Uint8Array([1, 2, 3]));
+        using _spy = vi.spyOn(fileSystem, "stat").mockImplementation((candidate) =>
+          candidate === path
+            ? Effect.fail(
+                PlatformError.systemError({
+                  _tag: reason,
+                  module: "FileSystem",
+                  method: "stat",
+                  pathOrDescriptor: candidate,
+                }),
+              )
+            : stat(candidate),
+        );
+        const error = yield* Effect.flip(
+          gateway.ingest(
+            {
+              ...goatInput("hello", reason),
+              attachments: [
+                { type: "image", id, name: "file.png", mimeType: "image/png", sizeBytes: 3 },
+              ],
+            },
+            rpcContext,
+          ),
+        );
+        assert.strictEqual(error.reason, "invalid_input");
+        assert.isUndefined(error.attachmentProblem);
+      }
+    }).pipe(Effect.provide(harness.layer));
+  });
   it.effect(
     "runs two requests in one conversation in the same session thread, each as its own run",
     () => {

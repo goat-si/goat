@@ -46,6 +46,7 @@ export function GoatBotTimeline({
   environmentId = null,
   replyingSince = null,
   onRetry,
+  onDiscard,
   onPick,
 }: {
   readonly rows: ReadonlyArray<GoatBotRow>;
@@ -53,6 +54,7 @@ export function GoatBotTimeline({
   readonly environmentId?: EnvironmentId | null;
   readonly replyingSince?: string | null;
   readonly onRetry: (clientKey: string) => void;
+  readonly onDiscard?: ((clientKey: string) => void) | undefined;
   /** Sends a question's choice as the user's answer; absent while the bot can't take messages. */
   readonly onPick?: ((answer: string) => void) | undefined;
 }) {
@@ -236,10 +238,15 @@ export function GoatBotTimeline({
                         </button>
                       ) : null}
                     </div>
-                    {row.delivery.state === "failed" ? (
-                      <span className="mt-1 text-xs leading-4 font-medium text-destructive-foreground">
-                        {row.delivery.rejectionReason ?? "Not Delivered"}
-                      </span>
+                    {delivery.state === "failed" ? (
+                      <div className="mt-1 flex items-center gap-2 text-xs leading-4 font-medium text-destructive-foreground">
+                        <span>{delivery.rejectionReason ?? "Not Delivered"}</span>
+                        {onDiscard ? (
+                          <button type="button" onClick={() => onDiscard(delivery.clientKey)}>
+                            Discard
+                          </button>
+                        ) : null}
+                      </div>
                     ) : row.showReceipt ? (
                       <span
                         className="mt-1 text-xs leading-4 font-medium text-muted-foreground"

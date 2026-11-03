@@ -186,6 +186,29 @@ function removeCallsFor(attachmentId: string): number {
 }
 
 describe("prepareTurnAttachments", () => {
+  it("logs a failed cancelled-mint deletion while keeping the send abandoned", async () => {
+    const minted = Promise.withResolvers<unknown>();
+    const controller = new AbortController();
+    const error = new Error("delete failed");
+    mocks.runAtomCommand.mockImplementation((_registry: unknown, command: unknown) =>
+      command === mocks.createUploadUrl
+        ? minted.promise
+        : Promise.resolve({ _tag: "Failure", error }),
+    );
+    using warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const preparing = prepareTurnAttachments({
+      environmentId,
+      attachments: [file],
+      signal: controller.signal,
+    });
+    controller.abort();
+    minted.resolve({
+      _tag: "Success",
+      value: { attachmentId: MINTED_ID, relativeUrl: "/upload", expiresAt: 1 },
+    });
+    expect(await preparing).toEqual({ status: "abandoned" });
+    expect(warning).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ error }));
+  });
   beforeEach(() => {
     mocks.canOperate = true;
     mocks.documentUri = "file:///documents";

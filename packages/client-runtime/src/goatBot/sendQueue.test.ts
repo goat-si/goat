@@ -38,6 +38,61 @@ function setup(canDispatch: () => boolean = () => true) {
 }
 
 describe("createGoatBotSendQueue", () => {
+  it("does not send queued messages or restore rows after disposal during an in-flight send", async () => {
+    const first = deferred<{ requestKey: string }>();
+    const finished = deferred<void>();
+    const sent: string[] = [];
+    const forgotten: string[] = [];
+    let disposed = false;
+    let key = 0;
+    const queue = createGoatBotSendQueue({
+      makeKey: () => `key-${++key}`,
+      canDispatch: () => true,
+      send: ({ text }) => {
+        sent.push(text);
+        return first.promise;
+      },
+      onForget: (clientKey) => {
+        forgotten.push(clientKey);
+      },
+      onChange: () => {
+        if (disposed) finished.resolve();
+      },
+    });
+    queue.submit("first", bot);
+    queue.submit("second", bot);
+    queue.dispose();
+    disposed = true;
+    first.resolve({ requestKey: "accepted" });
+    await finished.promise;
+    expect(sent).toEqual(["first"]);
+    expect(forgotten).toEqual(["key-1", "key-2"]);
+    expect(queue.pendingInputs()).toEqual([]);
+  });
+  it("shows the re-attach instruction after an expired upload rejection (#2388)", async () => {
+    const failed = deferred<void>();
+    const queue = createGoatBotSendQueue({
+      send: async () => {
+        throw { attachmentProblem: "expired" };
+      },
+      canDispatch: () => true,
+      onChange: () => {
+        if (queue.pendingInputs()[0]?.state === "failed") failed.resolve();
+      },
+      makeKey: () => "expired",
+    });
+    queue.submit("file", bot);
+    await failed.promise;
+    expect(queue.pendingInputs()[0]?.rejectionReason).toContain("re-attach");
+  });
+  it("discards only a failed message without changing other messages (#2388)", () => {
+    const { queue } = setup(() => false);
+    const first = queue.submit("first", bot);
+    const second = queue.submit("second", bot);
+    queue.discard(first);
+    expect(queue.pendingInputs().map((entry) => entry.clientKey)).toEqual([second]);
+  });
+
   it("sends in order, one at a time, while still taking new messages", async () => {
     const { queue, calls } = setup();
     queue.submit("first", bot);

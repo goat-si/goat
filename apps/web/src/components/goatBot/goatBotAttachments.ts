@@ -136,10 +136,88 @@ export async function uploadGoatBotAttachments(
   return uploaded;
 }
 
-/** Drops a draft's uploads and previews once they are sent or removed. */
-export function releaseGoatBotAttachments(attachments: ReadonlyArray<GoatBotDraftAttachment>) {
-  releaseDraftAttachments(attachments);
-  for (const attachment of attachments) {
-    if (attachment.type === "image") URL.revokeObjectURL(attachment.previewUrl);
+const attachmentOwners = new Map<
+  string,
+  { readonly attachment: GoatBotDraftAttachment; count: number }
+>();
+const previewOwners = new Map<string, number>();
+const pendingRelease = new Map<string, GoatBotDraftAttachment>();
+
+function uploadKeys(attachment: GoatBotDraftAttachment): ReadonlySet<string> {
+  const keys = new Set<string>();
+  const upload = readAttachmentUpload(attachment.id);
+  if (upload?.status === "ready" || (upload?.status === "failed" && upload.attachmentId)) {
+    keys.add(JSON.stringify([upload.environmentId, upload.attachmentId]));
   }
+  if (upload && "previous" in upload && upload.previous)
+    keys.add(JSON.stringify([upload.previous.environmentId, upload.previous.attachmentId]));
+  if (
+    attachment.type === "file" &&
+    attachment.uploadEnvironmentId !== undefined &&
+    attachment.uploadedAttachmentId !== undefined
+  ) {
+    keys.add(JSON.stringify([attachment.uploadEnvironmentId, attachment.uploadedAttachmentId]));
+  }
+  return keys;
+}
+
+function releaseUnownedUploads() {
+  const ownedKeys = new Set(
+    [...attachmentOwners.values()].flatMap((owner) => [...uploadKeys(owner.attachment)]),
+  );
+  for (const [id, attachment] of pendingRelease) {
+    if ([...uploadKeys(attachment)].some((key) => ownedKeys.has(key))) continue;
+    pendingRelease.delete(id);
+    releaseDraftAttachments([attachment]);
+  }
+}
+
+export function retainGoatBotAttachments(attachments: ReadonlyArray<GoatBotDraftAttachment>) {
+  for (const attachment of attachments) {
+    const owner = attachmentOwners.get(attachment.id);
+    if (owner) owner.count += 1;
+    else attachmentOwners.set(attachment.id, { attachment, count: 1 });
+    pendingRelease.delete(attachment.id);
+    if (attachment.type === "image")
+      previewOwners.set(attachment.previewUrl, (previewOwners.get(attachment.previewUrl) ?? 0) + 1);
+  }
+}
+
+export function releaseUnownedGoatBotAttachments(
+  attachments: ReadonlyArray<GoatBotDraftAttachment>,
+) {
+  const revoked = new Set<string>();
+  for (const attachment of attachments) {
+    if (
+      attachment.type === "image" &&
+      !previewOwners.has(attachment.previewUrl) &&
+      !revoked.has(attachment.previewUrl)
+    ) {
+      revoked.add(attachment.previewUrl);
+      URL.revokeObjectURL(attachment.previewUrl);
+    }
+    if (!attachmentOwners.has(attachment.id)) pendingRelease.set(attachment.id, attachment);
+  }
+  releaseUnownedUploads();
+}
+
+/** Drops uploads and previews after their last draft or message owner releases them. */
+export function releaseGoatBotAttachments(attachments: ReadonlyArray<GoatBotDraftAttachment>) {
+  for (const attachment of attachments) {
+    const owner = attachmentOwners.get(attachment.id);
+    if (owner === undefined) continue;
+    owner.count -= 1;
+    if (attachment.type === "image") {
+      const count = (previewOwners.get(attachment.previewUrl) ?? 1) - 1;
+      if (count === 0) {
+        previewOwners.delete(attachment.previewUrl);
+        URL.revokeObjectURL(attachment.previewUrl);
+      } else previewOwners.set(attachment.previewUrl, count);
+    }
+    if (owner.count === 0) {
+      attachmentOwners.delete(attachment.id);
+      pendingRelease.set(attachment.id, owner.attachment);
+    }
+  }
+  releaseUnownedUploads();
 }

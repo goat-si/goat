@@ -46,6 +46,7 @@ import { DraftComposerAttachmentSchema } from "../lib/composer-image-schema";
 import {
   composerAttachmentFileReferenceKey,
   isComposerAttachmentFileRetained,
+  isComposerAttachmentUploadRetained,
 } from "../lib/composerAttachmentFiles";
 import {
   registerComposerAttachmentUnusedHandler,
@@ -812,11 +813,11 @@ function isComposerAttachmentFileReferenced(fileUri: string): boolean {
     ),
   );
 }
-
 function isComposerAttachmentUploadReferenced(
   environmentId: EnvironmentId,
   attachmentId: string,
 ): boolean {
+  if (isComposerAttachmentUploadRetained(environmentId, attachmentId)) return true;
   const drafts = Object.values(appAtomRegistry.get(composerDraftsAtom));
   const queuedMessages = Object.values(
     appAtomRegistry.get(threadOutboxManager.queuedMessagesByThreadKeyAtom),
@@ -829,7 +830,6 @@ function isComposerAttachmentUploadReferenced(
     ),
   );
 }
-
 export async function releaseUnusedComposerAttachmentFiles(
   attachments: ReadonlyArray<DraftComposerAttachment>,
 ): Promise<void> {

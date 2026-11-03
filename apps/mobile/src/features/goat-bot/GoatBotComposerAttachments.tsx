@@ -31,20 +31,30 @@ export function GoatBotAttachButton(props: {
   readonly existingCount: number;
   /** Files are offered only when the server takes them; null means photos only. */
   readonly maxUploadBytes: number | null;
+  readonly getLifetime: () => AbortSignal | undefined;
   readonly onPicked: (attachments: ReadonlyArray<DraftComposerAttachment>) => void;
 }) {
-  const pick = (kind: "media" | "files") =>
-    pickAttachments(kind, props.existingCount, props.maxUploadBytes ?? undefined).then(
+  const pick = async (kind: "media" | "files") => {
+    const signal = props.getLifetime();
+    if (!signal || signal.aborted) return;
+    await pickAttachments(kind, props.existingCount, props.maxUploadBytes ?? undefined).then(
       ({ picked, error }) => {
+        if (signal.aborted) {
+          releaseGoatBotAttachments(picked);
+          return;
+        }
         if (picked.length > 0) props.onPicked(picked);
         if (error) Dialog.alert("Could not attach file", error);
       },
-      (cause: unknown) =>
+      (cause: unknown) => {
+        if (signal.aborted) return;
         Dialog.alert(
           "Could not attach file",
           cause instanceof Error ? cause.message : "Try again.",
-        ),
+        );
+      },
     );
+  };
   return (
     <ComposerAttachmentButton
       disabled={props.disabled}
