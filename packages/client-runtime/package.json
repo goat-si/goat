@@ -423,6 +423,10 @@
       "types": "./src/state/subagentRuntime.ts",
       "default": "./src/state/subagentRuntime.ts"
     },
+    "./state/environment-hue": {
+      "types": "./src/state/environmentHue.ts",
+      "default": "./src/state/environmentHue.ts"
+    },
     "./state/thread-sort": {
       "types": "./src/state/threadSort.ts",
       "default": "./src/state/threadSort.ts"

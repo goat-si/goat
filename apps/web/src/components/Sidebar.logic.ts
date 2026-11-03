@@ -1,3 +1,7 @@
+import {
+  assignEnvironmentHueSlots,
+  environmentHueSlot,
+} from "@goat/client-runtime/state/environment-hue";
 import { arrangeSidebarReorder } from "./sidebar/frozenReorder";
 import {
   hasUnseenCompletion,
@@ -94,37 +98,19 @@ const SIDEBAR_HOST_HUE_CLASSES = [
   "text-rose-500",
 ] as const;
 
-function sidebarHostHueSlot(environmentId: string): number {
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < environmentId.length; index += 1) {
-    hash = Math.imul(hash ^ environmentId.charCodeAt(index), 0x01000193);
-  }
-  return (hash >>> 0) % SIDEBAR_HOST_HUE_CLASSES.length;
-}
-
-/** Hash-only hue, for an environment outside the known set. */
 export function sidebarHostHueClassName(environmentId: string): string {
-  return SIDEBAR_HOST_HUE_CLASSES[sidebarHostHueSlot(environmentId)]!;
+  return SIDEBAR_HOST_HUE_CLASSES[environmentHueSlot(environmentId)]!;
 }
 
-/**
- * Distinct globe hues for the known device environments. Each id keeps its hashed
- * hue unless an id that sorts earlier already took it, then moves to the next free
- * one, so colors only repeat past the palette size and never depend on list order.
- */
 export function assignSidebarHostHues(
   environmentIds: ReadonlyArray<string>,
 ): ReadonlyMap<string, string> {
-  const taken = new Set<number>();
-  const hues = new Map<string, string>();
-  for (const environmentId of [...new Set(environmentIds)].toSorted()) {
-    if (taken.size === SIDEBAR_HOST_HUE_CLASSES.length) taken.clear();
-    let slot = sidebarHostHueSlot(environmentId);
-    while (taken.has(slot)) slot = (slot + 1) % SIDEBAR_HOST_HUE_CLASSES.length;
-    taken.add(slot);
-    hues.set(environmentId, SIDEBAR_HOST_HUE_CLASSES[slot]!);
-  }
-  return hues;
+  return new Map(
+    [...assignEnvironmentHueSlots(environmentIds)].map(([id, slot]) => [
+      id,
+      SIDEBAR_HOST_HUE_CLASSES[slot]!,
+    ]),
+  );
 }
 
 export function shouldNavigateAfterThreadPark(input: {
