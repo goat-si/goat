@@ -117,30 +117,61 @@ const bunLayout = Effect.fn("test.bunLayout")(function* (base: string) {
 });
 
 const PNPM_TARGET = "global/5/node_modules/@openai/codex/bin/codex.js";
+const PNPM_LEGACY_BASEDIR = 'basedir=$(dirname "$(echo "$0" | sed -e \'s,\\\\,/,g\')")';
+const PNPM_NODE_PATH = '  export NODE_PATH="$basedir/global/5/node_modules"';
 const PNPM_SHIMS = {
-  // pnpm 11 records the target and resolves the shim's own symlinks.
+  // pnpm 11's shape: it records the target and resolves the shim's own symlinks.
   marked: [
     "#!/bin/sh",
     'basedir_abs=$(CDPATH= cd -P -- "$basedir" && pwd -P) || exit $?',
-    'exec node  "$basedir_abs/' + PNPM_TARGET + '" "$@"',
+    'if [ -z "$NODE_PATH" ]; then',
+    '  export NODE_PATH="$basedir_abs/global/5/node_modules"',
+    "else",
+    '  export NODE_PATH="$basedir_abs/global/5/node_modules:$NODE_PATH"',
+    "fi",
+    'if [ -n "$exe" ] && [ -x "$basedir/node.exe" ]; then',
+    '  exec "$basedir/node.exe"  "$basedir_win/' + PNPM_TARGET + '" "$@"',
+    'elif [ -x "$basedir/node" ]; then',
+    '  exec "$basedir/node"  "$basedir_abs/' + PNPM_TARGET + '" "$@"',
+    "else",
+    '  exec node  "$basedir_abs/' + PNPM_TARGET + '" "$@"',
+    "fi",
     "# cmd-shim-target=" + PNPM_TARGET,
   ].join("\n"),
   legacy: [
     "#!/bin/sh",
-    'basedir=$(dirname "$(echo "$0" | sed -e \'s,\\\\,/,g\')")',
+    PNPM_LEGACY_BASEDIR,
+    PNPM_NODE_PATH,
     'if [ -x "$basedir/node" ]; then',
     '  exec "$basedir/node"  "$basedir/' + PNPM_TARGET + '" "$@"',
     "else",
     '  exec node  "$basedir/' + PNPM_TARGET + '" "$@"',
     "fi",
   ].join("\n"),
+  exportsMore: [
+    "#!/bin/sh",
+    PNPM_LEGACY_BASEDIR,
+    "export CODEX_HOME=/elsewhere",
+    'exec node  "$basedir/' + PNPM_TARGET + '" "$@"',
+  ].join("\n"),
+  markerDisagrees: [
+    "#!/bin/sh",
+    'exec node  "$basedir_abs/global/5/other.js" "$@"',
+    "# cmd-shim-target=" + PNPM_TARGET,
+  ].join("\n"),
+  otherBranch: [
+    "#!/bin/sh",
+    PNPM_LEGACY_BASEDIR,
+    'if [ -n "$CI" ]; then',
+    '  exec node  "$basedir/' + PNPM_TARGET + '" "$@"',
+    "else",
+    '  exec /usr/local/bin/other-codex "$@"',
+    "fi",
+  ].join("\n"),
 };
 
 /** pnpm add -g: a sh shim in PNPM_HOME, packages in the global virtual store. */
-const pnpmLayout = Effect.fn("test.pnpmLayout")(function* (
-  base: string,
-  shim: keyof typeof PNPM_SHIMS,
-) {
+const pnpmLayout = Effect.fn("test.pnpmLayout")(function* (base: string, shim: string) {
   const path = yield* Path.Path;
   const home = path.join(base, "pnpm");
   const store = path.join(home, "global", "5", ".pnpm");
@@ -166,7 +197,7 @@ const pnpmLayout = Effect.fn("test.pnpmLayout")(function* (
     "../../.pnpm/@openai+codex@" + VERSION + "/node_modules/@openai/codex",
     path.join(globalModules, "@openai", "codex"),
   );
-  yield* write(path.join(home, "codex"), PNPM_SHIMS[shim], 0o755);
+  yield* write(path.join(home, "codex"), shim, 0o755);
   return { bin: home, root, binary, manager: "CODEX_MANAGED_BY_PNPM" };
 });
 
@@ -225,8 +256,14 @@ it.effect.each([
     host: LINUX_X64,
   },
   { name: "bun", layout: bunLayout },
-  { name: "pnpm with a marked shim", layout: (base: string) => pnpmLayout(base, "marked") },
-  { name: "pnpm with a legacy shim", layout: (base: string) => pnpmLayout(base, "legacy") },
+  {
+    name: "pnpm with a marked shim",
+    layout: (base: string) => pnpmLayout(base, PNPM_SHIMS.marked),
+  },
+  {
+    name: "pnpm with a legacy shim",
+    layout: (base: string) => pnpmLayout(base, PNPM_SHIMS.legacy),
+  },
   { name: "vite-plus", layout: (base: string) => vitePlusLayout(base, "a1b2") },
   {
     name: "vite-plus with a legacy install id",
@@ -298,6 +335,44 @@ it.effect.each([
     }),
   },
   { name: "no codex on PATH", layout: (base: string) => Effect.succeed({ bin: base + "/empty" }) },
+  {
+    name: "a shim that exports more than NODE_PATH",
+    layout: (base: string) => pnpmLayout(base, PNPM_SHIMS.exportsMore),
+  },
+  {
+    name: "a package.json over the read limit",
+    layout: Effect.fn(function* (base: string) {
+      const path = yield* Path.Path;
+      const installed = yield* npmLayout(base);
+      yield* write(
+        path.join(installed.root, "package.json"),
+        JSON.stringify({ name: "@openai/codex", version: VERSION, padding: "x".repeat(70_000) }),
+      );
+      return installed;
+    }),
+  },
+  {
+    name: "a shim marker that disagrees with its exec line",
+    layout: (base: string) => pnpmLayout(base, PNPM_SHIMS.markerDisagrees),
+  },
+  {
+    name: "a shim that runs another program on one branch",
+    layout: (base: string) => pnpmLayout(base, PNPM_SHIMS.otherBranch),
+  },
+  {
+    name: "a relative PATH entry ahead of the install",
+    layout: Effect.fn(function* (base: string) {
+      const installed = yield* npmLayout(base);
+      return { bin: "relative/bin:" + installed.bin };
+    }),
+  },
+  {
+    name: "an empty PATH entry ahead of the install",
+    layout: Effect.fn(function* (base: string) {
+      const installed = yield* npmLayout(base);
+      return { bin: ":" + installed.bin };
+    }),
+  },
   {
     name: "windows",
     layout: (base: string) => npmLayout(base),

@@ -3,6 +3,7 @@ import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
 import * as NodePath from "@effect/platform-node/NodePath";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { resolveCommandPath } from "@goat/shared/shell";
+import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -34,10 +35,15 @@ type PackageManager = keyof typeof MANAGED_BY;
 
 // Only Codex's Linux musl builds link jemalloc; two arenas keep each idle app-server small.
 const JEMALLOC_CONF = "_RJEM_MALLOC_CONF";
-const SHIM_READ_LIMIT = 64 * 1024;
-const SHIM_EXEC_TARGET =
-  /^\s*exec\s+(?:"\$basedir\/node"|node)\s+"\$basedir(?:_abs)?\/([^"$`]+)"\s+"\$@"/gm;
-const SHIM_MARKED_TARGET = /^# cmd-shim-target=(.+)$/m;
+const READ_LIMIT_BYTES = 64 * 1024;
+// The exec, export and basedir lines @pnpm/cmd-shim writes; any other exec or export is a wrapper.
+const SHIM_EXEC =
+  /^\s*exec\s+(?:"\$basedir\/node(?:\.exe)?"|node(?:\.exe)?)\s+"\$basedir(?:_abs|_win)?\/([^"$`]+)"\s+"\$@"\s*$/;
+const SHIM_NODE_PATH_EXPORT = /^\s*export NODE_PATH="[^`]*"\s*$/;
+const SHIM_MARKER = /^# cmd-shim-target=(.+)$/;
+const SHIM_LEGACY_BASEDIR = 'basedir=$(dirname "$(echo "$0" | sed -e \'s,\\\\,/,g\')")';
+
+class UnreadableMetadata extends Data.TaggedError("UnreadableMetadata") {}
 
 const decodeRoot = Schema.decodeEffect(
   Schema.fromJsonString(
@@ -80,13 +86,35 @@ const exists = (file: string) =>
 const realPathOrUndefined = (file: string) =>
   FileSystem.FileSystem.use((fs) => fs.realPath(file)).pipe(Effect.orElseSucceed(() => undefined));
 
+/** Reads a small regular file; FIFOs, devices and large files fail so the launch falls back. */
+const readSmallFile = Effect.fnUntraced(function* (file: string) {
+  const fs = yield* FileSystem.FileSystem;
+  const info = yield* fs.stat(file);
+  if (info.type !== "File" || Number(info.size) > READ_LIMIT_BYTES)
+    return yield* new UnreadableMetadata();
+  return yield* fs.readFileString(file);
+});
+
+/** Spawn searches relative and empty PATH entries from the child's cwd, which this lookup cannot see. */
+function foundBeforeRelativeEntries(
+  entry: string,
+  command: string,
+  pathValue: string,
+  path: Path.Path,
+): boolean {
+  for (const dir of pathValue.split(":")) {
+    if (!path.isAbsolute(dir)) return false;
+    if (path.join(dir, command) === entry) return true;
+  }
+  return false;
+}
+
 /** The package roots of vite-plus's active install, per codex.js's ownership check. */
 const vitePlusPackageRoots = Effect.fnUntraced(function* (packagesDir: string) {
-  const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const metadata = yield* fs
-    .readFileString(path.join(packagesDir, "@openai", "codex.json"))
-    .pipe(Effect.flatMap(decodeVitePlus));
+  const metadata = yield* readSmallFile(path.join(packagesDir, "@openai", "codex.json")).pipe(
+    Effect.flatMap(decodeVitePlus),
+  );
   const installId = metadata.installId ?? "";
   const installDir = installId.startsWith("#")
     ? path.join(packagesDir, "@openai/codex" + installId)
@@ -134,21 +162,26 @@ const detectPackageManager = Effect.fnUntraced(function* (
   return "npm";
 });
 
-/** The codex.js a pnpm sh shim runs, read from its marker or its exec lines. */
+/** The script a pnpm sh shim runs, or undefined for any other script. */
 const pnpmShimTarget = Effect.fnUntraced(function* (entry: string, real: string) {
-  const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const info = yield* fs.stat(real);
-  if (info.type !== "File" || Number(info.size) > SHIM_READ_LIMIT) return undefined;
-  const text = yield* fs.readFileString(real);
-  if (!text.startsWith("#!/bin/sh")) return undefined;
-  // pnpm 11 shims resolve their own symlinks; older ones use $0 as invoked.
-  const marked = SHIM_MARKED_TARGET.exec(text)?.[1]?.trim();
-  if (marked !== undefined) return path.resolve(path.dirname(real), marked);
-  const targets = new Set(Array.from(text.matchAll(SHIM_EXEC_TARGET), (match) => match[1]));
+  const lines = (yield* readSmallFile(real)).split("\n");
+  if (lines[0] !== "#!/bin/sh") return undefined;
+  const targets = new Set<string | undefined>();
+  let marker: string | undefined;
+  let legacyBasedir = false;
+  for (const line of lines) {
+    if (/\bexec\b/.test(line)) targets.add(SHIM_EXEC.exec(line)?.[1]);
+    else if (/\bexport\b/.test(line) && !SHIM_NODE_PATH_EXPORT.test(line)) return undefined;
+    marker = SHIM_MARKER.exec(line)?.[1]?.trim() ?? marker;
+    legacyBasedir ||= line.trim() === SHIM_LEGACY_BASEDIR;
+  }
   const [target] = targets;
   if (targets.size !== 1 || target === undefined) return undefined;
-  return path.resolve(path.dirname(entry), target);
+  // pnpm 11 shims resolve their own symlinks first; older ones use $0 as invoked.
+  if (marker !== undefined)
+    return marker === target ? path.resolve(path.dirname(real), target) : undefined;
+  return legacyBasedir ? path.resolve(path.dirname(entry), target) : undefined;
 });
 
 /** The lexical codex.js path the PATH entry runs. */
@@ -178,6 +211,11 @@ const resolveNativeCodex = Effect.fnUntraced(function* (command: string, env: No
   if (!path.isAbsolute(command) && command.includes("/")) return undefined;
   const entry = yield* resolveCommandPath(command, { env });
   if (entry === null) return undefined;
+  if (
+    !path.isAbsolute(command) &&
+    !foundBeforeRelativeEntries(entry, command, env.PATH ?? "", path)
+  )
+    return undefined;
   const codexJs = yield* locateCodexJs(entry);
   if (codexJs === undefined) return undefined;
   const realCodexJs = yield* fs.realPath(codexJs);
@@ -187,9 +225,9 @@ const resolveNativeCodex = Effect.fnUntraced(function* (command: string, env: No
   )
     return undefined;
   const root = path.dirname(path.dirname(realCodexJs));
-  const rootPackage = yield* fs
-    .readFileString(path.join(root, "package.json"))
-    .pipe(Effect.flatMap(decodeRoot));
+  const rootPackage = yield* readSmallFile(path.join(root, "package.json")).pipe(
+    Effect.flatMap(decodeRoot),
+  );
   const vendorRoot = yield* Effect.try(() =>
     path.join(
       path.dirname(
@@ -199,9 +237,9 @@ const resolveNativeCodex = Effect.fnUntraced(function* (command: string, env: No
     ),
   ).pipe(Effect.orElseSucceed(() => path.join(root, "vendor")));
   const vendorDir = path.join(vendorRoot, triple);
-  const vendor = yield* fs
-    .readFileString(path.join(vendorDir, "codex-package.json"))
-    .pipe(Effect.flatMap(decodeVendor));
+  const vendor = yield* readSmallFile(path.join(vendorDir, "codex-package.json")).pipe(
+    Effect.flatMap(decodeVendor),
+  );
   if (vendor.version !== rootPackage.version || vendor.target !== triple) return undefined;
   const binary = yield* fs.realPath(path.join(vendorDir, vendor.entrypoint));
   const info = yield* fs.stat(binary);
