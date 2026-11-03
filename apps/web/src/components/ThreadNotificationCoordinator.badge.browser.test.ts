@@ -579,3 +579,50 @@ it("refreshes the notification fold when the parent goes offline", async () => {
   ]);
   expect(state.foldBuilds).toBe(2);
 });
+
+it("reuses the fold for separately timed completions across cursor-only snapshots", async () => {
+  await using app = setup();
+  const children = Array.from({ length: 12 }, (_, index) => ({
+    id: `child-${index}`,
+    launchedBy: {
+      kind: "launch" as const,
+      via: "delegate_task" as const,
+      threadId: "thread",
+      environmentId: "one",
+      environmentLabel: null,
+      threadTitle: null,
+    },
+  }));
+  state.shells.set("two", shell(children[0]!, ...children.slice(1)));
+  app.start();
+  using _timers = fakeTimers();
+  let latest = shell(children[0]!, ...children.slice(1));
+  for (let index = 0; index < children.length; index++) {
+    const rows = children.map((child, row) =>
+      row <= index
+        ? {
+            ...child,
+            latestTurn: {
+              turnId: "turn",
+              state: "completed",
+              completedAt: "2026-09-13T07:01:00.000Z",
+            },
+          }
+        : child,
+    );
+    latest = shell(rows[0]!, ...rows.slice(1));
+    state.shells.set("two", latest);
+    await vi.advanceTimersByTimeAsync(1);
+  }
+  await vi.advanceTimersByTimeAsync(WORKING_EXIT_GRACE_MS - children.length);
+  const stableSnapshot = Option.getOrThrow(latest.snapshot);
+  for (let index = 0; index < children.length; index++) {
+    state.shells.set("two", {
+      ...latest,
+      snapshot: Option.some({ ...stableSnapshot, cursor: index }),
+    });
+    await vi.advanceTimersByTimeAsync(1);
+  }
+  expect(TestNotification.sent).toEqual([]);
+  expect(state.foldBuilds).toBe(1);
+});
