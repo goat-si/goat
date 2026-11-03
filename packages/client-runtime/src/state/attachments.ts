@@ -94,13 +94,13 @@ type AttachmentRemoveCommand<E> = AtomCommand<
   E
 >;
 
-export function deletePendingAttachmentUpload<E>(input: {
+export async function deletePendingAttachmentUpload<E>(input: {
   readonly registry: AtomRegistry.AtomRegistry;
   readonly remove: AttachmentRemoveCommand<E>;
   readonly environmentId: EnvironmentId;
   readonly attachmentId: string;
-}): void {
-  void runAtomCommand(
+}): Promise<void> {
+  await runAtomCommand(
     input.registry,
     input.remove,
     { environmentId: input.environmentId, input: { attachmentId: input.attachmentId } },
@@ -156,7 +156,7 @@ export async function runAttachmentUploadCycle<E, RE>(input: {
   }
   const attachmentId = minted.value.attachmentId;
   if (input.onMinted?.(attachmentId) === "cancel") {
-    deletePendingAttachmentUpload({
+    await deletePendingAttachmentUpload({
       registry: input.registry,
       remove: input.remove,
       environmentId: input.environmentId,

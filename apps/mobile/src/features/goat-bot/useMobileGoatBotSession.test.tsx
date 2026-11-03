@@ -175,10 +175,6 @@ describe("mobile GOAT Bot session selection", () => {
     const transfer = Promise.withResolvers<void>();
     const deleted = Promise.withResolvers<void>();
     const finishDelete = Promise.withResolvers<void>();
-    const initialCleanup = Promise.withResolvers<void>();
-    harness.release.mockImplementation(async () => {
-      initialCleanup.resolve();
-    });
     harness.upload.mockReset().mockImplementation(async (input) => {
       expect(input.onMinted(uploadId)).toBe("continue");
       started.resolve();
@@ -207,15 +203,18 @@ describe("mobile GOAT Bot session selection", () => {
       removal = botSessions.disposeMobileGoatBotEnvironment(env).then(() => {
         settled = true;
       });
-      await initialCleanup.promise;
+      await Promise.resolve();
     });
     try {
       expect(settled).toBe(false);
+      expect(fileOwnership.isComposerAttachmentFileRetained(file.fileUri)).toBe(true);
+      expect(harness.release).not.toHaveBeenCalled();
     } finally {
       transfer.resolve();
     }
     await deleted.promise;
     expect(settled).toBe(false);
+    expect(fileOwnership.isComposerAttachmentFileRetained(file.fileUri)).toBe(true);
     finishDelete.resolve();
     await act(async () => {
       await removal;

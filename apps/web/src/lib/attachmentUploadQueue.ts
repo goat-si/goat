@@ -124,7 +124,7 @@ function stampDraftFileUpload(job: DraftFileOwner, attachmentId: string): void {
 
 function deletePendingUpload(environmentId: EnvironmentId, attachmentId: string): void {
   if (!readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)) return;
-  deletePendingAttachmentUpload({
+  void deletePendingAttachmentUpload({
     registry: appAtomRegistry,
     remove: attachmentEnvironment.remove,
     environmentId,

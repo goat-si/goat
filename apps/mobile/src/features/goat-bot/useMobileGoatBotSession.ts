@@ -102,6 +102,10 @@ function newSession(environmentId: EnvironmentId): Session {
   const retained = new Map<string, ReadonlyArray<() => void>>();
   const retainedUploadKeys = new Map<string, Set<string>>();
   const pendingCleanup = new Set<Promise<void>>();
+  let activeUpload: {
+    readonly controller: AbortController;
+    readonly settled: Promise<unknown>;
+  } | null = null;
   let disposed = false;
   const retainUploads = (key: string, attachments: ReadonlyArray<DraftComposerAttachment>) => {
     const releases = [...(retained.get(key) ?? [])];
@@ -152,6 +156,7 @@ function newSession(environmentId: EnvironmentId): Session {
     canDispatch: (bot) => {
       const current = sessions.get(environmentId);
       return (
+        !disposed &&
         current?.connected === true &&
         current.canOperate &&
         current.machine.ensure.state === "confirmed" &&
@@ -169,23 +174,33 @@ function newSession(environmentId: EnvironmentId): Session {
         throw new Error("GOAT Bot isn't available");
       }
       // Upload code loads only for messages that carry files.
-      const files =
-        attachments.length === 0
-          ? []
-          : await (
-              await import("./goatBotAttachments")
-            ).uploadGoatBotAttachments({
-              environmentId,
-              attachments: uploads.get(clientKey) ?? attachments,
-              remember: (uploaded) => {
-                if (disposed) {
-                  cleanup(uploaded);
-                  return;
-                }
-                uploads.set(clientKey, uploaded);
-                retainUploads(clientKey, uploaded);
-              },
-            });
+      let files;
+      if (attachments.length === 0) {
+        files = [];
+      } else {
+        const controller = new AbortController();
+        const settled = import("./goatBotAttachments").then(({ uploadGoatBotAttachments }) =>
+          uploadGoatBotAttachments({
+            environmentId,
+            signal: controller.signal,
+            attachments: uploads.get(clientKey) ?? attachments,
+            remember: (uploaded) => {
+              if (disposed) {
+                cleanup(uploaded);
+                return;
+              }
+              uploads.set(clientKey, uploaded);
+              retainUploads(clientKey, uploaded);
+            },
+          }),
+        );
+        activeUpload = { controller, settled };
+        try {
+          files = await settled;
+        } finally {
+          activeUpload = null;
+        }
+      }
       if (disposed) throw new Error("GOAT Bot environment was removed");
       const result = await runAtomCommand(appAtomRegistry, channelEnvironment.ingest, {
         environmentId,
@@ -230,6 +245,9 @@ function newSession(environmentId: EnvironmentId): Session {
     },
     dispose: async () => {
       disposed = true;
+      const upload = activeUpload;
+      upload?.controller.abort();
+      if (upload) await upload.settled.catch(() => undefined);
       queue.dispose();
       await Promise.all(pendingCleanup);
     },
