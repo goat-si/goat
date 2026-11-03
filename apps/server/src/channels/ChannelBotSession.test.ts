@@ -186,20 +186,18 @@ describe("GOAT Bot sessions", () => {
         const id = ChatAttachmentId.make(createPendingAttachmentId());
         const path = NodePath.join(config.attachmentsDir, `${id}.png`);
         NodeFS.writeFileSync(path, new Uint8Array([1, 2, 3]));
-        using _spy = vi
-          .spyOn(fileSystem, "stat")
-          .mockImplementation((candidate) =>
-            candidate === path
-              ? Effect.fail(
-                  PlatformError.systemError({
-                    _tag: reason,
-                    module: "FileSystem",
-                    method: "stat",
-                    pathOrDescriptor: candidate,
-                  }),
-                )
-              : stat(candidate),
-          );
+        using _spy = vi.spyOn(fileSystem, "stat").mockImplementation((candidate) =>
+          candidate === path
+            ? Effect.fail(
+                PlatformError.systemError({
+                  _tag: reason,
+                  module: "FileSystem",
+                  method: "stat",
+                  pathOrDescriptor: candidate,
+                }),
+              )
+            : stat(candidate),
+        );
         const error = yield* Effect.flip(
           gateway.ingest(
             {
