@@ -3,6 +3,7 @@ import { it } from "@effect/vitest";
 import { DEFAULT_TERMINAL_ID } from "@goat/contracts";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { resolveNice } from "@goat/shared/toolPriority";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -48,8 +49,12 @@ it.layer(
           authorize: Effect.void,
         });
         expect(ptyAdapter.spawnInputs[0]?.shell).toBe("/bin/sh");
-        expect(ptyAdapter.spawnInputs[1]?.shell).toMatch(/^\/(usr\/)?bin\/nice$/);
-        expect(ptyAdapter.spawnInputs[1]?.args?.slice(0, 3)).toEqual(["-n", "10", "/bin/sh"]);
+        const nice = yield* resolveNice("linux");
+        expect(ptyAdapter.spawnInputs[1]).toMatchObject(
+          nice === undefined
+            ? { shell: "/bin/sh" }
+            : { shell: nice, args: expect.arrayContaining(["-n", "10", "/bin/sh"]) },
+        );
         yield* manager.restart({ ...input, terminalId: agent.terminalId });
         expect(ptyAdapter.spawnInputs[2]?.shell).toBe("/bin/sh");
       }).pipe(Effect.provideService(HostProcess.Platform, "linux")),
