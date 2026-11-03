@@ -33,9 +33,11 @@ export default Effect.gen(function* () {
     create_operation_id: string;
     revision_count: number;
     body_bytes: number;
+    metadata_bytes: number;
     lineage_bytes: number;
   }>`SELECT i.space,i.memory_id,json_extract(i.identity_json,'$.createOperationId') AS create_operation_id,
       count(r.revision_id) AS revision_count,coalesce(sum(length(CAST(p.body_json AS BLOB))),0) AS body_bytes,
+      coalesce(sum(length(CAST(r.parents_json AS BLOB))+length(CAST(r.scope_json AS BLOB))+length(CAST(r.provenance_json AS BLOB))),0) AS metadata_bytes,
       coalesce((SELECT sum(length(CAST(l.record_json AS BLOB))) FROM memory_import_lineage l WHERE l.space=i.space AND l.memory_id=i.memory_id),0) AS lineage_bytes
     FROM memory_identity_ledger i
     LEFT JOIN memory_revisions r ON r.space=i.space AND r.memory_id=i.memory_id
@@ -46,7 +48,8 @@ export default Effect.gen(function* () {
     const chunk = [];
     let bytes = 0;
     for (const row of identities.slice(offset, offset + 100)) {
-      const rowBytes = row.body_bytes + row.lineage_bytes + row.revision_count * 1024;
+      const rowBytes =
+        row.body_bytes + row.metadata_bytes + row.lineage_bytes + row.revision_count * 1024;
       if (chunk.length > 0 && bytes + rowBytes > BATCH_MAX_BYTES) break;
       chunk.push(row);
       bytes += rowBytes;
