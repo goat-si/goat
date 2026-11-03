@@ -554,6 +554,10 @@ export interface ProjectionStoreV2Shape {
   ) => Effect.Effect<ReadonlyArray<IgnoredServerActivity>, ServerActivityReadError>;
   readonly getMessageCount: (threadId: ThreadId) => Effect.Effect<number, ProjectionStoreV2Error>;
   readonly getSubagentCount: (threadId: ThreadId) => Effect.Effect<number, ProjectionStoreV2Error>;
+  /** Child threads of the thread's app-owned tasks, in task order, without decoding the tasks. */
+  readonly listAppOwnedChildThreadIds: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ReadonlyArray<ThreadId>, ProjectionStoreV2Error>;
   readonly getNextTurnItemOrdinal: (
     threadId: ThreadId,
   ) => Effect.Effect<number, ProjectionStoreV2Error>;
@@ -5948,6 +5952,17 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         Effect.map((rows) => rows[0]?.count ?? 0),
         Effect.mapError(controlReadError(threadId)),
       );
+    const listAppOwnedChildThreadIds: ProjectionStoreV2Shape["listAppOwnedChildThreadIds"] = (
+      threadId,
+    ) =>
+      sql<{ readonly child_thread_id: string }>`SELECT child_thread_id
+        FROM orchestration_v2_projection_subagents
+        WHERE thread_id = ${threadId} AND origin = 'app_owned' AND child_thread_id IS NOT NULL
+          AND json_type(payload_json, '$.promotedAt') IS NULL
+        ORDER BY COALESCE(started_at, ''), subagent_id ASC`.pipe(
+        Effect.map((rows) => [...new Set(rows.map((row) => ThreadId.make(row.child_thread_id)))]),
+        Effect.mapError(controlReadError(threadId)),
+      );
     const getNextTurnItemOrdinal: ProjectionStoreV2Shape["getNextTurnItemOrdinal"] = (threadId) =>
       sql<{ ordinal: number | null }>`SELECT MAX(ordinal) AS ordinal
         FROM orchestration_v2_projection_turn_items WHERE thread_id = ${threadId}`.pipe(
@@ -7463,6 +7478,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       isNodeStored: readOnReader(isNodeStored, true),
       getMessageCount: readOnReader(getMessageCount),
       getSubagentCount: readOnReader(getSubagentCount),
+      listAppOwnedChildThreadIds: readOnReader(listAppOwnedChildThreadIds),
       getNextTurnItemOrdinal: readOnReader(getNextTurnItemOrdinal),
       getTurnItem: readOnReader(getTurnItem),
       getThreadRecords: (threadId, fields, filter) =>
@@ -8149,6 +8165,20 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
       getSubagentCount: (threadId) =>
         Ref.get(replayState).pipe(
           Effect.map((state) => state.projections.get(threadId)?.subagents.length ?? 0),
+        ),
+      listAppOwnedChildThreadIds: (threadId) =>
+        Ref.get(replayState).pipe(
+          Effect.map((state) => [
+            ...new Set(
+              (state.projections.get(threadId)?.subagents ?? []).flatMap((task) =>
+                task.origin === "app_owned" &&
+                task.childThreadId !== null &&
+                task.promotedAt === undefined
+                  ? [task.childThreadId]
+                  : [],
+              ),
+            ),
+          ]),
         ),
       getNextTurnItemOrdinal: (threadId) =>
         Ref.get(replayState).pipe(
