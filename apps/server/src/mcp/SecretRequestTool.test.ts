@@ -262,3 +262,35 @@ it.effect("refuses non-http origins and origin-bound file delivery before record
     }),
   ),
 );
+
+it.effect("refuses a login request without an origin before recording a card", () =>
+  withRunningTurn(({ orchestrator, requestSecret }) =>
+    Effect.gen(function* () {
+      expect(
+        yield* requestSecret(scope, { ...input, kind: "login" }).pipe(Effect.flip),
+      ).toMatchObject({ code: "invalid_request" });
+      const cards = (yield* orchestrator.getThreadProjection(threadId)).turnItems.filter(
+        (item) => item.type === "secret_request",
+      );
+      expect(cards).toEqual([]);
+    }),
+  ),
+);
+
+it.effect("records the login kind and normalized origin on the request card", () =>
+  withRunningTurn(({ orchestrator, requestSecret }) =>
+    Effect.gen(function* () {
+      expect(
+        yield* requestSecret(scope, {
+          ...input,
+          kind: "login",
+          origin: "https://example.com/login",
+        }),
+      ).toMatchObject({ status: "pending" });
+      const cards = (yield* orchestrator.getThreadProjection(threadId)).turnItems.filter(
+        (item) => item.type === "secret_request",
+      );
+      expect(cards).toMatchObject([{ requestKind: "login", siteOrigin: "https://example.com" }]);
+    }),
+  ),
+);

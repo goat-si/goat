@@ -4,6 +4,7 @@ import { SecretRef, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { needsHumanFields } from "./humanStepResult.ts";
 
 export const OrchestratorMcpRequestSecretInput = Schema.Struct({
+  kind: Schema.optional(Schema.Literal("login")),
   label: TrimmedNonEmptyString.annotate({
     description: "Card title, such as 'GitHub webhook secret'.",
   }),

@@ -50,7 +50,11 @@ const StoredSecret = Schema.fromJsonString(
     value: Schema.String,
     savedAt: Schema.Number,
     origin: Schema.optional(Schema.String),
+    loginThreadId: Schema.optional(Schema.String),
   }),
+);
+const encodeLogin = Schema.encodeEffect(
+  Schema.fromJsonString(Schema.Struct({ username: Schema.String, password: Schema.String })),
 );
 const encodeStored = Schema.encodeEffect(StoredSecret);
 const decodeStored = Schema.decodeUnknownOption(StoredSecret);
@@ -121,6 +125,18 @@ const make = Effect.gen(function* () {
         return yield* new SecretRequestError({ reason: "already_answered" });
       }
       if (
+        input.answer.type !== "decline" &&
+        (item.requestKind === "login") !== (input.answer.type === "save_login")
+      ) {
+        return yield* new SecretRequestError({ reason: "answer_mismatch" });
+      }
+      if (
+        input.answer.type === "save_login" &&
+        input.answer.password.length < SIGN_IN_SECRET_MIN_LENGTH
+      ) {
+        return yield* new SecretRequestError({ reason: "too_short_for_sign_in" });
+      }
+      if (
         input.answer.type === "save" &&
         item.siteOrigin !== undefined &&
         input.answer.secret.length < SIGN_IN_SECRET_MIN_LENGTH
@@ -133,10 +149,17 @@ const make = Effect.gen(function* () {
       }
       // Create before recording so racing answers cannot overwrite values or show saved before storage.
       // Existing values on pending cards finish earlier saves whose recording failed.
-      if (input.answer.type === "save") {
+      if (input.answer.type !== "decline") {
         const encoded = yield* encodeStored({
           projectId: records.thread.projectId,
-          value: input.answer.secret,
+          value:
+            input.answer.type === "save"
+              ? input.answer.secret
+              : yield* encodeLogin({
+                  username: input.answer.username,
+                  password: input.answer.password,
+                }).pipe(Effect.orDie),
+          ...(input.answer.type === "save_login" ? { loginThreadId: input.threadId } : {}),
           savedAt: yield* Clock.currentTimeMillis,
           ...(item.siteOrigin === undefined ? {} : { origin: item.siteOrigin }),
         }).pipe(Effect.orDie);
@@ -152,7 +175,7 @@ const make = Effect.gen(function* () {
             ),
           );
       }
-      const secretStatus = input.answer.type === "save" ? "saved" : "declined";
+      const secretStatus = input.answer.type === "decline" ? "declined" : "saved";
       yield* threadManagement
         .dispatch({
           type: "secret_request.record",
@@ -167,18 +190,19 @@ const make = Effect.gen(function* () {
           ...(item.placeholder === undefined ? {} : { placeholder: item.placeholder }),
           ...(item.delivery === undefined ? {} : { delivery: item.delivery }),
           ...(item.siteOrigin === undefined ? {} : { siteOrigin: item.siteOrigin }),
+          ...(item.requestKind === undefined ? {} : { requestKind: item.requestKind }),
           secretStatus,
         })
         .pipe(
           Effect.mapError((cause) => new SecretRequestError({ reason: "record_failed", cause })),
           // Clear failed saves so the pending card can be answered again.
           Effect.tapError(() =>
-            input.answer.type === "save"
+            input.answer.type !== "decline"
               ? removeLogged(storeName(refFor(salt, input.threadId, item.id)))
               : Effect.void,
           ),
         );
-      if (input.answer.type !== "save") return;
+      if (input.answer.type === "decline") return;
       // The wait may have closed the card; delete unrecorded answers because no one receives their refs.
       const recorded = yield* threadManagement
         .getThreadRecords(input.threadId, ["turnItems"], {
@@ -255,6 +279,8 @@ const make = Effect.gen(function* () {
     readonly origin?: string;
   }) {
     const stored = yield* readRef(input);
+    if (stored.loginThreadId !== undefined)
+      return yield* new SecretRequestError({ reason: "login_ref" });
     // Checked before removal, so a wrong destination leaves the ref usable on its own site.
     if (input.origin === undefined && stored.origin !== undefined) {
       return yield* new SecretRequestError({ reason: "origin_bound" });

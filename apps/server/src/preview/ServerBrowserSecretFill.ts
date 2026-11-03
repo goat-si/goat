@@ -98,6 +98,8 @@ const secretFailure = (reason: SecretRequestFailureReason): SecretFailure => {
     case "ref_unavailable":
     case "ref_expired":
       return "no_candidate";
+    case "answer_mismatch":
+    case "login_ref":
     case "agent_stopped":
     case "not_a_file_request":
     case "origin_required":

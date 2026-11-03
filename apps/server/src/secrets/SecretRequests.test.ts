@@ -37,6 +37,7 @@ const withService = <A, E>(
     readonly threadId?: ThreadId;
     readonly delivery?: "file";
     readonly siteOrigin?: string;
+    readonly requestKind?: "login";
     readonly directory?: string;
     readonly runStatus?: string;
     readonly removeFails?: boolean;
@@ -109,6 +110,7 @@ const withService = <A, E>(
                 reason: "Used as GH_TOKEN.",
                 ...(options.delivery === undefined ? {} : { delivery: options.delivery }),
                 ...(options.siteOrigin === undefined ? {} : { siteOrigin: options.siteOrigin }),
+                ...(options.requestKind === undefined ? {} : { requestKind: options.requestKind }),
                 secretStatus,
               },
             ],
@@ -556,4 +558,60 @@ it.effect(
         }),
       { siteOrigin: "https://example.com" },
     ),
+);
+
+it.effect("rejects a single-secret answer to a login request without storing it", () =>
+  withService(
+    ({ service, stored }) =>
+      Effect.gen(function* () {
+        const error = yield* service
+          .answer({
+            threadId,
+            turnItemId,
+            answer: { type: "save", secret: "test-password" },
+          })
+          .pipe(Effect.flip);
+        assert.equal(error.reason, "answer_mismatch");
+        assert.deepEqual(valuesOf(stored), []);
+      }),
+    { requestKind: "login", siteOrigin: "https://example.com" },
+  ),
+);
+
+it.effect("rejects a login answer to a single-secret request without storing it", () =>
+  withService(({ service, stored }) =>
+    Effect.gen(function* () {
+      const error = yield* service
+        .answer({
+          threadId,
+          turnItemId,
+          answer: { type: "save_login", username: "test-user", password: "test-password" },
+        })
+        .pipe(Effect.flip);
+      assert.equal(error.reason, "answer_mismatch");
+      assert.deepEqual(valuesOf(stored), []);
+    }),
+  ),
+);
+
+it.effect("stores a login answer privately and refuses the single-secret consumer", () =>
+  withService(
+    ({ service, stored, dispatched }) =>
+      Effect.gen(function* () {
+        yield* service.answer({
+          threadId,
+          turnItemId,
+          answer: { type: "save_login", username: "test-user", password: "test-password" },
+        });
+        const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
+        const result = yield* service
+          .consumeForOrigin({ ref, threadId, origin: "https://example.com" })
+          .pipe(Effect.flip);
+        assert.equal(result.reason, "login_ref");
+        assert.equal(valuesOf(stored).length, 1);
+        assert.isFalse(JSON.stringify(dispatched).includes("test-user"));
+        assert.isFalse(JSON.stringify(dispatched).includes("test-password"));
+      }),
+    { requestKind: "login", siteOrigin: "https://example.com" },
+  ),
 );
