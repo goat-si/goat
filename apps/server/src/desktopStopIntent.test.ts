@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
+import type { DesktopStopIntent } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
@@ -159,6 +160,35 @@ it.effect("a stalled delete keeps the intent that was read", () =>
       assert.deepStrictEqual(yield* Fiber.join(first), Option.some(intent));
       assert.deepStrictEqual(yield* reader.atShutdown, Option.some(intent));
       assert.equal(reads, 1);
+    }).pipe(Effect.provide(StopIntent.layer("/intent", 123).pipe(Layer.provide(fs))));
+  }),
+);
+
+it.effect("an interrupted fiber's finalizer reads the desktop stop intent", () =>
+  Effect.gen(function* () {
+    const ready = yield* Deferred.make<void>();
+    const result = yield* Deferred.make<Option.Option<DesktopStopIntent>>();
+    const fs = FileSystem.layerNoop({
+      stream: () => Stream.fromIterable([new TextEncoder().encode(JSON.stringify(intent))]),
+      remove: () => Effect.void,
+    });
+    yield* Effect.gen(function* () {
+      const reader = yield* StopIntent.DesktopStopIntentReader;
+      const fiber = yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* Effect.addFinalizer(() =>
+            reader.atShutdown.pipe(
+              Effect.flatMap((value) => Deferred.succeed(result, value)),
+              Effect.asVoid,
+            ),
+          );
+          yield* Deferred.succeed(ready, undefined);
+          return yield* Effect.never;
+        }),
+      ).pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(ready);
+      yield* Fiber.interrupt(fiber);
+      assert.deepStrictEqual(yield* Deferred.await(result), Option.some(intent));
     }).pipe(Effect.provide(StopIntent.layer("/intent", 123).pipe(Layer.provide(fs))));
   }),
 );

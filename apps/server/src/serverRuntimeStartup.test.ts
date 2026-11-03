@@ -1,5 +1,6 @@
 import { assert, it } from "@effect/vitest";
 import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   DEFAULT_SERVER_SETTINGS,
   ProjectId,
@@ -73,6 +74,7 @@ const bootstrapScenario = (
   },
   intent: Option.Option<DesktopStopIntent> = Option.none(),
   readerEffect: Effect.Effect<Option.Option<DesktopStopIntent>> = Effect.succeed(intent),
+  hold: Effect.Effect<void> = Effect.void,
 ) =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -302,6 +304,7 @@ const bootstrapScenario = (
             assert.isUndefined(welcome.payload.bootstrapThreadId);
           }
         }
+        yield* hold;
       }).pipe(
         Effect.provide(
           ServerRuntimeStartup.layerWithOptions(
@@ -415,6 +418,101 @@ it.effect.each(["relaunch", "unknown"] as const)("records shutdown intent: %s", 
           message[1]?.requestedAt === (reason === "relaunch" ? "2026-01-01T00:00:00Z" : undefined),
       ),
     );
+  }),
+);
+
+it.effect("an interrupted startup fiber logs the relaunch intent from the file", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = (yield* Path.Path).join(yield* fs.makeTempDirectoryScoped(), "intent.json");
+    yield* fs.writeFileString(
+      path,
+      JSON.stringify({
+        version: 1,
+        pid: 123,
+        reason: "relaunch",
+        requestedAt: "2026-01-01T00:00:00Z",
+      }),
+    );
+    const ready = yield* Deferred.make<void>();
+    const messages: unknown[] = [];
+    const logger = Logger.make(({ message }) => {
+      messages.push(message);
+    });
+    yield* Effect.gen(function* () {
+      const reader = yield* DesktopStopIntentReader.DesktopStopIntentReader;
+      const fiber = yield* bootstrapScenario(
+        "disabled-codex",
+        Effect.void,
+        undefined,
+        Option.none(),
+        reader.atShutdown,
+        Deferred.succeed(ready, undefined).pipe(Effect.andThen(Effect.never)),
+      ).pipe(
+        Effect.provide(Logger.layer([logger], { mergeWithExisting: false })),
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.await(ready);
+      yield* Fiber.interrupt(fiber);
+      assert.isTrue(
+        messages.some(
+          (message) =>
+            Array.isArray(message) &&
+            message[0] === "Server shutdown intent" &&
+            message[1]?.reason === "relaunch",
+        ),
+      );
+    }).pipe(Effect.provide(DesktopStopIntentReader.layer(path, 123)));
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("an interrupted startup bounds a stalled intent read to one second", () =>
+  Effect.gen(function* () {
+    const ready = yield* Deferred.make<void>();
+    const started = yield* Deferred.make<void>();
+    const messages: unknown[] = [];
+    const logger = Logger.make(({ message }) => {
+      messages.push(message);
+    });
+    const fs = FileSystem.layerNoop({
+      stream: () =>
+        Stream.fromEffect(Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never))),
+    });
+    yield* Effect.gen(function* () {
+      const reader = yield* DesktopStopIntentReader.DesktopStopIntentReader;
+      const fiber = yield* bootstrapScenario(
+        "disabled-codex",
+        Effect.void,
+        undefined,
+        Option.none(),
+        reader.atShutdown,
+        Deferred.succeed(ready, undefined).pipe(Effect.andThen(Effect.never)),
+      ).pipe(
+        Effect.provide(Logger.layer([logger], { mergeWithExisting: false })),
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.await(ready);
+      const interrupt = yield* Fiber.interrupt(fiber).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* TestClock.adjust(0);
+      const didStart = yield* Deferred.isDone(started);
+      if (didStart) {
+        yield* TestClock.adjust("999 millis");
+        assert.isUndefined(interrupt.pollUnsafe());
+        yield* TestClock.adjust("1 millis");
+      }
+      yield* Fiber.join(interrupt);
+      assert.isTrue(didStart);
+      assert.isTrue(
+        messages.some(
+          (message) =>
+            Array.isArray(message) &&
+            message[0] === "Server shutdown intent" &&
+            message[1]?.reason === "unknown",
+        ),
+      );
+    }).pipe(Effect.provide(DesktopStopIntentReader.layer("/intent", 123).pipe(Layer.provide(fs))));
   }),
 );
 

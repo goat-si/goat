@@ -617,7 +617,6 @@ export const waitForBackendStopIntent = (intent: BackendStopIntentHandle) =>
           )
         : Effect.void,
     ),
-    Effect.interruptible,
   );
 
 export const removeBackendStopIntent = (
