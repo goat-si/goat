@@ -81,6 +81,7 @@ export const ClaudeCloudDriver: ProviderDriver<ClaudeCloudSettings, ClaudeCloudD
       const resolveLogin = resolveClaudeCloudLogin(config.sourceInstanceId).pipe(
         Effect.provideService(ProviderHost.ProviderHost, host),
         Effect.provideService(Path.Path, path),
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
         Effect.provideService(HostProcess.Environment, processEnvironment),
         Effect.provideService(HostProcess.HomeDirectory, homeDirectory),
         Effect.provideService(HostProcess.Platform, platform),
