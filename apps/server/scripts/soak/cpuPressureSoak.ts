@@ -3,7 +3,7 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
 import * as NodeOS from "node:os";
 import * as NodeURL from "node:url";
-import { guardChild } from "@goat/shared/errorGuards";
+import { guardChild, guardErrors } from "@goat/shared/errorGuards";
 import {
   Observations,
   counter,
@@ -161,30 +161,35 @@ function spawnServer(
       "--dev-url",
       `http://127.0.0.1:${options.serverPort}`,
       "--no-browser",
-      "--log-level",
-      "debug",
     ],
     { cwd: checkout, env, stdio: ["ignore", "pipe", "pipe"] },
   );
 }
 
-async function waitForReady(server: OwnedChild): Promise<void> {
-  const ready = new Promise<void>((resolve) => {
-    let buffer = "";
-    const consume = (chunk: Buffer) => {
-      buffer = (buffer + chunk.toString()).slice(-65536);
-      if (buffer.includes("Accepting commands")) resolve();
+async function waitForReady(server: OwnedChild, directory: string, port: number): Promise<void> {
+  let watcher: NodeFS.FSWatcher | undefined;
+  const ready = new Promise<void>((resolve, reject) => {
+    const check = () => {
+      try {
+        if (verifyRuntimeState(directory, server.child.pid, port)) resolve();
+      } catch {
+        // A previous server's runtime file may still exist until publication.
+      }
     };
-    server.child.stdout?.on("data", consume);
-    server.child.stderr?.on("data", consume);
+    watcher = guardErrors(NodeFS.watch(directory, check), reject);
+    check();
   });
-  await Promise.race([
-    ready,
-    server.failure,
-    server.exited.then(({ code, signal }) => {
-      throw new Error(`server exited before readiness: ${code ?? signal}`);
-    }),
-  ]);
+  try {
+    await Promise.race([
+      ready,
+      server.failure,
+      server.exited.then(({ code, signal }) => {
+        throw new Error(`server exited before readiness: ${code ?? signal}`);
+      }),
+    ]);
+  } finally {
+    watcher?.close();
+  }
 }
 
 export function verifyRuntimeState(
@@ -265,7 +270,6 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
     });
     const trace = new LogTail(tracePath, (value) => {
       observations.consumeTrace(value);
-      detail?.write({ source: "trace", value });
     });
     const provider = new LogTail(lifecycle, (value) =>
       detail?.write({ source: "provider", value }),
@@ -284,11 +288,13 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
     sampleTimer = setInterval(sample, 5000);
     server = spawnServer(options, root, lifecycle, credential);
     owned.push(server);
+    server.child.stdout?.resume();
+    server.child.stderr?.resume();
     process.stdout.write(`owned server pid: ${server.child.pid}\n`);
     void server.exited.then(() => {
       if (!teardown) serverExit = true;
     });
-    await waitForReady(server);
+    await waitForReady(server, NodePath.join(options.home, "userdata"), options.serverPort);
     runtimeConfirmed = verifyRuntimeState(
       NodePath.join(options.home, "userdata"),
       server.child.pid,
