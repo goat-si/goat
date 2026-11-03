@@ -35,6 +35,7 @@ const callInScreenshotWorld = async (
   cdp: CDPSession,
   functionDeclaration: string,
   args: ReadonlyArray<string | number>,
+  errorMessage: string,
 ) => {
   const { frameTree } = await cdp.send("Page.getFrameTree");
   const { executionContextId } = await cdp.send("Page.createIsolatedWorld", {
@@ -48,17 +49,20 @@ const callInScreenshotWorld = async (
     awaitPromise: true,
     returnByValue: true,
   });
-  if (exceptionDetails) throw new Error("The screenshot could not be resized.");
+  if (exceptionDetails || (result.value !== null && typeof result.value !== "string")) {
+    throw new Error(errorMessage);
+  }
   return result.value as string | null;
 };
 
 export const shrinkPng = async (cdp: CDPSession, png: string, scale: number) => {
   const header = Buffer.from(png.slice(0, 32), "base64");
-  const result = await callInScreenshotWorld(cdp, SHRINK_PNG, [
-    png,
-    Math.round(header.readUInt32BE(16) * scale),
-    Math.round(header.readUInt32BE(20) * scale),
-  ]);
+  const result = await callInScreenshotWorld(
+    cdp,
+    SHRINK_PNG,
+    [png, Math.round(header.readUInt32BE(16) * scale), Math.round(header.readUInt32BE(20) * scale)],
+    "The snapshot could not shrink its screenshot.",
+  );
   if (result === null) throw new Error("The snapshot could not shrink its screenshot.");
   return result;
 };
@@ -68,4 +72,10 @@ export const shrinkJpegWithin = (
   jpeg: string,
   quality: number,
   bounds: { readonly maxWidth: number; readonly maxHeight: number },
-) => callInScreenshotWorld(cdp, SHRINK_JPEG, [jpeg, bounds.maxWidth, bounds.maxHeight, quality]);
+) =>
+  callInScreenshotWorld(
+    cdp,
+    SHRINK_JPEG,
+    [jpeg, bounds.maxWidth, bounds.maxHeight, quality],
+    "The preview still could not be resized.",
+  );
