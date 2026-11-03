@@ -19,6 +19,7 @@ import { runWorkload } from "./clients.ts";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeSqlite from "node:sqlite";
+import type * as NodeEvents from "node:events";
 
 export type SoakOptions = {
   home: string;
@@ -30,6 +31,7 @@ export type SoakOptions = {
   codexThreads: number;
   durationMs: number;
   selfCheck: boolean;
+  acceptance: boolean;
 };
 
 export function parseArgs(argv: string[]): SoakOptions {
@@ -45,8 +47,14 @@ export function parseArgs(argv: string[]): SoakOptions {
     "duration-ms",
     "self-check",
   ]);
-  for (let i = 0; i < argv.length; i += 2) {
+  let acceptance = false;
+  for (let i = 0; i < argv.length; i++) {
     const key = argv[i];
+    if (key === "--acceptance") {
+      if (acceptance) throw new Error("duplicate --acceptance");
+      acceptance = true;
+      continue;
+    }
     const value = argv[i + 1];
     if (
       !key?.startsWith("--") ||
@@ -57,6 +65,7 @@ export function parseArgs(argv: string[]): SoakOptions {
     )
       throw new Error(`invalid argument: ${key ?? ""}`);
     values.set(key.slice(2), value);
+    i++;
   }
   const required = (key: string) => {
     const value = values.get(key);
@@ -78,16 +87,24 @@ export function parseArgs(argv: string[]): SoakOptions {
     throw new Error("home and report must be absolute");
   const selfCheck = values.get("self-check") ?? "true";
   if (selfCheck !== "true" && selfCheck !== "false") throw new Error("invalid --self-check");
+  const replayThreads = integer("replay-threads", 120, 1, 10000);
+  const headlessClients = integer("headless-clients", 20, 1, 1000);
+  const durationMs = integer("duration-ms", 1800000, 1, 86400000);
+  if (acceptance && (replayThreads < 120 || headlessClients < 20 || durationMs < 1800000))
+    throw new Error(
+      "acceptance requires at least 120 Replay threads, 20 headless clients, and 1800000 ms",
+    );
   return {
     home,
     report,
     serverPort: integer("server-port", Number(port), 1, 65535),
     ...(values.has("project-id") ? { projectId: required("project-id") } : {}),
-    replayThreads: integer("replay-threads", 120, 1, 10000),
-    headlessClients: integer("headless-clients", 20, 1, 1000),
+    replayThreads,
+    headlessClients,
     codexThreads: integer("codex-threads", 2, 1, 1000),
-    durationMs: integer("duration-ms", 1800000, 1, 86400000),
+    durationMs,
     selfCheck: selfCheck === "true",
+    acceptance,
   };
 }
 
@@ -153,6 +170,20 @@ function spawnOwned(
 }
 
 const cleanupInFlight = new WeakMap<OwnedChild, Promise<boolean>>();
+export function installSignalHandlers(
+  emitter: Pick<NodeEvents.EventEmitter, "on" | "off">,
+  stop: (reason: string) => void,
+) {
+  const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+  const handlers = signals.map((signal) => ({
+    signal,
+    handler: () => stop(`driver received ${signal}`),
+  }));
+  for (const { signal, handler } of handlers) emitter.on(signal, handler);
+  return () => {
+    for (const { signal, handler } of handlers) emitter.off(signal, handler);
+  };
+}
 export async function cleanupOwned(children: OwnedChild[]): Promise<number[]> {
   const results = await Promise.all(
     children.map((owned) => {
@@ -332,14 +363,7 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
     abort.abort();
     rejectStop(new Error(reason));
   };
-  const onSignal = (signal: NodeJS.Signals) => stop(`driver received ${signal}`);
-  const onException = (error: Error) => stop(`driver uncaught exception: ${error.message}`);
-  const onRejection = (error: unknown) => stop(`driver unhandled rejection: ${String(error)}`);
-  process.on("SIGINT", onSignal);
-  process.on("SIGTERM", onSignal);
-  process.on("SIGHUP", onSignal);
-  process.on("uncaughtException", onException);
-  process.on("unhandledRejection", onRejection);
+  const removeSignalHandlers = installSignalHandlers(process, stop);
   let detail: DetailWriter | undefined;
   let sampleTimer: ReturnType<typeof setInterval> | undefined;
   let progressTimer: ReturnType<typeof setInterval> | undefined;
@@ -569,6 +593,7 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
       codex = codexEvidence(
         NodeFS.readFileSync(`${lifecycle}.codex-turns`, "utf8"),
         selfCheck.nativeIds,
+        startedAt && drainEndedAt ? { start: startedAt, end: drainEndedAt } : undefined,
       );
     } catch {
       /* A missing sidecar is reported as unavailable. */
@@ -665,9 +690,12 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
       ),
       ...(memoryAbort ? { result: "aborted", abortReason: memoryAbort } : {}),
       home: options.home,
+      mode: options.acceptance ? "acceptance" : "smoke",
       serverPid: server?.child.pid ?? null,
       ownedPids: owned.map(({ child }) => child.pid),
       cleanupSurvivors,
+      terminationResidual:
+        "A SIGKILL of the driver can orphan the server; owned PIDs are printed at spawn.",
       window: { start: startedAt, end: endedAt, drainEnd: drainEndedAt },
       loadStartedAt,
       drainEndedAt,
@@ -706,11 +734,7 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
     };
     NodeFS.writeSync(reportFd, `${JSON.stringify(report, null, 2)}\n`);
     NodeFS.closeSync(reportFd);
-    process.off("SIGINT", onSignal);
-    process.off("SIGTERM", onSignal);
-    process.off("SIGHUP", onSignal);
-    process.off("uncaughtException", onException);
-    process.off("unhandledRejection", onRejection);
+    removeSignalHandlers();
   }
 }
 

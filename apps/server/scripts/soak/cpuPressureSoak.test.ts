@@ -5,6 +5,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeReadline from "node:readline";
 import * as NodeNet from "node:net";
+import * as NodeEvents from "node:events";
 import * as NodeSqlite from "node:sqlite";
 import { guardChild, guardErrors } from "@goat/shared/errorGuards";
 import { describe, expect, it } from "@effect/vitest";
@@ -250,13 +251,25 @@ describe("soak observations", () => {
       { event: "completed", threadId: "one", turnId: "turn", at: "2026-01-01T00:01:31.000Z" },
     ];
     const data = lines.map((line) => JSON.stringify(line)).join("\n") + "\n";
-    expect(codexEvidence(data)).toMatchObject({
+    const window = { start: "2026-01-01T00:00:00.000Z", end: "2026-01-01T00:02:00.000Z" };
+    expect(codexEvidence(data, [], window)).toMatchObject({
       delayedStarts: 1,
       longCompletedTurns: 1,
       errors: [],
     });
-    expect(codexEvidence(data, ["one"]).delayedStarts).toBe(0);
-    expect(codexEvidence(data + "{").errors).not.toEqual([]);
+    expect(codexEvidence(data, ["one"], window).delayedStarts).toBe(0);
+    expect(codexEvidence(data + "{", [], window).errors).not.toEqual([]);
+    expect(
+      codexEvidence(data, [], { start: "2026-01-01T00:00:01.000Z", end: window.end }).delayedStarts,
+    ).toBe(0);
+    expect(
+      codexEvidence(data, [], { start: "2026-01-01T00:00:01.000Z", end: window.end })
+        .longCompletedTurns,
+    ).toBe(0);
+    expect(
+      codexEvidence(data, [], { start: window.start, end: "2026-01-01T00:01:00.000Z" })
+        .longCompletedTurns,
+    ).toBe(0);
   });
   it("measures CPU deltas and refuses unsaturated or incomplete samples", () => {
     const before = [{ user: 0, nice: 0, sys: 0, idle: 0, irq: 0 }];
@@ -339,13 +352,20 @@ describe("soak observations", () => {
   });
   it("marks stall coverage unknown after a stall log gap", () => {
     const observations = new Observations();
-    observations.consumeStall({ phase: "runtime", delayMaxMs: 1, droppedStallRecords: 0 });
+    observations.consumeStall({ phase: "startup", delayMaxMs: 1, droppedStallRecords: 0 });
     expect(observations.report([], counter(), counter()).stall.coverage).toBe("complete");
+    expect(observations.report([], counter(), counter()).stall).toMatchObject({
+      runtimeMaxMs: null,
+      belowThresholdMs: 2000,
+    });
+    expect(observations.report([], counter(), counter()).result).toBe("pass");
     observations.stallGap("stall log: file rotated or truncated");
     const report = observations.report([], counter(), counter(), []);
     expect(report.stall.coverage).toBe("unknown");
-    expect(report.result).toBe("inconclusive");
+    expect(report.result).toBe("pass");
     expect(report.counters.clientDisconnects.value).toBe(0);
+    observations.consumeStall({ phase: "runtime", delayMaxMs: 2000, droppedStallRecords: 1 });
+    expect(observations.report([], counter(), counter(), []).result).toBe("pass");
   });
 
   it("reports turn coverage independently and rejects unobserved or incomplete requests", () => {
@@ -392,11 +412,54 @@ describe("soak observations", () => {
         lines.slice(0, 4),
         joined,
         [{ thread: "thread", at: "2", status: "stopped" }],
-        [],
+        death,
         [],
         window,
       ).counter.value,
+    ).toBe(0);
+  });
+  it("counts a shared Codex process death only once across affected threads", () => {
+    const lines = [
+      { event: "start" as const, pid: 1, instance: "codex", at: "1" },
+      { event: "session" as const, pid: 1, instance: "codex", at: "1", thread: "a" },
+      { event: "session" as const, pid: 1, instance: "codex", at: "1", thread: "b" },
+      { event: "exit" as const, pid: 1, instance: "codex", at: "2" },
+      { event: "start" as const, pid: 2, instance: "codex", at: "3" },
+      { event: "session" as const, pid: 2, instance: "codex", at: "3", thread: "a" },
+      { event: "session" as const, pid: 2, instance: "codex", at: "3", thread: "b" },
+    ];
+    const joined = new Map([
+      ["a", "A"],
+      ["b", "B"],
+    ]);
+    const deaths = [
+      { thread: "A", instance: "codex", at: "2" },
+      { thread: "B", instance: "codex", at: "2" },
+    ];
+    expect(
+      providerRestarts(lines, joined, [], deaths, [], { start: "1", end: "4", disappeared: [] })
+        .counter.value,
     ).toBe(1);
+    expect(
+      providerRestarts(lines.slice(0, 4), joined, [], deaths, [], {
+        start: "1",
+        end: "4",
+        disappeared: [],
+      }).counter.value,
+    ).toBe(1);
+    expect(
+      providerRestarts(lines.slice(0, 6), joined, [], deaths, [], {
+        start: "1",
+        end: "4",
+        disappeared: [],
+      }).counter.value,
+    ).toBe(1);
+  });
+  it("marks stopped session releases requested but leaves errors unexpected", () => {
+    const observations = new Observations();
+    observations.releaseProvider("thread", "2", "stopped");
+    observations.releaseProvider("thread", "3", "error");
+    expect(observations.releases).toMatchObject([{ requested: true }, { requested: false }]);
   });
   it("counts a missing process and unmatched terminated run independently", () => {
     const lines = [
@@ -465,9 +528,30 @@ describe("soak observations", () => {
   });
 });
 
-import { cleanupOwned, parseArgs, validateHome, verifyRuntimeState } from "./cpuPressureSoak.ts";
+import {
+  cleanupOwned,
+  installSignalHandlers,
+  parseArgs,
+  validateHome,
+  verifyRuntimeState,
+} from "./cpuPressureSoak.ts";
 
 describe("soak input safety", () => {
+  it("routes only termination signals to cleanup and removes the handlers", () => {
+    const emitter = new NodeEvents.EventEmitter();
+    const reasons: string[] = [];
+    const remove = installSignalHandlers(emitter, (reason) => reasons.push(reason));
+    for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) emitter.emit(signal);
+    expect(reasons).toEqual([
+      "driver received SIGINT",
+      "driver received SIGTERM",
+      "driver received SIGHUP",
+    ]);
+    expect(emitter.listenerCount("uncaughtException")).toBe(0);
+    expect(emitter.listenerCount("unhandledRejection")).toBe(0);
+    remove();
+    expect(emitter.listenerCount("SIGTERM")).toBe(0);
+  });
   it("cleans up only captured children after a spawn error and can be called twice", async () => {
     const start = (command = process.execPath) => {
       let rejectFailure: (error: Error) => void = () => {};
@@ -537,6 +621,18 @@ describe("soak input safety", () => {
     expect(() =>
       parseArgs(["--home", "relative", "--report", "/tmp/report", "--server-port", "1"]),
     ).toThrow();
+  });
+  it("enforces minimum cohort and duration only in acceptance mode", () => {
+    const args = ["--home", "/tmp/home", "--report", "/tmp/report", "--server-port", "3333"];
+    expect(parseArgs([...args, "--acceptance"]).acceptance).toBe(true);
+    for (const extra of [
+      ["--replay-threads", "119"],
+      ["--headless-clients", "19"],
+      ["--duration-ms", "1799999"],
+    ]) {
+      expect(() => parseArgs([...args, "--acceptance", ...extra])).toThrow();
+      expect(parseArgs([...args, ...extra]).acceptance).toBe(false);
+    }
   });
 
   it("refuses homes and databases that escape the checkout through symlinks", () => {

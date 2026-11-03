@@ -33,7 +33,11 @@ export function linuxMemoryPressure(contents: string): 1 | 2 | 4 {
   const full = parse("full");
   return full > 0 ? 4 : some >= 10 ? 2 : 1;
 }
-export function codexEvidence(contents: string, excludedThreads: readonly string[] = []) {
+export function codexEvidence(
+  contents: string,
+  excludedThreads: readonly string[],
+  window: { start: string; end: string } | undefined,
+) {
   const turns = new Map<string, { scheduled?: number; started?: number; completed?: number }>();
   const errors: string[] = [];
   for (const line of contents.split("\n")) {
@@ -62,15 +66,30 @@ export function codexEvidence(contents: string, excludedThreads: readonly string
     }
   }
   if (contents && !contents.endsWith("\n")) errors.push("partial Codex sidecar line");
+  const start = window ? Date.parse(window.start) : NaN;
+  const end = window ? Date.parse(window.end) : NaN;
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start)
+    errors.push("Codex observation window unavailable");
+  const within = (time: number) => time >= start && time <= end;
   const values = [...turns.values()];
   return {
     delayedStarts: values.filter(
       (t) =>
-        t.scheduled !== undefined && t.started !== undefined && t.started - t.scheduled >= 30_000,
+        t.scheduled !== undefined &&
+        t.started !== undefined &&
+        within(t.scheduled) &&
+        within(t.started) &&
+        t.started - t.scheduled >= 30_000,
     ).length,
     longCompletedTurns: values.filter(
       (t) =>
-        t.started !== undefined && t.completed !== undefined && t.completed - t.started > 60_000,
+        t.scheduled !== undefined &&
+        t.started !== undefined &&
+        t.completed !== undefined &&
+        within(t.scheduled) &&
+        within(t.started) &&
+        within(t.completed) &&
+        t.completed - t.started > 60_000,
     ).length,
     errors: [...new Set(errors)],
   };
@@ -253,6 +272,20 @@ export function providerRestarts(
   let processExitRunEpisodes = 0;
   const matchedPids = new Set<number>();
   const matchedDeaths = new Set<number>();
+  const matchProcessDeaths = (pid: number, end: string) => {
+    for (const [affectedThread, sessionsForThread] of groups) {
+      const session = sessionsForThread.find((item) => item.pid === pid);
+      if (!session) continue;
+      const replacement = sessionsForThread
+        .filter((item) => item.at > session.at)
+        .sort((a, b) => a.at.localeCompare(b.at))[0];
+      const latest = replacement && replacement.at < end ? replacement.at : end;
+      deaths.forEach((entry, index) => {
+        if (entry.thread === affectedThread && entry.at >= session.at && entry.at <= latest)
+          matchedDeaths.add(index);
+      });
+    }
+  };
   for (const [thread, group] of groups) {
     group.sort((a, b) => a.at.localeCompare(b.at));
     for (let i = 1; i < group.length; i++) {
@@ -260,18 +293,23 @@ export function providerRestarts(
       const next = group[i];
       if (!previous || !next) continue;
       if (!window || next.at < window.start || next.at > window.end) continue;
-      if (
-        releases.some(
-          (release) =>
-            release.thread === thread &&
-            release.requested &&
-            release.status === "stopped" &&
-            release.at >= previous.at &&
-            release.at <= next.at,
-        )
-      )
+      const release = releases.find(
+        (release) =>
+          release.thread === thread &&
+          release.status === "stopped" &&
+          release.at >= previous.at &&
+          release.at <= next.at,
+      );
+      if (release) {
+        deaths.forEach((death, index) => {
+          if (death.thread === thread && death.at >= release.at && death.at <= next.at)
+            matchedDeaths.add(index);
+        });
         continue;
-      extraSessions++;
+      }
+      if (!matchedPids.has(previous.pid)) extraSessions++;
+      matchedPids.add(previous.pid);
+      matchProcessDeaths(previous.pid, window.end);
       const exit = lines.find(
         (line) =>
           line.event === "exit" &&
@@ -280,14 +318,10 @@ export function providerRestarts(
           line.at <= next.at,
       );
       if (exit) matchedPids.add(previous.pid);
-      const death = deaths.findIndex(
-        (entry, index) =>
-          !matchedDeaths.has(index) &&
-          entry.thread === thread &&
-          entry.at >= previous.at &&
-          entry.at <= next.at,
-      );
-      if (death >= 0) matchedDeaths.add(death);
+      deaths.forEach((entry, index) => {
+        if (entry.thread === thread && entry.at >= previous.at && entry.at <= next.at)
+          matchedDeaths.add(index);
+      });
     }
   }
   if (window) {
@@ -306,19 +340,22 @@ export function providerRestarts(
         .filter(([, group]) => group.some((session) => session.pid === pid))
         .map(([thread]) => thread);
       if (!pidThreads.length) continue;
-      if (
-        pidThreads.every((thread) =>
-          releases.some(
-            (release) =>
-              release.thread === thread &&
-              release.requested &&
-              release.status === "stopped" &&
-              release.at >= window.start &&
-              release.at <= (exit?.at ?? window.end),
-          ),
-        )
-      )
+      const stops = pidThreads.map((thread) =>
+        releases.find(
+          (release) =>
+            release.thread === thread &&
+            release.status === "stopped" &&
+            release.at >= window.start &&
+            release.at <= (exit?.at ?? window.end),
+        ),
+      );
+      if (stops.every(Boolean)) {
+        deaths.forEach((death, index) => {
+          const stop = stops.find((release) => release?.thread === death.thread);
+          if (stop && death.at >= stop.at && death.at <= window.end) matchedDeaths.add(index);
+        });
         continue;
+      }
       if (
         disappeared &&
         sessions.some((session) => session.pid === pid && session.at < window.start)
@@ -326,14 +363,21 @@ export function providerRestarts(
         reasons.push(`provider pid ${pid} disappearance time unknown`);
       processExitEpisodes++;
       matchedPids.add(pid);
-      const death = deaths.findIndex(
-        (entry, index) =>
-          !matchedDeaths.has(index) &&
-          pidThreads.includes(entry.thread) &&
+      deaths.forEach((entry, index) => {
+        const group = groups.get(entry.thread);
+        const session = group?.find((item) => item.pid === pid);
+        const next = group
+          ?.filter((item) => session && item.at > session.at)
+          .sort((a, b) => a.at.localeCompare(b.at))[0];
+        if (
+          session &&
+          entry.at >= session.at &&
           entry.at >= window.start &&
-          entry.at <= window.end,
-      );
-      if (death >= 0) matchedDeaths.add(death);
+          entry.at <= window.end &&
+          (!next || entry.at <= next.at)
+        )
+          matchedDeaths.add(index);
+      });
     }
   } else reasons.push("provider process exit window unavailable");
   processExitRunEpisodes = window
@@ -402,7 +446,7 @@ export class Observations {
   }
   releaseProvider(thread: string, at: string, status: "stopped" | "error"): void {
     if (this.releases.length >= LIMIT) this.lifecycleGaps.push("release observation limit reached");
-    else this.releases.push({ thread, at, status });
+    else this.releases.push({ thread, at, status, requested: status === "stopped" });
   }
   providerDeath(run: string, thread: string, instance: string, at: string): void {
     if (this.deathRuns.has(run)) return;
@@ -454,19 +498,25 @@ export class Observations {
   }
   consumeStall(value: unknown): void {
     if (typeof value !== "object" || value === null) {
-      this.gap("invalid stall record");
+      this.stallGap("invalid stall record");
       return;
     }
     const record = value as Record<string, unknown>;
-    if (typeof record.delayMaxMs !== "number" || typeof record.droppedStallRecords !== "number") {
-      this.gap("invalid stall record");
+    if (
+      (record.phase !== "startup" && record.phase !== "runtime") ||
+      typeof record.delayMaxMs !== "number" ||
+      !Number.isFinite(record.delayMaxMs) ||
+      typeof record.droppedStallRecords !== "number" ||
+      !Number.isFinite(record.droppedStallRecords)
+    ) {
+      this.stallGap("invalid stall record");
       return;
     }
     this.stall.samples++;
     this.stall.droppedRecords = Math.max(this.stall.droppedRecords, record.droppedStallRecords);
     const field = record.phase === "startup" ? "startupMaxMs" : "runtimeMaxMs";
     this.stall[field] = Math.max(this.stall[field] ?? 0, record.delayMaxMs);
-    if (record.droppedStallRecords > 0) this.gap("stall records dropped");
+    if (record.droppedStallRecords > 0) this.stallGap("stall records dropped");
   }
   gap(reason: string): void {
     if (!this.gaps.includes(reason)) this.gaps.push(reason);
@@ -484,12 +534,7 @@ export class Observations {
     const statuses = [...this.runs.values()];
     const failures = statuses.filter((s) => s === "failed" || s === "interrupted").length;
     const incomplete = statuses.filter((s) => s === "pending").length;
-    const reasons = [
-      ...this.gaps,
-      ...requiredCoverage,
-      ...this.stallGaps,
-      ...(this.stall.runtimeMaxMs === null ? ["runtime stall samples unavailable"] : []),
-    ];
+    const reasons = [...this.gaps, ...requiredCoverage];
     const disconnects = counter(this.socketEpisodes.size, socketCoverage);
     const turns = counter(failures, [
       ...this.streamGaps,
@@ -526,8 +571,15 @@ export class Observations {
       throughputPerMinute: null,
       stall: {
         ...this.stall,
+        ...(this.stall.runtimeMaxMs === null &&
+        this.stall.startupMaxMs !== null &&
+        this.stallGaps.length === 0 &&
+        this.stall.droppedRecords === 0
+          ? { belowThresholdMs: 2000 }
+          : {}),
+        reasons: this.stallGaps,
         coverage:
-          reasons.length || this.stall.runtimeMaxMs === null || this.stall.droppedRecords > 0
+          this.stallGaps.length || this.stall.startupMaxMs === null || this.stall.droppedRecords > 0
             ? "unknown"
             : "complete",
       },
