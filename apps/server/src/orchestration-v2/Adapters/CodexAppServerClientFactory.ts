@@ -12,6 +12,7 @@ import { resolveSpawnCommand } from "@goat/shared/shell";
 import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import * as CodexClient from "effect-codex-app-server/client";
 import * as Context from "effect/Context";
+import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
@@ -37,6 +38,7 @@ import {
 } from "../../provider/EventNdjsonLogger.ts";
 
 const CODEX_PROVIDER = ProviderDriverKind.make("codex");
+const CODEX_STDIO_FORCE_KILL_AFTER = "5 seconds";
 
 export interface CodexAppServerClientFactoryShape {
   readonly open: (input: {
@@ -68,6 +70,7 @@ export const makeCodexAppServerSpawnCommand = Effect.fn(
   readonly env?: NodeJS.ProcessEnv | undefined;
   readonly extendEnv?: boolean | undefined;
   readonly threadId?: string | undefined;
+  readonly forceKillAfter?: Duration.Input | undefined;
 }) {
   const launch = yield* (yield* AgentScope).wrap({
     command: input.command,
@@ -86,6 +89,7 @@ export const makeCodexAppServerSpawnCommand = Effect.fn(
     ...(input.env === undefined ? {} : { env: input.env }),
     ...(input.extendEnv === undefined ? {} : { extendEnv: input.extendEnv }),
     shell: spawnCommand.shell,
+    forceKillAfter: input.forceKillAfter ?? CODEX_STDIO_FORCE_KILL_AFTER,
   });
 });
 
