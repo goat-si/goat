@@ -397,7 +397,11 @@ export class Observations {
     const statuses = [...this.runs.values()];
     const failures = statuses.filter((s) => s === "failed" || s === "interrupted").length;
     const incomplete = statuses.filter((s) => s === "pending").length;
-    const reasons = [...this.gaps, ...requiredCoverage];
+    const reasons = [
+      ...this.gaps,
+      ...requiredCoverage,
+      ...(this.stall.runtimeMaxMs === null ? ["runtime stall samples unavailable"] : []),
+    ];
     const disconnects = counter(this.socketEpisodes.size, socketCoverage);
     const turns = counter(failures, [
       ...this.streamGaps,
@@ -432,7 +436,13 @@ export class Observations {
         incomplete,
       },
       throughputPerMinute: null,
-      stall: { ...this.stall, coverage: reasons.length ? "unknown" : "complete" },
+      stall: {
+        ...this.stall,
+        coverage:
+          reasons.length || this.stall.runtimeMaxMs === null || this.stall.droppedRecords > 0
+            ? "unknown"
+            : "complete",
+      },
     };
   }
 }

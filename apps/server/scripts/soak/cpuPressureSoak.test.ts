@@ -172,6 +172,7 @@ describe("soak observations", () => {
     const result = observations.report([], counter(), counter(), []);
     expect(result.counters.clientDisconnects.value).toBe(0);
     expect(result.counters.clientDisconnects.coverage).toBe("complete");
+    expect(result.stall.coverage).toBe("unknown");
   });
 
   it("reports turn coverage independently and rejects unobserved or incomplete requests", () => {
