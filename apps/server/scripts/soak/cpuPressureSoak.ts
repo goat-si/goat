@@ -60,7 +60,7 @@ export function parseArgs(argv: string[]): SoakOptions {
     home,
     report,
     serverPort: integer("server-port", Number(port), 1, 65535),
-    projectId: values.get("project-id"),
+    ...(values.has("project-id") ? { projectId: required("project-id") } : {}),
     replayThreads: integer("replay-threads", 120, 1, 10000),
     headlessClients: integer("headless-clients", 20, 1, 1000),
     codexThreads: integer("codex-threads", 2, 1, 1000),
