@@ -465,5 +465,5 @@ export const makeProxyBrowserClaims = (
       "This driver does not support browser claims.",
     );
   });
-  return { update, gate, allowed, interceptReply, attach, unsupported, report };
+  return { update, gate, allowed, interceptReply, refuseReply, attach, unsupported, report };
 };

@@ -3,8 +3,14 @@ import { EnvironmentId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
+import * as Schema from "effect/Schema";
 import { makeTestBrowserOriginGrants } from "./BrowserOriginGrants.testkit.ts";
 import { makeBrowserOriginGrants } from "./BrowserOriginGrants.ts";
+
+class NarrowWriteFailure extends Schema.TaggedError<NarrowWriteFailure>()(
+  "NarrowWriteFailure",
+  {},
+) {}
 
 it.effect("interrupting a held narrowing write still fences the driver", () =>
   Effect.gen(function* () {
@@ -20,7 +26,7 @@ it.effect("interrupting a held narrowing write still fences the driver", () =>
         hold
           ? Deferred.succeed(entered, undefined).pipe(
               Effect.andThen(Deferred.await(release)),
-              Effect.andThen(Effect.fail(new Error("write failed"))),
+              Effect.andThen(Effect.fail(new NarrowWriteFailure())),
             )
           : Effect.succeed(hash),
       confirm: () =>

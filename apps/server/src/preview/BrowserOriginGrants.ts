@@ -454,33 +454,35 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
       }).pipe(Effect.uninterruptible),
     ),
   );
-  const stop = Effect.fn("BrowserOriginGrants.stop")(function* (threadId?: ThreadId) {
-    const stopped = yield* Effect.sync(() => {
-      const signals: Array<Deferred.Deferred<void>> = [];
-      let removed = false;
-      for (const [id, entry] of pending)
-        if (threadId === undefined || entry.threadId === threadId) {
-          pending.delete(id);
-          ended.set(id, { threadId: entry.threadId, reason: "stopped" });
-          if (uncommittedGrants.delete(key(entry.threadId, entry.origin)))
-            grants.delete(key(entry.threadId, entry.origin));
-          signals.push(entry.stopped);
-          sequence++;
-          removed = true;
-        }
-      for (const [id, claim] of claims)
-        if (threadId === undefined || claim.threadId === threadId) {
-          claims.delete(id);
-          ended.set(id, { threadId: claim.threadId, reason: "stopped" });
-          sequence++;
-          removed = true;
-        }
-      return { signals, changed: removed };
-    });
-    if (!stopped.changed) return;
-    for (const signal of stopped.signals) yield* Deferred.succeed(signal, undefined);
-    yield* shrink(union());
-  }, Effect.uninterruptible);
+  const stop = Effect.fn("BrowserOriginGrants.stop")((threadId?: ThreadId) =>
+    Effect.gen(function* () {
+      const stopped = yield* Effect.sync(() => {
+        const signals: Array<Deferred.Deferred<void>> = [];
+        let removed = false;
+        for (const [id, entry] of pending)
+          if (threadId === undefined || entry.threadId === threadId) {
+            pending.delete(id);
+            ended.set(id, { threadId: entry.threadId, reason: "stopped" });
+            if (uncommittedGrants.delete(key(entry.threadId, entry.origin)))
+              grants.delete(key(entry.threadId, entry.origin));
+            signals.push(entry.stopped);
+            sequence++;
+            removed = true;
+          }
+        for (const [id, claim] of claims)
+          if (threadId === undefined || claim.threadId === threadId) {
+            claims.delete(id);
+            ended.set(id, { threadId: claim.threadId, reason: "stopped" });
+            sequence++;
+            removed = true;
+          }
+        return { signals, changed: removed };
+      });
+      if (!stopped.changed) return;
+      for (const signal of stopped.signals) yield* Deferred.succeed(signal, undefined);
+      yield* shrink(union());
+    }).pipe(Effect.uninterruptible),
+  );
   const blockOrigins = Effect.fn("BrowserOriginGrants.blockOrigins")(function* (
     hosts: ReadonlyArray<string> | undefined,
   ) {
