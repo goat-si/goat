@@ -10,7 +10,6 @@ import {
   type ThreadPullRequestStack,
 } from "@goat/contracts";
 import { makeDrainableWorker } from "@goat/shared/DrainableWorker";
-import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import {
   threadPullRequestKeyOf,
   normalizeThreadPullRequestKey,
@@ -600,7 +599,7 @@ export const make = Effect.gen(function* () {
   const worker = yield* makeDrainableWorker((scope: "all" | "requested") =>
     Effect.suspend(() => {
       if (scope === "requested") requestedSweepQueued = false;
-      return scope === "all" ? NodeSqliteClient.backgroundReads(sweep(scope)) : sweep(scope);
+      return sweep(scope);
     }).pipe(Effect.catchCause(logSkipped("pull request sync sweep failed", {}))),
   );
 
