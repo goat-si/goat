@@ -55,7 +55,7 @@ const terminals = new Set([
   "openconsole",
 ]);
 
-export const isTerminalCuaApplication = (app: string): boolean => {
+const isTerminalCuaApplication = (app: string): boolean => {
   const key = cuaAppKey(app);
   const basename = key
     .split(/[\\/]/u)
