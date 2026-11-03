@@ -144,7 +144,6 @@ export function makeAntigravityAcpAdapterFlavor(
           options.makeRuntime({
             ...input,
             clientFileReads: true,
-
             additionalDirectories: [options.host.paths.attachmentsDir],
           }),
         )

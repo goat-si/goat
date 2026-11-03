@@ -8,7 +8,7 @@ import { lintChangedArgs, vitePlusCommand } from "./check-changed-command.ts";
 it("allows lint-ignored changed files without failing on an unmatched pattern", () => {
   const cache = NodePath.resolve(import.meta.dirname, "../node_modules/.cache");
   NodeFS.mkdirSync(cache, { recursive: true });
-  const dir = NodeFS.mkdtempSync(NodePath.join(cache, "b46-lint-"));
+  const dir = NodeFS.mkdtempSync(NodePath.join(cache, "check-changed-lint-"));
   try {
     const file = NodePath.join(dir, "ignored.js");
     NodeFS.writeFileSync(file, "const unused = 1;\n");
