@@ -8,6 +8,7 @@ import { ScreenRunService } from "./ScreenRunService.ts";
 import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
 import { context, DriverError, UnknownOutcome, fixture } from "./DesktopTargetHost.testkit.ts";
 import { driverError } from "./DesktopDriverReplies.ts";
+import { driverOutcomeSafety, driverRefused } from "../cua/ComputerUseDriverOutcome.ts";
 
 const replyIdentity = {
   requestId: "request",
@@ -18,6 +19,90 @@ const replyIdentity = {
   turnId: "turn",
   callId: 1,
 };
+
+it("terminal reply classifiers agree on possible commit across read and write envelopes", () => {
+  const cases = [
+    {
+      tool: "list_windows",
+      status: "settled" as const,
+      isError: false,
+      content: { code: "screen_locked", effect: "unknown" },
+      expected: false,
+    },
+    {
+      tool: "list_windows",
+      status: "settled" as const,
+      isError: true,
+      content: { code: "screen_locked", effect: "unknown" },
+      expected: false,
+    },
+    {
+      tool: "click",
+      status: "settled" as const,
+      isError: true,
+      content: { code: "screen_locked", refusal: { code: "stopped_by_person" }, effect: "unknown" },
+      expected: true,
+    },
+    {
+      tool: "click",
+      status: "not_started" as const,
+      isError: false,
+      content: { refusal: { code: "screen_locked" }, effect: "committed" },
+      expected: true,
+    },
+    {
+      tool: "click",
+      status: "settled" as const,
+      isError: false,
+      content: { code: "screen_locked", effect: "unverifiable" },
+      expected: true,
+    },
+    {
+      tool: "click",
+      status: "settled" as const,
+      isError: true,
+      content: { code: "screen_locked", effect: "refused" },
+      expected: false,
+    },
+    {
+      tool: "click",
+      status: "unknown_outcome" as const,
+      isError: true,
+      content: { code: "screen_locked" },
+      expected: true,
+    },
+    ...["unknown", "committed", "unverifiable"].map((effect) => ({
+      tool: "click",
+      status: "settled" as const,
+      isError: true,
+      content: { code: "screen_locked", effect },
+      error: { code: -32602 },
+      expected: true,
+    })),
+    {
+      tool: "click",
+      status: "settled" as const,
+      isError: true,
+      content: { code: "other" },
+      error: { code: -32602, data: { refusal: { code: "screen_locked" }, effect: "unknown" } },
+      expected: true,
+    },
+  ];
+  for (const entry of cases) {
+    const reply = {
+      ...replyIdentity,
+      status: entry.status,
+      result: { isError: entry.isError, structuredContent: entry.content },
+      ...(entry.error ? { error: entry.error } : {}),
+    };
+    const error = driverError(reply, entry.tool);
+    expect(error?.effectStarted ?? false, JSON.stringify(entry)).toBe(entry.expected);
+    expect(driverOutcomeSafety(entry.tool, reply).possibleCommit, JSON.stringify(entry)).toBe(
+      entry.expected,
+    );
+    if (entry.expected) expect(driverRefused(entry.tool, reply), JSON.stringify(entry)).toBe(false);
+  }
+});
 
 it("a stop reason retains a screen lock's possible input effect", () => {
   expect(

@@ -116,6 +116,35 @@ const scriptSentNothing = (structured: Record<string, unknown>): boolean =>
       call.driver_calls.every((each: unknown) => isRecord(each) && readTool(each.tool)),
   );
 
+export const driverLockedEffectStarted = (
+  tool: string | undefined,
+  message: unknown,
+  args?: unknown,
+) => {
+  const envelope = isRecord(message) ? message : {};
+  const result = isRecord(envelope.result) ? envelope.result : {};
+  const error = isRecord(envelope.error) ? envelope.error : undefined;
+  if (
+    isReadOnlyCall(tool, args) ||
+    !(
+      error ||
+      result.isError === true ||
+      envelope.status === "unknown_outcome" ||
+      envelope.status === "not_started"
+    )
+  )
+    return false;
+  return [result.structuredContent, error?.data].some((value) => {
+    if (!isRecord(value) || (tool === "run_script" && scriptSentNothing(value))) return false;
+    const nested = isRecord(value.refusal) ? value.refusal.code : undefined;
+    return (
+      (value.code === "screen_locked" || nested === "screen_locked") &&
+      value.effect !== undefined &&
+      value.effect !== "refused"
+    );
+  });
+};
+
 /** The safety a reply already carries, as GOAT marked it on an earlier pass. */
 const markedSafety = (message: unknown): unknown => {
   const envelope = isRecord(message) ? message : {};
@@ -187,15 +216,7 @@ function classifiedSafety(
     (code) => code === "stopped_by_person" || code === "screen_locked",
   );
   const reportedInput = isRecord(structured.safety) && structured.safety.possibleCommit === true;
-  const lockedEffectStarted =
-    effect === "write" &&
-    (error !== undefined ||
-      result.isError === true ||
-      envelope.status === "unknown_outcome" ||
-      envelope.status === "not_started") &&
-    (structured.code === "screen_locked" || nestedCode === "screen_locked") &&
-    structured.effect !== undefined &&
-    structured.effect !== "refused";
+  const lockedEffectStarted = driverLockedEffectStarted(tool, message, args);
   if (
     lockedEffectStarted ||
     (terminal &&

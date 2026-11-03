@@ -3,7 +3,8 @@
 import * as Schema from "effect/Schema";
 import type { ComputerUsePrimitiveReply, ScreenRunError } from "@goat/contracts";
 import { ComputerUseRefusalDetail, ComputerUseRefusalReason } from "@goat/contracts";
-import { driverOutcomeSafety } from "../cua/ComputerUseDriverOutcome.ts";
+import { driverLockedEffectStarted, driverOutcomeSafety } from "../cua/ComputerUseDriverOutcome.ts";
+import { isReadOnlyCall } from "../cua/ComputerUseLeaseMessages.ts";
 import {
   replaceWithTerminal,
   terminalErrorState,
@@ -67,8 +68,12 @@ const driverEvidence = (structured: Record<string, unknown> | undefined) => {
     ...(code === undefined ? [] : [`driver:code=${code.slice(0, 80)}`]),
   ];
 };
-export const driverError = (reply: ComputerUsePrimitiveReply): ScreenRunError | undefined => {
-  const error = classifyDriverError(reply);
+export const driverError = (
+  reply: ComputerUsePrimitiveReply,
+  tool?: string,
+  args?: unknown,
+): ScreenRunError | undefined => {
+  const error = classifyDriverError(reply, tool, args);
   const evidence = driverEvidence(object(object(reply.result)?.structuredContent));
   return error === undefined || evidence.length === 0 ? error : { ...error, evidence };
 };
@@ -85,7 +90,11 @@ export const driverFailureNextStep = (
     ? "Earlier input may have landed. Observe before acting; never resend it."
     : error.nextStep;
 };
-const classifyDriverError = (reply: ComputerUsePrimitiveReply): ScreenRunError | undefined => {
+const classifyDriverError = (
+  reply: ComputerUsePrimitiveReply,
+  tool?: string,
+  args?: unknown,
+): ScreenRunError | undefined => {
   const result = object(reply.result);
   const structured = object(result?.structuredContent);
   const nested = string(object(structured?.refusal)?.code);
@@ -101,11 +110,17 @@ const classifyDriverError = (reply: ComputerUsePrimitiveReply): ScreenRunError |
   );
   const merged = state.reason;
   const driverCode = merged ?? nested ?? outer;
-  const lockedEffectStarted =
-    (nested === "screen_locked" || outer === "screen_locked") &&
+  const lockedEffectStarted = driverLockedEffectStarted(tool, reply, args);
+  const successfulWrite =
+    driverCode === "screen_locked" &&
+    reply.status === "settled" &&
+    result?.isError !== true &&
+    reply.error === undefined &&
     structured?.effect !== undefined &&
-    structured.effect !== "refused";
-  const possibleCommit = state.possibleCommit || lockedEffectStarted;
+    structured.effect !== "refused" &&
+    !isReadOnlyCall(tool, args) &&
+    driverOutcomeSafety(tool, reply, args).possibleCommit;
+  const possibleCommit = state.possibleCommit || lockedEffectStarted || successfulWrite;
   const safety = possibleCommit
     ? terminalFailure(replaceWithTerminal(state, true), "list_apps", {}, true)?.safety
     : undefined;
@@ -128,7 +143,8 @@ const classifyDriverError = (reply: ComputerUsePrimitiveReply): ScreenRunError |
             ? "The screen is locked; stop until the person unlocks it."
             : "The person stopped computer use; do not retry this turn."),
       ),
-      effectStarted: reply.status === "unknown_outcome" || possibleCommit,
+      effectStarted:
+        (reply.status === "unknown_outcome" && !isReadOnlyCall(tool, args)) || possibleCommit,
       ...(safety === undefined ? {} : { safety }),
       ...refusalOf(structured),
     };
@@ -141,6 +157,13 @@ const classifyDriverError = (reply: ComputerUsePrimitiveReply): ScreenRunError |
     driverCode === undefined
   )
     return { ...fail("unsupported", said), ...refusalOf(structured) };
+  if (
+    driverCode === "screen_locked" &&
+    isReadOnlyCall(tool, args) &&
+    structured?.effect !== "refused" &&
+    structured?.status !== "refused"
+  )
+    return undefined;
   if (driverCode === "screen_locked")
     return {
       ...fail("screen_locked", "The screen is locked; stop until the person unlocks it."),

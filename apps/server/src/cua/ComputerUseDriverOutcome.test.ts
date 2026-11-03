@@ -30,6 +30,17 @@ const parsed = (line: string) =>
     result: { structuredContent: Record<string, unknown>; content: Array<{ text: string }> };
   };
 
+it("a result's lock effect survives a simultaneous RPC rejection", () => {
+  for (const effect of ["unknown", "committed", "unverifiable"]) {
+    const message = {
+      error: { code: -32602 },
+      result: { isError: true, structuredContent: { code: "screen_locked", effect } },
+    };
+    assert.isTrue(driverOutcomeSafety("click", message).possibleCommit);
+    assert.isFalse(driverRefused("click", message));
+  }
+});
+
 it("a stop reason retains a screen lock's possible input effect", () => {
   for (const effect of ["unknown", "committed", "unverifiable"]) {
     const structuredContent = {
