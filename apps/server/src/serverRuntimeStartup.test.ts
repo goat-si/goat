@@ -8,6 +8,7 @@ import {
   CommandId,
   EnvironmentId,
   type ServerLifecycleStreamEvent,
+  type DesktopStopIntent,
 } from "@goat/contracts";
 import { DEFAULT_SIGNAL_EXPORT } from "@goat/shared/observability";
 import * as OtelEnvironment from "@goat/shared/otelEnvironment";
@@ -24,10 +25,12 @@ import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as TestClock from "effect/testing/TestClock";
 import * as Path from "effect/Path";
+import * as Option from "effect/Option";
 
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 
 import * as ServerConfig from "./config.ts";
+import * as DesktopStopIntentReader from "./desktopStopIntent.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
@@ -59,6 +62,7 @@ type BootstrapScenario =
 const bootstrapScenario = (
   scenario: BootstrapScenario,
   shutdown: Effect.Effect<void> = Effect.void,
+  intent: Option.Option<DesktopStopIntent> = Option.none(),
 ) =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -76,6 +80,9 @@ const bootstrapScenario = (
       };
       const imports = { importedThreadCount: 0, importedMessageCount: 0 };
       const dependencies = Layer.mergeAll(
+        Layer.succeed(DesktopStopIntentReader.DesktopStopIntentReader, {
+          atShutdown: Effect.succeed(intent),
+        }),
         NodeCrypto.layer,
         Path.layer,
         Layer.mock(ServerConfig.ServerConfig)({
@@ -262,6 +269,36 @@ it.effect.each([
   "project-failure",
 ] as const)("keeps bootstrap launch failures separate from project failures: %s", (scenario) =>
   bootstrapScenario(scenario),
+);
+
+it.effect.each(["relaunch", "unknown"] as const)("records shutdown intent: %s", (reason) =>
+  Effect.gen(function* () {
+    const messages: unknown[] = [];
+    const logger = Logger.make(({ message }) => {
+      messages.push(message);
+    });
+    const intent =
+      reason === "relaunch"
+        ? Option.some({
+            version: 1 as const,
+            pid: 123,
+            reason: "relaunch" as const,
+            requestedAt: "2026-01-01T00:00:00Z",
+          })
+        : Option.none();
+    yield* bootstrapScenario("disabled-codex", Effect.void, intent).pipe(
+      Effect.provide(Logger.layer([logger], { mergeWithExisting: false })),
+    );
+    assert.isTrue(
+      messages.some(
+        (message) =>
+          Array.isArray(message) &&
+          message[0] === "Server shutdown intent" &&
+          message[1]?.reason === reason &&
+          message[1]?.requestedAt === (reason === "relaunch" ? "2026-01-01T00:00:00Z" : undefined),
+      ),
+    );
+  }),
 );
 
 it.effect("records the duration of provider session shutdown", () =>

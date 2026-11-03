@@ -28,6 +28,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 
 import * as ServerConfig from "./config.ts";
+import * as DesktopStopIntentReader from "./desktopStopIntent.ts";
 import * as PersistenceRecoveryOwner from "./persistence/PersistenceRecoveryOwner.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import { flushCompileCache } from "./compileCache.ts";
@@ -550,6 +551,7 @@ const timedShutdownPhase = Effect.fn("serverRuntimeStartup.timedShutdownPhase")(
 
 const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: StartupOptions) {
   const serverConfig = yield* ServerConfig.ServerConfig;
+  const intentReader = yield* DesktopStopIntentReader.DesktopStopIntentReader;
   const keybindings = yield* Keybindings.Keybindings;
   const legacyV1ThreadImporter = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter;
   const providerRuntimeRecovery = yield* ProviderRuntimeRecovery.ProviderRuntimeRecoveryService;
@@ -568,6 +570,11 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
 
   yield* Effect.addFinalizer(() =>
     Effect.gen(function* () {
+      const intent = yield* intentReader.atShutdown;
+      yield* Effect.logInfo("Server shutdown intent", {
+        reason: Option.match(intent, { onNone: () => "unknown", onSome: (value) => value.reason }),
+        requestedAt: Option.getOrUndefined(Option.map(intent, (value) => value.requestedAt)),
+      });
       yield* commandGate.failCommandReady(
         new ServerRuntimeStartupError({
           mode: serverConfig.mode,

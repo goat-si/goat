@@ -38,6 +38,7 @@ import { layerMemoryDefaultStarted } from "./server.ts";
 import { ServerActivation } from "./serverActivation.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
+import * as DesktopStopIntentReader from "./desktopStopIntent.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
@@ -91,6 +92,7 @@ it.effect.each([
         const dependencies: Layer.Layer<
           Layer.Services<ReturnType<typeof ServerRuntimeStartup.layerWithOptions>>
         > = Layer.mergeAll(
+          DesktopStopIntentReader.layerNone,
           Layer.mock(ServerConfig.ServerConfig)({
             ...(yield* ServerConfig.deriveServerPaths(cwd, undefined).pipe(
               Effect.provide(Path.layer),
