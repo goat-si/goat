@@ -1,13 +1,19 @@
 // @effect-diagnostics nodeBuiltinImport:off -- fixtures use an isolated temporary record directory.
 import * as NodeFS from "node:fs";
+import * as NodeChildProcess from "node:child_process";
+import * as NodeModule from "node:module";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
-import { assert, it } from "@effect/vitest";
+import { assert, it, vi } from "@effect/vitest";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 import { TestClock } from "effect/testing";
+import * as ServerConfig from "../config.ts";
+import * as DetachedLive from "./CodexDetachedAppServerLive.ts";
 import {
   classifyDetachedAppServer,
   CodexDetachedAppServerError,
@@ -816,4 +822,53 @@ it.effect("does not verify a socket owner missing from the final process-table r
     });
     assert.equal(result.type, "unverifiable");
   }),
+);
+
+it.live("spawn errors are observed from the moment the child is created", () =>
+  withRecordDirectory((directory) =>
+    Effect.gen(function* () {
+      const service = yield* DetachedLive.CodexDetachedAppServers;
+      const requireBuiltin = NodeModule.createRequire(import.meta.url);
+      const childProcessModule = requireBuiltin("node:child_process") as typeof NodeChildProcess;
+      const fsModule = requireBuiltin("node:fs") as typeof NodeFS;
+      const originalSpawn = childProcessModule.spawn;
+      const originalClose = fsModule.closeSync;
+      let child: ReturnType<typeof NodeChildProcess.spawn> | undefined;
+      let listenersAtClose = -1;
+      let closed: Promise<void> = Promise.resolve();
+      using spawnSpy = vi.spyOn(childProcessModule, "spawn").mockImplementation((...args) => {
+        const spawned = originalSpawn(...args);
+        if (Array.isArray(args[1]) && args[1].includes("goat-codex")) {
+          child = spawned;
+          closed = new Promise<void>((resolve) => spawned.once("close", () => resolve()));
+        }
+        return spawned;
+      });
+      using closeSpy = vi.spyOn(fsModule, "closeSync").mockImplementation((fd) => {
+        if (child !== undefined) listenersAtClose = child.listenerCount("error");
+        return originalClose(fd);
+      });
+      NodeModule.syncBuiltinESMExports();
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          spawnSpy.mockRestore();
+          closeSpy.mockRestore();
+          NodeModule.syncBuiltinESMExports();
+        }),
+      );
+      const error = yield* service
+        .open({ ...openInput, cwd: NodePath.join(directory, "missing") })
+        .pipe(Effect.scoped, Effect.flip);
+      assert.instanceOf(error, CodexDetachedAppServerError);
+      yield* Effect.promise(() => closed);
+      assert.isAtLeast(listenersAtClose, 1);
+    }).pipe(
+      Effect.provide(
+        DetachedLive.layerLive.pipe(
+          Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "goat-codex-spawn-" })),
+          Layer.provide(NodeServices.layer),
+        ),
+      ),
+    ),
+  ),
 );

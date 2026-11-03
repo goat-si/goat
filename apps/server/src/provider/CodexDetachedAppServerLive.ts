@@ -173,7 +173,7 @@ const layer = Layer.effect(
             0o600,
           );
           try {
-            return NodeChildProcess.spawn(
+            const child = NodeChildProcess.spawn(
               "/bin/sh",
               [
                 "-c",
@@ -190,6 +190,9 @@ const layer = Layer.effect(
                 stdio: ["ignore", "ignore", stderr],
               },
             );
+            child.once("exit", (code) => Deferred.doneUnsafe(exited, Effect.succeed(code)));
+            child.on("error", () => Deferred.doneUnsafe(exited, Effect.succeed(null)));
+            return child;
           } finally {
             NodeFS.closeSync(stderr);
           }
@@ -197,8 +200,6 @@ const layer = Layer.effect(
         catch: (cause) =>
           new CodexDetachedAppServerError({ detail: "Could not start Codex app-server.", cause }),
       });
-      child.once("exit", (code) => Deferred.doneUnsafe(exited, Effect.succeed(code)));
-      child.once("error", () => Deferred.doneUnsafe(exited, Effect.succeed(null)));
       child.unref();
       if (child.pid === undefined) return yield* fail("Codex app-server did not start.");
       return {
