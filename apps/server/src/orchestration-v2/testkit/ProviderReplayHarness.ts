@@ -2,7 +2,12 @@ import * as RemoteReportInbox from "../../remoteReports/RemoteReportInbox.ts";
 import * as OtelEnvironment from "@goat/shared/otelEnvironment";
 import { DEFAULT_SIGNAL_EXPORT } from "@goat/shared/observability";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import type { CommandId, ProviderDriverKind, ProviderReplayTranscript } from "@goat/contracts";
+import type {
+  CodexAppServerIsolation,
+  CommandId,
+  ProviderDriverKind,
+  ProviderReplayTranscript,
+} from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -210,6 +215,7 @@ export function runOrchestratorV2ProviderReplayScenario<
     readonly runContinuationWorker?: boolean;
     readonly recoverOnStartup?: boolean;
     readonly continueThreadsAfterServerUpdate?: boolean;
+    readonly codexAppServerIsolation?: CodexAppServerIsolation;
     readonly afterSteps?: Effect.Effect<void>;
     readonly steerGuard?: { readonly commandId: CommandId; readonly arrival: Effect.Effect<void> };
   } = {},
@@ -284,6 +290,7 @@ export function layerProviderReplay<Transcript extends ProviderReplayTranscript,
     readonly runContinuationWorker?: boolean;
     readonly recoverOnStartup?: boolean;
     readonly continueThreadsAfterServerUpdate?: boolean;
+    readonly codexAppServerIsolation?: CodexAppServerIsolation;
     readonly replayGate?: ProviderReplayGate;
     readonly onReplayTurnComplete?: (nativeTurnId: string) => Effect.Effect<void>;
     readonly effectWorkerMaxAttempts?: number;
@@ -323,6 +330,7 @@ export function layerWithRegistry<Error>(
     readonly recoverOnStartup?: boolean;
     readonly continueThreadsAfterServerUpdate?: boolean;
     readonly effectWorkerMaxAttempts?: number;
+    readonly codexAppServerIsolation?: CodexAppServerIsolation;
   } = {},
 ): Layer.Layer<
   | Orchestrator.OrchestratorV2
@@ -360,6 +368,9 @@ export function layerWithRegistry<Error>(
     ...(options.continueThreadsAfterServerUpdate === undefined
       ? {}
       : { continueThreadsAfterServerUpdate: options.continueThreadsAfterServerUpdate }),
+    ...(options.codexAppServerIsolation === undefined
+      ? {}
+      : { codexAppServerIsolation: options.codexAppServerIsolation }),
   }).pipe(Layer.orDie);
   const layerStores = Layer.mergeAll(
     EventStore.layer,

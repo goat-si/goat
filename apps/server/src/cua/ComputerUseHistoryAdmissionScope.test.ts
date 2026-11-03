@@ -106,5 +106,9 @@ it.effect("interrupts a blocked admitted history write when the route is dispose
       assert.isTrue(wasInterrupted);
       assert.deepEqual(yield* history.listForThread(f.a), []);
     }),
-  ).pipe(Effect.provide(Layer.mergeAll(database, serviceLayer, ServerSettings.layerTest()))),
+  ).pipe(
+    Effect.provide(
+      Layer.mergeAll(database, serviceLayer, ServerSettings.layerTest({ enableCua: true })),
+    ),
+  ),
 );

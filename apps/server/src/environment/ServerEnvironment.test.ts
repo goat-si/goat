@@ -250,7 +250,7 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       survival: false,
     },
   ] as const)(
-    "advertises Codex turn survival only where the socket transport runs ($platform)",
+    "advertises Codex turn survival and app-server isolation only where the socket transport runs ($platform)",
     ({ platform, environment, survival }) =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
@@ -265,6 +265,7 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
         );
         expect(descriptor.capabilities.threadRestartContinuation).toBe(true);
         expect(descriptor.capabilities.codexTurnSurvival === true).toBe(survival);
+        expect(descriptor.capabilities.codexAppServerIsolation === true).toBe(survival);
       }),
   );
   it.effect.each([

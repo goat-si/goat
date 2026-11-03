@@ -52,6 +52,8 @@ it.effect("admits a host bind only for an approved pending window under app rest
       h.primitiveReply.pipe(Effect.as("refused")),
     );
     assert.include(outcome, "get_browser_state");
+    const reservation = h.reservations.find((value) => value.action === "reserve");
+    assert.equal(reservation?.authority, "claimBind");
   }),
 );
 
@@ -213,6 +215,7 @@ it.effect.each([true, false])(
       });
       assert.equal((yield* h.primitiveReply).status, "not_started");
       assert.equal(yield* h.driverQueued, 0);
+      assert.deepEqual(h.reservations, []);
     }),
 );
 

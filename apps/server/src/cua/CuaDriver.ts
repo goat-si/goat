@@ -58,7 +58,7 @@ import * as DesktopAppsListing from "./DesktopAppsListing.ts";
 import { makeDesktopBrowserManifest } from "./DesktopBrowserManifest.ts";
 import { currentBlock } from "./cuaDriverBlock.ts";
 import * as CuaDisplay from "./CuaDisplayCapability.ts";
-import { standaloneCatalog, type CuaAppListing } from "./CuaAppListing.ts";
+import { availableCatalog, standaloneCatalog, type CuaAppListing } from "./CuaAppListing.ts";
 export { catalogName } from "./CuaAppListing.ts";
 import * as InstalledDesktopApps from "./installedDesktopApps.ts";
 import * as CuaDriverInstallation from "./CuaDriverInstallation.ts";
@@ -145,6 +145,7 @@ export class CuaDriver extends Context.Service<
      * host cannot list; asking grants nothing.
      */
     readonly appCatalog: Effect.Effect<ReadonlyArray<ComputerUseApp>>;
+    readonly availableAppCatalog: Effect.Effect<Option.Option<ReadonlyArray<ComputerUseApp>>>;
     readonly lastFailure: Effect.Effect<Option.Option<CuaDriverError>>;
     /**
      * Why an agent cannot use the computer here until a person acts, from the last failure and
@@ -229,6 +230,7 @@ export interface CuaDriverOptions {
   readonly listedApps?: Effect.Effect<Option.Option<ReadonlyArray<string>>>;
   /** A desktop host's named listing; servers without one name each app by its id. */
   readonly appCatalog?: Effect.Effect<Option.Option<ReadonlyArray<ComputerUseApp>>>;
+  readonly availableAppCatalog?: Effect.Effect<Option.Option<ReadonlyArray<ComputerUseApp>>>;
   /**
    * Where a server that runs the driver itself reads requestable apps when a request asks
    * (#1561): a short-lived listing on the given display environment, never the shared daemon.
@@ -542,6 +544,11 @@ export const make = Effect.fn("CuaDriver.make")(function* (
           : Option.getOrElse(yield* options.appCatalog, () => []);
       return (yield* enabled) ? catalog : [];
     }),
+    availableAppCatalog: availableCatalog(
+      enabled,
+      standaloneListing,
+      options.availableAppCatalog ?? options.appCatalog,
+    ),
     lastFailure: Effect.sync(() => failure),
     block: (options.helperReadiness ?? Effect.succeedNone).pipe(
       Effect.map((helper) =>
@@ -952,12 +959,15 @@ export const layer = Layer.effect(
     );
     const driver = yield* make(factory, probe, {
       ...(config.mode === "desktop"
-        ? yield* DesktopAppsListing.makeDesktopAppsRequest().pipe(
-            Effect.map((request) => ({
+        ? yield* Effect.gen(function* () {
+            const request = yield* DesktopAppsListing.makeDesktopAppsRequest();
+            const catalog = yield* DesktopAppsListing.makeDesktopAppsCatalog();
+            return {
               listedApps: request.pipe(Effect.map(Option.map((listed) => listed.apps))),
-              appCatalog: request.pipe(Effect.map(Option.map((listed) => listed.catalog))),
-            })),
-          )
+              appCatalog: catalog,
+              availableAppCatalog: catalog,
+            };
+          })
         : {}),
       publishBrowserManifest,
       probeBrowserClaims: yield* makeBrowserDriverCapabilityProbe(),

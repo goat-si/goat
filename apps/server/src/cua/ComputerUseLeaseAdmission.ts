@@ -2,6 +2,7 @@ import type {
   ComputerUseCallAdmission,
   ComputerUseCallReservation,
   ComputerUseControlEnd,
+  ComputerUseApp,
   ThreadId,
   TurnItemId,
 } from "@goat/contracts";
@@ -19,12 +20,14 @@ import { allowsForegroundCall, withCallPermissions } from "./ComputerUseLeaseCal
 import { takesScreen } from "./ComputerUseScope.ts";
 import { ComputerUseCallApps } from "./ComputerUseCallApps.ts";
 import { deniedCallApp } from "./ComputerUseCallSafety.ts";
+import type { EveryAppKind } from "./ComputerUseFullAccess.ts";
 import * as ServerSettings from "../serverSettings.ts";
 
 type AdmissionControl = ComputerUseControl & {
   readonly uses: number;
   readonly ended?: ComputerUseControlEnd;
   readonly idleEpoch?: number;
+  readonly everyApp?: EveryAppKind;
 };
 
 /** The same current authority judges initial admission and the ticket held across a report. */
@@ -75,6 +78,7 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
   readonly controls: Map<ThreadId, C>;
   readonly reservations: ReturnType<typeof makeCallReservations>;
   readonly changed: Effect.Effect<void>;
+  readonly appCatalog: Effect.Effect<Option.Option<ReadonlyArray<ComputerUseApp>>>;
   readonly controlState: (
     threadId: ThreadId,
     controlId: string,
@@ -133,6 +137,17 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
         current?.controlId === request.controlId && current.ended === undefined,
       );
     }
+    const settingsBefore = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
+    const policyBefore = Option.isSome(settingsBefore)
+      ? yield* settingsBefore.value.getSettings.pipe(Effect.option)
+      : Option.none();
+    if (Option.isSome(settingsBefore) && Option.isNone(policyBefore))
+      return { status: "refused", detail: "reconnecting" } as const;
+    const strictBefore = Option.isNone(policyBefore) || policyBefore.value.cuaStrictInputGuards;
+    const catalog =
+      strictBefore && controls.get(threadId)?.nonPersonFullAccess === true
+        ? yield* deps.appCatalog
+        : Option.none();
     return yield* admission.withPermits(1)(
       Effect.gen(function* () {
         const call =
@@ -149,13 +164,13 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
           DateTime.toEpochMillis(yield* DateTime.now),
         );
         const state = yield* controlState(threadId, call.controlId);
-        const now = DateTime.toEpochMillis(yield* DateTime.now);
         const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
         const currentSettings = Option.isSome(settings)
           ? yield* settings.value.getSettings.pipe(Effect.option)
           : Option.none();
         if (Option.isSome(settings) && Option.isNone(currentSettings))
           return { status: "refused", detail: "reconnecting" } as const;
+        const now = DateTime.toEpochMillis(yield* DateTime.now);
         // No settings service (a test host) keeps the guards on.
         const strict = Option.isNone(currentSettings) || currentSettings.value.cuaStrictInputGuards;
         reservations.reclaimStopped(canAct, now);
@@ -183,15 +198,37 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
           return { status: "refused", detail, ...inTheWay } as const;
         if (detail !== undefined) return { status: "refused", detail } as const;
         if (state._tag !== "active") return { status: "refused", detail: "replaced" } as const;
+        const nonPerson = controls.get(threadId)?.nonPersonFullAccess === true;
+        if (strict && nonPerson && Option.isNone(catalog))
+          return { status: "refused", detail: "reconnecting" } as const;
         const denied = strict
           ? deniedCallApp(
               call,
               Option.isSome(currentSettings) ? currentSettings.value.cuaDeniedApps : [],
-              controls.get(threadId)?.nonPersonFullAccess === true,
+              nonPerson,
+              Option.getOrUndefined(catalog),
             )
           : undefined;
         if (denied !== undefined)
           return { status: "refused", detail: "app_not_allowed", app: denied } as const;
+        if (Option.isSome(settings) && settings.value.committedPolicy !== undefined) {
+          // @effect-diagnostics-next-line runEffectInsideEffect:off -- Admission must read this Ref without yielding.
+          const policy = Effect.runSync(settings.value.committedPolicy);
+          if (policy._tag !== "committed" || !policy.enableCua)
+            return { status: "refused", detail: "disabled" } as const;
+        }
+        if (strict && takesScreen(call.name, call.args)) {
+          for (const other of controls.values()) {
+            if (
+              other.threadId !== threadId &&
+              other.everyApp !== undefined &&
+              other.ended === undefined &&
+              other.idle !== true &&
+              DateTime.toEpochMillis(other.expiresAt) > now
+            )
+              return { status: "refused", detail: "screen_shared" } as const;
+          }
+        }
         // Confirmation retains the original ticket and its conflict coverage until cleanup.
         const decision: ComputerUseCallAdmission =
           request.action === "validate"

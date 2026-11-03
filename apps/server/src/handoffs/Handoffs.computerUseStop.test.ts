@@ -101,7 +101,9 @@ it.effect("a thread's Stop frees the apps its grant held for other threads at on
           owner.sessionId,
         );
         yield* PubSub.take(wake);
-        const live = yield* leases.control(threadId, yield* leases.active(threadId));
+        const live = Option.getOrThrow(
+          yield* leases.control(threadId, yield* leases.active(threadId)),
+        );
         const sql = yield* SqlClient.SqlClient;
         const settings = yield* ServerSettings.ServerSettingsService;
         const allowedBefore = [...(yield* settings.getSettings).cuaAllowedApps];
@@ -215,7 +217,7 @@ it.effect("a thread's Stop frees the apps its grant held for other threads at on
         assert.deepEqual(listed?.state, { _tag: "ended", reason: "stopped" });
         // A turn whose attachment was already under way finishes after the Stop and mints a new
         // control. It can act on no app, so the thread's one card stays the stopped one (WS9).
-        const late = yield* leases.control(threadId, Option.none());
+        const late = Option.getOrThrow(yield* leases.control(threadId, Option.none()));
         const lateState = yield* leases.controlState(threadId, late.controlId);
         assert.deepEqual(lateState._tag === "active" ? lateState.apps : undefined, []);
         const afterLate = (yield* leases.sessions).filter(
@@ -325,10 +327,11 @@ it.effect.each(["button", "person_esc"] as const)(
             owner.sessionId,
           );
           yield* PubSub.take(wake);
-          const live = yield* leases.control(threadId, yield* leases.active(threadId));
-          const otherControl = yield* leases.control(
-            otherThread,
-            yield* leases.active(otherThread),
+          const live = Option.getOrThrow(
+            yield* leases.control(threadId, yield* leases.active(threadId)),
+          );
+          const otherControl = Option.getOrThrow(
+            yield* leases.control(otherThread, yield* leases.active(otherThread)),
           );
           // Its agent reads the window, so the thread has a card to stop (#1555).
           yield* leases.callReservation(threadId, {
@@ -387,7 +390,7 @@ it.effect.each(["button", "person_esc"] as const)(
           });
           // A turn whose attachment was already under way finishes after the Stop and mints a new
           // control. It can act on no app, so the thread's one card stays the stopped one (WS9).
-          const late = yield* leases.control(threadId, Option.none());
+          const late = Option.getOrThrow(yield* leases.control(threadId, Option.none()));
           const lateState = yield* leases.controlState(threadId, late.controlId);
           assert.deepEqual(lateState._tag === "active" ? lateState.apps : undefined, []);
           if (source === "person_esc") {
@@ -495,7 +498,7 @@ it.effect("a thread's Stop keeps it off its approval even when that approval can
           { threadId, handoffId: held.handoffId, action: "completed" },
           owner.sessionId,
         );
-        yield* leases.control(threadId, yield* leases.active(threadId));
+        Option.getOrThrow(yield* leases.control(threadId, yield* leases.active(threadId)));
         // Ending the approval fails, as an unreachable store would.
         const failing = Handoffs.Handoffs.of({
           ...service,
@@ -517,7 +520,7 @@ it.effect("a thread's Stop keeps it off its approval even when that approval can
           Option.getOrUndefined(yield* leases.holder(otherThread, [app]))?.threadId,
           threadId,
         );
-        const late = yield* leases.control(threadId, Option.none());
+        const late = Option.getOrThrow(yield* leases.control(threadId, Option.none()));
         const lateState = yield* leases.controlState(threadId, late.controlId);
         assert.deepEqual(lateState._tag === "active" ? lateState.apps : undefined, []);
         // The kill switch still finds it to end it.

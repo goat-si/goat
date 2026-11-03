@@ -36,12 +36,14 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
+import * as Scheduler from "effect/Scheduler";
 import type * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/sql/SqlClient";
 import { resolveSelfInvocation, type SelfInvocation } from "@goat/shared/nodeRuntime";
 
 import * as CuaDriver from "./CuaDriver.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as ChannelBotDirectory from "../channels/ChannelBotDirectory.ts";
 import { makeCallReservations } from "./ComputerUseCallReservations.ts";
 import type { AppHolder } from "./ComputerUseAppLeases.ts";
@@ -154,7 +156,7 @@ export class ComputerUseLeases extends Context.Service<
       threadId: ThreadId,
       lease: Option.Option<ComputerUseLease>,
       runId?: RunId,
-    ) => Effect.Effect<ComputerUseControl>;
+    ) => Effect.Effect<Option.Option<ComputerUseControl>>;
     /**
      * A control on every app without a grant, for a run whose thread is in full access (D16). It
      * ends once the thread leaves full access. None for unattended work while another thread
@@ -412,17 +414,23 @@ const make = Effect.gen(function* () {
     nonPerson = false,
   ) {
     const now = yield* DateTime.now;
+    const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
     // Checked and claimed with no yield between, so two unattended turns cannot both pass.
     if (everyApp === "unattended" && unattendedEveryApp(threadId, now) !== undefined)
-      return undefined;
+      return Option.none<ComputerUseControl>();
     const handoffId = Option.isSome(lease) ? lease.value.handoffId : undefined;
     // A driver started for this thread after all; the session list drops the blocked entry.
-    if (blockedTurns.delete(threadId)) yield* changed;
     // Read, decision, state change and notice are one synchronous, uninterruptible step: a Stop
     // cannot land between the read and the write, and an interrupt cannot skip the notice of a
     // grant this added or dropped (#1617, #1653).
     return yield* Effect.uninterruptible(
       Effect.suspend(() => {
+        if (Option.isSome(settings) && settings.value.committedPolicy !== undefined) {
+          // @effect-diagnostics-next-line runEffectInsideEffect:off -- Admission must read this Ref without yielding.
+          const policy = Effect.runSync(settings.value.committedPolicy);
+          if (policy._tag !== "committed" || !policy.enableCua) return Effect.succeedNone;
+        }
+        const unblocked = blockedTurns.delete(threadId);
         const existing = controls.get(threadId);
         if (
           existing !== undefined &&
@@ -446,10 +454,10 @@ const make = Effect.gen(function* () {
           const moved =
             DateTime.toEpochMillis(reused.expiresAt) !== DateTime.toEpochMillis(existing.expiresAt);
           const notice =
-            implyFocus(reused) || existing.idle === true || moved || identityChanged
+            implyFocus(reused) || existing.idle === true || moved || identityChanged || unblocked
               ? changed
               : Effect.void;
-          return Effect.as(notice, reused as ComputerUseControl);
+          return Effect.as(notice, Option.some(reused));
         }
         const next: ControlRecord = {
           controlId: `control:${NodeCrypto.randomUUID()}`,
@@ -480,15 +488,13 @@ const make = Effect.gen(function* () {
           everyApp === undefined ? handoffId : undefined,
         );
         implyFocus(next);
-        return Effect.as(changed, next as ComputerUseControl);
+        return Effect.as(changed, Option.some(next));
       }),
-    );
+    ).pipe(Effect.provideService(Scheduler.PreventSchedulerYield, true));
   });
 
   const control = (threadId: ThreadId, lease: Option.Option<ComputerUseLease>, runId?: RunId) =>
-    mint(threadId, lease, undefined, runId).pipe(
-      Effect.map((record) => record as ComputerUseControl),
-    );
+    mint(threadId, lease, undefined, runId);
 
   const everyAppControl = Effect.fn("ComputerUseLeases.everyAppControl")(function* (
     threadId: ThreadId,
@@ -496,16 +502,12 @@ const make = Effect.gen(function* () {
     run?: { readonly runId?: RunId; readonly nonPerson?: boolean },
   ) {
     if (!unattended)
-      return Option.fromNullishOr(
-        yield* mint(threadId, Option.none(), "person", run?.runId, run?.nonPerson),
-      );
+      return yield* mint(threadId, Option.none(), "person", run?.runId, run?.nonPerson);
     return yield* admission.withPermits(1)(
       Effect.gen(function* () {
         if ((yield* live(undefined, true)).some((lease) => lease.threadId !== threadId))
           return Option.none<ComputerUseControl>();
-        return Option.fromNullishOr(
-          yield* mint(threadId, Option.none(), "unattended", run?.runId, true),
-        );
+        return yield* mint(threadId, Option.none(), "unattended", run?.runId, true);
       }),
     );
   });
@@ -548,6 +550,13 @@ const make = Effect.gen(function* () {
     if (forPerson.has(controlId)) return { _tag: "paused", reason: "takeover" };
     const own = stoppedCards.own(grants, threadId);
     yield* settle(threadId);
+    const otherControls = [...controls.values()].filter(
+      (other) =>
+        other.threadId !== threadId &&
+        other.everyApp !== undefined &&
+        acting(other) &&
+        DateTime.toEpochMillis(other.expiresAt) > DateTime.toEpochMillis(now),
+    );
     const focus = foreground.grants(threadId, controlId, own, DateTime.toEpochMillis(now));
     const focusState = focus.length === 0 ? {} : { foreground: focus };
     // While a run holds implied foreground, re-check soon so a missed run end still ends it.
@@ -558,6 +567,7 @@ const make = Effect.gen(function* () {
         until,
         ...focus.map((grant) => grant.expiresAtMillis),
         ...others.map((lease) => DateTime.toEpochMillis(lease.expiresAt)),
+        ...otherControls.map((other) => DateTime.toEpochMillis(other.expiresAt)),
       );
       return {
         _tag: "active",
@@ -568,7 +578,7 @@ const make = Effect.gen(function* () {
         wakeAt: Math.min(validUntil, DateTime.toEpochMillis(now) + recheck),
         validUntil,
         ...focusState,
-        ...(others.length === 0 ? {} : ({ shared: true } as const)),
+        ...(others.length === 0 && otherControls.length === 0 ? {} : ({ shared: true } as const)),
         ...(record.idle === true ? ({ idle: true } as const) : {}),
         ...(record.idleEpoch === undefined ? {} : { idleEpoch: record.idleEpoch }),
       } as const;
@@ -697,6 +707,7 @@ const make = Effect.gen(function* () {
 
   const calls = makeCallReservation({
     admission,
+    appCatalog: Option.isSome(driver) ? driver.value.availableAppCatalog : Effect.succeedNone,
     controls,
     reservations,
     changed,

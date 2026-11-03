@@ -1,4 +1,5 @@
 import { WorkLogButton, WorkLogList, WorkLogRow } from "./WorkLog";
+import { isSelectionClick } from "./selectionClick";
 import type { WorktreeSetupSnapshot } from "@goat/contracts";
 import {
   getQuestionAnswerPreview,
@@ -502,8 +503,9 @@ export function LiveWorkEntryTimelineRow({
   const thoughtIsStatus = thoughtLine !== "" && row.entry === row.thought;
 
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       className={cn(
         "group/live-work flex w-full max-w-full cursor-pointer rounded-md text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70",
         thoughtLine ? "flex-col items-start" : "min-h-6 items-center",
@@ -514,7 +516,16 @@ export function LiveWorkEntryTimelineRow({
           : undefined
       }
       aria-expanded={row.expanded}
-      onClick={() => ctx.onToggleWorkGroup(row.groupId, row.id)}
+      onClick={(event) => {
+        if (!isSelectionClick(event)) ctx.onToggleWorkGroup(row.groupId, row.id);
+      }}
+      onKeyDown={(event) => {
+        if (event.target !== event.currentTarget || event.repeat) return;
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          ctx.onToggleWorkGroup(row.groupId, row.id);
+        }
+      }}
     >
       {thoughtLine ? (
         <WorkLogRow
@@ -580,7 +591,7 @@ export function LiveWorkEntryTimelineRow({
         failed={failed}
         active={row.active}
       />
-    </button>
+    </div>
   );
 }
 

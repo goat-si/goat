@@ -29,7 +29,11 @@ import { create } from "zustand";
 import { useGlobalAgentStore } from "~/globalAgentStore";
 import { randomUUID } from "~/lib/utils";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
-import { useEnvironmentShellsBootstrapped, useThreadShell } from "~/state/entities";
+import {
+  useEnvironmentShellsBootstrapped,
+  useServerConfigs,
+  useThreadShell,
+} from "~/state/entities";
 import { environmentThreadDetails } from "~/state/threads";
 import {
   goatBotHomeReadBack,
@@ -39,6 +43,12 @@ import {
   resolveGoatBotHomeSelection,
   type GoatBotEnvironmentInput,
 } from "@goat/client-runtime/goatBot";
+import {
+  releaseGoatBotAttachments,
+  uploadGoatBotAttachments,
+  type GoatBotAttachmentSupport,
+  type GoatBotDraftAttachment,
+} from "./goatBotAttachments";
 import { GoatBotChannelContext, type GoatBotChannelPort } from "./goatBotChannelPort";
 import { useGoatBotEnvironments } from "./goatBotHooks";
 
@@ -52,7 +62,7 @@ interface Session {
   readonly port: GoatBotChannelPort | null;
   readonly canOperate: boolean;
   readonly legacyAutoRetried: boolean;
-  readonly queue: GoatBotSendQueue;
+  readonly queue: GoatBotSendQueue<GoatBotDraftAttachment>;
 }
 
 const useSessions = create<{ sessions: ReadonlyMap<EnvironmentId, Session>; revision: number }>(
@@ -68,8 +78,9 @@ function update(environmentId: EnvironmentId, session: Session) {
 }
 
 function newQueue(environmentId: EnvironmentId) {
-  return createGoatBotSendQueue({
+  return createGoatBotSendQueue<GoatBotDraftAttachment>({
     onChange: changed,
+    onDiscard: (_key, attachments) => releaseGoatBotAttachments(attachments),
     makeKey: randomUUID,
     canDispatch: (bot) => {
       const session = useSessions.getState().sessions.get(environmentId);
@@ -83,9 +94,10 @@ function newQueue(environmentId: EnvironmentId) {
         session.machine.ensure.bot.threadId === bot.threadId
       );
     },
-    send: async ({ clientKey, text, receivedAt, bot }) => {
+    send: async ({ clientKey, text, attachments, receivedAt, bot }) => {
       const port = useSessions.getState().sessions.get(environmentId)?.port;
       if (!port) throw new Error("GOAT Bot isn't available");
+      const files = await uploadGoatBotAttachments(bot.environmentId, attachments);
       const result = await port.ingest(bot.environmentId, {
         kind: "goat",
         connectionId: "goat",
@@ -95,10 +107,13 @@ function newQueue(environmentId: EnvironmentId) {
         actor: {},
         replyAddress: { kind: "goat", environmentId: bot.environmentId, threadId: bot.threadId },
         text,
-        attachments: [],
+        attachments: files,
         receivedAt,
         intent: "message",
       });
+      // The server keeps its own copy of each file once it has the message, and a rejected
+      // message is never sent again.
+      releaseGoatBotAttachments(attachments);
       if (result.state === "rejected")
         return { requestKey: result.inputId, rejected: "GOAT Bot did not accept this message" };
       return { requestKey: result.inputId };
@@ -199,7 +214,10 @@ const NO_PORT_PERMISSION: Pick<GoatBotChannelPort, "useCanSend"> = { useCanSend:
 
 // The queue changes in place and bumps revision; taking revision makes it an input of the
 // compiled read, so the timeline does not keep the previous pending inputs.
-function pendingInputsAt(queue: GoatBotSendQueue | undefined, _revision: number) {
+function pendingInputsAt(
+  queue: GoatBotSendQueue<GoatBotDraftAttachment> | undefined,
+  _revision: number,
+) {
   return queue?.pendingInputs() ?? [];
 }
 
@@ -391,6 +409,17 @@ export function useGoatBotSession(visibleTurnItems = EMPTY_ITEMS) {
     readers: goatBotItemReaders,
   });
   const activity = useGoatBotWorking(visibleTurnItems);
+  const serverConfigs = useServerConfigs();
+  const readyBot = availability.kind === "ready" ? availability.bot : null;
+  // Files go to the bot's own server, which says whether GOAT Bot takes them.
+  const capabilities =
+    readyBot === null
+      ? undefined
+      : serverConfigs.get(readyBot.environmentId)?.environment.capabilities;
+  const attachmentSupport: GoatBotAttachmentSupport | null =
+    capabilities?.goatBotAttachments === true && capabilities.attachmentUploads === true
+      ? { maxUploadBytes: capabilities.fileAttachments?.maxUploadBytes ?? null }
+      : null;
   return {
     confirmedBot: availability.kind === "ready" ? availability.bot : null,
     availability,
@@ -398,8 +427,12 @@ export function useGoatBotSession(visibleTurnItems = EMPTY_ITEMS) {
     rows,
     replyingSince: goatBotReplyingSince({ visibleTurnItems, readers: goatBotItemReaders }),
     activity,
-    onSend: (text: string) => {
-      if (availability.kind === "ready" && canOperate) queue?.submit(text, availability.bot);
+    attachmentSupport,
+    onSend: (text: string, attachments: ReadonlyArray<GoatBotDraftAttachment> = []) => {
+      if (availability.kind !== "ready" || !canOperate || queue === undefined) return false;
+      if (attachments.length > 0 && attachmentSupport === null) return false;
+      queue.submit(text, availability.bot, attachments);
+      return true;
     },
     onRetryInput: (key: string) => {
       if (availability.kind === "ready" && canOperate) queue?.retry(key);

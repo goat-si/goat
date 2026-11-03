@@ -8,6 +8,7 @@ import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ShellCommandBlock } from "./ShellCommandBlock";
+import { isSelectionClick } from "./selectionClick";
 
 export function ToolCallCard(props: {
   readonly title: string;
@@ -16,12 +17,12 @@ export function ToolCallCard(props: {
 }) {
   return (
     <div data-tool-call-card className="overflow-hidden rounded-lg border border-border bg-accent">
-      <div className="flex h-7 items-center ps-2.5 pe-1 font-sans text-xs text-muted-foreground select-none">
+      <div className="flex h-7 items-center ps-2.5 pe-1 font-sans text-xs text-muted-foreground">
         <span className="min-w-0 truncate">{props.title}</span>
       </div>
       <div className="px-2.5 pb-2">{props.children}</div>
       {props.footer ? (
-        <div className="flex justify-end px-2.5 pb-1.5 font-sans text-xs text-muted-foreground select-none">
+        <div className="flex justify-end px-2.5 pb-1.5 font-sans text-xs text-muted-foreground">
           {props.footer}
         </div>
       ) : null}
@@ -77,19 +78,16 @@ export function ShellCommandLine({ command }: { readonly command: string }) {
       tabIndex={0}
       aria-expanded={expanded}
       onClick={(event) => {
-        // A click that ends a text selection inside the command must not toggle it.
-        const selection = window.getSelection();
-        if (
-          selection !== null &&
-          !selection.isCollapsed &&
-          event.currentTarget.contains(selection.anchorNode)
-        ) {
-          return;
-        }
+        if (isSelectionClick(event)) return;
         toggle();
       }}
       onKeyDown={(event) => {
-        if ((event.key !== "Enter" && event.key !== " ") || event.repeat) return;
+        if (
+          event.target !== event.currentTarget ||
+          (event.key !== "Enter" && event.key !== " ") ||
+          event.repeat
+        )
+          return;
         event.preventDefault();
         toggle();
       }}
@@ -98,7 +96,7 @@ export function ShellCommandLine({ command }: { readonly command: string }) {
         !expanded && "line-clamp-2",
       )}
     >
-      <span aria-hidden className="me-[1ch] text-muted-foreground">
+      <span aria-hidden className="me-[1ch] text-muted-foreground select-none">
         $
       </span>
       <ShellCommandBlock command={commandDisplayText(command)} />

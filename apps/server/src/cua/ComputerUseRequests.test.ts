@@ -591,14 +591,16 @@ it.effect.each(["first", "existing"] as const)(
           );
           if (admitted.expiresAt === null) return assert.fail("admission needs an expiry");
           if (ordering === "existing")
-            yield* leases.control(threadId, yield* leases.active(threadId));
+            Option.getOrThrow(yield* leases.control(threadId, yield* leases.active(threadId)));
           const focus = yield* request({ foreground: true, minutes: 5 });
           if (focus.kind !== "needs_human") return assert.fail("foreground needs approval");
           yield* handoffs.respond(
             { threadId, handoffId: focus.handoff.handoffId, action: "completed" },
             sessionId,
           );
-          const control = yield* leases.control(threadId, yield* leases.active(threadId));
+          const control = Option.getOrThrow(
+            yield* leases.control(threadId, yield* leases.active(threadId)),
+          );
           const state = yield* leases.controlState(threadId, control.controlId);
           assert.equal(state._tag, "active");
           assert.isUndefined(state._tag === "active" ? state.apps : state);
@@ -703,7 +705,7 @@ it.effect(
           assert.isFalse(yield* leases.foregroundAvailable(threadId, purpose));
           const completed = yield* handoffs.respond({ ...address, action: "completed" }, sessionId);
           assert.deepEqual(completed.computerUseForeground, { purpose, target: "desktop" });
-          yield* leases.control(threadId, yield* leases.active(threadId));
+          Option.getOrThrow(yield* leases.control(threadId, yield* leases.active(threadId)));
           assert.isTrue(yield* leases.foregroundAvailable(threadId, purpose));
           assert.equal((yield* request({ foreground: true })).kind, "available");
           assert.equal(
@@ -745,7 +747,7 @@ it.effect(
               sessionId,
             );
             assert.equal(completed.state, "completed");
-            yield* leases.control(threadId, yield* leases.active(threadId));
+            Option.getOrThrow(yield* leases.control(threadId, yield* leases.active(threadId)));
             assert.isFalse(yield* leases.foregroundAvailable(threadId, purpose));
             assert.equal((yield* request({ foreground: true })).kind, "needs_human");
           }),

@@ -27,6 +27,7 @@ const driver = CuaDriver.CuaDriver.of({
   enabled: Effect.succeed(true),
   listedApps: Effect.succeedNone,
   appCatalog: Effect.succeed([]),
+  availableAppCatalog: Effect.succeedSome([]),
   acquire: Effect.succeedSome({ command: "/fixture/driver", args: ["mcp"], environment: [] }),
   lastFailure: Effect.succeedNone,
   block: Effect.succeed(undefined),

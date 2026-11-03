@@ -3,7 +3,7 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { assert, it } from "@effect/vitest";
-import { ProviderInstanceId, RunId, ThreadId } from "@goat/contracts";
+import { ProviderInstanceId, ProviderSessionId, RunId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
@@ -39,6 +39,7 @@ const openService = (directory: string, _options: {}) =>
   });
 const openInput = {
   instanceId: "codex",
+  providerSessionId: ProviderSessionId.make("session"),
   command: (socket: string) =>
     Effect.succeed({ command: "codex", args: ["app-server", "--listen", "unix://" + socket] }),
 };
@@ -48,7 +49,11 @@ it.effect("concurrent stop and goal fences are durable and gate admission", () =
     Effect.gen(function* () {
       const service = yield* openService(directory, {});
       const opened = yield* service.open(openInput);
-      const key = { instanceId: ProviderInstanceId.make("codex"), recordName: opened.record.name };
+      const key = {
+        instanceId: ProviderInstanceId.make("codex"),
+        recordName: opened.record.name,
+        providerSessionId: openInput.providerSessionId,
+      };
       const threadId = ThreadId.make("thread-fenced");
       const stop = { threadId, nativeThreadId: "native-thread", nativeTurnId: "native-turn" };
       const goal = { threadId, nativeThreadId: "native-thread" };

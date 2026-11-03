@@ -100,7 +100,7 @@ it.effect(
   () =>
     withWaiting(({ request, handoffs, leases, runId, created }) =>
       Effect.gen(function* () {
-        const control = yield* leases.control(threadId, Option.none(), runId);
+        const control = Option.getOrThrow(yield* leases.control(threadId, Option.none(), runId));
         const waiting = yield* request({ apps: [APP] }, WAIT).pipe(
           Effect.forkChild({ startImmediately: true }),
         );
@@ -118,7 +118,7 @@ it.effect(
 it.effect("an approved foreground request lets this turn's control take the foreground", () =>
   withWaiting(({ request, handoffs, leases, runId, created }) =>
     Effect.gen(function* () {
-      const control = yield* leases.control(threadId, Option.none(), runId);
+      const control = Option.getOrThrow(yield* leases.control(threadId, Option.none(), runId));
       const waiting = yield* request({ foreground: true }, WAIT).pipe(
         Effect.forkChild({ startImmediately: true }),
       );
@@ -187,7 +187,7 @@ it.effect.each(["declined", "cancelled"] as const)(
   (action) =>
     withWaiting(({ request, handoffs, leases, runId, created }) =>
       Effect.gen(function* () {
-        yield* leases.control(threadId, Option.none(), runId);
+        Option.getOrThrow(yield* leases.control(threadId, Option.none(), runId));
         const waiting = yield* request({ apps: [APP] }, WAIT).pipe(
           Effect.forkChild({ startImmediately: true }),
         );
@@ -200,7 +200,7 @@ it.effect.each(["declined", "cancelled"] as const)(
 it.effect("a request that expires while the call waits reports expired", () =>
   withWaiting(({ request, leases, runId, created }) =>
     Effect.gen(function* () {
-      yield* leases.control(threadId, Option.none(), runId);
+      Option.getOrThrow(yield* leases.control(threadId, Option.none(), runId));
       const waiting = yield* request({ apps: [APP], minutes: 5 }, WAIT).pipe(
         Effect.forkChild({ startImmediately: true }),
       );
@@ -214,7 +214,7 @@ it.effect("a request that expires while the call waits reports expired", () =>
 it.effect("a call that waited its budget leaves the request open and says so", () =>
   withWaiting(({ request, handoffs, leases, runId, created }) =>
     Effect.gen(function* () {
-      yield* leases.control(threadId, Option.none(), runId);
+      Option.getOrThrow(yield* leases.control(threadId, Option.none(), runId));
       const waiting = yield* request({ apps: [APP] }, Duration.minutes(1)).pipe(
         Effect.forkChild({ startImmediately: true }),
       );
@@ -231,7 +231,7 @@ it.effect("a call that waited its budget leaves the request open and says so", (
 it.effect("a newer different request replaces a pending one, whose call reports it", () =>
   withWaiting(({ request, handoffs, leases, runId, created }) =>
     Effect.gen(function* () {
-      yield* leases.control(threadId, Option.none(), runId);
+      Option.getOrThrow(yield* leases.control(threadId, Option.none(), runId));
       const first = yield* request({ apps: [APP] }, WAIT).pipe(
         Effect.forkChild({ startImmediately: true }),
       );
@@ -250,7 +250,7 @@ it.effect("a newer different request replaces a pending one, whose call reports 
 it.effect("an approval that lands first keeps its grant when a different request follows", () =>
   withWaiting(({ request, handoffs, leases, runId, created }) =>
     Effect.gen(function* () {
-      const control = yield* leases.control(threadId, Option.none(), runId);
+      const control = Option.getOrThrow(yield* leases.control(threadId, Option.none(), runId));
       const first = yield* request({ apps: [APP] }, WAIT).pipe(
         Effect.forkChild({ startImmediately: true }),
       );
@@ -270,7 +270,7 @@ it.effect("an approval that lands first keeps its grant when a different request
 it.effect("an approval after Stop does not reach the stopped turn", () =>
   withWaiting(({ request, handoffs, leases, runId, created }) =>
     Effect.gen(function* () {
-      yield* leases.control(threadId, Option.none(), runId);
+      Option.getOrThrow(yield* leases.control(threadId, Option.none(), runId));
       const waiting = yield* request({ apps: [APP] }, WAIT).pipe(
         Effect.forkChild({ startImmediately: true }),
       );
@@ -345,7 +345,7 @@ it.effect(
       yield* withWaiting(
         ({ request, handoffs, leases, runId, created }) =>
           Effect.gen(function* () {
-            yield* leases.control(threadId, Option.none(), runId);
+            Option.getOrThrow(yield* leases.control(threadId, Option.none(), runId));
             assert.deepEqual(yield* Queue.take(watched), []);
             const screen = yield* request({}, WAIT).pipe(
               Effect.forkChild({ startImmediately: true }),
@@ -380,7 +380,7 @@ it.effect("a request is judged by the running turn, not a scheduled one queued b
       });
       const runs = (yield* orchestrator.getThreadProjection(threadId)).runs;
       assert.isTrue(runs.some((run) => run.id !== runId && run.status === "queued"));
-      yield* leases.control(threadId, Option.none(), runId);
+      Option.getOrThrow(yield* leases.control(threadId, Option.none(), runId));
       const waiting = yield* request({ apps: [APP] }, WAIT).pipe(
         Effect.forkChild({ startImmediately: true }),
       );

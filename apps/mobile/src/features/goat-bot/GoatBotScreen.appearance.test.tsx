@@ -9,6 +9,7 @@ import { expect, it, vi } from "vite-plus/test";
 
 const appearance = vi.hoisted(() => ({ mode: "dark" as "light" | "dark", baseFontSize: 16 }));
 const screenSession = vi.hoisted(() => ({ activity: null as GoatBotActivity | null }));
+const list = vi.hoisted(() => ({ props: null as Record<string, unknown> | null }));
 
 vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
   useAppearancePreferences: () => ({
@@ -73,9 +74,10 @@ vi.mock("./GoatBotComposerAttachments", () => ({
   releaseGoatBotAttachments: () => {},
 }));
 vi.mock("@legendapp/list/react-native", () => ({
-  LegendList: ({ ListFooterComponent }: { ListFooterComponent?: ReactNode }) => (
-    <>{ListFooterComponent}</>
-  ),
+  LegendList: (props: { ListFooterComponent?: ReactNode }) => {
+    list.props = props;
+    return <>{props.ListFooterComponent}</>;
+  },
 }));
 vi.mock("@react-navigation/elements", async () => ({
   HeaderHeightContext: (await import("react")).createContext<number | undefined>(undefined),
@@ -233,4 +235,15 @@ it("shows the shared reader's reading and working text below the conversation", 
   const idle = await render(<GoatBotScreen visible />);
   expect(idle.container.textContent).not.toContain("Run df -h");
   await idle.unmount();
+});
+
+it("opens the conversation at its newest message and keeps following it", async () => {
+  const view = await render(<GoatBotScreen visible />);
+  // Without initialScrollAtEnd a long conversation opened at its oldest message.
+  expect(list.props).toMatchObject({
+    initialScrollAtEnd: true,
+    maintainScrollAtEnd: true,
+    alignItemsAtEnd: true,
+  });
+  await view.unmount();
 });

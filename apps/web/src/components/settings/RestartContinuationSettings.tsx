@@ -1,5 +1,6 @@
 import { DEFAULT_UNIFIED_SETTINGS } from "@goat/contracts/settings";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
+import { CodexAppServerIsolationSetting } from "./CodexAppServerIsolationSetting";
 import { ScopedSwitch } from "./ScopedSwitch";
 import { useSettingsScope } from "./SettingsScopeContext";
 import { SettingResetButton, SettingsRow } from "./settingsLayout";
@@ -129,6 +130,8 @@ export function RestartContinuationSettings() {
           </Select>
         }
       />
+
+      <CodexAppServerIsolationSetting />
     </>
   );
 }

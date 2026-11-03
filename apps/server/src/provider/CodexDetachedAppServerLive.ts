@@ -23,7 +23,7 @@ import {
 } from "./CodexDetachedAppServer.ts";
 
 /** Maintainer override: `socket` or `stdio` forces a transport; unset follows each project's setting. */
-const CODEX_TRANSPORT_ENV = "GOAT_CODEX_APP_SERVER_TRANSPORT";
+export const CODEX_TRANSPORT_ENV = "GOAT_CODEX_APP_SERVER_TRANSPORT";
 
 type CodexTransportMode = "auto" | "socket" | "stdio" | "unsupported";
 
@@ -35,6 +35,9 @@ export const codexSocketTransportMode = (
   const requested = environment[CODEX_TRANSPORT_ENV]?.trim();
   return requested === "socket" || requested === "stdio" ? requested : "auto";
 };
+
+export const codexAppServerIsolationAvailable = (mode: CodexTransportMode) =>
+  mode === "auto" || mode === "socket";
 
 export const shouldUseCodexSocketTransport = (
   mode: CodexTransportMode,

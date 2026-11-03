@@ -17,6 +17,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import { type McpSchema, Tool } from "effect/ai";
 
 import * as Sqlite from "../persistence/Sqlite.ts";
+import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import {
   serveEnforcingCatalogOverHttp,
@@ -115,6 +116,35 @@ const enforcing = (goatclaw: { readonly enabled: boolean; readonly defaultProfil
     Sqlite.layerMemory,
     ServerSettings.layerTest({ goatclaw, agentToolListing: "full" }),
   );
+
+it.effect("#2194: a worker-launched supervisor cannot discover or call direct PR writes", () =>
+  Effect.gen(function* () {
+    yield* seedCaller;
+    yield* Profiles.PermissionProfiles.pipe(
+      Effect.flatMap((profiles) =>
+        profiles.claim(callers.outside, {
+          id: "supervisor",
+          childThreadId: CALLER,
+          runtimeMode: "auto",
+          role: "supervisor",
+        }),
+      ),
+      Effect.provide(Profiles.layer),
+    );
+    const http = yield* serveEnforcingCatalogOverHttp(callers);
+    const listed = new Set((yield* http.listTools("thread")).map((tool) => tool.name));
+    const rows = yield* describeAll(http, "thread");
+    for (const path of ["pull_request.merge", "pull_request.close"] as const) {
+      const row = rows.find((candidate) => candidate.path === path)!;
+      expect(row.available).toMatchObject({
+        now: false,
+        reason: expect.stringContaining("pr.merge"),
+      });
+      expect(listed.has(row.name)).toBe(false);
+      expect(refusedByProfile(yield* http.callTool("thread", row.name, {}))).toBe(true);
+    }
+  }).pipe(Effect.scoped, Effect.provide(enforcing({ enabled: true, defaultProfile: "worker" }))),
+);
 
 it.effect.each(Object.keys(BUILTIN_PERMISSION_PROFILES))(
   "goat_describe and tools/list withhold tools for missing explicit grants or a %s thread's profile",

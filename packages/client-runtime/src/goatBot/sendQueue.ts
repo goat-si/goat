@@ -34,6 +34,7 @@ export interface GoatBotSendQueueOptions<
   readonly canDispatch: (bot: GoatBotRef) => boolean;
   readonly onChange: () => void;
   readonly onForget?: (clientKey: string, attachments: ReadonlyArray<A>) => void;
+  readonly onDiscard?: (clientKey: string, attachments: ReadonlyArray<A>) => void;
   readonly makeKey: () => string;
   readonly now?: () => string;
 }
@@ -163,6 +164,7 @@ export function createGoatBotSendQueue<A extends GoatBotAttachmentLabel = GoatBo
       const entry = entries.find((candidate) => candidate.clientKey === clientKey);
       if (entry?.state !== "failed") return;
       entries = entries.filter((candidate) => candidate !== entry);
+      options.onDiscard?.(entry.clientKey, entry.attachments);
       options.onForget?.(entry.clientKey, entry.attachments);
       changed();
     },

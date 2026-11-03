@@ -28,7 +28,7 @@ layer("ComputerUsePrimitiveChannel with real leases", (it) => {
         const leases = yield* ComputerUseLeases.ComputerUseLeases;
         const channel = yield* PrimitiveChannel.make;
         const threadId = ThreadId.make("thread-channel-terminal-stop");
-        const control = yield* leases.control(threadId, Option.none());
+        const control = Option.getOrThrow(yield* leases.control(threadId, Option.none()));
         const authority = {
           threadId,
           attachmentGeneration: "attachment:stop",
@@ -78,7 +78,7 @@ layer("ComputerUsePrimitiveChannel with real leases", (it) => {
           const leases = yield* ComputerUseLeases.ComputerUseLeases;
           const channel = yield* PrimitiveChannel.make;
           const threadId = ThreadId.make(`thread-channel-disable-${how}`);
-          const control = yield* leases.control(threadId, Option.none());
+          const control = Option.getOrThrow(yield* leases.control(threadId, Option.none()));
           const authority = {
             threadId,
             attachmentGeneration: "attachment:one",
@@ -107,7 +107,7 @@ layer("ComputerUsePrimitiveChannel with real leases", (it) => {
               proxyChannelToken: authority.proxyChannelToken,
             }),
           );
-          const next = yield* leases.control(threadId, Option.none());
+          const next = Option.getOrThrow(yield* leases.control(threadId, Option.none()));
           const reissued = { ...authority, attachmentGeneration: "attachment:two" };
           yield* channel.issue({
             ...reissued,
@@ -136,7 +136,7 @@ layer("ComputerUsePrimitiveChannel while a driver starts", (it) => {
         const leases = yield* ComputerUseLeases.ComputerUseLeases;
         const channel = yield* PrimitiveChannel.make;
         const threadId = ThreadId.make("thread-channel-starting-driver");
-        const control = yield* leases.control(threadId, Option.none());
+        const control = Option.getOrThrow(yield* leases.control(threadId, Option.none()));
         const authority = {
           threadId,
           attachmentGeneration: "attachment:one",

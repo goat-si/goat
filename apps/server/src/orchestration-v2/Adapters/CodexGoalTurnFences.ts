@@ -251,5 +251,11 @@ export const makeGoalTurnFences = (input: {
           yield* input.service.clearStopObligation(stop.record, stop.block);
     }
   });
-  return { pending, observe, resume, clearDead, hasGoals: input.goals.size > 0 };
+  const fenced = Effect.fn("CodexGoalTurnFences.fenced")(function* () {
+    const threads: Array<string> = [];
+    for (const nativeThreadId of new Set([...input.goals.keys(), ...input.tracked.keys()]))
+      if ((yield* blocksFor(nativeThreadId)).length > 0) threads.push(nativeThreadId);
+    return threads;
+  });
+  return { pending, observe, resume, clearDead, fenced, hasGoals: input.goals.size > 0 };
 };

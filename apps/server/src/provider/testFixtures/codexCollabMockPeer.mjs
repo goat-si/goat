@@ -388,7 +388,9 @@ rl.on("line", (line) => {
     return;
   }
   if (id !== undefined) {
-    if (soak) write({ id, error: { code: -32601, message: `Unknown method: ${method}` } });
-    else write({ id, result: {} });
+    if (soak) {
+      lifecycle("unknown-method", { method });
+      write({ id, error: { code: -32601, message: `Unknown method: ${method}` } });
+    } else write({ id, result: {} });
   }
 });

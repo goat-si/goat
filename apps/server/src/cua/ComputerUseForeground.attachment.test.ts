@@ -36,6 +36,7 @@ const layer = ComputerUseLeases.layer.pipe(
         cuaStrictInputGuards: true,
         enableCua: true,
       }),
+      Layer.mock(CuaDriver.CuaDriver)({ availableAppCatalog: Effect.succeedSome([]) }),
       DesktopTelemetryReceiver.layerTest({
         cuaReadiness: Effect.succeedSome({
           version: 1,
@@ -80,6 +81,7 @@ const attach = Effect.fn("foreground.attachFixture")(function* (
     acquire: Effect.succeedSome({ command: "/fixture/driver", args: ["mcp"], environment: [] }),
     listedApps: Effect.succeedNone,
     appCatalog: Effect.succeed([]),
+    availableAppCatalog: Effect.succeedSome([]),
     lastFailure: Effect.succeedNone,
     block: Effect.succeed(undefined),
     status: Effect.succeed({ platform: "darwin", running: true }),
@@ -141,7 +143,9 @@ describe("foreground through real computer-use attachment", () => {
         const gate = yield* Deferred.make<void>();
         const { h, leases } = yield* attach(false, false, gate);
         const competitor = ThreadId.make("thread:report-competitor");
-        const competingControl = yield* leases.control(competitor, Option.none());
+        const competingControl = Option.getOrThrow(
+          yield* leases.control(competitor, Option.none()),
+        );
         const competingCall = {
           action: "reserve" as const,
           controlId: competingControl.controlId,

@@ -561,6 +561,9 @@ export function useSettingsRestore(onRestored?: () => void) {
     DEFAULT_UNIFIED_SETTINGS.codexTurnsSurviveServerStop
       ? ["Keep Codex turns running"]
       : []),
+    ...(settings.codexAppServerIsolation !== DEFAULT_UNIFIED_SETTINGS.codexAppServerIsolation
+      ? ["Codex app-servers"]
+      : []),
     ...(isBackgroundActivityDirty ? ["Background activity"] : []),
     ...(settings.agentMemoryLimitGiB !== null ? ["Agent memory limit"] : []),
     ...(settings.defaultThreadEnvMode !== DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode
@@ -689,6 +692,12 @@ export function useSettingsRestore(onRestored?: () => void) {
         (target) => target.serverConfig?.environment.capabilities.codexTurnSurvival === true,
       )
         ? { codexTurnsSurviveServerStop: DEFAULT_UNIFIED_SETTINGS.codexTurnsSurviveServerStop }
+        : {}),
+      ...(connectedEnvironments.length > 0 &&
+      connectedEnvironments.every(
+        (target) => target.serverConfig?.environment.capabilities.codexAppServerIsolation === true,
+      )
+        ? { codexAppServerIsolation: DEFAULT_UNIFIED_SETTINGS.codexAppServerIsolation }
         : {}),
       backgroundActivity: DEFAULT_UNIFIED_SETTINGS.backgroundActivity,
       backgroundActivityProfile: DEFAULT_UNIFIED_SETTINGS.backgroundActivityProfile,

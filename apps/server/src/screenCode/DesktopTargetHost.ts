@@ -275,8 +275,8 @@ export const createDesktopTargetHost = (deps: {
   ) {
     const tool = input[0];
     const reply = yield* send(...input);
-    const safety = driverOutcomeSafety(tool, reply);
-    const error = driverError(reply);
+    const safety = driverOutcomeSafety(tool, reply, input[1]);
+    const error = driverError(reply, tool, input[1]);
     if (error) {
       return yield* Effect.fail({
         ...error,

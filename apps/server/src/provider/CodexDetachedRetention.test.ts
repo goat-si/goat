@@ -3,10 +3,12 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { assert, it } from "@effect/vitest";
-import { ProviderInstanceId, ThreadId } from "@goat/contracts";
+import { ProviderInstanceId, ProviderSessionId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 import { makeDetachedAppServers } from "./CodexDetachedAppServer.ts";
+
+const session = ProviderSessionId.make("session");
 
 it.effect.each(["restart", "quit"] as const)(
   "shutdown signals only a non-retained process (%s)",
@@ -41,6 +43,7 @@ it.effect.each(["restart", "quit"] as const)(
       const name = yield* Effect.gen(function* () {
         const opened = yield* service.open({
           instanceId: "codex",
+          providerSessionId: session,
           command: (path) =>
             Effect.sync(() => {
               socketPath = path;
@@ -227,6 +230,7 @@ it.effect.each(["restart", "quit"] as const)(
             version: 1,
             name,
             instanceId: "codex",
+            providerSessionId: session,
             socketPath: socket,
             pgid: 4321,
             bootId: "boot",
@@ -255,7 +259,7 @@ it.effect.each(["restart", "quit"] as const)(
       yield* service.loadRecords;
       yield* service.preserveForRecovery(name);
       yield* Effect.gen(function* () {
-        yield* service.connectExisting("codex", name);
+        yield* service.connectExisting("codex", name, session);
         if (stopKind === "restart")
           yield* service.retainOnClose(name, { setting: "restart", stopKind, prepared: true });
         yield* service.beginServerShutdown;
@@ -292,6 +296,7 @@ it.effect.each(["goal", "stop"] as const)(
             state: "running",
             createdAt: "2026-01-01T00:00:00Z",
             stderrMode: "discard",
+            providerSessionId: session,
             ...(kind === "goal"
               ? { goalBlocks: [{ threadId, nativeThreadId: "native" }] }
               : {
@@ -315,8 +320,8 @@ it.effect.each(["goal", "stop"] as const)(
           }),
       });
       assert.equal((yield* service.cleanup)[0]?.outcome, "retained");
-      assert.deepEqual(yield* service.listPreservedForInstance("codex"), [name]);
-      assert.deepEqual(yield* service.listPreservedForInstance("other"), []);
+      assert.deepEqual(yield* service.listPreservedForSession("codex", session), [name]);
+      assert.deepEqual(yield* service.listPreservedForSession("other", session), []);
       assert.equal(signals, 0);
       assert.equal((yield* service.ensureAdmission(threadId).pipe(Effect.exit))._tag, "Failure");
       if (kind === "goal") {
@@ -324,7 +329,7 @@ it.effect.each(["goal", "stop"] as const)(
           { instanceId: ProviderInstanceId.make("codex"), recordName: name },
           { threadId, nativeThreadId: "native" },
         );
-        assert.deepEqual(yield* service.listPreservedForInstance("codex"), [name]);
+        assert.deepEqual(yield* service.listPreservedForSession("codex", session), [name]);
       }
     }).pipe(Effect.scoped),
 );

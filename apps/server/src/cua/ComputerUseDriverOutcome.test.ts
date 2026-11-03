@@ -30,6 +30,35 @@ const parsed = (line: string) =>
     result: { structuredContent: Record<string, unknown>; content: Array<{ text: string }> };
   };
 
+it("a result's lock effect survives a simultaneous RPC rejection", () => {
+  for (const effect of ["unknown", "committed", "unverifiable"]) {
+    const message = {
+      error: { code: -32602 },
+      result: { isError: true, structuredContent: { code: "screen_locked", effect } },
+    };
+    assert.isTrue(driverOutcomeSafety("click", message).possibleCommit);
+    assert.isFalse(driverRefused("click", message));
+  }
+});
+
+it("a stop reason retains a screen lock's possible input effect", () => {
+  for (const effect of ["unknown", "committed", "unverifiable"]) {
+    const structuredContent = {
+      code: "screen_locked",
+      refusal: { code: "stopped_by_person" },
+      effect,
+    };
+    assert.deepInclude(
+      driverOutcomeSafety("click", { result: { isError: true, structuredContent } }),
+      {
+        possibleCommit: true,
+        retryClass: "never",
+        code: "write_indeterminate",
+      },
+    );
+  }
+});
+
 it("does not interpret a successful read's terminal-looking data as input", () => {
   const safety = driverOutcomeSafety("list_apps", {
     status: "settled",
@@ -40,6 +69,21 @@ it("does not interpret a successful read's terminal-looking data as input", () =
   });
   assert.isFalse(safety.possibleCommit);
   assert.equal(safety.code, "read_completed");
+});
+
+it("a successful read with screen-lock-looking data remains a completed read", () => {
+  const safety = driverOutcomeSafety("list_apps", {
+    status: "settled",
+    result: {
+      isError: false,
+      structuredContent: { code: "screen_locked", effect: "unknown" },
+    },
+  });
+  assert.deepInclude(safety, {
+    possibleCommit: false,
+    writeStatus: "not_applicable",
+    code: "read_completed",
+  });
 });
 
 describe("macOS input tool errors after dispatch reach the agent as may-have-acted", () => {

@@ -259,7 +259,7 @@ const quietRead = Effect.fn("DesktopEvidence.quietRead")(function* (
   );
   const reply = Option.getOrUndefined(sent);
   if (!reply) return undefined;
-  const error = driverError(reply);
+  const error = driverError(reply, tool, args);
   if (
     error?.code === "user_interacting" ||
     error?.code === "screen_locked" ||
@@ -548,7 +548,7 @@ export const finishCellTracker = Effect.fn("DesktopEvidence.finishCellTracker")(
       ),
     );
     const reply = Option.getOrUndefined(sent);
-    const error = reply === undefined ? undefined : driverError(reply);
+    const error = reply === undefined ? undefined : driverError(reply, "list_windows", { pid });
     if (error?.code === "stopped_by_person" || error?.code === "screen_locked")
       return yield* Effect.fail(error);
     endByPid.set(pid, reply && !error ? parseWindowList(driverValue(reply), pid) : undefined);

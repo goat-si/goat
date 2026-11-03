@@ -12,6 +12,7 @@ import {
   type DesktopStopIntent,
 } from "@goat/contracts";
 import { DEFAULT_SIGNAL_EXPORT } from "@goat/shared/observability";
+import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as OtelEnvironment from "@goat/shared/otelEnvironment";
 import { HttpServer } from "effect/http";
 import * as NetAddress from "effect/net/NetAddress";
@@ -160,6 +161,10 @@ export const bootstrapScenario = (
                     version: 1,
                     name: "codex-abcdefabcdef",
                     instanceId: "codex",
+                    // Recovery's bootstrap assigns this before goal recovery runs.
+                    providerSessionId: IdAllocator.derive.providerSession({
+                      providerInstanceId: ProviderInstanceId.make("codex"),
+                    }),
                     socketPath: "/tmp/goal.sock",
                     pgid: 123,
                     bootId: "boot",

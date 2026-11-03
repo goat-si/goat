@@ -605,9 +605,8 @@ it.effect("a role launch binds the child under the role's profile, narrowed by t
   }).pipe(Effect.provide(fixture("manager"))),
 );
 
-// #858: a person whose agents run under worker can still have a supervisor land pull requests.
 it.effect(
-  "a supervisor a worker thread launches can start a merge manager; ceilings still refuse it",
+  "a worker-launched supervisor remains within its caller's grant, including after resume",
   () =>
     Effect.gen(function* () {
       const profiles = yield* PermissionProfiles;
@@ -622,21 +621,30 @@ it.effect(
         role: "supervisor",
       });
       yield* seed("supervisor", "full-access");
-      // The merge manager holds what the worker caller held plus merge, under its runtime ceiling.
-      expect(
-        yield* profiles.claim(threadScope("supervisor"), {
-          id: "merger",
-          childThreadId: ThreadId.make("merger"),
-          runtimeMode: "full-access",
-          role: "merge-manager",
-        }),
-      ).toMatchObject({
+      yield* profiles.assertTarget(
+        threadScope("person"),
+        ThreadId.make("supervisor"),
+        "auto",
+        "auto",
+      );
+      yield* profiles.claim(threadScope("person"), {
+        id: "resume",
+        childThreadId: ThreadId.make("supervisor"),
         runtimeMode: "auto",
-        profile: {
-          id: "merge-manager",
-          capabilities: [...BUILTIN_PERMISSION_PROFILES.worker!.capabilities, "pr.merge"],
-        },
       });
+      expect(
+        (yield* profiles.resolve(threadScope("supervisor"))).profile.capabilities,
+      ).not.toContain("pr.merge");
+      expect(
+        (yield* profiles
+          .claim(threadScope("supervisor"), {
+            id: "merger",
+            childThreadId: ThreadId.make("merger"),
+            runtimeMode: "full-access",
+            role: "merge-manager",
+          })
+          .pipe(Effect.flip)).message,
+      ).toBe(refusal);
       // The person's own thread still cannot start one.
       expect(
         (yield* profiles

@@ -91,9 +91,11 @@ const runScenario = (
     const scenario = `survivor-${mode}`;
     const threadId = ThreadId.make(`thread-${scenario}`);
     const sourceRunId = RunId.make("source-run");
+    const providerSessionId = ProviderSessionId.make("session");
     const binding = {
       instanceId: CodexAdapter.CODEX_DEFAULT_INSTANCE_ID,
       recordName: "instance",
+      providerSessionId,
       threadId,
       sourceRunId,
       nativeThreadId: "native-thread",
@@ -437,7 +439,7 @@ const runScenario = (
         mode === "guard-shared" || mode === "startup-goal-release"
           ? ThreadId.make("other-thread")
           : threadId,
-      providerSessionId: ProviderSessionId.make("session"),
+      providerSessionId,
       modelSelection: CODEX_TEST_MODEL_SELECTION,
       runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
     });
