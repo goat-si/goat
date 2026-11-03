@@ -9,6 +9,7 @@ import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import * as Schema from "effect/Schema";
 import { Tool, Toolkit } from "effect/ai";
 import { BrowserOriginGrants } from "../../../../preview/BrowserOriginGrantsLayer.ts";
+import { BrowserClaimHandoffs } from "../../../../preview/BrowserClaimHandoffs.ts";
 import { agentSurfaceAnnotations } from "../../../agentSurface.ts";
 import * as McpInvocationContext from "../../../McpInvocationContext.ts";
 import * as ThreadManagementService from "../../../../orchestration-v2/ThreadManagementService.ts";
@@ -29,6 +30,7 @@ const RequestTool = Tool.make(agentSurfaceRegistry["browser_claim.request"].name
     McpInvocationContext.McpInvocationContext,
     ThreadManagementService.ThreadManagementService,
     BrowserOriginGrants,
+    BrowserClaimHandoffs,
   ],
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["browser_claim.request"]));
 const ListTool = Tool.make(agentSurfaceRegistry["browser_claim.list"].name, {

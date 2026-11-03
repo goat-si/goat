@@ -122,6 +122,7 @@ import { OrchestratorToolkit } from "./toolkits/orchestrator/tools.ts";
 import { PreviewToolkit } from "./toolkits/preview/tools.ts";
 import { BrowserClaimToolkit } from "./toolkits/preview/browserClaims/tools.ts";
 import { BrowserOriginGrants } from "../preview/BrowserOriginGrantsLayer.ts";
+import { BrowserClaimHandoffs } from "../preview/BrowserClaimHandoffs.ts";
 import { PreviewControlsToolkit } from "./toolkits/previewControls/tools.ts";
 import { ProjectToolkit } from "./toolkits/project/tools.ts";
 import { PullRequestsToolkit } from "./toolkits/pullRequests/tools.ts";
@@ -183,6 +184,7 @@ export const catalog = Layer.mergeAll(htmlRender, ...Object.values(otherRegistra
 const unusedImport = () => Effect.die("Catalog registration must not import memory");
 const inertDependencies = Layer.mergeAll(
   Layer.mock(BrowserOriginGrants)({}),
+  Layer.mock(BrowserClaimHandoffs)({}),
   Layer.mock(AgentWorkspace.AgentWorkspaceMcpService)({}),
   Layer.mock(AgentTerminal.AgentTerminalMcpService)({}),
   AttachmentLifecycle.layerUnused,

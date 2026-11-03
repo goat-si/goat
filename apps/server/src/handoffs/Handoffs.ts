@@ -51,6 +51,7 @@ import { startComputerUseSettingsObserver } from "./computerUseSettingsObserver.
 import { makeHandoffClientLabel } from "./handoffClientLabel.ts";
 import { BrowserClaimResponder } from "./BrowserClaimResponder.ts";
 import { answerBrowserClaim, browserClaimResultMessage } from "./browserClaimHandoffResponse.ts";
+import { makeBrowserClaimEnd } from "./browserClaimHandoffEnd.ts";
 import { targetKey } from "./targetKey.ts";
 import * as PersonStop from "./computerUsePersonStop.ts";
 import { storeName, matchesArgs } from "./handoffDigest.ts";
@@ -104,6 +105,11 @@ export class Handoffs extends Context.Service<
       authorizeAtCommit?: Effect.Effect<void, ServerSettingsError>,
     ) => Effect.Effect<void, HandoffError | ServerSettingsError>;
     readonly read: (input: HandoffReadInput) => Effect.Effect<Handoff, HandoffError>;
+    readonly endBrowserClaim: (
+      input: HandoffReadInput,
+      state: "cancelled" | "expired",
+      reason: string,
+    ) => Effect.Effect<Handoff, HandoffError>;
     /** A computer use request's answer for its waiting call; see computerUseContinuations. */
     readonly awaitComputerUseAnswer: Continuations["awaitAnswer"];
     readonly deliverComputerUseWake: Continuations["deliverWake"];
@@ -941,6 +947,7 @@ const make = Effect.gen(function* () {
     withComputerUseSettings: standing.withSettings,
     removeComputerUseAllowedApp: standing.removeAllowedApp,
     read,
+    endBrowserClaim: makeBrowserClaimEnd({ read, transition, lock }),
     open,
     respond,
     cancelComputerUseByPerson: (input) =>
