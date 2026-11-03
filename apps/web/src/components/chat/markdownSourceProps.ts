@@ -4,7 +4,9 @@ export interface MarkdownSourceProps {
   text: string;
   remarkPlugins: PluggableList;
   rehypePlugins: PluggableList;
+  /** The plugins are one of the shared sets. */
   shared: boolean;
+  /** The text will not change again; streamed text would only fill the cache with prefixes. */
   cache: boolean;
 }
 
