@@ -20,6 +20,8 @@ import type {
 } from "@goat/contracts";
 
 import { toSortableTimestamp } from "../../lib/threadSort";
+import { comparePullRequestsByRecency } from "./pullRequestRecency";
+export { comparePullRequestsByRecency } from "./pullRequestRecency";
 import type { PullRequestListSort } from "./pullRequestListPreferences";
 
 export interface EnvironmentPullRequestEntry extends PullRequestListEntry {
@@ -706,18 +708,6 @@ export function rankPullRequestsByMergeReadiness<Entry extends PullRequestListEn
     const sized = left.additions + left.deletions - (right.additions + right.deletions);
     return measured || sized || comparePullRequestsByRecency(left, right);
   });
-}
-
-export function comparePullRequestsByRecency(
-  left: PullRequestListEntry,
-  right: PullRequestListEntry,
-) {
-  const leftUpdated = toSortableTimestamp(left.updatedAt);
-  const rightUpdated = toSortableTimestamp(right.updatedAt);
-  const measured = Number(leftUpdated === null) - Number(rightUpdated === null);
-  if (measured !== 0) return measured;
-  if (leftUpdated === null || rightUpdated === null) return 0;
-  return rightUpdated - leftUpdated;
 }
 
 function rankByTierThenRecency<Entry extends PullRequestListEntry>(
