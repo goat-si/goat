@@ -1,6 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off globalFetch:off - Tests exercise the real native loopback listener without an OpenAI account.
 import * as NodeHttp from "node:http";
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import { codexAuthDeliveryUrl, readCodexAuthDelivery } from "@goat/shared/codexAuthHandoff";
 import { EnvironmentId, ProviderInstanceId } from "@goat/contracts";
 import { receiveCodexAuthCallback, cancelCodexAuthCallback } from "./CodexAuthCallback.ts";
@@ -108,5 +108,23 @@ describe("desktop Codex callback helper", () => {
       return true;
     });
     expect(await Promise.all([receiveA, receiveB])).toEqual([callback(a), callback(b)]);
+  });
+  it("fails the sign-in when its callback server errors after listening", async () => {
+    const authorizationUrl = request(await freePort());
+    const listen = NodeHttp.Server.prototype.listen;
+    const servers: Array<NodeHttp.Server> = [];
+    using _listen = vi.spyOn(NodeHttp.Server.prototype, "listen").mockImplementationOnce(function (
+      this: NodeHttp.Server,
+      ...args
+    ) {
+      servers.push(this);
+      return Reflect.apply(listen, this, args);
+    });
+    await expect(
+      receiveCodexAuthCallback(authorizationUrl, async () => {
+        servers[0]?.emit("error", new Error("accept failed"));
+        return true;
+      }),
+    ).rejects.toThrow("accept failed");
   });
 });

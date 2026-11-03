@@ -88,7 +88,7 @@ export async function receiveCodexAuthCallback(
           ),
         );
       server.listen(Number(new URL(request.redirectUri).port), "127.0.0.1", () => {
-        listenFailure = () => {};
+        listenFailure = (error) => callback.reject(error);
         resolve();
       });
     });
