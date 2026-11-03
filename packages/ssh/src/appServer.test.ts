@@ -277,8 +277,11 @@ describe("Git Bash managed server", () => {
         {},
         id,
       ).pipe(Effect.provide(host.spawner), Effect.result);
-      expect(result._tag).toBe("Failure");
-      expect(server.sessions).toHaveLength(1);
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: { message: expect.stringContaining("HTTP 403") },
+      });
+      expect(server.sessions).toEqual([{ header: TOKEN, body: null }]);
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
   it("accepts only bounded known probe reasons", () => {
