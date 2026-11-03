@@ -12,7 +12,7 @@ export interface PdfReadingPosition {
   onViewChange: (view: PdfViewState) => void;
 }
 
-export const initialPdfView = (): PdfViewState => ({
+const initialPdfView = (): PdfViewState => ({
   anchor: { page: 0, fraction: 0 },
   zoom: "fit-width",
   left: 0,
