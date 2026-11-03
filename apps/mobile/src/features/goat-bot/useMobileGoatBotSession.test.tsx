@@ -177,8 +177,7 @@ describe("mobile GOAT Bot session selection", () => {
     let exists = true;
     const cleanup = Promise.withResolvers<void>();
     harness.release.mockImplementation(async () => {
-      const isRetained = Reflect.get(fileOwnership, "isComposerAttachmentUploadRetained");
-      if (typeof isRetained !== "function" || !isRetained(env, uploadId)) exists = false;
+      if (!fileOwnership.isComposerAttachmentUploadRetained(env, uploadId)) exists = false;
       cleanup.resolve();
     });
     harness.verify.mockImplementation(async () => ({ status: exists ? "verified" : "missing" }));
@@ -253,10 +252,8 @@ describe("mobile GOAT Bot session selection", () => {
     harness.environments = [environment(env, false)];
     await render();
     expect(harness.release).not.toHaveBeenCalled();
-    const dispose = Reflect.get(botSessions, "disposeMobileGoatBotEnvironment");
-    expect(dispose).toBeTypeOf("function");
     await act(async () => {
-      await dispose(env);
+      await botSessions.disposeMobileGoatBotEnvironment(env);
     });
     expect(harness.release).toHaveBeenCalledWith([file]);
     expect(fileOwnership.isComposerAttachmentFileRetained(file.fileUri)).toBe(false);

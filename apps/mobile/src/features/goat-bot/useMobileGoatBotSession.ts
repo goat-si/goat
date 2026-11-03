@@ -37,7 +37,10 @@ import {
 
 import { environmentCatalog } from "../../connection/catalog";
 import type { DraftComposerAttachment } from "../../lib/composerImages";
-import { retainComposerAttachmentFile } from "../../lib/composerAttachmentFiles";
+import {
+  retainComposerAttachmentFile,
+  retainComposerAttachmentUpload,
+} from "../../lib/composerAttachmentFiles";
 import { uuidv4 } from "../../lib/uuid";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { channelEnvironment } from "../../state/channels";
@@ -66,6 +69,7 @@ interface Session {
   readonly queue: ReturnType<typeof createGoatBotSendQueue<DraftComposerAttachment>>;
   readonly pending: ReadonlyArray<GoatBotPendingInput>;
   readonly retain: (key: string, attachments: ReadonlyArray<DraftComposerAttachment>) => void;
+  readonly dispose: () => Promise<void>;
 }
 
 const sessions = new Map<EnvironmentId, Session>();
@@ -84,20 +88,59 @@ function update(environmentId: EnvironmentId, session: Session) {
   for (const listener of listeners) listener();
 }
 
+export async function disposeMobileGoatBotEnvironment(environmentId: EnvironmentId): Promise<void> {
+  const session = sessions.get(environmentId);
+  if (!session) return;
+  sessions.delete(environmentId);
+  for (const listener of listeners) listener();
+  await session.dispose();
+}
+
 function newSession(environmentId: EnvironmentId): Session {
   // A message's uploads, by its key, so a retry names the same files as the first attempt.
   const uploads = new Map<string, ReadonlyArray<DraftComposerAttachment>>();
   const retained = new Map<string, ReadonlyArray<() => void>>();
+  const retainedUploadKeys = new Map<string, Set<string>>();
+  const pendingCleanup = new Set<Promise<void>>();
+  let disposed = false;
+  const retainUploads = (key: string, attachments: ReadonlyArray<DraftComposerAttachment>) => {
+    const releases = [...(retained.get(key) ?? [])];
+    const ids = retainedUploadKeys.get(key) ?? new Set<string>();
+    for (const attachment of attachments) {
+      if (
+        attachment.uploadEnvironmentId === undefined ||
+        attachment.uploadedAttachmentId === undefined
+      )
+        continue;
+      const id = JSON.stringify([attachment.uploadEnvironmentId, attachment.uploadedAttachmentId]);
+      if (ids.has(id)) continue;
+      ids.add(id);
+      releases.push(
+        retainComposerAttachmentUpload(
+          attachment.uploadEnvironmentId,
+          attachment.uploadedAttachmentId,
+        ),
+      );
+    }
+    retained.set(key, releases);
+    retainedUploadKeys.set(key, ids);
+  };
+  const cleanup = (files: ReadonlyArray<DraftComposerAttachment>) => {
+    const task = import("../../state/use-composer-drafts")
+      .then(({ releaseUnusedComposerAttachmentFiles }) =>
+        releaseUnusedComposerAttachmentFiles(files),
+      )
+      .catch((error) => console.warn("[goat-bot] could not release attachment files", error));
+    pendingCleanup.add(task);
+    void task.finally(() => pendingCleanup.delete(task));
+  };
   const forget = (key: string, attachments: ReadonlyArray<DraftComposerAttachment>) => {
     const files = uploads.get(key) ?? attachments;
     uploads.delete(key);
     for (const release of retained.get(key) ?? []) release();
     retained.delete(key);
-    void import("../../state/use-composer-drafts")
-      .then(({ releaseUnusedComposerAttachmentFiles }) =>
-        releaseUnusedComposerAttachmentFiles(files),
-      )
-      .catch((error) => console.warn("[goat-bot] could not release attachment files", error));
+    retainedUploadKeys.delete(key);
+    cleanup(files);
   };
   const queue = createGoatBotSendQueue<DraftComposerAttachment>({
     onForget: forget,
@@ -134,8 +177,16 @@ function newSession(environmentId: EnvironmentId): Session {
             ).uploadGoatBotAttachments({
               environmentId,
               attachments: uploads.get(clientKey) ?? attachments,
-              remember: (uploaded) => uploads.set(clientKey, uploaded),
+              remember: (uploaded) => {
+                if (disposed) {
+                  cleanup(uploaded);
+                  return;
+                }
+                uploads.set(clientKey, uploaded);
+                retainUploads(clientKey, uploaded);
+              },
             });
+      if (disposed) throw new Error("GOAT Bot environment was removed");
       const result = await runAtomCommand(appAtomRegistry, channelEnvironment.ingest, {
         environmentId,
         input: goatBotIngestInput({
@@ -166,7 +217,7 @@ function newSession(environmentId: EnvironmentId): Session {
     canOperate: false,
     queue,
     pending: EMPTY_PENDING,
-    retain: (key, attachments) =>
+    retain: (key, attachments) => {
       retained.set(
         key,
         attachments.flatMap((attachment) =>
@@ -174,7 +225,14 @@ function newSession(environmentId: EnvironmentId): Session {
             ? []
             : [retainComposerAttachmentFile(attachment.fileUri, () => {})],
         ),
-      ),
+      );
+      retainUploads(key, attachments);
+    },
+    dispose: async () => {
+      disposed = true;
+      queue.dispose();
+      await Promise.all(pendingCleanup);
+    },
   };
 }
 

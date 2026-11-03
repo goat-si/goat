@@ -7,6 +7,30 @@ const IOS_DOCUMENTS_PATH = new RegExp(
   "i",
 );
 const retainedFiles = new Map<string, number>();
+const retainedUploads = new Map<string, number>();
+
+export function retainComposerAttachmentUpload(
+  environmentId: string,
+  attachmentId: string,
+): () => void {
+  const key = JSON.stringify([environmentId, attachmentId]);
+  retainedUploads.set(key, (retainedUploads.get(key) ?? 0) + 1);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const remaining = (retainedUploads.get(key) ?? 1) - 1;
+    if (remaining === 0) retainedUploads.delete(key);
+    else retainedUploads.set(key, remaining);
+  };
+}
+
+export function isComposerAttachmentUploadRetained(
+  environmentId: string,
+  attachmentId: string,
+): boolean {
+  return retainedUploads.has(JSON.stringify([environmentId, attachmentId]));
+}
 
 function fileUriPath(uri: string): string | null {
   try {

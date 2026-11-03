@@ -222,6 +222,7 @@ import {
   updateComposerDraftSettings,
 } from "./use-composer-drafts";
 import { retainComposerAttachmentFileForPreview } from "../lib/composerAttachmentPreviewRetention";
+import { retainComposerAttachmentUpload } from "../lib/composerAttachmentFiles";
 
 const DRAFT: ComposerDraft = {
   text: "hello",
@@ -1180,6 +1181,10 @@ describe("mobile composer drafts", () => {
 
     expect(composerAttachmentCleanupMocks.remove).not.toHaveBeenCalled();
     expect(composerAttachmentCleanupMocks.releaseUploads).not.toHaveBeenCalled();
+    await releaseUnusedComposerAttachmentFiles([
+      { ...file, fileUri: "file:///documents/other.pdf" },
+    ]);
+    expect(composerAttachmentCleanupMocks.releaseUploads).not.toHaveBeenCalled();
   });
 
   it("retains offline image bytes and newer edits when an early upload finishes", async () => {
@@ -1442,7 +1447,7 @@ describe("mobile composer drafts", () => {
     ]);
   });
 
-  it("keeps a pending upload referenced through another local file", async () => {
+  it("keeps a pending upload owned by a bot queue", async () => {
     const outboxLoad = vi.spyOn(threadOutboxManager, "load").mockResolvedValue(true);
     onTestFinished(() => outboxLoad.mockRestore());
     const environmentId = EnvironmentId.make("environment-1");
@@ -1456,14 +1461,8 @@ describe("mobile composer drafts", () => {
       uploadedAttachmentId: "pending-shared",
       uploadEnvironmentId: environmentId,
     };
-    const retained = {
-      ...discarded,
-      id: "file-retained-copy",
-      fileUri: "file:///documents/t3-composer-attachments/retained-copy.pdf",
-    };
-    appAtomRegistry.set(composerDraftsAtom, {
-      "environment-1:thread-1": { text: "Keep this copy", attachments: [retained] },
-    });
+    const release = retainComposerAttachmentUpload(environmentId, "pending-shared");
+    onTestFinished(release);
 
     await releaseUnusedComposerAttachmentFiles([discarded]);
 

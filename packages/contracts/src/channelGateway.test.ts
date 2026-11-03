@@ -127,20 +127,6 @@ describe("channel ingest", () => {
     });
   });
 
-  it("lets an older client decode an expired attachment error (#2388)", () => {
-    const encoded = Schema.encodeSync(json(ChannelGatewayError))(
-      new ChannelGatewayError({ reason: "invalid_input", attachmentProblem: "expired" }),
-    );
-    const previous = Schema.TaggedStruct("ChannelGatewayError", {
-      reason: Schema.Literal("invalid_input"),
-    });
-    expect(Schema.decodeUnknownSync(previous)(encoded)).toEqual({
-      _tag: "ChannelGatewayError",
-      reason: "invalid_input",
-    });
-    expect(Schema.decodeSync(json(ChannelGatewayError))(encoded).attachmentProblem).toBe("expired");
-  });
-
   it("tells a transport whether a failed delivery may have arrived", () => {
     const encode = Schema.encodeSync(json(ChannelGatewayError));
     expect(

@@ -44,6 +44,7 @@ export interface GoatBotSendQueue<A extends GoatBotAttachmentLabel = GoatBotAtta
   /** Sends a failed message again under the same key. Ignored while it is in flight. */
   readonly retry: (clientKey: string) => void;
   readonly discard: (clientKey: string) => void;
+  readonly dispose: () => void;
   /** Forgets accepted messages once their server rows exist. */
   readonly acknowledge: (requestKeys: ReadonlySet<string>) => void;
   readonly pendingInputs: () => ReadonlyArray<GoatBotPendingInput>;
@@ -60,6 +61,7 @@ export function createGoatBotSendQueue<A extends GoatBotAttachmentLabel = GoatBo
   const now = options.now ?? (() => DateTime.formatIso(DateTime.nowUnsafe()));
   let entries: Entry<A>[] = [];
   let busy = false;
+  let disposed = false;
   let projectedKeys: ReadonlySet<string> = new Set();
   let snapshot: ReadonlyArray<GoatBotPendingInput> = [];
 
@@ -79,7 +81,7 @@ export function createGoatBotSendQueue<A extends GoatBotAttachmentLabel = GoatBo
   };
 
   const pump = () => {
-    if (busy) return;
+    if (busy || disposed) return;
     const next = entries.find((entry) => entry.state === "queued");
     if (next === undefined) return;
     if (!options.canDispatch(next.bot)) {
@@ -131,6 +133,7 @@ export function createGoatBotSendQueue<A extends GoatBotAttachmentLabel = GoatBo
 
   return {
     submit: (text, bot, attachments = []) => {
+      if (disposed) throw new Error("GOAT Bot send queue is disposed");
       const clientKey = makeKey();
       entries = [
         ...entries,
@@ -161,6 +164,14 @@ export function createGoatBotSendQueue<A extends GoatBotAttachmentLabel = GoatBo
       if (entry?.state !== "failed") return;
       entries = entries.filter((candidate) => candidate !== entry);
       options.onForget?.(entry.clientKey, entry.attachments);
+      changed();
+    },
+    dispose: () => {
+      if (disposed) return;
+      disposed = true;
+      const forgotten = entries;
+      entries = [];
+      for (const entry of forgotten) options.onForget?.(entry.clientKey, entry.attachments);
       changed();
     },
     acknowledge: (requestKeys) => {

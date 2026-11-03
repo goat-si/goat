@@ -38,6 +38,37 @@ function setup(canDispatch: () => boolean = () => true) {
 }
 
 describe("createGoatBotSendQueue", () => {
+  it("does not send queued messages or restore rows after disposal during an in-flight send", async () => {
+    const first = deferred<{ requestKey: string }>();
+    const finished = deferred<void>();
+    const sent: string[] = [];
+    const forgotten: string[] = [];
+    let disposed = false;
+    let key = 0;
+    const queue = createGoatBotSendQueue({
+      makeKey: () => `key-${++key}`,
+      canDispatch: () => true,
+      send: ({ text }) => {
+        sent.push(text);
+        return first.promise;
+      },
+      onForget: (clientKey) => {
+        forgotten.push(clientKey);
+      },
+      onChange: () => {
+        if (disposed) finished.resolve();
+      },
+    });
+    queue.submit("first", bot);
+    queue.submit("second", bot);
+    queue.dispose();
+    disposed = true;
+    first.resolve({ requestKey: "accepted" });
+    await finished.promise;
+    expect(sent).toEqual(["first"]);
+    expect(forgotten).toEqual(["key-1", "key-2"]);
+    expect(queue.pendingInputs()).toEqual([]);
+  });
   it("shows the re-attach instruction after an expired upload rejection (#2388)", async () => {
     const failed = deferred<void>();
     const queue = createGoatBotSendQueue({
