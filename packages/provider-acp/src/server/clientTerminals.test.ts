@@ -90,6 +90,32 @@ const makeDrainFixture = Effect.fn("test.makeDrainFixture")(function* () {
 });
 
 describe("AcpClientTerminals", () => {
+  it.live("lowers ACP tool and descendant priority while preserving argv and exit", () =>
+    withTerminals((terminals) =>
+      Effect.gen(function* () {
+        const platform = yield* HostProcess.Platform;
+        if (platform !== "darwin" && platform !== "linux") return;
+        const created = yield* terminals.create({
+          sessionId: "session",
+          command: process.execPath,
+          args: [
+            "-e",
+            "const os = require('node:os'); const cp = require('node:child_process'); console.log(JSON.stringify([os.getPriority(), cp.execFileSync(process.execPath, ['-e', \"console.log(require('node:os').getPriority())\"], {encoding:'utf8'}).trim(), process.argv.slice(1)])); process.exit(3)",
+            "a b",
+            "'quoted'",
+            "",
+          ],
+        });
+        const request = { sessionId: "session", terminalId: created.terminalId };
+        expect((yield* terminals.waitForExit(request)).exitCode).toBe(3);
+        expect(JSON.parse((yield* terminals.output(request)).output)).toEqual([
+          10,
+          "10",
+          ["a b", "'quoted'", ""],
+        ]);
+      }),
+    ),
+  );
   it.effect.each([
     { pipes: "both", holdStdout: true, holdStderr: true },
     { pipes: "stdout", holdStdout: true, holdStderr: false },
@@ -222,6 +248,26 @@ describe("AcpClientTerminals", () => {
       const output = yield* terminals.output({ sessionId: "devin", ...terminal });
       expect(exit.exitCode).toBe(0);
       expect(output.output.trim()).toBe("MAILBOX-PROBE");
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
+  it.live("runs shell source below normal priority on Unix", () =>
+    Effect.gen(function* () {
+      const platform = yield* HostProcess.Platform;
+      if (platform !== "darwin" && platform !== "linux") return;
+      const terminals = yield* makeAcpClientTerminals({
+        defaultCwd: process.cwd(),
+        shellCommands: true,
+      });
+      yield* Effect.addFinalizer(() => terminals.disposeAll);
+      const terminal = yield* terminals.create({
+        sessionId: "devin",
+        command: "ps -o nice= -p $$ | tr -d ' '",
+      });
+      const exit = yield* terminals.waitForExit({ sessionId: "devin", ...terminal });
+      const output = yield* terminals.output({ sessionId: "devin", ...terminal });
+      expect(exit.exitCode).toBe(0);
+      expect(output.output.trim()).toBe("10");
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
 

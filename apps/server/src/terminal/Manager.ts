@@ -59,6 +59,7 @@ import { makeKeyedCoalescingWorker } from "@goat/shared/KeyedCoalescingWorker";
 import * as KeyedLock from "@goat/shared/KeyedLock";
 import { AgentScope } from "@goat/shared/AgentScope";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { toolPriorityLaunch } from "@goat/shared/toolPriority";
 import { mergePathEntries } from "@goat/shared/shell";
 
 import { acpRegistryManagedBinaryDirectories } from "@goat/provider-acp-registry/server";
@@ -1905,8 +1906,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     }
 
     const launch = yield* agentScope.wrap({
-      command: candidate.shell,
-      args: candidate.args ?? [],
+      ...toolPriorityLaunch(platform, candidate.shell, candidate.args, session.agentOwner !== null),
       name: "terminal",
       env: spawnEnv,
       survivesRestart: true,

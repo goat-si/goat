@@ -13,6 +13,8 @@ import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/compat";
 import * as NodeBuffer from "node:buffer";
+import { toolPriorityLaunch, toolPriorityShellLaunch } from "@goat/shared/toolPriority";
+import * as HostProcess from "@goat/shared/HostProcess";
 
 const MAX_LIVE_TERMINALS = 16;
 const MAX_UNRELEASED_TERMINALS = 64;
@@ -140,11 +142,19 @@ function acpTerminalCommand(input: {
   readonly defaultCwd: string;
   readonly environment?: NodeJS.ProcessEnv | undefined;
   readonly forceKillAfter: Duration.Input;
+  readonly platform: NodeJS.Platform;
 }) {
-  return ChildProcess.make(input.request.command, input.request.args ?? [], {
+  const launch =
+    input.shellCommands === true && (input.request.args?.length ?? 0) === 0
+      ? toolPriorityShellLaunch(input.platform, input.request.command)
+      : {
+          ...toolPriorityLaunch(input.platform, input.request.command, input.request.args ?? []),
+          shell: false,
+        };
+  return ChildProcess.make(launch.command, launch.args, {
     cwd: input.request.cwd ?? input.defaultCwd,
     ...(input.environment === undefined ? {} : { env: input.environment }),
-    shell: input.shellCommands === true && (input.request.args?.length ?? 0) === 0,
+    shell: launch.shell,
     forceKillAfter: input.forceKillAfter,
   });
 }
@@ -153,6 +163,7 @@ export const makeAcpClientTerminals = Effect.fn("makeAcpClientTerminals")(functi
   options: AcpClientTerminalsOptions,
 ): Effect.fn.Return<AcpClientTerminals, never, ChildProcessSpawner.ChildProcessSpawner> {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const platform = yield* HostProcess.Platform;
   const forceKillAfter = options.forceKillAfter ?? "5 seconds";
   const creationPermit = yield* Semaphore.make(1);
   const terminals = new Map<string, ManagedAcpTerminal>();
@@ -242,6 +253,7 @@ export const makeAcpClientTerminals = Effect.fn("makeAcpClientTerminals")(functi
                   defaultCwd: options.defaultCwd,
                   environment,
                   forceKillAfter,
+                  platform,
                 }),
               )
               .pipe(

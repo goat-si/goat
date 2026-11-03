@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./toolPriority": {
+      "types": "./src/toolPriority.ts",
+      "import": "./src/toolPriority.ts"
+    },
     "./stallAwareQuiet": {
       "types": "./src/stallAwareQuiet.ts",
       "import": "./src/stallAwareQuiet.ts"
