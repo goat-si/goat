@@ -103,6 +103,8 @@ const secretFailure = (reason: SecretRequestFailureReason): SecretFailure => {
       return "no_candidate";
     case "answer_mismatch":
     case "login_ref":
+    case "card_ref":
+    case "invalid_card":
     case "agent_stopped":
     case "not_a_file_request":
     case "origin_required":

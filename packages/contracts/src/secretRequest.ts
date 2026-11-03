@@ -60,6 +60,8 @@ export type SecretRequestAnswerInput = typeof SecretRequestAnswerInput.Type;
 const SECRET_REQUEST_FAILURE_MESSAGES = {
   answer_mismatch: "The answer does not match the requested kind.",
   login_ref: "This login item requires the login fill tool.",
+  card_ref: "This card item requires the card fill tool.",
+  invalid_card: "The card details are invalid.",
   load_failed: "Could not load the secret request.",
   not_found: "This secret request no longer exists.",
   already_answered: "This secret request was already answered.",
