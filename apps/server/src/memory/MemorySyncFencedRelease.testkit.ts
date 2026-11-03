@@ -23,7 +23,7 @@ import {
 export const fencedReleaseAfterSync = () =>
   Effect.gen(function* () {
     const afterSync = yield* Deferred.make<void>();
-    const settled = yield* Deferred.make<void>();
+    const settled = yield* Deferred.make<Store.TicketRow>();
     const model = realGeneration({
       resolveMemoryConflict: () =>
         Effect.fail(
@@ -69,9 +69,10 @@ export const fencedReleaseAfterSync = () =>
             store
               .transitionResolutionTicketTx(input)
               .pipe(
-                Effect.tap(() =>
-                  input.nextState === "recoverable" || input.nextState === "terminal"
-                    ? Deferred.succeed(settled, undefined)
+                Effect.tap((result) =>
+                  result !== null &&
+                  (input.nextState === "recoverable" || input.nextState === "terminal")
+                    ? Deferred.succeed(settled, result)
                     : Effect.void,
                 ),
               ),
@@ -82,13 +83,15 @@ export const fencedReleaseAfterSync = () =>
             yield* sync.syncOnce;
             yield* Deferred.succeed(afterSync, undefined);
             yield* sync.scheduleConflictResolution;
-            yield* Deferred.await(settled);
+            const applied = yield* Deferred.await(settled);
+            assert.isNotNull(applied);
+            assert.strictEqual(applied.state, "recoverable");
             const sql = yield* SqlClient.SqlClient;
             const tickets = yield* sql<{
               state: string;
             }>`SELECT json_extract(ticket_json,'$.state') AS state FROM memory_outbox WHERE kind='resolve'`;
             assert.strictEqual(tickets.length, 1);
-            assert.notStrictEqual(tickets[0]?.state, "terminal");
+            assert.strictEqual(tickets[0]?.state, "recoverable");
             yield* sync.shutdown;
           }).pipe(
             Effect.provide(
