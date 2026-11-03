@@ -24,7 +24,6 @@ import type * as Path from "effect/Path";
 import { desktopAppServerStateDirWords } from "@goat/shared/desktopAppServer";
 
 import type * as SshAuth from "./auth.ts";
-import { WINDOWS_SERVER_ALIVE } from "./runtimeOwnershipScripts.ts";
 import { runSshCommand } from "./command.ts";
 import { SshCommandError, SshInvalidTargetError, SshPairingError } from "./errors.ts";
 import {
@@ -43,7 +42,11 @@ import {
 } from "./runtimeWindows.ts";
 
 const managedLiveness = String.raw`case "$(uname -s)" in
-  MINGW* | MSYS* | CYGWIN*) ${WINDOWS_SERVER_ALIVE} ;;
+  MINGW* | MSYS* | CYGWIN*)
+    server_alive() {
+      tasklist_output="$(MSYS2_ARG_CONV_EXCL='*' tasklist.exe /FI "PID eq $1" /NH /FO CSV 2>/dev/null)" || return 1
+      printf '%s\n' "$tasklist_output" | grep -q "^\"[^\"]*\",\"$1\","
+    } ;;
   *) server_alive() { kill -0 "$1" 2>/dev/null; } ;;
 esac
 `;
