@@ -176,7 +176,17 @@ export const leaseUpdates = (input: {
           : undefined;
         const browserClaimVersion = snapshot?.revision ?? 0;
         const browserClaimBindings = snapshot?.bindings ?? [];
-        const browserClaims = snapshot?.claims ?? [];
+        const hosts = yield* (
+          settings.blockedBrowserHostsSnapshot ??
+          settings.getSettings.pipe(Effect.map((value) => value.blockedBrowserHosts))
+        ).pipe(Effect.option);
+        if (Option.isNone(hosts)) {
+          yield* Queue.offer(queue, { state: "ended", reason: "revoked" });
+          return yield* Queue.end(queue);
+        }
+        const browserClaims = (snapshot?.claims ?? []).map((claim) =>
+          hosts.value.length === 0 ? claim : { ...claim, blockedHosts: hosts.value },
+        );
         const claimedBrowserPids = snapshot?.pids ?? [];
         yield* Queue.offer(
           queue,

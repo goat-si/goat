@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import { retainedTerminal, type OutstandingCall } from "./ComputerUseLeaseProxyOptions.ts";
 import type { Envelope } from "./ComputerUseLeaseProtocol.ts";
 import { refusal, type JsonRpcId } from "./ComputerUseLeaseResponses.ts";
+import { isBlockedBrowserUrl } from "@goat/shared/preview";
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -43,6 +44,7 @@ export interface ProxyBrowserClaim {
   readonly tabId: string;
   readonly targetId: string;
   readonly origins: ReadonlyArray<string>;
+  readonly blockedHosts?: ReadonlyArray<string>;
 }
 
 export type BrowserClaimReport =
@@ -51,7 +53,7 @@ export type BrowserClaimReport =
       readonly browserClaimEnded: {
         readonly claimId: string;
         readonly claimGeneration: number;
-        readonly reason: "origin_changed";
+        readonly reason: "origin_changed" | "blocked_url";
       };
     };
 
@@ -71,6 +73,27 @@ export const browserReplyOutsideClaim = (result: unknown, claim: ProxyBrowserCla
           return true;
         }
       }
+    }
+    return Object.values(value).some((entry) =>
+      Array.isArray(entry)
+        ? entry.some((item) => inspect(item, depth + 1))
+        : inspect(entry, depth + 1),
+    );
+  };
+  return inspect(result, 0);
+};
+
+const browserReplyBlocked = (result: unknown, claim: ProxyBrowserClaim): boolean => {
+  const inspect = (value: unknown, depth: number): boolean => {
+    if (depth > 12 || !isRecord(value)) return false;
+    if (value.tab_id === claim.tabId) {
+      const urls = [value.url, isRecord(value.page) ? value.page.url : undefined];
+      if (
+        urls.some(
+          (url) => typeof url === "string" && isBlockedBrowserUrl(url, claim.blockedHosts ?? []),
+        )
+      )
+        return true;
     }
     return Object.values(value).some((entry) =>
       Array.isArray(entry)
@@ -325,13 +348,20 @@ export const makeProxyBrowserClaims = (report?: (value: BrowserClaimReport) => v
             claim.claimGeneration === selected.claimGeneration,
         );
   const outside = (result: unknown, claim: ProxyBrowserClaim | undefined) => {
-    if (claim === undefined || !browserReplyOutsideClaim(result, claim)) return false;
+    if (claim === undefined) return false;
+    const current =
+      claims.find(
+        (value) =>
+          value.claimId === claim.claimId && value.claimGeneration === claim.claimGeneration,
+      ) ?? claim;
+    const blocked = browserReplyBlocked(result, current);
+    if (!blocked && !browserReplyOutsideClaim(result, current)) return false;
     invalid.add(key(claim));
     report?.({
       browserClaimEnded: {
         claimId: claim.claimId,
         claimGeneration: claim.claimGeneration,
-        reason: "origin_changed",
+        reason: blocked ? "blocked_url" : "origin_changed",
       },
     });
     return true;

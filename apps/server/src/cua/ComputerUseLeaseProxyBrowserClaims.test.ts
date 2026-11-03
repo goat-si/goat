@@ -483,6 +483,50 @@ effectIt.effect(
     }),
 );
 
+effectIt.effect("withholds a reply from a blocked origin even when it was granted", () =>
+  Effect.gen(function* () {
+    const reports: Array<unknown> = [];
+    const h = yield* harness({ onBrowserClaimReport: (report) => reports.push(report) });
+    yield* h.push({
+      ...active(),
+      browserClaims: [
+        {
+          claimId: "claim-1",
+          claimGeneration: 2,
+          pid: 42,
+          windowId: 7,
+          targetId: "target-1",
+          tabId: "tab-1",
+          origins: ["https://example.test", "https://blocked.test"],
+          blockedHosts: ["blocked.test"],
+        },
+      ],
+    });
+    yield* h.applied;
+    yield* supportedDriver(h);
+    yield* h.send(call(3, "get_browser_state", { tab_id: "tab-1" }));
+    yield* h.nextToDriver;
+    yield* h.reply(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 3,
+        result: {
+          structuredContent: {
+            tab_id: "tab-1",
+            url: "https://blocked.test/secret",
+            private: "must not reach agent",
+          },
+        },
+      }),
+    );
+    const answer = yield* h.nextToProvider;
+    assert.notInclude(JSON.stringify(answer), "must not reach agent");
+    assert.deepEqual(reports.at(-1), {
+      browserClaimEnded: { claimId: "claim-1", claimGeneration: 2, reason: "blocked_url" },
+    });
+  }),
+);
+
 effectIt.effect("a claim admits only its own tab under app-restricted control", () =>
   Effect.gen(function* () {
     const h = yield* harness();
