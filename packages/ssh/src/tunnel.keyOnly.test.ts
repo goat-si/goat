@@ -115,3 +115,59 @@ describe.each([
     );
   });
 });
+
+it.effect.each([
+  [
+    'sign_and_send_pubkey: signing failed for ED25519 "id" from agent: communication with agent failed\nPermission denied (publickey,password).',
+    0,
+  ],
+  [
+    'sign_and_send_pubkey: signing failed for ED25519 "id": device not found\nPermission denied (publickey,password).',
+    1,
+  ],
+  ["Permission denied (publickey,password).", 1],
+] as const)(
+  "preserves agent signing errors and prompts for ordinary rejection",
+  ([stderr, expected]) => {
+    let prompts = 0;
+    const spawner = ChildProcessSpawner.make((command) =>
+      Effect.succeed(
+        commandArgs(command).includes("-G")
+          ? makeSuccessfulProcess("hostname devbox.example.com\nuser alex\nport 2222\n")
+          : {
+              ...makeSuccessfulProcess(""),
+              exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(255)),
+              stderr: Stream.make(encoder.encode(stderr)),
+            },
+      ),
+    );
+    return Effect.gen(function* () {
+      const manager = yield* SshTunnel.SshEnvironmentManager;
+      const error = yield* manager.ensureEnvironment(uploadTarget).pipe(Effect.flip);
+      assert.equal(prompts, expected);
+      if (expected === 0) assert.include(error.message, "signing failed");
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          NodeServices.layer,
+          Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          Layer.succeed(HttpClient.HttpClient, testHttpClient),
+          Layer.succeed(NetService.NetService, testNetService),
+          Layer.succeed(SshAuth.SshPasswordPrompt, {
+            isAvailable: true,
+            request: () =>
+              Effect.sync(() => {
+                prompts++;
+                return null;
+              }),
+          }),
+          SshTunnel.SshEnvironmentManager.layer({
+            resolveCliRunner: Effect.succeed(NODE_SCRIPT),
+            leaveRemoteServerRunning: true,
+          }),
+        ),
+      ),
+      Effect.scoped,
+    );
+  },
+);
