@@ -820,11 +820,12 @@ export class PreviewAutomationTimeoutError extends Schema.TaggedError<PreviewAut
     ...PreviewAutomationRequestErrorFields,
     ...PreviewAutomationOptionalRemoteDiagnosticFields,
     interceptedBy: Schema.optional(Schema.String.check(Schema.isMaxLength(300))),
+    reason: Schema.optional(Schema.String),
   },
 ) {
   override get message(): string {
     const summary = `Preview automation ${this.operation} timed out after ${this.timeoutMs}ms.`;
-    return this.interceptedBy ? `${summary} ${this.interceptedBy}` : summary;
+    return [summary, this.reason, this.interceptedBy].filter(Boolean).join(" ");
   }
 }
 
