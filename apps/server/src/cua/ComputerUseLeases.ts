@@ -707,6 +707,7 @@ const make = Effect.gen(function* () {
 
   const calls = makeCallReservation({
     admission,
+    appCatalog: Option.isSome(driver) ? driver.value.appCatalog : Effect.succeed([]),
     controls,
     reservations,
     changed,

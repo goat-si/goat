@@ -17,6 +17,7 @@ import { runMigrations } from "../persistence/Migrations.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { layerServerSettings } from "../serverSettingsLayers.testkit.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
+import * as CuaDriver from "./CuaDriver.ts";
 import { database, grant } from "./ComputerUseLeases.projection.testkit.ts";
 import { foregroundGrant } from "./ComputerUseForeground.testkit.ts";
 
@@ -334,6 +335,49 @@ it.effect(
         "admitted",
       );
     }).pipe(Effect.provide(everyAppLayer)),
+);
+
+it.effect("server admission refuses a terminal known only through its catalog alias", () =>
+  Effect.gen(function* () {
+    yield* runMigrations();
+    yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+      cuaStrictInputGuards: true,
+    });
+    const leases = yield* ComputerUseLeases.ComputerUseLeases;
+    const owner = ThreadId.make("thread-terminal-catalog");
+    yield* threadIn(owner, "full-access");
+    const control = Option.getOrThrow(
+      yield* leases.everyAppControl(owner, false, { nonPerson: true }),
+    );
+    const result = yield* leases.callReservation(owner, {
+      action: "reserve",
+      controlId: control.controlId,
+      connectionId: "connection",
+      callId: "opaque",
+      interruptions: 0,
+      idleEpoch: 0,
+      name: "click",
+      args: { pid: 42, window_id: 7 },
+      app: "org.example.shell",
+      safetyApps: ["org.example.shell", "Shell"],
+    });
+    assert.deepInclude(result, { status: "refused", detail: "app_not_allowed" });
+  }).pipe(
+    Effect.provide(
+      ComputerUseLeases.layer.pipe(
+        Layer.provideMerge(
+          Layer.mergeAll(
+            database,
+            NodeServices.layer,
+            ServerSettings.ServerSettingsService.layerTest({ cuaFullAccessAutoAdmit: false }),
+            Layer.mock(CuaDriver.CuaDriver)({
+              appCatalog: Effect.succeed([{ id: "org.example.shell", name: "GNOME Terminal" }]),
+            }),
+          ),
+        ),
+      ),
+    ),
+  ),
 );
 
 it.effect("updates the origin policy when a full access control is reused", () =>

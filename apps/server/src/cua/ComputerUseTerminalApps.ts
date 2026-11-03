@@ -1,4 +1,5 @@
 import { cuaAppKey } from "@goat/shared/cuaDriverManifest";
+import type { ComputerUseApp } from "@goat/contracts";
 
 const terminals = new Set([
   "com.apple.terminal",
@@ -67,3 +68,16 @@ export const isTerminalCuaApplication = (app: string): boolean => {
     (basename !== undefined && terminals.has(basename))
   );
 };
+
+export const isTerminalCuaApplicationInCatalog = (
+  app: string,
+  catalog: ReadonlyArray<ComputerUseApp>,
+): boolean =>
+  isTerminalCuaApplication(app) ||
+  catalog.some((entry) => {
+    const identities = [entry.id, entry.name, ...(entry.executables ?? [])];
+    return (
+      identities.some((identity) => cuaAppKey(identity) === cuaAppKey(app)) &&
+      identities.some(isTerminalCuaApplication)
+    );
+  });
