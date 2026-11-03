@@ -16,6 +16,14 @@ const tracked: Record<string, readonly string[]> = {
 };
 const message =
   "Create this emitter inside guardErrors/guardChild from @goat/shared/errorGuards so its 'error' is heard from the start; an unheard 'error' ends the whole process.";
+const INVOKERS = ["call", "apply", "bind"];
+
+const propertyName = (node: ESTree.MemberExpression): string | undefined =>
+  !node.computed && node.property.type === "Identifier"
+    ? node.property.name
+    : node.property.type === "Literal" && typeof node.property.value === "string"
+      ? node.property.value
+      : undefined;
 
 export default defineRule({
   meta: { type: "problem", docs: { description: "Guard error emitters at creation." } },
@@ -48,12 +56,7 @@ export default defineRule({
       }
       if (node.type === "MemberExpression") {
         const base = path(node.object);
-        const name =
-          !node.computed && node.property.type === "Identifier"
-            ? node.property.name
-            : node.property.type === "Literal" && typeof node.property.value === "string"
-              ? node.property.value
-              : undefined;
+        const name = propertyName(node);
         return base && name ? `${base}.${name}` : undefined;
       }
       if (node.type === "AwaitExpression") return path(node.argument);
@@ -95,12 +98,7 @@ export default defineRule({
       if (node.type === "LogicalExpression") return hasTracked(node.left) || hasTracked(node.right);
       if (node.type === "ConditionalExpression")
         return hasTracked(node.consequent) || hasTracked(node.alternate);
-      if (
-        node.type === "MemberExpression" &&
-        !node.computed &&
-        node.property.type === "Identifier" &&
-        ["call", "apply", "bind"].includes(node.property.name)
-      )
+      if (node.type === "MemberExpression" && INVOKERS.includes(propertyName(node) ?? ""))
         return hasTracked(node.object);
       return false;
     };
@@ -122,11 +120,7 @@ export default defineRule({
     const creation = (node: ESTree.CallExpression | ESTree.NewExpression) => {
       if (!hasTracked(node.callee)) return;
       const callee = unwrap(node.callee);
-      const bind =
-        callee.type === "MemberExpression" &&
-        !callee.computed &&
-        callee.property.type === "Identifier" &&
-        callee.property.name === "bind";
+      const bind = callee.type === "MemberExpression" && propertyName(callee) === "bind";
       if (bind || !guarded(node)) report(node);
     };
     const value = (node: ESTree.Node) => {
@@ -148,16 +142,22 @@ export default defineRule({
           parent.type !== "TSNonNullExpression"
         )
           return;
-        if (
-          parent.type === "ImportSpecifier" ||
-          parent.type === "ImportDeclaration" ||
-          parent.type === "VariableDeclarator"
-        )
-          return;
+        if (parent.type === "ImportSpecifier" || parent.type === "ImportDeclaration") return;
+        // A local const alias is tracked where it is called; an exported or reassignable one escapes.
+        if (parent.type === "VariableDeclarator") {
+          const declaration = parent.parent;
+          const exported = declaration?.parent?.type === "ExportNamedDeclaration";
+          if (
+            declaration?.type === "VariableDeclaration" &&
+            declaration.kind === "const" &&
+            !exported
+          )
+            return;
+          break;
+        }
         // Reading a member such as .prototype, or testing instanceof/typeof, creates nothing.
         if (parent.type === "MemberExpression" && parent.object === current) {
-          const name = !parent.computed && parent.property.type === "Identifier";
-          if (!name || !["call", "apply", "bind"].includes(parent.property.name)) return;
+          if (!INVOKERS.includes(propertyName(parent) ?? "")) return;
           current = parent;
           continue;
         }
