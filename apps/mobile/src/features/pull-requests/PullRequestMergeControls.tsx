@@ -17,7 +17,8 @@ import {
   canPerformPullRequestAction,
   mergeUnavailableReason,
   MERGE_METHODS,
-  PR_ACTION_ICONS,
+  mergeControlStatus,
+  canExecuteImmediateMerge,
   pullRequestActionLabel,
 } from "./pullRequestActions";
 import { pullRequestStackMerge, singlePullRequestMergeAllowed } from "./pullRequestStack";
@@ -25,7 +26,6 @@ import { pullRequestTarget, type PullRequestParams } from "./usePullRequestDiff"
 import { usePullRequestAction } from "./usePullRequestAction";
 import { usePullRequestPermissions } from "./usePullRequestPermissions";
 import { PullRequestGlyph } from "./pullRequestGlyphs";
-import type { AppSymbolName } from "../../components/ui/AppSymbol";
 import type { PullRequestStackState } from "./usePullRequestStack";
 
 export function PullRequestMergeControls(props: {
@@ -87,37 +87,13 @@ export function PullRequestMergeControls(props: {
     : "Merge unavailable";
   const nextAction =
     pr.state === "closed" ? "reopen" : pr.state === "open" && pr.isDraft ? "ready" : null;
-  // States the button itself names, instead of a reason line under it. Draft and
-  // closed offer their way forward when the viewer can take it.
-  const status: {
-    label: string;
-    icon: AppSymbolName;
-    final?: boolean;
-    action?: "ready" | "reopen";
-  } | null =
-    nextAction && stateAction.available(nextAction)
-      ? {
-          label: pullRequestActionLabel(nextAction, terminology),
-          icon: PR_ACTION_ICONS[nextAction],
-          final: nextAction === "reopen",
-          action: nextAction,
-        }
-      : pr.state === "merged"
-        ? { label: "Merged", icon: PullRequestGlyph.merged, final: true }
-        : pr.state === "closed"
-          ? { label: "Closed", icon: PullRequestGlyph.closed, final: true }
-          : pr.isDraft
-            ? { label: "Draft", icon: PullRequestGlyph.draft }
-            : pr.mergeability === "conflicting"
-              ? { label: "Resolve conflicts to merge", icon: PullRequestGlyph.conflicting }
-              : pr.autoMergeEnabled
-                ? {
-                    label: `Auto-merge pending${pr.autoMergeMethod ? ` (${pr.autoMergeMethod})` : ""}`,
-                    icon: "clock",
-                  }
-                : checkingStack && !busy
-                  ? { label: "Checking stack…", icon: PullRequestGlyph.merged }
-                  : null;
+  const status = mergeControlStatus(
+    pr,
+    nextAction !== null && stateAction.available(nextAction),
+    checkingStack,
+    busy,
+    terminology,
+  );
   const autoAction = pr.autoMergeEnabled ? "disable-auto-merge" : "enable-auto-merge";
   const canAutoMerge =
     !busy &&
@@ -129,7 +105,7 @@ export function PullRequestMergeControls(props: {
     if (
       pending.current ||
       (action !== "disable-auto-merge" && !method) ||
-      (action === "merge" ? !canMerge || pr.autoMergeEnabled === true : !canAutoMerge)
+      (action === "merge" ? !canExecuteImmediateMerge(pr, canMerge) : !canAutoMerge)
     )
       return;
     pending.current = true;
