@@ -205,6 +205,20 @@ beforeEach(() => {
 });
 
 describe("mobile task permissions", () => {
+  it("notifies the screen before enqueueing, and never for a refused send", async () => {
+    const events: string[] = [];
+    const onWillEnqueue = vi.fn(() => events.push("notify"));
+    const refused = useThreadComposerState();
+    await refused.onSendMessage(undefined, undefined, onWillEnqueue);
+    expect(onWillEnqueue).not.toHaveBeenCalled();
+    state.grantedEnvironments.add("secondary");
+    state.enqueue.mockImplementationOnce(async () => {
+      events.push("enqueue");
+    });
+    await useThreadComposerState().onSendMessage(undefined, undefined, onWillEnqueue);
+    expect(state.enqueue).toHaveBeenCalledOnce();
+    expect(events).toEqual(["notify", "enqueue"]);
+  });
   it("consumes an approval reply without queueing a parent message", async () => {
     state.grantedEnvironments.add("secondary");
     const composer = useThreadComposerState();
