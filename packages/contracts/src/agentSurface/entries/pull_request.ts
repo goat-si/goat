@@ -32,6 +32,29 @@ export const pullRequestEntries = {
       openWorldHint: false,
     },
   }),
+  "pull_request.link_many": entry({
+    resource: "pull_request",
+    verb: "link_many",
+    name: "goat_pull_request_link_many",
+    toolkit: "pullRequests",
+    summary: "Link pull requests to thread",
+    description:
+      "Link several pull request URLs to a thread in one call. Invalid URLs are returned separately.",
+    guide:
+      "Provide URLs for each pull request and stack layer. Existing visible links remain linked.",
+    effect: "write",
+    capability: "pr.open",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    idempotencyReason: "Already linked pull requests are left unchanged.",
+    annotations: {
+      title: "Link pull requests to thread",
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  }),
   "pull_request.unlink": entry({
     resource: "pull_request",
     verb: "unlink",
@@ -52,6 +75,28 @@ export const pullRequestEntries = {
       "Unlinking a pull request that is not linked succeeds with wasLinked false and changes nothing.",
     annotations: {
       title: "Unlink pull request from thread",
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  }),
+  "pull_request.unlink_many": entry({
+    resource: "pull_request",
+    verb: "unlink_many",
+    name: "goat_pull_request_unlink_many",
+    toolkit: "pullRequests",
+    summary: "Unlink pull requests by state",
+    description:
+      "Unlink all visible pull requests whose last known state matches the requested states. Unknown states remain linked.",
+    guide: "Select one or more states. This removes links without closing pull requests.",
+    effect: "destructive",
+    capability: "pr.open",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    idempotencyReason: "Unlinking already absent links changes nothing.",
+    annotations: {
+      title: "Unlink pull requests by state",
       idempotentHint: true,
       openWorldHint: false,
     },

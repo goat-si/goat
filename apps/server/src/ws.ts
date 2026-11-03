@@ -329,9 +329,7 @@ import { resolveAvailableWorktreesDirectory } from "./worktreesDirectory.ts";
 import * as WorktreeCheckoutHealth from "./vcs/WorktreeCheckoutHealth.ts";
 import * as AutomationHold from "./automationHold.ts";
 import {
-  resolveAvailableEditorsForConfig,
-  resolveEditorConfig,
-  resolveFileManagerRevealKindForConfig,
+  resolveOpenDiscoveryForConfig,
   withLateEditorConfig,
   withProviderStatusChanges,
 } from "./serverConfigUpdates.ts";
@@ -1781,10 +1779,12 @@ export const layerWsRpc = (
         const lastEventLoopStall = yield* eventLoopMonitor.latestNoticeableStall;
         const checkoutHealth = yield* worktreeCheckoutHealth.current;
         const currentAutomationHold = yield* automationHold.current;
-        const editorConfig = yield* resolveEditorConfig(
-          yield* resolveAvailableEditorsForConfig(externalLauncher.resolveAvailableEditors()),
-          resolveFileManagerRevealKindForConfig(externalLauncher.resolveFileManagerRevealKind()),
-        );
+        const discovery = yield* resolveOpenDiscoveryForConfig({
+          editors: externalLauncher.resolveAvailableEditors(),
+          fileManagerRevealKind: externalLauncher.resolveFileManagerRevealKind(),
+          remoteOpenTargets: remoteOpenTargets.resolveTargets(),
+          directEndpoints: directEndpoints.resolve(),
+        });
 
         return {
           environment,
@@ -1794,11 +1794,7 @@ export const layerWsRpc = (
           keybindings: keybindingsConfig.keybindings,
           issues: keybindingsConfig.issues,
           providers,
-          ...editorConfig,
-          remoteOpenTargets: yield* resolveAvailableEditorsForConfig(
-            remoteOpenTargets.resolveTargets(),
-          ),
-          directEndpoints: yield* resolveAvailableEditorsForConfig(directEndpoints.resolve()),
+          ...discovery,
           observability: {
             logsDirectoryPath: config.logsDir,
             localTracingEnabled: true,
