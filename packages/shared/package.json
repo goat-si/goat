@@ -663,6 +663,10 @@
       "types": "./src/processErrorNet.ts",
       "import": "./src/processErrorNet.ts"
     },
+    "./errorGuards": {
+      "types": "./src/errorGuards.ts",
+      "import": "./src/errorGuards.ts"
+    },
     "./PtyAdapter": {
       "types": "./src/PtyAdapter.ts",
       "import": "./src/PtyAdapter.ts"
