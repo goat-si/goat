@@ -178,6 +178,22 @@ describe("soak observations", () => {
     ).toBe(0);
     expect(providerRestarts(lines, new Map(), [], [], []).counter.value).toBeNull();
   });
+  it("counts Codex process deaths once and leaves ambiguous releases unknown", () => {
+    const lines = [
+      { event: "start" as const, pid: 1, instance: "codex", at: "1" },
+      { event: "start" as const, pid: 2, instance: "codex", at: "3" },
+    ];
+    const deaths = [{ thread: "thread", instance: "codex", at: "2" }];
+    expect(providerRestarts(lines, new Map(), [], deaths, []).counter.value).toBe(1);
+    expect(
+      providerRestarts(lines, new Map(), [{ thread: "thread", at: "2", status: "stopped" }], [], [])
+        .counter.value,
+    ).toBeNull();
+    const observations = new Observations();
+    observations.providerDeath("run", "thread", "codex", "2");
+    observations.providerDeath("run", "thread", "codex", "2");
+    expect(observations.deaths).toHaveLength(1);
+  });
 });
 
 import { cleanupOwned, parseArgs, validateHome, verifyRuntimeState } from "./cpuPressureSoak.ts";

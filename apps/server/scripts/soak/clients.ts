@@ -13,7 +13,9 @@ import {
   WsRpcGroup,
   ORCHESTRATION_PROTOCOL_QUERY_PARAM,
   ORCHESTRATION_PROTOCOL_VERSION,
+  type OrchestrationV2Run,
 } from "@goat/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -90,9 +92,7 @@ export interface WorkloadInput {
   onWindowEnd: () => Promise<void>;
 }
 
-export async function runWorkload(
-  input: WorkloadInput,
-): Promise<{
+export async function runWorkload(input: WorkloadInput): Promise<{
   replayStarted: number;
   codexStarted: number;
   headlessOpened: number;
@@ -326,9 +326,17 @@ export async function runWorkload(
       });
       if (replay) replayStarted++;
       else codexStarted++;
-      const observe = Effect.fn("Soak.observeRun")(function* (run: { id: string; status: string }) {
+      const observe = Effect.fn("Soak.observeRun")(function* (run: OrchestrationV2Run) {
         input.recordDetail({ type: "run", threadId, runId: run.id, status: run.status });
         input.observations.issueRun(run.id);
+        if (run.terminationCause?.kind === "provider_process_exit") {
+          input.observations.providerDeath(
+            run.id,
+            threadId,
+            run.providerInstanceId,
+            DateTime.formatIso(run.completedAt ?? run.requestedAt),
+          );
+        }
         if (
           !["completed", "failed", "interrupted", "cancelled", "rolled_back"].includes(
             run.status,
@@ -367,8 +375,29 @@ export async function runWorkload(
       for (const run of launch.projection.runs) yield* observe(run);
       yield* client["orchestration.subscribeThread"]({ threadId }).pipe(
         Stream.runForEach((item) => {
-          if (item.kind === "snapshot")
+          if (item.kind === "snapshot") {
+            for (const thread of item.projection.providerThreads) {
+              if (thread.nativeThreadRef?.nativeId)
+                input.observations.joinProvider(thread.nativeThreadRef.nativeId, threadId);
+            }
             return Effect.forEach(item.projection.runs, observe, { discard: true });
+          }
+          if (
+            item.kind === "event" &&
+            item.event.type === "provider-thread.updated" &&
+            item.event.payload.nativeThreadRef?.nativeId
+          )
+            input.observations.joinProvider(item.event.payload.nativeThreadRef.nativeId, threadId);
+          if (
+            item.kind === "event" &&
+            item.event.type === "provider-session.updated" &&
+            (item.event.payload.status === "stopped" || item.event.payload.status === "error")
+          )
+            input.observations.releaseProvider(
+              threadId,
+              DateTime.formatIso(item.event.occurredAt),
+              item.event.payload.status,
+            );
           if (
             item.kind === "event" &&
             (item.event.type === "run.created" || item.event.type === "run.updated")

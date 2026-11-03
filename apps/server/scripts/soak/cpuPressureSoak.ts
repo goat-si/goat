@@ -11,6 +11,7 @@ import {
   DetailWriter,
   cpuBusy,
   saturation,
+  providerRestarts,
 } from "./observations.ts";
 import { runWorkload } from "./clients.ts";
 import * as NodeFS from "node:fs";
@@ -276,9 +277,10 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
     const trace = new LogTail(tracePath, (value) => {
       observations.consumeTrace(value);
     });
-    const provider = new LogTail(lifecycle, (value) =>
-      detail?.write({ source: "provider", value }),
-    );
+    const provider = new LogTail(lifecycle, (value) => {
+      observations.consumeLifecycle(value);
+      detail?.write({ source: "provider", value });
+    });
     if (NodeFS.existsSync(stallPath)) stall.startAtEnd();
     if (NodeFS.existsSync(tracePath)) trace.startAtEnd();
     const sample = () => {
@@ -397,15 +399,34 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
     if (workload) await workload.catch(() => {});
     detail?.close();
     const cpu = saturation(cpuSamples, cpuGaps);
+    const provider = providerRestarts(
+      observations.lifecycle,
+      observations.joins,
+      observations.releases,
+      observations.deaths,
+      [
+        "provider forced-exit coverage test not performed",
+        ...(observations.lifecycle.some(
+          (line) => line.instance === "devReplay" && line.event === "start",
+        )
+          ? []
+          : ["no Replay lifecycle start observed"]),
+        ...(observations.lifecycle.some(
+          (line) => line.instance !== "devReplay" && line.event === "start",
+        )
+          ? []
+          : ["no Codex lifecycle start observed"]),
+        ...observations.gaps,
+      ],
+    );
     const report = {
       ...observations.report(
         [
           "client-runtime session coverage lacks a forced disconnect test",
-          "provider lifecycle coverage unavailable",
           ...(!cpu.verified ? ["saturation unverified"] : []),
           ...(errors.length ? ["workload error"] : []),
         ],
-        counter(0, ["provider lifecycle coverage unavailable"]),
+        provider.counter,
         counter(
           serverExit ? 1 : 0,
           runtimeConfirmed ? [] : ["server runtime identity unavailable"],
@@ -416,6 +437,7 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
       ownedPids: owned.map(({ child }) => child.pid),
       window: { start: startedAt, end: endedAt },
       saturation: cpu,
+      providerRestartParts: provider,
       workload: {
         ...workloadResult,
         clientRuntimeCoverage: "session",

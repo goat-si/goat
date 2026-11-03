@@ -254,6 +254,11 @@ export function providerRestarts(
 }
 
 export class Observations {
+  readonly lifecycle: Lifecycle[] = [];
+  readonly joins = new Map<string, string>();
+  readonly releases: Release[] = [];
+  readonly deaths: Death[] = [];
+  private deathRuns = new Set<string>();
   private socketEpisodes = new Set<string>();
   private runs = new Map<string, "pending" | "completed" | "failed" | "interrupted">();
   private windowOpen = false;
@@ -267,6 +272,37 @@ export class Observations {
     droppedRecords: 0,
   };
   readonly trace = { retired: 0 };
+  consumeLifecycle(value: unknown): void {
+    if (typeof value !== "object" || value === null) throw new Error("invalid lifecycle record");
+    const line = value as Record<string, unknown>;
+    if (
+      (line.event !== "start" && line.event !== "session" && line.event !== "exit") ||
+      typeof line.pid !== "number" ||
+      typeof line.instance !== "string" ||
+      typeof line.at !== "string" ||
+      (line.event === "session" && typeof line.thread !== "string")
+    )
+      throw new Error("invalid lifecycle record");
+    if (this.lifecycle.length >= LIMIT) this.gap("lifecycle observation limit reached");
+    else this.lifecycle.push(line as Lifecycle);
+  }
+  joinProvider(native: string, thread: string): void {
+    const existing = this.joins.get(native);
+    if (existing && existing !== thread) this.gap(`ambiguous native thread ${native}`);
+    else this.joins.set(native, thread);
+  }
+  releaseProvider(thread: string, at: string, status: "stopped" | "error"): void {
+    if (this.releases.length >= LIMIT) this.gap("release observation limit reached");
+    else this.releases.push({ thread, at, status });
+  }
+  providerDeath(run: string, thread: string, instance: string, at: string): void {
+    if (this.deathRuns.has(run)) return;
+    if (this.deaths.length >= LIMIT) this.gap("death observation limit reached");
+    else {
+      this.deathRuns.add(run);
+      this.deaths.push({ thread, instance, at });
+    }
+  }
   consumeTrace(value: unknown): void {
     if (typeof value !== "object" || value === null) {
       this.gap("invalid trace record");
