@@ -2,6 +2,54 @@ import { describe, expect, it } from "@effect/vitest";
 import { deniedCallApp } from "./ComputerUseCallSafety.ts";
 
 describe("computer use call safety", () => {
+  it("non-person full access refuses terminals on macOS, Linux and Windows", () => {
+    for (const app of [
+      "com.apple.Terminal",
+      "dev.warp.Warp-Stable",
+      "com.mitchellh.ghostty",
+      "org.alacritty",
+      "com.github.wez.wezterm",
+      "co.zeit.hyper",
+      "org.tabby",
+      "com.googlecode.iterm2",
+      "net.kovidgoyal.kitty",
+      "/usr/bin/GNOME-Terminal-Server",
+      "/usr/bin/kgx",
+      "/usr/bin/ptyxis",
+      "/usr/bin/konsole",
+      "/usr/bin/xterm",
+      "/usr/bin/xfce4-terminal",
+      "/usr/bin/tilix",
+      "/usr/bin/terminator",
+      "/usr/bin/foot",
+      "/usr/bin/urxvt",
+      "/usr/bin/st",
+      "/usr/bin/warp-terminal",
+      "/opt/WezTerm-GUI",
+      "C:\\Windows\\System32\\WindowsTerminal.EXE",
+      "C:\\Windows\\System32\\WT.exe",
+      "powershell",
+      "pwsh",
+      "cmd",
+      "conhost",
+      "openconsole",
+      "iterm",
+      "iterm2",
+      "terminal",
+      "warp",
+      "ghostty",
+      "kitty",
+      "alacritty",
+      "wezterm",
+      "hyper",
+      "tabby",
+    ]) {
+      expect(deniedCallApp({ name: "click", args: {}, app }, [], true), app).toBe(app);
+    }
+    expect(
+      deniedCallApp({ name: "click", args: {}, app: "/usr/bin/editor" }, [], true),
+    ).toBeUndefined();
+  });
   it("does not allow a name-only launch when a safety policy applies", () => {
     expect(
       deniedCallApp({ name: "launch_app", args: { name: "Editor" } }, ["com.example.Blocked"]),

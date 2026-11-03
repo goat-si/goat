@@ -31,6 +31,41 @@ import {
   withRequests,
 } from "./ComputerUseRequests.testkit.ts";
 
+it.effect("non-person full access refuses Linux and Windows terminal requests", () =>
+  withHarness(({ orchestrator }) =>
+    Effect.gen(function* () {
+      const runId = (yield* orchestrator.getThreadProjection(threadId)).runs.at(-1)!.id;
+      yield* withRequests(
+        orchestrator,
+        supported,
+        ({ request, leases }) =>
+          Effect.gen(function* () {
+            yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+              cuaStrictInputGuards: true,
+            });
+            yield* leases.everyAppControl(threadId, false, { runId });
+            for (const app of [
+              "/usr/bin/gnome-terminal",
+              "C:\\Windows\\System32\\WindowsTerminal.exe",
+            ]) {
+              assert.deepInclude(yield* request({ apps: [app] }), {
+                kind: "refused",
+                code: "app_not_allowed",
+                unknownApps: [app],
+              });
+            }
+          }),
+        undefined,
+        undefined,
+        undefined,
+        Option.none(),
+        undefined,
+        "remote",
+      );
+    }),
+  ),
+);
+
 it.effect("an organization denial refuses before approval", () =>
   withHarness(({ orchestrator }) =>
     withRequests(orchestrator, supported, ({ request }) =>

@@ -1,5 +1,6 @@
 import { cuaAppKey, isExcludedCuaApplication } from "@goat/shared/cuaDriverManifest";
 import { batchAppScope, isBatchTool } from "./ComputerUseBatchScope.ts";
+import { isTerminalCuaApplication } from "./ComputerUseTerminalApps.ts";
 
 export const deniedCallApp = (
   call: {
@@ -50,9 +51,6 @@ export const deniedCallApp = (
       app !== undefined &&
       (isExcludedCuaApplication(app) ||
         keys.has(cuaAppKey(app)) ||
-        (nonPersonFullAccess &&
-          ["com.apple.terminal", "com.googlecode.iterm2", "terminal", "iterm", "iterm2"].includes(
-            cuaAppKey(app),
-          ))),
+        (nonPersonFullAccess && isTerminalCuaApplication(app))),
   );
 };
