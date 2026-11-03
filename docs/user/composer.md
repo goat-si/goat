@@ -305,7 +305,7 @@ Integrations → Agent tools**; on mobile, under **Agent behavior**.
 
 Send `/compact` in an existing conversation to reduce context usage when the
 provider supports it. On web and desktop, the context meter is enabled by default and appears
-when the provider reports usage. To enable it if hidden, open **Settings → General → Legacy →
+when the provider reports usage. To enable it if hidden, open **Settings → General → Legacy features →
 Context window indicator (legacy)**. Open the meter for usage details and **Compact context**
 when the provider supports compaction.
 
