@@ -28,7 +28,12 @@ export function isYarnGlobalCommandPath(commandPath: string): boolean {
 /** Version-manager installs are pinned in its config, so updating them means editing that. */
 export function isMiseCommandPath(commandPath: string): boolean {
   const normalized = normalizeCommandPath(commandPath);
-  return normalized.includes("/mise/installs/") || normalized.includes("/mise/shims/");
+  return (
+    normalized.includes("/mise/installs/") ||
+    normalized.includes("/mise/shims/") ||
+    normalized.includes("/mise/command-wrappers/") ||
+    /\/mise(?:\.exe)?$/.test(normalized)
+  );
 }
 
 const winGetClaudeCommandPath =
