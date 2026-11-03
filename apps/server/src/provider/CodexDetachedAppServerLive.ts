@@ -22,8 +22,17 @@ import {
   privateSocketDirectory,
 } from "./CodexDetachedAppServer.ts";
 
-/** Opt-in maintainer switch until restart survival ships; stdio stays the default. */
+/** Maintainer override: `socket` or `stdio` forces a transport; unset follows each project's setting. */
 const CODEX_TRANSPORT_ENV = "GOAT_CODEX_APP_SERVER_TRANSPORT";
+
+export const codexSocketTransportMode = (
+  platform: NodeJS.Platform,
+  environment: NodeJS.ProcessEnv,
+): "auto" | "socket" | "stdio" | "unsupported" => {
+  if (platform === "win32") return "unsupported";
+  const requested = environment[CODEX_TRANSPORT_ENV]?.trim();
+  return requested === "socket" || requested === "stdio" ? requested : "auto";
+};
 
 export class CodexDetachedAppServers extends Context.Service<
   CodexDetachedAppServers,
@@ -236,18 +245,11 @@ const layer = Layer.effect(
         ),
       socketDirectory,
     });
+    const socketTransportMode = codexSocketTransportMode(platform, environment);
     return {
       ...service,
-      socketTransportEnabled:
-        platform !== "win32" && environment[CODEX_TRANSPORT_ENV]?.trim() === "socket",
-      socketTransportMode:
-        platform === "win32"
-          ? ("unsupported" as const)
-          : environment[CODEX_TRANSPORT_ENV]?.trim() === "socket"
-            ? ("socket" as const)
-            : environment[CODEX_TRANSPORT_ENV]?.trim() === "stdio"
-              ? ("stdio" as const)
-              : ("auto" as const),
+      socketTransportEnabled: socketTransportMode === "socket",
+      socketTransportMode,
     };
   }),
 );
