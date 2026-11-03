@@ -1073,7 +1073,7 @@ function acpMcpFallbackInput(value: string | undefined): Record<string, unknown>
  * tool inventory, so the separator match can stay loose.
  */
 const GOAT_MCP_TITLE_CALL =
-  /^(?:mcp[-_]{1,2})?goat[-_.:/ ]{1,3}(?<tool>[A-Za-z0-9][A-Za-z0-9_.-]*)(?::.*)?$/i;
+  /^(?:@|mcp[-_]{1,2})?goat[-_.:/ ]{1,3}(?<tool>[A-Za-z0-9][A-Za-z0-9_.-]*)(?::.*)?$/i;
 
 /**
  * Gemini CLI titles injected MCP calls "<tool> (<server> MCP Server)" and

@@ -43,8 +43,8 @@ export const event = (
   type: string,
   data: Record<string, unknown>,
   label?: string,
+  version = openCode2DurableVersion(type),
 ): ProviderReplayEntry => {
-  const version = openCode2DurableVersion(type);
   const durable =
     version === undefined ? {} : { durable: { aggregateID: SESSION, seq: 1, version } };
   return {
