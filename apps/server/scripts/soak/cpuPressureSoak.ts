@@ -495,7 +495,7 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
         }
       },
       signal: abort.signal,
-      onWindowStart: () => {
+      startLoad: () => {
         loadStartedAt = new Date().toISOString();
         for (let i = 0; i < 2 * NodeOS.availableParallelism(); i++) {
           const burner = spawnOwned(
@@ -515,16 +515,18 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
               rejectBurner(new Error("burner exited during workload"));
           });
         }
-        startedAt = new Date().toISOString();
+      },
+      onWindowStart: (startedAtMs) => {
+        startedAt = new Date(startedAtMs).toISOString();
         process.stdout.write(`SOAK-WINDOW start=${startedAt}\n`);
         observations.setWindowOpen(true);
         sampleCpu();
         cpuTimer = setInterval(sampleCpu, 5000);
       },
-      onWindowEnd: async () => {
+      onWindowEnd: async (endedAtMs) => {
         if (cpuTimer !== undefined) clearInterval(cpuTimer);
         sampleCpu();
-        endedAt = new Date().toISOString();
+        endedAt = new Date(endedAtMs).toISOString();
         process.stdout.write(`SOAK-WINDOW end=${endedAt}\n`);
         observations.setWindowOpen(false);
         stoppingBurners = true;

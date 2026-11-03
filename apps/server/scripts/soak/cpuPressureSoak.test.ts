@@ -9,8 +9,12 @@ import * as NodeEvents from "node:events";
 import * as NodeSqlite from "node:sqlite";
 import { guardChild, guardErrors } from "@goat/shared/errorGuards";
 import { describe, expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
 import { isSoakExitPrompt } from "../dev-replay-agent.ts";
-import { openRelay } from "./clients.ts";
+import { holdSoakWindow, openRelay } from "./clients.ts";
 
 it("relays bytes and disconnects the owned connection", async () => {
   const server = guardErrors(
@@ -239,6 +243,32 @@ import {
 } from "./observations.ts";
 
 describe("soak observations", () => {
+  it.effect(
+    "opens the window only after the load starts and reports at least the requested duration",
+    () =>
+      Effect.gen(function* () {
+        const loadStarted = yield* Deferred.make<void>();
+        const opened = yield* Deferred.make<number>();
+        const closed = yield* Deferred.make<number>();
+        const fiber = yield* holdSoakWindow({
+          durationMs: 1000,
+          startLoad: Deferred.await(loadStarted),
+          onWindowStart: (startedAtMs) => Deferred.succeed(opened, startedAtMs).pipe(Effect.asVoid),
+          onWindowEnd: (endedAtMs) => Deferred.succeed(closed, endedAtMs).pipe(Effect.asVoid),
+        }).pipe(Effect.forkChild);
+        yield* TestClock.adjust("50 millis");
+        yield* Deferred.succeed(loadStarted, undefined);
+        const startedAtMs = yield* Deferred.await(opened);
+        expect(startedAtMs).toBe(50);
+        yield* TestClock.adjust("999 millis");
+        expect(yield* Deferred.isDone(closed)).toBe(false);
+        yield* TestClock.adjust("2 millis");
+        yield* Fiber.join(fiber);
+        const endedAtMs = yield* Deferred.await(closed);
+        expect(endedAtMs - startedAtMs).toBeGreaterThanOrEqual(1000);
+      }),
+  );
+
   it("classifies Linux memory pressure and rejects missing data", () => {
     expect(linuxMemoryPressure("some avg10=0.00 avg60=0\nfull avg10=0.00 avg60=0\n")).toBe(1);
     expect(linuxMemoryPressure("some avg10=10.00 avg60=0\nfull avg10=0.00 avg60=0\n")).toBe(2);
