@@ -1,5 +1,5 @@
 import { scopeThreadRef, scopedThreadKey } from "@goat/client-runtime/environment";
-import { foldLaunchedThreads, launchRootKey } from "@goat/client-runtime/state/launch-fold";
+import { foldLaunchedThreads } from "@goat/client-runtime/state/launch-fold";
 import { isRemoteDelegatedChild } from "@goat/shared/threadLaunchState";
 import {
   type PendingSubagentRequest,
@@ -77,6 +77,75 @@ export function startThreadNotifications(
     setNotificationBadge(0);
   };
 
+  let cachedParents:
+    | {
+        readonly inputs: ReadonlyArray<readonly [EnvironmentId, object]>;
+        readonly expiresAt: number;
+        readonly parents: ReadonlyMap<string, EnvironmentThreadShell>;
+      }
+    | undefined;
+  const notificationParents = () => {
+    const inputs = registry.get(environmentSummaries.environmentIdsAtom).flatMap((id) => {
+      const shell = registry.get(environmentShell.stateValueAtom(id));
+      if (shell.status !== "live" || Option.isNone(shell.snapshot)) return [];
+      return [[id, registry.get(threadFamilies.snapshotAtom(id)) ?? shell.snapshot.value] as const];
+    });
+    const now = Date.now();
+    if (
+      cachedParents !== undefined &&
+      now < cachedParents.expiresAt &&
+      inputs.length === cachedParents.inputs.length &&
+      inputs.every(
+        ([id, snapshot], index) =>
+          cachedParents?.inputs[index]?.[0] === id && cachedParents.inputs[index]?.[1] === snapshot,
+      )
+    )
+      return cachedParents.parents;
+    const all: EnvironmentThreadShell[] = [];
+    for (const [id, snapshot] of inputs) {
+      const requests = pendingSubagentRequestsByThread(snapshot.threads);
+      for (const raw of snapshot.threads)
+        all.push(presentThreadShell(id, raw, requests.get(raw.id) ?? null));
+    }
+    const visible = all.filter(
+      (item) =>
+        item.archivedAt === null &&
+        item.deletedAt === null &&
+        !isSideChatThread(item.source) &&
+        item.lineage.relationshipToParent !== "subagent",
+    );
+    const fold = foldLaunchedThreads({ visible, all, now: new Date(now).toISOString() });
+    const byKey = new Map(
+      visible.map((item) => [scopedThreadKey(scopeThreadRef(item.environmentId, item.id)), item]),
+    );
+    const roots = new Map<string, string>();
+    const rootOf = (start: string) => {
+      const path: string[] = [];
+      let current = start;
+      while (!roots.has(current)) {
+        const parent = fold.parentKeyByKey.get(current);
+        if (parent === undefined) break;
+        path.push(current);
+        current = parent;
+      }
+      const root = roots.get(current) ?? current;
+      for (const item of path) roots.set(item, root);
+      return root;
+    };
+    const parents = new Map<string, EnvironmentThreadShell>();
+    for (const [child, parent] of fold.parentKeyByKey) {
+      const root = byKey.get(rootOf(parent));
+      if (root !== undefined) parents.set(child, root);
+    }
+    let expiresAt = Infinity;
+    for (const item of visible) {
+      const at = Date.parse(item.snoozedUntil ?? "");
+      if (at > now && at < expiresAt) expiresAt = at;
+    }
+    cachedParents = { inputs, expiresAt, parents };
+    return parents;
+  };
+
   // Completions fire from a timer, so read settings, focus and route when presenting.
   const present = (
     environmentId: EnvironmentId,
@@ -86,36 +155,12 @@ export function startThreadNotifications(
     let { thread } = state;
     const { status } = state;
     if (isRemoteDelegatedChild({ lineage: thread.lineage, launchedBy: thread.source.launchedBy })) {
-      const all: EnvironmentThreadShell[] = [];
-      for (const id of registry.get(environmentSummaries.environmentIdsAtom)) {
-        const shell = registry.get(environmentShell.stateValueAtom(id));
-        if (shell.status !== "live" || Option.isNone(shell.snapshot)) continue;
-        const snapshot = registry.get(threadFamilies.snapshotAtom(id)) ?? shell.snapshot.value;
-        const requests = pendingSubagentRequestsByThread(snapshot.threads);
-        for (const raw of snapshot.threads) {
-          all.push(presentThreadShell(id, raw, requests.get(raw.id) ?? null));
-        }
-      }
-      const visible = all.filter(
-        (item) =>
-          item.archivedAt === null &&
-          item.deletedAt === null &&
-          !isSideChatThread(item.source) &&
-          item.lineage.relationshipToParent !== "subagent",
-      );
-      const fold = foldLaunchedThreads({ visible, all, now: new Date().toISOString() });
       const key = scopedThreadKey(scopeThreadRef(environmentId, thread.id));
-      const parentKey = fold.parentKeyByKey.get(key);
-      if (parentKey !== undefined) {
+      const parent = notificationParents().get(key);
+      if (parent !== undefined) {
         if (kind === "completion") return;
-        const root = launchRootKey(fold, parentKey);
-        const parent = visible.find(
-          (item) => scopedThreadKey(scopeThreadRef(item.environmentId, item.id)) === root,
-        );
-        if (parent !== undefined) {
-          thread = parent;
-          environmentId = parent.environmentId;
-        }
+        thread = parent;
+        environmentId = parent.environmentId;
       }
     }
     const { notificationMode: mode, inAppNotificationsEnabled } = getClientSettings();

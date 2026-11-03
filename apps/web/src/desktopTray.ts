@@ -81,6 +81,7 @@ export function deriveTrayMenu(
   const pinned: TrayShell[] = [];
   const states = fleetThreadStates(
     threads.filter((thread) => liveEnvironmentIds.has(thread.environmentId)),
+    { additionalAttention: (thread) => (thread.pendingGuestMessageCount ?? 0) > 0 },
   );
   for (const thread of threads) {
     if (

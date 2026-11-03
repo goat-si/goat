@@ -105,7 +105,10 @@ export function classifyFleetThread(
 export function fleetThreadStates<
   T extends LaunchFoldThread &
     Pick<FleetShell, "archivedAt" | "deletedAt" | "sideChatOf" | "pendingSubagentRequest">,
->(shells: readonly T[]): ReadonlyMap<string, FleetThreadState | null> {
+>(
+  shells: readonly T[],
+  options?: { readonly additionalAttention?: (shell: T) => boolean },
+): ReadonlyMap<string, FleetThreadState | null> {
   const visible = shells.filter(
     (shell) =>
       shell.archivedAt === null &&
@@ -147,17 +150,29 @@ export function fleetThreadStates<
     remoteParents.set(childKey, parentKey);
     states.delete(childKey);
   }
-  for (const [childKey, parentKey] of remoteParents) {
-    if (fold.stateByKey.get(childKey) !== "attention") continue;
-    let target = parentKey;
-    for (
-      let next = remoteParents.get(target);
-      next !== undefined;
-      next = remoteParents.get(target)
-    ) {
+  const byKey = new Map(remoteChildren.map((child) => [key(child), child]));
+  const roots = new Map<string, string>();
+  const rootOf = (start: string) => {
+    const path: string[] = [];
+    let target = start;
+    while (!roots.has(target)) {
+      const next = remoteParents.get(target);
+      if (next === undefined) break;
+      path.push(target);
       target = next;
     }
-    states.set(target, "attention");
+    const root = roots.get(target) ?? target;
+    for (const item of path) roots.set(item, root);
+    return root;
+  };
+  for (const [childKey, parentKey] of remoteParents) {
+    const child = byKey.get(childKey);
+    if (
+      fold.stateByKey.get(childKey) !== "attention" &&
+      (child === undefined || options?.additionalAttention?.(child) !== true)
+    )
+      continue;
+    states.set(rootOf(parentKey), "attention");
   }
   return states;
 }

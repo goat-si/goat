@@ -23,10 +23,10 @@ vi.mock(import("@goat/client-runtime/state/launch-fold"), async (original) => {
   const actual = await original();
   return {
     ...actual,
-    foldLaunchedThreads: (...args: Parameters<typeof actual.foldLaunchedThreads>) => {
+    foldLaunchedThreads: ((...args: Parameters<typeof actual.foldLaunchedThreads>) => {
       state.foldBuilds++;
       return actual.foldLaunchedThreads(...args);
-    },
+    }) as typeof actual.foldLaunchedThreads,
   };
 });
 vi.mock(import("./ui/toast"), async (original) => {
@@ -550,4 +550,32 @@ it("reuses one launch fold for a burst of remote child completions", async () =>
   await vi.advanceTimersByTimeAsync(WORKING_EXIT_GRACE_MS);
   expect(TestNotification.sent).toEqual([]);
   expect(state.foldBuilds).toBe(1);
+});
+
+it("refreshes the notification fold when the parent goes offline", async () => {
+  await using app = setup();
+  const child = {
+    id: "child",
+    title: "Remote child",
+    launchedBy: {
+      kind: "launch" as const,
+      via: "delegate_task" as const,
+      threadId: "thread",
+      environmentId: "one",
+      environmentLabel: null,
+      threadTitle: null,
+    },
+  };
+  state.shells.set("two", shell(child));
+  app.start();
+  state.shells.set("two", shell({ ...child, hasPendingApprovals: true }));
+  expect(TestNotification.sent.map(({ options }) => options.body)).toEqual(["Test thread"]);
+  state.shells.set("one", { ...shell(), status: "cached" });
+  state.shells.set("two", shell(child));
+  state.shells.set("two", shell({ ...child, hasPendingUserInput: true }));
+  expect(TestNotification.sent.map(({ options }) => options.body)).toEqual([
+    "Test thread",
+    "Remote child",
+  ]);
+  expect(state.foldBuilds).toBe(2);
 });
