@@ -209,7 +209,6 @@ export const make = Effect.gen(function* () {
                 );
           const repository =
             detected === null ? null : pullRequestRepository(detected, resolvedProject);
-          if (detected !== null && repository === null) return finishBackfill(group);
           const detectedReference =
             detected !== null && repository !== null
               ? {
@@ -224,6 +223,7 @@ export const make = Effect.gen(function* () {
             Effect.gen(function* () {
               let branchPullRequest = detectedReference;
               if (
+                detected === null &&
                 branchPullRequest === null &&
                 thread.branch !== null &&
                 thread.worktreePath === null &&

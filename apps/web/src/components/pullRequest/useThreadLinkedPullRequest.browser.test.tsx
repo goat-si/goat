@@ -73,7 +73,6 @@ it.each([
       environmentId,
       persisted: old,
       projectId,
-      projectRepository: "upstream/project",
       threadBranch: "feature",
       gitStatus: {
         refName: "feature",
@@ -114,7 +113,6 @@ it("does not relink an unparseable detected URL (#2464)", async () => {
       environmentId,
       persisted: old,
       projectId,
-      projectRepository: "upstream/project",
       threadBranch: "feature",
       gitStatus: {
         refName: "feature",
@@ -132,6 +130,46 @@ it("does not relink an unparseable detected URL (#2464)", async () => {
   }
   await using screen = await render(<Harness />);
   await expect.element(screen.getByText("upstream/project")).toBeVisible();
+  await act(async () => {});
+  expect(state.writes).toEqual([]);
+});
+
+it("keeps an explicitly linked open upstream PR when the branch has a fork PR (#2464)", async () => {
+  state.branch = null;
+  state.answer = null;
+  state.writes = [];
+  state.persistedState = "open";
+  const environmentId = EnvironmentId.make("environment");
+  const projectId = ProjectId.make("project");
+  const persisted = {
+    projectId,
+    repository: "upstream/project",
+    number: 11,
+    url: "https://github.com/upstream/project/pull/11",
+  };
+  function Harness() {
+    const { linked } = useThreadLinkedPullRequest({
+      serverThreadRef: scopeThreadRef(environmentId, ThreadId.make("thread")),
+      environmentId,
+      persisted,
+      projectId,
+      threadBranch: "feature",
+      gitStatus: {
+        refName: "feature",
+        pr: {
+          number: 11,
+          title: "Work",
+          url: "https://github.com/fork/project/pull/11",
+          state: "open",
+          headRef: "feature",
+          baseRef: "main",
+        },
+      } as never,
+    });
+    return <div>{linked?.url}</div>;
+  }
+  await using screen = await render(<Harness />);
+  await expect.element(screen.getByText(persisted.url)).toBeVisible();
   await act(async () => {});
   expect(state.writes).toEqual([]);
 });
