@@ -303,6 +303,137 @@ describe("ThreadPullRequestServiceV2 reads", () => {
   );
 
   it.effect.each([
+    { repository: "fork/project", expected: "fork/project", previous: false },
+    { repository: "upstream/project", expected: "upstream/project", previous: false },
+    { repository: "other/project", expected: null, previous: false },
+    { repository: "other/project", expected: null, previous: true },
+  ])(
+    "discovers only the project's fork or upstream PR (#2464): $repository",
+    ({ repository, expected, previous }) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const previousReference = {
+            projectId: ProjectId.make("project-1"),
+            repository: "fork/project",
+            number: 42,
+            url: "https://github.com/fork/project/pull/42",
+          };
+          const thread = {
+            ...threadShell("fork-thread"),
+            branch: "feature/fork",
+            ...(previous ? { branchPullRequest: previousReference } : {}),
+          };
+          const project: OrchestrationProjectShell = {
+            id: thread.projectId,
+            title: "Project",
+            workspaceRoot: "/workspace/project",
+            defaultModelSelection: null,
+            scripts: [],
+            createdAt: "2026-08-01T00:00:00.000Z",
+            updatedAt: "2026-08-01T00:00:00.000Z",
+          };
+          const identity = {
+            canonicalKey: "github.com/upstream/project",
+            locator: {
+              source: "git-remote" as const,
+              remoteName: "upstream",
+              remoteUrl: "https://github.com/upstream/project",
+            },
+            origin: {
+              canonicalKey: "github.com/fork/project",
+              remoteUrl: "https://github.com/fork/project",
+            },
+            provider: SourceControlProviderKind.make("github"),
+            owner: "upstream",
+            name: "project",
+          };
+          const activation = yield* Deferred.make<void>();
+          const sweepStarted = yield* Deferred.make<void>();
+          const commands: Array<OrchestrationV2ServerCommand> = [];
+          const dependencies = Layer.mergeAll(
+            Layer.mock(Orchestrator.OrchestratorV2)({
+              streamDomainEvents: Stream.never,
+              getShellSnapshot: () =>
+                Deferred.succeed(sweepStarted, undefined).pipe(
+                  Effect.as({
+                    schemaVersion: 2,
+                    snapshotSequence: 1,
+                    threads: [thread],
+                    archivedThreads: [],
+                  }),
+                ),
+              dispatch: (command) =>
+                Effect.sync(() => {
+                  commands.push(command);
+                  return { sequence: 2, storedEvents: [] };
+                }),
+            }),
+            Layer.mock(ProjectStore.ProjectStoreV2)({
+              listShells: () => Effect.succeed([project]),
+              getShell: () => Effect.succeedSome(project),
+            }),
+            Layer.mock(GitManager.GitManager)({
+              branchPullRequest: () =>
+                Effect.succeed({
+                  number: 42,
+                  title: "Branch work",
+                  updatedAt: null,
+                  url: `https://github.com/${repository}/pull/42`,
+                  state: "open" as const,
+                  isDraft: false,
+                  baseRef: "main",
+                  headRef: thread.branch,
+                  repositoryKey: `github.com/${repository}`,
+                }),
+            }),
+            Layer.mock(PullRequestService.PullRequestService)({}),
+            Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
+              resolve: () => Effect.succeed(identity),
+            }),
+            Layer.mock(BackgroundPolicy.BackgroundPolicy)({}),
+            Layer.succeed(ServerActivation.ServerActivation, Deferred.await(activation)),
+            Layer.succeed(
+              Crypto.Crypto,
+              Crypto.make({
+                randomBytes: (size) => new Uint8Array(size).fill(1),
+                digest: (_algorithm, data) => Effect.succeed(data),
+              }),
+            ),
+            FileSystem.layerNoop({}),
+          );
+          yield* Effect.gen(function* () {
+            const service = yield* ThreadPullRequestService.make;
+            yield* service.start();
+            yield* Deferred.succeed(activation, undefined);
+            yield* Deferred.await(sweepStarted);
+            yield* service.drain;
+          }).pipe(Effect.provide(dependencies));
+          if (expected === null && previous) {
+            expect(commands).toHaveLength(1);
+            expect(commands[0]).toMatchObject({
+              type: "thread.pull-request.sync",
+              branchPullRequest: null,
+              expected: { branchPullRequest: previousReference },
+            });
+          } else if (expected === null) {
+            expect(commands).toEqual([]);
+          } else {
+            expect(commands).toHaveLength(1);
+            expect(commands[0]).toMatchObject({
+              type: "thread.pull-request.sync",
+              branchPullRequest: {
+                projectId: project.id,
+                repository: expected,
+                number: 42,
+                url: `https://github.com/${repository}/pull/42`,
+              },
+            });
+          }
+        }),
+      ),
+  );
+
+  it.effect.each([
     { state: "closed", sameBranch: false },
     { state: "merged", sameBranch: false },
     { state: "closed", sameBranch: true },

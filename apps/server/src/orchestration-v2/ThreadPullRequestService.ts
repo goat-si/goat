@@ -1,3 +1,4 @@
+import { projectRepositories } from "../pullRequest/projectRepositories.ts";
 import {
   CommandId,
   type OrchestrationProjectShell,
@@ -48,16 +49,18 @@ function samePullRequest(
   );
 }
 
-function pullRequestMatchesProject(
+function pullRequestRepository(
   pullRequest: GitManager.GitBranchPullRequest,
   project: OrchestrationProjectShell,
-): boolean {
-  return (
-    pullRequest.repositoryKey !== null &&
-    project.repositoryIdentity != null &&
-    sourceControlDefinitions.canonicalRepositoryKey(pullRequest.repositoryKey) ===
-      sourceControlDefinitions.canonicalRepositoryKey(project.repositoryIdentity.canonicalKey)
+): string | null {
+  if (pullRequest.repositoryKey === null) return null;
+  const key = sourceControlDefinitions.canonicalRepositoryKey(pullRequest.repositoryKey);
+  const match = projectRepositories([project]).find(
+    ({ identity }) =>
+      identity != null &&
+      sourceControlDefinitions.canonicalRepositoryKey(identity.canonicalKey) === key,
   );
+  return sourceControlDefinitions.repositorySelector(match?.identity);
 }
 
 const resolveProjectForPullRequestDiscovery = Effect.fn(
@@ -73,7 +76,6 @@ const resolveProjectForPullRequestDiscovery = Effect.fn(
   });
   return {
     project: { ...project, repositoryIdentity },
-    repository: sourceControlDefinitions.repositorySelector(repositoryIdentity),
   };
 });
 
@@ -183,11 +185,15 @@ export const make = Effect.gen(function* () {
           const first = group[0]!;
           const project = projects.get(first.projectId);
           if (project === undefined) return finishBackfill(group);
-          const { project: resolvedProject, repository } =
-            yield* resolveProjectForPullRequestDiscovery(project, repositoryIdentities, {
+          const { project: resolvedProject } = yield* resolveProjectForPullRequestDiscovery(
+            project,
+            repositoryIdentities,
+            {
               refresh: request.refresh,
-            });
-          if (first.branch !== null && repository === null) return finishBackfill(group);
+            },
+          );
+          if (first.branch !== null && resolvedProject.repositoryIdentity == null)
+            return finishBackfill(group);
           const worktreeExists =
             first.worktreePath !== null && (yield* fileSystem.exists(first.worktreePath));
           const cwd =
@@ -201,9 +207,8 @@ export const make = Effect.gen(function* () {
                   { cwd, branch: first.branch },
                   { refresh: request.refresh },
                 );
-          if (detected !== null && !pullRequestMatchesProject(detected, resolvedProject)) {
-            return finishBackfill(group);
-          }
+          const repository =
+            detected === null ? null : pullRequestRepository(detected, resolvedProject);
           const detectedReference =
             detected !== null && repository !== null
               ? {
@@ -218,6 +223,7 @@ export const make = Effect.gen(function* () {
             Effect.gen(function* () {
               let branchPullRequest = detectedReference;
               if (
+                detected === null &&
                 branchPullRequest === null &&
                 thread.branch !== null &&
                 thread.worktreePath === null &&
@@ -288,10 +294,10 @@ export const make = Effect.gen(function* () {
               current.url !== detected.url ||
               current.state !== detected.state ||
               current.repositoryKey !== detected.repositoryKey ||
-              !pullRequestMatchesProject(current, {
+              pullRequestRepository(current, {
                 ...project,
                 repositoryIdentity: currentIdentity,
-              })
+              }) !== repository
             ) {
               return failBackfill(updates.map((update) => update.thread));
             }
