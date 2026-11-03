@@ -86,6 +86,7 @@ import {
   rejectAgentWorkspaceTerminalPolicyChange,
 } from "./AgentWorkspaceTerminalPolicy.ts";
 import { makeCheckpointReplicationAdmission } from "./serverSettingsCheckpointAdmission.ts";
+import { makeCuaCommittedPolicy, type CuaCommittedPolicy } from "./cuaCommittedPolicy.ts";
 
 import { mapSettingsSecrets, type SettingsSecret } from "./settingsSecrets.ts";
 import { makeSettingsSecretMaterializer } from "./settingsSecretMaterialization.ts";
@@ -801,6 +802,7 @@ export class ServerSettingsService extends Context.Service<
     readonly ready: Effect.Effect<void, ServerSettingsError>;
 
     readonly getSettings: Effect.Effect<ServerSettings, ServerSettingsError>;
+    readonly committedPolicy: Effect.Effect<CuaCommittedPolicy>;
     readonly blockedBrowserHostsSnapshot?: Effect.Effect<
       ReadonlyArray<string>,
       ServerSettingsError
@@ -894,6 +896,8 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
       : {}),
   });
   const currentSettingsRef = yield* Ref.make<ServerSettings>(initialSettings);
+  const cuaPolicy = yield* makeCuaCommittedPolicy;
+  yield* cuaPolicy.publish(initialSettings, Option.none());
   const providerPolicy = yield* makeMemoryProviderPolicy;
   const ownerPublication = yield* makeOwnerPolicyPublication;
   yield* ownerPublication.initialize(initialSettings);
@@ -916,6 +920,7 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
       Effect.tap((nextSettings) =>
         Effect.uninterruptible(
           Ref.set(currentSettingsRef, nextSettings).pipe(
+            Effect.andThen(cuaPolicy.publish(nextSettings, Option.none())),
             Effect.andThen(hubConsent.committed(nextSettings.hub)),
             Effect.andThen(providerPolicy.publish(nextSettings.enableAgentMemoryAccess)),
             Effect.andThen(ownerPublication.publish(ownerProjection(nextSettings))),
@@ -989,6 +994,7 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
     start: Effect.void,
     ready: Effect.void,
     getSettings,
+    committedPolicy: cuaPolicy.read,
     blockedBrowserHostsSnapshot: Ref.get(currentSettingsRef).pipe(
       Effect.map((settings) => settings.blockedBrowserHosts),
     ),
@@ -1287,6 +1293,7 @@ const make = Effect.gen(function* () {
   const secretStore = yield* ServerSecretStore.ServerSecretStore;
   const sql = yield* SqlClient.SqlClient;
   const writeSemaphore = yield* Semaphore.make(1);
+  const cuaPolicy = yield* makeCuaCommittedPolicy;
   const checkpointAdmission = makeCheckpointReplicationAdmission();
   const routeState = yield* Effect.serviceOption(CodexRoute.CodexRouteState);
   const hubMarkerRef = yield* Ref.make<HubTransitionMarker | null>(null);
@@ -1467,6 +1474,7 @@ const make = Effect.gen(function* () {
             fs.rename(from, to).pipe(
               Effect.tap(() =>
                 publishCommittedHub(settings).pipe(
+                  Effect.andThen(cuaPolicy.publish(settings, Option.none())),
                   Effect.andThen(providerPolicy.publish(settings.enableAgentMemoryAccess)),
                   Effect.andThen(ownerPublication.publish(ownerProjection(settings))),
                 ),
@@ -1880,7 +1888,7 @@ const make = Effect.gen(function* () {
   ): Effect.Effect<ServerSettings, E | ServerSettingsError, R> =>
     Effect.gen(function* () {
       if (beforeCommit) yield* beforeCommit;
-      const { settings: current, parseFailure } = yield* reloadSettings;
+      const { settings: current, parseFailure } = yield* cuaPolicy.loaded(reloadSettings);
       if (Option.isSome(parseFailure)) {
         return yield* new ServerSettingsError({
           settingsPath,
@@ -1946,7 +1954,7 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         // Reloading publishes Connect policy, so a denied caller must not reach it.
         if (beforeCommit) yield* beforeCommit;
-        const { settings: current, parseFailure } = yield* reloadSettings;
+        const { settings: current, parseFailure } = yield* cuaPolicy.loaded(reloadSettings);
         if (Option.isSome(parseFailure))
           return yield* new ServerSettingsError({
             settingsPath,
@@ -2032,9 +2040,9 @@ const make = Effect.gen(function* () {
   const revalidateAndEmit = writeSemaphore.withPermits(1)(
     Effect.gen(function* () {
       yield* refreshCommittedHub;
-      const { settings } = yield* reloadSettings;
+      const { settings } = yield* cuaPolicy.loaded(reloadSettings);
       yield* emitChange(settings);
-    }),
+    }).pipe(Effect.tapError(() => cuaPolicy.unavailable)),
   );
 
   const start = Effect.gen(function* () {
@@ -2052,7 +2060,7 @@ const make = Effect.gen(function* () {
       yield* connectAccess.startup(
         writeSemaphore.withPermits(1)(
           Effect.gen(function* () {
-            const loaded = yield* loadSettingsFromDisk(false);
+            const loaded = yield* cuaPolicy.loaded(loadSettingsFromDisk(false));
             yield* connectAccess.commit(
               loaded.settings.hub,
               Cache.set(settingsCache, cacheKey, loaded).pipe(
@@ -2086,6 +2094,7 @@ const make = Effect.gen(function* () {
     ownerPolicyAdministration: ownerServices.administration,
     start,
     ready: Deferred.await(startedDeferred),
+    committedPolicy: cuaPolicy.read,
     getSettings: getSettingsFromCache.pipe(
       Effect.flatMap(materializeSettingsSecrets),
       Effect.map(resolveTextGenerationProvider),

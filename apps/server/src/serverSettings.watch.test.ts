@@ -4,6 +4,7 @@ import type { ServerSettings } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as Path from "effect/Path";
@@ -246,3 +247,190 @@ it.layer(NodeServices.layer)("settings watcher recovery", (it) => {
     }).pipe(Effect.scoped),
   );
 });
+
+// File operations remain real; this external watch seam delivers notifications
+// after their commits instead of relying on macOS's first native event timing.
+const withRegisteredSettingsWatchers = <A, E, R>(
+  use: (
+    awaitWatch: (directory: string, count?: number) => Effect.Effect<void>,
+    notify: (filePath: string) => Effect.Effect<void>,
+  ) => Effect.Effect<A, E, R>,
+) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const events = yield* PubSub.unbounded<{
+      event: FileSystem.WatchEvent;
+      seen: Deferred.Deferred<void>;
+    }>();
+    const registrations = new Map<string, Deferred.Deferred<void>>();
+    const counts = new Map<string, number>();
+    const registration = (directory: string, count = 1) => {
+      const key = `${directory}:${count}`;
+      let deferred = registrations.get(key);
+      if (!deferred) {
+        deferred = Deferred.makeUnsafe<void>();
+        registrations.set(key, deferred);
+      }
+      return deferred;
+    };
+    const notify = (filePath: string) =>
+      Effect.gen(function* () {
+        const seen = yield* Deferred.make<void>();
+        yield* PubSub.publish(events, { event: { _tag: "Update" as const, path: filePath }, seen });
+        if ((counts.get(path.dirname(filePath)) ?? 0) > 0) yield* Deferred.await(seen);
+      });
+    const controlledFs = FileSystem.FileSystem.of({
+      ...fs,
+      rename: (from, to) => fs.rename(from, to).pipe(Effect.tap(() => notify(to))),
+      remove: (filePath, options) =>
+        fs.remove(filePath, options).pipe(Effect.tap(() => notify(filePath))),
+      symlink: (from, to) => fs.symlink(from, to).pipe(Effect.tap(() => notify(to))),
+      watch: (directory, options) =>
+        Stream.unwrap(
+          PubSub.subscribe(events).pipe(
+            Effect.tap(() => {
+              options?.onReady?.();
+              const count = (counts.get(directory) ?? 0) + 1;
+              counts.set(directory, count);
+              return Deferred.succeed(registration(directory, count), undefined);
+            }),
+            Effect.map((subscription) =>
+              Stream.fromSubscription(subscription).pipe(
+                Stream.filter(({ event }) => path.dirname(event.path) === directory),
+                Stream.tap(({ seen }) => Deferred.succeed(seen, undefined)),
+                Stream.map(({ event }) => event),
+              ),
+            ),
+          ),
+        ),
+    });
+    return yield* use(
+      (directory, count) => Deferred.await(registration(directory, count)),
+      notify,
+    ).pipe(
+      Effect.provide(layerServerSettings()),
+      Effect.provideService(FileSystem.FileSystem, controlledFs),
+    );
+  });
+
+it.effect("computer use policy is published at rename before cleanup", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const entered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    let hold = false;
+    const controlledFs = FileSystem.FileSystem.of({
+      ...fs,
+      remove: (path, options) =>
+        Effect.gen(function* () {
+          if (hold && path.includes("settings.json.")) {
+            hold = false;
+            yield* Deferred.succeed(entered, undefined);
+            yield* Deferred.await(release);
+          }
+          yield* fs.remove(path, options);
+        }),
+    });
+    yield* Effect.gen(function* () {
+      const service = yield* ServerSettingsModule.ServerSettingsService;
+      yield* service.start;
+      assert.isDefined(service.committedPolicy);
+      assert.deepStrictEqual(yield* service.committedPolicy, {
+        _tag: "committed",
+        enableCua: false,
+        blockedBrowserHosts: [],
+      });
+      yield* service.updateSettings({ enableCua: true });
+      hold = true;
+      const writer = yield* service.updateSettings({ enableCua: false }).pipe(Effect.forkChild);
+      yield* Deferred.await(entered);
+      assert.deepStrictEqual(yield* service.committedPolicy, {
+        _tag: "committed",
+        enableCua: false,
+        blockedBrowserHosts: [],
+      });
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(writer);
+    }).pipe(
+      Effect.provide(layerServerSettings()),
+      Effect.provideService(FileSystem.FileSystem, controlledFs),
+    );
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("computer use policy follows locked reloads and fails closed on read failure", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    let failRead = false;
+    const failure = PlatformError.systemError({
+      _tag: "PermissionDenied",
+      module: "FileSystem",
+      method: "readFileString",
+      description: "test read failure",
+    });
+    const controlledFs = FileSystem.FileSystem.of({
+      ...fs,
+      readFileString: (path, options) =>
+        Effect.suspend(() => (failRead ? Effect.fail(failure) : fs.readFileString(path, options))),
+    });
+    yield* Effect.gen(function* () {
+      const service = yield* ServerSettingsModule.ServerSettingsService;
+      const config = yield* ServerConfig.ServerConfig;
+      yield* fs.writeFileString(
+        config.settingsPath,
+        JSON.stringify({ enableCua: true, blockedBrowserHosts: ["example.com"] }),
+      );
+      assert.deepStrictEqual(yield* service.committedPolicy, { _tag: "unavailable" });
+      yield* service.start;
+      assert.deepStrictEqual(yield* service.committedPolicy, {
+        _tag: "committed",
+        enableCua: true,
+        blockedBrowserHosts: ["example.com"],
+      });
+      failRead = true;
+      yield* Effect.exit(service.updateSettings({ standingInstructions: "test" }));
+      assert.deepStrictEqual(yield* service.committedPolicy, { _tag: "unavailable" });
+      failRead = false;
+      yield* fs.writeFileString(config.settingsPath, "{");
+      yield* Effect.exit(service.updateSettings({ standingInstructions: "test" }));
+      assert.deepStrictEqual(yield* service.committedPolicy, { _tag: "unavailable" });
+      yield* fs.writeFileString(config.settingsPath, JSON.stringify({ enableCua: false }));
+      yield* service.updateSettings({ standingInstructions: "test" });
+      assert.deepStrictEqual(yield* service.committedPolicy, {
+        _tag: "committed",
+        enableCua: false,
+        blockedBrowserHosts: [],
+      });
+    }).pipe(
+      Effect.provide(layerServerSettings()),
+      Effect.provideService(FileSystem.FileSystem, controlledFs),
+    );
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("computer use policy follows external edits at watcher revalidation", () =>
+  withRegisteredSettingsWatchers((awaitWatch, notify) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const config = yield* ServerConfig.ServerConfig;
+      const service = yield* ServerSettingsModule.ServerSettingsService;
+      yield* service.start;
+      yield* awaitWatch(path.dirname(config.settingsPath), 2);
+      const changes = yield* service.subscribeChanges;
+      yield* fs.writeFileString(
+        config.settingsPath,
+        JSON.stringify({ enableCua: true, blockedBrowserHosts: ["example.com"] }),
+      );
+      yield* notify(config.settingsPath);
+      yield* TestClock.adjust(100);
+      yield* changes.pipe(Stream.runHead);
+      assert.deepStrictEqual(yield* service.committedPolicy, {
+        _tag: "committed",
+        enableCua: true,
+        blockedBrowserHosts: ["example.com"],
+      });
+    }),
+  ).pipe(Effect.provide(NodeServices.layer)),
+);
