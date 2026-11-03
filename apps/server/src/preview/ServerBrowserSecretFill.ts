@@ -804,7 +804,6 @@ export const make = Effect.gen(function* () {
   });
 
   const fillCard = makeCardOperationWithStore(multiFieldDeps, secretRequests, runPromise);
-
   /** Whether a tab may show a password GOAT filled in pixels: its site, or a fill under way, says no. */
   const pixelsOff = (tab: SecretFillTab, threadId: ThreadId) => {
     if ((filling.get(tab.page.context()) ?? 0) > 0) return FILLING;
@@ -985,9 +984,11 @@ export const make = Effect.gen(function* () {
       gate: Parameters<typeof fill>[4],
       around: Parameters<typeof fill>[5],
     ) =>
-      request.operation === "fillLogin"
-        ? fillLogin(tab, request, deadline, record, gate, around)
-        : fill(tab, request, deadline, record, gate, around),
+      request.operation === "fillCard"
+        ? fillCard(tab, request, deadline, record, gate, around)
+        : request.operation === "fillLogin"
+          ? fillLogin(tab, request, deadline, record, gate, around)
+          : fill(tab, request, deadline, record, gate, around),
     guard,
     assertPixels,
     historyField,

@@ -198,6 +198,7 @@ const supportsOperation = (
   // Only the server browser keeps secrets out of the client and opens tabs in a chosen session.
   ((operation !== "fillSecret" &&
     operation !== "fillLogin" &&
+    operation !== "fillCard" &&
     operation !== "open" &&
     operation !== "claim") ||
     connection.inProcess);

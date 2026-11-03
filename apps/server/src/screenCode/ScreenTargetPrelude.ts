@@ -203,7 +203,7 @@ const __legacy = (arg) =>
     'sourceRef' in arg || 'deltaY' in arg || 'deltaX' in arg || 'mode' in arg || 'baseObservationId' in arg || 'urlIncludes' in arg || 'loadState' in arg);
 const __pointerMethods = new Set(['click', 'right_click', 'drag', 'scroll', 'move_cursor']);
 const __inputs = new Set(['click', 'right_click', 'hover', 'drag', 'scroll', 'select_text', 'set_value', 'press_key',
-  'type_text', 'select', 'tab_upload', 'tab_fill_secret', 'tab_fill_login', 'tab_dialog', 'tab_evaluate', 'navigate_tab', 'reload_tab', 'back_tab', 'forward_tab', 'bring_to_front', 'launch_app', 'invoke_menu']);
+  'type_text', 'select', 'tab_upload', 'tab_fill_secret', 'tab_fill_login', 'tab_fill_card', 'tab_dialog', 'tab_evaluate', 'navigate_tab', 'reload_tab', 'back_tab', 'forward_tab', 'bring_to_front', 'launch_app', 'invoke_menu']);
 ${screenTabExtrasPrelude}
 const __target = (binding, note, owner, extraProps = {}) => {
   let ref = binding.targetRef ?? binding;
@@ -229,7 +229,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
         : arg;
     const args = { ...withRegion, ...(!tab && __debug && ['get_window_state', 'get_accessibility_tree', 'screenshot'].includes(method) ? { debug: true } : {}), targetRef: ref };
     if (method === 'tab_evaluate') return __call(method, args);
-    if (method === 'tab_fill_login') return __checked(method, args).then((reply) => reply.v);
+    if (method === 'tab_fill_login' || method === 'tab_fill_card') return __checked(method, args).then((reply) => reply.v);
     if (__inputs.has(method)) return __reply(method, [args]).then((reply) => done(reply, args));
     return __call(method, args).then((value) => {
       if (tab && value && typeof value.siteNote === 'string') currentNote = value.siteNote;
@@ -681,7 +681,7 @@ const __target = (binding, note, owner, extraProps = {}) => {
     endForeground: () => call('end_foreground'),
   };
   // Each method's arguments are checked before normalizing could drop anything; a handle only fills a target slot.
-  const targetSlots = { click: [0], hover: [0], type: [1], press: [1], scroll: [0], setValue: [0], drag: [0, 1], selectText: [0], fillSecret: [0], fillLogin: [1], upload: [0] };
+  const targetSlots = { click: [0], hover: [0], type: [1], press: [1], scroll: [0], setValue: [0], drag: [0, 1], selectText: [0], fillSecret: [0], fillLogin: [1], fillCard: [1], upload: [0] };
   for (const key of Object.keys(surface)) {
     const method = surface[key];
     if (typeof method !== 'function') continue;
