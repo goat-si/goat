@@ -68,10 +68,23 @@ export function secretRequestDisplay(
 
 export function secretRequestAnswerInput(
   item: Pick<SecretRequestItem, "id" | "threadId">,
-  answer: { readonly type: "save"; readonly secret: string } | { readonly type: "decline" },
+  answer:
+    | { readonly type: "save"; readonly secret: string }
+    | { readonly type: "save_login"; readonly username: string; readonly password: string }
+    | { readonly type: "decline" },
 ): SecretRequestAnswerInput | null {
   if (answer.type === "decline") {
     return { threadId: item.threadId, turnItemId: item.id, answer: { type: "decline" } };
+  }
+  if (answer.type === "save_login") {
+    const username = answer.username.trim();
+    const password = answer.password.trim();
+    if (username.length === 0 || password.length === 0) return null;
+    return {
+      threadId: item.threadId,
+      turnItemId: item.id,
+      answer: { type: "save_login", username, password },
+    };
   }
   const secret = answer.secret.trim();
   if (secret.length === 0) return null;
