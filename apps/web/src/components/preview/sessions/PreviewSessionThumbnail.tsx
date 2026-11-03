@@ -13,7 +13,6 @@ import type { PreviewStreamControl } from "@goat/client-runtime/preview/server-b
 import {
   type ReactNode,
   type RefObject,
-  useContext,
   useEffect,
   useRef,
   useState,
@@ -27,7 +26,6 @@ import { cn } from "~/lib/utils";
 import { useDesktopSessionFrame } from "~/state/previewSessions";
 
 import { AgentCursorMark } from "../AgentBrowserCursor";
-import { StackDocumentContext } from "./PreviewSessionStackSurface";
 
 /** Whether the window shows at all; a backgrounded or minimized app streams nothing. */
 export function useDocumentVisible(doc: Document = document) {
@@ -343,20 +341,13 @@ export function PreviewSessionThumbnail(props: {
   readonly session: PreviewSession;
   readonly live: boolean;
   readonly size?: "card" | "large" | undefined;
-  /**
-   * This desktop draws the browser tab in a <webview> that paints only while on screen. A card
-   * streaming it parked would stay empty and hold an agent's snapshot behind a still that never
-   * comes, so the card shows the webview itself over this picture (NativeBrowserPicture), and this
-   * is what shows while it cannot: the panel or floating player holds the tab, or the cards are
-   * popped out of GOAT.
-   */
-  readonly drawnHere?: boolean | undefined;
+  /** The docked card can show the desktop's native webview. */
+  readonly nativePicture?: boolean | undefined;
   /** The large browser view's stream, for Take over and Hand back. */
   readonly surfaceRef?: RefObject<ServerBrowserHandle | null> | undefined;
   readonly onStreamControl?: ((control: PreviewStreamControl | null) => void) | undefined;
 }) {
   const { session } = props;
-  const stackDocument = useContext(StackDocumentContext);
   const large = props.size === "large";
   const stopped = session.status === "stopped";
   // The large browser view may be the controller itself, typing a secret: it keeps its stream,
@@ -378,18 +369,8 @@ export function PreviewSessionThumbnail(props: {
         text={`No computer use yet. ${session.target.kind === "desktop" ? session.target.title : "Allow it"}${session.reason === "permissionsNotGranted" || session.reason === undefined ? " (System Settings > Privacy & Security)" : ""}.`}
       />
     );
-  if (props.drawnHere && session.target.kind === "browser")
-    return (
-      <Placeholder
-        icon="globe"
-        text={
-          stopped || stackDocument === null || stackDocument === document
-            ? undefined
-            : "Watch in GOAT"
-        }
-        className={stopped ? "opacity-50" : undefined}
-      />
-    );
+  if (props.nativePicture && session.target.kind === "browser")
+    return <Placeholder icon="globe" className={stopped ? "opacity-50" : undefined} />;
   if (
     session.target.kind === "browser" &&
     session.threadId !== undefined &&

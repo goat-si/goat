@@ -96,6 +96,15 @@ export function PreviewSessionStack(props: {
   const documentVisible = useDocumentVisible();
   // Browser tabs whose large view should take control once its stream connects.
   const [takeOver, setTakeOver] = useState<ReadonlySet<string>>(() => new Set());
+  const expandedSession =
+    expanded === null
+      ? null
+      : (sessions.find(
+          (session) =>
+            (expanded.environmentId === undefined ||
+              session.environmentId === expanded.environmentId) &&
+            matchesFocus(session, expanded),
+        ) ?? null);
   const layout = useAgentCardsPlacement(
     probe,
     [
@@ -105,18 +114,11 @@ export function PreviewSessionStack(props: {
     ].join("|"),
     props.environmentId !== null && sessions.length > 0 && !panelOpen,
     shown && documentVisible,
+    expandedSession?.kind === "browser",
   );
   const focusedId =
     focus === null ? null : (sessions.find((session) => matchesFocus(session, focus))?.id ?? null);
-  const large =
-    expanded === null || layout?.large === null
-      ? null
-      : (sessions.find(
-          (session) =>
-            (expanded.environmentId === undefined ||
-              session.environmentId === expanded.environmentId) &&
-            matchesFocus(session, expanded),
-        ) ?? null);
+  const large = layout?.large === null ? null : expandedSession;
   const column = (large !== null ? layout?.large : null) ?? layout?.card;
   // A tab's webview is placed over its card by measurement, so anything that moves a card without
   // resizing it (the column moving, a card above it changing) must say so.

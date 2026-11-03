@@ -72,10 +72,12 @@ vi.mock("../../../state/previewSessions", async () => {
   };
 });
 vi.mock("../../../state/use-atom-command", () => ({ useAtomCommand: () => state.control }));
-vi.mock("../../../state/session", () => ({
+vi.mock("../../../state/session", async (original) => ({
+  ...(await original<typeof import("../../../state/session")>()),
   useEnvironmentScope: (_environmentId: string, scope: string) => state.scopes.has(scope),
 }));
-vi.mock("../../../state/environments", () => ({
+vi.mock("../../../state/environments", async (original) => ({
+  ...(await original<typeof import("../../../state/environments")>()),
   usePrimaryEnvironmentId: () => state.environmentId,
 }));
 vi.mock("../../../state/entities", () => ({
@@ -166,6 +168,8 @@ import {
 import { AppAtomRegistryProvider } from "../../../rpc/atomRegistry";
 import { AgentScreenCardsToggle } from "./AgentScreenCardsToggle";
 import { PreviewSessionStack } from "./PreviewSessionStack";
+import { AgentScreenCard } from "./AgentScreenCard";
+import { StackDocumentContext } from "./PreviewSessionStackSurface";
 import { usePreviewSessionStack } from "./previewSessionStackStore";
 import { usePreviewMiniPlayerStore } from "../../../previewMiniPlayerStore";
 
@@ -518,4 +522,52 @@ it("streams an isolated server-rendered tab on the desktop once its background t
   );
   expect(card.element().querySelector("[data-browser-surface-slot]")).toBeNull();
   await expect.element(card.getByRole("button", { name: "Take over" })).toBeInTheDocument();
+});
+
+it("fits an enlarged browser card including its toolbar in a height-limited viewport", async () => {
+  setup([browserTab()]);
+  await page.viewport(1400, 501);
+  using _pane = paneOf(1400);
+  await using screen = await render(<Cards />);
+  const card = screen.getByRole("article", { name: "GOAT (Dev): Agent controlling" });
+  await userEvent.click(card.getByRole("button", { name: "Enlarge" }), { force: true });
+  await expect.element(card).toHaveAttribute("data-size", "large");
+  const scroll = card.element().closest("[data-agent-cards-scroll]");
+  expect(scroll).not.toBeNull();
+  expect(card.element().getBoundingClientRect().bottom).toBeLessThanOrEqual(
+    scroll!.getBoundingClientRect().bottom,
+  );
+});
+
+it("reveals the main desktop window when a floating card opens its tab in the panel", async () => {
+  setup([browserTab()]);
+  state.nativeDesktop = true;
+  const revealWindow = vi.fn(async () => undefined);
+  const original = window.desktopBridge;
+  window.desktopBridge = { ...original, revealWindow } as NonNullable<typeof window.desktopBridge>;
+  using _bridge = {
+    [Symbol.dispose]: () => {
+      if (original) window.desktopBridge = original;
+      else delete window.desktopBridge;
+    },
+  };
+  await using screen = await render(
+    <AppAtomRegistryProvider>
+      <StackDocumentContext.Provider value={document.implementation.createHTMLDocument("floating")}>
+        <AgentScreenCard
+          session={browserTab()}
+          live
+          focused={false}
+          focusRequest={0}
+          onExpand={() => undefined}
+          onControl={() => undefined}
+          onDismiss={() => undefined}
+        />
+      </StackDocumentContext.Provider>
+    </AppAtomRegistryProvider>,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Open in the right panel" }), {
+    force: true,
+  });
+  expect(revealWindow).toHaveBeenCalledOnce();
 });

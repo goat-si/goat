@@ -341,6 +341,34 @@ it("a drawn tab the desktop does not host yet shows a placeholder and opens no s
   expect(screen.container.querySelector('[aria-label="Take over"]')).toBeNull();
 });
 
+it("navigates only after control is granted and drops a denied navigation", async () => {
+  setup();
+  const collapse = vi.fn();
+  await using screen = await render(card("large", tab, collapse));
+  await connect(screen);
+  await expect.element(screen.getByRole("button", { name: "Back" })).toBeInTheDocument();
+  await expect.element(screen.getByRole("button", { name: "Forward" })).toBeInTheDocument();
+  await expect.element(screen.getByRole("button", { name: "Refresh" })).toBeInTheDocument();
+  const address = screen.getByRole("combobox", { name: "Search or enter URL" });
+  await userEvent.click(address);
+  await userEvent.clear(address);
+  await userEvent.type(address, "https://example.com/{Enter}");
+  expect(state.sent).toContainEqual({ type: "takeControl" });
+  expect(state.sent.some((input) => input.type === "navigate")).toBe(false);
+  await control({ controller: "you" });
+  expect(state.sent).toContainEqual({ type: "navigate", url: "https://example.com/" });
+  state.sent = [];
+  await control({ controller: "agent" });
+  await userEvent.click(address);
+  await userEvent.clear(address);
+  await userEvent.type(address, "https://denied.example/{Enter}");
+  await control({ controller: "another-viewer" });
+  await control({ controller: "you" });
+  expect(state.sent.some((input) => input.type === "navigate")).toBe(false);
+  await userEvent.click(screen.getByRole("button", { name: "Shrink to a card" }));
+  expect(state.sent).toContainEqual({ type: "releaseControl" });
+});
+
 it("a drawn tab popped out natively stays native when the cards float out of GOAT", async () => {
   setup();
   pip.open.mockClear();
@@ -358,6 +386,8 @@ it("a drawn tab popped out natively stays native when the cards float out of GOA
   );
   // No webview can show in the floating window; the pop-out still belongs to the native tab.
   expect(screen.container.querySelector("[data-browser-surface-slot]")).toBeNull();
+  await connect(screen);
+  expect(screen.container.textContent).not.toContain("Watch in GOAT");
   const close = screen.getByRole("button", { name: "Close separate window" });
   await expect.element(close).toHaveAttribute("aria-pressed", "true");
   await close.click({ force: true });
