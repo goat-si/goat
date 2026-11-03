@@ -1,4 +1,27 @@
 import {
+  SidebarProjectSortOrder,
+  DEFAULT_SIDEBAR_PROJECT_SORT_ORDER,
+  SidebarThreadSortOrder,
+  DEFAULT_SIDEBAR_THREAD_SORT_ORDER,
+  SidebarProjectGroupingMode,
+  DEFAULT_SIDEBAR_PROJECT_GROUPING_MODE,
+  SidebarThreadPreviewCount,
+  DEFAULT_SIDEBAR_THREAD_PREVIEW_COUNT,
+  SidebarAutoSettleAfterDays,
+  DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
+  AppearanceContrast,
+  DEFAULT_APPEARANCE_CONTRAST,
+  PanelAnimationDurationMs,
+  DEFAULT_PANEL_ANIMATION_DURATION_MS,
+  EnvironmentIdentificationMode,
+  DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE,
+} from "./settingsAppearance.ts";
+export * from "./settingsAppearance.ts";
+import {
+  AgentMemoryLimitSettingsFields,
+  AgentMemoryLimitSettingsPatchFields,
+} from "./hostPressure.ts";
+import {
   MemoryHubSettings,
   MemoryOwnerSourceReadPolicy,
   DEFAULT_MEMORY_OWNER_SOURCE_READ_POLICY,
@@ -95,64 +118,6 @@ const DEFAULT_TIMESTAMP_FORMAT: TimestampFormat = "locale";
 export const DiffLayout = Schema.Literals(["stacked", "split"]);
 export type DiffLayout = typeof DiffLayout.Type;
 const DEFAULT_DIFF_LAYOUT: DiffLayout = "stacked";
-
-export const SidebarProjectSortOrder = Schema.Literals(["updated_at", "created_at", "manual"]);
-export type SidebarProjectSortOrder = typeof SidebarProjectSortOrder.Type;
-export const DEFAULT_SIDEBAR_PROJECT_SORT_ORDER: SidebarProjectSortOrder = "updated_at";
-
-export const SidebarThreadSortOrder = Schema.Literals(["updated_at", "created_at"]);
-export type SidebarThreadSortOrder = typeof SidebarThreadSortOrder.Type;
-const DEFAULT_SIDEBAR_THREAD_SORT_ORDER: SidebarThreadSortOrder = "updated_at";
-
-export const SidebarProjectGroupingMode = Schema.Literals([
-  "repository",
-  "repository_path",
-  "separate",
-]);
-export type SidebarProjectGroupingMode = typeof SidebarProjectGroupingMode.Type;
-const DEFAULT_SIDEBAR_PROJECT_GROUPING_MODE: SidebarProjectGroupingMode = "repository";
-export const MIN_SIDEBAR_THREAD_PREVIEW_COUNT = 1;
-export const MAX_SIDEBAR_THREAD_PREVIEW_COUNT = 15;
-export const SidebarThreadPreviewCount = Schema.Int.check(
-  Schema.isBetween({
-    minimum: MIN_SIDEBAR_THREAD_PREVIEW_COUNT,
-    maximum: MAX_SIDEBAR_THREAD_PREVIEW_COUNT,
-  }),
-);
-export type SidebarThreadPreviewCount = typeof SidebarThreadPreviewCount.Type;
-const DEFAULT_SIDEBAR_THREAD_PREVIEW_COUNT: SidebarThreadPreviewCount = 6;
-export const MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS = 1;
-export const MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS = 90;
-export const SidebarAutoSettleAfterDays = Schema.Number.check(
-  Schema.isBetween({
-    minimum: MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
-    maximum: MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
-  }),
-);
-export type SidebarAutoSettleAfterDays = typeof SidebarAutoSettleAfterDays.Type;
-const DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS: SidebarAutoSettleAfterDays = 3;
-
-export const MIN_APPEARANCE_CONTRAST = 50;
-export const MAX_APPEARANCE_CONTRAST = 200;
-export const AppearanceContrast = Schema.Int.check(
-  Schema.isBetween({ minimum: MIN_APPEARANCE_CONTRAST, maximum: MAX_APPEARANCE_CONTRAST }),
-);
-export type AppearanceContrast = typeof AppearanceContrast.Type;
-const DEFAULT_APPEARANCE_CONTRAST: AppearanceContrast = 100;
-export const MIN_PANEL_ANIMATION_DURATION_MS = 0;
-export const MAX_PANEL_ANIMATION_DURATION_MS = 400;
-export const PanelAnimationDurationMs = Schema.Int.check(
-  Schema.isBetween({
-    minimum: MIN_PANEL_ANIMATION_DURATION_MS,
-    maximum: MAX_PANEL_ANIMATION_DURATION_MS,
-  }),
-);
-export type PanelAnimationDurationMs = typeof PanelAnimationDurationMs.Type;
-const DEFAULT_PANEL_ANIMATION_DURATION_MS: PanelAnimationDurationMs = 0;
-
-export const EnvironmentIdentificationMode = Schema.Literals(["artwork", "pill", "none"]);
-export type EnvironmentIdentificationMode = typeof EnvironmentIdentificationMode.Type;
-export const DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE: EnvironmentIdentificationMode = "pill";
 
 export const SnapShotKeyChord = KeybindingShortcut.check(
   Schema.makeFilter(
@@ -1380,6 +1345,7 @@ export function newGoatBotHomeClaim({
 }
 
 export const ServerSettings = Schema.Struct({
+  ...AgentMemoryLimitSettingsFields,
   agentWorkspaceAccess: AgentWorkspaceAccess.pipe(
     Schema.withDecodingDefault(Effect.succeed("off")),
   ),
@@ -1850,6 +1816,7 @@ const ModelSelectionPatch = Schema.Struct({
 });
 
 const ServerSettingsPatchFields = Schema.Struct({
+  ...AgentMemoryLimitSettingsPatchFields,
   agentWorkspaceAccess: Schema.optionalKey(AgentWorkspaceAccess),
   agentTerminalAccess: Schema.optionalKey(AgentTerminalAccess),
   setModelFavorites: Schema.optionalKey(

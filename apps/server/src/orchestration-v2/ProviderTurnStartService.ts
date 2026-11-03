@@ -1,3 +1,6 @@
+import { isRegisteredAttach } from "./providerTurnStartHelpers.ts";
+import { withAgentOom } from "./agentOomFailure.ts";
+import { AgentScope } from "@goat/shared/AgentScope";
 import { makeRecreateMissingWorktree } from "./goat/RecreateWorktree.ts";
 import { makeProviderTurnHandoffRecovery } from "./goat/ProviderTurnHandoffRecovery.ts";
 import * as MemorySnapshot from "../memory/MemorySnapshot.ts";
@@ -101,13 +104,6 @@ export interface ProviderTurnStartServiceV2Shape {
   }) => Effect.Effect<void, ProviderTurnStartError>;
 }
 
-/** A registered cloud task whose first run has not started: that run attaches, never submits. */
-const isRegisteredAttach = (thread: OrchestrationV2ProviderThread | undefined) =>
-  thread?.cloudTask?.attach === "registered" &&
-  thread.firstRunOrdinal === null &&
-  thread.nativeThreadRef !== null &&
-  (thread.cloudTask.status === "running" || thread.cloudTask.status === "submitting");
-
 export class ProviderTurnStartServiceV2 extends Context.Service<
   ProviderTurnStartServiceV2,
   ProviderTurnStartServiceV2Shape
@@ -133,6 +129,7 @@ export const layer: Layer.Layer<
 > = Layer.effect(
   ProviderTurnStartServiceV2,
   Effect.gen(function* () {
+    const agentScope = yield* AgentScope;
     const eventSink = yield* EventSink.EventSinkV2;
     const prepareHandoffRecovery = yield* makeProviderTurnHandoffRecovery;
     const idAllocator = yield* IdAllocator.IdAllocatorV2;
@@ -640,18 +637,21 @@ export const layer: Layer.Layer<
             item: {
               type: "error",
               title: failed.title,
-              failure: makeProviderFailure({
-                cause: failed.error,
-                message:
-                  failed.message ??
-                  knownProviderFailureMessage(failed.error) ??
-                  (nestedCause instanceof Error
-                    ? nestedCause.message
-                    : typeof nestedCause === "string"
-                      ? nestedCause
-                      : failed.error.message),
-                class: "provider_error",
-              }),
+              failure: yield* withAgentOom(
+                input.threadId,
+                makeProviderFailure({
+                  cause: failed.error,
+                  message:
+                    failed.message ??
+                    knownProviderFailureMessage(failed.error) ??
+                    (nestedCause instanceof Error
+                      ? nestedCause.message
+                      : typeof nestedCause === "string"
+                        ? nestedCause
+                        : failed.error.message),
+                  class: "provider_error",
+                }),
+              ).pipe(Effect.provideService(AgentScope, agentScope)),
             },
           });
         },

@@ -7,7 +7,7 @@ import type {
 import { ProviderDriverKind } from "@goat/contracts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventLoggers";
-import { AgentScope } from "@goat/shared/AgentScope";
+import { AgentScope, handleAgentProcess } from "@goat/shared/AgentScope";
 import { resolveSpawnCommand } from "@goat/shared/shell";
 import * as CodexClient from "effect-codex-app-server/client";
 import * as Context from "effect/Context";
@@ -283,6 +283,11 @@ export const layerAppServerClientFactory: Layer.Layer<
         const handle = yield* spawner
           .spawn(command)
           .pipe(Effect.provideService(Scope.Scope, scope), Effect.mapError(openError));
+        yield* agentScope.watch({
+          process: handleAgentProcess(handle),
+          threadId: input.threadId,
+          shared: true,
+        });
         const context = yield* Layer.build(CodexClient.layerChildProcess(handle, clientOptions));
         return yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
           Effect.provide(context),
