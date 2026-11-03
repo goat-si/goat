@@ -268,3 +268,28 @@ it.effect("answers line counts for a fork's own and upstream rows that share a n
     );
   }),
 );
+
+it.effect("keeps the host on line counts a detail read already filled in", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [forkProject("p1", "/goat")],
+      providers: [
+        fakePullRequestProvider(SourceControlProviderKind.make("github"), {
+          getChangeRequest: () => Effect.succeed(hostedChangeRequest("", 6)),
+        }),
+      ],
+    });
+    const ref = {
+      projectId: "p1" as ProjectId,
+      host: "github.com",
+      repository: "goat-si/goat",
+      number: 1,
+    };
+    yield* service.detail(ref);
+    const { stats } = yield* service.listStats({ refs: [ref] });
+    assert.deepStrictEqual(
+      stats.map((stat) => [stat.host, stat.repository, stat.additions]),
+      [["github.com", "goat-si/goat", 6]],
+    );
+  }),
+);

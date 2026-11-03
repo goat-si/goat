@@ -17,7 +17,7 @@ import {
   nextPullRequestListInput,
   pullRequestListHead,
   patchPullRequestListEntry,
-  pullRequestStatKey as statKey,
+  pullRequestStatOf,
   withShownPullRequestStats,
   retainPullRequestStatsAnswers,
   scopedPullRequestListKey,
@@ -201,7 +201,7 @@ export function usePullRequestList(targets: readonly ListTarget[]) {
                   pages: {
                     ...pages,
                     entries: pages.entries.map((entry) => {
-                      const stat = stats.stats.get(statKey(entry));
+                      const stat = pullRequestStatOf(stats.stats, entry);
                       return stat
                         ? { ...entry, additions: stat.additions, deletions: stat.deletions }
                         : entry;

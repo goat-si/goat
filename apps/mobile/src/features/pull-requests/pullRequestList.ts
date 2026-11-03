@@ -85,6 +85,13 @@ const statKeys = (row: Parameters<typeof pullRequestStatKey>[0]) => [
   pullRequestStatKey(row),
   pullRequestStatKey({ ...row, host: undefined }),
 ];
+export const pullRequestStatOf = <Value>(
+  stats: ReadonlyMap<string, Value>,
+  row: Parameters<typeof pullRequestStatKey>[0],
+) =>
+  statKeys(row)
+    .map((key) => stats.get(key))
+    .find((value) => value !== undefined);
 
 export interface PullRequestStatsCache {
   readonly stats: ReadonlyMap<string, PullRequestDiffStat>;

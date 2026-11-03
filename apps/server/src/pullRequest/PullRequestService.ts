@@ -3106,7 +3106,8 @@ export const make = Effect.gen(function* () {
   const detailCache = yield* Cache.makeWith(
     (key: string) => {
       const statsKey = statsCacheKey(key);
-      return detailUncached(refOfCacheKey(key)).pipe(
+      const ref = refOfCacheKey(key);
+      return detailUncached(ref).pipe(
         Effect.tap(
           Effect.fn("PullRequestService.recordDetailStats")(function* (value: PullRequestDetail) {
             // GitHub detail includes the same checks; the checks TTL counts from their observation.
@@ -3125,6 +3126,7 @@ export const make = Effect.gen(function* () {
               statsKey,
               {
                 projectId: value.projectId,
+                ...(ref.host === undefined ? {} : { host: ref.host.toLowerCase() }),
                 repository: value.repository,
                 number: value.number,
                 additions: value.additions,

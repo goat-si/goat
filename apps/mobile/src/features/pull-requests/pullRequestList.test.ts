@@ -25,6 +25,7 @@ import {
   pullRequestProjectOrderIsEqual,
   retainPullRequestStatsAnswers,
   withShownPullRequestStats,
+  pullRequestStatOf,
   withAnsweredPullRequestStats,
   withListedPullRequests,
   withoutScratchProjectScope,
@@ -250,6 +251,25 @@ describe("shown PR diff stats", () => {
       [{ environmentId, stats: [{ ...stat, additions: 5 }] }],
     );
     expect(older.at(0)?.additions).toBe(5);
+  });
+
+  it("reads a listed row's counts from a server that answers without a host", () => {
+    const query = {
+      refs: [
+        { projectId: entry(1).projectId, host: "github.com", repository: "org/repo", number: 1 },
+      ],
+    };
+    const { cache } = withListedPullRequests(EMPTY_PULL_REQUEST_STATS_CACHE, [entry(1)]);
+    const answered = withAnsweredPullRequestStats(cache, query, [
+      {
+        projectId: entry(1).projectId,
+        repository: "org/repo",
+        number: 1,
+        additions: 4,
+        deletions: 1,
+      },
+    ]);
+    expect(pullRequestStatOf(answered.stats, entry(1))?.additions).toBe(4);
   });
 
   it("fills offline counts per environment without replacing newer row counts", () => {

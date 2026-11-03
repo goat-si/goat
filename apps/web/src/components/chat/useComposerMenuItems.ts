@@ -1,4 +1,6 @@
 import { useThreadContextHosts } from "~/lib/useThreadContextHosts";
+import { useProject } from "~/state/entities";
+import { scopeProjectRef } from "@goat/client-runtime/environment";
 import { matchComposerThreadItems } from "@goat/client-runtime/composerThreadItems";
 import {
   composerThreadMayRunUnattended,
@@ -67,7 +69,7 @@ export function useComposerMenuItems({
   gitCwd,
   activeThreadId,
   pullRequestProjectId,
-  pullRequestRepository,
+  pullRequestRepository: selectedRepository,
   threadPullRequests,
   planModeUiEnabled,
   sideChatAvailable,
@@ -99,6 +101,14 @@ export function useComposerMenuItems({
 }) {
   // Thread mentions rank by recency as of when the composer mounted.
   const [now] = useState(() => Date.now());
+  const pullRequestProject = useProject(
+    pullRequestProjectId === null ? null : scopeProjectRef(environmentId, pullRequestProjectId),
+  );
+  // The server lists a fork's own origin repository, not the upstream its identity selects.
+  const pullRequestRepository =
+    selectedRepository === null
+      ? null
+      : (pullRequestProject?.repositoryIdentity?.origin?.displayName ?? selectedRepository);
   const composerTriggerKind = composerTrigger?.kind ?? null;
   const pathTriggerQuery = composerTrigger?.kind === "path" ? composerTrigger.query : "";
   const pullRequestTriggerQuery =

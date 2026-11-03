@@ -62,3 +62,26 @@ it.effect("restores line counts when visible PR batches change", () =>
     expect(yield* cache.load(other, key)).toEqual(Option.none());
   }).pipe(Effect.provideService(EnvironmentQueryStore, store())),
 );
+
+it.effect("restores each host's line counts for one repository path on two hosts", () =>
+  Effect.gen(function* () {
+    const cache = persistPullRequestStats();
+    const ref = { projectId: ProjectId.make("project"), repository: "owner/repo", number: 1 };
+    const cafe = { ...ref, host: "git.cafe" };
+    const github = { ...ref, host: "github.com" };
+    yield* cache.save(env, JSON.stringify(["stats", { refs: [cafe, github] }]), {
+      stats: [
+        { ...github, additions: 9, deletions: 0 },
+        { ...cafe, additions: 3, deletions: 0 },
+      ],
+    });
+    const restored = (one: typeof cafe) =>
+      cache
+        .load(env, JSON.stringify(["stats", { refs: [one] }]))
+        .pipe(Effect.map(Option.map(({ stats }) => stats.map((stat) => stat.additions))));
+    expect([yield* restored(cafe), yield* restored(github)]).toEqual([
+      Option.some([3]),
+      Option.some([9]),
+    ]);
+  }).pipe(Effect.provideService(EnvironmentQueryStore, store())),
+);
