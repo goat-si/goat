@@ -35,6 +35,7 @@ import { createCommandPermissions } from "./commandPermissions.ts";
 import { createEnvironmentRpcCommand } from "./runtime.ts";
 import { createServerEnvironmentAtoms } from "./server.ts";
 import { createComputerUseHistoryCommand } from "./computerUseHistory.ts";
+import { createPreviewEnvironmentAtoms } from "./preview.ts";
 
 vi.mock("./session.ts", () => ({
   createEnvironmentSessionAtoms: () => ({ sessionStateAtom: sessions }),
@@ -69,6 +70,28 @@ const setup = Effect.gen(function* () {
 });
 
 describe("command permissions", () => {
+  it.effect("requires settings authority to approve a browser claim on the destination", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* setup;
+        const commands = createPreviewEnvironmentAtoms(runtime);
+        const approve = { claimId: "claim:1", approved: true };
+        const decline = { claimId: "claim:1", approved: false };
+        registry.set(sessions(env), AsyncResult.success(grant(true)));
+        expect(registry.get(commands.claimAnswer.permissionAtom(env, approve))).toBe(false);
+        expect(registry.get(commands.claimAnswer.permissionAtom(env, decline))).toBe(true);
+        registry.set(
+          sessions(env),
+          AsyncResult.success({
+            ...grant(true),
+            scopes: [AuthOrchestrationOperateScope, AuthSettingsWriteScope],
+            permissions: [AuthOrchestrationOperateScope, AuthSettingsWriteScope],
+          }),
+        );
+        expect(registry.get(commands.claimAnswer.permissionAtom(env, approve))).toBe(true);
+      }),
+    ),
+  );
   it.effect("requires the destination preview grant to close a browser tab", () =>
     Effect.scoped(
       Effect.gen(function* () {

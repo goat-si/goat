@@ -21,6 +21,26 @@ export function createPreviewEnvironmentAtoms<R, E>(
       JSON.stringify([environmentId, input.threadId]),
   };
   return {
+    claimChanges: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:preview:claim-changes",
+      tag: WS_METHODS.browserClaimsSubscribe,
+    }),
+    claim: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:preview:claim",
+      tag: WS_METHODS.browserClaimsClaim,
+    }),
+    claimAnswer: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:preview:claim-answer",
+      tag: WS_METHODS.browserClaimsAnswer,
+    }),
+    claimEnd: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:preview:claim-end",
+      tag: WS_METHODS.browserClaimsEnd,
+    }),
+    claimRevoke: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:preview:claim-revoke",
+      tag: WS_METHODS.browserClaimsRevoke,
+    }),
     list: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:preview:list",
       tag: WS_METHODS.previewList,
