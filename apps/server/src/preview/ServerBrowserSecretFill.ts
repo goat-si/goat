@@ -2,6 +2,7 @@ import { makeLoginOperation } from "./ServerBrowserLoginOperation.ts";
 import { FILL, IDENTIFIER, IDENTIFIER_NAME } from "./secretFillAccountScripts.ts";
 import { FOCUSED, SELECTED } from "./secretFillTargetScripts.ts";
 import { STILL_FILLED } from "./secretFillStillFilled.ts";
+import { makeCardOperationWithStore } from "./ServerBrowserCardOperation.ts";
 // @effect-diagnostics globalTimers:off -- The privacy settle wait runs inside a Promise-based browser operation.
 /**
  * goat_preview_fill_secret: types an origin-bound secret into a password field over CDP in an
@@ -755,7 +756,7 @@ export const make = Effect.gen(function* () {
     };
   };
 
-  const fillLogin = makeLoginOperation({
+  const multiFieldDeps = {
     debugLogging: playwrightDebugLogging,
     reserve: reserving,
     recording: (tab) => {
@@ -787,6 +788,10 @@ export const make = Effect.gen(function* () {
           (fences.get(tab.page) ?? []).filter((each) => each !== entry),
         );
     },
+  } satisfies Omit<Parameters<typeof makeLoginOperation>[0], "use">;
+
+  const fillLogin = makeLoginOperation({
+    ...multiFieldDeps,
     use: (input, run) =>
       runPromise(
         secretRequests.useLogin(input, (login) =>
@@ -797,6 +802,8 @@ export const make = Effect.gen(function* () {
         ),
       ),
   });
+
+  const fillCard = makeCardOperationWithStore(multiFieldDeps, secretRequests, runPromise);
 
   /** Whether a tab may show a password GOAT filled in pixels: its site, or a fill under way, says no. */
   const pixelsOff = (tab: SecretFillTab, threadId: ThreadId) => {
@@ -969,6 +976,7 @@ export const make = Effect.gen(function* () {
   return {
     fill,
     fillLogin,
+    fillCard,
     fillRequest: <T extends SecretFillTab>(
       tab: T,
       request: PreviewAutomationRequest,

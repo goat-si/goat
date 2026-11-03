@@ -94,6 +94,7 @@ export const fillCard = async (input: {
   readonly card: CardDetails;
   readonly register: (value: string) => void;
   readonly protect: (field: Field) => () => void;
+  readonly canDispatch?: () => boolean;
   readonly onDispatch?: () => void;
 }) => {
   const month = String(Number(input.card.expiryMonth)).padStart(2, "0");
@@ -158,6 +159,12 @@ export const fillCard = async (input: {
         throw new Error("Could not retain a required card field.");
     }
     for (const { name, field } of fields) {
+      if (input.canDispatch && !input.canDispatch())
+        return {
+          ...status(),
+          verdict: Object.keys(filled).length ? ("unverifiable" as const) : ("refused" as const),
+          code: "form_changed",
+        };
       const unprotect = input.protect(field);
       pending.delete(field.objectId);
       let dispatched = false;
