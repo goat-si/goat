@@ -515,7 +515,7 @@ it.layer(layerTest)("delegated background work across a server restart", (it) =>
                 payload: {
                   ...providerThread,
                   pendingBackgroundTasks: open
-                    ? [{ taskId: "sleep-900", kind: "command" as const, awaited: true }]
+                    ? [{ taskId: "sleep-900", kind: "command" as const, awaited: true as const }]
                     : [],
                 },
               }
