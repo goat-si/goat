@@ -1,3 +1,4 @@
+import { PullRequestProviderError } from "@goat/source-control-core/server/PullRequestProvider";
 import { markStartClaimed } from "./StartLaneRecovery.testkit.ts";
 import * as Option from "effect/Option";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -3808,6 +3809,95 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       assert.deepEqual(
         messages.flatMap((message) => message.notification?.summary ?? []),
         ["#8: stopped watching, could not read it"],
+      );
+    }),
+  );
+
+  it.effect("keeps a watch active through repeated transient host failures (#29450)", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const threadId = ThreadId.make("runtime-pull-request-watch-transient");
+      const projectId = ProjectId.make("pr-watch-transient-project");
+      yield* seedProject({
+        projectId,
+        title: "Watch unreadable",
+        workspaceRoot: "/workspace/watch-transient",
+        defaultModelSelection: null,
+        createdAt: "2026-10-01T00:00:00.000Z",
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("pr-watch-transient-create"),
+        threadId,
+        projectId,
+        title: "Watch unreadable",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request.watch",
+        commandId: CommandId.make("pr-watch-transient-start"),
+        threadId,
+        host: "github.com",
+        repository: "goat-si/goat",
+        number: 8,
+        watching: true,
+        link: { url: "https://github.com/goat-si/goat/pull/8", source: "agent" },
+      });
+      const reactor = yield* PullRequestWatchReactor.make.pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            NodeServices.layer,
+            ServerSettings.layerTest(),
+            Layer.mock(PullRequestService.PullRequestService)({
+              watchFingerprint: () => Effect.succeed(null),
+              detail: () =>
+                Effect.fail(
+                  new PullRequestOperationError({
+                    operation: "detail",
+                    detail: "host unreachable",
+                    cause: new PullRequestProviderError({
+                      provider: SourceControlProviderKind.make("github"),
+                      operation: "detail",
+                      reason: "failed",
+                      detail: "host unreachable",
+                    }),
+                  }),
+                ),
+              activity: () =>
+                Effect.fail(
+                  new PullRequestOperationError({
+                    operation: "activity",
+                    detail: "host unreachable",
+                    cause: new PullRequestProviderError({
+                      provider: SourceControlProviderKind.make("github"),
+                      operation: "activity",
+                      reason: "failed",
+                      detail: "host unreachable",
+                    }),
+                  }),
+                ),
+            }),
+          ),
+        ),
+      );
+      for (let pass = 0; pass < 61; pass += 1) {
+        yield* reactor.sweep;
+        // Failed reads back off, so reaching the limit takes about two hours of sweeps.
+        yield* TestClock.adjust("2 minutes");
+      }
+
+      const thread = yield* orchestrator.getThreadShell(threadId);
+      assert.isDefined(thread?.pullRequests?.[0]?.watch);
+      const { messages } = yield* orchestrator.getThreadRecords(threadId, ["messages"]);
+      assert.deepEqual(
+        messages.flatMap((message) => message.notification?.summary ?? []),
+        [],
       );
     }),
   );
