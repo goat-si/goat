@@ -30,6 +30,7 @@ export class BrowserClaimsRpcError extends Schema.TaggedError<BrowserClaimsRpcEr
 ) {}
 const errors = Schema.Union([BrowserClaimsRpcError, EnvironmentAuthorizationError]);
 export const BrowserClaimsPersonSnapshot = Schema.Struct({
+  supported: Schema.optionalKey(Schema.Boolean),
   claims: Schema.Array(
     Schema.Struct({ ...LiveTabClaim.fields, windowTitle: Schema.optionalKey(Schema.String) }),
   ),

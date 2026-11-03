@@ -1,7 +1,8 @@
 import { EnvironmentId, ThreadId } from "@goat/contracts";
 import { Atom } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
-import { userEvent } from "vite-plus/test/browser";
+import { page, userEvent } from "vite-plus/test/browser";
+import "~/index.css";
 import { render } from "../../../test/render";
 import { YourBrowserSection } from "./YourBrowserSection";
 
@@ -9,11 +10,15 @@ const mocks = vi.hoisted(() => ({
   snapshot: null as unknown,
   end: vi.fn(),
   revoke: vi.fn(),
+  claim: vi.fn(),
+  windows: vi.fn(),
   allowed: true,
 }));
 vi.mock("~/state/preview", () => ({
   previewEnvironment: {
     claimChanges: () => null,
+    claim: { permissionAtom: () => Atom.make(mocks.allowed), execute: mocks.claim },
+    claimWindows: { permissionAtom: () => Atom.make(mocks.allowed), execute: mocks.windows },
     claimEnd: { permissionAtom: () => Atom.make(mocks.allowed), execute: mocks.end },
     claimRevoke: { permissionAtom: () => Atom.make(mocks.allowed), execute: mocks.revoke },
   },
@@ -50,19 +55,32 @@ const pending = {
   createdAt: 1,
 };
 function setup(snapshot: unknown, allowed = true) {
-  mocks.snapshot = snapshot;
+  mocks.snapshot =
+    snapshot && typeof snapshot === "object" ? { supported: true, ...snapshot } : snapshot;
   mocks.allowed = allowed;
   mocks.end.mockReset();
   mocks.revoke.mockReset();
+  mocks.claim.mockReset();
+  mocks.windows.mockReset();
+  mocks.windows.mockResolvedValue({
+    _tag: "Success",
+    value: {
+      windows: [
+        { pid: 1, windowId: 10, title: "First window", app: "Chrome" },
+        { pid: 1, windowId: 11, title: "Second window", app: "Chrome" },
+      ],
+      refused: [{ pid: 2, app: "Edge", reason: "browser_process_protected" }],
+    },
+  });
 }
 
-it("hides unavailable and empty browser claims", async () => {
+it("hides unavailable browser claims and offers a picker when available", async () => {
   setup(null);
   await using screen = await render(<YourBrowserSection threadRef={threadRef} />);
   await expect.element(screen.getByText("Your browser")).not.toBeInTheDocument();
   setup({ claims: [], grants: [], pending: [] });
   await screen.rerender(<YourBrowserSection threadRef={threadRef} />);
-  await expect.element(screen.getByText("Your browser")).not.toBeInTheDocument();
+  await expect.element(screen.getByRole("button", { name: "Let GOAT use a tab" })).toBeVisible();
 });
 
 it("shows attached claims, grants and pending requests and sends the selected actions", async () => {
@@ -97,5 +115,60 @@ it("does not show claims belonging to another thread", async () => {
     pending: [{ ...pending, threadId: other }],
   });
   await using screen = await render(<YourBrowserSection threadRef={threadRef} />);
-  await expect.element(screen.getByText("Your browser")).not.toBeInTheDocument();
+  await expect.element(screen.getByText("Example window")).not.toBeInTheDocument();
+});
+
+it("selects a browser window, validates the origin, and shows a refusal", async () => {
+  setup({ claims: [], grants: [], pending: [] });
+  mocks.claim.mockResolvedValue({
+    _tag: "Success",
+    value: {
+      agentResult: { status: "refused" },
+      personMessage: "This tab is not on https://example.com",
+    },
+  });
+  await using screen = await render(<YourBrowserSection threadRef={threadRef} />);
+  await userEvent.click(screen.getByRole("button", { name: "Let GOAT use a tab" }));
+  await expect.element(page.getByText("First window", { exact: false })).toBeVisible();
+  await expect.element(page.getByText("Second window", { exact: false })).toBeVisible();
+  await expect.element(page.getByText("already has a tab", { exact: false })).toBeVisible();
+  await userEvent.click(page.getByText("First window", { exact: false }));
+  const origin = page.getByLabelText("Site origin");
+  await userEvent.fill(origin, "https://example.com/path");
+  await expect.element(page.getByRole("button", { name: "Allow" })).toBeDisabled();
+  await userEvent.fill(origin, "https://example.com");
+  await userEvent.click(page.getByRole("button", { name: "Allow" }));
+  expect(mocks.claim).toHaveBeenCalledWith({
+    environmentId,
+    input: { threadId, pid: 1, windowId: 10, origin: "https://example.com" },
+  });
+  await expect.element(page.getByText("This tab is not on https://example.com")).toBeVisible();
+});
+
+it("disables the picker when the person cannot grant access", async () => {
+  setup({ claims: [], grants: [], pending: [] }, false);
+  await using screen = await render(<YourBrowserSection threadRef={threadRef} />);
+  await expect.element(screen.getByRole("button", { name: "Let GOAT use a tab" })).toBeDisabled();
+});
+
+it("hides the picker when browser claims are unsupported", async () => {
+  setup({ supported: false, claims: [], grants: [], pending: [] });
+  await using screen = await render(<YourBrowserSection threadRef={threadRef} />);
+  await expect
+    .element(screen.getByRole("button", { name: "Let GOAT use a tab" }))
+    .not.toBeInTheDocument();
+});
+
+it("closes the picker after the tab attaches", async () => {
+  setup({ claims: [], grants: [], pending: [] });
+  mocks.claim.mockResolvedValue({
+    _tag: "Success",
+    value: { agentResult: { status: "attached", claim } },
+  });
+  await using screen = await render(<YourBrowserSection threadRef={threadRef} />);
+  await userEvent.click(screen.getByRole("button", { name: "Let GOAT use a tab" }));
+  await userEvent.click(page.getByText("First window", { exact: false }));
+  await userEvent.fill(page.getByLabelText("Site origin"), "https://example.com");
+  await userEvent.click(page.getByRole("button", { name: "Allow" }));
+  await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
 });

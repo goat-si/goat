@@ -1,5 +1,7 @@
+import { useRef, useState } from "react";
+import { BrowserClaimPicker } from "./BrowserClaimPicker";
 import { useAtomValue } from "@effect/atom-react";
-import type { ScopedThreadRef } from "@goat/contracts";
+import type { BrowserClaimWindows, ScopedThreadRef } from "@goat/contracts";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { previewEnvironment } from "~/state/preview";
@@ -8,22 +10,62 @@ import { useAtomCommand } from "~/state/use-atom-command";
 
 export function YourBrowserSection({ threadRef }: { threadRef: ScopedThreadRef }) {
   const { environmentId, threadId } = threadRef;
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [listing, setListing] = useState<typeof BrowserClaimWindows.Type | null>(null);
+  const [listError, setListError] = useState(false);
+  const serial = useRef(0);
+  const canList = useAtomValue(previewEnvironment.claimWindows.permissionAtom(environmentId));
+  const list = useAtomCommand(previewEnvironment.claimWindows, { reportFailure: false });
+  async function openPicker() {
+    const current = ++serial.current;
+    setListing(null);
+    setListError(false);
+    setPickerOpen(true);
+    const answer = await list({ environmentId, input: {} });
+    if (current !== serial.current) return;
+    if (answer._tag === "Success") setListing(answer.value);
+    else setListError(true);
+  }
+  function closePicker() {
+    ++serial.current;
+    setPickerOpen(false);
+  }
+  const canClaim = useAtomValue(previewEnvironment.claim.permissionAtom(environmentId));
   const result = useEnvironmentQuery(previewEnvironment.claimChanges({ environmentId, input: {} }));
   const canEnd = useAtomValue(previewEnvironment.claimEnd.permissionAtom(environmentId));
   const canRevoke = useAtomValue(previewEnvironment.claimRevoke.permissionAtom(environmentId));
   const end = useAtomCommand(previewEnvironment.claimEnd, "end browser claim");
   const revoke = useAtomCommand(previewEnvironment.claimRevoke, "revoke browser grant");
-  if (!result.isSuccess || !result.data) return null;
+  if (!result.isSuccess || !result.data || result.data.supported === false) return null;
   const claims = result.data.claims.filter((claim) => claim.threadId === threadId);
   const grants = result.data.grants.filter((grant) => grant.threadId === threadId);
   const pending = result.data.pending.filter((request) => request.threadId === threadId);
-  if (!claims.length && !grants.length && !pending.length) return null;
   return (
     <section
       aria-label="Your browser"
       className="flex max-h-48 shrink-0 flex-col gap-2 overflow-auto border-b p-3 text-sm"
     >
       <h2 className="font-medium">Your browser</h2>
+      {result.data.supported === true && (
+        <div>
+          <Button
+            size="xs"
+            variant="outline"
+            disabled={!canClaim || !canList}
+            onClick={() => void openPicker()}
+          >
+            Let GOAT use a tab
+          </Button>
+        </div>
+      )}
+      {pickerOpen && (
+        <BrowserClaimPicker
+          threadRef={threadRef}
+          onClose={closePicker}
+          listing={listing}
+          listError={listError}
+        />
+      )}
       {claims.map((claim) => (
         <div key={claim.claimId} className="flex items-center gap-2">
           <div className="min-w-0 flex-1">

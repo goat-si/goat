@@ -14,6 +14,7 @@ it.effect("lists only browser windows and reports protected and unapproved proce
               { pid: 2, name: "Microsoft Edge", bundle_id: "com.microsoft.edgemac", running: true },
               { pid: 3, name: "Chromium", bundle_id: "org.chromium.Chromium", running: true },
               { pid: 4, name: "Mail", bundle_id: "com.apple.mail", running: true },
+              { pid: 5, name: "Chrome Beta", bundle_id: "com.google.Chrome.beta", running: true },
             ],
           },
         });
@@ -23,6 +24,11 @@ it.effect("lists only browser windows and reports protected and unapproved proce
         return Effect.succeed({
           isError: true,
           structuredContent: { refusal: { code: "browser_process_protected" } },
+        });
+      if (pid === 5)
+        return Effect.succeed({
+          isError: true,
+          structuredContent: { refusal: { code: "bounded_resource_outside_manifest" } },
         });
       if (pid === 3)
         return Effect.succeed({
@@ -38,13 +44,13 @@ it.effect("lists only browser windows and reports protected and unapproved proce
         },
       });
     });
-    assert.deepEqual(calls, [1, 2, 3]);
+    assert.deepEqual(calls, [1, 2, 3, 5]);
     assert.deepEqual(result.windows, [
       { pid: 1, windowId: 10, title: "Browser window", app: "Google Chrome" },
     ]);
     assert.deepEqual(
       result.refused.map((entry) => entry.reason),
-      ["browser_process_protected", "outside_manifest"],
+      ["browser_process_protected", "outside_manifest", "outside_manifest"],
     );
   }),
 );

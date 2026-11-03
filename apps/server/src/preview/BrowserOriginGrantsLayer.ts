@@ -94,8 +94,10 @@ const make = Effect.gen(function* () {
     value: boolean,
   ) {
     if (supported === value) return;
-    if (value) supported = true;
-    else
+    if (value) {
+      supported = true;
+      yield* service.capabilityChanged;
+    } else
       yield* service.driverRestarted(() => {
         supported = false;
       });

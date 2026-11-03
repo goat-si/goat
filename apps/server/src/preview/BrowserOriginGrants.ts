@@ -371,6 +371,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
   });
   const listAll = Effect.fn("BrowserOriginGrants.listAll")(() =>
     Effect.sync(() => ({
+      supported: deps.supported(),
       claims: [...claims.values()].map((claim) => ({
         ...claim,
         windowTitle: windowTitles.get(claim) ?? claim.title,
@@ -666,6 +667,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
   });
   return {
     claimsSupported: Effect.sync(deps.supported),
+    capabilityChanged: advance,
     request,
     requestWindow,
     answer,
