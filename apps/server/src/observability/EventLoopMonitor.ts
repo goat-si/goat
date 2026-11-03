@@ -47,7 +47,7 @@ export class EventLoopMonitor extends Context.Reference<{
   }),
 }) {}
 
-/** Delay in ns, active time in ms, CPU in µs. */
+/** Delay in ns, active and main-thread CPU time in ms, process `usage` CPU in µs. */
 export interface EventLoopReadings {
   readonly delayMaxNs: number;
   readonly activeMs: number;
