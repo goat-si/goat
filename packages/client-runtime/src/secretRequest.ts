@@ -7,13 +7,15 @@ export type SecretRequestItem = Extract<
 
 /** A `file` request lets the agent's commands read the value, so its card must not promise more. */
 export const secretRequestPrivacyNote = (
-  item: Pick<SecretRequestItem, "delivery" | "siteOrigin">,
+  item: Pick<SecretRequestItem, "delivery" | "siteOrigin" | "requestKind">,
 ) =>
-  item.siteOrigin
-    ? `The agent gets only a reference. GOAT types it into a password field on ${item.siteOrigin}`
-    : item.delivery === "file"
-      ? "Kept out of chat, in a private file this agent's commands can read for 24 hours"
-      : "Stored securely, never shown to the agent";
+  item.siteOrigin && item.requestKind === "login"
+    ? `The agent gets only a reference. GOAT fills this login on ${item.siteOrigin}`
+    : item.siteOrigin
+      ? `The agent gets only a reference. GOAT types it into a password field on ${item.siteOrigin}`
+      : item.delivery === "file"
+        ? "Kept out of chat, in a private file this agent's commands can read for 24 hours"
+        : "Stored securely, never shown to the agent";
 export const SECRET_REQUEST_DEFAULT_PLACEHOLDER = "Paste the secret";
 
 export type SecretRequestDisplay =
@@ -68,10 +70,23 @@ export function secretRequestDisplay(
 
 export function secretRequestAnswerInput(
   item: Pick<SecretRequestItem, "id" | "threadId">,
-  answer: { readonly type: "save"; readonly secret: string } | { readonly type: "decline" },
+  answer:
+    | { readonly type: "save"; readonly secret: string }
+    | { readonly type: "save_login"; readonly username: string; readonly password: string }
+    | { readonly type: "decline" },
 ): SecretRequestAnswerInput | null {
   if (answer.type === "decline") {
     return { threadId: item.threadId, turnItemId: item.id, answer: { type: "decline" } };
+  }
+  if (answer.type === "save_login") {
+    const username = answer.username.trim();
+    const password = answer.password;
+    if (username.length === 0 || password.trim().length === 0) return null;
+    return {
+      threadId: item.threadId,
+      turnItemId: item.id,
+      answer: { type: "save_login", username, password },
+    };
   }
   const secret = answer.secret.trim();
   if (secret.length === 0) return null;

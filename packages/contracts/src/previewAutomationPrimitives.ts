@@ -141,3 +141,16 @@ export const PreviewAutomationFillSecretResult = Schema.Struct({
   }),
 });
 export type PreviewAutomationFillSecretResult = typeof PreviewAutomationFillSecretResult.Type;
+
+export const PreviewAutomationFillLoginInput = Schema.Struct({
+  tabId: Schema.optional(PreviewTabId),
+  secretRef: SecretRef,
+  timeoutMs: OptionalTimeoutMs,
+});
+export const PreviewAutomationFillLoginResult = Schema.Struct({
+  usernameFilled: Schema.Boolean,
+  passwordFilled: Schema.Boolean,
+  verdict: Schema.Literals(["confirmed", "unverifiable", "refused"]),
+  code: Schema.optional(Schema.String),
+});
+export type PreviewAutomationFillLoginResult = typeof PreviewAutomationFillLoginResult.Type;

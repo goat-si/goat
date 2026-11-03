@@ -500,6 +500,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         tab_dialog: "dialog",
         tab_upload: "upload",
         tab_fill_secret: "fillSecret",
+        tab_fill_login: "fillLogin",
         click: "click",
         right_click: "click",
         hover: "hover",

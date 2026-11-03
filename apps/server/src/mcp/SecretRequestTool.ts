@@ -59,6 +59,8 @@ export const makeRequestSecret = (deps: {
         "Pass clientRequestId with wait:false; call again with the same id to collect the answer.",
       );
     const origin = input.origin === undefined ? undefined : normalizeSecretOrigin(input.origin);
+    if (input.kind === "login" && origin === undefined)
+      return yield* failure("invalid_request", "A login request requires an http(s) origin.");
     if (input.origin !== undefined && origin === undefined)
       return yield* failure("invalid_request", "origin must be an http(s) URL or origin.");
     if (origin !== undefined && input.delivery === "file")
@@ -99,6 +101,7 @@ export const makeRequestSecret = (deps: {
           runId,
           nodeId,
           turnItemId,
+          ...(input.kind === "login" ? { requestKind: "login" as const } : {}),
           label: input.label,
           reason: input.reason,
           ...(input.placeholder === undefined ? {} : { placeholder: input.placeholder }),

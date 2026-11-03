@@ -290,6 +290,12 @@ it.effect("preview results and failures expose safety and a next step after MCP 
               dispatched: false,
             }),
           );
+        if (request.operation === "fillLogin")
+          return Effect.succeed({
+            usernameFilled: true,
+            passwordFilled: true,
+            verdict: "confirmed",
+          } as A);
         if (request.operation === "fillSecret")
           return Effect.succeed({
             filled: true,
@@ -373,6 +379,17 @@ it.effect("preview results and failures expose safety and a next step after MCP 
     expect(filled.isError, JSON.stringify(filled)).not.toBe(true);
     expect(filled.structuredContent).toMatchObject({
       filled: true,
+      safety: { possibleCommit: true, retryClass: "never" },
+    });
+    const login = yield* server.callTool({
+      name: "goat_preview_fill_login",
+      arguments: { secretRef: "secret-ref" },
+    });
+    expect(login.isError, JSON.stringify(login)).not.toBe(true);
+    expect(login.structuredContent).toMatchObject({
+      usernameFilled: true,
+      passwordFilled: true,
+      verdict: "confirmed",
       safety: { possibleCommit: true, retryClass: "never" },
     });
   }).pipe(
