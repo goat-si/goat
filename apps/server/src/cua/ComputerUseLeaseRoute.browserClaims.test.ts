@@ -1,6 +1,4 @@
 import { assert, describe, it } from "@effect/vitest";
-import * as NodeServices from "@effect/platform-node/NodeServices";
-import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import {
   type ComputerUsePauseReason,
   EnvironmentId,
@@ -8,7 +6,6 @@ import {
   ProviderInstanceId,
   ThreadId,
 } from "@goat/contracts";
-import * as Queue from "effect/Queue";
 import * as Context from "effect/Context";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
@@ -16,8 +13,7 @@ import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import { HttpRouter, HttpServer, HttpServerRequest } from "effect/http";
-import * as NetAddress from "effect/net/NetAddress";
+import { HttpRouter, HttpServerRequest } from "effect/http";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
@@ -25,12 +21,10 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import * as ServerSettings from "../serverSettings.ts";
-import { runMigrations } from "../persistence/Migrations.ts";
 import { leaseUpdates } from "./ComputerUseLeaseRoute.ts";
 import * as LeaseRoute from "./ComputerUseLeaseRoute.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import type { ComputerUseControlState } from "./ComputerUseControl.ts";
-import * as ComputerUsePrimitiveChannel from "./ComputerUsePrimitiveChannel.ts";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { makeTestBrowserOriginGrants as makeBrowserOriginGrants } from "../preview/BrowserOriginGrants.testkit.ts";
@@ -38,6 +32,11 @@ import { BrowserOriginGrants } from "../preview/BrowserOriginGrantsLayer.ts";
 import * as Grants from "../preview/BrowserOriginGrantsLayer.ts";
 import { BrowserClaimManifest } from "../preview/BrowserClaimManifest.ts";
 import { harness, call } from "./ComputerUseLeaseProxy.testkit.ts";
+import {
+  admissionFixture,
+  claimedAdmissionFixture,
+  threadFixture,
+} from "./ComputerUseLeaseRoute.browserClaims.testkit.ts";
 import {
   claimBindArgs,
   reservationViaRoute,
@@ -145,278 +144,274 @@ const fixture = Effect.fnUntraced(function* (
   };
 });
 
-const threadFixture = Effect.fn("LeaseRouteTest.threadFixture")(function* (
-  options: {
-    readonly livenessWindowMs?: number;
-    readonly grants?: BrowserOriginGrants["Service"];
-    readonly reservation?: ComputerUseLeases.ComputerUseLeases["Service"]["callReservation"];
-  } = {},
-) {
-  const registry = yield* McpSessionRegistry.__testing.make(options).pipe(
-    Effect.provideService(HttpServer.HttpServer, {
-      address: NetAddress.inetAddressFromIpStringUnsafe("127.0.0.1", 43123),
-      serve: () => Effect.void,
-    }),
-    Effect.provideService(ServerEnvironment.ServerEnvironment, {
-      getEnvironmentId: Effect.succeed(EnvironmentId.make("environment:test")),
-      getDescriptor: Effect.die("unused"),
-    }),
-    Effect.provide(NodeServices.layer),
-  );
-  const credential = yield* registry.issue({
-    threadId,
-    providerInstanceId: ProviderInstanceId.make("codex"),
-  });
-  const released: Array<readonly [string, string]> = [];
-  const signals = yield* PubSub.unbounded<void>();
-  const subscribed = yield* Deferred.make<void>();
-  const heldRead = yield* Ref.make<
-    { reading: Deferred.Deferred<void>; release: Deferred.Deferred<void> } | undefined
-  >(undefined);
-  const current = yield* Ref.make<
-    | {
-        controlId: string;
-        state: "active" | "paused" | "idle" | "stopped";
-      }
-    | undefined
-  >(undefined);
-  const leaseLayer = Layer.mock(ComputerUseLeases.ComputerUseLeases)({
-    onAuthorityChange: () => () => {},
-    releaseApps: (owner, id) => Effect.sync(() => released.push([owner, id])),
-    streamOpened: () => Effect.void,
-    proxy: undefined,
-    callReservation:
-      options.reservation ??
-      (() => Effect.succeed({ status: "admitted", reservationId: "reservation:test" } as const)),
-    currentControl: () =>
-      Ref.get(current).pipe(
-        Effect.map((value) =>
-          value === undefined
-            ? Option.none()
-            : Option.some({
-                threadId,
-                controlId: value.controlId,
-                expiresAt,
-                ...(value.state === "stopped" ? { ended: "stopped" as const } : {}),
-              }),
-        ),
-      ),
-    controlState: (_owner, id) =>
-      Effect.gen(function* () {
-        const value = yield* Ref.get(current);
-        const held = yield* Ref.getAndSet(heldRead, undefined);
-        if (held !== undefined) {
-          yield* Deferred.succeed(held.reading, undefined);
-          yield* Deferred.await(held.release);
-        }
-        if (value === undefined) return { _tag: "ended", reason: "revoked" } as const;
-        if (value.controlId !== id) return { _tag: "ended", reason: "replaced" } as const;
-        if (value.state === "stopped") return { _tag: "ended", reason: "stopped" } as const;
-        if ((yield* Clock.currentTimeMillis) >= DateTime.toEpochMillis(expiresAt))
-          return { _tag: "ended", reason: "expired" } as const;
-        if (value.state === "paused") return { _tag: "paused", reason: "takeover" } as const;
-        return {
-          _tag: "active",
-          expiresAt,
-          apps: ["com.apple.calculator"],
-          interruptions: { count: 0, last: "human_input" },
-          wakeAt: DateTime.toEpochMillis(expiresAt),
-          ...(value.state === "idle" ? ({ idle: true } as const) : {}),
-        } as const;
-      }),
-    subscribe: PubSub.subscribe(signals).pipe(
-      Effect.tap(() => Deferred.succeed(subscribed, undefined)),
-    ),
-  });
-  const baseContext = yield* Layer.build(
-    Layer.mergeAll(
-      Layer.effectDiscard(runMigrations()).pipe(
-        Layer.provideMerge(NodeSqliteClient.layer({ filename: ":memory:" })),
-      ),
-      ServerSettings.layerTest({ enableCua: true }),
-      Layer.succeed(McpSessionRegistry.McpSessionRegistry, registry),
-      leaseLayer,
-      ComputerUsePrimitiveChannel.layer.pipe(Layer.provide(leaseLayer)),
-    ),
-  );
-  const context =
-    options.grants === undefined
-      ? baseContext
-      : Context.add(baseContext, BrowserOriginGrants, options.grants);
-  const handler = yield* HttpRouter.toHttpEffect(LeaseRoute.layer);
-  const request = (
-    query: string,
-    authorization: string | undefined = credential.config.authorizationHeader,
-    headers: Readonly<Record<string, string>> = {},
-  ) =>
-    handler.pipe(
-      Effect.provideService(
-        HttpServerRequest.HttpServerRequest,
-        HttpServerRequest.fromWeb(
-          new Request(`http://goat.test/api/computer-use/lease?${query}`, {
-            headers: authorization === undefined ? headers : { authorization, ...headers },
-          }),
-        ),
-      ),
-      Effect.provideContext(context),
-    );
-  const postPrimitive = (path: string, body: object, token = "channel:secret") =>
-    handler.pipe(
-      Effect.provideService(
-        HttpServerRequest.HttpServerRequest,
-        HttpServerRequest.fromWeb(
-          new Request(`http://goat.test/api/computer-use/lease/${path}`, {
-            method: "POST",
-            headers: {
-              authorization: credential.config.authorizationHeader,
-              "x-goat-proxy-channel": token,
-            },
-            body: JSON.stringify(body),
-          }),
-        ),
-      ),
-      Effect.provideContext(context),
-      Effect.map((response) => response.status),
-    );
-  const open = Effect.fn("LeaseRouteTest.open")(function* (query = `thread=${threadId}`) {
-    const response = yield* request(query);
-    assert.equal(response.status, 200);
-    if (response.body._tag !== "Stream") return yield* Effect.die("expected lease stream");
-    const updates = yield* response.body.stream.pipe(
-      Stream.orDie,
-      Stream.decodeText,
-      Stream.splitLines,
-      // Heartbeats are blank lines every proxy skips.
-      Stream.filter((line) => line.length > 0),
-      Stream.map((line): unknown => JSON.parse(line)),
-      Stream.toQueue({ capacity: "unbounded" }),
-    );
-    yield* Deferred.await(subscribed);
-    return Queue.take(updates).pipe(Effect.catchTags({ Done: () => Effect.undefined }));
-  });
-  return {
-    registry,
-    credential,
-    context,
-    channel: Context.get(context, ComputerUsePrimitiveChannel.ComputerUsePrimitiveChannel),
-    request,
-    postPrimitive,
-    reserve: (name: string, args: unknown, authority?: "claimBind") =>
-      handler.pipe(
-        Effect.provideService(
-          HttpServerRequest.HttpServerRequest,
-          HttpServerRequest.fromWeb(
-            new Request("http://goat.test/api/computer-use/lease/calls", {
-              method: "POST",
-              headers: {
-                authorization: credential.config.authorizationHeader,
-                "content-type": "application/json",
-              },
-              body: JSON.stringify({
-                action: "reserve",
-                controlId: "control:test",
-                connectionId: "driver:1",
-                callId: "one",
-                name,
-                args,
-                ...(authority === undefined ? {} : { authority }),
-                interruptions: 0,
-                idleEpoch: 0,
-              }),
-            }),
-          ),
-        ),
-        Effect.provideContext(context),
-        Effect.map((response): unknown =>
-          response.body._tag === "Uint8Array"
-            ? JSON.parse(new TextDecoder().decode(response.body.body))
-            : response.status,
-        ),
-      ),
-    open,
-    released,
-    holdNextRead: Effect.gen(function* () {
-      const reading = yield* Deferred.make<void>();
-      const release = yield* Deferred.make<void>();
-      yield* Ref.set(heldRead, { reading, release });
-      return { reading: Deferred.await(reading), release: Deferred.succeed(release, undefined) };
-    }),
-    set: (controlId: string, state: "active" | "paused" | "idle" | "stopped" = "active") =>
-      Ref.set(current, { controlId, state }).pipe(
-        Effect.andThen(PubSub.publish(signals, undefined)),
-      ),
-  };
-});
-
 describe("computer use lease route", () => {
-  it.effect("thread capability reports cannot raise support and can lower server support", () =>
+  it.effect(
+    "reservation reports blocked_url when a selected claim is blocked during admission",
+    () =>
+      Effect.gen(function* () {
+        const { leases, control, route, scoped, selected, block } =
+          yield* claimedAdmissionFixture();
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const holder = yield* leases
+          .serializeAdmission(
+            Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
+          )
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(entered);
+        const reservation = yield* route
+          .postCall({
+            action: "reserve",
+            controlId: control.controlId,
+            connectionId: "driver:1",
+            callId: "blocked",
+            name: "browser_click",
+            args: scoped,
+            interruptions: 0,
+            idleEpoch: 0,
+          })
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.await(selected);
+        yield* block;
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(holder);
+        assert.deepEqual(yield* Fiber.join(reservation), {
+          status: "refused",
+          detail: "blocked_url",
+        });
+      }).pipe(Effect.scoped),
+  );
+
+  it.effect("validation reports blocked_url when its claim ends during admission", () =>
     Effect.gen(function* () {
-      const grantContext = yield* Layer.build(
-        Grants.layer.pipe(
-          Layer.provide(ServerSettings.layerTest()),
-          Layer.provide(
-            Layer.merge(
-              Layer.mock(ServerEnvironment.ServerEnvironment)({
-                getDescriptor: Effect.succeed(
-                  decodeDescriptor({
-                    environmentId: EnvironmentId.make("environment:test"),
-                    label: "Test",
-                    platform: { os: "linux", arch: "x64" },
-                    serverVersion: "test",
-                    capabilities: { repositoryIdentity: true },
-                  }),
-                ),
-              }),
-              Layer.succeed(BrowserClaimManifest, {
-                publish: () => Effect.succeed("a".repeat(64)),
-                readConfig: Effect.succeed({
-                  capability_manifest: {
-                    sha256: "a".repeat(64),
-                    file_sha256: "a".repeat(64),
-                    reload_error: null,
-                  },
-                }),
-                install: () => Effect.void,
-              }),
-            ),
-          ),
-        ),
-      );
-      const grants = Context.get(grantContext, BrowserOriginGrants);
-      const f = yield* threadFixture({ grants });
-      const handler = yield* HttpRouter.toHttpEffect(LeaseRoute.reportLayer);
-      const report = (supported: boolean) =>
-        handler.pipe(
-          Effect.provideService(
-            HttpServerRequest.HttpServerRequest,
-            HttpServerRequest.fromWeb(
-              new Request("http://goat.test/api/computer-use/lease", {
-                method: "POST",
-                headers: { authorization: f.credential.config.authorizationHeader },
-                body: JSON.stringify({ browserClaimsSupported: supported }),
-              }),
-            ),
-          ),
-          Effect.provideContext(f.context),
-        );
-      const input = {
+      const { leases, control, route, scoped, block } = yield* claimedAdmissionFixture();
+      const reserved = yield* route.postCall({
+        action: "reserve",
+        controlId: control.controlId,
+        connectionId: "driver:1",
+        callId: "blocked-validation",
+        name: "browser_click",
+        args: scoped,
+        interruptions: 0,
+        idleEpoch: 0,
+      });
+      if (
+        typeof reserved !== "object" ||
+        reserved === null ||
+        !("reservationId" in reserved) ||
+        typeof reserved.reservationId !== "string"
+      )
+        return assert.fail("expected reservation");
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const holder = yield* leases
+        .serializeAdmission(
+          Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
+        )
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(entered);
+      const validation = yield* route
+        .postCall({
+          action: "validate",
+          controlId: control.controlId,
+          connectionId: "driver:1",
+          reservationId: reserved.reservationId,
+        })
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* block;
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(holder);
+      assert.deepEqual(yield* Fiber.join(validation), { status: "refused", detail: "blocked_url" });
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("validation refuses a claim whose origin is currently blocked", () =>
+    Effect.gen(function* () {
+      const { grants, control, route, scoped, setBlocked } = yield* claimedAdmissionFixture();
+      const reserved = yield* route.postCall({
+        action: "reserve",
+        controlId: control.controlId,
+        connectionId: "driver:1",
+        callId: "current-block",
+        name: "browser_click",
+        args: scoped,
+        interruptions: 0,
+        idleEpoch: 0,
+      });
+      if (
+        typeof reserved !== "object" ||
+        reserved === null ||
+        !("reservationId" in reserved) ||
+        typeof reserved.reservationId !== "string"
+      )
+        return assert.fail("expected reservation");
+      yield* setBlocked;
+      const validation = yield* route.postCall({
+        action: "validate",
+        controlId: control.controlId,
+        connectionId: "driver:1",
+        reservationId: reserved.reservationId,
+      });
+      assert.deepEqual(validation, { status: "refused", detail: "blocked_url" });
+      assert.deepEqual(yield* grants.claimsFor(threadId), []);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("validation refuses a claim revoked while the call waited for admission", () =>
+    Effect.gen(function* () {
+      const { leases, control } = yield* admissionFixture();
+      const grants = yield* makeBrowserOriginGrants({
+        environmentId: EnvironmentId.make("environment:test"),
+        supported: () => true,
+        publish: () => Effect.void,
+        bind: () =>
+          Effect.succeed({
+            targetId: "target-1",
+            tabId: "tab",
+            title: "Site",
+            url: "https://example.test",
+            driverGeneration: 1,
+          }),
+      });
+      const pending = yield* grants.request({
         threadId,
         pid: 42,
         windowId: 7,
         origin: "https://example.test",
         windowTitle: "Browser",
+      });
+      if (pending.status !== "pending") return assert.fail("expected pending");
+      yield* grants.answer(pending.claimId, true);
+      const route = yield* threadFixture({
+        grants: { ...grants, setDriverCapability: () => Effect.void },
+        leases,
+      });
+      const scoped = {
+        tab_id: "tab",
+        target_id: "target-1",
+        session: "goat-claim:" + pending.claimId,
+        origin_scope: ["https://example.test"],
       };
-      assert.equal((yield* report(true)).status, 204);
-      const spoofed = yield* grants.request(input);
-      assert.equal(spoofed.status, "refused");
-      if (spoofed.status === "refused") assert.equal(spoofed.code, "unavailable");
-      yield* grants.setDriverCapability(true);
-      assert.equal((yield* grants.request(input)).status, "pending");
-      assert.equal((yield* report(false)).status, 204);
-      const lowered = yield* grants.request(input);
-      assert.equal(lowered.status, "refused");
-      if (lowered.status === "refused") assert.equal(lowered.code, "unavailable");
+      const reserved = yield* route.postCall({
+        action: "reserve",
+        controlId: control.controlId,
+        connectionId: "driver:1",
+        callId: "one",
+        name: "browser_click",
+        args: scoped,
+        interruptions: 0,
+        idleEpoch: 0,
+      });
+      if (
+        typeof reserved !== "object" ||
+        reserved === null ||
+        !("reservationId" in reserved) ||
+        typeof reserved.reservationId !== "string"
+      )
+        return assert.fail("expected reservation");
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const holder = yield* leases
+        .serializeAdmission(
+          Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
+        )
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(entered);
+      const validation = yield* route
+        .postCall({
+          action: "validate",
+          controlId: control.controlId,
+          connectionId: "driver:1",
+          reservationId: reserved.reservationId,
+        })
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* grants.revoke(threadId, "https://example.test");
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(holder);
+      assert.deepEqual(yield* Fiber.join(validation), {
+        status: "refused",
+        detail: "outside_manifest",
+      });
     }).pipe(Effect.scoped),
+  );
+
+  it.effect(
+    "thread capability reports cannot raise support and end only their thread's claims",
+    () =>
+      Effect.gen(function* () {
+        const grantContext = yield* Layer.build(
+          Grants.layer.pipe(
+            Layer.provide(ServerSettings.layerTest()),
+            Layer.provide(
+              Layer.merge(
+                Layer.mock(ServerEnvironment.ServerEnvironment)({
+                  getDescriptor: Effect.succeed(
+                    decodeDescriptor({
+                      environmentId: EnvironmentId.make("environment:test"),
+                      label: "Test",
+                      platform: { os: "linux", arch: "x64" },
+                      serverVersion: "test",
+                      capabilities: { repositoryIdentity: true },
+                    }),
+                  ),
+                }),
+                Layer.succeed(BrowserClaimManifest, {
+                  publish: () => Effect.succeed("a".repeat(64)),
+                  readConfig: Effect.succeed({
+                    capability_manifest: {
+                      sha256: "a".repeat(64),
+                      file_sha256: "a".repeat(64),
+                      reload_error: null,
+                    },
+                  }),
+                  install: () => Effect.void,
+                }),
+              ),
+            ),
+          ),
+        );
+        const grants = Context.get(grantContext, BrowserOriginGrants);
+        const f = yield* threadFixture({ grants });
+        const handler = yield* HttpRouter.toHttpEffect(LeaseRoute.reportLayer);
+        const report = (supported: boolean) =>
+          handler.pipe(
+            Effect.provideService(
+              HttpServerRequest.HttpServerRequest,
+              HttpServerRequest.fromWeb(
+                new Request("http://goat.test/api/computer-use/lease", {
+                  method: "POST",
+                  headers: { authorization: f.credential.config.authorizationHeader },
+                  body: JSON.stringify({ browserClaimsSupported: supported }),
+                }),
+              ),
+            ),
+            Effect.provideContext(f.context),
+          );
+        const input = {
+          threadId,
+          pid: 42,
+          windowId: 7,
+          origin: "https://example.test",
+          windowTitle: "Browser",
+        };
+        assert.equal((yield* report(true)).status, 204);
+        const spoofed = yield* grants.request(input);
+        assert.equal(spoofed.status, "refused");
+        if (spoofed.status === "refused") assert.equal(spoofed.code, "unavailable");
+        yield* grants.setDriverCapability(true);
+        assert.equal((yield* grants.request(input)).status, "pending");
+        const other = ThreadId.make("thread:other");
+        assert.equal(
+          (yield* grants.request({ ...input, threadId: other, windowId: 8 })).status,
+          "pending",
+        );
+        assert.equal((yield* report(false)).status, 204);
+        assert.deepEqual(
+          (yield* grants.listAll()).pending.map((entry) => entry.threadId),
+          [other],
+        );
+        assert.equal((yield* grants.request({ ...input, windowId: 9 })).status, "pending");
+      }).pipe(Effect.scoped),
   );
   it.effect("does not advertise a claim revoked while its change subscription is starting", () =>
     Effect.gen(function* () {
