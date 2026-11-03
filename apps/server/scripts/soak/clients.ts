@@ -206,8 +206,8 @@ export interface WorkloadInput {
   observations: Observations;
   recordDetail: (value: unknown) => void;
   signal: AbortSignal;
-  onWindowStart: () => void;
-  onWindowEnd: () => Promise<void>;
+  onWindowStart: (startedAtMs: number) => void;
+  onWindowEnd: (endedAtMs: number) => Promise<void>;
 }
 
 export async function runWorkload(input: WorkloadInput): Promise<{
@@ -719,24 +719,24 @@ export async function runWorkload(input: WorkloadInput): Promise<{
     }
     windowOpen = true;
     const windowStartedAtMs = yield* Clock.currentTimeMillis;
-    input.onWindowStart();
+    input.onWindowStart(windowStartedAtMs);
     yield* Deferred.succeed(windowStarted, undefined);
-    // Timers can fire a few ms before the wall clock the report measures; finish the window on the wall clock.
-    const waitWindow: Effect.Effect<void> = Clock.currentTimeMillis.pipe(
+    // Timers can fire a few ms early; end on the clock reading that also bounds the reported window.
+    const waitWindow: Effect.Effect<number> = Clock.currentTimeMillis.pipe(
       Effect.flatMap((now) => {
         const remaining = windowStartedAtMs + input.durationMs - now;
         return remaining > 0
           ? Effect.sleep(`${remaining + 1} millis`).pipe(Effect.andThen(waitWindow))
-          : Effect.void;
+          : Effect.succeed(now);
       }),
     );
     yield* waitWindow.pipe(
-      Effect.andThen(
+      Effect.tap(() =>
         Effect.sync(() => {
           windowOpen = false;
         }),
       ),
-      Effect.andThen(Effect.promise(input.onWindowEnd)),
+      Effect.flatMap((endedAtMs) => Effect.promise(() => input.onWindowEnd(endedAtMs))),
       Effect.andThen(Deferred.succeed(windowEnded, undefined)),
       Effect.forkScoped,
     );
