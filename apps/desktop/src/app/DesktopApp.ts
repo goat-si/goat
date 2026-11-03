@@ -153,12 +153,18 @@ const fatalStartupCause = <E>(stage: string, cause: Cause.Cause<E>) =>
   handleFatalStartupError(stage, Cause.pretty(cause)).pipe(Effect.andThen(Effect.failCause(cause)));
 
 const stopAllPoolInstances = Effect.fn("desktop.app.stopAllPoolInstances")(
-  function* (): Effect.fn.Return<void, never, DesktopBackendPool.DesktopBackendPool> {
+  function* (): Effect.fn.Return<
+    void,
+    never,
+    DesktopBackendPool.DesktopBackendPool | DesktopState.DesktopState
+  > {
     const pool = yield* DesktopBackendPool.DesktopBackendPool;
+    const state = yield* DesktopState.DesktopState;
+    const reason = yield* Ref.get(state.stopReason);
     const instances = yield* pool.list;
     yield* Effect.forEach(
       instances,
-      (instance) => instance.stop("quit", { timeout: BACKEND_STOP_TIMEOUT }),
+      (instance) => instance.stop(reason, { timeout: BACKEND_STOP_TIMEOUT }),
       { concurrency: "unbounded" },
     );
   },
