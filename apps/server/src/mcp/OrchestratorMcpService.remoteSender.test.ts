@@ -135,7 +135,8 @@ it.effect(
           host: "box",
           threadId: merger,
         });
-        assert.include(admission.ceiling?.capabilities, "pr.merge");
+        assert.isDefined(admission.ceiling);
+        assert.include(admission.ceiling.capabilities, "pr.merge");
         const wire = decodeSend({
           threadId: merger,
           message: "Continue",
@@ -172,7 +173,8 @@ it.effect(
           host: "box",
           threadId: merger,
         });
-        assert.notInclude(narrowedSend.ceiling?.capabilities, "pr.merge");
+        assert.isDefined(narrowedSend.ceiling);
+        assert.notInclude(narrowedSend.ceiling.capabilities, "pr.merge");
         const narrowedResult = yield* profiles
           .assertTarget(outside, merger, "full-access", "full-access", narrowedSend.ceiling)
           .pipe(Effect.result);
@@ -181,7 +183,8 @@ it.effect(
           host: "box",
           threadId: roleless,
         });
-        assert.include(ordinary.ceiling?.capabilities, "pr.merge");
+        assert.isDefined(ordinary.ceiling);
+        assert.include(ordinary.ceiling.capabilities, "pr.merge");
         yield* profiles.assertTarget(
           outside,
           roleless,
