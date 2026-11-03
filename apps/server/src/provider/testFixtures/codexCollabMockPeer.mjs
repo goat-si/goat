@@ -84,8 +84,19 @@ function soakRequest(message) {
       params.input.some(
         (item) => typeof item?.text === "string" && item.text.includes("GOAT_SOAK_EXIT"),
       )
-    )
-      process.exit(1);
+    ) {
+      const once = process.env.GOAT_SOAK_EXIT_ONCE_FILE;
+      let shouldExit = true;
+      if (once) {
+        try {
+          NodeFS.closeSync(NodeFS.openSync(once, "wx", 0o600));
+        } catch (error) {
+          if (error?.code !== "EEXIST") throw error;
+          shouldExit = false;
+        }
+      }
+      if (shouldExit) process.exit(1);
+    }
     const turnId = NodeCrypto.randomUUID();
     const itemId = NodeCrypto.randomUUID();
     const turn = { ...fixture.responses.turnStart.turn, id: turnId };

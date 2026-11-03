@@ -700,6 +700,7 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
         lifecycle,
         detailPath,
         `${options.report}.codex-script.json`,
+        `${options.report}.codex-exit-once`,
         `${lifecycle}.codex-turns`,
       ].filter((path) => NodeFS.existsSync(path)),
     };

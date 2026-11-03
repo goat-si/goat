@@ -298,6 +298,11 @@ export async function runWorkload(input: WorkloadInput): Promise<{
                 ? [
                     { name: "GOAT_CODEX_MOCK_LATENCIES_MS", value: "0", sensitive: false },
                     { name: "GOAT_CODEX_MOCK_TURN_MS", value: "0", sensitive: false },
+                    {
+                      name: "GOAT_SOAK_EXIT_ONCE_FILE",
+                      value: `${input.artifactPrefix}.codex-exit-once`,
+                      sensitive: false,
+                    },
                   ]
                 : []),
             ],

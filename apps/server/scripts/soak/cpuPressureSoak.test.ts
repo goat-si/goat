@@ -44,6 +44,72 @@ it("relays bytes and disconnects the owned connection", async () => {
 });
 
 describe("soak Codex fixture", () => {
+  it("forces one Codex exit then completes a recovery turn containing old history", async () => {
+    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-codex-recover-"));
+    const script = NodePath.join(dir, "script.json");
+    NodeFS.writeFileSync(script, JSON.stringify({ rootThreadId: "unused", notifications: [] }));
+    const fixture = new URL(
+      "../../src/provider/testFixtures/codexCollabMockPeer.mjs",
+      import.meta.url,
+    );
+    const start = () => {
+      const child = guardChild(
+        NodeChildProcess.spawn(process.execPath, [fixture.pathname], {
+          stdio: ["pipe", "pipe", "ignore"],
+          env: {
+            ...process.env,
+            GOAT_CODEX_COLLAB_SCRIPT: script,
+            GOAT_CODEX_MOCK_SOAK: "1",
+            GOAT_CODEX_MOCK_TURN_MS: "0",
+            GOAT_CODEX_MOCK_LATENCIES_MS: "0",
+            GOAT_SOAK_PROVIDER_LIFECYCLE_LOG: NodePath.join(dir, "life"),
+            GOAT_SOAK_EXIT_ONCE_FILE: NodePath.join(dir, "once"),
+          },
+        }),
+        () => {},
+      );
+      return {
+        child,
+        exited: new Promise<number | null>((resolve) => child.once("exit", resolve)),
+        lines: NodeReadline.createInterface({ input: child.stdout })[Symbol.asyncIterator](),
+      };
+    };
+    const first = start();
+    let second: ReturnType<typeof start> | undefined;
+    try {
+      first.child.stdin?.write(
+        `${JSON.stringify({ id: 1, method: "thread/start", params: { cwd: "/tmp" } })}\n`,
+      );
+      const response = JSON.parse((await first.lines.next()).value as string);
+      const threadId = response.result.thread.id;
+      first.child.stdin?.write(
+        `${JSON.stringify({ id: 2, method: "turn/start", params: { threadId, input: [{ text: "GOAT_SOAK_EXIT" }] } })}\n`,
+      );
+      expect(await first.exited).toBe(1);
+      second = start();
+      second.child.stdin?.write(
+        `${JSON.stringify({ id: 1, method: "thread/resume", params: { threadId, cwd: "/tmp" } })}\n`,
+      );
+      await second.lines.next();
+      second.child.stdin?.write(
+        `${JSON.stringify({ id: 2, method: "turn/start", params: { threadId, input: [{ text: "old GOAT_SOAK_EXIT; Recovery turn" }] } })}\n`,
+      );
+      for (;;) {
+        const line = await second.lines.next();
+        if (line.done) throw new Error("replacement exited before turn completed");
+        if (JSON.parse(line.value).method === "turn/completed") break;
+      }
+      second.child.stdin?.end();
+      expect(await second.exited).toBe(0);
+    } finally {
+      for (const owned of [first, second])
+        if (owned) {
+          if (owned.child.exitCode === null && owned.child.signalCode === null) owned.child.kill();
+          await owned.exited;
+        }
+      NodeFS.rmSync(dir, { recursive: true, force: true });
+    }
+  });
   it("exits a Codex process for an embedded self-check marker", async () => {
     const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-codex-marker-"));
     const script = NodePath.join(dir, "script.json");
