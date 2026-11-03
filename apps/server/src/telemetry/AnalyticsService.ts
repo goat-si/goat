@@ -353,7 +353,7 @@ export const make = Effect.gen(function* () {
     timedShutdownPhase(
       "analyticsFlush",
       Effect.gen(function* () {
-        const result = yield* Effect.interruptible(flush.pipe(Effect.timeoutOption("1 second")));
+        const result = yield* flush.pipe(Effect.timeoutOption("1 second"));
         const buffered = yield* Ref.get(bufferRef);
         const delivery = yield* Ref.get(deliveryRef);
         const inFlight = yield* Ref.get(inFlightRef);

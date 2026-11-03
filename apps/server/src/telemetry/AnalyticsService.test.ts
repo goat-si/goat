@@ -241,6 +241,77 @@ it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
     }),
   );
 
+  it.effect.each(["sent", "blocked"] as const)(
+    "an interrupted service fiber flushes or times out its shutdown batch: %s",
+    (scenario) => {
+      const logs: Array<unknown> = [];
+      const logger = Logger.make(({ message }) => {
+        logs.push(message);
+      });
+      return Effect.gen(function* () {
+        const ready = yield* Deferred.make<void>();
+        const started = yield* Deferred.make<void>();
+        const requests: Array<string> = [];
+        const client = HttpClient.make((request) =>
+          Effect.gen(function* () {
+            if (request.body._tag === "Uint8Array")
+              requests.push(new TextDecoder().decode(request.body.body));
+            yield* Deferred.succeed(started, undefined);
+            if (scenario === "blocked") return yield* Effect.never;
+            return yield* respondWithStatus(204)(request);
+          }),
+        );
+        const runtimeLayer = AnalyticsService.layer.pipe(
+          Layer.provideMerge(
+            ServerConfig.ServerConfig.layerTest(process.cwd(), {
+              prefix: "goat-telemetry-interrupted-",
+            }),
+          ),
+          Layer.provide(
+            ConfigProvider.layer(ConfigProvider.fromUnknown({ GOAT_TELEMETRY_ENABLED: true })),
+          ),
+          Layer.provide(
+            Layer.mergeAll(
+              Layer.succeed(HostProcess.Platform, "linux"),
+              Layer.succeed(HostProcess.Architecture, "x64"),
+              Layer.succeed(HttpClient.HttpClient, client),
+            ),
+          ),
+        );
+        const owner = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const context = yield* Layer.build(runtimeLayer);
+            const analytics = Context.get(context, AnalyticsService.AnalyticsService);
+            yield* analytics.record("test.interrupted.shutdown", {});
+            yield* Deferred.succeed(ready, undefined);
+            return yield* Effect.never;
+          }),
+        ).pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.await(ready);
+        const interrupt = yield* Fiber.interrupt(owner).pipe(
+          Effect.forkChild({ startImmediately: true }),
+        );
+        yield* TestClock.adjust(0);
+        const sent = yield* Deferred.isDone(started);
+        if (sent && scenario === "blocked") {
+          yield* TestClock.adjust("999 millis");
+          assert.isUndefined(interrupt.pollUnsafe());
+          yield* TestClock.adjust("1 millis");
+        }
+        yield* Fiber.join(interrupt);
+        assert.isTrue(sent);
+        assert.lengthOf(requests, 1);
+        const batch = yield* decodeSentBatch(requests[0] ?? "");
+        assert.equal(batch.batch[0]?.event, "test.interrupted.shutdown");
+        if (scenario === "blocked")
+          assert.deepInclude(logs, [
+            "Dropped telemetry events at shutdown deadline",
+            { events: 1 },
+          ]);
+      }).pipe(Effect.provide(Logger.layer([logger], { mergeWithExisting: false })));
+    },
+  );
+
   it.effect("shutdown drops a blocked analytics batch after one second", () => {
     const logs: Array<unknown> = [];
     const logger = Logger.make(({ message }) => {
