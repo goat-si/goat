@@ -565,9 +565,9 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       : workingLabel) ?? (isUnread ? DONE_STATUS_LABEL : undefined);
   const recede = shouldRecedeThreadRow({ status, selected });
   const isRegeneratingTitle = thread.titleRegeneration != null;
-  const worktreeFolder = folderName(thread.worktreePath) ?? thread.worktreePath?.trim();
-  const worktreeLabel = worktreeFolder
-    ? `, in worktree ${worktreeFolder}${thread.branch ? ` (${thread.branch})` : ""}`
+  const worktreeFolder = folderName(thread.worktreePath);
+  const worktreeLabel = thread.worktreePath?.trim()
+    ? `, in ${worktreeFolder ? `worktree ${worktreeFolder}` : "a worktree"}${thread.branch ? ` (${thread.branch})` : ""}`
     : "";
   const rowAccessibilityLabel = `${thread.title}${props.hasQueuedMessages ? ", messages queued to send" : ""}${isRegeneratingTitle ? ", regenerating title" : ""}${worktreeLabel}`;
   const timeLabel = props.timeLabel;

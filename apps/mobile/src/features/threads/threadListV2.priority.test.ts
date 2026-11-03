@@ -115,6 +115,14 @@ describe("threadListV2 Priority", () => {
       "v2-thread",
       "v2-thread",
     ]);
+  });
+
+  it("omits the trailing divider from the last Priority row", () => {
+    const items = buildThreadListV2ListItems({
+      items: [...layout.items, layout.items[0]!],
+      priorityCount: 1,
+      pendingTasks: [],
+    });
     expect(items[1]).toMatchObject({ showTrailingDivider: false });
   });
 
