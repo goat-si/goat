@@ -2359,12 +2359,13 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
             // Keep the correction owed by this turn across native active-run recovery.
             const memoryClaim = { claimed: memoryToolClaims.has(agent.nativeThreadId) };
             const message = yield* resolveUserMessage(turnInput, mcpServers, memoryClaim);
+            const compacted = message === "/compress";
             const pendingUpdates: Array<InteractionUpdate> = [];
             let context: ActiveCursorTurn | null = null;
-            // MCP send overrides replace the ambient servers loaded when the agent opens.
             const sdkRun = yield* agent.session
               .send({
                 message,
+                summarize: compacted,
                 prepareMessage: () =>
                   Effect.gen(function* () {
                     const mcpServers = cursorMcpServers(
@@ -2383,6 +2384,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                 options: {
                   model: cursorSdkModelSelection(turnInput.modelSelection),
                   mode: turnInput.runtimePolicy.interactionMode === "plan" ? "plan" : "agent",
+                  ...(mcpServers === undefined ? {} : { mcpServers }),
                 },
                 onDelta: (update) => {
                   if (context === null) {
@@ -2458,6 +2460,7 @@ export const makeCursorAdapterV2 = Effect.fn("makeCursorAdapterV2")(function* (
                   if (
                     context !== null &&
                     context.assistant.nextSegment === 0 &&
+                    !compacted &&
                     // Text from a resume that made no progress is not the turn's answer.
                     !isResumeFailureAfterTurnEnded(context, result) &&
                     result.result !== undefined &&

@@ -91,6 +91,7 @@ export interface CursorAgentSdkSendInput<Error> {
   readonly prepareMessage?: () => Effect.Effect<string | SDKUserMessage, CursorAgentSdkRunnerError>;
   readonly options?: Omit<SendOptions, "onDelta">;
   readonly onDelta?: (update: InteractionUpdate) => Effect.Effect<void, Error>;
+  readonly summarize?: boolean;
 }
 
 export interface CursorAgentSdkRun {
@@ -141,6 +142,8 @@ export interface CursorAgentSdkLoggedAgentOptions {
 export interface CursorAgentSdkLoggedSendOptions {
   readonly model?: SendOptions["model"];
   readonly mode?: SendOptions["mode"];
+  readonly hasMcpServers?: boolean;
+  readonly mcpServerNames?: ReadonlyArray<string>;
   readonly local?: {
     readonly force?: boolean;
     readonly hasCustomTools?: boolean;
@@ -270,6 +273,9 @@ export function loggedCursorAgentOptions(options: AgentOptions): CursorAgentSdkL
     ...(options.model === undefined ? {} : { model: options.model }),
     ...(options.name === undefined ? {} : { hasName: true }),
     ...(options.mode === undefined ? {} : { mode: options.mode }),
+    ...(options.mcpServers === undefined
+      ? {}
+      : { hasMcpServers: true, mcpServerNames: Object.keys(options.mcpServers).toSorted() }),
     ...(options.local === undefined
       ? {}
       : {
@@ -474,16 +480,18 @@ export const makeCursorAgentSdkRunner = Effect.fn("makeCursorAgentSdkRunner")(fu
               });
               return yield* Effect.tryPromise({
                 try: () =>
-                  agent.send(message, {
-                    ...sendInput.options,
-                    onDelta: async ({ update }) => {
-                      if (!callbacksReady) {
-                        pendingUpdates.push(update);
-                        return;
-                      }
-                      await dispatchUpdate(update);
-                    },
-                  }),
+                  sendInput.summarize === true
+                    ? agent.summarize()
+                    : agent.send(message, {
+                        ...sendInput.options,
+                        onDelta: async ({ update }) => {
+                          if (!callbacksReady) {
+                            pendingUpdates.push(update);
+                            return;
+                          }
+                          await dispatchUpdate(update);
+                        },
+                      }),
                 catch: (cause) => runnerError(cause, "run.start"),
               });
             });
