@@ -483,8 +483,8 @@ it.live("login sentinels stay out of agent results, thread events and browser di
           expect(screen.value).toHaveProperty("observed");
           yield* Effect.promise(() => page.reload());
           yield* Effect.promise(() => page.locator("#user").focus());
-          const input3 = { ...input, clientRequestId: "login-ask-3" };
-          const pending3 = yield* requestSecret(scope, input3);
+          const thirdInput = { ...input, clientRequestId: "login-ask-3" };
+          const thirdPending = yield* requestSecret(scope, thirdInput);
           yield* worker.drain();
           const projection3 = yield* orchestrator.getThreadProjection(threadId);
           const card3 = projection3.turnItems.find(
@@ -496,18 +496,18 @@ it.live("login sentinels stay out of agent results, thread events and browser di
             sessionId,
           );
           yield* worker.drain();
-          const saved3 = yield* requestSecret(scope, input3);
-          if (saved3.status !== "saved" || !("secretRef" in saved3))
+          const thirdSaved = yield* requestSecret(scope, thirdInput);
+          if (thirdSaved.status !== "saved" || !("secretRef" in thirdSaved))
             return yield* Effect.die("third login ref missing");
           fault.password = true;
-          const afterUsername = yield* callFill(saved3.secretRef);
+          const afterUsername = yield* callFill(thirdSaved.secretRef);
           expect(afterUsername.isError).toBe(true);
           expect(yield* Effect.promise(() => page.locator("#user").inputValue())).toBe(username);
-          const retry = yield* callFill(saved3.secretRef);
+          const retry = yield* callFill(thirdSaved.secretRef);
           expect(retry.isError).toBe(true);
           return {
-            pending3,
-            saved3,
+            thirdPending,
+            thirdSaved,
             afterUsername,
             retry,
             refused,
