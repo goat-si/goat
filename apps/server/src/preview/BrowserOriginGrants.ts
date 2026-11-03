@@ -337,7 +337,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
             uncommittedGrants.delete(grantKey);
           }
           yield* shrink(union());
-        });
+        }).pipe(Effect.uninterruptible);
         const result = yield* Effect.gen(function* () {
           const applied = yield* untilRestart(publish(union()), signal, entry.stopped);
           if (Option.isNone(applied)) return { agentResult: decline };
