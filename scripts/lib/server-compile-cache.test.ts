@@ -142,6 +142,8 @@ it("generates macOS x64 bytecode on an ARM64 host under Rosetta", async () => {
     cp.spawn = (executable, args, options) => {
       require('node:assert/strict').match(executable, /Fixture\\.app\\/Contents\\/MacOS\\/Fixture$/);
       require('node:assert/strict').equal(options.env.ELECTRON_RUN_AS_NODE, '1');
+      require('node:assert/strict').match(args[0], /prepare-server-compile-cache-runner\\.cjs$/);
+      require('node:assert/strict').equal(require('node:fs').existsSync(args[0]), true);
       const child = new EventEmitter(); child.stdio = [null, null, null]; child.stdin = null;
       process.nextTick(() => child.emit('close', 0)); return child;
     };
