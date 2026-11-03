@@ -30,6 +30,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as Metrics from "../observability/Metrics.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
+import { parseSetupKey, type AuthenticatorSetup } from "./Authenticator.ts";
 
 const SECRET_REF_PREFIX = "secret-ref:";
 const storeName = (ref: SecretRef) => `secret-request-${ref.slice(SECRET_REF_PREFIX.length)}`;
@@ -55,6 +56,17 @@ const StoredSecret = Schema.fromJsonString(
     loginThreadId: Schema.optional(Schema.String),
     cardThreadId: Schema.optional(Schema.String),
     loginInFlight: Schema.optional(Schema.Boolean),
+    loginConsumed: Schema.optional(Schema.Boolean),
+    codeSetup: Schema.optional(
+      Schema.Struct({
+        secret: Schema.String,
+        algorithm: Schema.Literals(["SHA1", "SHA256", "SHA512"]),
+        digits: Schema.Literals([6, 8]),
+        period: Schema.Number,
+      }),
+    ),
+    codeFills: Schema.optional(Schema.Number),
+    codeExpiresAt: Schema.optional(Schema.Number),
   }),
 );
 const LoginItem = Schema.fromJsonString(
@@ -115,6 +127,10 @@ export class SecretRequests extends Context.Service<
       input: { readonly ref: SecretRef; readonly threadId: ThreadId; readonly origin: string },
       use: (item: CardDetails) => Effect.Effect<LoginDelivery, E, R>,
     ) => Effect.Effect<LoginDelivery, SecretRequestError | E, R>;
+    readonly useOneTimeCode: <E, R>(
+      input: { readonly ref: SecretRef; readonly threadId: ThreadId; readonly origin: string },
+      use: (setup: AuthenticatorSetup) => Effect.Effect<LoginDelivery, E, R>,
+    ) => Effect.Effect<LoginDelivery, SecretRequestError | E, R>;
     /** Moves a saved `file` request's value to an owner-only file and returns its path. */
     readonly saveToFile: (input: {
       readonly threadId: ThreadId;
@@ -166,6 +182,18 @@ const make = Effect.gen(function* () {
       }
       const cardDetails =
         input.answer.type === "save_card" ? normalizeCardDetails(input.answer) : undefined;
+      const codeSetup =
+        input.answer.type === "save_login" && input.answer.authenticatorSetupKey !== undefined
+          ? parseSetupKey(input.answer.authenticatorSetupKey)
+          : undefined;
+      if (
+        input.answer.type === "save_login" &&
+        input.answer.authenticatorSetupKey !== undefined &&
+        codeSetup === undefined
+      )
+        return yield* new SecretRequestError({ reason: "invalid_authenticator_setup_key" });
+      if (codeSetup !== undefined && item.siteOrigin === undefined)
+        return yield* new SecretRequestError({ reason: "origin_required" });
       if (input.answer.type === "save_card" && cardDetails === undefined)
         return yield* new SecretRequestError({ reason: "invalid_card" });
       if (input.answer.type === "save_card" && item.siteOrigin === undefined)
@@ -206,6 +234,7 @@ const make = Effect.gen(function* () {
           projectId: records.thread.projectId,
           value,
           ...(input.answer.type === "save_login" ? { loginThreadId: input.threadId } : {}),
+          ...(codeSetup === undefined ? {} : { codeSetup }),
           ...(input.answer.type === "save_card" ? { cardThreadId: input.threadId } : {}),
           savedAt: yield* Clock.currentTimeMillis,
           ...(item.siteOrigin === undefined ? {} : { origin: item.siteOrigin }),
@@ -301,6 +330,7 @@ const make = Effect.gen(function* () {
   const readRef = Effect.fn("SecretRequests.readRef")(function* (input: {
     readonly ref: SecretRef;
     readonly projectId: ProjectId;
+    readonly forCode?: boolean;
   }) {
     if (!REF_PATTERN.test(input.ref))
       return yield* new SecretRequestError({ reason: "invalid_ref" });
@@ -313,7 +343,13 @@ const make = Effect.gen(function* () {
     if (Option.isNone(decoded) || decoded.value.projectId !== input.projectId) {
       return yield* new SecretRequestError({ reason: "ref_unavailable" });
     }
-    if ((yield* Clock.currentTimeMillis) - decoded.value.savedAt > SECRET_REF_TTL_MS) {
+    if (!input.forCode && decoded.value.loginConsumed === true) {
+      return yield* new SecretRequestError({ reason: "ref_unavailable" });
+    }
+    if (
+      !input.forCode &&
+      (yield* Clock.currentTimeMillis) - decoded.value.savedAt > SECRET_REF_TTL_MS
+    ) {
       yield* removeLogged(storeName(input.ref));
       return yield* new SecretRequestError({ reason: "ref_expired" });
     }
@@ -378,7 +414,7 @@ const make = Effect.gen(function* () {
 
   const useReserved = <A, E, R>(
     input: { readonly ref: SecretRef; readonly threadId: ThreadId; readonly origin: string },
-    kind: "login" | "card",
+    kind: "login" | "card" | "code",
     decode: (value: string) => Option.Option<A>,
     use: (item: A) => Effect.Effect<LoginDelivery, E, R>,
   ) =>
@@ -390,15 +426,29 @@ const make = Effect.gen(function* () {
             Effect.mapError((cause) => new SecretRequestError({ reason: "load_failed", cause })),
           );
         const { stored, item } = yield* Effect.gen(function* () {
-          const stored = yield* readRef({ ref: input.ref, projectId: records.thread.projectId });
+          const stored = yield* readRef({
+            ref: input.ref,
+            projectId: records.thread.projectId,
+            forCode: kind === "code",
+          });
           if (
-            (kind === "login" ? stored.loginThreadId : stored.cardThreadId) !== input.threadId ||
-            stored.loginInFlight === true
+            (kind === "card" ? stored.cardThreadId : stored.loginThreadId) !== input.threadId ||
+            stored.loginInFlight === true ||
+            (kind === "login" && stored.loginConsumed === true) ||
+            (kind === "code" && stored.codeSetup === undefined)
           )
             return yield* new SecretRequestError({ reason: "ref_unavailable" });
           if (stored.origin !== input.origin)
             return yield* new SecretRequestError({ reason: "origin_mismatch" });
-          const item = decode(stored.value);
+          if (
+            kind === "code" &&
+            (yield* Clock.currentTimeMillis) >=
+              (stored.codeExpiresAt ?? stored.savedAt + SECRET_REF_TTL_MS)
+          ) {
+            if (stored.loginConsumed === true) yield* removeLogged(storeName(input.ref));
+            return yield* new SecretRequestError({ reason: "ref_expired" });
+          }
+          const item = decode(kind === "code" ? JSON.stringify(stored.codeSetup) : stored.value);
           if (Option.isNone(item)) return yield* new SecretRequestError({ reason: "read_failed" });
           yield* writeLoginRef(input.ref, { ...stored, loginInFlight: true });
           return { stored, item: item.value };
@@ -416,6 +466,29 @@ const make = Effect.gen(function* () {
             yield* writeLoginRef(input.ref, stored);
             return delivery;
           }
+          if (kind === "login" && stored.codeSetup !== undefined) {
+            yield* writeLoginRef(input.ref, {
+              ...stored,
+              value: "",
+              loginConsumed: true,
+              codeExpiresAt: (yield* Clock.currentTimeMillis) + 10 * 60 * 1000,
+            });
+            return delivery;
+          }
+          if (kind === "code" && delivery === "complete" && (stored.codeFills ?? 0) < 2) {
+            yield* writeLoginRef(input.ref, { ...stored, codeFills: (stored.codeFills ?? 0) + 1 });
+            return delivery;
+          }
+          if (kind === "code" && stored.loginConsumed !== true) {
+            const {
+              codeSetup: _codeSetup,
+              codeFills: _codeFills,
+              codeExpiresAt: _codeExpiresAt,
+              ...login
+            } = stored;
+            yield* writeLoginRef(input.ref, login);
+            return delivery;
+          }
           if (!(yield* removeLogged(storeName(input.ref))))
             return yield* new SecretRequestError({ reason: "consume_failed" });
           return delivery;
@@ -427,6 +500,20 @@ const make = Effect.gen(function* () {
     useReserved(input, "login", decodeLogin, use).pipe(Effect.withSpan("SecretRequests.useLogin"));
   const useCard: SecretRequests["Service"]["useCard"] = (input, use) =>
     useReserved(input, "card", decodeCard, use).pipe(Effect.withSpan("SecretRequests.useCard"));
+  const decodeCode = Schema.decodeUnknownOption(
+    Schema.fromJsonString(
+      Schema.Struct({
+        secret: Schema.String,
+        algorithm: Schema.Literals(["SHA1", "SHA256", "SHA512"]),
+        digits: Schema.Literals([6, 8]),
+        period: Schema.Number,
+      }),
+    ),
+  );
+  const useOneTimeCode: SecretRequests["Service"]["useOneTimeCode"] = (input, use) =>
+    useReserved(input, "code", decodeCode, use).pipe(
+      Effect.withSpan("SecretRequests.useOneTimeCode"),
+    );
 
   const saveToFile: SecretRequests["Service"]["saveToFile"] = Effect.fn(
     "SecretRequests.saveToFile",
@@ -496,7 +583,13 @@ const make = Effect.gen(function* () {
       const decoded = Option.flatMap(stored, (bytes) =>
         decodeStored(new TextDecoder().decode(bytes)),
       );
-      if (Option.isSome(decoded) && now - decoded.value.savedAt <= SECRET_REF_TTL_MS) continue;
+      if (
+        Option.isSome(decoded) &&
+        (decoded.value.loginConsumed && decoded.value.codeExpiresAt !== undefined
+          ? now < decoded.value.codeExpiresAt
+          : now - decoded.value.savedAt <= SECRET_REF_TTL_MS)
+      )
+        continue;
       if (yield* removeLogged(name)) removed += 1;
     }
     yield* Effect.annotateCurrentSpan({ "secret_request.expired_removed": removed });
@@ -536,6 +629,7 @@ const make = Effect.gen(function* () {
     consumeForOrigin,
     useLogin,
     useCard,
+    useOneTimeCode,
     saveToFile,
   });
 });
