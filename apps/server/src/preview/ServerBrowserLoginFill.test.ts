@@ -52,7 +52,7 @@ const makePage = (kinds: FieldKind[], pausePassword?: () => Promise<void>) => {
   let mutations = 0;
   const masked: string[] = [];
   const sent: string[] = [];
-  const send = async (method: string, params: Record<string, unknown>) => {
+  const send = async (method: string, params: Record<string, unknown>, onDispatch?: () => void) => {
     if (method === "Runtime.releaseObject") {
       const id = String(params.objectId);
       released.push(id);
@@ -78,6 +78,7 @@ const makePage = (kinds: FieldKind[], pausePassword?: () => Promise<void>) => {
       if (args[0]?.value === "password") await pausePassword?.();
       mutations++;
       sent.push(String(args[0]?.value));
+      onDispatch?.();
     }
     const result = fn.apply(
       params.objectId ? objects.get(String(params.objectId)) : undefined,
@@ -220,10 +221,14 @@ it.live("refuses a prefilled different account before either mutation", () =>
 it.live("returns unverifiable if a page changes a field before masked read-back", () =>
   Effect.promise(async () => {
     const page = makePage(["text", "password"]);
-    const send = async (method: string, params: Record<string, unknown>) => {
+    const send = async (
+      method: string,
+      params: Record<string, unknown>,
+      onDispatch?: () => void,
+    ) => {
       if (String(params.functionDeclaration).includes("u.value === username"))
         page.fields[0]!.value = "changed";
-      return page.send(method, params);
+      return page.send(method, params, onDispatch);
     };
     const result = await fillLogin({
       send,
@@ -266,10 +271,14 @@ it.live("prefers the named username and masks both values before any input", () 
   Effect.promise(async () => {
     const page = makePage(["text", "email", "password"]);
     page.fields[1]!.autocomplete = "username";
-    const send = async (method: string, params: Record<string, unknown>) => {
+    const send = async (
+      method: string,
+      params: Record<string, unknown>,
+      onDispatch?: () => void,
+    ) => {
       if (String(params.functionDeclaration).includes("GOAT_LOGIN_MUTATE"))
         expect(page.masked).toEqual(["test-user", "test-password"]);
-      return page.send(method, params);
+      return page.send(method, params, onDispatch);
     };
     const result = await fillLogin({
       send,
@@ -346,8 +355,12 @@ it.live("retains each delivered field handle for the caller and releases the wra
 it.live("protects both field handles before dispatch when the password reply is lost", () =>
   Effect.promise(async () => {
     const page = makePage(["text", "password"]);
-    const send = async (method: string, params: Record<string, unknown>) => {
-      const result = await page.send(method, params);
+    const send = async (
+      method: string,
+      params: Record<string, unknown>,
+      onDispatch?: () => void,
+    ) => {
+      const result = await page.send(method, params, onDispatch);
       const args = (params.arguments ?? []) as Array<{ value: unknown }>;
       if (
         String(params.functionDeclaration).includes("GOAT_LOGIN_MUTATE") &&
@@ -371,5 +384,32 @@ it.live("protects both field handles before dispatch when the password reply is 
       { value: "test-password" },
     ]);
     for (const field of page.protectedFields) expect(page.released).not.toContain(field.objectId);
+  }),
+);
+
+it.live("releases a protected field if its pre-dispatch gate refuses", () =>
+  Effect.promise(async () => {
+    const page = makePage(["text", "password"]);
+    const send = async (
+      method: string,
+      params: Record<string, unknown>,
+      onDispatch?: () => void,
+    ) => {
+      if (String(params.functionDeclaration).includes("GOAT_LOGIN_MUTATE"))
+        throw new Error("gate refused");
+      return page.send(method, params, onDispatch);
+    };
+    await expect(
+      fillLogin({
+        send,
+        contextId: 1,
+        origin: "https://login.test",
+        login: { username: "test-user", password: "test-password" },
+        register: page.register,
+        protect: page.protect,
+      }),
+    ).rejects.toThrow();
+    expect(page.protectedFields).toEqual([]);
+    expect(page.released).toEqual(expect.arrayContaining(["object-0", "object-1", "object-2"]));
   }),
 );

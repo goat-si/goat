@@ -10,6 +10,8 @@ import {
   TurnItemId,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Metric from "effect/Metric";
@@ -715,6 +717,57 @@ it.effect("an uncertain login delivery remains unavailable", () =>
           (yield* service.useLogin(input, () => Effect.succeed(true)).pipe(Effect.flip)).reason,
           "ref_unavailable",
         );
+      }),
+    { requestKind: "login", siteOrigin: "https://example.com" },
+  ),
+);
+
+it.effect("a held login fill does not block an unrelated secret and reserves its own ref", () =>
+  withService(
+    ({ service, stored }) =>
+      Effect.gen(function* () {
+        yield* service.answer({
+          threadId,
+          turnItemId,
+          answer: { type: "save_login", username: "test-user", password: "test-password" },
+        });
+        const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
+        const otherRef = SecretRef.make(`secret-ref:${"a".repeat(32)}`);
+        stored.set(
+          `secret-request-${"a".repeat(32)}`,
+          new TextEncoder().encode(
+            JSON.stringify({
+              projectId,
+              value: "other-secret",
+              savedAt: 0,
+              origin: "https://example.com",
+            }),
+          ),
+        );
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const input = { ref, threadId, origin: "https://example.com" };
+        const first = yield* service
+          .useLogin(input, () =>
+            Deferred.succeed(entered, undefined).pipe(
+              Effect.andThen(Deferred.await(release)),
+              Effect.as(true),
+            ),
+          )
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(entered);
+        const other = yield* service.consumeForOrigin({
+          ref: otherRef,
+          threadId,
+          origin: "https://example.com",
+        });
+        assert.equal(other, "other-secret");
+        const duplicate = yield* service
+          .useLogin(input, () => Effect.succeed(true))
+          .pipe(Effect.flip);
+        assert.equal(duplicate.reason, "ref_unavailable");
+        yield* Deferred.succeed(release, undefined);
+        assert.isTrue(yield* Fiber.join(first));
       }),
     { requestKind: "login", siteOrigin: "https://example.com" },
   ),

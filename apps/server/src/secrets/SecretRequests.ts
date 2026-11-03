@@ -328,6 +328,15 @@ const make = Effect.gen(function* () {
     );
   });
 
+  const writeLoginRef = Effect.fn("SecretRequests.writeLoginRef")(
+    (ref: SecretRef, entry: typeof StoredSecret.Type) =>
+      encodeStored(entry).pipe(
+        Effect.orDie,
+        Effect.flatMap((encoded) => store.set(storeName(ref), new TextEncoder().encode(encoded))),
+        Effect.mapError((cause) => new SecretRequestError({ reason: "store_failed", cause })),
+      ),
+  );
+
   const useLogin: SecretRequests["Service"]["useLogin"] = (input, use) =>
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
@@ -336,33 +345,29 @@ const make = Effect.gen(function* () {
           .pipe(
             Effect.mapError((cause) => new SecretRequestError({ reason: "load_failed", cause })),
           );
-        const stored = yield* readRef({ ref: input.ref, projectId: records.thread.projectId });
-        if (stored.loginThreadId !== input.threadId || stored.loginInFlight === true)
-          return yield* new SecretRequestError({ reason: "ref_unavailable" });
-        if (stored.origin !== input.origin)
-          return yield* new SecretRequestError({ reason: "origin_mismatch" });
-        const login = decodeLogin(stored.value);
-        if (Option.isNone(login)) return yield* new SecretRequestError({ reason: "read_failed" });
-        const write = (entry: typeof stored) =>
-          encodeStored(entry).pipe(
-            Effect.orDie,
-            Effect.flatMap((encoded) =>
-              store.set(storeName(input.ref), new TextEncoder().encode(encoded)),
-            ),
-            Effect.mapError((cause) => new SecretRequestError({ reason: "store_failed", cause })),
-          );
-        // A crash or uncertain callback must not make a fully delivered item reusable.
-        yield* write({ ...stored, loginInFlight: true });
-        const complete = yield* restore(use(login.value));
-        if (!complete) {
-          yield* write(stored);
-          return false;
-        }
-        if (!(yield* removeLogged(storeName(input.ref))))
-          return yield* new SecretRequestError({ reason: "consume_failed" });
-        return true;
+        const { stored, login } = yield* Effect.gen(function* () {
+          const stored = yield* readRef({ ref: input.ref, projectId: records.thread.projectId });
+          if (stored.loginThreadId !== input.threadId || stored.loginInFlight === true)
+            return yield* new SecretRequestError({ reason: "ref_unavailable" });
+          if (stored.origin !== input.origin)
+            return yield* new SecretRequestError({ reason: "origin_mismatch" });
+          const login = decodeLogin(stored.value);
+          if (Option.isNone(login)) return yield* new SecretRequestError({ reason: "read_failed" });
+          yield* writeLoginRef(input.ref, { ...stored, loginInFlight: true });
+          return { stored, login: login.value };
+        }).pipe(consumeLock.withPermits(1));
+        const complete = yield* restore(use(login));
+        return yield* Effect.gen(function* () {
+          if (!complete) {
+            yield* writeLoginRef(input.ref, stored);
+            return false;
+          }
+          if (!(yield* removeLogged(storeName(input.ref))))
+            return yield* new SecretRequestError({ reason: "consume_failed" });
+          return true;
+        }).pipe(consumeLock.withPermits(1));
       }),
-    ).pipe(consumeLock.withPermits(1), Effect.withSpan("SecretRequests.useLogin"));
+    ).pipe(Effect.withSpan("SecretRequests.useLogin"));
 
   const saveToFile: SecretRequests["Service"]["saveToFile"] = Effect.fn(
     "SecretRequests.saveToFile",

@@ -58,6 +58,43 @@ import { createScreenDispatchRouter } from "../screenCode/ScreenDispatchRouter.t
 import { ScreenRunService } from "../screenCode/ScreenRunService.ts";
 import { resolveScreenRuntimeAsset } from "../screenCode/ScreenRuntimeAsset.ts";
 
+const fault = vi.hoisted(() => ({ inspection: false, password: false }));
+vi.mock(import("../preview/ServerBrowserLoginFill.ts"), async (original) => {
+  const actual = await original();
+  return {
+    ...actual,
+    fillLogin: (input: Parameters<typeof actual.fillLogin>[0]) =>
+      actual.fillLogin({
+        ...input,
+        send: (method, params, onDispatch) => {
+          if (
+            fault.inspection &&
+            method === "Runtime.callFunctionOn" &&
+            typeof params.functionDeclaration === "string" &&
+            params.functionDeclaration.includes("let focused = document.activeElement")
+          ) {
+            fault.inspection = false;
+            return Promise.reject(new Error("inspection failed"));
+          }
+          const args = Array.isArray(params.arguments)
+            ? (params.arguments as Array<{ value?: unknown }>)
+            : [];
+          if (
+            fault.password &&
+            method === "Runtime.callFunctionOn" &&
+            typeof params.functionDeclaration === "string" &&
+            params.functionDeclaration.includes("GOAT_LOGIN_MUTATE") &&
+            args[0]?.value === "password"
+          ) {
+            fault.password = false;
+            return Promise.reject(new Error("password dispatch failed"));
+          }
+          return input.send(method, params, onDispatch);
+        },
+      }),
+  };
+});
+
 let browser: Promise<Browser> | undefined;
 const contexts: Array<BrowserContext> = [];
 vi.mock("../preview/ServerBrowserContexts.ts", () => ({
@@ -348,17 +385,26 @@ it.live("login sentinels stay out of agent results, thread events and browser di
             ),
             Layer.provideMerge(database),
           );
-          const mcp = yield* McpServer.McpServer.pipe(
-            Effect.flatMap((server) =>
-              server.callTool({
-                name: "goat_preview_fill_login",
-                arguments: { tabId, secretRef: saved.secretRef },
-              }),
-            ),
-            Effect.provideService(McpSchema.McpServerClient, mcpClient),
-            Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
-            Effect.provide(registration),
+          const callFill = (secretRef = saved.secretRef) =>
+            McpServer.McpServer.pipe(
+              Effect.flatMap((server) =>
+                server.callTool({
+                  name: "goat_preview_fill_login",
+                  arguments: { tabId, secretRef },
+                }),
+              ),
+              Effect.provideService(McpSchema.McpServerClient, mcpClient),
+              Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+              Effect.provide(registration),
+            );
+          fault.inspection = true;
+          const refused = yield* callFill();
+          expect(refused.isError).toBe(true);
+          expect(Option.isSome(yield* secrets.savedRef({ threadId, turnItemId: card.id }))).toBe(
+            true,
           );
+          expect(yield* Effect.promise(() => page.locator("#user").inputValue())).toBe("");
+          const mcp = yield* callFill();
           expect(mcp.isError, JSON.stringify(mcp)).not.toBe(true);
           expect(mcp.structuredContent).toMatchObject({
             usernameFilled: true,
@@ -435,7 +481,45 @@ it.live("login sentinels stay out of agent results, thread events and browser di
           expect(logs._tag).toBe("Success");
           expect(snapshot._tag).toBe("Failure");
           expect(screen.value).toHaveProperty("observed");
-          return { mcp, pending2, saved2, screen, firstLogs, firstSnapshot, logs, snapshot };
+          yield* Effect.promise(() => page.reload());
+          yield* Effect.promise(() => page.locator("#user").focus());
+          const input3 = { ...input, clientRequestId: "login-ask-3" };
+          const pending3 = yield* requestSecret(scope, input3);
+          yield* worker.drain();
+          const projection3 = yield* orchestrator.getThreadProjection(threadId);
+          const card3 = projection3.turnItems.find(
+            (item) => item.type === "secret_request" && item.id !== card.id && item.id !== card2.id,
+          );
+          if (!card3) return yield* Effect.die("third login card missing");
+          yield* handoffs.answerSecret(
+            { threadId, turnItemId: card3.id, answer: { type: "save_login", username, password } },
+            sessionId,
+          );
+          yield* worker.drain();
+          const saved3 = yield* requestSecret(scope, input3);
+          if (saved3.status !== "saved" || !("secretRef" in saved3))
+            return yield* Effect.die("third login ref missing");
+          fault.password = true;
+          const afterUsername = yield* callFill(saved3.secretRef);
+          expect(afterUsername.isError).toBe(true);
+          expect(yield* Effect.promise(() => page.locator("#user").inputValue())).toBe(username);
+          const retry = yield* callFill(saved3.secretRef);
+          expect(retry.isError).toBe(true);
+          return {
+            pending3,
+            saved3,
+            afterUsername,
+            retry,
+            refused,
+            mcp,
+            pending2,
+            saved2,
+            screen,
+            firstLogs,
+            firstSnapshot,
+            logs,
+            snapshot,
+          };
         }).pipe(Effect.provide(browserLayer));
         yield* worker.drain();
         const projection = yield* orchestrator.getThreadProjection(threadId);

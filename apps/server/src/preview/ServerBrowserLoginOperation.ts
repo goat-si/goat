@@ -52,7 +52,6 @@ export const makeLoginOperation =
         readonly origin: string;
       },
       run: (login: Login) => Promise<boolean>,
-      signal: AbortSignal,
     ) => Promise<boolean>;
   }) =>
   async <T extends SecretFillTab>(
@@ -103,39 +102,66 @@ export const makeLoginOperation =
                 worldName: "goat-login-fill",
               });
               let result: LoginFillResult | undefined;
+              let notSent = false;
               await deps.use(
                 { ref: input.secretRef, threadId: request.threadId, origin },
                 async (login) => {
-                  const send = async (method: string, params: Record<string, unknown>) => {
+                  let dispatched = false;
+                  const send = async (
+                    method: string,
+                    params: Record<string, unknown>,
+                    onDispatch?: () => void,
+                  ) => {
                     if (performance.now() >= deadlineMs)
                       throw new DOMException("Login fill timed out.", "TimeoutError");
                     if (method === "Runtime.releaseObject")
                       return channel.send("Runtime.releaseObject", params as { objectId: string });
                     if (method === "Runtime.callFunctionOn")
-                      return Reflect.apply(channel.send, undefined, [method, params]) as Promise<{
-                        result?: { objectId?: string; value?: unknown };
-                        exceptionDetails?: unknown;
-                      }>;
+                      return channel.call(() => {
+                        onDispatch?.();
+                        return Reflect.apply(tab.cdp.send, tab.cdp, [method, params]) as Promise<{
+                          result?: { objectId?: string; value?: unknown };
+                          exceptionDetails?: unknown;
+                        }>;
+                      });
                     throw new Error("Unsupported login fill operation.");
                   };
-                  const output = await fillLogin({
+                  const run = fillLogin({
                     send,
                     contextId: world.executionContextId,
                     origin,
                     login,
                     register: (value) => deps.register(tab, request.threadId, value),
                     protect: (field) => deps.protect(tab, request.threadId, origin, tab.cdp, field),
+                    onDispatch: () => {
+                      dispatched = true;
+                    },
                   });
-                  result = {
-                    usernameFilled: output.usernameFilled,
-                    passwordFilled: output.passwordFilled,
-                    verdict: output.verdict,
-                    ...(output.verdict === "refused" ? { code: output.code } : {}),
-                  };
-                  return output.usernameFilled && output.passwordFilled;
+                  let onAbort: (() => void) | undefined;
+                  const aborted = new Promise<never>((_, reject) => {
+                    onAbort = () => reject(signal.reason);
+                    if (signal.aborted) onAbort();
+                    else signal.addEventListener("abort", onAbort, { once: true });
+                  });
+                  try {
+                    const output = await Promise.race([run, aborted]);
+                    result = {
+                      usernameFilled: output.usernameFilled,
+                      passwordFilled: output.passwordFilled,
+                      verdict: output.verdict,
+                      ...(output.verdict === "refused" ? { code: output.code } : {}),
+                    };
+                    return output.usernameFilled && output.passwordFilled;
+                  } catch (cause) {
+                    if (dispatched) throw cause;
+                    notSent = true;
+                    return false;
+                  } finally {
+                    if (onAbort) signal.removeEventListener("abort", onAbort);
+                  }
                 },
-                signal,
               );
+              if (notSent) throw refusal("Login fill stopped before any input was sent.");
               if (!result) throw new Error("Login fill did not return a result.");
               return result;
             }),

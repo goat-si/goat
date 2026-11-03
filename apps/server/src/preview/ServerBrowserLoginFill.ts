@@ -3,7 +3,11 @@ type RemoteReply = {
   readonly exceptionDetails?: unknown;
 };
 
-type Send = (method: string, params: Record<string, unknown>) => Promise<RemoteReply>;
+type Send = (
+  method: string,
+  params: Record<string, unknown>,
+  onDispatch?: () => void,
+) => Promise<RemoteReply>;
 
 const VISIBLE = `(field) => {
   if (!field.getClientRects().length) return false;
@@ -67,6 +71,7 @@ export const fillLogin = async (input: {
   readonly login: { readonly username: string; readonly password: string };
   readonly register: (value: string) => void;
   readonly protect: (field: { readonly objectId: string; readonly value: string }) => () => void;
+  readonly onDispatch?: () => void;
 }) => {
   const found = await input.send("Runtime.callFunctionOn", {
     functionDeclaration: FIND_FIELDS,
@@ -113,17 +118,34 @@ export const fillLogin = async (input: {
     ) => {
       const unprotect = input.protect(field);
       pending.delete(field.objectId);
-      const reply = await input.send("Runtime.callFunctionOn", {
-        objectId,
-        functionDeclaration: MUTATE,
-        arguments: [
-          { value: which },
-          { value: field.value },
-          { value: input.origin },
-          { value: input.login.username },
-        ],
-        returnByValue: true,
-      });
+      let dispatched = false;
+      let reply: RemoteReply;
+      try {
+        reply = await input.send(
+          "Runtime.callFunctionOn",
+          {
+            objectId,
+            functionDeclaration: MUTATE,
+            arguments: [
+              { value: which },
+              { value: field.value },
+              { value: input.origin },
+              { value: input.login.username },
+            ],
+            returnByValue: true,
+          },
+          () => {
+            dispatched = true;
+            input.onDispatch?.();
+          },
+        );
+      } catch (cause) {
+        if (!dispatched) {
+          unprotect();
+          await release(field.objectId);
+        }
+        throw cause;
+      }
       if (reply.exceptionDetails) throw new Error("Login input delivery is uncertain.");
       if (reply.result?.value === true) {
         fields.push(field);

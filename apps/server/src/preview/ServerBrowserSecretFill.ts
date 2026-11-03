@@ -785,7 +785,7 @@ export const make = Effect.gen(function* () {
           (fences.get(tab.page) ?? []).filter((each) => each !== entry),
         );
     },
-    use: (input, run, signal) =>
+    use: (input, run) =>
       runPromise(
         secretRequests.useLogin(input, (login) =>
           Effect.tryPromise({
@@ -793,7 +793,6 @@ export const make = Effect.gen(function* () {
             catch: () => new SecretRequestError({ reason: "consume_failed" }),
           }),
         ),
-        { signal },
       ),
   });
 
