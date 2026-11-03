@@ -123,8 +123,9 @@ GOAT Connect does not have an active link between your account and the host.
 - **GOAT Connect is off on the host, or the host only publishes agent activity.**
   On the host, open **Settings > Connections** and turn **GOAT Connect** on, or
   run `goat connect`.
-- **The host was linked, but the server did not apply the link yet.** Run
-  `goat service restart` on the host, or restart `goat serve`.
+- **The host was linked, but the server did not apply the link yet.** Restart
+  the server on the host: quit and reopen the GOAT desktop app, run
+  `goat service restart`, or stop `goat serve` and run it again.
 - **This device's sign-in expired, or the host no longer accepts this
   device.** Sign out of GOAT Connect and sign in again.
 - **Your account reached its tunnel limit.** Remove an environment you do not
