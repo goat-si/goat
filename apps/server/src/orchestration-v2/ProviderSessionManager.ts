@@ -1371,7 +1371,7 @@ export const layerWithOptions = (
       }) =>
         Effect.acquireUseRelease(
           removeLiveEntry(input).pipe(
-            Effect.tap(([entry]) => input.latch.keepFor(Option.getOrUndefined(entry)?.runtime)),
+            Effect.tap(([entry]) => input.latch.keepFor(Option.getOrUndefined(entry))),
           ),
           ([entry, releasedAt]) =>
             Option.match(entry, {
@@ -2627,13 +2627,17 @@ export const layerWithOptions = (
                   }
                 }
                 const key = sessionKey(input.providerSessionId);
-                if (!(yield* awaitReopen(key)))
+                const settled = yield* awaitReopen(
+                  key,
+                  Ref.get(sessions).pipe(Effect.map((current) => current.get(key))),
+                );
+                if (Option.isNone(settled))
                   return yield* new ProviderSessionOpenError({
                     instanceId: input.modelSelection.instanceId,
                     providerSessionId: input.providerSessionId,
                     cause: "The previous session for this thread is still stopping.",
                   });
-                const existing = (yield* Ref.get(sessions)).get(key);
+                const existing = settled.value;
                 if (existing !== undefined) {
                   const attached = existing.attachedThreadIds.has(input.threadId);
                   if (!attached && !existing.supportsMultipleProviderThreads) {

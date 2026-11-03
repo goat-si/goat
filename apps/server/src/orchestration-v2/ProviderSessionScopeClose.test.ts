@@ -3,6 +3,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import { TestClock } from "effect/testing";
 
@@ -104,5 +105,66 @@ it.effect("shutdown waits for a release that starts its close while shutdown wai
     );
     yield* TestClock.adjust("10 seconds");
     assert.deepEqual(yield* Fiber.join(shutdown), [true, true]);
+  }),
+);
+
+const optedIn = { reopenAfterClose: true as const };
+
+it.effect("a reopen waits for a hold registered while it looked up the session", () =>
+  Effect.gen(function* () {
+    const closer = makeScopeCloser(30_000);
+    const released = yield* Deferred.make<void>();
+    const lookups = yield* Ref.make(0);
+    const scope = yield* Scope.make();
+    // A release of the same key starts between the reopen's wait and its lookup.
+    const lookup = Ref.getAndUpdate(lookups, (count) => count + 1).pipe(
+      Effect.tap((count) =>
+        count > 0
+          ? Effect.void
+          : closer
+              .holdReopen("session", (latch) =>
+                latch
+                  .keepFor({ runtime: optedIn, scope })
+                  .pipe(Effect.andThen(Deferred.await(released))),
+              )
+              .pipe(Effect.forkChild({ startImmediately: true })),
+      ),
+    );
+    const reopen = yield* closer
+      .awaitReopen("session", lookup)
+      .pipe(Effect.forkChild({ startImmediately: true }));
+    yield* TestClock.adjust("10 seconds");
+    assert.strictEqual(yield* Ref.get(lookups), 1);
+
+    yield* Deferred.succeed(released, undefined);
+    assert.isTrue(Option.isSome(yield* Fiber.join(reopen)));
+    assert.strictEqual(yield* Ref.get(lookups), 2);
+  }),
+);
+
+it.effect("an interrupted release still closes the scope it removed before a reopen proceeds", () =>
+  Effect.gen(function* () {
+    const closer = makeScopeCloser(30_000);
+    const session = yield* makeHeldSessionScope;
+    const removed = yield* Deferred.make<void>();
+    const release = yield* closer
+      .holdReopen("session", (latch) =>
+        latch
+          .keepFor({ runtime: optedIn, scope: session.scope })
+          .pipe(Effect.andThen(Deferred.succeed(removed, undefined)), Effect.andThen(Effect.never)),
+      )
+      .pipe(Effect.forkChild({ startImmediately: true }));
+    yield* Deferred.await(removed);
+    yield* Fiber.interrupt(release);
+    yield* Deferred.await(session.closing);
+
+    const reopen = yield* closer
+      .awaitReopen(
+        "session",
+        Effect.sync(() => session.state.closed),
+      )
+      .pipe(Effect.forkChild({ startImmediately: true }));
+    yield* Deferred.succeed(session.exited, undefined);
+    assert.deepEqual(yield* Fiber.join(reopen), Option.some(true));
   }),
 );

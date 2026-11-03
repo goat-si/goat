@@ -145,11 +145,12 @@ it.effect("a session tracks only its own process's survivor and resumes only its
       block: { threadId: ThreadId.make("goal-" + key), nativeThreadId: "native-goal-" + key },
     });
     const resumed: string[] = [];
+    const blocks = [goal("a"), goal("b")];
     const service = {
       list: Effect.succeed([binding("a"), binding("b")]),
       listGoalBlocksByInstance: () => Effect.succeed([goal("a"), goal("b")]),
       getGoalBlocks: (threadId: ThreadId) =>
-        Effect.succeed([goal("a"), goal("b")].filter((entry) => entry.block.threadId === threadId)),
+        Effect.sync(() => blocks.filter((entry) => entry.block.threadId === threadId)),
       getStopObligations: () => Effect.succeed([]),
     } as unknown as CodexSurvivors["Service"];
     const client = {
@@ -174,5 +175,9 @@ it.effect("a session tracks only its own process's survivor and resumes only its
     assert.deepEqual([...notifications.waiting.keys()], ["native-survivor-a"]);
     yield* notifications.resumeGoalThreads;
     assert.deepEqual(resumed, ["native-goal-a"]);
+    // Once its fences are ready the session still holds its own persisted goal block, until cleared.
+    assert.deepEqual(yield* notifications.fencedGoalThreads, Option.some(["native-goal-a"]));
+    blocks.splice(0, 1);
+    assert.deepEqual(yield* notifications.fencedGoalThreads, Option.some([]));
   }).pipe(Effect.scoped),
 );

@@ -3,6 +3,7 @@ import type { OrchestrationV2ProviderThread } from "@goat/contracts";
 import type * as CodexClient from "effect-codex-app-server/client";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 
 import { makeCodexLiveWork } from "./CodexLiveWork.ts";
 
@@ -22,6 +23,7 @@ const makeState = () => ({
   goalsByNativeThread: new Map<string, { status: string } | null>(),
   waiting: new Map<string, unknown>(),
   pendingGoalThreads: new Set<string>(),
+  fencedGoalThreads: [] as ReadonlyArray<string> | "fails",
   goalReads: [] as Array<string>,
   goalRead: "active" as GoalRead,
 });
@@ -54,7 +56,13 @@ const liveWork = (state: State) =>
     pendingSubagentTurns: Effect.sync(() => state.pendingSubagentTurns),
     pendingRuntimeRequests: Effect.sync(() => state.pendingRuntimeRequests),
     goalsByNativeThread: state.goalsByNativeThread,
-    survivors: { waiting: state.waiting, pendingGoalThreads: state.pendingGoalThreads },
+    survivors: {
+      waiting: state.waiting,
+      pendingGoalThreads: state.pendingGoalThreads,
+      fencedGoalThreads: Effect.sync(() =>
+        state.fencedGoalThreads === "fails" ? Option.none() : Option.some(state.fencedGoalThreads),
+      ),
+    },
     turnHasRetainedBackgroundWork: () => Effect.succeed(false),
   });
 
@@ -149,5 +157,30 @@ it.effect("a goal-active or survivor thread is kept loaded, other threads are no
     assert.isTrue(yield* hasPendingBackgroundWorkForThread(providerThread("native-goal")));
     assert.isTrue(yield* hasPendingBackgroundWorkForThread(providerThread("native-survivor")));
     assert.isFalse(yield* hasPendingBackgroundWorkForThread(providerThread("native-idle")));
+  }),
+);
+
+it.effect(
+  "a persisted goal block holds the session after its fences are ready, until Codex reports the goal inactive",
+  () =>
+    Effect.gen(function* () {
+      const state = makeState();
+      state.fencedGoalThreads = ["native-goal"];
+      const { holdsLiveWork } = liveWork(state);
+      assert.isTrue(yield* holdsLiveWork({ pastPinCeiling: false }));
+      state.goalRead = "fails";
+      assert.isTrue(yield* holdsLiveWork({ pastPinCeiling: true }));
+      state.goalRead = "paused";
+      assert.isFalse(yield* holdsLiveWork({ pastPinCeiling: true }));
+      assert.deepEqual(state.goalReads, ["native-goal", "native-goal"]);
+    }),
+);
+
+it.effect("goal blocks that cannot be read hold the session", () =>
+  Effect.gen(function* () {
+    const state = makeState();
+    state.fencedGoalThreads = "fails";
+    const { holdsLiveWork } = liveWork(state);
+    assert.isTrue(yield* holdsLiveWork({ pastPinCeiling: true }));
   }),
 );

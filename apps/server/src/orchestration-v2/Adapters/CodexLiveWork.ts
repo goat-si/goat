@@ -70,6 +70,8 @@ export const makeCodexLiveWork = <Turn extends CodexLiveTurn<Turn>>(input: {
     readonly waiting: ReadonlyMap<string, unknown>;
     /** Goal threads whose persisted goal block is not yet confirmed. */
     readonly pendingGoalThreads: ReadonlySet<string>;
+    /** Goal threads whose persisted goal block this session still holds; none if unreadable. */
+    readonly fencedGoalThreads: Effect.Effect<Option.Option<ReadonlyArray<string>>>;
   };
   readonly turnHasRetainedBackgroundWork: (nativeTurnId: string) => Effect.Effect<boolean>;
 }) => {
@@ -121,16 +123,21 @@ export const makeCodexLiveWork = <Turn extends CodexLiveTurn<Turn>>(input: {
   }) {
     if ((yield* input.activeTurns).size > 0) return true;
     if ((yield* input.pendingRuntimeRequests).size > 0) return true;
-    if (input.survivors.waiting.size > 0 || input.survivors.pendingGoalThreads.size > 0)
-      return true;
+    if (input.survivors.waiting.size > 0) return true;
     if ((yield* input.pendingSubagentTurns).size > 0) return true;
     for (const subagent of (yield* input.subagentThreads).values())
       if (unfinishedSubagent(subagent)) return true;
-    const goals = [...input.goalsByNativeThread]
-      .filter(([, goal]) => goal?.status === "active")
-      .map(([nativeThreadId]) => nativeThreadId);
-    if (!options.pastPinCeiling) return goals.length > 0;
-    // Past the ceiling a cached goal can be stale, so Codex confirms it.
+    const fenced = yield* input.survivors.fencedGoalThreads;
+    if (Option.isNone(fenced)) return true;
+    const goals = new Set([
+      ...[...input.goalsByNativeThread]
+        .filter(([, goal]) => goal?.status === "active")
+        .map(([nativeThreadId]) => nativeThreadId),
+      ...input.survivors.pendingGoalThreads,
+      ...fenced.value,
+    ]);
+    if (!options.pastPinCeiling) return goals.size > 0;
+    // Past the ceiling cached goals and leftover blocks can be stale, so Codex confirms them.
     for (const nativeThreadId of goals)
       if (yield* goalStillActive(input.client, nativeThreadId)) return true;
     return false;

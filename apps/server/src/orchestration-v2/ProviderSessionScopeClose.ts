@@ -10,7 +10,9 @@ import * as Scope from "effect/Scope";
 export interface ReopenLatch {
   /** Keeps the hold only for a removed runtime that opts in; otherwise ends it now. */
   readonly keepFor: (
-    runtime: { readonly reopenAfterClose?: true } | undefined,
+    removed:
+      | { readonly runtime: { readonly reopenAfterClose?: true }; readonly scope: Scope.Closeable }
+      | undefined,
   ) => Effect.Effect<void>;
 }
 
@@ -18,6 +20,7 @@ interface LatchState {
   readonly key: string;
   readonly done: Deferred.Deferred<void>;
   closing: boolean;
+  removedScope?: Scope.Closeable;
 }
 
 /**
@@ -54,34 +57,55 @@ export const makeScopeCloser = (timeoutMs: number) => {
     Effect.suspend(() => {
       const state: LatchState = { key, done: Deferred.makeUnsafe<void>(), closing: false };
       const latch: ReopenLatch = {
-        keepFor: (runtime) =>
+        keepFor: (removed) =>
           Effect.sync(() => {
-            if (runtime?.reopenAfterClose !== true) openLatch(state);
+            if (removed !== undefined) state.removedScope = removed.scope;
+            if (removed?.runtime.reopenAfterClose !== true) openLatch(state);
           }),
       };
       latchStates.set(latch, state);
       const held = latches.get(key) ?? new Set();
       held.add(state);
       latches.set(key, held);
+      // A release cut short after removing its session still closes it, holding reopens till then.
       return release(latch).pipe(
         Effect.ensuring(
-          Effect.sync(() => {
-            if (!state.closing) openLatch(state);
+          Effect.suspend(() => {
+            if (state.closing) return Effect.void;
+            if (state.removedScope === undefined) return Effect.sync(() => openLatch(state));
+            return closeWithin(state.removedScope, { reason: "release_interrupted", latch }).pipe(
+              Effect.forkDetach,
+              Effect.asVoid,
+            );
           }),
         ),
       );
     });
 
-  /** False when a hold on the key outlived the bound. */
-  const awaitReopen = (key: string): Effect.Effect<boolean> =>
-    Effect.suspend(() => {
+  /**
+   * Runs `lookup` once no hold is left on the key, again if a release registered meanwhile.
+   * None when holds outlive the bound.
+   */
+  const awaitReopen = <A>(
+    key: string,
+    lookup: Effect.Effect<A>,
+  ): Effect.Effect<Option.Option<A>> => {
+    const settle: Effect.Effect<A> = Effect.suspend(() => {
       const held = [...(latches.get(key) ?? [])];
-      if (held.length === 0) return Effect.succeed(true);
-      return Effect.forEach(held, (latch) => Deferred.await(latch.done), {
-        concurrency: "unbounded",
-        discard: true,
-      }).pipe(Effect.timeoutOption(timeoutMs), Effect.map(Option.isSome));
+      if (held.length > 0)
+        return Effect.forEach(held, (latch) => Deferred.await(latch.done), {
+          concurrency: "unbounded",
+          discard: true,
+        }).pipe(Effect.andThen(settle));
+      return lookup.pipe(
+        Effect.filterOrElse(
+          () => !latches.has(key),
+          () => settle,
+        ),
+      );
     });
+    return settle.pipe(Effect.timeoutOption(timeoutMs));
+  };
 
   const trackRelease = <A, E, R>(release: Effect.Effect<A, E, R>) =>
     Effect.suspend(() => {
