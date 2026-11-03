@@ -340,6 +340,15 @@ export function makeExistingServerRoutes(input: {
             })
             .pipe(Effect.ignore),
         );
+        // A new SSH session can land on another backend than the probe's; never route through it.
+        if ((yield* answersFor(entry, environmentId)) === undefined) {
+          routes.delete(sideKey);
+          yield* Scope.close(scope, Exit.void);
+          return yield* new SshLaunchError({
+            message: `The forward to ${target.alias} does not reach GOAT environment ${environmentId}.`,
+            stdout: "",
+          });
+        }
         sidecars.set(sideKey, { kind, entry });
         return yield* verified(entry.httpBaseUrl);
       }),

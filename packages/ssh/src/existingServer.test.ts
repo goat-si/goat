@@ -62,7 +62,9 @@ const makeHost = () => {
     connections: 0,
     // What the host's own curl sees (the strict probe) and what an open forward reaches.
     served: OWNER as string,
-    forwardServed: undefined as string | undefined,
+    // What each open forward reaches, by local port, when it differs from `served`.
+    forwardServed: new Map<number, string>(),
+    nextForwardServes: undefined as string | undefined,
     onDisk: OWNER as string,
     forwardsKilled: 0,
     // Holds the next identity read through a forward until released.
@@ -75,10 +77,14 @@ const makeHost = () => {
       const args = commandArgs(command);
       if (args.includes("-G")) return makeSuccessfulProcess("hostname devbox.example.com\n");
       host.connections++;
-      if (args.includes("-N"))
+      if (args.includes("-N")) {
+        const localPort = Number(args[args.indexOf("-L") + 1]?.split(":")[0]);
+        if (host.nextForwardServes !== undefined)
+          host.forwardServed.set(localPort, host.nextForwardServes);
         return makeRunningProcess(() => {
           host.forwardsKilled++;
         });
+      }
       const stdin = command._tag === "StandardCommand" ? command.options.stdin : undefined;
       const bytes =
         typeof stdin === "object" && "stream" in stdin && Stream.isStream(stdin.stream)
@@ -114,7 +120,9 @@ const makeHost = () => {
       }
       return HttpClientResponse.fromWeb(
         request,
-        new Response(descriptor(host.forwardServed ?? host.served)),
+        new Response(
+          descriptor(host.forwardServed.get(Number(new URL(request.url).port)) ?? host.served),
+        ),
       );
     }),
   );
@@ -244,7 +252,11 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           const route = () => manager.existingEnvironment!(uploadTarget, OWNER);
           const cold = yield* call(route());
           // The open forward still reaches an old backend; a fresh SSH session sees the owner.
-          host.forwardServed = "old-backend";
+          if (Result.isSuccess(cold.result))
+            host.forwardServed.set(
+              Number(new URL(cold.result.success.httpBaseUrl).port),
+              "old-backend",
+            );
           const after = yield* call(route());
           assert.isTrue(Result.isSuccess(after.result));
           if (Result.isSuccess(after.result) && Result.isSuccess(cold.result))
@@ -278,6 +290,28 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           assert.isTrue(Result.isSuccess(after));
           if (Result.isSuccess(after) && Result.isSuccess(cold.result))
             assert.notEqual(after.success.httpBaseUrl, cold.result.success.httpBaseUrl);
+        }).pipe(Effect.provide(layer), Effect.scoped);
+      }),
+    );
+    it.effect("a new forward that reaches another environment fails closed", () =>
+      Effect.gen(function* () {
+        const { host, layer, call } = makeHost();
+        yield* Effect.gen(function* () {
+          const manager = yield* SshTunnel.SshEnvironmentManager;
+          host.nextForwardServes = "other-backend";
+          const first = yield* call(manager.existingEnvironment!(uploadTarget, OWNER));
+          assert.isTrue(Result.isFailure(first.result));
+          assert.equal(host.forwardsKilled, 1);
+          const session = yield* call(
+            manager.issueExistingMcpSession!(uploadTarget, OWNER, {
+              label: "hub",
+              ttl: "1h",
+              runtimeModeCeiling: "full-access",
+            }),
+          );
+          // Both probes and another forward, but no credential request.
+          assert.isTrue(Result.isFailure(session.result));
+          assert.equal(session.connections, 3);
         }).pipe(Effect.provide(layer), Effect.scoped);
       }),
     );
