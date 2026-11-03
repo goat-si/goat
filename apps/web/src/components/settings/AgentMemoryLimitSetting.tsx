@@ -19,6 +19,18 @@ export function AgentMemoryLimitSetting() {
     setSource(value);
     setDraft(String(value ?? 16));
   }
+  const commit = () => {
+    const parsed = Number(draft);
+    if (
+      draft !== "" &&
+      Number.isInteger(parsed) &&
+      parsed >= 0 &&
+      parsed <= 1024 &&
+      parsed !== value
+    )
+      update({ agentMemoryLimitGiB: parsed });
+    else setDraft(String(value ?? 16));
+  };
   return (
     <SettingsRow
       {...searchableSetting("agent-memory-limit")}
@@ -52,14 +64,16 @@ export function AgentMemoryLimitSetting() {
             value={draft}
             disabled={!allowed || value === null}
             aria-label="Agent memory limit in GiB"
-            onChange={(event) => {
-              const text = event.target.value;
-              setDraft(text);
-              const parsed = Number(text);
-              if (text !== "" && Number.isInteger(parsed) && parsed >= 0 && parsed <= 1024)
-                update({ agentMemoryLimitGiB: parsed });
+            onChange={(event) => setDraft(event.target.value)}
+            onBlur={commit}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                commit();
+              } else if (event.key === "Escape") {
+                setDraft(String(value ?? 16));
+              }
             }}
-            onBlur={() => setDraft(String(value ?? 16))}
           />
           <span>GiB</span>
         </div>
