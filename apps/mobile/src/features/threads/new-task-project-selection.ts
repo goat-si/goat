@@ -166,10 +166,11 @@ export function newTaskDestination(options: {
     options.projects.find(
       (project) => project.environmentId === ref.environmentId && project.id === ref.projectId,
     );
+  const last = find(options.lastProject);
   const matched =
     options.useLastProject === false
       ? undefined
-      : (find(options.currentProject) ?? find(options.lastProject));
+      : (find(options.currentProject) ?? (last?.archivedAt == null ? last : undefined));
   const scope = matched && options.projectScopes?.find((scope) => scope.projects.includes(matched));
   const project =
     scope && options.connectedEnvironmentIds
