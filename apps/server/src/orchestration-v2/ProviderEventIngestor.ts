@@ -1,4 +1,5 @@
 import { withAgentOom } from "./agentOomFailure.ts";
+import { handedOffSurvivorTurns } from "./goat/CodexSurvivorHandoff.ts";
 import {
   NodeId,
   CommandId,
@@ -624,7 +625,14 @@ export const layer: Layer.Layer<
                     })),
                   ];
             }
-            case "provider_turn.updated":
+            case "provider_turn.updated": {
+              const turnThreadId = input.event.threadId ?? input.threadId;
+              const handedOff = yield* handedOffSurvivorTurns(projections, {
+                threadId: turnThreadId,
+                runId: input.runId,
+                providerTurn: input.event.providerTurn,
+                at: yield* DateTime.now,
+              });
               return [
                 ...(["completed", "interrupted", "failed", "cancelled"].includes(
                   input.event.providerTurn.status,
@@ -641,7 +649,17 @@ export const layer: Layer.Layer<
                   payload: input.event.providerTurn,
                   nodeId: input.event.providerTurn.nodeId,
                 }),
+                ...(yield* Effect.forEach(handedOff, ({ runId, turn }) =>
+                  makeDomainEvent(input, {
+                    type: "provider-turn.updated",
+                    threadId: turnThreadId,
+                    runId,
+                    payload: turn,
+                    nodeId: turn.nodeId,
+                  }),
+                )),
               ];
+            }
             case "node.updated":
               // Adapters send an unchanged node again with each text delta. Compare with the
               // stored node, not the last one sent, because the server also writes nodes.

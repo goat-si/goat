@@ -438,6 +438,17 @@ const runRestartScenario = (
           assert.equal(turn?.status, outcome === "completed" ? "completed" : "failed");
           assert.equal(turn?.nativeTurnRef?.nativeId, nativeTurnId);
           assert.isUndefined(turn?.survivingRestart);
+          // The source run handed its native turn to the continuation, so none of its turns stay open.
+          const source = projection.runs.find(
+            (run) => run.id === continued?.restartContinuationOfRunId,
+          );
+          assert.equal(source?.status, "cancelled");
+          assert.deepEqual(
+            projection.providerTurns
+              .filter((item) => item.runAttemptId === source?.activeAttemptId)
+              .map((item) => item.status),
+            ["cancelled"],
+          );
           if (outcome === "completed") {
             assert.lengthOf(
               projection.turnItems.filter(
