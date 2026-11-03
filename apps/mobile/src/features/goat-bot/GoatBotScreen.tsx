@@ -8,7 +8,7 @@ import {
 } from "@goat/client-runtime/goatBot";
 import type { EnvironmentId } from "@goat/contracts";
 import { HeaderHeightContext } from "@react-navigation/elements";
-import { memo, useCallback, useContext, useState } from "react";
+import { memo, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { Platform, Pressable, Text, TextInput, View, useWindowDimensions } from "react-native";
 import {
   KeyboardAvoidingView,
@@ -20,6 +20,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { IOS_NAV_BAR_HEIGHT } from "../../lib/layoutMetrics";
 import type { DraftComposerAttachment } from "../../lib/composerImages";
+import { retainComposerAttachmentFile } from "../../lib/composerAttachmentFiles";
 import {
   GoatBotAttachButton,
   GoatBotAttachmentStrip,
@@ -194,6 +195,7 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
   readonly canSend: boolean;
   readonly onSend: (answer: string) => boolean;
   readonly onRetry: (key: string) => void;
+  readonly onDiscard?: (key: string) => void;
   readonly onSelectThread: (thread: ThreadSelection) => void;
   /** The environment whose bot history is shown; thread links in bot text open there. */
   readonly environmentId?: EnvironmentId | null;
@@ -259,6 +261,15 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
                 className="p-2"
               >
                 <Text className="text-sm text-foreground">Retry</Text>
+              </Pressable>
+            ) : null}
+            {delivery.state === "failed" ? (
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => props.onDiscard?.(delivery.clientKey)}
+                className="p-2"
+              >
+                <Text className="text-sm text-foreground">Discard</Text>
               </Pressable>
             ) : null}
           </View>
@@ -392,6 +403,15 @@ export function GoatBotScreen(props: {
   const listTopInset = hasBanner || homeError ? 0 : topInset;
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<ReadonlyArray<DraftComposerAttachment>>([]);
+  const draftFiles = useRef(new Map<string, () => void>());
+  // oxlint-disable-next-line goat/react-effect-budget -- Release draft file ownership when the screen unmounts.
+  useEffect(
+    () => () => {
+      for (const release of draftFiles.current.values()) release();
+      draftFiles.current.clear();
+    },
+    [],
+  );
   const [inputHeight, setInputHeight] = useState(44);
   const inputMaxHeight = goatBotInputMaxHeight(useWindowDimensions().height);
   const renderItem = useCallback(
@@ -401,6 +421,7 @@ export function GoatBotScreen(props: {
         canSend={session.canSend}
         onSend={session.onSend}
         onRetry={session.onRetryInput}
+        onDiscard={session.onDiscardInput}
         onSelectThread={onSelectThread}
         environmentId={session.historyEnvironmentId}
       />
@@ -409,12 +430,15 @@ export function GoatBotScreen(props: {
       session.canSend,
       session.onSend,
       session.onRetryInput,
+      session.onDiscardInput,
       onSelectThread,
       session.historyEnvironmentId,
     ],
   );
   const send = () => {
     if (session.onSend(text, attachments)) {
+      for (const release of draftFiles.current.values()) release();
+      draftFiles.current.clear();
       setText("");
       setAttachments([]);
       setInputHeight(44);
@@ -422,6 +446,8 @@ export function GoatBotScreen(props: {
   };
   const support = session.attachmentSupport;
   const removeAttachment = (id: string) => {
+    draftFiles.current.get(id)?.();
+    draftFiles.current.delete(id);
     releaseGoatBotAttachments(attachments.filter((attachment) => attachment.id === id));
     setAttachments((current) => current.filter((attachment) => attachment.id !== id));
   };
@@ -512,7 +538,19 @@ export function GoatBotScreen(props: {
               disabled={!session.canSend}
               existingCount={attachments.length}
               maxUploadBytes={support.maxUploadBytes}
-              onPicked={(picked) => setAttachments((current) => [...current, ...picked])}
+              onPicked={(picked) => {
+                for (const attachment of picked) {
+                  if (attachment.fileUri !== undefined) {
+                    draftFiles.current.set(
+                      attachment.id,
+                      retainComposerAttachmentFile(attachment.fileUri, () =>
+                        releaseGoatBotAttachments([attachment]),
+                      ),
+                    );
+                  }
+                }
+                setAttachments((current) => [...current, ...picked]);
+              }}
             />
           ) : null}
           <TextInput

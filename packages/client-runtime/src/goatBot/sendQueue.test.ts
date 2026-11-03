@@ -38,6 +38,22 @@ function setup(canDispatch: () => boolean = () => true) {
 }
 
 describe("createGoatBotSendQueue", () => {
+  it("shows the re-attach instruction after an expired upload rejection (#2388)", async () => {
+    const failed = deferred<void>();
+    const queue = createGoatBotSendQueue({
+      send: async () => {
+        throw { attachmentProblem: "expired" };
+      },
+      canDispatch: () => true,
+      onChange: () => {
+        if (queue.pendingInputs()[0]?.state === "failed") failed.resolve();
+      },
+      makeKey: () => "expired",
+    });
+    queue.submit("file", bot);
+    await failed.promise;
+    expect(queue.pendingInputs()[0]?.rejectionReason).toContain("re-attach");
+  });
   it("discards only a failed message without changing other messages (#2388)", () => {
     const { queue } = setup(() => false);
     const first = queue.submit("first", bot);

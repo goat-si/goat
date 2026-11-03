@@ -12,6 +12,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as PlatformError from "effect/PlatformError";
 
 import {
   createPendingAttachmentId,
@@ -52,6 +53,37 @@ const stagePendingUpload = Effect.fn("test.stagePendingUpload")(function* (input
 });
 
 describe("AttachmentClaims", () => {
+  it.effect("does not report permission errors as expired uploads (#2388)", () =>
+    Effect.gen(function* () {
+      const pending = yield* stagePendingUpload({
+        name: "protected.png",
+        bytes: new Uint8Array([1]),
+        mimeType: "image/png",
+      });
+      const fileSystem = yield* FileSystem.FileSystem;
+      const denied = Object.create(fileSystem, {
+        stat: {
+          value: (path: string) =>
+            Effect.fail(
+              PlatformError.systemError({
+                _tag: "PermissionDenied",
+                module: "FileSystem",
+                method: "stat",
+                pathOrDescriptor: path,
+              }),
+            ),
+        },
+      }) as FileSystem.FileSystem;
+      const error = yield* Effect.flip(
+        claimPendingAttachments({
+          threadId: "thread-protected",
+          attachments: [pending],
+        }).pipe(Effect.provideService(FileSystem.FileSystem, denied)),
+      );
+      expect(error.attachmentProblem).toBeUndefined();
+      expect(error.cause).toMatchObject({ reason: { _tag: "PermissionDenied" } });
+    }).pipe(Effect.provide(layerTest)),
+  );
   it.effect("marks a missing pending upload as expired (#2388)", () =>
     Effect.gen(function* () {
       const pending = yield* stagePendingUpload({

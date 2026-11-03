@@ -269,7 +269,13 @@ const make = Effect.gen(function* () {
       Effect.tapError((cause) =>
         Effect.logWarning("GOAT bot attachment claim failed", { cause: cause.message }),
       ),
-      Effect.mapError(() => new ChannelGatewayError({ reason: "invalid_input" })),
+      Effect.mapError(
+        (error) =>
+          new ChannelGatewayError({
+            reason: "invalid_input",
+            ...(error.attachmentProblem ? { attachmentProblem: error.attachmentProblem } : {}),
+          }),
+      ),
       Effect.provideContext(attachmentServices),
     );
   const releaseClaims = (claimed: AttachmentClaims.ClaimedAttachments | undefined) =>

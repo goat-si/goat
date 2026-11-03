@@ -245,6 +245,7 @@ export class ChannelGatewayError extends Schema.TaggedError<ChannelGatewayError>
   "ChannelGatewayError",
   {
     reason: ChannelGatewayErrorReason,
+    attachmentProblem: Schema.optionalKey(Schema.Literal("expired")),
     /** Seconds the caller should wait before retrying, when the transport said so. */
     retryAfterSeconds: Schema.optionalKey(PositiveInt),
     /**

@@ -41,6 +41,7 @@ export interface GoatBotChatViewProps {
   readonly replyingSince?: string | null | undefined;
   readonly onSend: (text: string) => void;
   readonly onRetryInput: (clientKey: string) => void;
+  readonly onDiscardInput?: (clientKey: string) => void;
   /** Asks the server for its bot again, after a failure or a busy global agent. */
   readonly onRetryAvailability?: (() => void) | undefined;
   /** The old global agent, which keeps its coding view and history. */
@@ -67,6 +68,7 @@ export function GoatBotChatView({
   replyingSince = null,
   onSend,
   onRetryInput,
+  onDiscardInput,
   onRetryAvailability,
   legacyAgentRoute,
   removal = null,
@@ -162,6 +164,7 @@ export function GoatBotChatView({
           environmentId={environmentId}
           replyingSince={removed ? null : replyingSince}
           onRetry={onRetryInput}
+          onDiscard={onDiscardInput}
           onPick={canSend ? onSend : undefined}
         />
       ) : removal !== null ? (

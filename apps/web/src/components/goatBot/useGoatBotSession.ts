@@ -404,6 +404,7 @@ export function useGoatBotSession(visibleTurnItems = EMPTY_ITEMS) {
     onRetryInput: (key: string) => {
       if (availability.kind === "ready" && canOperate) queue?.retry(key);
     },
+    onDiscardInput: (key: string) => queue?.discard(key),
     onRetryAvailability: () => {
       if (environmentId === null) return;
       const current = useSessions.getState().sessions.get(environmentId);

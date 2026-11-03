@@ -33,6 +33,7 @@ export interface GoatBotSendQueueOptions<
   /** Checked right before every attempt; when false the queue stops and waits for a retry. */
   readonly canDispatch: (bot: GoatBotRef) => boolean;
   readonly onChange: () => void;
+  readonly onForget?: (clientKey: string, attachments: ReadonlyArray<A>) => void;
   readonly makeKey: () => string;
   readonly now?: () => string;
 }
@@ -42,6 +43,7 @@ export interface GoatBotSendQueue<A extends GoatBotAttachmentLabel = GoatBotAtta
   readonly submit: (text: string, bot: GoatBotRef, attachments?: ReadonlyArray<A>) => string;
   /** Sends a failed message again under the same key. Ignored while it is in flight. */
   readonly retry: (clientKey: string) => void;
+  readonly discard: (clientKey: string) => void;
   /** Forgets accepted messages once their server rows exist. */
   readonly acknowledge: (requestKeys: ReadonlySet<string>) => void;
   readonly pendingInputs: () => ReadonlyArray<GoatBotPendingInput>;
@@ -104,11 +106,20 @@ export function createGoatBotSendQueue<A extends GoatBotAttachmentLabel = GoatBo
           next.rejectionReason = result.rejected ?? null;
           next.requestKey = result.requestKey;
           if (projectedKeys.has(result.requestKey) || projectedKeys.has(next.clientKey)) {
+            if (entries.includes(next)) options.onForget?.(next.clientKey, next.attachments);
             entries = entries.filter((entry) => entry !== next);
           }
         },
-        () => {
+        (error: unknown) => {
           next.state = "failed";
+          if (
+            typeof error === "object" &&
+            error !== null &&
+            "attachmentProblem" in error &&
+            error.attachmentProblem === "expired"
+          ) {
+            next.rejectionReason = "Attachment expired. Please re-attach the file.";
+          }
         },
       )
       .finally(() => {
@@ -145,6 +156,13 @@ export function createGoatBotSendQueue<A extends GoatBotAttachmentLabel = GoatBo
       changed();
       pump();
     },
+    discard: (clientKey) => {
+      const entry = entries.find((candidate) => candidate.clientKey === clientKey);
+      if (entry?.state !== "failed") return;
+      entries = entries.filter((candidate) => candidate !== entry);
+      options.onForget?.(entry.clientKey, entry.attachments);
+      changed();
+    },
     acknowledge: (requestKeys) => {
       projectedKeys = requestKeys;
       const kept = entries.filter(
@@ -153,6 +171,9 @@ export function createGoatBotSendQueue<A extends GoatBotAttachmentLabel = GoatBo
           (entry.requestKey === null || !requestKeys.has(entry.requestKey)),
       );
       if (kept.length === entries.length) return;
+      for (const entry of entries) {
+        if (!kept.includes(entry)) options.onForget?.(entry.clientKey, entry.attachments);
+      }
       entries = kept;
       changed();
     },

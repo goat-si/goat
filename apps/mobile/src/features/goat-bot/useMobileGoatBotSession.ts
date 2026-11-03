@@ -37,6 +37,7 @@ import {
 
 import { environmentCatalog } from "../../connection/catalog";
 import type { DraftComposerAttachment } from "../../lib/composerImages";
+import { retainComposerAttachmentFile } from "../../lib/composerAttachmentFiles";
 import { uuidv4 } from "../../lib/uuid";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { channelEnvironment } from "../../state/channels";
@@ -64,6 +65,7 @@ interface Session {
   readonly canOperate: boolean;
   readonly queue: ReturnType<typeof createGoatBotSendQueue<DraftComposerAttachment>>;
   readonly pending: ReadonlyArray<GoatBotPendingInput>;
+  readonly retain: (key: string, attachments: ReadonlyArray<DraftComposerAttachment>) => void;
 }
 
 const sessions = new Map<EnvironmentId, Session>();
@@ -85,7 +87,20 @@ function update(environmentId: EnvironmentId, session: Session) {
 function newSession(environmentId: EnvironmentId): Session {
   // A message's uploads, by its key, so a retry names the same files as the first attempt.
   const uploads = new Map<string, ReadonlyArray<DraftComposerAttachment>>();
+  const retained = new Map<string, ReadonlyArray<() => void>>();
+  const forget = (key: string, attachments: ReadonlyArray<DraftComposerAttachment>) => {
+    const files = uploads.get(key) ?? attachments;
+    uploads.delete(key);
+    for (const release of retained.get(key) ?? []) release();
+    retained.delete(key);
+    void import("../../state/use-composer-drafts")
+      .then(({ releaseUnusedComposerAttachmentFiles }) =>
+        releaseUnusedComposerAttachmentFiles(files),
+      )
+      .catch((error) => console.warn("[goat-bot] could not release attachment files", error));
+  };
   const queue = createGoatBotSendQueue<DraftComposerAttachment>({
+    onForget: forget,
     makeKey: uuidv4,
     onChange: () => {
       const current = sessions.get(environmentId);
@@ -133,16 +148,7 @@ function newSession(environmentId: EnvironmentId): Session {
       });
       if (result._tag === "Failure") throw squashAtomCommandFailure(result);
       if (attachments.length > 0) {
-        // The server keeps its own copy once it has the message; the local files can go.
-        const sent = uploads.get(clientKey) ?? attachments;
-        uploads.delete(clientKey);
-        void import("../../state/use-composer-drafts")
-          .then(({ releaseUnusedComposerAttachmentFiles }) =>
-            releaseUnusedComposerAttachmentFiles(sent),
-          )
-          .catch((error) =>
-            console.warn("[goat-bot] could not release sent attachment files", error),
-          );
+        forget(clientKey, attachments);
       }
       return {
         requestKey: result.value.inputId,
@@ -160,6 +166,15 @@ function newSession(environmentId: EnvironmentId): Session {
     canOperate: false,
     queue,
     pending: EMPTY_PENDING,
+    retain: (key, attachments) =>
+      retained.set(
+        key,
+        attachments.flatMap((attachment) =>
+          attachment.fileUri === undefined
+            ? []
+            : [retainComposerAttachmentFile(attachment.fileUri, () => {})],
+        ),
+      ),
   };
 }
 
@@ -476,10 +491,12 @@ export function useMobileGoatBotSession(visible: boolean) {
   const onSend = useCallback(
     (text: string, attachments: ReadonlyArray<DraftComposerAttachment> = []) => {
       if (!canSend || !confirmedBot || (!text.trim() && attachments.length === 0)) return false;
-      queue?.submit(text.trim(), confirmedBot, attachments);
+      if (!queue || !session) return false;
+      const key = queue.submit(text.trim(), confirmedBot, attachments);
+      session.retain(key, attachments);
       return true;
     },
-    [canSend, confirmedBot, queue],
+    [canSend, confirmedBot, queue, session],
   );
   const onRetryInput = useCallback(
     (key: string) => {
@@ -513,6 +530,7 @@ export function useMobileGoatBotSession(visible: boolean) {
     error: ensure.state === "failed" ? ensure.message : null,
     onSend,
     onRetryInput,
+    onDiscardInput: (key: string) => queue?.discard(key),
     onRetryAvailability,
   };
 }
