@@ -6743,10 +6743,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               return true;
             }),
           );
+        // The stopped-queued record clears after finalizing, so a Stop deciding meanwhile cannot keep it.
         yield* survivorHooks.handleNotification("turn/completed", (payload) =>
           Effect.gen(function* () {
             forcedNativeTurns.delete(payload.turn.id);
-            stoppedQueuedTurns.end(payload.turn.id);
             const context = (yield* Ref.get(activeTurns)).get(payload.turn.id);
             if (context === undefined) {
               return;
@@ -6773,7 +6773,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                       : { failureErrorInfo: payload.turn.error.codexErrorInfo }),
                   }),
             });
-          }),
+          }).pipe(Effect.ensuring(Effect.sync(() => stoppedQueuedTurns.end(payload.turn.id)))),
         );
 
         /** Settles a /goal turn that never reaches Codex. State changes reply through the goal row. */
