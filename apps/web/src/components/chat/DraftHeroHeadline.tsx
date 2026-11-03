@@ -11,6 +11,8 @@ import { openCommandPalette } from "~/commandPaletteBus";
 import { shortcutLabelForCommand } from "~/keybindings";
 import { primaryServerKeybindingsAtom } from "~/state/server";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
+import { useOrderWhileOpen } from "~/hooks/useOrderWhileOpen";
+import { useProjectPin } from "~/hooks/useProjectGroupUpdate";
 import { useScratchProject } from "~/hooks/useScratchProject";
 import { useClientSettings } from "~/hooks/useSettings";
 import { hasExplicitComposerModelSelection } from "~/lib/chatThreadActions";
@@ -18,6 +20,7 @@ import {
   deriveLogicalProjectKeyFromSettings,
   selectProjectGroupingSettings,
 } from "~/logicalProject";
+import { pickableProjectGroups } from "@goat/client-runtime/state/project-grouping";
 import {
   buildSidebarProjectPickerEntries,
   buildSidebarProjectSnapshots,
@@ -27,6 +30,7 @@ import { useProjects, useThreadShells } from "~/state/entities";
 import { useEnvironments, usePrimaryEnvironmentId } from "~/state/environments";
 import { ProjectEnvironmentBadge } from "../ProjectEnvironmentBadge";
 import { ProjectFavicon } from "../ProjectFavicon";
+import { isProjectPinShortcut, ProjectPinButton } from "../ProjectPinButton";
 import { sortLogicalProjectsForSidebar } from "../Sidebar.logic";
 import {
   Combobox,
@@ -90,6 +94,8 @@ export function DraftHeroHeadline({
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerQuery, setPickerQuery] = useState("");
   const pickerFilter = useComboboxFilter();
+  const highlightedPickerValueRef = useRef<string | null>(null);
+  const { canPinProjectGroup, toggleProjectGroupPin } = useProjectPin();
 
   const environmentLabelById = new Map(
     environments.map((environment) => [environment.environmentId, environment.label] as const),
@@ -115,7 +121,7 @@ export function DraftHeroHeadline({
     ),
   );
   const projectPickerEntries = buildSidebarProjectPickerEntries({
-    groups: projectGroups,
+    groups: pickableProjectGroups(projectGroups),
     preferredProjectRef: activeProjectRef,
   });
   const projectEntryByKey = new Map(
@@ -157,11 +163,15 @@ export function DraftHeroHeadline({
   // "Add project" is an action, so search hides it.
   const noProjectItem: PickerItem | null =
     scratchTargetEnvironmentId === null ? null : { value: NO_PROJECT_VALUE, label: "No project" };
-  const pickerItems: readonly PickerItem[] = [
-    ...(noProjectItem ? [noProjectItem] : []),
-    { value: ADD_PROJECT_VALUE, label: "Add project" },
-    ...menuEntries.map(({ group }) => ({ value: group.projectKey, label: group.displayName })),
-  ];
+  const pickerItems: readonly PickerItem[] = useOrderWhileOpen(
+    [
+      ...(noProjectItem ? [noProjectItem] : []),
+      { value: ADD_PROJECT_VALUE, label: "Add project" },
+      ...menuEntries.map(({ group }) => ({ value: group.projectKey, label: group.displayName })),
+    ],
+    (item) => item.value,
+    pickerOpen,
+  );
   const pickerSearch = pickerQuery.trim();
   const filteredPickerItems =
     pickerSearch.length === 0
@@ -244,6 +254,9 @@ export function DraftHeroHeadline({
       itemToStringLabel={(item) => item.label}
       isItemEqualToValue={(a, b) => a.value === b.value}
       open={pickerOpen}
+      onItemHighlighted={(item) => {
+        highlightedPickerValueRef.current = item?.value ?? null;
+      }}
       onOpenChange={(open) => {
         setPickerOpen(open);
         setPickerQuery("");
@@ -302,6 +315,16 @@ export function DraftHeroHeadline({
           placeholder="Search projects..."
           value={pickerQuery}
           onChange={(event) => setPickerQuery(event.target.value)}
+          onKeyDown={(event) => {
+            const highlighted = highlightedPickerValueRef.current;
+            const group = highlighted ? projectEntryByKey.get(highlighted)?.group : undefined;
+            if (!group || !canPinProjectGroup(group) || !isProjectPinShortcut(event, keybindings)) {
+              return;
+            }
+            event.preventDefault();
+            event.stopPropagation();
+            toggleProjectGroupPin(group);
+          }}
         />
         <ComboboxEmpty>No matching projects.</ComboboxEmpty>
         <ComboboxList>
@@ -327,6 +350,14 @@ export function DraftHeroHeadline({
                     group={entry.group}
                     primaryEnvironmentId={primaryEnvironmentId}
                     machineByEnvironmentId={environmentMachineById}
+                  />
+                ) : null}
+                {entry && canPinProjectGroup(entry.group) ? (
+                  <ProjectPinButton
+                    name={entry.group.displayName}
+                    pinned={entry.group.pinned}
+                    shortcutLabel={shortcutLabelForCommand(keybindings, "thread.pin")}
+                    onToggle={() => toggleProjectGroupPin(entry.group)}
                   />
                 ) : null}
               </ComboboxItem>

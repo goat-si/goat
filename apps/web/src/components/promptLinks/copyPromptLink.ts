@@ -1,3 +1,4 @@
+import { isAttachmentOnlyBootstrapPrompt } from "@goat/shared/composerContextReferences";
 import type { EnvironmentProject } from "@goat/client-runtime/state/shell";
 import { type ModelSelection, repositoryGroupingKeyOf, type ServerProvider } from "@goat/contracts";
 import {
@@ -22,7 +23,7 @@ export function promptLinkFor(
     readonly model: string | null;
   },
 ): string | null {
-  const trimmed = prompt.trim();
+  const trimmed = isAttachmentOnlyBootstrapPrompt(prompt) ? "" : prompt.trim();
   if (trimmed.length === 0 || trimmed.length > PROMPT_LINK_MAX_PROMPT_LENGTH) return null;
   const origin = configuredHostedAppUrl();
   return buildNewThreadLink({ prompt: trimmed, ...context, ...(origin ? { origin } : {}) });

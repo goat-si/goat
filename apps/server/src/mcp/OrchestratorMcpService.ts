@@ -1100,7 +1100,11 @@ const make = Effect.gen(function* () {
           ),
         );
 
-  const loadProjection = (threadId: ThreadId, includeUserMessages = true) =>
+  const loadProjection = (
+    threadId: ThreadId,
+    includeUserMessages = true,
+    subagentIds?: ReadonlyArray<NodeId>,
+  ) =>
     threadManagement
       .getThreadRecords(
         threadId,
@@ -1114,7 +1118,11 @@ const make = Effect.gen(function* () {
           "contextTransfers",
           "turnItems",
         ],
-        { turnItemTypes: [], messageRoles: includeUserMessages ? ["user"] : [] },
+        {
+          turnItemTypes: [],
+          messageRoles: includeUserMessages ? ["user"] : [],
+          ...(subagentIds === undefined ? {} : { subagentIds }),
+        },
       )
       .pipe(
         Effect.mapError((error) =>
@@ -1521,7 +1529,16 @@ const make = Effect.gen(function* () {
     observedRunId?: RunId | null,
   ): Effect.fn.Return<OrchestratorMcpDelegateTaskResult, OrchestratorMcpFailure> {
     yield* requireCapability(scope);
-    const parentProjection = yield* loadProjection(scope.thread.threadId, false);
+    const initialParent = yield* loadProjection(scope.thread.threadId, false, [taskId]);
+    const selected = initialParent.subagents.find((candidate) => candidate.id === taskId);
+    const earlier =
+      selected?.continuedFrom === undefined
+        ? []
+        : (yield* loadProjection(scope.thread.threadId, false, [selected.continuedFrom])).subagents;
+    const parentProjection = {
+      ...initialParent,
+      subagents: [...initialParent.subagents, ...earlier],
+    };
     const task = parentProjection.subagents.find(
       (candidate) =>
         candidate.id === taskId &&
@@ -1604,7 +1621,7 @@ const make = Effect.gen(function* () {
           "runtimeRequests",
           "nodes",
         ],
-        { messageRoles: ["user"], omitSettledLeafNodes: true },
+        { messageRoles: ["user"], omitSettledLeafNodes: true, omitSettledSubagents: true },
       )
       .pipe(Effect.mapError(threadManagementFailure));
     const childRun = delegatedTaskRun(childControls, task);
@@ -3039,7 +3056,9 @@ const make = Effect.gen(function* () {
       const scope = yield* requireThreadScope(callerScope, "task_cancel");
       const current = yield* readTask(scope, input.taskId);
       const key = yield* requestKey(input.clientRequestId);
-      const parentProjection = yield* loadProjection(scope.thread.threadId);
+      const parentProjection = yield* threadManagement
+        .getThreadRecords(scope.thread.threadId, ["subagents"], { subagentIds: [input.taskId] })
+        .pipe(Effect.mapError(threadManagementFailure));
       // The user promoted the child to a top-level thread: it is no longer this task's to stop.
       if (
         parentProjection.subagents.some(
@@ -3107,7 +3126,7 @@ const make = Effect.gen(function* () {
         return yield* failure("task_not_cancellable", "The task has no local child thread.");
       const childThreadId = current.childThreadId;
       yield* ensureCloudCancellationSupported(
-        yield* loadProjection(childThreadId),
+        yield* loadProjection(childThreadId, true, []),
         "task_not_cancellable",
       );
       // Cancelling stops the child and every task under it, each a write to a
@@ -3126,17 +3145,11 @@ const make = Effect.gen(function* () {
             shell.interactionMode,
           );
         }
-        const { subagents } = yield* threadManagement
-          .getThreadRecords(threadId, ["subagents"])
+        const childThreadIds = yield* threadManagement
+          .listAppOwnedChildThreadIds(threadId)
           .pipe(Effect.mapError(threadManagementFailure));
-        for (const task of subagents) {
-          if (
-            task.origin === "app_owned" &&
-            task.childThreadId !== null &&
-            task.promotedAt === undefined
-          ) {
-            yield* assertStoppable(task.childThreadId);
-          }
+        for (const childId of childThreadIds) {
+          yield* assertStoppable(childId);
         }
       });
       yield* assertStoppable(childThreadId);
@@ -3144,7 +3157,7 @@ const make = Effect.gen(function* () {
         (task) => task.id === input.taskId && task.origin === "app_owned",
       );
       const disposeCompletionDelivery = Effect.gen(function* () {
-        const child = yield* loadProjection(childThreadId);
+        const child = yield* loadProjection(childThreadId, true, []);
         const latestRun =
           ThreadManagementService.latestActiveRun(child) ??
           ThreadManagementService.latestRun(child);
@@ -3290,9 +3303,11 @@ const make = Effect.gen(function* () {
           runId: parentTask.runId,
           subagentId: parentTask.id,
         });
-        const { subagents } = yield* threadManagement.getThreadRecords(scope.thread.threadId, [
-          "subagents",
-        ]);
+        const { subagents } = yield* threadManagement.getThreadRecords(
+          scope.thread.threadId,
+          ["subagents"],
+          { subagentIds: [input.taskId] },
+        );
         return subagents.some((task) => task.id === input.taskId && task.status === "cancelled");
       }).pipe(Effect.mapError(threadManagementFailure));
       if (isTerminalTaskStatus(current.status)) {
@@ -3305,7 +3320,7 @@ const make = Effect.gen(function* () {
           status: cancelled ? "cancelled" : current.status,
         } satisfies OrchestratorMcpTaskCancelResult;
       }
-      const child = yield* loadProjection(childThreadId);
+      const child = yield* loadProjection(childThreadId, true, []);
       if (
         current.workState !== "waiting_for_children" &&
         ThreadManagementService.latestActiveRun(child) === undefined &&

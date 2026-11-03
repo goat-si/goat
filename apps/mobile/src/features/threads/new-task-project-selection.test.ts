@@ -54,6 +54,8 @@ function makeScope(projects: ReadonlyArray<EnvironmentProject>): HomeProjectScop
       environmentId: project.environmentId,
       projectId: project.id,
     })),
+    pinned: false,
+    archived: false,
   };
 }
 
@@ -272,6 +274,21 @@ describe("new task project choice", () => {
     ).toEqual({ draft: { requestId: "request" } });
     expect(newTaskDestination({ ...options, lastProject: undefined })).toEqual({
       draft: { requestId: "request" },
+    });
+  });
+
+  it("opens the picker for an archived remembered project while preserving an explicit current project", () => {
+    const archived = { ...makeProject("archived"), archivedAt: "2026-01-01T00:00:00.000Z" };
+    const options = {
+      projects: [archived],
+      requestId: "request",
+      useLastProject: true,
+      currentProject: undefined,
+      lastProject: { environmentId: "environment", projectId: "archived" },
+    };
+    expect(newTaskDestination(options)).toEqual({ draft: { requestId: "request" } });
+    expect(newTaskDestination({ ...options, currentProject: options.lastProject })).toEqual({
+      draft: { requestId: "request", environmentId: "environment", projectId: "archived" },
     });
   });
 

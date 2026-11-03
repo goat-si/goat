@@ -92,6 +92,7 @@ import { isMacPlatform } from "~/lib/utils";
 import { readLocalApi } from "../localApi";
 import { useSidebarPendingFileDropStore } from "../sidebarPendingFileDropStore";
 import { selectProjectGroupingSettings } from "../logicalProject";
+import { pickableProjectGroups } from "@goat/client-runtime/state/project-grouping";
 import {
   projectGroupsSpanEnvironments,
   resolveSidebarProjectScopeKeys,
@@ -937,12 +938,12 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   // A scope whose project is gone reads as all projects once every snapshot has
   // loaded. The stored key is left alone, so the scope returns with its project.
   const chosenProjectScopeKeys = resolveSidebarProjectScopeKeys({
-    groups: projectGroups,
+    groups: pickableProjectGroups(projectGroups),
     keys: persistedProjectScopeKeys,
     settings: projectGroupingSettings,
     canClearMissingScope: allProjectSnapshotsReady && allProjectConfigsReady,
   });
-  const chosenProjectGroups = projectGroups.filter((project) =>
+  const chosenProjectGroups = pickableProjectGroups(projectGroups).filter((project) =>
     chosenProjectScopeKeys.includes(project.projectKey),
   );
   const chosenScopeProjectKeys =
@@ -2809,6 +2810,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         activeThread: newThreadContext.activeThread ?? undefined,
         defaultProjectRef: newThreadContext.defaultProjectRef,
         handleNewThread,
+      }).then((started) => {
+        if (!started) openCommandPalette({ open: "new-thread-in" });
       });
       return;
     }
@@ -2822,13 +2825,20 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       ) {
         return;
       }
-      if (shouldCreateNewThreadInCurrentProject(false, projectGroups.length)) {
-        await startNewThreadFromContext({
+      if (
+        shouldCreateNewThreadInCurrentProject(
+          false,
+          projectGroups.filter((group) => !group.archived).length,
+          projectGroups.length,
+        )
+      ) {
+        const started = await startNewThreadFromContext({
           activeDraftThread: newThreadContext.activeDraftThread,
           activeThread: newThreadContext.activeThread ?? undefined,
           defaultProjectRef: newThreadContext.defaultProjectRef,
           handleNewThread: newThreadContext.handleNewThread,
         });
+        if (!started) openCommandPalette({ open: "new-thread-in" });
       } else {
         openCommandPalette({ open: "new-thread-in" });
       }

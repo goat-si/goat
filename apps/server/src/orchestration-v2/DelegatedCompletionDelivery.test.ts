@@ -27,6 +27,7 @@ import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
+import * as Tracer from "effect/Tracer";
 import * as EventSink from "./EventSink.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProviderContinuationRequests from "@goat/provider-core/server/ProviderContinuationRequests";
@@ -39,6 +40,57 @@ import {
 import * as ThreadCommandExecutor from "./ThreadCommandExecutor.ts";
 
 it.layer(layerTest)("delegated completion delivery repairs", (it) => {
+  it.effect("counts already delivered siblings in the completion notice", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const now = yield* DateTime.now;
+      const threadId = ThreadId.make("thread:delegated-delivery-notice-count");
+      const runId = RunId.make("run:delegated-delivery-notice-count");
+      const firstTaskId = NodeId.make("node:delegated-delivery-notice-count-first");
+      const secondTaskId = NodeId.make("node:delegated-delivery-notice-count-second");
+
+      yield* seedParentWithTerminalTask({
+        threadId,
+        projectId: ProjectId.make("project:delegated-delivery-notice-count"),
+        runId,
+        rootNodeId: NodeId.make("node:delegated-delivery-notice-count-root"),
+        taskId: firstTaskId,
+        deliveryState: "claimed",
+        completionWake: "always",
+        deliveryTaskIds: [firstTaskId, secondTaskId],
+        parentRunStatus: "completed",
+        siblingTasks: [
+          { id: secondTaskId, deliveryState: "claimed" },
+          {
+            id: NodeId.make("node:delegated-delivery-notice-count-earlier"),
+            deliveryState: "delivered",
+          },
+        ],
+        now,
+      });
+
+      yield* orchestrator.dispatch({
+        type: "message.dispatch",
+        commandId: CommandId.make("command:delegated-delivery-notice-count"),
+        threadId,
+        messageId: MessageId.make(`message:delegated-delivery:${threadId}`),
+        text: "Delegated tasks reached a terminal state.",
+        attachments: [],
+        dispatchMode: { type: "queue_after_active" },
+        createdBy: "agent",
+        creationSource: "server",
+        delegatedCompletion: { parentRunId: runId, generation: 1, taskIds: [firstTaskId] },
+      });
+
+      const projection = yield* orchestrator.getThreadProjection(threadId);
+      const notice = projection.turnItems.find((item) => item.type === "notification");
+      assert.match(
+        notice?.type === "notification" ? notice.summary : "",
+        /^2 of 3 delegated tasks finished:/,
+      );
+    }),
+  );
+
   it.effect.each(["always", "settled_only"] as const)(
     "remote %s shares the completion mailbox and acknowledgement",
     (completionWake) =>
@@ -1254,6 +1306,76 @@ it.layer(layerTest)("delegated completion delivery repairs", (it) => {
 it.layer(Layer.merge(layerTest, ProviderContinuationRequests.layer))(
   "subagent follow-ups",
   (it) => {
+    it.effect("recovers a reserved delivery without loading conversation history", () =>
+      Effect.gen(function* () {
+        const orchestrator = yield* Orchestrator.OrchestratorV2;
+        const sink = yield* EventSink.EventSinkV2;
+        const requests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
+        const now = yield* DateTime.now;
+        const threadId = ThreadId.make("thread:bounded-delivery-recovery");
+        const runId = RunId.make("run:bounded-delivery-recovery");
+        const taskId = NodeId.make("task:bounded-delivery-recovery");
+        yield* seedParentWithTerminalTask({
+          threadId,
+          runId,
+          taskId,
+          projectId: ProjectId.make("project:bounded-delivery-recovery"),
+          rootNodeId: NodeId.make("node:bounded-delivery-recovery"),
+          deliveryState: "claimed",
+          deliveryTaskIds: [taskId],
+          completionWake: "always",
+          now,
+        });
+        for (const suffix of ["first", "second"]) {
+          yield* sink.write({
+            events: [
+              {
+                id: EventId.make(`event:bounded-delivery-history:${suffix}`),
+                type: "message.updated",
+                threadId,
+                occurredAt: now,
+                payload: {
+                  id: MessageId.make(`message:bounded-delivery-history:${suffix}`),
+                  threadId,
+                  runId: null,
+                  nodeId: null,
+                  createdBy: "user",
+                  creationSource: "web",
+                  role: "user",
+                  text: "Unrelated historical input",
+                  attachments: [],
+                  streaming: false,
+                  createdAt: now,
+                  updatedAt: now,
+                },
+              },
+            ],
+          });
+        }
+        const statements: string[] = [];
+        const tracer = Tracer.make({
+          span(options) {
+            const span = new Tracer.NativeSpan(options);
+            const end = span.end.bind(span);
+            span.end = (time, exit) => {
+              end(time, exit);
+              const query = span.attributes.get("db.query.text");
+              if (typeof query === "string") statements.push(query);
+            };
+            return span;
+          },
+        });
+        yield* orchestrator.recoverDelegatedTasks.pipe(Effect.withTracer(tracer));
+        assert.isFalse(statements.some((query) => query.includes("MIN(ordinal)")));
+        const messageReads = statements.filter((query) =>
+          query.includes("FROM orchestration_v2_projection_messages"),
+        );
+        assert.isNotEmpty(messageReads);
+        assert.isTrue(messageReads.every((query) => query.includes("message_id IN")));
+        const wake = yield* requests.take;
+        assert.equal(wake.delegatedCompletion?.parentRunId, runId);
+      }),
+    );
     it.effect("keeps a checkpoint completion committed between finalize's read and write", () =>
       Effect.gen(function* () {
         const orchestrator = yield* Orchestrator.OrchestratorV2;

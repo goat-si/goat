@@ -5,6 +5,7 @@ import {
   EnvironmentId,
   EventId,
   CommandId,
+  ContextTransferId,
   MessageId,
   type ModelSelection,
   type OrchestrationV2ProviderThread,
@@ -359,6 +360,266 @@ const addRolledBackRecoveryCandidate = Effect.fn("addRolledBackRecoveryCandidate
 
   return threadId;
 });
+
+it.effect("record reads restrict provider histories to delivery identities", () =>
+  Effect.gen(function* () {
+    const store = yield* ProjectionStore.ProjectionStoreV2;
+    const threadId = yield* addRolledBackRecoveryCandidate("delivery-identities");
+    const sql = yield* SqlClient.SqlClient;
+    const now = yield* DateTime.now;
+    for (const suffix of ["selected", "history"]) {
+      const id = ProviderThreadId.make(`provider-thread:${suffix}`);
+      yield* store.apply({
+        id: EventId.make(`event:delivery-identities:${suffix}`),
+        type: "provider-thread.updated",
+        threadId,
+        occurredAt: now,
+        payload: {
+          id,
+          appThreadId: threadId,
+          driver,
+          providerInstanceId,
+          providerSessionId: null,
+          ownerNodeId: null,
+          nativeThreadRef: null,
+          nativeConversationHeadRef: null,
+          lastRunOrdinal: null,
+          handoffIds: [],
+          forkedFrom: null,
+          status: "active",
+          firstRunOrdinal: 1,
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+    }
+    for (const [suffix, attempt] of [
+      ["selected", "current"],
+      ["history", "old"],
+      ["runless", null],
+    ] as const) {
+      yield* store.apply({
+        id: EventId.make(`event:delivery-turn:${suffix}`),
+        type: "provider-turn.updated",
+        threadId,
+        occurredAt: now,
+        payload: {
+          id: ProviderTurnId.make(`turn:${suffix}`),
+          providerThreadId: ProviderThreadId.make("provider-thread:selected"),
+          nodeId: NodeId.make("node:delivery"),
+          runAttemptId: attempt === null ? null : RunAttemptId.make(attempt),
+          nativeTurnRef: null,
+          ordinal: suffix === "selected" ? 1 : suffix === "history" ? 2 : 3,
+          status: "completed",
+          startedAt: now,
+          completedAt: now,
+        },
+      });
+    }
+    assert.deepEqual(
+      (yield* store.getThreadRecords(threadId, ["providerTurns"], {
+        providerTurnAttemptIds: [RunAttemptId.make("current")],
+      })).providerTurns.map((turn) => turn.id),
+      ["turn:selected"],
+    );
+    assert.deepEqual(
+      (yield* store.getThreadRecords(threadId, ["providerTurns"], {
+        providerTurnAttemptIds: [],
+      })).providerTurns,
+      [],
+    );
+    const selected = yield* store.getThreadRecords(threadId, ["providerThreads"], {
+      providerThreadIds: [ProviderThreadId.make("provider-thread:selected")],
+    });
+    assert.deepEqual(
+      selected.providerThreads.map((row) => row.id),
+      ["provider-thread:selected"],
+    );
+    assert.deepEqual(
+      (yield* store.getThreadRecords(threadId, ["providerThreads"], {
+        providerThreadIds: [],
+      })).providerThreads,
+      [],
+    );
+    // Unselected history must not be decoded, even if its payload is unreadable.
+    yield* sql`UPDATE orchestration_v2_projection_provider_threads SET payload_json = '{}'
+      WHERE provider_thread_id = 'provider-thread:history'`;
+    assert.lengthOf(
+      (yield* store.getThreadRecords(threadId, ["providerThreads"], {
+        providerThreadIds: [ProviderThreadId.make("provider-thread:selected")],
+      })).providerThreads,
+      1,
+    );
+  }).pipe(Effect.provide(layerTest)),
+);
+
+it.effect.each([
+  ["memory", ProjectionStore.layerMemory],
+  ["SQL", layerTest],
+] as const)(
+  "%s idle compaction filters keep the latest run, live work and the newest usage",
+  ([, layer]) =>
+    Effect.gen(function* () {
+      const store = yield* ProjectionStore.ProjectionStoreV2;
+      // Its rolled-back run 1 still has a running item, which background work must ignore.
+      const threadId = yield* addRolledBackRecoveryCandidate("idle-compaction");
+      const now = yield* DateTime.now;
+      const minutes = (count: number) => DateTime.add(now, { minutes: count });
+      const selected = ProviderThreadId.make("provider-thread:idle-selected");
+      const nodeId = NodeId.make("node:idle-compaction");
+      for (const [ordinal, status] of [
+        [2, "completed"],
+        [3, "completed"],
+        [4, "failed"],
+      ] as const) {
+        const runId = RunId.make(`run:idle-compaction:${ordinal}`);
+        yield* store.apply({
+          id: EventId.make(`event:idle-compaction:run-${ordinal}`),
+          type: "run.created",
+          threadId,
+          runId,
+          nodeId,
+          driver,
+          providerInstanceId,
+          occurredAt: now,
+          payload: {
+            id: runId,
+            threadId,
+            ordinal,
+            providerInstanceId,
+            modelSelection,
+            providerThreadId: selected,
+            userMessageId: MessageId.make(`message:idle-compaction:${ordinal}`),
+            rootNodeId: nodeId,
+            activeAttemptId: null,
+            status,
+            requestedAt: now,
+            startedAt: now,
+            completedAt: now,
+            checkpointId: null,
+            contextHandoffId: null,
+          },
+        });
+      }
+      for (const [id, providerThreadId, ordinal, usageAt] of [
+        ["turn:idle-old", selected, 1, minutes(1)],
+        ["turn:idle-newest", selected, 2, minutes(3)],
+        ["turn:idle-later-ordinal", selected, 3, minutes(2)],
+        ["turn:idle-no-usage", selected, 4, null],
+        [
+          "turn:idle-other-thread",
+          ProviderThreadId.make("provider-thread:idle-other"),
+          1,
+          minutes(9),
+        ],
+      ] as const) {
+        yield* store.apply({
+          id: EventId.make(`event:${id}`),
+          type: "provider-turn.updated",
+          threadId,
+          nodeId,
+          driver,
+          occurredAt: now,
+          payload: {
+            id: ProviderTurnId.make(id),
+            providerThreadId,
+            nodeId,
+            runAttemptId: null,
+            nativeTurnRef: null,
+            ordinal,
+            status: "completed",
+            startedAt: now,
+            completedAt: now,
+            ...(usageAt === null
+              ? {}
+              : { tokenUsage: { usedTokens: 150_000, updatedAt: DateTime.formatIso(usageAt) } }),
+          },
+        });
+      }
+      for (const status of ["pending", "resolved"] as const) {
+        yield* store.apply({
+          id: EventId.make(`event:idle-compaction:request-${status}`),
+          type: "runtime-request.updated",
+          threadId,
+          nodeId,
+          occurredAt: now,
+          payload: {
+            id: RuntimeRequestId.make(`request:idle-compaction:${status}`),
+            nodeId,
+            providerTurnId: null,
+            nativeRequestRef: null,
+            kind: "user_input",
+            status,
+            responseCapability: { type: "message" },
+            createdAt: now,
+            resolvedAt: status === "pending" ? null : now,
+          },
+        });
+      }
+      for (const status of ["pending", "consumed"] as const) {
+        yield* store.apply({
+          id: EventId.make(`event:idle-compaction:transfer-${status}`),
+          type: "context-transfer.created",
+          threadId,
+          occurredAt: now,
+          payload: {
+            id: ContextTransferId.make(`transfer:idle-compaction:${status}`),
+            type: "merge_back",
+            sourceThreadId: ThreadId.make("thread:idle-compaction:side"),
+            targetThreadId: threadId,
+            sourcePoint: { threadId: ThreadId.make("thread:idle-compaction:side") },
+            basePoint: null,
+            sourceProviderInstanceId: providerInstanceId,
+            targetProviderInstanceId: providerInstanceId,
+            targetRunId: null,
+            status,
+            resolution: null,
+            createdBy: "user",
+            error: null,
+            createdAt: now,
+            updatedAt: now,
+            consumedAt: status === "pending" ? null : now,
+          },
+        });
+      }
+
+      const records = yield* store.getThreadRecords(
+        threadId,
+        ["runs", "providerTurns", "runtimeRequests", "contextTransfers"],
+        {
+          runStatuses: ["preparing", "starting", "running", "rolled_back"],
+          includeLatestRun: true,
+          providerTurnThreadIds: [selected],
+          latestProviderTurnUsageOnly: true,
+          runtimeRequestStatuses: ["pending"],
+          contextTransferStatuses: ["pending"],
+        },
+      );
+      // The failed latest run stays, so a completed earlier run is not mistaken for the latest.
+      assert.deepEqual(
+        records.runs.map((run) => run.id),
+        ["run:idle-compaction:rolled-back", "run:idle-compaction:4"],
+      );
+      assert.deepEqual(
+        records.providerTurns.map((turn) => turn.id),
+        ["turn:idle-newest"],
+      );
+      assert.deepEqual(
+        records.runtimeRequests.map((request) => request.id),
+        ["request:idle-compaction:pending"],
+      );
+      assert.deepEqual(
+        records.contextTransfers.map((transfer) => transfer.id),
+        ["transfer:idle-compaction:pending"],
+      );
+      const empty = yield* store.getThreadRecords(threadId, ["runs", "providerTurns"], {
+        runStatuses: [],
+        providerTurnThreadIds: [],
+        latestProviderTurnUsageOnly: true,
+      });
+      assert.deepEqual([empty.runs, empty.providerTurns], [[], []]);
+    }).pipe(Effect.provide(layer)),
+);
 
 it.effect.each([
   ["memory", ProjectionStore.layerMemory],
@@ -1009,7 +1270,139 @@ const commandReadsSkipSettledLeafNodes = Effect.gen(function* () {
     nodeNames(yield* store.getThreadRecords(threadId, ["nodes"])),
     nodes.map(([name]) => name).toSorted(),
   );
+
+  const subagents = [
+    ["delivered", settledRun, "completed", "delivered"],
+    ["acknowledged", settledRun, "failed", "acknowledged"],
+    ["disposed", settledRun, "cancelled", "disposed"],
+    ["pending-delivery", settledRun, "completed", "pending"],
+    ["claimed", settledRun, "completed", "claimed"],
+    ["no-delivery", settledRun, "interrupted", null],
+    ["running", settledRun, "running", null],
+    ["active-run-delivered", activeRun, "completed", "delivered"],
+  ] as const;
+  // A follow-up reuses its task's child thread.
+  const childThreadIds: Partial<Record<(typeof subagents)[number][0], ThreadId>> = {
+    delivered: ThreadId.make("thread:settled-subagents:child-a"),
+    running: ThreadId.make("thread:settled-subagents:child-a"),
+    "no-delivery": ThreadId.make("thread:settled-subagents:child-b"),
+    "active-run-delivered": ThreadId.make("thread:settled-subagents:promoted"),
+  };
+  for (const [index, [name, run, status, delivery]] of subagents.entries()) {
+    const id = NodeId.make(`node:settled-subagents:${name}`);
+    const childThreadId = childThreadIds[name] ?? null;
+    yield* store.apply({
+      id: EventId.make(`event:settled-subagents:item:${name}`),
+      type: "turn-item.updated",
+      threadId,
+      runId: run.id,
+      nodeId: id,
+      driver,
+      occurredAt: now,
+      payload: {
+        id: TurnItemId.make(`item:settled-subagents:${name}`),
+        type: "subagent",
+        threadId,
+        runId: run.id,
+        nodeId: id,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        parentItemId: null,
+        ordinal: 100 + index,
+        status: status === "running" ? "running" : "completed",
+        title: name,
+        startedAt: now,
+        completedAt: status === "running" ? null : now,
+        updatedAt: now,
+        subagentId: id,
+        origin: "app_owned",
+        driver,
+        providerInstanceId,
+        childThreadId,
+        prompt: "Do the work",
+        result: null,
+      },
+    });
+    yield* store.apply({
+      id: EventId.make(`event:settled-subagents:${name}`),
+      type: "subagent.updated",
+      threadId,
+      runId: run.id,
+      nodeId: id,
+      driver,
+      providerInstanceId,
+      occurredAt: now,
+      payload: {
+        id,
+        threadId,
+        runId: run.id,
+        parentNodeId: run.rootNodeId!,
+        origin: "app_owned",
+        createdBy: "agent",
+        driver,
+        providerInstanceId,
+        providerThreadId: null,
+        childThreadId,
+        nativeTaskRef: null,
+        ...(name === "active-run-delivered" ? { promotedAt: now } : {}),
+        prompt: "Do the work",
+        title: name,
+        model: null,
+        ...(delivery === null
+          ? {}
+          : { completionDelivery: { state: delivery, observedByRunId: null } }),
+        status,
+        result: null,
+        startedAt: now,
+        completedAt: status === "running" ? null : now,
+        updatedAt: now,
+      },
+    });
+  }
+  const subagentNames = (records: {
+    readonly subagents: ReadonlyArray<{ readonly title: string | null }>;
+  }) => records.subagents.map((subagent) => subagent.title ?? "").toSorted();
+  assert.deepEqual(
+    subagentNames(
+      yield* store.getThreadRecords(threadId, ["subagents"], { omitSettledSubagents: true }),
+    ),
+    ["active-run-delivered", "claimed", "no-delivery", "pending-delivery", "running"],
+  );
+  assert.deepEqual(
+    subagentNames(yield* store.getThreadRecords(threadId, ["subagents"])),
+    subagents.map(([name]) => name).toSorted(),
+  );
+  // A command about one settled task keeps it, and reads only its node and turn item.
+  const deliveredId = NodeId.make("node:settled-subagents:delivered");
+  const forTask = yield* store.getThreadRecords(threadId, ["subagents", "nodes", "turnItems"], {
+    omitSettledSubagents: { except: [deliveredId] },
+    nodeIds: [NodeId.make("node:settled-leaf-nodes:settled-tool")],
+    turnItemNodeIds: [deliveredId],
+  });
+  assert.deepEqual(subagentNames(forTask), [
+    "active-run-delivered",
+    "claimed",
+    "delivered",
+    "no-delivery",
+    "pending-delivery",
+    "running",
+  ]);
+  assert.deepEqual(nodeNames(forTask), ["settled-tool"]);
+  assert.deepEqual(
+    forTask.turnItems.map((item) => item.title),
+    ["delivered"],
+  );
+  assert.strictEqual(yield* store.getSubagentCount(threadId), subagents.length);
+  assert.deepEqual(
+    [...(yield* store.listAppOwnedChildThreadIds(threadId))],
+    [childThreadIds.delivered, childThreadIds["no-delivery"]],
+  );
 });
+
+it.effect("replay command reads retain the same live subagents as SQLite", () =>
+  commandReadsSkipSettledLeafNodes.pipe(Effect.provide(ProjectionStore.layerMemory)),
+);
 
 const backgroundThreadUpdatesKeepTimestamp = Effect.gen(function* () {
   const store = yield* ProjectionStore.ProjectionStoreV2;
@@ -4126,6 +4519,12 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
       const projection = yield* projectionStore.getThreadProjection(threadId);
       assert.deepEqual(projection.runs[0]?.delegatedCompletion, run.delegatedCompletion);
       assert.deepEqual(projection.subagents[0]?.completionDelivery, task.completionDelivery);
+      assert.deepEqual(
+        (yield* projectionStore.getThreadRecords(threadId, ["subagents"], {
+          omitSettledSubagents: true,
+        })).subagents,
+        [],
+      );
     }),
   );
 
@@ -7465,10 +7864,24 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
           completedAt: releasedAt,
         },
       });
+      const { statements, tracer } = traceSqlStatements();
       assert.deepEqual(
-        (yield* store.getRuntimeRecoveryProjection(threadId)).runs.map((run) => run.id),
+        (yield* store
+          .getRuntimeRecoveryProjection(threadId)
+          .pipe(Effect.withTracer(tracer))).runs.map((run) => run.id),
         [runId, newerRunId],
       );
+      const sql = yield* SqlClient.SqlClient;
+      const itemReads = statements.filter((query) => query.includes("turn_items"));
+      assert.isAbove(itemReads.length, 0);
+      for (const statement of itemReads) {
+        const plan = yield* sql.unsafe<{ readonly detail: string }>(
+          `EXPLAIN QUERY PLAN ${statement}`,
+        );
+        for (const { detail } of plan) {
+          assert.notMatch(detail, /turn_items_(thread_ordinal|thread_run)_idx \(thread_id=\?\)$/);
+        }
+      }
     }),
   );
 
