@@ -151,9 +151,23 @@ describe("soak observations", () => {
   });
 });
 
-import { parseArgs, validateHome } from "./cpuPressureSoak.ts";
+import { parseArgs, validateHome, verifyRuntimeState } from "./cpuPressureSoak.ts";
 
 describe("soak input safety", () => {
+  it("checks the published runtime identity without treating an absent file as another server", () => {
+    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-runtime-"));
+    try {
+      expect(verifyRuntimeState(dir, 123, 456)).toBe(false);
+      NodeFS.writeFileSync(
+        NodePath.join(dir, "server-runtime.json"),
+        JSON.stringify({ pid: 123, port: 456 }),
+      );
+      expect(verifyRuntimeState(dir, 123, 456)).toBe(true);
+      expect(() => verifyRuntimeState(dir, 999, 456)).toThrow();
+    } finally {
+      NodeFS.rmSync(dir, { recursive: true, force: true });
+    }
+  });
   it("rejects invalid ports, counts, paths and unknown flags", () => {
     const args = ["--home", "/tmp/home", "--report", "/tmp/report", "--server-port", "3333"];
     expect(parseArgs(args).serverPort).toBe(3333);

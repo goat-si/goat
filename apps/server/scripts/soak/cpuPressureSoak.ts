@@ -180,6 +180,24 @@ async function waitForReady(server: OwnedChild): Promise<void> {
   ]);
 }
 
+export function verifyRuntimeState(
+  directory: string,
+  pid: number | undefined,
+  port: number,
+): boolean {
+  let contents: string;
+  try {
+    contents = NodeFS.readFileSync(NodePath.join(directory, "server-runtime.json"), "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+  const runtime = JSON.parse(contents) as { pid?: number; port?: number };
+  if (runtime.pid !== pid || runtime.port !== port)
+    throw new Error("server runtime identity mismatch");
+  return true;
+}
+
 async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
   validateHome(options.home, checkout);
   const reportParent = NodeFS.realpathSync(NodePath.dirname(options.report));
@@ -242,11 +260,11 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
       if (!teardown) serverExit = true;
     });
     await waitForReady(server);
-    const runtime = JSON.parse(
-      NodeFS.readFileSync(NodePath.join(options.home, "userdata/server-runtime.json"), "utf8"),
-    ) as { pid?: number; port?: number };
-    if (runtime.pid !== server.child.pid || runtime.port !== options.serverPort)
-      throw new Error("server runtime identity mismatch");
+    verifyRuntimeState(
+      NodePath.join(options.home, "userdata"),
+      server.child.pid,
+      options.serverPort,
+    );
     let rejectBurner: (error: Error) => void = () => {};
     const burnerFailure = new Promise<never>((_, reject) => {
       rejectBurner = reject;
@@ -306,6 +324,14 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
         throw new Error("server exited during workload");
       }),
     ]);
+    if (
+      !verifyRuntimeState(
+        NodePath.join(options.home, "userdata"),
+        server.child.pid,
+        options.serverPort,
+      )
+    )
+      throw new Error("server runtime identity was not published");
     sample();
     for (const gap of [...stall.gaps, ...trace.gaps, ...provider.gaps]) observations.gap(gap);
     if (stall.hasPartialLine || trace.hasPartialLine || provider.hasPartialLine)
