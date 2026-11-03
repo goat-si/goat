@@ -1,3 +1,4 @@
+import { resolvePastedPath } from "@goat/shared/path";
 import { ProviderUpdateChecksSetting } from "./ProviderUpdateChecksSetting";
 import { AgentMemoryLimitSetting } from "./AgentMemoryLimitSetting";
 import { SettingsGroup } from "./SettingsGroup";
@@ -1408,6 +1409,7 @@ export function GeneralSettingsPanel() {
               className="w-full sm:w-72"
               value={mixedAddProjectBaseDirectory ? "" : settings.addProjectBaseDirectory}
               onCommit={(next) => updateSettings({ addProjectBaseDirectory: next })}
+              normalizeDraft={resolvePastedPath}
               placeholder={mixedAddProjectBaseDirectory ? "Mixed" : "~/"}
               spellCheck={false}
               aria-label="Add project base directory"

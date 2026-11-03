@@ -1,3 +1,4 @@
+import { resolvePastedPath } from "@goat/shared/path";
 import * as Schema from "effect/Schema";
 import { ScheduledTaskNotificationPolicy } from "@goat/contracts";
 import { FormField, SelectRow } from "./ScheduledTaskFormFields";
@@ -861,7 +862,12 @@ function TaskForm({
               disabled={saving}
               value={draft.checkoutPath}
               borderTop
-              onChange={(checkoutPath) => setDraft({ ...draft, checkoutPath })}
+              onChange={(checkoutPath) =>
+                setDraft({
+                  ...draft,
+                  checkoutPath: resolvePastedPath(draft.checkoutPath, checkoutPath),
+                })
+              }
             />
           ) : null}
         </SettingsSection>
