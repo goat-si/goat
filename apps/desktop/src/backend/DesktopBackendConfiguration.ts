@@ -3,6 +3,7 @@ import {
   LEGACY_RESOURCE_MONITOR_BINARY_NAME,
 } from "@goat/contracts/legacyT3Names";
 import * as NodeOS from "node:os";
+import { DESKTOP_STOP_INTENT_DIR } from "@goat/contracts";
 
 import { parsePersistedServerObservabilitySettings } from "@goat/shared/serverSettings";
 import { currentDesktopBootstrapToken } from "@goat/shared/desktopBootstrapToken";
@@ -500,6 +501,7 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
       readonly resourceMonitorPath: Option.Option<string>;
       readonly cliPath: Option.Option<string>;
       readonly shellEnvironmentPrepared: boolean;
+      readonly stopIntentId: string;
     },
   ): Effect.fn.Return<
     DesktopBackendManager.DesktopBackendStartConfig,
@@ -517,6 +519,12 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
       [GOAT_DESKTOP_BOOTSTRAP_HOME_KEY]: environment.baseDir,
       host: backendExposure.bindHost,
       desktopBootstrapToken: input.bootstrapToken,
+      desktopStopIntentPath: environment.path.join(
+        environment.stateDir,
+        "runtime",
+        DESKTOP_STOP_INTENT_DIR,
+        `${input.stopIntentId}.json`,
+      ),
       desktopBootstrapSecret: input.bootstrapSecret,
       shellEnvironmentPrepared: input.shellEnvironmentPrepared,
       tailscaleServeEnabled: backendExposure.tailscaleServeEnabled,
@@ -852,6 +860,7 @@ export const make = Effect.gen(function* () {
       resourceMonitorPath,
       cliPath,
       shellEnvironmentPrepared,
+      stopIntentId: yield* crypto.randomUUIDv4(),
     }).pipe(
       Effect.provideService(DesktopEnvironment.DesktopEnvironment, environment),
       Effect.provideService(DesktopServerExposure.DesktopServerExposure, serverExposure),

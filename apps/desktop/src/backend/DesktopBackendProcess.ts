@@ -1,17 +1,25 @@
 import { GOAT_ENVIRONMENT_PATH } from "@goat/contracts/legacyT3Names";
 import {
   DesktopBackendBootstrap,
+  DesktopStopIntent,
   DesktopTelemetryControlMessage,
   type DesktopBackendBootstrap as DesktopBackendBootstrapValue,
   type DesktopTelemetryControlMessage as DesktopTelemetryControlMessageValue,
+  type DesktopStopReason,
 } from "@goat/contracts";
 import { waitForHttpReady as waitForHttpReadyShared } from "@goat/shared/httpReadiness";
 import * as Cause from "effect/Cause";
+import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
+import * as FileSystem from "effect/FileSystem";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- Atomic replacement uses the native path of the desktop host.
+import * as NodePath from "node:path";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
 import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
@@ -26,7 +34,7 @@ const DEFAULT_BACKEND_READINESS_REQUEST_TIMEOUT = Duration.seconds(1);
 // Match the service launcher's grace period so backends can stop provider sessions.
 export const DEFAULT_BACKEND_TERMINATE_GRACE = Duration.seconds(5);
 export const BACKEND_SPAWN_SETTLE_TIMEOUT = Duration.seconds(1);
-// Spawn settle, grace, the SIGKILL exit wait, output drain, and a margin.
+// Spawn settle, intent write, grace, SIGKILL wait, and output drain fit in this budget.
 export const BACKEND_STOP_TIMEOUT = Duration.sum(
   BACKEND_SPAWN_SETTLE_TIMEOUT,
   Duration.sum(DEFAULT_BACKEND_TERMINATE_GRACE, Duration.seconds(3)),
@@ -517,3 +525,120 @@ export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
     ),
   );
 });
+
+export const INTENT_WRITE_TIMEOUT = Duration.seconds(1);
+
+const encodeStopIntent = Schema.encodeSync(Schema.fromJsonString(DesktopStopIntent));
+export const writeBackendStopIntent = Effect.fn("desktop.backendInstance.writeStopIntent")(
+  function* (
+    run: {
+      readonly intentPath: string | undefined;
+      readonly pid: Option.Option<number>;
+      readonly intentWritten: Deferred.Deferred<void>;
+    },
+    reason: DesktopStopReason,
+    fs: FileSystem.FileSystem,
+    recordStop: DesktopObservability.DesktopBackendOutputLogShape["recordStop"],
+    bounded: boolean,
+  ) {
+    const input = {
+      path: run.intentPath,
+      pid: run.pid,
+      done: run.intentWritten,
+      reason,
+      fs,
+      recordStop,
+      bounded,
+    };
+    if (input.path === undefined || Option.isNone(input.pid)) {
+      yield* Deferred.succeed(input.done, undefined);
+      return;
+    }
+    const path = input.path;
+    const pid = input.pid.value;
+    const temporary = `${path}.tmp`;
+    const write = Effect.gen(function* () {
+      const requestedAt = DateTime.formatIso(yield* DateTime.now);
+      yield* input.fs.makeDirectory(NodePath.dirname(path), { recursive: true, mode: 0o700 });
+      yield* input.fs.writeFileString(
+        temporary,
+        encodeStopIntent({ version: 1, pid, reason: input.reason, requestedAt }),
+        { mode: 0o600 },
+      );
+      yield* input.fs.rename(temporary, path);
+    });
+    const result = yield* write.pipe(Effect.result, Effect.timeoutOption(INTENT_WRITE_TIMEOUT));
+    yield* Deferred.succeed(input.done, undefined);
+    if (Option.isNone(result) || result.value._tag === "Failure") {
+      const warning = input.recordStop({
+        message: "backend stop intent not written",
+        level: "WARN",
+        details: `pid=${pid} reason=${input.reason}`,
+      });
+      if (input.bounded) yield* Effect.forkDetach(warning);
+      else yield* warning;
+    }
+  },
+);
+
+export const waitForBackendStopIntent = (done: Deferred.Deferred<void>) =>
+  Deferred.await(done).pipe(Effect.timeoutOption(INTENT_WRITE_TIMEOUT), Effect.asVoid);
+
+export const removeBackendStopIntent = (fs: FileSystem.FileSystem, path: string | undefined) =>
+  path === undefined ? Effect.void : fs.remove(path).pipe(Effect.ignore);
+
+export const recordBackendStopRequest = (
+  pid: Option.Option<number>,
+  reason: DesktopStopReason,
+  timeout: Duration.Duration | undefined,
+  recordStop: DesktopObservability.DesktopBackendOutputLogShape["recordStop"],
+) => {
+  const write = recordStop({
+    message: "backend stop requested",
+    level: "INFO",
+    details: `pid=${Option.match(pid, { onNone: () => "pending", onSome: String })} reason=${reason} graceMs=${Duration.toMillis(DEFAULT_BACKEND_TERMINATE_GRACE)} timeoutMs=${timeout ? Duration.toMillis(timeout) : "none"}`,
+  });
+  return timeout ? Effect.forkDetach(write).pipe(Effect.asVoid) : write;
+};
+
+export interface ActiveBackendRun {
+  readonly id: number;
+  readonly scope: Scope.Closeable;
+  readonly spawnReady: Deferred.Deferred<void>;
+  readonly intentWritten: Deferred.Deferred<void>;
+  readonly intentPath: string | undefined;
+  readonly boundedStop: Ref.Ref<boolean>;
+  readonly fiber: Option.Option<Fiber.Fiber<void, never>>;
+  readonly pid: Option.Option<number>;
+  readonly exitObserved: boolean;
+  readonly stopRequested: boolean;
+  readonly stopRequest: Option.Option<{
+    readonly reason: DesktopStopReason;
+    readonly atNanos: bigint;
+  }>;
+  readonly exitAtNanos: Option.Option<bigint>;
+}
+
+export interface BackendManagerState {
+  readonly desiredRunning: boolean;
+  readonly ready: boolean;
+  readonly config: Option.Option<DesktopBackendStartConfig>;
+  readonly active: Option.Option<ActiveBackendRun>;
+  readonly restartAttempt: number;
+  readonly startupRetryAttempt: number;
+  readonly preflightFailureAttempt: number;
+  readonly restartFiber: Option.Option<Fiber.Fiber<void, never>>;
+  readonly nextRunId: number;
+}
+
+export const initialBackendManagerState: BackendManagerState = {
+  desiredRunning: false,
+  ready: false,
+  config: Option.none(),
+  active: Option.none(),
+  restartAttempt: 0,
+  startupRetryAttempt: 0,
+  preflightFailureAttempt: 0,
+  restartFiber: Option.none(),
+  nextRunId: 1,
+};
