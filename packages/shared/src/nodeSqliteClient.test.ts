@@ -205,6 +205,27 @@ const makeTempDatabase = Effect.gen(function* () {
   return { filename, other };
 });
 
+it.effect("configures the writer lock wait before probing the checkpoint database", () =>
+  Effect.gen(function* () {
+    const { filename } = yield* makeTempDatabase;
+    const original = NodeSqlite.DatabaseSync.prototype.prepare;
+    let initialWait: number | undefined;
+    using _probe = vi
+      .spyOn(NodeSqlite.DatabaseSync.prototype, "prepare")
+      .mockImplementation(function (this: NodeSqlite.DatabaseSync, query) {
+        if (query === "SELECT sqlite_version() AS version") {
+          initialWait = Number(original.call(this, "PRAGMA busy_timeout").get()?.timeout);
+        }
+        return original.call(this, query);
+      });
+    yield* Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      assert.deepEqual(yield* sql`SELECT value FROM counters`.values, [[0]]);
+      assert.equal(initialWait, 5000);
+    }).pipe(Effect.provide(SqliteClient.layer({ filename, checkpointWorker: true })));
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
 it.effect("keeps another connection from committing between a transaction's read and write", () =>
   Effect.gen(function* () {
     const { filename, other } = yield* makeTempDatabase;
