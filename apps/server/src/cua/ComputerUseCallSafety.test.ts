@@ -2,6 +2,24 @@ import { describe, expect, it } from "@effect/vitest";
 import { deniedCallApp } from "./ComputerUseCallSafety.ts";
 
 describe("computer use call safety", () => {
+  it("launch_app with bundle_id and urls is a second target under full access", () => {
+    for (const value of [["https://example.com"], [], "", null]) {
+      expect(
+        deniedCallApp(
+          { name: "launch_app", args: { bundle_id: "com.example.Editor", urls: value } },
+          [],
+          true,
+        ),
+      ).toBeDefined();
+    }
+    expect(
+      deniedCallApp(
+        { name: "launch_app", args: { bundle_id: "com.example.Editor", session: null } },
+        [],
+        true,
+      ),
+    ).toBeUndefined();
+  });
   it("non-person full access refuses terminals on macOS, Linux and Windows", () => {
     for (const app of [
       "com.apple.Terminal",

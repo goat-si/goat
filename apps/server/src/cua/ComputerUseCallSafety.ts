@@ -1,6 +1,7 @@
 import { cuaAppKey, isExcludedCuaApplication } from "@goat/shared/cuaDriverManifest";
 import { batchAppScope, isBatchTool } from "./ComputerUseBatchScope.ts";
 import { isTerminalCuaApplication } from "./ComputerUseTerminalApps.ts";
+import { launchAlternateTarget } from "./ComputerUseLaunchTargets.ts";
 
 export const deniedCallApp = (
   call: {
@@ -27,10 +28,11 @@ export const deniedCallApp = (
           .map(([, value]) => String(value))
       : [];
   if (call.name === "launch_app" && (denied.length > 0 || nonPersonFullAccess)) {
-    const alternate = args.find(
-      ([key, value]) => key !== "bundle_id" && key !== "session" && typeof value === "string",
-    );
-    if (alternate !== undefined) return String(alternate[1]);
+    const alternate = launchAlternateTarget(call.args);
+    if (alternate !== undefined)
+      return typeof alternate[1] === "string" && alternate[1].length > 0
+        ? alternate[1]
+        : alternate[0];
     if (
       !args.some(
         ([key, value]) => key === "bundle_id" && typeof value === "string" && value.length > 0,

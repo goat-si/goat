@@ -15,6 +15,7 @@ import { cuaAppKey, isExcludedCuaApplication } from "@goat/shared/cuaDriverManif
 
 import { backgroundBatch, batchAppScope } from "./ComputerUseBatchScope.ts";
 import { foreground } from "./ComputerUseCallReservations.ts";
+import { launchAlternateTarget } from "./ComputerUseLaunchTargets.ts";
 import { movesPointer } from "./computerUseTarget.ts";
 
 /** Reads and session bookkeeping that touch no app's contents or input. */
@@ -168,11 +169,7 @@ export function scopeVerdict(input: {
   if (typeof input.name === "string" && UNSCOPED_TOOLS.has(input.name)) return { _tag: "allow" };
   const args = record(input.args);
   const alternateLaunchTarget =
-    input.name === "launch_app" &&
-    Object.entries(args ?? {}).some(
-      ([key, value]) =>
-        key !== "bundle_id" && key !== "session" && typeof value === "string" && value.length > 0,
-    );
+    input.name === "launch_app" && launchAlternateTarget(args) !== undefined;
   const pid = targetPid(args);
   const target = pid === undefined ? undefined : input.appOf(pid);
   const named = text(args?.bundle_id) ?? text(args?.name) ?? text(args?.app_name);
