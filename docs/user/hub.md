@@ -136,8 +136,9 @@ worktrees, such as those under **worker** and **manager**, can also add and clon
 projects; changing or deleting a project still needs permission to change settings.
 An agent needs `pr.merge` to use GOAT's pull request merge and close tools. A
 supervisor can start a merge manager only when its own grant allows merging;
-otherwise, it asks a person through the decision inbox. Turn permission profiles
-on in **Settings → Hub**.
+otherwise, it asks a person through the decision inbox. Profiles do not control an
+agent's own terminal: an agent with repository credentials can still open or merge
+a pull request from there. Turn permission profiles on in **Settings → Hub**.
 
 A profile's lane limit (`maxLanes`) also covers the subagents a coding agent
 starts by itself. Codex and Claude run no more of them at once than the limit;
