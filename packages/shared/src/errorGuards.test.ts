@@ -7,9 +7,9 @@ import { expect } from "vite-plus/test";
 
 import { guardChild, guardErrors } from "./errorGuards.ts";
 
-// A live child that holds its stdin closed, so the parent's next write fails with EPIPE.
-const CLOSED_STDIN_CHILD =
-  "require('node:fs').closeSync(0); process.stdout.write('ready\\n'); setInterval(() => {}, 1000);";
+// Never reads stdin, so a large write stays pending until the child is killed. On Windows a child
+// that closes fd 0 leaves the parent's write queued forever, so killing is the portable trigger.
+const UNREAD_STDIN_CHILD = "process.stdout.write('ready\\n'); setInterval(() => {}, 1000);";
 
 const spawnScoped = (script: string) =>
   Effect.acquireRelease(
@@ -19,20 +19,26 @@ const spawnScoped = (script: string) =>
     (child) => Effect.sync(() => child.kill("SIGKILL")),
   );
 
-it.live("a guarded child's stdin EPIPE reaches stdinRoute instead of ending the process", () =>
-  Effect.gen(function* () {
-    const stdinErrors = Promise.withResolvers<Error>();
-    const childErrors: Error[] = [];
-    const child = yield* spawnScoped(CLOSED_STDIN_CHILD);
-    guardChild(child, (error) => childErrors.push(error), stdinErrors.resolve);
-    yield* Effect.promise(
-      () => new Promise<void>((resolve) => child.stdout.once("data", () => resolve())),
-    );
-    child.stdin.write("x".repeat(70_000));
-    const error = yield* Effect.promise(() => stdinErrors.promise);
-    expect(Reflect.get(error, "code")).toBe("EPIPE");
-    expect(childErrors).toEqual([]);
-  }).pipe(Effect.scoped),
+it.live(
+  "a guarded child's failed stdin write reaches stdinRoute instead of ending the process",
+  () =>
+    Effect.gen(function* () {
+      const stdinErrors = Promise.withResolvers<Error>();
+      const childErrors: Error[] = [];
+      const child = yield* spawnScoped(UNREAD_STDIN_CHILD);
+      guardChild(child, (error) => childErrors.push(error), stdinErrors.resolve);
+      yield* Effect.promise(
+        () => new Promise<void>((resolve) => child.stdout.once("data", () => resolve())),
+      );
+      child.stdin.write("x".repeat(1 << 20));
+      expect(child.stdin.writableLength).toBeGreaterThan(0);
+      child.kill("SIGKILL");
+      const error = yield* Effect.promise(() => stdinErrors.promise);
+      // POSIX reports the broken pipe as EPIPE, Windows as EOF.
+      expect(["EPIPE", "EOF"]).toContain(Reflect.get(error, "code"));
+      expect(Reflect.get(error, "syscall")).toBe("write");
+      expect(childErrors).toEqual([]);
+    }).pipe(Effect.scoped),
 );
 
 it.live("a guarded child's stdout and stderr errors reach the child's route", () =>
