@@ -298,7 +298,7 @@ const threadFixture = Effect.fn("LeaseRouteTest.threadFixture")(function* (
     channel: Context.get(context, ComputerUsePrimitiveChannel.ComputerUsePrimitiveChannel),
     request,
     postPrimitive,
-    reserve: (name: string, args: object) =>
+    reserve: (name: string, args: unknown) =>
       handler.pipe(
         Effect.provideService(
           HttpServerRequest.HttpServerRequest,
@@ -627,6 +627,8 @@ describe("computer use lease route", () => {
         reservation: (request) =>
           request.action === "reserve"
             ? route.reserve(request.name, request.args).pipe(
+                Effect.scoped,
+                Effect.orDie,
                 Effect.tap((value) =>
                   Effect.sync(() => {
                     decision = value;

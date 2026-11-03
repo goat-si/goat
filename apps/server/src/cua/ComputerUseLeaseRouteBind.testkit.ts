@@ -1,3 +1,4 @@
+// @effect-diagnostics preferSchemaOverJson:off -- The fake driver exchanges opaque JSON-RPC lines.
 import * as Effect from "effect/Effect";
 import type { PendingBrowserBind } from "./ComputerUseClaimBindAuthority.ts";
 import { active, CONTROL, type harness } from "./ComputerUseLeaseProxy.testkit.ts";
