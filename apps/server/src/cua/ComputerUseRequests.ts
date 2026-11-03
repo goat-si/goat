@@ -32,7 +32,7 @@ import type { ComputerUseAnswer } from "../handoffs/computerUseContinuations.ts"
 import * as CuaDriver from "./CuaDriver.ts";
 import { namedAppMessages } from "./ComputerUseNamedApps.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
-import { isTerminalCuaApplication } from "./ComputerUseTerminalApps.ts";
+import { isTerminalCuaApplicationInCatalog } from "./ComputerUseTerminalApps.ts";
 import {
   computerUseOrigin,
   projectionOriginReads,
@@ -228,17 +228,7 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
     wanted !== undefined
   ) {
     const catalog = yield* cua.value.appCatalog;
-    const terminals = wanted.filter(
-      (app) =>
-        isTerminalCuaApplication(app) ||
-        catalog.some((entry) => {
-          const identities = [entry.id, entry.name, ...(entry.executables ?? [])];
-          return (
-            identities.some((identity) => cuaAppKey(identity) === cuaAppKey(app)) &&
-            identities.some(isTerminalCuaApplication)
-          );
-        }),
-    );
+    const terminals = wanted.filter((app) => isTerminalCuaApplicationInCatalog(app, catalog));
     if (terminals.length > 0)
       return {
         kind: "refused",

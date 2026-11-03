@@ -24,6 +24,7 @@ export const layerInteractive = (input: {
         acquire: input.acquire.pipe(Effect.map(Option.some)),
         listedApps: Effect.succeedNone,
         appCatalog: Effect.succeed([]),
+        availableAppCatalog: Effect.succeedSome([]),
         lastFailure: Effect.succeed(Option.none()),
         block: Effect.succeed(undefined),
         status: Effect.succeed({ platform: "darwin", running: true }),
