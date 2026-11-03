@@ -125,14 +125,19 @@ async function main(): Promise<void> {
     });
     activeInstall = install;
     let installOutput = "";
+    let launcherMissing = false;
     for (const [source, target] of [
       [install.stdout, process.stdout],
       [install.stderr, process.stderr],
     ] as const) {
+      // The tail kept for the marker can drop the diagnostic, so it is matched as output arrives.
+      let carry = "";
       source.setEncoding("utf8");
       source.on("data", (chunk: string) => {
         target.write(chunk);
         installOutput = (installOutput + chunk).slice(-8_000);
+        launcherMissing ||= isCorepackLauncherMissing(carry + chunk);
+        carry = (carry + chunk).slice(-1_000);
       });
     }
     const installStatus = await new Promise<number | null>((resolve) =>
@@ -140,11 +145,7 @@ async function main(): Promise<void> {
     );
     activeInstall = undefined;
     if (installStatus === 0 && !cancelSignal) break;
-    if (
-      !cancelSignal &&
-      index + 1 < candidates.length &&
-      isCorepackLauncherMissing(installOutput)
-    ) {
+    if (!cancelSignal && index + 1 < candidates.length && launcherMissing) {
       process.stderr.write(
         "Worktree setup: corepack's pnpm launcher is missing; trying the next installer.\n",
       );

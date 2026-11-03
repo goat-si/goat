@@ -32,7 +32,7 @@ it("recognizes only missing corepack pnpm launchers", () => {
   assert.isFalse(isCorepackLauncherMissing("ERR_PNPM_OUTDATED_LOCKFILE"));
 });
 
-function setupFixture(pinned: string, pnpmOutput: string) {
+function setupFixture(pinned: string, pnpmOutput: string, trailingLines = 0) {
   const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-setup-contract-"));
   const scripts = NodePath.join(root, "scripts");
   const bin = NodePath.join(root, "bin");
@@ -53,9 +53,10 @@ function setupFixture(pinned: string, pnpmOutput: string) {
   );
   const windows = HostProcess.Platform.defaultValue() === "win32";
   for (const name of ["pnpm", "npx"] as const) {
+    const noise = "x".repeat(60);
     const contents = windows
-      ? `@echo off\r\necho ${name}>>"%SETUP_TEST_LOG%"\r\n${name === "pnpm" ? `echo ${pnpmOutput} 1>&2\r\nexit /b 1` : "exit /b 0"}\r\n`
-      : `#!/bin/sh\nprintf '%s\n' '${name}' >> "$SETUP_TEST_LOG"\n${name === "pnpm" ? `printf '%s\n' "${pnpmOutput}" >&2\nexit 1` : "exit 0"}\n`;
+      ? `@echo off\r\necho ${name}>>"%SETUP_TEST_LOG%"\r\n${name === "pnpm" ? `echo ${pnpmOutput} 1>&2\r\nfor /L %%i in (1,1,${trailingLines}) do echo ${noise} 1>&2\r\nexit /b 1` : "exit /b 0"}\r\n`
+      : `#!/bin/sh\nprintf '%s\n' '${name}' >> "$SETUP_TEST_LOG"\n${name === "pnpm" ? `printf '%s\n' "${pnpmOutput}" >&2\ni=0\nwhile [ "$i" -lt ${trailingLines} ]; do printf '%s\n' '${noise}' >&2; i=$((i + 1)); done\nexit 1` : "exit 0"}\n`;
     NodeFS.writeFileSync(NodePath.join(bin, `${name}${windows ? ".cmd" : ""}`), contents, {
       mode: 0o755,
     });
@@ -119,6 +120,24 @@ describe("worktree setup contract", () => {
       const result = fixture.run();
       assert.equal(result.status, 0, result.stderr);
       assert.isTrue(NodeFS.existsSync(NodePath.join(fixture.root, ".goat", "setup-done")));
+      assert.deepEqual(NodeFS.readFileSync(fixture.log, "utf8").trim().split(/\r?\n/), [
+        "pnpm",
+        "npx",
+      ]);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("#2178 still steps past the missing launcher when more output follows it than the marker keeps", () => {
+    const fixture = setupFixture(
+      process.versions.node,
+      "Error: Cannot find module '/x/.cache/node/corepack/v1/pnpm/12.14.0/bin/pnpm.cjs'",
+      200,
+    );
+    try {
+      const result = fixture.run();
+      assert.equal(result.status, 0, result.stderr);
       assert.deepEqual(NodeFS.readFileSync(fixture.log, "utf8").trim().split(/\r?\n/), [
         "pnpm",
         "npx",
