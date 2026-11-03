@@ -25,5 +25,7 @@ it("allows lint-ignored changed files without failing on an unmatched pattern", 
 
 it("selects Astro components as code for lint and knip", async () => {
   const { isChangedCode } = await import("./check-changed-command.ts");
-  expect(isChangedCode("apps/marketing/src/pages/index.astro")).toBe(true);
+  const astro = "apps/marketing/src/pages/index.astro";
+  expect(isChangedCode(astro)).toBe(true);
+  expect(lintChangedArgs([astro])).toEqual(["lint", "--no-error-on-unmatched-pattern", astro]);
 });
