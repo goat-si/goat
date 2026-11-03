@@ -125,6 +125,55 @@ it.effect("removing an unreadable record lets the next admission through without
   ),
 );
 
+it.effect("the global-block retry never signals an app-server this server run owns", () =>
+  withRecordDirectory((directory) =>
+    Effect.gen(function* () {
+      const signals: string[] = [];
+      const service = yield* makeDetachedAppServers({
+        stateDir: directory,
+        bootId: Effect.succeed("boot-one"),
+        processTable: {
+          groupMembers: () => Effect.succeed([]),
+          ownerOfSocket: () => Effect.void.pipe(Effect.as(undefined)),
+        },
+        socketAccepts: () => Effect.succeed(false),
+        signalGroup: (_pgid, signal) => Effect.sync(() => void signals.push(signal)),
+        socketDirectory: Effect.succeed("/tmp/goat-test/codex"),
+        launch: (input) =>
+          Effect.promise(() => NodeFSP.writeFile(input.pidFile, "4321")).pipe(
+            Effect.as({
+              pid: 4321,
+              exited: Effect.never,
+              signalIfAlive: (signal: "SIGTERM" | "SIGKILL") => {
+                signals.push(signal);
+                return true;
+              },
+            }),
+          ),
+        connect: () =>
+          Effect.succeed({ incoming: Stream.never, send: () => Effect.void, closed: Effect.never }),
+      });
+      const opened = yield* service.open(openInput);
+      const records = NodePath.join(directory, "codex-app-servers");
+      const broken = NodePath.join(records, "broken.json");
+      yield* Effect.promise(() => NodeFSP.writeFile(broken, "null"));
+      assert.isDefined((yield* service.loadRecords).globalBlock);
+      const threadId = ThreadId.make("thread-beside-owned");
+      assert.equal((yield* service.ensureAdmission(threadId).pipe(Effect.exit))._tag, "Failure");
+      assert.deepEqual(signals, []);
+      yield* Effect.promise(() =>
+        NodeFSP.access(NodePath.join(records, opened.record.name + ".json")),
+      );
+      yield* Effect.promise(() => NodeFSP.rm(broken));
+      yield* service.ensureAdmission(threadId);
+      assert.deepEqual(signals, []);
+      yield* Effect.promise(() =>
+        NodeFSP.access(NodePath.join(records, opened.record.name + ".json")),
+      );
+    }),
+  ),
+);
+
 it.effect("an unreadable record refuses only turns that would use the socket or are fenced", () =>
   withRecordDirectory((directory) =>
     Effect.gen(function* () {

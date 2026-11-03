@@ -240,6 +240,7 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
   const directory = NodePath.join(deps.stateDir, RECORD_DIRECTORY);
   const runSync = Effect.runSyncWith(yield* Effect.context<never>());
   const owned = new Map<string, DetachedLaunched>();
+  const launching = new Set<string>();
   const retained = new Set<string>();
   const recoveryRetained = new Set<string>();
   const adoptedClosed = new Set<string>();
@@ -640,6 +641,8 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
     const outcomes: Array<{ readonly name: string; readonly outcome: DetachedOutcome }> = [];
     for (const entry of entries.filter((name) => name.endsWith(".json")).sort()) {
       const name = entry.slice(0, -".json".length);
+      // Cleanup also reruns beside live sessions; only records from earlier runs are reconsidered.
+      if (owned.has(name) || launching.has(name)) continue;
       const record = yield* readRecord(NodePath.join(directory, entry)).pipe(Effect.option);
       if (record._tag === "None" || record.value.name !== name) {
         unreadable = true;
@@ -785,20 +788,25 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
       stderrMode: "discard",
       createdAt: DateTime.formatIso(yield* DateTime.now),
     };
-    yield* writeRecord(spawning);
-    const wrapped = yield* input
-      .command(socketPath)
-      .pipe(Effect.tapError(() => removeRecord(spawning).pipe(Effect.ignore)));
-    const launched = yield* launch({
-      command: wrapped.command,
-      args: wrapped.args,
-      cwd: input.cwd,
-      env: input.env,
-      pidFile: files.pid,
-      stderrPath: files.stderr,
-    }).pipe(Effect.tapError(() => cleanupRecord(spawning).pipe(Effect.ignore)));
+    launching.add(name);
+    const launched = yield* Effect.gen(function* () {
+      yield* writeRecord(spawning);
+      const wrapped = yield* input
+        .command(socketPath)
+        .pipe(Effect.tapError(() => removeRecord(spawning).pipe(Effect.ignore)));
+      const started = yield* launch({
+        command: wrapped.command,
+        args: wrapped.args,
+        cwd: input.cwd,
+        env: input.env,
+        pidFile: files.pid,
+        stderrPath: files.stderr,
+      }).pipe(Effect.tapError(() => cleanupRecord(spawning).pipe(Effect.ignore)));
+      return started;
+    }).pipe(Effect.onError(() => Effect.sync(() => launching.delete(name))));
     const running: DetachedAppServerRecord = { ...spawning, pgid: launched.pid, state: "running" };
     owned.set(running.name, launched);
+    launching.delete(name);
     yield* Effect.addFinalizer(() =>
       close(running).pipe(
         Effect.ignore,
