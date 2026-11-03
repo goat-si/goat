@@ -12,7 +12,7 @@ import * as ChannelIdentityService from "./ChannelIdentityService.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
-import { goatBotSessionThreadIdFor, taskIdFor } from "./channelIds.ts";
+import { goatBotSessionThreadIdFor, taskIdFor, turnSteerIdsFor } from "./channelIds.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import * as SqlClient from "effect/sql/SqlClient";
 import {
@@ -117,6 +117,95 @@ const claimedFromTeammate = (key: string, memoryGrantCeiling?: "read" | "read_wr
   });
 
 describe("GOAT Bot sessions under the requester's current authority", () => {
+  it.effect.each([false, true])(
+    "#2193 does not repeat a refused forward when permission is restored: %s",
+    (restored) => {
+      const harness = sessionHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        yield* linkTeammate;
+        const task = yield* dispatchNow(yield* receiveFromTeammate("look: task", "replay-1"));
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const reception = yield* ChannelReceptionService.ChannelReceptionService;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+        const input = yield* gateway.ingest(
+          slackInput("more:" + task.taskId + " check logs", "replay-2", "1760000000.000900", "U2"),
+          slackContext,
+        );
+        yield* reception.receive(input.inputId, runtime.ownerToken);
+        const [pending] = yield* ledger.listPendingForwards(10);
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`UPDATE channel_identities SET granted_scopes_json = '[]' WHERE connection_id = 'slack-1' AND external_actor_id = 'U2'`;
+        yield* dispatcher.forward(pending!, runtime.ownerToken);
+        assert.lengthOf((yield* current(task.taskId)).openQuestions, 1);
+        if (restored)
+          yield* sql`UPDATE channel_identities SET granted_scopes_json = '["orchestration:read","orchestration:operate"]' WHERE connection_id = 'slack-1' AND external_actor_id = 'U2'`;
+        yield* dispatcher.forward(pending!, runtime.ownerToken);
+        assert.lengthOf((yield* current(task.taskId)).openQuestions, 1);
+        assert.lengthOf(harness.world.sends, 0);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect("#2193 recovers an accepted steer after the requester loses authority", () => {
+    const harness = sessionHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* linkTeammate;
+      const task = yield* dispatchNow(yield* receiveFromTeammate("look: task", "crash-1"));
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const reception = yield* ChannelReceptionService.ChannelReceptionService;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const input = yield* gateway.ingest(
+        slackInput("more:" + task.taskId + " check logs", "crash-2", "1760000000.000900", "U2"),
+        slackContext,
+      );
+      yield* reception.receive(input.inputId, runtime.ownerToken);
+      const ids = turnSteerIdsFor(input.inputId, "first");
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`INSERT INTO channel_bot_session_runs
+        (thread_id, message_id, task_id, task_generation, kind, created_at)
+        VALUES (${task.worker!.threadId}, ${ids.messageId}, ${task.taskId}, ${task.generation}, 'followup', '1970-01-01T00:00:00.000Z')`;
+      yield* threads.sendToThread({
+        projectId,
+        commandId: ids.commandId,
+        threadId: task.worker!.threadId,
+        messageId: ids.messageId,
+        text: "check logs",
+        attachments: [],
+        mode: "steer",
+        targetRunId: task.worker!.runId!,
+        createdBy: "user",
+        creationSource: "server",
+      });
+      const read = threads.getThreadRecords;
+      Object.assign(threads, {
+        getThreadRecords: ((...args: Parameters<typeof read>) =>
+          read(...args).pipe(
+            Effect.map((records) => ({
+              ...records,
+              messages: [
+                ...records.messages,
+                { id: ids.messageId, runId: task.worker!.runId } as never,
+              ],
+            })),
+          )) as typeof read,
+      });
+      yield* sql`UPDATE channel_identities SET granted_scopes_json = '[]' WHERE connection_id = 'slack-1' AND external_actor_id = 'U2'`;
+      for (const pending of yield* ledger.listPendingForwards(10))
+        yield* dispatcher.forward(pending, runtime.ownerToken);
+      assert.lengthOf((yield* current(task.taskId)).openQuestions, 0);
+      assert.lengthOf(harness.world.sends, 1);
+      assert.lengthOf(yield* ledger.listPendingForwards(10), 0);
+      assert.isUndefined((yield* ledger.getTask(task.taskId))!.pendingAnswerMessageId);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect("#2193 forwards a follow-up under the requester's lowered Slack ceiling", () => {
     const harness = sessionHarness();
     return Effect.gen(function* () {

@@ -67,13 +67,13 @@ import {
   answerForwardIdsFor,
   goatBotSessionSharingFor,
   goatBotSessionThreadIdFor,
-  questionIdFor,
   sessionLaunchIdsFor,
   sessionSendIdsFor,
   stopIdsFor,
   turnSteerIdsFor,
 } from "./channelIds.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
+import { refuseForward } from "./channelForwardRefusal.ts";
 import { turnInstruction } from "./channelWorkerBrief.ts";
 import { isThreadMissing } from "./channelWorkerObservation.ts";
 import {
@@ -605,31 +605,6 @@ const make = Effect.gen(function* () {
       .withPermits(1)(serveNow(initial, owner))
       .pipe(Effect.mapError(asLedgerError("serve")));
 
-  const askRequester = Effect.fn("ChannelBotSession.askRequester")(function* (
-    stored: ChannelLedger.ChannelStoredTask,
-    text: string,
-    owner: string,
-  ) {
-    return yield* commitTransition(
-      ledger,
-      stored,
-      {
-        type: "task.question.opened",
-        payload: {
-          question: {
-            questionId: questionIdFor(stored.task.taskId, stored.task.version + 1),
-            text,
-            askedAt: yield* nowIso,
-            ...(stored.task.requester.externalActorId === undefined
-              ? {}
-              : { requesterExternalActorId: stored.task.requester.externalActorId }),
-          },
-        },
-      },
-      { owner, narrate: true, pendingAnswerMessageId: null },
-    );
-  });
-
   /** One message into the task's own live run, else as the task's next run; never another's. */
   const sendForTask = Effect.fn("ChannelBotSession.sendForTask")(function* (
     stored: ChannelLedger.ChannelStoredTask,
@@ -663,6 +638,19 @@ const make = Effect.gen(function* () {
     `;
     const steeredInto = records.runs.find((run) => run.id === firstIntent[0]?.steered_into_run_id);
     if (steeredInto !== undefined) return { _tag: "sent", run: steeredInto } as const;
+    const accepted = records.messages.find(
+      (message) => message.id === ids.first.messageId || message.id === ids.queued.messageId,
+    );
+    if (accepted !== undefined) {
+      const run = records.runs.find((candidate) => candidate.id === accepted.runId);
+      if (run === undefined)
+        return yield* new ChannelLedger.ChannelLedgerError({
+          reason: "persistence",
+          detail: "The accepted session message's run is unavailable.",
+        });
+      yield* recordRun(threadId, accepted.id, run, true);
+      return { _tag: "sent", run } as const;
+    }
     // A person stopped this task's run in GOAT; sending would start it again.
     if (current?.status === "cancelled" && firstIntent.length === 0)
       return { _tag: "stopped", run: current } as const;
@@ -781,16 +769,18 @@ const make = Effect.gen(function* () {
         });
         return;
       }
-      const asked = yield* askRequester(
-        (yield* ledger.getTask(event.taskId)) ?? stored,
+      yield* refuseForward(
+        sql,
+        ledger,
+        stored,
         result._tag === "permission_changed"
           ? "The requester’s permission changed; your follow-up was not sent. Open the thread in GOAT."
           : "The session didn't take your follow-up (\"" +
               event.payload.text +
               '"). Say it again, or open the thread in GOAT.',
         owner,
+        pending.sequence,
       );
-      if (asked !== undefined) yield* done;
       return;
     }
     // A stopped run is not restarted: the follow-up is dropped and its fence lifted.
@@ -816,7 +806,9 @@ const make = Effect.gen(function* () {
     if (result._tag === "failed" || result._tag === "permission_changed") {
       if (result._tag === "failed" && result.refusal === undefined && !rejected(result.failure))
         return;
-      const asked = yield* askRequester(
+      yield* refuseForward(
+        sql,
+        ledger,
         stored,
         result._tag === "permission_changed"
           ? "The requester’s permission changed; your answer was not sent. Open the thread in GOAT."
@@ -824,8 +816,8 @@ const make = Effect.gen(function* () {
               event.payload.answer +
               '"). Answer again, or answer in the thread.',
         owner,
+        pending.sequence,
       );
-      if (asked !== undefined) yield* done;
       return;
     }
     if (yield* bindAfterSend(event.taskId, [ids.messageId], result.run, owner)) yield* done;
@@ -974,6 +966,10 @@ const make = Effect.gen(function* () {
     function* (pending, owner) {
       const stored = yield* ledger.getTask(pending.event.taskId);
       if (stored === undefined || !isSessionTask(stored.task)) return false;
+      const state = yield* sql<{ readonly forward_state: string }>`
+        SELECT forward_state FROM channel_task_events WHERE sequence = ${pending.sequence}
+      `;
+      if (state[0]?.forward_state !== "pending") return true;
       const event = pending.event;
       if (event.type === "task.followup.received") yield* forwardFollowUp(pending, event, owner);
       else if (event.type === "task.cancelled")
