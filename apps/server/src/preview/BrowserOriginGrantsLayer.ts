@@ -23,6 +23,7 @@ const make = Effect.gen(function* () {
   const manifest = yield* Effect.serviceOption(BrowserClaimManifest);
   const bind = yield* Effect.serviceOption(BrowserClaimBind);
   let supported = false;
+  let disable = () => Effect.void;
   const service = yield* makeBrowserOriginGrants({
     environmentId,
     blockedHosts:
@@ -40,6 +41,7 @@ const make = Effect.gen(function* () {
       Option.isSome(manifest) && manifest.value.fence
         ? manifest.value.fence
         : Effect.succeed(false),
+    onFenceFailure: () => disable(),
     confirm: () =>
       Option.isSome(manifest)
         ? manifest.value.readConfig
@@ -97,6 +99,7 @@ const make = Effect.gen(function* () {
         supported = false;
       });
   });
+  disable = () => setDriverCapability(false);
   return { ...service, setDriverCapability };
 });
 

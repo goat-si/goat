@@ -20,6 +20,66 @@ class ManifestUnavailable extends Schema.TaggedError<ManifestUnavailable>()(
   {},
 ) {}
 
+it.effect("a failed driver fence disables further browser claims", () =>
+  Effect.gen(function* () {
+    let failWrites = false;
+    const hash = "a".repeat(64);
+    const context = yield* Layer.build(
+      Grants.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            ServerSettings.layerTest(),
+            Layer.mock(ServerEnvironment.ServerEnvironment)({
+              getDescriptor: Effect.succeed(
+                decodeDescriptor({
+                  environmentId: EnvironmentId.make("environment:test"),
+                  label: "Test",
+                  platform: { os: "linux", arch: "x64" },
+                  serverVersion: "test",
+                  capabilities: { repositoryIdentity: true },
+                }),
+              ),
+            }),
+            Layer.succeed(BrowserClaimManifest, {
+              publish: () =>
+                failWrites ? Effect.fail(new ManifestUnavailable()) : Effect.succeed(hash),
+              readConfig: Effect.succeed({
+                capability_manifest: { sha256: hash, file_sha256: hash, reload_error: null },
+              }),
+              fence: Effect.succeed(false),
+              install: () => Effect.void,
+            }),
+            Layer.succeed(BrowserClaimBind, {
+              bind: (input) =>
+                Effect.succeed({
+                  targetId: "target",
+                  tabId: "tab",
+                  title: "Site",
+                  url: input.origin,
+                  driverGeneration: 1,
+                }),
+            }),
+          ),
+        ),
+      ),
+    );
+    const service = Context.get(context, Grants.BrowserOriginGrants);
+    yield* service.setDriverCapability(true);
+    const input = {
+      threadId: ThreadId.make("thread:test"),
+      pid: 42,
+      windowId: 7,
+      origin: "https://example.test",
+      windowTitle: "Browser",
+    };
+    const claim = yield* service.claim(input);
+    assert.equal(claim.agentResult.status, "attached");
+    failWrites = true;
+    yield* service.stop(input.threadId);
+    assert.equal((yield* service.request(input)).status, "refused");
+  }).pipe(Effect.scoped),
+);
+
 it.effect("reports unsupported capability as unavailable and removes claims from snapshots", () =>
   Effect.gen(function* () {
     const service = yield* Grants.BrowserOriginGrants;

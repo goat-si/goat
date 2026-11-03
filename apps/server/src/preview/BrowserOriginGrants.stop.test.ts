@@ -3,7 +3,114 @@ import { EnvironmentId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
+import * as Schema from "effect/Schema";
 import { makeTestBrowserOriginGrants } from "./BrowserOriginGrants.testkit.ts";
+import { makeBrowserOriginGrants } from "./BrowserOriginGrants.ts";
+
+class NarrowWriteFailure extends Schema.TaggedError<NarrowWriteFailure>()(
+  "NarrowWriteFailure",
+  {},
+) {}
+
+it.effect("a failed narrowing write fences the driver", () =>
+  Effect.gen(function* () {
+    let failWrites = false;
+    let fences = 0;
+    const hash = "a".repeat(64);
+    const service = yield* makeBrowserOriginGrants({
+      environmentId: EnvironmentId.make("environment:test"),
+      supported: () => true,
+      publish: () => (failWrites ? Effect.fail(new NarrowWriteFailure()) : Effect.succeed(hash)),
+      confirm: () =>
+        Effect.succeed({
+          capability_manifest: { sha256: hash, file_sha256: hash, reload_error: null },
+        }),
+      fence: () =>
+        Effect.sync(() => {
+          fences++;
+          return true;
+        }),
+      bind: (input) =>
+        Effect.succeed({
+          targetId: "target",
+          tabId: "tab",
+          title: "Site",
+          url: input.origin,
+          driverGeneration: 1,
+        }),
+    });
+    const threadId = ThreadId.make("thread:test");
+    const answer = yield* service.claim({
+      threadId,
+      pid: 42,
+      windowId: 7,
+      origin: "https://example.test",
+      windowTitle: "Browser",
+    });
+    assert.equal(answer.agentResult.status, "attached");
+    failWrites = true;
+    yield* service.stop(threadId);
+    assert.equal(fences, 1);
+  }),
+);
+
+it.effect("interrupting a held narrowing write still fences the driver", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    let hold = false;
+    let fences = 0;
+    const hash = "a".repeat(64);
+    const service = yield* makeBrowserOriginGrants({
+      environmentId: EnvironmentId.make("environment:test"),
+      supported: () => true,
+      publish: () =>
+        hold
+          ? Deferred.succeed(entered, undefined).pipe(
+              Effect.andThen(Deferred.await(release)),
+              Effect.andThen(Effect.fail(new NarrowWriteFailure())),
+            )
+          : Effect.succeed(hash),
+      confirm: () =>
+        Effect.succeed({
+          capability_manifest: { sha256: hash, file_sha256: hash, reload_error: null },
+        }),
+      fence: () =>
+        Effect.sync(() => {
+          fences++;
+          return true;
+        }),
+      bind: (input) =>
+        Effect.succeed({
+          targetId: "target",
+          tabId: "tab",
+          title: "Site",
+          url: input.origin,
+          driverGeneration: 1,
+        }),
+    });
+    const threadId = ThreadId.make("thread:test");
+    const answer = yield* service.claim({
+      threadId,
+      pid: 42,
+      windowId: 7,
+      origin: "https://example.test",
+      windowTitle: "Browser",
+    });
+    assert.equal(answer.agentResult.status, "attached");
+    hold = true;
+    const stopping = yield* service
+      .stop(threadId)
+      .pipe(Effect.forkChild({ startImmediately: true }));
+    yield* Deferred.await(entered);
+    const interruption = yield* Fiber.interrupt(stopping).pipe(
+      Effect.forkChild({ startImmediately: true }),
+    );
+    yield* Deferred.succeed(release, undefined);
+    yield* Fiber.join(interruption);
+    assert.equal(fences, 1);
+  }),
+);
 
 it.effect("stopping one thread ends its claims and preserves other claims and grants", () =>
   Effect.gen(function* () {

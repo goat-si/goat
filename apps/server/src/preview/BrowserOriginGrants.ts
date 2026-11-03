@@ -51,6 +51,7 @@ interface Dependencies {
   readonly confirm: (sha256: string) => Effect.Effect<unknown, Error>;
   /** Restarts the driver; true when it could. */
   readonly fence?: () => Effect.Effect<boolean>;
+  readonly onFenceFailure?: () => Effect.Effect<void>;
   readonly windowTitle?: (
     input: Pick<Request, "threadId" | "pid" | "windowId">,
   ) => Effect.Effect<string, Error>;
@@ -136,25 +137,30 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
   const publish = Effect.fn("BrowserOriginGrants.publishExpansion")(function* (value: Union) {
     yield* confirm(yield* write(value));
   });
-  const shrink = Effect.fn("BrowserOriginGrants.publishShrink")(function* (value: Union) {
-    const sha = yield* write(value);
-    // Narrowing never waits on the driver, but a driver that keeps a wider manifest is
-    // restarted: its old browser windows and origins must not outlive the claims that named them.
-    yield* confirm(sha).pipe(
-      Effect.catch((cause) =>
-        Effect.logWarning("Browser manifest shrink was not confirmed; restarting the driver", {
-          cause,
-        }).pipe(
-          Effect.andThen(deps.fence?.() ?? Effect.succeed(false)),
-          Effect.flatMap((fenced) =>
-            fenced
-              ? Effect.void
-              : Effect.logError("Browser manifest shrink was not confirmed and no fence exists"),
-          ),
+  const fence = (cause: unknown) =>
+    Effect.logWarning("Browser manifest narrowing was not applied; restarting the driver", {
+      cause,
+    }).pipe(
+      Effect.andThen(
+        Effect.suspend(() => deps.fence?.() ?? Effect.succeed(false)).pipe(
+          Effect.catchCause(() => Effect.succeed(false)),
         ),
       ),
-      Effect.forkDetach({ startImmediately: true }),
+      Effect.flatMap((fenced) =>
+        fenced
+          ? Effect.void
+          : Effect.logError("No driver fence is available").pipe(
+              Effect.andThen(deps.onFenceFailure?.() ?? Effect.void),
+            ),
+      ),
     );
+  const shrink = Effect.fn("BrowserOriginGrants.publishShrink")(function* (value: Union) {
+    const result = yield* write(value).pipe(Effect.result);
+    if (result._tag === "Failure") return yield* fence(result.failure);
+    const sha = result.success;
+    // Narrowing never waits on the driver, but a driver that keeps a wider manifest is
+    // restarted: its old browser windows and origins must not outlive the claims that named them.
+    yield* confirm(sha).pipe(Effect.catch(fence), Effect.forkDetach({ startImmediately: true }));
   });
   const pending = new Map<string, Pending>();
   const claims = new Map<string, LiveTabClaim>();
@@ -280,7 +286,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
             uncommittedGrants.delete(grantKey);
           }
           yield* shrink(union());
-        });
+        }).pipe(Effect.uninterruptible);
         const result = yield* Effect.gen(function* () {
           const applied = yield* untilRestart(publish(union()), signal, entry.stopped);
           if (Option.isNone(applied)) return { agentResult: decline };
@@ -393,7 +399,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
         claims.delete(claimId);
         yield* shrink(union());
         return true;
-      }),
+      }).pipe(Effect.uninterruptible),
     ),
   );
   const revoke = Effect.fn("BrowserOriginGrants.revoke")((threadId: ThreadId, origin: string) =>
@@ -406,36 +412,34 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
         for (const [id, claim] of claims)
           if (claim.threadId === threadId && claim.origin === origin) claims.delete(id);
         yield* shrink(union());
-      }),
+      }).pipe(Effect.uninterruptible),
     ),
   );
-  const stop = Effect.fn("BrowserOriginGrants.stop")(function* (threadId?: ThreadId) {
-    const stopped = yield* Effect.sync(() => {
-      const signals: Array<Deferred.Deferred<void>> = [];
-      for (const [id, entry] of pending)
-        if (threadId === undefined || entry.threadId === threadId) {
-          pending.delete(id);
-          ended.set(id, { threadId: entry.threadId, reason: "stopped" });
-          if (uncommittedGrants.delete(key(entry.threadId, entry.origin)))
-            grants.delete(key(entry.threadId, entry.origin));
-          signals.push(entry.stopped);
-          sequence++;
-        }
-      for (const [id, claim] of claims)
-        if (threadId === undefined || claim.threadId === threadId) {
-          claims.delete(id);
-          ended.set(id, { threadId: claim.threadId, reason: "stopped" });
-          sequence++;
-        }
-      return signals;
-    });
-    for (const signal of stopped) yield* Deferred.succeed(signal, undefined);
-    yield* shrink(union()).pipe(
-      Effect.catch((cause) =>
-        Effect.logWarning("Could not publish stopped browser claims", { cause }),
-      ),
-    );
-  });
+  const stop = Effect.fn("BrowserOriginGrants.stop")((threadId?: ThreadId) =>
+    Effect.gen(function* () {
+      const stopped = yield* Effect.sync(() => {
+        const signals: Array<Deferred.Deferred<void>> = [];
+        for (const [id, entry] of pending)
+          if (threadId === undefined || entry.threadId === threadId) {
+            pending.delete(id);
+            ended.set(id, { threadId: entry.threadId, reason: "stopped" });
+            if (uncommittedGrants.delete(key(entry.threadId, entry.origin)))
+              grants.delete(key(entry.threadId, entry.origin));
+            signals.push(entry.stopped);
+            sequence++;
+          }
+        for (const [id, claim] of claims)
+          if (threadId === undefined || claim.threadId === threadId) {
+            claims.delete(id);
+            ended.set(id, { threadId: claim.threadId, reason: "stopped" });
+            sequence++;
+          }
+        return signals;
+      });
+      for (const signal of stopped) yield* Deferred.succeed(signal, undefined);
+      yield* shrink(union());
+    }).pipe(Effect.uninterruptible),
+  );
   const blockedHostsChanged = Effect.fn("BrowserOriginGrants.blockedHostsChanged")(
     (hosts: ReadonlyArray<string>) =>
       lock.withPermits(1)(
@@ -462,7 +466,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
           if (changed) yield* advance;
           if (changed || claims.size > 0 || [...pending.values()].some((entry) => entry.granted))
             yield* shrink(union());
-        }),
+        }).pipe(Effect.uninterruptible),
       ),
   );
   const end = Effect.fn("BrowserOriginGrants.end")(
@@ -481,7 +485,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
           if (reason === "blocked_url") rememberBlockedClaim(claimId, threadId);
           yield* shrink(union());
           return true;
-        }),
+        }).pipe(Effect.uninterruptible),
       ),
   );
   const endReason = Effect.fn("BrowserOriginGrants.endReason")(
@@ -515,7 +519,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     });
     yield* Deferred.succeed(previousSignal, undefined);
     yield* shrink(union());
-  });
+  }, Effect.uninterruptible);
   const bindingValues = (threadId: ThreadId) =>
     [...pending.values()]
       .filter((entry) => entry.threadId === threadId && entry.granted)
@@ -606,10 +610,13 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
         );
         if (decision.blocked) {
           if (decision.claim) {
-            claims.delete(decision.claim.claimId);
-            ended.set(decision.claim.claimId, { threadId, reason: "blocked_url" });
-            rememberBlockedClaim(decision.claim.claimId, threadId);
-            yield* shrink(union());
+            const claim = decision.claim;
+            yield* Effect.gen(function* () {
+              claims.delete(claim.claimId);
+              ended.set(claim.claimId, { threadId, reason: "blocked_url" });
+              rememberBlockedClaim(claim.claimId, threadId);
+              yield* shrink(union());
+            }).pipe(Effect.uninterruptible);
           }
           return { status: "blocked" as const };
         }
