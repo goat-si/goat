@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off globalFetch:off globalTimers:off
+// @effect-diagnostics nodeBuiltinImport:off globalFetch:off globalTimers:off globalDate:off
 import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
@@ -171,17 +171,35 @@ export async function runWorkload(
       concurrency: "unbounded",
     });
     for (const [index, ticket] of tickets.slice(1).entries()) {
-      const connectionId = `bare-${index}`;
+      let previousConnection: string | undefined;
+      let connectionNumber = 0;
       const layer = protocol(input.origin, ticket, (socket) => {
+        if (previousConnection) {
+          input.observations.recordSocket(previousConnection, teardown);
+          input.recordDetail({
+            type: "socket.replaced",
+            connectionId: previousConnection,
+            at: new Date().toISOString(),
+            requested: teardown,
+          });
+        }
+        const connectionId = `bare-${index}-${connectionNumber++}`;
+        previousConnection = connectionId;
         socket.addEventListener("error", () => {
           input.observations.recordSocket(connectionId, teardown);
-          input.recordDetail({ type: "socket.error", connectionId, requested: teardown });
+          input.recordDetail({
+            type: "socket.error",
+            connectionId,
+            at: new Date().toISOString(),
+            requested: teardown,
+          });
         });
         socket.addEventListener("close", (event) => {
           input.observations.recordSocket(connectionId, teardown);
           input.recordDetail({
             type: "socket.close",
             connectionId,
+            at: new Date().toISOString(),
             code: event.code,
             requested: teardown,
           });
