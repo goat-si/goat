@@ -577,6 +577,22 @@ describe("orchestration V2 wire projection", () => {
     expect(projected).toMatchObject({ exitCode: 0, outputOmitted: true });
   });
 
+  it("uses the exit code over a stored command failure flag (#2339)", () => {
+    const item = {
+      ...base,
+      type: "command_execution" as const,
+      input: "search logs",
+      output: "error text",
+      outputIndicatesFailure: true,
+    };
+    expect(projectTurnItemForWire({ ...item, exitCode: 0 })).not.toHaveProperty(
+      "outputIndicatesFailure",
+    );
+    expect(projectTurnItemForWire({ ...item, exitCode: 1 })).toMatchObject({
+      outputIndicatesFailure: true,
+    });
+  });
+
   it("omits inline file bodies but preserves file identity and change counts", () => {
     const item = {
       ...base,
