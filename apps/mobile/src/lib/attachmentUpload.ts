@@ -277,6 +277,8 @@ export async function prepareTurnAttachments(input: {
   readonly attachments: ReadonlyArray<DraftComposerAttachment>;
   readonly supportsImageUploads?: boolean;
   readonly signal?: AbortSignal;
+  readonly leavePendingUploadsOnAbort?: boolean;
+  readonly onLocalTransfer?: (transfer: Promise<void>) => void;
   readonly onUploadProgress?: (attachmentId: string, progress: number) => void;
   readonly persistUploadedReferences?: (
     draftAttachments: ReadonlyArray<DraftComposerAttachment>,
@@ -351,6 +353,7 @@ export async function prepareTurnAttachments(input: {
         if (verification.status === "failed") {
           throw verification.error;
         }
+        if (controller.signal.aborted) throw new Error("Upload cancelled.");
         if (verification.status === "verified") {
           pendingAttachmentIds.push(attachment.uploadedAttachmentId);
           uploadedAttachments.push(uploadedReference(attachment, attachment.uploadedAttachmentId));
@@ -375,8 +378,8 @@ export async function prepareTurnAttachments(input: {
             ? null
             : resolveAssetUrl(currentConnection.value.httpBaseUrl, relativeUrl);
         },
-        transport: (url) => ({
-          done: uploadFileBytes(
+        transport: (url) => {
+          const done = uploadFileBytes(
             environmentId,
             attachment,
             url,
@@ -384,11 +387,13 @@ export async function prepareTurnAttachments(input: {
             input.onUploadProgress
               ? (progress) => input.onUploadProgress?.(attachment.id, progress)
               : undefined,
-          ),
-          abort,
-        }),
+          );
+          input.onLocalTransfer?.(done);
+          return { done, abort };
+        },
         onMinted: (attachmentId) => {
-          if (controller.signal.aborted) return "cancel";
+          if (controller.signal.aborted)
+            return input.leavePendingUploadsOnAbort ? "abandon" : "cancel";
           pendingAttachmentIds.push(attachmentId);
           createdAttachmentIds.push(attachmentId);
           return "continue";
@@ -414,13 +419,15 @@ export async function prepareTurnAttachments(input: {
     );
     if (referencesChanged && input.persistUploadedReferences) {
       if ((await input.persistUploadedReferences(draftAttachments)) === "abandon") {
-        await releaseCreatedUploadsQuietly(environmentId, createdAttachmentIds);
+        if (!(controller.signal.aborted && input.leavePendingUploadsOnAbort))
+          await releaseCreatedUploadsQuietly(environmentId, createdAttachmentIds);
         return { status: "abandoned" };
       }
     }
     return ready(uploadedAttachments, pendingAttachmentIds, draftAttachments);
   } catch (error) {
-    await releaseCreatedUploadsQuietly(environmentId, createdAttachmentIds);
+    if (!(controller.signal.aborted && input.leavePendingUploadsOnAbort))
+      await releaseCreatedUploadsQuietly(environmentId, createdAttachmentIds);
     if (controller.signal.aborted) return { status: "abandoned" };
     throw error;
   } finally {

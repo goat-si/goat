@@ -169,6 +169,49 @@ afterEach(async () => {
 });
 
 describe("mobile GOAT Bot session selection", () => {
+  it("does not wait for a late upload mint or delete it after environment removal", async () => {
+    const env = EnvironmentId.make("removed-during-mint");
+    const file = {
+      id: "minting",
+      type: "file" as const,
+      name: "report.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 42,
+      fileUri: "file:///documents/minting.pdf",
+    };
+    const started = Promise.withResolvers<void>();
+    const mint = Promise.withResolvers<void>();
+    const minted = Promise.withResolvers<void>();
+    const deletes: unknown[] = [];
+    harness.environments = [environment(env)];
+    harness.items = [];
+    harness.upload.mockReset().mockImplementation(async (input) => {
+      started.resolve();
+      await mint.promise;
+      expect(input.onMinted("pending-late")).toBe("abandon");
+      minted.resolve();
+      return { status: "cancelled", attachmentId: "pending-late" };
+    });
+    harness.run.mockImplementation(async (_registry, _command, args) => {
+      if ("input" in args && "attachmentId" in args.input) deletes.push(args.input.attachmentId);
+      return { _tag: "Success", value: bot(env) };
+    });
+    await render();
+    await act(async () => {
+      session.onSend("hello", [file]);
+      await started.promise;
+    });
+    await act(async () => {
+      await botSessions.disposeMobileGoatBotEnvironment(env);
+    });
+    expect(harness.release).toHaveBeenCalledWith([file]);
+    expect(fileOwnership.isComposerAttachmentFileRetained(file.fileUri)).toBe(false);
+    await act(async () => {
+      mint.resolve();
+      await minted.promise;
+    });
+    expect(deletes).toEqual([]);
+  });
   it("aborts and waits for the local transfer without deleting pending uploads on removal", async () => {
     const env = EnvironmentId.make("remove-in-flight-upload");
     const uploadId = "pending-00000000-0000-4000-8000-000000000001-pdf";

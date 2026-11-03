@@ -99,13 +99,18 @@ export async function deletePendingAttachmentUpload<E>(input: {
   readonly remove: AttachmentRemoveCommand<E>;
   readonly environmentId: EnvironmentId;
   readonly attachmentId: string;
-}): Promise<void> {
-  await runAtomCommand(
+}) {
+  const result = await runAtomCommand(
     input.registry,
     input.remove,
     { environmentId: input.environmentId, input: { attachmentId: input.attachmentId } },
     { reportFailure: false, reportDefect: false },
   );
+  if (result._tag === "Failure") {
+    const error = squashAtomCommandFailure(result);
+    return { ok: false as const, error };
+  }
+  return { ok: true as const };
 }
 
 export interface AttachmentByteUpload {
@@ -118,7 +123,7 @@ export type AttachmentUploadCycleResult =
   | { readonly status: "cancelled"; readonly attachmentId: string | null }
   | {
       readonly status: "failed";
-      readonly step: "mint" | "resolve-url" | "transfer";
+      readonly step: "mint" | "resolve-url" | "transfer" | "cleanup";
       readonly attachmentId: string | null;
       readonly error: unknown;
     };
@@ -137,7 +142,7 @@ export async function runAttachmentUploadCycle<E, RE>(input: {
   readonly upload: AttachmentCreateUploadUrlInput;
   readonly resolveUploadUrl: (relativeUrl: string) => string | null;
   readonly transport: (url: string) => AttachmentByteUpload;
-  readonly onMinted?: (attachmentId: string) => "continue" | "cancel";
+  readonly onMinted?: (attachmentId: string) => "continue" | "cancel" | "abandon";
   readonly onTransferStart?: (abort: () => void) => void;
 }): Promise<AttachmentUploadCycleResult> {
   const minted = await runAtomCommand(
@@ -155,13 +160,17 @@ export async function runAttachmentUploadCycle<E, RE>(input: {
     };
   }
   const attachmentId = minted.value.attachmentId;
-  if (input.onMinted?.(attachmentId) === "cancel") {
-    await deletePendingAttachmentUpload({
+  const action = input.onMinted?.(attachmentId);
+  if (action === "abandon") return { status: "cancelled", attachmentId };
+  if (action === "cancel") {
+    const deletion = await deletePendingAttachmentUpload({
       registry: input.registry,
       remove: input.remove,
       environmentId: input.environmentId,
       attachmentId,
     });
+    if (!deletion.ok)
+      return { status: "failed", step: "cleanup", attachmentId, error: deletion.error };
     return { status: "cancelled", attachmentId };
   }
 

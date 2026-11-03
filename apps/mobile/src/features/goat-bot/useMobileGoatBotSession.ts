@@ -104,7 +104,7 @@ function newSession(environmentId: EnvironmentId): Session {
   const pendingCleanup = new Set<Promise<void>>();
   let activeUpload: {
     readonly controller: AbortController;
-    readonly settled: Promise<unknown>;
+    transfer: Promise<void> | null;
   } | null = null;
   let disposed = false;
   const retainUploads = (key: string, attachments: ReadonlyArray<DraftComposerAttachment>) => {
@@ -132,7 +132,11 @@ function newSession(environmentId: EnvironmentId): Session {
   const cleanup = (files: ReadonlyArray<DraftComposerAttachment>) => {
     const task = import("../../state/use-composer-drafts")
       .then(({ releaseUnusedComposerAttachmentFiles }) =>
-        releaseUnusedComposerAttachmentFiles(files),
+        releaseUnusedComposerAttachmentFiles(
+          disposed
+            ? files.map(({ uploadedAttachmentId: _id, uploadEnvironmentId: _env, ...file }) => file)
+            : files,
+        ),
       )
       .catch((error) => console.warn("[goat-bot] could not release attachment files", error));
     pendingCleanup.add(task);
@@ -179,10 +183,15 @@ function newSession(environmentId: EnvironmentId): Session {
         files = [];
       } else {
         const controller = new AbortController();
+        const upload: NonNullable<typeof activeUpload> = { controller, transfer: null };
+        activeUpload = upload;
         const settled = import("./goatBotAttachments").then(({ uploadGoatBotAttachments }) =>
           uploadGoatBotAttachments({
             environmentId,
             signal: controller.signal,
+            onLocalTransfer: (transfer) => {
+              upload.transfer = transfer;
+            },
             attachments: uploads.get(clientKey) ?? attachments,
             remember: (uploaded) => {
               if (disposed) {
@@ -194,7 +203,6 @@ function newSession(environmentId: EnvironmentId): Session {
             },
           }),
         );
-        activeUpload = { controller, settled };
         try {
           files = await settled;
         } finally {
@@ -247,7 +255,7 @@ function newSession(environmentId: EnvironmentId): Session {
       disposed = true;
       const upload = activeUpload;
       upload?.controller.abort();
-      if (upload) await upload.settled.catch(() => undefined);
+      if (upload?.transfer) await upload.transfer.catch(() => undefined);
       queue.dispose();
       await Promise.all(pendingCleanup);
     },

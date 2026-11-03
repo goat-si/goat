@@ -129,6 +129,12 @@ function deletePendingUpload(environmentId: EnvironmentId, attachmentId: string)
     remove: attachmentEnvironment.remove,
     environmentId,
     attachmentId,
+  }).then((result) => {
+    if (!result.ok)
+      console.warn("[attachments] could not delete pending upload", {
+        attachmentId,
+        error: result.error,
+      });
   });
 }
 

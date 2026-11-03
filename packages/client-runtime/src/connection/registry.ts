@@ -267,24 +267,6 @@ export const make = Effect.gen(function* () {
   );
   const started = yield* Ref.make(false);
   const withLeaseLock = yield* makeLeaseLock;
-  const cleanupSupervisors = new Map<
-    EnvironmentId,
-    EnvironmentServiceScope["supervisor"] | undefined
-  >();
-
-  const clearOwnedData = Effect.fn("EnvironmentRegistry.clearOwnedData")(function* (
-    environmentId: EnvironmentId,
-  ) {
-    const supervisor = (yield* SubscriptionRef.get(serviceScopes)).get(environmentId)?.supervisor;
-    cleanupSupervisors.set(environmentId, supervisor);
-    yield* ownedDataCleanup.clear(environmentId).pipe(
-      Effect.ensuring(
-        Effect.sync(() => {
-          cleanupSupervisors.delete(environmentId);
-        }),
-      ),
-    );
-  });
 
   const getEntry = Effect.fn("EnvironmentRegistry.getEntry")(function* (
     environmentId: EnvironmentId,
@@ -351,12 +333,6 @@ export const make = Effect.gen(function* () {
   const acquireSupervisor = Effect.fn("EnvironmentRegistry.acquireSupervisor")(function* (
     environmentId: EnvironmentId,
   ) {
-    if (cleanupSupervisors.has(environmentId)) {
-      const supervisor = cleanupSupervisors.get(environmentId);
-      if (supervisor === undefined)
-        return yield* new EnvironmentNotRegisteredError({ environmentId });
-      return supervisor;
-    }
     return yield* withLeaseLock(
       environmentId,
       Effect.gen(function* () {
@@ -728,7 +704,6 @@ export const make = Effect.gen(function* () {
             next.delete(environmentId);
             return next;
           });
-          yield* clearOwnedData(environmentId);
           yield* closeServiceScope(environmentId);
           yield* SubscriptionRef.update(entries, (current) => {
             const next = new Map(current);
@@ -755,6 +730,7 @@ export const make = Effect.gen(function* () {
                   }),
                 ),
               ),
+              ownedDataCleanup.clear(environmentId),
             ],
             { concurrency: "unbounded", discard: true },
           );
@@ -819,7 +795,6 @@ export const make = Effect.gen(function* () {
       next.delete(environmentId);
       return next;
     });
-    yield* clearOwnedData(environmentId);
     yield* closeServiceScope(environmentId);
     yield* SubscriptionRef.update(entries, (current) => {
       const next = new Map(current);
@@ -836,6 +811,7 @@ export const make = Effect.gen(function* () {
             }),
           ),
         ),
+        ownedDataCleanup.clear(environmentId),
       ],
       { concurrency: "unbounded", discard: true },
     );

@@ -80,46 +80,6 @@ import {
 } from "./registry.testkit.ts";
 
 describe("EnvironmentRegistry", () => {
-  it.effect("keeps the environment connection available until owned data cleanup finishes", () =>
-    Effect.gen(function* () {
-      const cleanupStarted = yield* Deferred.make<void>();
-      const cleanupOperation = yield* Deferred.make<void>();
-      const finishCleanup = yield* Deferred.make<void>();
-      let routedOperation = () => Effect.void;
-      const harness = yield* makeHarness([TARGET], [], [], {
-        beforeOwnedDataClear: () =>
-          Deferred.succeed(cleanupStarted, undefined).pipe(
-            Effect.andThen(Effect.suspend(() => routedOperation())),
-            Effect.andThen(Deferred.succeed(cleanupOperation, undefined)),
-            Effect.andThen(Deferred.await(finishCleanup)),
-          ),
-      });
-      yield* Effect.gen(function* () {
-        const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
-        routedOperation = () => registry.run(TARGET.environmentId, Effect.void).pipe(Effect.orDie);
-        yield* registry.start;
-        yield* awaitConnectionState(
-          registry,
-          TARGET.environmentId,
-          (state) => state.phase === "connected",
-        );
-        const removing = yield* registry.remove(TARGET.environmentId).pipe(Effect.forkChild);
-        yield* Deferred.await(cleanupStarted);
-        yield* Deferred.await(cleanupOperation);
-        const stillListed = (yield* SubscriptionRef.get(registry.entries)).has(
-          TARGET.environmentId,
-        );
-        const released = yield* Ref.get(harness.releasedSessions);
-        yield* Deferred.succeed(finishCleanup, undefined);
-        yield* Fiber.join(removing);
-        expect(stillListed).toBe(true);
-        expect(released).toBe(0);
-        expect((yield* SubscriptionRef.get(registry.entries)).has(TARGET.environmentId)).toBe(
-          false,
-        );
-      }).pipe(Effect.provide(harness.layer));
-    }),
-  );
   it.effect("preserves a disabled environment and its route order when hub metadata changes", () =>
     Effect.gen(function* () {
       const target = new HubProxyConnectionTarget({
