@@ -5,7 +5,8 @@ associated with a hashed account or installation identifier. To count how many i
 uses, the server also sends hashed account identifiers: your GOAT Connect account, your OpenAI and
 Claude accounts when you are signed in, and a random identifier for each device that connects.
 Events include the provider, model, reasoning effort, permission mode, turn result, duration,
-release channel, and main-agent token totals when available.
+release channel, and main-agent token totals when available. Model names are sent only when a turn
+reports one model and it appears in a provider's public model list.
 
 The endpoint runs on Cloudflare and stores events in GOAT's own database. It keeps only the events
 and fields GOAT has reviewed for collection and drops anything else. It does not store your IP
