@@ -19,13 +19,22 @@ class BrowserClaimBindUnavailable extends Schema.TaggedError<BrowserClaimBindUna
 const make = Effect.gen(function* () {
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const settings = yield* ServerSettings.ServerSettingsService;
+  const runSync = Effect.runSyncWith(yield* Effect.context<never>());
   const changes = yield* settings.subscribeChanges;
   const { environmentId } = yield* environment.getDescriptor;
   const manifest = yield* Effect.serviceOption(BrowserClaimManifest);
   const bind = yield* Effect.serviceOption(BrowserClaimBind);
   let supported = false;
+  let disable = () => Effect.void;
   const service = yield* makeBrowserOriginGrants({
     environmentId,
+    blockedHostsNow: () => {
+      if (settings.committedPolicy === undefined) return undefined;
+      const policy = runSync(settings.committedPolicy);
+      return policy._tag === "committed" && Array.isArray(policy.blockedBrowserHosts)
+        ? policy.blockedBrowserHosts
+        : undefined;
+    },
     blockedHosts:
       settings.blockedBrowserHostsSnapshot ??
       settings.getSettings.pipe(Effect.map((value) => value.blockedBrowserHosts)),
@@ -41,6 +50,7 @@ const make = Effect.gen(function* () {
       Option.isSome(manifest) && manifest.value.fence
         ? manifest.value.fence
         : Effect.succeed(false),
+    onFenceFailure: () => disable(),
     confirm: () =>
       Option.isSome(manifest)
         ? manifest.value.readConfig
@@ -63,31 +73,7 @@ const make = Effect.gen(function* () {
   yield* changes.pipe(
     Stream.map((value) => value.blockedBrowserHosts),
     Stream.changesWith((a, b) => a.length === b.length && a.every((host, i) => host === b[i])),
-    Stream.runForEach((hosts) =>
-      service.blockedHostsChanged(hosts).pipe(
-        Effect.catch((cause) =>
-          Effect.gen(function* () {
-            yield* Effect.logError(
-              "Could not apply browser host settings; fencing browser claims",
-              { cause },
-            );
-            const fenced = yield* Option.isSome(manifest) && manifest.value.fence
-              ? manifest.value.fence
-              : Effect.succeed(false);
-            if (!fenced) yield* Effect.logError("Could not fence the browser driver");
-            yield* service
-              .driverRestarted(() => {
-                supported = false;
-              })
-              .pipe(
-                Effect.catch((error) =>
-                  Effect.logError("Could not publish fenced browser claims", { error }),
-                ),
-              );
-          }),
-        ),
-      ),
-    ),
+    Stream.runForEach((hosts) => service.blockedHostsChanged(hosts)),
     Effect.forkScoped,
   );
   const setDriverCapability = Effect.fn("BrowserOriginGrants.setDriverCapability")(function* (
@@ -100,6 +86,7 @@ const make = Effect.gen(function* () {
         supported = false;
       });
   });
+  disable = () => setDriverCapability(false);
   return { ...service, setDriverCapability };
 });
 

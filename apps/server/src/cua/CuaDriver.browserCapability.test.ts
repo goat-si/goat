@@ -1,17 +1,29 @@
 import { expect, it } from "@effect/vitest";
-import { EnvironmentId, ThreadId, type CuaDriverMcpConfiguration } from "@goat/contracts";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
+import {
+  EnvironmentId,
+  ThreadId,
+  type CuaDriverMcpConfiguration,
+  type DesktopCuaDriverReport,
+} from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Deferred from "effect/Deferred";
+import * as Context from "effect/Context";
+import * as Layer from "effect/Layer";
+import * as TestClock from "effect/testing/TestClock";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as ServerSettings from "../serverSettings.ts";
+import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 import * as CuaDriver from "./CuaDriver.ts";
 import type * as CuaDisplay from "./CuaDisplayCapability.ts";
 import { makeTestBrowserOriginGrants as makeBrowserOriginGrants } from "../preview/BrowserOriginGrants.testkit.ts";
+import * as BrowserClaimManifest from "../preview/BrowserClaimManifest.ts";
 import { makeBrowserDriverCapabilityProbe } from "./BrowserDriverCapabilityProbe.ts";
 import { supportsBrowserClaims } from "./ComputerUseLeaseProxyBrowserClaims.ts";
 
@@ -58,6 +70,156 @@ const makeService = Effect.fnUntraced(function* (
     }),
   );
   return { service };
+});
+
+const fenceFixture = Effect.fn("CuaDriverTest.fenceFixture")(function* (
+  stop: CuaDriver.CuaDriverHost["stop"],
+) {
+  const host = yield* makeHost();
+  let capability = true;
+  const grants = yield* makeBrowserOriginGrants({
+    environmentId: EnvironmentId.make("environment:test"),
+    supported: () => capability,
+    publish: () => Effect.void,
+    bind: () => Effect.die("not used"),
+  });
+  const { service } = yield* makeService(Effect.succeed({ ...host.host, stop }), true, undefined, {
+    setDriverCapability: (value) =>
+      Effect.sync(() => {
+        capability = value;
+      }),
+  });
+  const context = yield* Layer.build(BrowserClaimManifest.layer);
+  const manifest = Context.get(context, BrowserClaimManifest.BrowserClaimManifest);
+  yield* manifest.install(
+    () => Effect.succeed("a".repeat(64)),
+    Effect.succeed({}),
+    service.fenceBrowserManifest,
+  );
+  yield* Deferred.succeed(host.ready, mcp);
+  yield* service.acquire;
+  yield* Deferred.await(host.watching);
+  return { manifest, grants };
+});
+
+it.layer(ServerSettings.layerTest())("browser manifest driver fence", (it) => {
+  it.effect("a manifest fence succeeds only after the active host stops", () =>
+    Effect.gen(function* () {
+      const { manifest } = yield* fenceFixture(Effect.void);
+      if (!manifest.fence) return expect.fail("missing manifest fence");
+      expect(yield* manifest.fence).toBe(true);
+      expect(yield* manifest.fence).toBe(false);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a host stop failure makes the manifest fence fail and disables claims", () =>
+    Effect.gen(function* () {
+      const { manifest, grants } = yield* fenceFixture(
+        Effect.fail(new CuaDriver.CuaDriverHostError({ operation: "stop" })),
+      );
+      if (!manifest.fence) return expect.fail("missing manifest fence");
+      expect(yield* manifest.fence).toBe(false);
+      expect(
+        (yield* grants.request({
+          threadId: ThreadId.make("thread:test"),
+          pid: 42,
+          windowId: 7,
+          origin: "https://example.test",
+          windowTitle: "Browser",
+        })).status,
+      ).toBe("refused");
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a host stop wait expiry makes the manifest fence fail and disables claims", () =>
+    Effect.gen(function* () {
+      const stopping = yield* Deferred.make<void>();
+      const finishStop = yield* Deferred.make<void>();
+      const { manifest, grants } = yield* fenceFixture(
+        Deferred.succeed(stopping, undefined).pipe(Effect.andThen(Deferred.await(finishStop))),
+      );
+      if (!manifest.fence) return expect.fail("missing manifest fence");
+      const fencing = yield* manifest.fence.pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(stopping);
+      yield* TestClock.adjust("4 seconds");
+      expect(yield* Fiber.join(fencing)).toBe(false);
+      expect(
+        (yield* grants.request({
+          threadId: ThreadId.make("thread:test"),
+          pid: 42,
+          windowId: 7,
+          origin: "https://example.test",
+          windowTitle: "Browser",
+        })).status,
+      ).toBe("refused");
+      yield* Deferred.succeed(finishStop, undefined);
+    }).pipe(Effect.scoped),
+  );
+  it.effect("an unacknowledged desktop stop makes the manifest fence fail", () =>
+    Effect.gen(function* () {
+      const reports = yield* PubSub.unbounded<DesktopCuaDriverReport>();
+      const stopRequested = yield* Deferred.make<void>();
+      const healthy = {
+        status: "healthy" as const,
+        lastSampleAt: Option.none(),
+        lastError: Option.none(),
+      };
+      const factory = yield* CuaDriver.makeDesktopHostFactory().pipe(
+        Effect.provide(
+          DesktopTelemetryReceiver.layerTest({
+            health: Effect.succeed(healthy),
+            subscribeHealth: Effect.succeed({ latest: healthy, changes: Stream.empty }),
+            cuaReports: Stream.fromPubSub(reports),
+            requestCuaDriver: (requestId, enabled) =>
+              enabled
+                ? PubSub.publish(reports, {
+                    version: 1,
+                    type: "cuaDriverReport",
+                    requestId,
+                    status: "ready",
+                    mcp,
+                  }).pipe(Effect.asVoid)
+                : Deferred.succeed(stopRequested, undefined).pipe(Effect.asVoid),
+          }),
+        ),
+      );
+      let capability = true;
+      const grants = yield* makeBrowserOriginGrants({
+        environmentId: EnvironmentId.make("environment:test"),
+        supported: () => capability,
+        publish: () => Effect.void,
+        bind: () => Effect.die("not used"),
+      });
+      const { service } = yield* makeService(factory, true, undefined, {
+        setDriverCapability: (value) =>
+          Effect.sync(() => {
+            capability = value;
+          }),
+      });
+      const context = yield* Layer.build(BrowserClaimManifest.layer);
+      const manifest = Context.get(context, BrowserClaimManifest.BrowserClaimManifest);
+      yield* manifest.install(
+        () => Effect.succeed("a".repeat(64)),
+        Effect.succeed({}),
+        service.fenceBrowserManifest,
+      );
+      expect(Option.isSome(yield* service.acquire)).toBe(true);
+      if (!manifest.fence) return expect.fail("missing manifest fence");
+      const fencing = yield* manifest.fence.pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(stopRequested);
+      yield* TestClock.adjust("3 seconds");
+      expect(yield* Fiber.join(fencing)).toBe(false);
+      expect(
+        (yield* grants.request({
+          threadId: ThreadId.make("thread:test"),
+          pid: 42,
+          windowId: 7,
+          origin: "https://example.test",
+          windowTitle: "Browser",
+        })).status,
+      ).toBe("refused");
+    }).pipe(Effect.scoped, Effect.provide(NodeCrypto.layer)),
+  );
 });
 
 it.layer(ServerSettings.layerTest())("browser claim capability lifecycle", (it) => {

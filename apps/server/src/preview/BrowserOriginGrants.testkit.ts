@@ -9,6 +9,18 @@ export const makeTestBrowserOriginGrants = (
 ) =>
   makeBrowserOriginGrants({
     ...dependencies,
+    blockedHostsNow:
+      dependencies.blockedHostsNow ??
+      (() => {
+        try {
+          const result = Effect.runSync(
+            Effect.option(dependencies.blockedHosts ?? Effect.succeed([])),
+          );
+          return result._tag === "Some" ? result.value : undefined;
+        } catch {
+          return undefined;
+        }
+      }),
     publish: (union) => dependencies.publish(union).pipe(Effect.as(hash)),
     confirm: () =>
       Effect.succeed({
