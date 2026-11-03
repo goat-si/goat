@@ -11,7 +11,8 @@ import * as Schema from "effect/Schema";
 
 import type { ExistingServerProbe } from "./appServer.ts";
 import type * as SshAuth from "./auth.ts";
-import { runSshCommand } from "./command.ts";
+import { REMOTE_RUNTIME_STATE_KEY, runSshCommand } from "./command.ts";
+import { SSH_READY_TIMEOUT_MS } from "./sshReadiness.ts";
 import { SshCommandError, SshLaunchError, SshPairingError } from "./errors.ts";
 import {
   compatibleRuntimeUpdateBlocked,
@@ -27,6 +28,7 @@ import { readLocalRuntimeArchive } from "./runtimeArchive.ts";
 import { downloadRuntimeArchiveWithGh } from "./runtimeArchiveGh.ts";
 import { downloadRuntimeArchiveWithHttps } from "./runtimeArchiveHttp.ts";
 import { runtimePreparationError } from "./runtimePreparationErrors.ts";
+import { buildRemoteRuntimeProbeScript } from "./runtimeProbe.ts";
 import {
   powershellCommand,
   WINDOWS_DETECT,
@@ -185,6 +187,51 @@ export const inspectWindowsRuntime = Effect.fn("ssh.windows.inspect")(function* 
 ) {
   const result = yield* nativeWindowsCommand(target, auth, { op: "inspect", version });
   return yield* parseState(result.stdout);
+});
+
+export const statusRuntimeProbe = Effect.fn("ssh.windows.statusRuntimeProbe")(function* (
+  target: DesktopSshEnvironmentTarget,
+  version: string,
+) {
+  const auth = {
+    batchMode: "yes" as const,
+    interactiveAuth: false,
+    preHostArgs: ["-o", "StrictHostKeyChecking=yes", "-o", "UpdateHostKeys=no"],
+  };
+  return yield* runSshCommand(target, {
+    ...auth,
+    remoteCommandArgs: ["sh", "-l", "-s"],
+    stdin: buildRemoteRuntimeProbeScript(version, REMOTE_RUNTIME_STATE_KEY),
+    timeoutMs: SSH_READY_TIMEOUT_MS,
+  }).pipe(
+    Effect.catchTags({
+      SshCommandError: (error) =>
+        nativeWindowsAfter(
+          target,
+          auth,
+        )(error).pipe(
+          Effect.flatMap(() => inspectWindowsRuntime(target, auth, version)),
+          Effect.map((state) => ({
+            stdout: JSON.stringify({
+              platform: "win32",
+              arch: "x64",
+              ready: state.selection !== null,
+              liveStatus: state.live ? "live" : "none",
+              ...(state.live && state.selection !== null
+                ? {
+                    liveVersion: state.selection.version,
+                    livePort: state.selection.port,
+                    liveOwned: true,
+                    liveDrain: false,
+                    liveSignals: state.signals,
+                    liveBinarySignals: state.binarySignals,
+                  }
+                : {}),
+            }),
+          })),
+        ),
+    }),
+  );
 });
 
 /**

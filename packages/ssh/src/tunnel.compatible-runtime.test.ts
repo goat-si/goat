@@ -20,6 +20,28 @@ const live = (version: string) => ({
 });
 
 describe("compatible SSH runtime", () => {
+  it.effect("reconnects when a compatible unowned runtime moves ports", () => {
+    const f = fixture({ ...live("1.2.2"), liveOwned: false });
+    f.setLaunchVersion("1.2.2");
+    return Effect.gen(function* () {
+      const manager = yield* SshTunnel.SshEnvironmentManager;
+      assert.equal(
+        (yield* manager.ensureEnvironment(uploadTarget, { keyOnly: true })).remotePort,
+        3773,
+      );
+      f.setProbe({ ...live("1.2.2"), liveOwned: false, livePort: 3883 });
+      f.setLaunchPort(3883);
+      assert.equal(successfulStatus(yield* manager.status(uploadTarget)).state, "ready");
+      yield* manager.readyEnvironment(uploadTarget).pipe(Effect.flip);
+      assert.equal(
+        (yield* manager.ensureEnvironment(uploadTarget, { keyOnly: true })).remotePort,
+        3883,
+      );
+      assert.equal((yield* manager.readyEnvironment(uploadTarget)).remotePort, 3883);
+      assert.equal(f.calls.uploads, 0);
+      assert.equal(f.calls.launches, 2);
+    }).pipe(Effect.provide(f.layer), Effect.scoped);
+  });
   it.effect("a compatible unowned runtime remains usable after connecting and reconnecting", () => {
     const f = fixture({ ...live("1.2.2"), liveOwned: false });
     f.setLaunchVersion("1.2.2");

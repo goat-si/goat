@@ -55,9 +55,9 @@ import {
 import { REMOTE_NODE_ENGINE_CHECK_SCRIPT } from "./remoteNodeEngineCheck.ts";
 import { ensureSshMaster } from "./master.ts";
 import { makeOwnedSshTunnelCommand, ownedAuthDirectory } from "./tunnelOwner.ts";
+import { staleUnmanagedAttachment as staleAttachment } from "./tunnelAttachment.ts";
 import {
   SSH_READY_PROBE_TIMEOUT_MS,
-  SSH_READY_TIMEOUT_MS,
   type SshReadinessBudget,
   sshReadinessBudget,
   waitForHttpReady,
@@ -4194,6 +4194,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     let verifiedDrainDeferral:
       | { entry: SshTunnelEntry; intent: NonNullable<ReturnType<typeof pendingReplacements.get>> }
       | undefined;
+    let staleUnmanagedAttachment: SshTunnelEntry | undefined;
     const result = yield* Effect.gen(function* () {
       const { resolvedTarget } = yield* resolveManagedTarget(target);
       key = targetConnectionKey(resolvedTarget);
@@ -4233,14 +4234,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         );
         if (app !== undefined) return app;
       }
-      const output = yield* runSshCommand(resolvedTarget, {
-        batchMode: "yes",
-        interactiveAuth: false,
-        preHostArgs: ["-o", "StrictHostKeyChecking=yes", "-o", "UpdateHostKeys=no"],
-        remoteCommandArgs: ["sh", "-l", "-s"],
-        stdin: buildRemoteRuntimeProbeScript(requestedVersion, REMOTE_RUNTIME_STATE_KEY),
-        timeoutMs: SSH_READY_TIMEOUT_MS,
-      });
+      const output = yield* NativeWindows.statusRuntimeProbe(resolvedTarget, requestedVersion);
       const probe = yield* decodeRemoteJsonOutput(output.stdout, decodeRemoteRuntimeProbe).pipe(
         Effect.mapError(runtimePreparationError),
       );
@@ -4283,6 +4277,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         }
         const providers = observed?.status?.providers;
         const servesUnmanaged = blocked && binaryVerified;
+        staleUnmanagedAttachment = staleAttachment(entry, servesUnmanaged, probe);
         const readyState = providers?.ready === false ? "providers_not_ready" : "ready";
         snapshot = {
           ...base,
@@ -4437,6 +4432,10 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     let enriched = yield* enrichFailure(target, result);
     if (closed || (generations.get(key) ?? 0) !== generation) return statuses.get(key) ?? enriched;
     if (statuses.get(key) !== observed && statuses.has(key)) return statuses.get(key)!;
+    if (staleUnmanagedAttachment !== undefined && tunnels.get(key) === staleUnmanagedAttachment) {
+      staleUnmanagedAttachment.attachmentInvalidated = true;
+      attachments.delete(staleUnmanagedAttachment);
+    }
     if (verifiedDrainDeferral !== undefined) {
       if (
         tunnels.get(key) !== verifiedDrainDeferral.entry ||
