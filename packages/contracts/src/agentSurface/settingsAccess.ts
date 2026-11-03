@@ -115,6 +115,7 @@ export const SETTINGS_ACCESS = {
   completionWebhook: person("It sends reports to an outside address and holds a signing secret."),
   providerInstances: path("provider.update"),
   usageLimitSources: person(HOLDS_SECRETS),
+  secretProviders: person(HOLDS_SECRETS),
   cursorKeychainUsageEnabled: person("It reads the system keychain."),
   usagePriceOverrides: agent,
   usageModelAliases: agent,

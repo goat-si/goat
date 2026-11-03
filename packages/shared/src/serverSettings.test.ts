@@ -6,6 +6,8 @@ import {
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  SecretProviderId,
+  SecretProviderKind,
   UsageLimitSourceId,
   type ServerProvider,
 } from "@goat/contracts";
@@ -628,6 +630,24 @@ describe("serverSettings helpers", () => {
 
     const removed = applyServerSettingsPatch(added, { usageLimitSources: { [hubA]: null } });
     expect(Object.keys(removed.usageLimitSources)).toEqual([hubB]);
+  });
+
+  it("merges secret provider edits without removing other providers", () => {
+    const first = SecretProviderId.make("first");
+    const second = SecretProviderId.make("second");
+    const config = {
+      kind: SecretProviderKind.make("one_password"),
+      label: "Vault",
+      config: { account: "account" },
+    };
+    const current = { ...DEFAULT_SERVER_SETTINGS, secretProviders: { [first]: config } };
+    const added = applyServerSettingsPatch(current, { secretProviders: { [second]: config } });
+    expect(Object.keys(added.secretProviders)).toEqual([first, second]);
+    expect(
+      Object.keys(
+        applyServerSettingsPatch(added, { secretProviders: { [first]: null } }).secretProviders,
+      ),
+    ).toEqual([second]);
   });
 
   it("replaces and removes individual usage prices without clobbering other models", () => {

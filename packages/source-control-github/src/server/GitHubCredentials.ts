@@ -189,9 +189,15 @@ export const make = Effect.gen(function* () {
     );
 
   const savedToken = (host: string) =>
-    sourceControlHost.settings.get.pipe(
-      Effect.map((settings) => readSettings(settings).tokens[host]?.trim() || null),
-      Effect.orElseSucceed(() => null),
+    sourceControlHost.settings.getWithSecrets(GitHubClient.definition.kind, host).pipe(
+      Effect.map((settings) => {
+        const value = readSettings(settings).tokens[host];
+        return typeof value === "string" ? value.trim() || null : null;
+      }),
+      Effect.mapError(
+        () =>
+          new GitHubCliFailedError({ host, cause: new Error("Could not read saved credential") }),
+      ),
     );
 
   const cacheKey = (host: string, account: string | undefined) =>

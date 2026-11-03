@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { ServerSettingsError } from "@goat/contracts";
 import type * as SourceControlHost from "@goat/source-control-core/server/SourceControlHost";
 import * as TestSourceControlHost from "@goat/source-control-testing/TestSourceControlHost";
 
@@ -33,6 +34,27 @@ function harness(
 }
 
 describe("GitCafeCredentials", () => {
+  it.effect("does not fall back to cafe when a saved reference cannot be read", () => {
+    const layer = GitCafeCredentials.layer.pipe(
+      Layer.provide(
+        TestSourceControlHost.layer({
+          resolveSettings: () =>
+            Effect.fail(
+              new ServerSettingsError({ settingsPath: "fixture", operation: "read-secret" }),
+            ),
+        }),
+      ),
+      Layer.provide(Layer.succeed(HostProcess.Environment, { CAFE_TOKEN: "fallback" })),
+      Layer.provide(Layer.succeed(HostProcess.WorkingDirectory, "/server")),
+    );
+    return Effect.gen(function* () {
+      const credentials = yield* GitCafeCredentials.GitCafeCredentials;
+      assert.strictEqual(
+        (yield* Effect.flip(credentials.get("git.cafe")))._tag,
+        "GitCafeCliFailedError",
+      );
+    }).pipe(Effect.provide(layer));
+  });
   it("hands CAFE_TOKEN only to the host cafe itself targets", () => {
     const token = { CAFE_TOKEN: "env-token" };
     assert.strictEqual(GitCafeCredentials.environmentToken("git.cafe", token), "env-token");

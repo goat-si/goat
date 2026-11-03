@@ -65,6 +65,7 @@ export * from "./keybindings.ts";
 export * from "./server.ts";
 export * from "./automationHold.ts";
 export * from "./settings.ts";
+export { SecretReference, isSecretReference, isOnePasswordReference } from "./secretReference.ts";
 export * from "./blockedBrowserHosts.ts";
 export * from "./git.ts";
 export * from "./vcs.ts";

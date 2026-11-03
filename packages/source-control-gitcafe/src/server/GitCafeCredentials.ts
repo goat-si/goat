@@ -62,7 +62,9 @@ export class GitCafeCredentials extends Context.Service<
       host: string,
     ) => Effect.Effect<GitCafeCredential, GitCafeCredentialUnavailableError>;
     readonly invalidate: (host: string) => Effect.Effect<void>;
-    readonly cliEnv: (host: string) => Effect.Effect<Readonly<Record<string, string>>>;
+    readonly cliEnv: (
+      host: string,
+    ) => Effect.Effect<Readonly<Record<string, string>>, GitCafeCredentialUnavailableError>;
   }
 >()("@goat/source-control-gitcafe/server/GitCafeCredentials") {}
 
@@ -128,7 +130,7 @@ export const make = Effect.gen(function* () {
   const fromSettings = (host: string) =>
     normalizeHost(host) !== DEFAULT_HOST
       ? Effect.succeed(null)
-      : sourceControlHost.settings.get.pipe(
+      : sourceControlHost.settings.getWithSecrets(GitCafeClient.definition.kind, host).pipe(
           Effect.map(
             (settings) =>
               readSourceControlHostSettings(
@@ -136,7 +138,13 @@ export const make = Effect.gen(function* () {
                 settings.sourceControlHosts[GitCafeClient.definition.kind],
               ).token || null,
           ),
-          Effect.orElseSucceed(() => null),
+          Effect.mapError(
+            () =>
+              new GitCafeCliFailedError({
+                host,
+                cause: new Error("Could not read saved credential"),
+              }),
+          ),
         );
 
   const lookup = Effect.fn("GitCafeCredentials.lookup")(function* (

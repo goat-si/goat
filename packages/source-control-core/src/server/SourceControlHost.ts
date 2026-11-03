@@ -67,6 +67,10 @@ export class SourceControlHost extends Context.Service<
     readonly settings: {
       /** Read fresh on each call to pick up credential changes. */
       readonly get: Effect.Effect<ServerSettings, ServerSettingsError>;
+      readonly getWithSecrets: (
+        kind: string,
+        host?: string,
+      ) => Effect.Effect<ServerSettings, ServerSettingsError>;
     };
     readonly process: {
       readonly run: (

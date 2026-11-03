@@ -68,6 +68,38 @@ const decodeHubSettings = Schema.decodeUnknownEffect(MemoryHubSettings);
 
 const decodeServerSettings = Schema.decodeUnknownEffect(ServerSettings);
 const decodeServerSettingsJson = Schema.decodeUnknownEffect(Schema.fromJsonString(ServerSettings));
+const decodeServerSettingsSync = Schema.decodeUnknownSync(ServerSettings);
+
+it("does not expose unknown secret provider configuration to clients", () => {
+  const settings = decodeServerSettingsSync({
+    secretProviders: {
+      future: { kind: "future", label: "Vault", config: { token: "private" } },
+      personal: {
+        kind: "one_password",
+        label: "Personal",
+        config: { account: "my.1password.com", token: "private" },
+      },
+    },
+  });
+  const client = ServerSettingsModule.redactServerSettingsForClient(settings);
+  assert.deepStrictEqual(client.secretProviders as unknown, {
+    future: { kind: "future", label: "Vault" },
+    personal: { kind: "one_password", label: "Personal", config: { account: "my.1password.com" } },
+  });
+});
+
+it.effect("rejects unsupported secret providers at the settings service boundary", () =>
+  Effect.gen(function* () {
+    const service = yield* ServerSettingsModule.ServerSettingsService;
+    const patch = {
+      secretProviders: { vault: { kind: "future", label: "Vault", config: { token: "private" } } },
+    };
+    const result = yield* Effect.exit(
+      service.updateSettings(patch as unknown as Parameters<typeof service.updateSettings>[0]),
+    );
+    assert.isTrue(Exit.isFailure(result));
+  }).pipe(Effect.provide(layerServerSettings().pipe(Layer.provideMerge(NodeServices.layer)))),
+);
 
 const layerServerSettingsWithSecrets = () =>
   ServerSettingsModule.layer.pipe(
