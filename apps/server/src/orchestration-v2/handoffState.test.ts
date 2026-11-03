@@ -52,6 +52,38 @@ it.effect("browser claim cards outlive the asking turn and expire on their deadl
   }),
 );
 
+it.effect(
+  "a claim decision timestamp cannot bypass another handoff's deadline or postdate expiry",
+  () =>
+    Effect.gen(function* () {
+      const card = grant({
+        target: { environmentId: EnvironmentId.make("host"), path: "browser_claim.answer" },
+      });
+      const invalidLate = yield* transitionHandoff(
+        card,
+        "completed",
+        person,
+        minute(35),
+        false,
+        undefined,
+        "Attached",
+        minute(31),
+      ).pipe(Effect.result);
+      assert.equal(invalidLate._tag, "Failure");
+      const invalidOther = yield* transitionHandoff(
+        grant(),
+        "completed",
+        person,
+        minute(35),
+        false,
+        undefined,
+        "Attached",
+        minute(10),
+      ).pipe(Effect.result);
+      assert.equal(invalidOther._tag, "Failure");
+    }),
+);
+
 describe("computer use grant handoffs", () => {
   it.effect("outlive the turn that asked and expire on their clock", () =>
     Effect.gen(function* () {

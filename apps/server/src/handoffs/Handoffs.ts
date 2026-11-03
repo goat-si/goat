@@ -301,6 +301,7 @@ const make = Effect.gen(function* () {
     computerUseScope?: "session" | "always",
     onResolved?: Effect.Effect<void, HandoffError>,
     resultMessage?: string,
+    browserClaimDecisionAt?: DateTime.Utc,
   ) {
     yield* threads
       .dispatch({
@@ -315,6 +316,7 @@ const make = Effect.gen(function* () {
         actor,
         ...(computerUseScope === undefined ? {} : { computerUseScope }),
         ...(resultMessage === undefined ? {} : { resultMessage }),
+        ...(browserClaimDecisionAt === undefined ? {} : { browserClaimDecisionAt }),
       })
       .pipe(Effect.mapError(unavailable));
     const handoff = yield* read(input);
@@ -464,6 +466,7 @@ const make = Effect.gen(function* () {
         input.computerUseScope,
         pendingGrant && input.action === "opened" ? retire : undefined,
         browserClaimResultMessage(browserClaimResult),
+        browserClaimResult?.decisionAt,
       );
       yield* standing.record(input, result);
       if (

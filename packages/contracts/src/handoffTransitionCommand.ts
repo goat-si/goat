@@ -11,4 +11,5 @@ export const HandoffTransitionCommand = Schema.Struct({
   actor: HandoffActor,
   computerUseScope: Schema.optionalKey(Schema.Literals(["session", "always"])),
   resultMessage: Schema.optionalKey(Schema.String),
+  browserClaimDecisionAt: Schema.optionalKey(Schema.DateTimeUtc),
 });

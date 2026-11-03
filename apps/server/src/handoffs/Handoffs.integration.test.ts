@@ -12,14 +12,107 @@ import * as SessionStore from "../auth/SessionStore.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as Option from "effect/Option";
 import { assert, it } from "@effect/vitest";
-import { CommandId, EnvironmentId, Handoff, TurnItemId } from "@goat/contracts";
+import { CommandId, EnvironmentId, Handoff, HandoffError, TurnItemId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
+import { makeTestBrowserOriginGrants } from "../preview/BrowserOriginGrants.testkit.ts";
 import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
-import { instanceId, threadId, withHarness } from "./Handoffs.testkit.ts";
+import { durableHandoffs, instanceId, threadId, withHarness } from "./Handoffs.testkit.ts";
+
+it.effect(
+  "an approval started before expiry stays completed if attachment finishes after expiry",
+  () =>
+    withHarness(({ orchestrator, worker }) =>
+      Effect.gen(function* () {
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const environmentId = EnvironmentId.make("test-environment");
+        const grants = yield* makeTestBrowserOriginGrants({
+          environmentId,
+          supported: () => true,
+          publish: () => Effect.void,
+          bind: (input) =>
+            Deferred.succeed(entered, undefined).pipe(
+              Effect.andThen(Deferred.await(release)),
+              Effect.as({
+                targetId: "target",
+                tabId: "tab",
+                title: "Site",
+                url: input.origin,
+                driverGeneration: 1,
+              }),
+            ),
+        });
+        const pending = yield* grants.request({
+          threadId,
+          pid: 42,
+          windowId: 7,
+          origin: "https://example.test",
+          windowTitle: "Site",
+        });
+        if (pending.status !== "pending") return assert.fail("expected pending claim");
+        const now = yield* DateTime.now;
+        const sessionId = AuthSessionId.make("session:browser-claim");
+        const client: AuthClientSession = {
+          sessionId,
+          subject: "desktop-bootstrap",
+          method: "browser-session-cookie",
+          scopes: ["orchestration:operate", "settings:write"],
+          client: { label: "Person", deviceType: "unknown" },
+          issuedAt: now,
+          expiresAt: DateTime.add(now, { days: 1 }),
+          lastConnectedAt: now,
+          connected: true,
+          current: true,
+        };
+        const fixture = yield* durableHandoffs(orchestrator, {
+          environmentId,
+          sessions: Effect.succeed([client]),
+          browserClaimResponder: {
+            register: () => Effect.void,
+            answer: (id, approved) =>
+              grants
+                .answer(id, approved)
+                .pipe(
+                  Effect.mapError((cause) => new HandoffError({ reason: "unavailable", cause })),
+                ),
+          },
+        });
+        const service = yield* fixture.start;
+        const run = (yield* orchestrator.getThreadProjection(threadId)).runs.at(-1)!;
+        const card = yield* service.create({
+          kind: "approval",
+          title: "Use tab",
+          reason: "Site https://example.test",
+          requestedBy: { threadId, providerInstanceId: instanceId, path: "browser_claim.request" },
+          target: { environmentId, path: "browser_claim.answer" },
+          runId: run.id,
+          nodeId: run.rootNodeId!,
+          human: { location: "Browser" },
+          args: { claimId: pending.claimId },
+          expiresAt: DateTime.add(now, { minutes: 1 }),
+        });
+        yield* worker.drain();
+        const address = { threadId, handoffId: card.handoffId };
+        const answer = yield* service
+          .respond({ ...address, action: "completed" }, sessionId)
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(entered);
+        yield* TestClock.adjust("2 minutes");
+        yield* Deferred.succeed(release, undefined);
+        assert.equal((yield* Fiber.join(answer)).state, "completed");
+        yield* service.sweep;
+        yield* worker.drain();
+        assert.equal((yield* service.read(address)).state, "completed");
+        assert.lengthOf((yield* grants.list(threadId)).claims, 1);
+      }),
+    ),
+);
 
 const encodeHandoff = Schema.encodeEffect(Schema.toCodecJson(Handoff));
 

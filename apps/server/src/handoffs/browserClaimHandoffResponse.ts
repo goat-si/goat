@@ -23,9 +23,10 @@ export const answerBrowserClaim = Effect.fn("Handoffs.answerBrowserClaim")(funct
     input.action === "opened"
   )
     return;
+  const decisionAt = yield* DateTime.now;
   if (
     record.expiresAt !== null &&
-    DateTime.toEpochMillis(record.expiresAt) <= DateTime.toEpochMillis(yield* DateTime.now)
+    DateTime.toEpochMillis(record.expiresAt) <= DateTime.toEpochMillis(decisionAt)
   )
     return yield* new HandoffError({ reason: "expired" });
   if (Option.isNone(responder))
@@ -39,14 +40,17 @@ export const answerBrowserClaim = Effect.fn("Handoffs.answerBrowserClaim")(funct
       reason: "unavailable",
       detail: "Browser claim binding is unavailable.",
     });
-  return yield* responder.value.answer(payload.args.claimId, input.action === "completed");
+  const answer = yield* responder.value.answer(payload.args.claimId, input.action === "completed");
+  return { answer, decisionAt };
 });
 
 export const browserClaimResultMessage = (
   result: Effect.Success<ReturnType<typeof answerBrowserClaim>>,
 ) => {
   if (!result) return undefined;
-  if ("personMessage" in result && result.personMessage)
-    return result.personMessage.replace(/^blocked_url: /, "");
-  return result.agentResult.status === "attached" ? "Attached" : result.agentResult.message;
+  if ("personMessage" in result.answer && result.answer.personMessage)
+    return result.answer.personMessage.replace(/^blocked_url: /, "");
+  return result.answer.agentResult.status === "attached"
+    ? "Attached"
+    : result.answer.agentResult.message;
 };
