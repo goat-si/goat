@@ -18,7 +18,7 @@ const GOAT_MEMORY_READ_TOOL_NAMES: ReadonlyArray<string> = (
 ).map(listed);
 const GOAT_MEMORY_SOURCE_TOOL_NAME = listed("memory.source_read");
 const GOAT_MEMORY_WRITE_TOOL_NAMES: ReadonlyArray<string> = (
-  ["memory.upsert", "memory.forget", "memory.revert_resolution"] as const
+  ["memory.remember", "memory.upsert", "memory.forget", "memory.revert_resolution"] as const
 ).map(listed);
 
 /** The memory tools a session without these grants must not offer, by their listed names. */

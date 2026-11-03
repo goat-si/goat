@@ -19,6 +19,10 @@ export const SSH_HOST_ADD_CONVERGES =
 export const MEMORY_OPERATION_ID =
   "Requires operationId, which the memory store keeps with a digest of the operation: a repeat returns the first receipt, a changed one is refused, and expectedHeads refuses a stale write.";
 
+/** Remember derives its target and operation from what it saves. */
+export const MEMORY_REMEMBER_CONTENT =
+  "Saving the same text to the same scope from the same conversation updates one memory instead of adding another; an unchanged retry returns the first receipt.";
+
 /** Notes check the revision the caller read. */
 export const NOTE_REVISION =
   "Revision-checked: once the first call lands, a repeat with the same baseRevision is refused as a conflict, so it cannot apply twice.";

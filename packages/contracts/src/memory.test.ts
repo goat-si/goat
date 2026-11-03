@@ -1841,7 +1841,7 @@ describe("WP4 cursor, owner policy and relay contracts", () => {
       credential: "forged",
     });
     rejects(M.MemoryHubDisableInput, { requestId: id(), expectedVersion: 0, credential: "forged" });
-    expect(M.MEMORY_MCP_TOOLS).toHaveLength(10);
+    expect(M.MEMORY_MCP_TOOLS).toHaveLength(11);
     round(M.MemorySettingsGetInput, {});
     round(M.MemorySettingsUpdateInput, { requestId: id(), enabled: false });
     round(M.MemorySettingsUpdateInput, { requestId: id(), modelSelection: null });

@@ -138,6 +138,7 @@ export * from "./clientRpcPermissions.ts";
 export * from "./memory.ts";
 export * from "./siteNotes.ts";
 export * from "./memoryRecall.ts";
+export * from "./memoryRemember.ts";
 export * from "./memoryMcpTools.ts";
 export * from "./memoryGeneration.ts";
 

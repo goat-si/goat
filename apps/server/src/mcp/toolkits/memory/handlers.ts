@@ -158,6 +158,7 @@ const decodeRead = argumentsOf("memory_read", M.MemoryReadInput);
 const decodeHistory = argumentsOf("memory_history", M.MemoryHistoryInput);
 const decodeSyncStatus = argumentsOf("memory_sync_status", M.MemorySyncStatusInput);
 const decodeUpsert = argumentsOf("memory_upsert", M.MemoryUpsertInput);
+const decodeRemember = argumentsOf("goat_memory_remember", M.MemoryRememberInput);
 const decodeForget = argumentsOf("memory_forget", M.MemoryForgetInput);
 const decodeRevertResolution = argumentsOf(
   "memory_revert_resolution",
@@ -264,6 +265,35 @@ const handlers = {
         )
         .pipe(Effect.flatMap((stored) => receipt(stored.receipt)));
     }).pipe(Effect.catch(memoryFailure("memory_upsert"))),
+  ),
+  goat_memory_remember: McpToolAccess.writesWithCapability((input) =>
+    Effect.gen(function* () {
+      const service = yield* MemoryService.MemoryService;
+      const value = yield* decodeRemember(yield* withCurrentSpace(input));
+      const memorySpaceId = value.memorySpaceId;
+      if (!memorySpaceId) return yield* new M.MemoryRpcError({ code: "hub_disabled" });
+      return yield* service
+        .remember(
+          { ...value, memorySpaceId },
+          yield* invocationPermit("write"),
+          yield* callerThread,
+        )
+        .pipe(
+          Effect.catchTags({
+            MemoryRememberScopeUnavailable: (error) =>
+              Effect.fail(
+                new M.OrchestratorMcpFailure({
+                  code: "invalid_request",
+                  message:
+                    error.scope === "project"
+                      ? "This conversation has no project memory, so nothing was saved. Save it with scope user or thread."
+                      : "Thread memory needs a conversation, so nothing was saved. Save it with scope user.",
+                }),
+              ),
+          }),
+          Effect.flatMap((stored) => receipt(stored.receipt)),
+        );
+    }).pipe(Effect.catch(memoryFailure("goat_memory_remember"))),
   ),
   memory_forget: McpToolAccess.destructive(
     McpToolAccess.writesWithCapability((input) =>

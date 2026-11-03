@@ -91,6 +91,7 @@ import {
   withReplayRequestId,
 } from "./CodexAdapterV2.testkit.ts";
 import * as CodexAdapterV2Testkit from "./CodexAdapterV2.testkit.ts";
+import { GOAT_MEMORY_TOOLS } from "./CodexAdapterV2.attachment.testkit.ts";
 
 const layerAdapterTest = Layer.mergeAll(
   MemoryDerivedCache.layer,
@@ -100,19 +101,6 @@ const layerAdapterTest = Layer.mergeAll(
 );
 
 const replayTranscriptJson = Schema.fromJsonString(CodexReplay.CodexAppServerReplayTranscript);
-// Every memory tool by the name /mcp lists, which is what Codex disables.
-const GOAT_MEMORY_TOOLS = [
-  "goat_memory_list",
-  "goat_memory_search",
-  "goat_memory_recall",
-  "goat_memory_read",
-  "goat_memory_history",
-  "goat_memory_sync_status",
-  "goat_memory_source_read",
-  "goat_memory_upsert",
-  "goat_memory_forget",
-  "goat_memory_revert_resolution",
-];
 const encodeReplayTranscriptJson = Schema.encodeEffect(replayTranscriptJson);
 const decodeReplayTranscriptJson = Schema.decodeUnknownEffect(replayTranscriptJson);
 const gitCommand = (cwd: string, args: ReadonlyArray<string>) =>
@@ -1212,10 +1200,10 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             )(requests[0]);
             const server = request.config["mcp_servers.goat"];
             assert.equal(server.http_headers.Authorization, credential);
-            // The last three are the write tools; the rest only read.
-            for (const name of GOAT_MEMORY_TOOLS.slice(-3))
+            // The last four are the write tools; the rest only read.
+            for (const name of GOAT_MEMORY_TOOLS.slice(-4))
               assert.equal(server.disabled_tools.includes(name), index === 1 || index === 2);
-            for (const name of GOAT_MEMORY_TOOLS.slice(0, -3))
+            for (const name of GOAT_MEMORY_TOOLS.slice(0, -4))
               assert.equal(server.disabled_tools.includes(name), index === 1);
           }),
         );

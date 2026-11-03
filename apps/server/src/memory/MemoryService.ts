@@ -32,6 +32,7 @@ import { checkedHistoryPage, checkedPage } from "./memoryDiagnostics.ts";
 import { decideMemoryOperation, memoryOperationDigest } from "./MemoryDecider.ts";
 import { redactMemoryText, scanMemoryValue } from "./MemorySecretScanner.ts";
 import { makeCommitSummary, type SummaryCommit } from "./MemorySummaryCommit.ts";
+import { makeRemember, type MemoryRememberScopeUnavailable } from "./MemoryRemember.ts";
 
 export class MemoryAccessError extends Schema.TaggedError<MemoryAccessError>()(
   "MemoryAccessError",
@@ -189,6 +190,11 @@ export class MemoryService extends Context.Service<
       permit: Permit,
       sourceThread?: M.ScopedThreadRef,
     ) => Effect.Effect<Store.StoredReceipt, MemoryServiceError>;
+    readonly remember: (
+      input: M.MemoryRememberInput & { readonly memorySpaceId: M.MemorySpaceId },
+      permit: Permit,
+      sourceThread?: M.ScopedThreadRef,
+    ) => Effect.Effect<Store.StoredReceipt, MemoryServiceError | MemoryRememberScopeUnavailable>;
     readonly retryForgetExpansion: (
       intent: Store.PendingForgetIntent,
     ) => Effect.Effect<void, MemoryServiceError>;
@@ -1258,6 +1264,14 @@ const make = Effect.fnUntraced(function* (
         return yield* apply(op, Store.localIntent, permit);
       }),
     );
+  });
+  const remember = makeRemember({
+    sql,
+    environmentId,
+    store,
+    resolveProjectKey,
+    upsert,
+    stableUuid: memoryStableUuid,
   });
   const forget = Effect.fn("MemoryService.forget")(function* (
     input: M.MemoryForgetInput,
@@ -2655,6 +2669,7 @@ const make = Effect.fnUntraced(function* (
     resolveProjectKey,
     changes,
     upsert,
+    remember,
     forget,
     retryForgetExpansion,
     revertResolution,

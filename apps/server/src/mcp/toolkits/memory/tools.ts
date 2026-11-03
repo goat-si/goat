@@ -151,6 +151,19 @@ const SyncStatusTool = Tool.dynamic(agentSurfaceRegistry["memory.sync_status"].n
   .addDependency(ThreadManagementService.ThreadManagementService)
   .annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["memory.sync_status"]));
 
+const RememberTool = Tool.dynamic(agentSurfaceRegistry["memory.remember"].name, {
+  description: agentSurfaceRegistry["memory.remember"].description,
+  parameters: spaceOptional(memoryInputSchema(M.MemoryRememberInput)),
+  success: M.MemoryMutationReceipt,
+  failure,
+  failureMode: "return",
+})
+  .addDependency(McpInvocationContext.McpInvocationContext)
+  .addDependency(MemoryService.MemoryService)
+  .addDependency(MemorySyncService.MemorySyncService)
+  .addDependency(ThreadManagementService.ThreadManagementService)
+  .annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["memory.remember"]));
+
 const UpsertTool = Tool.dynamic(agentSurfaceRegistry["memory.upsert"].name, {
   description: agentSurfaceRegistry["memory.upsert"].description,
   parameters: memoryInputSchema(M.MemoryUpsertInput),
@@ -210,6 +223,7 @@ export const MemoryToolkit = Toolkit.make(
   ReadTool,
   HistoryTool,
   SyncStatusTool,
+  RememberTool,
   UpsertTool,
   ForgetTool,
   RevertResolutionTool,
