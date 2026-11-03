@@ -3,14 +3,8 @@
 import * as Schema from "effect/Schema";
 import type { ComputerUsePrimitiveReply, ScreenRunError } from "@goat/contracts";
 import { ComputerUseRefusalDetail, ComputerUseRefusalReason } from "@goat/contracts";
-import { driverLockedEffectStarted, driverOutcomeSafety } from "../cua/ComputerUseDriverOutcome.ts";
-import { isReadOnlyCall } from "../cua/ComputerUseLeaseMessages.ts";
-import {
-  replaceWithTerminal,
-  terminalErrorState,
-  terminalReplyState,
-  terminalFailure,
-} from "../cua/ComputerUseTerminal.ts";
+import { driverReplyEvidence, driverOutcomeSafety } from "../cua/ComputerUseDriverOutcome.ts";
+import { replaceWithTerminal, terminalFailure } from "../cua/ComputerUseTerminal.ts";
 import type { ScreenHostDispatchResult } from "./ScreenHostBridge.ts";
 
 const isRefusalReason = Schema.is(ComputerUseRefusalReason);
@@ -99,53 +93,26 @@ const classifyDriverError = (
   const structured = object(result?.structuredContent);
   const nested = string(object(structured?.refusal)?.code);
   const outer = string(structured?.code);
-  const terminal = (code: string | undefined) =>
-    code === "stopped_by_person" || code === "screen_locked" ? code : undefined;
-  const rpc = terminalErrorState(reply.error);
-  const state = replaceWithTerminal(
-    terminalReplyState(reply.result, reply.status),
-    rpc,
-    terminal(nested),
-    terminal(outer),
-  );
-  const merged = state.reason;
-  const driverCode = merged ?? nested ?? outer;
-  const lockedEffectStarted = driverLockedEffectStarted(tool, reply, args);
-  const successfulWrite =
-    (driverCode === "screen_locked" || driverCode === "stopped_by_person") &&
-    reply.status === "settled" &&
-    result?.isError !== true &&
-    reply.error === undefined &&
-    structured?.effect !== "refused" &&
-    structured?.status !== "refused" &&
-    !isReadOnlyCall(tool, args) &&
-    driverOutcomeSafety(tool, reply, args).possibleCommit;
-  const possibleCommit = state.possibleCommit || lockedEffectStarted || successfulWrite;
-  const safety = possibleCommit
-    ? terminalFailure(replaceWithTerminal(state, true), "list_apps", {}, true)?.safety
-    : undefined;
+  const evidence = driverReplyEvidence(tool, reply, args);
+  const driverCode = evidence.terminal ?? nested ?? outer;
+  const safety =
+    evidence.effectStarted && evidence.terminal !== undefined
+      ? terminalFailure(replaceWithTerminal(evidence.terminal, true), "list_apps", {}, true)?.safety
+      : undefined;
   const said =
-    merged !== undefined && merged !== (nested ?? outer)
+    evidence.terminal !== undefined && evidence.terminal !== (nested ?? outer)
       ? undefined
       : refusalText(result, structured);
-  if (
-    (reply.status === "unknown_outcome" ||
-      reply.status === "not_started" ||
-      result?.isError === true ||
-      reply.error !== undefined ||
-      !isReadOnlyCall(tool, args)) &&
-    (driverCode === "stopped_by_person" || driverCode === "screen_locked")
-  )
+  if (evidence.terminal !== undefined)
     return {
       ...fail(
-        driverCode,
+        evidence.terminal,
         said ??
-          (driverCode === "screen_locked"
+          (evidence.terminal === "screen_locked"
             ? "The screen is locked; stop until the person unlocks it."
             : "The person stopped computer use; do not retry this turn."),
       ),
-      effectStarted:
-        (reply.status === "unknown_outcome" && !isReadOnlyCall(tool, args)) || possibleCommit,
+      effectStarted: evidence.effectStarted,
       ...(safety === undefined ? {} : { safety }),
       ...refusalOf(structured),
     };
@@ -158,20 +125,6 @@ const classifyDriverError = (
     driverCode === undefined
   )
     return { ...fail("unsupported", said), ...refusalOf(structured) };
-  if (
-    driverCode === "screen_locked" &&
-    isReadOnlyCall(tool, args) &&
-    structured?.effect !== "refused" &&
-    structured?.status !== "refused"
-  )
-    return undefined;
-  if (driverCode === "screen_locked")
-    return {
-      ...fail("screen_locked", "The screen is locked; stop until the person unlocks it."),
-      effectStarted: possibleCommit,
-      ...(safety === undefined ? {} : { safety }),
-      ...refusalOf(structured),
-    };
   if (
     driverCode === "user_interacting" &&
     (structured?.effect === undefined || structured.effect === "refused")

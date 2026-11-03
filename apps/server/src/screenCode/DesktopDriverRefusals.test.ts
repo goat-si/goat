@@ -8,7 +8,7 @@ import { ScreenRunService } from "./ScreenRunService.ts";
 import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
 import { context, DriverError, UnknownOutcome, fixture } from "./DesktopTargetHost.testkit.ts";
 import { driverError } from "./DesktopDriverReplies.ts";
-import { driverOutcomeSafety, driverRefused } from "../cua/ComputerUseDriverOutcome.ts";
+import { driverOutcomeSafety, driverReplyEvidence } from "../cua/ComputerUseDriverOutcome.ts";
 
 const replyIdentity = {
   requestId: "request",
@@ -19,6 +19,39 @@ const replyIdentity = {
   turnId: "turn",
   callId: 1,
 };
+
+it.each([undefined, "refused"])(
+  "unknown outcome keeps a terminal result despite RPC rejection %#",
+  (effect) => {
+    const reply = {
+      ...replyIdentity,
+      status: "unknown_outcome" as const,
+      error: { code: -32602 },
+      result: {
+        isError: true,
+        structuredContent: { code: "screen_locked", ...(effect === undefined ? {} : { effect }) },
+      },
+    };
+    expect(driverError(reply, "click")).toMatchObject({
+      code: "screen_locked",
+      effectStarted: true,
+    });
+    expect(driverOutcomeSafety("click", reply).possibleCommit).toBe(true);
+  },
+);
+
+it("a started effect outranks a refused status on a terminal write", () => {
+  const reply = {
+    ...replyIdentity,
+    status: "settled" as const,
+    result: {
+      isError: false,
+      structuredContent: { code: "screen_locked", status: "refused", effect: "unknown" },
+    },
+  };
+  expect(driverError(reply, "click")).toMatchObject({ code: "screen_locked", effectStarted: true });
+  expect(driverOutcomeSafety("click", reply).possibleCommit).toBe(true);
+});
 
 it.each(["unknown", "committed", "unverifiable"])(
   "a not-started RPC lock with %s effect may have acted",
@@ -71,144 +104,72 @@ it("a settled write with a lock code and no refusal may have acted", () => {
   expect(driverOutcomeSafety("click", reply).possibleCommit).toBe(true);
 });
 
-it("terminal reply classifiers agree on possible commit across read and write envelopes", () => {
-  const cases = [
-    {
-      tool: "list_windows",
-      status: "settled" as const,
-      isError: false,
-      content: { code: "screen_locked", effect: "unknown" },
-      expected: false,
-    },
-    {
-      tool: "list_windows",
-      status: "settled" as const,
-      isError: true,
-      content: { code: "screen_locked", effect: "unknown" },
-      expected: false,
-    },
-    {
-      tool: "click",
-      status: "settled" as const,
-      isError: true,
-      content: { code: "screen_locked", refusal: { code: "stopped_by_person" }, effect: "unknown" },
-      expected: true,
-    },
-    ...["unknown", "committed", "unverifiable"].flatMap((effect) => [
-      {
-        tool: "click",
-        status: "not_started" as const,
-        isError: false,
-        content: {},
-        error: { code: "screen_locked", effect },
-        expected: true,
-        expectedCode: "screen_locked",
-      },
-      {
-        tool: "click",
-        status: "not_started" as const,
-        isError: false,
-        content: {},
-        error: { code: "screen_locked", data: { effect } },
-        expected: true,
-        expectedCode: "screen_locked",
-      },
-      {
-        tool: "click",
-        status: "settled" as const,
-        isError: false,
-        content: { code: "screen_locked", refusal: { code: "stopped_by_person" }, effect },
-        expected: true,
-        expectedCode: "stopped_by_person",
-      },
-    ]),
-    {
-      tool: "click",
-      status: "settled" as const,
-      isError: false,
-      content: { code: "screen_locked" },
-      expected: true,
-      expectedCode: "screen_locked",
-    },
-    {
-      tool: "list_windows",
-      status: "not_started" as const,
-      isError: false,
-      content: {},
-      error: { code: "screen_locked", data: { effect: "unknown" } },
-      expected: false,
-      expectedCode: "screen_locked",
-    },
-    {
-      tool: "click",
-      status: "unknown_outcome" as const,
-      isError: false,
-      content: {},
-      error: { code: "screen_locked", effect: "unknown" },
-      expected: true,
-      expectedCode: "screen_locked",
-    },
-    {
-      tool: "click",
-      status: "not_started" as const,
-      isError: false,
-      content: { refusal: { code: "screen_locked" }, effect: "committed" },
-      expected: true,
-    },
-    {
-      tool: "click",
-      status: "settled" as const,
-      isError: false,
-      content: { code: "screen_locked", effect: "unverifiable" },
-      expected: true,
-    },
-    {
-      tool: "click",
-      status: "settled" as const,
-      isError: true,
-      content: { code: "screen_locked", effect: "refused" },
-      expected: false,
-    },
-    {
-      tool: "click",
-      status: "unknown_outcome" as const,
-      isError: true,
-      content: { code: "screen_locked" },
-      expected: true,
-    },
-    ...["unknown", "committed", "unverifiable"].map((effect) => ({
-      tool: "click",
-      status: "settled" as const,
-      isError: true,
-      content: { code: "screen_locked", effect },
-      error: { code: -32602 },
-      expected: true,
-    })),
-    {
-      tool: "click",
-      status: "settled" as const,
-      isError: true,
-      content: { code: "other" },
-      error: { code: -32602, data: { refusal: { code: "screen_locked" }, effect: "unknown" } },
-      expected: true,
-    },
-  ];
-  for (const entry of cases) {
-    const reply = {
-      ...replyIdentity,
-      status: entry.status,
-      result: { isError: entry.isError, structuredContent: entry.content },
-      ...("error" in entry && entry.error ? { error: entry.error } : {}),
-    };
-    const error = driverError(reply, entry.tool);
-    if ("expectedCode" in entry)
-      expect(error?.code, JSON.stringify(entry)).toBe(entry.expectedCode);
-    expect(error?.effectStarted ?? false, JSON.stringify(entry)).toBe(entry.expected);
-    expect(driverOutcomeSafety(entry.tool, reply).possibleCommit, JSON.stringify(entry)).toBe(
-      entry.expected,
-    );
-    if (entry.expected) expect(driverRefused(entry.tool, reply), JSON.stringify(entry)).toBe(false);
-  }
+it("terminal reply classifiers agree across the generated envelope matrix", () => {
+  let count = 0;
+  for (const placement of ["result", "error", "data"] as const)
+    for (const code of ["screen_locked", "stopped_by_person"] as const)
+      for (const nested of [false, true])
+        for (const effect of [
+          undefined,
+          "refused",
+          "unknown",
+          "committed",
+          "unverifiable",
+        ] as const)
+          for (const status of ["settled", "not_started", "unknown_outcome"] as const)
+            for (const isError of [false, true])
+              for (const rpc of [false, true])
+                for (const tool of ["click", "list_windows"] as const) {
+                  const fields = {
+                    ...(nested ? { refusal: { code } } : { code }),
+                    ...(effect === undefined ? {} : { effect }),
+                  };
+                  const reply = {
+                    ...replyIdentity,
+                    status,
+                    result: { isError, structuredContent: placement === "result" ? fields : {} },
+                    ...(placement === "error"
+                      ? { error: { ...fields, ...(rpc ? { data: { code: -32602 } } : {}) } }
+                      : placement === "data"
+                        ? { error: { code: rpc ? -32602 : -32000, data: fields } }
+                        : rpc
+                          ? { error: { code: -32602 } }
+                          : {}),
+                  };
+                  const evidence = driverReplyEvidence(tool, reply);
+                  const classified = driverError(reply, tool);
+                  const safety = driverOutcomeSafety(tool, reply);
+                  const label = JSON.stringify({
+                    placement,
+                    code,
+                    nested,
+                    effect,
+                    status,
+                    isError,
+                    rpc,
+                    tool,
+                  });
+                  expect(classified?.effectStarted ?? false, label).toBe(safety.possibleCommit);
+                  if (evidence.terminal) {
+                    expect(classified?.code, label).toBe(evidence.terminal);
+                    expect(safety.retryClass, label).toBe("never");
+                    if (
+                      tool === "click" &&
+                      ((effect !== undefined && effect !== "refused") ||
+                        status === "unknown_outcome")
+                    )
+                      expect(safety.possibleCommit, label).toBe(true);
+                    if (
+                      tool === "click" &&
+                      (effect === undefined || effect === "refused") &&
+                      evidence.refusedBeforeDispatch
+                    )
+                      expect(safety.possibleCommit, label).toBe(false);
+                  }
+                  if (tool === "list_windows") expect(safety.possibleCommit, label).toBe(false);
+                  count++;
+                }
+  expect(count).toBe(1440);
 });
 
 it("a stop reason retains a screen lock's possible input effect", () => {
