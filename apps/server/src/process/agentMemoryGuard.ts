@@ -252,10 +252,9 @@ export const makeAgentMemoryGuard = Effect.fn("AgentMemoryGuard.make")(function*
     Effect.sleep("30 seconds").pipe(
       Effect.andThen(
         tick.pipe(
-          Effect.catchCause((cause) =>
-            Cause.hasInterrupts(cause)
-              ? Effect.failCause(cause)
-              : Effect.logWarning("Agent memory guard tick failed", cause),
+          Effect.catchCauseIf(
+            (cause) => !Cause.hasInterrupts(cause),
+            (cause) => Effect.logWarning("Agent memory guard tick failed", cause),
           ),
         ),
       ),
