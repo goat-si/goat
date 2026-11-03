@@ -1,8 +1,10 @@
 // @effect-diagnostics nodeBuiltinImport:off
+import * as NodeChildProcess from "node:child_process";
 import * as NodePath from "node:path";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
+import { vi } from "vite-plus/test";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -527,6 +529,36 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           timeoutMs: 1000,
         });
         expect(result).toEqual({ code: null, stdout: "", stderr: "" });
+      }).pipe(Effect.provide(SshRuntimeAutoUpdate.layerHost)),
+    );
+    it.live("an output pipe that breaks on a live command stops it before the run settles", () =>
+      Effect.gen(function* () {
+        const create = NodeChildProcess.spawn;
+        const spawned = Promise.withResolvers<NodeChildProcess.ChildProcess>();
+        using _spawn = vi.spyOn(NodeChildProcess, "spawn").mockImplementationOnce((...args) => {
+          const child = Reflect.apply(
+            create,
+            NodeChildProcess,
+            args,
+          ) as NodeChildProcess.ChildProcess;
+          spawned.resolve(child);
+          return child;
+        });
+        const host = yield* SshRuntimeAutoUpdate.SshRuntimeHost;
+        const running = yield* host
+          .run({
+            command: "/bin/sh",
+            args: ["-c", 'printf "ready\\n"; sleep 600'],
+            env: { PATH: process.env.PATH },
+            timeoutMs: 600_000,
+          })
+          .pipe(Effect.forkChild);
+        const child = yield* Effect.promise(() => spawned.promise);
+        yield* Effect.promise(() => new Promise((resolve) => child.stdout?.once("data", resolve)));
+        child.stdout?.destroy(new Error("output pipe broke"));
+        const result = yield* Fiber.join(running);
+        expect(result.code).toBeNull();
+        expect(child.signalCode).toBe("SIGKILL");
       }).pipe(Effect.provide(SshRuntimeAutoUpdate.layerHost)),
     );
     it.live("a timed-out host command also stops the processes it started", () =>

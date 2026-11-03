@@ -141,11 +141,19 @@ const stopProcessTree = (child: NodeChildProcess.ChildProcess, signal: NodeJS.Si
   child.kill(signal);
 };
 
+// No pid means the spawn failed; a live child whose pipe broke is stopped, and close ends the run.
+const endOnError =
+  (spawnFailure: PromiseWithResolvers<Error>) =>
+  (error: Error, child: NodeChildProcess.ChildProcess) => {
+    if (child.pid === undefined) spawnFailure.resolve(error);
+    else stopProcessTree(child, "SIGKILL");
+  };
+
 const spawnOwnedCommand = async (
   command: string,
   args: ReadonlyArray<string>,
   options: NodeChildProcess.SpawnOptions & { env: NodeJS.ProcessEnv },
-  onError: ErrorRoute,
+  onError: (error: Error, child: NodeChildProcess.ChildProcess) => void,
   onStdinError: ErrorRoute = () => {},
   signal?: AbortSignal,
 ) => {
@@ -155,14 +163,12 @@ const spawnOwnedCommand = async (
     : { command, args, dispose: async () => {} });
   try {
     signal?.throwIfAborted();
-    return {
-      child: guardChild(
-        NodeChildProcess.spawn(owned.command, [...owned.args], options),
-        onError,
-        onStdinError,
-      ),
-      dispose: owned.dispose,
-    };
+    const child: NodeChildProcess.ChildProcess = guardChild(
+      NodeChildProcess.spawn(owned.command, [...owned.args], options),
+      (error) => onError(error, child),
+      onStdinError,
+    );
+    return { child, dispose: owned.dispose };
   } catch (error) {
     await owned.dispose();
     throw error;
@@ -185,7 +191,7 @@ export const layerHost = Layer.succeed(SshRuntimeHost, {
           windowsHide: true,
           stdio: ["pipe", "pipe", "pipe"],
         },
-        spawnFailure.resolve,
+        endOnError(spawnFailure),
         undefined,
         controller.signal,
       );
@@ -275,7 +281,7 @@ export const layerHost = Layer.succeed(SshRuntimeHost, {
                   env: input.env,
                   stdio: ["ignore", stdout, stderr],
                 },
-                spawnFailure.resolve,
+                endOnError(spawnFailure),
                 undefined,
                 controller.signal,
               );
