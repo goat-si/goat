@@ -172,3 +172,66 @@ it("closes the picker after the tab attaches", async () => {
   await userEvent.click(page.getByRole("button", { name: "Allow" }));
   await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
 });
+
+it("opens the browser picker when the menu action is requested", async () => {
+  setup({ claims: [], grants: [], pending: [] });
+  await using _screen = await render(<YourBrowserSection threadRef={threadRef} />);
+  const { openBrowserClaim } = await import("./browserClaimRequest");
+  const { useRightPanelStore, selectActiveRightPanel } = await import("~/rightPanelStore");
+  const { registerMenuAction, dispatchMenuAction } = await import("~/shortcuts/dispatcher");
+  using _registration = {
+    [Symbol.dispose]: registerMenuAction("browser.claim", () => openBrowserClaim(threadRef)),
+  };
+  dispatchMenuAction("browser.claim");
+  expect(selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, threadRef)).toBe(
+    "preview",
+  );
+  await expect.element(page.getByRole("dialog")).toBeVisible();
+  useRightPanelStore.getState().removeThread(threadRef);
+});
+
+it("explains when the client cannot approve a browser tab", async () => {
+  setup({ claims: [], grants: [], pending: [] }, false);
+  await using _screen = await render(<YourBrowserSection threadRef={threadRef} />);
+  const { toastManager } = await import("~/components/ui/toast");
+  using toast = vi.spyOn(toastManager, "add");
+  const { useBrowserClaimRequest } = await import("./browserClaimRequest");
+  useBrowserClaimRequest.getState().request(threadRef);
+  await vi.waitFor(() =>
+    expect(toast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "This client cannot change settings to allow a browser tab.",
+      }),
+    ),
+  );
+  await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+});
+
+it("explains when browser claims are unsupported", async () => {
+  setup({ supported: false, claims: [], grants: [], pending: [] });
+  await using _screen = await render(<YourBrowserSection threadRef={threadRef} />);
+  const { toastManager } = await import("~/components/ui/toast");
+  using toast = vi.spyOn(toastManager, "add");
+  const { useBrowserClaimRequest } = await import("./browserClaimRequest");
+  useBrowserClaimRequest.getState().request(threadRef);
+  await vi.waitFor(() =>
+    expect(toast).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Browser tab claims are unavailable in this environment.",
+      }),
+    ),
+  );
+  await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+});
+
+it("explains when the menu action has no active thread", async () => {
+  const { openBrowserClaim } = await import("./browserClaimRequest");
+  const { toastManager } = await import("~/components/ui/toast");
+  using toast = vi.spyOn(toastManager, "add");
+  openBrowserClaim(null);
+  expect(toast).toHaveBeenCalledWith(
+    expect.objectContaining({
+      title: "Open a thread to let an agent use a browser tab.",
+    }),
+  );
+});
