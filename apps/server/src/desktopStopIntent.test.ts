@@ -5,6 +5,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
 import * as StopIntent from "./desktopStopIntent.ts";
 
 const intent = {
@@ -67,4 +68,29 @@ it.effect("an absent channel returns none", () =>
     const reader = yield* StopIntent.DesktopStopIntentReader;
     assert.deepStrictEqual(yield* reader.atShutdown, Option.none());
   }).pipe(Effect.provide(StopIntent.layer(undefined, 123).pipe(Layer.provide(NodeServices.layer)))),
+);
+
+it.effect("permission denied is cached as a terminal result", () =>
+  Effect.gen(function* () {
+    let reads = 0;
+    const fs = FileSystem.layerNoop({
+      readFileString: (path) => {
+        reads++;
+        return Effect.fail(
+          PlatformError.systemError({
+            _tag: "PermissionDenied",
+            module: "FileSystem",
+            method: "readFileString",
+            pathOrDescriptor: path,
+          }),
+        );
+      },
+    });
+    yield* Effect.gen(function* () {
+      const reader = yield* StopIntent.DesktopStopIntentReader;
+      assert.deepStrictEqual(yield* reader.atShutdown, Option.none());
+      assert.deepStrictEqual(yield* reader.atShutdown, Option.none());
+      assert.equal(reads, 1);
+    }).pipe(Effect.provide(StopIntent.layer("/intent.json", 123).pipe(Layer.provide(fs))));
+  }),
 );
