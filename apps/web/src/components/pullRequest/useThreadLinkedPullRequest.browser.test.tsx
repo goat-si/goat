@@ -9,7 +9,7 @@ import { scopeThreadRef } from "@goat/client-runtime/environment";
 import { expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
-  branch: null as { projectId: string; repository?: string; number: number; url: string } | null,
+  branch: null as { projectId: string; repository: string; number: number; url: string } | null,
   identity: null as RepositoryIdentity | null,
   writes: [] as Array<{ repository: string; number: number; url: string }>,
   persistedState: "closed" as "open" | "closed",
@@ -111,36 +111,33 @@ it.each([
     repository: "forkcode",
   },
   {
-    name: "Azure upstream",
+    name: "older Azure server upstream",
     identity: azure,
     url: "https://dev.azure.com/acme/platform/_git/t3code/pullrequest/11",
     repository: "t3code",
   },
   {
-    name: "older server upstream",
+    name: "older GitHub server upstream",
     identity: github,
     url: "https://github.com/upstream/project/pull/11",
-    repository: undefined,
-    expected: "upstream/project",
+    repository: "upstream/project",
   },
 ])(
   "relinks $name using the validated repository selector (#2464)",
-  async ({ identity, url, repository, expected }) => {
+  async ({ identity, url, repository }) => {
     state.identity = identity;
     state.branch = {
       projectId,
       number: 11,
       url,
-      ...(repository === undefined ? {} : { repository }),
+      repository,
     };
     state.writes = [];
     state.persistedState = "closed";
     await using screen = await render(<Harness url={url} />);
     await act(async () => {});
-    expect(screen.container.textContent).toContain(expected ?? repository);
-    expect(state.writes).toEqual([
-      { projectId, repository: expected ?? repository, number: 11, url },
-    ]);
+    expect(screen.container.textContent).toContain(repository);
+    expect(state.writes).toEqual([{ projectId, repository, number: 11, url }]);
   },
 );
 

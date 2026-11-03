@@ -29,9 +29,6 @@ function repositoryForBranch(
   const upstream = sourceControlClients
     .get(identity.provider)
     .isChangeRequestInRepository(identity, parsed.link);
-  // Older servers omit the repository and only detect upstream pull requests.
-  if (branch.repository == null)
-    return upstream ? sourceControlClients.repositorySelector(identity) : null;
   const origin = identity.origin;
   const originUrl = origin?.remoteUrl;
   const displayName = origin?.displayName ?? origin?.canonicalKey.split("/").slice(1).join("/");
