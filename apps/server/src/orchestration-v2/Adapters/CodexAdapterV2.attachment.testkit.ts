@@ -145,23 +145,55 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
   const subagentStatuses: Array<string> = [];
   // Every status each execution node was given, in order.
   const nodeStatuses = new Map<string, Array<string>>();
+  // Each provider turn the adapter reported, latest state last.
+  type ReportedTurn = {
+    readonly id: string;
+    readonly runAttemptId: string | null;
+    readonly nativeId: string | null;
+    readonly status: string;
+  };
+  const providerTurns: Array<ReportedTurn> = [];
+  const turnListeners = new Set<() => void>();
+  // Waits until the adapter has reported a provider turn that matches.
+  const providerTurn = (matches: (turn: ReportedTurn) => boolean) =>
+    Effect.callback<ReportedTurn>((resume) => {
+      const check = () => {
+        const found = providerTurns.findLast(matches);
+        if (found === undefined) return;
+        turnListeners.delete(check);
+        resume(Effect.succeed(found));
+      };
+      turnListeners.add(check);
+      check();
+      return Effect.sync(() => void turnListeners.delete(check));
+    });
   yield* runtime.events.pipe(
     Stream.runForEach((event) =>
       event.type === "turn.terminal"
         ? Queue.offer(terminals, { providerTurnId: event.providerTurnId, status: event.status })
-        : event.type === "subagent.updated"
-          ? Effect.sync(() => void subagentStatuses.push(event.subagent.status))
-          : event.type === "node.updated"
-            ? Effect.sync(
-                () =>
-                  void nodeStatuses.set(event.node.id, [
-                    ...(nodeStatuses.get(event.node.id) ?? []),
-                    event.node.status,
-                  ]),
-              )
-            : event.type === "provider_thread.updated" && event.providerThread.goal
-              ? Queue.offer(goalTokens, event.providerThread.goal.tokensUsed ?? 0)
-              : Effect.void,
+        : event.type === "provider_turn.updated"
+          ? Effect.sync(() => {
+              providerTurns.push({
+                id: event.providerTurn.id,
+                runAttemptId: event.providerTurn.runAttemptId,
+                nativeId: event.providerTurn.nativeTurnRef?.nativeId ?? null,
+                status: event.providerTurn.status,
+              });
+              for (const listener of turnListeners) listener();
+            })
+          : event.type === "subagent.updated"
+            ? Effect.sync(() => void subagentStatuses.push(event.subagent.status))
+            : event.type === "node.updated"
+              ? Effect.sync(
+                  () =>
+                    void nodeStatuses.set(event.node.id, [
+                      ...(nodeStatuses.get(event.node.id) ?? []),
+                      event.node.status,
+                    ]),
+                )
+              : event.type === "provider_thread.updated" && event.providerThread.goal
+                ? Queue.offer(goalTokens, event.providerThread.goal.tokensUsed ?? 0)
+                : Effect.void,
     ),
     Effect.forkScoped,
   );
@@ -193,6 +225,8 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
     goalUpdates: Stream.fromQueue(goalTokens),
     subagentStatuses,
     nodeStatuses,
+    providerTurns,
+    providerTurn,
     runtime,
     providerThread,
   };
