@@ -64,6 +64,7 @@ import {
   acceptWebhookDedupe,
   decodePendingRequest,
   decodePendingTask,
+  encodePendingTask,
   dedupeError,
   releaseWebhookReplay,
 } from "./webhookDedupe.ts";
@@ -2247,10 +2248,19 @@ export const layer = Layer.effect(
                 continue;
               }
               const prepared = yield* Effect.gen(function* () {
-                const task = yield* decodePendingTask(entry.task_json);
+                const current = yield* findTask(taskId);
+                const snapshot = yield* decodePendingTask(entry.task_json);
+                const task =
+                  current?.createdAt === snapshot.createdAt && current.prompt !== snapshot.prompt
+                    ? { ...snapshot, prompt: current.prompt }
+                    : snapshot;
                 const request = yield* decodePendingRequest(entry.request_json);
                 const frameId = Buffer.from(yield* crypto.randomBytes(6)).toString("hex");
-                return { task, rendered: renderWebhookPrompt(task.prompt, request, frameId) };
+                return {
+                  task,
+                  taskJson: task === snapshot ? null : yield* encodePendingTask(task),
+                  rendered: renderWebhookPrompt(task.prompt, request, frameId),
+                };
               }).pipe(Effect.exit);
               if (Exit.isFailure(prepared)) {
                 if (Cause.hasInterruptsOnly(prepared.cause))
@@ -2263,11 +2273,13 @@ export const layer = Layer.effect(
                 yield* remove;
                 continue;
               }
-              const { task, rendered } = prepared.value;
+              const { task, taskJson, rendered } = prepared.value;
               if (rendered.prompt.trim().length > PROVIDER_SEND_TURN_MAX_INPUT_CHARS) {
                 yield* markDeliveryFailed(entry.delivery_id, PROMPT_TOO_LONG);
                 yield* releaseFailedDelivery(entry.delivery_id);
               } else {
+                if (taskJson !== null)
+                  yield* sql`UPDATE scheduled_task_webhook_pending SET task_json = ${taskJson} WHERE delivery_id = ${entry.delivery_id}`;
                 yield* sql`UPDATE scheduled_task_webhook_deliveries SET outcome = 'accepted', error = NULL, rendered_prompt = ${rendered.prompt.slice(0, WEBHOOK_DELIVERY_LOG_PROMPT_LIMIT)}, missing_fields_json = ${encodeMissingFieldsJson(rendered.missing)} WHERE delivery_id = ${entry.delivery_id}`;
                 if (!(yield* runWebhookDelivery(task, entry.delivery_id, rendered.prompt))) return;
               }

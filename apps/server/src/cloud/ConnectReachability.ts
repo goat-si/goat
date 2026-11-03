@@ -72,7 +72,7 @@ export function classifyReachability(
     return fail(
       "not_linked",
       "The server has not set up a GOAT Connect tunnel.",
-      "Run `goat connect`, then restart the server (`goat service restart`) so it applies the link.",
+      "Run `goat connect`, then restart GOAT so it applies the link.",
     );
   }
   if (connector === null) {

@@ -682,7 +682,9 @@ idempotent.
 Users rarely watch child threads, so a child question would otherwise go
 unanswered. When a child opens a pending `user_input` request, the parent gets
 a notification message telling it to answer with the pending request tools or
-ask the user. The message says whether the child is blocked or, for a Codex
+ask the user. A pending question can steer a running parent turn when the provider
+supports safe steering; otherwise it queues. In a GOAT Bot session it can steer only
+the run that launched the child. Resolution notices queue. The message says whether the child is blocked or, for a Codex
 async question, still working. If the question is answered or dismissed before
 the notification starts a turn, that queued turn is cancelled. Approvals are not
 routed, because those tools cannot answer them.

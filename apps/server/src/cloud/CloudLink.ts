@@ -953,6 +953,12 @@ const make = Effect.gen(function* () {
       ],
       { concurrency: 8 },
     );
+    const currentReachability = Option.filter(
+      latestReachability,
+      (result) =>
+        Option.isNone(endpointRuntimeConfig) ||
+        !(result.status === "unreachable" && result.cause === "not_linked"),
+    );
     return {
       cloudLinkRevocation: (yield* revocation.pending.pipe(
         Effect.mapError(
@@ -972,7 +978,7 @@ const make = Effect.gen(function* () {
         : false,
       holdWebhooksWhileOffline:
         Option.isSome(holdWebhooks) && bytesToString(holdWebhooks.value) === "true",
-      ...(Option.isSome(latestReachability) ? { reachability: latestReachability.value } : {}),
+      ...(Option.isSome(currentReachability) ? { reachability: currentReachability.value } : {}),
     } satisfies EnvironmentCloudLinkStateResult;
   });
 
