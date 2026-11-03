@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// @effect-diagnostics nodeBuiltinImport:off globalTimers:off
+// @effect-diagnostics nodeBuiltinImport:off globalTimers:off globalDate:off
 /**
  * A free ACP agent for dev servers. It plays recorded ACP transcripts with simulated
  * streaming, so the real adapter, orchestration, and UI run without a paid model.
@@ -172,6 +172,18 @@ function permissionRejectedToolCallId(request: LogicalFrame, answer: unknown): s
 }
 
 function runAgent(): void {
+  const lifecycleLog = process.env.GOAT_SOAK_PROVIDER_LIFECYCLE_LOG;
+  const lifecycle = (event: string, extra: Record<string, unknown> = {}) => {
+    if (lifecycleLog === undefined) return;
+    NodeFS.appendFileSync(
+      lifecycleLog,
+      `${JSON.stringify({ event, pid: process.pid, instance: process.env.GOAT_SOAK_PROVIDER_INSTANCE ?? "devReplay", at: new Date().toISOString(), ...extra })}\n`,
+    );
+  };
+  if (lifecycleLog !== undefined) {
+    lifecycle("start");
+    process.on("exit", (code) => lifecycle("exit", { code }));
+  }
   const turnsByScenario = new Map<string, ReadonlyArray<ReplayTurn>>();
   const loadTurns = (scenarioId: string) => {
     const cached = turnsByScenario.get(scenarioId);
@@ -291,6 +303,7 @@ function runAgent(): void {
         // Loading after a restart keeps the thread usable; GOAT already holds its history.
         const sessionId =
           message.method === "session/load" ? String(params.sessionId) : NodeCrypto.randomUUID();
+        lifecycle("session", { thread: sessionId });
         const cwd = typeof params.cwd === "string" ? params.cwd : process.cwd();
         sessions.set(sessionId, { cwd, model: SCENARIOS[0].id, promptCount: 0, cancel: undefined });
         return {
@@ -321,6 +334,18 @@ function runAgent(): void {
         const sessionId = String(params.sessionId);
         const session = sessions.get(sessionId);
         if (session === undefined) throw new Error(`Unknown session ${sessionId}`);
+        if (
+          lifecycleLog !== undefined &&
+          Array.isArray(params.prompt) &&
+          params.prompt.some(
+            (part: unknown) =>
+              typeof part === "object" &&
+              part !== null &&
+              "text" in part &&
+              part.text === "GOAT_SOAK_EXIT",
+          )
+        )
+          process.exit(1);
         const turns = loadTurns(session.model);
         const turn = turns[session.promptCount % Math.max(turns.length, 1)];
         session.promptCount += 1;

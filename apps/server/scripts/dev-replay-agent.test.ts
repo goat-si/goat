@@ -3,6 +3,8 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodeReadline from "node:readline";
 import * as NodeURL from "node:url";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 
 import { describe, expect, it } from "@effect/vitest";
 
@@ -62,6 +64,41 @@ async function talkToAgent(
 }
 
 describe("dev replay agent", () => {
+  it("records soak lifecycle and exits on the sentinel only when enabled", async () => {
+    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-replay-soak-"));
+    const log = NodePath.join(dir, "lifecycle.ndjson");
+    const agent = NodeChildProcess.spawn(
+      process.execPath,
+      [NodeURL.fileURLToPath(new URL("./dev-replay-agent.ts", import.meta.url))],
+      {
+        stdio: ["pipe", "pipe", "inherit"],
+        env: { ...process.env, GOAT_SOAK_PROVIDER_LIFECYCLE_LOG: log },
+      },
+    );
+    const exited = new Promise<number | null>((resolve) => agent.once("exit", resolve));
+    const lines = NodeReadline.createInterface({ input: agent.stdout })[Symbol.asyncIterator]();
+    try {
+      agent.stdin.write(
+        `${JSON.stringify({ id: 1, method: "session/new", params: { cwd: "/tmp" } })}\n`,
+      );
+      const response = JSON.parse((await lines.next()).value as string) as AgentMessage;
+      const sessionId = response.result?.sessionId;
+      expect(sessionId).toBeTruthy();
+      agent.stdin.write(
+        `${JSON.stringify({ id: 2, method: "session/prompt", params: { sessionId, prompt: [{ type: "text", text: "GOAT_SOAK_EXIT" }] } })}\n`,
+      );
+      expect(await exited).toBe(1);
+      const events = NodeFS.readFileSync(log, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(events.map((event) => event.event)).toEqual(["start", "session", "exit"]);
+      expect(events[1]).toMatchObject({ thread: sessionId, instance: "devReplay" });
+    } finally {
+      if (agent.exitCode === null) agent.kill();
+      NodeFS.rmSync(dir, { recursive: true, force: true });
+    }
+  });
   it("keeps sessions and tool ids unique across processes and reloads", async () => {
     const prompt = (sessionId: string) => ({ method: "session/prompt", params: { sessionId } });
     const selectTodoList = (sessionId: string) => ({
