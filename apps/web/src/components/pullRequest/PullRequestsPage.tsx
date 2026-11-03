@@ -210,25 +210,18 @@ export function PullRequestsPage() {
       search: (previous: PullRequestsSearch): PullRequestsSearch => {
         const next = { ...previous, ...patch };
         return {
-          involvement: next.involvement ?? previous.involvement,
-          state: next.state ?? previous.state,
-          ...(next.sort && next.sort !== "ready" ? { sort: next.sort } : {}),
+          ...pullRequestListPreferences({
+            ...next,
+            involvement: next.involvement ?? previous.involvement,
+            state: next.state ?? previous.state,
+          }),
           ...(next.repository ? { repository: next.repository } : {}),
           ...(next.number ? { number: next.number } : {}),
-          ...(next.projectId ? { projectId: next.projectId } : {}),
-          ...(next.environmentId ? { environmentId: next.environmentId } : {}),
-          ...(next.host ? { host: next.host } : {}),
           ...(next.selectedHost ? { selectedHost: next.selectedHost } : {}),
           ...(next.selectedProjectId ? { selectedProjectId: next.selectedProjectId } : {}),
           ...(next.selectedEnvironmentId
             ? { selectedEnvironmentId: next.selectedEnvironmentId }
             : {}),
-          ...(next.q ? { q: next.q } : {}),
-          ...(next.draft ? { draft: next.draft } : {}),
-          ...(next.review ? { review: next.review } : {}),
-          ...(next.checks ? { checks: next.checks } : {}),
-          ...(next.author ? { author: next.author } : {}),
-          ...(next.labels && next.labels.length > 0 ? { labels: next.labels } : {}),
         };
       },
       replace: true,
@@ -273,7 +266,12 @@ export function PullRequestsPage() {
   const turnRefreshToken = turnRefreshes
     .map(([environmentId, revision]) => `${environmentId}:${revision}`)
     .join("|");
-  const scopeKey = `${environmentKey}:${assignmentKey}:${search.state}:${search.involvement}:${scopedProjectId ?? ""}:${search.host ?? ""}:${search.draft ?? ""}:${search.review ?? ""}:${search.checks ?? ""}:${search.author ?? ""}:${search.labels?.join("\u0000") ?? ""}`;
+  const scopeKey = `${environmentKey}:${assignmentKey}:${search.state}:${search.involvement}:${scopedProjectId ?? ""}:${search.host ?? ""}:${search.draft ?? ""}:${search.review ?? ""}:${search.checks ?? ""}:${search.author ?? ""}:${search.labels?.join("\u0000") ?? ""}:${search.upstream ?? ""}`;
+  const listScope = {
+    ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
+    ...(search.host ? { host: search.host } : {}),
+    ...(search.upstream ? { includeUpstream: true } : {}),
+  };
   const filterKey = `${scopeKey}:${sentQuery}`;
   const statsScope: PullRequestStatsScope = { key: filterKey, policy: statsPolicy };
   const [page, setPage] = useState<{
@@ -307,9 +305,8 @@ export function PullRequestsPage() {
           state: search.state,
           involvement: search.involvement,
           limit: pageSize,
-          ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
+          ...listScope,
           ...(projectIds ? { projectIds } : {}),
-          ...(search.host ? { host: search.host } : {}),
           ...(hasFilters ? { filters } : {}),
           ...(sentParsed.text ? { query: sentParsed.text } : {}),
           ...(cursors === undefined ? {} : { cursors }),
@@ -330,9 +327,8 @@ export function PullRequestsPage() {
       state: search.state,
       involvement: search.involvement,
       limit: PAGE_SIZE,
-      ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
+      ...listScope,
       ...(projectIds ? { projectIds } : {}),
-      ...(search.host ? { host: search.host } : {}),
       ...(menuFiltered ? { filters: menuFilters } : {}),
     } satisfies PullRequestListInput,
   }));
@@ -350,9 +346,8 @@ export function PullRequestsPage() {
         state: "all",
         involvement: search.involvement,
         limit: PAGE_SIZE,
-        ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
+        ...listScope,
         ...(projectIds ? { projectIds } : {}),
-        ...(search.host ? { host: search.host } : {}),
       } satisfies PullRequestListInput,
     }));
   })();
@@ -384,9 +379,8 @@ export function PullRequestsPage() {
           state: search.state,
           involvement,
           limit: PAGE_SIZE,
-          ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
+          ...listScope,
           ...(projectIds ? { projectIds } : {}),
-          ...(search.host ? { host: search.host } : {}),
           ...(menuFiltered ? { filters: menuFilters } : {}),
         } satisfies PullRequestListInput,
       }));
@@ -1280,6 +1274,10 @@ export function PullRequestsPage() {
       projects={scopedProjects}
       projectId={scopedProjectId}
       projectEnvironmentId={scopedProject?.environmentId}
+      includeUpstream={search.upstream === "include"}
+      onIncludeUpstream={(include) =>
+        updateListScope({ upstream: include ? "include" : undefined })
+      }
       unavailable={unavailableProjects}
       onProject={(projectId, environmentId) =>
         updateListScope(environmentId === undefined ? { projectId } : { projectId, environmentId })

@@ -72,6 +72,7 @@ export const Route = createFileRoute("/_chat/pull-requests")({
       ? { author: raw.author.trim().slice(0, 200) }
       : {}),
     ...pullRequestSearchLabels(raw.labels),
+    ...(raw.upstream === "include" ? { upstream: "include" as const } : {}),
   }),
   component: PullRequestsPage,
 });

@@ -34,6 +34,7 @@ export const PullRequestListControls = Schema.Struct({
   filters: PullRequestListFilters,
   projectId: Schema.optional(Schema.String),
   projectEnvironmentId: Schema.optional(Schema.String),
+  includeUpstream: Schema.optional(Schema.Boolean),
   sort: Schema.Literals(["updated", "created", "oldest"]),
 });
 export type PullRequestListControls = typeof PullRequestListControls.Type;

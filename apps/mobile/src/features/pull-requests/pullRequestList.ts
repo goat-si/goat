@@ -338,6 +338,7 @@ export function pullRequestListInput(
     filters: { ...controls.filters, ...parsed.filters },
     limit: PR_LIST_PAGE_SIZE,
     ...(controls.projectId ? { projectId: ProjectId.make(controls.projectId) } : {}),
+    ...(controls.includeUpstream ? { includeUpstream: true } : {}),
     ...(parsed.text ? { query: parsed.text } : {}),
   };
 }
