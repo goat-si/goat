@@ -86,6 +86,69 @@ it.effect("another thread's live full-access control makes taking the screen sha
   }).pipe(Effect.provide(everyAppLayer)),
 );
 
+it.effect.each(["reserve", "validate"] as const)(
+  "a full-access control minted during the settings read refuses screen-taking %s",
+  (action) =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      const owner = ThreadId.make(`thread:shared-race-${action}`);
+      const other = ThreadId.make(`thread:shared-race-other-${action}`);
+      yield* threadIn(other, "full-access");
+      yield* settings.updateSettings({ cuaStrictInputGuards: true });
+      const control = Option.getOrThrow(yield* leases.control(owner, Option.none()));
+      const focus = yield* foregroundGrant(owner, `handoff:shared-race-${action}`);
+      const reserve = {
+        action: "reserve" as const,
+        controlId: control.controlId,
+        connectionId: "race",
+        callId: "one",
+        interruptions: 0,
+        idleEpoch: 0,
+        name: "bring_to_front",
+        args: { pid: 42, window_id: 7 },
+        foregroundGrantId: focus.handoffId,
+      };
+      const first =
+        action === "validate" ? yield* leases.callReservation(owner, reserve) : undefined;
+      if (first !== undefined && (first.status !== "admitted" || first.reservationId === null))
+        return assert.fail("expected ticket");
+      const request =
+        first?.status === "admitted" && first.reservationId !== null
+          ? {
+              action: "validate" as const,
+              controlId: control.controlId,
+              connectionId: "race",
+              reservationId: first.reservationId,
+            }
+          : reserve;
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const heldSettings = ServerSettings.ServerSettingsService.of({
+        ...settings,
+        getSettings: settings.getSettings.pipe(
+          Effect.tap(() =>
+            Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
+          ),
+        ),
+      });
+      const pending = yield* leases
+        .callReservation(owner, request)
+        .pipe(
+          Effect.provideService(ServerSettings.ServerSettingsService, heldSettings),
+          Effect.forkChild,
+        );
+      yield* Deferred.await(entered);
+      assert.isTrue(Option.isSome(yield* leases.everyAppControl(other, false)));
+      yield* Deferred.succeed(release, undefined);
+      assert.deepInclude(yield* Fiber.join(pending), {
+        status: "refused",
+        detail: "screen_shared",
+      });
+    }).pipe(Effect.provide(everyAppLayer)),
+);
+
 it.effect("a thread's own full-access control alone does not share the screen", () =>
   Effect.gen(function* () {
     yield* runMigrations();

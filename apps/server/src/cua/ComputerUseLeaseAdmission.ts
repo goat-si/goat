@@ -19,12 +19,14 @@ import { allowsForegroundCall, withCallPermissions } from "./ComputerUseLeaseCal
 import { takesScreen } from "./ComputerUseScope.ts";
 import { ComputerUseCallApps } from "./ComputerUseCallApps.ts";
 import { deniedCallApp } from "./ComputerUseCallSafety.ts";
+import type { EveryAppKind } from "./ComputerUseFullAccess.ts";
 import * as ServerSettings from "../serverSettings.ts";
 
 type AdmissionControl = ComputerUseControl & {
   readonly uses: number;
   readonly ended?: ComputerUseControlEnd;
   readonly idleEpoch?: number;
+  readonly everyApp?: EveryAppKind;
 };
 
 /** The same current authority judges initial admission and the ticket held across a report. */
@@ -149,13 +151,13 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
           DateTime.toEpochMillis(yield* DateTime.now),
         );
         const state = yield* controlState(threadId, call.controlId);
-        const now = DateTime.toEpochMillis(yield* DateTime.now);
         const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
         const currentSettings = Option.isSome(settings)
           ? yield* settings.value.getSettings.pipe(Effect.option)
           : Option.none();
         if (Option.isSome(settings) && Option.isNone(currentSettings))
           return { status: "refused", detail: "reconnecting" } as const;
+        const now = DateTime.toEpochMillis(yield* DateTime.now);
         // No settings service (a test host) keeps the guards on.
         const strict = Option.isNone(currentSettings) || currentSettings.value.cuaStrictInputGuards;
         reservations.reclaimStopped(canAct, now);
@@ -197,6 +199,18 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
           const policy = Effect.runSync(settings.value.committedPolicy);
           if (policy._tag !== "committed" || !policy.enableCua)
             return { status: "refused", detail: "disabled" } as const;
+        }
+        if (strict && takesScreen(call.name, call.args)) {
+          for (const other of controls.values()) {
+            if (
+              other.threadId !== threadId &&
+              other.everyApp !== undefined &&
+              other.ended === undefined &&
+              other.idle !== true &&
+              DateTime.toEpochMillis(other.expiresAt) > now
+            )
+              return { status: "refused", detail: "screen_shared" } as const;
+          }
         }
         // Confirmation retains the original ticket and its conflict coverage until cleanup.
         const decision: ComputerUseCallAdmission =
