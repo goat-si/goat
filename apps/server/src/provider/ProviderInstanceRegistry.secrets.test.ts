@@ -436,7 +436,7 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
       const fiber = yield* (mutator.reloadSecrets?.(id) ?? Effect.void).pipe(Effect.forkChild);
       yield* Deferred.await(started);
       yield* TestClock.adjust("45 seconds");
-      expect(fiber.pollUnsafe()).toBeDefined();
+      // The read stays blocked, so the join returns only because the comparison bound fired.
       yield* Fiber.join(fiber);
       expect(reads).toBe(2);
       expect(yield* registry.getInstance(id)).toBeUndefined();

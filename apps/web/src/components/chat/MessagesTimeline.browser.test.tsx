@@ -104,6 +104,12 @@ describe("MessagesTimeline work rows", () => {
       expect(viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop).toBeLessThan(2),
     );
     expect(viewport.scrollTop).toBeGreaterThan(0);
+    // The list settles its row layout after scrolling; click only once the heading is the hit target.
+    await vi.waitFor(() => {
+      const box = heading.element().getBoundingClientRect();
+      const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+      expect(heading.element().contains(hit)).toBe(true);
+    });
     const top = heading.element().getBoundingClientRect().top;
     const height = viewport.scrollHeight;
     using _timers = fakeTimers();
