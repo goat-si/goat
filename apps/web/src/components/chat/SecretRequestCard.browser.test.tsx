@@ -84,3 +84,57 @@ it("keeps the existing single-secret form", async () => {
     },
   });
 });
+
+it("validates the card, suppresses password managers, and saves a normalized answer", async () => {
+  state.answer.mockReset().mockResolvedValue({ _tag: "Success", value: undefined });
+  const item = {
+    type: "secret_request",
+    id: TurnItemId.make("item:card"),
+    threadId: ThreadId.make("thread:card"),
+    label: "Payment",
+    reason: "Pay",
+    secretStatus: "pending",
+    requestKind: "card",
+    siteOrigin: "https://card.test",
+  } as never;
+  await using screen = await render(
+    <SecretRequestCard environmentId={EnvironmentId.make("test")} item={item} visibility="local" />,
+  );
+  const fields = ["Card number", "Expiry month", "Expiry year", "CVC", "Name on card"].map(
+    (label) => screen.getByLabelText(label),
+  );
+  const save = screen.getByRole("button", { name: "Save securely" });
+  for (const field of fields) {
+    await expect.element(field).toHaveAttribute("autocomplete", "off");
+    await expect.element(field).toHaveAttribute("data-1p-ignore");
+    await expect.element(field).toHaveAttribute("data-lpignore", "true");
+    await expect.element(field).toHaveAttribute("data-bwignore");
+    await expect.element(field).toHaveAttribute("type", "text");
+  }
+  await expect.element(fields[3]!).toHaveAttribute("style", "-webkit-text-security: disc;");
+  await expect.element(save).toBeDisabled();
+  await fields[0]!.fill("4242 4242-4242 4242");
+  await fields[1]!.fill("01");
+  await fields[2]!.fill("29");
+  await fields[3]!.fill("00");
+  await fields[4]!.fill("  Example Name  ");
+  await expect.element(save).toBeDisabled();
+  await fields[3]!.fill("003");
+  await expect.element(save).toBeEnabled();
+  await save.click();
+  expect(state.answer).toHaveBeenCalledWith({
+    environmentId: "test",
+    input: {
+      threadId: "thread:card",
+      turnItemId: "item:card",
+      answer: {
+        type: "save_card",
+        number: "4242424242424242",
+        expiryMonth: "01",
+        expiryYear: "2029",
+        cvc: "003",
+        name: "  Example Name  ",
+      },
+    },
+  });
+});

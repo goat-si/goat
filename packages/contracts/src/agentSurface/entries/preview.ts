@@ -307,6 +307,26 @@ export const previewEntries = {
     humanSteps: [],
     annotations: { title: "Fill a saved login", idempotentHint: false, openWorldHint: true },
   }),
+  "preview.fill_card": entry({
+    resource: "preview",
+    verb: "fill_card",
+    name: "goat_preview_fill_card",
+    toolkit: "preview",
+    summary: "Fill a saved card into a sign-in page",
+    description: "Fill a saved card on its requested origin without exposing its values.",
+    guide:
+      "Call request_secret with kind card and its origin, focus the form, then pass its reference. A fill that sets any field consumes the reference. A partial fill reports which field was filled and needs a new card request. After an unverifiable result, observe the page before asking for a new login.",
+    effect: "destructive",
+    capability: "none",
+    capabilityReason: "Drives the calling thread's own browser preview.",
+    idempotencyReason:
+      "A login reference can be consumed; inspect partial or uncertain delivery before retrying.",
+    hostRoutable: false,
+    requires: "thread",
+    dryRun: "unsupported",
+    humanSteps: [],
+    annotations: { title: "Fill a saved card", idempotentHint: false, openWorldHint: true },
+  }),
   "preview.hover": entry({
     resource: "preview",
     verb: "hover",

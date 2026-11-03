@@ -71,3 +71,22 @@ it("explains that the agent receives only a reference to the site-bound login", 
     secretRequestPrivacyNote({ requestKind: "login", siteOrigin: "https://example.com" }),
   ).toBe("The agent gets only a reference. GOAT fills this login on https://example.com");
 });
+
+it("validates and normalizes a card answer without altering name or CVC", () => {
+  const item = { id: "item:card", threadId: "thread:card" } as never;
+  const answer = {
+    type: "save_card" as const,
+    number: "4242 4242-4242 4242",
+    expiryMonth: "01",
+    expiryYear: "29",
+    cvc: "003",
+    name: "  Name  ",
+  };
+  expect(secretRequestAnswerInput(item, { ...answer, cvc: "12" })).toBeNull();
+  expect(secretRequestAnswerInput(item, { ...answer, number: "123" })).toBeNull();
+  expect(secretRequestAnswerInput(item, answer)).toEqual({
+    threadId: "thread:card",
+    turnItemId: "item:card",
+    answer: { ...answer, number: "4242424242424242", expiryYear: "2029" },
+  });
+});

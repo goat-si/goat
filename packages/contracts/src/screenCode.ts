@@ -90,6 +90,7 @@ export const ScreenMethod = Schema.Literals([
   "tab_upload",
   "tab_fill_secret",
   "tab_fill_login",
+  "tab_fill_card",
   "list_menu_bar_extras",
 ]);
 export type ScreenMethod = typeof ScreenMethod.Type;

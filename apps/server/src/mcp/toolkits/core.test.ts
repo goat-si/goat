@@ -163,7 +163,7 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
     "channel_task_move",
     "channel_task_report",
   ]);
-  expect(names.size).toBe(240);
+  expect(names.size).toBe(241);
   expect([...names].some((name) => name.startsWith("t3_"))).toBe(false);
   for (const [tool, questionDelivery] of [
     [ProjectToolkit.tools.goat_thread_launch, "Only local user-input questions still arrive."],

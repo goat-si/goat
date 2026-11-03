@@ -154,3 +154,16 @@ export const PreviewAutomationFillLoginResult = Schema.Struct({
   code: Schema.optional(Schema.String),
 });
 export type PreviewAutomationFillLoginResult = typeof PreviewAutomationFillLoginResult.Type;
+
+export const PreviewAutomationFillCardInput = PreviewAutomationFillLoginInput;
+export const PreviewAutomationFillCardResult = Schema.Struct({
+  numberFilled: Schema.Boolean,
+  cvcFilled: Schema.Boolean,
+  expiryFilled: Schema.Boolean,
+  expiryMonthFilled: Schema.Boolean,
+  expiryYearFilled: Schema.Boolean,
+  nameFilled: Schema.Boolean,
+  verdict: Schema.Literals(["confirmed", "unverifiable", "refused"]),
+  code: Schema.optional(Schema.String),
+});
+export type PreviewAutomationFillCardResult = typeof PreviewAutomationFillCardResult.Type;

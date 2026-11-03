@@ -23,6 +23,7 @@ import {
   type PreviewAutomationRead,
   type PreviewAutomationFillSecretResult,
   type PreviewAutomationFillLoginResult,
+  type PreviewAutomationFillCardResult,
   type PreviewAutomationScrollCollectResult,
   type PreviewAutomationSnapshot,
   type PreviewAutomationLogs,
@@ -143,6 +144,7 @@ const invoke = Effect.fn("PreviewToolkit.invoke")(function* <A>(
       "read",
       "fillSecret",
       "fillLogin",
+      "fillCard",
     ].includes(operation)
   )
     return { result, ...safety };
@@ -429,6 +431,11 @@ const handlers = {
   goat_preview_fill_login: McpToolAccess.destructive(
     McpToolAccess.actsAsCaller((input) =>
       invokeTargeted<PreviewAutomationFillLoginResult>("fillLogin", input, input.timeoutMs),
+    ),
+  ),
+  goat_preview_fill_card: McpToolAccess.destructive(
+    McpToolAccess.actsAsCaller((input) =>
+      invokeTargeted<PreviewAutomationFillCardResult>("fillCard", input, input.timeoutMs),
     ),
   ),
   preview_hover: McpToolAccess.actsAsCaller((input) =>

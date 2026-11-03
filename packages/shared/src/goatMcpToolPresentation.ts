@@ -351,6 +351,7 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     "browser",
     "browser",
   ),
+  goat_preview_fill_card: tool(["Fill", "Filling", "Filled", "a saved card"], "browser", "browser"),
   goat_preview_fill_login: tool(
     ["Fill", "Filling", "Filled", "a saved login"],
     "browser",

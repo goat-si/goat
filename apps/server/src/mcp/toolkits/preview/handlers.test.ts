@@ -296,6 +296,16 @@ it.effect("preview results and failures expose safety and a next step after MCP 
             passwordFilled: true,
             verdict: "confirmed",
           } as A);
+        if (request.operation === "fillCard")
+          return Effect.succeed({
+            numberFilled: true,
+            cvcFilled: true,
+            expiryFilled: false,
+            expiryMonthFilled: false,
+            expiryYearFilled: false,
+            nameFilled: false,
+            verdict: "confirmed",
+          } as A);
         if (request.operation === "fillSecret")
           return Effect.succeed({
             filled: true,
@@ -389,6 +399,17 @@ it.effect("preview results and failures expose safety and a next step after MCP 
     expect(login.structuredContent).toMatchObject({
       usernameFilled: true,
       passwordFilled: true,
+      verdict: "confirmed",
+      safety: { possibleCommit: true, retryClass: "never" },
+    });
+    const card = yield* server.callTool({
+      name: "goat_preview_fill_card",
+      arguments: { secretRef: "secret-ref" },
+    });
+    expect(card.isError, JSON.stringify(card)).not.toBe(true);
+    expect(card.structuredContent).toMatchObject({
+      numberFilled: true,
+      cvcFilled: true,
       verdict: "confirmed",
       safety: { possibleCommit: true, retryClass: "never" },
     });

@@ -80,6 +80,7 @@ const methods = [
   "tab_upload",
   "tab_fill_secret",
   "tab_fill_login",
+  "tab_fill_card",
 ] as const;
 
 type ChildResult = Pick<
