@@ -526,7 +526,7 @@ export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
   );
 });
 
-export const INTENT_WRITE_TIMEOUT = Duration.seconds(1);
+const INTENT_WRITE_TIMEOUT = Duration.seconds(1);
 
 const encodeStopIntent = Schema.encodeSync(Schema.fromJsonString(DesktopStopIntent));
 export const writeBackendStopIntent = Effect.fn("desktop.backendInstance.writeStopIntent")(
@@ -554,27 +554,34 @@ export const writeBackendStopIntent = Effect.fn("desktop.backendInstance.writeSt
       yield* Deferred.succeed(input.done, undefined);
       return;
     }
-    if (Option.isNone(input.pid)) return;
     const path = input.path;
-    const pid = input.pid.value;
+    const pid = Option.getOrUndefined(input.pid);
     const temporary = `${path}.tmp`;
     const write = Effect.gen(function* () {
       const requestedAt = DateTime.formatIso(yield* DateTime.now);
       yield* input.fs.makeDirectory(NodePath.dirname(path), { recursive: true, mode: 0o700 });
       yield* input.fs.writeFileString(
         temporary,
-        encodeStopIntent({ version: 1, pid, reason: input.reason, requestedAt }),
+        encodeStopIntent({
+          version: 1,
+          ...(pid === undefined ? {} : { pid }),
+          reason: input.reason,
+          requestedAt,
+        }),
         { mode: 0o600 },
       );
       yield* input.fs.rename(temporary, path);
     });
-    const result = yield* write.pipe(Effect.result, Effect.timeoutOption(INTENT_WRITE_TIMEOUT));
+    const fiber = yield* Effect.forkDetach(
+      write.pipe(Effect.onError(() => input.fs.remove(temporary).pipe(Effect.ignore))),
+    );
+    const result = yield* Fiber.await(fiber).pipe(Effect.timeoutOption(INTENT_WRITE_TIMEOUT));
     yield* Deferred.succeed(input.done, undefined);
     if (Option.isNone(result) || result.value._tag === "Failure") {
       const warning = input.recordStop({
         message: "backend stop intent not written",
         level: "WARN",
-        details: `pid=${pid} reason=${input.reason}`,
+        details: `pid=${pid ?? "pending"} reason=${input.reason}`,
       });
       if (input.bounded) yield* Effect.forkDetach(warning);
       else yield* warning;

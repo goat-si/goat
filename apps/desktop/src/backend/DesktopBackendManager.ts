@@ -557,17 +557,6 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
                 });
                 const active = Option.getOrUndefined((yield* Ref.get(state)).active);
                 if (active?.id === runId && active.stopRequested) {
-                  if (active.intentPath !== undefined && Option.isSome(active.stopRequest)) {
-                    yield* Effect.forkDetach(
-                      writeBackendStopIntent(
-                        active,
-                        active.stopRequest.value.reason,
-                        fileSystem,
-                        backendOutputLog.recordStop,
-                        yield* Ref.get(active.boundedStop),
-                      ),
-                    );
-                  }
                   yield* backendOutputLog.markStop;
                 }
               }),

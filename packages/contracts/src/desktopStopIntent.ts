@@ -12,7 +12,7 @@ export type DesktopStopReason = typeof DesktopStopReason.Type;
 
 export const DesktopStopIntent = Schema.Struct({
   version: Schema.Literal(1),
-  pid: Schema.Int,
+  pid: Schema.optionalKey(Schema.Int),
   reason: DesktopStopReason,
   requestedAt: Schema.String,
 });
