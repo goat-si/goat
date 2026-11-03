@@ -24,6 +24,8 @@ import {
 } from "./sshRuntimeGitBash.ts";
 import * as SshRuntimeAutoUpdate from "./sshRuntimeAutoUpdate.ts";
 
+vi.mock("node:child_process", { spy: true });
+
 const PID = 4242;
 const target = "1.1.0";
 const GIT_BASH = "C:\\Program Files\\Git\\bin\\bash.exe";

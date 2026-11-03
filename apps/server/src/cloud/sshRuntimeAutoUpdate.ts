@@ -107,19 +107,31 @@ export class SshRuntimeHost extends Context.Service<
   }
 >()("goat/cloud/sshRuntimeAutoUpdate/SshRuntimeHost") {}
 
-const collect = (child: NodeChildProcess.ChildProcess, spawnFailure: Promise<Error>) =>
+// A failed spawn emits 'error' and then 'close' with a negative errno; `failed` is set before that close.
+type SpawnFailure = PromiseWithResolvers<Error> & { failed: boolean };
+const spawnFailureLatch = (): SpawnFailure => ({
+  failed: false,
+  ...Promise.withResolvers<Error>(),
+});
+
+const collect = (child: NodeChildProcess.ChildProcess, spawnFailure: SpawnFailure) =>
   new Promise<SshRuntimeProcessResult>((resolve) => {
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     child.stdout?.on("data", (chunk: Buffer) => stdout.push(chunk));
     child.stderr?.on("data", (chunk: Buffer) => stderr.push(chunk));
-    void spawnFailure.then(() => resolve({ code: null, stdout: "", stderr: "" }));
+    const failed = { code: null, stdout: "", stderr: "" };
+    void spawnFailure.promise.then(() => resolve(failed));
     child.once("close", (code) =>
-      resolve({
-        code,
-        stdout: Buffer.concat(stdout).toString("utf8"),
-        stderr: Buffer.concat(stderr).toString("utf8"),
-      }),
+      resolve(
+        spawnFailure.failed
+          ? failed
+          : {
+              code,
+              stdout: Buffer.concat(stdout).toString("utf8"),
+              stderr: Buffer.concat(stderr).toString("utf8"),
+            },
+      ),
     );
   });
 
@@ -143,9 +155,12 @@ const stopProcessTree = (child: NodeChildProcess.ChildProcess, signal: NodeJS.Si
 
 // No pid means the spawn failed; a live child whose pipe broke is stopped and fails once it closes.
 const endOnError =
-  (spawnFailure: PromiseWithResolvers<Error>, onPipeFailure = () => {}) =>
+  (spawnFailure: SpawnFailure, onPipeFailure = () => {}) =>
   (error: Error, child: NodeChildProcess.ChildProcess) => {
-    if (child.pid === undefined) return spawnFailure.resolve(error);
+    if (child.pid === undefined) {
+      spawnFailure.failed = true;
+      return spawnFailure.resolve(error);
+    }
     onPipeFailure();
     stopProcessTree(child, "SIGKILL");
   };
@@ -182,7 +197,7 @@ export const layerHost = Layer.succeed(SshRuntimeHost, {
       // Its own process group, so a timeout or an interruption also stops the downloader the
       // install script waits on, and with it the install lock.
       const controller = new AbortController();
-      const spawnFailure = Promise.withResolvers<Error>();
+      const spawnFailure = spawnFailureLatch();
       let pipeFailed = false;
       const started = spawnOwnedCommand(
         input.command,
@@ -205,7 +220,7 @@ export const layerHost = Layer.succeed(SshRuntimeHost, {
       let bound: ReturnType<typeof setTimeout> | undefined;
       const closed = started
         .then(async ({ child, dispose }) => {
-          const result = collect(child, spawnFailure.promise);
+          const result = collect(child, spawnFailure);
           child.stdin?.end(input.stdin ?? "");
           bound = setTimeout(() => {
             if (done || child.pid === undefined) return;
@@ -273,7 +288,7 @@ export const layerHost = Layer.succeed(SshRuntimeHost, {
           // Detached leaves the script outside libuv's kill-on-close job, so it outlives the drain.
           const scriptArg = bashScriptArg(input.shell, scriptFile);
           let stderr: number | undefined;
-          const spawnFailure = Promise.withResolvers<Error>();
+          const spawnFailure = spawnFailureLatch();
           const { child, dispose } = await (async () => {
             try {
               stderr = NodeFS.openSync(stderrFile, "w", 0o600);
@@ -303,7 +318,7 @@ export const layerHost = Layer.succeed(SshRuntimeHost, {
           if (child.pid !== undefined) preparation.resolve();
           const code = await new Promise<number | null>((resolve) => {
             void spawnFailure.promise.then(() => resolve(null));
-            child.once("close", resolve);
+            child.once("close", (code) => resolve(spawnFailure.failed ? null : code));
             // Still alive here means the script never drained this server: it is stuck before the
             // swap, so stopping it (its trap releases the replacement lock) cannot strand the host.
             const bound = setTimeout(() => {
