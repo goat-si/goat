@@ -121,7 +121,7 @@ export const previewEntries = {
     toolkit: "preview",
     summary: "Open browser preview",
     description:
-      "Open or reuse a GOAT browser tab, isolated by default or in a GOAT profile a person signed in to. Retry with the same clientRequestId to avoid duplicates.",
+      "Open or reuse a GOAT browser tab, isolated by default or in a GOAT profile a person signed in to. For a dev server, pass an environment-port target. Retry with the same clientRequestId to avoid duplicates.",
     guide:
       "An explicit tabId reuses that tab; reuseExistingTab=false creates a new tab; otherwise the broker supplies this session's current tab. Omission never implicitly takes over another session's tab. Unless open=false, the server requests a preview reveal; an explicit open=true forces the reveal request, while omission leaves it unforced. A new tab is isolated (no saved sign-ins) unless session is profile or profileId names a profile, by id or case-insensitive name from goat_preview_status; more than one profile with none named is refused as ambiguous, never picked. A profile keeps its sign-ins in the store of its first agent open (server browser or desktop app) and is refused, never switched, where that store is unavailable. A reused tab keeps its session; asking for another one is refused. The result reports session {mode, profileId, store} for each tab. An initial open may return despite a load wait timing out; use goat_preview_navigate when a successful readiness wait matters.",
     effect: "destructive",
