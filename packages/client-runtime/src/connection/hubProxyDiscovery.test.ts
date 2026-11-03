@@ -79,6 +79,7 @@ const makeRegistry = Effect.gen(function* () {
   );
   const removed = yield* Deferred.make<string>();
   const registered: string[] = [];
+  const registrations: ConnectionRegistration[] = [];
   // Only the coordinator's registry boundary is faked; route decisions and lifecycle streams run normally.
   const registry = EnvironmentRegistry.of({
     entries,
@@ -86,13 +87,37 @@ const makeRegistry = Effect.gen(function* () {
     register: (registration: ConnectionRegistration) =>
       Effect.sync(() => {
         registered.push(registration.target.environmentId);
+        registrations.push(registration);
         return true;
       }),
     removeRoute: (_id: EnvironmentId, routeId: string) =>
       Deferred.succeed(removed, routeId).pipe(Effect.asVoid),
   } as unknown as EnvironmentRegistry["Service"]);
-  return { registry, entries, removed, registered };
+  return { registry, entries, removed, registered, registrations };
 });
+
+it.effect("keeps known hub nodes on the reachable route when its session lacks hub access", () =>
+  Effect.gen(function* () {
+    const h = yield* makeRegistry;
+    yield* watchHubProxyDiscovery(
+      Stream.succeed({
+        hubEnvironmentId: HUB,
+        hubConnectionId: "another-route",
+        hubLabel: "Hub",
+        nodes: [],
+        sessionScopes: [],
+        config: { environment: { capabilities: { hubProxy: true } } } as ServerConfig,
+      }),
+    ).pipe(Effect.provideService(EnvironmentRegistry, h.registry));
+    expect(yield* Deferred.isDone(h.removed)).toBe(false);
+    expect(h.registrations).toHaveLength(1);
+    expect(h.registrations[0]?._tag).toBe("HubProxyConnectionRegistration");
+    const registration = h.registrations[0];
+    if (registration?._tag !== "HubProxyConnectionRegistration")
+      throw new Error("Expected hub route");
+    expect(registration.profile.hubConnectionId).toBe("another-route");
+  }),
+);
 
 const makeConnectedDiscovery = Effect.fn(function* (options: {
   readonly failReads?: number;
@@ -399,31 +424,33 @@ describe("hub proxy discovery coordinator", () => {
   );
 
   it.effect.each([
-    { scopes: [] as readonly AuthEnvironmentScope[], capability: true, count: 0 },
-    { scopes: [AuthHubProxyScope], capability: false, count: 0 },
-    { scopes: [AuthHubProxyScope], capability: true, count: 1 },
-  ])("requires both the session scope and hub capability (%j)", ({ scopes, capability, count }) =>
-    Effect.gen(function* () {
-      const h = yield* makeRegistry;
-      const environment = yield* decodeDescriptor({
-        environmentId: HUB,
-        label: "Hub",
-        platform: { os: "linux", arch: "x64" },
-        serverVersion: "1",
-        capabilities: { hubProxy: capability },
-      });
-      yield* watchHubProxyDiscovery(
-        Stream.make({
-          hubEnvironmentId: HUB,
-          hubConnectionId: "primary",
-          hubLabel: "Hub",
-          nodes: [{ nodeId: "new", environmentId: EnvironmentId.make("new"), label: "New" }],
-          sessionScopes: scopes,
-          config: { environment },
-        }),
-      ).pipe(Effect.provideService(EnvironmentRegistry, h.registry));
-      expect(h.registered).toHaveLength(count);
-    }),
+    { scopes: [] as readonly AuthEnvironmentScope[], capability: true, registered: [NODE] },
+    { scopes: [AuthHubProxyScope], capability: false, registered: [] },
+    { scopes: [AuthHubProxyScope], capability: true, registered: [EnvironmentId.make("new")] },
+  ])(
+    "requires both the session scope and hub capability (%j)",
+    ({ scopes, capability, registered }) =>
+      Effect.gen(function* () {
+        const h = yield* makeRegistry;
+        const environment = yield* decodeDescriptor({
+          environmentId: HUB,
+          label: "Hub",
+          platform: { os: "linux", arch: "x64" },
+          serverVersion: "1",
+          capabilities: { hubProxy: capability },
+        });
+        yield* watchHubProxyDiscovery(
+          Stream.make({
+            hubEnvironmentId: HUB,
+            hubConnectionId: "primary",
+            hubLabel: "Hub",
+            nodes: [{ nodeId: "new", environmentId: EnvironmentId.make("new"), label: "New" }],
+            sessionScopes: scopes,
+            config: { environment },
+          }),
+        ).pipe(Effect.provideService(EnvironmentRegistry, h.registry));
+        expect(h.registered).toEqual(registered);
+      }),
   );
 
   it.effect(

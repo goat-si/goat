@@ -127,11 +127,31 @@ export const watchHubProxyDiscovery = <E, R>(
             update.config?.environment.capabilities.hubProxy === true;
           const entries = yield* SubscriptionRef.get(registry.entries);
           if (!entries.has(update.hubEnvironmentId)) return;
-          if (authorized && (yield* registry.state(update.hubEnvironmentId)).phase !== "connected")
+          const missingHubAccess =
+            !authorized && update.config?.environment.capabilities.hubProxy === true;
+          if (
+            (authorized || missingHubAccess) &&
+            (yield* registry.state(update.hubEnvironmentId)).phase !== "connected"
+          )
             return;
+          const knownNodes = missingHubAccess
+            ? [...entries.values()].flatMap(connectionRoutes).flatMap((route) => {
+                const profile = Option.getOrNull(route.profile);
+                return profile?._tag === "HubProxyConnectionProfile" &&
+                  profile.hubEnvironmentId === update.hubEnvironmentId
+                  ? [
+                      {
+                        nodeId: profile.nodeId,
+                        environmentId: profile.environmentId,
+                        label: profile.label,
+                      },
+                    ]
+                  : [];
+              })
+            : [];
           const changes = reconcileHubProxyRoutes({
             ...update,
-            nodes: authorized ? update.nodes : [],
+            nodes: authorized ? update.nodes : knownNodes,
             existing: [...entries.values()],
           });
           for (const id of changes.remove) {
