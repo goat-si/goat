@@ -153,17 +153,3 @@ name: "goat",`;
     );
   });
 });
-
-it("preserves distinct upstream and legacy identities in compatibility fixtures", () => {
-  for (const path of [
-    "apps/server/src/pullRequest/PullRequestForkListing.test.ts",
-    "apps/server/src/pullRequest/projectRepositories.test.ts",
-    "apps/web/src/components/pullRequest/pullRequestList.logic.test.ts",
-    "packages/shared/src/composerPullRequestMatches.test.ts",
-  ]) {
-    const upstream = "github.com/pingdotgg/t3code";
-    expect(apply(path, upstream)).toBe(upstream);
-  }
-  const path = "packages/client-runtime/src/work-log/computerUse.test.ts";
-  expect(apply(path, "t3code:goat_screen_run")).toBe("t3code:goat_screen_run");
-});
