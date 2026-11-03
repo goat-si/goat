@@ -25,6 +25,14 @@ import {
 } from "./snapshotProbe.ts";
 
 describe("spawn failure diagnosis", () => {
+  it("reports a deleted inherited cwd as inaccessible after a spawn failure (#2476)", () => {
+    expect(
+      classifySpawnFailure({ code: "ENOENT" }, undefined, undefined, undefined, undefined, () => {
+        throw Object.assign(new Error("cwd deleted"), { code: "ENOENT" });
+      }),
+    ).toBe("cwd_inaccessible");
+  });
+
   it.effect("a spawn failure with no cwd keeps its real cause (#2415)", () =>
     Effect.sync(() => {
       const missing = { binary: NodePath.join(NodeOS.tmpdir(), "goat-no-such-binary-2415") };
