@@ -52,9 +52,6 @@ export class OrchestrationEffectExecutorV2 extends Context.Service<
   OrchestrationEffectExecutorV2Shape
 >()("goat/orchestration-v2/EffectWorker/OrchestrationEffectExecutorV2") {}
 
-// Persist the deadline through the outbox's enqueue time: ten minutes gives
-// the five-minute git removal timeout headroom without resetting on reclaims.
-const WORKSPACE_LEASE_WAIT_MS = 10 * 60_000;
 const WORKSPACE_LEASE_RETRY_MS = 1_000;
 
 export const layerExecutor: Layer.Layer<
@@ -154,9 +151,6 @@ export const layerExecutor: Layer.Layer<
                 threadId: effect.threadId,
                 runId: effect.request.runId,
                 willRetry,
-                workspaceLeaseDeadline: DateTime.add(DateTime.makeUnsafe(effect.createdAt), {
-                  milliseconds: WORKSPACE_LEASE_WAIT_MS,
-                }),
               })
               .pipe(
                 Effect.mapError(
@@ -393,9 +387,6 @@ export const layerExecutor: Layer.Layer<
                     threadId: effect.threadId,
                     runId: effect.request.runId,
                     willRetry,
-                    workspaceLeaseDeadline: DateTime.add(DateTime.makeUnsafe(effect.createdAt), {
-                      milliseconds: WORKSPACE_LEASE_WAIT_MS,
-                    }),
                   }),
                 ),
                 Effect.mapError(
