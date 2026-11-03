@@ -111,7 +111,7 @@ import { cloudTaskForRun } from "./cloudTaskView.ts";
 import { hostFailure } from "./hostFailure.ts";
 import { listCapabilityModels } from "./OrchestratorMcpCapabilities.ts";
 import { overrideOptionSelections } from "./modelOptionOverrides.ts";
-import { invalidOptionSelections } from "./ModelSelectionValidation.ts";
+import { invalidOptionSelections, knownOptions } from "./ModelSelectionValidation.ts";
 
 import {
   delegatedTaskProgress,
@@ -1474,10 +1474,10 @@ const make = Effect.gen(function* () {
       );
     }
 
+    const descriptors = provider.models.find((candidate) => candidate.slug === model)?.capabilities
+      ?.optionDescriptors;
     const requestedOptions = input.target?.options;
     if (requestedOptions !== undefined) {
-      const descriptors = provider.models.find((candidate) => candidate.slug === model)
-        ?.capabilities?.optionDescriptors;
       const invalid = invalidOptionSelections(requestedOptions, descriptors);
       if (invalid.length > 0) {
         return yield* failure(
@@ -1490,7 +1490,7 @@ const make = Effect.gen(function* () {
     const inheritsOptions =
       instanceId === inheritedSelection.instanceId && model === inheritedSelection.model;
     const options = overrideOptionSelections(
-      inheritsOptions ? inheritedSelection.options : undefined,
+      inheritsOptions ? knownOptions(inheritedSelection.options, descriptors) : undefined,
       requestedOptions,
     );
     return {
@@ -2306,7 +2306,14 @@ const make = Effect.gen(function* () {
         parentThreadId: parent?.thread.id ?? null,
         inheritedProviderInstanceId: inherited?.instanceId ?? null,
         inheritedModel: inherited?.model ?? null,
-        inheritedOptions: inherited?.options ?? [],
+        inheritedOptions:
+          knownOptions(
+            inherited?.options,
+            providers
+              .find((provider) => provider.instanceId === inherited?.instanceId)
+              ?.models.find((model) => model.slug === inherited?.model)?.capabilities
+              ?.optionDescriptors,
+          ) ?? [],
         runtimeMode: limits.runtimeMode,
         interactionMode: limits.interactionMode,
         providers: yield* Effect.forEach(providers, (provider) =>
