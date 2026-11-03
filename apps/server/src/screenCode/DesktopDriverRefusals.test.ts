@@ -7,6 +7,76 @@ import { createScreenDispatchRouter } from "./ScreenDispatchRouter.ts";
 import { ScreenRunService } from "./ScreenRunService.ts";
 import { resolveScreenRuntimeAsset } from "./ScreenRuntimeAsset.ts";
 import { context, DriverError, UnknownOutcome, fixture } from "./DesktopTargetHost.testkit.ts";
+import { driverError } from "./DesktopDriverReplies.ts";
+
+const replyIdentity = {
+  requestId: "request",
+  registrationId: "registration",
+  controlId: "control",
+  connectionGeneration: "generation",
+  runId: "run",
+  turnId: "turn",
+  callId: 1,
+};
+
+it.each([
+  { isError: true, content: { code: "screen_locked", effect: "unknown" } },
+  { isError: true, content: { refusal: { code: "screen_locked" }, effect: "committed" } },
+  { isError: false, content: { code: "screen_locked", effect: "unverifiable" } },
+  { isError: false, content: { refusal: { code: "screen_locked" }, effect: "unknown" } },
+])("screen_locked with an effect that started may have acted %#", ({ isError, content }) => {
+  expect(
+    driverError({
+      ...replyIdentity,
+      status: "settled",
+      result: { isError, structuredContent: content },
+    }),
+  ).toMatchObject({
+    code: "screen_locked",
+    effectStarted: true,
+    safety: { code: "write_indeterminate", possibleCommit: true, retryClass: "never" },
+  });
+});
+
+it.each([undefined, "refused"])("screen_locked with no effect stays unsent %#", (effect) => {
+  for (const isError of [true, false]) {
+    expect(
+      driverError({
+        ...replyIdentity,
+        status: "settled",
+        result: {
+          isError,
+          structuredContent: { code: "screen_locked", ...(effect && { effect }) },
+        },
+      }),
+    ).toMatchObject({ code: "screen_locked", effectStarted: false });
+  }
+});
+
+it.each([undefined, "refused"])(
+  "screen_locked preserves possible commit despite absent or refused effect %#",
+  (effect) => {
+    for (const extra of [
+      { status: "unknown_outcome" as const },
+      { safety: { possibleCommit: true } },
+    ]) {
+      expect(
+        driverError({
+          ...replyIdentity,
+          status: extra.status ?? "settled",
+          result: {
+            isError: true,
+            structuredContent: {
+              code: "screen_locked",
+              ...(effect && { effect }),
+              ...(extra.safety && { safety: extra.safety }),
+            },
+          },
+        }),
+      ).toMatchObject({ code: "screen_locked", effectStarted: true });
+    }
+  },
+);
 
 // Stop and lock end the cell even when its script catches the individual tool error.
 it.live.each([

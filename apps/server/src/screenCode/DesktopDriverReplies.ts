@@ -101,8 +101,13 @@ const classifyDriverError = (reply: ComputerUsePrimitiveReply): ScreenRunError |
   );
   const merged = state.reason;
   const driverCode = merged ?? nested ?? outer;
-  const safety = state.possibleCommit
-    ? terminalFailure(state, "list_apps", {}, true)?.safety
+  const lockedEffectStarted =
+    driverCode === "screen_locked" &&
+    structured?.effect !== undefined &&
+    structured.effect !== "refused";
+  const possibleCommit = state.possibleCommit || lockedEffectStarted;
+  const safety = possibleCommit
+    ? terminalFailure(replaceWithTerminal(state, true), "list_apps", {}, true)?.safety
     : undefined;
   const said =
     merged !== undefined && merged !== (nested ?? outer)
@@ -123,7 +128,7 @@ const classifyDriverError = (reply: ComputerUsePrimitiveReply): ScreenRunError |
             ? "The screen is locked; stop until the person unlocks it."
             : "The person stopped computer use; do not retry this turn."),
       ),
-      effectStarted: reply.status === "unknown_outcome" || state.possibleCommit,
+      effectStarted: reply.status === "unknown_outcome" || possibleCommit,
       ...(safety === undefined ? {} : { safety }),
       ...refusalOf(structured),
     };
@@ -139,6 +144,8 @@ const classifyDriverError = (reply: ComputerUsePrimitiveReply): ScreenRunError |
   if (driverCode === "screen_locked")
     return {
       ...fail("screen_locked", "The screen is locked; stop until the person unlocks it."),
+      effectStarted: possibleCommit,
+      ...(safety === undefined ? {} : { safety }),
       ...refusalOf(structured),
     };
   if (
