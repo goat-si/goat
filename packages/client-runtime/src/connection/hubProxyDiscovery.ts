@@ -26,9 +26,19 @@ import {
   HubProxyConnectionRegistration,
   type ConnectionCatalogEntry,
 } from "./catalog.ts";
-import { HubProxyConnectionTarget, hubProxyConnectionId } from "./model.ts";
+import { ConnectionCredentialStore } from "./credentialStore.ts";
+import {
+  HubProxyConnectionTarget,
+  hubProxyConnectionId,
+  type PreparedConnection,
+} from "./model.ts";
 import { EnvironmentRegistry } from "./registry.ts";
-import { connectionRouteId, connectionRoutes } from "./routes.ts";
+import {
+  connectionRouteId,
+  connectionRoutes,
+  credentialConnectionId,
+  sendsTokenInClear,
+} from "./routes.ts";
 
 export interface HubProxyNode {
   readonly nodeId: string;
@@ -232,9 +242,71 @@ const discoveryRetry = Schedule.spaced("1 second").pipe(
 
 export const watchConnectedHubProxyDiscovery = Effect.gen(function* () {
   const registry = yield* EnvironmentRegistry;
+  const credentials = yield* ConnectionCredentialStore;
   const watchers = new Map<EnvironmentId, Fiber.Fiber<void>>();
   const signer = yield* Effect.serviceOption(ManagedRelayDpopSigner);
   const remoteAuthorization = yield* Effect.serviceOption(RemoteEnvironmentAuthorization);
+  // Pairing the hub again at another address saves a second session beside the first, and route
+  // order can pick the one without hub:proxy. The active credential then takes the saved one that
+  // has it, so both routes keep hub access, unless that token would travel over plain HTTP.
+  const adoptSavedHubAccess = Effect.fn("HubProxyDiscovery.adoptSavedHubAccess")(function* (
+    supervisor: EnvironmentSupervisor["Service"],
+    prepared: PreparedConnection,
+  ) {
+    const target = prepared.target;
+    const current = prepared.httpAuthorization;
+    if (target._tag !== "BearerConnectionTarget" || current?._tag !== "Bearer")
+      return Option.none<ReadonlyArray<AuthEnvironmentScope>>();
+    const entry = (yield* SubscriptionRef.get(registry.entries)).get(target.environmentId);
+    const routes = entry === undefined ? [] : connectionRoutes(entry);
+    const activeCredentialId = credentialConnectionId(target.connectionId);
+    const sharing = routes.filter(
+      (route) => credentialConnectionId(connectionRouteId(route.target)) === activeCredentialId,
+    );
+    const tried = new Set([activeCredentialId]);
+    for (const route of routes) {
+      const credentialId = credentialConnectionId(connectionRouteId(route.target));
+      if (route.target._tag !== "BearerConnectionTarget" || tried.has(credentialId)) continue;
+      tried.add(credentialId);
+      if (sharing.some((shared) => sendsTokenInClear(routes, shared, undefined, credentialId)))
+        continue;
+      const saved = Option.getOrUndefined(
+        yield* credentials.get(credentialId).pipe(Effect.orElseSucceed(() => Option.none())),
+      );
+      if (saved === undefined || saved.token === current.token) continue;
+      const authorization = { _tag: "Bearer" as const, token: saved.token };
+      const state = yield* fetchEnvironmentSessionState({
+        prepared: { ...prepared, httpAuthorization: authorization },
+        signer,
+        remoteAuthorization,
+      }).pipe(Effect.option);
+      if (Option.isNone(state) || !state.value.authenticated) continue;
+      const scopes = state.value.permissions ?? state.value.scopes ?? [];
+      if (!scopes.includes(AuthHubProxyScope)) continue;
+      const written = yield* credentials.put(activeCredentialId, saved, current.token).pipe(
+        Effect.andThen(credentials.get(activeCredentialId)),
+        Effect.map((stored) => Option.isSome(stored) && stored.value.token === saved.token),
+        Effect.catch((error) =>
+          Effect.logWarning("Could not save the hub credential that has hub access.", {
+            error,
+          }).pipe(Effect.as(false)),
+        ),
+      );
+      if (!written) return Option.none<ReadonlyArray<AuthEnvironmentScope>>();
+      yield* SubscriptionRef.update(supervisor.prepared, (live) =>
+        Option.isSome(live) && live.value.target === target
+          ? Option.some({ ...live.value, httpAuthorization: authorization })
+          : live,
+      );
+      yield* Effect.logInfo("Using the saved hub credential that has hub access.", {
+        environmentId: target.environmentId,
+        connectionId: activeCredentialId,
+        from: credentialId,
+      });
+      return Option.some(scopes);
+    }
+    return Option.none<ReadonlyArray<AuthEnvironmentScope>>();
+  });
   const updates = (environmentId: EnvironmentId) => {
     let lastUpdate: HubProxyDiscoveryUpdate | undefined;
     return registry.followStream(
@@ -343,8 +415,16 @@ export const watchConnectedHubProxyDiscovery = Effect.gen(function* () {
                           Effect.succeed({ authenticated: false, permissions: [], scopes: [] }),
                         ),
                       );
-                      const sessionScopes = auth.permissions ?? auth.scopes ?? [];
-                      if (!auth.authenticated || !sessionScopes.includes(AuthHubProxyScope))
+                      const ownScopes = auth.authenticated
+                        ? (auth.permissions ?? auth.scopes ?? [])
+                        : [];
+                      const sessionScopes = ownScopes.includes(AuthHubProxyScope)
+                        ? ownScopes
+                        : Option.getOrElse(
+                            yield* adoptSavedHubAccess(supervisor, prepared.value),
+                            () => ownScopes,
+                          );
+                      if (!sessionScopes.includes(AuthHubProxyScope))
                         return Stream.fromEffect(emptyUpdate);
                       return subscribeNodes({}).pipe(
                         Stream.filter(
