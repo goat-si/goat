@@ -105,13 +105,20 @@ export function GoatBotTimeline({
       element.scrollHeight - element.scrollTop - element.clientHeight < FOLLOW_THRESHOLD_PX;
     updateEdges();
   };
+  // Messages finish laying out after they render (Markdown, highlighting, images), and the
+  // column can get its height after mounting; a reader following the newest message stays there.
+  const followResize = useStableCallback(() => {
+    const scroll = scrollRef.current;
+    if (scroll !== null && followingRef.current) scroll.scrollTop = scroll.scrollHeight;
+    updateEdges();
+  });
   useLayoutEffect(() => {
     updateEdges();
     const scroll = scrollRef.current;
     const list = listRef.current;
     if (!scroll || !list) return;
-    return observeResize([scroll, list], updateEdges);
-  }, [updateEdges]);
+    return observeResize([scroll, list], followResize);
+  }, [updateEdges, followResize]);
   // New rows and the activity bubble keep the view pinned to the latest message unless the
   // reader scrolled up.
   useLayoutEffect(() => {
