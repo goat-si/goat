@@ -88,7 +88,7 @@ export const traceFileConfig = Config.String("GOAT_TRACE_FILE").pipe(
   Config.option,
   Config.map(Option.getOrUndefined),
 );
-export const traceMaxFilesConfig = Config.Int("GOAT_TRACE_MAX_FILES").pipe(Config.withDefault(10));
+export const traceMaxFilesConfig = Config.Int("GOAT_TRACE_MAX_FILES").pipe(Config.withDefault(30));
 
 const EnvServerConfig = Config.all({
   logLevel: Config.LogLevel("GOAT_LOG_LEVEL").pipe(Config.withDefault("Info")),

@@ -67,6 +67,12 @@ span spent waiting for that connection, behind other SQL. That wait does not blo
 so subtract it before you blame a slow span on the query. Statements inside a transaction use its
 connection and do not carry these attributes.
 
+At the default `Info` trace level, the local trace file leaves out spans that succeeded under a
+parent within 10 ms with no events, for uncontended SQL and the hot boundaries listed in
+`apps/server/src/observability/tracePolicy.ts`. Slow, failed, root and evented spans are always
+written, and `GOAT_TRACE_MIN_LEVEL=Debug` writes every span. `goat trace summary` counts only
+written spans.
+
 DPoP proof failures include the safe `environment.dpop.failure_code` span
 attribute. A `time_window` failure means that a signed proof was too old or too
 far in the future for the environment server's allowed window. It can point to
@@ -608,7 +614,7 @@ Local trace file:
 
 - `GOAT_TRACE_FILE`: override trace file path
 - `GOAT_TRACE_MAX_BYTES`: per-file rotation size, default `10485760`
-- `GOAT_TRACE_MAX_FILES`: rotated file count, default `10`
+- `GOAT_TRACE_MAX_FILES`: rotated file count, default `30` (31 files of `GOAT_TRACE_MAX_BYTES` at most)
 - `GOAT_TRACE_BATCH_WINDOW_MS`: flush window, default `1000`
 - `GOAT_TRACE_MIN_LEVEL`: minimum trace level, default `Info`
 - `GOAT_TRACE_TIMING_ENABLED`: enable timing metadata, default `true`
