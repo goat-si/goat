@@ -38,6 +38,14 @@ function setup(canDispatch: () => boolean = () => true) {
 }
 
 describe("createGoatBotSendQueue", () => {
+  it("discards only a failed message without changing other messages (#2388)", () => {
+    const { queue } = setup(() => false);
+    const first = queue.submit("first", bot);
+    const second = queue.submit("second", bot);
+    queue.discard(first);
+    expect(queue.pendingInputs().map((entry) => entry.clientKey)).toEqual([second]);
+  });
+
   it("sends in order, one at a time, while still taking new messages", async () => {
     const { queue, calls } = setup();
     queue.submit("first", bot);
