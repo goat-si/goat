@@ -596,6 +596,7 @@ it.effect("a goal block left after the survivor settles does not hold the queued
         terminalEvidence: true,
         retainingFence: false,
         fenceWriteFailed: false,
+        conflicts: new Map(),
       };
       yield* forgetUnblockedSurvivor({
         waiting: new Map(),

@@ -65,6 +65,8 @@ const runScenario = (
     | "guard-unscoped"
     | "conflict"
     | "conflict-fence"
+    | "conflict-finished"
+    | "conflict-finished-goal"
     | "goal"
     | "goal-newer"
     | "goal-release"
@@ -111,12 +113,17 @@ const runScenario = (
     const stopMode = mode.startsWith("stop-");
     const guardMode = mode.startsWith("guard");
     const conflictMode = mode.startsWith("conflict");
+    const finishedConflict = mode.startsWith("conflict-finished");
     const goalMode = mode.startsWith("goal");
     const lossMode = mode.startsWith("loss-");
     const readFailure = mode.startsWith("read-");
     let fenceWritesFail = mode === "read-fence-failure";
     let goalBlocked = mode.startsWith("startup-goal-");
-    let goalStatus: "active" | "paused" | "none" = "active";
+    let goalStatus: "active" | "paused" | "none" = mode === "conflict-finished" ? "none" : "active";
+    let otherStatus: "inProgress" | "interrupted" = "inProgress";
+    let releases = 0;
+    const released = yield* Deferred.make<void>();
+    const conflictCleared = yield* Deferred.make<void>();
     let goalReads = 0;
     let notifyGoalRead = false;
     let stallGoalRead = false;
@@ -146,7 +153,7 @@ const runScenario = (
       mode === "running" ||
       stopMode ||
       guardMode ||
-      conflictMode ||
+      (conflictMode && !finishedConflict) ||
       goalMode ||
       lossMode ||
       readFailure
@@ -157,7 +164,10 @@ const runScenario = (
       list: Effect.succeed(mode.startsWith("startup-goal-") ? [] : [binding]),
       startBlockedThreads: Effect.succeed([]),
       setStartWake: () => Effect.void,
-      release: () => Effect.void,
+      release: () =>
+        Effect.sync(() => {
+          releases++;
+        }).pipe(Effect.andThen(Deferred.succeed(released, undefined)), Effect.asVoid),
       classifyRecord: () =>
         mode === "loss-error"
           ? Effect.fail(new CodexDetachedAppServerError({ detail: "inspection failed" }))
@@ -206,7 +216,8 @@ const runScenario = (
         obligation.nativeTurnId === "other-turn"
           ? Effect.sync(() => {
               order.push("clear-conflict");
-            })
+              if (finishedConflict) fence = false;
+            }).pipe(Effect.andThen(Deferred.succeed(conflictCleared, undefined)), Effect.asVoid)
           : Deferred.await(terminalObserved).pipe(
               Effect.andThen(
                 Effect.sync(() => {
@@ -316,6 +327,7 @@ const runScenario = (
                     });
                     order.push("interrupt");
                     yield* Deferred.succeed(interrupted, undefined);
+                    if (finishedConflict) return {};
                     if (
                       conflictMode ||
                       (mode === "goal-newer" &&
@@ -372,7 +384,12 @@ const runScenario = (
                     if (mode === "loss-read-fails")
                       return yield* new CodexErrors.CodexAppServerInputStreamEndedError({});
                     return {
-                      data: [makeCodexReplayTurn({ id: binding.nativeTurnId, status })],
+                      data: [
+                        makeCodexReplayTurn({ id: binding.nativeTurnId, status }),
+                        ...(finishedConflict
+                          ? [makeCodexReplayTurn({ id: "other-turn", status: otherStatus })]
+                          : []),
+                      ],
                       nextCursor: null,
                     };
                   }
@@ -588,7 +605,7 @@ const runScenario = (
       }
       yield* runtime.interruptTurn({ providerThread, providerTurnId });
     }
-    if (conflictMode) {
+    if (conflictMode && !finishedConflict) {
       for (const handler of notifications.get("turn/started") ?? []) {
         yield* handler({
           threadId: binding.nativeThreadId,
@@ -644,6 +661,32 @@ const runScenario = (
           )
         : yield* Fiber.join(stopEvents);
     assert.notInclude(requests, "turn/start");
+    if (finishedConflict) {
+      const terminal = events.find((event) => event.type === "turn.terminal");
+      assert.equal(terminal?.status, "completed");
+      assert.deepEqual(
+        order,
+        mode === "conflict-finished-goal"
+          ? ["record", "interrupt", "goal"]
+          : ["record", "interrupt"],
+      );
+      assert.equal(releases, 0, "the binding stays until the newer native turn ends");
+      assert.equal((yield* Effect.exit(service.ensureAdmission(threadId)))._tag, "Failure");
+      otherStatus = "interrupted";
+      for (const handler of notifications.get("turn/completed") ?? [])
+        yield* handler({
+          threadId: binding.nativeThreadId,
+          turn: makeCodexReplayTurn({ id: "other-turn", status: "interrupted" }),
+        });
+      yield* Deferred.await(conflictCleared);
+      yield* Deferred.await(released);
+      assert.equal(order.at(-1), "clear-conflict");
+      assert.equal(
+        (yield* Effect.exit(service.ensureAdmission(threadId)))._tag,
+        mode === "conflict-finished-goal" ? "Failure" : "Success",
+      );
+      return;
+    }
     if (lossMode) {
       const terminal = events.find((event) => event.type === "turn.terminal");
       assert.equal(terminal?.status, "failed");
@@ -855,6 +898,12 @@ it.effect("a conflicting turn is fenced and interrupted while the survivor keeps
 );
 it.effect("a conflict fence failure fails the survivor without interrupting", () =>
   runScenario("conflict-fence"),
+);
+it.effect("a newer turn found after the survivor finished is fenced until it ends", () =>
+  runScenario("conflict-finished"),
+);
+it.effect("a newer turn with an active goal keeps a goal block after its fence clears", () =>
+  runScenario("conflict-finished-goal"),
 );
 it.effect("an active goal is blocked and the survivor fails after native interruption", () =>
   runScenario("goal"),

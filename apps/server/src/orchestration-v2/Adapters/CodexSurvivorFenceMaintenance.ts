@@ -13,6 +13,7 @@ import type {
   CodexSurvivors,
 } from "../../provider/CodexSurvivors.ts";
 import { isVerifiedCodexProcessLoss } from "./CodexSurvivorSessionLoss.ts";
+import { clearConflictFences, releaseEndedConflicts } from "./CodexSurvivorConflictFence.ts";
 
 export type SurvivorSignal =
   | { readonly type: "End" | "Stop" | "Goal" | "SessionLost" }
@@ -32,8 +33,13 @@ export type SurvivorEntry = {
   terminalEvidence: boolean;
   retainingFence: boolean;
   fenceWriteFailed: boolean;
+  /** Newer native turns fenced after the survivor ended, with whether each stop is durable. */
+  readonly conflicts: Map<string, boolean>;
 };
 export type SurvivorWaiting = Map<string, SurvivorEntry>;
+
+export const holdsFence = (entry: SurvivorEntry) =>
+  entry.retainingFence || entry.conflicts.size > 0;
 
 export const forgetUnblockedSurvivor = Effect.fn("CodexSurvivorFenceMaintenance.forget")(
   function* (input: {
@@ -108,12 +114,14 @@ const clearSurvivorFence = Effect.fn("CodexSurvivorFenceMaintenance.clear")(func
 
 const verifyRetainedSurvivorDeath = Effect.fn("CodexSurvivorFenceMaintenance.verifyDeath")(
   function* (entry: SurvivorEntry) {
-    if (!entry.retainingFence) return false;
+    if (!holdsFence(entry)) return false;
     const result = yield* entry.service
       .classifyRecord(entry.binding)
       .pipe(Effect.orElseSucceed(() => ({ type: "unverifiable" as const })));
     if (!isVerifiedCodexProcessLoss(result)) return false;
-    return yield* clearSurvivorFence(entry);
+    yield* clearConflictFences(entry);
+    yield* clearSurvivorFence(entry);
+    return true;
   },
 );
 
@@ -192,6 +200,14 @@ export const observeSurvivorNotification = Effect.fnUntraced(function* (input: {
           if (
             terminalPending &&
             (yield* clearSurvivorFence(current)) &&
+            current.conflicts.size === 0 &&
+            waiting.get(threadId) === current
+          )
+            waiting.delete(threadId);
+          if (
+            current.conflicts.size > 0 &&
+            (yield* releaseEndedConflicts({ client, entry: current })) &&
+            !current.retainingFence &&
             waiting.get(threadId) === current
           )
             waiting.delete(threadId);

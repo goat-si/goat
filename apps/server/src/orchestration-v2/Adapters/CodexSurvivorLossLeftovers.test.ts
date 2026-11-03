@@ -60,6 +60,7 @@ it.effect("retained survivor fence remains while process leftovers are possible"
     const service = {
       classifyRecord: () =>
         Effect.sync(() => ({ type: "gone" as const, possibleLeftovers: leftovers ? [12] : [] })),
+      release: () => Effect.void,
       clearStopObligation: () =>
         Effect.sync(() => {
           cleared = true;
@@ -80,6 +81,7 @@ it.effect("retained survivor fence remains while process leftovers are possible"
       terminalEvidence: false,
       retainingFence: true,
       fenceWriteFailed: false,
+      conflicts: new Map(),
     };
     const waiting = new Map([[binding.nativeThreadId, entry]]);
     yield* clearDeadSurvivorFences({ entries: [entry], waiting });

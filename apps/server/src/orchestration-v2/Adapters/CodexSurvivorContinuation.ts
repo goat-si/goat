@@ -27,10 +27,12 @@ import {
   observeSurvivorNotification,
   clearDeadSurvivorFences,
   forgetUnblockedSurvivor,
+  holdsFence,
   type SurvivorSignal,
   type SurvivorWaiting,
   type GoalMaintenance,
 } from "./CodexSurvivorFenceMaintenance.ts";
+import { fenceConflictingTurns, releaseEndedConflicts } from "./CodexSurvivorConflictFence.ts";
 
 export function mapCodexTurnStatus(
   status: CodexSchema.V2TurnCompletedNotification__TurnStatus,
@@ -86,6 +88,7 @@ export const makeSurvivorNotifications = Effect.fn("CodexSurvivorContinuation.no
           terminalEvidence: false,
           retainingFence: false,
           fenceWriteFailed: false,
+          conflicts: new Map(),
         };
         waiting.set(binding.nativeThreadId, entry);
         tracked.set(binding.nativeThreadId, entry);
@@ -396,6 +399,7 @@ export const adoptSurvivor = Effect.fn("CodexSurvivorContinuation.adopt")(functi
     terminalEvidence: false,
     retainingFence: false,
     fenceWriteFailed: false,
+    conflicts: new Map(),
   };
   input.waiting.waiting.set(binding.nativeThreadId, entry);
   input.waiting.tracked.set(binding.nativeThreadId, entry);
@@ -453,20 +457,18 @@ const findSurvivorTurn = Effect.fn("CodexSurvivorContinuation.findTurn")(functio
   const fail = () => new CodexSurvivorReadError({});
   let cursor: string | undefined;
   const seen = new Set<string>();
+  const active: string[] = [];
   for (let page = 0; page < MAX_PAGES; page++) {
     const result = yield* input.readTurns({
       threadId: input.threadId,
       ...(cursor === undefined ? {} : { cursor }),
     });
     const turn = result.data.find((candidate) => candidate.id === input.turnId);
-    if (
-      !input.allowConflicts &&
-      result.data.some(
-        (candidate) => candidate.id !== input.turnId && candidate.status === "inProgress",
-      )
-    )
-      return yield* fail();
-    if (turn !== undefined) return turn;
+    for (const candidate of result.data)
+      if (candidate.id !== input.turnId && candidate.status === "inProgress")
+        active.push(candidate.id);
+    if (!input.allowConflicts && active.length > 0) return yield* fail();
+    if (turn !== undefined) return { turn, active };
     if (!result.nextCursor || seen.has(result.nextCursor)) return yield* fail();
     seen.add(result.nextCursor);
     cursor = result.nextCursor;
@@ -481,6 +483,8 @@ export const readSurvivorResult = Effect.fn("CodexSurvivorContinuation.readResul
 >(input: {
   readonly threadId: string;
   readonly turnId: string;
+  /** Reports other in-progress turns instead of failing on them. */
+  readonly allowConflicts?: boolean;
   readonly readTurns: (input: {
     readonly threadId: string;
     readonly cursor?: string;
@@ -524,12 +528,16 @@ export const readSurvivorResult = Effect.fn("CodexSurvivorContinuation.readResul
   return yield* Effect.gen(function* () {
     for (let attempt = 0; attempt < 2; attempt++) {
       const before = yield* findSurvivorTurn(input);
-      if (!["completed", "interrupted", "failed"].includes(before.status)) return yield* fail();
+      if (!["completed", "interrupted", "failed"].includes(before.turn.status))
+        return yield* fail();
       const first = yield* readItems();
       const second = yield* readItems();
       const after = yield* findSurvivorTurn(input);
-      if (NodeUtil.isDeepStrictEqual(before, after) && NodeUtil.isDeepStrictEqual(first, second)) {
-        return { turn: after, items: second };
+      if (
+        NodeUtil.isDeepStrictEqual(before.turn, after.turn) &&
+        NodeUtil.isDeepStrictEqual(first, second)
+      ) {
+        return { turn: after.turn, items: second, active: after.active };
       }
     }
     return yield* fail();
@@ -591,7 +599,7 @@ const waitForSurvivor = Effect.fn("CodexSurvivorContinuation.wait")(function* <A
   const read = Effect.gen(function* () {
     let goalActive = false;
     const first = yield* findSurvivorTurn({ threadId, turnId, readTurns, allowConflicts: true });
-    let ended = first.status !== "inProgress";
+    let ended = first.turn.status !== "inProgress";
     const conflicted = new Set<string>();
     const pendingConflicts = new Set<string>();
     while (true) {
@@ -642,7 +650,13 @@ const waitForSurvivor = Effect.fn("CodexSurvivorContinuation.wait")(function* <A
         );
       }
     }
-    const result = yield* readSurvivorResult({ threadId, turnId, readTurns, readItems });
+    const result = yield* readSurvivorResult({
+      threadId,
+      turnId,
+      readTurns,
+      readItems,
+      allowConflicts: true,
+    });
     return { result, goalActive };
   }).pipe(
     Effect.raceFirst(
@@ -664,6 +678,14 @@ const waitForSurvivor = Effect.fn("CodexSurvivorContinuation.wait")(function* <A
       return yield* new CodexSurvivorReadError({});
     yield* entry.gate.withPermits(1)(
       Effect.gen(function* () {
+        // A newer turn started before GOAT resubscribed: it holds admission until Codex ends it.
+        yield* fenceConflictingTurns({ client: input.client, entry, turnIds: result.active });
+        if (entry.conflicts.size > 0)
+          yield* releaseEndedConflicts({ client: input.client, entry }).pipe(
+            Effect.catch((cause) =>
+              Effect.logWarning("Failed to check a newer Codex turn", { cause }),
+            ),
+          );
         yield* input.settle(
           input.context,
           status,
@@ -685,7 +707,8 @@ const waitForSurvivor = Effect.fn("CodexSurvivorContinuation.wait")(function* <A
             Effect.logWarning("Failed to refresh a Codex survivor goal block", { cause }),
           ),
         );
-        if (input.waiting.get(threadId) === entry) input.waiting.delete(threadId);
+        if (!holdsFence(entry) && input.waiting.get(threadId) === entry)
+          input.waiting.delete(threadId);
         yield* forgetUnblockedSurvivor({ waiting: input.waiting, tracked: input.tracked, entry });
       }),
     );
@@ -723,7 +746,7 @@ const waitForSurvivor = Effect.fn("CodexSurvivorContinuation.wait")(function* <A
               }
               yield* input.settle(input.context, "failed", detail);
             }
-            if (!entry.retainingFence && input.waiting.get(threadId) === entry)
+            if (!holdsFence(entry) && input.waiting.get(threadId) === entry)
               input.waiting.delete(threadId);
             yield* forgetUnblockedSurvivor({
               waiting: input.waiting,
@@ -736,7 +759,7 @@ const waitForSurvivor = Effect.fn("CodexSurvivorContinuation.wait")(function* <A
     ),
     Effect.ensuring(
       Effect.sync(() => {
-        if (!entry.retainingFence && input.waiting.get(threadId) === entry)
+        if (!holdsFence(entry) && input.waiting.get(threadId) === entry)
           input.waiting.delete(threadId);
       }),
     ),
