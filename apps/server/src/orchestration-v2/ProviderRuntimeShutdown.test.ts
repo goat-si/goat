@@ -11,6 +11,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as Detached from "../provider/CodexDetachedAppServerLive.ts";
+import { CodexDetachedAppServerError } from "../provider/CodexDetachedAppServer.ts";
 import { layerTest } from "./FoundationPersistence.testkit.ts";
 import * as Recovery from "./ProviderRuntimeRecoveryService.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
@@ -124,4 +125,80 @@ it.effect.each(
       assert.equal(Option.isSome(prepared), retained.length > 0);
     }).pipe(Effect.provide(layer));
   }),
+);
+
+it.effect(
+  "an app-server that refuses retention closes with its session without failing shutdown",
+  () =>
+    Effect.gen(function* () {
+      const retained: string[] = [];
+      const threads = {
+        kept: ThreadId.make("kept-thread"),
+        refused: ThreadId.make("refused-thread"),
+      };
+      const detached = Layer.mock(Detached.CodexDetachedAppServers)({
+        socketTransportEnabled: true,
+        loadRecords: Effect.succeed([
+          { name: "kept", instanceId: "codex-kept", state: "running", stderrMode: "discard" },
+          { name: "refused", instanceId: "codex-refused", state: "running", stderrMode: "discard" },
+        ] as never),
+        retainOnClose: (name) =>
+          name === "refused"
+            ? Effect.fail(new CodexDetachedAppServerError({ detail: "not verified" }))
+            : Effect.sync(() => {
+                retained.push(name);
+                return true;
+              }),
+      });
+      const projection = (name: keyof typeof threads) => ({
+        thread: { id: threads[name], projectId: "project" },
+        providerThreads: [{ id: `pt-${name}`, driver: "codex", cloudTask: undefined }],
+        providerSessions: [],
+        runs: [
+          {
+            id: RunId.make(`run-${name}`),
+            status: "running",
+            providerThreadId: `pt-${name}`,
+            providerInstanceId: ProviderInstanceId.make(`codex-${name}`),
+            activeAttemptId: RunAttemptId.make("attempt"),
+          },
+        ],
+      });
+      const layer = Recovery.layer.pipe(
+        Layer.provideMerge(
+          Layer.mock(ProjectionStore.ProjectionStoreV2)({
+            getRecoveryThreadIds: () => Effect.succeed([threads.kept, threads.refused]),
+            getRuntimeRecoveryProjection: (threadId) =>
+              Effect.succeed(projection(threadId === threads.kept ? "kept" : "refused") as never),
+            getThreadRecords: () =>
+              Effect.succeed({
+                providerTurns: [
+                  {
+                    id: ProviderTurnId.make("turn"),
+                    runAttemptId: RunAttemptId.make("attempt"),
+                    status: "running",
+                    ordinal: 1,
+                  },
+                ],
+              } as never),
+          }),
+        ),
+        Layer.provideMerge(detached),
+        Layer.provideMerge(layerTest),
+        Layer.provideMerge(
+          ServerSettings.layerTest({
+            codexTurnsSurviveServerStop: "always",
+            continueThreadsAfterServerUpdate: false,
+          }),
+        ),
+      );
+      const summary = yield* Effect.gen(function* () {
+        return yield* (yield* Recovery.ProviderRuntimeRecoveryService).prepareForShutdownWithStopKind(
+          "quit",
+        );
+      }).pipe(Effect.provide(layer));
+      assert.deepEqual(retained, ["kept"]);
+      // The refused thread is left to the ordinary shutdown path, which is offered it as a candidate.
+      assert.deepEqual(summary, { candidates: 2, continued: 1 });
+    }),
 );

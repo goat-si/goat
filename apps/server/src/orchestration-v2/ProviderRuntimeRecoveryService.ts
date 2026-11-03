@@ -56,6 +56,8 @@ export class ProviderRuntimeRecoveryError extends Schema.TaggedError<ProviderRun
     return `Provider runtime recovery failed during ${this.operation}.`;
   }
 }
+const drainOutboxError = (cause: unknown) =>
+  new ProviderRuntimeRecoveryError({ operation: "drain-outbox", cause });
 
 export interface ProviderRuntimeRecoverySummary {
   readonly terminalizedRuns: number;
@@ -73,22 +75,19 @@ export interface ProviderRuntimeReconciliationSummary {
   readonly requeuedEffects: number;
 }
 
+type ShutdownPreparation = Effect.Effect<
+  ProviderRuntimeShutdown.ShutdownContinuationSummary,
+  ProviderRuntimeRecoveryError
+>;
+
 export class ProviderRuntimeRecoveryService extends Context.Service<
   ProviderRuntimeRecoveryService,
   {
     readonly reconcile: (
       trigger: "startup" | "shutdown",
     ) => Effect.Effect<ProviderRuntimeReconciliationSummary, ProviderRuntimeRecoveryError>;
-    readonly prepareForShutdown: Effect.Effect<
-      ProviderRuntimeShutdown.ShutdownContinuationSummary,
-      ProviderRuntimeRecoveryError
-    >;
-    readonly prepareForShutdownWithStopKind: (
-      stopKind: "restart" | "quit",
-    ) => Effect.Effect<
-      ProviderRuntimeShutdown.ShutdownContinuationSummary,
-      ProviderRuntimeRecoveryError
-    >;
+    readonly prepareForShutdown: ShutdownPreparation;
+    readonly prepareForShutdownWithStopKind: (stopKind: "restart" | "quit") => ShutdownPreparation;
     readonly recover: Effect.Effect<ProviderRuntimeRecoverySummary, ProviderRuntimeRecoveryError>;
   }
 >()("goat/orchestration-v2/ProviderRuntimeRecoveryService") {}
@@ -909,11 +908,7 @@ export const make = Effect.gen(function* () {
       if (hasSurvivor)
         yield* outbox
           .requeueSurvivorStarts(threadId, preserveStarts)
-          .pipe(
-            Effect.mapError(
-              (cause) => new ProviderRuntimeRecoveryError({ operation: "drain-outbox", cause }),
-            ),
-          );
+          .pipe(Effect.mapError(drainOutboxError));
       for (const session of projection.providerSessions) {
         if (session.status !== "stopped" && session.status !== "error") {
           stoppedThisPass.set(session.id, session);
@@ -931,11 +926,7 @@ export const make = Effect.gen(function* () {
             trigger === "startup" ? [...blockedThreads] : [...protectedThreads],
           )
         : outbox.reconcileAfterProcessLoss
-    ).pipe(
-      Effect.mapError(
-        (cause) => new ProviderRuntimeRecoveryError({ operation: "drain-outbox", cause }),
-      ),
-    );
+    ).pipe(Effect.mapError(drainOutboxError));
     return {
       terminalizedRuns,
       stoppedSessions,

@@ -14,10 +14,10 @@ import type * as ServerSettings from "../serverSettings.ts";
 import { restartContinuationRun } from "./RestartContinuation.ts";
 import { runShutdownContinuationTasks } from "./ShutdownContinuationTasks.ts";
 
-export interface ShutdownContinuationSummary {
+export type ShutdownContinuationSummary = {
   readonly candidates: number;
   readonly continued: number;
-}
+};
 
 const prepareOrdinaryContinuations = Effect.fn(
   "ProviderRuntimeShutdown.prepareOrdinaryContinuations",
