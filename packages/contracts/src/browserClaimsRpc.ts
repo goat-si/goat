@@ -14,6 +14,8 @@ import {
   LiveTabClaim,
 } from "./browserClaims.ts";
 
+export const BROWSER_CLAIM_ANSWER_HANDOFF_PATH = "browser_claim.answer";
+
 export const BROWSER_CLAIMS_WS_METHODS = {
   browserClaimsClaim: "browserClaims.claim",
   browserClaimsAnswer: "browserClaims.answer",

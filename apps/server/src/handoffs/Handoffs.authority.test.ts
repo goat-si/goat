@@ -38,6 +38,27 @@ const sessionId = AuthSessionId.make("session:authority");
 const now = DateTime.makeUnsafe("2026-10-23T00:00:00Z");
 const address = { threadId, handoffId };
 
+it.effect("browser claim approval requires settings authority but decline does not", () =>
+  Effect.gen(function* () {
+    const options = { path: "browser_claim.answer" };
+    const approved = yield* run(
+      "desktop-bootstrap",
+      (service) => service.respond({ ...address, action: "completed" }, sessionId),
+      options,
+    );
+    expect(approved.result).toMatchObject({
+      _tag: "Failure",
+      failure: { _tag: "EnvironmentAuthorizationError", requiredScope: "settings:write" },
+    });
+    const declined = yield* run(
+      "desktop-bootstrap",
+      (service) => service.respond({ ...address, action: "declined" }, sessionId),
+      options,
+    );
+    expect(declined.result).toMatchObject({ _tag: "Success", success: { state: "declined" } });
+  }),
+);
+
 // A session that holds every scope an orchestration:operate handoff needs; only its subject varies.
 const session = (
   subject: string,
