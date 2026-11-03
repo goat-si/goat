@@ -1,7 +1,13 @@
 import { assert, describe, it } from "@effect/vitest";
 import type { ChannelConversationId, ChannelTask } from "@goat/contracts";
-import { ThreadId } from "@goat/contracts";
+import { ProviderInstanceId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Profiles from "../goatclaw/PermissionProfiles.ts";
+import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
+import * as ChannelSessionReceiptGate from "../mcp/ChannelSessionReceiptGate.ts";
+import { requireDeclaredCapability } from "../mcp/McpToolAccess.ts";
+import * as ServerSettings from "../serverSettings.ts";
 
 import * as ChannelBotSession from "./ChannelBotSession.ts";
 import * as ChannelDispatcher from "./ChannelDispatcher.ts";
@@ -115,6 +121,65 @@ const claimedFromTeammate = (key: string, memoryGrantCeiling?: "read" | "read_wr
   });
 
 describe("GOAT Bot sessions under the requester's current authority", () => {
+  it.effect("#2194: a supervisor session does not launch if its role binding fails", () => {
+    const harness = sessionHarness();
+    return Effect.gen(function* () {
+      const settings = yield* ServerSettings.ServerSettingsService;
+      yield* settings.updateSettings({ goatclaw: { enabled: true, defaultProfile: "owner" } });
+      yield* setupBot;
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`CREATE TRIGGER refuse_bot_binding BEFORE INSERT ON goatclaw_thread_profiles
+        BEGIN SELECT RAISE(ABORT, 'binding unavailable'); END`;
+      yield* ask("look: check the merge", "refused-supervisor-binding");
+      assert.lengthOf(harness.world.launches, 0);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("#2194: a GOAT Bot supervisor delegates merges but cannot write PRs itself", () => {
+    const harness = sessionHarness();
+    return Effect.gen(function* () {
+      const settings = yield* ServerSettings.ServerSettingsService;
+      yield* settings.updateSettings({ goatclaw: { enabled: true, defaultProfile: "worker" } });
+      yield* setupBot;
+      const task = yield* ask("look: check the merge", "supervisor-permissions");
+      const thread = task.worker!.threadId;
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`INSERT INTO orchestration_v2_projection_threads
+        (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
+        VALUES (${thread}, 'project', 'Session', 'codex', 'full-access', 'default', '2026-10-25', '2026-10-25', '{}')`;
+      const profiles = yield* Profiles.PermissionProfiles;
+      const scope: McpInvocationContext.McpInvocationScope = {
+        environmentId,
+        requestNamespace: `provider:${thread}`,
+        thread: {
+          threadId: thread,
+          providerSessionId: "session",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+        },
+        client: undefined,
+        capabilities: new Set(["orchestration"]),
+        issuedAt: 0,
+      };
+      const merger = yield* profiles.claim(scope, {
+        id: "merger",
+        runtimeMode: "auto",
+        role: "merge-manager",
+      });
+      assert.include(merger.profile.capabilities, "pr.merge");
+      const outcomes: string[] = [];
+      for (const path of ["pull_request.merge", "pull_request.close"]) {
+        const result = yield* requireDeclaredCapability(profiles, path, "write", {}).pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+          Effect.provideService(ChannelSessionReceiptGate.ChannelSessionReceiptGate, {
+            require: () => Effect.void,
+          }),
+          Effect.match({ onFailure: (error) => error.code, onSuccess: () => "admitted" }),
+        );
+        outcomes.push(result);
+      }
+      assert.deepStrictEqual(outcomes, ["capability_denied", "capability_denied"]);
+    }).pipe(Effect.provide(Profiles.layer.pipe(Layer.provideMerge(harness.layer))));
+  });
   it.effect(
     "builds a session's journal from the requester's current scopes, not the ones at intake",
     () => {

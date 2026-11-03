@@ -348,18 +348,23 @@ const make = Effect.gen(function* () {
     const ids = sessionLaunchIdsFor(task.taskId, task.generation);
     const settings = yield* serverSettings.getSettings.pipe(Effect.orDie);
     // Only a requester at full access may act through the supervisor's owner profile.
-    if (settings.goatclaw.enabled && requester.runtimeModeCeiling === "full-access")
-      yield* permissions
+    if (settings.goatclaw.enabled && requester.runtimeModeCeiling === "full-access") {
+      const binding = yield* permissions
         .bind(
           row.thread_id,
           goatclawRoleTemplate("supervisor").profileId,
           "channel:" + task.requester.ownerId,
+          "supervisor",
         )
-        .pipe(
-          Effect.catch((error) =>
-            Effect.logWarning("GOAT Bot session keeps the default profile", { cause: error }),
-          ),
-        );
+        .pipe(Effect.result);
+      if (binding._tag === "Failure") {
+        yield* Effect.logWarning("GOAT Bot session could not bind its role", {
+          cause: binding.failure,
+        });
+        yield* setState(row, "retired");
+        return yield* fail(stored, owner, "GOAT Bot could not start its session.");
+      }
+    }
     yield* writeIntent(row.thread_id, ids.messageId, task, "launch");
     const launched = yield* launches
       .launch({

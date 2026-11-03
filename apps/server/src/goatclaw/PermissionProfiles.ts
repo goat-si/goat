@@ -215,6 +215,7 @@ export class PermissionProfiles extends Context.Service<
       threadId: ThreadId,
       profileId: string,
       ownerKey: string,
+      role?: GoatclawRole,
     ) => Effect.Effect<void, OrchestratorMcpFailure>;
     /**
      * The thread's `maxLanes` for provider-native subagents, or undefined while goatclaw is off.
@@ -741,15 +742,22 @@ export const layer = Layer.effect(
       threadId: ThreadId,
       profileId: string,
       ownerKey: string,
+      role?: GoatclawRole,
     ) {
       const policy = (yield* settings.getSettings.pipe(Effect.mapError(storageFailure))).goatclaw;
       if (!policy.enabled) return;
       const named = policy.profiles[profileId];
       if (named === undefined)
         return yield* refusal(`Permission profile ${profileId} does not exist.`);
+      if (role !== undefined && goatclawRoleTemplate(role).profileId !== profileId)
+        return yield* refusal(`Role ${role} does not use permission profile ${profileId}.`);
       const sql = yield* sqlEffect;
+      const snapshot = encodeBinding({
+        ...named,
+        ...(role === undefined ? {} : { goatclawRole: role }),
+      });
       yield* sql`INSERT INTO goatclaw_thread_profiles (thread_id, profile_id, ceiling_json, owner_key)
-      VALUES (${threadId}, ${profileId}, ${encodeProfile(named)}, ${ownerKey})
+      VALUES (${threadId}, ${profileId}, ${snapshot}, ${ownerKey})
       ON CONFLICT(thread_id) DO NOTHING`.pipe(Effect.mapError(storageFailure));
     });
     const nativeSubagentLimit = Effect.fn("PermissionProfiles.nativeSubagentLimit")(function* (
