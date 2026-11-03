@@ -55,9 +55,9 @@ import {
 import { REMOTE_NODE_ENGINE_CHECK_SCRIPT } from "./remoteNodeEngineCheck.ts";
 import { ensureSshMaster } from "./master.ts";
 import { makeOwnedSshTunnelCommand, ownedAuthDirectory } from "./tunnelOwner.ts";
+import { admitLive } from "./tunnelAttachment.ts";
 import {
   SSH_READY_PROBE_TIMEOUT_MS,
-  SSH_READY_TIMEOUT_MS,
   type SshReadinessBudget,
   sshReadinessBudget,
   waitForHttpReady,
@@ -80,6 +80,7 @@ import {
   decodeRemoteJsonOutput,
   isNodeScriptRunner,
   matchesSignals,
+  compatibleRuntimeUpdateBlocked,
   liveRuntimeBlocksUpdate,
   notifyRuntimePhase,
   REMOTE_ARCHIVE_CHECKSUMS_SECONDS,
@@ -2530,7 +2531,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       snapshot = { ...base, state: "ready", refreshDeferred, detail: refreshDeferred.detail };
       acquisitionFailures.set(key, result.selectedRuntime.upgradeFailure);
     } else if (!("type" in result) && result.selectedRuntime.updateBlocked !== undefined) {
-      snapshot = { ...base, state: "update_blocked", detail: result.selectedRuntime.updateBlocked };
+      snapshot = { ...base, state: "ready", detail: result.selectedRuntime.updateBlocked };
     } else {
       snapshot = { ...base, state: "ready" };
       if (runtimeVersion === requestedVersion) acquisitionFailures.delete(key);
@@ -4193,6 +4194,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     let verifiedDrainDeferral:
       | { entry: SshTunnelEntry; intent: NonNullable<ReturnType<typeof pendingReplacements.get>> }
       | undefined;
+    let staleUnmanagedAttachment: SshTunnelEntry | undefined;
     const result = yield* Effect.gen(function* () {
       const { resolvedTarget } = yield* resolveManagedTarget(target);
       key = targetConnectionKey(resolvedTarget);
@@ -4232,14 +4234,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         );
         if (app !== undefined) return app;
       }
-      const output = yield* runSshCommand(resolvedTarget, {
-        batchMode: "yes",
-        interactiveAuth: false,
-        preHostArgs: ["-o", "StrictHostKeyChecking=yes", "-o", "UpdateHostKeys=no"],
-        remoteCommandArgs: ["sh", "-l", "-s"],
-        stdin: buildRemoteRuntimeProbeScript(requestedVersion, REMOTE_RUNTIME_STATE_KEY),
-        timeoutMs: SSH_READY_TIMEOUT_MS,
-      });
+      const output = yield* NativeWindows.statusRuntimeProbe(resolvedTarget, requestedVersion);
       const probe = yield* decodeRemoteJsonOutput(output.stdout, decodeRemoteRuntimeProbe).pipe(
         Effect.mapError(runtimePreparationError),
       );
@@ -4247,6 +4242,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       const base = { host, requestedVersion };
       let snapshot: SshHostStatus;
       let compatibleLive = false;
+      let admission: ReturnType<typeof admitLive> | undefined;
       if (probe.liveStatus === "live") {
         if (
           probe.liveVersion === undefined ||
@@ -4267,12 +4263,11 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         const compatible = matchesSignals(probe.liveSignals, requestedVersion);
         const runsRequested = probe.liveVersion === requestedVersion;
         const blocked = liveRuntimeBlocksUpdate(probe, order, compatible, runsRequested);
-        compatibleLive =
+        const binaryVerified =
           compatible &&
-          probe.identityAbsent !== true &&
-          probe.liveBinarySignals !== undefined &&
-          probe.liveBinarySignals.serverVersion === probe.liveVersion &&
+          probe.liveBinarySignals?.serverVersion === probe.liveVersion &&
           matchesSignals(probe.liveBinarySignals, requestedVersion);
+        compatibleLive = binaryVerified && probe.identityAbsent !== true;
         if (!compatible && !blocked) {
           return {
             kind: "error",
@@ -4282,19 +4277,19 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
           } satisfies SshHostResult;
         }
         const providers = observed?.status?.providers;
+        admission = admitLive(entry, { ...probe, blocked, compatible, binaryVerified, order });
+        const readyState = providers?.ready === false ? "providers_not_ready" : "ready";
+        staleUnmanagedAttachment = admission.staleEntry;
         snapshot = {
           ...base,
           runtimeVersion: probe.liveVersion,
-          state: blocked
-            ? "update_blocked"
-            : providers?.ready === false
-              ? "providers_not_ready"
-              : "ready",
+          state: admission.restricted ? "update_blocked" : readyState,
           ...(providers === undefined ? {} : { providers }),
-          ...(blocked
+          ...(admission.restricted || admission.explainsUpdate
             ? {
-                detail:
-                  order !== undefined && order > 0
+                detail: !admission.restricted
+                  ? compatibleRuntimeUpdateBlocked(host, probe.liveVersion, requestedVersion, order)
+                  : admission.newer
                     ? `${host} runs a newer GOAT (${probe.liveVersion}). Update this app from the update button next to Settings.`
                     : `A GOAT server that this app didn't start or cannot replace is running on ${host}. Stop it on the host, then reconnect.`,
               }
@@ -4378,6 +4373,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       } else if (compatibleLive && snapshot.runtimeVersion === requestedVersion) {
         clearArchiveDeferral = { failure: previousFailure, intent: pendingReplacements.get(key) };
       } else if (
+        admission?.unreplaceable !== true &&
         compatibleLive &&
         previousFailure?.reason === "archive_unavailable" &&
         previousFailure.archive?.requestedVersion === requestedVersion
@@ -4392,8 +4388,9 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
           refreshDeferred,
         };
       } else if (
-        previousFailure?.reason === "archive_unavailable" ||
-        previousFailure?.reason === "unsupported_platform"
+        admission?.unreplaceable !== true &&
+        (previousFailure?.reason === "archive_unavailable" ||
+          previousFailure?.reason === "unsupported_platform")
       ) {
         snapshot = {
           ...base,
@@ -4438,6 +4435,10 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
     let enriched = yield* enrichFailure(target, result);
     if (closed || (generations.get(key) ?? 0) !== generation) return statuses.get(key) ?? enriched;
     if (statuses.get(key) !== observed && statuses.has(key)) return statuses.get(key)!;
+    if (staleUnmanagedAttachment !== undefined && tunnels.get(key) === staleUnmanagedAttachment) {
+      staleUnmanagedAttachment.attachmentInvalidated = true;
+      attachments.delete(staleUnmanagedAttachment);
+    }
     if (verifiedDrainDeferral !== undefined) {
       if (
         tunnels.get(key) !== verifiedDrainDeferral.entry ||

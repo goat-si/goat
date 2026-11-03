@@ -4,6 +4,11 @@ import * as NodeChildProcess from "node:child_process";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
+import {
+  ORCHESTRATION_PROTOCOL_VERSION,
+  type DesktopSshEnvironmentReadyOrPending,
+} from "@goat/contracts";
+import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import * as NetService from "@goat/shared/Net";
 import { WINDOWS_DETACHED_SPAWN_POWERSHELL } from "@goat/shared/windowsHostProcess";
 import * as Effect from "effect/Effect";
@@ -20,6 +25,7 @@ import * as SshAuth from "./auth.ts";
 import {
   ARCHIVE,
   makeSuccessfulProcess,
+  makeRunningProcess,
   remoteShell,
   testHttpClient,
   testNetService,
@@ -54,7 +60,124 @@ const runWithDoubles = (bin: string, body: string) =>
     env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` },
   });
 
+const remotePortOf = (result: DesktopSshEnvironmentReadyOrPending) =>
+  "type" in result ? undefined : result.remotePort;
+
 describe("Windows SSH host", () => {
+  const nativeRuntime = (scenario: "older" | "moved" | "missing" | "mismatch") => {
+    const version =
+      scenario === "older" ? "1.2.2" : scenario === "mismatch" ? "1.2.4" : ARCHIVE.archiveVersion;
+    const signals = {
+      serverVersion: version,
+      sshRuntimeProtocolVersion: SSH_RUNTIME_PROTOCOL_VERSION,
+      orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
+    };
+    const selection = {
+      version,
+      executablePath: "C:\\Users\\fixture\\.goat\\runtime\\goat\\versions\\1.2.2\\goat.exe",
+      baseDir: "C:\\Users\\fixture\\.goat",
+      sha256: "a".repeat(64),
+      pid: 1234,
+      birth: "birth",
+      environmentId: "synthetic-child",
+      instanceId: "instance",
+      nonce: "b".repeat(32),
+      port: 3773,
+    };
+    const operations: string[] = [];
+    let port = 3773;
+    let binarySignals: typeof signals | undefined = signals;
+    const spawner = ChildProcessSpawner.make((command) =>
+      Effect.gen(function* () {
+        if (command._tag !== "StandardCommand") return yield* Effect.die("unexpected command");
+        if (command.args.includes("-G"))
+          return makeSuccessfulProcess("hostname devbox.example.com\nuser alex\nport 2222\n");
+        if (command.args.includes("-N")) return makeRunningProcess(() => undefined);
+        if (command.args.includes("powershell.exe")) {
+          const input = command.options.stdin;
+          if (
+            input === undefined ||
+            typeof input !== "object" ||
+            !("stream" in input) ||
+            !Stream.isStream(input.stream)
+          )
+            return makeSuccessfulProcess("GOAT_NATIVE_WINDOWS=FullLanguage\r\n");
+          const chunks = yield* Stream.runCollect(input.stream);
+          const bytes = Buffer.concat(Array.from(chunks, (chunk) => Buffer.from(chunk)));
+          if (bytes.length === 0)
+            return makeSuccessfulProcess("GOAT_NATIVE_WINDOWS=FullLanguage\r\n");
+          const request = JSON.parse(
+            bytes.subarray(4, 4 + bytes.readUInt32LE(0)).toString("utf8"),
+          ).request;
+          operations.push(request.op);
+          return makeSuccessfulProcess(
+            JSON.stringify({
+              selection: { ...selection, port },
+              live: true,
+              signals,
+              binarySignals,
+              reused: true,
+            }),
+          );
+        }
+        const failed = makeSuccessfulProcess("");
+        return {
+          ...failed,
+          exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(1)),
+          stderr: Stream.make(new TextEncoder().encode("'sh' is not recognized")),
+        };
+      }),
+    );
+    const layer = Layer.mergeAll(
+      NodeServices.layer,
+      Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
+      Layer.succeed(HttpClient.HttpClient, testHttpClient),
+      Layer.succeed(NetService.NetService, testNetService),
+      SshAuth.SshPasswordPrompt.disabledLayer,
+      SshEnvironmentManager.layer({
+        resolveCliRunner: Effect.succeed(ARCHIVE),
+        leaveRemoteServerRunning: true,
+      }),
+    );
+    return Effect.gen(function* () {
+      const manager = yield* SshEnvironmentManager;
+      yield* manager.ensureEnvironment(uploadTarget, { keyOnly: true });
+      if (scenario === "moved") port = 3883;
+      if (scenario === "missing") binarySignals = undefined;
+      if (scenario === "mismatch") binarySignals = { ...signals, serverVersion: "1.2.1" };
+      const status = yield* manager.status(uploadTarget);
+      if (scenario === "missing" || scenario === "mismatch") {
+        assert.equal(status.status?.state, "update_blocked");
+        if (scenario === "mismatch")
+          assert.include(status.status?.detail ?? "", "didn't start or cannot replace");
+      } else {
+        assert.equal(status.status?.state, "ready");
+        if (scenario === "older")
+          assert.include(status.status?.detail ?? "", "didn't start or cannot replace");
+        if (scenario === "moved") {
+          yield* manager.readyEnvironment(uploadTarget).pipe(Effect.flip);
+          assert.equal(
+            remotePortOf(yield* manager.ensureEnvironment(uploadTarget, { keyOnly: true })),
+            3883,
+          );
+        }
+        yield* manager.readyEnvironment(uploadTarget);
+      }
+      assert.isFalse(operations.some((op) => op === "install" || op === "stop"));
+    }).pipe(Effect.provide(layer), Effect.scoped);
+  };
+  it.effect("keeps an older compatible native Windows runtime ready without replacing it", () =>
+    nativeRuntime("older"),
+  );
+  it.effect("reconnects to a moved equal-version native Windows runtime without replacing it", () =>
+    nativeRuntime("moved"),
+  );
+  it.effect("blocks an equal-version native Windows runtime with missing binary signals", () =>
+    nativeRuntime("missing"),
+  );
+  it.effect("blocks a newer native Windows runtime with mismatched binary signals", () =>
+    nativeRuntime("mismatch"),
+  );
   it.effect("maps a native server's command line to the POSIX launch identity", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

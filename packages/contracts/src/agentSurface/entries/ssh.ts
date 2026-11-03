@@ -29,7 +29,7 @@ export const sshEntries = {
     operation: "ssh_setup",
     summary: "Prepare an SSH host",
     description:
-      "Start or install GOAT's runtime on a pinned SSH host over key-only SSH, then diagnose its providers. Returns at the first setup phase while setup continues on the host; follow it with goat_ssh_host_status until state is ready with setup.stage complete, failed, or providers_not_ready. On auth_failed, run the returned key command on this machine, then retry.",
+      "Start or install GOAT's runtime on a pinned SSH host over key-only SSH, then diagnose its providers. Returns at the first setup phase while setup continues on the host; follow it with goat_ssh_host_status until state is ready with setup.stage complete, failed, or providers_not_ready. Ready may include a detail explaining why its runtime cannot be updated. On auth_failed, run the returned key command on this machine, then retry.",
     guide:
       "A thread may prepare when its enabled goatclaw profile grants threads.remote and hub.manage for the host and it runs full-access in default mode; otherwise a person presses Retry on the host in Settings → Connections. Clients need environment:maintain. The host must already be pinned (goat_ssh_host_add). state ready with setup.stage diagnosis means provider diagnosis is still running. For update_waiting or update_blocked, follow the recovery the status names. A failed setup or diagnosis publishes an error whose fix says to call goat_ssh_host_prepare again.",
     effect: "write",
