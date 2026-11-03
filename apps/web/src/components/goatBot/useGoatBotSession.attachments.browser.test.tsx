@@ -216,6 +216,43 @@ it("discarding a failed message releases its uploaded files", async () => {
   expect(mocks.released).toContainEqual(["discard.txt"]);
 });
 
+function fileDrag(type: "dragenter" | "dragover" | "drop", file: File) {
+  const dataTransfer = new DataTransfer();
+  dataTransfer.items.add(file);
+  return new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer });
+}
+
+it("attaches a file dropped on the GOAT Bot chat and sends it with the message", async () => {
+  const port = setup(true);
+  await using screen = await render(
+    <GoatBotChannelContext value={port}>
+      <Session />
+    </GoatBotChannelContext>,
+    { router: false }, // The bot screen here has no links to follow.
+  );
+  await expect.element(screen.getByRole("textbox", { name: "Message GOAT Bot" })).toBeEnabled();
+  const file = new File(["notes"], "dropped.txt", { type: "text/plain" });
+  const conversation = screen.getByRole("textbox", { name: "Message GOAT Bot" }).element();
+  await act(() => conversation.dispatchEvent(fileDrag("dragenter", file)));
+  await expect.element(screen.getByText("Drop files to attach")).toBeVisible();
+  const drop = fileDrag("drop", file);
+  await act(() => conversation.dispatchEvent(drop));
+  expect(drop.defaultPrevented).toBe(true);
+  await expect.element(screen.getByText("Drop files to attach")).not.toBeInTheDocument();
+  await expect
+    .element(screen.getByRole("list", { name: "Attachments" }))
+    .toHaveTextContent("dropped.txt");
+  await userEvent.click(screen.getByRole("button", { name: "Send" }));
+
+  await vi.waitFor(() => expect(port.ingest).toHaveBeenCalledTimes(1));
+  expect(mocks.uploads.map((files) => files.map((upload) => upload.name))).toEqual([
+    ["dropped.txt"],
+  ]);
+  expect(vi.mocked(port.ingest).mock.calls[0]![1]).toMatchObject({
+    attachments: [{ id: "uploaded-0", name: "dropped.txt", type: "file" }],
+  });
+});
+
 it("releases staged files when preparation finishes after the composer unmounts", async () => {
   const port = setup(true);
   const file = image("late-preparation");
@@ -533,7 +570,7 @@ it("releases a failed message's attachments when its committed projection arrive
   expect(revoked).toHaveBeenCalledExactlyOnceWith(file.previewUrl);
 });
 
-it("offers no attach button when GOAT Bot's server cannot take files", async () => {
+it("offers no attach button or drop target when GOAT Bot's server cannot take files", async () => {
   const port = setup(false);
   await using screen = await render(
     <GoatBotChannelContext value={port}>
@@ -543,4 +580,11 @@ it("offers no attach button when GOAT Bot's server cannot take files", async () 
   );
   await expect.element(screen.getByRole("textbox", { name: "Message GOAT Bot" })).toBeEnabled();
   expect(screen.container.querySelector('button[aria-label="Attach files"]')).toBeNull();
+  const file = new File(["notes"], "refused.txt", { type: "text/plain" });
+  const conversation = screen.getByRole("textbox", { name: "Message GOAT Bot" }).element();
+  const over = fileDrag("dragover", file);
+  await act(() => conversation.dispatchEvent(fileDrag("dragenter", file)));
+  await act(() => conversation.dispatchEvent(over));
+  expect(over.defaultPrevented).toBe(false);
+  expect(screen.container.querySelector("[data-chat-workspace-drop-overlay]")).toBeNull();
 });
