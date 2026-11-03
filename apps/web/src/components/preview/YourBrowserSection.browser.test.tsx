@@ -175,18 +175,23 @@ it("closes the picker after the tab attaches", async () => {
 
 it("opens the browser picker when the menu action is requested", async () => {
   setup({ claims: [], grants: [], pending: [] });
-  await using _screen = await render(<YourBrowserSection threadRef={threadRef} />);
+  await using screen = await render(<YourBrowserSection threadRef={threadRef} />);
+  if (!screen.router) throw new Error("Expected a router");
   const { openBrowserClaim } = await import("./browserClaimRequest");
   const { useRightPanelStore, selectActiveRightPanel } = await import("~/rightPanelStore");
   const { registerMenuAction, dispatchMenuAction } = await import("~/shortcuts/dispatcher");
   using _registration = {
-    [Symbol.dispose]: registerMenuAction("browser.claim", () => openBrowserClaim(threadRef)),
+    [Symbol.dispose]: registerMenuAction("browser.claim", () =>
+      openBrowserClaim(threadRef, screen.router!),
+    ),
   };
   dispatchMenuAction("browser.claim");
   expect(selectActiveRightPanel(useRightPanelStore.getState().byThreadKey, threadRef)).toBe(
     "preview",
   );
   await expect.element(page.getByRole("dialog")).toBeVisible();
+  await screen.rerender(<YourBrowserSection threadRef={threadRef} />);
+  expect(mocks.windows).toHaveBeenCalledTimes(1);
   useRightPanelStore.getState().removeThread(threadRef);
 });
 
@@ -228,10 +233,42 @@ it("explains when the menu action has no active thread", async () => {
   const { openBrowserClaim } = await import("./browserClaimRequest");
   const { toastManager } = await import("~/components/ui/toast");
   using toast = vi.spyOn(toastManager, "add");
-  openBrowserClaim(null);
+  await using screen = await render(<div />);
+  if (!screen.router) throw new Error("Expected a router");
+  openBrowserClaim(null, screen.router);
   expect(toast).toHaveBeenCalledWith(
     expect.objectContaining({
       title: "Open a thread to let an agent use a browser tab.",
     }),
   );
+});
+
+it("does not reopen a pending picker after the browser panel is closed and reopened", async () => {
+  setup({ claims: [], grants: [], pending: [] });
+  const { openBrowserClaim } = await import("./browserClaimRequest");
+  const { useRightPanelStore } = await import("~/rightPanelStore");
+  await using screen = await render(<div />, { router: "/env:test/thread:test" });
+  if (!screen.router) throw new Error("Expected a router");
+  openBrowserClaim(threadRef, screen.router);
+  useRightPanelStore.getState().close(threadRef);
+  useRightPanelStore.getState().open(threadRef, "preview");
+  await screen.rerender(<YourBrowserSection threadRef={threadRef} />);
+  expect(mocks.windows).not.toHaveBeenCalled();
+  await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+  useRightPanelStore.getState().removeThread(threadRef);
+});
+
+it("does not reopen a pending picker after navigating to another thread and back", async () => {
+  setup({ claims: [], grants: [], pending: [] });
+  await using screen = await render(<div />, { router: "/env:test/thread:test" });
+  if (!screen.router) throw new Error("Expected a router");
+  const { openBrowserClaim } = await import("./browserClaimRequest");
+  const { useRightPanelStore } = await import("~/rightPanelStore");
+  openBrowserClaim(threadRef, screen.router);
+  await screen.router.navigate({ href: "/env:test/thread:other" });
+  await screen.router.navigate({ href: "/env:test/thread:test" });
+  await screen.rerender(<YourBrowserSection threadRef={threadRef} />);
+  expect(mocks.windows).not.toHaveBeenCalled();
+  await expect.element(page.getByRole("dialog")).not.toBeInTheDocument();
+  useRightPanelStore.getState().removeThread(threadRef);
 });

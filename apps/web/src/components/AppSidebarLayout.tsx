@@ -315,7 +315,7 @@ function registerAppShellCommands(router: AnyRouter, shellElement: Element): () 
     registerWorkspaceFocusCommands(router),
     registerPullRequestsEscapeCommand(router),
     registerMenuAction("browser.claim", () => {
-      openBrowserClaim(resolveThreadRouteRef(router.state.matches.at(-1)?.params ?? {}));
+      openBrowserClaim(resolveThreadRouteRef(router.state.matches.at(-1)?.params ?? {}), router);
     }),
     registerMenuAction("open-settings", () => {
       if (!/^\/settings(\/|$)/.test(router.state.location.pathname))
