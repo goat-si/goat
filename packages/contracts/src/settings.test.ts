@@ -51,11 +51,24 @@ const decodeMemoryHubSettingsUpdate = Schema.decodeSync(MemoryHubSettingsUpdateI
 it("defaults blocked browser hosts to empty and normalizes valid writes", () => {
   expect(decodeServerSettings({}).blockedBrowserHosts).toEqual([]);
   expect(
-    decodeServerSettingsPatch({ blockedBrowserHosts: [" EXAMPLE.COM. ", "[2001:0db8::1]"] }),
+    decodeServerSettingsPatch({
+      blockedBrowserHosts: [
+        " EXAMPLE.COM. ",
+        "[2001:0db8::1]",
+        "example.com:443",
+        "[2001:db8::1]:8080",
+      ],
+    }),
   ).toEqual({
-    blockedBrowserHosts: ["example.com", "[2001:db8::1]"],
+    blockedBrowserHosts: ["example.com", "[2001:db8::1]", "example.com", "[2001:db8::1]"],
   });
-  for (const host of ["", "https://example.com", "example.com:443", "example.com/path"]) {
+  for (const host of [
+    "",
+    "https://example.com",
+    "example.com:abc",
+    "example.com:99999",
+    "example.com/path",
+  ]) {
     expect(() => decodeServerSettingsPatch({ blockedBrowserHosts: [host] })).toThrow();
   }
 });
