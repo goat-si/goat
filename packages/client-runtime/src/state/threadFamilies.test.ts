@@ -31,7 +31,7 @@ import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
 import type * as RpcSession from "../rpc/session.ts";
 import { scopeThreadRef, scopedThreadKey } from "../environment/scoped.ts";
-import { createRemoteLauncherFamilies } from "../../../../apps/web/src/components/sidebar/remoteLauncherFamilies.ts";
+import { createRemoteLauncherFamilies } from "./remoteLauncherFamilies.ts";
 import { foldLaunchedThreads } from "./launchFold.ts";
 import { projectSettledLaunchShelf } from "../../../../apps/web/src/components/sidebar/settledLaunchShelf.ts";
 import { foldsUnderLauncher } from "@goat/shared/threadLaunchState";
@@ -442,6 +442,47 @@ it.effect(
         ]);
       }),
     ),
+);
+
+it.effect("restores the omitted parent of a remote task.create child behind an idle subagent", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const h = yield* makeFamilyHarness();
+      const root = fullRow("root");
+      const helper = fullRow("helper", {
+        lineage: {
+          rootThreadId: root.id,
+          parentThreadId: root.id,
+          relationshipToParent: "subagent",
+        },
+      });
+      const task = launched("remote-task", "helper", {
+        launchedBy: {
+          kind: "launch",
+          via: "delegate_task",
+          environmentId: TARGET.environmentId,
+          threadId: helper.id,
+          environmentLabel: null,
+          threadTitle: null,
+        },
+      });
+      h.registry.set(h.shells(REMOTE), AsyncResult.success(h.shellAt(1, [task])));
+      const { controller, shells } = controllerFor(h);
+      h.registry.mount(shells.quietThreadShellsAtom);
+      const release = controller.retain(h.registry);
+      const request = yield* Queue.take(h.started);
+      expect(request.threadId).toBe(helper.id);
+      yield* Deferred.succeed(request.reply, { snapshotSequence: 1, threads: [root, helper] });
+      yield* settleFamily(h, "helper");
+      const all = h.registry.get(shells.quietThreadShellsAtom);
+      const visible = all.filter((t) => t.lineage.relationshipToParent !== "subagent");
+      const fold = foldLaunchedThreads({ all, visible, now: NOW });
+      expect(fold.roots.map((t) => t.id)).toEqual([root.id]);
+      expect(fold.folded.map((t) => t.id)).toEqual(["remote-task"]);
+      release();
+      yield* Effect.promise(() => Promise.resolve());
+    }),
+  ),
 );
 
 it.effect(
