@@ -128,6 +128,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+const GROK_EFFORT_RANK = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
+
 function grokReasoningOptionsFromModel(model: EffectAcpSchema.ModelInfo): {
   readonly options: ReadonlyArray<{
     value: string;
@@ -185,6 +187,10 @@ function grokReasoningOptionsFromModel(model: EffectAcpSchema.ModelInfo): {
   const selectedDefault =
     advertisedDefaults.find((option) => option.value === currentValue)?.value ??
     advertisedDefaults[0]?.value;
+  const rank = (option: { value: string }) => GROK_EFFORT_RANK.indexOf(option.value);
+  if (options.every((option) => rank(option) >= 0)) {
+    options.sort((left, right) => rank(left) - rank(right));
+  }
   return {
     options: options.map(({ value, label, description }) => ({
       value,

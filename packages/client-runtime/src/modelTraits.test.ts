@@ -65,6 +65,11 @@ describe("effort slider", () => {
     expect(findReasoningDescriptor([CONTEXT_WINDOW, EFFORT])).toBe(EFFORT);
   });
 
+  it("recognizes an agent-named reasoning control", () => {
+    const descriptor = { ...EFFORT, id: "thought_level", role: "reasoning" as const };
+    expect(findReasoningDescriptor([CONTEXT_WINDOW, descriptor])).toBe(descriptor);
+  });
+
   it("hides the slider for models without a reasoning choice", () => {
     expect(findReasoningDescriptor([CONTEXT_WINDOW, serviceTierDescriptor("default")])).toBeNull();
     expect(
