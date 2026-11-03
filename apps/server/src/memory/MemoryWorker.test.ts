@@ -4,7 +4,7 @@ import {
   backgroundReads,
   failFastReaderAdmission,
   makeReaderAdmission,
-} from "../../../../packages/shared/src/readerAdmission.ts";
+} from "@goat/shared/readerAdmission";
 import * as TestClock from "effect/testing/TestClock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
