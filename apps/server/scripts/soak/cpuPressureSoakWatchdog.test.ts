@@ -5,6 +5,43 @@ import { guardChild } from "@goat/shared/errorGuards";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
+async function readDriverReady(
+  driver: NodeChildProcess.ChildProcessWithoutNullStreams,
+  lines: AsyncIterator<string>,
+): Promise<string> {
+  let stderr = "";
+  driver.stderr.setEncoding("utf8");
+  driver.stderr.on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+  const stderrEnded = new Promise<void>((resolve) => driver.stderr.once("end", resolve));
+  const line = await lines.next();
+  if (line.done) {
+    await stderrEnded;
+    throw new Error(`driver exited before readiness: ${stderr}`);
+  }
+  return line.value;
+}
+
+it.live("reports the driver's stderr when it exits before readiness", () =>
+  Effect.promise(async () => {
+    const driver = guardChild(
+      NodeChildProcess.spawn(
+        process.execPath,
+        ["-e", 'console.error("fixture startup failure"); process.exit(1)'],
+        {
+          stdio: ["pipe", "pipe", "pipe"],
+        },
+      ),
+      () => {},
+    );
+    const exited = new Promise<number | null>((resolve) => driver.once("exit", resolve));
+    const lines = NodeReadline.createInterface({ input: driver.stdout })[Symbol.asyncIterator]();
+    await expect(readDriverReady(driver, lines)).rejects.toThrow("fixture startup failure");
+    expect(await exited).toBe(1);
+  }),
+);
+
 // oxlint-disable-next-line goat/no-global-process-runtime -- Process groups are unavailable on Windows.
 it.live.skipIf(process.platform === "win32")(
   "kills the server group after a SIGKILLed driver (#2468)",
@@ -23,11 +60,6 @@ it.live.skipIf(process.platform === "win32")(
       const exited = new Promise<NodeJS.Signals | null>((resolve) =>
         driver.once("exit", (_, signal) => resolve(signal)),
       );
-      let stderr = "";
-      driver.stderr.setEncoding("utf8");
-      driver.stderr.on("data", (chunk: string) => {
-        stderr += chunk;
-      });
       const lines = NodeReadline.createInterface({ input: driver.stdout })[Symbol.asyncIterator]();
       const serverPipe = driver.stdio[3];
       const grandchildPipe = driver.stdio[4];
@@ -42,13 +74,9 @@ it.live.skipIf(process.platform === "win32")(
       let pgid: number | undefined;
       const failures: unknown[] = [];
       try {
-        const line = await lines.next();
-        if (line.done) {
-          await stderrEnded;
-          throw new Error(`driver exited before readiness: ${stderr}`);
-        }
-        expect(line.value).toMatch(/^fixture-ready \d+$/);
-        pgid = Number(line.value.split(" ")[1]);
+        const line = await readDriverReady(driver, lines);
+        expect(line).toMatch(/^fixture-ready \d+$/);
+        pgid = Number(line.split(" ")[1]);
         expect((await serverLines.next()).value).toBe("server-ready");
         expect((await grandchildLines.next()).value).toBe("grandchild-ready");
         driver.kill("SIGKILL");
