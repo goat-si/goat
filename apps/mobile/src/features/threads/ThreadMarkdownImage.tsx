@@ -228,7 +228,13 @@ export function ThreadMarkdownImageView(props: {
                   uri={uri}
                   cacheKey={props.cacheKey}
                   format={props.format}
-                  onLoad={(size) => setDecoded({ sourceKey: props.sourceKey, size })}
+                  onLoad={(size) =>
+                    setDecoded((current) =>
+                      current?.sourceKey === props.sourceKey
+                        ? current
+                        : { sourceKey: props.sourceKey, size },
+                    )
+                  }
                   onError={() => setFailure({ uri: props.uri, failed: true })}
                 />
               </View>
@@ -321,6 +327,16 @@ export function ThreadMarkdownImage(props: {
   const withGallery = useFilePreviewGallery();
   const assetUrl = useAssetUrlState(props.environmentId, props.resource);
   const refreshAssetUrl = useRefreshAssetUrl(props.environmentId, props.resource);
+  const resourceKey =
+    props.resource._tag === "attachment"
+      ? `attachment:${props.resource.attachmentId}`
+      : props.resource._tag === "tool-output-image"
+        ? `tool-output:${props.resource.itemId}:${props.resource.index}`
+        : `workspace:${props.resource.path}`;
+  const sourceKey =
+    assetUrl._tag === "Success" && assetUrl.fileRevision !== undefined
+      ? `${resourceKey}@${assetUrl.fileRevision}`
+      : resourceKey;
 
   return (
     <ThreadMarkdownImageView
@@ -330,13 +346,7 @@ export function ThreadMarkdownImage(props: {
           ? assetImageCacheKey(props.environmentId, props.resource, assetUrl.fileRevision)
           : undefined
       }
-      sourceKey={
-        props.resource._tag === "attachment"
-          ? `attachment:${props.resource.attachmentId}`
-          : props.resource._tag === "tool-output-image"
-            ? `tool-output:${props.resource.itemId}:${props.resource.index}`
-            : `workspace:${props.resource.path}`
-      }
+      sourceKey={sourceKey}
       unavailable={assetUrl._tag === "Failure"}
       onRetry={async () => {
         const url = await refreshAssetUrl();

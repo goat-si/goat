@@ -571,6 +571,17 @@ describe("presentProviderGoal", () => {
 });
 
 describe("presentPendingBackgroundWork", () => {
+  it("clarifies named waiting monitors and running commands (#28969)", () => {
+    expect(
+      presentPendingBackgroundWork([
+        { taskId: "1", kind: "monitor", description: "Check build", awaited: true },
+      ])?.title,
+    ).toBe("Waiting · Check build");
+    expect(
+      presentPendingBackgroundWork([{ taskId: "2", kind: "command", description: "git status" }])
+        ?.title,
+    ).toBe("Running · git status");
+  });
   it("names a command by its script rather than its shell (#28446)", () => {
     const presentation = presentPendingBackgroundWork([
       {

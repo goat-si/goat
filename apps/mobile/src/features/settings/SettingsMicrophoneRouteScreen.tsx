@@ -10,6 +10,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { type AppSymbolName, SymbolView } from "../../components/ui/AppSymbol";
 import { AppText as Text } from "../../components/ui/AppText";
+import { ListRowLayout } from "../../components/ui/ListRowLayout";
 import { cn } from "../../lib/cn";
 import {
   isMicrophoneDevice,
@@ -18,6 +19,7 @@ import {
   microphoneEntryKey,
   microphoneOrder,
 } from "../../lib/microphonePriority";
+import { getLocalVoiceTranscriber } from "../../native/voiceTranscription";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { SettingsActionRow } from "./components/SettingsActionRow";
 import { SettingsDragHandle } from "./components/SettingsDragHandle";
@@ -88,6 +90,35 @@ const KINDS: Record<
 };
 
 export function SettingsMicrophoneRouteScreen() {
+  return getLocalVoiceTranscriber() === null ? <VoiceInputUnavailable /> : <MicrophoneSettings />;
+}
+
+function VoiceInputUnavailable() {
+  const insets = useSafeAreaInsets();
+  return (
+    <View collapsable={false} className="flex-1 bg-sheet">
+      <ScrollView
+        contentInsetAdjustmentBehavior="automatic"
+        showsVerticalScrollIndicator={false}
+        className="flex-1"
+        contentContainerClassName="gap-3 px-5 pt-4"
+        contentContainerStyle={{ paddingBottom: Math.max(insets.bottom, 18) + 18 }}
+      >
+        <SettingsSection title="Voice input">
+          <ListRowLayout icon="mic" label="Not available on this device" />
+        </SettingsSection>
+        <Text className="px-2 text-sm text-foreground-muted">
+          GOAT's voice input uses Apple's on-device speech transcription, which needs iOS 26 or
+          later on a device that supports it. Without it, the composer has no microphone button, and
+          allowing microphone access won't add one. Apple keyboard dictation is separate and isn't
+          affected.
+        </Text>
+      </ScrollView>
+    </View>
+  );
+}
+
+function MicrophoneSettings() {
   const insets = useSafeAreaInsets();
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
