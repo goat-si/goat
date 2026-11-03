@@ -191,7 +191,10 @@ const createRun = Effect.fn("shellEquivalence.createRun")(function* (
   });
 });
 
-const addRunItem = Effect.fn("shellEquivalence.addRunItem")(function* (name: string) {
+const addRunItem = Effect.fn("shellEquivalence.addRunItem")(function* (
+  name: string,
+  status: "running" | "completed" = "completed",
+) {
   const store = yield* ProjectionStore.ProjectionStoreV2;
   const threadId = id(name);
   const currentRunId = runId(name);
@@ -213,10 +216,10 @@ const addRunItem = Effect.fn("shellEquivalence.addRunItem")(function* (name: str
       nativeItemRef: null,
       parentItemId: null,
       ordinal: 1,
-      status: "completed",
+      status,
       title: null,
       startedAt: now,
-      completedAt: now,
+      completedAt: status === "completed" ? now : null,
       updatedAt: now,
       type: "command_execution",
       input: "fixture",
@@ -261,6 +264,7 @@ const cases = [
   "an idle subagent with an empty provider roster is omitted",
   "a settled subagent with provider background work remains visible",
   "an idle subagent with an unwatched pull request is omitted",
+  "a settled subagent with a running background command remains visible",
 ] as const;
 
 it.effect.each(cases)(
@@ -325,8 +329,12 @@ it.effect.each(cases)(
         yield* createThread({ name: "provider-child", parent: "root", root: "root" });
         yield* createRun("provider-child");
         yield* addProviderThread("provider-child", scenario === cases[8]);
-      } else {
+      } else if (scenario === cases[9]) {
         yield* createThread({ name: "unwatched", parent: "root", root: "root", unwatchedPr: true });
+      } else {
+        yield* createThread({ name: "background", parent: "root", root: "root" });
+        yield* createRun("background");
+        yield* addRunItem("background", "running");
       }
 
       const full = yield* store.getShellSnapshot({ location: "active" });
@@ -384,9 +392,11 @@ it.effect.each(cases)(
       } else if (scenario === cases[7] || scenario === cases[8]) {
         assert.equal(visible.has(id("provider-child")), scenario === cases[8]);
         assert.isTrue(expected.subagentThreadIds.has(id("provider-child")));
-      } else {
+      } else if (scenario === cases[9]) {
         assert.isFalse(visible.has(id("unwatched")));
         assert.isTrue(expected.subagentThreadIds.has(id("unwatched")));
+      } else {
+        assert.isTrue(visible.has(id("background")));
       }
     }).pipe(Effect.provide(layerTest)),
 );
