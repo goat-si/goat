@@ -198,6 +198,16 @@ describe("soak observations", () => {
     expect(result.counters.clientDisconnects.coverage).toBe("complete");
     expect(result.stall.coverage).toBe("unknown");
   });
+  it("marks stall coverage unknown after a stall log gap", () => {
+    const observations = new Observations();
+    observations.consumeStall({ phase: "runtime", delayMaxMs: 1, droppedStallRecords: 0 });
+    expect(observations.report([], counter(), counter()).stall.coverage).toBe("complete");
+    observations.stallGap("stall log: file rotated or truncated");
+    const report = observations.report([], counter(), counter(), []);
+    expect(report.stall.coverage).toBe("unknown");
+    expect(report.result).toBe("inconclusive");
+    expect(report.counters.clientDisconnects.value).toBe(0);
+  });
 
   it("reports turn coverage independently and rejects unobserved or incomplete requests", () => {
     const observations = new Observations();

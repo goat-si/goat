@@ -337,6 +337,7 @@ export class Observations {
   readonly streamGaps: string[] = [];
   readonly lifecycleGaps: string[] = [];
   readonly socketGaps: string[] = [];
+  readonly stallGaps: string[] = [];
   private windowOpen = false;
   private completedInWindow = 0;
   private completedDuringDrain = 0;
@@ -407,6 +408,9 @@ export class Observations {
   streamGap(reason: string): void {
     if (!this.streamGaps.includes(reason)) this.streamGaps.push(reason);
   }
+  stallGap(reason: string): void {
+    if (!this.stallGaps.includes(reason)) this.stallGaps.push(reason);
+  }
   setWindowOpen(open: boolean): void {
     this.windowOpen = open;
   }
@@ -453,6 +457,7 @@ export class Observations {
     const reasons = [
       ...this.gaps,
       ...requiredCoverage,
+      ...this.stallGaps,
       ...(this.stall.runtimeMaxMs === null ? ["runtime stall samples unavailable"] : []),
     ];
     const disconnects = counter(this.socketEpisodes.size, socketCoverage);

@@ -523,6 +523,8 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
     sample();
     drainEndedAt = new Date().toISOString();
     for (const gap of [...stall.gaps, ...trace.gaps]) telemetryNotes.push(gap);
+    for (const gap of stall.gaps) observations.stallGap(`stall log: ${gap}`);
+    if (stall.hasPartialLine) observations.stallGap("stall log: partial line");
     if (stall.hasPartialLine || trace.hasPartialLine) telemetryNotes.push("partial telemetry line");
     providerGaps.push(...provider.gaps);
     if (provider.hasPartialLine) providerGaps.push("partial lifecycle line");
@@ -628,6 +630,7 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
         [
           ...(!cpu.verified ? ["saturation unverified"] : []),
           ...workloadGaps,
+          ...(detail?.truncated ? ["detail artifact truncated"] : []),
           ...(errors.length ? ["workload error"] : []),
         ],
         provider.counter,
