@@ -4,11 +4,13 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as Tracer from "effect/Tracer";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import { refreshCheckpointAccounting } from "../../memory/MemoryCheckpointAccounting.ts";
 import { checkpointBound } from "../../memory/MemoryCheckpointBound.ts";
 import { decideMemoryOperation, memoryOperationDigest } from "../../memory/MemoryDecider.ts";
 import { scanMemoryValue } from "../../memory/MemorySecretScanner.ts";
+import { measureForgetReservation } from "../../memory/store/ForgetReservation.ts";
 import * as Store from "../../memory/MemoryStore.ts";
 import memory from "./078_Memory.ts";
 import hub from "./079_MemoryHubSync.ts";
@@ -52,6 +54,114 @@ const layer = Store.layer.pipe(
       ]),
     ).pipe(Layer.provideMerge(NodeSqliteClient.layer({ filename: ":memory:" }))),
   ),
+);
+
+it.effect(
+  "batches migration 123 reads while preserving each space's forget reservation (#2412)",
+  () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const store = yield* Store.MemoryStore;
+      const otherSpace = M.MemorySpaceId.make(id(2));
+      const expected: Array<{
+        space: string;
+        memory_id: string;
+        reserve_bytes: number;
+        reserve_keys: number;
+      }> = [];
+      for (let n = 0; n < 205; n++) {
+        const original = upsert(n);
+        const targetSpace = n === 204 ? otherSpace : space;
+        const base = n === 204 ? upsert(0) : original;
+        if (base.kind !== "upsert") throw new Error("Expected an upsert");
+        const op = decodeOperation({
+          ...base,
+          memorySpaceId: targetSpace,
+          revision: { ...base.revision, memorySpaceId: targetSpace },
+        });
+        if (op.kind !== "upsert") throw new Error("Expected an upsert");
+        yield* store.transact(
+          Effect.gen(function* () {
+            const ledger = yield* store.appendHubEntryTx({
+              operation: op,
+              operationDigest: memoryOperationDigest(op),
+              outcome: "accepted",
+              now: 0,
+            });
+            const decided = decideMemoryOperation(
+              yield* store.loadAggregate(targetSpace, op.memoryId),
+              op,
+              Store.hubAdmission,
+              scanMemoryValue(op),
+            );
+            yield* store.apply({ ...decided, receipt: ledger.entry.receipt });
+          }),
+        );
+        const records: M.MemoryImportLineageRecord[] =
+          n === 0 || n === 204
+            ? [
+                {
+                  memorySpaceId: targetSpace,
+                  memoryId: op.memoryId,
+                  kind: "sourceKey",
+                  sourceKey: {
+                    environmentId: env,
+                    sourceId: M.MemoryImportSourceId.make(id(9000 + n)),
+                    sourceItemKey: `source-${n}`,
+                  },
+                },
+              ]
+            : [];
+        for (const record of records)
+          yield* sql`INSERT INTO memory_import_lineage(space,memory_id,kind,key,record_json) VALUES (${targetSpace},${op.memoryId},'sourceKey',${`key-${n}`},${JSON.stringify(record)})`;
+        const reservation = yield* measureForgetReservation(
+          op,
+          [{ revision: op.revision, payload: op.payload }],
+          records,
+        );
+        expected.push({
+          space: targetSpace,
+          memory_id: op.memoryId,
+          reserve_bytes: M.MEMORY_IDENTITY_CORE_MAX_BYTES + reservation.bytes,
+          reserve_keys: reservation.keys,
+        });
+      }
+      yield* sql`UPDATE memory_identity_ledger SET reserve_bytes=0,reserve_keys=0`;
+      const statements: string[] = [];
+      const tracer = Tracer.make({
+        span(options) {
+          const span = new Tracer.NativeSpan(options);
+          const end = span.end.bind(span);
+          span.end = (time, exit) => {
+            end(time, exit);
+            const query = span.attributes.get("db.query.text");
+            if (typeof query === "string") statements.push(query);
+          };
+          return span;
+        },
+      });
+      yield* sql.withTransaction(migration).pipe(Effect.withTracer(tracer));
+      assert.deepStrictEqual(
+        yield* sql`SELECT space,memory_id,reserve_bytes,reserve_keys FROM memory_identity_ledger ORDER BY space,memory_id`,
+        expected.sort(
+          (a, b) => a.space.localeCompare(b.space) || a.memory_id.localeCompare(b.memory_id),
+        ),
+      );
+      const revisionReads = statements.filter(
+        (query) =>
+          /FROM memory_revisions r LEFT JOIN memory_payloads p/.test(query) &&
+          !query.includes("ORDER BY r.revision_id"),
+      );
+      const lineageReads = statements.filter(
+        (query) =>
+          /SELECT .*record_json FROM memory_import_lineage/.test(query) &&
+          !query.includes("ORDER BY kind,key"),
+      );
+      assert.isAbove(revisionReads.length, 1);
+      assert.isAbove(lineageReads.length, 1);
+      assert.isBelow(revisionReads.length, 10);
+      assert.isBelow(lineageReads.length, 10);
+    }).pipe(Effect.provide(layer)),
 );
 const decodeOperation = Schema.decodeUnknownSync(M.MemoryOperation);
 const upsert = (n: number) =>
@@ -97,6 +207,114 @@ const refusal = (dimension: string) =>
       reclaimable: 0,
     },
   });
+
+it.effect("isolates an identity whose revision bodies exceed the migration batch budget", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const store = yield* Store.MemoryStore;
+    for (const n of [0, 1, 2]) {
+      const op = upsert(n);
+      yield* store.transact(
+        Effect.gen(function* () {
+          const ledger = yield* store.appendHubEntryTx({
+            operation: op,
+            operationDigest: memoryOperationDigest(op),
+            outcome: "accepted",
+            now: 0,
+          });
+          const decided = decideMemoryOperation(
+            yield* store.loadAggregate(space, op.memoryId),
+            op,
+            Store.hubAdmission,
+            scanMemoryValue(op),
+          );
+          yield* store.apply({ ...decided, receipt: ledger.entry.receipt });
+        }),
+      );
+    }
+    yield* sql`UPDATE memory_payloads SET body_json=json_set(body_json,'$.text',${"x".repeat(16000)}) WHERE space=${space} AND payload_ref=${id(301)}`;
+    yield* sql`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<550)
+      INSERT INTO memory_payloads(space,payload_ref,memory_id,body_json,dependencies_json)
+      SELECT p.space,printf('00000000-0000-4000-8000-%012d',10000+n.i),p.memory_id,p.body_json,p.dependencies_json
+      FROM memory_payloads p CROSS JOIN n WHERE p.space=${space} AND p.payload_ref=${id(301)}`;
+    yield* sql`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<550)
+      INSERT INTO memory_revisions(space,revision_id,memory_id,operation_id,parents_json,scope_json,assertion_kind,provenance_json,payload_ref,created_at)
+      SELECT r.space,printf('00000000-0000-4000-8000-%012d',10000+n.i),r.memory_id,r.operation_id,r.parents_json,r.scope_json,r.assertion_kind,r.provenance_json,printf('00000000-0000-4000-8000-%012d',10000+n.i),r.created_at
+      FROM memory_revisions r CROSS JOIN n WHERE r.space=${space} AND r.revision_id=${id(301)}`;
+    const statements: string[] = [];
+    const tracer = Tracer.make({
+      span(options) {
+        const span = new Tracer.NativeSpan(options);
+        const end = span.end.bind(span);
+        span.end = (time, exit) => {
+          end(time, exit);
+          const query = span.attributes.get("db.query.text");
+          if (typeof query === "string") statements.push(query);
+        };
+        return span;
+      },
+    });
+    yield* sql.withTransaction(migration).pipe(Effect.withTracer(tracer));
+    const revisionReads = statements.filter(
+      (query) =>
+        /FROM memory_revisions r LEFT JOIN memory_payloads p/.test(query) &&
+        !query.includes("ORDER BY r.revision_id"),
+    );
+    assert.strictEqual(revisionReads.length, 3);
+  }).pipe(Effect.provide(layer)),
+);
+
+it.effect("splits migration batches when revision metadata exceeds the budget", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const store = yield* Store.MemoryStore;
+    for (const n of [0, 1]) {
+      const op = upsert(n);
+      yield* store.transact(
+        Effect.gen(function* () {
+          const ledger = yield* store.appendHubEntryTx({
+            operation: op,
+            operationDigest: memoryOperationDigest(op),
+            outcome: "accepted",
+            now: 0,
+          });
+          const decided = decideMemoryOperation(
+            yield* store.loadAggregate(space, op.memoryId),
+            op,
+            Store.hubAdmission,
+            scanMemoryValue(op),
+          );
+          yield* store.apply({ ...decided, receipt: ledger.entry.receipt });
+        }),
+      );
+    }
+    const parents = JSON.stringify(Array.from({ length: 100 }, (_, n) => id(50000 + n)));
+    yield* sql`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<2200)
+      INSERT INTO memory_revisions(space,revision_id,memory_id,operation_id,parents_json,scope_json,assertion_kind,provenance_json,payload_ref,created_at)
+      SELECT r.space,printf('00000000-0000-4000-8000-%012d',10000+n.i),r.memory_id,r.operation_id,${parents},r.scope_json,r.assertion_kind,r.provenance_json,printf('00000000-0000-4000-8000-%012d',10000+n.i),r.created_at
+      FROM memory_revisions r CROSS JOIN n WHERE r.space=${space} AND r.revision_id=${id(300)}`;
+    const statements: string[] = [];
+    const tracer = Tracer.make({
+      span(options) {
+        const span = new Tracer.NativeSpan(options);
+        const end = span.end.bind(span);
+        span.end = (time, exit) => {
+          end(time, exit);
+          const query = span.attributes.get("db.query.text");
+          if (typeof query === "string") statements.push(query);
+        };
+        return span;
+      },
+    });
+    yield* sql.withTransaction(migration).pipe(Effect.withTracer(tracer));
+    const revisionReads = statements.filter(
+      (query) =>
+        /FROM memory_revisions r LEFT JOIN memory_payloads p/.test(query) &&
+        !query.includes("ORDER BY r.revision_id"),
+    );
+    assert.strictEqual(revisionReads.length, 2);
+  }).pipe(Effect.provide(layer)),
+);
 
 it.effect(
   "re-measures legacy forget reserves, refreshes checkpoint counters and re-arms only staging-refused syncs",
