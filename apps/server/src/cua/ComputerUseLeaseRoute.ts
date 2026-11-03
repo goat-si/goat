@@ -525,6 +525,14 @@ const makeCallLayer = (serverScope: Scope.Scope) =>
       let selectedClaim: { readonly claimId: string; readonly claimGeneration: number } | undefined;
       let selectedBind: { readonly claimId: string; readonly origin: string } | undefined;
       const grants = yield* Effect.serviceOption(BrowserOriginGrants.BrowserOriginGrants);
+      const judge = Effect.fn("ComputerUseLeaseRoute.judgeBrowserCall")(function* (
+        reserved: Extract<ComputerUseCallReservation, { action: "reserve" }>,
+      ) {
+        const snapshot = Option.isSome(grants)
+          ? yield* grants.value.snapshotFor(threadId)
+          : { claims: [], bindings: [] };
+        return serverAdmitsBrowserCall(reserved.name, reserved.args, snapshot);
+      });
       if (call.value.action === "reserve" && deniedApp === undefined && !pointerLocked) {
         if (Option.isSome(grants)) {
           const checked = yield* grants.value
@@ -560,7 +568,7 @@ const makeCallLayer = (serverScope: Scope.Scope) =>
                 ? { status: "refused", detail: "blocked_url" }
                 : outsideManifest
                   ? { status: "refused", detail: "outside_manifest" }
-                  : yield* leases.callReservation(threadId, call.value);
+                  : yield* leases.callReservation(threadId, call.value, judge);
         if (
           call.value.action === "reserve" &&
           (selectedClaim || selectedBind) &&
