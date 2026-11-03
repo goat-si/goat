@@ -61,6 +61,19 @@ it("marks a recorded child whose fast parent already ended (#2465)", () => {
   assert.isTrue(child.attributes.get("trace.parent_omitted"));
 });
 
+const spanNames = (source: string) =>
+  new Set(
+    Array.from(
+      source.matchAll(/\b(?:Effect\.)?(?:fn|withSpan|useSpan)\(\s*["']([^"']+)["']/g),
+      (match) => match[1],
+    ),
+  );
+
+it("does not count a policy span name that appears only in a comment (#2483)", () => {
+  const names = spanNames('// Effect.fn("SqliteWriter.send")');
+  assert.isFalse(names.has("SqliteWriter.send"));
+});
+
 it("keeps policy names aligned with span names in source (#2465)", () => {
   const root = NodePath.resolve(import.meta.dirname, "../../../..");
   const files = NodeFS.globSync(["apps/server/src/**/*.ts", "packages/*/src/**/*.ts"], {
@@ -70,11 +83,7 @@ it("keeps policy names aligned with span names in source (#2465)", () => {
   const names = new Set<string>();
   for (const file of files) {
     const source = NodeFS.readFileSync(NodePath.join(root, file), "utf8");
-    for (const match of source.matchAll(
-      /\b(?:Effect\.)?(?:fn|withSpan|useSpan)\(\s*["']([^"']+)["']/g,
-    )) {
-      if (match[1]) names.add(match[1]);
-    }
+    for (const name of spanNames(source)) if (name) names.add(name);
   }
   for (const name of HOT_SPANS) assert.isTrue(names.has(name), name);
   const sqlite = NodeFS.readFileSync(
