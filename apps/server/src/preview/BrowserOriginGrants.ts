@@ -159,8 +159,11 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
   const publish = Effect.fn("BrowserOriginGrants.publishExpansion")(function* () {
     yield* confirm((yield* write(false)).sha);
   });
-  const fence = (cause: unknown) =>
-    Effect.logWarning("Browser manifest narrowing was not applied; restarting the driver", {
+  let fencing = false;
+  const fence = Effect.fn("BrowserOriginGrants.fence")(function* (cause: unknown) {
+    if (fencing || !deps.supported()) return;
+    fencing = true;
+    yield* Effect.logWarning("Browser manifest narrowing was not applied; restarting the driver", {
       cause,
     }).pipe(
       Effect.andThen(
@@ -175,7 +178,13 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
               Effect.andThen(deps.onFenceFailure?.() ?? Effect.void),
             ),
       ),
+      Effect.ensuring(
+        Effect.sync(() => {
+          fencing = false;
+        }),
+      ),
     );
+  }, Effect.uninterruptible);
   type Confirmation = { readonly sha: string; readonly number: number; readonly value: Union };
   let activeConfirmation: Confirmation | undefined;
   let pendingConfirmation: Confirmation | undefined;
@@ -589,7 +598,8 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
       uncommittedGrants.clear();
     });
     yield* Deferred.succeed(previousSignal, undefined);
-    yield* shrink();
+    // The driver is being revoked, so this cleanup write cannot initiate another fence.
+    yield* write(true).pipe(Effect.ignore);
   }, Effect.uninterruptible);
   const bindingValues = (threadId: ThreadId) =>
     [...pending.values()]

@@ -3,6 +3,8 @@ import { EnvironmentId, ExecutionEnvironmentDescriptor, ThreadId } from "@goat/c
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Queue from "effect/Queue";
+import * as Semaphore from "effect/Semaphore";
+import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as Context from "effect/Context";
 import { serverAdmitsBrowserCall } from "../cua/ComputerUseLeaseProxyBrowserClaims.ts";
@@ -19,6 +21,91 @@ class ManifestUnavailable extends Schema.TaggedError<ManifestUnavailable>()(
   "ManifestUnavailable",
   {},
 ) {}
+
+it.effect("persistent manifest failures do not reenter the driver lifecycle fence", () =>
+  Effect.gen(function* () {
+    let failWrites = false;
+    let revoke = Effect.void;
+    const lifecycle = yield* Semaphore.make(1);
+    const finished = yield* Deferred.make<void>();
+    const hash = "a".repeat(64);
+    const context = yield* Layer.build(
+      Grants.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            ServerSettings.layerTest(),
+            Layer.mock(ServerEnvironment.ServerEnvironment)({
+              getDescriptor: Effect.succeed(
+                decodeDescriptor({
+                  environmentId: EnvironmentId.make("environment:test"),
+                  label: "Test",
+                  platform: { os: "linux", arch: "x64" },
+                  serverVersion: "test",
+                  capabilities: { repositoryIdentity: true },
+                }),
+              ),
+            }),
+            Layer.succeed(BrowserClaimManifest, {
+              publish: () =>
+                failWrites ? Effect.fail(new ManifestUnavailable()) : Effect.succeed(hash),
+              readConfig: Effect.succeed({
+                capability_manifest: { sha256: hash, file_sha256: hash, reload_error: null },
+              }),
+              fence: lifecycle.withPermit(Effect.suspend(() => revoke)).pipe(Effect.as(true)),
+              install: () => Effect.void,
+            }),
+            Layer.succeed(BrowserClaimBind, {
+              bind: (input) =>
+                Effect.succeed({
+                  targetId: "target",
+                  tabId: "tab",
+                  title: "Site",
+                  url: input.origin,
+                  driverGeneration: 1,
+                }),
+            }),
+          ),
+        ),
+      ),
+    );
+    const service = Context.get(context, Grants.BrowserOriginGrants);
+    revoke = service.setDriverCapability(false);
+    yield* service.setDriverCapability(true);
+    const input = {
+      threadId: ThreadId.make("thread:test"),
+      pid: 42,
+      windowId: 7,
+      origin: "https://example.test",
+      windowTitle: "Browser",
+    };
+    assert.equal((yield* service.claim(input)).agentResult.status, "attached");
+    failWrites = true;
+    yield* service.stop(input.threadId).pipe(
+      Effect.tap(() => Deferred.succeed(finished, undefined)),
+      Effect.forkDetach({ startImmediately: true }),
+    );
+    assert.isTrue(
+      Option.isSome(yield* Deferred.poll(finished)),
+      "fence must finish without reentering lifecycle",
+    );
+    assert.equal((yield* service.request(input)).status, "refused");
+    assert.deepEqual(yield* service.claimsFor(input.threadId), []);
+    failWrites = false;
+    yield* service.setDriverCapability(true);
+    assert.equal((yield* service.claim(input)).agentResult.status, "attached");
+    failWrites = true;
+    const restartFinished = yield* Deferred.make<void>();
+    yield* lifecycle.withPermit(service.setDriverCapability(false)).pipe(
+      Effect.tap(() => Deferred.succeed(restartFinished, undefined)),
+      Effect.forkDetach({ startImmediately: true }),
+    );
+    assert.isTrue(
+      Option.isSome(yield* Deferred.poll(restartFinished)),
+      "external revocation must finish",
+    );
+    assert.equal((yield* service.request(input)).status, "refused");
+  }).pipe(Effect.scoped),
+);
 
 it.effect("a failed driver fence disables further browser claims", () =>
   Effect.gen(function* () {
