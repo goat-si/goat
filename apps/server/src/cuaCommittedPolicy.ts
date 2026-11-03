@@ -60,22 +60,34 @@ export const makeCuaCommittedPolicy = Effect.gen(function* () {
   const subscribeRestrictions = Effect.gen(function* () {
     let cursor = sequence;
     const subscription = yield* PubSub.subscribe(signals);
-    return Stream.concat(Stream.succeed(undefined), Stream.fromSubscription(subscription)).pipe(
-      Stream.map(() => {
-        const oldest = history[0];
-        const missed = oldest !== undefined && cursor < oldest.sequence - 1;
-        const pending = history.filter((entry) => entry.sequence > cursor);
-        cursor = sequence;
-        if (missed || pending.some((entry) => entry.hosts === undefined)) return undefined;
-        const hosts = new Set<string>();
-        for (const entry of pending)
-          for (const host of entry.hosts ?? []) {
-            hosts.add(host);
-            if (hosts.size > 4096) return undefined;
-          }
-        return [...hosts];
-      }),
-    );
+    const pending = () => {
+      const oldest = history[0];
+      const missed = oldest !== undefined && cursor < oldest.sequence - 1;
+      const entries = history.filter((entry) => entry.sequence > cursor);
+      if (missed || entries.some((entry) => entry.hosts === undefined)) return undefined;
+      const hosts = new Set<string>();
+      for (const entry of entries)
+        for (const host of entry.hosts ?? []) {
+          hosts.add(host);
+          if (hosts.size > 4096) return undefined;
+        }
+      return [...hosts];
+    };
+    return {
+      pending: Effect.sync(pending),
+      changes: Stream.concat(Stream.succeed(undefined), Stream.fromSubscription(subscription)).pipe(
+        Stream.map(() => {
+          const through = sequence;
+          const hosts = pending();
+          return {
+            hosts,
+            acknowledge: () => {
+              cursor = Math.max(cursor, through);
+            },
+          };
+        }),
+      ),
+    };
   });
   return {
     read: Ref.get(ref),

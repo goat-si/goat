@@ -22,15 +22,18 @@ const make = Effect.gen(function* () {
   const bind = yield* Effect.serviceOption(BrowserClaimBind);
   const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
   const runSync = Effect.runSyncWith(yield* Effect.context<never>());
+  const policyFeed =
+    Option.isSome(settings) && settings.value.committedPolicyChanges
+      ? yield* settings.value.committedPolicyChanges
+      : undefined;
   const blockedHosts = () => {
-    if (
-      Option.isNone(settings) ||
-      !settings.value.committedPolicy ||
-      !settings.value.committedPolicyChanges
-    )
-      return undefined;
+    if (Option.isNone(settings) || !settings.value.committedPolicy || !policyFeed) return undefined;
     const policy = runSync(settings.value.committedPolicy);
-    return policy._tag === "committed" ? policy.blockedBrowserHosts : undefined;
+    const pending = runSync(policyFeed.pending);
+    if (policy._tag !== "committed" || pending === undefined) return undefined;
+    return pending.length === 0
+      ? policy.blockedBrowserHosts
+      : [...policy.blockedBrowserHosts, ...pending];
   };
   let supported = false;
   let disable = () => Effect.void;
@@ -78,10 +81,11 @@ const make = Effect.gen(function* () {
       });
   });
   disable = () => setDriverCapability(false);
-  if (Option.isSome(settings) && settings.value.committedPolicyChanges) {
-    const changes = yield* settings.value.committedPolicyChanges;
-    yield* changes.pipe(
-      Stream.runForEach((hosts) => service.blockOrigins(hosts)),
+  if (policyFeed) {
+    yield* policyFeed.changes.pipe(
+      Stream.runForEach((batch) =>
+        service.blockOrigins(batch.hosts).pipe(Effect.tap(() => Effect.sync(batch.acknowledge))),
+      ),
       Effect.forkScoped({ startImmediately: true }),
     );
     yield* service.blockOrigins(blockedHosts());

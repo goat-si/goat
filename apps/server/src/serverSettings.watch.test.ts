@@ -30,6 +30,22 @@ const layerServerSettings = () =>
     ),
   );
 
+it.effect("acknowledging a policy batch preserves newer unprocessed restrictions", () =>
+  Effect.gen(function* () {
+    const service = yield* ServerSettingsModule.ServerSettingsService;
+    const feed = yield* service.committedPolicyChanges ?? Effect.die("missing policy feed");
+    const changes = yield* feed.changes.pipe(Stream.toQueue({ capacity: "unbounded" }));
+    (yield* Queue.take(changes)).acknowledge();
+    yield* service.updateSettings({ blockedBrowserHosts: ["a.test"] });
+    const batch = yield* Queue.take(changes);
+    assert.deepEqual(batch.hosts, ["a.test"]);
+    yield* service.updateSettings({ blockedBrowserHosts: ["b.test"] });
+    yield* service.updateSettings({ blockedBrowserHosts: [] });
+    batch.acknowledge();
+    assert.deepEqual(yield* feed.pending, ["b.test"]);
+  }).pipe(Effect.scoped, Effect.provide(ServerSettingsModule.layerTest())),
+);
+
 it.effect(
   "committed policy feeds fail closed when a host list exceeds the history size limit",
   () =>
@@ -42,8 +58,8 @@ it.effect(
         { ...settings, blockedBrowserHosts: ["a".repeat(262_145)] },
         Option.none(),
       );
-      const changes = yield* feed.pipe(Stream.toQueue({ capacity: "unbounded" }));
-      assert.isUndefined(yield* Queue.take(changes));
+      const changes = yield* feed.changes.pipe(Stream.toQueue({ capacity: "unbounded" }));
+      assert.isUndefined((yield* Queue.take(changes)).hosts);
     }).pipe(Effect.scoped, Effect.provide(ServerSettingsModule.layerTest())),
 );
 
@@ -54,7 +70,7 @@ it.effect("committed policy feeds retain transient blocks while a subscriber is 
     const entered = yield* Deferred.make<void>();
     const release = yield* Deferred.make<void>();
     let first = true;
-    const changes = yield* feed.pipe(
+    const changes = yield* feed.changes.pipe(
       Stream.mapEffect((value) => {
         if (!first) return Effect.succeed(value);
         first = false;
@@ -71,7 +87,7 @@ it.effect("committed policy feeds retain transient blocks while a subscriber is 
     yield* service.updateSettings({ blockedBrowserHosts: [] });
     yield* Deferred.succeed(release, undefined);
     yield* Queue.take(changes);
-    assert.deepEqual(yield* Queue.take(changes), ["a.test", "b.test"]);
+    assert.deepEqual((yield* Queue.take(changes)).hosts, ["a.test", "b.test"]);
   }).pipe(Effect.scoped, Effect.provide(ServerSettingsModule.layerTest())),
 );
 
@@ -82,7 +98,7 @@ it.effect("committed policy feeds fail closed when a subscriber falls behind", (
     const entered = yield* Deferred.make<void>();
     const release = yield* Deferred.make<void>();
     let first = true;
-    const changes = yield* feed.pipe(
+    const changes = yield* feed.changes.pipe(
       Stream.mapEffect((value) => {
         if (!first) return Effect.succeed(value);
         first = false;
@@ -96,9 +112,10 @@ it.effect("committed policy feeds fail closed when a subscriber falls behind", (
     yield* Deferred.await(entered);
     for (let i = 0; i < 65; i++)
       yield* service.updateSettings({ blockedBrowserHosts: [`site${i}.test`] });
+    assert.isUndefined(yield* feed.pending);
     yield* Deferred.succeed(release, undefined);
     yield* Queue.take(changes);
-    assert.isUndefined(yield* Queue.take(changes));
+    assert.isUndefined((yield* Queue.take(changes)).hosts);
   }).pipe(Effect.scoped, Effect.provide(ServerSettingsModule.layerTest())),
 );
 
@@ -113,10 +130,10 @@ it.effect(
       const second = yield* subscribe;
       yield* service.updateSettings({ blockedBrowserHosts: ["example.test"] });
       yield* service.updateSettings({ blockedBrowserHosts: [] });
-      const firstQueue = yield* first.pipe(Stream.toQueue({ capacity: "unbounded" }));
-      const secondQueue = yield* second.pipe(Stream.toQueue({ capacity: "unbounded" }));
-      assert.deepEqual(yield* Queue.take(firstQueue), ["example.test"]);
-      assert.deepEqual(yield* Queue.take(secondQueue), ["example.test"]);
+      const firstQueue = yield* first.changes.pipe(Stream.toQueue({ capacity: "unbounded" }));
+      const secondQueue = yield* second.changes.pipe(Stream.toQueue({ capacity: "unbounded" }));
+      assert.deepEqual((yield* Queue.take(firstQueue)).hosts, ["example.test"]);
+      assert.deepEqual((yield* Queue.take(secondQueue)).hosts, ["example.test"]);
     }).pipe(Effect.scoped, Effect.provide(ServerSettingsModule.layerTest())),
 );
 

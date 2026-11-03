@@ -15,8 +15,248 @@ import { BrowserClaimManifest } from "./BrowserClaimManifest.ts";
 import { BrowserClaimBind } from "./BrowserClaimBind.ts";
 import { makeTestBrowserOriginGrants } from "./BrowserOriginGrants.testkit.ts";
 import { makeCuaCommittedPolicy } from "../cuaCommittedPolicy.ts";
+import { threadFixture } from "../cua/ComputerUseLeaseRoute.browserClaims.testkit.ts";
 
 const decodeDescriptor = Schema.decodeSync(ExecutionEnvironmentDescriptor);
+
+it.effect("a held manifest write cannot hide a later transient block from calls or replies", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    let hold = false;
+    const settings = Context.get(
+      yield* Layer.build(ServerSettings.layerTest({ enableCua: true })),
+      ServerSettings.ServerSettingsService,
+    );
+    const hash = "a".repeat(64);
+    const context = yield* Layer.build(
+      Grants.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.succeed(ServerSettings.ServerSettingsService, settings),
+            Layer.mock(ServerEnvironment.ServerEnvironment)({
+              getDescriptor: Effect.succeed(
+                decodeDescriptor({
+                  environmentId: EnvironmentId.make("environment:test"),
+                  label: "Test",
+                  platform: { os: "linux", arch: "x64" },
+                  serverVersion: "test",
+                  capabilities: { repositoryIdentity: true },
+                }),
+              ),
+            }),
+            Layer.succeed(BrowserClaimManifest, {
+              publish: () =>
+                hold
+                  ? Deferred.succeed(entered, undefined).pipe(
+                      Effect.andThen(Deferred.await(release)),
+                      Effect.as(hash),
+                    )
+                  : Effect.succeed(hash),
+              readConfig: Effect.succeed({
+                capability_manifest: { sha256: hash, file_sha256: hash, reload_error: null },
+              }),
+              install: () => Effect.void,
+            }),
+            Layer.succeed(BrowserClaimBind, {
+              bind: (input) =>
+                Effect.succeed({
+                  targetId: `target-${input.windowId}`,
+                  tabId: `tab-${input.windowId}`,
+                  title: "Site",
+                  url: input.origin,
+                  driverGeneration: 1,
+                }),
+            }),
+          ),
+        ),
+      ),
+    );
+    const grants = Context.get(context, Grants.BrowserOriginGrants);
+    yield* grants.setDriverCapability(true);
+    const other = ThreadId.make("thread:other");
+    const threadId = ThreadId.make("thread:bot");
+    const first = yield* grants.claim({
+      threadId: other,
+      pid: 42,
+      windowId: 7,
+      origin: "https://a.test",
+      windowTitle: "Browser",
+    });
+    const second = yield* grants.claim({
+      threadId,
+      pid: 42,
+      windowId: 8,
+      origin: "https://b.test",
+      windowTitle: "Browser",
+    });
+    if (first.agentResult.status !== "attached" || second.agentResult.status !== "attached")
+      return assert.fail("expected attached claims");
+    const claim = second.agentResult.claim;
+    const route = yield* threadFixture({ grants });
+    const scoped = {
+      tab_id: "tab-8",
+      target_id: "target-8",
+      session: `goat-claim:${claim.claimId}`,
+      origin_scope: ["https://b.test"],
+    };
+    assert.deepEqual(yield* route.reserve("browser_click", scoped), {
+      status: "admitted",
+      reservationId: "reservation:test",
+    });
+    hold = true;
+    yield* settings.updateSettings({ blockedBrowserHosts: ["a.test"] });
+    yield* Deferred.await(entered);
+    const revisions = yield* grants.changes.pipe(Stream.toQueue({ capacity: "unbounded" }));
+    yield* Queue.take(revisions);
+    yield* settings.updateSettings({ blockedBrowserHosts: ["b.test"] });
+    yield* settings.updateSettings({ blockedBrowserHosts: [] });
+    const reserved = yield* route.reserve("browser_click", scoped);
+    const validated = yield* route.postCall({
+      action: "validate",
+      controlId: "control:test",
+      connectionId: "driver:1",
+      reservationId: "reservation:test",
+    });
+    if (
+      typeof reserved === "object" &&
+      reserved !== null &&
+      "status" in reserved &&
+      reserved.status === "refused"
+    )
+      yield* Queue.take(revisions);
+    const reasonBeforeReply = yield* grants.endReason(threadId, claim.claimId);
+    const reply = yield* grants.judgeReply(
+      threadId,
+      claim.claimId,
+      claim.claimGeneration,
+      [],
+      false,
+    );
+    const reason = yield* grants.endReason(threadId, claim.claimId);
+    yield* Deferred.succeed(release, undefined);
+    assert.deepEqual(reserved, { status: "refused", detail: "outside_manifest" });
+    assert.deepEqual(validated, { status: "refused", detail: "outside_manifest" });
+    assert.equal(reasonBeforeReply, "origin_changed");
+    assert.isFalse(reply);
+    assert.equal(reason, "origin_changed");
+  }).pipe(Effect.scoped),
+);
+
+it.effect("an unprocessed transient policy block refuses admission and reply judgment", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const base = Context.get(
+      yield* Layer.build(ServerSettings.layerTest({ enableCua: true })),
+      ServerSettings.ServerSettingsService,
+    );
+    const subscribe = base.committedPolicyChanges;
+    if (subscribe === undefined) return assert.fail("missing policy feed");
+    const settings = {
+      ...base,
+      committedPolicyChanges: subscribe.pipe(
+        Effect.map((feed) => ({
+          ...feed,
+          changes: feed.changes.pipe(
+            Stream.mapEffect((batch) =>
+              batch.hosts?.includes("b.test")
+                ? Deferred.succeed(entered, undefined).pipe(
+                    Effect.andThen(Deferred.await(release)),
+                    Effect.as(batch),
+                  )
+                : Effect.succeed(batch),
+            ),
+          ),
+        })),
+      ),
+    };
+    const hash = "a".repeat(64);
+    const context = yield* Layer.build(
+      Grants.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.succeed(ServerSettings.ServerSettingsService, settings),
+            Layer.mock(ServerEnvironment.ServerEnvironment)({
+              getDescriptor: Effect.succeed(
+                decodeDescriptor({
+                  environmentId: EnvironmentId.make("environment:test"),
+                  label: "Test",
+                  platform: { os: "linux", arch: "x64" },
+                  serverVersion: "test",
+                  capabilities: { repositoryIdentity: true },
+                }),
+              ),
+            }),
+            Layer.succeed(BrowserClaimManifest, {
+              publish: () => Effect.succeed(hash),
+              readConfig: Effect.succeed({
+                capability_manifest: { sha256: hash, file_sha256: hash, reload_error: null },
+              }),
+              install: () => Effect.void,
+            }),
+            Layer.succeed(BrowserClaimBind, {
+              bind: (input) =>
+                Effect.succeed({
+                  targetId: "target",
+                  tabId: "tab",
+                  title: "Site",
+                  url: input.origin,
+                  driverGeneration: 1,
+                }),
+            }),
+          ),
+        ),
+      ),
+    );
+    const grants = Context.get(context, Grants.BrowserOriginGrants);
+    yield* grants.setDriverCapability(true);
+    const threadId = ThreadId.make("thread:bot");
+    const answer = yield* grants.claim({
+      threadId,
+      pid: 42,
+      windowId: 7,
+      origin: "https://b.test",
+      windowTitle: "Browser",
+    });
+    if (answer.agentResult.status !== "attached") return assert.fail("expected attached claim");
+    const claim = answer.agentResult.claim;
+    const route = yield* threadFixture({ grants });
+    const scoped = {
+      tab_id: "tab",
+      target_id: "target",
+      session: `goat-claim:${claim.claimId}`,
+      origin_scope: ["https://b.test"],
+    };
+    assert.deepEqual(yield* route.reserve("browser_click", scoped), {
+      status: "admitted",
+      reservationId: "reservation:test",
+    });
+    yield* settings.updateSettings({ blockedBrowserHosts: ["b.test"] });
+    yield* Deferred.await(entered);
+    yield* settings.updateSettings({ blockedBrowserHosts: [] });
+    const reserved = yield* route.reserve("browser_click", scoped);
+    const validated = yield* route.postCall({
+      action: "validate",
+      controlId: "control:test",
+      connectionId: "driver:1",
+      reservationId: "reservation:test",
+    });
+    const reply = yield* grants.judgeReply(
+      threadId,
+      claim.claimId,
+      claim.claimGeneration,
+      [],
+      false,
+    );
+    const reason = yield* grants.endReason(threadId, claim.claimId);
+    yield* Deferred.succeed(release, undefined);
+    assert.deepEqual(reserved, { status: "refused", detail: "outside_manifest" });
+    assert.deepEqual(validated, { status: "refused", detail: "outside_manifest" });
+    assert.isFalse(reply);
+    assert.equal(reason, "origin_changed");
+  }).pipe(Effect.scoped),
+);
 
 it.effect("claims stay unavailable when committed policy changes cannot be observed", () =>
   Effect.gen(function* () {
@@ -198,11 +438,12 @@ it.effect("a block followed by an unblock still ends an existing claim", () =>
     const settings = {
       ...base,
       committedPolicyChanges: feed.pipe(
-        Effect.map((stream) =>
-          stream.pipe(
+        Effect.map((policyFeed) => ({
+          ...policyFeed,
+          changes: policyFeed.changes.pipe(
             Stream.drop(1),
             Stream.mapEffect((value) =>
-              value !== undefined && value.length > 0
+              value.hosts !== undefined && value.hosts.length > 0
                 ? Deferred.succeed(entered, undefined).pipe(
                     Effect.andThen(Deferred.await(release)),
                     Effect.as(value),
@@ -210,7 +451,7 @@ it.effect("a block followed by an unblock still ends an existing claim", () =>
                 : Deferred.succeed(processed, undefined).pipe(Effect.as(value)),
             ),
           ),
-        ),
+        })),
       ),
     };
     const hash = "a".repeat(64);

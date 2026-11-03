@@ -254,6 +254,102 @@ it.effect("a coalesced narrowing fences when a later union is not its subset", (
   }),
 );
 
+it.effect("host blocks coalesce manifest writes while removing each claim immediately", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const drained = yield* Deferred.make<void>();
+    let hold = false;
+    let writes = 0;
+    const service = yield* makeTestBrowserOriginGrants({
+      environmentId: EnvironmentId.make("environment:test"),
+      supported: () => true,
+      publish: (union) =>
+        Effect.gen(function* () {
+          writes++;
+          if (hold && union.existingProfiles.length > 0) {
+            yield* Deferred.succeed(entered, undefined);
+            yield* Deferred.await(release);
+          }
+          if (hold && union.existingProfiles.length === 0)
+            yield* Deferred.succeed(drained, undefined);
+        }),
+      bind: (input) =>
+        Effect.succeed({
+          targetId: "target",
+          tabId: `tab-${input.windowId}`,
+          title: "Site",
+          url: input.origin,
+          driverGeneration: 1,
+        }),
+    });
+    const threads = [
+      ThreadId.make("thread:a"),
+      ThreadId.make("thread:b"),
+      ThreadId.make("thread:c"),
+    ];
+    for (const [index, threadId] of threads.entries()) {
+      const result = yield* service.claim({
+        threadId,
+        pid: 42,
+        windowId: index + 1,
+        origin: `https://site${index}.test`,
+        windowTitle: "Browser",
+      });
+      assert.equal(result.agentResult.status, "attached");
+    }
+    hold = true;
+    yield* service.blockOrigins(["site0.test"]);
+    yield* Deferred.await(entered);
+    yield* service.blockOrigins(["site1.test"]);
+    yield* service.blockOrigins(["site2.test"]);
+    for (const threadId of threads) assert.deepEqual(yield* service.claimsFor(threadId), []);
+    assert.equal(writes, 4);
+    yield* Deferred.succeed(release, undefined);
+    yield* Deferred.await(drained);
+    assert.equal(writes, 5);
+  }),
+);
+
+it.effect("a failed background narrowing fences the driver", () =>
+  Effect.gen(function* () {
+    const fenced = yield* Deferred.make<void>();
+    let fail = false;
+    const hash = "a".repeat(64);
+    const service = yield* makeBrowserOriginGrants({
+      environmentId: EnvironmentId.make("environment:test"),
+      supported: () => true,
+      publish: () => (fail ? Effect.die("manifest writer failed") : Effect.succeed(hash)),
+      confirm: () =>
+        Effect.succeed({
+          capability_manifest: { sha256: hash, file_sha256: hash, reload_error: null },
+        }),
+      fence: () => Deferred.succeed(fenced, undefined).pipe(Effect.as(true)),
+      bind: (input) =>
+        Effect.succeed({
+          targetId: "target",
+          tabId: "tab",
+          title: "Site",
+          url: input.origin,
+          driverGeneration: 1,
+        }),
+    });
+    const threadId = ThreadId.make("thread:test");
+    const claim = yield* service.claim({
+      threadId,
+      pid: 42,
+      windowId: 7,
+      origin: "https://example.test",
+      windowTitle: "Browser",
+    });
+    assert.equal(claim.agentResult.status, "attached");
+    fail = true;
+    yield* service.blockOrigins(["example.test"]);
+    yield* Deferred.await(fenced);
+    assert.deepEqual(yield* service.claimsFor(threadId), []);
+  }),
+);
+
 it.effect("stopping one thread ends its claims and preserves other claims and grants", () =>
   Effect.gen(function* () {
     const service = yield* makeTestBrowserOriginGrants({

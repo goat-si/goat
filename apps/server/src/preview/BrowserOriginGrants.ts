@@ -11,6 +11,7 @@ import * as Clock from "effect/Clock";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Scheduler from "effect/Scheduler";
 import * as Semaphore from "effect/Semaphore";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { isBlockedBrowserUrl } from "@goat/shared/preview";
@@ -215,6 +216,37 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     if (decision.start)
       yield* confirmNarrowings(done).pipe(Effect.forkDetach({ startImmediately: true }));
   }, Effect.uninterruptible);
+  let pendingNarrowing: { readonly value: Union; readonly unsafe: boolean } | undefined;
+  let narrowingWorker = false;
+  const publishNarrowings = Effect.fn("BrowserOriginGrants.publishNarrowings")(function* () {
+    while (true) {
+      const next = yield* Effect.sync(() => {
+        const item = pendingNarrowing;
+        pendingNarrowing = undefined;
+        if (item === undefined) narrowingWorker = false;
+        return item;
+      });
+      if (next === undefined) return;
+      if (next.unsafe) yield* fence("A pending narrowing was superseded by a wider union");
+      yield* shrink(next.value).pipe(Effect.catchCause(fence));
+    }
+  });
+  const scheduleNarrowing = Effect.fn("BrowserOriginGrants.scheduleNarrowing")(function* (
+    value: Union,
+  ) {
+    const start = yield* Effect.sync(() => {
+      pendingNarrowing = {
+        value,
+        unsafe:
+          pendingNarrowing !== undefined &&
+          (pendingNarrowing.unsafe || !subset(value, pendingNarrowing.value)),
+      };
+      if (narrowingWorker) return false;
+      narrowingWorker = true;
+      return true;
+    });
+    if (start) yield* publishNarrowings().pipe(Effect.forkDetach);
+  });
   const settled = Effect.suspend(() =>
     confirming === undefined ? Effect.void : Deferred.await(confirming),
   );
@@ -481,53 +513,58 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
       yield* shrink(union());
     }).pipe(Effect.uninterruptible),
   );
-  const blockOrigins = Effect.fn("BrowserOriginGrants.blockOrigins")(function* (
-    hosts: ReadonlyArray<string> | undefined,
-  ) {
-    const result = yield* Effect.sync(() => {
-      const blockedOrigin = (origin: string) =>
-        hosts === undefined || isBlockedBrowserUrl(origin, hosts);
-      const affected = new Set(
-        [...grants.values()]
-          .filter(
-            (grant) =>
-              !uncommittedGrants.has(key(grant.threadId, grant.origin)) &&
-              blockedOrigin(grant.origin),
-          )
-          .map((grant) => grant.threadId),
-      );
-      const signals: Array<Deferred.Deferred<void>> = [];
-      let changed = false;
-      for (const [id, entry] of pending)
-        if (blockedOrigin(entry.origin)) {
-          pending.delete(id);
-          ended.set(id, { threadId: entry.threadId, reason: "origin_changed" });
-          if (uncommittedGrants.delete(key(entry.threadId, entry.origin)))
-            grants.delete(key(entry.threadId, entry.origin));
-          signals.push(entry.stopped);
-          sequence++;
-          changed = true;
-        }
-      for (const [id, claim] of claims)
-        if (affected.has(claim.threadId)) {
-          claims.delete(id);
-          ended.set(id, { threadId: claim.threadId, reason: "origin_changed" });
-          sequence++;
-          changed = true;
-        }
-      for (const [id, grant] of grants)
-        if (blockedOrigin(grant.origin)) {
-          grants.delete(id);
-          uncommittedGrants.delete(id);
-          changed = true;
-        }
-      return { signals, changed };
-    });
-    if (!result.changed) return;
-    yield* advance;
-    for (const signal of result.signals) yield* Deferred.succeed(signal, undefined);
-    yield* shrink(union());
-  }, Effect.uninterruptible);
+  const blockOrigins = Effect.fn("BrowserOriginGrants.blockOrigins")(
+    function* (hosts: ReadonlyArray<string> | undefined) {
+      const result = yield* Effect.sync(() => {
+        const blockedOrigin = (origin: string) =>
+          hosts === undefined || isBlockedBrowserUrl(origin, hosts);
+        const affected = new Set(
+          [...grants.values()]
+            .filter(
+              (grant) =>
+                !uncommittedGrants.has(key(grant.threadId, grant.origin)) &&
+                blockedOrigin(grant.origin),
+            )
+            .map((grant) => grant.threadId),
+        );
+        const signals: Array<Deferred.Deferred<void>> = [];
+        let changed = false;
+        for (const [id, entry] of pending)
+          if (blockedOrigin(entry.origin)) {
+            pending.delete(id);
+            ended.set(id, { threadId: entry.threadId, reason: "origin_changed" });
+            if (uncommittedGrants.delete(key(entry.threadId, entry.origin)))
+              grants.delete(key(entry.threadId, entry.origin));
+            signals.push(entry.stopped);
+            sequence++;
+            changed = true;
+          }
+        for (const [id, claim] of claims)
+          if (affected.has(claim.threadId)) {
+            claims.delete(id);
+            ended.set(id, { threadId: claim.threadId, reason: "origin_changed" });
+            sequence++;
+            changed = true;
+          }
+        for (const [id, grant] of grants)
+          if (blockedOrigin(grant.origin)) {
+            grants.delete(id);
+            uncommittedGrants.delete(id);
+            changed = true;
+          }
+        return { signals, changed };
+      });
+      if (!result.changed) return;
+      yield* advance;
+      for (const signal of result.signals) yield* Deferred.succeed(signal, undefined);
+      yield* scheduleNarrowing(union());
+    },
+    (effect) =>
+      effect.pipe(
+        Effect.provideService(Scheduler.PreventSchedulerYield, true),
+        Effect.uninterruptible,
+      ),
+  );
   const end = Effect.fn("BrowserOriginGrants.end")(
     (threadId: ThreadId, claimId: string, generation: number, reason: "origin_changed") =>
       lock.withPermits(1)(
@@ -641,7 +678,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     });
     if (judgment === "ended") {
       yield* advance;
-      yield* shrink(union());
+      yield* scheduleNarrowing(union());
     }
     return judgment === "allowed";
   }, Effect.uninterruptible);
