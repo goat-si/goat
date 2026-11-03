@@ -141,12 +141,13 @@ const stopProcessTree = (child: NodeChildProcess.ChildProcess, signal: NodeJS.Si
   child.kill(signal);
 };
 
-// No pid means the spawn failed; a live child whose pipe broke is stopped, and close ends the run.
+// No pid means the spawn failed; a live child whose pipe broke is stopped and fails once it closes.
 const endOnError =
-  (spawnFailure: PromiseWithResolvers<Error>) =>
+  (spawnFailure: PromiseWithResolvers<Error>, onPipeFailure = () => {}) =>
   (error: Error, child: NodeChildProcess.ChildProcess) => {
-    if (child.pid === undefined) spawnFailure.resolve(error);
-    else stopProcessTree(child, "SIGKILL");
+    if (child.pid === undefined) return spawnFailure.resolve(error);
+    onPipeFailure();
+    stopProcessTree(child, "SIGKILL");
   };
 
 const spawnOwnedCommand = async (
@@ -182,6 +183,7 @@ export const layerHost = Layer.succeed(SshRuntimeHost, {
       // install script waits on, and with it the install lock.
       const controller = new AbortController();
       const spawnFailure = Promise.withResolvers<Error>();
+      let pipeFailed = false;
       const started = spawnOwnedCommand(
         input.command,
         input.args.map((arg) => bashScriptArg(input.command, arg)),
@@ -191,7 +193,9 @@ export const layerHost = Layer.succeed(SshRuntimeHost, {
           windowsHide: true,
           stdio: ["pipe", "pipe", "pipe"],
         },
-        endOnError(spawnFailure),
+        endOnError(spawnFailure, () => {
+          pipeFailed = true;
+        }),
         undefined,
         controller.signal,
       );
@@ -211,7 +215,9 @@ export const layerHost = Layer.succeed(SshRuntimeHost, {
             }, 5_000).unref();
           }, input.timeoutMs);
           try {
-            return await result;
+            const settled = await result;
+            // Output lost to a broken pipe cannot vouch for success, even after a clean leader exit.
+            return pipeFailed ? { ...settled, code: null } : settled;
           } finally {
             await dispose();
           }

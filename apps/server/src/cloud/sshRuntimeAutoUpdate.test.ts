@@ -561,6 +561,37 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         expect(child.signalCode).toBe("SIGKILL");
       }).pipe(Effect.provide(SshRuntimeAutoUpdate.layerHost)),
     );
+    it.live("an output pipe that breaks after a clean leader exit still fails the run", () =>
+      Effect.gen(function* () {
+        const create = NodeChildProcess.spawn;
+        const spawned = Promise.withResolvers<NodeChildProcess.ChildProcess>();
+        using _spawn = vi.spyOn(NodeChildProcess, "spawn").mockImplementationOnce((...args) => {
+          const child = Reflect.apply(
+            create,
+            NodeChildProcess,
+            args,
+          ) as NodeChildProcess.ChildProcess;
+          spawned.resolve(child);
+          return child;
+        });
+        const host = yield* SshRuntimeAutoUpdate.SshRuntimeHost;
+        // The background sleep keeps the output pipe open after the shell exits 0.
+        const running = yield* host
+          .run({
+            command: "/bin/sh",
+            args: ["-c", 'sleep 600 & printf "ready\\n"; exit 0'],
+            env: { PATH: process.env.PATH },
+            timeoutMs: 600_000,
+          })
+          .pipe(Effect.forkChild);
+        const child = yield* Effect.promise(() => spawned.promise);
+        yield* Effect.promise(() => new Promise((resolve) => child.once("exit", resolve)));
+        expect(child.exitCode).toBe(0);
+        child.stdout?.destroy(new Error("output pipe broke"));
+        const result = yield* Fiber.join(running);
+        expect(result.code).toBeNull();
+      }).pipe(Effect.provide(SshRuntimeAutoUpdate.layerHost)),
+    );
     it.live("a timed-out host command also stops the processes it started", () =>
       Effect.gen(function* () {
         const host = yield* SshRuntimeAutoUpdate.SshRuntimeHost;
