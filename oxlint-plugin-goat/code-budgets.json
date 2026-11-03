@@ -494,7 +494,7 @@
   "apps/web/src/components/chat/ChatComposer.tsx": { "lines": 3925, "nonNull": 2 },
   "apps/web/src/components/chat/ComposerFooterControls.tsx": { "nonNull": 1 },
   "apps/web/src/components/chat/ComposerStashMenu.tsx": { "nonNull": 1 },
-  "apps/web/src/components/chat/MessagesTimeline.browser.test.tsx": { "lines": 1122 },
+  "apps/web/src/components/chat/MessagesTimeline.browser.test.tsx": { "lines": 1128 },
   "apps/web/src/components/chat/MessagesTimeline.logic.test.ts": { "lines": 4493 },
   "apps/web/src/components/chat/MessagesTimeline.logic.ts": { "lines": 2619, "nonNull": 9 },
   "apps/web/src/components/chat/MessagesTimeline.tsx": { "lines": 1680 },
