@@ -278,6 +278,7 @@ export function serverEnvironment(
     ...env,
     GOAT_DEV_AUTH_TOKEN: credential,
     GOAT_TELEMETRY_ENABLED: "false",
+    GOAT_CODEX_APP_SERVER_TRANSPORT: "stdio",
     GOAT_SOAK_PROVIDER_LIFECYCLE_LOG: lifecyclePath,
   };
 }
@@ -287,9 +288,12 @@ export async function spawnWatchedServer(
   args: string[],
   options: NodeChildProcess.SpawnOptions,
   watchdogOutput: number | "ignore" = "ignore",
+  platform?: NodeJS.Platform,
 ) {
-  // oxlint-disable-next-line goat/no-global-process-runtime -- This standalone driver requires POSIX process groups.
-  if (process.platform === "win32") throw new Error("soak watchdog requires POSIX process groups");
+  // oxlint-disable-next-line goat/no-global-process-runtime -- This standalone driver selects its host process model.
+  const hostPlatform = platform ?? NodeOS.platform();
+  if (hostPlatform === "win32")
+    return { server: spawnOwned(command, args, options), watchdog: undefined };
   const stdio = options.stdio;
   if (!Array.isArray(stdio) || stdio.length !== 3)
     throw new Error("server requires three stdio entries");
@@ -547,7 +551,8 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
     const watched = await spawnServer(options, root, lifecycle, credential);
     server = watched.server;
     watchdog = watched.watchdog;
-    owned.push(server, watchdog);
+    owned.push(server);
+    if (watchdog) owned.push(watchdog);
     server.child.stdout?.resume();
     server.child.stderr?.resume();
     process.stdout.write(`owned server pid: ${server.child.pid}\n`);
@@ -556,10 +561,14 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
     });
     await Promise.race([
       waitForReady(server, NodePath.join(options.home, "userdata"), options.serverPort),
-      watchdog.failure,
-      watchdog.exited.then(() => {
-        throw new Error("server watchdog exited before readiness");
-      }),
+      ...(watchdog
+        ? [
+            watchdog.failure,
+            watchdog.exited.then(() => {
+              throw new Error("server watchdog exited before readiness");
+            }),
+          ]
+        : []),
       stopped,
     ]);
     runtimeConfirmed = verifyRuntimeState(
@@ -638,10 +647,14 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
     workloadResult = await Promise.race([
       workload,
       server.failure,
-      watchdog.failure,
-      watchdog.exited.then(() => {
-        throw new Error("server watchdog exited during workload");
-      }),
+      ...(watchdog
+        ? [
+            watchdog.failure,
+            watchdog.exited.then(() => {
+              throw new Error("server watchdog exited during workload");
+            }),
+          ]
+        : []),
       burnerFailure,
       stopped,
       server.exited.then(() => {
@@ -821,6 +834,9 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
       serverPid: server?.child.pid ?? null,
       ownedPids: owned.map(({ child }) => child.pid),
       cleanupSurvivors,
+      ...(!watchdog && server
+        ? { terminationResidual: "On Windows, a SIGKILLed driver can leave the server running." }
+        : {}),
       window: { start: startedAt, end: endedAt, drainEnd: drainEndedAt },
       loadStartedAt,
       drainEndedAt,

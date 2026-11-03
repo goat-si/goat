@@ -755,6 +755,7 @@ describe("soak input safety", () => {
         LANG: "en_US.UTF-8",
         SECRET_TOKEN: "secret",
         VITE_WS_URL: "bad",
+        GOAT_CODEX_APP_SERVER_TRANSPORT: "socket",
       },
       "/tmp/lifecycle",
       "credential",
