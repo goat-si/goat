@@ -378,6 +378,66 @@ const threadFixture = Effect.fn("LeaseRouteTest.threadFixture")(function* (
 });
 
 describe("computer use lease route", () => {
+  it.effect("a claimed-tab call to a newly blocked host is refused at validation", () =>
+    Effect.gen(function* () {
+      let hosts: ReadonlyArray<string> = [];
+      const grants = yield* makeBrowserOriginGrants({
+        environmentId: EnvironmentId.make("environment:test"),
+        supported: () => true,
+        blockedHosts: () => hosts,
+        publish: () => Effect.void,
+        bind: () =>
+          Effect.succeed({
+            targetId: "target-1",
+            tabId: "tab",
+            title: "Site",
+            url: "https://example.test",
+            driverGeneration: 1,
+          }),
+      });
+      const pending = yield* grants.request({
+        threadId,
+        pid: 42,
+        windowId: 7,
+        origin: "https://example.test",
+        windowTitle: "Browser",
+      });
+      if (pending.status !== "pending") return assert.fail("expected pending");
+      yield* grants.answer(pending.claimId, true);
+      const route = yield* threadFixture({
+        grants: { ...grants, setDriverCapability: () => Effect.void },
+      });
+      const scoped = {
+        tab_id: "tab",
+        target_id: "target-1",
+        session: "goat-claim:" + pending.claimId,
+        origin_scope: ["https://example.test"],
+      };
+      assert.deepEqual(yield* route.reserve("browser_click", scoped), {
+        status: "admitted",
+        reservationId: "reservation:test",
+      });
+      hosts = ["other.test"];
+      assert.deepEqual(
+        yield* route.reserve("browser_navigate", { ...scoped, url: "https://other.test/page" }),
+        { status: "refused", detail: "outside_manifest" },
+      );
+      assert.deepEqual(yield* route.reserve("browser_click", scoped), {
+        status: "admitted",
+        reservationId: "reservation:test",
+      });
+      hosts = ["example.test"];
+      assert.deepEqual(
+        yield* route.postCall({
+          action: "validate",
+          controlId: "control:test",
+          connectionId: "driver:1",
+          reservationId: "reservation:test",
+        }),
+        { status: "refused", detail: "outside_manifest" },
+      );
+    }).pipe(Effect.scoped, Effect.provide(ServerSettings.layerTest({ enableCua: true }))),
+  );
   it.effect("validation refuses a claim revoked while the call waited for admission", () =>
     Effect.gen(function* () {
       const context = yield* Layer.build(
