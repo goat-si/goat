@@ -835,6 +835,7 @@ const make = Effect.gen(function* () {
     tab.control.onChange(ServerBrowserScreen.authorityReporter(tab, screen.notify));
     tab.control.onChange(() => (broadcastControl(tab), reportLiveTabs()));
     reportLiveTabs();
+    if (desktop) void page.waitForLoadState("load").then(() => reportLoaded(tab), constVoid);
     // Existing desktop and popup PDFs can start loading before interception attaches.
     if (
       snapshot.navStatus._tag === "Loading" &&

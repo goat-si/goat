@@ -65,7 +65,7 @@ vi.mock("./ServerBrowserContexts.ts", () => ({
       return makeEncoderPage() as unknown as Page;
     }
     async connectDesktopPage(endpoint: string) {
-      const context = makeContext();
+      const context = makeContext(undefined, desktopPageUrl);
       context.page.viewportSize.mockReturnValue(null);
       desktopConnections.push({ endpoint, context });
       return { browser: { close: async () => {} }, page: context.page as unknown as Page };
@@ -88,12 +88,12 @@ function fileChooserElement(accept: string) {
   };
 }
 
-function makeContext(onClose?: (context: BrowserContext) => void) {
+function makeContext(onClose?: (context: BrowserContext) => void, initialUrl = "about:blank") {
   const events = new NodeEvents.EventEmitter();
   const nativeFileChooser = vi.fn();
   const setChooserFiles = vi.fn(async (_files: unknown) => {});
   const sessions: ReturnType<typeof makeSession>[] = [];
-  let url = "about:blank";
+  let url = initialUrl;
   let viewport: ReturnType<Page["viewportSize"]> = { width: 1280, height: 800 };
   const cssViewport = { width: 1920, height: 1080 };
   let closed = false;
@@ -238,6 +238,7 @@ let contextGate: PromiseWithResolvers<void> | null = null;
 let contextFailure: Error | null = null;
 let initialNavigation: (() => Promise<void>) | null = null;
 let desktopRendersNext = false;
+let desktopPageUrl = "about:blank";
 /** Replaces the answer to the desktop page's size reads. */
 let desktopSizeAnswer: (() => Promise<Record<string, unknown>>) | null = null;
 const desktopDetaches = new NodeEvents.EventEmitter();
@@ -386,6 +387,7 @@ beforeEach(() => {
   mockCopy.focusedFrame = null;
   desktopTabs.clear();
   desktopRendersNext = false;
+  desktopPageUrl = "about:blank";
   desktopSizeAnswer = null;
   desktopDetachReady = Promise.withResolvers<void>();
   desktopReleased = Promise.withResolvers<void>();
@@ -641,6 +643,33 @@ it.live.each(["desktop" as const, undefined])(
         expect(reused.tabId).toBe(tabId);
       }),
     ).pipe(Effect.provide(layer)),
+);
+
+it.effect("a desktop page that loaded before the server attached reports its loaded title", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { broker } = yield* ready;
+      const manager = yield* Manager.PreviewManager;
+      const events = yield* manager.subscribeEvents;
+      desktopRendersNext = true;
+      desktopPageUrl = "https://example.com/loaded";
+      const opened = yield* broker.invoke<PreviewAutomationStatus>({
+        scope,
+        operation: "open",
+        input: { url: desktopPageUrl, reuseExistingTab: false, show: false, session: "profile" },
+      });
+      let event = yield* PubSub.take(events);
+      while (event.type !== "navigated" || event.tabId !== opened.tabId) {
+        event = yield* PubSub.take(events);
+      }
+
+      expect(event.snapshot.navStatus).toEqual({
+        _tag: "Success",
+        url: "https://example.com/loaded",
+        title: "test page",
+      });
+    }),
+  ).pipe(Effect.provide(layer)),
 );
 
 it.live.each([
