@@ -54,6 +54,8 @@ import * as UsageLimitSources from "../usage/UsageLimitSources.ts";
 import { lowerRuntimeMode } from "./ChannelGateway.ts";
 import * as ChannelBotSession from "./ChannelBotSession.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
+import { refuseForward } from "./channelForwardRefusal.ts";
+import { makeForwardFollowUp } from "./channelForwardFollowUp.ts";
 import * as ChannelChildWork from "./ChannelChildWork.ts";
 import * as ChannelRemoteWorkers from "./ChannelRemoteWorkers.ts";
 import { makeChannelProjectChoices } from "./channelProjectChoices.ts";
@@ -62,7 +64,6 @@ import {
   answerForwardIdsFor,
   questionIdFor,
   stopIdsFor,
-  turnSteerIdsFor,
   workerLaunchIdsFor,
 } from "./channelIds.ts";
 import { choosePlacement, type PlacementCandidate, usageWindows } from "./channelPlacement.ts";
@@ -957,161 +958,7 @@ const make = Effect.gen(function* () {
    * completion fence set with the follow-up is lifted in the same write, so the task settles on
    * that run and never on the one before it.
    */
-  const forwardFollowUp = (
-    pending: ChannelLedger.ChannelPendingEvent,
-    event: Extract<ChannelLedger.ChannelPendingEvent["event"], { type: "task.followup.received" }>,
-    owner: string,
-  ) =>
-    Effect.gen(function* () {
-      const stored = yield* ledger.getTask(event.taskId);
-      const worker = stored?.task.worker;
-      const target = stored?.task.target;
-      // Work that was stopped, finished, or restarted as a new generation never gets an old
-      // follow-up: sending it would start a run nothing reports on.
-      if (
-        stored === undefined ||
-        worker === undefined ||
-        target === undefined ||
-        (stored.task.status !== "running" && stored.task.status !== "waiting_input") ||
-        stored.task.generation !== event.payload.generation
-      ) {
-        yield* ledger.completeForward({ owner, sequence: pending.sequence });
-        return;
-      }
-      // In order per task: a later follow-up never overtakes an earlier one still waiting.
-      if (
-        yield* ledger.hasEarlierPendingForward({ taskId: event.taskId, sequence: pending.sequence })
-      ) {
-        return;
-      }
-      // A person stopped the worker's run in GOAT after this follow-up was recorded. Sending it
-      // would start the worker again; instead the follow-up is dropped and the fence lifted, so
-      // reconciliation records the stop as it does for any stopped run.
-      const records = yield* threads
-        .getThreadRecords(worker.threadId, ["runs"])
-        .pipe(Effect.option);
-      const newest = Option.match(records, {
-        onNone: () => undefined,
-        onSome: (value) =>
-          value.runs.toSorted((left, right) => left.ordinal - right.ordinal).at(-1),
-      });
-      if (newest?.status === "cancelled") {
-        const latest = (yield* ledger.getTask(event.taskId)) ?? stored;
-        if (latest.pendingAnswerMessageId !== undefined) {
-          const lifted = yield* commitTransition(
-            ledger,
-            latest,
-            { type: "task.worker.bound", payload: { worker: { ...worker, runId: newest.id } } },
-            { owner, pendingAnswerMessageId: null },
-          );
-          if (lifted === undefined) return;
-        }
-        yield* ledger.completeForward({ owner, sequence: pending.sequence });
-        return;
-      }
-      const refused = yield* Ref.make<DispatchModeRefusal | undefined>(undefined);
-      const send = (attempt: "first" | "queued") => {
-        const ids = turnSteerIdsFor(event.payload.inputId, attempt);
-        return threads
-          .sendToThread({
-            projectId: ProjectId.make(target.projectId),
-            commandId: ids.commandId,
-            threadId: worker.threadId,
-            messageId: ids.messageId,
-            text: "Follow-up from " + event.payload.from + ": " + event.payload.text,
-            attachments: [],
-            // First into the running run when it can take steering; the second attempt only
-            // queues, which the thread accepts whatever its run is doing.
-            mode: attempt === "first" ? "auto" : "queue",
-            createdBy: "user",
-            creationSource: "server",
-          })
-          .pipe(
-            Effect.provideService(DispatchModeLimit, {
-              runtimeMode: stored.task.requester.runtimeModeCeiling,
-              interactionMode: "default",
-              refused,
-            }),
-            Effect.result,
-          );
-      };
-      const rejected = (failure: { readonly _tag: string }) =>
-        failure._tag === "OrchestratorCommandRejectedError" ||
-        failure._tag === "OrchestratorCommandPreviouslyRejectedError";
-      let sent = yield* send("first");
-      // A rejected command id is refused for good, so a definite rejection gets one more attempt
-      // under its own ids rather than retrying the same ones forever.
-      if (
-        sent._tag === "Failure" &&
-        rejected(sent.failure) &&
-        (yield* Ref.get(refused)) === undefined
-      ) {
-        sent = yield* send("queued");
-      }
-      if (sent._tag === "Failure") {
-        const refusal = yield* Ref.get(refused);
-        if (refusal !== undefined || rejected(sent.failure)) {
-          // Read again: an earlier follow-up's question may have moved the task since.
-          const asked = yield* askRequester(
-            (yield* ledger.getTask(event.taskId)) ?? stored,
-            refusal !== undefined
-              ? "The thread doing this now runs in " +
-                  refusal.runtimeMode +
-                  " mode, above what this work may use, so I didn't pass on your follow-up (\"" +
-                  event.payload.text +
-                  "\"). Lower the thread's mode in GOAT, or say it again there."
-              : "The thread doing this didn't take your follow-up (\"" +
-                  event.payload.text +
-                  '"). Say it again, or open the thread in GOAT.',
-            owner,
-            { clearPendingAnswer: true },
-          );
-          // Done only once the person has been told; otherwise the next pass tells them.
-          if (asked === undefined) return;
-          yield* ledger.completeForward({ owner, sequence: pending.sequence });
-          return;
-        }
-        // Not known to be refused; the next pass sends it again under the same ids.
-        yield* Effect.logWarning("channel follow-up forward failed", {
-          taskId: stored.task.taskId,
-          cause: sent.failure,
-        });
-        return;
-      }
-      const latest = yield* ledger.getTask(event.taskId);
-      if (
-        latest === undefined ||
-        latest.task.worker === undefined ||
-        (latest.task.status !== "running" && latest.task.status !== "waiting_input")
-      ) {
-        // Settling waits for pending forwards, so this means the task was stopped meanwhile.
-        yield* ledger.completeForward({ owner, sequence: pending.sequence });
-        return;
-      }
-      // Bind the task to the run that took the follow-up. Only the follow-up that set the fence
-      // lifts it; an earlier one leaves a later one's fence in place.
-      const own = [
-        turnSteerIdsFor(event.payload.inputId, "first").messageId,
-        turnSteerIdsFor(event.payload.inputId, "queued").messageId,
-      ] as ReadonlyArray<string>;
-      const ownsFence =
-        latest.pendingAnswerMessageId !== undefined && own.includes(latest.pendingAnswerMessageId);
-      if (ownsFence || latest.task.worker.runId !== sent.success.run.id) {
-        const bound = yield* commitTransition(
-          ledger,
-          latest,
-          {
-            type: "task.worker.bound",
-            payload: { worker: { ...latest.task.worker, runId: sent.success.run.id } },
-          },
-          { owner, ...(ownsFence ? { pendingAnswerMessageId: null } : {}) },
-        );
-        // A concurrent write moved the task; the next pass sends again under the same ids,
-        // which lands on the same run, and binds then.
-        if (bound === undefined) return;
-      }
-      yield* ledger.completeForward({ owner, sequence: pending.sequence });
-    });
+  const forwardFollowUp = yield* makeForwardFollowUp(askRequester);
 
   /**
    * Stops the worker of a task a person stopped from chat: a full thread stop, which also holds
@@ -1254,6 +1101,7 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       // GOAT Bot sessions route by run: a stop or follow-up must reach only its own task's run.
       if (yield* session.forward(pending, owner)) return;
+      if (!(yield* ledger.isForwardPending(pending.sequence))) return;
       const event = pending.event;
       if (event.type === "task.followup.received") {
         return yield* forwardFollowUp(pending, event, owner);
@@ -1273,6 +1121,40 @@ const make = Effect.gen(function* () {
         return;
       }
       const ids = answerForwardIdsFor(event.eventId);
+      const requester = yield* requesterForDispatch(stored.task).pipe(
+        Effect.provideService(ChannelLedger.ChannelLedger, ledger),
+        Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
+      );
+      if (requester === undefined) {
+        const projection = yield* threads
+          .getThreadRecords(worker.threadId, ["messages", "runs"])
+          .pipe(Effect.option);
+        if (Option.isNone(projection)) return;
+        const accepted =
+          projection.value.messages.some((message) => message.id === ids.messageId) ||
+          projection.value.runs.some((run) => run.userMessageId === ids.messageId);
+        if (accepted) {
+          yield* ledger.completeForward({ owner, sequence: pending.sequence });
+          return;
+        }
+        yield* refuseForward(
+          ledger,
+          stored,
+          "The requester’s permission changed; your answer was not sent. Open the thread in GOAT.",
+          owner,
+          pending.sequence,
+        ).pipe(
+          Effect.mapError(
+            (cause) =>
+              new ChannelLedger.ChannelLedgerError({
+                reason: "persistence",
+                detail: "Could not record forward refusal.",
+                cause,
+              }),
+          ),
+        );
+        return;
+      }
       // The worker's modes may have been raised since the task started. The orchestrator re-checks
       // them against the requester's ceiling inside the thread's command lock.
       const refused = yield* Ref.make<DispatchModeRefusal | undefined>(undefined);
@@ -1290,7 +1172,7 @@ const make = Effect.gen(function* () {
         })
         .pipe(
           Effect.provideService(DispatchModeLimit, {
-            runtimeMode: stored.task.requester.runtimeModeCeiling,
+            runtimeMode: requester.runtimeModeCeiling,
             interactionMode: "default",
             refused,
           }),

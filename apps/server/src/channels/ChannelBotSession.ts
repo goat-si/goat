@@ -770,7 +770,6 @@ const make = Effect.gen(function* () {
         return;
       }
       yield* refuseForward(
-        sql,
         ledger,
         stored,
         result._tag === "permission_changed"
@@ -807,7 +806,6 @@ const make = Effect.gen(function* () {
       if (result._tag === "failed" && result.refusal === undefined && !rejected(result.failure))
         return;
       yield* refuseForward(
-        sql,
         ledger,
         stored,
         result._tag === "permission_changed"
@@ -966,10 +964,7 @@ const make = Effect.gen(function* () {
     function* (pending, owner) {
       const stored = yield* ledger.getTask(pending.event.taskId);
       if (stored === undefined || !isSessionTask(stored.task)) return false;
-      const state = yield* sql<{ readonly forward_state: string }>`
-        SELECT forward_state FROM channel_task_events WHERE sequence = ${pending.sequence}
-      `;
-      if (state[0]?.forward_state !== "pending") return true;
+      if (!(yield* ledger.isForwardPending(pending.sequence))) return true;
       const event = pending.event;
       if (event.type === "task.followup.received") yield* forwardFollowUp(pending, event, owner);
       else if (event.type === "task.cancelled")

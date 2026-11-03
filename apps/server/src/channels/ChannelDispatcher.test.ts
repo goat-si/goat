@@ -1,14 +1,23 @@
 import { assert, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as TestClock from "effect/testing/TestClock";
-import { MessageId, ProviderInstanceId, ThreadId } from "@goat/contracts";
+import {
+  ChannelInputId,
+  ChannelQuestionId,
+  MessageId,
+  ProviderInstanceId,
+  ThreadId,
+} from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as SqlClient from "effect/sql/SqlClient";
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { DispatchModeLimit } from "../orchestration-v2/DispatchModeLimit.ts";
+import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import { channelBotFilesFor } from "./channelBotNotes.ts";
 
 import * as ChannelDispatcher from "./ChannelDispatcher.ts";
@@ -18,15 +27,99 @@ import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
+import { commitTransition } from "./channelTaskWrites.ts";
 import {
   defaultScript,
   goatInput,
+  linkSlackUser,
   makeHarness,
   modelSelection,
   onlyTask,
   rpcContext,
   setupBot,
+  slackContext,
+  slackInput,
 } from "./testkit/ChannelHarness.ts";
+
+it.effect.each([
+  ["followup", false],
+  ["followup", true],
+  ["answer", false],
+  ["answer", true],
+] as const)("#2193 rechecks non-session authority %s", ([kind, revoked]) => {
+  const harness = makeHarness();
+  return Effect.gen(function* () {
+    yield* setupBot;
+    yield* linkSlackUser();
+    const gateway = yield* ChannelGateway.ChannelGateway;
+    const runtime = yield* ChannelRuntime.ChannelRuntime;
+    const ledger = yield* ChannelLedger.ChannelLedger;
+    const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+    yield* gateway.ingest(slackInput("do: inspect the build", "authority-1"), slackContext);
+    yield* runtime.drain;
+    const task = yield* onlyTask;
+    assert.strictEqual(task.status, "running");
+    if (kind === "answer") {
+      const questionId = ChannelQuestionId.make("question:authority");
+      yield* commitTransition(
+        ledger,
+        (yield* ledger.getTask(task.taskId))!,
+        {
+          type: "task.question.opened",
+          payload: { question: { questionId, text: "Which?", askedAt: task.updatedAt } },
+        },
+        { owner: runtime.ownerToken },
+      );
+      yield* commitTransition(
+        ledger,
+        (yield* ledger.getTask(task.taskId))!,
+        {
+          type: "task.question.answered",
+          payload: { questionId, answer: "the big one" },
+        },
+        { owner: runtime.ownerToken, forward: true, pendingAnswerMessageId: "answer-fence" },
+      );
+    } else {
+      yield* commitTransition(
+        ledger,
+        (yield* ledger.getTask(task.taskId))!,
+        {
+          type: "task.followup.received",
+          payload: {
+            inputId: ChannelInputId.make("input:authority"),
+            text: "check logs",
+            from: "Owner",
+            generation: task.generation,
+          },
+        },
+        { owner: runtime.ownerToken, forward: true, pendingAnswerMessageId: "followup-fence" },
+      );
+    }
+    const threads = yield* ThreadManagement.ThreadManagementService;
+    const send = threads.sendToThread;
+    const ceilings: Array<string | undefined> = [];
+    Object.assign(threads, {
+      sendToThread: (input: Parameters<typeof send>[0]) =>
+        Effect.flatMap(DispatchModeLimit, (limit) => {
+          ceilings.push(limit?.runtimeMode);
+          return send(input);
+        }),
+    });
+    const sql = yield* SqlClient.SqlClient;
+    if (revoked)
+      yield* sql`UPDATE channel_identities SET granted_scopes_json = '[]' WHERE connection_id = 'slack-1' AND external_actor_id = 'U1'`;
+    else
+      yield* sql`UPDATE channel_identities SET runtime_mode_ceiling = 'approval-required' WHERE connection_id = 'slack-1' AND external_actor_id = 'U1'`;
+    const [pending] = yield* ledger.listPendingForwards(10);
+    yield* dispatcher.forward(pending!, runtime.ownerToken);
+    if (revoked) {
+      assert.lengthOf(harness.world.sends, 0);
+      assert.include((yield* onlyTask).openQuestions[0]!.text, "permission");
+    } else {
+      assert.deepStrictEqual(ceilings, ["approval-required"]);
+    }
+  }).pipe(Effect.provide(harness.layer));
+});
 
 it.effect(
   "freezes before local launch and reuses the exact brief after interrupted acceptance",

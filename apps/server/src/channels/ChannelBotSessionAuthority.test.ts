@@ -13,7 +13,7 @@ import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
 import { goatBotSessionThreadIdFor, taskIdFor, turnSteerIdsFor } from "./channelIds.ts";
-import { commitTransition } from "./channelTaskWrites.ts";
+import { commitTransition, prepareTransition } from "./channelTaskWrites.ts";
 import * as SqlClient from "effect/sql/SqlClient";
 import {
   environmentId,
@@ -117,6 +117,66 @@ const claimedFromTeammate = (key: string, memoryGrantCeiling?: "read" | "read_wr
   });
 
 describe("GOAT Bot sessions under the requester's current authority", () => {
+  it.effect(
+    "#2193 rolls back forward completion when the refusal question loses a version race",
+    () => {
+      const harness = sessionHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        yield* linkTeammate;
+        const task = yield* dispatchNow(yield* receiveFromTeammate("look: task", "atomic-1"));
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const reception = yield* ChannelReceptionService.ChannelReceptionService;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const input = yield* gateway.ingest(
+          slackInput("more:" + task.taskId + " logs", "atomic-2", "1760000000.000900", "U2"),
+          slackContext,
+        );
+        yield* reception.receive(input.inputId, runtime.ownerToken);
+        const [pending] = yield* ledger.listPendingForwards(10);
+        const stored = (yield* ledger.getTask(task.taskId))!;
+        const prepared = prepareTransition(
+          stored,
+          {
+            type: "task.question.opened",
+            payload: {
+              question: {
+                questionId: ChannelQuestionId.make("question:atomic"),
+                text: "permission changed",
+                askedAt: task.updatedAt,
+              },
+            },
+          },
+          task.updatedAt,
+          undefined,
+        );
+        assert.isTrue(prepared.ok);
+        if (!prepared.ok) return;
+        yield* commitTransition(
+          ledger,
+          stored,
+          {
+            type: "task.progress",
+            payload: { generation: task.generation, summary: "Still running." },
+          },
+          { owner: runtime.ownerToken },
+        );
+        const failure = yield* Effect.flip(
+          ledger.applyTaskEvent({
+            owner: runtime.ownerToken,
+            write: prepared.write,
+            deliveries: [],
+            completeForwardSequence: pending!.sequence,
+          }),
+        );
+        assert.strictEqual(failure.reason, "version_conflict");
+        assert.isTrue(yield* ledger.isForwardPending(pending!.sequence));
+        assert.lengthOf((yield* current(task.taskId)).openQuestions, 0);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
   it.effect.each([false, true])(
     "#2193 does not repeat a refused forward when permission is restored: %s",
     (restored) => {

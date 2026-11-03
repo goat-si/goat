@@ -1,3 +1,4 @@
+import { forwardQueries } from "./channelForwardQueries.ts";
 import { deliveryLedger } from "./channelDeliveryLedger.ts";
 import * as SessionReceiptGate from "../orchestration-v2/goat/SessionReceiptGate.ts";
 import * as Option from "effect/Option";
@@ -302,6 +303,7 @@ export class ChannelLedger extends Context.Service<
       readonly cursor?: number | undefined;
       /** Changes the task's remote worker state in the same transaction. */
       readonly remoteWorker?: RemoteWorkerStateUpdate | undefined;
+      readonly completeForwardSequence?: number | undefined;
     }) => Effect.Effect<number, ChannelLedgerError>;
     /** Marks why a finished run is not reported yet; the owner scan re-checks held tasks. */
     readonly setCompletionHold: (input: {
@@ -418,6 +420,7 @@ export class ChannelLedger extends Context.Service<
       readonly taskId: ChannelTaskId;
       readonly sequence: number;
     }) => Effect.Effect<boolean, ChannelLedgerError>;
+    readonly isForwardPending: (sequence: number) => Effect.Effect<boolean, ChannelLedgerError>;
     readonly completeForward: (input: {
       readonly owner: string;
       readonly sequence: number;
@@ -1284,6 +1287,14 @@ const make = Effect.gen(function* () {
         .withTransaction(
           Effect.gen(function* () {
             yield* fence(input.owner);
+            if (input.completeForwardSequence !== undefined) {
+              const pending = yield* sql<{ readonly sequence: number }>`
+                UPDATE channel_task_events SET forward_state = 'done'
+                WHERE sequence = ${input.completeForwardSequence} AND task_id = ${input.write.next.taskId}
+                  AND forward_state = 'pending' RETURNING sequence
+              `;
+              if (pending.length === 0) return 0;
+            }
             const sequence = yield* writeTaskEvent(input.write);
             yield* insertDeliveries(input.deliveries, input.write.event.occurredAt);
             if (input.cursor !== undefined) {
@@ -1588,25 +1599,7 @@ const make = Effect.gen(function* () {
             Effect.mapError(toLedgerError("outcomeDeliveries")),
           ),
 
-    hasPendingForward: (taskId) =>
-      sql<{ readonly found: number }>`
-        SELECT 1 AS found FROM channel_task_events
-        WHERE task_id = ${taskId} AND forward_state = 'pending' LIMIT 1
-      `.pipe(
-        Effect.map((rows) => rows.length > 0),
-        Effect.mapError(toLedgerError("hasPendingForward")),
-      ),
-
-    hasEarlierPendingForward: (input) =>
-      sql<{ readonly found: number }>`
-        SELECT 1 AS found FROM channel_task_events
-        WHERE task_id = ${input.taskId} AND forward_state = 'pending'
-          AND sequence < ${input.sequence}
-        LIMIT 1
-      `.pipe(
-        Effect.map((rows) => rows.length > 0),
-        Effect.mapError(toLedgerError("hasEarlierPendingForward")),
-      ),
+    ...forwardQueries(sql, toLedgerError),
 
     completeForward: (input) =>
       sql
