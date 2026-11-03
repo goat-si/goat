@@ -272,6 +272,60 @@ describe("Observability.layer", () => {
   );
 });
 
+it.effect("writes retained parents and marks late children in local traces (#2465)", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const dir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-parent-policy-" });
+    const result = yield* Effect.gen(function* () {
+      const tracer = yield* Tracer.Tracer;
+      const root = Tracer.externalSpan({ traceId: "1".repeat(32), spanId: "2".repeat(16) });
+      const make = (name: string, parent: Tracer.AnySpan) =>
+        tracer.span({
+          name,
+          parent: Option.some(parent),
+          annotations: Context.empty(),
+          links: [],
+          startTime: 0n,
+          kind: "internal",
+          root: false,
+          sampled: true,
+        });
+      const earlyParent = make("SqliteWriter.send", root);
+      const earlyChild = make("fixture.early", earlyParent);
+      earlyChild.end(1_000_000n, Exit.void);
+      earlyParent.end(1_000_000n, Exit.void);
+      const lateParent = make("SqliteWriter.send", root);
+      const lateChild = make("fixture.late", lateParent);
+      lateParent.end(1_000_000n, Exit.void);
+      lateChild.end(1_000_000n, Exit.void);
+      return {
+        path: (yield* ServerConfig.ServerConfig).serverTracePath,
+        earlyParent: earlyParent.spanId,
+        lateParent: lateParent.spanId,
+      };
+    }).pipe(
+      Effect.provide(
+        Observability.layer.pipe(
+          Layer.provideMerge(ServerConfig.layerTest(dir, dir)),
+          Layer.provide(ResourceAttribution.layer),
+          Layer.provide(layerTraceCollector([])),
+        ),
+      ),
+    );
+    const records = (yield* fs.readFileString(result.path))
+      .trim()
+      .split("\n")
+      .map(decodeTraceRecord);
+    assert.isTrue(records.some((record) => record.spanId === result.earlyParent));
+    assert.isFalse(records.some((record) => record.spanId === result.lateParent));
+    const early = records.find((record) => record.name === "fixture.early");
+    const late = records.find((record) => record.name === "fixture.late");
+    assert.equal(early?.parentSpanId, result.earlyParent);
+    assert.equal(late?.parentSpanId, result.lateParent);
+    assert.isTrue(late?.attributes["trace.parent_omitted"]);
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
 it.effect.each(["Info", "Debug", "Trace"] as const)(
   "applies the local SQL policy at %s while preserving OTLP spans",
   (traceMinLevel) =>

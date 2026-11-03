@@ -5,7 +5,7 @@ import type { LocalSpanEvents } from "@goat/shared/observability";
 
 // Boundaries that run hundreds of times a minute and almost always finish in microseconds. A fast
 // success says nothing the parent span does not; a slow or failed call is still written.
-const HOT_SPANS: ReadonlySet<string> = new Set([
+export const HOT_SPANS: ReadonlySet<string> = new Set([
   "CodexAdapterV2.appendReasoning",
   "CodexAssistantText.flushBeforeTool",
   "ChannelSessionFirst.observe",
@@ -30,7 +30,7 @@ const HOT_SPANS: ReadonlySet<string> = new Set([
   "resolveClaudeHomePath",
   "shell.resolveMacosGit",
 ]);
-const SQL_SPANS: ReadonlySet<string> = new Set(["sqlite", "sql.transaction"]);
+export const SQL_SPANS: ReadonlySet<string> = new Set(["sqlite", "sql.transaction"]);
 // Every transaction records one of these; a rollback or any other event is still evidence.
 const ROUTINE_SQL_EVENTS: ReadonlySet<string> = new Set([
   "effect.sql.transaction.commit",
@@ -42,7 +42,7 @@ const FAST_SPAN_NANOS = 10_000_000n;
  * Leaves a span out of the local trace file only when it is a hot boundary or uncontended SQL that
  * ended successfully under a parent within 10 ms, with nothing attached worth reading.
  */
-export function keepLocalSpan(span: Tracer.Span, events: LocalSpanEvents): boolean {
+function hasEvidence(span: Tracer.Span, events: LocalSpanEvents): boolean {
   const sql = SQL_SPANS.has(span.name);
   if (!sql && !HOT_SPANS.has(span.name)) return true;
   if (span.status._tag !== "Ended" || !Exit.isSuccess(span.status.exit)) return true;
@@ -55,4 +55,32 @@ export function keepLocalSpan(span: Tracer.Span, events: LocalSpanEvents): boole
   }
   const duration = span.status.endTime - span.status.startTime;
   return duration < 0n || duration >= FAST_SPAN_NANOS;
+}
+
+export function makeLocalSpanPolicy() {
+  const parents = new Set<string>();
+  const dropped = new Set<string>();
+  const limit = 10_000;
+  const key = (span: Tracer.AnySpan) => `${span.traceId}:${span.spanId}`;
+  const remember = (set: Set<string>, id: string) => {
+    if (set.has(id)) return;
+    // Evicting old ids can leave an orphan or an unmarked omitted parent.
+    const oldest = set.values().next().value;
+    if (set.size >= limit && oldest !== undefined) set.delete(oldest);
+    set.add(id);
+  };
+  return (span: Tracer.Span, events: LocalSpanEvents): boolean => {
+    const id = key(span);
+    const needed = parents.delete(id);
+    if (!needed && !hasEvidence(span, events)) {
+      remember(dropped, id);
+      return false;
+    }
+    if (Option.isSome(span.parent)) {
+      const parentId = key(span.parent.value);
+      if (dropped.has(parentId)) span.attribute("trace.parent_omitted", true);
+      else remember(parents, parentId);
+    }
+    return true;
+  };
 }

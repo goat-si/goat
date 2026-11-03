@@ -1,9 +1,14 @@
+// @effect-diagnostics nodeBuiltinImport:off -- The synchronous source guard reads repository files.
 import { assert, it } from "vite-plus/test";
 import * as Context from "effect/Context";
 import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Tracer from "effect/Tracer";
-import { keepLocalSpan } from "./tracePolicy.ts";
+import * as Statement from "effect/sql/Statement";
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
+import * as NodeURL from "node:url";
+import { HOT_SPANS, SQL_SPANS, makeLocalSpanPolicy } from "./tracePolicy.ts";
 
 const parent = Tracer.externalSpan({ traceId: "trace", spanId: "parent" });
 const span = (
@@ -34,16 +39,62 @@ const span = (
   if (!options.unfinished) native.end(options.endNanos ?? 1_000_000n, options.exit ?? Exit.void);
   return native;
 };
-const keep = (native: Tracer.NativeSpan) => keepLocalSpan(native, native.events);
+const makeKeep = () => {
+  const policy = makeLocalSpanPolicy();
+  return (native: Tracer.NativeSpan) => policy(native, native.events);
+};
 
 it("keeps a fast parent when its recorded child ends first (#2465)", () => {
+  const keep = makeKeep();
   const hotParent = span("SqliteWriter.send");
   const child = span("child", { parent: hotParent });
   assert.isTrue(keep(child));
   assert.isTrue(keep(hotParent));
 });
 
+it("marks a recorded child whose fast parent already ended (#2465)", () => {
+  const keep = makeKeep();
+  const hotParent = span("SqliteWriter.send");
+  const child = span("child", { parent: hotParent });
+  assert.isFalse(keep(hotParent));
+  assert.isTrue(keep(child));
+  assert.isTrue(child.attributes.get("trace.parent_omitted"));
+});
+
+it("keeps policy names aligned with span names in source (#2465)", () => {
+  const root = NodePath.resolve(import.meta.dirname, "../../../..");
+  const files = NodeFS.globSync(["apps/server/src/**/*.ts", "packages/*/src/**/*.ts"], {
+    cwd: root,
+    exclude: ["**/*.test.ts", "**/tracePolicy.ts"],
+  });
+  const names = new Set<string>();
+  for (const file of files) {
+    const source = NodeFS.readFileSync(NodePath.join(root, file), "utf8");
+    for (const match of source.matchAll(
+      /\b(?:Effect\.)?(?:fn|withSpan|useSpan)\(\s*["']([^"']+)["']/g,
+    )) {
+      if (match[1]) names.add(match[1]);
+    }
+  }
+  for (const name of HOT_SPANS) assert.isTrue(names.has(name), name);
+  const sqlite = NodeFS.readFileSync(
+    NodePath.join(root, "packages/shared/src/nodeSqliteClient.ts"),
+    "utf8",
+  );
+  assert.match(sqlite, /\[ATTR_DB_SYSTEM_NAME,\s*["']sqlite["']\]/);
+  names.add(Statement.spanName([["db.system.name", "sqlite"]]));
+  const sqlClient = NodeFS.readFileSync(
+    NodeURL.fileURLToPath(import.meta.resolve("effect/sql/SqlClient")),
+    "utf8",
+  );
+  for (const match of sqlClient.matchAll(/\b(?:Effect\.)?useSpan\(\s*["']([^"']+)["']/g)) {
+    if (match[1]) names.add(match[1]);
+  }
+  for (const name of SQL_SPANS) assert.isTrue(names.has(name), name);
+});
+
 it("leaves out only fast successful hot spans and uncontended SQL", () => {
+  const keep = makeKeep();
   assert.isFalse(keep(span("SqliteWriter.send")));
   assert.isFalse(keep(span("OpenCodexQuotaPool.routeOf")));
   assert.isFalse(keep(span("sqlite", { wait: 0 })));
@@ -56,6 +107,7 @@ it("leaves out only fast successful hot spans and uncontended SQL", () => {
 });
 
 it("keeps every span that carries evidence", () => {
+  const keep = makeKeep();
   const kept = {
     "an unlisted name": span("ProviderTurnStartService.start"),
     "a slow hot span": span("SqliteWriter.send", { endNanos: 10_000_000n }),
