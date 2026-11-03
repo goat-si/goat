@@ -24,6 +24,7 @@ import * as Scope from "effect/Scope";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as TestClock from "effect/testing/TestClock";
+import * as Stream from "effect/Stream";
 import * as Path from "effect/Path";
 import * as Option from "effect/Option";
 
@@ -69,6 +70,7 @@ const bootstrapScenario = (
     auxiliary: Deferred.Deferred<void>;
   },
   intent: Option.Option<DesktopStopIntent> = Option.none(),
+  readerEffect: Effect.Effect<Option.Option<DesktopStopIntent>> = Effect.succeed(intent),
 ) =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -87,7 +89,7 @@ const bootstrapScenario = (
       const imports = { importedThreadCount: 0, importedMessageCount: 0 };
       const dependencies = Layer.mergeAll(
         Layer.succeed(DesktopStopIntentReader.DesktopStopIntentReader, {
-          atShutdown: Effect.succeed(intent),
+          atShutdown: readerEffect,
         }),
         NodeCrypto.layer,
         Path.layer,
@@ -356,6 +358,43 @@ it.effect.each(["relaunch", "unknown"] as const)("records shutdown intent: %s", 
           message[1]?.requestedAt === (reason === "relaunch" ? "2026-01-01T00:00:00Z" : undefined),
       ),
     );
+  }),
+);
+
+it.effect("shutdown finalizer bounds stalled intent I/O and logs unknown", () =>
+  Effect.gen(function* () {
+    const started = yield* Deferred.make<void>();
+    const messages: unknown[] = [];
+    const logger = Logger.make(({ message }) => {
+      messages.push(message);
+    });
+    const fs = FileSystem.layerNoop({
+      stream: () =>
+        Stream.fromEffect(Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never))),
+    });
+    yield* Effect.gen(function* () {
+      const reader = yield* DesktopStopIntentReader.DesktopStopIntentReader;
+      const fiber = yield* bootstrapScenario(
+        "disabled-codex",
+        Effect.void,
+        Option.none(),
+        reader.atShutdown,
+      ).pipe(
+        Effect.provide(Logger.layer([logger], { mergeWithExisting: false })),
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.await(started);
+      yield* TestClock.adjust("1 second");
+      yield* Fiber.join(fiber);
+      assert.isTrue(
+        messages.some(
+          (message) =>
+            Array.isArray(message) &&
+            message[0] === "Server shutdown intent" &&
+            message[1]?.reason === "unknown",
+        ),
+      );
+    }).pipe(Effect.provide(DesktopStopIntentReader.layer("/intent", 123).pipe(Layer.provide(fs))));
   }),
 );
 

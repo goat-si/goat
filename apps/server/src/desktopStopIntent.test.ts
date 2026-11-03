@@ -1,6 +1,10 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
+import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -15,16 +19,33 @@ const intent = {
   requestedAt: "2026-01-01T00:00:00Z",
 } as const;
 
-it.effect.each(["match", "other-pid", "invalid"] as const)(
+it.effect.each(["match", "other-pid", "invalid", "no-pid", "oversized"] as const)(
   "reads and removes %s intent",
   (scenario) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = (yield* Path.Path).join(yield* fs.makeTempDirectoryScoped(), "intent.json");
-      yield* fs.writeFileString(path, scenario === "invalid" ? "{" : JSON.stringify(intent));
+      const noPid = {
+        version: intent.version,
+        reason: intent.reason,
+        requestedAt: intent.requestedAt,
+      };
+      yield* fs.writeFileString(
+        path,
+        scenario === "invalid"
+          ? "{"
+          : scenario === "oversized"
+            ? JSON.stringify(intent).padEnd(4097, " ")
+            : JSON.stringify(scenario === "no-pid" ? noPid : intent),
+      );
       yield* Effect.gen(function* () {
         const reader = yield* StopIntent.DesktopStopIntentReader;
-        const expected = scenario === "match" ? Option.some(intent) : Option.none();
+        const expected =
+          scenario === "match"
+            ? Option.some(intent)
+            : scenario === "no-pid"
+              ? Option.some(noPid)
+              : Option.none();
         assert.deepStrictEqual(yield* reader.atShutdown, expected);
         assert.isFalse(yield* fs.exists(path));
         yield* fs.writeFileString(path, JSON.stringify({ ...intent, reason: "quit" }));
@@ -74,13 +95,13 @@ it.effect("permission denied is cached as a terminal result", () =>
   Effect.gen(function* () {
     let reads = 0;
     const fs = FileSystem.layerNoop({
-      readFileString: (path) => {
+      stream: (path) => {
         reads++;
-        return Effect.fail(
+        return Stream.fail(
           PlatformError.systemError({
             _tag: "PermissionDenied",
             module: "FileSystem",
-            method: "readFileString",
+            method: "stream",
             pathOrDescriptor: path,
           }),
         );
@@ -92,5 +113,34 @@ it.effect("permission denied is cached as a terminal result", () =>
       assert.deepStrictEqual(yield* reader.atShutdown, Option.none());
       assert.equal(reads, 1);
     }).pipe(Effect.provide(StopIntent.layer("/intent.json", 123).pipe(Layer.provide(fs))));
+  }),
+);
+
+it.effect.each(["read", "delete", "concurrent"] as const)("stalled %s is bounded", (scenario) =>
+  Effect.gen(function* () {
+    const started = yield* Deferred.make<void>();
+    const fs = FileSystem.layerNoop({
+      stream: () =>
+        scenario === "delete"
+          ? Stream.fromIterable([new TextEncoder().encode(JSON.stringify(intent))])
+          : Stream.fromEffect(
+              Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
+            ),
+      remove: () => Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
+    });
+    yield* Effect.gen(function* () {
+      const reader = yield* StopIntent.DesktopStopIntentReader;
+      const calls =
+        scenario === "concurrent" ? [reader.atShutdown, reader.atShutdown] : [reader.atShutdown];
+      const fiber = yield* Effect.all(calls, { concurrency: "unbounded" }).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.await(started);
+      yield* TestClock.adjust("1 second");
+      assert.deepStrictEqual(
+        yield* Fiber.join(fiber),
+        calls.map(() => Option.none()),
+      );
+    }).pipe(Effect.provide(StopIntent.layer("/intent", 123).pipe(Layer.provide(fs))));
   }),
 );
