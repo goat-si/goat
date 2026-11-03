@@ -16,7 +16,7 @@ export class EffectExecutionFences extends Context.Service<
     readonly revision: Effect.Effect<number>;
     readonly awaitChange: (revision: number) => Effect.Effect<Option.Option<Effect.Effect<void>>>;
     readonly setGeneralCapacity: (count: number) => Effect.Effect<void>;
-    readonly snapshot: Effect.Effect<{
+    readonly snapshotWith: (input: { readonly startCapacity: number }) => Effect.Effect<{
       readonly fullLanes: ReadonlyArray<EffectLane>;
       readonly titleThreads: ReadonlyArray<string>;
       readonly mainThreads: ReadonlyArray<string>;
@@ -77,24 +77,28 @@ export const layer = Layer.sync(EffectExecutionFences, () => {
         generalCapacity = count;
       }),
     ),
-    snapshot: Effect.sync(() => {
-      const counts = { general: 0, control: 0, cleanup: 0 };
-      const titleThreads: string[] = [];
-      const mainThreads: string[] = [];
-      for (const { effect } of active.values()) {
-        counts[EFFECT_LANES[effect.request.type]]++;
-        (effect.request.type === "thread-title.generate" ? titleThreads : mainThreads).push(
-          effect.threadId,
-        );
-      }
-      return {
-        fullLanes: (["general", "control", "cleanup"] as const).filter(
-          (lane) => counts[lane] >= (lane === "general" ? generalCapacity : 1),
-        ),
-        titleThreads,
-        mainThreads,
-      };
-    }),
+    snapshotWith: Effect.fn("EffectExecutionFences.snapshotWith")((input) =>
+      Effect.sync(() => {
+        const counts = { general: 0, control: 0, cleanup: 0, start: 0 };
+        const titleThreads: string[] = [];
+        const mainThreads: string[] = [];
+        for (const { effect } of active.values()) {
+          counts[EFFECT_LANES[effect.request.type]]++;
+          (effect.request.type === "thread-title.generate" ? titleThreads : mainThreads).push(
+            effect.threadId,
+          );
+        }
+        return {
+          fullLanes: (["general", "control", "cleanup", "start"] as const).filter(
+            (lane) =>
+              counts[lane] >=
+              (lane === "general" ? generalCapacity : lane === "start" ? input.startCapacity : 1),
+          ),
+          titleThreads,
+          mainThreads,
+        };
+      }),
+    ),
     admissions: Effect.sync(() => Array.from(active.values(), ({ effect }) => effect)),
     admitClaim: Effect.fn("EffectExecutionFences.admitClaim")((effect) =>
       Effect.sync(() => {

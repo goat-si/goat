@@ -566,12 +566,12 @@ it.effect(
             runRecoveryOnce: Effect.succeed(false),
           }),
           Layer.mock(EffectOutbox.EffectOutboxV2)({
+            listNeverAttemptedStarts: () => Effect.succeed([]),
             reconcileAfterProcessLoss: Effect.succeed({ requeued: 0, cancelled: 0 }),
           }),
         ),
       ),
     );
-
     return Effect.gen(function* () {
       const summary = yield* (yield* ProviderRuntimeRecovery.ProviderRuntimeRecoveryService)
         .recover;

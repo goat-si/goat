@@ -607,14 +607,20 @@ export interface OrchestrationEffectWorkerV2Shape {
   readonly configureConcurrency: (count: number) => Effect.Effect<void>;
   readonly awaitControlWork: Effect.Effect<void>;
   readonly awaitCleanupWork: Effect.Effect<void>;
+  readonly awaitStartWork: Effect.Effect<void>;
   readonly runGeneralOnce: Effect.Effect<boolean, OrchestrationEffectWorkerError>;
   readonly runControlOnce: Effect.Effect<boolean, OrchestrationEffectWorkerError>;
   readonly runCleanupOnce: Effect.Effect<boolean, OrchestrationEffectWorkerError>;
+  readonly runStartOnce: Effect.Effect<boolean, OrchestrationEffectWorkerError>;
   readonly nextGeneralClaimableAt: Effect.Effect<
     Option.Option<DateTime.Utc>,
     OrchestrationEffectWorkerError
   >;
   readonly nextControlClaimableAt: Effect.Effect<
+    Option.Option<DateTime.Utc>,
+    OrchestrationEffectWorkerError
+  >;
+  readonly nextStartClaimableAt: Effect.Effect<
     Option.Option<DateTime.Utc>,
     OrchestrationEffectWorkerError
   >;
@@ -954,12 +960,15 @@ export const layerWithOptions = (
         }),
         awaitControlWork: awaitLaneWork(outbox.awaitControlAvailable),
         awaitCleanupWork: awaitLaneWork(outbox.awaitCleanupAvailable),
+        awaitStartWork: awaitLaneWork(outbox.awaitStartAvailable),
         runGeneralOnce: runOnce(false, effectTypesForLane("general")),
         runControlOnce: runOnce(false, effectTypesForLane("control")),
         runCleanupOnce: runOnce(false, effectTypesForLane("cleanup")),
+        runStartOnce: runOnce(false, effectTypesForLane("start")),
         nextGeneralClaimableAt: nextFor(effectTypesForLane("general")),
         nextControlClaimableAt: nextFor(effectTypesForLane("control")),
         nextCleanupClaimableAt: nextFor(effectTypesForLane("cleanup")),
+        nextStartClaimableAt: nextFor(effectTypesForLane("start")),
         awaitWork: awaitLaneWork(outbox.awaitAvailable),
         runOnce: runOnce(),
         runRecoveryOnce: runOnce(true),

@@ -156,6 +156,7 @@ const bootstrapScenario = (
           runGeneralOnce: Effect.never,
           runControlOnce: Effect.never,
           runCleanupOnce: Effect.never,
+          runStartOnce: Effect.never,
         }),
         Layer.mock(ServerLifecycleEvents.ServerLifecycleEvents)({
           publish: (event) =>

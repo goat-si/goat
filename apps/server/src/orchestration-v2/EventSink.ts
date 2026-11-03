@@ -170,10 +170,10 @@ export interface EventSinkV2Shape {
     readonly effects: ReadonlyArray<EffectOutbox.PendingOrchestrationEffectV2>;
     /** Queue runtime work without changing projections; requires at least one effect. */
     readonly allowEffectOnly?: boolean;
-    readonly cancelUnsettledEffects?: {
-      readonly effectTypes: ReadonlyArray<EffectOutbox.OrchestrationEffectRequestV2["type"]>;
-      readonly reason: string;
-    };
+    readonly cancelUnsettledEffects?: Omit<
+      Parameters<EffectOutbox.EffectOutboxV2Shape["cancelUnsettled"]>[0],
+      "threadId"
+    >;
     /** Like writeWithEffects' updateDelegatedCompletionOnly, for this run's run.updated only. */
     readonly updateDelegatedCompletionOnlyRunId?: RunId;
   }) => Effect.Effect<

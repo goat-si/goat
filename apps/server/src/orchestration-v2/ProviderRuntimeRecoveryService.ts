@@ -276,8 +276,26 @@ export const make = Effect.gen(function* () {
           (agent) => agent.providerThreadId === null || !cloudThreadIds.has(agent.providerThreadId),
         ),
       };
+      const pendingStarts = projection.runs.some((run) => run.status === "starting")
+        ? yield* outbox.listNeverAttemptedStarts(projection.thread.id).pipe(
+            Effect.mapError(
+              (cause) =>
+                new ProviderRuntimeRecoveryError({
+                  operation: "reconcile",
+                  threadId: projection.thread.id,
+                  cause,
+                }),
+            ),
+          )
+        : [];
+      const preservedRunIds = new Set(
+        pendingStarts.flatMap((effect) =>
+          effect.request.type === "provider-turn.start" ? [effect.request.runId] : [],
+        ),
+      );
       const runs = [] as Array<OrchestrationV2ThreadProjection["runs"][number]>;
       for (const run of nonterminalRuns(projection)) {
+        if (run.status === "starting" && preservedRunIds.has(run.id)) continue;
         if (run.status === "waiting") {
           const checkpointEffects = yield* outbox
             .listByCommandId(CommandId.make(`command:effect:checkpoint.capture:${run.id}`))
@@ -592,7 +610,10 @@ export const make = Effect.gen(function* () {
           payload: { ...task, completionWake: "always", updatedAt: now },
         });
       }
-      const recoveredNonterminalRunIds = new Set(runs.map((run) => run.id));
+      const recoveredNonterminalRunIds = new Set([
+        ...runs.map((run) => run.id),
+        ...preservedRunIds,
+      ]);
       const cancelledStaleNodeIds = new Set<string>();
       for (const item of projection.turnItems ?? []) {
         if (item.runId !== null && recoveredNonterminalRunIds.has(item.runId)) {
@@ -770,6 +791,7 @@ export const make = Effect.gen(function* () {
             threadId: projection.thread.id,
             effectTypes: EffectOutbox.PROCESS_BOUND_EFFECT_TYPES,
             reason: detail,
+            preserveNeverAttemptedStarts: true,
           })
           .pipe(
             Effect.mapError(
@@ -796,6 +818,7 @@ export const make = Effect.gen(function* () {
             cancelUnsettledEffects: {
               effectTypes: EffectOutbox.PROCESS_BOUND_EFFECT_TYPES,
               reason: detail,
+              preserveNeverAttemptedStarts: true,
             },
           })
           .pipe(
