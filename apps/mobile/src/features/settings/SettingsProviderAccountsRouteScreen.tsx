@@ -233,6 +233,9 @@ function ProviderAccount({
   const signedIn =
     provider.auth.status === "authenticated" ||
     (provider.auth.status === "unknown" && state?.phase === "succeeded");
+  const usesCredentials =
+    provider.driver === "antigravity" &&
+    (provider.auth.type === "gemini-api-key" || provider.auth.type === "agent-platform");
   const isDiscovering =
     provider.driver === "acpRegistry" &&
     !active &&
@@ -446,7 +449,7 @@ function ProviderAccount({
       ) : !active && !needsExternalSetup && provider.setup?.canAuthenticate !== false ? (
         <SettingsActionRow
           icon="person.crop.circle"
-          label={signedIn ? "Change account" : "Sign in"}
+          label={signedIn ? "Change account" : usesCredentials ? "Connect" : "Sign in"}
           disabled={disabled || !provider.enabled || !provider.installed || state === null}
           loading={pending}
           onPress={chooseMethod}
