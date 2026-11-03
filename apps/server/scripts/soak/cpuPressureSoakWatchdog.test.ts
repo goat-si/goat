@@ -1,9 +1,11 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeChildProcess from "node:child_process";
+import * as NodeFS from "node:fs";
 import * as NodeReadline from "node:readline";
 import { guardChild } from "@goat/shared/errorGuards";
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import { soakServerGateScript } from "./cpuPressureSoak.ts";
 
 async function readDriverReady(
   driver: NodeChildProcess.ChildProcessWithoutNullStreams,
@@ -40,6 +42,50 @@ it.live("reports the driver's stderr when it exits before readiness", () =>
     await expect(readDriverReady(driver, lines)).rejects.toThrow("fixture startup failure");
     expect(await exited).toBe(1);
   }),
+);
+
+// oxlint-disable-next-line goat/no-global-process-runtime -- The gate uses POSIX shell file descriptors.
+it.live.skipIf(process.platform === "win32")(
+  "starts the server only after the POSIX shell gate receives a line",
+  () =>
+    Effect.promise(async () => {
+      const shell = NodeFS.existsSync("/bin/dash") ? "/bin/dash" : "/bin/sh";
+      const run = async (input: string) => {
+        const child = guardChild(
+          NodeChildProcess.spawn(
+            shell,
+            [
+              "-c",
+              soakServerGateScript,
+              "soak-server",
+              process.execPath,
+              "-e",
+              'process.stdout.write("started")',
+            ],
+            { stdio: ["ignore", "pipe", "pipe", "pipe"] },
+          ),
+          () => {},
+        );
+        let stdout = "";
+        let stderr = "";
+        child.stdout.setEncoding("utf8");
+        child.stdout.on("data", (chunk: string) => {
+          stdout += chunk;
+        });
+        child.stderr.setEncoding("utf8");
+        child.stderr.on("data", (chunk: string) => {
+          stderr += chunk;
+        });
+        const closed = new Promise<number | null>((resolve) => child.once("close", resolve));
+        const gate = child.stdio[3];
+        if (!gate || !("end" in gate) || typeof gate.end !== "function")
+          throw new Error("missing gate pipe");
+        gate.end(input);
+        return { code: await closed, stdout, stderr };
+      };
+      expect(await run("start\n")).toMatchObject({ code: 0, stdout: "started", stderr: "" });
+      expect(await run("")).toMatchObject({ code: 1, stdout: "" });
+    }),
 );
 
 // oxlint-disable-next-line goat/no-global-process-runtime -- Process groups are unavailable on Windows.

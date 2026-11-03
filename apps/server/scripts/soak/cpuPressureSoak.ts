@@ -283,6 +283,8 @@ export function serverEnvironment(
   };
 }
 
+export const soakServerGateScript = 'IFS= read -r <&3 || exit 1; exec "$@"';
+
 export async function spawnWatchedServer(
   command: string,
   args: string[],
@@ -300,7 +302,7 @@ export async function spawnWatchedServer(
   // The gate closes if the driver dies before the watchdog can claim the process group.
   const server = spawnOwned(
     "/bin/sh",
-    ["-c", 'IFS= read -r <&3 || exit 1; exec "$@"', "soak-server", command, ...args],
+    ["-c", soakServerGateScript, "soak-server", command, ...args],
     { ...options, stdio: [...stdio, "pipe"], detached: true },
   );
   const pgid = server.child.pid;
