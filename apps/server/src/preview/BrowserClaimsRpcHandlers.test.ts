@@ -13,6 +13,20 @@ import * as RpcAuthorization from "../auth/RpcAuthorization.ts";
 import { sessionResolver } from "../handoffs/HumanStepAuthority.ts";
 import * as BrowserRpc from "./BrowserClaimsRpcHandlers.ts";
 
+it.effect("browser window listing is person-only and unavailable without the driver", () =>
+  Effect.gen(function* () {
+    for (const subject of ["mcp-client", "paired-person"]) {
+      const handlers = BrowserRpc.makeBrowserClaimsRpcHandlers(Option.none(), { subject });
+      const result = yield* handlers[WS_METHODS.browserClaimsWindows]().pipe(Effect.result);
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure")
+        expect(result.failure._tag).toBe(
+          subject === "mcp-client" ? "EnvironmentAuthorizationError" : "BrowserClaimsRpcError",
+        );
+    }
+  }),
+);
+
 it.effect("refuses browser claim subscriptions from non-person sessions", () =>
   Effect.gen(function* () {
     const handlers = BrowserRpc.makeBrowserClaimsRpcHandlers(Option.none(), {

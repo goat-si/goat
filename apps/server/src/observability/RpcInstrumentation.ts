@@ -19,6 +19,7 @@ type WsRpcMethod = RpcGroup.Rpcs<typeof WsRpcGroup | typeof WsHubNodesRpcGroup>[
 
 // Trace queries and dashboards depend on these labels, including deviations from method prefixes.
 const RPC_AGGREGATES = {
+  [WS_METHODS.browserClaimsWindows]: "browserClaims",
   [WS_METHODS.browserClaimsClaim]: "browserClaims",
   [WS_METHODS.browserClaimsAnswer]: "browserClaims",
   [WS_METHODS.browserClaimsRevoke]: "browserClaims",

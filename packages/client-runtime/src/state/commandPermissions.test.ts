@@ -78,6 +78,8 @@ describe("command permissions", () => {
         const approve = { claimId: "claim:1", approved: true };
         const decline = { claimId: "claim:1", approved: false };
         registry.set(sessions(env), AsyncResult.success(grant(true)));
+        expect(registry.get(commands.claimWindows.permissionAtom(env))).toBe(true);
+        expect(registry.get(commands.claim.permissionAtom(env))).toBe(false);
         expect(registry.get(commands.claimAnswer.permissionAtom(env, approve))).toBe(false);
         expect(registry.get(commands.claimAnswer.permissionAtom(env, decline))).toBe(true);
         registry.set(
@@ -88,6 +90,7 @@ describe("command permissions", () => {
             permissions: [AuthOrchestrationOperateScope, AuthSettingsWriteScope],
           }),
         );
+        expect(registry.get(commands.claim.permissionAtom(env))).toBe(true);
         expect(registry.get(commands.claimAnswer.permissionAtom(env, approve))).toBe(true);
       }),
     ),

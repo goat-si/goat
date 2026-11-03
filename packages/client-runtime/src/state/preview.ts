@@ -25,6 +25,10 @@ export function createPreviewEnvironmentAtoms<R, E>(
       label: "environment-data:preview:claim-changes",
       tag: WS_METHODS.browserClaimsSubscribe,
     }),
+    claimWindows: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:preview:claim-windows",
+      tag: WS_METHODS.browserClaimsWindows,
+    }),
     claim: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:preview:claim",
       tag: WS_METHODS.browserClaimsClaim,

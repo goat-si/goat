@@ -10,6 +10,7 @@ import { useEnvironmentScope } from "~/state/session";
 
 import { PreviewPanelShell, type PreviewPanelMode } from "./PreviewPanelShell";
 import { PreviewView } from "./PreviewView";
+import { YourBrowserSection } from "./YourBrowserSection";
 
 interface Props {
   mode: PreviewPanelMode;
@@ -49,6 +50,7 @@ export function PreviewPanel({
 
   return (
     <PreviewPanelShell mode={mode}>
+      <YourBrowserSection threadRef={threadRef} />
       <PreviewView
         threadRef={threadRef}
         {...(tabId !== undefined ? { tabId } : {})}

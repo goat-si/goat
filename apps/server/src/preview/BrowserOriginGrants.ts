@@ -245,6 +245,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
   const claims = new Map<string, LiveTabClaim>();
   // The bind's driver target, kept off LiveTabClaim so people and agents never see it.
   const targets = new WeakMap<LiveTabClaim, string>();
+  const windowTitles = new WeakMap<LiveTabClaim, string>();
   const grants = new Map<string, BrowserOriginGrant>();
   const uncommittedGrants = new Set<string>();
   const blockedClaimEnds = new Map<string, ThreadId>();
@@ -406,6 +407,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
           };
           uncommittedGrants.delete(grantKey);
           targets.set(claim, tab.targetId);
+          windowTitles.set(claim, entry.windowTitle);
           claims.set(claimId, claim);
           pending.delete(claimId);
           yield* advance;
@@ -453,7 +455,11 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
   });
   const listAll = Effect.fn("BrowserOriginGrants.listAll")(() =>
     Effect.sync(() => ({
-      claims: [...claims.values()],
+      supported: deps.supported(),
+      claims: [...claims.values()].map((claim) => ({
+        ...claim,
+        windowTitle: windowTitles.get(claim) ?? claim.title,
+      })),
       grants: [...grants.values()].filter(
         (grant) => !uncommittedGrants.has(key(grant.threadId, grant.origin)),
       ),
@@ -804,6 +810,8 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     };
   });
   return {
+    claimsSupported: Effect.sync(deps.supported),
+    capabilityChanged: advance,
     request,
     requestWindow,
     answer,

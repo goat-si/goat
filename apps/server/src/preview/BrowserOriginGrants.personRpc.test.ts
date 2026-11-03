@@ -21,7 +21,12 @@ it.effect("person subscription emits the initial snapshot and each subsequent re
       Stream.runForEach((snapshot) => Queue.offer(snapshots, snapshot)),
       Effect.forkChild,
     );
-    assert.deepEqual(yield* Queue.take(snapshots), { claims: [], grants: [], pending: [] });
+    assert.deepEqual(yield* Queue.take(snapshots), {
+      supported: true,
+      claims: [],
+      grants: [],
+      pending: [],
+    });
     const result = yield* service.request({
       threadId: ThreadId.make("thread:one"),
       pid: 42,
@@ -111,6 +116,8 @@ it.effect("person claim and end attach once and keep the approved grant", () =>
     });
     if (answer.agentResult.status !== "attached") return assert.fail("expected attached");
     assert.equal(binds, 1);
+    assert.equal((yield* service.listAll()).claims[0]?.windowTitle, "Browser");
+    assert.equal((yield* service.listAll()).claims[0]?.title, "Site");
     assert.isTrue(yield* service.endPerson(answer.agentResult.claim.claimId));
     assert.deepEqual((yield* service.list(threadId)).claims, []);
     assert.lengthOf((yield* service.list(threadId)).grants, 1);
@@ -150,5 +157,26 @@ it.effect("agent requests use the observed window title and refuse missing windo
       "Failure",
     );
     assert.equal(reads, 2);
+  }),
+);
+
+it.effect("person subscription reports capability changes without polling", () =>
+  Effect.gen(function* () {
+    let supported = false;
+    const service = yield* makeTestBrowserOriginGrants({
+      environmentId: EnvironmentId.make("environment:test"),
+      supported: () => supported,
+      publish: () => Effect.void,
+      bind: () => Effect.die("must not bind"),
+    });
+    const snapshots = yield* Queue.unbounded<Effect.Success<ReturnType<typeof service.listAll>>>();
+    yield* service.subscribe().pipe(
+      Stream.runForEach((snapshot) => Queue.offer(snapshots, snapshot)),
+      Effect.forkChild,
+    );
+    assert.isFalse((yield* Queue.take(snapshots)).supported);
+    supported = true;
+    yield* service.capabilityChanged;
+    assert.isTrue((yield* Queue.take(snapshots)).supported);
   }),
 );

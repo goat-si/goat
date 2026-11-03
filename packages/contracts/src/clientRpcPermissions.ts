@@ -86,6 +86,7 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.memoryHubSettingsUpdate]: AuthSettingsWriteScope,
   [WS_METHODS.memoryReadSource]: AuthMemoryReadScope,
 
+  [WS_METHODS.browserClaimsWindows]: AuthOrchestrationOperateScope,
   [WS_METHODS.browserClaimsClaim]: AuthOrchestrationOperateScope,
   [WS_METHODS.browserClaimsAnswer]: AuthOrchestrationOperateScope,
   [WS_METHODS.browserClaimsRevoke]: AuthOrchestrationOperateScope,
