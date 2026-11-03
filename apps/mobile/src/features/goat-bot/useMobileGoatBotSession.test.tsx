@@ -212,7 +212,7 @@ describe("mobile GOAT Bot session selection", () => {
     });
     expect(deletes).toEqual([]);
   });
-  it("aborts and waits for the local transfer without deleting pending uploads on removal", async () => {
+  it("returns from removal immediately and releases the file after the aborted transfer settles", async () => {
     const env = EnvironmentId.make("remove-in-flight-upload");
     const uploadId = "pending-00000000-0000-4000-8000-000000000001-pdf";
     const file = {
@@ -227,6 +227,10 @@ describe("mobile GOAT Bot session selection", () => {
     harness.items = [];
     const started = Promise.withResolvers<void>();
     const transfer = Promise.withResolvers<void>();
+    const released = Promise.withResolvers<void>();
+    harness.release.mockImplementation(async () => {
+      released.resolve();
+    });
     let signal: AbortSignal | undefined;
     harness.transfer.mockReset().mockImplementation(async (_uri, _url, options) => {
       signal = options.signal;
@@ -259,15 +263,14 @@ describe("mobile GOAT Bot session selection", () => {
       await started.promise;
     });
     let settled = false;
-    let removal!: Promise<void>;
     await act(async () => {
-      removal = botSessions.disposeMobileGoatBotEnvironment(env).then(() => {
+      void botSessions.disposeMobileGoatBotEnvironment(env).then(() => {
         settled = true;
       });
       await Promise.resolve();
     });
     try {
-      expect(settled).toBe(false);
+      expect(settled).toBe(true);
       expect(signal?.aborted).toBe(true);
       expect(fileOwnership.isComposerAttachmentFileRetained(file.fileUri)).toBe(true);
       expect(harness.release).not.toHaveBeenCalled();
@@ -275,12 +278,76 @@ describe("mobile GOAT Bot session selection", () => {
       transfer.resolve();
     }
     await act(async () => {
-      await removal;
+      await released.promise;
     });
     expect(ingests).toEqual([]);
     expect(deletes).toEqual([]);
     expect(harness.release).toHaveBeenCalledWith([file]);
     expect(fileOwnership.isComposerAttachmentFileRetained(file.fileUri)).toBe(false);
+  });
+  it("returns from removal while a transfer and an earlier cleanup remain stalled", async () => {
+    const env = EnvironmentId.make("stalled-removal");
+    const file = {
+      id: "held",
+      type: "file" as const,
+      name: "held.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 42,
+      fileUri: "file:///documents/stalled.pdf",
+    };
+    const cleanupStarted = Promise.withResolvers<void>();
+    const cleanup = Promise.withResolvers<void>();
+    const started = Promise.withResolvers<void>();
+    const transfer = Promise.withResolvers<never>();
+    const failed = Promise.withResolvers<void>();
+    let signal: AbortSignal | undefined;
+    harness.environments = [environment(env)];
+    harness.items = [];
+    harness.key.mockReturnValueOnce("old").mockReturnValueOnce("held");
+    harness.release.mockImplementation(async () => {
+      cleanupStarted.resolve();
+      await cleanup.promise;
+    });
+    harness.transfer.mockImplementation((_uri, _url, options) => {
+      signal = options.signal;
+      started.resolve();
+      return transfer.promise;
+    });
+    harness.upload.mockImplementation(async (input) => {
+      input.onMinted("pending-held");
+      await input.transport("https://example.test/upload").done;
+      return { status: "uploaded", attachmentId: "pending-held" };
+    });
+    harness.run.mockImplementation(async (_registry, _command, args) => {
+      if ("input" in args && "idempotencyKey" in args.input) {
+        failed.resolve();
+        return { _tag: "Failure", cause: "offline" };
+      }
+      return { _tag: "Success", value: bot(env) };
+    });
+    await render();
+    await act(async () => {
+      session.onSend("first");
+      await failed.promise;
+    });
+    await act(async () => {
+      session.onDiscardInput("old");
+      await cleanupStarted.promise;
+    });
+    await act(async () => {
+      session.onSend("second", [file]);
+      await started.promise;
+    });
+    let settled = false;
+    await act(async () => {
+      void botSessions.disposeMobileGoatBotEnvironment(env).then(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+    });
+    expect(settled).toBe(true);
+    expect(signal?.aborted).toBe(true);
+    expect(fileOwnership.isComposerAttachmentFileRetained(file.fileUri)).toBe(true);
   });
   it("keeps a shared upload available for another failed message after discard (#2388)", async () => {
     const env = EnvironmentId.make("shared-upload-regression");

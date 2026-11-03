@@ -210,6 +210,31 @@ describe("attachmentUploadQueue", () => {
     vi.unstubAllGlobals();
   });
 
+  it("logs a failed cancelled-mint deletion while the attachment stays removed", async () => {
+    const image = makeImage("cancel-delete-failure");
+    const minted = Promise.withResolvers<unknown>();
+    const deletion = Promise.withResolvers<void>();
+    const error = new Error("delete failed");
+    mocks.runAtomCommand.mockImplementation((_registry: unknown, command: unknown) => {
+      if (command === mocks.createUploadUrl) return minted.promise;
+      deletion.resolve();
+      return Promise.resolve({ _tag: "Failure", error });
+    });
+    using warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    startAttachmentUpload({ environmentId: firstEnvironment, image });
+    releaseAttachmentUpload(image.id);
+    minted.resolve({
+      _tag: "Success",
+      value: { attachmentId: "pending-failed-cleanup", relativeUrl: "/upload", expiresAt: 1 },
+    });
+    await deletion.promise;
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(warning).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ error }));
+    expect(readAttachmentUpload(image.id)).toBeUndefined();
+  });
+
   it("keeps an attachment local until its own environment grants write access", async () => {
     const image = makeImage("permission-gain");
     mocks.readEnvironmentScope.mockImplementation(
