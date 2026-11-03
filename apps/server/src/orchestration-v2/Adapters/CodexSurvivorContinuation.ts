@@ -257,6 +257,7 @@ export const makeSurvivorNotifications = Effect.fn("CodexSurvivorContinuation.no
       tracked,
       handleNotification,
       hasGoalThreads: goalFences.hasGoals,
+      pendingGoalThreads: goalFences.pending,
       resumeGoalThreads: goalFences.resume(),
       makeSessionEvents: (providerSessionId: import("@goat/contracts").ProviderSessionId) =>
         makeCodexSessionEvents(client, providerSessionId, sessionLost),
