@@ -11,6 +11,8 @@ import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
+import * as SshAuth from "./auth.ts";
 import { targetConnectionKey } from "./command.ts";
 import { makeExistingServerRoutes } from "./existingServer.ts";
 import { requestedRuntime } from "./remoteRuntime.ts";
@@ -43,6 +45,7 @@ const listener = (handler: NodeHttp.RequestListener, port = 0) =>
 describe("existing Git Bash managed environment", () => {
   it.live("reads through a managed sidecar when the external primary uses the same port", () =>
     Effect.gen(function* () {
+      const client = yield* HttpClient.HttpClient;
       const reads: string[] = [];
       const owner = yield* listener((request, response) => {
         if (request.url === "/.well-known/goat/environment") {
@@ -152,22 +155,37 @@ describe("existing Git Bash managed environment", () => {
                 body += chunk;
               });
               request.on("end", () => {
-                void fetch(`http://127.0.0.1:${input.remotePort}${request.url}`, {
-                  method: request.method,
-                  headers: {
-                    authorization: request.headers.authorization ?? "",
-                    "content-type": "application/json",
+                const outbound = NodeHttp.request(
+                  {
+                    host: "127.0.0.1",
+                    port: input.remotePort,
+                    path: request.url,
+                    method: "POST",
+                    headers: {
+                      authorization: request.headers.authorization ?? "",
+                      "content-type": "application/json",
+                    },
                   },
-                  body,
-                })
-                  .then(async (remote) => {
-                    response.statusCode = remote.status;
-                    response.end(await remote.text());
-                  })
-                  .catch(() => {
-                    response.statusCode = 502;
-                    response.end();
-                  });
+                  (remote) => {
+                    let text = "";
+                    remote.on("data", (chunk) => {
+                      text += chunk;
+                    });
+                    remote.on("end", () => {
+                      response.statusCode = remote.statusCode ?? 502;
+                      response.end(text);
+                    });
+                    remote.on("error", () => {
+                      response.statusCode = 502;
+                      response.end();
+                    });
+                  },
+                );
+                outbound.on("error", () => {
+                  response.statusCode = 502;
+                  response.end();
+                });
+                outbound.end(body);
               });
             }, input.localPort).pipe(Scope.provide(input.scope));
             return {
@@ -194,23 +212,19 @@ describe("existing Git Bash managed environment", () => {
           runtimeModeCeiling: "full-access",
         });
         expect(session.token).toBe(token);
-        const response = yield* Effect.promise(() =>
-          fetch(`${sidecar.httpBaseUrl}mcp`, {
-            method: "POST",
-            headers: {
-              authorization: `Bearer ${session.token}`,
-              "content-type": "application/json",
-            },
-            body: JSON.stringify({
+        const response = yield* client.execute(
+          HttpClientRequest.post(`${sidecar.httpBaseUrl}mcp`).pipe(
+            HttpClientRequest.setHeader("authorization", `Bearer ${session.token}`),
+            HttpClientRequest.bodyJsonUnsafe({
               jsonrpc: "2.0",
               id: 1,
               method: "tools/call",
               params: { name: "goat_thread_read", arguments: { threadId: "thread-1" } },
             }),
-          }),
+          ),
         );
         expect(response.status).toBe(200);
-        expect(yield* Effect.promise(() => response.json())).toEqual({
+        expect(yield* response.json).toEqual({
           jsonrpc: "2.0",
           id: 1,
           result: { threadId: "thread-1" },
@@ -220,9 +234,18 @@ describe("existing Git Bash managed environment", () => {
         expect(tunnels.get(key)).toBe(primary);
         expect(primaryKilled).toBe(false);
       }).pipe(
-        Effect.provide(Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, transport)),
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, transport),
         Effect.provideService(NetService.NetService, NetService.make()),
       );
-    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          FetchHttpClient.layer,
+          SshAuth.SshPasswordPrompt.disabledLayer,
+          NodeServices.layer,
+        ),
+      ),
+      Effect.scoped,
+    ),
   );
 });

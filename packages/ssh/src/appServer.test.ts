@@ -3,7 +3,7 @@ import * as NodeHttp from "node:http";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
-import { ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
+import { EnvironmentId, ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import { servedRuntimeProtocolRanges } from "@goat/shared/sshRuntimeProtocol";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -51,7 +51,10 @@ interface AppServer {
 const startAppServer = (descriptor: object, sessionStatus = 200, replaceAfterDescriptor = false) =>
   Effect.acquireRelease(
     Effect.callback<
-      AppServer & { readonly server: NodeHttp.Server; readonly replacement?: NodeHttp.Server }
+      AppServer & {
+        readonly server: NodeHttp.Server;
+        readonly replacement: NodeHttp.Server | undefined;
+      }
     >((resume) => {
       const sessions: AppServer["sessions"] = [];
       let replacement: NodeHttp.Server | undefined;
@@ -194,7 +197,7 @@ const makeHost = Effect.fn("test.appServer.host")(function* (record: {
 describe("Git Bash managed server", () => {
   it.live("probes and issues a credential only for the requested live environment", () =>
     Effect.gen(function* () {
-      const id = "11111111-1111-4111-8111-111111111111";
+      const id = EnvironmentId.make("11111111-1111-4111-8111-111111111111");
       const descriptor = { ...attachableDescriptor, environmentId: id };
       const server = yield* startAppServer(descriptor);
       const host = yield* makeHost({
@@ -212,7 +215,7 @@ describe("Git Bash managed server", () => {
       const request = {
         kind: "session" as const,
         subject: "mcp-client" as const,
-        scopes: ["orchestration:read" as const],
+        scopes: ["orchestration:read"] as const,
         ttl: "12h" as const,
         label: "test",
       };
@@ -227,7 +230,7 @@ describe("Git Bash managed server", () => {
       expect((yield* probe()).kind).toBe("unusable");
       yield* issue(server.port).pipe(Effect.flip);
       yield* fs.writeFileString(`${dir}/environment-id`, `${id}\n`);
-      descriptor.environmentId = "22222222-2222-4222-8222-222222222222";
+      descriptor.environmentId = EnvironmentId.make("22222222-2222-4222-8222-222222222222");
       expect((yield* probe()).kind).toBe("unusable");
       yield* issue(server.port).pipe(Effect.flip);
       descriptor.environmentId = id;
@@ -249,7 +252,7 @@ describe("Git Bash managed server", () => {
   );
   it.live("rejects a replacement with another control token after the descriptor check", () =>
     Effect.gen(function* () {
-      const id = "11111111-1111-4111-8111-111111111111";
+      const id = EnvironmentId.make("11111111-1111-4111-8111-111111111111");
       const server = yield* startAppServer(
         { ...attachableDescriptor, environmentId: id },
         200,
@@ -721,8 +724,8 @@ describe("manager on a host running the app server", () => {
     );
   it.live("finds a different managed environment on Git Bash and reports unusable records", () =>
     Effect.gen(function* () {
-      const id = "11111111-1111-4111-8111-111111111111";
-      const other = "22222222-2222-4222-8222-222222222222";
+      const id = EnvironmentId.make("11111111-1111-4111-8111-111111111111");
+      const other = EnvironmentId.make("22222222-2222-4222-8222-222222222222");
       const server = yield* startAppServer({ ...attachableDescriptor, environmentId: id });
       const host = yield* makeHost({
         pid: 55140,
