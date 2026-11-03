@@ -793,7 +793,11 @@ const make = Effect.gen(function* () {
     const event = pending.event;
     const done = ledger.completeForward({ owner, sequence: pending.sequence });
     const stored = yield* ledger.getTask(event.taskId);
-    if (event.type !== "task.question.answered" || stored?.task.worker === undefined)
+    if (
+      event.type !== "task.question.answered" ||
+      stored?.task.worker === undefined ||
+      (stored.task.status !== "running" && stored.task.status !== "waiting_input")
+    )
       return yield* done;
     const ids = answerForwardIdsFor(event.eventId);
     const result = yield* sendForTask(

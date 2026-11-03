@@ -117,6 +117,54 @@ const claimedFromTeammate = (key: string, memoryGrantCeiling?: "read" | "read_wr
   });
 
 describe("GOAT Bot sessions under the requester's current authority", () => {
+  it.effect("#2193 drops a revoked answer when its session task was cancelled", () => {
+    const harness = sessionHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* linkTeammate;
+      const task = yield* dispatchNow(yield* receiveFromTeammate("look: task", "cancel-session-1"));
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+      const questionId = ChannelQuestionId.make("question:cancel-session");
+      yield* commitTransition(
+        ledger,
+        (yield* ledger.getTask(task.taskId))!,
+        {
+          type: "task.question.opened",
+          payload: { question: { questionId, text: "Which?", askedAt: task.updatedAt } },
+        },
+        { owner: runtime.ownerToken },
+      );
+      yield* commitTransition(
+        ledger,
+        (yield* ledger.getTask(task.taskId))!,
+        {
+          type: "task.question.answered",
+          payload: { questionId, answer: "the big one" },
+        },
+        { owner: runtime.ownerToken, forward: true, pendingAnswerMessageId: "answer-fence" },
+      );
+      yield* commitTransition(
+        ledger,
+        (yield* ledger.getTask(task.taskId))!,
+        {
+          type: "task.cancelled",
+          payload: { reason: "Stopped." },
+        },
+        { owner: runtime.ownerToken },
+      );
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`UPDATE channel_identities SET granted_scopes_json = '[]' WHERE connection_id = 'slack-1' AND external_actor_id = 'U2'`;
+      const [pending] = yield* ledger.listPendingForwards(10);
+      yield* dispatcher.forward(pending!, runtime.ownerToken);
+      assert.lengthOf(yield* ledger.listPendingForwards(10), 0);
+      assert.strictEqual((yield* current(task.taskId)).status, "cancelled");
+      assert.lengthOf((yield* current(task.taskId)).openQuestions, 0);
+      assert.lengthOf(harness.world.sends, 0);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect(
     "#2193 rolls back forward completion when the refusal question loses a version race",
     () => {

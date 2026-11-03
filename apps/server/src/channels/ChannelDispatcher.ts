@@ -1109,6 +1109,16 @@ const make = Effect.gen(function* () {
       if (event.type === "task.cancelled") return yield* stopWorker(pending, owner);
       const stored = yield* ledger.getTask(event.taskId);
       const worker = stored?.task.worker;
+      if (
+        event.type === "task.question.answered" &&
+        stored !== undefined &&
+        (stored.task.status === "completed" ||
+          stored.task.status === "failed" ||
+          stored.task.status === "cancelled")
+      ) {
+        yield* ledger.completeForward({ owner, sequence: pending.sequence });
+        return;
+      }
       if (worker?.host !== undefined) return yield* remoteWorkers.forward(pending, owner);
       const projectId = stored?.task.target?.projectId;
       if (

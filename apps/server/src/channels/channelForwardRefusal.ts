@@ -12,6 +12,14 @@ export const refuseForward = Effect.fn("channel.refuseForward")(function* (
   sequence: number,
 ) {
   const latest = (yield* ledger.getTask(stored.task.taskId)) ?? stored;
+  if (
+    latest.task.status === "completed" ||
+    latest.task.status === "failed" ||
+    latest.task.status === "cancelled"
+  ) {
+    yield* ledger.completeForward({ owner, sequence });
+    return;
+  }
   yield* commitTransition(
     ledger,
     latest,
