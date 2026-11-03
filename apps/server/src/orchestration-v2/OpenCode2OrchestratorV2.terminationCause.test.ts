@@ -87,8 +87,12 @@ it.effect("records queued replacement when a waiting message becomes Steer", () 
             onHang: () => steerSent.resolve(),
           }),
       },
-      // Shutdown interrupts the active session; wait until the steer has reached OpenCode.
-      { afterSteps: Effect.promise(() => steerSent.promise) },
+      {
+        steerGuard: {
+          commandId: promote.commandId,
+          arrival: Effect.promise(() => steerSent.promise),
+        },
+      },
     ).pipe(provideDeterministicTestRuntime);
     const projection = result.projections.get(thread.threadId);
     assert.isDefined(projection);

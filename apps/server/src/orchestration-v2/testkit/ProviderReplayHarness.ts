@@ -2,11 +2,12 @@ import * as RemoteReportInbox from "../../remoteReports/RemoteReportInbox.ts";
 import * as OtelEnvironment from "@goat/shared/otelEnvironment";
 import { DEFAULT_SIGNAL_EXPORT } from "@goat/shared/observability";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import type { ProviderDriverKind, ProviderReplayTranscript } from "@goat/contracts";
+import type { CommandId, ProviderDriverKind, ProviderReplayTranscript } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import type * as Scope from "effect/Scope";
@@ -210,6 +211,7 @@ export function runOrchestratorV2ProviderReplayScenario<
     readonly recoverOnStartup?: boolean;
     readonly continueThreadsAfterServerUpdate?: boolean;
     readonly afterSteps?: Effect.Effect<void>;
+    readonly steerGuard?: { readonly commandId: CommandId; readonly arrival: Effect.Effect<void> };
   } = {},
 ): Effect.Effect<
   OrchestratorV2ScenarioResult,
@@ -232,6 +234,7 @@ export function runOrchestratorV2ProviderReplayScenario<
     }
     const layer = layerProviderReplay(scenario, harness, {
       ...options,
+      ...(options.steerGuard === undefined ? {} : { effectWorkerMaxAttempts: 1 }),
       replayGate,
       onReplayTurnComplete: (nativeTurnId) => {
         const completion = completions.get(nativeTurnId);
@@ -241,9 +244,29 @@ export function runOrchestratorV2ProviderReplayScenario<
       },
     });
     return yield* Effect.gen(function* () {
+      const outbox = yield* EffectOutbox.EffectOutboxV2;
+      const guard = options.steerGuard;
+      const afterSteps = Effect.gen(function* () {
+        if (options.afterSteps !== undefined) yield* options.afterSteps;
+        if (guard === undefined) return;
+        const effects = yield* outbox.listByCommandId(guard.commandId).pipe(Effect.orDie);
+        const steer = effects.find((effect) => effect.request.type === "provider-turn.steer");
+        if (steer === undefined) return yield* Effect.die(new Error("no steer effect"));
+        yield* Effect.raceFirst(
+          guard.arrival,
+          Effect.gen(function* () {
+            yield* outbox.awaitSettled(steer.id).pipe(Effect.orDie);
+            const settled = yield* outbox.get(steer.id).pipe(Effect.orDie);
+            if (Option.isSome(settled) && settled.value.status === "failed") {
+              return yield* Effect.die(new Error("steer attempt failed before reaching OpenCode"));
+            }
+            return yield* Effect.die(new Error("steer attempt ended without reaching OpenCode"));
+          }),
+        );
+      });
       const result = yield* runOrchestratorV2Scenario(scenario, {
         replayGate,
-        ...(options.afterSteps === undefined ? {} : { afterSteps: options.afterSteps }),
+        afterSteps,
         awaitReplayTurnComplete: (nativeTurnId) => Deferred.await(completions.get(nativeTurnId)!),
       });
       const recorder = yield* CommandOutputRecorder.CommandOutputRecorder;
@@ -263,10 +286,12 @@ export function layerProviderReplay<Transcript extends ProviderReplayTranscript,
     readonly continueThreadsAfterServerUpdate?: boolean;
     readonly replayGate?: ProviderReplayGate;
     readonly onReplayTurnComplete?: (nativeTurnId: string) => Effect.Effect<void>;
+    readonly effectWorkerMaxAttempts?: number;
   } = {},
 ): Layer.Layer<
   | Orchestrator.OrchestratorV2
   | EffectWorker.OrchestrationEffectWorkerV2
+  | EffectOutbox.EffectOutboxV2
   | EventSink.EventSinkV2
   | CommandOutputRecorder.CommandOutputRecorder
   | ProviderSessionManager.ProviderSessionManagerV2,
@@ -297,6 +322,7 @@ export function layerWithRegistry<Error>(
     readonly runContinuationWorker?: boolean;
     readonly recoverOnStartup?: boolean;
     readonly continueThreadsAfterServerUpdate?: boolean;
+    readonly effectWorkerMaxAttempts?: number;
   } = {},
 ): Layer.Layer<
   | Orchestrator.OrchestratorV2
@@ -575,9 +601,11 @@ export function layerWithRegistry<Error>(
       ),
     ),
   );
-  const layerEffectWorkerProvided = EffectWorker.layer.pipe(
-    Layer.provide(Layer.merge(layerStores, layerEffectExecutorProvided)),
-  );
+  const layerEffectWorkerProvided = EffectWorker.layerWithOptions(
+    options.effectWorkerMaxAttempts === undefined
+      ? {}
+      : { maxAttempts: options.effectWorkerMaxAttempts },
+  ).pipe(Layer.provide(Layer.merge(layerStores, layerEffectExecutorProvided)));
   const layerReplayRuntime = Layer.mergeAll(
     layerOrchestratorProvided,
     layerStores,
