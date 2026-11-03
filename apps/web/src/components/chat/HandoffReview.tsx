@@ -6,6 +6,7 @@ export function HandoffReview(props: {
   human: HandoffHuman;
   busy: boolean;
   allowed: boolean;
+  approveAllowed?: boolean;
   approveLabel: string;
   onApprove: () => void;
   alternateApproval?: { label: string; onApprove: () => void };
@@ -53,7 +54,10 @@ export function HandoffReview(props: {
         Only you see these details. The agent never does.
       </p>
       <div className="flex flex-wrap gap-2">
-        <Button disabled={props.busy || !props.allowed} onClick={props.onApprove}>
+        <Button
+          disabled={props.busy || !props.allowed || props.approveAllowed === false}
+          onClick={props.onApprove}
+        >
           {props.approveLabel}
         </Button>
         {props.alternateApproval ? (
