@@ -93,7 +93,6 @@ const refused = (message: string, failure?: SecretFailure) =>
       : { beforeInput: true, ...(failure ? { secretFailure: failure } : {}) },
   );
 
-/** Why a secretRef could not be used, in the three states a caller can act on. */
 const secretFailure = (reason: SecretRequestFailureReason): SecretFailure => {
   switch (reason) {
     case "not_found":
@@ -106,6 +105,7 @@ const secretFailure = (reason: SecretRequestFailureReason): SecretFailure => {
     case "login_ref":
     case "card_ref":
     case "invalid_card":
+    case "invalid_authenticator_setup_key":
     case "agent_stopped":
     case "not_a_file_request":
     case "origin_required":

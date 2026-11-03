@@ -415,7 +415,7 @@ const make = Effect.gen(function* () {
   const useReserved = <A, E, R>(
     input: { readonly ref: SecretRef; readonly threadId: ThreadId; readonly origin: string },
     kind: "login" | "card" | "code",
-    decode: (value: string) => Option.Option<A>,
+    decode: (value: string, setup: AuthenticatorSetup | undefined) => Option.Option<A>,
     use: (item: A) => Effect.Effect<LoginDelivery, E, R>,
   ) =>
     Effect.uninterruptibleMask((restore) =>
@@ -448,7 +448,7 @@ const make = Effect.gen(function* () {
             if (stored.loginConsumed === true) yield* removeLogged(storeName(input.ref));
             return yield* new SecretRequestError({ reason: "ref_expired" });
           }
-          const item = decode(kind === "code" ? JSON.stringify(stored.codeSetup) : stored.value);
+          const item = decode(stored.value, stored.codeSetup);
           if (Option.isNone(item)) return yield* new SecretRequestError({ reason: "read_failed" });
           yield* writeLoginRef(input.ref, { ...stored, loginInFlight: true });
           return { stored, item: item.value };
@@ -497,21 +497,15 @@ const make = Effect.gen(function* () {
     );
 
   const useLogin: SecretRequests["Service"]["useLogin"] = (input, use) =>
-    useReserved(input, "login", decodeLogin, use).pipe(Effect.withSpan("SecretRequests.useLogin"));
+    useReserved(input, "login", (value) => decodeLogin(value), use).pipe(
+      Effect.withSpan("SecretRequests.useLogin"),
+    );
   const useCard: SecretRequests["Service"]["useCard"] = (input, use) =>
-    useReserved(input, "card", decodeCard, use).pipe(Effect.withSpan("SecretRequests.useCard"));
-  const decodeCode = Schema.decodeUnknownOption(
-    Schema.fromJsonString(
-      Schema.Struct({
-        secret: Schema.String,
-        algorithm: Schema.Literals(["SHA1", "SHA256", "SHA512"]),
-        digits: Schema.Literals([6, 8]),
-        period: Schema.Number,
-      }),
-    ),
-  );
+    useReserved(input, "card", (value) => decodeCard(value), use).pipe(
+      Effect.withSpan("SecretRequests.useCard"),
+    );
   const useOneTimeCode: SecretRequests["Service"]["useOneTimeCode"] = (input, use) =>
-    useReserved(input, "code", decodeCode, use).pipe(
+    useReserved(input, "code", (_value, setup) => Option.fromNullishOr(setup), use).pipe(
       Effect.withSpan("SecretRequests.useOneTimeCode"),
     );
 
