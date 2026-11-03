@@ -5,6 +5,9 @@ if (process.env.GOAT_FAKE_CLAUDE_SPAWN_MARKER) {
 }
 
 const argv = process.argv.slice(2);
+if (process.env.GOAT_FAKE_CLAUDE_ATTEMPTS) {
+  NodeFS.appendFileSync(process.env.GOAT_FAKE_CLAUDE_ATTEMPTS, `${JSON.stringify(argv)}\n`);
+}
 const args = argv.join(" ");
 
 function fail(message, code) {
@@ -28,6 +31,16 @@ if (!argv.includes("--disable-slash-commands")) {
 }
 if (!argv.includes("--strict-mcp-config")) {
   fail("text generation must not load configured MCP servers", 9);
+}
+if (process.env.GOAT_FAKE_CLAUDE_REJECT_PERSISTENCE_ALWAYS === "1") {
+  fail("error: unknown option '--no-session-persistence'", 1);
+}
+if (process.env.GOAT_FAKE_CLAUDE_REJECTS_NO_SESSION_PERSISTENCE === "1") {
+  if (argv.includes("--no-session-persistence")) {
+    fail("error: unknown option '--no-session-persistence'", 1);
+  }
+} else if (!argv.includes("--no-session-persistence")) {
+  fail("text generation must not save a resumable session", 16);
 }
 if (process.env.GOAT_FAKE_CLAUDE_SPAWN_MARKER) {
   const sources = argv.indexOf("--setting-sources");

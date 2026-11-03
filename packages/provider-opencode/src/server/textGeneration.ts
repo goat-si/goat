@@ -356,6 +356,13 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
                 ),
               ),
             );
+          } else {
+            const id = session.data.id;
+            yield* Effect.addFinalizer(() =>
+              OpenCodeRuntime.runOpenCodeSdk("session.delete", (signal) =>
+                client.session.delete({ sessionID: id }, { signal }),
+              ).pipe(Effect.timeout("5 seconds"), Effect.ignore({ log: "Warn" })),
+            );
           }
           const selectedAgent = getModelSelectionStringOptionValue(input.modelSelection, "agent");
           const selectedVariant = getModelSelectionStringOptionValue(

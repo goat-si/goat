@@ -5,11 +5,7 @@ import { createCommandPermissions } from "./commandPermissions.ts";
 import { followStreamInEnvironment } from "./environmentStreams.ts";
 import { reuseUnchanged } from "./serverConfigProjection.ts";
 export { runStreamInEnvironment, followStreamInEnvironment } from "./environmentStreams.ts";
-import {
-  type ClientGuardedRpcTag,
-  EnvironmentId,
-  type EnvironmentId as EnvironmentIdType,
-} from "@goat/contracts";
+import { EnvironmentId, type EnvironmentId as EnvironmentIdType } from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -30,7 +26,6 @@ import {
   type EnvironmentSubscriptionRpcTag,
   type EnvironmentUnaryRpcTag,
   EnvironmentRpcUnavailableError,
-  request,
   requestGuarded,
   RpcPermissionGuard,
   subscribe,
@@ -93,6 +88,8 @@ interface EnvironmentQueryAtomOptions<Input, A, E, R> extends Omit<
   readonly execute: (
     input: Input,
     emit: (value: A) => Effect.Effect<void>,
+    registry: AtomRegistry.AtomRegistry,
+    environmentId: EnvironmentIdType,
   ) => Effect.Effect<A, E, R>;
   readonly persistence?: QueryPersistence<A>;
   readonly staleTimeMs?: number;
@@ -627,7 +624,7 @@ export function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
                 ? runInEnvironment(
                     target.environmentId,
                     options
-                      .execute(target.input, emit)
+                      .execute(target.input, emit, get.registry, target.environmentId)
                       .pipe(pendingOnceSessionReplaced(session.value)),
                   )
                 : Effect.never;
@@ -766,11 +763,7 @@ export function createEnvironmentCommand<R, ER, Input, A, E>(
   });
 }
 
-export function createEnvironmentRpcQueryAtomFamily<
-  R,
-  ER,
-  TTag extends Exclude<EnvironmentUnaryRpcTag, ClientGuardedRpcTag>,
->(
+export function createEnvironmentRpcQueryAtomFamily<R, ER, TTag extends EnvironmentUnaryRpcTag>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry.EnvironmentRegistry | R, ER>,
   options: {
     readonly label: string;
@@ -795,6 +788,7 @@ export function createEnvironmentRpcQueryAtomFamily<
     readonly onAnswer?: QueryAnswerHandler<EnvironmentRpcInput<TTag>, EnvironmentRpcSuccess<TTag>>;
   },
 ) {
+  const permissions = createCommandPermissions(runtime, options.tag);
   return createEnvironmentQueryAtomFamily(runtime, {
     label: options.label,
     ...(options.persistence === undefined ? {} : { persistence: options.persistence }),
@@ -809,7 +803,16 @@ export function createEnvironmentRpcQueryAtomFamily<
     execute: (
       input: EnvironmentRpcInput<TTag>,
       emit: (value: EnvironmentRpcSuccess<TTag>) => Effect.Effect<void>,
-    ) => options.execute?.(input, emit) ?? request(options.tag, input),
+      registry: AtomRegistry.AtomRegistry,
+      environmentId: EnvironmentIdType,
+    ) =>
+      permissions.authorize(registry, environmentId, input).pipe(
+        Effect.andThen(() => options.execute?.(input, emit) ?? requestGuarded(options.tag, input)),
+        Effect.provideService(RpcPermissionGuard, {
+          authorize: (id, method, payload) =>
+            createCommandPermissions(runtime, method).authorize(registry, id, payload),
+        }),
+      ),
   });
 }
 

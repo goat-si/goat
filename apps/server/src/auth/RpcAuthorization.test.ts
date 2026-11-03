@@ -13,6 +13,7 @@ import {
   CLIENT_GUARDED_RPC_SCOPES,
   DEFAULT_SERVER_SETTINGS,
   ProviderInstanceId,
+  ORCHESTRATION_V2_WS_METHODS,
   SshWorkspaceLaunchInput,
   ThreadId,
   WS_METHODS,
@@ -53,6 +54,14 @@ describe("RPC authorization scopes", () => {
       RpcAuthorization.requiredScopesForRpcCall(WS_METHODS.serverRefreshProviders, {}),
     ).toEqual([AuthOrchestrationReadScope]);
   });
+  it.effect("requires orchestration read before returning native child work", () =>
+    Effect.gen(function* () {
+      const method = ORCHESTRATION_V2_WS_METHODS.getNativeChildWork;
+      const denied = yield* Effect.flip(RpcAuthorization.authorizeRpcCall([], method, {}));
+      expect(denied.requiredPermission).toBe(AuthOrchestrationReadScope);
+      yield* RpcAuthorization.authorizeRpcCall([AuthOrchestrationReadScope], method, {});
+    }),
+  );
   it.effect("refuses storage item deletion without environment maintenance authority", () =>
     Effect.gen(function* () {
       const method = WS_METHODS.serverCleanUpStorageItems;
