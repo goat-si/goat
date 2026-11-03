@@ -4866,6 +4866,26 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
       }),
     );
 
+    it.effect("stops selected-file commits when the index reset fails", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        const head = yield* git(cwd, ["rev-parse", "HEAD"]);
+        yield* writeTextFile(cwd, "a.txt", "a\n");
+        yield* writeTextFile(cwd, "staged.txt", "staged\n");
+        yield* git(cwd, ["add", "staged.txt"]);
+        const fs = yield* FileSystem.FileSystem;
+        const lock = (yield* Path.Path).join(cwd, ".git", "index.lock");
+        yield* fs.writeFileString(lock, "");
+        const error = yield* driver.commit(cwd, "Add a", "", { stage: { filePaths: ["a.txt"] } }).pipe(Effect.flip);
+        yield* fs.remove(lock);
+        assert.equal(error.operation, "GitVcsDriver.commit.reset");
+        assert.equal(yield* git(cwd, ["rev-parse", "HEAD"]), head);
+        assert.equal(yield* git(cwd, ["diff", "--cached", "--name-only"]), "staged.txt");
+      }),
+    );
+
     it.effect.each([
       { location: "root", ref: "refs/heads/MERGE_HEAD" },
       { location: "nested", ref: "refs/heads/MERGE_HEAD" },
