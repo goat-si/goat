@@ -24,6 +24,27 @@ export const makePrLookupGitState = Effect.fn("PrLookupGitState.make")(function*
     { readonly epoch: number; readonly verifiedAtMs: number; readonly result: string }
   >();
   const epoch = (cwd: string) => epochs.get(cwd) ?? 0;
+  // Remembered reads also restart on an explicit refresh, which must not move the epoch that
+  // keys GitManager's PR lookup cache and its failure backoff.
+  // Generations come from one counter; a forgotten repository gets a fresh one, so an older read
+  // can never match it.
+  const readGenerations = new Map<string, number>();
+  let lastGeneration = 0;
+  let forgottenGeneration = 0;
+  const readGeneration = (cwd: string) => readGenerations.get(cwd) ?? forgottenGeneration;
+  const restartReads = (cwd: string) => {
+    readGenerations.delete(cwd);
+    if (readGenerations.size >= options.capacity) {
+      const oldest = readGenerations.keys().next().value;
+      if (oldest !== undefined) readGenerations.delete(oldest);
+      forgottenGeneration = ++lastGeneration;
+    }
+    readGenerations.set(cwd, ++lastGeneration);
+  };
+  const advanceEpoch = (cwd: string) => {
+    epochs.set(cwd, epoch(cwd) + 1);
+    restartReads(cwd);
+  };
   const clear = (cwd: string) => {
     const prefix = `${cwd}\u0000`;
     for (const key of remembered.keys()) {
@@ -37,13 +58,19 @@ export const makePrLookupGitState = Effect.fn("PrLookupGitState.make")(function*
     fingerprints.delete(key);
     if (fingerprints.size >= options.capacity) {
       const oldest = fingerprints.keys().next().value;
-      if (oldest !== undefined) fingerprints.delete(oldest);
+      if (oldest !== undefined) {
+        fingerprints.delete(oldest);
+        // Remembered reads live only as long as the fingerprints that can invalidate them.
+        const forgottenCwd = oldest.split("\u0000", 1)[0] ?? oldest;
+        restartReads(forgottenCwd);
+        clear(forgottenCwd);
+      }
     }
     fingerprints.set(key, value);
   };
   const bumpEpoch = Effect.fn("PrLookupGitState.bumpEpoch")(function* (cwd: string) {
     const key = yield* options.normalizeCwd(cwd);
-    epochs.set(key, epoch(key) + 1);
+    advanceEpoch(key);
   });
   const forget = Effect.fn("PrLookupGitState.forget")(function* (cwd: string) {
     clear(yield* options.normalizeCwd(cwd));
@@ -55,7 +82,7 @@ export const makePrLookupGitState = Effect.fn("PrLookupGitState.make")(function*
   ) {
     const metadata = yield* fingerprint(cwd, branch);
     if (metadata === null) {
-      epochs.set(cwd, epoch(cwd) + 1);
+      advanceEpoch(cwd);
       clear(cwd);
       return;
     }
@@ -68,10 +95,14 @@ export const makePrLookupGitState = Effect.fn("PrLookupGitState.make")(function*
       (previousRepository !== undefined && previousRepository !== metadata.repository) ||
       (previousRefs !== undefined && previousRefs !== metadata.refs)
     ) {
-      epochs.set(cwd, epoch(cwd) + 1);
+      advanceEpoch(cwd);
       clear(cwd);
     }
-    if (refresh) clear(cwd);
+    if (refresh) {
+      // A read that started before the refresh must not answer or repopulate for later callers.
+      restartReads(cwd);
+      clear(cwd);
+    }
     saveFingerprint(cwd, metadata.repository);
     saveFingerprint(branchKey, metadata.refs);
   });
@@ -94,7 +125,7 @@ export const makePrLookupGitState = Effect.fn("PrLookupGitState.make")(function*
     ) {
       return entry.value;
     }
-    const generation = epoch(cwd);
+    const generation = readGeneration(cwd);
     const pendingKey = `${entryKey}\u0000${generation}`;
     let shared = pending.get(pendingKey);
     if (shared === undefined) {
@@ -107,7 +138,10 @@ export const makePrLookupGitState = Effect.fn("PrLookupGitState.make")(function*
     const completedAtMs = yield* Clock.currentTimeMillis;
     const latest = remembered.get(entryKey);
     // A git mutation must not let an older in-flight read repopulate its cache.
-    if (epoch(cwd) !== generation || (latest !== undefined && latest.startedAtMs > startedAtMs))
+    if (
+      readGeneration(cwd) !== generation ||
+      (latest !== undefined && latest.startedAtMs > startedAtMs)
+    )
       return value;
     remembered.delete(entryKey);
     if (remembered.size >= options.capacity) {
@@ -135,8 +169,15 @@ export const makePrLookupGitState = Effect.fn("PrLookupGitState.make")(function*
     )
       return found;
     const generation = epoch(cwd);
+    const reads = readGeneration(cwd);
     const verified = yield* recheck;
-    if (verified === null || verified.state === "open" || epoch(cwd) !== generation)
+    // An eviction or refresh during the recheck restarts reads without moving the epoch.
+    if (
+      verified === null ||
+      verified.state === "open" ||
+      epoch(cwd) !== generation ||
+      readGeneration(cwd) !== reads
+    )
       return verified;
     verifiedTerminal.delete(key);
     if (verifiedTerminal.size >= options.capacity) {
