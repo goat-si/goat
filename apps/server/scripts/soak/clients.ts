@@ -19,6 +19,7 @@ import {
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -717,9 +718,19 @@ export async function runWorkload(input: WorkloadInput): Promise<{
       );
     }
     windowOpen = true;
+    const windowStartedAtMs = yield* Clock.currentTimeMillis;
     input.onWindowStart();
     yield* Deferred.succeed(windowStarted, undefined);
-    yield* Effect.sleep(`${input.durationMs} millis`).pipe(
+    // Timers can fire a few ms before the wall clock the report measures; finish the window on the wall clock.
+    const waitWindow: Effect.Effect<void> = Clock.currentTimeMillis.pipe(
+      Effect.flatMap((now) => {
+        const remaining = windowStartedAtMs + input.durationMs - now;
+        return remaining > 0
+          ? Effect.sleep(`${remaining + 1} millis`).pipe(Effect.andThen(waitWindow))
+          : Effect.void;
+      }),
+    );
+    yield* waitWindow.pipe(
       Effect.andThen(
         Effect.sync(() => {
           windowOpen = false;
