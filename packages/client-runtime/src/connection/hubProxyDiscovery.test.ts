@@ -133,12 +133,18 @@ const makeConnectedDiscovery = Effect.fn(function* (options: {
   readonly failStrongReads?: number;
   /** Runs when the hub-access token is checked, before the hub answers. */
   readonly onStrongRead?: (stored: Map<string, BearerConnectionCredential>) => void;
+  /** Adds a device reached through the hub whose last attempt was refused. */
+  readonly blockedDevice?: boolean;
 }) {
   const h = yield* makeRegistry;
   const firstRead = yield* Deferred.make<void>();
   const subscribed = yield* Deferred.make<void>();
   const reconciled = yield* Deferred.make<void>();
   const strongRead = yield* Deferred.make<void>();
+  const emitted = yield* Deferred.make<void>();
+  const reconnected = yield* Deferred.make<void>();
+  let disconnected = false;
+  const retried: EnvironmentId[] = [];
   let reads = 0;
   let strongReads = 0;
   let subscriptions = 0;
@@ -233,14 +239,19 @@ const makeConnectedDiscovery = Effect.fn(function* (options: {
           options.bearerAddress === undefined ? null : { _tag: "Bearer", token: "weak" },
       }),
     ),
-    connect: Effect.void,
-    disconnect: Effect.void,
+    connect: Effect.suspend(() =>
+      disconnected ? Deferred.succeed(reconnected, undefined).pipe(Effect.asVoid) : Effect.void,
+    ),
+    disconnect: Effect.sync(() => {
+      disconnected = true;
+    }),
     retryNow: Effect.void,
   });
   const registry = EnvironmentRegistry.of({
     ...h.registry,
     entries: yield* SubscriptionRef.make<ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>>(
       new Map([
+        ...(options.blockedDevice ? [[NODE, node] as const] : []),
         [
           HUB,
           options.bearerAddress === undefined
@@ -262,14 +273,25 @@ const makeConnectedDiscovery = Effect.fn(function* (options: {
         ],
       ]),
     ),
-    state: () =>
+    state: (id: EnvironmentId) =>
       Deferred.succeed(reconciled, undefined).pipe(
-        Effect.as({ ...AVAILABLE_CONNECTION_STATE, phase: "connected" as const }),
+        Effect.as({
+          ...AVAILABLE_CONNECTION_STATE,
+          phase: id === NODE ? ("blocked" as const) : ("connected" as const),
+        }),
       ),
+    retryNow: (id: EnvironmentId) =>
+      Effect.sync(() => {
+        retried.push(id);
+      }),
     followStream: (
       _id: EnvironmentId,
       stream: Stream.Stream<unknown, unknown, EnvironmentSupervisor>,
-    ) => stream.pipe(Stream.provideService(EnvironmentSupervisor, supervisor)),
+    ) =>
+      stream.pipe(
+        Stream.provideService(EnvironmentSupervisor, supervisor),
+        Stream.tap(() => Deferred.succeed(emitted, undefined)),
+      ),
   } as unknown as EnvironmentRegistry["Service"]);
   const auth: AuthSessionState = {
     authenticated: true,
@@ -336,29 +358,35 @@ const makeConnectedDiscovery = Effect.fn(function* (options: {
     stored,
     requests,
     strongRead,
+    emitted,
+    reconnected,
+    retried,
   };
 });
 
 describe("a hub reached with a session that lacks hub:proxy", () => {
-  const preparedToken = (h: { readonly supervisor: EnvironmentSupervisor["Service"] }) =>
-    SubscriptionRef.get(h.supervisor.prepared).pipe(
-      Effect.map((prepared) => {
-        const authorization = Option.getOrNull(prepared)?.httpAuthorization;
-        return authorization?._tag === "Bearer" ? authorization.token : null;
-      }),
-    );
-
-  it.effect("saves the pairing that has hub access for the active route", () =>
+  it.effect("reconnects the hub with the saved pairing that has hub access", () =>
     Effect.gen(function* () {
       const h = yield* makeConnectedDiscovery({
         scopes: [],
         bearerAddress: "http://100.100.1.1:3773/",
         bearerOverTailscale: true,
       });
-      yield* Deferred.await(h.subscribed);
+      yield* Deferred.await(h.reconnected);
       expect(h.stored.get("a")?.token).toBe("strong");
-      // The live socket keeps its own session, so its permissions stay what the server enforces.
-      expect(yield* preparedToken(h)).toBe("weak");
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("retries a device the hub refused once the pairing with access is saved", () =>
+    Effect.gen(function* () {
+      const h = yield* makeConnectedDiscovery({
+        scopes: [],
+        bearerAddress: "http://100.100.1.1:3773/",
+        bearerOverTailscale: true,
+        blockedDevice: true,
+      });
+      yield* Deferred.await(h.reconnected);
+      expect(h.retried).toEqual([NODE]);
     }).pipe(Effect.scoped),
   );
 
@@ -372,7 +400,7 @@ describe("a hub reached with a session that lacks hub:proxy", () => {
       });
       yield* Deferred.await(h.strongRead);
       yield* TestClock.adjust("1 second");
-      yield* Deferred.await(h.subscribed);
+      yield* Deferred.await(h.reconnected);
       expect(h.stored.get("a")?.token).toBe("strong");
     }).pipe(Effect.scoped),
   );
@@ -387,10 +415,9 @@ describe("a hub reached with a session that lacks hub:proxy", () => {
           stored.set("a", new BearerConnectionCredential({ token: "fresh" }));
         },
       });
-      yield* Deferred.await(h.strongRead);
-      yield* TestClock.adjust("1 minute");
+      yield* Deferred.await(h.emitted);
       expect(h.stored.get("a")?.token).toBe("fresh");
-      expect(h.counts().subscriptions).toBe(0);
+      expect(yield* Deferred.isDone(h.reconnected)).toBe(false);
     }).pipe(Effect.scoped),
   );
 
@@ -400,11 +427,10 @@ describe("a hub reached with a session that lacks hub:proxy", () => {
         scopes: [],
         bearerAddress: "http://192.168.1.5:3773/",
       });
-      yield* Deferred.await(h.firstRead);
-      yield* TestClock.adjust("1 minute");
+      yield* Deferred.await(h.emitted);
       expect(h.requests).not.toContain("Bearer strong");
       expect(h.stored.get("a")?.token).toBe("weak");
-      expect(yield* preparedToken(h)).toBe("weak");
+      expect(yield* Deferred.isDone(h.reconnected)).toBe(false);
     }).pipe(Effect.scoped),
   );
 
@@ -415,8 +441,7 @@ describe("a hub reached with a session that lacks hub:proxy", () => {
         bearerAddress: "http://100.100.1.1:3773/",
         learnedFromLan: "http://192.168.1.5:3773/",
       });
-      yield* Deferred.await(h.firstRead);
-      yield* TestClock.adjust("1 minute");
+      yield* Deferred.await(h.emitted);
       expect(h.requests).not.toContain("Bearer strong");
       expect(h.stored.get("a")?.token).toBe("weak");
     }).pipe(Effect.scoped),

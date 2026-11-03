@@ -231,22 +231,22 @@ export const watchConnectedHubProxyDiscovery = Effect.gen(function* () {
   const remoteAuthorization = yield* Effect.serviceOption(RemoteEnvironmentAuthorization);
   // Pairing the hub again at another address saves a second session beside the first, and route
   // order can pick the one without hub:proxy. The active credential then takes the saved one that
-  // has it unless that token would travel over plain HTTP. Device routes read it from the store;
-  // the live socket keeps its session, and with it its permissions, until it reconnects.
+  // has it, unless that token would travel over plain HTTP, and the hub reconnects with it.
   const adoptSavedHubAccess = Effect.fn("HubProxyDiscovery.adoptSavedHubAccess")(function* (
+    supervisor: EnvironmentSupervisor["Service"],
     prepared: PreparedConnection,
   ) {
     const target = prepared.target;
     const current = prepared.httpAuthorization;
-    if (target._tag !== "BearerConnectionTarget" || current?._tag !== "Bearer")
-      return Option.none<ReadonlyArray<AuthEnvironmentScope>>();
-    const entry = (yield* SubscriptionRef.get(registry.entries)).get(target.environmentId);
+    if (target._tag !== "BearerConnectionTarget" || current?._tag !== "Bearer") return false;
+    const entries = yield* SubscriptionRef.get(registry.entries);
+    const entry = entries.get(target.environmentId);
     const routes = entry === undefined ? [] : connectionRoutes(entry);
     const activeCredentialId = credentialConnectionId(target.connectionId);
     const sharing = routes.filter(
       (route) => credentialConnectionId(connectionRouteId(route.target)) === activeCredentialId,
     );
-    // The active credential comes first: an earlier adoption may already have replaced it.
+    // The active credential comes first: one adopted while the socket stayed open is already saved.
     const candidates = new Set([
       activeCredentialId,
       ...routes.flatMap((route) =>
@@ -270,25 +270,45 @@ export const watchConnectedHubProxyDiscovery = Effect.gen(function* () {
       if (state === undefined || !state.authenticated) continue;
       const scopes = state.permissions ?? state.scopes ?? [];
       if (!scopes.includes(AuthHubProxyScope)) continue;
-      if (credentialId === activeCredentialId) return Option.some(scopes);
-      const written = yield* credentials.put(activeCredentialId, saved, current.token).pipe(
-        Effect.andThen(credentials.get(activeCredentialId)),
-        Effect.map((stored) => Option.isSome(stored) && stored.value.token === saved.token),
-        Effect.catch((error) =>
-          Effect.logWarning("Could not save the hub credential that has hub access.", {
-            error,
-          }).pipe(Effect.as(false)),
-        ),
-      );
-      if (!written) return Option.none<ReadonlyArray<AuthEnvironmentScope>>();
+      const written =
+        credentialId === activeCredentialId ||
+        (yield* credentials.put(activeCredentialId, saved, current.token).pipe(
+          Effect.andThen(credentials.get(activeCredentialId)),
+          Effect.map((stored) => Option.isSome(stored) && stored.value.token === saved.token),
+          Effect.catch((error) =>
+            Effect.logWarning("Could not save the hub credential that has hub access.", {
+              error,
+            }).pipe(Effect.as(false)),
+          ),
+        ));
+      if (!written) return false;
       yield* Effect.logInfo("Using the saved hub credential that has hub access.", {
         environmentId: target.environmentId,
         connectionId: activeCredentialId,
         from: credentialId,
       });
-      return Option.some(scopes);
+      // A device refused through this hub waits for a signal; the saved credential can now open it.
+      for (const device of entries.values()) {
+        const throughHub = connectionRoutes(device).some((route) => {
+          const profile = Option.getOrNull(route.profile);
+          return (
+            profile?._tag === "HubProxyConnectionProfile" &&
+            profile.hubEnvironmentId === target.environmentId
+          );
+        });
+        if (!throughHub) continue;
+        const deviceId = device.target.environmentId;
+        const blocked = yield* registry.state(deviceId).pipe(
+          Effect.map((deviceState) => deviceState.phase === "blocked"),
+          Effect.orElseSucceed(() => false),
+        );
+        if (blocked) yield* registry.retryNow(deviceId);
+      }
+      // Ending the live session makes the next attempt read the saved credential.
+      yield* supervisor.disconnect.pipe(Effect.andThen(supervisor.connect));
+      return true;
     }
-    return Option.none<ReadonlyArray<AuthEnvironmentScope>>();
+    return false;
   });
   const updates = (environmentId: EnvironmentId) => {
     let lastUpdate: HubProxyDiscoveryUpdate | undefined;
@@ -398,17 +418,11 @@ export const watchConnectedHubProxyDiscovery = Effect.gen(function* () {
                           Effect.succeed({ authenticated: false, permissions: [], scopes: [] }),
                         ),
                       );
-                      const ownScopes = auth.authenticated
-                        ? (auth.permissions ?? auth.scopes ?? [])
-                        : [];
-                      const sessionScopes = ownScopes.includes(AuthHubProxyScope)
-                        ? ownScopes
-                        : Option.getOrElse(
-                            yield* adoptSavedHubAccess(prepared.value),
-                            () => ownScopes,
-                          );
-                      if (!sessionScopes.includes(AuthHubProxyScope))
-                        return Stream.fromEffect(emptyUpdate);
+                      const sessionScopes = auth.permissions ?? auth.scopes ?? [];
+                      if (!auth.authenticated || !sessionScopes.includes(AuthHubProxyScope))
+                        return (yield* adoptSavedHubAccess(supervisor, prepared.value))
+                          ? Stream.empty
+                          : Stream.fromEffect(emptyUpdate);
                       return subscribeNodes({}).pipe(
                         Stream.filter(
                           (snapshot) => snapshot.hubEnvironmentId === target.environmentId,
