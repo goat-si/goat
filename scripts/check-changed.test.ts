@@ -22,3 +22,8 @@ it("allows lint-ignored changed files without failing on an unmatched pattern", 
     NodeFS.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+it("selects Astro components as code for lint and knip", async () => {
+  const { isChangedCode } = await import("./check-changed-command.ts");
+  expect(isChangedCode("apps/marketing/src/pages/index.astro")).toBe(true);
+});

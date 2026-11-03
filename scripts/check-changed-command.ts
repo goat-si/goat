@@ -21,3 +21,7 @@ export function vitePlusCommand(
 export function lintChangedArgs(files: ReadonlyArray<string>): Array<string> {
   return ["lint", "--no-error-on-unmatched-pattern", ...files];
 }
+
+export function isChangedCode(file: string): boolean {
+  return /\.(?:[cm]?[jt]sx?|astro)$/.test(file);
+}
