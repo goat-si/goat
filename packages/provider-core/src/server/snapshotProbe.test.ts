@@ -88,6 +88,22 @@ describe("spawn failure diagnosis", () => {
     }),
   );
 
+  it.effect("keeps an inaccessible executable unknown even when cwd is known (#2415)", () =>
+    Effect.sync(() => {
+      expect(
+        classifySpawnFailure(
+          { code: "ENOENT" },
+          process.cwd(),
+          undefined,
+          { binary: "provider-cli", env: { PATH: NodeOS.tmpdir() } },
+          () => {
+            throw Object.assign(new Error("stat failed"), { code: "EACCES" });
+          },
+        ),
+      ).toBe("unknown");
+    }),
+  );
+
   it("recognizes an existing executable with a missing interpreter, including PATH lookup", () => {
     const cwd = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-broken-shebang-"));
     try {
