@@ -49,6 +49,12 @@ const state = vi.hoisted(() => ({
   releaseUploads: vi.fn(),
   clearDraft: vi.fn(),
   toast: vi.fn(),
+  saveClientSettings:
+    vi.fn<
+      (
+        update: (settings: typeof DEFAULT_CLIENT_SETTINGS) => typeof DEFAULT_CLIENT_SETTINGS,
+      ) => Promise<void>
+    >(),
 }));
 
 // Session grants come from the server; each test drives them through these atoms.
@@ -98,6 +104,7 @@ vi.mock(import("~/state/use-atom-command"), async (original) => ({
 }));
 vi.mock(import("~/hooks/useSettings"), async (original) => ({
   ...(await original()),
+  persistClientSettingsUpdate: state.saveClientSettings,
   useClientSettings: ((selector?: (settings: typeof DEFAULT_CLIENT_SETTINGS) => unknown) =>
     selector ? selector(DEFAULT_CLIENT_SETTINGS) : DEFAULT_CLIENT_SETTINGS) as never,
 }));
@@ -346,6 +353,20 @@ describe("project organization", () => {
 });
 
 describe("project settings permissions", () => {
+  it("allows a checkout grouping override without project write access", async () => {
+    setup();
+    state.saveClientSettings.mockReset().mockResolvedValue(undefined);
+    await grant(remoteId, AsyncResult.success(session([])));
+    await using screen = await mountPanel();
+    const trigger = screen.getByRole("combobox", { name: /Grouping rule for \/work\/remote/ });
+    await userEvent.click(trigger);
+    await userEvent.click(page.getByRole("option", { name: "Keep separate" }));
+    expect(state.saveClientSettings).toHaveBeenCalledOnce();
+    const update = state.saveClientSettings.mock.calls[0]![0];
+    const next = update(DEFAULT_CLIENT_SETTINGS);
+    expect(Object.values(next.sidebarProjectGroupingOverrides)).toContain("separate");
+    expect(state.update).not.toHaveBeenCalled();
+  });
   it("disables shared edits when any member lacks project access", async () => {
     setup();
     await grant(remoteId, AsyncResult.success(session([AuthSettingsWriteScope])));
