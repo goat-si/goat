@@ -313,8 +313,10 @@ export async function spawnWatchedServer(
     const pgid = Number(process.argv[1]);
     process.stdin.resume();
     process.stdin.on("end", () => {
-      try { process.kill(-pgid, "SIGKILL"); }
-      catch (error) { if (error.code !== "ESRCH") throw error; }
+      try {
+        process.kill(-pgid, "SIGKILL");
+        fs.writeSync(1, "watchdog-killed\\n");
+      } catch (error) { if (error.code !== "ESRCH") throw error; }
     });
     fs.writeSync(3, "ready\\n");
   `;

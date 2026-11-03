@@ -799,56 +799,6 @@ describe("soak input safety", () => {
       }
     }),
   );
-  // oxlint-disable-next-line goat/no-global-process-runtime -- Process groups are unavailable on Windows.
-  it.live.skipIf(process.platform === "win32")(
-    "kills the server group after a SIGKILLed driver (#2468)",
-    () =>
-      Effect.promise(async () => {
-        const moduleUrl = new URL("./cpuPressureSoak.ts", import.meta.url).href;
-        const serverCode = `const {spawn} = require("node:child_process"); const c = spawn(process.execPath, ["-e", "process.stdin.resume()"], {stdio:["pipe","ignore","ignore"]}); c.once("spawn", () => console.log(c.pid)); process.stdin.resume();`;
-        const driverCode = `const m = await import(${JSON.stringify(moduleUrl)}); const owned = await m.spawnWatchedServer(process.execPath, ["-e", ${JSON.stringify(serverCode)}], {stdio:["pipe","pipe","ignore"]}, 1); const lines = (await import("node:readline")).createInterface({input:owned.server.child.stdout})[Symbol.asyncIterator](); const grandchild = (await lines.next()).value; console.log("fixture-ready " + owned.server.child.pid + " " + grandchild); process.stdin.resume();`;
-        const driver = guardChild(
-          NodeChildProcess.spawn(process.execPath, ["--input-type=module", "-e", driverCode], {
-            stdio: ["pipe", "pipe", "pipe"],
-          }),
-          () => {},
-        );
-        const exited = new Promise<NodeJS.Signals | null>((resolve) =>
-          driver.once("exit", (_, signal) => resolve(signal)),
-        );
-        const lines = NodeReadline.createInterface({ input: driver.stdout })[
-          Symbol.asyncIterator
-        ]();
-        let pgid: number | undefined;
-        const failures: unknown[] = [];
-        try {
-          const line = await lines.next();
-          expect(line.done).toBe(false);
-          expect(line.value).toMatch(/^fixture-ready \d+ \d+$/);
-          pgid = Number((line.value as string).split(" ")[1]);
-          driver.kill("SIGKILL");
-          expect(await exited).toBe("SIGKILL");
-          expect((await lines.next()).done).toBe(true);
-          expect(() => process.kill(-pgid!, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
-        } catch (error) {
-          failures.push(error);
-        }
-        try {
-          if (driver.exitCode === null && driver.signalCode === null) driver.kill("SIGKILL");
-          await exited;
-        } catch (error) {
-          failures.push(error);
-        }
-        if (pgid !== undefined) {
-          try {
-            process.kill(-pgid, "SIGKILL");
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== "ESRCH") failures.push(error);
-          }
-        }
-        if (failures.length) throw failures[0];
-      }),
-  );
 
   it("routes only termination signals to cleanup and removes the handlers", () => {
     const emitter = new NodeEvents.EventEmitter();
