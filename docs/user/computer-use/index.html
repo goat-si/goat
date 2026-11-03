@@ -72,7 +72,8 @@ When an agent asks for a password for a sign-in page, the card shows the site.
 GOAT types the password into that site’s password field, and the agent gets only a reference.</p>
 <p>An agent can also request a login with a username and password. The agent never sees either value;
 GOAT fills them only on the site named in the request, and each login is used once. If a fill
-stops partway, the agent needs a new login request.</p>
+stops partway, the agent needs a new login request.
+You can also add an authenticator setup key to the login request. GOAT generates the code without showing the key or code to the agent, and codes remain available for a short time after the login is filled.</p>
 <p>An agent can request payment card details for a named site. The agent never sees the values, and
 GOAT fills them only on that site. Each card is used once; if a fill stops partway, the agent needs
 a new card request.</p>
