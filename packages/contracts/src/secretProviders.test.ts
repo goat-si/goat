@@ -5,6 +5,7 @@ import {
   ServerSettingsPatch,
   requiredScopesForServerSettingsPatch,
 } from "./settings.ts";
+import { isOnePasswordReference } from "./secretReference.ts";
 
 const decodeServerSettings = Schema.decodeUnknownSync(ServerSettings);
 const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
@@ -35,4 +36,32 @@ it("validates secret provider writes while retaining unknown stored providers", 
     encodeServerSettings(decodeServerSettings({ secretProviders: { vault: unknown } }))
       .secretProviders,
   ).toEqual({ vault: unknown });
+});
+
+it("keeps environment secret references beside an empty value for older clients", () => {
+  const instance = {
+    driver: "codex",
+    environment: [
+      {
+        name: "API_KEY",
+        value: "",
+        sensitive: true,
+        secret: { provider: "personal", reference: "op://vault/item/field" },
+      },
+    ],
+  };
+  const decoded = decodeServerSettings({ providerInstances: { codex: instance } });
+  expect(encodeServerSettings(decoded).providerInstances).toEqual({ codex: instance });
+});
+
+it("accepts only 1Password read references without control or template characters", () => {
+  expect(isOnePasswordReference("op://vault/item/field")).toBe(true);
+  for (const value of [
+    "not-a-reference",
+    "op://vault/item",
+    "op://vault/item/field\n--help",
+    "op://vault/{{item}}/field",
+  ]) {
+    expect(isOnePasswordReference(value)).toBe(false);
+  }
 });

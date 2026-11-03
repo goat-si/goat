@@ -233,7 +233,8 @@ export const makeDiscovery = Effect.gen(function* () {
         },
         spec: { ...discovery, parseAuth: (input) => parseGitHubAuth(input, settings) },
       });
-      const savedToken = (settings.tokens["github.com"] ?? "").trim() !== "";
+      const token = settings.tokens["github.com"];
+      const savedToken = typeof token === "string" ? token.trim() !== "" : token !== undefined;
       const variable = environmentTokenVariable(environment);
       const tokenSource = savedToken ? "the token saved in Settings" : variable;
       if (tokenSource === null || settings.hosts["github.com"]?.enabled === false) return cli;

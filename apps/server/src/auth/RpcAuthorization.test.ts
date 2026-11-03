@@ -43,6 +43,16 @@ const RPC_REQUIRED_SCOPES = {
 };
 
 describe("RPC authorization scopes", () => {
+  it("requires provider management for explicitly reloading secrets", () => {
+    expect(
+      RpcAuthorization.requiredScopesForRpcCall(WS_METHODS.serverRefreshProviders, {
+        reloadSecrets: true,
+      }),
+    ).toEqual([AuthOrchestrationReadScope, AuthProvidersManageScope]);
+    expect(
+      RpcAuthorization.requiredScopesForRpcCall(WS_METHODS.serverRefreshProviders, {}),
+    ).toEqual([AuthOrchestrationReadScope]);
+  });
   it.effect("refuses storage item deletion without environment maintenance authority", () =>
     Effect.gen(function* () {
       const method = WS_METHODS.serverCleanUpStorageItems;

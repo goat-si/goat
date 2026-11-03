@@ -5,7 +5,7 @@ import * as Layer from "effect/Layer";
 import * as Redacted from "effect/Redacted";
 import { ChildProcessSpawner } from "effect/process";
 
-import { DEFAULT_SERVER_SETTINGS } from "@goat/contracts";
+import { DEFAULT_SERVER_SETTINGS, ServerSettingsError } from "@goat/contracts";
 import type * as SourceControlHost from "@goat/source-control-core/server/SourceControlHost";
 import { applyServerSettingsPatch } from "@goat/shared/serverSettings";
 import * as TestSourceControlHost from "@goat/source-control-testing/TestSourceControlHost";
@@ -72,6 +72,47 @@ describe("GitHubCredentials", () => {
   });
   afterEach(() => {
     vi.unstubAllEnvs();
+  });
+
+  it.effect("uses only the selected host's resolved settings token", () => {
+    const calls: Array<string | undefined> = [];
+    const layer = GitHubCredentials.layer.pipe(
+      Layer.provide(
+        TestSourceControlHost.layer({
+          resolveSettings: (settings, kind, host) => {
+            calls.push(`${kind}:${host}`);
+            return Effect.succeed({
+              ...settings,
+              sourceControlHosts: { github: { tokens: { "github.com": "resolved-token" } } },
+            });
+          },
+        }),
+      ),
+      Layer.provide(NodeCrypto.layer),
+    );
+    return Effect.gen(function* () {
+      const credentials = yield* GitHubCredentials.GitHubCredentials;
+      expect(Redacted.value((yield* credentials.get("github.com")).token)).toBe("resolved-token");
+      expect(calls).toEqual(["github:github.com"]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("does not fall back to gh when a saved reference cannot be read", () => {
+    const layer = GitHubCredentials.layer.pipe(
+      Layer.provide(
+        TestSourceControlHost.layer({
+          resolveSettings: () =>
+            Effect.fail(
+              new ServerSettingsError({ settingsPath: "fixture", operation: "read-secret" }),
+            ),
+        }),
+      ),
+      Layer.provide(NodeCrypto.layer),
+    );
+    return Effect.gen(function* () {
+      const credentials = yield* GitHubCredentials.GitHubCredentials;
+      expect((yield* Effect.flip(credentials.get("github.com")))._tag).toBe("GitHubCliFailedError");
+    }).pipe(Effect.provide(layer));
   });
 
   it.effect("lets an environment token win over a pinned account, as gh does", () => {

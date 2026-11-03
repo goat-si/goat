@@ -380,6 +380,15 @@ export const requiredScopesForRpcCall = (
   method: string,
   payload: unknown,
 ): ReadonlyArray<AuthEnvironmentScope> => {
+  if (
+    method === WS_METHODS.serverRefreshProviders &&
+    typeof payload === "object" &&
+    payload !== null &&
+    "reloadSecrets" in payload &&
+    payload.reloadSecrets === true
+  ) {
+    return [AuthOrchestrationReadScope, AuthProvidersManageScope];
+  }
   if (method === WS_METHODS.serverRetryResourceTelemetry) {
     return [AuthEnvironmentMaintainScope, AuthDiagnosticsReadScope];
   }

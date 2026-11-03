@@ -11,6 +11,53 @@ import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as ServerConfig from "./config.ts";
 import * as SqlitePersistence from "./persistence/Sqlite.ts";
 import * as ServerSettings from "./serverSettings.ts";
+import { ServerSettings as ServerSettingsSchema } from "@goat/contracts";
+import * as Schema from "effect/Schema";
+import { layerServerSettings } from "./serverSettingsLayers.testkit.ts";
+
+const decodeSettings = Schema.decodeUnknownSync(ServerSettingsSchema);
+
+it("preserves source control references while redacting literal tokens", () => {
+  const reference = { provider: "vault", reference: "op://work/item/password" };
+  const untrustedReference = { ...reference, token: "never-expose" };
+  const settings = decodeSettings({
+    sourceControlHosts: {
+      bitbucket: { accessToken: untrustedReference, apiToken: "literal-secret" },
+      github: { tokens: { "github.com": untrustedReference, "other.example": "literal-token" } },
+    },
+  });
+  const redacted = ServerSettings.redactServerSettingsForClient(settings).sourceControlHosts;
+  assert.deepStrictEqual(redacted.bitbucket?.accessToken, reference);
+  assert.notStrictEqual(redacted.bitbucket?.apiToken, "literal-secret");
+  const githubTokens = (redacted.github?.tokens ?? {}) as Record<string, unknown>;
+  assert.deepStrictEqual(githubTokens["github.com"], reference);
+  assert.notStrictEqual(githubTokens["other.example"], "literal-token");
+});
+
+it.effect("keeps a second host's stored literal when a token becomes a reference", () =>
+  Effect.gen(function* () {
+    const service = yield* ServerSettings.ServerSettingsService;
+    yield* service.updateSettings({
+      sourceControlHosts: {
+        github: { tokens: { "github.com": "first-token", "other.example": "second-token" } },
+      },
+    });
+    const reference = { provider: "vault", reference: "op://work/item/password" };
+    const previous = ServerSettings.redactServerSettingsForClient(yield* service.getSettings);
+    const previousTokens = previous.sourceControlHosts.github?.tokens as Record<string, unknown>;
+    yield* service.updateSettings({
+      sourceControlHosts: { github: { tokens: { ...previousTokens, "github.com": reference } } },
+    });
+    const settings = yield* service.getSettings;
+    const tokens = settings.sourceControlHosts.github?.tokens as Record<string, unknown>;
+    assert.deepStrictEqual(tokens["github.com"], reference);
+    assert.strictEqual(tokens["other.example"], "second-token");
+    const client = ServerSettings.redactServerSettingsForClient(settings);
+    const clientTokens = client.sourceControlHosts.github?.tokens as Record<string, unknown>;
+    assert.deepStrictEqual(clientTokens["github.com"], reference);
+    assert.notStrictEqual(clientTokens["other.example"], "second-token");
+  }).pipe(Effect.provide(layerServerSettings().pipe(Layer.provideMerge(NodeServices.layer)))),
+);
 
 it.effect(
   "reuses materialized settings without file reads and observes settings and secret changes",

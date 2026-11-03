@@ -110,6 +110,8 @@ import { CuaSettingsFields, CuaSettingsPatchFields } from "./computerUseSettings
 import { SnoozeSettingsFields, SnoozeSettingsPatchFields } from "./snoozePresets.ts";
 import { BuiltInSkillProjectOverrideFields } from "./builtinSkills.ts";
 import * as BlockedBrowser from "./blockedBrowserHosts.ts";
+import { SecretProviderId, SecretProviderSlug } from "./secretReference.ts";
+export { SecretProviderId } from "./secretReference.ts";
 
 export * from "./settingsFontSizes.ts";
 export { requiredScopesForServerSettingsPatch } from "./auth.ts";
@@ -839,18 +841,14 @@ export const UsageLimitSourceConfig = Schema.Struct({
 });
 export type UsageLimitSourceConfig = typeof UsageLimitSourceConfig.Type;
 
-const SecretProviderSlug = TrimmedNonEmptyString.check(
-  Schema.isMaxLength(64),
-  Schema.isPattern(/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/),
-);
-export const SecretProviderId = SecretProviderSlug.pipe(Schema.brand("SecretProviderId"));
-export type SecretProviderId = typeof SecretProviderId.Type;
 export const SecretProviderKind = SecretProviderSlug.pipe(Schema.brand("SecretProviderKind"));
 export type SecretProviderKind = typeof SecretProviderKind.Type;
 export const OnePasswordAccount = Schema.String.check(
   Schema.isMaxLength(253),
   Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._-]*$/),
 ).pipe(Schema.brand("OnePasswordAccount"));
+export type OnePasswordAccount = typeof OnePasswordAccount.Type;
+export const SecretProviderLabel = TrimmedNonEmptyString.check(Schema.isMaxLength(64));
 export const OnePasswordSecretProviderConfig = Schema.Struct({ account: OnePasswordAccount });
 const isOnePasswordSecretProviderConfig = Schema.is(OnePasswordSecretProviderConfig);
 export const SecretProviderConfig = Schema.Struct({
@@ -861,7 +859,7 @@ export const SecretProviderConfig = Schema.Struct({
 export type SecretProviderConfig = typeof SecretProviderConfig.Type;
 export const SecretProviderConfigWrite = Schema.Struct({
   ...SecretProviderConfig.fields,
-  label: TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
+  label: SecretProviderLabel,
 }).check(
   Schema.makeFilter((entry) =>
     entry.kind === "one_password" && isOnePasswordSecretProviderConfig(entry.config)

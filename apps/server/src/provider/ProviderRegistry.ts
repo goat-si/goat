@@ -21,6 +21,7 @@ import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as Semaphore from "effect/Semaphore";
+import * as Scope from "effect/Scope";
 
 import * as ProviderLatestVersions from "@goat/provider-core/server/ProviderLatestVersions";
 import * as ModelManifest from "./ModelManifest.ts";
@@ -60,6 +61,9 @@ export class ProviderRegistry extends Context.Service<
     /** Unknown instance ids return the cached list without error. */
     readonly refreshInstance: (
       instanceId: ProviderInstanceId,
+    ) => Effect.Effect<ReadonlyArray<ServerProvider>>;
+    readonly reloadSecretsAndRefresh?: (
+      instanceId?: ProviderInstanceId,
     ) => Effect.Effect<ReadonlyArray<ServerProvider>>;
 
     /** Only refreshed instances can verify an update; the published list still includes every row. */
@@ -1044,6 +1048,13 @@ export const layer = Layer.effect(
         refresh(provider).pipe(Effect.catchCause(recoverRefreshFailure)),
       refreshInstance: (instanceId: ProviderInstanceId) =>
         refreshInstance(instanceId).pipe(Effect.catchCause(recoverRefreshFailure)),
+      reloadSecretsAndRefresh: (instanceId?: ProviderInstanceId) =>
+        (instanceRegistry.reloadSecrets?.(instanceId) ?? Effect.void).pipe(
+          Effect.andThen(syncLiveSourcesAndContinue),
+          Effect.andThen(instanceId === undefined ? refresh() : refreshInstance(instanceId)),
+          Effect.catchCause(recoverRefreshFailure),
+          Scope.provide(serviceScope),
+        ),
       refreshWorkspaceSnapshot: (input) =>
         refreshWorkspaceSnapshot(input).pipe(Effect.catchCause(recoverRefreshFailure)),
       refreshAfterUpdate,

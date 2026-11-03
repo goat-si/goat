@@ -663,7 +663,7 @@ export const make = Effect.gen(function* () {
 
   const apiUrl = (path: string) => `${config.baseUrl.replace(/\/+$/u, "")}${path}`;
 
-  const currentCredential = host.settings.get.pipe(
+  const currentCredential = host.settings.getWithSecrets(BitbucketClient.definition.kind).pipe(
     Effect.map((settings) =>
       resolveCredential(
         readSourceControlHostSettings(
@@ -673,15 +673,12 @@ export const make = Effect.gen(function* () {
         config,
       ),
     ),
-    Effect.catch((error) =>
-      // No cause: a settings decode error can quote a hand-edited token.
-      Effect.logWarning("failed to read Bitbucket credentials from settings", {
-        operation: error.operation,
-      }).pipe(
-        Effect.as(
-          resolveCredential(readSourceControlHostSettings(BitbucketClient.settings, {}), config),
-        ),
-      ),
+    Effect.mapError(
+      () =>
+        new BitbucketRequestError({
+          operation: "request",
+          cause: new Error("Could not read saved credential"),
+        }),
     ),
   );
 
@@ -1037,6 +1034,12 @@ export const make = Effect.gen(function* () {
               Effect.catch(() => currentCredential.pipe(Effect.map(authFromCredential))),
             ),
       ),
+      Effect.orElseSucceed(() => ({
+        status: "unknown" as const,
+        account: Option.none(),
+        host: Option.some("bitbucket.org"),
+        detail: Option.some("Could not read saved credential."),
+      })),
     ),
     listPullRequests: Effect.fn("BitbucketApi.listPullRequests")(function (input) {
       return resolveRepository(input).pipe(

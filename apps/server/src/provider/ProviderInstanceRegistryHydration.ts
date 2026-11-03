@@ -31,6 +31,7 @@ import * as ProviderHostLive from "./ProviderHostLive.ts";
 import type * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import type * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as ServerConfig from "../config.ts";
+import { cachedResolveSecret } from "../secrets/secretResolver.ts";
 
 type ProviderInstanceRegistryHydrationEnv =
   | Exclude<
@@ -174,13 +175,20 @@ export const reconcileSnapshot = (
   mutator: ProviderInstanceRegistryMutator.ProviderInstanceRegistryMutatorShape,
   configMap: ProviderInstanceConfigMap,
   revision: CodexRoute.SettingsRevision | undefined,
+  secretProviders?: ServerSettings["secretProviders"],
+  deferSecrets?: boolean,
 ) =>
   Effect.serviceOption(ServerConfig.ServerConfig).pipe(
     Effect.flatMap((config) => {
       const devServer = Option.isSome(config) && config.value.devUrl !== undefined;
-      if (devServer || !(DEV_REPLAY_INSTANCE_ID in configMap)) return mutator.reconcile(configMap);
+      if (devServer || !(DEV_REPLAY_INSTANCE_ID in configMap))
+        return mutator.reconcile(configMap, secretProviders, deferSecrets);
       const { [DEV_REPLAY_INSTANCE_ID]: _replay, ...withoutReplay } = configMap;
-      return mutator.reconcile(withoutReplay as ProviderInstanceConfigMap);
+      return mutator.reconcile(
+        withoutReplay as ProviderInstanceConfigMap,
+        secretProviders,
+        deferSecrets,
+      );
     }),
     Effect.provideService(CodexRoute.HydratingRevision, revision),
   );
@@ -196,6 +204,7 @@ const settingsWatcher = (
   initial?: {
     readonly configMap: ProviderInstanceConfigMap;
     readonly revision: CodexRoute.SettingsRevision | undefined;
+    readonly secretProviders?: ServerSettings["secretProviders"];
   },
 ) =>
   Layer.effectDiscard(
@@ -205,7 +214,15 @@ const settingsWatcher = (
       const routeState = yield* Effect.serviceOption(CodexRoute.CodexRouteState);
       // Initial hydration runs here, not in the registry layer, so it carries its revision too.
       if (initial !== undefined)
-        yield* reconcileSnapshot(mutator, initial.configMap, initial.revision);
+        yield* reconcileSnapshot(
+          mutator,
+          initial.configMap,
+          initial.revision,
+          initial.secretProviders,
+          true,
+        );
+      if (initial !== undefined && mutator.reloadSecrets)
+        yield* mutator.reloadSecrets().pipe(Effect.forkScoped);
       const settingsChanges: Stream.Stream<
         {
           readonly settings: ServerSettings;
@@ -227,11 +244,17 @@ const settingsWatcher = (
                 mutator,
                 deriveProviderInstanceConfigMap(next.settings),
                 next.revision,
+                next.settings.secretProviders,
               );
             // Read before the settings, so a commit in between can only make this look older.
             const revision = Option.isSome(routeState) ? routeState.value.revision() : undefined;
             const settings = yield* serverSettings.getSettings;
-            yield* reconcileSnapshot(mutator, deriveProviderInstanceConfigMap(settings), revision);
+            yield* reconcileSnapshot(
+              mutator,
+              deriveProviderInstanceConfigMap(settings),
+              revision,
+              settings.secretProviders,
+            );
           }).pipe(
             Effect.tap(() =>
               Option.isSome(routeState) && next.revision
@@ -301,6 +324,13 @@ export const layer: Layer.Layer<
     const layerMutable = ProviderInstanceRegistry.layer({
       drivers: BUILT_IN_DRIVERS,
       configMap: {} as ProviderInstanceConfigMap,
+      invalidateSecrets: cachedResolveSecret.invalidate,
+      resolveSecret: (reference) =>
+        serverSettings.getSettings.pipe(
+          Effect.flatMap((settings) =>
+            Effect.tryPromise(() => cachedResolveSecret(settings.secretProviders, reference)),
+          ),
+        ),
     }).pipe(
       Layer.provide(ProviderOrchestrationAdapterInfrastructure.layer),
       Layer.provide(Layer.succeed(McpProviderSessions.McpProviderSessions, fencedSessions)),
@@ -326,6 +356,7 @@ export const layer: Layer.Layer<
     const hydrated = settingsWatcher(afterInitial, {
       configMap: initialConfigMap,
       revision: initial?.revision,
+      ...(initial ? { secretProviders: initial.settings.secretProviders } : {}),
     }).pipe(
       Layer.provideMerge(layerMutable),
       Layer.tap(() =>

@@ -115,6 +115,22 @@ export const makeDiscovery = Effect.gen(function* () {
             process: { run: (input) => process.run({ ...input, env: { ...input.env, ...env } }) },
           }),
         ),
+        Effect.catch(() =>
+          probeSourceControlProvider({
+            cwd,
+            process,
+            spec: {
+              ...cliDiscovery,
+              authArgs: ["--version"],
+              parseAuth: () =>
+                providerAuth({
+                  status: "unknown",
+                  host: AUTH_HOST,
+                  detail: "Could not read saved credential.",
+                }),
+            },
+          }),
+        ),
       ),
     refineUnknownRemote: () => Effect.succeed(null),
   } satisfies SourceControlManagedCliDiscoverySpec;

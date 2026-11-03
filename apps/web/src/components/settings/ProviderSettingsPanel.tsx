@@ -1,4 +1,6 @@
 import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
+import { isSecretsFeatureEnabled } from "../../env";
+import { SecretsSettingsPanel } from "./SecretsSettings";
 import { environmentTransportLabel } from "./EnvironmentRow.logic";
 import { SettingsGroup } from "./SettingsGroup";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
@@ -298,6 +300,7 @@ export function ProviderSettingsPanel(target: ProviderSettingsTarget) {
         key={`${target.environmentId ?? ""}:${target.instanceId ?? ""}`}
         {...target}
       />
+      {target.scoped && isSecretsFeatureEnabled ? <SecretsSettingsPanel /> : null}
     </SettingsPageContainer>
   );
 }
@@ -677,7 +680,13 @@ export function EnvironmentProviderSettings({
     void (async () => {
       const result = await refreshServerProviders({
         environmentId,
-        input: { refreshModels: true },
+        input: {
+          refreshModels: true,
+          ...(isSecretsFeatureEnabled &&
+          readEnvironmentScope(environmentId, AuthProvidersManageScope)
+            ? { reloadSecrets: true }
+            : {}),
+        },
       });
       refreshingRef.current = false;
       setIsRefreshingProviders(false);
