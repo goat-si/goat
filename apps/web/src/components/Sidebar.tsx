@@ -1,3 +1,5 @@
+import { isSidebarEnvironmentDisconnected } from "./Sidebar.logic";
+import { liveShellEnvironmentIdsAtom } from "../state/shell";
 import { type EnvironmentId, type ScopedProjectRef } from "@goat/contracts";
 import { threadChipCopyTarget } from "@goat/client-runtime/thread-reference";
 import { copyThreadReference } from "~/lib/copyThreadReference";
@@ -120,6 +122,7 @@ import { useNowMinute } from "../hooks/useNowMinute";
 import {
   useEnvironmentIdentities,
   useConnectedEnvironmentIds,
+  useEnvironmentConnectionSummaries,
   useEnvironmentMachines,
   usePrimaryEnvironmentId,
 } from "../state/environments";
@@ -383,6 +386,18 @@ function useSidebarThreads(input: {
   const [acknowledgedWakes, setAcknowledgedWakes] = useState<ReadonlySet<string>>(() => new Set());
   const [priorityReleases, setPriorityReleases] = useState<ReadonlySet<string>>(() => new Set());
   const workingShelfEnabled = useClientSettings((setting) => setting.sidebarWorkingShelfEnabled);
+  const environmentConnections = useEnvironmentConnectionSummaries();
+  const liveShellEnvironmentIds = useAtomValue(liveShellEnvironmentIdsAtom);
+  const disconnectedEnvironmentIds = new Set(
+    environmentConnections
+      .filter((environment) =>
+        isSidebarEnvironmentDisconnected(
+          environment.connectionState,
+          liveShellEnvironmentIds.has(environment.environmentId),
+        ),
+      )
+      .map((environment) => environment.environmentId),
+  );
   const inboxReturnsVersion = useSyncExternalStore(
     inboxReturns.subscribe,
     inboxReturns.getSnapshot,
@@ -430,6 +445,7 @@ function useSidebarThreads(input: {
     acknowledgedWakes,
     priorityReleases,
     workingShelfEnabled,
+    disconnectedEnvironmentIds,
     clockKey: `${nowMinute}:${snoozeWakeClock}:${inboxReturnsVersion}`,
     hiddenBotThreadKeys: botThreads.hidden,
   });
