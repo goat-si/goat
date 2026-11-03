@@ -396,7 +396,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
         claims.delete(claimId);
         yield* shrink(union());
         return true;
-      }),
+      }).pipe(Effect.uninterruptible),
     ),
   );
   const revoke = Effect.fn("BrowserOriginGrants.revoke")((threadId: ThreadId, origin: string) =>
@@ -409,7 +409,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
         for (const [id, claim] of claims)
           if (claim.threadId === threadId && claim.origin === origin) claims.delete(id);
         yield* shrink(union());
-      }),
+      }).pipe(Effect.uninterruptible),
     ),
   );
   const stop = Effect.fn("BrowserOriginGrants.stop")(function* (threadId?: ThreadId) {
@@ -434,7 +434,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     });
     for (const signal of stopped) yield* Deferred.succeed(signal, undefined);
     yield* shrink(union());
-  });
+  }, Effect.uninterruptible);
   const blockOrigins = Effect.fn("BrowserOriginGrants.blockOrigins")(function* (
     hosts: ReadonlyArray<string> | undefined,
   ) {
@@ -481,7 +481,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     yield* advance;
     for (const signal of result.signals) yield* Deferred.succeed(signal, undefined);
     yield* shrink(union());
-  });
+  }, Effect.uninterruptible);
   const end = Effect.fn("BrowserOriginGrants.end")(
     (threadId: ThreadId, claimId: string, generation: number, reason: "origin_changed") =>
       lock.withPermits(1)(
@@ -492,7 +492,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
           ended.set(claimId, { threadId, reason });
           yield* shrink(union());
           return true;
-        }),
+        }).pipe(Effect.uninterruptible),
       ),
   );
   const endReason = Effect.fn("BrowserOriginGrants.endReason")(
@@ -526,7 +526,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     });
     yield* Deferred.succeed(previousSignal, undefined);
     yield* shrink(union());
-  });
+  }, Effect.uninterruptible);
   const bindingValues = (threadId: ThreadId) =>
     [...pending.values()]
       .filter((entry) => entry.threadId === threadId && entry.granted)
@@ -596,7 +596,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
       yield* shrink(union());
     }
     return judgment === "allowed";
-  });
+  }, Effect.uninterruptible);
   const bindingsFor = Effect.fn("BrowserOriginGrants.bindingsFor")((threadId: ThreadId) =>
     Effect.sync(() => bindingValues(threadId)),
   );
