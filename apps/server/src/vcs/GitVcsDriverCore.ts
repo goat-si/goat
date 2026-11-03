@@ -4631,7 +4631,11 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const branch =
       parseRemoteRefWithRemoteNames(input.refName, [input.remoteName])?.branchName ?? input.refName;
     const scopedArgs = [
-      ...args,
+      "fetch",
+      "--quiet",
+      "--no-tags",
+      "--",
+      input.remoteName,
       `+refs/heads/${branch}:refs/remotes/${input.remoteName}/${branch}`,
     ];
     const result = yield* runFetch(scopedArgs);
