@@ -95,7 +95,7 @@ export function pullRequestListErrorMessages(
     for (const label of unreachable.values())
       labelCounts.set(label, (labelCounts.get(label) ?? 0) + 1);
     const names = [...unreachable].map(([id, label]) =>
-      (labelCounts.get(label) ?? 0) > 1 ? `${label} (${id})` : label,
+      !environmentLabels.get(id) || (labelCounts.get(label) ?? 0) > 1 ? `${label} (${id})` : label,
     );
     messages.unshift(
       `Couldn't reach ${unreachable.size === 1 ? "environment" : "environments"}: ${names.join(", ")}`,
