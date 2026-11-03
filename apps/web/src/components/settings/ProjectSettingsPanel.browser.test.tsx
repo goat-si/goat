@@ -53,7 +53,7 @@ const state = vi.hoisted(() => ({
     vi.fn<
       (
         update: (settings: typeof DEFAULT_CLIENT_SETTINGS) => typeof DEFAULT_CLIENT_SETTINGS,
-      ) => Promise<void>
+      ) => Promise<typeof DEFAULT_CLIENT_SETTINGS>
     >(),
 }));
 
@@ -355,7 +355,7 @@ describe("project organization", () => {
 describe("project settings permissions", () => {
   it("allows a checkout grouping override without project write access", async () => {
     setup();
-    state.saveClientSettings.mockReset().mockResolvedValue(undefined);
+    state.saveClientSettings.mockReset().mockResolvedValue(DEFAULT_CLIENT_SETTINGS);
     await grant(remoteId, AsyncResult.success(session([])));
     await using screen = await mountPanel();
     const trigger = screen.getByRole("combobox", { name: /Grouping rule for \/work\/remote/ });
