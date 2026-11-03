@@ -55,7 +55,7 @@ function isDirectRun(): boolean {
 
 /**
  * Without group or other access even under umask 002: the dev server keeps the
- * modes it finds here, and its memory import rejects writable state.
+ * modes it finds here, and its memory import rejects writable state (#1648).
  */
 export function createMarkerDirectory(directory: string): void {
   NodeFS.mkdirSync(directory, { recursive: true, mode: 0o700 });
