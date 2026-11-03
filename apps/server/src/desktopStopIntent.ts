@@ -6,6 +6,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
+import * as ServerConfig from "./config.ts";
 
 export class DesktopStopIntentReader extends Context.Service<
   DesktopStopIntentReader,
@@ -53,3 +54,9 @@ export const layer = (path: string | undefined, pid: number) =>
           return { atShutdown: read() };
         }),
       );
+
+export const layerFromServerConfig = Layer.unwrap(
+  Effect.map(ServerConfig.ServerConfig, (config) =>
+    layer(config.desktopStopIntentPath, process.pid),
+  ),
+);

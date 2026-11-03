@@ -18,4 +18,4 @@ export const DesktopStopIntent = Schema.Struct({
 });
 export type DesktopStopIntent = typeof DesktopStopIntent.Type;
 
-export const DESKTOP_STOP_INTENT_FILE = "desktop-stop-intent.json";
+export const DESKTOP_STOP_INTENT_DIR = "desktop-stop-intent";
