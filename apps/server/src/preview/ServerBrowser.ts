@@ -2558,7 +2558,8 @@ const make = Effect.gen(function* () {
                   : {}),
               });
             } else {
-              const dispatch = () => dispatchViewerInput(tab, session, viewer, message);
+              const dispatch = (input: Record<string, unknown>) =>
+                dispatchViewerInput(tab, session, viewer, input);
               if (
                 message.type === "mouse" &&
                 message.action === "move" &&
@@ -2568,10 +2569,23 @@ const make = Effect.gen(function* () {
                 await tab.control.humanLatest(
                   viewer.id,
                   `hover:${ViewerInput.modifiersOf(message)}`,
+                  message,
                   dispatch,
                 );
+              } else if (message.type === "wheel") {
+                await tab.control.humanLatest(
+                  viewer.id,
+                  `wheel:${ViewerInput.num(message.x)}:${ViewerInput.num(message.y)}:${ViewerInput.modifiersOf(message)}:${Math.sign(ViewerInput.num(message.deltaX))}:${Math.sign(ViewerInput.num(message.deltaY))}`,
+                  message,
+                  dispatch,
+                  (waiting, next) => ({
+                    ...next,
+                    deltaX: ViewerInput.num(waiting.deltaX) + ViewerInput.num(next.deltaX),
+                    deltaY: ViewerInput.num(waiting.deltaY) + ViewerInput.num(next.deltaY),
+                  }),
+                );
               } else {
-                await tab.control.human(viewer.id, dispatch);
+                await tab.control.human(viewer.id, () => dispatch(message));
               }
             }
           } catch {
