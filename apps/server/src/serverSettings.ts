@@ -798,11 +798,12 @@ export class ServerSettingsService extends Context.Service<
   ServerSettingsService,
   {
     readonly start: Effect.Effect<void, ServerSettingsError>;
-
     readonly ready: Effect.Effect<void, ServerSettingsError>;
-
     readonly getSettings: Effect.Effect<ServerSettings, ServerSettingsError>;
     readonly committedPolicy?: Effect.Effect<CuaCommittedPolicy>;
+    readonly committedPolicyChanges?: Effect.Success<
+      typeof makeCuaCommittedPolicy
+    >["subscribeRestrictions"];
     readonly blockedBrowserHostsSnapshot?: Effect.Effect<
       ReadonlyArray<string>,
       ServerSettingsError
@@ -811,7 +812,6 @@ export class ServerSettingsService extends Context.Service<
     readonly committedHub?: Effect.Effect<ServerSettings["hub"], ServerSettingsError>;
     /** Hub and cloud consent generations, advanced inside each commit; doubles may leave it out. */
     readonly hubConsentGenerations?: Effect.Effect<HubConsentGenerations>;
-
     readonly updateAgentWorkspaceTerminalPolicy?: (
       patch: ServerSettingsPatch,
       actorSessionId: AuthSessionId,
@@ -823,13 +823,11 @@ export class ServerSettingsService extends Context.Service<
       /** Runs inside the write lock before the patch applies, so a revoked grant cannot commit. */
       authorizeAtCommit?: Effect.Effect<void, ServerSettingsError>,
     ) => Effect.Effect<ServerSettings, ServerSettingsError>;
-
     /**
      * Read-modify-write: `patchFor` sees the latest stored settings inside the
      * write lock and returns the patch to apply, so a nested key edited by
      * another writer between a caller's read and its write is never lost.
      */
-
     readonly updateSettingsWith: (
       patchFor: (
         current: ServerSettings,
@@ -995,6 +993,7 @@ const makeTest = Effect.fn("serverSettings.makeTest")(function* (
     ready: Effect.void,
     getSettings,
     committedPolicy: cuaPolicy.read,
+    committedPolicyChanges: cuaPolicy.subscribeRestrictions,
     blockedBrowserHostsSnapshot: Ref.get(currentSettingsRef).pipe(
       Effect.map((settings) => settings.blockedBrowserHosts),
     ),
@@ -2095,6 +2094,7 @@ const make = Effect.gen(function* () {
     start,
     ready: Deferred.await(startedDeferred),
     committedPolicy: cuaPolicy.read,
+    committedPolicyChanges: cuaPolicy.subscribeRestrictions,
     getSettings: getSettingsFromCache.pipe(
       Effect.flatMap(materializeSettingsSecrets),
       Effect.map(resolveTextGenerationProvider),

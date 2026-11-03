@@ -28,6 +28,61 @@ const layerServerSettings = () =>
     ),
   );
 
+it.effect("committed policy feeds retain transient blocks while a subscriber is held", () =>
+  Effect.gen(function* () {
+    const service = yield* ServerSettingsModule.ServerSettingsService;
+    const feed = yield* service.committedPolicyChanges ?? Effect.die("missing policy feed");
+    const entered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    let first = true;
+    const changes = yield* feed.pipe(
+      Stream.mapEffect((value) => {
+        if (!first) return Effect.succeed(value);
+        first = false;
+        return Deferred.succeed(entered, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.as(value),
+        );
+      }),
+      Stream.toQueue({ capacity: "unbounded" }),
+    );
+    yield* Deferred.await(entered);
+    yield* service.updateSettings({ blockedBrowserHosts: ["a.test"] });
+    yield* service.updateSettings({ blockedBrowserHosts: ["b.test"] });
+    yield* service.updateSettings({ blockedBrowserHosts: [] });
+    yield* Deferred.succeed(release, undefined);
+    yield* Queue.take(changes);
+    assert.deepEqual(yield* Queue.take(changes), ["a.test", "b.test"]);
+  }).pipe(Effect.scoped, Effect.provide(ServerSettingsModule.layerTest())),
+);
+
+it.effect("committed policy feeds fail closed when a subscriber falls behind", () =>
+  Effect.gen(function* () {
+    const service = yield* ServerSettingsModule.ServerSettingsService;
+    const feed = yield* service.committedPolicyChanges ?? Effect.die("missing policy feed");
+    const entered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    let first = true;
+    const changes = yield* feed.pipe(
+      Stream.mapEffect((value) => {
+        if (!first) return Effect.succeed(value);
+        first = false;
+        return Deferred.succeed(entered, undefined).pipe(
+          Effect.andThen(Deferred.await(release)),
+          Effect.as(value),
+        );
+      }),
+      Stream.toQueue({ capacity: "unbounded" }),
+    );
+    yield* Deferred.await(entered);
+    for (let i = 0; i < 65; i++)
+      yield* service.updateSettings({ blockedBrowserHosts: [`site${i}.test`] });
+    yield* Deferred.succeed(release, undefined);
+    yield* Queue.take(changes);
+    assert.isUndefined(yield* Queue.take(changes));
+  }).pipe(Effect.scoped, Effect.provide(ServerSettingsModule.layerTest())),
+);
+
 it.layer(NodeServices.layer)("settings watcher recovery", (it) => {
   it.effect.each([
     ["primary", "error"],
