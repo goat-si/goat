@@ -678,6 +678,8 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
       workload: {
         ...workloadResult,
         clientRuntimeCoverage: "session",
+        clientRuntimeCoverageReason:
+          "EnvironmentSupervisor requires Node connectivity, wakeup and connection-driver layers with renewable WebSocket tickets; this harness uses RpcSession directly.",
         replayRequested: options.replayThreads,
         codexRequested: options.codexThreads,
         headlessRequested: options.headlessClients,

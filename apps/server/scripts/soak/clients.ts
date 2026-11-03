@@ -2,6 +2,8 @@
 import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
+import * as NodeNet from "node:net";
+import { guardErrors } from "@goat/shared/errorGuards";
 import {
   AuthWebSocketTicketResult,
   CommandId,
@@ -73,6 +75,109 @@ function protocol(origin: string, ticket: string, observe?: (socket: WebSocket) 
     retryTransientErrors: false,
     retryPolicy: Schedule.recurs(0),
   }).pipe(Layer.provide(socket), Layer.provide(RpcSerialization.layerJson));
+}
+
+export async function openRelay(origin: string, limit: number, onError: (error: Error) => void) {
+  const target = new URL(origin);
+  const connections = new Map<NodeNet.Socket, NodeNet.Socket>();
+  const server = guardErrors(NodeNet.createServer(), onError);
+  server.on("connection", (incoming) => {
+    if (connections.size >= limit) {
+      incoming.destroy();
+      onError(new Error("relay connection limit reached"));
+      return;
+    }
+    let outbound: NodeNet.Socket | undefined;
+    guardErrors(incoming, () => {
+      incoming.destroy();
+      outbound?.destroy();
+    });
+    outbound = guardErrors(NodeNet.connect(Number(target.port), target.hostname), () => {
+      incoming.destroy();
+      outbound?.destroy();
+    });
+    connections.set(incoming, outbound);
+    incoming.once("close", () => {
+      outbound?.destroy();
+      connections.delete(incoming);
+    });
+    outbound.once("close", () => incoming.destroy());
+    incoming.pipe(outbound);
+    outbound.pipe(incoming);
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("relay address unavailable");
+  return {
+    wsBaseUrl: `ws://127.0.0.1:${address.port}`,
+    disconnectOnly: () => {
+      if (connections.size !== 1) throw new Error("self-check relay connection ambiguous");
+      const pair = [...connections.entries()][0];
+      if (!pair) throw new Error("self-check relay connection missing");
+      pair[0].destroy();
+      pair[1].destroy();
+    },
+    close: () =>
+      new Promise<void>((resolve) => {
+        for (const [incoming, outbound] of connections) {
+          incoming.destroy();
+          outbound.destroy();
+        }
+        server.close(() => resolve());
+      }),
+  };
+}
+
+function socketObserver(
+  observations: Observations,
+  label: string,
+  requested: () => boolean,
+  record: (value: unknown) => void,
+) {
+  let previous: string | undefined;
+  let sequence = 0;
+  const closed = (cause: string, code?: number) => {
+    if (!previous) return;
+    observations.recordSocket(previous, requested());
+    record({
+      type: cause,
+      connectionId: previous,
+      at: new Date().toISOString(),
+      requested: requested(),
+      ...(code === undefined ? {} : { code }),
+    });
+  };
+  const observe = (socket: WebSocket) => {
+    if (previous) closed("socket.replaced");
+    const current = `${label}-${sequence++}`;
+    previous = current;
+    socket.addEventListener("error", () => {
+      observations.recordSocket(current, requested());
+      record({
+        type: "socket.error",
+        connectionId: current,
+        at: new Date().toISOString(),
+        requested: requested(),
+      });
+    });
+    socket.addEventListener("close", (event) => {
+      observations.recordSocket(current, requested());
+      record({
+        type: "socket.close",
+        connectionId: current,
+        at: new Date().toISOString(),
+        code: event.code,
+        requested: requested(),
+      });
+    });
+  };
+  return { observe, closed };
 }
 
 export interface WorkloadInput {
@@ -187,85 +292,86 @@ export async function runWorkload(input: WorkloadInput): Promise<{
         },
       },
     });
+    const relay = yield* Effect.acquireRelease(
+      Effect.promise(() =>
+        openRelay(input.origin, input.headlessClients + 1, (error) =>
+          input.observations.socketGaps.push(`relay: ${error.message}`),
+        ),
+      ),
+      (resource) => Effect.promise(() => resource.close()),
+    );
+    const openSession = Effect.fn("Soak.openSession")(function* (
+      ticket: string,
+      label: string,
+      observer: ReturnType<typeof socketObserver>,
+    ) {
+      const target = new PrimaryConnectionTarget({
+        environmentId: config.environment.environmentId,
+        label,
+        httpBaseUrl: input.origin,
+        wsBaseUrl: relay.wsBaseUrl,
+      });
+      const factory = yield* makeRpcSession({ drainIo: drainNodeIo }).pipe(
+        Effect.provideService(Socket.WebSocketConstructor, (url) => {
+          const socket = new WebSocket(url);
+          observer.observe(socket);
+          return socket;
+        }),
+      );
+      const session = yield* factory.connect({
+        environmentId: target.environmentId,
+        label,
+        httpBaseUrl: target.httpBaseUrl,
+        socketUrl: `${target.wsBaseUrl}/ws?wsTicket=${encodeURIComponent(ticket)}&${ORCHESTRATION_PROTOCOL_QUERY_PARAM}=${ORCHESTRATION_PROTOCOL_VERSION}`,
+        httpAuthorization: null,
+        target,
+      });
+      yield* session.ready;
+      return session;
+    });
+    if (input.selfCheck.enabled) {
+      const selfTicket = tickets[input.headlessClients + 1];
+      if (!selfTicket) return yield* Effect.die(new Error("missing self-check ticket"));
+      const selfSocket = new Observations();
+      const observer = socketObserver(selfSocket, "self-session", () => false, input.recordDetail);
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const session = yield* openSession(selfTicket, "Soak self-check", observer);
+          yield* Effect.sync(() => relay.disconnectOnly());
+          yield* Effect.exit(session.closed);
+          observer.closed("session.closed");
+        }),
+      );
+      input.selfCheck.clientDisconnect.observed = selfSocket.report(
+        [],
+        { value: 0, observed: 0, coverage: "complete", reasons: [], evidence: [] },
+        { value: 0, observed: 0, coverage: "complete", reasons: [], evidence: [] },
+      ).counters.clientDisconnects.observed;
+      input.selfCheck.clientDisconnect.passed =
+        input.selfCheck.clientDisconnect.observed === 1 && selfSocket.socketGaps.length === 0;
+    }
     const headlessTickets = tickets.slice(1, input.headlessClients + 1);
     const opened = yield* Effect.forEach(headlessTickets, () => Deferred.make<void, Error>(), {
       concurrency: "unbounded",
     });
     for (const [index, ticket] of headlessTickets.entries()) {
       const realSession = index < Math.ceil(input.headlessClients / 2);
-      let previousConnection: string | undefined;
-      let connectionNumber = 0;
-      const observeSocket = (socket: WebSocket) => {
-        if (previousConnection) {
-          input.observations.recordSocket(previousConnection, teardown);
-          input.recordDetail({
-            type: "socket.replaced",
-            connectionId: previousConnection,
-            at: new Date().toISOString(),
-            requested: teardown,
-          });
-        }
-        const connectionId = `${realSession ? "session" : "bare"}-${index}-${connectionNumber++}`;
-        previousConnection = connectionId;
-        socket.addEventListener("error", () => {
-          input.observations.recordSocket(connectionId, teardown);
-          input.recordDetail({
-            type: "socket.error",
-            connectionId,
-            at: new Date().toISOString(),
-            requested: teardown,
-          });
-        });
-        socket.addEventListener("close", (event) => {
-          input.observations.recordSocket(connectionId, teardown);
-          input.recordDetail({
-            type: "socket.close",
-            connectionId,
-            at: new Date().toISOString(),
-            code: event.code,
-            requested: teardown,
-          });
-        });
-      };
+      const observer = socketObserver(
+        input.observations,
+        `${realSession ? "session" : "bare"}-${index}`,
+        () => teardown,
+        input.recordDetail,
+      );
       const ready = opened[index];
       if (!ready) return yield* Effect.die(new Error("missing client readiness"));
       yield* Effect.gen(function* () {
         if (realSession) {
-          const target = new PrimaryConnectionTarget({
-            environmentId: config.environment.environmentId,
-            label: `Soak session ${index}`,
-            httpBaseUrl: input.origin,
-            wsBaseUrl: input.origin.replace(/^http/, "ws"),
-          });
-          const factory = yield* makeRpcSession({ drainIo: drainNodeIo }).pipe(
-            Effect.provideService(Socket.WebSocketConstructor, (url) => {
-              const socket = new WebSocket(url);
-              observeSocket(socket);
-              return socket;
-            }),
-          );
-          const session = yield* factory.connect({
-            environmentId: target.environmentId,
-            label: target.label,
-            httpBaseUrl: target.httpBaseUrl,
-            socketUrl: `${target.wsBaseUrl}/ws?wsTicket=${encodeURIComponent(ticket)}&${ORCHESTRATION_PROTOCOL_QUERY_PARAM}=${ORCHESTRATION_PROTOCOL_VERSION}`,
-            httpAuthorization: null,
-            target,
-          });
-          yield* session.ready;
+          const session = yield* openSession(ticket, `Soak session ${index}`, observer);
           sessionOpened++;
           yield* session.closed.pipe(
             Effect.catchCause((cause) =>
-              Effect.gen(function* () {
-                if (previousConnection)
-                  input.observations.recordSocket(previousConnection, teardown);
-                input.recordDetail({
-                  type: "session.closed",
-                  connectionId: previousConnection,
-                  at: DateTime.formatIso(yield* DateTime.now),
-                  cause: String(cause),
-                  requested: teardown,
-                });
+              Effect.sync(() => {
+                observer.closed(`session.closed: ${String(cause)}`);
               }),
             ),
             Effect.forkScoped,
@@ -277,7 +383,7 @@ export async function runWorkload(input: WorkloadInput): Promise<{
             headlessOpened++;
             yield* Deferred.succeed(ready, undefined);
             return yield* Effect.never;
-          }).pipe(Effect.provide(protocol(input.origin, ticket, observeSocket)));
+          }).pipe(Effect.provide(protocol(input.origin, ticket, observer.observe)));
         }
         headlessOpened++;
         yield* Deferred.succeed(ready, undefined);
@@ -293,31 +399,6 @@ export async function runWorkload(input: WorkloadInput): Promise<{
     }
     yield* Effect.forEach(opened, Deferred.await, { concurrency: "unbounded" });
     if (input.selfCheck.enabled) {
-      const selfTicket = tickets[input.headlessClients + 1];
-      if (!selfTicket) return yield* Effect.die(new Error("missing self-check ticket"));
-      const selfSocket = new Observations();
-      yield* Effect.promise(
-        () =>
-          new Promise<void>((resolve, reject) => {
-            const url = `${input.origin.replace(/^http/, "ws")}/ws?wsTicket=${encodeURIComponent(selfTicket)}&${ORCHESTRATION_PROTOCOL_QUERY_PARAM}=${ORCHESTRATION_PROTOCOL_VERSION}`;
-            const socket = new WebSocket(url);
-            socket.addEventListener("open", () => socket.close());
-            socket.addEventListener("error", () => {
-              selfSocket.recordSocket("self", false);
-              reject(new Error("self-check socket error"));
-            });
-            socket.addEventListener("close", () => {
-              selfSocket.recordSocket("self", false);
-              resolve();
-            });
-          }),
-      );
-      input.selfCheck.clientDisconnect.observed = selfSocket.report(
-        [],
-        { value: 0, observed: 0, coverage: "complete", reasons: [], evidence: [] },
-        { value: 0, observed: 0, coverage: "complete", reasons: [], evidence: [] },
-      ).counters.clientDisconnects.observed;
-      input.selfCheck.clientDisconnect.passed = input.selfCheck.clientDisconnect.observed === 1;
       const selfThread = ThreadId.make(id());
       const selfStart = DateTime.formatIso(yield* DateTime.now);
       const selfObserved = new Observations();

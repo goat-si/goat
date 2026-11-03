@@ -4,10 +4,44 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeReadline from "node:readline";
+import * as NodeNet from "node:net";
 import * as NodeSqlite from "node:sqlite";
-import { guardChild } from "@goat/shared/errorGuards";
+import { guardChild, guardErrors } from "@goat/shared/errorGuards";
 import { describe, expect, it } from "@effect/vitest";
 import { isSoakExitPrompt } from "../dev-replay-agent.ts";
+import { openRelay } from "./clients.ts";
+
+it("relays bytes and disconnects the owned connection", async () => {
+  const server = guardErrors(
+    NodeNet.createServer((socket) => {
+      guardErrors(socket, () => socket.destroy());
+      socket.pipe(socket);
+    }),
+    () => {},
+  );
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  if (!address || typeof address === "string") throw new Error("missing test address");
+  const relay = await openRelay(`http://127.0.0.1:${address.port}`, 2, () => {});
+  const socket = guardErrors(
+    NodeNet.connect(Number(new URL(relay.wsBaseUrl).port), "127.0.0.1"),
+    () => {},
+  );
+  const closed = new Promise<void>((resolve) => socket.once("close", resolve));
+  try {
+    const data = new Promise<string>((resolve) =>
+      socket.once("data", (chunk) => resolve(chunk.toString())),
+    );
+    socket.write("hello");
+    expect(await data).toBe("hello");
+    relay.disconnectOnly();
+    await closed;
+  } finally {
+    socket.destroy();
+    await relay.close();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
 
 describe("soak Codex fixture", () => {
   it("recognizes the self-check marker embedded in a Replay prompt", () => {
