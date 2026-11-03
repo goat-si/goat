@@ -12,6 +12,12 @@ import { REMOTE_RUNNER_HINT_SCRIPT } from "./runtimeFactsScripts.ts";
 
 const REMOTE_REPLACEMENT_WAIT_ATTEMPTS = 50;
 
+export const WINDOWS_SERVER_ALIVE = String.raw`server_alive() {
+  tasklist_output="$(MSYS2_ARG_CONV_EXCL='*' tasklist.exe /FI "PID eq $1" /NH /FO CSV 2>/dev/null)" || return 1
+  printf '%s\n' "$tasklist_output" | grep -q "^\"[^\"]*\",\"$1\","
+}
+`;
+
 // Process inspection for the lock owner (this shell) and the server it launches. On a Windows
 // host, Git Bash and Cygwin list only their own processes in /proc and ps, while the server is a
 // native process: PowerShell reads its identity, and the identity's Windows paths are mapped back
@@ -33,10 +39,7 @@ if [ "$GOAT_HOST_WINDOWS" = 1 ]; then
     win_info="$(GOAT_PROCESS_ID="$1" MSYS2_ARG_CONV_EXCL='*' powershell.exe -NoProfile -NonInteractive -EncodedCommand '${encodePowerShellCommand(WINDOWS_PROCESS_INFO_POWERSHELL)}' </dev/null 2>/dev/null)" || return 1
     printf '%s\n' "$win_info" | tr -d '\r'
   }
-  server_alive() {
-    MSYS2_ARG_CONV_EXCL='*' tasklist.exe /FI "PID eq $1" /NH /FO CSV 2>/dev/null | grep -q "^\"[^\"]*\",\"$1\","
-  }
-  server_kill() { MSYS2_ARG_CONV_EXCL='*' taskkill.exe /PID "$1" /F >/dev/null 2>&1; }
+  ${WINDOWS_SERVER_ALIVE}  server_kill() { MSYS2_ARG_CONV_EXCL='*' taskkill.exe /PID "$1" /F >/dev/null 2>&1; }
   server_uid() {
     win_info="$(windows_process_info "$1")" || return 1
     if [ "$(printf '%s\n' "$win_info" | sed -n 1p)" = self ]; then id -u; else echo other; fi

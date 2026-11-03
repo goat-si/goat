@@ -24,6 +24,7 @@ import type * as Path from "effect/Path";
 import { desktopAppServerStateDirWords } from "@goat/shared/desktopAppServer";
 
 import type * as SshAuth from "./auth.ts";
+import { WINDOWS_SERVER_ALIVE } from "./runtimeOwnershipScripts.ts";
 import { runSshCommand } from "./command.ts";
 import { SshCommandError, SshInvalidTargetError, SshPairingError } from "./errors.ts";
 import {
@@ -41,12 +42,14 @@ import {
   nativeWindowsAfter,
 } from "./runtimeWindows.ts";
 
-// The app server's directory depends on the channel (`desktopAppServerStateDirs`). Attach to the
-// first live one; otherwise start the managed server. A probe that cannot run stays fail-open
-// (`declined`), so the managed server still serves the host. Windows hosts are skipped.
+const managedLiveness = String.raw`case "$(uname -s)" in
+  MINGW* | MSYS* | CYGWIN*) ${WINDOWS_SERVER_ALIVE} ;;
+  *) server_alive() { kill -0 "$1" 2>/dev/null; } ;;
+esac
+`;
+
 const managedPreamble = String.raw`set -eu
-case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) printf 'GOAT_APP_SERVER=none\n'; exit 0 ;; esac
-app_userdata="$HOME/.goat/userdata"
+${managedLiveness}app_userdata="$HOME/.goat/userdata"
 app_record="$app_userdata/server-runtime.json"
 app_token="$app_userdata/runtime-control.token"
 app_none() { printf 'GOAT_APP_SERVER=%s\n' "$1"; exit 0; }
@@ -57,11 +60,12 @@ app_pid="$(printf '%s\n' "$app_line" | sed -n 's/.*"pid"[[:space:]]*:[[:space:]]
 app_port="$(printf '%s\n' "$app_line" | sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
 case "$app_pid:$app_port" in *[!0-9:]* | :* | *:) app_none none ;; esac
 [ "$app_pid" -gt 0 ] && [ "$app_port" -ge 1 ] && [ "$app_port" -le 65535 ] || app_none none
-kill -0 "$app_pid" 2>/dev/null || app_none none
+server_alive "$app_pid" || app_none none
 command -v curl >/dev/null 2>&1 || app_none no-curl
 [ -f "$app_token" ] && [ ! -L "$app_token" ] && [ -s "$app_token" ] || app_none no-token
 `;
 
+// Windows hosts do not have an SSH app server.
 // First live, reachable app server wins. A missing or dead record is skipped. A live one that
 // cannot be attached is remembered, and a later directory can still be used.
 const appServerSelect = String.raw`set -eu
@@ -117,29 +121,29 @@ printf 'GOAT_APP_SERVER=live %s %s %s\n%s\nGOAT_APP_SERVER_OTHERS=%s\n' "$app_pi
 `;
 
 const managedExistingServerProbeScript = String.raw`set -eu
-case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) printf 'GOAT_EXISTING=absent\n'; exit 0 ;; esac
-home="$HOME/.goat/userdata"
+${managedLiveness}home="$HOME/.goat/userdata"
 record="$home/server-runtime.json"; token="$home/runtime-control.token"; identity="$home/environment-id"
 fail() { printf 'GOAT_EXISTING=%s\n' "$1"; exit 0; }
 # A clean shutdown removes the record but keeps the identity and database, which may own a
 # legacy watch; only a home with neither has no other server.
 if [ ! -f "$record" ]; then
-  if [ -e "$identity" ] || [ -e "$home/statev2.sqlite" ]; then fail unusable; fi
-  fail absent
+  if [ -e "$identity" ] || [ -e "$home/statev2.sqlite" ]; then fail "unusable no-record"; fi
+  fail "absent no-record"
 fi
-[ ! -L "$record" ] && [ -f "$identity" ] && [ ! -L "$identity" ] || fail unusable
-[ -f "$token" ] && [ ! -L "$token" ] && [ -s "$token" ] || fail unusable
+[ ! -L "$record" ] && [ -f "$identity" ] && [ ! -L "$identity" ] || fail "unusable bad-record"
+[ -f "$token" ] && [ ! -L "$token" ] && [ -s "$token" ] || fail "unusable no-token"
 line="$(tr '\n' ' ' <"$record")"
 pid="$(printf '%s\n' "$line" | sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
 port="$(printf '%s\n' "$line" | sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
 origin="$(printf '%s\n' "$line" | sed -n 's/.*"origin"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
-case "$pid:$port" in *[!0-9:]* | :* | *:) fail unusable ;; esac
-[ "$pid" -gt 0 ] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || fail unusable
-[ "$origin" = "http://127.0.0.1:$port" ] || fail unusable
+case "$pid:$port" in *[!0-9:]* | :* | *:) fail "unusable bad-record" ;; esac
+[ "$pid" -gt 0 ] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || fail "unusable bad-record"
+[ "$origin" = "http://127.0.0.1:$port" ] || fail "unusable bad-origin"
 # A stopped recorded server may own a legacy watch; its database is not disproven.
-kill -0 "$pid" 2>/dev/null || fail unusable
-command -v curl >/dev/null 2>&1 || fail unusable
-descriptor="$(curl -fsS --max-time 5 "http://127.0.0.1:$port@@GOAT_ENVIRONMENT_PATH@@" 2>/dev/null | tr '\n' ' ')" || fail unusable
+server_alive "$pid" || fail "unusable dead-pid"
+command -v curl >/dev/null 2>&1 || fail "unusable no-curl"
+descriptor="$(curl -fsS --max-time 5 "http://127.0.0.1:$port@@GOAT_ENVIRONMENT_PATH@@" 2>/dev/null)" || fail "unusable unreachable"
+descriptor="$(printf '%s' "$descriptor" | tr '\n' ' ')"
 printf 'GOAT_EXISTING=live %s %s\n%s\n' "$port" "$(cat "$identity")" "$descriptor"
 `;
 
@@ -243,7 +247,7 @@ export type ExistingServerProbe =
       readonly port: number;
       readonly version: string;
     }
-  | { readonly kind: "absent" | "unusable" };
+  | { readonly kind: "absent" | "unusable"; readonly reason?: string };
 
 const isEnvironmentId = Schema.is(EnvironmentId);
 
@@ -251,7 +255,21 @@ export const parseExistingServerProbe = (stdout: string): ExistingServerProbe =>
   const lines = stdout.split(/\r?\n/u);
   const index = lines.findIndex((line) => line.startsWith("GOAT_EXISTING="));
   const marker = lines[index]?.slice("GOAT_EXISTING=".length);
-  if (marker === "absent") return { kind: "absent" };
+  const [kind, reason, extra] = (marker ?? "").split(" ");
+  if (kind === "absent" || kind === "unusable") {
+    const allowed = [
+      "no-record",
+      "bad-record",
+      "no-token",
+      "bad-origin",
+      "dead-pid",
+      "no-curl",
+      "unreachable",
+    ];
+    return reason !== undefined && extra === undefined && allowed.includes(reason)
+      ? { kind, reason }
+      : { kind };
+  }
   if (marker === undefined || !marker.startsWith("live ")) return { kind: "unusable" };
   const [, portText, diskId] = marker.split(" ");
   const port = Number(portText);

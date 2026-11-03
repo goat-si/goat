@@ -1765,14 +1765,7 @@ const make = Effect.gen(function* () {
             existingRoute === undefined
               ? Effect.die("Existing route disappeared")
               : existingRoute(target, explicitOrigin),
-          ).pipe(
-            Effect.mapError(() =>
-              failure(
-                "host_unavailable",
-                `GOAT environment ${explicitOrigin} on ${target.alias} is unavailable.`,
-              ),
-            ),
-          )
+          ).pipe(Effect.mapError((error) => failure("host_unavailable", error.message)))
         : yield* Effect.gen(function* () {
             const active = yield* withRuntime(
               requireReady
