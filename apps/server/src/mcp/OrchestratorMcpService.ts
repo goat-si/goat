@@ -1132,6 +1132,14 @@ const make = Effect.gen(function* () {
         ),
       );
 
+  const loadTasks = (threadId: ThreadId, taskId: NodeId) =>
+    threadManagement.getThreadRecords(threadId, ["subagents"], { subagentIds: [taskId] }).pipe(
+      Effect.map(({ subagents }) => subagents),
+      Effect.mapError((error) =>
+        failure("orchestration_error", `Unable to read thread ${threadId}: ${errorMessage(error)}`),
+      ),
+    );
+
   const loadProjectThread = (
     projectId: OrchestrationV2ThreadProjection["thread"]["projectId"],
     threadId: ThreadId,
@@ -1528,8 +1536,7 @@ const make = Effect.gen(function* () {
     observedRunId?: RunId | null,
   ): Effect.fn.Return<OrchestratorMcpDelegateTaskResult, OrchestratorMcpFailure> {
     yield* requireCapability(scope);
-    const parentProjection = yield* loadProjection(scope.thread.threadId, false);
-    const task = parentProjection.subagents.find(
+    const task = (yield* loadTasks(scope.thread.threadId, taskId)).find(
       (candidate) =>
         candidate.id === taskId &&
         candidate.origin === "app_owned" &&
@@ -1568,7 +1575,12 @@ const make = Effect.gen(function* () {
         ...(task.role === undefined ? {} : { role: task.role }),
         ...(task.reviewLedger === undefined ? {} : { reviewLedger: task.reviewLedger }),
         ...(task.role === "review"
-          ? { reviewRound: yield* reviewRoundFor(parentProjection, task) }
+          ? {
+              reviewRound: yield* reviewRoundFor(
+                yield* loadProjection(scope.thread.threadId, false),
+                task,
+              ),
+            }
           : {}),
         ...(task.modelSelection === undefined ? {} : { modelSelection: task.modelSelection }),
         ...(task.parentModelSelection === undefined
@@ -1590,7 +1602,7 @@ const make = Effect.gen(function* () {
         yield* acknowledgeTaskResult(
           scope,
           task,
-          parentProjection,
+          yield* loadProjection(scope.thread.threadId, false),
           response.status,
           acknowledgementOperation,
         );
@@ -1599,6 +1611,7 @@ const make = Effect.gen(function* () {
 
     if (task.childThreadId === null)
       return yield* failure("task_not_found", "This task has no local child thread.");
+    const parentProjection = yield* loadProjection(scope.thread.threadId, false);
     const childControls = yield* threadManagement
       .getThreadRecords(
         task.childThreadId,

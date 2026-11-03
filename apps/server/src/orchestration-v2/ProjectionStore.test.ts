@@ -8585,6 +8585,17 @@ it.effect(
           progress: "Still reviewing",
         },
       });
+      assert.deepEqual(
+        (yield* store.getThreadRecords(threadId, ["subagents"], {
+          subagentIds: [NodeId.make("missing-task")],
+        })).subagents,
+        [],
+      );
+      assert.equal(
+        (yield* store.getThreadRecords(threadId, ["subagents"], { subagentIds: [task.id] }))
+          .subagents[0]?.id,
+        task.id,
+      );
       const persisted = (yield* store.getThreadRecords(threadId, ["subagents"])).subagents[0]!;
       assert.deepEqual(persisted.reviewLedger, task.reviewLedger);
       assert.deepEqual(persisted.completionDelivery, task.completionDelivery);
