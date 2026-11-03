@@ -112,12 +112,11 @@ export const stopLateQueuedTurn = <E, R>(
     Effect.ignore,
   );
 
-/** Runs every item to its end, then fails with the first failure, so one cannot skip another. */
+/** Runs every item concurrently to its end, then fails with the first failure, so none waits on another. */
 export const settleEach = <A, E, R>(
   items: ReadonlyArray<A>,
   run: (item: A) => Effect.Effect<unknown, E, R>,
-  concurrency: number | "unbounded" = 1,
 ) =>
-  Effect.forEach(items, (item) => Effect.exit(run(item)), { concurrency }).pipe(
+  Effect.forEach(items, (item) => Effect.exit(run(item)), { concurrency: "unbounded" }).pipe(
     Effect.flatMap((exits) => Effect.forEach(exits, (exit) => exit, { discard: true })),
   );

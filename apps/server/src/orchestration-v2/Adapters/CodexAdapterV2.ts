@@ -7955,30 +7955,27 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   (target) => sendInterrupt(target.context),
                 );
                 // A queued turn that never starts cannot be interrupted, so it ends here instead.
-                const queuedStops = settleEach(
-                  queued,
-                  ({ context }) =>
-                    stopQueuedTurn({
-                      context,
-                      stopped: stoppedQueuedTurns,
-                      withPermit: turnTerminalizationPermit.withPermits(1),
-                      interrupt: sendInterrupt,
-                      // Never started, so it has no subagents a failed Stop must keep running.
-                      settle: Effect.flatMap(DateTime.now, (completedAt) =>
-                        finalizeCodexTurn({
-                          context,
-                          nativeTurnId: context.nativeTurnId,
-                          status: "interrupted",
-                          completedAt,
-                        }),
-                      ),
-                      full: toProtocolError(
-                        "Too many queued Codex turns are still waiting to be stopped; Stop could not be delivered.",
-                      ),
-                    }),
-                  "unbounded",
+                const queuedStops = settleEach(queued, ({ context }) =>
+                  stopQueuedTurn({
+                    context,
+                    stopped: stoppedQueuedTurns,
+                    withPermit: turnTerminalizationPermit.withPermits(1),
+                    interrupt: sendInterrupt,
+                    // Never started, so it has no subagents a failed Stop must keep running.
+                    settle: Effect.flatMap(DateTime.now, (completedAt) =>
+                      finalizeCodexTurn({
+                        context,
+                        nativeTurnId: context.nativeTurnId,
+                        status: "interrupted",
+                        completedAt,
+                      }),
+                    ),
+                    full: toProtocolError(
+                      "Too many queued Codex turns are still waiting to be stopped; Stop could not be delivered.",
+                    ),
+                  }),
                 );
-                yield* settleEach([started, queuedStops], (effect) => effect, "unbounded");
+                yield* settleEach([started, queuedStops], (effect) => effect);
                 const containedTerminalKeys = new Set<string>();
                 const attemptedTerminalKeys = new Set<string>();
                 const collectTrackedTerminals = Effect.fn("CodexAdapterV2.collectTrackedTerminals")(

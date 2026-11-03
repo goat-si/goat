@@ -7,7 +7,7 @@ import * as Fiber from "effect/Fiber";
 import { TestClock } from "effect/testing";
 
 import * as CodexAdapterV2 from "./CodexAdapterV2.ts";
-import { fixture, layerAdapterTest } from "./CodexAdapterV2.attachment.testkit.ts";
+import { fixture, layerAdapterTest, spawnChild } from "./CodexAdapterV2.attachment.testkit.ts";
 import { makeCodexReplayTurn } from "./CodexReplay.testkit.ts";
 
 describe("Codex Stop of a turn Codex queued behind a running turn", () => {
@@ -231,6 +231,80 @@ describe("Codex Stop of a turn Codex queued behind a running turn", () => {
           [yield* replay.interrupted, yield* replay.interrupted],
           ["turn-1", "turn-2"],
         );
+      }),
+    ).pipe(Effect.provide(layerAdapterTest)),
+  );
+
+  it.effect("interrupts a subagent's turn while Codex has not answered the root's interrupt", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const root = "stop-unanswered-root";
+        const child = root + "-child";
+        const f = fixture(root);
+        yield* (yield* McpProviderSessions.McpProviderSessions).set(f.config);
+        f.start();
+        yield* f.turnStart(3, 1, false);
+        spawnChild(f, root, child);
+        const turnEvent = (threadId: string, id: string, status: "inProgress" | "interrupted") => ({
+          type: "emit_inbound" as const,
+          frame: {
+            method: status === "inProgress" ? "turn/started" : "turn/completed",
+            params: { threadId, turn: makeCodexReplayTurn({ id, status }) },
+          },
+        });
+        const expectInterrupt = (id: number, threadId: string, turnId: string) => ({
+          type: "expect_outbound" as const,
+          frame: { id, method: "turn/interrupt", params: { threadId, turnId } },
+        });
+        f.entries.push(
+          turnEvent(child, "child-turn", "inProgress"),
+          // A paused goal's update tells the test the child's turn has registered.
+          {
+            type: "emit_inbound",
+            frame: {
+              method: "thread/goal/updated",
+              params: {
+                threadId: root,
+                turnId: "turn-1",
+                goal: {
+                  threadId: root,
+                  objective: "fence",
+                  status: "paused",
+                  tokenBudget: null,
+                  tokensUsed: 1,
+                  timeUsedSeconds: 1,
+                  createdAt: 1782622440,
+                  updatedAt: 1782622450,
+                },
+              },
+            },
+          },
+          // Codex answers the root's interrupt only after the child's.
+          expectInterrupt(4, root, "turn-1"),
+          expectInterrupt(5, child, "child-turn"),
+          { type: "emit_inbound", frame: { id: 5, result: {} } },
+          turnEvent(child, "child-turn", "interrupted"),
+          { type: "emit_inbound", frame: { id: 4, result: {} } },
+          turnEvent(root, "turn-1", "interrupted"),
+        );
+        const replay = yield* f.open;
+        yield* replay.startTurn(1);
+        yield* replay.goalTokens;
+        const allocator = yield* IdAllocator.IdAllocatorV2;
+        const stop = yield* replay.runtime
+          .interruptTurn({
+            providerThread: replay.providerThread,
+            providerTurnId: allocator.derive.providerTurn({
+              driver: CodexAdapterV2.CODEX_DRIVER_KIND,
+              nativeTurnId: "turn-1",
+            }),
+          })
+          .pipe(Effect.exit, Effect.forkScoped);
+        assert.deepStrictEqual(
+          [yield* replay.interrupted, yield* replay.interrupted],
+          ["turn-1", "child-turn"],
+        );
+        assert.deepStrictEqual(yield* Fiber.join(stop), Exit.void);
       }),
     ).pipe(Effect.provide(layerAdapterTest)),
   );
