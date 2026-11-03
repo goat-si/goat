@@ -134,36 +134,52 @@ describe("Codex Stop of a turn Codex queued behind a running turn", () => {
     ).pipe(Effect.provide(layerAdapterTest)),
   );
 
-  it.effect("interrupts a queued turn that Codex starts after Stop settled it", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const f = yield* queuedBehindRunningTurn("stop-queued-starts-after-timeout");
-        interrupted(f, 5, "turn-1");
-        f.entries.push({
-          type: "emit_inbound",
-          afterMs: 15_000,
-          frame: {
-            method: "turn/started",
-            params: {
-              threadId: f.nativeThreadId,
-              turn: makeCodexReplayTurn({ id: "turn-2", status: "inProgress" }),
+  it.effect(
+    "interrupts a queued turn that Codex starts after Stop settled it, retrying a refusal",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const f = yield* queuedBehindRunningTurn("stop-queued-starts-after-timeout");
+          interrupted(f, 5, "turn-1");
+          f.entries.push({
+            type: "emit_inbound",
+            afterMs: 15_000,
+            frame: {
+              method: "turn/started",
+              params: {
+                threadId: f.nativeThreadId,
+                turn: makeCodexReplayTurn({ id: "turn-2", status: "inProgress" }),
+              },
             },
-          },
-        });
-        interrupted(f, 6, "turn-2");
-        const replay = yield* f.open;
-        yield* replay.startTurn(1);
-        yield* replay.startTurn(2);
-        const stop = yield* stopTurn2(replay);
-        yield* TestClock.adjust("10 seconds");
-        assert.deepStrictEqual(yield* Fiber.join(stop), Exit.void);
-        const terminals = [yield* replay.terminal, yield* replay.terminal];
-        assert.deepStrictEqual(yield* statusOf(terminals), ["interrupted", "interrupted"]);
-        assert.equal(yield* replay.interrupted, "turn-1");
-        yield* TestClock.adjust("30 seconds");
-        assert.equal(yield* replay.interrupted, "turn-2");
-      }),
-    ).pipe(Effect.provide(layerAdapterTest)),
+          });
+          f.entries.push(
+            {
+              type: "expect_outbound",
+              frame: {
+                id: 6,
+                method: "turn/interrupt",
+                params: { threadId: f.nativeThreadId, turnId: "turn-2" },
+              },
+            },
+            { type: "emit_inbound", frame: { id: 6, error: { code: -32603, message: "busy" } } },
+          );
+          interrupted(f, 7, "turn-2");
+          const replay = yield* f.open;
+          yield* replay.startTurn(1);
+          yield* replay.startTurn(2);
+          const stop = yield* stopTurn2(replay);
+          yield* TestClock.adjust("10 seconds");
+          assert.deepStrictEqual(yield* Fiber.join(stop), Exit.void);
+          const terminals = [yield* replay.terminal, yield* replay.terminal];
+          assert.deepStrictEqual(yield* statusOf(terminals), ["interrupted", "interrupted"]);
+          assert.equal(yield* replay.interrupted, "turn-1");
+          yield* TestClock.adjust("30 seconds");
+          assert.deepStrictEqual(
+            [yield* replay.interrupted, yield* replay.interrupted],
+            ["turn-2", "turn-2"],
+          );
+        }),
+      ).pipe(Effect.provide(layerAdapterTest)),
   );
 
   it.effect("still interrupts the queued turn when interrupting the running turn fails", () =>

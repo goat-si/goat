@@ -88,14 +88,19 @@ export const stopQueuedTurn = Effect.fn("CodexAdapterV2.stopQueuedTurn")(functio
 
 export const stopLateQueuedTurn = <E, R>(interrupt: Effect.Effect<unknown, E, R>) =>
   interrupt.pipe(
+    Effect.retry({ times: 2 }),
     Effect.asVoid,
     Effect.catch((cause) =>
       Effect.logWarning("orchestration-v2.codex-queued-turn-stop-failed", { cause }),
     ),
   );
 
-/** Runs every effect to its end, then fails with the first failure, so one cannot cancel another. */
-export const allSettledThenFail = <E, R>(effects: ReadonlyArray<Effect.Effect<void, E, R>>) =>
-  Effect.forEach(effects, Effect.exit, { concurrency: "unbounded" }).pipe(
+/** Runs every item to its end, then fails with the first failure, so one cannot skip another. */
+export const settleEach = <A, E, R>(
+  items: ReadonlyArray<A>,
+  run: (item: A) => Effect.Effect<unknown, E, R>,
+  concurrency: number | "unbounded" = 1,
+) =>
+  Effect.forEach(items, (item) => Effect.exit(run(item)), { concurrency }).pipe(
     Effect.flatMap((exits) => Effect.forEach(exits, (exit) => exit, { discard: true })),
   );

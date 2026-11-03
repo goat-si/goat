@@ -113,10 +113,10 @@ import { withCodexRequestDeadlines } from "./CodexRequestDeadline.ts";
 import { CUA_DEFERRED_NOTE, makeCodexThreadStatuses } from "./codexThreadStatuses.ts";
 import * as CodexSubagents from "./codexSubagents.ts";
 import {
-  allSettledThenFail,
   awaitingNativeStart,
   makeStoppedQueuedTurns,
   queueBlockers,
+  settleEach,
   stopLateQueuedTurn,
   stopQueuedTurn,
 } from "./CodexQueuedTurnStop.ts";
@@ -7950,13 +7950,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 const queued = interruptTargets.filter(({ context }) =>
                   awaitingNativeStart(context),
                 );
-                const started = Effect.forEach(
+                const started = settleEach(
                   interruptTargets.filter((target) => !queued.includes(target)),
                   (target) => sendInterrupt(target.context),
-                  { discard: true },
                 );
                 // A queued turn that never starts cannot be interrupted, so it ends here instead.
-                const queuedStops = Effect.forEach(
+                const queuedStops = settleEach(
                   queued,
                   ({ context }) =>
                     stopQueuedTurn({
@@ -7964,20 +7963,19 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                       stopped: stoppedQueuedTurns,
                       withPermit: turnTerminalizationPermit.withPermits(1),
                       interrupt: sendInterrupt,
-                      settle: Effect.gen(function* () {
-                        forcedNativeTurns.add(context.nativeTurnId);
-                        const forced = yield* finalizeCodexTurn({
+                      // Never started, so it has no subagents a failed Stop must keep running.
+                      settle: Effect.flatMap(DateTime.now, (completedAt) =>
+                        finalizeCodexTurn({
                           context,
                           nativeTurnId: context.nativeTurnId,
                           status: "interrupted",
-                          completedAt: yield* DateTime.now,
-                        });
-                        if (!forced) forcedNativeTurns.delete(context.nativeTurnId);
-                      }),
+                          completedAt,
+                        }),
+                      ),
                     }),
-                  { concurrency: "unbounded", discard: true },
+                  "unbounded",
                 );
-                yield* allSettledThenFail([started, queuedStops]);
+                yield* settleEach([started, queuedStops], (effect) => effect, "unbounded");
                 const containedTerminalKeys = new Set<string>();
                 const attemptedTerminalKeys = new Set<string>();
                 const collectTrackedTerminals = Effect.fn("CodexAdapterV2.collectTrackedTerminals")(
