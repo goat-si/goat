@@ -9,7 +9,6 @@ import * as Result from "effect/Result";
 import * as Predicate from "effect/Predicate";
 import * as Schema from "effect/Schema";
 import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
-import * as SqlClient from "effect/sql/SqlClient";
 
 import {
   annotateEnvironmentRequest,
@@ -20,7 +19,6 @@ import {
 } from "../auth/http.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import { traceLocalHandlerWork } from "../cloud/traceRelayRequest.ts";
-import * as OrchestrationEventStore from "../persistence/OrchestrationEventStore.ts";
 import * as ProjectEnrichmentService from "../project/ProjectEnrichmentService.ts";
 import {
   buildBoundedThreadProjection,
@@ -31,12 +29,8 @@ import {
   OLDER_THREAD_USER_TURN_LIMIT,
 } from "./threadHistoryPaging.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
-import * as ProjectStore from "./ProjectStore.ts";
-import {
-  buildActiveShellSnapshot,
-  loadShellSnapshotParts,
-  shellSnapshotForSubscriber,
-} from "./ShellStream.ts";
+import { buildActiveShellSnapshot, shellSnapshotForSubscriber } from "./ShellStream.ts";
+import * as ShellSnapshotLoads from "./ShellSnapshotLoads.ts";
 import { boundedSnapshotResponseFields } from "./ThreadStream.ts";
 import { projectThreadProjectionForWire } from "./WireProjection.ts";
 
@@ -56,11 +50,9 @@ export const layer = HttpApiBuilder.group(
   EnvironmentHttpApi,
   "orchestration",
   Effect.fnUntraced(function* (handlers) {
-    const sql = yield* SqlClient.SqlClient;
+    const shellLoads = yield* ShellSnapshotLoads.ShellSnapshotLoads;
     const environment = yield* ServerEnvironment.ServerEnvironmentIdentity;
     const threadManagement = yield* ThreadManagementService.ThreadManagementService;
-    const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
-    const projectStore = yield* ProjectStore.ProjectStoreV2;
     const projectEnrichment = yield* ProjectEnrichmentService.ProjectEnrichmentService;
 
     const enrichProjectShells = Effect.fn("http.orchestration.enrichProjectShells")(
@@ -84,15 +76,7 @@ export const layer = HttpApiBuilder.group(
         readonly omitIdleSubagents: boolean;
         readonly omitOlderSettled: boolean;
       }) {
-        const parts = yield* loadShellSnapshotParts({
-          sql,
-          readThreads: threadManagement.readShellSnapshot({
-            location: "active",
-            ...(options.omitIdleSubagents ? { omitIdleSubagents: true } : {}),
-          }),
-          listProjects: projectStore.listShells(),
-          latestSequence: applicationEvents.latestApplicationSequence,
-        });
+        const parts = yield* shellLoads.active(options.omitIdleSubagents);
         const base = buildActiveShellSnapshot(parts);
         const { snapshot } = shellSnapshotForSubscriber(
           base,
