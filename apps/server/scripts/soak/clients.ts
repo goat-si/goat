@@ -80,6 +80,7 @@ export interface WorkloadInput {
   headlessClients: number;
   durationMs: number;
   observations: Observations;
+  recordDetail: (value: unknown) => void;
   signal: AbortSignal;
   onWindowStart: () => void;
   onWindowEnd: () => Promise<void>;
@@ -162,12 +163,19 @@ export async function runWorkload(
     for (const [index, ticket] of tickets.slice(1).entries()) {
       const connectionId = `bare-${index}`;
       const layer = protocol(input.origin, ticket, (socket) => {
-        socket.addEventListener("error", () =>
-          input.observations.recordSocket(connectionId, teardown),
-        );
-        socket.addEventListener("close", () =>
-          input.observations.recordSocket(connectionId, teardown),
-        );
+        socket.addEventListener("error", () => {
+          input.observations.recordSocket(connectionId, teardown);
+          input.recordDetail({ type: "socket.error", connectionId, requested: teardown });
+        });
+        socket.addEventListener("close", (event) => {
+          input.observations.recordSocket(connectionId, teardown);
+          input.recordDetail({
+            type: "socket.close",
+            connectionId,
+            code: event.code,
+            requested: teardown,
+          });
+        });
       });
       const ready = opened[index];
       if (!ready) return yield* Effect.die(new Error("missing client readiness"));
@@ -234,6 +242,7 @@ export async function runWorkload(
       if (replay) replayStarted++;
       else codexStarted++;
       const observe = Effect.fn("Soak.observeRun")(function* (run: { id: string; status: string }) {
+        input.recordDetail({ type: "run", threadId, runId: run.id, status: run.status });
         input.observations.issueRun(run.id);
         if (
           !["completed", "failed", "interrupted", "cancelled", "rolled_back"].includes(

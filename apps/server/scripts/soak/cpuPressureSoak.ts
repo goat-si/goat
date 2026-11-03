@@ -264,9 +264,17 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
       headlessClients: options.headlessClients,
       durationMs: options.durationMs,
       observations,
+      recordDetail: (value) => {
+        try {
+          detail?.write(value);
+        } catch (error) {
+          observations.gap(`detail write failed: ${String(error)}`);
+        }
+      },
       signal: abort.signal,
       onWindowStart: () => {
         startedAt = new Date().toISOString();
+        observations.setWindowOpen(true);
         for (let i = 0; i < 2 * NodeOS.availableParallelism(); i++) {
           const burner = spawnOwned(
             process.execPath,
@@ -285,6 +293,7 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
       },
       onWindowEnd: async () => {
         endedAt = new Date().toISOString();
+        observations.setWindowOpen(false);
         stoppingBurners = true;
         await cleanupOwned(burners);
       },

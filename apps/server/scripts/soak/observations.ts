@@ -212,6 +212,9 @@ export function providerRestarts(
 export class Observations {
   private socketEpisodes = new Set<string>();
   private runs = new Map<string, "pending" | "completed" | "failed" | "interrupted">();
+  private windowOpen = false;
+  private completedInWindow = 0;
+  private completedDuringDrain = 0;
   readonly gaps: string[] = [];
   readonly stall = {
     runtimeMaxMs: null as number | null,
@@ -240,8 +243,16 @@ export class Observations {
     if (this.runs.size >= LIMIT) this.gap("run limit reached");
     else if (!this.runs.has(id)) this.runs.set(id, "pending");
   }
+  setWindowOpen(open: boolean): void {
+    this.windowOpen = open;
+  }
   recordRun(id: string, status: "completed" | "failed" | "interrupted"): void {
-    if (this.runs.get(id) === "pending") this.runs.set(id, status);
+    if (this.runs.get(id) !== "pending") return;
+    this.runs.set(id, status);
+    if (status === "completed") {
+      if (this.windowOpen) this.completedInWindow++;
+      else this.completedDuringDrain++;
+    }
   }
   consumeStall(value: unknown): void {
     if (typeof value !== "object" || value === null) {
@@ -290,9 +301,13 @@ export class Observations {
       runs: {
         issued: statuses.length,
         completed: statuses.filter((s) => s === "completed").length,
-        failed: failures,
+        completedInWindow: this.completedInWindow,
+        completedDuringDrain: this.completedDuringDrain,
+        failed: statuses.filter((s) => s === "failed").length,
+        interrupted: statuses.filter((s) => s === "interrupted").length,
         incomplete,
       },
+      throughputPerMinute: null,
       stall: { ...this.stall, coverage: reasons.length ? "unknown" : "complete" },
     };
   }
