@@ -2,6 +2,7 @@ import { scopeProjectRef, scopeThreadRef } from "@goat/client-runtime/environmen
 import { EnvironmentId, ProjectId, ThreadId } from "@goat/contracts";
 import { Profiler } from "react";
 import { expect, it, vi } from "vite-plus/test";
+import { userEvent } from "vite-plus/test/browser";
 
 import { act, render } from "../../../test/render";
 import { DraftId, useComposerDraftStore } from "../../composerDraftStore";
@@ -24,6 +25,7 @@ it("keeps draft previews current through edits, promotion and removal", async ()
   const onRender = vi.fn();
   await using screen = await render(
     <Profiler id="draft-block" onRender={onRender}>
+      <button type="button">Before drafts</button>
       <ul>
         <SidebarDraftBlock
           projectByKey={new Map()}
@@ -44,6 +46,10 @@ it("keeps draft previews current through edits, promotion and removal", async ()
     initial.setPrompt(draftId, "First draft preview");
   });
   await expect.element(row).toHaveAccessibleName("First draft preview, Unsent draft");
+  screen.getByRole("button", { name: "Before drafts" }).element().focus();
+  await userEvent.tab();
+  expect(document.activeElement).toBe(row.element());
+  await expect.element(row).toHaveAttribute("role", "button");
 
   const rendersBeforeOtherComposer = onRender.mock.calls.length;
   await act(() =>
