@@ -1521,7 +1521,7 @@ const make = Effect.gen(function* () {
     observedRunId?: RunId | null,
   ): Effect.fn.Return<OrchestratorMcpDelegateTaskResult, OrchestratorMcpFailure> {
     yield* requireCapability(scope);
-    const parentProjection = yield* loadProjection(scope.thread.threadId);
+    const parentProjection = yield* loadProjection(scope.thread.threadId, false);
     const task = parentProjection.subagents.find(
       (candidate) =>
         candidate.id === taskId &&

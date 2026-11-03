@@ -289,6 +289,7 @@ it("taskStatus returns task.providerInstanceId rather than the driver kind", asy
     updatedAt: now,
   } as unknown as OrchestrationV2ThreadProjection;
 
+  const parentMessageRoles: Array<ReadonlyArray<string> | undefined> = [];
   const layer = layerOrchestratorService.pipe(
     Layer.provide(Layer.mock(RemoteDispatchCoordinator.RemoteDispatchCoordinator)({})),
     Layer.provide(Layer.mock(SshRemoteDispatch.SshRemoteDispatch)({})),
@@ -296,8 +297,11 @@ it("taskStatus returns task.providerInstanceId rather than the driver kind", asy
       Layer.mergeAll(
         Layer.mock(ThreadManagementService.ThreadManagementService)({
           getTimelinePage: () => Effect.succeed({ items: [], totalItems: 0, hasMore: false }),
-          getThreadRecords: (threadId) => {
-            if (threadId === parentThreadId) return Effect.succeed(parentProjection);
+          getThreadRecords: (threadId, _sections, options) => {
+            if (threadId === parentThreadId) {
+              parentMessageRoles.push(options?.messageRoles);
+              return Effect.succeed(parentProjection);
+            }
             if (threadId === childThreadId) return Effect.succeed(childProjection);
             return Effect.die(`unexpected thread ${threadId}`);
           },
@@ -327,6 +331,7 @@ it("taskStatus returns task.providerInstanceId rather than the driver kind", asy
     expect(result.status).toBe("running");
     expect(result.taskId).toBe(taskId);
     expect(result.childThreadId).toBe(childThreadId);
+    expect(parentMessageRoles).toContainEqual([]);
   }).pipe(Effect.provide(layer), Effect.runPromise);
 });
 
