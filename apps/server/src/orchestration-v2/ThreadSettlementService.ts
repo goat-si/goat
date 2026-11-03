@@ -655,7 +655,10 @@ export const make = Effect.gen(function* () {
   // reads: clients hold it in Working only briefly, so a late settle makes it appear and then vanish.
   const admission = yield* SettlementAdmission.make({
     targeted: (threadId: ThreadId) => runSweep(null, threadId),
-    full: (refresh) => NodeSqliteClient.backgroundReads(runSweep(null, undefined, refresh)),
+    full: (refresh) =>
+      refresh
+        ? runSweep(null, undefined, true)
+        : NodeSqliteClient.backgroundReads(runSweep(null, undefined, false)),
   });
   // The event consumer reads metadata only; restoring archived history would hold it behind the archive lock.
   const readThreadMetadata = (threadId: ThreadId) =>
