@@ -244,6 +244,7 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
   const directory = NodePath.join(deps.stateDir, RECORD_DIRECTORY);
   const runSync = Effect.runSyncWith(yield* Effect.context<never>());
   const owned = new Map<string, DetachedLaunched>();
+  const stopping = new Map<string, DetachedAppServerRecord>();
   const launching = new Set<string>();
   const retained = new Set<string>();
   const recoveryRetained = new Set<string>();
@@ -706,6 +707,13 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
             " is still running and could not be stopped. GOAT will not start Codex for this provider until it stops.",
         });
     }
+    if (
+      [...stopping.values()].some((record) => blocksSession(record, instanceId, providerSessionId))
+    )
+      return yield* new CodexDetachedAppServerError({
+        detail:
+          "A Codex process for this session is still stopping. GOAT will not start another one until it exits.",
+      });
     const unassigned = [...recoveryRetained].some((name) => {
       const record = fences.get(name);
       return record?.instanceId === instanceId && record.providerSessionId === undefined;
@@ -762,6 +770,16 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
     return { outcome: "signalled" as const };
   });
 
+  const closeFinalizer = (record: DetachedAppServerRecord) =>
+    Effect.suspend(() => {
+      stopping.set(record.name, record);
+      return close(record).pipe(
+        Effect.catch(() => markBlocked(record)),
+        Effect.ignore,
+        Effect.ensuring(Effect.sync(() => stopping.delete(record.name))),
+      );
+    });
+
   const socketDirectory =
     deps.socketDirectory ??
     Effect.fail(new CodexDetachedAppServerError({ detail: "No socket directory configured." }));
@@ -815,15 +833,7 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
     owned.set(running.name, launched);
     launching.delete(name);
     yield* Effect.addFinalizer(() =>
-      close(running).pipe(
-        Effect.catch(() => markBlocked(running)),
-        Effect.ignore,
-        Effect.ensuring(
-          Effect.sync(() => {
-            owned.delete(running.name);
-          }),
-        ),
-      ),
+      closeFinalizer(running).pipe(Effect.ensuring(Effect.sync(() => owned.delete(running.name)))),
     );
     yield* writeRecord(running);
     const channel = yield* connect(socketPath).pipe(
@@ -921,10 +931,7 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
         const current = { ...(fences.get(name) ?? record), pgid: after.pgid };
         if (!(yield* Ref.get(shuttingDown)) && (current.goalBlocks?.length ?? 0) > 0) return;
         adoptedClosed.add(name);
-        yield* close(current).pipe(
-          Effect.catch(() => markBlocked(current)),
-          Effect.ignore,
-        );
+        yield* closeFinalizer(current);
       }),
     );
     return { channel, record: { ...record, pgid: after.pgid } };

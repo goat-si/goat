@@ -9,8 +9,11 @@ import { assert, it, vi } from "@effect/vitest";
 import { ProviderInstanceId, ProviderSessionId, ThreadId } from "@goat/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { TestClock } from "effect/testing";
 import * as ServerConfig from "../config.ts";
@@ -451,6 +454,45 @@ const openInput = {
   command: (socket: string) =>
     Effect.succeed({ command: "codex", args: ["app-server", "--listen", "unix://" + socket] }),
 };
+
+it.effect("a session whose app-server is still stopping cannot open another one", () =>
+  withRecordDirectory((directory) =>
+    Effect.gen(function* () {
+      const stopping = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const service = yield* makeDetachedAppServers({
+        stateDir: directory,
+        bootId: Effect.succeed("boot-one"),
+        processTable: {
+          ...processTable([]),
+          groupMembers: () =>
+            Deferred.succeed(stopping, undefined).pipe(
+              Effect.andThen(Deferred.await(release)),
+              Effect.as([]),
+            ),
+        },
+        socketAccepts: () => Effect.succeed(false),
+        signalGroup: () => Effect.void,
+        socketDirectory: Effect.succeed("/tmp/goat-test/codex"),
+        launch: () =>
+          Effect.succeed({ pid: 4321, exited: Effect.never, signalIfAlive: () => true }),
+        connect: () =>
+          Effect.succeed({ incoming: Stream.never, send: () => Effect.void, closed: Effect.never }),
+      });
+      const scope = yield* Scope.make();
+      yield* service.open(openInput).pipe(Effect.provideService(Scope.Scope, scope));
+      const closing = yield* Scope.close(scope, Exit.void).pipe(Effect.forkScoped);
+      yield* Deferred.await(stopping);
+      const same = yield* service.ensureNotBlocked("codex", anySession).pipe(Effect.exit);
+      yield* service.ensureNotBlocked("codex", ProviderSessionId.make("other"));
+      yield* service.ensureNotBlocked("other", anySession);
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(closing);
+      yield* service.ensureNotBlocked("codex", anySession);
+      assert.equal(same._tag, "Failure");
+    }),
+  ),
+);
 
 it.effect("open reports the exit code and manual diagnosis hint", () =>
   withRecordDirectory((directory) =>
