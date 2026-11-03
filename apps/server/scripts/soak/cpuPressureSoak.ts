@@ -118,7 +118,7 @@ function spawnOwned(
   return { child, exited, failure };
 }
 
-async function cleanupOwned(children: OwnedChild[]): Promise<void> {
+export async function cleanupOwned(children: OwnedChild[]): Promise<void> {
   for (const { child } of children)
     if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
   await Promise.all(children.map(({ exited }) => exited));
@@ -212,6 +212,7 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
   const observations = new Observations();
   let server: OwnedChild | undefined;
   let serverExit = false;
+  let runtimeConfirmed = false;
   let teardown = false;
   let stoppingBurners = false;
   let workload:
@@ -225,6 +226,7 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
   const errors: string[] = [];
   let detail: DetailWriter | undefined;
   let sampleTimer: ReturnType<typeof setInterval> | undefined;
+  let progressTimer: ReturnType<typeof setInterval> | undefined;
   try {
     NodeFS.closeSync(NodeFS.openSync(lifecycle, "wx", 0o600));
     detail = new DetailWriter(detailPath);
@@ -260,7 +262,7 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
       if (!teardown) serverExit = true;
     });
     await waitForReady(server);
-    verifyRuntimeState(
+    runtimeConfirmed = verifyRuntimeState(
       NodePath.join(options.home, "userdata"),
       server.child.pid,
       options.serverPort,
@@ -314,6 +316,10 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
         observations.setWindowOpen(false);
         stoppingBurners = true;
         await cleanupOwned(burners);
+        progressTimer = setInterval(
+          () => process.stdout.write("Waiting for issued turns to drain\n"),
+          30_000,
+        );
       },
     });
     workloadResult = await Promise.race([
@@ -332,6 +338,7 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
       )
     )
       throw new Error("server runtime identity was not published");
+    runtimeConfirmed = true;
     sample();
     for (const gap of [...stall.gaps, ...trace.gaps, ...provider.gaps]) observations.gap(gap);
     if (stall.hasPartialLine || trace.hasPartialLine || provider.hasPartialLine)
@@ -341,6 +348,7 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
   } finally {
     teardown = true;
     if (sampleTimer !== undefined) clearInterval(sampleTimer);
+    if (progressTimer !== undefined) clearInterval(progressTimer);
     abort.abort();
     await cleanupOwned(owned);
     if (workload) await workload.catch(() => {});
@@ -354,7 +362,10 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
           ...(errors.length ? ["workload error"] : []),
         ],
         counter(0, ["provider lifecycle coverage unavailable"]),
-        counter(serverExit ? 1 : 0),
+        counter(
+          serverExit ? 1 : 0,
+          runtimeConfirmed ? [] : ["server runtime identity unavailable"],
+        ),
       ),
       home: options.home,
       serverPid: server?.child.pid ?? null,
@@ -369,7 +380,12 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
         burnersRequested: 2 * NodeOS.availableParallelism(),
       },
       errors,
-      artifacts: [lifecycle, detailPath, `${options.report}.codex-script.json`],
+      artifacts: [
+        lifecycle,
+        detailPath,
+        `${options.report}.codex-script.json`,
+        `${lifecycle}.codex-turns`,
+      ].filter((path) => NodeFS.existsSync(path)),
     };
     NodeFS.writeSync(reportFd, `${JSON.stringify(report, null, 2)}\n`);
     NodeFS.closeSync(reportFd);

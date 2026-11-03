@@ -95,6 +95,7 @@ function soakRequest(message) {
         NodeFS.appendFileSync(
           `${lifecycleLog}.codex-turns`,
           `${JSON.stringify({ event, threadId, turnId, requestId: id, delay, at: new Date().toISOString() })}\n`,
+          { mode: 0o600 },
         );
     };
     sidecar("scheduled");

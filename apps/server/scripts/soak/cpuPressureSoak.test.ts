@@ -4,6 +4,7 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeReadline from "node:readline";
+import { guardChild } from "@goat/shared/errorGuards";
 import { describe, expect, it } from "@effect/vitest";
 
 describe("soak Codex fixture", () => {
@@ -63,6 +64,7 @@ describe("soak Codex fixture", () => {
             .map((message) => message.result.turn.id),
         ).size,
       ).toBe(2);
+      expect(NodeFS.statSync(`${log}.codex-turns`).mode & 0o777).toBe(0o600);
       child.stdin.end();
       expect(await exited).toBe(0);
       const events = NodeFS.readFileSync(log, "utf8")
@@ -157,9 +159,50 @@ describe("soak observations", () => {
   });
 });
 
-import { parseArgs, validateHome, verifyRuntimeState } from "./cpuPressureSoak.ts";
+import { cleanupOwned, parseArgs, validateHome, verifyRuntimeState } from "./cpuPressureSoak.ts";
 
 describe("soak input safety", () => {
+  it("cleans up only captured children after a spawn error and can be called twice", async () => {
+    const start = (command = process.execPath) => {
+      let rejectFailure: (error: Error) => void = () => {};
+      const failure = new Promise<never>((_, reject) => {
+        rejectFailure = reject;
+      });
+      void failure.catch(() => {});
+      const child = guardChild(
+        NodeChildProcess.spawn(command, ["-e", "process.stdin.resume()"], {
+          stdio: ["pipe", "ignore", "ignore"],
+        }),
+        rejectFailure,
+      );
+      const ready = new Promise<void>((resolve, reject) => {
+        child.once("spawn", resolve);
+        child.once("error", reject);
+      });
+      const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+        (resolve) => {
+          child.once("exit", (code, signal) => resolve({ code, signal }));
+          child.once("error", () => resolve({ code: null, signal: null }));
+        },
+      );
+      return { child, ready, exited, failure };
+    };
+    const first = start();
+    const second = start();
+    const failed = start(NodePath.join(NodeOS.tmpdir(), `missing-soak-executable-${process.pid}`));
+    const failedReady = failed.ready.catch((error: unknown) => error);
+    try {
+      await Promise.all([first.ready, second.ready]);
+      expect(await failedReady).toBeInstanceOf(Error);
+      await cleanupOwned([first, failed]);
+      await cleanupOwned([first]);
+      expect(first.child.signalCode).toBe("SIGTERM");
+      expect(second.child.exitCode).toBeNull();
+      expect(second.child.signalCode).toBeNull();
+    } finally {
+      await cleanupOwned([first, second, failed]);
+    }
+  });
   it("checks the published runtime identity without treating an absent file as another server", () => {
     const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-runtime-"));
     try {
