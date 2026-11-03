@@ -179,8 +179,16 @@ function ChatStandIn() {
   return null;
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
 async function renderView(readResult: ProjectReadFileResult | null = READ) {
-  const attached = Promise.withResolvers<void>();
+  const attached = deferred<void>();
   const screen = await render(
     <div data-preview-panel-mode="inline">
       <ChatStandIn />
@@ -456,8 +464,8 @@ describe("tree and viewer focus", () => {
   it("gives a newly opened file's editor the focus once it replaces the old one", async () => {
     setup();
     const attached = new Map([
-      ["src/index.ts", Promise.withResolvers<void>()],
-      ["notes.md", Promise.withResolvers<void>()],
+      ["src/index.ts", deferred<void>()],
+      ["notes.md", deferred<void>()],
     ]);
     const onAttach = (path: string) => attached.get(path)?.resolve();
     await using screen = await render(<SwitchingView onAttach={onAttach} />, {
@@ -479,7 +487,7 @@ describe("tree and viewer focus", () => {
 
   it("focuses the open file's editor at once when Cmd/Ctrl+Down names that file", async () => {
     setup();
-    const attached = Promise.withResolvers<void>();
+    const attached = deferred<void>();
     await using screen = await render(<SwitchingView onAttach={() => attached.resolve()} />, {
       router: false /* nothing links */,
     });
@@ -495,7 +503,7 @@ describe("tree and viewer focus", () => {
     ["the focus toggle", [MOD, "Alt"]],
   ] as const)("waits for an editor that is still loading after %s", async (_, modifiers) => {
     setup();
-    const attached = Promise.withResolvers<void>();
+    const attached = deferred<void>();
     const onAttach = () => attached.resolve();
     await using screen = await render(<SwitchingView loaded={false} onAttach={onAttach} />, {
       router: false /* nothing links */,
