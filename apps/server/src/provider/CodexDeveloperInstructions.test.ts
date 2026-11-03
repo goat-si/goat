@@ -192,7 +192,7 @@ describe("Codex orchestration context", () => {
 
     NodeAssert.ok(
       orchestration.includes(
-        "Use native subagents only for same-provider work here without model options",
+        "Use native subagents only for same-provider foreground work here without model options",
       ),
     );
     NodeAssert.ok(
@@ -202,9 +202,6 @@ describe("Codex orchestration context", () => {
       orchestration.includes(
         "Each review round is a new task with the brief, prior findings, and open objections",
       ),
-    );
-    NodeAssert.ok(
-      orchestration.includes("Background agents use `task.create`, never a background `Agent`"),
     );
     NodeAssert.ok(!orchestration.includes("inheritedOptions"));
     NodeAssert.ok(!orchestration.includes("Prefer native"));
