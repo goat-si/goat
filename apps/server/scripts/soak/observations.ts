@@ -22,6 +22,48 @@ export function counter(observed = 0, reasons: string[] = []): Counter {
 
 const LIMIT = 100_000;
 const MAX_LINE = 1024 * 1024;
+export function codexEvidence(contents: string, excludedThreads: readonly string[] = []) {
+  const turns = new Map<string, { scheduled?: number; started?: number; completed?: number }>();
+  const errors: string[] = [];
+  for (const line of contents.split("\n")) {
+    if (!line) continue;
+    try {
+      const value: unknown = JSON.parse(line);
+      if (typeof value !== "object" || value === null) throw new Error("invalid record");
+      const entry = value as Record<string, unknown>;
+      if (
+        typeof entry.threadId !== "string" ||
+        typeof entry.turnId !== "string" ||
+        typeof entry.at !== "string" ||
+        !["scheduled", "started", "completed"].includes(String(entry.event))
+      )
+        throw new Error("invalid record");
+      if (excludedThreads.includes(entry.threadId)) continue;
+      const at = Date.parse(entry.at);
+      if (!Number.isFinite(at)) throw new Error("invalid timestamp");
+      const turn = turns.get(entry.turnId) ?? {};
+      if (entry.event === "scheduled") turn.scheduled = at;
+      if (entry.event === "started") turn.started = at;
+      if (entry.event === "completed") turn.completed = at;
+      turns.set(entry.turnId, turn);
+    } catch {
+      errors.push("invalid Codex sidecar record");
+    }
+  }
+  if (contents && !contents.endsWith("\n")) errors.push("partial Codex sidecar line");
+  const values = [...turns.values()];
+  return {
+    delayedStarts: values.filter(
+      (t) =>
+        t.scheduled !== undefined && t.started !== undefined && t.started - t.scheduled >= 30_000,
+    ).length,
+    longCompletedTurns: values.filter(
+      (t) =>
+        t.started !== undefined && t.completed !== undefined && t.completed - t.started > 60_000,
+    ).length,
+    errors: [...new Set(errors)],
+  };
+}
 type CpuTimes = { user: number; nice: number; sys: number; idle: number; irq: number };
 
 export function cpuBusy(previous: readonly CpuTimes[], current: readonly CpuTimes[]): number[] {

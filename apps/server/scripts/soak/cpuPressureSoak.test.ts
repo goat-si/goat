@@ -93,9 +93,25 @@ import {
   providerRestarts,
   cpuBusy,
   saturation,
+  codexEvidence,
 } from "./observations.ts";
 
 describe("soak observations", () => {
+  it("requires observed delayed Codex start and long completion", () => {
+    const lines = [
+      { event: "scheduled", threadId: "one", turnId: "turn", at: "2026-01-01T00:00:00.000Z" },
+      { event: "started", threadId: "one", turnId: "turn", at: "2026-01-01T00:00:30.000Z" },
+      { event: "completed", threadId: "one", turnId: "turn", at: "2026-01-01T00:01:31.000Z" },
+    ];
+    const data = lines.map((line) => JSON.stringify(line)).join("\n") + "\n";
+    expect(codexEvidence(data)).toMatchObject({
+      delayedStarts: 1,
+      longCompletedTurns: 1,
+      errors: [],
+    });
+    expect(codexEvidence(data, ["one"]).delayedStarts).toBe(0);
+    expect(codexEvidence(data + "{").errors).not.toEqual([]);
+  });
   it("measures CPU deltas and refuses unsaturated or incomplete samples", () => {
     const before = [{ user: 0, nice: 0, sys: 0, idle: 0, irq: 0 }];
     const after = [{ user: 90, nice: 0, sys: 0, idle: 10, irq: 0 }];

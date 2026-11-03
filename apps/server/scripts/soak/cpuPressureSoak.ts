@@ -12,6 +12,7 @@ import {
   cpuBusy,
   saturation,
   providerRestarts,
+  codexEvidence,
 } from "./observations.ts";
 import { runWorkload } from "./clients.ts";
 import * as NodeFS from "node:fs";
@@ -515,6 +516,30 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
     if (workload) await workload.catch(() => {});
     detail?.close();
     const cpu = saturation(cpuSamples, cpuGaps);
+    let codex = { delayedStarts: 0, longCompletedTurns: 0, errors: ["Codex sidecar unavailable"] };
+    try {
+      codex = codexEvidence(
+        NodeFS.readFileSync(`${lifecycle}.codex-turns`, "utf8"),
+        selfCheck.nativeIds,
+      );
+    } catch {
+      /* A missing sidecar is reported as unavailable. */
+    }
+    const workloadGaps = [
+      ...(workloadResult?.replayStarted === options.replayThreads
+        ? []
+        : ["Replay cohort incomplete"]),
+      ...(workloadResult?.codexStarted === options.codexThreads ? [] : ["Codex cohort incomplete"]),
+      ...(workloadResult?.headlessOpened === options.headlessClients
+        ? []
+        : ["headless cohort incomplete"]),
+      ...(startedAt && endedAt && Date.parse(endedAt) - Date.parse(startedAt) >= options.durationMs
+        ? []
+        : ["measured window shorter than requested"]),
+      ...(!codex.delayedStarts ? ["no Codex start answered after 30 seconds"] : []),
+      ...(!codex.longCompletedTurns ? ["no Codex turn completed after 60 seconds"] : []),
+      ...codex.errors,
+    ];
     const acceptanceLines = observations.lifecycle.filter(
       (line) =>
         !selfCheck.pids.includes(line.pid) &&
@@ -564,6 +589,7 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
       ...observations.report(
         [
           ...(!cpu.verified ? ["saturation unverified"] : []),
+          ...workloadGaps,
           ...(errors.length ? ["workload error"] : []),
         ],
         provider.counter,
@@ -590,6 +616,8 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
       selfCheck,
       telemetry: { notes: telemetryNotes, detailTruncated: detail?.truncated ?? false },
       saturation: cpu,
+      codexEvidence: codex,
+      workloadGaps,
       providerRestartParts: provider,
       workload: {
         ...workloadResult,

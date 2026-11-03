@@ -417,20 +417,8 @@ export async function runWorkload(input: WorkloadInput): Promise<{
     const drains: Array<Deferred.Deferred<void>> = [];
     const total = input.replayThreads + input.codexThreads;
     const windowEnded = yield* Deferred.make<void>();
-    windowOpen = true;
-    input.onWindowStart();
-    yield* Effect.sleep(`${input.durationMs} millis`).pipe(
-      Effect.andThen(
-        Effect.sync(() => {
-          windowOpen = false;
-        }),
-      ),
-      Effect.andThen(Effect.promise(input.onWindowEnd)),
-      Effect.andThen(Deferred.succeed(windowEnded, undefined)),
-      Effect.forkScoped,
-    );
+    const windowStarted = yield* Deferred.make<void>();
     for (let index = 0; index < total; index++) {
-      if (!windowOpen) break;
       const replay = index < input.replayThreads;
       const threadId = ThreadId.make(id());
       const modelSelection = {
@@ -439,7 +427,6 @@ export async function runWorkload(input: WorkloadInput): Promise<{
       };
       const drained = yield* Deferred.make<void>();
       drains.push(drained);
-      let pending = true;
       const terminal = new Set<string>();
       let lastSequence: number | undefined;
       input.observations.requestRun();
@@ -488,12 +475,11 @@ export async function runWorkload(input: WorkloadInput): Promise<{
               ? "failed"
               : "interrupted",
         );
-        pending = false;
+        yield* Deferred.await(windowStarted);
         if (!windowOpen) {
           yield* Deferred.succeed(drained, undefined);
           return;
         }
-        pending = true;
         input.observations.requestRun();
         yield* client["orchestration.dispatchCommand"]({
           type: "message.dispatch",
@@ -563,9 +549,20 @@ export async function runWorkload(input: WorkloadInput): Promise<{
         ),
         Effect.forkScoped,
       );
-      // A terminal launch snapshot must not leave the drain waiting.
-      if (!pending) yield* Deferred.succeed(drained, undefined);
     }
+    windowOpen = true;
+    input.onWindowStart();
+    yield* Deferred.succeed(windowStarted, undefined);
+    yield* Effect.sleep(`${input.durationMs} millis`).pipe(
+      Effect.andThen(
+        Effect.sync(() => {
+          windowOpen = false;
+        }),
+      ),
+      Effect.andThen(Effect.promise(input.onWindowEnd)),
+      Effect.andThen(Deferred.succeed(windowEnded, undefined)),
+      Effect.forkScoped,
+    );
     yield* Deferred.await(windowEnded);
     yield* Effect.forEach(drains, Deferred.await, { concurrency: "unbounded" });
     teardown = true;
