@@ -139,56 +139,56 @@ export function GoatBotChatView({
           <GoatBotModeButton to="thread" />
         </div>
       </WorkspacePageHeader>
+      {availability.kind === "offline" ||
+      availability.kind === "home_offline" ||
+      availability.kind === "connecting" ? (
+        <div
+          role="status"
+          className="border-b border-border px-4 py-2 text-sm text-muted-foreground"
+        >
+          {availability.kind === "home_offline"
+            ? offlineHomeCopy(availability)
+            : availability.kind === "offline"
+              ? "GOAT Bot's computer is offline. You can send messages again once it reconnects."
+              : "Connecting to GOAT Bot…"}
+          {/* With no history the notice below carries the same action. */}
+          {availability.kind === "home_offline" && homeMove && rows.length > 0 ? (
+            <div className="mt-2">
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={homeMove.busy}
+                onClick={homeMove.onMove}
+              >
+                Move GOAT Bot to {homeMove.label}
+              </Button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+      {homeMoveError ? (
+        <p role="alert" className="px-4 py-2 text-sm text-muted-foreground">
+          {homeMoveError}
+        </p>
+      ) : null}
+      {rows.length > 0 &&
+      availability.kind !== "ready" &&
+      availability.kind !== "offline" &&
+      availability.kind !== "home_offline" &&
+      availability.kind !== "connecting" ? (
+        <div role="status">
+          <GoatBotNotice
+            availability={availability}
+            onRetryAvailability={onRetryAvailability}
+            legacyAgentRoute={legacyAgentRoute}
+          />
+        </div>
+      ) : null}
       <div
         className="relative flex min-h-0 flex-1 flex-col"
         {...(acceptsFiles ? dropHandlers : {})}
       >
         {dragActive ? <WorkspaceFileDropOverlay /> : null}
-        {availability.kind === "offline" ||
-        availability.kind === "home_offline" ||
-        availability.kind === "connecting" ? (
-          <div
-            role="status"
-            className="border-b border-border px-4 py-2 text-sm text-muted-foreground"
-          >
-            {availability.kind === "home_offline"
-              ? offlineHomeCopy(availability)
-              : availability.kind === "offline"
-                ? "GOAT Bot's computer is offline. You can send messages again once it reconnects."
-                : "Connecting to GOAT Bot…"}
-            {/* With no history the notice below carries the same action. */}
-            {availability.kind === "home_offline" && homeMove && rows.length > 0 ? (
-              <div className="mt-2">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={homeMove.busy}
-                  onClick={homeMove.onMove}
-                >
-                  Move GOAT Bot to {homeMove.label}
-                </Button>
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-        {homeMoveError ? (
-          <p role="alert" className="px-4 py-2 text-sm text-muted-foreground">
-            {homeMoveError}
-          </p>
-        ) : null}
-        {rows.length > 0 &&
-        availability.kind !== "ready" &&
-        availability.kind !== "offline" &&
-        availability.kind !== "home_offline" &&
-        availability.kind !== "connecting" ? (
-          <div role="status">
-            <GoatBotNotice
-              availability={availability}
-              onRetryAvailability={onRetryAvailability}
-              legacyAgentRoute={legacyAgentRoute}
-            />
-          </div>
-        ) : null}
         {rows.length > 0 ? (
           // History stays readable while the bot is unavailable; only sending stops.
           <GoatBotTimeline
