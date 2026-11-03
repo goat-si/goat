@@ -30,6 +30,7 @@ const stalled: EventLoopMonitor.EventLoopReadings = {
   rssBytes: 1536 * 1024 * 1024,
   heapUsedBytes: 512 * 1024 * 1024,
   elapsedMs: 30_000,
+  mainThreadCpuMs: 700,
   loadAverage: 219.43,
   cpuCount: 18,
 };
@@ -48,6 +49,63 @@ describe("EventLoopMonitor", () => {
 
 const stallLog = { filePath: "/unused/stalls.ndjson", maxBytes: 262144 };
 const runtimeStall = { ...stalled, delayMaxNs: ms(7_000), activeMs: 7_000 };
+
+it.effect("sampler advances CPU and elapsed baselines after each sample", () =>
+  Effect.gen(function* () {
+    const usage = process.resourceUsage();
+    const memory = process.memoryUsage();
+    const elu = { idle: 0, active: 0, utilization: 0 };
+    const raw = [
+      { now: 100, threadCpuUsage: { user: 1000, system: 2000 } },
+      { now: 250.5, threadCpuUsage: { user: 2400, system: 3100 } },
+      { now: 500, threadCpuUsage: { user: 5100, system: 4000 } },
+    ];
+    let index = 0;
+    const sample = yield* EventLoopMonitor.makeSampler(() => ({
+      ...raw[index++]!,
+      elu,
+      resourceUsage: usage,
+      memory,
+      loadAverage: 1,
+      cpuCount: 4,
+    }));
+    const first = yield* sample;
+    const second = yield* sample;
+    assert.equal(first.mainThreadCpuMs, 3);
+    assert.equal(first.elapsedMs, 150.5);
+    assert.equal(second.mainThreadCpuMs, 4);
+    assert.equal(second.elapsedMs, 249.5);
+  }).pipe(Effect.scoped),
+);
+
+it.effect("stall records carry main-thread CPU, window length and load", () =>
+  Effect.gen(function* () {
+    const lines = yield* Queue.unbounded<string>();
+    const readings = {
+      ...runtimeStall,
+      elapsedMs: 38_600,
+      mainThreadCpuMs: 700,
+      loadAverage: 14.24,
+    };
+    yield* Effect.gen(function* () {
+      yield* EventLoopMonitor.EventLoopMonitor;
+      yield* TestClock.adjust("60 seconds");
+      yield* Queue.take(lines);
+      const record = JSON.parse(yield* Queue.take(lines));
+      assert.equal(record.phase, "runtime");
+      assert.equal(record.windowMs, 38_600);
+      assert.equal(record.mainThreadCpuMs, 700);
+      assert.equal(record.loadAverage, 14.2);
+      assert.equal(record.cpuCount, 18);
+    }).pipe(
+      Effect.provide(
+        EventLoopMonitor.layerWith(Effect.succeed(Effect.succeed(readings)), stallLog, (line) =>
+          Queue.offer(lines, line).pipe(Effect.asVoid),
+        ),
+      ),
+    );
+  }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
 
 it.effect.each([
   { label: "stalled", readings: runtimeStall },
