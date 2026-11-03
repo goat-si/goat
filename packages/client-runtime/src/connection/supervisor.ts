@@ -779,7 +779,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     ignoreOffline: Ref.Ref<boolean>,
     sequence: number,
   ) {
-    let deviceOffline = (yield* connectivity.status) === "offline";
+    let deviceOffline = (yield* Ref.get(observedNetwork)) === "offline";
     for (;;) {
       const next = yield* Queue.take(signals);
       switch (next._tag) {
@@ -844,8 +844,8 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     target,
     loopback,
     currentRoutes,
-    // The OS lookup behind connectivity.status can hang on mobile; intent mirrors every change.
-    currentNetwork: Ref.get(intent).pipe(Effect.map((current) => current.network)),
+    // Use the observed device status, including offline for a primary target.
+    currentNetwork: Ref.get(observedNetwork),
     signals,
     resetRetryState,
     probeUnanswered,

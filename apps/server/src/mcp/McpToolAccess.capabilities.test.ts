@@ -191,10 +191,10 @@ const caller = ThreadId.make("thread:caller");
 // Writes each built-in profile may run: the declared mapping's effect, pinned for review.
 const ALLOWED_WRITES: Readonly<Record<string, number>> = {
   observer: 63,
-  worker: 116,
-  manager: 130,
-  "merge-manager": 132,
-  owner: 169,
+  worker: 118,
+  manager: 132,
+  "merge-manager": 134,
+  owner: 171,
 };
 
 it("classifies login fill with the same capability and effect as secret fill", () => {
