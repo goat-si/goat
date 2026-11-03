@@ -1,5 +1,7 @@
 import { expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as Stream from "effect/Stream";
 import {
   AuthOrchestrationApproveScope,
   AuthOrchestrationOperateScope,
@@ -10,6 +12,21 @@ import {
 import * as RpcAuthorization from "../auth/RpcAuthorization.ts";
 import { sessionResolver } from "../handoffs/HumanStepAuthority.ts";
 import * as BrowserRpc from "./BrowserClaimsRpcHandlers.ts";
+
+it.effect("refuses browser claim subscriptions from non-person sessions", () =>
+  Effect.gen(function* () {
+    const handlers = BrowserRpc.makeBrowserClaimsRpcHandlers(Option.none(), {
+      subject: "mcp-client",
+    });
+    const result = yield* handlers[WS_METHODS.browserClaimsSubscribe]().pipe(
+      Stream.runCollect,
+      Effect.result,
+    );
+    expect(result._tag).toBe("Failure");
+    if (result._tag === "Failure")
+      expect(result.failure._tag).toBe("EnvironmentAuthorizationError");
+  }),
+);
 
 it.effect("allows only person sessions and requires settings to widen browser access", () =>
   Effect.gen(function* () {

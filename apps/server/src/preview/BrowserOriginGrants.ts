@@ -13,6 +13,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as SubscriptionRef from "effect/SubscriptionRef";
+import * as Stream from "effect/Stream";
 import { isBlockedBrowserUrl } from "@goat/shared/preview";
 import {
   manifestApplied,
@@ -666,6 +667,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     claimWindow,
     list,
     listAll,
+    subscribe: () => SubscriptionRef.changes(version).pipe(Stream.mapEffect(() => listAll())),
     endPerson,
     revoke,
     stop,

@@ -24,6 +24,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.browserClaimsRevoke]: "browserClaims",
   [WS_METHODS.browserClaimsEnd]: "browserClaims",
   [WS_METHODS.browserClaimsList]: "browserClaims",
+  [WS_METHODS.browserClaimsSubscribe]: "browserClaims",
   [WS_METHODS.hubNodesList]: "hubNodes",
   [WS_METHODS.hubNodesSubscribe]: "hubNodes",
   [WS_METHODS.hubNodesAdd]: "hubNodes",
