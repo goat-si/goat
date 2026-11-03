@@ -636,6 +636,10 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
       ),
     );
 
+    yield* Effect.logDebug("startup phase: waiting for http listener");
+    yield* runStartupPhase("http.wait", Deferred.await(httpListening));
+    yield* runStartupPhase("auxiliary-roots.parked", options?.awaitAuxiliaryParked ?? Effect.void);
+
     const welcomeBase = yield* resolveWelcomeBase;
     const environment = yield* serverEnvironment.getDescriptor;
     const legacyMigrationThreadCount = yield* legacyV1ThreadImporter.pendingThreadCount;
@@ -762,10 +766,6 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
         }
       }),
     );
-
-    yield* Effect.logDebug("startup phase: waiting for http listener");
-    yield* runStartupPhase("http.wait", Deferred.await(httpListening));
-    yield* runStartupPhase("auxiliary-roots.parked", options?.awaitAuxiliaryParked ?? Effect.void);
 
     const updateOutcome = yield* launcher.prepareTrial;
 

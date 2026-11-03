@@ -16,6 +16,7 @@ import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as Environment from "../environment/ServerEnvironment.ts";
 import * as RuntimeIdentity from "../runtimeIdentity.ts";
+import { forkParked } from "../serverActivation.ts";
 import { resolveMemoryModelSelection } from "@goat/shared/serverSettings";
 import * as Settings from "../serverSettings.ts";
 import * as Generation from "../textGeneration/TextGeneration.ts";
@@ -291,11 +292,7 @@ const make = Effect.gen(function* () {
       modelSelection === null ? undefined : `${space ?? ""}|${encodeSelection(modelSelection)}`;
     const scanContinuations =
       scanKey !== undefined && (scanKey !== continuationScanKey || now >= continuationScanDueAt);
-    // Recovers each live thread whose latest terminal run still has unsummarized messages, or
-    // whose consolidation is due. It starts from the thread projection and probes each thread's
-    // tail by index, so its cost follows the thread count instead of the event history. Any
-    // unfinished or cancelled row for that run settles it: work ids are deterministic, so
-    // re-deriving a settled run only repeats the same no-op insert.
+    // Tail probes cost per thread. Unfinished or cancelled work settles a run; ids are deterministic.
     const continuations = scanContinuations
       ? yield* query(
           selectContinuationCandidates(sql, {
@@ -347,8 +344,7 @@ const make = Effect.gen(function* () {
               continue;
             }
             if (!terminal.has(run.status)) continue;
-            // Memory is off. Still process deletion/rollback and advance the hook;
-            // continuations recover these summaries once memory is turned back on.
+            // Continuations recover skipped summaries when memory is turned back on.
             if (modelSelection === null) continue;
             if (yield* query(SourceScan.isDelegatedChildThread(sql, row.stream_id))) continue;
             const source = yield* query(
@@ -427,8 +423,7 @@ const make = Effect.gen(function* () {
             );
             if (candidate.metadata.kind !== "summary") continue;
             if (!chunk) {
-              // Events only append, so a run invalidated by later events stays invalidated.
-              // Record that as settled, or every scan would read this source again.
+              // Events only append, so an invalidated run stays invalidated; settle it or scans reread it.
               if (continuationSequences.has(row.sequence))
                 work.push({
                   ...candidate,
@@ -973,15 +968,20 @@ const make = Effect.gen(function* () {
     yield* Effect.addFinalizer(() =>
       Ref.set(started, false).pipe(Effect.andThen(Ref.set(queue, undefined))),
     );
-    yield* Stream.runForEach(yield* store.subscribeWake, () => wake).pipe(Effect.forkScoped);
-    yield* events.stream({ afterSequence: yield* store.readThreadHookWatermark() }).pipe(
-      catchUpWakes,
-      Stream.runForEach(() => wake),
-      Effect.catch(() => Effect.void),
-      Effect.forkScoped,
+    const watermark = yield* store.readThreadHookWatermark();
+    yield* forkParked(
+      Effect.gen(function* () {
+        yield* Stream.runForEach(yield* store.subscribeWake, () => wake).pipe(Effect.forkScoped);
+        yield* events.stream({ afterSequence: watermark }).pipe(
+          catchUpWakes,
+          Stream.runForEach(() => wake),
+          Effect.ignore,
+          Effect.forkScoped,
+        );
+        yield* wake;
+        yield* wake.pipe(Effect.repeat(Schedule.spaced("5 seconds")), Effect.forkScoped);
+      }),
     );
-    yield* wake;
-    yield* wake.pipe(Effect.repeat(Schedule.spaced("5 seconds")), Effect.forkScoped);
   }, Effect.mapError(workerError));
   const drain = Effect.gen(function* () {
     const worker = yield* Ref.get(queue);
