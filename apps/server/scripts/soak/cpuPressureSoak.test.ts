@@ -32,6 +32,12 @@ describe("soak Codex fixture", () => {
     const send = (id: number, method: string, params: object) =>
       child.stdin.write(`${JSON.stringify({ id, method, params })}\n`);
     try {
+      send(10, "initialize", {});
+      send(11, "config/read", {});
+      const initialized = JSON.parse((await lines.next()).value as string);
+      const config = JSON.parse((await lines.next()).value as string);
+      expect(initialized.result.userAgent).toBe("codex/0.164.0");
+      expect(config.result).toEqual({ config: {}, origins: {} });
       send(1, "thread/start", { cwd: "/tmp" });
       send(2, "thread/start", { cwd: "/tmp" });
       const first = JSON.parse((await lines.next()).value as string);

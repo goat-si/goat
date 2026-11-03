@@ -3,6 +3,7 @@ import * as NodeReadline from "node:readline";
 import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 import * as NodeCrypto from "node:crypto";
+import * as NodeOS from "node:os";
 
 const here = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
 const fixture = JSON.parse(
@@ -150,6 +151,10 @@ function soakRequest(message) {
     write({ id, result: { rateLimits: {} } });
     return true;
   }
+  if (method === "config/read") {
+    write({ id, result: { config: {}, origins: {} } });
+    return true;
+  }
   return false;
 }
 let turnStartCount = 0;
@@ -204,10 +209,11 @@ rl.on("line", (line) => {
     write({
       id,
       result: {
-        userAgent: "t3-collab-mock/0.0.0",
-        codexHome: "/tmp",
+        userAgent: soak ? "codex/0.164.0" : "t3-collab-mock/0.0.0",
+        codexHome: soak ? NodePath.dirname(process.env.GOAT_CODEX_COLLAB_SCRIPT) : "/tmp",
         platformFamily: "unix",
-        platformOs: "linux",
+        // oxlint-disable-next-line goat/no-global-process-runtime -- Standalone fixture reports its host OS.
+        platformOs: soak && NodeOS.platform() === "darwin" ? "macos" : "linux",
       },
     });
     return;
