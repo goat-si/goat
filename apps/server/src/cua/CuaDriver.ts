@@ -1,3 +1,4 @@
+import { timedShutdownPhase } from "@goat/shared/timedShutdownPhase";
 import * as NodeModule from "node:module";
 
 import {
@@ -323,10 +324,13 @@ export const make = Effect.fn("CuaDriver.make")(function* (
   });
 
   yield* Effect.addFinalizer(() =>
-    Effect.gen(function* () {
-      closed = true;
-      if (active) yield* revoke(active);
-    }),
+    timedShutdownPhase(
+      "cuaCleanup",
+      Effect.gen(function* () {
+        closed = true;
+        if (active) yield* revoke(active);
+      }),
+    ),
   );
   yield* changes.pipe(
     Stream.runForEach((value) =>

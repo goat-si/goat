@@ -1,3 +1,4 @@
+import { timedShutdownPhase } from "@goat/shared/timedShutdownPhase";
 import {
   CommandId,
   DEFAULT_MODEL,
@@ -533,27 +534,6 @@ const runOrderedV2StartupPhases = Effect.fn("serverRuntimeStartup.runOrderedV2St
   },
 );
 
-const timedShutdownPhase = Effect.fn("serverRuntimeStartup.timedShutdownPhase")(function* <A, E, R>(
-  phase: string,
-  effect: Effect.Effect<A, E, R>,
-) {
-  const start = yield* Clock.monotonicTimeNanos;
-  yield* Effect.logInfo("Server shutdown phase started", { phase });
-  return yield* effect.pipe(
-    Effect.onExit((exit) =>
-      Effect.gen(function* () {
-        const durationMs = Number(((yield* Clock.monotonicTimeNanos) - start) / 1_000_000n);
-        const outcome = Exit.isSuccess(exit)
-          ? "success"
-          : Cause.hasInterruptsOnly(exit.cause)
-            ? "interrupted"
-            : "failure";
-        yield* Effect.logInfo("Server shutdown phase finished", { phase, durationMs, outcome });
-      }),
-    ),
-  );
-});
-
 const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: StartupOptions) {
   const serverConfig = yield* ServerConfig.ServerConfig;
   const intentReader = yield* DesktopStopIntentReader.DesktopStopIntentReader;
@@ -597,6 +577,7 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
       yield* timedShutdownPhase(
         "prepareForShutdown",
         providerRuntimeRecovery.prepareForShutdown,
+        (summary) => summary,
       ).pipe(Effect.ensuring(timedShutdownPhase("providerSessions", providerSessions.shutdown)));
       const reconciliation = yield* timedShutdownPhase(
         "reconcile",
