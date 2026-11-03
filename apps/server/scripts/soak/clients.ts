@@ -116,8 +116,12 @@ export async function runWorkload(
     if (input.projectId) {
       projectId = ProjectId.make(input.projectId);
       const project = shell.value.snapshot.projects.find((entry) => entry.id === projectId);
-      if (!project || !NodeFS.existsSync(project.workspaceRoot))
-        return yield* Effect.die(new Error("requested project unavailable"));
+      if (
+        !project ||
+        !NodeFS.existsSync(project.workspaceRoot) ||
+        NodeFS.realpathSync(project.workspaceRoot) !== input.checkout
+      )
+        return yield* Effect.die(new Error("requested project is not the isolated checkout"));
     } else {
       const existing = shell.value.snapshot.projects.find(
         (project) => project.workspaceRoot === input.checkout,
