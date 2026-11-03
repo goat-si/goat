@@ -20,6 +20,7 @@ export const BROWSER_CLAIMS_WS_METHODS = {
   browserClaimsRevoke: "browserClaims.revoke",
   browserClaimsEnd: "browserClaims.end",
   browserClaimsList: "browserClaims.list",
+  browserClaimsSubscribe: "browserClaims.subscribe",
 } as const;
 
 export class BrowserClaimsRpcError extends Schema.TaggedError<BrowserClaimsRpcError>()(
@@ -71,5 +72,11 @@ export const BrowserClaimsRpcs = RpcGroup.make(
     payload: Schema.Struct({}),
     success: BrowserClaimsPersonSnapshot,
     error: errors,
+  }),
+  Rpc.make(BROWSER_CLAIMS_WS_METHODS.browserClaimsSubscribe, {
+    payload: Schema.Struct({}),
+    success: BrowserClaimsPersonSnapshot,
+    error: errors,
+    stream: true,
   }),
 );

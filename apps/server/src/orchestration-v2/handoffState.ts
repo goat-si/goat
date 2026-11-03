@@ -1,5 +1,6 @@
 import {
   COMPUTER_USE_GRANT_HANDOFF_PATH,
+  BROWSER_CLAIM_ANSWER_HANDOFF_PATH,
   HandoffError,
   PREVIEW_HANDOFF_PATH,
   endsWithItsRun,
@@ -23,7 +24,20 @@ export function transitionHandoff(
   now: DateTime.Utc,
   runEnded: boolean,
   computerUseScope?: "session" | "always",
+  resultMessage?: string,
+  browserClaimDecisionAt?: DateTime.Utc,
 ) {
+  if (
+    browserClaimDecisionAt !== undefined &&
+    (record.target.path !== BROWSER_CLAIM_ANSWER_HANDOFF_PATH ||
+      actor.type !== "client" ||
+      !["completed", "declined", "cancelled"].includes(state) ||
+      DateTime.toEpochMillis(browserClaimDecisionAt) > DateTime.toEpochMillis(now) ||
+      DateTime.toEpochMillis(browserClaimDecisionAt) < DateTime.toEpochMillis(record.createdAt) ||
+      (record.expiresAt !== null &&
+        DateTime.toEpochMillis(browserClaimDecisionAt) >= DateTime.toEpochMillis(record.expiresAt)))
+  )
+    return Effect.fail(new HandoffError({ reason: "invalid_request" }));
   if (
     computerUseScope !== undefined &&
     (record.target.path !== COMPUTER_USE_GRANT_HANDOFF_PATH ||
@@ -63,6 +77,7 @@ export function transitionHandoff(
     record.target.path === PREVIEW_HANDOFF_PATH && state === "cancelled" && actor.type === "agent";
   const expired =
     !screenStop &&
+    browserClaimDecisionAt === undefined &&
     ((record.expiresAt !== null &&
       DateTime.toEpochMillis(record.expiresAt) <= DateTime.toEpochMillis(now)) ||
       (endsWithItsRun(record) && runEnded));
@@ -77,6 +92,7 @@ export function transitionHandoff(
     ...record,
     state: next,
     actor: expired ? { type: "server" as const } : actor,
+    ...(resolved && !expired && resultMessage !== undefined ? { resultMessage } : {}),
     ...(next === "completed" && computerUseScope !== undefined ? { computerUseScope } : {}),
     ...(resolved
       ? {

@@ -30,6 +30,9 @@ import * as Sqlite from "../persistence/Sqlite.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as Handoffs from "./Handoffs.ts";
 import * as ComputerUseLeases from "../cua/ComputerUseLeases.ts";
+import { BrowserClaimResponder } from "./BrowserClaimResponder.ts";
+// @effect-diagnostics-next-line nodeBuiltinImport:off -- This fixture encodes the existing encrypted payload format.
+import * as NodeCrypto from "node:crypto";
 
 const encodeHandoff = Schema.encodeEffect(Schema.fromJsonString(Schema.toCodecJson(Handoff)));
 const threadId = ThreadId.make("thread:authority");
@@ -37,6 +40,66 @@ const handoffId = TurnItemId.make("handoff:authority");
 const sessionId = AuthSessionId.make("session:authority");
 const now = DateTime.makeUnsafe("2026-10-23T00:00:00Z");
 const address = { threadId, handoffId };
+
+it.effect("browser claim resolution records the result for the person", () =>
+  Effect.gen(function* () {
+    const response = yield* run(
+      "desktop-bootstrap",
+      (service) => service.respond({ ...address, action: "completed" }, sessionId),
+      { path: "browser_claim.answer", scopes: ["orchestration:operate", "settings:write"] },
+    );
+    expect(response.result).toMatchObject({
+      _tag: "Success",
+      success: { resultMessage: "This site is blocked in browser settings." },
+    });
+  }),
+);
+
+it.effect("a browser claim card stays pending when its responder is unavailable", () =>
+  Effect.gen(function* () {
+    const response = yield* run(
+      "desktop-bootstrap",
+      (service) =>
+        Effect.gen(function* () {
+          const result = yield* service
+            .respond({ ...address, action: "completed" }, sessionId)
+            .pipe(Effect.result);
+          expect(result).toMatchObject({
+            _tag: "Failure",
+            failure: { _tag: "HandoffError", reason: "unavailable" },
+          });
+          return yield* service.read(address);
+        }),
+      {
+        path: "browser_claim.answer",
+        scopes: ["orchestration:operate", "settings:write"],
+        noResponder: true,
+      },
+    );
+    expect(response.result).toMatchObject({ _tag: "Success", success: { state: "pending" } });
+  }),
+);
+
+it.effect("browser claim approval requires settings authority but decline does not", () =>
+  Effect.gen(function* () {
+    const options = { path: "browser_claim.answer" };
+    const approved = yield* run(
+      "desktop-bootstrap",
+      (service) => service.respond({ ...address, action: "completed" }, sessionId),
+      options,
+    );
+    expect(approved.result).toMatchObject({
+      _tag: "Failure",
+      failure: { _tag: "EnvironmentAuthorizationError", requiredScope: "settings:write" },
+    });
+    const declined = yield* run(
+      "desktop-bootstrap",
+      (service) => service.respond({ ...address, action: "declined" }, sessionId),
+      options,
+    );
+    expect(declined.result).toMatchObject({ _tag: "Success", success: { state: "declined" } });
+  }),
+);
 
 // A session that holds every scope an orchestration:operate handoff needs; only its subject varies.
 const session = (
@@ -67,6 +130,7 @@ const run = <A, E>(
     readonly destination?: EnvironmentId;
     readonly afterHolder?: Effect.Effect<void>;
     readonly path?: string;
+    readonly noResponder?: boolean;
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -129,18 +193,56 @@ const run = <A, E>(
                 answer: () => Ref.update(answered, (count) => count + 1),
               }),
               Layer.mock(SecretStore.ServerSecretStore)({
-                get: () => Effect.succeed(Option.none()),
+                get: () =>
+                  Effect.sync(() => {
+                    if (options.path !== "browser_claim.answer") return Option.none();
+                    const iv = Buffer.alloc(12);
+                    const cipher = NodeCrypto.createCipheriv(
+                      "aes-256-gcm",
+                      Buffer.alloc(32, 1),
+                      iv,
+                    );
+                    const payload = JSON.stringify({
+                      version: 1,
+                      kind: "continuation",
+                      human: { location: "Browser" },
+                      args: { claimId: "claim:1" },
+                    });
+                    const body = Buffer.concat([cipher.update(payload, "utf8"), cipher.final()]);
+                    return Option.some(Buffer.concat([iv, cipher.getAuthTag(), body]));
+                  }),
                 remove: () => Effect.void,
                 getOrCreateRandom: (_name, size) => Effect.succeed(new Uint8Array(size).fill(1)),
               }),
+              ...(options.path === "browser_claim.answer" && !options.noResponder
+                ? [
+                    Layer.succeed(BrowserClaimResponder, {
+                      register: () => Effect.void,
+                      answer: (_claimId, approved) =>
+                        Effect.succeed({
+                          agentResult: {
+                            status: "refused" as const,
+                            code: "declined" as const,
+                            message: "The person did not approve this request.",
+                          },
+                          ...(approved
+                            ? { personMessage: "This site is blocked in browser settings." }
+                            : {}),
+                        }),
+                    }),
+                  ]
+                : []),
               Layer.unwrap(
                 Effect.map(SqlClient.SqlClient, (sql) =>
                   Layer.mock(ThreadManagement.ThreadManagementService)({
                     // Applies the transition to the projection the service reads back.
                     dispatch: (command) =>
                       (command.type === "handoff.transition"
-                        ? sql`UPDATE orchestration_v2_projection_turn_items
-                            SET status = ${command.state}, payload_json = json_set(payload_json, '$.handoff.state', ${command.state})`
+                        ? command.resultMessage === undefined
+                          ? sql`UPDATE orchestration_v2_projection_turn_items
+                              SET status = ${command.state}, payload_json = json_set(payload_json, '$.handoff.state', ${command.state})`
+                          : sql`UPDATE orchestration_v2_projection_turn_items
+                              SET status = ${command.state}, payload_json = json_set(payload_json, '$.handoff.state', ${command.state}, '$.handoff.resultMessage', ${command.resultMessage})`
                         : Effect.void
                       ).pipe(Effect.as({ sequence: 1, storedEvents: [] }), Effect.orDie),
                   }),

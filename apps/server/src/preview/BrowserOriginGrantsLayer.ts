@@ -9,6 +9,7 @@ import * as ServerSettings from "../serverSettings.ts";
 import { BrowserClaimBind } from "./BrowserClaimBind.ts";
 import { BrowserClaimManifest } from "./BrowserClaimManifest.ts";
 import { makeBrowserOriginGrants } from "./BrowserOriginGrants.ts";
+import { BrowserClaimResponder } from "../handoffs/BrowserClaimResponder.ts";
 
 class BrowserClaimBindUnavailable extends Schema.TaggedError<BrowserClaimBindUnavailable>()(
   "BrowserClaimBindUnavailable",
@@ -57,6 +58,8 @@ const make = Effect.gen(function* () {
             new BrowserClaimBindUnavailable({ cause: "Browser claim binding is unavailable." }),
           ),
   });
+  const responder = yield* Effect.serviceOption(BrowserClaimResponder);
+  if (Option.isSome(responder)) yield* responder.value.register(service.answer);
   yield* changes.pipe(
     Stream.map((value) => value.blockedBrowserHosts),
     Stream.changesWith((a, b) => a.length === b.length && a.every((host, i) => host === b[i])),

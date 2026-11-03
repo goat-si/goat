@@ -1,5 +1,6 @@
 import {
   AuthSessionId,
+  BROWSER_CLAIM_ANSWER_HANDOFF_PATH,
   COMPUTER_USE_GRANT_HANDOFF_PATH,
   EnvironmentAuthorizationError,
   HandoffError,
@@ -51,7 +52,9 @@ export const makeHandoffClientLabel = ({
               : // Admitting an unattended thread to the screen, or changing the hub's members, is as
                 // strong as changing this environment's settings. Ending a screen grant only narrows
                 // what agents may do, so whoever may stop agents can end it (Stop all).
-                (record.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH &&
+                (record.target.path === BROWSER_CLAIM_ANSWER_HANDOFF_PATH &&
+                    input.action === "completed") ||
+                  (record.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH &&
                     input.action !== "cancelled") ||
                   isHubDeviceHandoffPath(record.target.path)
                 ? ("settings:write" as const)

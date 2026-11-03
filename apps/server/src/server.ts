@@ -224,6 +224,8 @@ import * as SqlitePersistence from "./persistence/Sqlite.ts";
 import * as PersistenceRecoveryOwner from "./persistence/PersistenceRecoveryOwner.ts";
 import * as PreviewSessions from "./preview/PreviewSessions.ts";
 import * as BrowserOriginGrants from "./preview/BrowserOriginGrantsLayer.ts";
+import * as BrowserClaimMcpLayers from "./preview/BrowserClaimMcpLayers.ts";
+import * as BrowserClaimResponder from "./handoffs/BrowserClaimResponder.ts";
 import * as BrowserClaimManifestModule from "./preview/BrowserClaimManifest.ts";
 import * as BrowserClaimBindModule from "./preview/BrowserClaimBind.ts";
 import * as AgentScopeLive from "./process/agentScope.ts";
@@ -607,6 +609,7 @@ const layerBrowserOriginGrants = Layer.provide(
     Layer.merge(layerServerEnvironment, layerServerSettings),
     BrowserClaimManifestModule.layer,
     BrowserClaimBindModule.layer,
+    BrowserClaimResponder.layer,
   ),
 );
 const layerCuaDriver = CuaDriver.layer.pipe(
@@ -928,6 +931,7 @@ const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
   Layer.provideMerge(ProjectEnrichmentService.layer),
   Layer.provideMerge(Layer.mergeAll(NativeAppIconResolver.layer, layerProjectFaviconResolver)),
   Layer.provideMerge(Layer.mergeAll(layerRepositoryIdentityResolver, layerBrowserOriginGrants)),
+  Layer.provideMerge(BrowserClaimResponder.layer),
   Layer.provideMerge(CodexManagedTokenBroker.layer),
   Layer.provideMerge(layerServerEnvironment),
   Layer.provideMerge(layerAuth),
@@ -1100,7 +1104,7 @@ const layerMakeRoutes = Layer.mergeAll(
   ),
   Layer.provide(RemoteDispatchCoordinator.layer),
   Layer.provide(layerLaunchWatches),
-  Layer.provide(Layer.merge(SshRemoteDispatchLive.layer, PreviewSessions.layerHandoffs)),
+  Layer.provide(BrowserClaimMcpLayers.layer),
   Layer.provide(
     PullRequestReviewGuideService.layer.pipe(Layer.provide(PullRequestReviewGuides.layer)),
   ),

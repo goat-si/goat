@@ -7,6 +7,7 @@ import {
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Stream from "effect/Stream";
 import { RpcInstrumentation } from "../observability/RpcInstrumentation.ts";
 import {
   canResolveHumanStep,
@@ -65,6 +66,13 @@ export const makeBrowserClaimsRpcHandlers = (
       person.pipe(
         Effect.andThen(service),
         Effect.flatMap((value) => value.listAll()),
+      ),
+    [WS_METHODS.browserClaimsSubscribe]: () =>
+      Stream.unwrap(
+        person.pipe(
+          Effect.andThen(service),
+          Effect.map((value) => value.subscribe()),
+        ),
       ),
   });
 };
