@@ -211,7 +211,7 @@ function matchToken(
     // A token that opens with punctuation (".ts") brings its own boundary, as in messages.
     if (
       field.wordStarts[index] ||
-      (ownBoundary ??= !ALPHANUMERIC.test(token[0]!) && !SYMBOL.test(token[0]!))
+      (ownBoundary ??= !ALPHANUMERIC.test(token.charAt(0)) && !SYMBOL.test(token.charAt(0)))
     ) {
       // Whole when the match ends where a word ends: "t3c" is a prefix of
       // "t3code", ".ts" whole in "index.ts" but a prefix in "parser.tsx".
@@ -279,9 +279,9 @@ function matchToken(
  */
 function matchJoinedWords(field: SearchField, token: string): TokenMatch | null {
   for (
-    let start = field.text.indexOf(token[0]!);
+    let start = field.text.indexOf(token.charAt(0));
     start !== -1;
-    start = field.text.indexOf(token[0]!, start + 1)
+    start = field.text.indexOf(token.charAt(0), start + 1)
   ) {
     if (!field.wordStarts[start]) continue;
     const runs: SearchRange[] = [];
@@ -694,7 +694,7 @@ export function findSearchTokenRanges(text: string, query: string): SearchRange[
   const ranges: SearchRange[] = [];
   for (const [token, needsWordStart] of tokens) {
     // A token that opens with punctuation brings its own boundary, as in scoring.
-    const ownBoundary = !ALPHANUMERIC.test(token[0]!) && !SYMBOL.test(token[0]!);
+    const ownBoundary = !ALPHANUMERIC.test(token.charAt(0)) && !SYMBOL.test(token.charAt(0));
     for (let index = field.text.indexOf(token); index !== -1;) {
       if (needsWordStart && !ownBoundary && !field.wordStarts[index]) {
         index = field.text.indexOf(token, index + 1);
