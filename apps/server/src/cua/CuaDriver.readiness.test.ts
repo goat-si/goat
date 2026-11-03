@@ -1,5 +1,5 @@
 import { expect, it } from "@effect/vitest";
-import type { CuaHostStatus } from "@goat/contracts";
+import type { ComputerUseApp, CuaHostStatus } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -372,6 +372,25 @@ it.effect(
       Effect.provideService(HostProcess.Environment, {}),
       Effect.scoped,
     ),
+);
+
+it.effect("catalog availability distinguishes a failed listing from an empty listing", () =>
+  Effect.gen(function* () {
+    const listing = yield* Ref.make(Option.none<ReadonlyArray<ComputerUseApp>>());
+    const service = yield* CuaDriver.make(
+      () => Effect.die("unused"),
+      Effect.succeed({ capability: "available", reason: "fixture", environment: [] }),
+      { appCatalog: Ref.get(listing) },
+    );
+    expect(yield* service.availableAppCatalog).toEqual(Option.none());
+    yield* Ref.set(listing, Option.some([]));
+    expect(yield* service.availableAppCatalog).toEqual(Option.some([]));
+  }).pipe(
+    Effect.provide(ServerSettings.layerTest({ enableCua: true })),
+    Effect.provideService(HostProcess.Platform, "linux"),
+    Effect.provideService(HostProcess.Environment, {}),
+    Effect.scoped,
+  ),
 );
 
 it.effect("a standalone listing keeps executable aliases paired with bundle ids", () =>

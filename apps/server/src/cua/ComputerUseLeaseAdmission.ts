@@ -2,6 +2,7 @@ import type {
   ComputerUseCallAdmission,
   ComputerUseCallReservation,
   ComputerUseControlEnd,
+  ComputerUseApp,
   ThreadId,
   TurnItemId,
 } from "@goat/contracts";
@@ -77,6 +78,7 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
   readonly controls: Map<ThreadId, C>;
   readonly reservations: ReturnType<typeof makeCallReservations>;
   readonly changed: Effect.Effect<void>;
+  readonly appCatalog: Effect.Effect<Option.Option<ReadonlyArray<ComputerUseApp>>>;
   readonly controlState: (
     threadId: ThreadId,
     controlId: string,
@@ -135,6 +137,17 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
         current?.controlId === request.controlId && current.ended === undefined,
       );
     }
+    const settingsBefore = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
+    const policyBefore = Option.isSome(settingsBefore)
+      ? yield* settingsBefore.value.getSettings.pipe(Effect.option)
+      : Option.none();
+    if (Option.isSome(settingsBefore) && Option.isNone(policyBefore))
+      return { status: "refused", detail: "reconnecting" } as const;
+    const strictBefore = Option.isNone(policyBefore) || policyBefore.value.cuaStrictInputGuards;
+    const catalog =
+      strictBefore && controls.get(threadId)?.nonPersonFullAccess === true
+        ? yield* deps.appCatalog
+        : Option.none();
     return yield* admission.withPermits(1)(
       Effect.gen(function* () {
         const call =
@@ -185,11 +198,15 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
           return { status: "refused", detail, ...inTheWay } as const;
         if (detail !== undefined) return { status: "refused", detail } as const;
         if (state._tag !== "active") return { status: "refused", detail: "replaced" } as const;
+        const nonPerson = controls.get(threadId)?.nonPersonFullAccess === true;
+        if (strict && nonPerson && Option.isNone(catalog))
+          return { status: "refused", detail: "reconnecting" } as const;
         const denied = strict
           ? deniedCallApp(
               call,
               Option.isSome(currentSettings) ? currentSettings.value.cuaDeniedApps : [],
-              controls.get(threadId)?.nonPersonFullAccess === true,
+              nonPerson,
+              Option.getOrUndefined(catalog),
             )
           : undefined;
         if (denied !== undefined)

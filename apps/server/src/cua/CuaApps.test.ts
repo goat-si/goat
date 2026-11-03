@@ -37,10 +37,11 @@ const fixture = Effect.fnUntraced(function* (
   synchronous = false,
   failSend = false,
   advertised: Option.Option<DesktopCuaReadinessReport> = Option.some(readiness(true)),
+  requireCatalog = false,
 ) {
   const reports = yield* PubSub.unbounded<DesktopCuaAppsReport>();
   const requests = yield* Queue.unbounded<string>();
-  const request = yield* DesktopAppsListing.makeDesktopAppsRequest().pipe(
+  const request = yield* DesktopAppsListing.makeDesktopAppsRequest(requireCatalog).pipe(
     Effect.provide(
       Layer.mergeAll(
         NodeCrypto.layer,
@@ -70,6 +71,79 @@ const fixture = Effect.fnUntraced(function* (
   const listing = request.pipe(Effect.map(Option.map((listed) => listed.apps)));
   return { listing, request, requests, reports };
 });
+
+it.effect("desktop catalog shares a listing for five seconds and retains unavailable results", () =>
+  Effect.gen(function* () {
+    const reports = yield* PubSub.unbounded<DesktopCuaAppsReport>();
+    const requests = yield* Queue.unbounded<string>();
+    const catalog = yield* DesktopAppsListing.makeDesktopAppsCatalog().pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          NodeCrypto.layer,
+          DesktopTelemetryReceiver.layerTest({
+            cuaReadiness: Effect.succeedSome(readiness(true)),
+            cuaApps: Stream.fromPubSub(reports),
+            requestCuaApps: (requestId) => Queue.offer(requests, requestId).pipe(Effect.asVoid),
+          }),
+        ),
+      ),
+    );
+    const first = yield* catalog.pipe(Effect.forkChild);
+    yield* PubSub.publish(reports, {
+      version: 1,
+      type: "cuaApps",
+      requestId: yield* Queue.take(requests),
+      status: "listed",
+      apps: [],
+      catalog: [],
+    });
+    expect(yield* Fiber.join(first)).toEqual(Option.some([]));
+    yield* TestClock.adjust("4900 millis");
+    expect(yield* catalog).toEqual(Option.some([]));
+    expect(yield* Queue.size(requests)).toBe(0);
+    yield* TestClock.adjust("200 millis");
+    const failed = yield* catalog.pipe(Effect.forkChild);
+    yield* PubSub.publish(reports, {
+      version: 1,
+      type: "cuaApps",
+      requestId: yield* Queue.take(requests),
+      status: "unavailable",
+    });
+    expect(yield* Fiber.join(failed)).toEqual(Option.none());
+    expect(yield* catalog).toEqual(Option.none());
+  }).pipe(Effect.scoped),
+);
+
+it.effect(
+  "catalog-required desktop listings distinguish missing, empty and timed out answers",
+  () =>
+    Effect.gen(function* () {
+      const f = yield* fixture(false, false, Option.some(readiness(true)), true);
+      const missing = yield* f.request.pipe(Effect.forkChild);
+      yield* PubSub.publish(f.reports, {
+        version: 1,
+        type: "cuaApps",
+        requestId: yield* Queue.take(f.requests),
+        status: "listed",
+        apps: [],
+      });
+      expect(yield* Fiber.join(missing)).toEqual(Option.none());
+      const empty = yield* f.request.pipe(Effect.forkChild);
+      yield* PubSub.publish(f.reports, {
+        version: 1,
+        type: "cuaApps",
+        requestId: yield* Queue.take(f.requests),
+        status: "listed",
+        apps: [],
+        catalog: [],
+      });
+      expect(yield* Fiber.join(empty)).toEqual(Option.some({ apps: [], catalog: [] }));
+      const timed = yield* f.request.pipe(Effect.forkChild);
+      yield* Queue.take(f.requests);
+      yield* TestClock.adjust("10 seconds");
+      expect(yield* Fiber.join(timed)).toEqual(Option.none());
+    }).pipe(Effect.scoped),
+);
 
 it.effect("subscribes before requesting a fresh list, including synchronous desktop replies", () =>
   Effect.gen(function* () {

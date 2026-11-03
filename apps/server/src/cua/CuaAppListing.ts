@@ -1,5 +1,6 @@
 import type { ComputerUseApp } from "@goat/contracts";
 import * as Option from "effect/Option";
+import * as Effect from "effect/Effect";
 
 export interface CuaAppListing {
   readonly apps: ReadonlyArray<string>;
@@ -20,3 +21,18 @@ export const standaloneCatalog = (listing: Option.Option<CuaAppListing>) =>
     ),
     () => [],
   );
+
+export const availableCatalog = Effect.fn("CuaDriver.availableCatalog")(function* (
+  enabled: Effect.Effect<boolean>,
+  listing: Effect.Effect<Option.Option<CuaAppListing>>,
+  catalog?: Effect.Effect<Option.Option<ReadonlyArray<ComputerUseApp>>>,
+) {
+  if (!(yield* enabled)) return Option.none();
+  const result = yield* (
+    catalog ??
+      listing.pipe(
+        Effect.map((value) => Option.map(value, (entry) => standaloneCatalog(Option.some(entry)))),
+      )
+  );
+  return (yield* enabled) ? result : Option.none();
+});

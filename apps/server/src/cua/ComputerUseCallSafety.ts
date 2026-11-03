@@ -1,6 +1,7 @@
 import { cuaAppKey, isExcludedCuaApplication } from "@goat/shared/cuaDriverManifest";
+import type { ComputerUseApp } from "@goat/contracts";
 import { batchAppScope, isBatchTool } from "./ComputerUseBatchScope.ts";
-import { isTerminalCuaApplication } from "./ComputerUseTerminalApps.ts";
+import { isTerminalCuaApplicationInCatalog } from "./ComputerUseTerminalApps.ts";
 import { launchAlternateTarget } from "./ComputerUseLaunchTargets.ts";
 
 export const deniedCallApp = (
@@ -12,6 +13,7 @@ export const deniedCallApp = (
   },
   denied: ReadonlyArray<string>,
   nonPersonFullAccess = false,
+  catalog: ReadonlyArray<ComputerUseApp> = [],
 ): string | undefined => {
   const keys = new Set(denied.map(cuaAppKey));
   const args =
@@ -53,6 +55,6 @@ export const deniedCallApp = (
       app !== undefined &&
       (isExcludedCuaApplication(app) ||
         keys.has(cuaAppKey(app)) ||
-        (nonPersonFullAccess && isTerminalCuaApplication(app))),
+        (nonPersonFullAccess && isTerminalCuaApplicationInCatalog(app, catalog))),
   );
 };

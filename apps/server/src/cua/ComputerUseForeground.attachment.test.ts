@@ -36,6 +36,7 @@ const layer = ComputerUseLeases.layer.pipe(
         cuaStrictInputGuards: true,
         enableCua: true,
       }),
+      Layer.mock(CuaDriver.CuaDriver)({ availableAppCatalog: Effect.succeedSome([]) }),
       DesktopTelemetryReceiver.layerTest({
         cuaReadiness: Effect.succeedSome({
           version: 1,
@@ -80,6 +81,7 @@ const attach = Effect.fn("foreground.attachFixture")(function* (
     acquire: Effect.succeedSome({ command: "/fixture/driver", args: ["mcp"], environment: [] }),
     listedApps: Effect.succeedNone,
     appCatalog: Effect.succeed([]),
+    availableAppCatalog: Effect.succeedSome([]),
     lastFailure: Effect.succeedNone,
     block: Effect.succeed(undefined),
     status: Effect.succeed({ platform: "darwin", running: true }),

@@ -17,6 +17,7 @@ import { runMigrations } from "../persistence/Migrations.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { layerServerSettings } from "../serverSettingsLayers.testkit.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
+import * as CuaDriver from "./CuaDriver.ts";
 import { database, grant } from "./ComputerUseLeases.projection.testkit.ts";
 import { foregroundGrant } from "./ComputerUseForeground.testkit.ts";
 
@@ -44,6 +45,7 @@ const everyAppLayer = ComputerUseLeases.layer.pipe(
         enableCua: true,
         cuaFullAccessAutoAdmit: false,
       }),
+      Layer.mock(CuaDriver.CuaDriver)({ availableAppCatalog: Effect.succeedSome([]) }),
     ),
   ),
 );
@@ -125,11 +127,17 @@ it.effect.each(["reserve", "validate"] as const)(
           : reserve;
       const entered = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
+      let reads = 0;
       const heldSettings = ServerSettings.ServerSettingsService.of({
         ...settings,
         getSettings: settings.getSettings.pipe(
           Effect.tap(() =>
-            Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
+            Effect.suspend(() => {
+              reads++;
+              return reads === 2
+                ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)))
+                : Effect.void;
+            }),
           ),
         ),
       });
