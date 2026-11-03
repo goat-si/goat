@@ -3,6 +3,7 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeOS from "node:os";
 import * as NodeReadlinePromises from "node:readline/promises";
 
+import { guardChild, guardErrors } from "@goat/shared/errorGuards";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { isCommandAvailable, resolveSpawnCommand } from "@goat/shared/shell";
 import * as Config from "effect/Config";
@@ -87,19 +88,21 @@ export const describeServerProcess = Effect.fn("triage.describeServerProcess")(f
 const pickAgent = (agents: ReadonlyArray<TriageAgent>) =>
   Effect.tryPromise({
     try: async () => {
-      const readline = NodeReadlinePromises.createInterface({
-        input: process.stdin,
-        output: process.stdout,
-      });
-      // Closing the interface leaves a pending question unsettled, so a broken terminal rejects it here.
-      const broken = new Promise<never>((_, reject) => readline.on("error", reject));
+      const broken = Promise.withResolvers<never>();
+      const readline = guardErrors(
+        NodeReadlinePromises.createInterface({
+          input: process.stdin,
+          output: process.stdout,
+        }),
+        broken.reject,
+      );
       try {
         const menu = agents
           .map((agent, index) => `  [${String(index + 1)}] ${agent.label}`)
           .join("\n");
         for (;;) {
           const answer = (
-            await Promise.race([readline.question(`Run triage with:\n${menu}\n> `), broken])
+            await Promise.race([readline.question(`Run triage with:\n${menu}\n> `), broken.promise])
           ).trim();
           const byNumber = agents[Number.parseInt(answer, 10) - 1];
           if (byNumber !== undefined) {
@@ -124,14 +127,14 @@ const runInteractiveSession = (input: {
   readonly cwd: string;
 }) =>
   Effect.callback<number, TriageAgentSpawnError>((resume) => {
-    const child = NodeChildProcess.spawn(input.command, [...input.args], {
-      cwd: input.cwd,
-      // The Windows desktop launcher supplies terminal input through the reopened console.
-      stdio: [interactiveStdin(), "inherit", "inherit"],
-      shell: input.shell,
-    });
-    child.once("error", (cause) =>
-      resume(Effect.fail(new TriageAgentSpawnError({ command: input.command, cause }))),
+    const child = guardChild(
+      NodeChildProcess.spawn(input.command, [...input.args], {
+        cwd: input.cwd,
+        // The Windows desktop launcher supplies terminal input through the reopened console.
+        stdio: [interactiveStdin(), "inherit", "inherit"],
+        shell: input.shell,
+      }),
+      (cause) => resume(Effect.fail(new TriageAgentSpawnError({ command: input.command, cause }))),
     );
     child.once("exit", (code, signal) => resume(Effect.succeed(code ?? (signal === null ? 0 : 1))));
   });

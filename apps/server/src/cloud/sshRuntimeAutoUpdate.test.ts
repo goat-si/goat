@@ -517,6 +517,18 @@ it.live("the detached launcher returns the script's output through files", () =>
 describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
   "POSIX process-group cleanup",
   () => {
+    it.live("a missing command settles a spawn failure", () =>
+      Effect.gen(function* () {
+        const host = yield* SshRuntimeAutoUpdate.SshRuntimeHost;
+        const result = yield* host.run({
+          command: "/goat-nonexistent-command-for-spawn-regression",
+          args: [],
+          env: {},
+          timeoutMs: 1000,
+        });
+        expect(result).toEqual({ code: null, stdout: "", stderr: "" });
+      }).pipe(Effect.provide(SshRuntimeAutoUpdate.layerHost)),
+    );
     it.live("a timed-out host command also stops the processes it started", () =>
       Effect.gen(function* () {
         const host = yield* SshRuntimeAutoUpdate.SshRuntimeHost;

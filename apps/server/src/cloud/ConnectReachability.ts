@@ -1,4 +1,5 @@
 import * as NodeNet from "node:net";
+import { guardErrors } from "@goat/shared/errorGuards";
 
 import {
   connectReachabilityHelpUrl,
@@ -177,14 +178,13 @@ const DNS_ERROR_CODES = new Set(["ENOTFOUND", "EAI_AGAIN", "EAI_NONAME"]);
 
 const canOpenTcp = (host: string, port: number) =>
   Effect.callback<boolean>((resume) => {
-    const socket = NodeNet.connect({ host, port });
     const finish = (connected: boolean) => {
       socket.destroy();
       resume(Effect.succeed(connected));
     };
+    const socket = guardErrors(NodeNet.connect({ host, port }), () => finish(false));
     socket.setTimeout(Duration.toMillis(EDGE_CONNECT_TIMEOUT), () => finish(false));
     socket.once("connect", () => finish(true));
-    socket.once("error", () => finish(false));
     return Effect.sync(() => socket.destroy());
   });
 

@@ -1,5 +1,6 @@
 import * as NodeSqlite from "node:sqlite";
 import * as NodeWorkerThreads from "node:worker_threads";
+import { guardErrors } from "./errorGuards.ts";
 
 import * as Cache from "effect/Cache";
 import * as Clock from "effect/Clock";
@@ -32,7 +33,12 @@ import { makeReaderPool, type ReaderSlot } from "./nodeSqliteReaderPool.ts";
 import { connectionOwner, measureWriterSql, recordReaderSql } from "./slowSqlOperations.ts";
 export { recentSlowSql } from "./slowSqlOperations.ts";
 
-import { readerWorkerSource, checkpointWorkerSource } from "./sqliteWorkerSources.ts";
+import { readerWorkerSource } from "./sqliteWorkerSources.ts";
+import {
+  CHECKPOINT_BACKPRESSURE_FRAMES,
+  CHECKPOINT_FRAMES,
+  openCheckpointWorker,
+} from "./sqliteCheckpointWorker.ts";
 
 import { makeWriter } from "./nodeSqliteWriter.ts";
 import { hasLargeBinding, sqliteParameters } from "./nodeSqliteParameters.ts";
@@ -260,20 +266,8 @@ const makeReader = Effect.fn("SqliteReader.make")(function* (options: SqliteClie
   let nextRequestId = 0;
 
   const start = Effect.fn("SqliteReader.start")(function* () {
-    const worker = yield* Effect.try({
-      try: () =>
-        new NodeWorkerThreads.Worker(readerWorkerSource, {
-          eval: true,
-          workerData: {
-            filename: options.filename,
-            allowExtension: options.allowExtension ?? false,
-            prepareCacheSize: options.prepareCacheSize ?? 200,
-          },
-        }),
-      catch: (cause) => failed(cause, "Failed to open database", "open"),
-    });
-    const requests = yield* Semaphore.make(1);
     let stoppedMessage: string | undefined;
+    let spawned: NodeWorkerThreads.Worker | undefined;
     const pending = new Map<
       number,
       {
@@ -284,10 +278,10 @@ const makeReader = Effect.fn("SqliteReader.make")(function* (options: SqliteClie
     >();
     const stop = (message: string) => {
       stoppedMessage = message;
-      if (current?.worker === worker) {
+      if (spawned !== undefined && current?.worker === spawned) {
         current = undefined;
         backoff();
-        retiring = worker.terminate().then(() => undefined);
+        retiring = spawned.terminate().then(() => undefined);
       }
       for (const [id, request] of pending) {
         request.resume(
@@ -298,6 +292,22 @@ const makeReader = Effect.fn("SqliteReader.make")(function* (options: SqliteClie
       }
       pending.clear();
     };
+    const worker = yield* Effect.try({
+      try: () =>
+        (spawned = guardErrors(
+          new NodeWorkerThreads.Worker(readerWorkerSource, {
+            eval: true,
+            workerData: {
+              filename: options.filename,
+              allowExtension: options.allowExtension ?? false,
+              prepareCacheSize: options.prepareCacheSize ?? 200,
+            },
+          }),
+          (cause) => stop(`Database reader failed: ${cause.message}`),
+        )),
+      catch: (cause) => failed(cause, "Failed to open database", "open"),
+    });
+    const requests = yield* Semaphore.make(1);
     worker.on("message", (reply: ReaderReply | ReaderStartup) => {
       if (stoppedMessage !== undefined) return;
       if ("type" in reply) {
@@ -312,7 +322,6 @@ const makeReader = Effect.fn("SqliteReader.make")(function* (options: SqliteClie
       if ("rows" in reply) retryMs = 250;
       request.resume(reply);
     });
-    worker.on("error", (cause) => stop(`Database reader failed: ${cause.message}`));
     worker.on("exit", (code) => stop(`Database reader exited with code ${code}`));
 
     const request = (input: ReaderRequest) =>
@@ -478,10 +487,6 @@ const makeReader = Effect.fn("SqliteReader.make")(function* (options: SqliteClie
   return { acquire, state } satisfies ReaderSlot;
 });
 
-const CHECKPOINT_FRAMES = 1000;
-const CHECKPOINT_IDLE_MS = 100;
-const CHECKPOINT_BACKPRESSURE_FRAMES = 10 * CHECKPOINT_FRAMES;
-
 const readSafeSqliteInteger = (value: unknown) => {
   const number = typeof value === "bigint" ? Number(value) : value;
   return typeof number === "number" && Number.isSafeInteger(number) ? number : undefined;
@@ -513,17 +518,11 @@ const startCheckpointWorker = Effect.fn("SqliteCheckpoint.start")(function* (
   const journalMode = writer.prepare("PRAGMA journal_mode");
   const frames = writer.prepare("PRAGMA wal_checkpoint(NOOP)");
   const sizeLimit = writer.prepare("PRAGMA journal_size_limit");
+  // Replaced once recover() exists; a worker that errors before then also exits, which attach() reports.
+  let onWorkerError = (_candidate: NodeWorkerThreads.Worker, _cause: Error) => {};
+  const openWorker = () => openCheckpointWorker(filename, (...args) => onWorkerError(...args));
   const started = yield* Effect.try({
-    try: () =>
-      new NodeWorkerThreads.Worker(checkpointWorkerSource, {
-        eval: true,
-        workerData: {
-          filename,
-          frames: CHECKPOINT_FRAMES,
-          backpressureFrames: CHECKPOINT_BACKPRESSURE_FRAMES,
-          idleMs: CHECKPOINT_IDLE_MS,
-        },
-      }),
+    try: openWorker,
     catch: (cause) => failed(cause, "Failed to open checkpoint worker", "open"),
   }).pipe(
     Effect.retry({
@@ -591,6 +590,9 @@ const startCheckpointWorker = Effect.fn("SqliteCheckpoint.start")(function* (
     retiring = worker.terminate();
     runFork(warn(reason));
     if (restartFiber === undefined) restartFiber = runFork(restart());
+  };
+  onWorkerError = (candidate, cause) => {
+    if (candidate === worker) recover(cause.message);
   };
   const send = (message: unknown) => {
     try {
@@ -660,9 +662,6 @@ const startCheckpointWorker = Effect.fn("SqliteCheckpoint.start")(function* (
     wake();
   };
   const attach = (candidate: NodeWorkerThreads.Worker) => {
-    candidate.on("error", (cause) => {
-      if (candidate === worker) recover(cause.message);
-    });
     candidate.on("exit", (code) => {
       if (candidate === worker) recover(`exited with code ${code}`);
     });
@@ -725,18 +724,7 @@ const startCheckpointWorker = Effect.fn("SqliteCheckpoint.start")(function* (
         yield* Effect.sleep(Duration.millis(retryMs));
         retryMs = Math.min(8_000, retryMs * 2);
         yield* Effect.promise(() => retiring);
-        const replacement = yield* Effect.try(
-          () =>
-            new NodeWorkerThreads.Worker(checkpointWorkerSource, {
-              eval: true,
-              workerData: {
-                filename,
-                frames: CHECKPOINT_FRAMES,
-                backpressureFrames: CHECKPOINT_BACKPRESSURE_FRAMES,
-                idleMs: CHECKPOINT_IDLE_MS,
-              },
-            }),
-        ).pipe(Effect.result);
+        const replacement = yield* Effect.try(openWorker).pipe(Effect.result);
         if (Result.isFailure(replacement)) continue;
         worker = replacement.success;
         stopped = false;

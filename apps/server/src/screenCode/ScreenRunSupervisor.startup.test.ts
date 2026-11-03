@@ -119,12 +119,18 @@ it.live("a child that closes its stdin ends its session instead of the server", 
         const fs = require('node:fs');
         const byte = Buffer.alloc(1);
         while (fs.readSync(0, byte, 0, 1, null) === 1 && byte[0] !== 10) {}
-        fs.closeSync(0);
         process.stdout.write('{"t":"ready"}\\n');
         setInterval(() => {}, 1000);
       `,
         ],
         { stdio: ["pipe", "pipe", "pipe"] },
+      );
+      // Windows never fails a write to a child that closed fd 0, so the stdin stream is broken the
+      // way Node reports EPIPE, before the supervisor (whose listener comes later) sends the cell.
+      child.stdout.once("data", () =>
+        child.stdin.destroy(
+          Object.assign(new Error("write EPIPE"), { code: "EPIPE", syscall: "write" }),
+        ),
       );
       yield* Effect.addFinalizer(() =>
         Effect.sync(() => {

@@ -26,11 +26,10 @@ import {
   PROBATION_MS,
   readServiceEnvironment,
   readServiceState,
-  SMOKE_TIMEOUT_MS,
-  smokeProbeHostname,
   writeServiceState,
   type BackupSpaceProbe,
 } from "./serviceLauncher.ts";
+import { SMOKE_TIMEOUT_MS, smokeProbeHostname } from "./serviceLauncherSmokeProbe.ts";
 
 const childObserver = vi.hoisted(() => ({
   current: undefined as ((child: NodeChildProcess.ChildProcess) => void) | undefined,

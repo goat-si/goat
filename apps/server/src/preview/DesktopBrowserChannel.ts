@@ -22,12 +22,15 @@ import * as Stream from "effect/Stream";
 import * as Ndjson from "effect/encoding/Ndjson";
 import * as NodeCrypto from "node:crypto";
 import * as NodeNet from "node:net";
+import { guardErrors } from "@goat/shared/errorGuards";
 
 import * as ServerConfig from "../config.ts";
 import { writeAllToFileDescriptor } from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
 
 const decodeEvent = Schema.decodeUnknownEffect(DesktopBrowserEvent);
 const encodeCommand = Schema.encodeEffect(Schema.fromJsonString(DesktopBrowserCommand));
+// fromReadable reports errors while reading; the socket is destroyed on release.
+const ignoreAfterStreamEnds = () => {};
 
 export interface DesktopTabKey {
   readonly threadId: string;
@@ -108,7 +111,12 @@ const make = Effect.gen(function* () {
 
   // Use cancellable socket reads; filesystem pipe reads keep Node alive after scope shutdown.
   const readable = yield* Effect.acquireRelease(
-    Effect.sync(() => new NodeNet.Socket({ fd: inputFd, readable: true, writable: false })),
+    Effect.sync(() =>
+      guardErrors(
+        new NodeNet.Socket({ fd: inputFd, readable: true, writable: false }),
+        ignoreAfterStreamEnds,
+      ),
+    ),
     (stream) => Effect.sync(() => stream.destroy()),
   );
   yield* NodeStream.fromReadable<Uint8Array, Error>({

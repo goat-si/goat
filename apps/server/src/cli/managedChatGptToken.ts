@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - Lean self-invoked local IPC client; no auth/store graph.
 import * as NodeNet from "node:net";
+import { guardErrors } from "@goat/shared/errorGuards";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
@@ -23,10 +24,12 @@ export async function runManagedChatGptTokenCli(args: ReadonlyArray<string>): Pr
   const program = Effect.gen(function* () {
     const [endpoint, instanceId, environmentId, profileKey] = yield* decodeArguments(args);
     const socket = yield* Effect.acquireRelease(
-      Effect.sync(() => NodeNet.createConnection(endpoint)),
+      Effect.sync(() => {
+        const socket = guardErrors(NodeNet.createConnection(endpoint), () => socket.destroy());
+        return socket;
+      }),
       (socket) => Effect.sync(() => socket.destroy()),
     );
-    socket.on("error", () => {});
     socket.once("connect", () =>
       socket.write(encodeRequest({ version: 1, instanceId, environmentId, profileKey }) + "\n"),
     );

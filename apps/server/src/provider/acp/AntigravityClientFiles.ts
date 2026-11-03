@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off -- The write helper runs as a separate Node process.
 import * as NodeChildProcess from "node:child_process";
 
+import { guardChild } from "@goat/shared/errorGuards";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { resolveNodeExecutable } from "@goat/shared/nodeRuntime";
 import * as Effect from "effect/Effect";
@@ -226,35 +227,37 @@ const runWriteHelper = (input: {
   readonly content: Buffer;
 }) =>
   Effect.callback<number, Error>((resume) => {
-    const child = NodeChildProcess.spawn(
-      input.node,
-      [
-        "-e",
-        WRITE_HELPER_SCRIPT,
-        // Ends Node's own options, so a segment like `--version` stays a name.
-        "--",
-        input.request.root,
-        input.request.name,
-        input.request.temp,
-        String(input.request.bytes),
-        ...input.request.directories,
-      ],
-      {
-        cwd: input.request.root,
-        // Node or Electron alike run the script; inherited NODE_OPTIONS do not.
-        env: {
-          ELECTRON_RUN_AS_NODE: "1",
-          ...(input.systemRoot === undefined ? {} : { SystemRoot: input.systemRoot }),
+    const child = guardChild(
+      NodeChildProcess.spawn(
+        input.node,
+        [
+          "-e",
+          WRITE_HELPER_SCRIPT,
+          // Ends Node's own options, so a segment like `--version` stays a name.
+          "--",
+          input.request.root,
+          input.request.name,
+          input.request.temp,
+          String(input.request.bytes),
+          ...input.request.directories,
+        ],
+        {
+          cwd: input.request.root,
+          // Node or Electron alike run the script; inherited NODE_OPTIONS do not.
+          env: {
+            ELECTRON_RUN_AS_NODE: "1",
+            ...(input.systemRoot === undefined ? {} : { SystemRoot: input.systemRoot }),
+          },
+          stdio: ["pipe", "ignore", "ignore"],
+          windowsHide: true,
         },
-        stdio: ["pipe", "ignore", "ignore"],
-        windowsHide: true,
-      },
+      ),
+      (cause) => resume(Effect.fail(cause)),
+      // A helper that exits early closes the pipe; its exit code reports why.
+      () => {},
     );
     const exited = new Promise<void>((resolve) => child.once("close", () => resolve()));
-    child.once("error", (cause) => resume(Effect.fail(cause)));
     child.once("close", (code) => resume(Effect.succeed(code ?? 1)));
-    // A helper that exits early closes the pipe; its exit code reports why.
-    child.stdin.on("error", () => undefined);
     child.stdin.end(input.content);
     return Effect.promise(() => {
       child.stdin.destroy();

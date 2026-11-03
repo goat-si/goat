@@ -4,6 +4,7 @@
 // @effect-diagnostics preferSchemaOverJson:off
 import * as NodeChildProcess from "node:child_process";
 import * as NodeReadline from "node:readline";
+import { guardChild, guardErrors } from "@goat/shared/errorGuards";
 
 /**
  * The Linux helper's one engine: a `cua-driver mcp` child. On Linux bare `mcp` owns its runtime
@@ -81,23 +82,41 @@ export async function startDriver(options: {
   readonly expectedVersion: string;
 }): Promise<DriverClient> {
   // Its own process group, so a forced stop reaches anything the driver started.
-  const child = NodeChildProcess.spawn(options.executable, ["mcp"], {
-    stdio: ["pipe", "pipe", "ignore"],
-    env: { ...options.environment },
-    detached: true,
-  });
-  const exited = new Promise<void>((resolve) => {
-    child.once("exit", () => resolve());
-    child.once("error", () => resolve());
-  });
-  child.stdin.on("error", () => undefined);
+  const ended = Promise.withResolvers<void>();
   const pending = new Map<number, Pending>();
   let gone = false;
-  void exited.then(() => {
+  const markGone = () => {
     gone = true;
     for (const resolve of pending.values()) resolve("gone");
     pending.clear();
+  };
+  const kill = () => {
+    if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return;
+    try {
+      process.kill(-child.pid, "SIGKILL");
+    } catch {
+      // The group is already gone.
+    }
+  };
+  const child = guardChild(
+    NodeChildProcess.spawn(options.executable, ["mcp"], {
+      stdio: ["pipe", "pipe", "ignore"],
+      env: { ...options.environment },
+      detached: true,
+    }),
+    () => {
+      markGone();
+      kill();
+      if (child.pid === undefined) ended.resolve();
+    },
+    // A driver that stopped reading is gone only once it exits, which resolves ended.
+    () => {},
+  );
+  child.once("exit", () => {
+    markGone();
+    ended.resolve();
   });
+  const exited = ended.promise;
 
   let serial = 0;
   const send = (value: object) => {
@@ -120,17 +139,7 @@ export async function startDriver(options: {
       send({ id, method, params });
     });
 
-  const kill = () => {
-    if (child.pid === undefined) return;
-    try {
-      process.kill(-child.pid, "SIGKILL");
-    } catch {
-      // The group is already gone.
-    }
-  };
-  const lines = NodeReadline.createInterface({ input: child.stdout });
-  // A driver whose stdout breaks is as gone as one that exited.
-  lines.on("error", kill);
+  const lines = guardErrors(NodeReadline.createInterface({ input: child.stdout }), kill);
   lines.on("line", (line) => {
     let message: Record<string, unknown>;
     try {

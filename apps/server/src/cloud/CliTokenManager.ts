@@ -538,6 +538,7 @@ export const make = Effect.gen(function* () {
       },
     ).pipe(
       Layer.provideMerge(
+        // oxlint-disable-next-line goat/guard-error-emitters -- NodeHttpServer attaches the server error listener before listening.
         NodeHttpServer.layer(NodeHttp.createServer, {
           host: "127.0.0.1",
           port: (yield* CliOAuthLoopbackPort) ?? metadata.loopbackPort,

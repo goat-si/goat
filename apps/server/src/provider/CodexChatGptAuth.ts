@@ -1,6 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - OAuth loopback listener and PKCE use Node APIs.
 import * as NodeCrypto from "node:crypto";
 import * as NodeHttp from "node:http";
+import { guardErrors } from "@goat/shared/errorGuards";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import {
   ProviderSetupError,
@@ -472,26 +473,23 @@ export const makeCodexChatGptAuth = Effect.fn("makeCodexChatGptAuth")(function* 
     const callback = Promise.withResolvers<{ url: URL; response?: NodeHttp.ServerResponse }>();
     const clientCallback = context.callbackMode === "client";
     let used = false;
+    const answerCallback: NodeHttp.RequestListener = (request, response) => {
+      const url = new URL(request.url ?? "/", "http://127.0.0.1");
+      if (request.method !== "GET" || url.pathname !== "/auth/callback") {
+        response.writeHead(404).end();
+        return;
+      }
+      if (used) return void response.writeHead(410).end("Sign-in is no longer active.");
+      used = true;
+      callback.resolve({ url, response });
+    };
     const server = clientCallback
       ? undefined
       : yield* Effect.acquireRelease(
           Effect.tryPromise({
             try: () =>
               new Promise<NodeHttp.Server>((resolve, reject) => {
-                const server = NodeHttp.createServer((request, response) => {
-                  const url = new URL(request.url ?? "/", "http://127.0.0.1");
-                  if (request.method !== "GET" || url.pathname !== "/auth/callback") {
-                    response.writeHead(404).end();
-                    return;
-                  }
-                  if (used) {
-                    response.writeHead(410).end("Sign-in is no longer active.");
-                    return;
-                  }
-                  used = true;
-                  callback.resolve({ url, response });
-                });
-                server.once("error", reject);
+                const server = guardErrors(NodeHttp.createServer(answerCallback), reject);
                 server.listen(0, "127.0.0.1", () => resolve(server));
               }),
             catch: () =>

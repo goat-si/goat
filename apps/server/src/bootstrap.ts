@@ -11,6 +11,10 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import { decodeJsonResult } from "@goat/shared/schemaJson";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { guardErrors } from "@goat/shared/errorGuards";
+
+// Readline receives input errors and routes them to the envelope reader.
+const ignoreReadThroughReadline = () => {};
 
 export class BootstrapFdStatError extends Schema.TaggedError<BootstrapFdStatError>()(
   "BootstrapFdStatError",
@@ -89,13 +93,15 @@ export const readBootstrapEnvelope = Effect.fn("readBootstrapEnvelope")(function
     Option.Option<A>,
     BootstrapEnvelopeReadError | BootstrapEnvelopeDecodeError
   >((resume) => {
-    const input = NodeReadline.createInterface({
-      input: stream,
-      crlfDelay: Infinity,
-    });
+    const input = guardErrors(
+      NodeReadline.createInterface({
+        input: stream,
+        crlfDelay: Infinity,
+      }),
+      (error) => handleError(error),
+    );
 
     const cleanup = () => {
-      input.removeListener("error", handleError);
       input.removeListener("line", handleLine);
       input.removeListener("close", handleClose);
       input.close();
@@ -137,8 +143,6 @@ export const readBootstrapEnvelope = Effect.fn("readBootstrapEnvelope")(function
       resume(Effect.succeedNone);
     };
 
-    // readline re-emits its input's errors on the interface, which needs its own listener.
-    input.on("error", handleError);
     input.once("line", handleLine);
     input.once("close", handleClose);
 
@@ -181,11 +185,14 @@ const makeBootstrapInputStream = Effect.fn("bootstrap.makeBootstrapInputStream")
       let streamFd: number | undefined;
       try {
         streamFd = NodeFS.openSync(fdPath, "r");
-        return NodeFS.createReadStream("", {
-          fd: streamFd,
-          encoding: "utf8",
-          autoClose: true,
-        });
+        return guardErrors(
+          NodeFS.createReadStream("", {
+            fd: streamFd,
+            encoding: "utf8",
+            autoClose: true,
+          }),
+          ignoreReadThroughReadline,
+        );
       } catch (error) {
         if (isBootstrapFdPathDuplicationError(error)) {
           if (streamFd !== undefined) {
@@ -208,17 +215,23 @@ const makeBootstrapInputStream = Effect.fn("bootstrap.makeBootstrapInputStream")
 
 const makeDirectBootstrapStream = (fd: number): NodeStream.Readable => {
   try {
-    return NodeFS.createReadStream("", {
-      fd,
-      encoding: "utf8",
-      autoClose: true,
-    });
+    return guardErrors(
+      NodeFS.createReadStream("", {
+        fd,
+        encoding: "utf8",
+        autoClose: true,
+      }),
+      ignoreReadThroughReadline,
+    );
   } catch {
-    const stream = new NodeNet.Socket({
-      fd,
-      readable: true,
-      writable: false,
-    });
+    const stream = guardErrors(
+      new NodeNet.Socket({
+        fd,
+        readable: true,
+        writable: false,
+      }),
+      ignoreReadThroughReadline,
+    );
     stream.setEncoding("utf8");
     return stream;
   }

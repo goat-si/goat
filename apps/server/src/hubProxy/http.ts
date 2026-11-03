@@ -18,6 +18,7 @@ import {
   type AuthEnvironmentScope,
 } from "@goat/contracts";
 import * as NodeSocket from "@effect/platform-node/NodeSocket";
+import { guardErrors } from "@goat/shared/errorGuards";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -372,16 +373,20 @@ export const openUpstreamSocket = (upstream: HubProxyUpstream, search: string) =
       return { reader, sink: relaySink(ws) };
     }).pipe(
       Effect.provideService(Socket.WebSocketConstructor, (url, options) => {
-        const socket = new NodeSocket.NodeWS.WebSocket(
-          url,
-          typeof options === "object" && !Array.isArray(options) ? options.protocols : options,
-          {
-            headers:
-              typeof options === "object" && !Array.isArray(options) ? options.headers : undefined,
-          },
+        // Effect detaches its listener before closing a still-connecting socket.
+        const socket = guardErrors(
+          new NodeSocket.NodeWS.WebSocket(
+            url,
+            typeof options === "object" && !Array.isArray(options) ? options.protocols : options,
+            {
+              headers:
+                typeof options === "object" && !Array.isArray(options)
+                  ? options.headers
+                  : undefined,
+            },
+          ),
+          () => {},
         );
-        // Effect detaches its once-only listener before closing a still-connecting socket; without this, ws's teardown error would crash the process.
-        socket.on("error", () => {});
         ws = socket;
         // ws exposes the HTTP status only on this event, not on SocketOpenError.
         socket.on("unexpected-response", (_request, response) => {

@@ -60,8 +60,6 @@ import * as ObservedCheckService from "./threadResults/ObservedCheckService.ts";
 import * as ThreadResultService from "./threadResults/ThreadResultService.ts";
 import * as ScreenCodeLayers from "./screenCode/ScreenCodeLayers.ts";
 import * as SiteNotes from "./preview/SiteNotes.ts";
-// Effect wraps this raw Node HTTP server after its startup and write-error guards attach.
-import * as NodeHttp from "node:http";
 
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -195,10 +193,7 @@ import * as FleetPlacement from "./fleet/resources/Placement.ts";
 import * as ServerHttp from "./http.ts";
 import * as RuntimeSessionRoute from "./runtimeSessionRoute.ts";
 import { withUntracedRequests } from "./http.ts";
-import {
-  guardHttpResponseWriteErrors,
-  rejectRequestsUntilServing,
-} from "./httpResponseErrorGuard.ts";
+import { createGuardedHttpServer } from "./httpResponseErrorGuard.ts";
 import * as HubProxyHttp from "./hubProxy/http.ts";
 import * as HubProxyNodes from "./hubProxy/HubProxyNodes.ts";
 import * as HubProxySessions from "./hubProxy/HubProxySessions.ts";
@@ -394,9 +389,7 @@ const layerHttpServer = Layer.unwrap(
     const config = yield* ServerConfig.ServerConfig;
     return NodeHttpServer.layer(
       () => {
-        const server = rejectRequestsUntilServing(
-          guardHttpResponseWriteErrors(NodeHttp.createServer()),
-        );
+        const server = createGuardedHttpServer();
         if (config.privateNetworkOnly) {
           server.on("connection", (socket) => {
             if (!acceptsPrivateNetworkConnection(socket)) {
