@@ -7,7 +7,12 @@ import {
   type GoatBotRow,
 } from "@goat/client-runtime/goatBot";
 import type { EnvironmentId } from "@goat/contracts";
-import { BellIcon, CircleAlertIcon, MessageCircleQuestionIcon } from "~/components/solar";
+import {
+  BellIcon,
+  CircleAlertIcon,
+  MessageCircleQuestionIcon,
+  PaperclipIcon,
+} from "~/components/solar";
 import {
   createContext,
   Fragment,
@@ -199,6 +204,15 @@ export function GoatBotTimeline({
                           )}
                         >
                           {row.text}
+                          {row.attachments?.map((file) => (
+                            <span
+                              key={file.id}
+                              className="flex items-center gap-1 text-sm opacity-80"
+                            >
+                              <PaperclipIcon className="size-3.5 shrink-0" aria-hidden />
+                              <span className="truncate">{file.name}</span>
+                            </span>
+                          ))}
                         </div>
                         {!failed ? (
                           <time
