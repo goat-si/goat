@@ -7009,6 +7009,24 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           );
         });
 
+        // Codex refuses to resume a session archived elsewhere until it is unarchived.
+        const resumeNativeThread = Effect.fn("CodexAdapterV2.resumeNativeThread")(function* (
+          threadId: string,
+          params: Record<string, unknown>,
+        ) {
+          const resume = client.raw.request("thread/resume", { threadId, ...params });
+          return yield* resume.pipe(
+            Effect.catchTags({
+              CodexAppServerRequestError: (cause) =>
+                /\bsession \S+ is archived\b|\bcodex unarchive\b/i.test(cause.errorMessage)
+                  ? client.raw
+                      .request("thread/unarchive", { threadId })
+                      .pipe(Effect.andThen(resume))
+                  : Effect.fail(cause),
+            }),
+          );
+        });
+
         const startNativeTurn = Effect.fn("CodexAdapterV2.startNativeTurn")(
           function* (
             turnInput: ProviderAdapter.ProviderAdapterV2TurnInput,
@@ -7488,26 +7506,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 nativeThreadId,
               });
               // excludeTurns is not in the generated request schema yet.
-              const resume = client.raw.request("thread/resume", {
-                threadId: nativeThreadId,
+              const resume = resumeNativeThread(nativeThreadId, {
                 excludeTurns: true,
                 ...resumedRuntime.params,
               });
-              const response = yield* resume.pipe(
-                Effect.catchTags({
-                  CodexAppServerRequestError: (cause) => {
-                    if (
-                      !/\bsession \S+ is archived\b|\bcodex unarchive\b/i.test(cause.errorMessage)
-                    ) {
-                      return Effect.fail(cause);
-                    }
-                    return client.raw
-                      .request("thread/unarchive", { threadId: nativeThreadId })
-                      .pipe(Effect.andThen(resume));
-                  },
-                }),
-                Effect.flatMap(decodeCodexResumeMetadata),
-              );
+              const response = yield* resume.pipe(Effect.flatMap(decodeCodexResumeMetadata));
               // As after thread/start: an unreported thread could never reload until its next turn.
               if (response.thread.status)
                 threadStatuses.record(response.thread.id, response.thread.status.type);
@@ -8342,8 +8345,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                   modelSelection: input.modelSelection,
                   runtimePolicy: input.runtimePolicy,
                 });
-                yield* client.raw.request("thread/resume", {
-                  threadId,
+                yield* resumeNativeThread(threadId, {
                   excludeTurns: true,
                   ...loadRuntime.params,
                 });
