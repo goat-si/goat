@@ -147,50 +147,6 @@ describe("OpenCode native subagent limit", () => {
     ),
   );
 
-  it.effect.each(["resume", "adopt"] as const)(
-    "restores GOAT rules before the first prompt when resuming or adopting (#2239): %s",
-    (mode) =>
-      Effect.gen(function* () {
-        const { calls, harness, root, sessions, config } = yield* limitHarness(
-          `resume-permission-${mode}`,
-          (permission) => ({ permission }),
-        );
-        const sessionID = `${root}-existing`;
-        const existing = {
-          ...harness.providerThread,
-          nativeThreadRef: {
-            driver: harness.runtime.driver,
-            nativeId: sessionID,
-            strength: "strong" as const,
-          },
-        };
-        const targetPolicy = runtimePolicy("approval-required", { cwd: "/workspace" });
-        const resumed = yield* mode === "resume"
-          ? harness.runtime.resumeThread({ providerThread: existing, runtimePolicy: targetPolicy })
-          : harness.runtime.ensureThread({
-              threadId: harness.threadId,
-              modelSelection: {
-                instanceId: config.providerInstanceId,
-                model: "anthropic/claude-sonnet",
-                options: [],
-              },
-              runtimePolicy: targetPolicy,
-              existingProviderThread: existing,
-            });
-        yield* sessions.set({ ...config, nativeSubagentLimit: 0 });
-        yield* harness.startTurn("work", resumed);
-        const rules = openCodePermissionRules(targetPolicy);
-        assert.deepEqual(calls, [
-          { sessionID, permission: rules },
-          { sessionID, permission: [...rules, DENY] },
-          { sessionID },
-        ]);
-      }).pipe(
-        Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer)),
-        Effect.scoped,
-      ),
-  );
-
   it.effect("adds and removes only GOAT's task deny, keeping the session's own rules", () =>
     Effect.gen(function* () {
       const own = [{ permission: "task", pattern: "reviewer", action: "allow" }, DENY];

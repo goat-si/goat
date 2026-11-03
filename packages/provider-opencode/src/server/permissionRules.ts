@@ -4,10 +4,15 @@ import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapte
 
 import { nonEmptyString, recordString, recordValue } from "./records.ts";
 
+export type OpenCodePermissionRequestKind = Extract<
+  ProviderRequestKind,
+  "command" | "file-read" | "file-change"
+>;
+
 export function openCodePermissionRequestKind(
   permission: string,
   toolName?: string,
-): Extract<ProviderRequestKind, "command" | "file-read" | "file-change"> {
+): OpenCodePermissionRequestKind {
   const normalized = permission.toLowerCase();
   const normalizedTool = toolName?.toLowerCase() ?? "";
   if (
