@@ -19,6 +19,13 @@ const facts = (overrides: Partial<ReachabilityFacts>): ReachabilityFacts => ({
 });
 
 describe("classifyReachability", () => {
+  it("tells an unlinked desktop user to restart GOAT without assuming a service", () => {
+    const result = classifyReachability(facts({ managedTunnelConfigured: false }), checkedAt);
+    expect(result).toMatchObject({ status: "unreachable", cause: "not_linked" });
+    if (result.status !== "unreachable") throw new Error("Expected an unreachable result");
+    expect(result.fix).toContain("restart GOAT");
+    expect(result.fix).not.toContain("service restart");
+  });
   it.each([
     [{ kind: "status", status: 502 }, "origin_unreachable"],
     [{ kind: "status", status: 530 }, "no_connector"],

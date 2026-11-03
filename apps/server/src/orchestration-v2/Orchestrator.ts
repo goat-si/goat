@@ -37,6 +37,7 @@ import {
   isCompactionCommandMessage,
   describeUserInputResponder,
   isOrchestrationV2WorkActive,
+  isGoatBotSessionThreadId,
   isProviderNativeSubagentThread,
   MessageId,
   NodeId,
@@ -5758,7 +5759,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             (id) =>
               projection.subagents.find((task) => task.id === id)?.completionWake === "always",
           )
-        : command.notification?.source.kind === "delegated_task"
+        : command.notification?.source.kind === "question" &&
+          command.notification.outcome === "updated"
     ) {
       const active = projection.runs.find((run) => run.status === "running");
       const providerThread = projection.providerThreads.find(
@@ -5770,14 +5772,26 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       const activeMessage = projection.messages.find(
         (message) => message.id === active?.userMessageId,
       );
+      const questionSource = command.notification?.source;
+      const questionOwners =
+        questionSource?.kind === "question"
+          ? projection.subagents.filter(
+              (task) =>
+                task.origin === "app_owned" && task.childThreadId === questionSource.threadId,
+            )
+          : [];
+      const questionParentRun = questionOwners.length === 1 ? questionOwners[0]?.runId : null;
       if (
         active !== undefined &&
-        (delegatedCompletion === undefined ||
-          canSteerDelegatedCompletionIntoRun(
-            command.threadId,
-            delegatedCompletion.parentRunId,
-            active.id,
-          )) &&
+        (delegatedCompletion !== undefined
+          ? canSteerDelegatedCompletionIntoRun(
+              command.threadId,
+              delegatedCompletion.parentRunId,
+              active.id,
+            )
+          : questionParentRun != null
+            ? canSteerDelegatedCompletionIntoRun(command.threadId, questionParentRun, active.id)
+            : !isGoatBotSessionThreadId(command.threadId)) &&
         activeTurn !== undefined &&
         providerThread?.providerSessionId != null &&
         (activeMessage === undefined || !isNativeMaintenanceCommand(activeMessage))

@@ -9,6 +9,8 @@ import {
   ProviderInstanceId,
   ProviderThreadId,
   ProviderTurnId,
+  RuntimeRequestId,
+  RunId,
   ThreadId,
   TurnItemId,
   type ModelSelection,
@@ -18,11 +20,14 @@ import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import * as EffectWorker from "./EffectWorker.ts";
 import * as EventSink from "./EventSink.ts";
+import * as QuestionEscalationService from "./QuestionEscalationService.ts";
+import { answer, ids, questionEvents } from "./QuestionEscalationService.testkit.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProviderReplayHarness from "./testkit/ProviderReplayHarness.ts";
@@ -296,7 +301,12 @@ it.effect.each(
           ...(question
             ? {
                 notification: {
-                  source: { kind: "delegated_task", taskIds: [taskId] },
+                  source: {
+                    kind: "question",
+                    threadId: ThreadId.make("thread:question"),
+                    requestId: RuntimeRequestId.make("request:question"),
+                    humanRequired: false,
+                  },
                   outcome: "updated",
                   summary: "Delegated task has a question",
                 },
@@ -450,61 +460,112 @@ const composerSelection = {
   options: [...runSelection.options, { id: "fastMode", value: false }],
 };
 
-it.effect("steers a delegated task question notice into the running parent turn", () =>
+it.effect.each([
+  { name: "ordinary", bot: false, owner: "none", steers: true },
+  { name: "bot-own", bot: true, owner: "current", steers: true },
+  { name: "bot-other", bot: true, owner: "other", steers: false },
+  { name: "bot-unknown", bot: true, owner: "none", steers: false },
+] as const)("$name: routes a question dispatched by QuestionEscalationService", (testCase) =>
   Effect.scoped(
     Effect.gen(function* () {
+      const suffix = `question-real-dispatch-${testCase.name}`;
+      const botThread = testCase.bot ? ThreadId.make(`goat-bot-session:${suffix}`) : undefined;
       const { started, steered, layer, startFirstTurn } = yield* nextTurnSelectionHarness(
-        "delegated-question-steer",
+        suffix,
+        false,
+        Effect.void,
+        false,
+        botThread,
       );
       yield* Effect.gen(function* () {
         const orchestrator = yield* Orchestrator.OrchestratorV2;
         const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
         const threadId = yield* startFirstTurn;
         const { thread } = yield* orchestrator.getThreadProjection(threadId);
-        yield* (yield* EventSink.EventSinkV2).write({
-          events: [
-            {
-              id: EventId.make("event:composer-selection"),
-              type: "thread.model-selection-updated",
-              threadId,
-              providerInstanceId: instanceId,
-              occurredAt: yield* DateTime.now,
-              payload: { ...thread, modelSelection: composerSelection },
-            },
-          ],
-        });
-        const messageId = MessageId.make("message:delegated-task-question:child-question");
-        const notification = {
-          source: {
-            kind: "delegated_task" as const,
-            taskIds: [NodeId.make("task:question")],
-            childThreadId: ThreadId.make("thread:question-child"),
-          },
-          outcome: "updated" as const,
-          summary: "Delegated task has a question",
-        };
         yield* orchestrator.dispatch({
-          type: "message.dispatch",
-          commandId: CommandId.make("question-wake"),
-          threadId,
-          messageId,
-          text: "Delegated task asked a question",
-          notification,
-          attachments: [],
-          dispatchMode: { type: "queue_after_active" },
-          createdBy: "agent",
-          creationSource: "server",
+          type: "thread.create",
+          commandId: CommandId.make("create-question-child"),
+          threadId: ids(suffix).askingId,
+          projectId: thread.projectId,
+          title: "Question child",
+          modelSelection: runSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdBy: "user",
+          creationSource: "web",
+          launchedBy: {
+            kind: "launch",
+            threadId,
+            environmentId: null,
+            environmentLabel: null,
+            threadTitle: null,
+            via: "thread_launch",
+          },
         });
+        const sink = yield* EventSink.EventSinkV2;
+        if (testCase.owner !== "none") {
+          const now = yield* DateTime.now;
+          const taskId = NodeId.make(`task:${suffix}`);
+          const runId = testCase.owner === "current" ? started[0]!.runId : RunId.make("run:other");
+          yield* sink.write({
+            events: [
+              {
+                id: EventId.make(`event:${suffix}:task`),
+                type: "subagent.updated",
+                threadId,
+                runId,
+                nodeId: taskId,
+                occurredAt: now,
+                payload: {
+                  id: taskId,
+                  threadId,
+                  runId,
+                  parentNodeId: started[0]!.rootNodeId,
+                  origin: "app_owned",
+                  createdBy: "agent",
+                  driver,
+                  providerInstanceId: instanceId,
+                  providerThreadId: null,
+                  childThreadId: ids(suffix).askingId,
+                  nativeTaskRef: null,
+                  prompt: "Ask",
+                  title: "Question child",
+                  model: null,
+                  status: "running",
+                  result: null,
+                  startedAt: now,
+                  completedAt: null,
+                  updatedAt: now,
+                },
+              },
+            ],
+          });
+        }
+        yield* sink.write({ events: yield* questionEvents(suffix) });
+        const service = yield* QuestionEscalationService.QuestionEscalationService;
+        yield* service.reconcile(ids(suffix).askingId, ids(suffix).requestId);
         yield* worker.drain();
         const after = yield* orchestrator.getThreadProjection(threadId);
-        assert.deepEqual(steered, ["Delegated task asked a question"]);
+        assert.lengthOf(steered, testCase.steers ? 1 : 0);
+        if (testCase.steers) assert.include(steered[0], "Question child");
         assert.lengthOf(started, 1);
-        assert.isFalse(after.runs.some((run) => run.status === "queued"));
-        const message = after.messages.find((candidate) => candidate.id === messageId);
-        assert.equal(message?.runId, started[0]?.runId);
-        assert.deepEqual(message?.notification, notification);
-        assert.deepEqual(after.thread.modelSelection, composerSelection);
-      }).pipe(Effect.provide(layer));
+        const message = after.messages.find((item) => item.id === ids(suffix).messageId);
+        if (testCase.steers) assert.equal(message?.runId, started[0]?.runId);
+        else assert.equal(after.runs.find((run) => run.id === message?.runId)?.status, "queued");
+        assert.equal(message?.notification?.source.kind, "question");
+        if (testCase.steers) {
+          yield* answer(suffix);
+          yield* service.reconcile(ids(suffix).askingId, ids(suffix).requestId);
+          yield* worker.drain();
+          const resolved = yield* orchestrator.getThreadProjection(threadId);
+          const notice = resolved.messages.find((item) => item.id === ids(suffix).resolutionId);
+          assert.equal(notice?.notification?.outcome, "completed");
+          assert.equal(resolved.runs.find((run) => run.id === notice?.runId)?.status, "queued");
+          assert.lengthOf(steered, 1);
+        }
+      }).pipe(Effect.provide(QuestionEscalationService.layer.pipe(Layer.provideMerge(layer))));
     }),
   ),
 );

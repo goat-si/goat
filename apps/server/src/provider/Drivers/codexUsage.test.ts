@@ -337,6 +337,26 @@ describe("parseCodexLine", () => {
     expect(codexUsageFormat.readMalformedRecords?.(state)).toBe(1);
   });
 
+  it("bounds unreported requests and resumes reconciliation after the next snapshot", () => {
+    const state = initialCodexScanState();
+    const usage = counters(1, 1);
+    const request = JSON.stringify({
+      type: "token_usage_record",
+      timestamp: "2026-08-01T05:17:45.000Z",
+      payload: { usage },
+    });
+    parseCodexLine(turnContext, state);
+    parseCodexLine(counted(usage, usage), state);
+    for (let index = 0; index < 1025; index++) parseCodexLine(request, state);
+    expect(state.unreportedOverflow).toBe(true);
+    expect(state.unreportedRequests).toBeUndefined();
+    expect(parseCodexLine(counted(usage, counters(1026, 1026)), state)).toBeNull();
+    expect(state.unreportedOverflow).toBeUndefined();
+    expect(parseCodexLine(counted(usage, counters(1027, 1027)), state)?.totals.outputTokens).toBe(
+      1,
+    );
+  });
+
   it("bills only the reported request when usage records sit between reconciling snapshots", () => {
     const state = initialCodexScanState();
     const usageRecord = (usage: unknown) =>
