@@ -29,9 +29,20 @@ const harness = vi.hoisted(() => ({
   workerShell: null as object | null,
   shellReads: [] as Array<string | null>,
   upload: vi.fn(),
+  transfer: vi.fn(),
   verify: vi.fn(),
   release: vi.fn(async (_attachments: ReadonlyArray<unknown>) => {}),
   key: vi.fn(() => "request"),
+}));
+vi.mock("expo-file-system", () => ({
+  File: class {
+    constructor(readonly uri: string) {}
+    upload(url: string, options: unknown) {
+      return harness.transfer(this.uri, url, options);
+    }
+  },
+  Paths: { document: { uri: "file:///documents" } },
+  UploadType: { BINARY_CONTENT: 0 },
 }));
 const preparedConnection = Symbol("prepared connection");
 vi.mock("@goat/client-runtime/state/attachments", async (original) => ({
@@ -158,7 +169,7 @@ afterEach(async () => {
 });
 
 describe("mobile GOAT Bot session selection", () => {
-  it("waits for an in-flight upload and its pending upload deletion when the environment is removed", async () => {
+  it("aborts and waits for the local transfer without deleting pending uploads on removal", async () => {
     const env = EnvironmentId.make("remove-in-flight-upload");
     const uploadId = "pending-00000000-0000-4000-8000-000000000001-pdf";
     const file = {
@@ -173,20 +184,27 @@ describe("mobile GOAT Bot session selection", () => {
     harness.items = [];
     const started = Promise.withResolvers<void>();
     const transfer = Promise.withResolvers<void>();
-    const deleted = Promise.withResolvers<void>();
-    const finishDelete = Promise.withResolvers<void>();
-    harness.upload.mockReset().mockImplementation(async (input) => {
-      expect(input.onMinted(uploadId)).toBe("continue");
+    let signal: AbortSignal | undefined;
+    harness.transfer.mockReset().mockImplementation(async (_uri, _url, options) => {
+      signal = options.signal;
       started.resolve();
       await transfer.promise;
-      return { status: "uploaded", attachmentId: uploadId };
+      throw new Error("transfer aborted");
+    });
+    harness.upload.mockReset().mockImplementation(async (input) => {
+      expect(input.onMinted(uploadId)).toBe("continue");
+      try {
+        await input.transport("https://example.test/upload").done;
+        return { status: "uploaded", attachmentId: uploadId };
+      } catch (error) {
+        return { status: "failed", step: "transfer", attachmentId: uploadId, error };
+      }
     });
     const ingests: unknown[] = [];
+    const deletes: unknown[] = [];
     harness.run.mockImplementation(async (_registry, _command, args) => {
       if ("input" in args && "attachmentId" in args.input) {
-        expect(args.input.attachmentId).toBe(uploadId);
-        deleted.resolve();
-        await finishDelete.promise;
+        deletes.push(args.input.attachmentId);
         return { _tag: "Success", value: undefined };
       }
       if ("input" in args && "idempotencyKey" in args.input) ingests.push(args.input);
@@ -207,19 +225,18 @@ describe("mobile GOAT Bot session selection", () => {
     });
     try {
       expect(settled).toBe(false);
+      expect(signal?.aborted).toBe(true);
       expect(fileOwnership.isComposerAttachmentFileRetained(file.fileUri)).toBe(true);
       expect(harness.release).not.toHaveBeenCalled();
     } finally {
       transfer.resolve();
     }
-    await deleted.promise;
-    expect(settled).toBe(false);
-    expect(fileOwnership.isComposerAttachmentFileRetained(file.fileUri)).toBe(true);
-    finishDelete.resolve();
     await act(async () => {
       await removal;
     });
     expect(ingests).toEqual([]);
+    expect(deletes).toEqual([]);
+    expect(harness.release).toHaveBeenCalledWith([file]);
     expect(fileOwnership.isComposerAttachmentFileRetained(file.fileUri)).toBe(false);
   });
   it("keeps a shared upload available for another failed message after discard (#2388)", async () => {

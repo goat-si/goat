@@ -6,6 +6,7 @@ import {
   type AttachmentDeleteInput,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Cause from "effect/Cause";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 
 import type { AtomCommand } from "./runtime.ts";
@@ -55,6 +56,30 @@ const uploadInput: AttachmentCreateUploadUrlInput = {
 };
 
 describe("runAttachmentUploadCycle", () => {
+  it("reports a failed deletion of a cancelled mint", async () => {
+    const failure = new Error("delete denied");
+    const result = await runAttachmentUploadCycle({
+      registry,
+      createUploadUrl: makeCreateUploadUrl("pending-denied"),
+      remove: {
+        label: "test:remove-denied",
+        run: async () => AsyncResult.failure(Cause.fail(failure)),
+      },
+      environmentId,
+      upload: uploadInput,
+      resolveUploadUrl: () => "https://environment.test/upload",
+      transport: () => {
+        throw new Error("transport must not run after cancel");
+      },
+      onMinted: () => "cancel",
+    });
+    expect(result).toMatchObject({
+      status: "failed",
+      step: "cleanup",
+      attachmentId: "pending-denied",
+      error: failure,
+    });
+  });
   it("waits for pending upload deletion when cancelled after minting", async () => {
     const started = Promise.withResolvers<void>();
     const finish = Promise.withResolvers<void>();
