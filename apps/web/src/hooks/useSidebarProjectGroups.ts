@@ -5,6 +5,7 @@ import { useEnvironmentIdentities, usePrimaryEnvironmentId } from "../state/envi
 import { useProjects, useQuietThreadShells } from "../state/entities";
 import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
 import { useClientSettings } from "./useSettings";
+import { pickableProjectGroups } from "@goat/client-runtime/state/project-grouping";
 
 export function useSidebarProjectGroups() {
   const projects = useProjects();
@@ -35,5 +36,5 @@ export function useSidebarProjectGroups() {
     primaryEnvironmentId,
     resolveEnvironmentLabel: (environmentId) => labels.get(environmentId) ?? null,
   });
-  return sortSidebarV2ProjectGroups(unsortedGroups, threads, sortOrder);
+  return pickableProjectGroups(sortSidebarV2ProjectGroups(unsortedGroups, threads, sortOrder));
 }

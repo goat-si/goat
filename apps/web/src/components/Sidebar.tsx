@@ -2822,7 +2822,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       ) {
         return;
       }
-      if (shouldCreateNewThreadInCurrentProject(false, projectGroups.length)) {
+      if (
+        shouldCreateNewThreadInCurrentProject(
+          false,
+          projectGroups.filter((group) => !group.archived).length,
+          projectGroups.length,
+        )
+      ) {
         await startNewThreadFromContext({
           activeDraftThread: newThreadContext.activeDraftThread,
           activeThread: newThreadContext.activeThread ?? undefined,
