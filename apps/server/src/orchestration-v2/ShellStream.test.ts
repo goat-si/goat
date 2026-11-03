@@ -301,7 +301,7 @@ describe("omitIdleSubagentShells", () => {
     expect(
       shouldPublishShellApplicationEvent(
         { event: { threadId: "idle", type: "turn-item.updated" } } as ApplicationStoredEvent,
-        omitted.subagentThreadIds,
+        new Set(omitted.subagentThreadIds),
       ),
     ).toBe(false);
   });
@@ -321,6 +321,7 @@ describe("omitIdleSubagentShells", () => {
       };
       const first = shellSnapshotForSubscriber(snapshot, options, index);
       const joined = shellSnapshotForSubscriber(snapshot, options, index);
+      const firstSubagents = new Set(first.subagentThreadIds);
       const promotion = {
         sequence: 6,
         event: {
@@ -329,12 +330,9 @@ describe("omitIdleSubagentShells", () => {
           payload: { lineage: { relationshipToParent: null } },
         },
       } as ApplicationStoredEvent;
-      shouldPublishShellApplicationEvent(
-        promotion,
-        first.subagentThreadIds,
-        subagentLineageOrder(5),
-      );
-      expect(first.subagentThreadIds.has("child")).toBe(false);
+      shouldPublishShellApplicationEvent(promotion, firstSubagents, subagentLineageOrder(5));
+      expect(firstSubagents.has("child")).toBe(false);
+      expect(first.subagentThreadIds.has("child")).toBe(true);
       expect(joined.subagentThreadIds.has("child")).toBe(true);
       expect(index.subagentThreadIds).toEqual(["child"]);
     }),
