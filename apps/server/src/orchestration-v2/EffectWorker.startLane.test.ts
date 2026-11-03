@@ -4,6 +4,7 @@ import { assert, it } from "@effect/vitest";
 import {
   CommandId,
   MessageId,
+  ProviderInstanceId,
   ProviderSessionId,
   ProviderThreadId,
   ProviderTurnId,
@@ -16,9 +17,17 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Queue from "effect/Queue";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as HostPressureMonitor from "../fleet/pressure/HostPressureMonitor.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
+import * as CodexDetached from "../provider/CodexDetachedAppServerLive.ts";
+import * as CodexSurvivors from "../provider/CodexSurvivors.ts";
+import {
+  forgetUnblockedSurvivor,
+  type SurvivorEntry,
+  type SurvivorSignal,
+} from "./Adapters/CodexSurvivorFenceMaintenance.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EffectWorker from "./EffectWorker.ts";
 import * as RuntimeLayer from "./runtimeLayer.ts";
@@ -431,4 +440,169 @@ it.effect("start lane server pressure boundary shares one monitor with the runti
       ),
     );
   }),
+);
+
+it.effect("queued start waits for the adopted survivor to settle before turn/start", () =>
+  Effect.gen(function* () {
+    const outbox = yield* EffectOutbox.EffectOutboxV2;
+    const threadId = ThreadId.make("survivor-start-lane");
+    const blocked = yield* Ref.make<ReadonlyArray<ThreadId>>([threadId]);
+    const operations: string[] = [];
+    yield* outbox.setStartGuard(
+      Ref.get(blocked).pipe(Effect.map((blockedThreads) => ({ blockedThreads, survivors: [] }))),
+    );
+    const workerLayer = EffectWorker.layer.pipe(
+      Layer.provide(
+        Layer.merge(
+          Layer.succeed(EffectOutbox.EffectOutboxV2, outbox),
+          Layer.mock(EffectWorker.OrchestrationEffectExecutorV2)({
+            execute: (effect) =>
+              Effect.sync(() => {
+                operations.push(
+                  effect.request.type === "provider-runtime.continue" ? "adopt" : "turn/start",
+                );
+              }),
+          }),
+        ),
+      ),
+    );
+    yield* Effect.gen(function* () {
+      const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+      yield* outbox.enqueue([
+        {
+          id: "queued-start",
+          commandId: CommandId.make("queued-start"),
+          threadId,
+          request: { type: "provider-turn.start", runId: RunId.make("queued") },
+        },
+        {
+          id: "survivor-continuation",
+          commandId: CommandId.make("survivor-continuation"),
+          threadId,
+          request: { type: "provider-runtime.continue", sourceRunId: RunId.make("survivor") },
+        },
+      ]);
+      assert.isFalse(yield* worker.runStartOnce);
+      assert.isTrue(Option.isNone(yield* worker.nextStartClaimableAt));
+      assert.isTrue(yield* worker.runGeneralOnce);
+      assert.deepEqual(operations, ["adopt"]);
+      assert.isFalse(yield* worker.runStartOnce);
+      assert.deepInclude(Option.getOrThrow(yield* outbox.get("queued-start")), {
+        status: "pending",
+        attemptCount: 0,
+      });
+      yield* Ref.set(blocked, []);
+      yield* outbox.notifyAvailable();
+      assert.isTrue(yield* worker.runStartOnce);
+      assert.isFalse(yield* worker.runStartOnce);
+      assert.deepEqual(operations, ["adopt", "turn/start"]);
+    }).pipe(Effect.provide(workerLayer));
+  }).pipe(Effect.provide(Layer.fresh(layerEffectOutboxProvided))),
+);
+
+it.effect("clearing a stop fence wakes a queued start without claiming it early", () =>
+  Effect.gen(function* () {
+    const outbox = yield* EffectOutbox.EffectOutboxV2;
+    const threadId = ThreadId.make("stop-fenced-start");
+    const blocked = yield* Ref.make<ReadonlyArray<ThreadId>>([threadId]);
+    const detached = Layer.mock(CodexDetached.CodexDetachedAppServers)({
+      socketTransportEnabled: true,
+      stopFencedThreads: Ref.get(blocked).pipe(Effect.map((ids) => [...ids])),
+      clearStopObligation: () => Ref.set(blocked, []).pipe(Effect.as(undefined)),
+    });
+    yield* Effect.gen(function* () {
+      const survivors = yield* CodexSurvivors.CodexSurvivors;
+      if (!survivors.startBlockedThreads || !survivors.setStartWake)
+        return yield* Effect.die("missing start guard");
+      yield* survivors.setStartWake(outbox.notifyAvailable());
+      yield* outbox.setStartGuard(
+        survivors.startBlockedThreads.pipe(
+          Effect.map((blockedThreads) => ({ blockedThreads, survivors: [] })),
+        ),
+      );
+      yield* outbox.enqueue([
+        {
+          id: "fenced-start",
+          commandId: CommandId.make("fenced-start"),
+          threadId,
+          request: { type: "provider-turn.start", runId: RunId.make("fenced-start") },
+        },
+      ]);
+      assert.isTrue(
+        Option.isNone(yield* outbox.claimNext({ workerId: "fence-test", leaseDurationMs: 30_000 })),
+      );
+      yield* survivors.clearStopObligation(
+        { instanceId: ProviderInstanceId.make("codex"), recordName: "codex-record" },
+        { threadId, nativeThreadId: "native-thread", nativeTurnId: "native-turn" },
+      );
+      yield* outbox.awaitStartAvailable;
+      assert.equal(
+        Option.getOrThrow(
+          yield* outbox.claimNext({ workerId: "fence-test", leaseDurationMs: 30_000 }),
+        ).id,
+        "fenced-start",
+      );
+    }).pipe(Effect.provide(CodexSurvivors.layer.pipe(Layer.provide(detached))));
+  }).pipe(Effect.provide(Layer.fresh(layerEffectOutboxProvided))),
+);
+
+it.effect("a goal block left after the survivor settles does not hold the queued start", () =>
+  Effect.gen(function* () {
+    const outbox = yield* EffectOutbox.EffectOutboxV2;
+    const threadId = ThreadId.make("goal-blocked-start");
+    const binding = {
+      instanceId: ProviderInstanceId.make("codex"),
+      recordName: "codex-record",
+      threadId,
+      sourceRunId: RunId.make("survivor"),
+      nativeThreadId: "native-thread",
+      nativeTurnId: "native-turn",
+    };
+    const detached = Layer.mock(CodexDetached.CodexDetachedAppServers)({
+      socketTransportEnabled: true,
+      stopFencedThreads: Effect.succeed([]),
+      hasGoalBlock: () => Effect.succeed(true),
+    });
+    yield* Effect.gen(function* () {
+      const survivors = yield* CodexSurvivors.CodexSurvivors;
+      yield* outbox.setStartGuard(
+        survivors.startBlockedThreads.pipe(
+          Effect.map((blockedThreads) => ({ blockedThreads, survivors: [] })),
+        ),
+      );
+      yield* survivors.replace([binding]);
+      yield* outbox.enqueue([
+        {
+          id: "goal-start",
+          commandId: CommandId.make("goal-start"),
+          threadId,
+          request: { type: "provider-turn.start", runId: RunId.make("goal-pause") },
+        },
+      ]);
+      const claim = outbox.claimNext({ workerId: "goal-test", leaseDurationMs: 30_000 });
+      assert.isTrue(Option.isNone(yield* claim));
+      const entry: SurvivorEntry = {
+        nativeTurnId: binding.nativeTurnId,
+        signals: yield* Queue.bounded<SurvivorSignal>(1),
+        binding,
+        service: survivors,
+        gate: yield* Semaphore.make(1),
+        lost: yield* Deferred.make<void>(),
+        done: undefined,
+        providerTurnId: undefined,
+        stopRecorded: false,
+        interruptSent: false,
+        overflow: false,
+        terminalEvidence: true,
+        retainingFence: false,
+        fenceWriteFailed: false,
+      };
+      yield* forgetUnblockedSurvivor({
+        waiting: new Map(),
+        tracked: new Map([[binding.nativeThreadId, entry]]),
+        entry,
+      });
+      assert.equal(Option.getOrThrow(yield* claim).id, "goal-start");
+    }).pipe(Effect.provide(CodexSurvivors.layer.pipe(Layer.provide(detached))));
+  }).pipe(Effect.provide(Layer.fresh(layerEffectOutboxProvided))),
 );

@@ -1,4 +1,5 @@
 import { seedQueuedStarts, assertQueuedStarts } from "./ProviderRuntimeQueuedStart.testkit.ts";
+import { survivorRecords } from "./ProviderRuntimeRecoverySurvivorRecords.testkit.ts";
 import { assert } from "@effect/vitest";
 import {
   CommandId,
@@ -61,33 +62,7 @@ export const recoveryScenario = (
     let pendingStop = reviewCase === "stop-clear-crash";
     let clearAttempts = 0;
     let saltedChecks = 0;
-    const records = ["plain", "goal", "salted", "stop", "terminal"]
-      .filter((kind) => !(["ordinary", "missing"].includes(reviewCase ?? "") && kind === "salted"))
-      .map((kind) => ({
-        version: 1 as const,
-        instanceId: `codex-${kind}`,
-        name: `codex-${kind}-abcdefabcdef`,
-        socketPath: `/tmp/${kind}.sock`,
-        pgid: kind === "plain" ? 1001 : 1002,
-        bootId: "boot",
-        state: "running" as const,
-        createdAt: "2026-01-01T00:00:00Z",
-        stderrMode: "discard" as const,
-        ...(kind === "plain" && (reviewCase === "goal-release" || reviewCase === "goal-held")
-          ? { goalBlocks: [{ threadId: ThreadId.make("old-goal"), nativeThreadId: "old-native" }] }
-          : {}),
-        ...(kind === "stop" && reviewCase === "stop-clear-crash"
-          ? {
-              stopObligations: [
-                {
-                  threadId: ThreadId.make("stop"),
-                  nativeThreadId: "native-stop",
-                  nativeTurnId: "turn-native-stop",
-                },
-              ],
-            }
-          : {}),
-      }));
+    const records = survivorRecords(reviewCase);
     const mockDetached = Layer.mock(Detached.CodexDetachedAppServers)({
       socketTransportEnabled: reviewCase !== "ordinary",
       loadRecords: Effect.sync(() => {
@@ -113,6 +88,10 @@ export const recoveryScenario = (
     });
     const mockSurvivors = Layer.mock(Survivors.CodexSurvivors)({
       list: Ref.get(bindings),
+      startBlockedThreads: Ref.get(bindings).pipe(
+        Effect.map((items) => items.map((item) => item.threadId)),
+      ),
+      setStartWake: () => Effect.void,
       classifyRecord: (key) =>
         Effect.sync(
           () =>

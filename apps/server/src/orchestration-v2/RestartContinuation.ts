@@ -19,6 +19,8 @@ import * as ServerSettings from "../serverSettings.ts";
 import { isNativeMaintenanceCommand } from "./CommandPolicy.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as CodexSurvivors from "../provider/CodexSurvivors.ts";
+import * as EffectOutbox from "./EffectOutbox.ts";
+import { survivorQueuedRuns } from "./goat/CodexSurvivorQueuedRuns.ts";
 import * as ProviderTurnStart from "./ProviderTurnStartService.ts";
 import {
   awaitingProviderThreadId,
@@ -42,13 +44,17 @@ export const makeRestartContinuation = Effect.fn("RestartContinuation.make")(fun
   starter: ProviderTurnStart.ProviderTurnStartServiceV2["Service"],
 ) {
   const survivors = yield* Effect.serviceOption(CodexSurvivors.CodexSurvivors);
+  const outbox = yield* Effect.serviceOption(EffectOutbox.EffectOutboxV2);
   return (input: { readonly threadId: ThreadId; readonly sourceRunId: RunId }) => {
     const continuation = continueRestartedRun(input).pipe(
       Effect.provideService(ProviderTurnStart.ProviderTurnStartServiceV2, starter),
     );
-    return Option.isSome(survivors)
+    const withSurvivors = Option.isSome(survivors)
       ? continuation.pipe(Effect.provideService(CodexSurvivors.CodexSurvivors, survivors.value))
       : continuation;
+    return Option.isSome(outbox)
+      ? withSurvivors.pipe(Effect.provideService(EffectOutbox.EffectOutboxV2, outbox.value))
+      : withSurvivors;
   };
 });
 
@@ -251,9 +257,19 @@ export const continueRestartedRun = Effect.fn("RestartContinuation.continueResta
       )
     )
       return;
+    const outbox = yield* Effect.serviceOption(EffectOutbox.EffectOutboxV2);
+    const queuedRuns =
+      survivor && Option.isSome(outbox)
+        ? yield* survivorQueuedRuns(
+            outbox.value,
+            { threadId: input.threadId, restartContinuationOfRunId: binding?.sourceRunId },
+            projection,
+          )
+        : new Set<RunId>();
     if (
       projection.runs.some(
         (run) =>
+          !queuedRuns.has(run.id) &&
           run.id !== source.id &&
           run.id !== existingContinuation?.id &&
           run.status !== "queued" &&

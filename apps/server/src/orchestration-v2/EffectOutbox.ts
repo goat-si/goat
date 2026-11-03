@@ -29,7 +29,6 @@ import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/sql/SqlClient";
-
 import {
   PROCESS_BOUND_EFFECT_TYPES,
   REPLAY_SAFE_EFFECT_TYPES_AFTER_PROCESS_LOSS,
@@ -40,10 +39,18 @@ export {
 } from "./EffectOutboxEffectTypes.ts";
 import * as EffectExecutionFences from "./EffectExecutionFences.ts";
 import { effectTypesForLane } from "./EffectExecutionPolicy.ts";
+import type {
+  OrchestrationEffectV2,
+  PendingOrchestrationEffectV2,
+  StartGuardSnapshot,
+} from "./EffectOutboxEffectTypes.ts";
+export type {
+  OrchestrationEffectV2,
+  PendingOrchestrationEffectV2,
+} from "./EffectOutboxEffectTypes.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as AutomationHold from "../automationHold.ts";
 import * as HostPressureMonitor from "../fleet/pressure/HostPressureMonitor.ts";
-
 export const OrchestrationEffectRequestV2 = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("provider-runtime.continue"),
@@ -145,7 +152,6 @@ export const OrchestrationEffectRequestV2 = Schema.Union([
   }),
 ]);
 export type OrchestrationEffectRequestV2 = typeof OrchestrationEffectRequestV2.Type;
-
 export const OrchestrationEffectStatusV2 = Schema.Literals([
   "pending",
   "running",
@@ -158,30 +164,6 @@ export type OrchestrationEffectStatusV2 = typeof OrchestrationEffectStatusV2.Typ
 /** Receipts deduplicate retries, and restart re-enqueues need far less than a week. Retain failed rows to keep deleted-thread worktrees. */
 export const SETTLED_EFFECT_RETENTION = Duration.days(7);
 const PRUNE_BATCH_SIZE = 500;
-
-export interface OrchestrationEffectV2 {
-  readonly id: string;
-  readonly commandId: CommandId;
-  readonly threadId: ThreadId;
-  readonly request: OrchestrationEffectRequestV2;
-  readonly status: OrchestrationEffectStatusV2;
-  readonly attemptCount: number;
-  readonly availableAt: string;
-  readonly leaseOwner: string | null;
-  readonly leaseExpiresAt: string | null;
-  readonly createdAt: string;
-  readonly updatedAt: string;
-  readonly completedAt: string | null;
-  readonly lastError: string | null;
-}
-
-export interface PendingOrchestrationEffectV2 {
-  readonly id: string;
-  readonly commandId: CommandId;
-  readonly threadId: ThreadId;
-  readonly request: OrchestrationEffectRequestV2;
-  readonly availableAt?: DateTime.Utc;
-}
 
 export class EffectOutboxError extends Schema.TaggedError<EffectOutboxError>()(
   "EffectOutboxError",
@@ -208,6 +190,8 @@ export interface EffectOutboxV2Shape {
   readonly awaitCleanupAvailable: Effect.Effect<void>;
   readonly awaitStartAvailable: Effect.Effect<void>;
   readonly notifyAvailable: (count?: number) => Effect.Effect<void>;
+  readonly setStartGuard: (guard: Effect.Effect<StartGuardSnapshot>) => Effect.Effect<void>;
+  readonly getStartGuard: Effect.Effect<StartGuardSnapshot>;
   /** Persist rows only. Notify workers after the surrounding transaction commits. */
   readonly enqueue: (
     effects: ReadonlyArray<PendingOrchestrationEffectV2>,
@@ -362,6 +346,10 @@ export const layer = Layer.effect(
         ? sql``
         : sql`AND candidate.effect_id NOT IN (SELECT value FROM json_each(${held.effects}))
               AND candidate.thread_id NOT IN (SELECT value FROM json_each(${held.threads}))`;
+    let startGuard: Effect.Effect<StartGuardSnapshot> = Effect.succeed({
+      blockedThreads: [],
+      survivors: [],
+    });
     const available = yield* Queue.dropping<void>(64);
     const controlAvailable = yield* Queue.dropping<void>(1);
     const cleanupAvailable = yield* Queue.dropping<void>(1);
@@ -402,14 +390,17 @@ export const layer = Layer.effect(
       availableBefore?: string,
       excludeRestartContinuations = false,
       effectTypes?: ReadonlyArray<OrchestrationEffectRequestV2["type"]>,
-    ) =>
-      sql`
+      guard: StartGuardSnapshot = { blockedThreads: [], survivors: [] },
+    ) => {
+      const allowedSurvivor = sql`EXISTS (SELECT 1 FROM orchestration_v2_projection_runs AS survivor_run, json_each(${JSON.stringify(guard.survivors)}) AS survivor WHERE survivor_run.thread_id = candidate.thread_id AND json_valid(candidate.payload_json) AND survivor_run.run_id = json_extract(candidate.payload_json, '$.runId') AND json_valid(survivor_run.payload_json) AND json_extract(survivor_run.payload_json, '$.restartContinuationOfRunId') = json_extract(survivor.value, '$.sourceRunId') AND candidate.thread_id = json_extract(survivor.value, '$.threadId'))`;
+      return sql`
         ${
           availableBefore === undefined
             ? sql`1 = 1`
             : sql`candidate.available_at <= ${availableBefore}`
         }
         AND candidate.status = 'pending'
+        AND (candidate.effect_type != 'provider-turn.start' OR candidate.thread_id NOT IN (SELECT value FROM json_each(${encodeIds(guard.blockedThreads)})) OR ${allowedSurvivor})
         AND ${effectTypes === undefined ? sql`1 = 1` : effectTypes.length === 0 ? sql`0 = 1` : sql`candidate.effect_type IN ${sql.in(effectTypes)}`}
         AND ${occupancy.titleThreads.length === 0 ? sql`1 = 1` : sql`(candidate.effect_type != 'thread-title.generate' OR candidate.thread_id NOT IN ${sql.in(occupancy.titleThreads)})`}
         AND ${occupancy.mainThreads.length === 0 ? sql`1 = 1` : sql`(candidate.effect_type = 'thread-title.generate' OR candidate.thread_id NOT IN ${sql.in(occupancy.mainThreads)})`}
@@ -430,6 +421,7 @@ export const layer = Layer.effect(
                 }
               )
             )
+            AND NOT ((candidate.effect_type = 'provider-runtime.continue' OR (candidate.effect_type = 'provider-turn.start' AND ${allowedSurvivor})) AND active.effect_type = 'provider-turn.start' AND active.status = 'pending' AND active.thread_id IN (SELECT value FROM json_each(${encodeIds(guard.blockedThreads)})))
             AND (
               (
                 candidate.effect_type = 'thread-title.generate'
@@ -443,6 +435,7 @@ export const layer = Layer.effect(
             )
         )
       `;
+    };
 
     const cancellationSignal = (effectId: string) => {
       const existing = cancellationSignals.get(effectId);
@@ -594,6 +587,11 @@ export const layer = Layer.effect(
       awaitCleanupAvailable: Queue.take(cleanupAvailable),
       awaitStartAvailable: Queue.take(startAvailable),
       notifyAvailable,
+      getStartGuard: Effect.suspend(() => startGuard),
+      setStartGuard: (guard) =>
+        Effect.sync(() => {
+          startGuard = guard;
+        }),
       listByCommandId: (commandId) =>
         sql<EffectRow>`
           SELECT *
@@ -785,6 +783,7 @@ export const layer = Layer.effect(
           effectTypes,
         }) {
           const held = yield* heldBacklog;
+          const startState = yield* startGuard;
           const startCapacity = yield* sampleStartCapacity;
           const occupancy = yield* fences.snapshotWith({ startCapacity });
           const now = yield* DateTime.now;
@@ -805,7 +804,7 @@ export const layer = Layer.effect(
             WHERE effect_id = (
               SELECT candidate.effect_id
               FROM orchestration_v2_effect_outbox AS candidate
-              WHERE ${claimableCandidatePredicate(occupancy, nowIso, excludeRestartContinuations, effectTypes)}${backlogFilter(held)}
+              WHERE ${claimableCandidatePredicate(occupancy, nowIso, excludeRestartContinuations, effectTypes, startState)}${backlogFilter(held)}
                 AND ${excludeRestartContinuations ? sql`candidate.effect_type != 'provider-runtime.continue'` : sql`1 = 1`}
               ORDER BY candidate.available_at ASC, candidate.created_at ASC, candidate.effect_id ASC
               LIMIT 1
@@ -827,12 +826,13 @@ export const layer = Layer.effect(
       nextClaimableAtFor: Effect.fn("EffectOutbox.nextClaimableAtFor")(
         function* (effectTypes) {
           const held = yield* heldBacklog;
+          const startState = yield* startGuard;
           const startCapacity = yield* sampleStartCapacity;
           const occupancy = yield* fences.snapshotWith({ startCapacity });
           const rows = yield* sql<{ readonly available_at: string | null }>`
           SELECT MIN(candidate.available_at) AS available_at
           FROM orchestration_v2_effect_outbox AS candidate
-          WHERE ${claimableCandidatePredicate(occupancy, undefined, false, effectTypes)}${backlogFilter(held)}
+          WHERE ${claimableCandidatePredicate(occupancy, undefined, false, effectTypes, startState)}${backlogFilter(held)}
         `.pipe(NodeSqliteClient.readOnly, Effect.withTracerEnabled(false));
           const availableAt = rows[0]?.available_at;
           if (availableAt === undefined || availableAt === null) return Option.none();

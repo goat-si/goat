@@ -586,6 +586,16 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
         record.goalBlocks?.some((entry) => entry.threadId === threadId),
       ),
     );
+  const stopFencedThreads = Effect.sync(() => [
+    ...new Set([
+      ...[...failedFences]
+        .filter(([key]) => key.startsWith('["stop",'))
+        .map(([, threadId]) => threadId),
+      ...[...fences.values()].flatMap((record) =>
+        (record.stopObligations ?? []).map((entry) => entry.threadId),
+      ),
+    ]),
+  ]);
   const ensureAdmission = Effect.fn("CodexDetachedAppServers.ensureAdmission")(function* (
     threadId: ThreadId,
     options?: { readonly allowGoalControl?: boolean },
@@ -923,6 +933,7 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
     recordStopObligation,
     clearStopObligation,
     getStopObligations,
+    stopFencedThreads,
     getGoalBlocks,
     listGoalBlocksByInstance,
     recordGoalBlock,

@@ -43,8 +43,10 @@ export const forgetUnblockedSurvivor = Effect.fn("CodexSurvivorFenceMaintenance.
   }) {
     const { entry, waiting, tracked } = input;
     const nativeThreadId = entry.binding.nativeThreadId;
-    if (waiting.has(nativeThreadId) || (yield* entry.service.hasGoalBlock(entry.binding.threadId)))
-      return;
+    if (waiting.has(nativeThreadId)) return;
+    // A goal block must not hold the binding: /goal pause is itself a queued start.
+    yield* entry.service.release(entry.binding);
+    if (yield* entry.service.hasGoalBlock(entry.binding.threadId)) return;
     if (tracked.get(nativeThreadId) === entry) tracked.delete(nativeThreadId);
   },
 );
@@ -238,9 +240,11 @@ export const clearDeadSurvivorFences = Effect.fn("CodexSurvivorFenceMaintenance.
         .withPermits(1)(verifyRetainedSurvivorDeath(entry))
         .pipe(
           Effect.tap((cleared) =>
-            Effect.sync(() => {
-              if (cleared && waiting.get(entry.binding.nativeThreadId) === entry)
+            Effect.gen(function* () {
+              if (!cleared) return;
+              if (waiting.get(entry.binding.nativeThreadId) === entry)
                 waiting.delete(entry.binding.nativeThreadId);
+              yield* entry.service.release(entry.binding);
             }),
           ),
           Effect.catch((cause) =>

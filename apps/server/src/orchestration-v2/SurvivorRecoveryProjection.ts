@@ -154,6 +154,14 @@ export const prepare = Effect.fn("SurvivorRecoveryProjection.prepare")(function*
   readonly ids: IdAllocator.IdAllocatorV2["Service"];
 }) {
   yield* input.detached.loadRecords;
+  yield* input.outbox.setStartGuard(
+    Effect.gen(function* () {
+      const survivors = yield* input.survivors.list;
+      const blockedThreads = yield* input.survivors.startBlockedThreads;
+      return { blockedThreads, survivors };
+    }),
+  );
+  yield* input.survivors.setStartWake(input.outbox.notifyAvailable());
   const terminalThreads = yield* CodexSurvivorRecovery.settleTerminalRuns(input);
   const classified = yield* CodexSurvivorRecovery.classifyRecovery({
     ...input,

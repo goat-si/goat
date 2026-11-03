@@ -187,6 +187,10 @@ export class CodexSurvivors extends Context.Service<
   CodexSurvivors,
   {
     readonly list: Effect.Effect<ReadonlyArray<CodexSurvivorBinding>>;
+    /** Threads whose queued starts must wait: an unsettled survivor or a stop fence. */
+    readonly startBlockedThreads: Effect.Effect<ReadonlyArray<ThreadId>>;
+    readonly setStartWake: (wake: Effect.Effect<void>) => Effect.Effect<void>;
+    readonly release: (binding: CodexSurvivorBinding) => Effect.Effect<void>;
     readonly blockThread?: (threadId: ThreadId) => Effect.Effect<void>;
     readonly classifyRecord: (
       key: CodexInstanceRecordKey,
@@ -261,7 +265,29 @@ export const layer = Layer.effect(
     const detached = yield* Detached.CodexDetachedAppServers;
     const bindings = yield* Ref.make<ReadonlyArray<CodexSurvivorBinding>>([]);
     const blockedThreads = yield* Ref.make<ReadonlySet<ThreadId>>(new Set());
+    let wakeStarts: Effect.Effect<void> = Effect.void;
+    const wake = Effect.suspend(() => wakeStarts);
     return CodexSurvivors.of({
+      startBlockedThreads: Effect.gen(function* () {
+        const current = yield* Ref.get(bindings);
+        const fenced = yield* detached.stopFencedThreads;
+        return [...new Set([...current.map((binding) => binding.threadId), ...fenced])];
+      }),
+      setStartWake: Effect.fn("CodexSurvivors.setStartWake")((effect) =>
+        Effect.sync(() => {
+          wakeStarts = effect;
+        }),
+      ),
+      release: Effect.fn("CodexSurvivors.release")((binding) =>
+        Ref.update(bindings, (current) =>
+          current.filter(
+            (value) =>
+              value.instanceId !== binding.instanceId ||
+              value.threadId !== binding.threadId ||
+              value.nativeTurnId !== binding.nativeTurnId,
+          ),
+        ).pipe(Effect.andThen(wake)),
+      ),
       list: Ref.get(bindings),
       blockThread: Effect.fn("CodexSurvivors.blockThread")((threadId) =>
         Ref.update(blockedThreads, (current) => new Set([...current, threadId])),
@@ -394,7 +420,7 @@ export const layer = Layer.effect(
         return result.value;
       }),
       replace: Effect.fn("CodexSurvivors.replace")((value: ReadonlyArray<CodexSurvivorBinding>) =>
-        Ref.set(bindings, value),
+        Ref.set(bindings, value).pipe(Effect.andThen(wake)),
       ),
       get: Effect.fn("CodexSurvivors.get")((instanceId: ProviderInstanceId, threadId: ThreadId) =>
         Ref.get(bindings).pipe(
@@ -406,8 +432,12 @@ export const layer = Layer.effect(
       getGoalBlocks: detached.getGoalBlocks,
       listGoalBlocksByInstance: detached.listGoalBlocksByInstance,
       getStopObligations: detached.getStopObligations,
-      recordStopObligation: detached.recordStopObligation,
-      clearStopObligation: detached.clearStopObligation,
+      recordStopObligation: Effect.fn("CodexSurvivors.recordStopObligation")((key, stop) =>
+        detached.recordStopObligation(key, stop).pipe(Effect.ensuring(wake)),
+      ),
+      clearStopObligation: Effect.fn("CodexSurvivors.clearStopObligation")((key, stop) =>
+        detached.clearStopObligation(key, stop).pipe(Effect.ensuring(wake)),
+      ),
       recordGoalBlock: detached.recordGoalBlock,
       clearGoalBlock: detached.clearGoalBlock,
       hasGoalBlock: detached.hasGoalBlock,

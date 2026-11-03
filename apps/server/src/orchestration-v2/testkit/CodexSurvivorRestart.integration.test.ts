@@ -1,12 +1,20 @@
 import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { ProviderDriverKind } from "@goat/contracts";
+import {
+  CommandId,
+  EventId,
+  NodeId,
+  ProviderDriverKind,
+  RunAttemptId,
+  RunId,
+} from "@goat/contracts";
 import * as CodexClient from "effect-codex-app-server/client";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import { CodexDetachedAppServerError } from "../../provider/CodexDetachedAppServer.ts";
 import * as CodexReplay from "effect-codex-app-server/replay";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
@@ -29,11 +37,16 @@ import {
   makeCodexReplayTurn,
 } from "../Adapters/CodexReplay.testkit.ts";
 import * as EventSink from "../EventSink.ts";
+import * as EffectOutbox from "../EffectOutbox.ts";
+import * as ProjectionStore from "../ProjectionStore.ts";
 import * as Orchestrator from "../Orchestrator.ts";
 import * as ProviderReplayHarness from "./ProviderReplayHarness.ts";
 import { CODEX_MODEL_SELECTION, materializeFixtureInput } from "./fixtures/shared.ts";
 
-const runRestartScenario = (outcome: "completed" | "gone" | "unknown" | "leftovers") =>
+const runRestartScenario = (
+  outcome: "completed" | "gone" | "unknown" | "leftovers",
+  queued = false,
+) =>
   Effect.scoped(
     Effect.gen(function* () {
       const workspace = yield* checkpointWorkspace("codex-survivor-restart");
@@ -55,6 +68,9 @@ const runRestartScenario = (outcome: "completed" | "gone" | "unknown" | "leftove
       if (threadId === undefined) return yield* Effect.die("missing test thread");
       const bindings = yield* Ref.make<ReadonlyArray<Survivors.CodexSurvivorBinding>>([]);
       const reads = yield* Deferred.make<void>();
+      const nextStarted = yield* Deferred.make<void>();
+      const earlyStart = yield* Deferred.make<void>();
+      let wakeStarts: Effect.Effect<void> = Effect.void;
       const lost = yield* Deferred.make<CodexErrors.CodexAppServerError>();
       let fence = false;
       let nativeStatus: "inProgress" | "completed" = "inProgress";
@@ -108,8 +124,14 @@ const runRestartScenario = (outcome: "completed" | "gone" | "unknown" | "leftove
                     if (method === "thread/start") return threadResponse;
                     if (method === "turn/start") {
                       starts++;
+                      if (starts > 1) yield* Deferred.succeed(nextStarted, undefined);
+                      if (starts > 1 && nativeStatus !== "completed")
+                        yield* Deferred.succeed(earlyStart, undefined);
                       return {
-                        turn: makeCodexReplayTurn({ id: nativeTurnId, status: "inProgress" }),
+                        turn: makeCodexReplayTurn({
+                          id: starts > 1 ? "queued-native-turn" : nativeTurnId,
+                          status: "inProgress",
+                        }),
                       };
                     }
                     if (method === "thread/turns/list") {
@@ -151,6 +173,17 @@ const runRestartScenario = (outcome: "completed" | "gone" | "unknown" | "leftove
       };
       const survivorService = Survivors.CodexSurvivors.of({
         list: Ref.get(bindings),
+        startBlockedThreads: Ref.get(bindings).pipe(
+          Effect.map((items) => items.map((item) => item.threadId)),
+        ),
+        setStartWake: (wake) =>
+          Effect.sync(() => {
+            wakeStarts = wake;
+          }),
+        release: (binding) =>
+          Ref.update(bindings, (items) =>
+            items.filter((item) => item.threadId !== binding.threadId),
+          ).pipe(Effect.andThen(Effect.suspend(() => wakeStarts))),
         classifyRecord: () =>
           Deferred.isDone(lost).pipe(
             Effect.map((ended) =>
@@ -255,11 +288,108 @@ const runRestartScenario = (outcome: "completed" | "gone" | "unknown" | "leftove
           ),
         ),
       );
+      if (queued)
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const store = yield* ProjectionStore.ProjectionStoreV2;
+            const outbox = yield* EffectOutbox.EffectOutboxV2;
+            const projection = yield* store.getThreadProjection(threadId);
+            const source = projection.runs[0];
+            const attempt = projection.attempts[0];
+            const node = projection.nodes.find((value) => value.id === source?.rootNodeId);
+            if (!source || !attempt || !node)
+              return yield* Effect.die("missing source run fixture");
+            const runId = RunId.make("queued-after-survivor");
+            const attemptId = RunAttemptId.make("queued-after-survivor-attempt");
+            const nodeId = NodeId.make("queued-after-survivor-node");
+            const now = yield* DateTime.now;
+            yield* store.apply({
+              id: EventId.make("queued:run"),
+              type: "run.created",
+              threadId,
+              runId,
+              occurredAt: now,
+              payload: {
+                ...source,
+                id: runId,
+                ordinal: source.ordinal + 1,
+                activeAttemptId: attemptId,
+                rootNodeId: nodeId,
+                status: "starting",
+                startedAt: null,
+                completedAt: null,
+              },
+            });
+            yield* store.apply({
+              id: EventId.make("queued:attempt"),
+              type: "run-attempt.updated",
+              threadId,
+              runId,
+              occurredAt: now,
+              payload: {
+                ...attempt,
+                id: attemptId,
+                runId,
+                rootNodeId: nodeId,
+                providerTurnId: null,
+                status: "pending",
+                startedAt: null,
+                completedAt: null,
+              },
+            });
+            yield* store.apply({
+              id: EventId.make("queued:node"),
+              type: "node.updated",
+              threadId,
+              runId,
+              nodeId,
+              providerInstanceId: source.providerInstanceId,
+              occurredAt: now,
+              payload: {
+                ...node,
+                id: nodeId,
+                runId,
+                rootNodeId: nodeId,
+                providerTurnId: null,
+                status: "pending",
+                startedAt: null,
+                completedAt: null,
+              },
+            });
+            yield* outbox.enqueue([
+              {
+                id: "queued-after-survivor",
+                commandId: CommandId.make("queued-after-survivor"),
+                threadId,
+                request: { type: "provider-turn.start", runId },
+              },
+            ]);
+          }).pipe(
+            Effect.provide(
+              Layer.merge(ProjectionStore.layer, EffectOutbox.layer).pipe(
+                Layer.provide(crashDbLayer),
+              ),
+            ),
+          ),
+        );
       yield* Effect.scoped(
         Effect.gen(function* () {
           const sink = yield* EventSink.EventSinkV2;
           const orchestrator = yield* Orchestrator.OrchestratorV2;
-          yield* Deferred.await(reads);
+          yield* Effect.raceFirst(
+            Deferred.await(reads),
+            Deferred.await(earlyStart).pipe(
+              Effect.andThen(Effect.die("turn/start was sent while the survivor turn was running")),
+            ),
+          );
+          if (queued) {
+            const outbox = yield* EffectOutbox.EffectOutboxV2;
+            const effect = yield* outbox.get("queued-after-survivor");
+            assert.equal(effect._tag, "Some");
+            if (effect._tag === "Some")
+              assert.deepInclude(effect.value, { status: "pending", attemptCount: 0 });
+            assert.equal(starts, 1);
+          }
           const waiting = yield* waitFor(
             sink,
             (event) =>
@@ -342,7 +472,16 @@ const runRestartScenario = (outcome: "completed" | "gone" | "unknown" | "leftove
                 "Failure",
               );
           }
-          assert.equal(starts, 1);
+          if (queued) {
+            yield* Deferred.await(nextStarted);
+            const outbox = yield* EffectOutbox.EffectOutboxV2;
+            yield* outbox.awaitSettled("queued-after-survivor");
+            const effect = yield* outbox.get("queued-after-survivor");
+            assert.equal(effect._tag, "Some");
+            if (effect._tag === "Some") assert.equal(effect.value.status, "succeeded");
+          }
+          assert.isFalse(yield* Deferred.isDone(earlyStart));
+          assert.equal(starts, queued ? 2 : 1);
         }).pipe(
           Effect.provide(
             Layer.merge(
@@ -371,4 +510,8 @@ it.effect("unverified survivor session loss blocks admission and schedules no co
 );
 it.effect("session loss with possible process leftovers blocks admission without continuing", () =>
   runRestartScenario("leftovers"),
+);
+
+it.effect("a queued start waits for the survivor waiter before sending turn/start", () =>
+  runRestartScenario("completed", true),
 );
