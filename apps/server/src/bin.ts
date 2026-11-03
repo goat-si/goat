@@ -81,7 +81,11 @@ if (
       // the CLI without one. Never for the fast paths, whose stdin is a pipe.
       const { attachConsoleStdin } = await import("./cli/consoleStdin.ts");
       attachConsoleStdin();
+      const importStart = performance.now();
       const { runCli } = await import("./binCli.ts");
+      if (process.env.GOAT_STARTUP_PROFILE_DIR) {
+        performance.measure("server.import.binCli", { start: importStart });
+      }
       runCli();
     }
   }
