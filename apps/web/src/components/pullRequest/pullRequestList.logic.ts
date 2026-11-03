@@ -492,6 +492,7 @@ export function mergePullRequestDiffStats(
   stats: ReadonlyArray<{
     readonly environmentId: string;
     readonly projectId: string;
+    readonly repository: string;
     readonly number: number;
     readonly additions: number;
     readonly deletions: number;
@@ -511,8 +512,9 @@ export function mergePullRequestDiffStats(
 export const pullRequestDiffStatKey = (row: {
   readonly environmentId: string;
   readonly projectId: string;
+  readonly repository: string;
   readonly number: number;
-}) => `${row.environmentId} ${row.projectId} ${row.number}`;
+}) => `${row.environmentId} ${row.projectId} ${row.repository.toLowerCase()} ${row.number}`;
 
 export interface MergedPullRequestList {
   readonly viewers: PullRequestViewers;
@@ -960,17 +962,17 @@ export function findProjectForRepository<
       return false;
     }
     const identity = project.repositoryIdentity;
-    if (
-      !identity ||
-      (sourceControlClients.repositorySelector(identity)?.toLowerCase() !== repository &&
-        identity.origin?.displayName?.toLowerCase() !== repository)
-    ) {
-      return false;
+    if (!identity) return false;
+    // A fork lists its own origin repository beside the upstream its identity names.
+    const origin = identity.origin?.displayName?.toLowerCase() === repository;
+    if (sourceControlClients.repositorySelector(identity)?.toLowerCase() === repository) {
+      return (
+        host === undefined ||
+        sourceControlClients.changeRequestHost(identity, identity.provider) === host ||
+        (origin && identity.origin?.canonicalKey.split("/")[0] === host)
+      );
     }
-    return (
-      host === undefined ||
-      sourceControlClients.changeRequestHost(identity, identity.provider) === host
-    );
+    return origin && (host === undefined || identity.origin?.canonicalKey.split("/")[0] === host);
   });
   // Azure repository names can collide across projects on the same host.
   const scoped = findScopedProject(candidates, input.scopedEnvironmentId, input.scopedProjectId);

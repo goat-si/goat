@@ -34,10 +34,17 @@ export function projectRepositories(
       continue;
     }
     own.push({ project, identity: fork, upstream: false });
-    upstream.push({ project, identity, upstream: true });
+    // The same path on another host is a mirror (a GitCafe origin of a GitHub repository), not
+    // the repository it was forked from; listing it would show every change request twice.
+    if (identity && repositoryPath(fork) !== repositoryPath(identity)) {
+      upstream.push({ project, identity, upstream: true });
+    }
   }
   return [...own, ...upstream];
 }
+
+const repositoryPath = (identity: RepositoryIdentity) =>
+  identity.canonicalKey.split("/").slice(1).join("/").toLowerCase();
 
 export const remoteHostKey = (recognized: SourceControlProviderInfo, remoteUrl: string) =>
   `${recognized.baseUrl}\n${isSshRemoteUrl(remoteUrl) ? "ssh" : "web"}`;
@@ -73,12 +80,17 @@ export function statTargets<Listed extends ListedRepository>(
   for (const ref of refs) {
     const repository = name(ref.repository);
     const host = ref.host?.trim().toLowerCase();
+    const own = byProject.get(`${ref.projectId} ${repository}`);
+    const elsewhere = listed.filter(
+      (item) => name(item.repository) === repository && (host === undefined || item.host === host),
+    );
+    // Without a host, a name another project lists on two hosts cannot say which one was meant.
     const project =
-      byProject.get(`${ref.projectId} ${repository}`) ??
-      listed.find(
-        (item) =>
-          name(item.repository) === repository && (host === undefined || item.host === host),
-      );
+      own !== undefined && (host === undefined || own.host === host)
+        ? own
+        : new Set(elsewhere.map((item) => item.host)).size === 1
+          ? elsewhere[0]
+          : undefined;
     if (project === undefined) continue;
     const key = `${project.cursorKey} ${ref.number}`;
     const held = targets.get(key);
