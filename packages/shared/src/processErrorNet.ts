@@ -15,7 +15,6 @@ interface NetState {
   netInstalled: boolean;
   rejectionHolds: number;
   rejectionListening: boolean;
-  contained: number;
   readonly classifiers: Set<RejectionClassifier>;
   readonly counts: Map<string, number>;
   readonly onUncaught: (error: unknown) => void;
@@ -81,13 +80,12 @@ const makeState = (): NetState => {
     netInstalled: false,
     rejectionHolds: 0,
     rejectionListening: false,
-    contained: 0,
     classifiers: new Set(),
     counts: new Map(),
     onUncaught: (error) => {
       try {
         const key = teardownKey(error);
-        if (key !== undefined) return contain(net, key, NodeUtil.inspect(error));
+        if (key !== undefined) return log(net, "contained", key, NodeUtil.inspect(error));
         log(net, "fatal uncaught exception", errorKey(error), NodeUtil.inspect(error));
       } catch (cause) {
         return failHandling(cause);
@@ -98,7 +96,7 @@ const makeState = (): NetState => {
       try {
         for (const classify of net.classifiers) {
           const message = classify(reason);
-          if (message !== undefined) return contain(net, "rejection", message);
+          if (message !== undefined) return log(net, "contained", "rejection", message);
         }
         // Node's rule: with another listener present, that listener decides.
         if (process.listenerCount("unhandledRejection") > 1) {
@@ -123,11 +121,6 @@ const log = (net: NetState, verdict: string, key: string, detail: string) => {
   const count = (net.counts.get(key) ?? 0) + 1;
   net.counts.set(key, count);
   writeStderr(`goat: ${verdict} ${key} (${count}): ${detail}\n`);
-};
-
-const contain = (net: NetState, key: string, detail: string) => {
-  net.contained += 1;
-  log(net, "contained", key, detail);
 };
 
 // One state per process, even if this module is loaded twice (source and bundle).
@@ -172,6 +165,3 @@ export function containRejections(classify: RejectionClassifier): () => void {
     }
   };
 }
-
-/** How many errors the net has kept from ending the process since it started. */
-export const containedErrorCount = (): number => state().contained;
