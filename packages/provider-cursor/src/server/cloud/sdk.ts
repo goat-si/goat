@@ -4,7 +4,6 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as CursorSdk from "../CursorSdk.ts";
-import { Cursor } from "../sdk.ts";
 
 export type CloudRun = Pick<Run, "id" | "agentId" | "status" | "stream" | "wait" | "createdAt">;
 export type CloudAgent = Pick<SDKAgent, "agentId" | "close"> & {
@@ -59,19 +58,19 @@ export class CursorCloudSdk extends Context.Service<
 export const layer = Layer.effect(
   CursorCloudSdk,
   Effect.gen(function* () {
-    const { Agent } = yield* CursorSdk.CursorSdk;
+    const { load } = yield* CursorSdk.CursorSdk;
     return CursorCloudSdk.of({
-      create: (options) => Agent.create(options),
-      resume: (id, options) => Agent.resume(id, options),
-      getRun: (id, options) => Agent.getRun(id, options),
-      cancelRun: (id, options) => Agent.cancelRun(id, options),
+      create: (options) => load().Agent.create(options),
+      resume: (id, options) => load().Agent.resume(id, options),
+      getRun: (id, options) => load().Agent.getRun(id, options),
+      cancelRun: (id, options) => load().Agent.cancelRun(id, options),
       listRuns: (agentId, options) =>
-        Agent.listRuns(agentId, { runtime: "cloud", apiKey: options.apiKey, limit: 1 }),
+        load().Agent.listRuns(agentId, { runtime: "cloud", apiKey: options.apiKey, limit: 1 }),
       checkAccess: (apiKey) =>
-        request("list", () => Agent.list({ runtime: "cloud", apiKey, limit: 1 })).pipe(
+        request("list", () => load().Agent.list({ runtime: "cloud", apiKey, limit: 1 })).pipe(
           Effect.asVoid,
         ),
-      readModels: (apiKey) => request("models", () => Cursor.models.list({ apiKey })),
+      readModels: (apiKey) => request("models", () => load().Cursor.models.list({ apiKey })),
     });
   }),
 );
