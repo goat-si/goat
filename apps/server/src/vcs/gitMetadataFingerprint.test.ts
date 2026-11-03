@@ -1,6 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import { git, initRepoWithCommit, layerTest, makeTmpDir } from "./testing/gitFixture.ts";
 import { makeGitMetadataFingerprint, splitBranchSections } from "./gitMetadataFingerprint.ts";
@@ -140,5 +141,58 @@ it("reads escaped, repeated and CRLF branch sections as git names them", () => {
       ['feat/"quoted"', "\tremote = origin\n\tmerge = refs/heads/x"],
       ["main", "\tremote = origin"],
     ]),
+  });
+});
+
+it.effect.each([false, true])(
+  "#2462: a same-stamp config rewrite is visible (during read: %s)",
+  (duringRead) =>
+    Effect.gen(function* () {
+      const { cwd } = yield* setup;
+      const fs = yield* FileSystem.FileSystem;
+      const configPath = (yield* Path.Path).join(cwd, ".git", "config");
+      const original = yield* fs.readFileString(configPath);
+      const replacement = original.replace("project.git", "changed.git");
+      assert.notEqual(replacement, original);
+      assert.equal(replacement.length, original.length);
+      const info = yield* fs.stat(configPath);
+      let rewriteOnRead = duringRead;
+      const testFs: FileSystem.FileSystem = {
+        ...fs,
+        stat: (file) =>
+          file === configPath
+            ? Effect.succeed({ ...info, mtime: Option.some(new Date(0)) })
+            : fs.stat(file),
+        open: (file, options) =>
+          fs.open(file, options).pipe(
+            Effect.map((handle) => ({
+              ...handle,
+              readAlloc: (size) =>
+                handle.readAlloc(size).pipe(
+                  Effect.tap(() => {
+                    if (file !== configPath || !rewriteOnRead) return Effect.void;
+                    rewriteOnRead = false;
+                    return fs.writeFileString(configPath, replacement);
+                  }),
+                ),
+            })),
+          ),
+      };
+      const read = yield* makeGitMetadataFingerprint().pipe(
+        Effect.provideService(FileSystem.FileSystem, testFs),
+      );
+      const before = yield* read(cwd, "main");
+      if (!duringRead) yield* fs.writeFileString(configPath, replacement);
+      const after = yield* read(cwd, "main");
+      assert.isNotNull(before);
+      assert.isNotNull(after);
+      assert.notEqual(after?.repository, before?.repository);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);
+
+it.each(["#", ";"])("#2462: branch headers accept a trailing %s comment", (comment) => {
+  assert.deepEqual(splitBranchSections(`[branch "main"] ${comment} comment\n\tremote = origin\n`), {
+    shared: "",
+    branches: new Map([["main", "\tremote = origin"]]),
   });
 });
