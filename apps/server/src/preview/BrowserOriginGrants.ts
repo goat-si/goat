@@ -16,6 +16,7 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import { isBlockedBrowserUrl } from "@goat/shared/preview";
 import {
   manifestApplied,
+  scopeBrowserCall,
   serverAdmitsBrowserCall,
 } from "../cua/ComputerUseLeaseProxyBrowserClaims.ts";
 import { authorizeClaimBind } from "../cua/ComputerUseClaimBindAuthority.ts";
@@ -565,6 +566,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     fallbackHosts: ReadonlyArray<string>,
     expected?: { readonly claimId: string; readonly claimGeneration: number },
   ) {
+    if ("unchanged" in scopeBrowserCall(name, args, [])) return { status: "admit" as const };
     // Approved bind calls execute while answer owns the lock; they cannot acquire it again.
     if (
       expected === undefined &&

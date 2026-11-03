@@ -128,6 +128,13 @@ it.effect("a block during a bind cannot end its request before the answer is set
       .answer(pending.claimId, true)
       .pipe(Effect.forkChild({ startImmediately: true }));
     yield* Deferred.await(entered);
+    const unrelatedDone = yield* Deferred.make<void>();
+    const unrelated = yield* service.admitClaimCall(threadId, "list_apps", {}, []).pipe(
+      Effect.tap(() => Deferred.succeed(unrelatedDone, undefined)),
+      Effect.forkChild({ startImmediately: true }),
+    );
+    assert.isTrue(Option.isSome(yield* Deferred.poll(unrelatedDone)));
+    assert.equal((yield* Fiber.join(unrelated)).status, "admit");
     hosts = ["example.test"];
     const blockedDone = yield* Deferred.make<void>();
     const blocked = yield* service.blockedHostsChanged(hosts).pipe(
