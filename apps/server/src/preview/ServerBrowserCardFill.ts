@@ -113,7 +113,14 @@ export const fillCard = async (input: {
   });
   if (found.exceptionDetails) throw new Error("Could not inspect the card form.");
   const objectId = found.result?.objectId;
-  const empty = { numberFilled: false, cvcFilled: false, expiryFilled: false, nameFilled: false };
+  const empty = {
+    numberFilled: false,
+    cvcFilled: false,
+    expiryFilled: false,
+    expiryMonthFilled: false,
+    expiryYearFilled: false,
+    nameFilled: false,
+  };
   if (!objectId)
     return {
       ...empty,
@@ -129,6 +136,8 @@ export const fillCard = async (input: {
     cvcFilled: filled.cvc !== undefined,
     expiryFilled:
       filled.expiry !== undefined || filled.month !== undefined || filled.year !== undefined,
+    expiryMonthFilled: filled.month !== undefined,
+    expiryYearFilled: filled.year !== undefined,
     nameFilled: filled.name !== undefined,
   });
   try {

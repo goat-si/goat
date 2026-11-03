@@ -110,6 +110,23 @@ it.live("matches expiry select options by value or text", () =>
   ),
 );
 
+it.live("reports the exact expiry fields set before an unmatched option stops delivery", () =>
+  withForm(
+    '<input id="number" autocomplete="cc-number"><select id="month" autocomplete="cc-exp-month"><option value="01">January</option></select><select id="year" autocomplete="cc-exp-year"><option value="2030">2030</option></select><input id="cvc" autocomplete="cc-csc">',
+    async ({ fill, read }) => {
+      expect(await fill()).toMatchObject({
+        verdict: "unverifiable",
+        code: "no_option_year",
+        numberFilled: true,
+        expiryMonthFilled: true,
+        expiryYearFilled: false,
+        cvcFilled: false,
+      });
+      expect(await read("#cvc")).toBe("");
+    },
+  ),
+);
+
 it.live.each([
   ['<input autocomplete="cc-number">', "missing_cvc"],
   ['<input autocomplete="cc-csc">', "missing_number"],
