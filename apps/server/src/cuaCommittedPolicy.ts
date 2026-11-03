@@ -13,17 +13,16 @@ export type CuaCommittedPolicy =
 
 export const makeCuaCommittedPolicy = Effect.gen(function* () {
   const ref = yield* Ref.make<CuaCommittedPolicy>({ _tag: "unavailable" });
-  const publish = (settings: ServerSettings, parseFailure: Option.Option<unknown>) =>
-    Ref.set(
-      ref,
-      Option.isSome(parseFailure)
-        ? { _tag: "unavailable" }
-        : {
-            _tag: "committed",
-            enableCua: settings.enableCua,
-            blockedBrowserHosts: settings.blockedBrowserHosts,
-          },
-    );
+  const publish = (settings: ServerSettings, parseFailure: Option.Option<unknown>) => {
+    const policy: CuaCommittedPolicy = Option.isSome(parseFailure)
+      ? { _tag: "unavailable" }
+      : {
+          _tag: "committed",
+          enableCua: settings.enableCua,
+          blockedBrowserHosts: settings.blockedBrowserHosts,
+        };
+    return Ref.set(ref, policy);
+  };
   return {
     read: Ref.get(ref),
     unavailable: Ref.set(ref, { _tag: "unavailable" }),

@@ -426,6 +426,7 @@ const make = Effect.gen(function* () {
     return yield* Effect.uninterruptible(
       Effect.suspend(() => {
         if (Option.isSome(settings) && settings.value.committedPolicy !== undefined) {
+          // @effect-diagnostics-next-line runEffectInsideEffect:off -- Admission must read this Ref without yielding.
           const policy = Effect.runSync(settings.value.committedPolicy);
           if (policy._tag !== "committed" || !policy.enableCua) return Effect.succeed(undefined);
         }
