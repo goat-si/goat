@@ -161,6 +161,24 @@ command and message IDs prevent duplicate submissions after an outbox retry. Cod
 resumes without adding provider prompt text unless the turn lost background work;
 other adapters receive the continuation message through their normal turn path.
 
+Codex can keep a turn running through the restart instead. With
+`codexTurnsSurviveServerStop` on, macOS and Linux run each Codex instance's app-server
+[detached](../../apps/server/src/provider/CodexDetachedAppServer.ts) on a private
+Unix socket, and shutdown leaves it running when the stop is a restart: a runtime drain
+marks one in-process, and the desktop's stop intent names relaunch, update or recovery
+retry. Recovery classifies survivors before it reconciles anything, so a still-running
+native turn is never cancelled, and survival does not depend on the continuation
+preference above. The continuation then adopts that turn without `turn/start` and imports
+its items once it ends; it never runs a second turn on the same native thread. Two rules
+keep that true across crashes and races. A stop fence is written to the process record
+before every interrupt and cleared only by Codex's own terminal status or a verified
+process death, never by a status GOAT wrote itself; until then the thread refuses new
+turns, and same-thread queued starts stay unclaimed in the outbox. A process GOAT cannot
+verify blocks its threads rather than counting as lost. Threads with a Codex goal do not
+survive, because a surviving goal can start turns no GOAT run owns; they stay blocked
+until `/goal pause` or `/goal clear`. A surviving turn's GOAT tools are refused for the
+rest of that turn, since MCP credentials are per server run.
+
 Delegated tasks (`goat_task_create` child threads) are reconciled as their own threads,
 never as the parent's background work. The orchestrator settles child results and
 completion deliveries in a startup pass after reconciliation, because the terminal-run
