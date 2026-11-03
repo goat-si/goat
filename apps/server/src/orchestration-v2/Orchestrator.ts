@@ -114,6 +114,7 @@ import {
   goalCommandStopsActiveRun,
   isNativeMaintenanceCommand,
   resolveMessageDispatchIntent,
+  shouldClearActiveOrder,
 } from "./CommandPolicy.ts";
 import { CommandReceiptStoreV2 } from "./CommandReceiptStore.ts";
 import { makeReviewLedger, OrchestratorReviewLedgerError } from "./goat/ReviewLedger.ts";
@@ -5487,7 +5488,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       });
       projection = applyToProjection(projection, event, { deferNotificationCursor: true });
     }
-
     const continuedTaskId = projection.runs.find(
       (run) => run.id === command.restartContinuationOfRunId,
     )?.delegatedTaskId;
@@ -5516,23 +5516,23 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       });
       projection = yield* getProjectionWithPendingEvents(command.threadId, events);
     }
-    // Background wakes and delegated completions continue work the user already snoozed, so
-    // only a message someone actually sent ends the snooze.
+    // Background wakes and delegated completions preserve snooze.
     const automaticWake =
       command.notification !== undefined || command.delegatedCompletion !== undefined;
-    if (projection.thread.snoozedUntil != null && !automaticWake) {
+    const unsnooze = projection.thread.snoozedUntil != null && !automaticWake;
+    const clearOrder = shouldClearActiveOrder(command, projection.thread.activeOrderKey);
+    if (unsnooze || clearOrder) {
       const now = yield* DateTime.now;
       const thread: OrchestrationV2AppThread = {
         ...projection.thread,
-        snoozedUntil: null,
-        snoozedAt: null,
-        updatedAt: now,
+        ...(unsnooze ? { snoozedUntil: null, snoozedAt: null, updatedAt: now } : {}),
+        ...(clearOrder ? { activeOrderKey: null } : {}),
       };
       yield* emit(
         events,
         command,
       )({
-        type: "thread.unsnoozed",
+        type: unsnooze ? "thread.unsnoozed" : "thread.active-reordered",
         threadId: command.threadId,
         providerInstanceId: thread.providerInstanceId,
         occurredAt: now,
