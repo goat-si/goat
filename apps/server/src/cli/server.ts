@@ -15,7 +15,6 @@ import { SERVICE_LAUNCHER_CONTEXT_ENV } from "../cloud/serviceProtocol.ts";
 import * as ServerConfig from "../config.ts";
 import { applyDevSshPolicy } from "../devSshPolicy.ts";
 import { awaitLauncherLoss } from "../launcherWatch.ts";
-import { runServer } from "../server.ts";
 import { holdWorkspaceLeaseRegistry } from "../workspace/workspaceLeaseRegistry.ts";
 import {
   acquireServerOwnerLock,
@@ -50,8 +49,8 @@ const runServerCommand = Effect.fn("server.runServerCommand")(function* (
     readonly originalCwd?: string | undefined;
   },
 ) {
-  // For the process lifetime: shutdown tears down pipes and sockets, when teardown errors cluster.
   yield* Effect.sync(installProcessErrorNet);
+  const { runServer } = yield* Effect.promise(() => import("../server.ts"));
   const originalCwd = (yield* prepareWorkingDirectory()) ?? options?.originalCwd;
   const logLevel = yield* GlobalFlag.LogLevel;
   const config = yield* resolveServerConfig(flags, logLevel, { ...options, originalCwd });

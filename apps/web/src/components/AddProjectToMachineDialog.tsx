@@ -1,3 +1,4 @@
+import { resolvePastedPath } from "@goat/shared/path";
 import { useParams } from "@tanstack/react-router";
 import { scopeProjectRef } from "@goat/client-runtime/environment";
 import {
@@ -311,7 +312,9 @@ function AddProjectToMachineDialog({ request }: { request: AddProjectToMachineRe
               <Input
                 id={`${id}-path`}
                 value={destinationPath}
-                onChange={(event) => setPathOverride(event.target.value)}
+                onChange={(event) =>
+                  setPathOverride(resolvePastedPath(destinationPath, event.target.value))
+                }
                 spellCheck={false}
                 autoComplete="off"
               />

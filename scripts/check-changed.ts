@@ -24,6 +24,7 @@ import { guardChild } from "../packages/shared/src/errorGuards.ts";
 import { decide, readWorkspace } from "../.github/scripts/ci-changes.cjs";
 import { vitePlusCommand } from "./check-changed-command.ts";
 import { testsForChanges } from "./lib/changed-tests.ts";
+import { splitTests } from "./lib/split-tests.ts";
 
 const root = NodePath.resolve(import.meta.dirname, "..");
 const CODE = /\.[cm]?[jt]sx?$/;
@@ -230,6 +231,7 @@ const graphql = ["apps/server", "packages/source-control-github"].filter((dir) =
 );
 
 const filters = (names: ReadonlyArray<string>) => names.flatMap((name) => ["--filter", name]);
+const { vitestTests, nodeTests } = splitTests(tests);
 const steps = [
   // Runs first; it takes about a second.
   runPatchCheck && { name: "unused patches", run: checkPatches },
@@ -258,9 +260,13 @@ const steps = [
     ],
   },
   // From the repo root, the root vite.config.ts hands each file to its package's config.
-  tests.size > 0 && {
-    name: `test (${tests.size} files)`,
-    args: ["test", "run", "--passWithNoTests", ...tests],
+  vitestTests.length > 0 && {
+    name: `test (${vitestTests.length} files)`,
+    args: ["test", "run", "--passWithNoTests", ...vitestTests],
+  },
+  nodeTests.length > 0 && {
+    name: `node --test (${nodeTests.length} files)`,
+    args: ["exec", "node", "--test", ...nodeTests],
   },
 ].filter((step) => step !== false);
 

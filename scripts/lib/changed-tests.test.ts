@@ -15,6 +15,13 @@ const coverageSuites = (changes: ReadonlyArray<string>) =>
   );
 
 describe("testsForChanges", () => {
+  it("selects tests across packages when the provider environment scrubber changes", () => {
+    const tests = testsForChanges(root, ["packages/shared/src/testing/providerEnv.ts"]);
+    expect(tests).toContain("apps/desktop/src/app/DesktopLifecycle.test.ts");
+    expect(tests).toContain("apps/web/src/hooks/useCommitOnBlur.browser.test.tsx");
+    expect(tests).toContain("packages/shared/src/logging.test.ts");
+  });
+
   it("runs the replay suites and prompt comparisons when shared prompt text changes (#901)", () => {
     const tests = testsForChanges(root, [
       "packages/provider-core/src/server/orchestrationInstructions.ts",
