@@ -16,6 +16,7 @@ import {
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
 import { useAdaptiveWorkspaceLayout } from "../layout/AdaptiveWorkspaceLayout";
 import { useWorkspaceTabs } from "./WorkspaceTabsContext";
+import { shouldRestoreNativeSearch } from "./workspace-tabs-state";
 import { useCompactWorkspaceTabs, useSidebarWorkspaceTabs } from "./useSystemWorkspaceTabBar";
 import { WorkspaceTabToolbarButtons } from "./WorkspaceSectionToolbar";
 
@@ -93,13 +94,9 @@ export function WorkspaceToolbar(props: {
   useHardwareKeyboardCommand("focusSearch", focusSearch);
   // The sidebar remains visible while its detail owns navigation focus.
   const searchHostVisible = focused || primaryColumn?.presented === true;
+  const restoreSearchState = shouldRestoreNativeSearch(tab, duoSearch);
   const restoreSearch = useCallback(() => {
-    if (
-      searchHostVisible &&
-      searchVisible &&
-      isTabActive(selectedTab) &&
-      tab.searchMode !== "resting"
-    ) {
+    if (searchHostVisible && searchVisible && isTabActive(selectedTab) && restoreSearchState) {
       searchRef.current?.setText(tab.query);
       // Integrated search collapses to its button when its screen reappears,
       // which would hide the query that still filters the list.
@@ -108,7 +105,15 @@ export function WorkspaceToolbar(props: {
         if (tab.searchMode === "active") searchRef.current?.focus();
       }
     }
-  }, [searchHostVisible, isTabActive, selectedTab, tab.searchMode, tab.query, searchVisible]);
+  }, [
+    searchHostVisible,
+    isTabActive,
+    selectedTab,
+    tab.searchMode,
+    tab.query,
+    searchVisible,
+    restoreSearchState,
+  ]);
   useFocusEffect(
     useCallback(() => {
       const frame = requestAnimationFrame(restoreSearch);
