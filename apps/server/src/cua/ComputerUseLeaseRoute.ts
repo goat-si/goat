@@ -538,13 +538,12 @@ const makeCallLayer = (serverScope: Scope.Scope) =>
             live.claims,
           );
           blockedBrowser = decision.blocked === true;
-          if (decision.claim)
-            yield* grants.value.end(
-              threadId,
-              decision.claim.claimId,
-              decision.claim.claimGeneration,
-              "blocked_url",
-            );
+          if (decision.claim) {
+            const ended = yield* grants.value
+              .end(threadId, decision.claim.claimId, decision.claim.claimGeneration, "blocked_url")
+              .pipe(Effect.option);
+            if (Option.isNone(ended)) return HttpServerResponse.empty({ status: 503 });
+          }
         }
       }
       const result = yield* Effect.gen(function* () {

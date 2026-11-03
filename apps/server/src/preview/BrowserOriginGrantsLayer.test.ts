@@ -15,6 +15,10 @@ import { BrowserClaimManifest } from "./BrowserClaimManifest.ts";
 import { BrowserClaimBind } from "./BrowserClaimBind.ts";
 
 const decodeDescriptor = Schema.decodeSync(ExecutionEnvironmentDescriptor);
+class ManifestUnavailable extends Schema.TaggedError<ManifestUnavailable>()(
+  "ManifestUnavailable",
+  {},
+) {}
 
 it.effect("reports unsupported capability as unavailable and removes claims from snapshots", () =>
   Effect.gen(function* () {
@@ -261,7 +265,7 @@ it.effect("a settings change ends blocked claims and pending requests without a 
     const manifest = Layer.succeed(BrowserClaimManifest, {
       publish: (union) =>
         (failPublish
-          ? Effect.fail(new Error("manifest unavailable"))
+          ? Effect.fail(new ManifestUnavailable())
           : union.origins.length === 0
             ? Deferred.succeed(processed, undefined)
             : Effect.void
