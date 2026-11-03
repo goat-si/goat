@@ -116,17 +116,12 @@ it.effect("permission denied is cached as a terminal result", () =>
   }),
 );
 
-it.effect.each(["read", "delete", "concurrent"] as const)("stalled %s is bounded", (scenario) =>
+it.effect.each(["read", "concurrent"] as const)("stalled %s is bounded", (scenario) =>
   Effect.gen(function* () {
     const started = yield* Deferred.make<void>();
     const fs = FileSystem.layerNoop({
       stream: () =>
-        scenario === "delete"
-          ? Stream.fromIterable([new TextEncoder().encode(JSON.stringify(intent))])
-          : Stream.fromEffect(
-              Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
-            ),
-      remove: () => Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never)),
+        Stream.fromEffect(Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never))),
     });
     yield* Effect.gen(function* () {
       const reader = yield* StopIntent.DesktopStopIntentReader;
@@ -141,6 +136,29 @@ it.effect.each(["read", "delete", "concurrent"] as const)("stalled %s is bounded
         yield* Fiber.join(fiber),
         calls.map(() => Option.none()),
       );
+    }).pipe(Effect.provide(StopIntent.layer("/intent", 123).pipe(Layer.provide(fs))));
+  }),
+);
+
+it.effect("a stalled delete keeps the intent that was read", () =>
+  Effect.gen(function* () {
+    const removing = yield* Deferred.make<void>();
+    let reads = 0;
+    const fs = FileSystem.layerNoop({
+      stream: () => {
+        reads += 1;
+        return Stream.fromIterable([new TextEncoder().encode(JSON.stringify(intent))]);
+      },
+      remove: () => Deferred.succeed(removing, undefined).pipe(Effect.andThen(Effect.never)),
+    });
+    yield* Effect.gen(function* () {
+      const reader = yield* StopIntent.DesktopStopIntentReader;
+      const first = yield* reader.atShutdown.pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(removing);
+      yield* TestClock.adjust("1 second");
+      assert.deepStrictEqual(yield* Fiber.join(first), Option.some(intent));
+      assert.deepStrictEqual(yield* reader.atShutdown, Option.some(intent));
+      assert.equal(reads, 1);
     }).pipe(Effect.provide(StopIntent.layer("/intent", 123).pipe(Layer.provide(fs))));
   }),
 );

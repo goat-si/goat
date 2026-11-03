@@ -60,15 +60,17 @@ export const layer = (path: string | undefined, pid: number) =>
                     decoded,
                     (intent) => intent.pid === undefined || intent.pid === pid,
                   );
-                  yield* fs.remove(path).pipe(Effect.ignore);
                   cached = Option.some(result);
+                  yield* fs.remove(path).pipe(Effect.ignore);
                   return result;
                 }),
               )
               .pipe(
                 Effect.interruptible,
                 Effect.timeoutOption("1 second"),
-                Effect.map(Option.flatten),
+                Effect.map((result) =>
+                  Option.isSome(result) ? result.value : Option.flatten(cached),
+                ),
               ),
           );
           return { atShutdown: read() };
