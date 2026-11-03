@@ -250,6 +250,9 @@ export function makeExistingServerRoutes(input: {
       Effect.gen(function* () {
         if (input.isClosed())
           return yield* new SshLaunchError({ message: "SSH manager is closed.", stdout: "" });
+        // A call that held the lock before this one may have just verified the route.
+        const verifiedMeanwhile = yield* reuseRoute(sideKey, environmentId);
+        if (verifiedMeanwhile !== undefined) return verifiedMeanwhile;
         const selected = yield* Effect.result(
           existingOwner(target, environmentId, routes.get(sideKey)?.kind),
         );

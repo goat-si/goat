@@ -315,5 +315,23 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
         }).pipe(Effect.provide(layer), Effect.scoped);
       }),
     );
+    it.effect("concurrent calls on a cold or expired route share one ownership check", () =>
+      Effect.gen(function* () {
+        const { layer, call } = makeHost();
+        yield* Effect.gen(function* () {
+          const manager = yield* SshTunnel.SshEnvironmentManager;
+          const route = () => manager.existingEnvironment!(uploadTarget, OWNER);
+          const both = () => Effect.all([route(), route()], { concurrency: "unbounded" });
+          const cold = yield* call(both());
+          assert.isTrue(Result.isSuccess(cold.result));
+          // One app probe, one managed probe, and one forward for both callers.
+          assert.equal(cold.connections, 3);
+          yield* TestClock.adjust(Duration.minutes(5));
+          const expired = yield* call(both());
+          assert.isTrue(Result.isSuccess(expired.result));
+          assert.equal(expired.connections, 1);
+        }).pipe(Effect.provide(layer), Effect.scoped);
+      }),
+    );
   },
 );
