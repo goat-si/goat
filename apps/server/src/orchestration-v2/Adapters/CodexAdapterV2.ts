@@ -7058,7 +7058,28 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               ...(yield* Ref.get(activeTurns)),
             ]);
             const started = yield* client
-              .request("turn/start", turnStartParams)
+              .requestTurnStart(turnStartParams, (turnId) =>
+                Effect.gen(function* () {
+                  const owner =
+                    (yield* Ref.get(activeTurns)).get(turnId) ??
+                    (yield* Ref.get(settledTurns)).get(turnId);
+                  // A newer start on this thread folds its input into this turn and adopts it.
+                  const retry = (yield* Ref.get(pendingRootTurns)).get(threadId);
+                  if (
+                    (owner !== undefined && owner.input.attemptId !== turnInput.attemptId) ||
+                    (retry !== undefined && retry.attemptId !== turnInput.attemptId)
+                  )
+                    return;
+                  yield* client.request("turn/interrupt", { threadId, turnId }).pipe(
+                    Effect.catch((cause) =>
+                      Effect.logWarning("orchestration-v2.codex-deadline-turn-stop-failed", {
+                        cause,
+                      }),
+                    ),
+                    Effect.forkIn(scope),
+                  );
+                }),
+              )
               .pipe(Effect.tapError(() => Effect.sync(start.failed)));
             start.answered(started.turn.id);
             // Codex folds input into a turn that is still running. If that turn
