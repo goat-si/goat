@@ -253,6 +253,20 @@ describe("searchSettings", () => {
     expect(searchSettings("sidebar.toggle")[0]?.targetId).toBeUndefined();
   });
 
+  it("finds settings rows by their visible titles", () => {
+    for (const [title, id] of [
+      ["Automatic worktree cleanup", "storage-worktrees"],
+      ["Delete settled worktrees", "storage-worktrees"],
+      ["Delete old browser artifacts", "storage-artifacts"],
+      ["Delete old rotated logs", "storage-artifacts"],
+      ["Native sessions", "providers"],
+      ["CODEX_HOME path", "providers"],
+      ["Shadow home path", "providers"],
+    ] as const) {
+      expect(searchSettings(title)[0]?.id, title).toBe(id);
+    }
+  });
+
   it("keeps catalog result ids unique", () => {
     const ids = SETTINGS_SEARCH_ITEMS.map((item) => item.id);
     expect(new Set(ids).size).toBe(ids.length);

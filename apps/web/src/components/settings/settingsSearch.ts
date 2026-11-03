@@ -223,7 +223,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/storage",
     scope: "project-defaults",
     searchTerms: [
-      "disk storage delete deleted archived threads old inactive merged unchanged worktrees retention days project inherit off custom",
+      "disk storage automatic delete deleted archived threads old inactive merged settled unchanged worktrees retention days project inherit off custom",
     ],
   },
   {
@@ -238,7 +238,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Artifacts and logs",
     to: "/settings/storage",
     scope: "environment-defaults",
-    searchTerms: ["disk storage browser screenshots captures rotated logs cleanup retention"],
+    searchTerms: ["disk storage delete old browser artifacts screenshots captures rotated logs cleanup retention"],
   },
   {
     id: "project-defaults",
@@ -796,7 +796,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     title: "Providers",
     to: "/settings/providers",
     searchTerms: [
-      "agents cli codex claude cursor grok fx opencode antigravity google sign in sign out install subscription instances authentication api key models configuration binary path config directory endpoint arguments environment variables display name accent color custom favorite hidden auto compact",
+      "agents cli codex claude cursor grok fx opencode antigravity google sign in sign out install subscription instances authentication api key models configuration binary path config directory codex_home shadow home endpoint arguments environment variables display name accent color custom favorite hidden auto compact native sessions import resume",
       "opencodex home model route connect to home",
     ],
   },
