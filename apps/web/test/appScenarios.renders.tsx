@@ -19,6 +19,7 @@ import {
   assistantItem,
   emitTerminalMetadata,
   emitThreadEvent,
+  emitVcsStatus,
   installFakeEnvironment,
   isThreadSubscribed,
   runningRun,
@@ -319,4 +320,30 @@ it("app-switch-settings-section", async () => {
   await report("app-switch-settings-section", [
     await measure(openSettings(router, "/settings/appearance")),
   ]);
+});
+
+it("VCS status changes do not redraw the composer", async () => {
+  using _clock = frozenClock();
+  await using _app = (await openThread(WARM)).screen;
+  const local = (insertions: number) => ({
+    isRepo: true,
+    hasPrimaryRemote: true,
+    isDefaultRef: true,
+    refName: "main",
+    hasWorkingTreeChanges: insertions % 2 === 1,
+    workingTree: {
+      files: [{ path: "src/app.ts", insertions, deletions: 0 }],
+      insertions,
+      deletions: 0,
+    },
+  });
+  await act(() => emitVcsStatus({ _tag: "snapshot", local: local(0), remote: null }));
+  const counted = await measure(async () => {
+    for (let update = 1; update <= 20; update++) {
+      await act(() => emitVcsStatus({ _tag: "localUpdated", local: local(update) }));
+    }
+  });
+  expect(counted.components.ChatView).toBeGreaterThan(0);
+  expect(counted.components.ChatComposer).toBeUndefined();
+  await report("vcs-status-composer", [counted]);
 });

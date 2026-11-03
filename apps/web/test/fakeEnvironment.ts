@@ -26,6 +26,7 @@ import {
   type OrchestrationV2ThreadStreamItem,
   type OrchestrationV2TurnItem,
   type TerminalMetadataStreamEvent,
+  type VcsStatusStreamEvent,
 } from "@goat/contracts";
 import type {
   ConnectionAttemptError,
@@ -313,6 +314,7 @@ const json = (body: unknown, status = 200) =>
 // Keyed by thread id: a live thread subscription's queue, for pushing events to it.
 const threadSubscribers = new Map<string, Queue.Queue<OrchestrationV2ThreadStreamItem>>();
 let terminalMetadataSubscriber: Queue.Queue<TerminalMetadataStreamEvent> | null = null;
+let vcsStatusSubscriber: Queue.Queue<VcsStatusStreamEvent> | null = null;
 let threads: ReadonlyArray<FakeThread> = [];
 let sequence = 1;
 
@@ -369,6 +371,13 @@ const handlers: Record<string, (input: never) => unknown> = {
       },
     );
   },
+  [WS_METHODS.subscribeVcsStatus]: () =>
+    subscribe<VcsStatusStreamEvent>([], (queue) => {
+      vcsStatusSubscriber = queue;
+      return () => {
+        if (vcsStatusSubscriber === queue) vcsStatusSubscriber = null;
+      };
+    }),
   [WS_METHODS.subscribeServerConfig]: () =>
     subscribe([{ version: 1 as const, type: "snapshot" as const, config: currentServerConfig }]),
 };
@@ -499,3 +508,8 @@ export function runningRun(threadId: ThreadId, id: string, ordinal: number, user
 }
 
 export { userItem };
+
+export async function emitVcsStatus(event: VcsStatusStreamEvent): Promise<void> {
+  if (vcsStatusSubscriber === null) throw new Error("No VCS status subscription");
+  await Effect.runPromise(Queue.offer(vcsStatusSubscriber, event));
+}
