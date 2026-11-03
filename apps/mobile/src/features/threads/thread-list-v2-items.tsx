@@ -76,11 +76,11 @@ import { ThreadListV2Duration } from "./thread-list-pane-clock";
 import {
   DONE_STATUS_LABEL,
   STATUS_LABEL_BY_STATUS,
-  folderName,
   ThreadListV2RowOrigin,
   ThreadListV2WorkingSpinner,
   ThreadListV2WorktreeGlyph,
 } from "./thread-list-v2-row-meta";
+import { threadListV2RowAccessibilityLabel } from "./thread-list-v2-label";
 import { PullRequestGlyph } from "../pull-requests/pullRequestGlyphs";
 import { pullRequestStatus } from "../pull-requests/pullRequestStatus";
 
@@ -565,11 +565,11 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
       : workingLabel) ?? (isUnread ? DONE_STATUS_LABEL : undefined);
   const recede = shouldRecedeThreadRow({ status, selected });
   const isRegeneratingTitle = thread.titleRegeneration != null;
-  const worktreeFolder = folderName(thread.worktreePath);
-  const worktreeLabel = thread.worktreePath?.trim()
-    ? `, in ${worktreeFolder ? `worktree ${worktreeFolder}` : "a worktree"}${thread.branch ? ` (${thread.branch})` : ""}`
-    : "";
-  const rowAccessibilityLabel = `${thread.title}${props.hasQueuedMessages ? ", messages queued to send" : ""}${isRegeneratingTitle ? ", regenerating title" : ""}${worktreeLabel}`;
+  const rowAccessibilityLabel = threadListV2RowAccessibilityLabel({
+    thread,
+    hasQueuedMessages: props.hasQueuedMessages,
+    isRegeneratingTitle,
+  });
   const timeLabel = props.timeLabel;
 
   const visitThread = useAtomCommand(threadEnvironment.visit, { reportFailure: false });

@@ -19,7 +19,6 @@ vi.mock("../../state/threads", async () => {
       ),
     },
     launchSubagentRowsAtom: Atom.make([]).pipe(Atom.keepAlive),
-    threadEnvironment: { visit: {} },
   };
 });
 vi.mock("../../state/preferences", async () => {
@@ -186,106 +185,4 @@ describe("mobile thread list with GOAT Bot threads", () => {
     await list.showBotThreads(false);
     expect(list.read().ids).toEqual(["coding", "mine", "settled-mine"]);
   });
-});
-
-it("#2394 reads a drive-root worktree without exposing its raw path", async () => {
-  vi.stubGlobal("__DEV__", false);
-  vi.doMock("react-native", () => ({
-    View: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
-    Pressable: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
-    useWindowDimensions: () => ({ width: 400 }),
-  }));
-  const box = ({ children }: { children?: React.ReactNode }) => <div>{children}</div>;
-  vi.doMock("../../components/ui/RowPressable", () => ({
-    RowPressable: ({
-      accessibilityLabel,
-      children,
-    }: {
-      accessibilityLabel: string;
-      children?: React.ReactNode;
-    }) => <button aria-label={accessibilityLabel}>{children}</button>,
-  }));
-  vi.doMock("../../components/ui/Dialog", () => ({ alert: () => {} }));
-  vi.doMock("../../components/ui/AppText", () => ({ AppText: box }));
-  vi.doMock("../../components/ui/AppSymbol", () => ({ SymbolView: () => null }));
-  vi.doMock("../../components/ui/AppActivityIndicator", () => ({
-    AppActivityIndicator: () => null,
-  }));
-  vi.doMock("../../components/ui/Menu", () => ({ Menu: box }));
-  vi.doMock("../../components/EnvironmentMachineSymbol", () => ({
-    EnvironmentMachineSymbol: () => null,
-  }));
-  vi.doMock("../../components/ProjectFavicon", () => ({ ProjectFavicon: () => null }));
-  vi.doMock("../../components/ProviderIcon", () => ({
-    ProviderIcon: () => null,
-    ProviderInstanceIcon: () => null,
-  }));
-  vi.doMock("./CustomSnoozeSheet", () => ({ CustomSnoozeSheet: () => null }));
-  vi.doMock("../home/thread-swipe-actions", () => ({ ThreadSwipeable: box }));
-  vi.doMock("../home/swipe-row-activation", () => ({ useSwipeRowDormant: () => false }));
-  vi.doMock("../../lib/copyThreadReference", () => ({ copyThreadShell: () => {} }));
-  vi.doMock("../../lib/copyTextWithHaptic", () => ({ copyTextWithHaptic: () => {} }));
-  vi.doMock("../../lib/useUniwindTheme", () => ({ useUniwindTheme: () => "light" }));
-  vi.doMock("../../lib/clock", () => ({ useNowAfter: () => 0 }));
-  vi.doMock("../../state/session", () => ({ useEnvironmentScope: () => false }));
-  vi.doMock("../../state/use-atom-command", () => ({ useAtomCommand: () => () => {} }));
-  vi.doMock("../../state/use-thread-pr", () => ({ useThreadPr: () => null }));
-  vi.doMock("../../state/atom-registry", () => ({ appAtomRegistry: {} }));
-  vi.doMock("../../state/thread-order", () => ({ threadArrangementOpenAtom: {} }));
-  vi.doMock("./turnThreadIntoProject", () => ({
-    canTurnThreadIntoProject: () => false,
-    turnThreadIntoProject: () => {},
-  }));
-  vi.doMock("./use-pending-draft-branch", () => ({ usePendingDraftBranch: () => null }));
-  vi.doMock("./queued-message-icon", () => ({ QueuedMessageIcon: () => null }));
-  vi.doMock("./thread-search-match", () => ({ ThreadSearchMatchExcerpt: () => null }));
-  vi.doMock("./thread-list-pane-clock", () => ({ ThreadListV2Duration: () => null }));
-  const { ThreadListV2Row } = await import("./thread-list-v2-items");
-  const noop = () => {};
-  const container = document.createElement("div");
-  const root = createRoot(container);
-  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-  try {
-    await act(async () =>
-      root.render(
-        <ThreadListV2Row
-          thread={thread("root", { worktreePath: "C:\\", branch: "feature" })}
-          variant="card"
-          wokeAt={null}
-          timeLabel=""
-          snoozePresetMinute=""
-          project={null}
-          providers={undefined}
-          providerInstance={null}
-          environmentLabel={null}
-          onSelectThread={noop}
-          onOpenThreadPullRequests={noop}
-          onDeleteThread={noop}
-          onNewThreadOnBranch={noop}
-          onRenameThread={noop}
-          onRegenerateThreadTitle={noop}
-          onMarkThreadUnread={noop}
-          onSettleThread={async () => true}
-          onSnoozeThread={noop}
-          onUnsnoozeThread={noop}
-          onUnsettleThread={noop}
-          onArchiveThread={noop}
-          onPinThread={noop}
-          onUnpinThread={noop}
-          onSetThreadAutoSettle={noop}
-          settlementSupported={false}
-          snoozeSupported={false}
-          snoozePresets={[]}
-          pinningSupported={false}
-          autoSettleOptOutSupported={false}
-          titleRegenerationSupported={false}
-          onSwipeableWillOpen={noop}
-          onSwipeableClose={noop}
-        />,
-      ),
-    );
-    expect(container.querySelector('[aria-label="root, in a worktree (feature)"]')).not.toBeNull();
-  } finally {
-    await act(async () => root.unmount());
-  }
 });

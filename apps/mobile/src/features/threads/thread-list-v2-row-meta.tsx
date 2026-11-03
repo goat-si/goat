@@ -6,6 +6,7 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
 import { cn } from "../../lib/cn";
 import type { ThreadListV2Status } from "./threadListV2";
+import { folderName } from "./thread-list-v2-label";
 
 interface StatusLabel {
   readonly label: string;
@@ -88,13 +89,6 @@ export function ThreadListV2WorkingSpinner(props: { readonly tintClassName: stri
       />
     </View>
   );
-}
-
-export function folderName(path: string | null | undefined): string | null {
-  if (!path?.trim()) return null;
-  const segments = path.split(/[\\/]+/).filter(Boolean);
-  const last = segments.at(-1);
-  return last === undefined || (segments.length === 1 && /^[a-z]:$/i.test(last)) ? null : last;
 }
 
 export function ThreadListV2WorktreeGlyph(props: {
