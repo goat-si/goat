@@ -10,7 +10,6 @@ const root = NodePath.resolve(NodePath.dirname(NodeURL.fileURLToPath(import.meta
 const [sha, ref] = NodeProcess.argv.slice(2);
 const workflowPath = ".github/workflows/goat-ci.yml";
 const nightlyPath = ".github/workflows/goat-nightly.yml";
-const closeOutsidePrsPath = ".github/workflows/close-outside-prs.yml";
 const connectHostedPath = ".github/workflows/connect-hosted.yml";
 const marketingPagesPath = ".github/workflows/marketing-pages.yml";
 const disabled = new Set((NodeProcess.env.GOAT_DISABLED_WORKFLOWS ?? "").split("\n"));
@@ -586,62 +585,9 @@ function isPinnedResolve(step) {
   return NodeCrypto.createHash("sha256").update(pinned).digest("hex") === pinnedResolveSha256;
 }
 
-// close-outside-prs.yml stays active on goat-si/goat on purpose (#426, #430). It runs on
-// pull_request_target with a write token from the default branch (dev), so it must never check out or
-// run pull request code. A blocklist of commands cannot promise that, so the reviewed job is
-// pinned whole: any change to it, including step names, scripts and env, means reviewing it
-// again and updating this hash on purpose.
-const pinnedCloseOutsideJobSha256 =
-  "1f8e3fb2ec56cb45493b0a0a6758252f5f119cf9f749bd857546370b3d585e5b";
-
-function validateCloseOutsidePrsWorkflow(source, yaml) {
-  const fail = (reason) => refuse(reason, closeOutsidePrsPath);
-  const workflow = parseWorkflow(source, yaml);
-  if (workflow === undefined) return fail("invalid YAML");
-  if (!isMapping(workflow)) return fail("root must be a mapping");
-  const trigger = isMapping(workflow.on) ? workflow.on.pull_request_target : undefined;
-  if (
-    !isMapping(workflow.on) ||
-    Object.keys(workflow.on).length !== 1 ||
-    !isMapping(trigger) ||
-    Object.keys(trigger).length !== 1 ||
-    !Array.isArray(trigger.types) ||
-    trigger.types.length !== 2 ||
-    trigger.types[0] !== "opened" ||
-    trigger.types[1] !== "reopened"
-  ) {
-    return fail("on must be exactly pull_request_target with types [opened, reopened]");
-  }
-  if (
-    !isMapping(workflow.permissions) ||
-    Object.keys(workflow.permissions).length !== 1 ||
-    workflow.permissions["pull-requests"] !== "write"
-  ) {
-    return fail("permissions must be exactly pull-requests: write");
-  }
-  if (Object.keys(workflow).some((key) => !["name", "on", "permissions", "jobs"].includes(key))) {
-    return fail("only name, on, permissions and jobs are allowed at the workflow level");
-  }
-  if (typeof workflow.name !== "undefined" && typeof workflow.name !== "string") {
-    return fail("name must be a string");
-  }
-  if (workflow.name?.includes("${{")) return fail("name must not contain expressions");
-  const job = isMapping(workflow.jobs) ? workflow.jobs.close : undefined;
-  if (Object.keys(workflow.jobs ?? {}).length !== 1 || !isMapping(job)) {
-    return fail("jobs must be exactly close");
-  }
-  const digest = NodeCrypto.createHash("sha256")
-    .update(JSON.stringify(canonical(job)))
-    .digest("hex");
-  if (digest !== pinnedCloseOutsideJobSha256) {
-    return fail("jobs.close must match the reviewed job; review it and update the pinned hash");
-  }
-}
-
 // marketing-pages.yml publishes the marketing preview to the gh-pages branch from dev. Its deploy job
-// holds contents: write and pages: write, so the whole file is pinned like
-// close-outside-prs: any change, including an action SHA bump, means reviewing it again and updating
-// this hash on purpose.
+// holds contents: write and pages: write, so the whole file is pinned: any change, including an
+// action SHA bump, means reviewing it again and updating this hash on purpose.
 const pinnedMarketingPagesSha256 =
   "d1020a1155c65a1d861a548b2d4c8303414d35dc447da8a28bb2046d8ded2cd3";
 
@@ -677,7 +623,6 @@ for (const path of paths) {
   if (
     path !== workflowPath &&
     path !== nightlyPath &&
-    path !== closeOutsidePrsPath &&
     path !== marketingPagesPath &&
     path !== connectHostedPath &&
     /\.ya?ml$/.test(path) &&
@@ -687,13 +632,7 @@ for (const path of paths) {
     status = 1;
   }
 }
-for (const path of [
-  workflowPath,
-  nightlyPath,
-  closeOutsidePrsPath,
-  marketingPagesPath,
-  connectHostedPath,
-]) {
+for (const path of [workflowPath, nightlyPath, marketingPagesPath, connectHostedPath]) {
   if (!paths.includes(path)) continue;
   let source;
   try {
@@ -722,7 +661,6 @@ for (const path of [
   if (path === connectHostedPath) validateConnectHostedWorkflow(source, yaml);
   else if (path === workflowPath) validateWorkflow(source, yaml);
   else if (path === nightlyPath) validateNightlyWorkflow(source, yaml);
-  else if (path === marketingPagesPath) validateMarketingPagesWorkflow(source, yaml);
-  else validateCloseOutsidePrsWorkflow(source, yaml);
+  else validateMarketingPagesWorkflow(source, yaml);
 }
 if (status !== 0) NodeProcess.exit(status);
