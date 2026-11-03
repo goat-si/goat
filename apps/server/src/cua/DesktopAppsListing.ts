@@ -60,3 +60,12 @@ export const makeDesktopAppsRequest = Effect.fn("CuaDriver.makeDesktopAppsReques
   );
   return ask;
 });
+
+export const makeDesktopAppsCatalog = Effect.fn("CuaDriver.makeDesktopAppsCatalog")(function* () {
+  const request = yield* makeDesktopAppsRequest(true);
+  const [catalog] = yield* Effect.cachedInvalidateWithTTL(
+    request.pipe(Effect.map(Option.map((listed) => listed.catalog))),
+    "5 seconds",
+  );
+  return catalog;
+});

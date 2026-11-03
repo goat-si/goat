@@ -338,6 +338,173 @@ it.effect(
     }).pipe(Effect.provide(everyAppLayer)),
 );
 
+it.effect("person and grant controls do not read the terminal catalog", () => {
+  let reads = 0;
+  return Effect.gen(function* () {
+    yield* runMigrations();
+    yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+      cuaStrictInputGuards: true,
+    });
+    const leases = yield* ComputerUseLeases.ComputerUseLeases;
+    const person = ThreadId.make("thread-catalog-person");
+    const granted = ThreadId.make("thread-catalog-grant");
+    yield* threadIn(person, "full-access");
+    const personControl = Option.getOrThrow(yield* leases.everyAppControl(person, false));
+    yield* grant(granted, "handoff:catalog-grant", ["com.example.Editor"]);
+    const grantControl = yield* leases.control(granted, yield* leases.active(granted));
+    for (const [owner, control, pid] of [
+      [person, personControl, 42],
+      [granted, grantControl, 43],
+    ] as const) {
+      const result = yield* leases.callReservation(owner, {
+        action: "reserve",
+        controlId: control.controlId,
+        connectionId: "connection",
+        callId: "call",
+        interruptions: 0,
+        idleEpoch: 0,
+        name: "click",
+        args: { pid, window_id: 7 },
+        app: pid === 42 ? "com.example.Other" : "com.example.Editor",
+      });
+      assert.equal(result.status, "admitted");
+    }
+    assert.equal(reads, 0);
+  }).pipe(
+    Effect.provide(
+      ComputerUseLeases.layer.pipe(
+        Layer.provideMerge(
+          Layer.mergeAll(
+            database,
+            NodeServices.layer,
+            ServerSettings.ServerSettingsService.layerTest({ enableCua: true, cuaFullAccessAutoAdmit: false }),
+            Layer.mock(CuaDriver.CuaDriver)({
+              availableAppCatalog: Effect.sync(() => {
+                reads++;
+                return Option.none();
+              }),
+            }),
+          ),
+        ),
+      ),
+    ),
+  );
+});
+
+it.effect("a pending catalog listing does not hold the call admission permit", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    yield* Effect.gen(function* () {
+      yield* runMigrations();
+      yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+        cuaStrictInputGuards: true,
+      });
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      const remote = ThreadId.make("thread-catalog-pending");
+      const person = ThreadId.make("thread-catalog-concurrent");
+      yield* threadIn(remote, "full-access");
+      yield* threadIn(person, "full-access");
+      const remoteControl = Option.getOrThrow(
+        yield* leases.everyAppControl(remote, false, { nonPerson: true }),
+      );
+      const personControl = Option.getOrThrow(yield* leases.everyAppControl(person, false));
+      const call = (owner: ThreadId, controlId: string, pid: number) =>
+        leases.callReservation(owner, {
+          action: "reserve",
+          controlId,
+          connectionId: "connection",
+          callId: "call",
+          interruptions: 0,
+          idleEpoch: 0,
+          name: "click",
+          args: { pid, window_id: 7 },
+          app: `com.example.App${pid}`,
+        });
+      const pending = yield* call(remote, remoteControl.controlId, 42).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.await(entered);
+      assert.equal((yield* call(person, personControl.controlId, 43)).status, "admitted");
+      yield* Deferred.succeed(release, undefined);
+      assert.equal((yield* Fiber.join(pending)).status, "admitted");
+    }).pipe(
+      Effect.provide(
+        ComputerUseLeases.layer.pipe(
+          Layer.provideMerge(
+            Layer.mergeAll(
+              database,
+              NodeServices.layer,
+              ServerSettings.ServerSettingsService.layerTest({ enableCua: true, cuaFullAccessAutoAdmit: false }),
+              Layer.mock(CuaDriver.CuaDriver)({
+                availableAppCatalog: Deferred.succeed(entered, undefined).pipe(
+                  Effect.andThen(Deferred.await(release)),
+                  Effect.as(Option.some([])),
+                ),
+              }),
+            ),
+          ),
+        ),
+      ),
+    );
+  }),
+);
+
+it.effect("admission observes a source catalog refresh five seconds after it was primed", () =>
+  Effect.gen(function* () {
+    let terminal = false;
+    const [source] = yield* Effect.cachedInvalidateWithTTL(
+      Effect.sync(() =>
+        Option.some([{ id: "org.example.shell", name: terminal ? "GNOME Terminal" : "Shell" }]),
+      ),
+      "5 seconds",
+    );
+    yield* Effect.gen(function* () {
+      yield* runMigrations();
+      yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+        cuaStrictInputGuards: true,
+      });
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      const owner = ThreadId.make("thread-staggered-catalog");
+      yield* threadIn(owner, "full-access");
+      const control = Option.getOrThrow(
+        yield* leases.everyAppControl(owner, false, { nonPerson: true }),
+      );
+      const call = (callId: string) =>
+        leases.callReservation(owner, {
+          action: "reserve",
+          controlId: control.controlId,
+          connectionId: "connection",
+          callId,
+          interruptions: 0,
+          idleEpoch: 0,
+          name: "click",
+          args: { pid: 42, window_id: 7 },
+          app: "org.example.shell",
+        });
+      yield* source;
+      yield* TestClock.adjust("4900 millis");
+      assert.equal((yield* call("first")).status, "admitted");
+      terminal = true;
+      yield* TestClock.adjust("200 millis");
+      assert.deepInclude(yield* call("second"), { status: "refused", detail: "app_not_allowed" });
+    }).pipe(
+      Effect.provide(
+        ComputerUseLeases.layer.pipe(
+          Layer.provideMerge(
+            Layer.mergeAll(
+              database,
+              NodeServices.layer,
+              ServerSettings.ServerSettingsService.layerTest({ enableCua: true, cuaFullAccessAutoAdmit: false }),
+              Layer.mock(CuaDriver.CuaDriver)({ availableAppCatalog: source }),
+            ),
+          ),
+        ),
+      ),
+    );
+  }),
+);
+
 it.effect.each([
   { available: false, strict: true, expected: "refused", reads: 1 },
   { available: true, strict: true, expected: "admitted", reads: 1 },
@@ -402,12 +569,19 @@ it.effect("non-person call admission shares a catalog listing until its short ex
         database,
         NodeServices.layer,
         ServerSettings.ServerSettingsService.layerTest({ enableCua: true, cuaFullAccessAutoAdmit: false }),
-        Layer.mock(CuaDriver.CuaDriver)({
-          availableAppCatalog: Effect.sync(() => {
-            listings++;
-            return Option.some([{ id: "org.example.shell", name: "GNOME Terminal" }]);
-          }),
-        }),
+        Layer.unwrap(
+          Effect.cachedInvalidateWithTTL(
+            Effect.sync(() => {
+              listings++;
+              return Option.some([{ id: "org.example.shell", name: "GNOME Terminal" }]);
+            }),
+            "5 seconds",
+          ).pipe(
+            Effect.map(([source]) =>
+              Layer.mock(CuaDriver.CuaDriver)({ availableAppCatalog: source }),
+            ),
+          ),
+        ),
       ),
     ),
   );

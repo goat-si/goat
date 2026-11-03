@@ -961,13 +961,11 @@ export const layer = Layer.effect(
       ...(config.mode === "desktop"
         ? yield* Effect.gen(function* () {
             const request = yield* DesktopAppsListing.makeDesktopAppsRequest();
-            const catalogRequest = yield* DesktopAppsListing.makeDesktopAppsRequest(true);
+            const catalog = yield* DesktopAppsListing.makeDesktopAppsCatalog();
             return {
               listedApps: request.pipe(Effect.map(Option.map((listed) => listed.apps))),
-              appCatalog: request.pipe(Effect.map(Option.map((listed) => listed.catalog))),
-              availableAppCatalog: catalogRequest.pipe(
-                Effect.map(Option.map((listed) => listed.catalog)),
-              ),
+              appCatalog: catalog,
+              availableAppCatalog: catalog,
             };
           })
         : {}),
