@@ -82,18 +82,12 @@ const READINESS = Schedule.spaced("50 millis");
 const READINESS_LIMIT = "30 seconds";
 const MAX_SOCKET_PATH_BYTES = 103;
 const ABANDONED = "abandoned";
+// In PR-A the process never outlives the server, so scoped maintenance bounds its log.
+const MAX_STDERR_LOG_BYTES = 4 * 1024 * 1024;
 
 /** Runs as the detached group leader: publishes its pid with link(2), then execs Codex in place. */
-export const PID_HANDSHAKE_SCRIPT = `printf %s "$$" > "$1.$$" && ln "$1.$$" "$1" || { rm -f "$1.$$"; exit 75; }
-rm -f "$1.$$"
-fifo="$1.err"
-log="$2"
-command -v tail >/dev/null && mkfifo "$fifo" || { printf '%s\\n' 'Could not create Codex stderr FIFO.' > "$log"; exit 76; }
-/bin/sh -c 'tail -c 65536 <"$1" >"$2"; : >"$2.done"' goat-codex-log "$fifo" "$log" </dev/null &
-exec 3>"$fifo"
-rm -f "$fifo"
-shift 2
-exec "$@" 2>&3 3>&-`;
+export const PID_HANDSHAKE_SCRIPT =
+  'printf %s "$$" > "$1.$$" && ln "$1.$$" "$1" || { rm -f "$1.$$"; exit 75; }; rm -f "$1.$$"; shift; exec "$@"';
 
 /** Creates root/codex with mode 0700 and refuses a directory another user could write to. */
 export const privateSocketDirectory = (root: string, uid: number) =>
@@ -268,9 +262,13 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
       await NodeFSP.rm(files.record, { force: true });
       await NodeFSP.rm(files.pid, { force: true });
       await NodeFSP.rm(files.stderr, { force: true });
-      await NodeFSP.rm(files.stderr + ".done", { force: true });
-      await NodeFSP.rm(files.pid + ".err", { force: true });
     });
+
+  const truncateStderr = (path: string) =>
+    tryIo("Could not truncate a Codex stderr log.", async () => {
+      const stat = await NodeFSP.stat(path);
+      if (stat.size > MAX_STDERR_LOG_BYTES) await NodeFSP.truncate(path, 0);
+    }).pipe(Effect.catch((error) => Effect.logDebug(error.detail, error.cause)));
 
   const readPidFile = (name: string) =>
     tryIo("Could not read a Codex pid file.", async () => {
@@ -394,6 +392,7 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
     const outcomes: Array<{ readonly name: string; readonly outcome: DetachedOutcome }> = [];
     for (const entry of entries.filter((name) => name.endsWith(".json")).sort()) {
       const name = entry.slice(0, -".json".length);
+      yield* truncateStderr(paths(name).stderr);
       const record = yield* readRecord(NodePath.join(directory, entry)).pipe(Effect.option);
       if (record._tag === "None" || record.value.name !== name) {
         unreadable = true;
@@ -510,6 +509,12 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
     }).pipe(Effect.tapError(() => cleanupRecord(spawning).pipe(Effect.ignore)));
     const running: DetachedAppServerRecord = { ...spawning, pgid: launched.pid, state: "running" };
     yield* Effect.addFinalizer(() => close(running).pipe(Effect.ignore));
+    yield* Effect.sleep("30 seconds").pipe(
+      Effect.andThen(
+        truncateStderr(files.stderr).pipe(Effect.repeat(Schedule.spaced("30 seconds"))),
+      ),
+      Effect.forkScoped,
+    );
     yield* writeRecord(running);
     const channel = yield* connect(socketPath).pipe(
       Effect.retry(READINESS),
