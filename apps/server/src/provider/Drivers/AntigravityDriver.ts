@@ -50,7 +50,7 @@ import {
 import type * as AcpSessionRuntime from "@goat/provider-acp/server/AcpSessionRuntime";
 import type { ServerProviderDraft } from "@goat/provider-core/server/snapshotProbe";
 import {
-  removeAntigravityRuntimeTempDirs,
+  retireAntigravityRuntimeTempDirs,
   removeAntigravitySessionFiles,
 } from "../acp/AntigravitySessionFiles.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
@@ -154,9 +154,11 @@ export const AntigravityDriver: ProviderDriver<
       directories.runtimeTemp,
       path.join(profileDirectory, "antigravity-acp", "tmp"),
     ]) {
-      yield* removeAntigravityRuntimeTempDirs(directory).pipe(
+      const removeRetired = yield* retireAntigravityRuntimeTempDirs(directory).pipe(
         Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, path),
       );
+      yield* Effect.forkScoped(removeRetired);
     }
     const continuationIdentity = defaultProviderContinuationIdentity({
       driverKind: DRIVER,

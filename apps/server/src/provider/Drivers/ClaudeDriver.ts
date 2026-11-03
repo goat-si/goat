@@ -44,7 +44,6 @@ import {
   type ProviderInstance,
 } from "@goat/provider-core/server/driver";
 import { withInstanceIdentity } from "@goat/provider-core/server/instanceIdentity";
-import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
 import {
   enrichProviderSnapshotWithVersionAdvisory,
   makeCachedProviderMaintenanceResolution,
@@ -60,6 +59,7 @@ import {
 import {
   makeClaudeCapabilitiesCacheKey,
   makeClaudeContinuationGroupKey,
+  mergeClaudeProcessEnvironment,
   resolveClaudeHomePath,
 } from "./ClaudeHome.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -140,7 +140,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
     const modelCatalog = catalogService
       .current(DRIVER_KIND)
       .pipe(Effect.map(resolveClaudeModelCatalog));
-    const processEnv = yield* mergeProviderInstanceEnvironment(environment);
+    const processEnv = yield* mergeClaudeProcessEnvironment(config, environment, process.env);
     const fallbackContinuationIdentity = defaultProviderContinuationIdentity({
       driverKind: DRIVER_KIND,
       instanceId,

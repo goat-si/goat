@@ -2206,9 +2206,16 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             mcp_optional_startup_grace_ms: 10_000,
             "mcp_servers.goat": {
               url: attachment.endpoint,
-              disabled_tools: disabledTools,
+              disabled_tools: [...disabledTools, "goat_thread_wait"],
               tool_timeout_sec: 3900,
               http_headers: { Authorization: attachment.authorizationHeader },
+            },
+            "mcp_servers.goat-direct": {
+              url: attachment.endpoint,
+              tool_timeout_sec: 3900,
+              http_headers: { Authorization: attachment.authorizationHeader },
+              enabled_tools: ["goat_thread_wait"],
+              omit_tools_from: ["code_mode", "deferred"],
             },
           },
         });
@@ -9897,9 +9904,16 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             "shell_environment_policy.set.T3_ACP_MCP_AUTHORIZATION": "Bearer secret-codex-token",
             "mcp_servers.goat": {
               url: "http://127.0.0.1:43123/mcp",
-              disabled_tools: GOAT_MEMORY_TOOLS,
+              disabled_tools: [...GOAT_MEMORY_TOOLS, "goat_thread_wait"],
               tool_timeout_sec: 3_900,
               http_headers: { Authorization: "Bearer secret-codex-token" },
+            },
+            "mcp_servers.goat-direct": {
+              url: "http://127.0.0.1:43123/mcp",
+              tool_timeout_sec: 3_900,
+              http_headers: { Authorization: "Bearer secret-codex-token" },
+              enabled_tools: ["goat_thread_wait"],
+              omit_tools_from: ["code_mode", "deferred"],
             },
           },
         },
