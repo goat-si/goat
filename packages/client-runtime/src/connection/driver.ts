@@ -102,6 +102,7 @@ export const connectOverRoutes = Effect.fn("ConnectionDriver.connectOverRoutes")
   const attemptScope = yield* Scope.Scope;
   let transient: ConnectionTransientError | undefined;
   let blocked: ConnectionBlockedError | undefined;
+  let hubPermission: ConnectionBlockedError | undefined;
   // Each route gets its own scope so a half-open session closes before the next try.
   const attempt = Effect.fnUntraced(function* (route: ConnectionRoute) {
     const routeScope = yield* Scope.fork(attemptScope);
@@ -113,7 +114,14 @@ export const connectOverRoutes = Effect.fn("ConnectionDriver.connectOverRoutes")
     if (result._tag === "Failure") {
       if (result.failure._tag === "ConnectionAttemptSuperseded") return yield* result.failure;
       if (result.failure._tag === "ConnectionTransientError") transient ??= result.failure;
-      else blocked ??= result.failure;
+      else {
+        blocked ??= result.failure;
+        if (
+          route.target._tag === "HubProxyConnectionTarget" &&
+          result.failure.reason === "permission"
+        )
+          hubPermission ??= result.failure;
+      }
     }
     return result;
   });
@@ -149,6 +157,20 @@ export const connectOverRoutes = Effect.fn("ConnectionDriver.connectOverRoutes")
     if (result._tag === "Success") return result.success;
     if (result.failure.reason === "unsupported") return yield* result.failure;
   }
+  // A direct route that may come back keeps the retry; the hub's refusal says why the hub route can't help.
+  if (transient !== undefined && hubPermission !== undefined)
+    return yield* new ConnectionTransientError({
+      reason: transient.reason,
+      detail: `${transient.detail} Through the hub: ${hubPermission.detail}`,
+      ...(transient.retryAfterMillis === undefined
+        ? {}
+        : { retryAfterMillis: transient.retryAfterMillis }),
+      ...(transient.traceId === undefined ? {} : { traceId: transient.traceId }),
+      ...(transient.hop === undefined ? {} : { hop: transient.hop }),
+      ...(transient.via === undefined ? {} : { via: transient.via }),
+      ...(transient.failureCause === undefined ? {} : { failureCause: transient.failureCause }),
+      ...(transient.httpStatus === undefined ? {} : { httpStatus: transient.httpStatus }),
+    });
   return yield* (
     transient ??
       blocked ??

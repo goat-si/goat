@@ -61,6 +61,7 @@ import * as ThreadResultService from "./threadResults/ThreadResultService.ts";
 import * as ScreenCodeLayers from "./screenCode/ScreenCodeLayers.ts";
 import * as SiteNotes from "./preview/SiteNotes.ts";
 
+import { heartbeat, HeartbeatWebSocket } from "./wsHeartbeat.ts";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { EnvironmentHttpApi, type RepositoryIdentity } from "@goat/contracts";
@@ -112,6 +113,7 @@ import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServerOwnership from "./serverOwnership.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import * as ServerSettings from "./serverSettings.ts";
+import * as ShellSnapshotLoads from "./orchestration-v2/ShellSnapshotLoads.ts";
 import * as ProjectEnrichmentService from "./project/ProjectEnrichmentService.ts";
 import * as NativeAppIconResolver from "./assets/NativeAppIconResolver.ts";
 import * as AntigravityInstallation from "./provider/AntigravityInstallation.ts";
@@ -384,9 +386,10 @@ const layerRelayClient = Layer.unwrap(
     return RelayClient.layerCloudflared({ baseDir: config.baseDir });
   }),
 );
-const layerHttpServer = Layer.unwrap(
+export const layerHttpServer = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
+    yield* Effect.forkScoped(heartbeat);
     return NodeHttpServer.layer(
       () => {
         const server = createGuardedHttpServer();
@@ -403,11 +406,8 @@ const layerHttpServer = Layer.unwrap(
         host: config.host ?? "127.0.0.1",
         port: config.port,
         gracefulShutdownTimeout: HTTP_PREEMPTIVE_SHUTDOWN_GRACE_MS,
-        // Context takeover stays enabled (ws default) so the compression
-        // window is shared across frames — that also makes small frames cheap
-        // to compress, so no size threshold is set (ws only honors
-        // `threshold` when context takeover is disabled).
-        websocket: { perMessageDeflate: true },
+        // Context takeover shares the compression window; ws ignores threshold when it is enabled.
+        websocket: { perMessageDeflate: true, WebSocket: HeartbeatWebSocket },
       },
     );
   }),
@@ -900,7 +900,6 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
     ),
   ),
 );
-
 const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
   Layer.provideMerge(layerPtyAdapter),
   Layer.provideMerge(AcpRegistrySupport.layerFromHost.pipe(Layer.provide(ProviderHostLive.layer))),
@@ -943,7 +942,6 @@ const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
     ),
   ),
 );
-
 const layerRuntimeDependencies = layerRuntimeCoreDependencies.pipe(
   Layer.provideMerge(layerUsage),
   Layer.provideMerge(layerBackground),
@@ -957,7 +955,6 @@ const layerRuntimeDependencies = layerRuntimeCoreDependencies.pipe(
   Layer.provideMerge(ServerLifecycleEvents.layer),
   Layer.provide(NetService.layer),
 );
-
 const layerSshWorkspace = SshWorkspaceSync.layer.pipe(
   Layer.provide(layerOrchestrationV2Runtime),
   Layer.provide(GitVcsDriver.layer),
@@ -1264,8 +1261,7 @@ const layerMakeServer = Layer.unwrap(
         )
       : Layer.empty;
     const cloudLinkStartup = desiredLinkReconcileStartup(cloudLinkParked);
-
-    const layerRuntimeServices = ServerRuntimeStartup.layerWithOptions({
+    const layerRuntimeServices = ServerRuntimeStartup.layerLiveWithOptions({
       activate: Deferred.succeed(activation, undefined).pipe(Effect.asVoid),
       abort: (error) => Deferred.die(activation, error).pipe(Effect.asVoid),
       awaitAuxiliaryParked: Effect.all(
@@ -1277,8 +1273,11 @@ const layerMakeServer = Layer.unwrap(
         ],
         { concurrency: "unbounded" },
       ).pipe(Effect.asVoid),
-    }).pipe(Layer.provideMerge(layerRuntimeDependencies), Layer.provide(layerLauncher));
-
+    }).pipe(
+      Layer.provideMerge(ShellSnapshotLoads.withRuntime(layerOrchestrationV2Runtime)),
+      Layer.provideMerge(layerRuntimeDependencies),
+      Layer.provide(layerLauncher),
+    );
     const layerRoutes = HttpRouter.serve(layerMakeRoutes.pipe(Layer.provide(layerLauncher)), {
       disableLogger: !config.logWebSocketEvents,
       routerConfig: HTTP_ROUTER_CONFIG,
@@ -1313,7 +1312,7 @@ const layerMakeServer = Layer.unwrap(
       Layer.provide(HomeRoute.layer),
       Layer.provideMerge(FetchHttpClient.layer),
       Layer.provide(VcsProcess.layer),
-      Layer.provideMerge(AgentScopeLive.layer),
+      Layer.provideMerge(AgentScopeLive.layer.pipe(Layer.provide(layerServerSettings))),
       Layer.provideMerge(layerPlatformServices),
       Layer.provideMerge(PendingAttachmentSweep.layer),
     );

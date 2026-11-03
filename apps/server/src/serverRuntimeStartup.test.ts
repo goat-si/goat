@@ -46,6 +46,7 @@ import * as ProjectService from "./project/ProjectService.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import { ServerActivation } from "./serverActivation.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
+import * as CodexDetachedAppServerLive from "./provider/CodexDetachedAppServerLive.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
@@ -123,6 +124,11 @@ const bootstrapScenario = (
           reconcile: () => Effect.succeed(recovery),
         }),
         Layer.mock(Orchestrator.OrchestratorV2)({ recoverDelegatedTasks: Effect.void }),
+        Layer.mock(CodexDetachedAppServerLive.CodexDetachedAppServers)({
+          cleanup: Effect.succeed([]),
+          beginServerShutdown: Effect.void,
+          socketTransportEnabled: false,
+        }),
         Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({ shutdown }),
         Layer.mock(AgentAwarenessRelay.AgentAwarenessRelay)({ start: () => Effect.void }),
         Layer.mock(EffectWorker.OrchestrationEffectWorkerV2)({

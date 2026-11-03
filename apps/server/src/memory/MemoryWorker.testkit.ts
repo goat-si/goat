@@ -84,8 +84,12 @@ export const live = (
   promotions?: (
     input: M.GenerateMemorySummaryInput,
   ) => NonNullable<M.GenerateMemorySummaryOutcome["promotions"]>,
+  wrapStore: (
+    store: Parameters<typeof Store.MemoryStore.of>[0],
+  ) => Parameters<typeof Store.MemoryStore.of>[0] = (store) => store,
 ) =>
   Worker.layer.pipe(
+    Layer.provide(Layer.effect(Store.MemoryStore, Effect.map(Store.MemoryStore, wrapStore))),
     Layer.provideMerge(service),
     Layer.provideMerge(maintenance),
     Layer.provide(NodeServices.layer),

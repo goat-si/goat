@@ -47,7 +47,7 @@ export class EventLoopMonitor extends Context.Reference<{
   }),
 }) {}
 
-/** Delay in ns, active time in ms, CPU in µs. */
+/** Delay in ns, active and main-thread CPU time in ms, process `usage` CPU in µs. */
 export interface EventLoopReadings {
   readonly delayMaxNs: number;
   readonly activeMs: number;
@@ -64,13 +64,16 @@ export interface EventLoopReadings {
   readonly heapUsedBytes: number;
   /** Wall time the readings cover. */
   readonly elapsedMs: number;
+  readonly mainThreadCpuMs: number;
   /** One-minute load average, undefined on Windows. */
   readonly loadAverage: number | undefined;
   readonly cpuCount: number;
 }
 
 // Node skips the first gap after a reset, so a stall right at a sample boundary can be missed.
-const makeNodeSampler = Effect.gen(function* () {
+export const makeSampler = Effect.fn("EventLoopMonitor.makeSampler")(function* (
+  read: () => RawSample,
+) {
   const histogram = yield* Effect.acquireRelease(
     Effect.sync(() => {
       const histogram = NodePerfHooks.monitorEventLoopDelay({ resolution: RESOLUTION_MS });
@@ -79,16 +82,13 @@ const makeNodeSampler = Effect.gen(function* () {
     }),
     (histogram) => Effect.sync(() => histogram.disable()),
   );
-  let elu = NodePerfHooks.performance.eventLoopUtilization();
-  let usage = process.resourceUsage();
-  let sampledAt = NodePerfHooks.performance.now();
+  let previous = read();
 
   return Effect.sync(() => {
-    const nextElu = NodePerfHooks.performance.eventLoopUtilization();
-    const nextUsage = process.resourceUsage();
-    const nextSampledAt = NodePerfHooks.performance.now();
-    const memory = process.memoryUsage();
-    const loop = NodePerfHooks.performance.eventLoopUtilization(nextElu, elu);
+    const next = read();
+    const usage = previous.resourceUsage;
+    const nextUsage = next.resourceUsage;
+    const loop = NodePerfHooks.performance.eventLoopUtilization(next.elu, previous.elu);
     const readings: EventLoopReadings = {
       delayMaxNs: histogram.max,
       activeMs: loop.active,
@@ -101,20 +101,37 @@ const makeNodeSampler = Effect.gen(function* () {
         involuntaryContextSwitches:
           nextUsage.involuntaryContextSwitches - usage.involuntaryContextSwitches,
       },
-      rssBytes: memory.rss,
-      heapUsedBytes: memory.heapUsed,
-      elapsedMs: nextSampledAt - sampledAt,
-      // Windows has no load average and reports 0, which a running process never sees elsewhere.
-      loadAverage: NodeOS.loadavg()[0] || undefined,
-      cpuCount: NodeOS.availableParallelism(),
+      rssBytes: next.memory.rss,
+      heapUsedBytes: next.memory.heapUsed,
+      elapsedMs: next.now - previous.now,
+      mainThreadCpuMs: Math.round(
+        (next.threadCpuUsage.user -
+          previous.threadCpuUsage.user +
+          next.threadCpuUsage.system -
+          previous.threadCpuUsage.system) /
+          1000,
+      ),
+      loadAverage: next.loadAverage,
+      cpuCount: next.cpuCount,
     };
     histogram.reset();
-    elu = nextElu;
-    usage = nextUsage;
-    sampledAt = nextSampledAt;
+    previous = next;
     return readings;
   });
 });
+
+const readNodeSample = () => ({
+  elu: NodePerfHooks.performance.eventLoopUtilization(),
+  resourceUsage: process.resourceUsage(),
+  threadCpuUsage: process.threadCpuUsage(),
+  now: NodePerfHooks.performance.now(),
+  memory: process.memoryUsage(),
+  // Windows has no load average and reports 0, which a running process never sees elsewhere.
+  loadAverage: NodeOS.loadavg()[0] || undefined,
+  cpuCount: NodeOS.availableParallelism(),
+});
+type RawSample = ReturnType<typeof readNodeSample>;
+const makeNodeSampler = makeSampler(readNodeSample);
 
 export const stallMs = ({ delayMaxNs, activeMs }: EventLoopReadings) => {
   const delayMs = Math.round(delayMaxNs / 1e6) - RESOLUTION_MS;
@@ -217,6 +234,10 @@ export const layerWith = (
           recentSql: recentSlowSql(DateTime.toEpochMillis(now)),
           droppedStallRecords,
           utilization: Math.round(utilization * 100) / 100,
+          windowMs: Math.round(readings.elapsedMs),
+          mainThreadCpuMs: readings.mainThreadCpuMs,
+          ...(loadAverage === undefined ? {} : { loadAverage: Math.round(loadAverage * 10) / 10 }),
+          cpuCount,
           cpuUserMs: Math.round(usage.userCPUTime / 1000),
           cpuSystemMs: Math.round(usage.systemCPUTime / 1000),
           majorPageFaults: usage.majorPageFault,

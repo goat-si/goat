@@ -2,6 +2,7 @@ import { assert, it } from "@effect/vitest";
 import {
   CommandId,
   MessageId,
+  type OrchestrationV2Command,
   type OrchestrationV2ProviderCapabilities,
   type OrchestrationV2ThreadProjection,
   ProviderInstanceId,
@@ -242,6 +243,32 @@ it.each(["/compact", " /LOGOUT "])("queues a steer sent while %s runs", (text) =
     ),
     { type: "restart_active", targetRunId: activeRunId },
   );
+});
+
+const channelMessage = {
+  type: "message.dispatch",
+  commandId,
+  threadId,
+  messageId: userMessageId,
+  text: "Continue",
+  attachments: [],
+  dispatchMode: { type: "start_immediately" },
+  createdBy: "user",
+  creationSource: "server",
+} satisfies Extract<OrchestrationV2Command, { type: "message.dispatch" }>;
+
+it.each([
+  "usageLimitContinuationOfRunId",
+  "automatedContinuationOfRunId",
+  "restartContinuationOfRunId",
+] as const)("preserves the saved active order for a user-attributed %s", (field) => {
+  assert.isFalse(
+    CommandPolicy.shouldClearActiveOrder({ ...channelMessage, [field]: activeRunId }, "a"),
+  );
+});
+
+it("clears the saved active order for a server-delivered channel prompt", () => {
+  assert.isTrue(CommandPolicy.shouldClearActiveOrder(channelMessage, "a"));
 });
 
 const layer = it.layer(CommandPolicy.layer);

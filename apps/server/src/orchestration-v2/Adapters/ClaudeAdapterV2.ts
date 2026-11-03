@@ -1,3 +1,4 @@
+import { claudePromptCacheTtlMs, type ClaudeCacheCreation } from "./claudeCacheTtl.ts";
 import { buildAssistantArtifacts } from "./ClaudeAssistantArtifacts.ts";
 import { makeClaudeAssistantTextProjector } from "./ClaudeAssistantText.ts";
 import { sealAssistantTextEvent } from "./AssistantTextBoundary.ts";
@@ -92,7 +93,7 @@ import type {
 import { spawnClaudeProcessGroup, spawnClaudeWindowsProcess } from "./ClaudeProcessSpawn.ts";
 import { parseCliArgs } from "@goat/shared/cliArgs";
 import { fromLenientJson } from "@goat/shared/schemaJson";
-import { AgentScope } from "@goat/shared/AgentScope";
+import { AgentScope, nodeChildAgentProcess } from "@goat/shared/AgentScope";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { applyClaudePromptEffortPrefix } from "@goat/shared/model";
 import {
@@ -256,20 +257,6 @@ function claudeContextWindow(modelSelection: ModelSelection): number | null {
   return (
     resolveClaudeCatalogContextWindowTokens(BUNDLED_CLAUDE_MODEL_CATALOG, modelSelection) ?? null
   );
-}
-
-interface ClaudeCacheCreation {
-  readonly ephemeral_1h_input_tokens: number;
-  readonly ephemeral_5m_input_tokens: number;
-}
-
-function claudePromptCacheTtlMs(
-  cacheCreation: ClaudeCacheCreation | null | undefined,
-): number | undefined {
-  if (!cacheCreation) return undefined;
-  if (cacheCreation.ephemeral_1h_input_tokens > 0) return 60 * 60_000;
-  if (cacheCreation.ephemeral_5m_input_tokens > 0) return 5 * 60_000;
-  return undefined;
 }
 
 // Claude caps the window at the model's context, so a setting at or above it never applies.
@@ -980,6 +967,11 @@ export const layerQueryRunner: Layer.Layer<
           const spawnClaudeCodeProcess = (spawnOptions: ClaudeSpawnOptions) => {
             const child = spawnProcess(spawnOptions);
             spawnedProcess = child;
+            const watched =
+              child instanceof NodeChildProcess.ChildProcess
+                ? nodeChildAgentProcess(child)
+                : undefined;
+            if (watched) runFork(agentScope.watch({ process: watched, threadId: input.threadId }));
             processExited = child.exitCode !== null || child.signalCode != null;
             processExit = new Promise<void>((resolve) => {
               if (processExited) resolve();

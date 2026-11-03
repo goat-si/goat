@@ -1,3 +1,4 @@
+import { contentText } from "./piContentText.ts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { AgentScope } from "@goat/shared/AgentScope";
 import { getModelSelectionStringOptionValue } from "@goat/shared/model";
@@ -189,18 +190,6 @@ export interface PiAdapterV2Options {
       request: ProviderContinuationRequests.ProviderContinuationRequest,
     ) => Effect.Effect<void>;
   };
-}
-
-function contentText(content: unknown): string {
-  if (!Array.isArray(content)) {
-    return typeof content === "string" ? content : "";
-  }
-  return content
-    .map((block) => {
-      if (recordField(block, "type") === "text") return recordString(block, "text") ?? "";
-      return "";
-    })
-    .join("");
 }
 
 const MAX_STRUCTURED_TOOL_OUTPUT_BYTES = 64 * 1024;
@@ -486,12 +475,14 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
         scopeUnit === undefined ? Effect.void : yield* Effect.cached(agentScope.stop(scopeUnit));
       yield* Effect.addFinalizer(() => stopScope);
       const connection: PiRpcConnection = yield* makePiRpcConnection({
+        threadId: input.threadId,
         command: scopedLaunch.command,
         args: scopedLaunch.args,
         cwd,
         env: launch.env,
       }).pipe(
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        Effect.provideService(AgentScope, agentScope),
         Effect.mapError(
           (cause) =>
             new ProviderAdapter.ProviderAdapterOpenSessionError({

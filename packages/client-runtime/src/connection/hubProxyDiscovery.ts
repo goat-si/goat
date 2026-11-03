@@ -26,9 +26,19 @@ import {
   HubProxyConnectionRegistration,
   type ConnectionCatalogEntry,
 } from "./catalog.ts";
-import { HubProxyConnectionTarget, hubProxyConnectionId } from "./model.ts";
+import { ConnectionCredentialStore } from "./credentialStore.ts";
+import {
+  HubProxyConnectionTarget,
+  hubProxyConnectionId,
+  type PreparedConnection,
+} from "./model.ts";
 import { EnvironmentRegistry } from "./registry.ts";
-import { connectionRouteId, connectionRoutes } from "./routes.ts";
+import {
+  connectionRouteId,
+  connectionRoutes,
+  credentialConnectionId,
+  sendsTokenInClear,
+} from "./routes.ts";
 
 export interface HubProxyNode {
   readonly nodeId: string;
@@ -127,6 +137,9 @@ export const watchHubProxyDiscovery = <E, R>(
             update.config?.environment.capabilities.hubProxy === true;
           const entries = yield* SubscriptionRef.get(registry.entries);
           if (!entries.has(update.hubEnvironmentId)) return;
+          // Without hub:proxy, device routes stay as they are: one bound to another pairing may
+          // still work, and one bound to this route shows the hub's refusal.
+          if (!authorized && update.config?.environment.capabilities.hubProxy === true) return;
           if (authorized && (yield* registry.state(update.hubEnvironmentId)).phase !== "connected")
             return;
           const changes = reconcileHubProxyRoutes({
@@ -141,6 +154,26 @@ export const watchHubProxyDiscovery = <E, R>(
               }
           }
           for (const registration of changes.register) yield* registry.register(registration);
+          if (!authorized) return;
+          // A device refused through this hub waits for a signal; confirmed access can now open it.
+          for (const entry of entries.values()) {
+            const throughHub = connectionRoutes(entry).some((route) => {
+              const profile = Option.getOrNull(route.profile);
+              return (
+                profile?._tag === "HubProxyConnectionProfile" &&
+                profile.hubEnvironmentId === update.hubEnvironmentId
+              );
+            });
+            if (!entry.enabled || !throughHub) continue;
+            const deviceId = entry.target.environmentId;
+            const refused = yield* registry.state(deviceId).pipe(
+              Effect.map(
+                (state) => state.phase === "blocked" && state.lastFailure?.reason === "permission",
+              ),
+              Effect.orElseSucceed(() => false),
+            );
+            if (refused) yield* registry.retryNow(deviceId);
+          }
         }).pipe(
           Effect.catch((error) =>
             Effect.logWarning("Could not reconcile hub proxy routes.", { error }),
@@ -212,9 +245,66 @@ const discoveryRetry = Schedule.spaced("1 second").pipe(
 
 export const watchConnectedHubProxyDiscovery = Effect.gen(function* () {
   const registry = yield* EnvironmentRegistry;
+  const credentials = yield* ConnectionCredentialStore;
   const watchers = new Map<EnvironmentId, Fiber.Fiber<void>>();
   const signer = yield* Effect.serviceOption(ManagedRelayDpopSigner);
   const remoteAuthorization = yield* Effect.serviceOption(RemoteEnvironmentAuthorization);
+  // Pairing the hub again at another address saves a second session beside the first, and route
+  // order can pick the one without hub:proxy. The active credential then takes the saved one that
+  // has it, unless that token would travel over plain HTTP, and the hub reconnects with it.
+  const adoptSavedHubAccess = Effect.fn("HubProxyDiscovery.adoptSavedHubAccess")(function* (
+    prepared: PreparedConnection,
+  ) {
+    const target = prepared.target;
+    const current = prepared.httpAuthorization;
+    if (target._tag !== "BearerConnectionTarget" || current?._tag !== "Bearer") return false;
+    const entries = yield* SubscriptionRef.get(registry.entries);
+    const entry = entries.get(target.environmentId);
+    const routes = entry === undefined ? [] : connectionRoutes(entry);
+    const activeCredentialId = credentialConnectionId(target.connectionId);
+    const sharing = routes.filter(
+      (route) => credentialConnectionId(connectionRouteId(route.target)) === activeCredentialId,
+    );
+    // The active credential comes first: one adopted while the socket stayed open is already saved.
+    const candidates = new Set([
+      activeCredentialId,
+      ...routes.flatMap((route) =>
+        route.target._tag === "BearerConnectionTarget"
+          ? [credentialConnectionId(connectionRouteId(route.target))]
+          : [],
+      ),
+    ]);
+    for (const credentialId of candidates) {
+      if (sharing.some((shared) => sendsTokenInClear(routes, shared, undefined, credentialId)))
+        continue;
+      // Store and transient network failures go to the discovery retry rather than a verdict.
+      const saved = Option.getOrUndefined(yield* credentials.get(credentialId));
+      if (saved === undefined || saved.token === current.token) continue;
+      const state = yield* fetchEnvironmentSessionState({
+        prepared: { ...prepared, httpAuthorization: { _tag: "Bearer", token: saved.token } },
+        signer,
+        remoteAuthorization,
+      }).pipe(Effect.catchIf(isTerminalDiscoveryError, () => Effect.void));
+      if (state === undefined || !state.authenticated) continue;
+      const scopes = state.permissions ?? state.scopes ?? [];
+      if (!scopes.includes(AuthHubProxyScope)) continue;
+      const written =
+        credentialId === activeCredentialId ||
+        (yield* credentials.put(activeCredentialId, saved, current.token).pipe(
+          Effect.andThen(credentials.get(activeCredentialId)),
+          Effect.map((stored) => Option.isSome(stored) && stored.value.token === saved.token),
+        ));
+      if (!written) return false;
+      yield* Effect.logInfo("Using the saved hub credential that has hub access.", {
+        environmentId: target.environmentId,
+        connectionId: activeCredentialId,
+        from: credentialId,
+      });
+      yield* registry.reconnect(target.environmentId);
+      return true;
+    }
+    return false;
+  });
   const updates = (environmentId: EnvironmentId) => {
     let lastUpdate: HubProxyDiscoveryUpdate | undefined;
     return registry.followStream(
@@ -325,7 +415,9 @@ export const watchConnectedHubProxyDiscovery = Effect.gen(function* () {
                       );
                       const sessionScopes = auth.permissions ?? auth.scopes ?? [];
                       if (!auth.authenticated || !sessionScopes.includes(AuthHubProxyScope))
-                        return Stream.fromEffect(emptyUpdate);
+                        return (yield* adoptSavedHubAccess(prepared.value))
+                          ? Stream.empty
+                          : Stream.fromEffect(emptyUpdate);
                       return subscribeNodes({}).pipe(
                         Stream.filter(
                           (snapshot) => snapshot.hubEnvironmentId === target.environmentId,

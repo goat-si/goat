@@ -1,4 +1,5 @@
 import { watchedEvents } from "../testUtils/watchedEvents.testkit.ts";
+import { fencedReleaseAfterSync } from "./MemorySyncFencedRelease.testkit.ts";
 import {
   id,
   space,
@@ -3721,44 +3722,9 @@ it.effect(
     }),
 );
 
-it.effect("a fenced release after the Hub binding changed keeps the attempt for recovery", () =>
-  Effect.gen(function* () {
-    const model = realGeneration({
-      resolveMemoryConflict: () =>
-        Effect.fail(
-          new M.TextGenerationError({
-            operation: "resolveMemoryConflict",
-            detail: "Grok did not disclose or support the selected memory model.",
-            cause: new MemoryGenerationRunnerError({ code: "unavailable" }),
-          }),
-        ),
-    });
-    const client = peer({
-      // Settings moved to another Hub binding, so the client fences locally: the old lease
-      // may still be live at the Hub, and the attempt must not be retired on that answer.
-      release: () =>
-        changeHub(1, { ...member, secretName: "rebound-fixture" }).pipe(
-          Effect.orDie,
-          Effect.andThen(Effect.fail(new M.MemoryHubError({ code: "fenced" }))),
-        ),
-    });
-    yield* Effect.scoped(
-      Effect.gen(function* () {
-        yield* ready;
-        yield* conflict();
-        const sync = yield* Sync.MemorySyncService;
-        yield* sync.syncOnce;
-        yield* sync.scheduleConflictResolution;
-        const sql = yield* SqlClient.SqlClient;
-        const tickets = yield* sql<{
-          state: string;
-        }>`SELECT json_extract(ticket_json,'$.state') AS state FROM memory_outbox WHERE kind='resolve'`;
-        assert.strictEqual(tickets.length, 1);
-        assert.notStrictEqual(tickets[0]!.state, "terminal");
-        yield* sync.shutdown;
-      }).pipe(Effect.provide(fixture(client, model).pipe(Layer.provideMerge(Hold.layer)))),
-    );
-  }),
+it.effect(
+  "a fenced release after the Hub binding changed keeps the attempt for recovery",
+  fencedReleaseAfterSync,
 );
 
 it.effect(

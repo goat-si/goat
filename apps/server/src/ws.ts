@@ -244,6 +244,7 @@ import {
   coalesceThreadLiveStream,
 } from "./orchestration-v2/ThreadLiveEventCoalescer.ts";
 import * as ThreadManagementService from "./orchestration-v2/ThreadManagementService.ts";
+import * as ShellSnapshotLoads from "./orchestration-v2/ShellSnapshotLoads.ts";
 import * as ThreadMessageIntake from "./orchestration-v2/ThreadMessageIntake.ts";
 import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
 import {
@@ -1030,7 +1031,7 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
     readonly omitIdleSubagents?: boolean;
     readonly omitOlderSettled?: boolean;
   }) {
-    const sql = yield* SqlClient.SqlClient;
+    const shellLoads = yield* ShellSnapshotLoads.ShellSnapshotLoads;
     const threadManagement = yield* ThreadManagementService.ThreadManagementService;
     const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
     const projects = yield* ProjectStore.ProjectStoreV2;
@@ -1039,7 +1040,6 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
     let subagents = subagentShellState([], 0);
     const filterSubagentTranscript = (stored: ApplicationStoredEvent) =>
       shouldPublishShellApplicationEvent(stored, subagents.ids, subagents);
-
     const enrichmentChanges = yield* projectEnrichment.subscribeChanges;
     const loadProjectMetadataSnapshot = Effect.fn("ws.orchestrationV2.loadProjectMetadataSnapshot")(
       function* (snapshotSequence: number) {
@@ -1057,20 +1057,16 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
       },
     );
     const loadSnapshot = Effect.fn("ws.orchestrationV2.loadShellSnapshot")(function* () {
-      const base = buildActiveShellSnapshot(
-        yield* loadShellSnapshotParts({
-          sql,
-          readThreads: threadManagement.readShellSnapshot({ location: "active" }),
-          listProjects: projects.listShells(),
-          latestSequence: applicationEvents.latestApplicationSequence,
-        }),
-      );
-      subagents = subagentShellState(base.threads, base.snapshotSequence);
-      const forSubscriber = shellSnapshotForSubscriber(base, {
-        omitIdleSubagents: input.omitIdleSubagents === true,
+      const omitIdleSubagents = input.omitIdleSubagents === true;
+      const parts = yield* shellLoads.active(omitIdleSubagents);
+      const base = buildActiveShellSnapshot(parts);
+      const options = {
+        omitIdleSubagents,
         omitOlderSettled: input.omitOlderSettled === true,
         now: yield* DateTime.now,
-      });
+      };
+      const forSubscriber = shellSnapshotForSubscriber(base, options, parts.shellIndex);
+      subagents = subagentShellState([...forSubscriber.subagentThreadIds], base.snapshotSequence);
       const enriched = yield* enrichProjectShells(base.projects);
       return {
         snapshot: {

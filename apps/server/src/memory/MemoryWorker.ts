@@ -1,5 +1,6 @@
 import * as M from "@goat/contracts";
 import { makeDrainableWorker, type DrainableWorker } from "@goat/shared/DrainableWorker";
+import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
@@ -28,7 +29,7 @@ import { MEMORY_SCANNER_POLICY_VERSION, redacted, scanMemoryValue } from "./Memo
 import { selectContinuationCandidates } from "./memoryContinuationScan.ts";
 import * as SourceScan from "./memorySourceScan.ts";
 import { catchUpWakes, terminalRunStatuses as terminal } from "./memoryCatchUpWakes.ts";
-import { MemoryWorkerError } from "./MemoryWorkerError.ts";
+import { MemoryWorkerError, safeCode } from "./MemoryWorkerError.ts";
 import { generateSummaryChunks, type SummaryPromotions } from "./memorySummaryChunks.ts";
 import { resolveThreadProject } from "./MemorySummaryCommit.ts";
 export { MemoryWorkerError };
@@ -73,18 +74,6 @@ export const MEMORY_CONTINUATION_SCAN_INTERVAL_MS = 900_000;
 const continuationPageSize = 100;
 /** Outbox rows one retention statement examines; the pass yields to the event loop between pages. */
 const MEMORY_RETENTION_PAGE_ROWS = 64;
-const isFailureCode = Schema.is(M.MemoryFailureCode);
-const safeCode = (error: unknown): M.MemoryFailureCode => {
-  if (typeof error === "object" && error !== null) {
-    if ("code" in error && isFailureCode(error.code)) return error.code;
-    if ("_tag" in error && error._tag === "TextGenerationError") {
-      // Only exact public enum codes may cross the provider's diagnostic boundary.
-      if ("detail" in error && isFailureCode(error.detail)) return error.detail;
-      return "generation_failed";
-    }
-  }
-  return "storage_failed";
-};
 const isWorkerError = Schema.is(MemoryWorkerError);
 const isHeld = Schema.is(Hold.MemoryGenerationHeld);
 const workerError = (cause: unknown) =>
@@ -971,7 +960,7 @@ const make = Effect.gen(function* () {
     const queued = yield* Ref.make(false);
     const worker = yield* makeDrainableWorker<void, never, never>(() =>
       Ref.set(queued, false).pipe(
-        Effect.andThen(sweepDue()),
+        Effect.andThen(NodeSqliteClient.backgroundReads(sweepDue())),
         Effect.catch((error) =>
           Effect.logWarning("Memory sweep deferred", { code: error.code, stage: error.stage }),
         ),

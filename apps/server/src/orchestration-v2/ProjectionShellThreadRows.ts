@@ -1,7 +1,17 @@
-import { IDLE_COMPACTION_TEXT, type ThreadId } from "@goat/contracts";
+import {
+  IDLE_COMPACTION_TEXT,
+  ThreadId,
+  RunId,
+  type OrchestrationV2ShellThreadStatus,
+} from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import type * as SqlClient from "effect/sql/SqlClient";
 import type { ShellSnapshotOptions } from "./ProjectionStore.ts";
+
+export type ShellSubscriberOptions = Pick<
+  ShellSnapshotOptions,
+  "location" | "familyOf" | "worktreePath" | "threadIds" | "omitIdleSubagents"
+>;
 
 // One JSON parameter instead of one per id keeps large lists under SQLite's variable limit.
 const encodeIdList = Schema.encodeSync(Schema.fromJsonString(Schema.Array(Schema.String)));
@@ -10,6 +20,10 @@ export type ShellThreadRow = {
   readonly thread_id: string;
   readonly payload_json: string;
   readonly forked_from_run_source_thread_id: string | null;
+  readonly lineage_relationship: string | null;
+  readonly lineage_parent_thread_id: string | null;
+  readonly local_launcher_thread_id: string | null;
+  readonly has_pull_request_watch: number;
   readonly latest_run_id: string | null;
   readonly latest_run_status: string | null;
   readonly latest_run_requested_at: string | null;
@@ -98,6 +112,14 @@ export const makeShellThreadRows = (sql: SqlClient.SqlClient) => {
                   THEN json_extract(t.payload_json, '$.forkedFrom.threadId')
                 ELSE NULL
               END AS forked_from_run_source_thread_id,
+              json_extract(t.payload_json, '$.lineage.relationshipToParent') AS lineage_relationship,
+              json_extract(t.payload_json, '$.lineage.parentThreadId') AS lineage_parent_thread_id,
+              CASE WHEN json_extract(t.payload_json, '$.launchedBy.kind') = 'launch'
+                AND json_extract(t.payload_json, '$.launchedBy.via') IS NOT 'delegate_task'
+                AND json_extract(t.payload_json, '$.launchedBy.environmentId') IS NULL
+                THEN json_extract(t.payload_json, '$.launchedBy.threadId') ELSE NULL END AS local_launcher_thread_id,
+              EXISTS (SELECT 1 FROM json_each(t.payload_json, '$.pullRequests') e
+                WHERE json_extract(e.value, '$.watch') IS NOT NULL) AS has_pull_request_watch,
               presented.run_id AS latest_run_id,
               presented.status AS latest_run_status,
               presented.requested_at AS latest_run_requested_at,
@@ -308,3 +330,160 @@ export const makeShellThreadRows = (sql: SqlClient.SqlClient) => {
           `;
   return { selectShellThreadRows, isIdleCompactionMessage, isIdleCompactionRun, isSilentShellRun };
 };
+
+export function selectShellDecodeRows(input: {
+  readonly targetThreadIds: ReadonlySet<ThreadId>;
+  readonly threadRows: ReadonlyArray<ShellThreadRow>;
+  readonly providerThreadRows: ReadonlyArray<{
+    readonly thread_id: string;
+    readonly has_pending_background_tasks: number;
+    /** thread_id, or the payload's appThreadId when thread_id is empty (pendingBackgroundDataByThreadId). */
+    readonly owner_thread_id: string | null;
+  }>;
+  readonly pendingTurnItemRows: ReadonlyArray<{ readonly thread_id: string }>;
+}) {
+  const { targetThreadIds, threadRows, providerThreadRows, pendingTurnItemRows } = input;
+  const subagentRows = threadRows.filter(
+    (row) =>
+      targetThreadIds.has(ThreadId.make(row.thread_id)) && row.lineage_relationship === "subagent",
+  );
+  const shellIndex = {
+    subagentThreadIds: subagentRows.map((row) => ThreadId.make(row.thread_id)),
+    subagentParentIds: new Set(
+      subagentRows.flatMap((row) =>
+        row.lineage_parent_thread_id === null ? [] : [row.lineage_parent_thread_id],
+      ),
+    ),
+  };
+  const providerIds = new Set(
+    providerThreadRows
+      .filter((row) => row.has_pending_background_tasks === 1)
+      .flatMap((row) => (row.owner_thread_id === null ? [] : [row.owner_thread_id])),
+  );
+  const pendingIds = new Set(pendingTurnItemRows.map((row) => row.thread_id));
+  const keep = new Set(
+    threadRows
+      .filter(
+        (row) =>
+          row.lineage_relationship !== "subagent" ||
+          shellIndex.subagentParentIds.has(row.thread_id) ||
+          row.activity_run_status !== null ||
+          row.active_run_id !== null ||
+          (row.latest_run_status !== null &&
+            !["completed", "interrupted", "failed", "cancelled", "rolled_back"].includes(
+              row.latest_run_status,
+            )) ||
+          row.pending_request_payload_json !== null ||
+          row.pending_secret_request_payload_json !== null ||
+          row.has_pull_request_watch === 1 ||
+          providerIds.has(row.thread_id) ||
+          pendingIds.has(row.thread_id),
+      )
+      .map((row) => row.thread_id),
+  );
+  const rowsById = new Map(threadRows.map((row) => [row.thread_id, row]));
+  const pending = [...keep];
+  for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
+    const row = rowsById.get(next);
+    if (row === undefined) continue;
+    for (const dependency of [
+      row.forked_from_run_source_thread_id,
+      row.local_launcher_thread_id,
+      row.lineage_relationship === "subagent" ? row.lineage_parent_thread_id : null,
+    ]) {
+      if (dependency !== null && rowsById.has(dependency) && !keep.has(dependency)) {
+        keep.add(dependency);
+        pending.push(dependency);
+      }
+    }
+  }
+  return { shellIndex, keep };
+}
+
+export function shellStatusFromStoredRunStatus(
+  status: string | null,
+): OrchestrationV2ShellThreadStatus {
+  switch (status) {
+    case null:
+      return "idle";
+    case "preparing":
+    case "queued":
+    case "starting":
+    case "running":
+    case "waiting":
+    case "completed":
+    case "interrupted":
+    case "failed":
+    case "cancelled":
+    case "rolled_back":
+      return status;
+    default:
+      return "failed";
+  }
+}
+
+export type ShellRunRow = {
+  readonly thread_id: string;
+  readonly run_id: string;
+  readonly ordinal: number;
+};
+
+export type ShellRunItemCountRow = {
+  readonly thread_id: string;
+  readonly run_id: string;
+  readonly item_count: number;
+};
+
+export type ShellItemCountRow = {
+  readonly thread_id: string;
+  readonly item_count: number;
+  readonly runless_item_count: number;
+};
+
+export function shellForkSourceIds(
+  rows: ReadonlyArray<{ readonly forked_from_run_source_thread_id: string | null }>,
+): ReadonlyArray<ThreadId> {
+  return [
+    ...new Set(
+      rows.flatMap((row) =>
+        row.forked_from_run_source_thread_id === null
+          ? []
+          : [ThreadId.make(row.forked_from_run_source_thread_id)],
+      ),
+    ),
+  ];
+}
+
+export const runMapsByThreadId = (input: {
+  readonly runRows: ReadonlyArray<ShellRunRow>;
+  readonly itemCountRows: ReadonlyArray<ShellRunItemCountRow>;
+}) => {
+  const runOrdinalsByThreadId = new Map<ThreadId, Map<RunId, number>>();
+  for (const row of input.runRows) {
+    const threadId = ThreadId.make(row.thread_id);
+    const runId = RunId.make(row.run_id);
+    const existing = runOrdinalsByThreadId.get(threadId) ?? new Map<RunId, number>();
+    existing.set(runId, row.ordinal);
+    runOrdinalsByThreadId.set(threadId, existing);
+  }
+  const itemCountsByThreadId = new Map<ThreadId, Map<RunId, number>>();
+  for (const row of input.itemCountRows) {
+    const threadId = ThreadId.make(row.thread_id);
+    const runId = RunId.make(row.run_id);
+    const existing = itemCountsByThreadId.get(threadId) ?? new Map<RunId, number>();
+    existing.set(runId, row.item_count);
+    itemCountsByThreadId.set(threadId, existing);
+  }
+  return { runOrdinalsByThreadId, itemCountsByThreadId };
+};
+
+export const shellItemCountMap = (rows: ReadonlyArray<ShellItemCountRow>) =>
+  new Map(
+    rows.map(
+      (row) =>
+        [
+          ThreadId.make(row.thread_id),
+          { itemCount: row.item_count, runlessItemCount: row.runless_item_count },
+        ] as const,
+    ),
+  );

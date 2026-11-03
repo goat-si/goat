@@ -207,6 +207,8 @@ export function sortThreadsForListV2<
     readonly id: string;
     readonly createdAt: string;
     readonly unsettledAt?: string | null | undefined;
+    readonly latestUserMessageAt?: string | null | undefined;
+    readonly latestUserAuthoredMessageAt?: string | null | undefined;
     readonly activeOrderKey?: string | null | undefined;
     readonly environmentId?: string | undefined;
   },

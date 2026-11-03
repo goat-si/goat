@@ -1,6 +1,7 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import {
   sshRuntimeBuildOrder,
+  sshRuntimeCanBeUpdated,
   sshRuntimePhaseText,
   sshRuntimeRecoveryText,
   sshRuntimeStatusText,
@@ -138,6 +139,7 @@ function SshRuntimeSettingsRowContent({
   const canUpdate =
     !connecting &&
     status !== undefined &&
+    sshRuntimeCanBeUpdated(status) &&
     (status.state === "update_waiting" ||
       status.state === "failed" ||
       status.state === "stopped" ||

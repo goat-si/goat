@@ -1,3 +1,4 @@
+import * as ShellSnapshotLoads from "./orchestration-v2/ShellSnapshotLoads.ts";
 import * as DecisionService from "./goatclaw/DecisionService.ts";
 import * as ChannelBotDirectory from "./channels/ChannelBotDirectory.ts";
 import * as ChannelBotRegistry from "./channels/ChannelBotRegistry.ts";
@@ -247,6 +248,7 @@ const layerUnusedLifecycleRpcServices = Layer.mergeAll(
   Layer.mock(ThreadLaunchService.ThreadLaunchService)({}),
   Layer.mock(LaunchWatchService.LaunchWatchService)({}),
   Layer.mock(ThreadManagement.ThreadManagementService)({}),
+  Layer.mock(ShellSnapshotLoads.ShellSnapshotLoads)({}),
   Layer.mock(ThreadSearch.ThreadSearch)({}),
   Layer.mock(UsageService.UsageService)({}),
   Layer.mock(VcsProvisioningService.VcsProvisioningService)({}),

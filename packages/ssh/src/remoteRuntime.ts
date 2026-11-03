@@ -188,6 +188,16 @@ export const liveRuntimeBlocksUpdate = (
     ? !compatible
     : live.liveOwned !== true || order === undefined || (!runsRequested && live.liveDrain !== true);
 
+export const compatibleRuntimeUpdateBlocked = (
+  host: string,
+  liveVersion: string,
+  requestedVersion: string,
+  order: number | undefined,
+) =>
+  order !== undefined && order < 0
+    ? `${host} keeps running GOAT ${liveVersion}, which this app didn't start or cannot replace. To move it to ${requestedVersion}, update GOAT on ${host} or stop that server there when its work is done, then reconnect.`
+    : `${host} runs GOAT ${liveVersion}, which this app didn't start or cannot replace, so it keeps using it. GOAT can't tell whether it is older than ${requestedVersion}, so it suggests no update.`;
+
 export function sshTargetLogFields(target: DesktopSshEnvironmentTarget) {
   return {
     alias: target.alias,

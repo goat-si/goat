@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./stallAwareQuiet": {
+      "types": "./src/stallAwareQuiet.ts",
+      "import": "./src/stallAwareQuiet.ts"
+    },
     "./urlCredentialRedaction": {
       "types": "./src/urlCredentialRedaction.ts",
       "import": "./src/urlCredentialRedaction.ts"
@@ -526,6 +530,10 @@
     "./nodeSqliteClient": {
       "types": "./src/nodeSqliteClient.ts",
       "import": "./src/nodeSqliteClient.ts"
+    },
+    "./readerAdmission": {
+      "types": "./src/readerAdmission.ts",
+      "import": "./src/readerAdmission.ts"
     },
     "./orchestrationV2BoundedSnapshot": {
       "types": "./src/orchestrationV2BoundedSnapshot.ts",
