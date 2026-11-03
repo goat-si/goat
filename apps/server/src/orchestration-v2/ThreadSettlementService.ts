@@ -19,6 +19,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import * as Schedule from "effect/Schedule";
 import * as Semaphore from "effect/Semaphore";
 import type * as Scope from "effect/Scope";
@@ -304,6 +305,7 @@ export const make = Effect.gen(function* () {
   const pullRequests = yield* PullRequestService.PullRequestService;
   const crypto = yield* Crypto.Crypto;
   const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
   const shellClosedThreads = new Set<ThreadId>();
   const terminals = yield* TerminalManager.TerminalManager;
   const projectScripts = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
@@ -468,7 +470,9 @@ export const make = Effect.gen(function* () {
           if (project === undefined || thread.branch === null) return;
           const worktreeExists =
             thread.worktreePath !== null &&
-            (yield* fileSystem.exists(thread.worktreePath).pipe(Effect.orElseSucceed(() => false)));
+            (yield* fileSystem
+              .exists(path.join(thread.worktreePath, ".git"))
+              .pipe(Effect.orElseSucceed(() => true)));
           lookupCwdByThreadId.set(
             thread.id,
             worktreeExists && thread.worktreePath !== null
