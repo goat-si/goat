@@ -166,6 +166,8 @@ import {
 import { AppAtomRegistryProvider } from "../../../rpc/atomRegistry";
 import { AgentScreenCardsToggle } from "./AgentScreenCardsToggle";
 import { PreviewSessionStack } from "./PreviewSessionStack";
+import { AgentScreenCard } from "./AgentScreenCard";
+import { StackDocumentContext } from "./PreviewSessionStackSurface";
 import { usePreviewSessionStack } from "./previewSessionStackStore";
 import { usePreviewMiniPlayerStore } from "../../../previewMiniPlayerStore";
 
@@ -518,4 +520,37 @@ it("streams an isolated server-rendered tab on the desktop once its background t
   );
   expect(card.element().querySelector("[data-browser-surface-slot]")).toBeNull();
   await expect.element(card.getByRole("button", { name: "Take over" })).toBeInTheDocument();
+});
+
+it("reveals the main desktop window when a floating card opens its tab in the panel", async () => {
+  setup([browserTab()]);
+  state.nativeDesktop = true;
+  const revealWindow = vi.fn(async () => undefined);
+  const original = window.desktopBridge;
+  window.desktopBridge = { ...original, revealWindow } as NonNullable<typeof window.desktopBridge>;
+  using _bridge = {
+    [Symbol.dispose]: () => {
+      if (original) window.desktopBridge = original;
+      else delete window.desktopBridge;
+    },
+  };
+  await using screen = await render(
+    <AppAtomRegistryProvider>
+      <StackDocumentContext.Provider value={document.implementation.createHTMLDocument("floating")}>
+        <AgentScreenCard
+          session={browserTab()}
+          live
+          focused={false}
+          focusRequest={0}
+          onExpand={() => undefined}
+          onControl={() => undefined}
+          onDismiss={() => undefined}
+        />
+      </StackDocumentContext.Provider>
+    </AppAtomRegistryProvider>,
+  );
+  await userEvent.click(screen.getByRole("button", { name: "Open in the right panel" }), {
+    force: true,
+  });
+  expect(revealWindow).toHaveBeenCalledOnce();
 });
