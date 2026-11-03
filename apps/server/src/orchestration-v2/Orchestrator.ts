@@ -5512,7 +5512,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             : now,
         updatedAt: now,
       };
-      yield* emit(
+      const event = yield* emit(
         events,
         command,
       )({
@@ -5522,7 +5522,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         occurredAt: now,
         payload: thread,
       });
-      projection = yield* getProjectionWithPendingEvents(command.threadId, events);
+      projection = applyToProjection(projection, event, { deferNotificationCursor: true });
     }
     // Background wakes and delegated completions preserve snooze.
     const automaticWake =
@@ -5536,7 +5536,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         ...(unsnooze ? { snoozedUntil: null, snoozedAt: null, updatedAt: now } : {}),
         ...(clearOrder ? { activeOrderKey: null } : {}),
       };
-      yield* emit(
+      const event = yield* emit(
         events,
         command,
       )({
@@ -5546,7 +5546,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         occurredAt: now,
         payload: thread,
       });
-      projection = yield* getProjectionWithPendingEvents(command.threadId, events);
+      projection = applyToProjection(projection, event, { deferNotificationCursor: true });
     }
     const userMessages = projection.messages.filter((message) => message.role === "user");
     const onlyMaintenanceHistory =
@@ -5566,7 +5566,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         titleRegeneration: { requestId: command.commandId, startedAt: now },
         updatedAt: now,
       };
-      yield* emit(
+      const event = yield* emit(
         events,
         command,
       )({
@@ -5583,7 +5583,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           messageId: command.messageId,
         }),
       ]);
-      projection = yield* getProjectionWithPendingEvents(command.threadId, events);
+      projection = applyToProjection(projection, event, { deferNotificationCursor: true });
     }
     const modelSelection = command.modelSelection ?? projection.thread.modelSelection;
     let dispatchMode = resolveMessageDispatchIntent(
