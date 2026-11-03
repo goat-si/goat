@@ -101,6 +101,8 @@ const thread = {
   id: "thread",
   title: "Test thread",
   archivedAt: null as string | null,
+  snoozedUntil: null as string | null,
+  subagentOf: null as string | null,
   hasPendingApprovals: false,
   hasPendingUserInput: false,
   session: null as { status: string } | null,
@@ -136,9 +138,9 @@ function toV2ThreadShell(input: typeof thread) {
     worktreePath: null,
     activeProviderThreadId: null,
     lineage: {
-      rootThreadId: input.id,
-      parentThreadId: null,
-      relationshipToParent: null,
+      rootThreadId: input.subagentOf ?? input.id,
+      parentThreadId: input.subagentOf,
+      relationshipToParent: input.subagentOf === null ? null : "subagent",
     },
     forkedFrom: null,
     createdBy: "user",
@@ -172,6 +174,7 @@ function toV2ThreadShell(input: typeof thread) {
       ? DateTime.makeUnsafe(latestTurn.completedAt)
       : undefined,
     archivedAt: input.archivedAt ? DateTime.makeUnsafe(input.archivedAt) : null,
+    snoozedUntil: input.snoozedUntil ? DateTime.makeUnsafe(input.snoozedUntil) : null,
     settledOverride: null,
     settledAt: null,
     lastVisitedAt: null,
@@ -651,4 +654,69 @@ it("refreshes the notification parent when its thread rows change", async () => 
     "Renamed parent",
   ]);
   expect(state.foldBuilds).toBe(2);
+});
+
+it("avoids rebuilding a fold for interleaved remote child completions", async () => {
+  await using app = setup();
+  const children = Array.from({ length: 12 }, (_, index) => ({
+    id: `child-${index}`,
+    launchedBy: {
+      kind: "launch" as const,
+      via: "delegate_task" as const,
+      threadId: "thread",
+      environmentId: "one",
+      environmentLabel: null,
+      threadTitle: null,
+    },
+  }));
+  state.shells.set("two", shell(children[0]!, ...children.slice(1)));
+  app.start();
+  using _timers = fakeTimers();
+  for (let index = 0; index < children.length; index++) {
+    const rows = children.map((child, at) =>
+      at <= index
+        ? {
+            ...child,
+            latestTurn: {
+              turnId: "turn",
+              state: "completed",
+              completedAt: "2026-09-13T07:01:00.000Z",
+            },
+          }
+        : child,
+    );
+    state.shells.set("two", shell(rows[0]!, ...rows.slice(1)));
+    await vi.advanceTimersByTimeAsync(WORKING_EXIT_GRACE_MS);
+  }
+  expect(TestNotification.sent).toEqual([]);
+  expect(state.foldBuilds).toBeLessThanOrEqual(1);
+});
+
+it("directs a subagent approval to its remote child when the launcher is snoozed", async () => {
+  await using app = setup();
+  const child = {
+    id: "child",
+    title: "Remote child",
+    launchedBy: {
+      kind: "launch" as const,
+      via: "delegate_task" as const,
+      threadId: "thread",
+      environmentId: "one",
+      environmentLabel: null,
+      threadTitle: null,
+    },
+  };
+  const subagent = { id: "subagent", subagentOf: "child" };
+  state.shells.set("one", shell({ snoozedUntil: "2099-01-01T00:00:00.000Z" }));
+  state.shells.set("two", shell(child, subagent));
+  app.start();
+  state.shells.set("two", shell(child, { ...subagent, hasPendingApprovals: true }));
+  expect(TestNotification.sent.map(({ title, options }) => [title, options.body])).toEqual([
+    ["Approval needed", "Remote child"],
+  ]);
+  TestNotification.sent[0]!.dispatchEvent(new Event("click"));
+  expect(state.navigate).toHaveBeenCalledWith({
+    to: "/$environmentId/$threadId",
+    params: { environmentId: "two", threadId: "child" },
+  });
 });
