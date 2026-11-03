@@ -560,8 +560,7 @@ function terminalOutputTailParts(
   if (total <= maxChars) return { parts, truncated: false };
   const start = total - maxChars;
   let offset = 0;
-  for (let index = 0; index < parts.length; index += 1) {
-    const part = parts[index]!;
+  for (const [index, part] of parts.entries()) {
     if (offset + part.length > start) {
       const newline = part.indexOf("\n", Math.max(0, start - offset));
       if (newline !== -1) {

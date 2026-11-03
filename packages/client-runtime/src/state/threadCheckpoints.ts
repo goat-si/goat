@@ -48,7 +48,8 @@ export function deriveThreadCheckpointSummaries(
     // Resume the reverse scan only as far as this checkpoint needs. Recent
     // checkpoints must not force a traversal of unrelated older history.
     while (nextMessageIndex >= 0 && assistantMessageIdsByRun.get(checkpoint.runId) === undefined) {
-      const message = messages[nextMessageIndex--]!;
+      const message = messages[nextMessageIndex--];
+      if (message === undefined) continue;
       const { runId, role } = message;
       if (
         role === "assistant" &&
