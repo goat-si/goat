@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
+import * as Scheduler from "effect/Scheduler";
 import { makeTestBrowserOriginGrants } from "./BrowserOriginGrants.testkit.ts";
 import { makeBrowserOriginGrants } from "./BrowserOriginGrants.ts";
 
@@ -11,6 +12,73 @@ class NarrowWriteFailure extends Schema.TaggedError<NarrowWriteFailure>()(
   "NarrowWriteFailure",
   {},
 ) {}
+
+it.effect("a newer narrower manifest supersedes a failed confirmation without restarting", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const firstFinished = yield* Deferred.make<void>();
+    const nextStarted = yield* Deferred.make<void>();
+    let writes = 0;
+    let fences = 0;
+    const service = yield* makeBrowserOriginGrants({
+      environmentId: EnvironmentId.make("environment:test"),
+      supported: () => true,
+      publish: () => Effect.sync(() => String(++writes).padStart(64, "0")),
+      confirm: (sha) =>
+        sha === String(3).padStart(64, "0")
+          ? Deferred.succeed(entered, undefined).pipe(
+              Effect.andThen(Deferred.await(release)),
+              Effect.andThen(Effect.fail(new NarrowWriteFailure())),
+              Effect.ensuring(Deferred.succeed(firstFinished, undefined)),
+            )
+          : sha === String(4).padStart(64, "0")
+            ? Deferred.await(firstFinished).pipe(
+                Effect.andThen(Deferred.succeed(nextStarted, undefined)),
+                Effect.as({
+                  capability_manifest: { sha256: sha, file_sha256: sha, reload_error: null },
+                }),
+              )
+            : Effect.succeed({
+                capability_manifest: { sha256: sha, file_sha256: sha, reload_error: null },
+              }),
+      fence: () =>
+        Effect.sync(() => {
+          fences++;
+          return true;
+        }),
+      bind: (input) =>
+        Effect.succeed({
+          targetId: "target",
+          tabId: `tab-${input.windowId}`,
+          title: "Site",
+          url: input.origin,
+          driverGeneration: 1,
+        }),
+    });
+    const a = ThreadId.make("thread:a");
+    const b = ThreadId.make("thread:b");
+    for (const [threadId, windowId, origin] of [
+      [a, 7, "https://a.test"],
+      [b, 8, "https://b.test"],
+    ] as const) {
+      const result = yield* service.claim({
+        threadId,
+        pid: 42,
+        windowId,
+        origin,
+        windowTitle: "Browser",
+      });
+      assert.equal(result.agentResult.status, "attached");
+    }
+    yield* service.stop(a);
+    yield* Deferred.await(entered);
+    yield* service.stop(b);
+    yield* Deferred.succeed(release, undefined);
+    yield* Deferred.await(nextStarted);
+    assert.equal(fences, 0);
+  }).pipe(Effect.provideService(Scheduler.PreventSchedulerYield, true)),
+);
 
 it.effect("concurrent narrowings keep at most one confirmation in flight", () =>
   Effect.gen(function* () {
