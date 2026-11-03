@@ -75,14 +75,21 @@ export const makeGitMetadataFingerprint = Effect.fn("GitMetadataFingerprint.make
   const readBounded = Effect.fnUntraced(
     function* (file: string) {
       const handle = yield* fs.open(file, { flag: "r" });
-      const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
-      let text = "";
+      const chunks: Uint8Array[] = [];
       let bytes = 0;
       while (bytes <= CONFIG_SECTION_MAX_BYTES) {
         const chunk = yield* handle.readAlloc(64 * 1024);
-        if (Option.isNone(chunk)) return text + decoder.decode();
+        if (Option.isNone(chunk)) {
+          const result = new Uint8Array(bytes);
+          let offset = 0;
+          for (const part of chunks) {
+            result.set(part, offset);
+            offset += part.length;
+          }
+          return result;
+        }
         bytes += chunk.value.length;
-        text += decoder.decode(chunk.value, { stream: true });
+        chunks.push(chunk.value);
       }
       return null;
     },
@@ -106,15 +113,21 @@ export const makeGitMetadataFingerprint = Effect.fn("GitMetadataFingerprint.make
     const memo = sectionsByConfig.get(file);
     if (memo?.stamp === fileStamp.value && memo.reusable) return memo;
     const readAt = yield* Clock.currentTimeMillis;
-    const text = fileStamp.value === "missing" ? null : yield* readBounded(file);
+    const bytes = fileStamp.value === "missing" ? null : yield* readBounded(file);
+    const text =
+      bytes === null
+        ? null
+        : yield* Effect.try(() =>
+            new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes),
+          ).pipe(Effect.orElseSucceed(() => null));
     const sections = text === null ? null : splitBranchSections(text);
     const reusable =
       fileStamp.value === "missing" ||
       (fileStamp.mtime !== null && readAt - fileStamp.mtime > CONFIG_MTIME_GRANULARITY_MS);
     const fallback =
-      text !== null && sections === null
-        ? `${fileStamp.value}:content:${Hex.encode(yield* crypto.digest("SHA-256", new TextEncoder().encode(text)))}`
-        : !reusable && text === null
+      bytes !== null && sections === null
+        ? `${fileStamp.value}:content:${Hex.encode(yield* crypto.digest("SHA-256", bytes))}`
+        : !reusable && bytes === null
           ? `${fileStamp.value}:racy:${++racyRead}`
           : fileStamp.value;
     sectionsByConfig.delete(file);
