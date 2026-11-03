@@ -618,14 +618,8 @@ const commandOf = (text: string) => {
   return match === null ? undefined : { name: match[1]!, text: match[2] ?? "" };
 };
 
-const SKILL_MENTION = new RegExp(SKILL_MENTION_PATTERN.source, "u");
-
-const skillsNamed = (text: string, known: ReadonlySet<string>) => [
-  ...new Set(
-    [...text.matchAll(SKILL_MENTION_PATTERN)].flatMap((match) =>
-      known.has(match[2] ?? "") ? [match[2]!] : [],
-    ),
-  ),
+const skillMentions = (text: string) => [
+  ...new Set([...text.matchAll(SKILL_MENTION_PATTERN)].flatMap((match) => match[2] ?? [])),
 ];
 
 const turnTokenUsage = (turn: ActiveTurn, status: OrchestrationV2ProviderTurn["status"]) => {
@@ -3430,6 +3424,26 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       );
     });
 
+    const listSkills = (location: { readonly directory: string }) =>
+      client.skill.list({ location }).pipe(
+        Effect.timeout(INVENTORY_TIMEOUT),
+        Effect.map((list) => new Set<string>(list.data.map((skill) => skill.id))),
+        Effect.orElseSucceed(() => new Set<string>()),
+      );
+
+    // OpenCode answers model inventory after its directory scan completes.
+    const skillsMentioned = Effect.fnUntraced(function* (
+      location: { readonly directory: string },
+      mentions: ReadonlyArray<string>,
+    ) {
+      const known = yield* listSkills(location);
+      if (mentions.some((name) => !known.has(name))) {
+        yield* readModels(location.directory);
+        for (const name of yield* listSkills(location)) known.add(name);
+      }
+      return mentions.filter((name) => known.has(name));
+    });
+
     const submit = Effect.fnUntraced(function* (
       sessionId: string,
       turnInput: ProviderAdapter.ProviderAdapterV2TurnInput,
@@ -3467,16 +3481,8 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
           return yield* client.session.command({ sessionID, ...command });
         }
       }
-      const skills = SKILL_MENTION.test(text)
-        ? skillsNamed(
-            text,
-            yield* client.skill.list({ location }).pipe(
-              Effect.timeout(INVENTORY_TIMEOUT),
-              Effect.map((list) => new Set(list.data.map((skill) => skill.id))),
-              Effect.orElseSucceed(() => new Set<string>()),
-            ),
-          )
-        : [];
+      const mentions = skillMentions(text);
+      const skills = mentions.length === 0 ? [] : yield* skillsMentioned(location, mentions);
       if (state.active !== turn || turn.interrupted) return;
       yield* prepareMemory(sessionId, state, turnInput);
       const files = yield* promptFiles(turnInput.message.attachments);
