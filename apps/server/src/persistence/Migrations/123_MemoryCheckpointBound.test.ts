@@ -264,6 +264,58 @@ it.effect("isolates an identity whose revision bodies exceed the migration batch
   }).pipe(Effect.provide(layer)),
 );
 
+it.effect("splits migration batches when revision metadata exceeds the budget", () =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    const store = yield* Store.MemoryStore;
+    for (const n of [0, 1]) {
+      const op = upsert(n);
+      yield* store.transact(
+        Effect.gen(function* () {
+          const ledger = yield* store.appendHubEntryTx({
+            operation: op,
+            operationDigest: memoryOperationDigest(op),
+            outcome: "accepted",
+            now: 0,
+          });
+          const decided = decideMemoryOperation(
+            yield* store.loadAggregate(space, op.memoryId),
+            op,
+            Store.hubAdmission,
+            scanMemoryValue(op),
+          );
+          yield* store.apply({ ...decided, receipt: ledger.entry.receipt });
+        }),
+      );
+    }
+    const parents = JSON.stringify(Array.from({ length: 100 }, (_, n) => id(50000 + n)));
+    yield* sql`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<2200)
+      INSERT INTO memory_revisions(space,revision_id,memory_id,operation_id,parents_json,scope_json,assertion_kind,provenance_json,payload_ref,created_at)
+      SELECT r.space,printf('00000000-0000-4000-8000-%012d',10000+n.i),r.memory_id,r.operation_id,${parents},r.scope_json,r.assertion_kind,r.provenance_json,printf('00000000-0000-4000-8000-%012d',10000+n.i),r.created_at
+      FROM memory_revisions r CROSS JOIN n WHERE r.space=${space} AND r.revision_id=${id(300)}`;
+    const statements: string[] = [];
+    const tracer = Tracer.make({
+      span(options) {
+        const span = new Tracer.NativeSpan(options);
+        const end = span.end.bind(span);
+        span.end = (time, exit) => {
+          end(time, exit);
+          const query = span.attributes.get("db.query.text");
+          if (typeof query === "string") statements.push(query);
+        };
+        return span;
+      },
+    });
+    yield* sql.withTransaction(migration).pipe(Effect.withTracer(tracer));
+    const revisionReads = statements.filter(
+      (query) =>
+        /FROM memory_revisions r LEFT JOIN memory_payloads p/.test(query) &&
+        !query.includes("ORDER BY r.revision_id"),
+    );
+    assert.strictEqual(revisionReads.length, 2);
+  }).pipe(Effect.provide(layer)),
+);
+
 it.effect(
   "re-measures legacy forget reserves, refreshes checkpoint counters and re-arms only staging-refused syncs",
   () =>
