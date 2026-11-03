@@ -1,3 +1,4 @@
+import { ChildThreadApprovals } from "./ChildThreadApprovals";
 import type { CloudRunCard, CloudTaskState } from "@goat/client-runtime/state/cloud-task";
 import { CloudTaskStatus } from "./CloudTaskStatus";
 import { AppText as Text } from "../../components/ui/AppText";
@@ -1512,6 +1513,10 @@ function ThreadDetailBody(props: ThreadDetailScreenProps) {
                   }}
                 />
                 <ComposerCards maxWidth={contentMaxWidth} onHeight={handleCardsHeight}>
+                  <ChildThreadApprovals
+                    threadRef={props.selectedThreadDetailRef}
+                    maxHeight={pendingUserInputMaxHeight}
+                  />
                   {props.queuedRunEdit !== null ? (
                     <Animated.View
                       className="shrink-0"
