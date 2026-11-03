@@ -25,6 +25,20 @@ import {
 } from "./snapshotProbe.ts";
 
 describe("spawn failure diagnosis", () => {
+  it.effect("does not attribute spawn failures to an unspecified working directory", () =>
+    Effect.sync(() => {
+      const missing = { binary: NodePath.join(NodeOS.tmpdir(), "goat-no-such-binary-2415") };
+      const existing = { binary: process.execPath };
+      expect([
+        classifySpawnFailure({ code: "ENOENT" }, undefined, undefined, missing),
+        classifySpawnFailure({ code: "ENOENT" }, undefined, undefined, existing),
+        classifySpawnFailure({ code: "EACCES" }, undefined, undefined, existing),
+        classifySpawnFailure({ code: "EPERM" }, undefined, undefined, existing),
+        classifySpawnFailure({ code: "EIO" }, undefined),
+      ]).toEqual(["missing", "unknown", "unknown", "unknown", "unknown"]);
+    }),
+  );
+
   it("recognizes an existing executable with a missing interpreter, including PATH lookup", () => {
     const cwd = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-broken-shebang-"));
     try {
