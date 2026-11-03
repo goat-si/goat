@@ -1,3 +1,4 @@
+import { useEnvironmentHues } from "../threads/useEnvironmentHues";
 import { useActiveNewTask } from "../../state/active-new-task";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
 import { useAndroidControlSizing } from "../../components/ui/useAndroidControlSizing";
@@ -442,6 +443,7 @@ export function HomeScreen(props: HomeScreenProps) {
     const id = setInterval(() => setNow(new Date().toISOString()), 60_000);
     return () => clearInterval(id);
   });
+  const environmentHues = useEnvironmentHues();
   const listEnvironments = useAtomValue(threadListEnvironmentsAtom);
   const {
     providersByEnvironmentId,
@@ -543,6 +545,7 @@ export function HomeScreen(props: HomeScreenProps) {
                 null)
               : null
           }
+          environmentHue={environmentHues.get(item.pendingTask.environmentId)}
           environmentMachine={machineByEnvironmentId.get(item.pendingTask.environmentId)}
           showPendingDivider={item.showPendingDivider}
           showTrailingDivider={item.showTrailingDivider}
@@ -656,6 +659,7 @@ export function HomeScreen(props: HomeScreenProps) {
               ? (props.savedConnectionsById[thread.environmentId]?.environmentLabel ?? null)
               : null
           }
+          environmentHue={environmentHues.get(thread.environmentId)}
           environmentMachine={machineByEnvironmentId.get(thread.environmentId)}
           searchMatch={
             // Only rows listed for their messages show one and open at it.
@@ -715,6 +719,7 @@ export function HomeScreen(props: HomeScreenProps) {
     projectByKey,
     projectTitleByProjectKey: v2ProjectTitleByProjectKey,
     listEnvironments,
+    environmentHues,
     savedConnectionsById: props.savedConnectionsById,
     searchQuery: props.searchQuery,
     selectedThreadKey,

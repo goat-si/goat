@@ -238,6 +238,7 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
   readonly project: EnvironmentProject | null;
   readonly projectTitle?: string;
   readonly environmentLabel: string | null;
+  readonly environmentHue?: string | undefined;
   readonly environmentMachine?: EnvironmentMachineKind;
   readonly pane?: "screen" | "sidebar";
   readonly showPendingDivider: boolean;
@@ -370,7 +371,8 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
               kind={props.environmentMachine}
               size={11}
               tintColorClassName={
-                sidebarPane ? "accent-drawer-foreground-muted" : "accent-foreground-tertiary"
+                props.environmentHue ??
+                (sidebarPane ? "accent-drawer-foreground-muted" : "accent-foreground-tertiary")
               }
             />
           ) : null}
@@ -457,6 +459,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly providers: ReadonlyArray<ThreadListProvider> | undefined;
   readonly providerInstance: ThreadRowProviderInstance | null;
   readonly environmentLabel: string | null;
+  readonly environmentHue?: string | undefined;
   readonly environmentMachine?: EnvironmentMachineKind;
   readonly pane?: "screen" | "sidebar";
   readonly showTrailingDivider?: boolean;
@@ -1144,9 +1147,10 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
                 kind={props.environmentMachine}
                 size={11}
                 tintColorClassName={
-                  selected
+                  props.environmentHue ??
+                  (selected
                     ? selectedThreadRowColors.mutedIconTintClassName
-                    : rowAppearance.tertiaryIconTintClassName
+                    : rowAppearance.tertiaryIconTintClassName)
                 }
               />
             ) : null}
