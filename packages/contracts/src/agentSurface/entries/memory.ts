@@ -1,5 +1,5 @@
 import { entry } from "../entry.ts";
-import { MEMORY_OPERATION_ID } from "../idempotencyReasons.ts";
+import { MEMORY_OPERATION_ID, MEMORY_REMEMBER_CONTENT } from "../idempotencyReasons.ts";
 
 export const memoryEntries = {
   "memory.recall": entry({
@@ -142,6 +142,38 @@ export const memoryEntries = {
       idempotentHint: false,
       openWorldHint: false,
     },
+  }),
+  "memory.remember": entry({
+    resource: "memory",
+    verb: "remember",
+    name: "goat_memory_remember",
+    toolkit: "memory",
+    summary: "Save a memory from text and a scope.",
+    description:
+      "Save one lasting fact, decision or preference for later conversations. Choose scope user for every project, project for this conversation's project, or thread for this conversation only. Pass memoryId to replace an existing memory instead of adding another. Do not save progress reports, tool output or execution summaries.",
+    guide:
+      "Needs memory:write and a session allowed to write. GOAT fills the memory space, ids, current revision, project key and this conversation as evidence.",
+    parameters: {
+      text: "The memory, written to stand on its own.",
+      scope:
+        "user (every project), project (this conversation's project) or thread. Required unless memoryId is set.",
+      memoryId: "Optional id from goat_memory_recall to replace that memory; it keeps its scope.",
+      memorySpaceId: "Optional current memory space.",
+    },
+    examples: [
+      {
+        title: "Save a preference for every project",
+        args: { text: "Jun reviews Korean summaries before English ones.", scope: "user" },
+      },
+    ],
+    effect: "write",
+    capability: "threads.launch",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    idempotencyReason: MEMORY_REMEMBER_CONTENT,
+    annotations: { idempotentHint: true, openWorldHint: false },
   }),
   "memory.upsert": entry({
     resource: "memory",

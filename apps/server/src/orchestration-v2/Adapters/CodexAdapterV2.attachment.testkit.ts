@@ -49,6 +49,7 @@ export const GOAT_MEMORY_TOOLS = [
   "goat_memory_history",
   "goat_memory_sync_status",
   "goat_memory_source_read",
+  "goat_memory_remember",
   "goat_memory_upsert",
   "goat_memory_forget",
   "goat_memory_revert_resolution",

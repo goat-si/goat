@@ -89,3 +89,5 @@ For a recoverable sync hold, restore compatibility or connectivity, then use **R
 On web and desktop, if Memory says **Device disconnected**, reconnect that environment to continue. If it says **Memory unavailable**, update or reconnect the selected environment. **Hub disconnected** means the hub connection is offline; **Hub connected** alone does not mean every memory is ready to read. **Waiting to sync** means that memory still has changes to share.
 
 Agents can recall related memories across this project’s threads with a natural-language query. Results are ranked by relevance and recency and may be stale; verify changeable details.
+
+Agents with memory write access save lasting decisions, preferences and facts as they come up, to **All projects**, **Project** or **Thread** memory, without waiting for the conversation summary. Saving the same memory again from a conversation updates it instead of adding a copy. Review, edit or forget these in **Settings → Memory** like any other memory.

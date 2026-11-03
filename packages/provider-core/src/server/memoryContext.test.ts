@@ -4,6 +4,7 @@ import { goatCallText } from "@goat/contracts/agentSurface/callText";
 import * as Schema from "effect/Schema";
 import {
   MEMORY_BRIEFING,
+  MEMORY_BRIEFING_V4,
   memoryContextFits,
   memoryContextText,
   packMemoryContext,
@@ -147,7 +148,7 @@ source: {&quot;environmentId&quot;:&quot;env&lt;&amp;\&quot;&apos;&quot;,&quot;s
     expect(() =>
       validateMemoryContext({
         ...kept,
-        renderedText: kept.renderedText.replace("Rephrase 2-3 times", "Never search"),
+        renderedText: kept.renderedText.replace("rephrase before concluding", "never search"),
       }),
     ).toThrow();
   });
@@ -237,12 +238,13 @@ kept
 </memory>${renderedNotice}`,
   });
 
-  it("version 4 binds the space and briefs recall even when memories are left out", () => {
+  it("version 5 binds the space and briefs recall and remember even when memories are left out", () => {
     const snapshot = packMemoryContext({ ...input([item(1, "kept")]), hasMore: true })!;
-    expect(snapshot.protocolVersion).toBe(4);
+    expect(snapshot.protocolVersion).toBe(5);
     expect(snapshot.renderedText).toContain(snapshot.memorySpaceId);
     expect(() => validateMemoryContext({ ...snapshot, memorySpaceId: id(998) })).toThrow();
     expect(snapshot.renderedText).toContain(MEMORY_BRIEFING);
+    expect(snapshot.renderedText).toContain('path:"memory.remember"');
     expect(snapshot.renderedText).toContain(
       `More GOAT memories exist than fit here; use ${goatCallText("memory.recall")} to find them.`,
     );
@@ -256,6 +258,19 @@ kept
     ).toThrow();
   });
 
+  it("version 4 snapshots keep their recall-only briefing", () => {
+    const current = packMemoryContext(input([item(1, "kept")]))!;
+    const legacy = {
+      ...current,
+      protocolVersion: 4 as const,
+      renderedText: renderMemoryContext(current.items, false, 4, current.memorySpaceId),
+    };
+    expect(legacy.renderedText).toContain(MEMORY_BRIEFING_V4);
+    expect(legacy.renderedText).not.toContain("memory.remember");
+    expect(validateMemoryContext(legacy)).toEqual(legacy);
+    expect(() => validateMemoryContext({ ...legacy, protocolVersion: 5 })).toThrow();
+  });
+
   it("version 3 snapshots keep their original space-free briefing", () => {
     for (const notice of [
       "",
@@ -265,7 +280,10 @@ kept
       const legacy = {
         ...old,
         protocolVersion: 3,
-        renderedText: old.renderedText.replace("\n\n<memory", `\n\n${MEMORY_BRIEFING}\n\n<memory`),
+        renderedText: old.renderedText.replace(
+          "\n\n<memory",
+          `\n\n${MEMORY_BRIEFING_V4}\n\n<memory`,
+        ),
       };
       expect(validateMemoryContext(legacy)).toEqual(legacy);
       expect(legacy.renderedText).not.toContain("Memory space:");

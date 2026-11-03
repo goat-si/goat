@@ -6,6 +6,7 @@ export const MEMORY_MCP_TOOLS = [
   "memory_read",
   "memory_history",
   "memory_sync_status",
+  "goat_memory_remember",
   "memory_upsert",
   "memory_forget",
   "memory_revert_resolution",
