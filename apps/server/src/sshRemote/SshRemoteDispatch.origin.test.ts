@@ -96,7 +96,10 @@ describe("SSH dispatch origin routing", () => {
           );
         }),
       );
-      expect(result).toMatchObject({ _tag: "Failure", failure: { reason: "host_unavailable" } });
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: { reason: "host_unavailable", message: "offline" },
+      });
       expect(record.toolCalls).toEqual([]);
       expect(record.sessionsIssued).toBe(0);
     }),

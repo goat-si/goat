@@ -48,16 +48,18 @@ interface AppServer {
 }
 
 /** A loopback stand-in for the GOAT app's server: its descriptor and its runtime session route. */
-const startAppServer = (descriptor: object, sessionStatus = 200) =>
+const startAppServer = (descriptor: object, sessionStatus = 200, replaceAfterDescriptor = false) =>
   Effect.acquireRelease(
     Effect.callback<AppServer & { readonly server: NodeHttp.Server }>((resume) => {
       const sessions: AppServer["sessions"] = [];
+      let controlToken = TOKEN;
       const server = NodeHttp.createServer((request, response) => {
         let body = "";
         request.on("data", (chunk) => (body += chunk));
         request.on("end", () => {
           if (request.method === "GET" && request.url === "/.well-known/goat/environment") {
             response.end(JSON.stringify(descriptor));
+            if (replaceAfterDescriptor) controlToken = "replacement-control-secret";
             return;
           }
           if (request.method === "POST" && request.url === "/.well-known/goat/runtime/session") {
@@ -66,7 +68,7 @@ const startAppServer = (descriptor: object, sessionStatus = 200) =>
               header: typeof header === "string" ? header : undefined,
               body: JSON.parse(body),
             });
-            response.statusCode = header === TOKEN ? sessionStatus : 403;
+            response.statusCode = header === controlToken ? sessionStatus : 403;
             response.end(
               JSON.stringify({ token: "app-session-token", expiresAt: "2026-10-27T00:00:00.000Z" }),
             );
@@ -207,6 +209,40 @@ describe("Git Bash managed server", () => {
       });
       expect(yield* probe()).toEqual({ kind: "unusable", reason: "dead-pid" });
       yield* issue(server.port).pipe(Effect.flip);
+      expect(server.sessions).toHaveLength(1);
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+  it.live("rejects a replacement with another control token after the descriptor check", () =>
+    Effect.gen(function* () {
+      const id = "11111111-1111-4111-8111-111111111111";
+      const server = yield* startAppServer(
+        { ...attachableDescriptor, environmentId: id },
+        200,
+        true,
+      );
+      const host = yield* makeHost({
+        pid: 55140,
+        port: server.port,
+        stateDir: ".goat/userdata",
+        windows: true,
+      });
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.writeFileString(`${host.home}/.goat/userdata/environment-id`, `${id}\n`);
+      const result = yield* issueExistingServerCredential(
+        uploadTarget,
+        "managed",
+        server.port,
+        {
+          kind: "session",
+          subject: "mcp-client",
+          scopes: ["orchestration:read"],
+          ttl: "12h",
+          label: "test",
+        },
+        {},
+        id,
+      ).pipe(Effect.provide(host.spawner), Effect.result);
+      expect(result._tag).toBe("Failure");
       expect(server.sessions).toHaveLength(1);
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
