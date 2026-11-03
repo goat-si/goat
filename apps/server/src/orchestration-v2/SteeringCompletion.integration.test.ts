@@ -505,6 +505,20 @@ it.effect.each([
           },
         });
         const sink = yield* EventSink.EventSinkV2;
+        if (testCase.steers) {
+          yield* sink.write({
+            events: [
+              {
+                id: EventId.make(`event:${suffix}:composer-selection`),
+                type: "thread.model-selection-updated",
+                threadId,
+                providerInstanceId: instanceId,
+                occurredAt: yield* DateTime.now,
+                payload: { ...thread, modelSelection: composerSelection },
+              },
+            ],
+          });
+        }
         if (testCase.owner !== "none") {
           const now = yield* DateTime.now;
           const taskId = NodeId.make(`task:${suffix}`);
@@ -555,6 +569,7 @@ it.effect.each([
         if (testCase.steers) assert.equal(message?.runId, started[0]?.runId);
         else assert.equal(after.runs.find((run) => run.id === message?.runId)?.status, "queued");
         assert.equal(message?.notification?.source.kind, "question");
+        if (testCase.steers) assert.deepEqual(after.thread.modelSelection, composerSelection);
         if (testCase.steers) {
           yield* answer(suffix);
           yield* service.reconcile(ids(suffix).askingId, ids(suffix).requestId);
