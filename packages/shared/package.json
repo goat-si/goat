@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./stallAwareQuiet": {
+      "types": "./src/stallAwareQuiet.ts",
+      "import": "./src/stallAwareQuiet.ts"
+    },
     "./urlCredentialRedaction": {
       "types": "./src/urlCredentialRedaction.ts",
       "import": "./src/urlCredentialRedaction.ts"

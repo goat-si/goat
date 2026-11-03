@@ -63,6 +63,7 @@ import * as SiteNotes from "./preview/SiteNotes.ts";
 // Effect wraps this raw Node HTTP server after its startup and write-error guards attach.
 import * as NodeHttp from "node:http";
 
+import { heartbeat, HeartbeatWebSocket } from "./wsHeartbeat.ts";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { EnvironmentHttpApi, type RepositoryIdentity } from "@goat/contracts";
@@ -390,9 +391,10 @@ const layerRelayClient = Layer.unwrap(
     return RelayClient.layerCloudflared({ baseDir: config.baseDir });
   }),
 );
-const layerHttpServer = Layer.unwrap(
+export const layerHttpServer = Layer.unwrap(
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;
+    yield* Effect.forkScoped(heartbeat);
     return NodeHttpServer.layer(
       () => {
         const server = rejectRequestsUntilServing(
@@ -411,11 +413,8 @@ const layerHttpServer = Layer.unwrap(
         host: config.host ?? "127.0.0.1",
         port: config.port,
         gracefulShutdownTimeout: HTTP_PREEMPTIVE_SHUTDOWN_GRACE_MS,
-        // Context takeover stays enabled (ws default) so the compression
-        // window is shared across frames — that also makes small frames cheap
-        // to compress, so no size threshold is set (ws only honors
-        // `threshold` when context takeover is disabled).
-        websocket: { perMessageDeflate: true },
+        // Context takeover shares the compression window; ws ignores threshold when it is enabled.
+        websocket: { perMessageDeflate: true, WebSocket: HeartbeatWebSocket },
       },
     );
   }),

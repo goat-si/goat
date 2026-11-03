@@ -13,12 +13,13 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { HttpRouter, HttpServer, HttpServerRequest } from "effect/http";
 import { Rpc, RpcGroup, RpcSerialization, RpcServer } from "effect/rpc";
+import { vi } from "vite-plus/test";
 
 import { withWebSocketIdleTimeout } from "./wsIdleTimeout.ts";
 
 const group = RpcGroup.make(Rpc.make("stream", { success: Schema.String, stream: true }));
 
-const startServer = Effect.fnUntraced(function* (sendOutput = false) {
+const startServer = Effect.fnUntraced(function* (sendOutput = false, drain?: Effect.Effect<void>) {
   const streamClosed = yield* Deferred.make<void>();
   const connected =
     yield* Deferred.make<ReturnType<typeof NodeHttpServerRequest.toIncomingMessage>["socket"]>();
@@ -51,7 +52,7 @@ const startServer = Effect.fnUntraced(function* (sendOutput = false) {
             connected,
             NodeHttpServerRequest.toIncomingMessage(request).socket,
           );
-          return yield* withWebSocketIdleTimeout(httpEffect);
+          return yield* withWebSocketIdleTimeout(httpEffect, drain);
         }),
       );
     }),
@@ -102,12 +103,12 @@ const subscribe = (client: NodeWS.WebSocket) =>
     ),
   );
 
-it.effect("closes a silent real socket at 120 seconds", () =>
+it.effect("closes a silent real socket at 300 seconds", () =>
   Effect.gen(function* () {
     const server = yield* startServer();
     const { client, closed } = yield* connect(server.url);
     const transport = yield* Deferred.await(server.connected);
-    yield* TestClock.adjust("119 seconds");
+    yield* TestClock.adjust("299 seconds");
     assert.isFalse(transport.destroyed);
     assert.equal(client.readyState, NodeWS.WebSocket.OPEN);
     yield* TestClock.adjust("1 second");
@@ -123,9 +124,9 @@ it.effect("an ordinary RPC frame resets the idle deadline", () =>
     const { client, closed } = yield* connect(server.url);
     yield* TestClock.adjust("50 seconds");
     assert.include(yield* subscribe(client), "started");
-    yield* TestClock.adjust("119 seconds");
+    yield* TestClock.adjust("299 seconds");
     assert.equal(client.readyState, NodeWS.WebSocket.OPEN);
-    yield* TestClock.adjust("1 second");
+    yield* TestClock.adjust("6 seconds");
     yield* closed;
     yield* Deferred.await(server.streamClosed);
   }),
@@ -152,9 +153,9 @@ it.effect.each(
         }
         assert.equal(client.readyState, NodeWS.WebSocket.OPEN);
       }
-      yield* TestClock.adjust("119 seconds");
+      yield* TestClock.adjust("299 seconds");
       assert.equal(client.readyState, NodeWS.WebSocket.OPEN);
-      yield* TestClock.adjust("1 second");
+      yield* TestClock.adjust("6 seconds");
       yield* closed;
       yield* Deferred.await(server.streamClosed);
     }),
@@ -170,9 +171,9 @@ it.effect("outbound stream frames do not keep an abandoned client alive", () =>
     const output = yield* receive(client).pipe(Effect.forkChild({ startImmediately: true }));
     yield* TestClock.adjust("30 seconds");
     assert.include(yield* Fiber.join(output), "still running");
-    yield* TestClock.adjust("89 seconds");
+    yield* TestClock.adjust("269 seconds");
     assert.equal(client.readyState, NodeWS.WebSocket.OPEN);
-    yield* TestClock.adjust("1 second");
+    yield* TestClock.adjust("6 seconds");
     yield* closed;
     yield* Deferred.await(server.streamClosed);
   }),
@@ -206,11 +207,71 @@ it.effect.each([120_000, -120_000])(
       wallOffset = jump;
       assert.equal(currentTimeMillisUnsafe() - beforeWall, jump);
       assert.equal(clock.monotonicTimeNanosUnsafe(), beforeElapsed);
-      yield* TestClock.adjust("119 seconds");
+      yield* TestClock.adjust("299 seconds");
       assert.isFalse(transport.destroyed);
       assert.equal(client.readyState, NodeWS.WebSocket.OPEN);
-      yield* TestClock.adjust("1 second");
+      yield* TestClock.adjust("6 seconds");
       assert.isTrue(transport.destroyed);
       yield* closed;
     }),
+);
+
+it.effect("pong bytes keep a quiet client alive, then silence closes it once", () =>
+  Effect.gen(function* () {
+    const server = yield* startServer();
+    const { client, closed } = yield* connect(server.url);
+    const transport = yield* Deferred.await(server.connected);
+    const destroy = vi.spyOn(transport, "destroy");
+    for (let index = 0; index < 20; index++) {
+      yield* TestClock.adjust("30 seconds");
+      yield* Effect.callback<void>((resume) => {
+        transport.once("data", () => resume(Effect.void));
+        client.pong();
+      });
+      assert.isFalse(transport.destroyed);
+    }
+    yield* TestClock.adjust("299 seconds");
+    assert.isFalse(transport.destroyed);
+    yield* TestClock.adjust("6 seconds");
+    yield* closed;
+    assert.equal(destroy.mock.calls.length, 1);
+  }),
+);
+
+it.effect("bytes read during the drain after a late sample tick keep the socket open", () =>
+  Effect.gen(function* () {
+    let hold: Deferred.Deferred<void> | undefined;
+    const entered = yield* Deferred.make<void>();
+    const left = yield* Deferred.make<void>();
+    const drain = Effect.suspend(() =>
+      hold === undefined
+        ? Effect.void
+        : Deferred.succeed(entered, undefined).pipe(
+            Effect.andThen(Deferred.await(hold)),
+            Effect.andThen(Deferred.succeed(left, undefined)),
+          ),
+    );
+    const server = yield* startServer(false, drain);
+    const { client, closed } = yield* connect(server.url);
+    const transport = yield* Deferred.await(server.connected);
+    yield* TestClock.adjust("295 seconds");
+    assert.isFalse(transport.destroyed);
+    const gate = yield* Deferred.make<void>();
+    hold = gate;
+    yield* TestClock.adjust("5 seconds");
+    yield* Deferred.await(entered);
+    yield* TestClock.adjust("60 seconds");
+    yield* Effect.callback<void>((resume) => {
+      transport.once("data", () => resume(Effect.void));
+      client.ping();
+    });
+    hold = undefined;
+    yield* Deferred.succeed(gate, undefined);
+    yield* Deferred.await(left);
+    assert.isFalse(transport.destroyed);
+    yield* TestClock.adjust("299 seconds");
+    assert.isFalse(transport.destroyed);
+    yield* TestClock.adjust("6 seconds");
+    yield* closed;
+  }),
 );
