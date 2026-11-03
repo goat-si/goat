@@ -1,8 +1,10 @@
 import { assert, describe, it } from "@effect/vitest";
 import type { ChannelConversationId, ChannelTask } from "@goat/contracts";
-import { ThreadId } from "@goat/contracts";
+import { ChannelQuestionId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 
+import { DispatchModeLimit } from "../orchestration-v2/DispatchModeLimit.ts";
+import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as ChannelBotSession from "./ChannelBotSession.ts";
 import * as ChannelDispatcher from "./ChannelDispatcher.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
@@ -115,6 +117,87 @@ const claimedFromTeammate = (key: string, memoryGrantCeiling?: "read" | "read_wr
   });
 
 describe("GOAT Bot sessions under the requester's current authority", () => {
+  it.effect("#2193 forwards a follow-up under the requester's lowered Slack ceiling", () => {
+    const harness = sessionHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* linkTeammate;
+      const task = yield* dispatchNow(yield* receiveFromTeammate("look: task", "ceiling-1"));
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const reception = yield* ChannelReceptionService.ChannelReceptionService;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const send = threads.sendToThread;
+      const ceilings: Array<string | undefined> = [];
+      Object.assign(threads, {
+        sendToThread: (input: Parameters<typeof send>[0]) =>
+          Effect.flatMap(DispatchModeLimit, (limit) => {
+            ceilings.push(limit?.runtimeMode);
+            return send(input);
+          }),
+      });
+      const input = yield* gateway.ingest(
+        slackInput("more:" + task.taskId + " check logs", "ceiling-2", "1760000000.000900", "U2"),
+        slackContext,
+      );
+      yield* reception.receive(input.inputId, runtime.ownerToken);
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`UPDATE channel_identities SET runtime_mode_ceiling = 'approval-required' WHERE connection_id = 'slack-1' AND external_actor_id = 'U2'`;
+      for (const pending of yield* ledger.listPendingForwards(10))
+        yield* dispatcher.forward(pending, runtime.ownerToken);
+      assert.isTrue(harness.world.sends.some((entry) => entry.text.includes("check logs")));
+      assert.deepStrictEqual(ceilings, ["approval-required"]);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("#2193 refuses an answer when the requester's Slack grant is revoked", () => {
+    const harness = sessionHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* linkTeammate;
+      const task = yield* dispatchNow(yield* receiveFromTeammate("look: task", "grant-1"));
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+      const questionId = ChannelQuestionId.make("question:grant");
+      yield* commitTransition(
+        ledger,
+        (yield* ledger.getTask(task.taskId))!,
+        {
+          type: "task.question.opened",
+          payload: {
+            question: { questionId, text: "Which?", askedAt: "2026-10-12T00:00:00.000Z" },
+          },
+        },
+        { owner: runtime.ownerToken },
+      );
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const reception = yield* ChannelReceptionService.ChannelReceptionService;
+      const input = yield* gateway.ingest(
+        slackInput(
+          "answer:" + task.taskId + " " + questionId + " the big one",
+          "grant-2",
+          "1760000000.000900",
+          "U2",
+        ),
+        slackContext,
+      );
+      yield* reception.receive(input.inputId, runtime.ownerToken);
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`UPDATE channel_identities SET granted_scopes_json = '[]' WHERE connection_id = 'slack-1' AND external_actor_id = 'U2'`;
+      for (const pending of yield* ledger.listPendingForwards(10))
+        yield* dispatcher.forward(pending, runtime.ownerToken);
+      assert.isFalse(harness.world.sends.some((entry) => entry.text.includes("the big one")));
+      const after = yield* current(task.taskId);
+      assert.strictEqual(after.status, "waiting_input");
+      assert.include(after.openQuestions[0]!.text, "permission");
+      assert.isUndefined((yield* ledger.getTask(task.taskId))!.pendingAnswerMessageId);
+      assert.lengthOf(yield* ledger.listPendingForwards(10), 0);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect(
     "builds a session's journal from the requester's current scopes, not the ones at intake",
     () => {

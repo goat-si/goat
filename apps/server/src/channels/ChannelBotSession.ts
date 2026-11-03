@@ -666,6 +666,11 @@ const make = Effect.gen(function* () {
     // A person stopped this task's run in GOAT; sending would start it again.
     if (current?.status === "cancelled" && firstIntent.length === 0)
       return { _tag: "stopped", run: current } as const;
+    const requester = yield* requesterForDispatch(task).pipe(
+      Effect.provideService(ChannelLedger.ChannelLedger, ledger),
+      Effect.provideService(SlackChannelSettings.SlackChannelSettings, slackSettings),
+    );
+    if (requester === undefined) return { _tag: "permission_changed" } as const;
     const refused = yield* Ref.make<DispatchModeRefusal | undefined>(undefined);
     const attempt = (mode: "steer" | "queue", which: ReturnType<typeof turnSteerIdsFor>) =>
       writeIntent(threadId, which.messageId, task, "followup").pipe(
@@ -683,7 +688,7 @@ const make = Effect.gen(function* () {
               createdBy: "user",
               creationSource: "server",
             })
-            .pipe(modeLimit(task.requester, refused), Effect.result),
+            .pipe(modeLimit(requester, refused), Effect.result),
         ),
       );
     let which = ids.first;
@@ -768,8 +773,8 @@ const make = Effect.gen(function* () {
       yield* inputAttachments(event.payload.inputId),
     );
     const own = [ids.first.messageId, ids.queued.messageId];
-    if (result._tag === "failed") {
-      if (result.refusal === undefined && !rejected(result.failure)) {
+    if (result._tag === "failed" || result._tag === "permission_changed") {
+      if (result._tag === "failed" && result.refusal === undefined && !rejected(result.failure)) {
         yield* Effect.logWarning("GOAT Bot session follow-up failed; retrying", {
           taskId: event.taskId,
           cause: result.failure,
@@ -778,9 +783,11 @@ const make = Effect.gen(function* () {
       }
       const asked = yield* askRequester(
         (yield* ledger.getTask(event.taskId)) ?? stored,
-        "The session didn't take your follow-up (\"" +
-          event.payload.text +
-          '"). Say it again, or open the thread in GOAT.',
+        result._tag === "permission_changed"
+          ? "The requester’s permission changed; your follow-up was not sent. Open the thread in GOAT."
+          : "The session didn't take your follow-up (\"" +
+              event.payload.text +
+              '"). Say it again, or open the thread in GOAT.',
         owner,
       );
       if (asked !== undefined) yield* done;
@@ -806,13 +813,16 @@ const make = Effect.gen(function* () {
       "Answer from " + stored.task.requester.displayName + ": " + event.payload.answer,
       { first: ids, queued: ids },
     );
-    if (result._tag === "failed") {
-      if (result.refusal === undefined && !rejected(result.failure)) return;
+    if (result._tag === "failed" || result._tag === "permission_changed") {
+      if (result._tag === "failed" && result.refusal === undefined && !rejected(result.failure))
+        return;
       const asked = yield* askRequester(
         stored,
-        "The session didn't take your answer (\"" +
-          event.payload.answer +
-          '"). Answer again, or answer in the thread.',
+        result._tag === "permission_changed"
+          ? "The requester’s permission changed; your answer was not sent. Open the thread in GOAT."
+          : "The session didn't take your answer (\"" +
+              event.payload.answer +
+              '"). Answer again, or answer in the thread.',
         owner,
       );
       if (asked !== undefined) yield* done;
