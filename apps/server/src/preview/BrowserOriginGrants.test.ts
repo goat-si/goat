@@ -285,6 +285,120 @@ class ManifestConfirmationMismatch extends Schema.TaggedError<ManifestConfirmati
   {},
 ) {}
 
+it.effect("a narrowing superseded by a newer applied narrowing does not restart the driver", () =>
+  Effect.gen(function* () {
+    let written = 0;
+    let fences = 0;
+    const entered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const service = yield* makeUnconfirmedGrants({
+      environmentId: EnvironmentId.make("environment:test"),
+      supported: () => true,
+      publish: () => Effect.sync(() => String(++written).padStart(64, "0")),
+      confirm: (sha) =>
+        sha === String(3).padStart(64, "0")
+          ? Deferred.succeed(entered, undefined).pipe(
+              Effect.andThen(Deferred.await(release)),
+              Effect.andThen(Effect.fail(new ManifestConfirmationMismatch())),
+            )
+          : Effect.succeed({
+              capability_manifest: { sha256: sha, file_sha256: sha, reload_error: null },
+            }),
+      fence: () =>
+        Effect.sync(() => {
+          fences++;
+          return true;
+        }),
+      bind: (input) =>
+        Effect.succeed({
+          targetId: "target-1",
+          tabId: "tab-" + input.windowId,
+          title: "Site",
+          url: input.origin,
+          driverGeneration: 1,
+        }),
+    });
+    const threadId = ThreadId.make("thread:test");
+    for (const [windowId, origin] of [
+      [7, "https://example.test"],
+      [8, "https://other.test"],
+    ] as const) {
+      const request = yield* service.request({
+        threadId,
+        pid: 42,
+        windowId,
+        origin,
+        windowTitle: "Browser",
+      });
+      if (request.status !== "pending") return assert.fail("expected pending");
+      yield* service.answer(request.claimId, true);
+    }
+    yield* service.revoke(threadId, "https://example.test");
+    yield* Deferred.await(entered);
+    yield* service.revoke(threadId, "https://other.test");
+    yield* Deferred.succeed(release, undefined);
+    yield* service.settled;
+    assert.equal(fences, 0);
+  }),
+);
+
+it.effect("an expansion between two narrowings does not hide a failed narrowing", () =>
+  Effect.gen(function* () {
+    let written = 0;
+    let fences = 0;
+    const entered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    const service = yield* makeUnconfirmedGrants({
+      environmentId: EnvironmentId.make("environment:test"),
+      supported: () => true,
+      publish: () => Effect.sync(() => String(++written).padStart(64, "0")),
+      confirm: (sha) =>
+        sha === String(3).padStart(64, "0")
+          ? Deferred.succeed(entered, undefined).pipe(
+              Effect.andThen(Deferred.await(release)),
+              Effect.andThen(Effect.fail(new ManifestConfirmationMismatch())),
+            )
+          : Effect.succeed({
+              capability_manifest: { sha256: sha, file_sha256: sha, reload_error: null },
+            }),
+      fence: () =>
+        Effect.sync(() => {
+          fences++;
+          return true;
+        }),
+      bind: (input) =>
+        Effect.succeed({
+          targetId: "target-1",
+          tabId: "tab-" + input.windowId,
+          title: "Site",
+          url: input.origin,
+          driverGeneration: 1,
+        }),
+    });
+    const threadId = ThreadId.make("thread:test");
+    const attach = Effect.fnUntraced(function* (windowId: number, origin: string) {
+      const request = yield* service.request({
+        threadId,
+        pid: 42,
+        windowId,
+        origin,
+        windowTitle: "Browser",
+      });
+      if (request.status !== "pending") return yield* Effect.die("expected pending");
+      yield* service.answer(request.claimId, true);
+    });
+    yield* attach(7, "https://example.test");
+    yield* attach(8, "https://other.test");
+    yield* service.revoke(threadId, "https://example.test");
+    yield* Deferred.await(entered);
+    yield* attach(9, "https://third.test");
+    yield* service.revoke(threadId, "https://other.test");
+    yield* Deferred.succeed(release, undefined);
+    yield* service.settled;
+    assert.equal(fences, 1);
+  }),
+);
+
 it.effect("restarts the driver when a narrower manifest cannot be written", () =>
   Effect.gen(function* () {
     let failWrites = false;

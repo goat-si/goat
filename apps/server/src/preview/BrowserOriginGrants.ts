@@ -105,11 +105,30 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     if (!manifestApplied(yield* deps.confirm(sha), sha))
       return yield* new BrowserManifestNotApplied();
   });
-  const write = (value: Union) =>
-    writeLock.withPermits(1)(advance.pipe(Effect.andThen(deps.publish(value))));
+  let writes = 0;
+  let latest:
+    | {
+        readonly number: number;
+        readonly value: Union;
+        readonly narrowing: boolean;
+        applied: boolean;
+      }
+    | undefined;
+  const write = (value: Union, narrowing: boolean) =>
+    writeLock.withPermits(1)(
+      Effect.gen(function* () {
+        const entry = { number: ++writes, value, narrowing, applied: false };
+        latest = entry;
+        yield* advance;
+        const sha = yield* deps.publish(value);
+        entry.applied = true;
+        return { sha, number: entry.number };
+      }),
+    );
   const publish = Effect.fn("BrowserOriginGrants.publishExpansion")(function* (value: Union) {
-    yield* confirm(yield* write(value));
+    yield* confirm((yield* write(value, false)).sha);
   });
+  const confirming = new Set<Deferred.Deferred<void>>();
   const fence = (cause: unknown) =>
     Effect.logWarning("Browser manifest narrowing was not applied; restarting the driver", {
       cause,
@@ -124,13 +143,39 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
       ),
     );
   const shrink = Effect.fn("BrowserOriginGrants.publishShrink")(function* (value: Union) {
-    const result = yield* write(value).pipe(Effect.result);
+    const result = yield* write(value, true).pipe(Effect.result);
     if (result._tag === "Failure") return yield* fence(result.failure);
-    const sha = result.success;
+    const { sha, number } = result.success;
+    const done = yield* Deferred.make<void>();
+    confirming.add(done);
     // Narrowing never waits on the driver, but a driver that keeps a wider manifest is
     // restarted: its old browser windows and origins must not outlive the claims that named them.
-    yield* confirm(sha).pipe(Effect.catch(fence), Effect.forkDetach({ startImmediately: true }));
+    yield* confirm(sha).pipe(
+      Effect.catch((cause) => {
+        const newer = latest;
+        const subset =
+          newer !== undefined &&
+          newer.value.origins.every((origin) => value.origins.includes(origin)) &&
+          newer.value.existingProfiles.every((profile) =>
+            value.existingProfiles.some(
+              (old) => old.pid === profile.pid && old.windowId === profile.windowId,
+            ),
+          );
+        return newer && newer.number > number && newer.narrowing && newer.applied && subset
+          ? Effect.void
+          : fence(cause);
+      }),
+      Effect.ensuring(
+        Effect.sync(() => confirming.delete(done)).pipe(
+          Effect.andThen(Deferred.succeed(done, undefined)),
+        ),
+      ),
+      Effect.forkDetach({ startImmediately: true }),
+    );
   });
+  const settled = Effect.suspend(() =>
+    Effect.forEach([...confirming], Deferred.await, { discard: true }),
+  );
   const pending = new Map<string, Pending>();
   const claims = new Map<string, LiveTabClaim>();
   // The bind's driver target, kept off LiveTabClaim so people and agents never see it.
@@ -484,6 +529,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     snapshotFor,
     claimsFor,
     claimedPids,
+    settled,
     revision: SubscriptionRef.get(version),
     changes: SubscriptionRef.changes(version),
   };
