@@ -1,5 +1,5 @@
+import { BACKEND_STOP_TIMEOUT } from "../backend/DesktopBackendProcess.ts";
 import * as Cause from "effect/Cause";
-import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -158,7 +158,7 @@ const stopAllPoolInstances = Effect.fn("desktop.app.stopAllPoolInstances")(
     const instances = yield* pool.list;
     yield* Effect.forEach(
       instances,
-      (instance) => instance.stop({ timeout: Duration.seconds(5) }),
+      (instance) => instance.stop("quit", { timeout: BACKEND_STOP_TIMEOUT }),
       { concurrency: "unbounded" },
     );
   },

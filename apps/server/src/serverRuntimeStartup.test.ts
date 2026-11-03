@@ -21,6 +21,8 @@ import * as Fiber from "effect/Fiber";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
+import * as TestClock from "effect/testing/TestClock";
 import * as Path from "effect/Path";
 
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
@@ -44,16 +46,21 @@ import * as ProjectService from "./project/ProjectService.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import { ServerActivation } from "./serverActivation.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
+import * as CodexDetachedAppServerLive from "./provider/CodexDetachedAppServerLive.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 
-it.effect.each([
-  "disabled-codex",
-  "disabled-default",
-  "launch-failure",
-  "project-failure",
-] as const)("keeps bootstrap launch failures separate from project failures: %s", (scenario) =>
+type BootstrapScenario =
+  | "disabled-codex"
+  | "disabled-default"
+  | "launch-failure"
+  | "project-failure";
+
+const bootstrapScenario = (
+  scenario: BootstrapScenario,
+  shutdown: Effect.Effect<void> = Effect.void,
+) =>
   Effect.scoped(
     Effect.gen(function* () {
       const projectId = ProjectId.make("bootstrap-project");
@@ -117,7 +124,12 @@ it.effect.each([
           reconcile: () => Effect.succeed(recovery),
         }),
         Layer.mock(Orchestrator.OrchestratorV2)({ recoverDelegatedTasks: Effect.void }),
-        Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({ shutdown: Effect.void }),
+        Layer.mock(CodexDetachedAppServerLive.CodexDetachedAppServers)({
+          cleanup: Effect.succeed([]),
+          beginServerShutdown: Effect.void,
+          socketTransportEnabled: false,
+        }),
+        Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({ shutdown }),
         Layer.mock(AgentAwarenessRelay.AgentAwarenessRelay)({ start: () => Effect.void }),
         Layer.mock(EffectWorker.OrchestrationEffectWorkerV2)({
           configureConcurrency: () => Effect.void,
@@ -247,7 +259,45 @@ it.effect.each([
         Effect.provideService(ServerActivation, Effect.never),
       );
     }),
-  ),
+  );
+
+it.effect.each([
+  "disabled-codex",
+  "disabled-default",
+  "launch-failure",
+  "project-failure",
+] as const)("keeps bootstrap launch failures separate from project failures: %s", (scenario) =>
+  bootstrapScenario(scenario),
+);
+
+it.effect("records the duration of provider session shutdown", () =>
+  Effect.gen(function* () {
+    const started = yield* Deferred.make<void>();
+    const messages: unknown[] = [];
+    const logger = Logger.make(({ message }) => {
+      messages.push(message);
+    });
+    const shutdown = Deferred.succeed(started, undefined).pipe(
+      Effect.andThen(Effect.sleep("3 seconds")),
+    );
+    const fiber = yield* bootstrapScenario("disabled-codex", shutdown).pipe(
+      Effect.provide(Logger.layer([logger], { mergeWithExisting: false })),
+      Effect.forkChild,
+    );
+    yield* Deferred.await(started);
+    yield* TestClock.adjust("3 seconds");
+    yield* Fiber.join(fiber);
+    assert.isTrue(
+      messages.some(
+        (message) =>
+          Array.isArray(message) &&
+          message[0] === "Server shutdown phase finished" &&
+          message[1]?.phase === "providerSessions" &&
+          message[1]?.durationMs === 3000 &&
+          message[1]?.outcome === "success",
+      ),
+    );
+  }),
 );
 
 it.effect("interrupts the effect worker when awareness relay startup fails", () =>

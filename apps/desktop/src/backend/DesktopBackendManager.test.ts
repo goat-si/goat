@@ -25,6 +25,7 @@ import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import * as DesktopBackendManager from "./DesktopBackendManager.ts";
+import { registerBackendStopTests } from "./DesktopBackendStopTestHelpers.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
 import * as DesktopTelemetryPublisher from "../telemetry/DesktopTelemetryPublisher.ts";
 import * as DesktopBrowserHost from "../preview/DesktopBrowserHost.ts";
@@ -69,7 +70,7 @@ const configWithObservability: DesktopBackendBootstrapValue = {
   otlpTracesUrl: "http://127.0.0.1:4318/v1/traces",
 };
 
-function makeProcess(options?: {
+export function makeProcess(options?: {
   readonly stdout?: Stream.Stream<Uint8Array, PlatformError.PlatformError>;
   readonly stderr?: Stream.Stream<Uint8Array, PlatformError.PlatformError>;
   readonly exitCode?: Effect.Effect<ChildProcessSpawner.ExitCode, PlatformError.PlatformError>;
@@ -138,8 +139,11 @@ interface MakeInstanceInput {
   readonly pruneRuntimes?: (distro: string | null, runtimeId: string) => Effect.Effect<void>;
 }
 
-function makeTestInstance(input: MakeInstanceInput) {
+export function makeTestInstance(input: MakeInstanceInput) {
   const stubLog: DesktopObservability.DesktopBackendOutputLogShape = {
+    recordStop: () => Effect.void,
+    markStop: Effect.void,
+    persistStopOutput: () => Effect.void,
     beginSession: () => Effect.void,
     writeOutputChunk: () => Effect.void,
     persistFailureSnapshot: () => Effect.void,
@@ -203,6 +207,114 @@ function makeTestInstance(input: MakeInstanceInput) {
 }
 
 describe("DesktopBackendManager", () => {
+  registerBackendStopTests({ makeTestInstance, makeProcess, baseConfig });
+  it.effect.each([
+    ["a requested stop that exits cleanly records reason and elapsed", false],
+    ["stop with a timeout equal to the grace records that it gave up", true],
+  ] as const)("%s", ([_name, timeout]) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>();
+        const releasing = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const exited = yield* Deferred.make<void>();
+        const records: Array<{ message: string; details: string }> = [];
+        let stoppedDetails = "";
+        const spawnerLayer = Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make(() =>
+            Effect.gen(function* () {
+              const scope = yield* Scope.Scope;
+              yield* Scope.addFinalizer(
+                scope,
+                Deferred.succeed(releasing, undefined).pipe(
+                  Effect.andThen(Deferred.await(release)),
+                  Effect.andThen(Deferred.succeed(exited, undefined)),
+                  Effect.asVoid,
+                ),
+              );
+              yield* Deferred.succeed(started, undefined);
+              return makeProcess({
+                exitCode: Deferred.await(exited).pipe(Effect.as(ChildProcessSpawner.ExitCode(0))),
+              });
+            }),
+          ),
+        );
+        const instance = yield* makeTestInstance({
+          spawnerLayer,
+          backendOutputLog: {
+            recordStop: (record) =>
+              Effect.sync(() => {
+                records.push(record);
+              }),
+            persistStopOutput: ({ details }: { details: string }) =>
+              Effect.sync(() => {
+                stoppedDetails = details;
+              }),
+          },
+        });
+        yield* instance.start;
+        yield* Deferred.await(started);
+        const stop = yield* (
+          timeout
+            ? instance.stop("quit", { timeout: Duration.seconds(5) })
+            : instance.stop("recovery-stop")
+        ).pipe(Effect.forkChild);
+        yield* Deferred.await(releasing);
+        yield* TestClock.adjust(timeout ? "5 seconds" : "2 seconds");
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(stop);
+        const reason = timeout ? "quit" : "recovery-stop";
+        assert.isTrue(
+          records.some(
+            (record) =>
+              record.message === "backend stop requested" &&
+              record.details.includes(`reason=${reason}`),
+          ),
+        );
+        if (timeout) {
+          assert.isTrue(
+            records.some(
+              (record) =>
+                record.message === "backend stop timed out" && record.details.includes("5000"),
+            ),
+          );
+        } else {
+          assert.include(stoppedDetails, "reason=recovery-stop");
+          assert.include(stoppedDetails, "2000ms");
+        }
+      }),
+    ),
+  );
+
+  it.effect("a SIGKILL without a stop request says so", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const failure = yield* Deferred.make<string>();
+        const exitCause = PlatformError.systemError({
+          _tag: "Unknown",
+          module: "ChildProcess",
+          method: "exitCode",
+          cause: new Error("Process interrupted due to receipt of signal: 'SIGKILL'"),
+        });
+        const layerSpawner = Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make(() =>
+            Effect.succeed(makeProcess({ exitCode: Effect.fail(exitCause) })),
+          ),
+        );
+        const instance = yield* makeTestInstance({
+          spawnerLayer: layerSpawner,
+          backendOutputLog: {
+            persistFailure: ({ details }) => Deferred.succeed(failure, details).pipe(Effect.asVoid),
+          },
+        });
+        yield* instance.start;
+        assert.include(yield* Deferred.await(failure), "the desktop had not requested a stop");
+      }),
+    ),
+  );
+
   it.effect("spawns the backend with fd3 bootstrap and fd4 telemetry", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -454,9 +566,10 @@ describe("DesktopBackendManager", () => {
               Effect.sync(() => {
                 persistedFailureCount += 1;
               }),
-            discardSession: Effect.sync(() => {
-              discardedSessionCount += 1;
-            }),
+            persistStopOutput: () =>
+              Effect.sync(() => {
+                discardedSessionCount += 1;
+              }),
           },
           desktopTelemetryPublisher: {
             removeControlSource: () =>
@@ -477,7 +590,7 @@ describe("DesktopBackendManager", () => {
         assert.equal(runningSnapshot.ready, true);
         assert.deepEqual(runningSnapshot.activePid, Option.some(123));
 
-        const stopFiber = yield* instance.stop().pipe(Effect.forkChild);
+        const stopFiber = yield* instance.stop("quit").pipe(Effect.forkChild);
         yield* Deferred.await(teardownStarted).pipe(Effect.timeout("1 second"));
         assert.isFalse(yield* Ref.get(backendReadyFlag));
         assert.equal(shutdownCount, 1);
@@ -545,7 +658,7 @@ describe("DesktopBackendManager", () => {
         yield* instance.start;
         assert.equal(yield* Queue.take(starts), 1);
 
-        const stopFiber = yield* instance.stop().pipe(Effect.forkChild);
+        const stopFiber = yield* instance.stop("quit").pipe(Effect.forkChild);
         yield* Deferred.await(teardownStarted).pipe(Effect.timeout("1 second"));
         yield* instance.start;
         assert.equal((yield* instance.snapshot).desiredRunning, true);
@@ -690,12 +803,16 @@ describe("DesktopBackendManager", () => {
           spawnerLayer: Layer.succeed(
             ChildProcessSpawner.ChildProcessSpawner,
             ChildProcessSpawner.make(() =>
-              Effect.succeed(
-                makeProcess({
+              Effect.gen(function* () {
+                const exited = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
+                yield* Effect.addFinalizer(() =>
+                  Deferred.succeed(exited, ChildProcessSpawner.ExitCode(0)),
+                );
+                return makeProcess({
                   stderr: Stream.make(new TextEncoder().encode("Server bootstrap stalled")),
-                  exitCode: Effect.never,
-                }),
-              ),
+                  exitCode: Deferred.await(exited),
+                });
+              }),
             ),
           ),
           httpClientLayer: layerHttpClient(() =>
@@ -770,7 +887,7 @@ it.effect("WSL preflight reaches fallback without spending the exit recovery bud
       }
       yield* Queue.take(ready);
       assert.equal(spawns, 6);
-      yield* instance.stop();
+      yield* instance.stop("quit");
     }),
   ),
 );
@@ -876,7 +993,7 @@ it.effect("six ready-then-exit80 runs pause; Retry explicitly restores the same 
       assert.equal((yield* instance.snapshot).restartAttempt, 1);
       yield* TestClock.adjust("10 minutes");
       assert.equal((yield* instance.snapshot).restartAttempt, 0);
-      yield* instance.stop();
+      yield* instance.stop("quit");
     }),
   ),
 );

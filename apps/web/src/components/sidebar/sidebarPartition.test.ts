@@ -103,3 +103,16 @@ describe("partitionSidebarThreads with GOAT Bot threads", () => {
     expect(rowIds(result)).toEqual(["bot-coding", "channel-worker:work"]);
   });
 });
+
+it("orders active threads by their latest user prompt when the working shelf is off", () => {
+  const older = {
+    ...row("older"),
+    createdAt: "2026-03-01T00:00:00Z",
+    latestUserAuthoredMessageAt: "2026-03-03T00:00:00Z",
+  };
+  const newer = { ...row("newer"), createdAt: "2026-03-02T00:00:00Z" };
+  expect(partition([newer, older], new Set()).activeThreads.map((thread) => thread.id)).toEqual([
+    "older",
+    "newer",
+  ]);
+});

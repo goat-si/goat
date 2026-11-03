@@ -26,6 +26,7 @@ import {
   COMPUTER_USE_PRIMITIVE_CONTROL_CUTOFF_ROUTE,
 } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
+import { ignoreClosedPipe } from "@goat/shared/closedPipe";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Queue from "effect/Queue";
@@ -315,6 +316,8 @@ const linuxExecutable = (pid: number) => {
 };
 
 export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<void> {
+  // The provider that reads replies may leave first; its stdin EOF still ends the proxy.
+  process.stdout.on("error", ignoreClosedPipe);
   const platform = HostProcess.Platform.defaultValue();
   const drivers = new Set<NodeChildProcess.ChildProcess>();
   endDriversWithProxy(platform, () => drivers);
@@ -397,6 +400,8 @@ export async function runLeaseProxyCli(args: ReadonlyArray<string>): Promise<voi
           send(watch.exited(code ?? undefined));
         });
         const lines = NodeReadline.createInterface({ input: child.stdout, crlfDelay: Infinity });
+        // A broken driver stdout ends the driver; its exit handler reports it.
+        lines.on("error", () => killDriverGroup(platform, child, "SIGKILL"));
         // Keep early replies buffered for the proxy while the watch observes the same frames.
         const incoming = lines[Symbol.asyncIterator]();
         lines.on("line", (line) => send(watch.received(line)));

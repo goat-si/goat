@@ -33,11 +33,31 @@ code does not protect you here: these events fire from callbacks outside any fib
 ## Never resume after an uncaught exception
 
 Node does not guarantee consistent state after `uncaughtException`. Do not register
-`process.on("uncaughtException")` or `process.on("unhandledRejection")` anywhere except the
-server's single last-resort handler. That handler records the error and exits so the desktop
-supervisor restarts the server. It may continue only for codes that arrive after their
-resource was already torn down, such as `EPIPE`, `ECONNRESET` and `ERR_STREAM_DESTROYED`. Each
-code on that list needs a reviewed reason. Swallowing anything else hides state corruption.
+`process.on("uncaughtException")` or `process.on("unhandledRejection")` anywhere except
+[`@goat/shared/processErrorNet`](../../packages/shared/src/processErrorNet.ts), the last-resort
+handler the server installs at startup. It logs every uncaught error and unhandled rejection, then
+exits 1 so the desktop supervisor restarts the server, except for the reviewed entries below.
+Swallowing anything else hides state corruption.
+
+The teardown entries also require the error to be an `'error'` event that nobody heard: Node
+marks those, and a plain `throw` from our own code is unmarked, so it always exits. A rejection
+exits unless a registered classifier names it. Another `unhandledRejection` listener (Vitest) is
+left to decide about rejections; another `uncaughtException` listener never keeps the process up.
+
+| Entry                     | Predicate                                                                                      | Why continuing is safe                                                                                                                                        |
+| ------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `EPIPE`                   | `code` `EPIPE`, `syscall` `write`, unheard event                                               | Node destroys the socket or pipe, then emits on a later tick; the write that caused it has already returned.                                                  |
+| `ECONNRESET`              | `code` `ECONNRESET`, `syscall` `read` or `write`, unheard event                                | A peer reset, emitted after the socket is destroyed. http's "socket hang up" has no `syscall` and still exits: its request's owner is waiting for a response. |
+| `WS_CLOSED_CONNECTING`    | message "WebSocket was closed before the connection was established", no `code`, unheard event | `ws` raises it only after its owner closed a still-connecting socket, emitted on a later tick.                                                                |
+| Cursor closed exec stream | rejection named `WriteIterableClosedError` with message "WritableIterable is closed"           | The SDK refuses the write as its first statement because the exec already ended; nothing was written.                                                         |
+
+Reviewed and refused:
+
+- `ERR_STREAM_DESTROYED`: a write to a destroyed stream reports it only to the write callback,
+  so it escapes only when code rethrows or rejects it on its own path. The stdout/stderr
+  [closed-pipe filter](../../packages/shared/src/closedPipe.ts) still ignores it there.
+- Cursor shell spawn failures: the SDK routes a failed spawn into the exec's own stream, which
+  delivers it to GOAT's Cursor adapter, so containing it could hide a GOAT failure.
 
 ## Isolate by component, not by agent
 

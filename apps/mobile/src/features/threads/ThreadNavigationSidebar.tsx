@@ -1,3 +1,4 @@
+import { useEnvironmentHues } from "./useEnvironmentHues";
 import { useActiveNewTask } from "../../state/active-new-task";
 import { ThreadUndoNotice } from "../home/ThreadUndoNotice";
 import { useAndroidControlSizing } from "../../components/ui/useAndroidControlSizing";
@@ -291,6 +292,7 @@ function ThreadNavigationSidebarPane(
     const id = setInterval(() => setNow(new Date().toISOString()), 60_000);
     return () => clearInterval(id);
   }, []);
+  const environmentHues = useEnvironmentHues();
   const listEnvironments = useAtomValue(threadListEnvironmentsAtom);
   const {
     providersByEnvironmentId,
@@ -498,6 +500,7 @@ function ThreadNavigationSidebarPane(
     projectTitleByProjectKey,
     savedConnectionsById,
     listEnvironments,
+    environmentHues,
     threadSearchMatchByKey,
     workingShelfEnabled,
   };
@@ -554,6 +557,7 @@ function ThreadNavigationSidebarPane(
                 ? (savedConnectionsById[item.pendingTask.environmentId]?.environmentLabel ?? null)
                 : null
             }
+            environmentHue={environmentHues.get(item.pendingTask.environmentId)}
             environmentMachine={machineByEnvironmentId.get(item.pendingTask.environmentId)}
             pane="sidebar"
             showPendingDivider={item.showPendingDivider}
@@ -591,6 +595,7 @@ function ThreadNavigationSidebarPane(
                   ? (savedConnectionsById[thread.environmentId]?.environmentLabel ?? null)
                   : null
               }
+              environmentHue={environmentHues.get(thread.environmentId)}
               environmentMachine={machineByEnvironmentId.get(thread.environmentId)}
               searchMatch={
                 // Only rows listed for their messages show one and open at it.

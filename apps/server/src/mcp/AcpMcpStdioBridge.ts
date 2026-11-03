@@ -2,6 +2,7 @@
 // @effect-diagnostics nodeBuiltinImport:off preferSchemaOverJson:off
 import * as NodeReadline from "node:readline";
 
+import { ignoreClosedPipe } from "@goat/shared/closedPipe";
 import { discardResponseBody, responsePayloads } from "@goat/shared/mcpResponsePayloads";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
@@ -511,6 +512,8 @@ export async function runAcpMcpBridgeFastPath(): Promise<void> {
     process.exitCode = 2;
     return;
   }
+  // The ACP agent that reads replies may leave first; its stdin EOF still ends the bridge.
+  process.stdout.on("error", ignoreClosedPipe);
   await Effect.runPromise(
     runAcpMcpStdioBridge({
       endpoint,

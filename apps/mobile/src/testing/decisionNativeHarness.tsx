@@ -8,6 +8,7 @@ vi.mock("../native/NativeScrollViewMarker", () => ({
   NativeScrollView: Box,
   NativeScrollViewMarker: Box,
 }));
+vi.mock("../features/threads/useEnvironmentHues", () => ({ useEnvironmentHues: () => new Map() }));
 vi.mock("../features/home/ThreadUndoNotice", () => ({ ThreadUndoNotice: () => null }));
 vi.mock("react-native-reanimated", () => ({
   default: { View: Box },

@@ -12,7 +12,7 @@ class o extends Error {
   override name = "WriteIterableClosedError";
 }
 
-// Calls the guard directly, with Vitest's own listener detached so the guard does not defer to it.
+// Calls the process net's rejection listener directly, with Vitest's own listener detached so it does not defer.
 const rejectThroughGuard = (reason: unknown) =>
   Effect.gen(function* () {
     const others = process.listeners("unhandledRejection");
@@ -20,7 +20,6 @@ const rejectThroughGuard = (reason: unknown) =>
     const guard = process.listeners("unhandledRejection").find((l) => !others.includes(l));
     assert.isDefined(guard);
     using exit = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
-    using _log = vi.spyOn(console, "error").mockImplementation(() => {});
     for (const listener of others) process.off("unhandledRejection", listener);
     try {
       guard(reason, Promise.resolve());
@@ -42,6 +41,25 @@ describe("CursorSdk unhandled rejection guard", () => {
       assert.deepStrictEqual(yield* rejectThroughGuard(new Error("WritableIterable is closed")), [
         [1],
       ]);
+    }),
+  );
+
+  it.effect("exits on a Cursor shell spawn failure, which reaches GOAT's adapter too", () =>
+    Effect.gen(function* () {
+      const spawnFailure = Object.assign(new Error("spawn /bin/zsh ENOENT"), {
+        code: "ENOENT",
+        syscall: "spawn /bin/zsh",
+        spawnargs: ["-c", "dump_zsh_state >&4"],
+      });
+      assert.deepStrictEqual(yield* rejectThroughGuard(spawnFailure), [[1]]);
+    }),
+  );
+
+  it.effect("releases its rejection listener with the layer", () =>
+    Effect.gen(function* () {
+      const before = process.listenerCount("unhandledRejection");
+      yield* Layer.build(CursorSdk.layer).pipe(Effect.scoped);
+      assert.strictEqual(process.listenerCount("unhandledRejection"), before);
     }),
   );
 });

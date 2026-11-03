@@ -98,17 +98,6 @@ export async function startDriver(options: {
     for (const resolve of pending.values()) resolve("gone");
     pending.clear();
   });
-  NodeReadline.createInterface({ input: child.stdout }).on("line", (line) => {
-    let message: Record<string, unknown>;
-    try {
-      message = record(JSON.parse(line));
-    } catch {
-      return;
-    }
-    if (typeof message.id !== "number") return;
-    pending.get(message.id)?.(message);
-    pending.delete(message.id);
-  });
 
   let serial = 0;
   const send = (value: object) => {
@@ -139,6 +128,20 @@ export async function startDriver(options: {
       // The group is already gone.
     }
   };
+  const lines = NodeReadline.createInterface({ input: child.stdout });
+  // A driver whose stdout breaks is as gone as one that exited.
+  lines.on("error", kill);
+  lines.on("line", (line) => {
+    let message: Record<string, unknown>;
+    try {
+      message = record(JSON.parse(line));
+    } catch {
+      return;
+    }
+    if (typeof message.id !== "number") return;
+    pending.get(message.id)?.(message);
+    pending.delete(message.id);
+  });
   const close = async () => {
     child.stdin.end();
     const timer = setTimeout(kill, CLOSE_GRACE_MS);

@@ -1,5 +1,10 @@
 import * as HostProcess from "@goat/shared/HostProcess";
+import { ignoreClosedPipe } from "@goat/shared/closedPipe";
+import { installProcessErrorNet } from "@goat/shared/processErrorNet";
+import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -36,13 +41,6 @@ const prepareWorkingDirectory = Effect.fn("server.prepareWorkingDirectory")(func
   return result.original;
 });
 
-// The desktop launcher reads this process's stdout and stderr. Once it is gone,
-// every log write fails, and Node turns an unhandled stream error into a crash
-// that skips shutdown and leaves the ownership lock and runtime record behind.
-function ignoreClosedLauncherPipe(error: NodeJS.ErrnoException): void {
-  if (error.code !== "EPIPE" && error.code !== "ERR_STREAM_DESTROYED") throw error;
-}
-
 const runServerCommand = Effect.fn("server.runServerCommand")(function* (
   flags: CliServerFlags,
   options?: {
@@ -52,6 +50,8 @@ const runServerCommand = Effect.fn("server.runServerCommand")(function* (
     readonly originalCwd?: string | undefined;
   },
 ) {
+  // For the process lifetime: shutdown tears down pipes and sockets, when teardown errors cluster.
+  yield* Effect.sync(installProcessErrorNet);
   const originalCwd = (yield* prepareWorkingDirectory()) ?? options?.originalCwd;
   const logLevel = yield* GlobalFlag.LogLevel;
   const config = yield* resolveServerConfig(flags, logLevel, { ...options, originalCwd });
@@ -63,6 +63,28 @@ const runServerCommand = Effect.fn("server.runServerCommand")(function* (
   const sshReplacementId = environment[SSH_REPLACEMENT_ID_ENV]?.trim() || undefined;
   return yield* Effect.scoped(
     Effect.gen(function* () {
+      const clock = yield* Clock.Clock;
+      const runLog = Effect.runForkWith(yield* Effect.context<never>());
+      let signalAt: bigint | undefined;
+      const onSigterm = () => {
+        signalAt ??= clock.monotonicTimeNanosUnsafe();
+        runLog(Effect.logInfo("Server received SIGTERM; shutting down"));
+      };
+      const onSigint = () => {
+        signalAt ??= clock.monotonicTimeNanosUnsafe();
+        runLog(Effect.logInfo("Server received SIGINT; shutting down"));
+      };
+      yield* Effect.acquireRelease(
+        Effect.sync(() => {
+          process.prependListener("SIGTERM", onSigterm);
+          process.prependListener("SIGINT", onSigint);
+        }),
+        () =>
+          Effect.sync(() => {
+            process.off("SIGTERM", onSigterm);
+            process.off("SIGINT", onSigint);
+          }),
+      );
       // Held until the server exits, before any layer opens the database.
       yield* acquireServerOwnerLock({
         stateDir: config.stateDir,
@@ -77,17 +99,39 @@ const runServerCommand = Effect.fn("server.runServerCommand")(function* (
       // Other GOAT servers on this machine bind the same checkouts; removal must see their work.
       yield* holdWorkspaceLeaseRegistry();
       const run = runServer.pipe(Effect.provideService(ServerConfig.ServerConfig, config));
-      if (config.mode !== "desktop" || config.desktopBootstrapToken === undefined)
-        return yield* run;
-      yield* Effect.sync(() => {
-        process.stdout.on("error", ignoreClosedLauncherPipe);
-        process.stderr.on("error", ignoreClosedLauncherPipe);
-      });
-      return yield* Effect.raceFirst(
-        run,
-        awaitLauncherLoss().pipe(
-          // End like SIGTERM does (interrupt-only exit, so the runtime forces process exit).
-          Effect.andThen(Effect.interrupt),
+      const desktop = config.mode === "desktop" && config.desktopBootstrapToken !== undefined;
+      if (desktop) {
+        yield* Effect.sync(() => {
+          // The desktop launcher reads this process's stdout and stderr. Once it is gone,
+          // every log write fails, and Node turns an unhandled stream error into a crash
+          // that skips shutdown and leaves the ownership lock and runtime record behind.
+          process.stdout.on("error", ignoreClosedPipe);
+          process.stderr.on("error", ignoreClosedPipe);
+        });
+      }
+      const running = desktop
+        ? Effect.raceFirst(
+            run,
+            awaitLauncherLoss().pipe(
+              // End like SIGTERM does (interrupt-only exit, so the runtime forces process exit).
+              Effect.andThen(Effect.interrupt),
+            ),
+          )
+        : run;
+      return yield* running.pipe(
+        Effect.onExit((exit) =>
+          Effect.gen(function* () {
+            const totalMs =
+              signalAt === undefined
+                ? null
+                : Number(((yield* Clock.monotonicTimeNanos) - signalAt) / 1_000_000n);
+            const result = Exit.isSuccess(exit)
+              ? "success"
+              : Cause.hasInterruptsOnly(exit.cause)
+                ? "interrupted"
+                : "failure";
+            yield* Effect.logInfo("Server shutdown finished", { exit: result, totalMs });
+          }),
         ),
       );
     }),

@@ -84,18 +84,24 @@ export const layer = HttpApiBuilder.group(
         readonly omitIdleSubagents: boolean;
         readonly omitOlderSettled: boolean;
       }) {
-        const base = buildActiveShellSnapshot(
-          yield* loadShellSnapshotParts({
-            sql,
-            readThreads: threadManagement.readShellSnapshot({ location: "active" }),
-            listProjects: projectStore.listShells(),
-            latestSequence: applicationEvents.latestApplicationSequence,
+        const parts = yield* loadShellSnapshotParts({
+          sql,
+          readThreads: threadManagement.readShellSnapshot({
+            location: "active",
+            ...(options.omitIdleSubagents ? { omitIdleSubagents: true } : {}),
           }),
-        );
-        const { snapshot } = shellSnapshotForSubscriber(base, {
-          ...options,
-          now: yield* DateTime.now,
+          listProjects: projectStore.listShells(),
+          latestSequence: applicationEvents.latestApplicationSequence,
         });
+        const base = buildActiveShellSnapshot(parts);
+        const { snapshot } = shellSnapshotForSubscriber(
+          base,
+          {
+            ...options,
+            now: yield* DateTime.now,
+          },
+          parts.shellIndex,
+        );
         const projects = yield* enrichProjectShells(base.projects);
         return { ...snapshot, projects };
       },

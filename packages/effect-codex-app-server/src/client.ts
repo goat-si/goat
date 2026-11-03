@@ -17,9 +17,15 @@ import {
   encodeOptionalPayload,
   runHandler,
 } from "./_internal/shared.ts";
+import {
+  makeMessageChannelStdio,
+  type CodexAppServerMessageChannel,
+} from "./_internal/messageChannel.ts";
+export type { CodexAppServerMessageChannel } from "./_internal/messageChannel.ts";
 import { makeChildStdio, makeStderrTail, makeTerminationError } from "./_internal/stdio.ts";
 
 export interface CodexAppServerClientOptions {
+  readonly maxOutgoingMessageBytes?: number;
   readonly logIncoming?: boolean;
   readonly logOutgoing?: boolean;
   readonly logger?: (
@@ -227,6 +233,9 @@ export const make = Effect.fn("effect-codex-app-server/CodexAppServerClient.make
   const terminated = yield* Deferred.make<CodexError.CodexAppServerError>();
   const transport = yield* CodexProtocol.makeCodexAppServerPatchedProtocol({
     stdio,
+    ...(options.maxOutgoingMessageBytes !== undefined
+      ? { maxOutgoingMessageBytes: options.maxOutgoingMessageBytes }
+      : {}),
     ...(terminationError ? { terminationError } : {}),
     ...(options.logIncoming !== undefined ? { logIncoming: options.logIncoming } : {}),
     ...(options.logOutgoing !== undefined ? { logOutgoing: options.logOutgoing } : {}),
@@ -321,3 +330,19 @@ const makeChildProcessClient = Effect.fn(
     makeTerminationError(handle, stderrTail.read),
   );
 });
+
+// Codex's socket listener accepts messages up to tungstenite's 64 MiB default.
+const SOCKET_MAX_MESSAGE_BYTES = 64 * 1024 * 1024;
+
+export const layerMessageChannel = (
+  channel: CodexAppServerMessageChannel,
+  options: CodexAppServerClientOptions = {},
+): Layer.Layer<CodexAppServerClient> =>
+  Layer.effect(
+    CodexAppServerClient,
+    make(
+      makeMessageChannelStdio(channel),
+      { maxOutgoingMessageBytes: SOCKET_MAX_MESSAGE_BYTES, ...options },
+      channel.closed,
+    ),
+  );

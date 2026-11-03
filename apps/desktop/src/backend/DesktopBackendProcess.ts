@@ -24,8 +24,14 @@ const DEFAULT_BACKEND_READINESS_TIMEOUT = Duration.minutes(1);
 const DEFAULT_BACKEND_READINESS_INTERVAL = Duration.millis(100);
 const DEFAULT_BACKEND_READINESS_REQUEST_TIMEOUT = Duration.seconds(1);
 // Match the service launcher's grace period so backends can stop provider sessions.
-const DEFAULT_BACKEND_TERMINATE_GRACE = Duration.seconds(5);
-const DEFAULT_BACKEND_OUTPUT_DRAIN_TIMEOUT = Duration.seconds(5);
+export const DEFAULT_BACKEND_TERMINATE_GRACE = Duration.seconds(5);
+export const BACKEND_SPAWN_SETTLE_TIMEOUT = Duration.seconds(1);
+// Spawn settle, grace, the SIGKILL exit wait, output drain, and a margin.
+export const BACKEND_STOP_TIMEOUT = Duration.sum(
+  BACKEND_SPAWN_SETTLE_TIMEOUT,
+  Duration.sum(DEFAULT_BACKEND_TERMINATE_GRACE, Duration.seconds(3)),
+);
+const DEFAULT_BACKEND_OUTPUT_DRAIN_TIMEOUT = Duration.seconds(1);
 const BACKEND_READINESS_PATH = GOAT_ENVIRONMENT_PATH;
 const { logWarning: logBackendProcessWarning } =
   DesktopObservability.makeComponentLogger("desktop-backend-process");
@@ -180,6 +186,8 @@ interface RunBackendProcessOptions extends DesktopBackendStartConfig {
   ) => Effect.Effect<void>;
   readonly readinessTimeout?: Duration.Duration;
   readonly outputDrainTimeout?: Duration.Duration;
+  readonly terminateGrace?: Duration.Duration;
+  readonly onSpawnReady?: Effect.Effect<void>;
   readonly onStarted?: (pid: number) => Effect.Effect<void>;
   readonly onExitObserved?: () => Effect.Effect<void>;
   readonly onReady?: () => Effect.Effect<void>;
@@ -258,236 +266,254 @@ const decodeDesktopTelemetryControlLine = Schema.decodeUnknownEffect(
   Schema.fromJsonString(DesktopTelemetryControlMessage),
 );
 
+export const signalOfExitReason = (reason: string): string | undefined =>
+  /^killed by (SIG[A-Z0-9]+)$/.exec(reason)?.[1];
+
 export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
   options: RunBackendProcessOptions,
 ): Effect.fn.Return<BackendProcessExit, BackendProcessError, BackendProcessRunRequirements> {
-  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const bootstrapJson = yield* encodeBootstrapJson(options.bootstrap).pipe(
-    Effect.mapError(
-      (cause) =>
-        new BackendProcessBootstrapEncodeError({
-          executablePath: options.executablePath,
-          entryPath: options.entryPath,
-          cwd: options.cwd,
-          httpBaseUrl: options.httpBaseUrl,
-          cause,
-        }),
-    ),
-  );
-  const onOutput = options.onOutput ?? (() => Effect.void);
-  const bootstrapStream = Stream.encodeText(Stream.make(`${bootstrapJson}\n`));
-  const additionalFds: Record<`fd${number}`, ChildProcess.AdditionalFdConfig> = {};
-  if (options.bootstrapDelivery === "fd3") {
-    additionalFds.fd3 = {
-      type: "input",
-      stream: bootstrapStream,
-    };
-    if (options.bootstrap.desktopTelemetryFd !== undefined) {
-      additionalFds[`fd${options.bootstrap.desktopTelemetryFd}`] = {
+  const outputFibers: Array<Fiber.Fiber<void, never>> = [];
+  return yield* Effect.gen(function* () {
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const bootstrapJson = yield* encodeBootstrapJson(options.bootstrap).pipe(
+      Effect.mapError(
+        (cause) =>
+          new BackendProcessBootstrapEncodeError({
+            executablePath: options.executablePath,
+            entryPath: options.entryPath,
+            cwd: options.cwd,
+            httpBaseUrl: options.httpBaseUrl,
+            cause,
+          }),
+      ),
+    );
+    const onOutput = options.onOutput ?? (() => Effect.void);
+    const bootstrapStream = Stream.encodeText(Stream.make(`${bootstrapJson}\n`));
+    const additionalFds: Record<`fd${number}`, ChildProcess.AdditionalFdConfig> = {};
+    if (options.bootstrapDelivery === "fd3") {
+      additionalFds.fd3 = {
         type: "input",
-        stream: options.desktopTelemetryStream,
+        stream: bootstrapStream,
       };
+      if (options.bootstrap.desktopTelemetryFd !== undefined) {
+        additionalFds[`fd${options.bootstrap.desktopTelemetryFd}`] = {
+          type: "input",
+          stream: options.desktopTelemetryStream,
+        };
+      }
+      if (options.bootstrap.desktopTelemetryControlFd !== undefined) {
+        additionalFds[`fd${options.bootstrap.desktopTelemetryControlFd}`] = {
+          type: "output",
+        };
+      }
+      if (
+        options.bootstrap.desktopBrowserFd !== undefined &&
+        options.desktopBrowserStream !== undefined
+      ) {
+        additionalFds[`fd${options.bootstrap.desktopBrowserFd}`] = {
+          type: "input",
+          stream: options.desktopBrowserStream,
+        };
+      }
+      if (options.bootstrap.desktopBrowserControlFd !== undefined) {
+        additionalFds[`fd${options.bootstrap.desktopBrowserControlFd}`] = { type: "output" };
+      }
     }
-    if (options.bootstrap.desktopTelemetryControlFd !== undefined) {
-      additionalFds[`fd${options.bootstrap.desktopTelemetryControlFd}`] = {
-        type: "output",
-      };
+    const command = ChildProcess.make(options.executablePath, options.args, {
+      cwd: options.cwd,
+      env: options.env,
+      extendEnv: options.extendEnv,
+      stdin: options.bootstrapDelivery === "stdin" ? bootstrapStream : "ignore",
+      stdout: options.captureOutput ? "pipe" : "inherit",
+      stderr: options.captureOutput ? "pipe" : "inherit",
+      killSignal: "SIGTERM",
+      forceKillAfter: options.terminateGrace ?? DEFAULT_BACKEND_TERMINATE_GRACE,
+      // wsl.exe drops extra file descriptors; deliver its bootstrap via stdin.
+      ...(options.bootstrapDelivery === "fd3" ? { additionalFds } : {}),
+    });
+
+    const handle = yield* Effect.uninterruptibleMask(() =>
+      Effect.gen(function* () {
+        const handle = yield* spawner.spawn(command).pipe(
+          Effect.mapError(
+            (cause) =>
+              new BackendProcessSpawnError({
+                executablePath: options.executablePath,
+                entryPath: options.entryPath,
+                cwd: options.cwd,
+                httpBaseUrl: options.httpBaseUrl,
+                cause,
+              }),
+          ),
+        );
+        if (options.captureOutput) {
+          const outputContext = {
+            executablePath: options.executablePath,
+            entryPath: options.entryPath,
+            cwd: options.cwd,
+            httpBaseUrl: options.httpBaseUrl,
+            pid: Number(handle.pid),
+          };
+          const onOutputFailure = options.onOutputFailure ?? (() => Effect.void);
+          outputFibers.push(
+            yield* drainBackendOutput(
+              outputContext,
+              "stdout",
+              handle.stdout,
+              onOutput,
+              onOutputFailure,
+            ).pipe(Effect.forkDetach),
+            yield* drainBackendOutput(
+              outputContext,
+              "stderr",
+              handle.stderr,
+              onOutput,
+              onOutputFailure,
+            ).pipe(Effect.forkDetach),
+          );
+        }
+        yield* options.onSpawnReady ?? Effect.void;
+        return handle;
+      }),
+    );
+    yield* options.onStarted?.(handle.pid) ?? Effect.void;
+    if (
+      options.bootstrap.desktopTelemetryControlFd !== undefined &&
+      options.onDesktopTelemetryControl !== undefined
+    ) {
+      const controlFd = options.bootstrap.desktopTelemetryControlFd;
+      const handleControl = options.onDesktopTelemetryControl;
+      const dispatch = yield* makeControlDispatch({
+        handle: handleControl,
+        onFailure: () =>
+          logBackendProcessWarning("desktop telemetry control admission closed", {
+            fd: controlFd,
+          }).pipe(
+            Effect.andThen(
+              options.onControlFailure ??
+                handleControl({ version: 1, type: "setDiagnosticsDemand", enabled: false }),
+            ),
+          ),
+      });
+      const frameControl = makeControlLineFramer();
+      yield* handle.getOutputFd(controlFd).pipe(
+        Stream.mapEffect((chunk) => Effect.try(() => frameControl(chunk))),
+        Stream.flattenIterable,
+        Stream.filter((line) => line.trim().length > 0),
+        Stream.mapEffect((line) =>
+          decodeDesktopTelemetryControlLine(line).pipe(
+            Effect.flatMap(dispatch.offer),
+            Effect.catchCause((cause) =>
+              logBackendProcessWarning("ignored invalid desktop telemetry control message", {
+                fd: controlFd,
+                cause: Cause.pretty(cause),
+              }).pipe(Effect.as(true)),
+            ),
+          ),
+        ),
+        Stream.takeWhile((accepted) => accepted),
+        Stream.runDrain,
+        Effect.andThen(dispatch.end),
+        Effect.andThen(options.onControlFailure ?? Effect.void),
+        Effect.catchCause((cause) =>
+          logBackendProcessWarning("desktop telemetry control stream stopped", {
+            fd: controlFd,
+            cause: Cause.pretty(cause),
+          }).pipe(Effect.andThen(options.onControlFailure ?? Effect.void)),
+        ),
+        Effect.forkScoped,
+      );
     }
     if (
-      options.bootstrap.desktopBrowserFd !== undefined &&
-      options.desktopBrowserStream !== undefined
+      options.bootstrap.desktopBrowserControlFd !== undefined &&
+      options.onDesktopBrowserCommand !== undefined
     ) {
-      additionalFds[`fd${options.bootstrap.desktopBrowserFd}`] = {
-        type: "input",
-        stream: options.desktopBrowserStream,
-      };
-    }
-    if (options.bootstrap.desktopBrowserControlFd !== undefined) {
-      additionalFds[`fd${options.bootstrap.desktopBrowserControlFd}`] = { type: "output" };
-    }
-  }
-  const command = ChildProcess.make(options.executablePath, options.args, {
-    cwd: options.cwd,
-    env: options.env,
-    extendEnv: options.extendEnv,
-    stdin: options.bootstrapDelivery === "stdin" ? bootstrapStream : "ignore",
-    stdout: options.captureOutput ? "pipe" : "inherit",
-    stderr: options.captureOutput ? "pipe" : "inherit",
-    killSignal: "SIGTERM",
-    forceKillAfter: DEFAULT_BACKEND_TERMINATE_GRACE,
-    // wsl.exe drops extra file descriptors; deliver its bootstrap via stdin.
-    ...(options.bootstrapDelivery === "fd3" ? { additionalFds } : {}),
-  });
-
-  const handle = yield* spawner.spawn(command).pipe(
-    Effect.mapError(
-      (cause) =>
-        new BackendProcessSpawnError({
-          executablePath: options.executablePath,
-          entryPath: options.entryPath,
-          cwd: options.cwd,
-          httpBaseUrl: options.httpBaseUrl,
-          cause,
-        }),
-    ),
-  );
-  const outputFibers: Array<Fiber.Fiber<void, never>> = [];
-
-  yield* options.onStarted?.(handle.pid) ?? Effect.void;
-  if (
-    options.bootstrap.desktopTelemetryControlFd !== undefined &&
-    options.onDesktopTelemetryControl !== undefined
-  ) {
-    const controlFd = options.bootstrap.desktopTelemetryControlFd;
-    const handleControl = options.onDesktopTelemetryControl;
-    const dispatch = yield* makeControlDispatch({
-      handle: handleControl,
-      onFailure: () =>
-        logBackendProcessWarning("desktop telemetry control admission closed", {
-          fd: controlFd,
-        }).pipe(
-          Effect.andThen(
-            options.onControlFailure ??
-              handleControl({ version: 1, type: "setDiagnosticsDemand", enabled: false }),
-          ),
+      const browserFd = options.bootstrap.desktopBrowserControlFd;
+      const handleCommand = options.onDesktopBrowserCommand;
+      yield* handle.getOutputFd(browserFd).pipe(
+        Stream.decodeText(),
+        Stream.splitLines,
+        Stream.filter((line) => line.length > 0),
+        Stream.runForEach(handleCommand),
+        Effect.catchCause((cause) =>
+          logBackendProcessWarning("desktop browser command stream stopped", {
+            fd: browserFd,
+            cause: Cause.pretty(cause),
+          }),
         ),
-    });
-    const frameControl = makeControlLineFramer();
-    yield* handle.getOutputFd(controlFd).pipe(
-      Stream.mapEffect((chunk) => Effect.try(() => frameControl(chunk))),
-      Stream.flattenIterable,
-      Stream.filter((line) => line.trim().length > 0),
-      Stream.mapEffect((line) =>
-        decodeDesktopTelemetryControlLine(line).pipe(
-          Effect.flatMap(dispatch.offer),
-          Effect.catchCause((cause) =>
-            logBackendProcessWarning("ignored invalid desktop telemetry control message", {
-              fd: controlFd,
-              cause: Cause.pretty(cause),
-            }).pipe(Effect.as(true)),
-          ),
-        ),
-      ),
-      Stream.takeWhile((accepted) => accepted),
-      Stream.runDrain,
-      Effect.andThen(dispatch.end),
-      Effect.andThen(options.onControlFailure ?? Effect.void),
-      Effect.catchCause((cause) =>
-        logBackendProcessWarning("desktop telemetry control stream stopped", {
-          fd: controlFd,
-          cause: Cause.pretty(cause),
-        }).pipe(Effect.andThen(options.onControlFailure ?? Effect.void)),
-      ),
-      Effect.forkScoped,
-    );
-  }
-  if (
-    options.bootstrap.desktopBrowserControlFd !== undefined &&
-    options.onDesktopBrowserCommand !== undefined
-  ) {
-    const browserFd = options.bootstrap.desktopBrowserControlFd;
-    const handleCommand = options.onDesktopBrowserCommand;
-    yield* handle.getOutputFd(browserFd).pipe(
-      Stream.decodeText(),
-      Stream.splitLines,
-      Stream.filter((line) => line.length > 0),
-      Stream.runForEach(handleCommand),
-      Effect.catchCause((cause) =>
-        logBackendProcessWarning("desktop browser command stream stopped", {
-          fd: browserFd,
-          cause: Cause.pretty(cause),
-        }),
-      ),
-      Effect.forkScoped,
-    );
-  }
-  if (options.captureOutput) {
-    const outputContext = {
-      executablePath: options.executablePath,
-      entryPath: options.entryPath,
-      cwd: options.cwd,
-      httpBaseUrl: options.httpBaseUrl,
-      pid: Number(handle.pid),
-    };
-    const onOutputFailure = options.onOutputFailure ?? (() => Effect.void);
-    outputFibers.push(
-      yield* drainBackendOutput(
-        outputContext,
-        "stdout",
-        handle.stdout,
-        onOutput,
-        onOutputFailure,
-      ).pipe(Effect.forkScoped),
-      yield* drainBackendOutput(
-        outputContext,
-        "stderr",
-        handle.stderr,
-        onOutput,
-        onOutputFailure,
-      ).pipe(Effect.forkScoped),
-    );
-  }
-  // Cold WSL boots across /mnt/c can exceed one probe budget; retry while the backend is alive.
-  const probeReadiness = Effect.fn("desktop.backendProcess.probeReadiness")(() =>
-    waitForHttpReady({
-      executablePath: options.executablePath,
-      entryPath: options.entryPath,
-      cwd: options.cwd,
-      httpBaseUrl: options.httpBaseUrl,
-      timeout: options.readinessTimeout ?? DEFAULT_BACKEND_READINESS_TIMEOUT,
-    }).pipe(
-      Effect.flatMap(() => options.onReady?.() ?? Effect.void),
-      Effect.as(true),
-      Effect.catchTags({
-        BackendReadinessTimeoutError: (error) =>
-          (options.onReadinessFailure?.(error) ?? Effect.void).pipe(Effect.as(false)),
-      }),
-    ),
-  );
-
-  yield* probeReadiness().pipe(Effect.repeat({ while: (ready) => !ready }), Effect.forkScoped);
-
-  const exit = yield* handle.exitCode.pipe(
-    Effect.map((exitCode) => ({
-      code: Option.some(exitCode),
-      reason: `code=${exitCode}`,
-    })),
-    Effect.catch((cause) => {
-      // Effect's Node spawner exposes signal exits only through this cause message.
-      const signal =
-        cause.cause instanceof Error
-          ? /^Process interrupted due to receipt of signal: '(SIG[A-Z0-9]+)'$/.exec(
-              cause.cause.message,
-            )?.[1]
-          : undefined;
-      if (signal !== undefined) {
-        return Effect.succeed({ code: Option.none(), reason: `killed by ${signal}` });
-      }
-      return Effect.fail(
-        new BackendProcessExitStatusError({
-          executablePath: options.executablePath,
-          entryPath: options.entryPath,
-          cwd: options.cwd,
-          httpBaseUrl: options.httpBaseUrl,
-          pid: Number(handle.pid),
-          cause,
-        }),
+        Effect.forkScoped,
       );
-    }),
-    Effect.exit,
-  );
-  if (Exit.isSuccess(exit)) {
-    yield* options.onExitObserved?.() ?? Effect.void;
-  }
-  yield* Effect.forEach(outputFibers, Fiber.await, {
-    concurrency: "unbounded",
-    discard: true,
+    }
+    // Cold WSL boots across /mnt/c can exceed one probe budget; retry while the backend is alive.
+    const probeReadiness = Effect.fn("desktop.backendProcess.probeReadiness")(() =>
+      waitForHttpReady({
+        executablePath: options.executablePath,
+        entryPath: options.entryPath,
+        cwd: options.cwd,
+        httpBaseUrl: options.httpBaseUrl,
+        timeout: options.readinessTimeout ?? DEFAULT_BACKEND_READINESS_TIMEOUT,
+      }).pipe(
+        Effect.flatMap(() => options.onReady?.() ?? Effect.void),
+        Effect.as(true),
+        Effect.catchTags({
+          BackendReadinessTimeoutError: (error) =>
+            (options.onReadinessFailure?.(error) ?? Effect.void).pipe(Effect.as(false)),
+        }),
+      ),
+    );
+
+    yield* probeReadiness().pipe(Effect.repeat({ while: (ready) => !ready }), Effect.forkScoped);
+
+    const exit = yield* handle.exitCode.pipe(
+      Effect.map((exitCode) => ({
+        code: Option.some(exitCode),
+        reason: `code=${exitCode}`,
+      })),
+      Effect.catch((cause) => {
+        // Effect's Node spawner exposes signal exits only through this cause message.
+        const signal =
+          cause.cause instanceof Error
+            ? /^Process interrupted due to receipt of signal: '(SIG[A-Z0-9]+)'$/.exec(
+                cause.cause.message,
+              )?.[1]
+            : undefined;
+        if (signal !== undefined) {
+          return Effect.succeed({ code: Option.none(), reason: `killed by ${signal}` });
+        }
+        return Effect.fail(
+          new BackendProcessExitStatusError({
+            executablePath: options.executablePath,
+            entryPath: options.entryPath,
+            cwd: options.cwd,
+            httpBaseUrl: options.httpBaseUrl,
+            pid: Number(handle.pid),
+            cause,
+          }),
+        );
+      }),
+      Effect.exit,
+    );
+    if (Exit.isSuccess(exit)) {
+      yield* options.onExitObserved?.() ?? Effect.void;
+    }
+    yield* Effect.forEach(outputFibers, Fiber.await, {
+      concurrency: "unbounded",
+      discard: true,
+    }).pipe(
+      Effect.timeout(options.outputDrainTimeout ?? DEFAULT_BACKEND_OUTPUT_DRAIN_TIMEOUT),
+      Effect.ignore,
+    );
+    yield* Effect.forEach(outputFibers, Fiber.interrupt, {
+      concurrency: "unbounded",
+      discard: true,
+    });
+    if (Exit.isFailure(exit)) {
+      return yield* Effect.failCause(exit.cause);
+    }
+    return exit.value;
   }).pipe(
-    Effect.timeout(options.outputDrainTimeout ?? DEFAULT_BACKEND_OUTPUT_DRAIN_TIMEOUT),
-    Effect.ignore,
+    Effect.ensuring(
+      Effect.forEach(outputFibers, Fiber.interrupt, { concurrency: "unbounded", discard: true }),
+    ),
   );
-  if (Exit.isFailure(exit)) {
-    return yield* Effect.failCause(exit.cause);
-  }
-  return exit.value;
 });
