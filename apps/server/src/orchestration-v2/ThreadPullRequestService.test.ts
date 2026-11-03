@@ -365,6 +365,8 @@ describe("ThreadPullRequestServiceV2 reads", () => {
               branchPullRequest: () =>
                 Effect.succeed({
                   number: 42,
+                  title: "Branch work",
+                  updatedAt: null,
                   url: `https://github.com/${repository}/pull/42`,
                   state: "open" as const,
                   isDraft: false,
