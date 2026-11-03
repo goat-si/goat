@@ -86,7 +86,7 @@ const layerCommandReceiptStoreProvided = CommandReceiptStore.layerFromApplicatio
   Layer.provide(layerEventInfrastructure),
 );
 
-const layerStores = Layer.mergeAll(
+export const layerStores = Layer.mergeAll(
   layerEventInfrastructure,
   layerEventStoreProvided,
   ProjectionStore.layer,

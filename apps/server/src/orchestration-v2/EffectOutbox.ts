@@ -14,6 +14,8 @@ import {
   RuntimeRequestId,
   ThreadId,
 } from "@goat/contracts";
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeOS from "node:os";
 import * as Context from "effect/Context";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as DateTime from "effect/DateTime";
@@ -32,6 +34,7 @@ import * as EffectExecutionFences from "./EffectExecutionFences.ts";
 import { effectTypesForLane } from "./EffectExecutionPolicy.ts";
 import { forkParked } from "../serverActivation.ts";
 import * as AutomationHold from "../automationHold.ts";
+import * as HostPressureMonitor from "../fleet/pressure/HostPressureMonitor.ts";
 
 export const OrchestrationEffectRequestV2 = Schema.Union([
   Schema.Struct({
@@ -218,6 +221,7 @@ export interface EffectOutboxV2Shape {
   readonly awaitAvailable: Effect.Effect<void>;
   readonly awaitControlAvailable: Effect.Effect<void>;
   readonly awaitCleanupAvailable: Effect.Effect<void>;
+  readonly awaitStartAvailable: Effect.Effect<void>;
   readonly notifyAvailable: (count?: number) => Effect.Effect<void>;
   /** Persist rows only. Notify workers after the surrounding transaction commits. */
   readonly enqueue: (
@@ -325,6 +329,16 @@ export const layer = Layer.effect(
     const sql = yield* SqlClient.SqlClient;
     const fences = yield* EffectExecutionFences.EffectExecutionFences;
     const claimLock = yield* Semaphore.make(1);
+    const pressure = yield* Effect.serviceOption(HostPressureMonitor.HostPressureMonitor);
+    const sampleStartCapacity = Option.isSome(pressure)
+      ? pressure.value.current.pipe(
+          Effect.map((sample) =>
+            sample?.level === "critical"
+              ? 1
+              : Math.max(2, Math.floor(NodeOS.availableParallelism() / 2)),
+          ),
+        )
+      : Effect.succeed(Math.max(2, Math.floor(NodeOS.availableParallelism() / 2)));
     const hold = yield* AutomationHold.AutomationHold;
     let backlog: { readonly effects: string; readonly threads: string } | undefined;
     const heldBacklog = Effect.gen(function* () {
@@ -338,6 +352,7 @@ export const layer = Layer.effect(
     const available = yield* Queue.dropping<void>(64);
     const controlAvailable = yield* Queue.dropping<void>(1);
     const cleanupAvailable = yield* Queue.dropping<void>(1);
+    const startAvailable = yield* Queue.dropping<void>(64);
     const cancellationSignals = new Map<string, Deferred.Deferred<void>>();
     const settledSignals = new Map<string, Deferred.Deferred<void>>();
     const signalSettled = (effectIds: ReadonlyArray<string>) =>
@@ -356,13 +371,21 @@ export const layer = Layer.effect(
         available,
         Array.from({ length: Math.min(64, Math.max(0, Math.floor(count))) }, () => undefined),
       ).pipe(
+        Effect.andThen(
+          Queue.offerAll(
+            startAvailable,
+            Array.from({ length: Math.min(64, Math.max(0, Math.floor(count))) }, () => undefined),
+          ),
+        ),
         Effect.andThen(Queue.offer(controlAvailable, undefined)),
         Effect.andThen(Queue.offer(cleanupAvailable, undefined)),
         Effect.asVoid,
       );
     // Retry backoff must block later effects so turns cannot race a pending rollback.
     const claimableCandidatePredicate = (
-      occupancy: Effect.Success<EffectExecutionFences.EffectExecutionFences["Service"]["snapshot"]>,
+      occupancy: Effect.Success<
+        ReturnType<EffectExecutionFences.EffectExecutionFences["Service"]["snapshotWith"]>
+      >,
       availableBefore?: string,
       excludeRestartContinuations = false,
       effectTypes?: ReadonlyArray<OrchestrationEffectRequestV2["type"]>,
@@ -506,6 +529,7 @@ export const layer = Layer.effect(
       awaitAvailable: Queue.take(available),
       awaitControlAvailable: Queue.take(controlAvailable),
       awaitCleanupAvailable: Queue.take(cleanupAvailable),
+      awaitStartAvailable: Queue.take(startAvailable),
       notifyAvailable,
       listByCommandId: (commandId) =>
         sql<EffectRow>`
@@ -622,7 +646,8 @@ export const layer = Layer.effect(
           effectTypes,
         }) {
           const held = yield* heldBacklog;
-          const occupancy = yield* fences.snapshot;
+          const startCapacity = yield* sampleStartCapacity;
+          const occupancy = yield* fences.snapshotWith({ startCapacity });
           const now = yield* DateTime.now;
           const nowIso = DateTime.formatIso(now);
           const leaseExpiresAt = DateTime.formatIso(
@@ -663,7 +688,8 @@ export const layer = Layer.effect(
       nextClaimableAtFor: Effect.fn("EffectOutbox.nextClaimableAtFor")(
         function* (effectTypes) {
           const held = yield* heldBacklog;
-          const occupancy = yield* fences.snapshot;
+          const startCapacity = yield* sampleStartCapacity;
+          const occupancy = yield* fences.snapshotWith({ startCapacity });
           const rows = yield* sql<{ readonly available_at: string | null }>`
           SELECT MIN(candidate.available_at) AS available_at
           FROM orchestration_v2_effect_outbox AS candidate
