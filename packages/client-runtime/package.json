@@ -531,6 +531,10 @@
       "types": "./src/state/launchFold.fixtures.ts",
       "default": "./src/state/launchFold.fixtures.ts"
     },
+    "./state/remote-launcher-families": {
+      "types": "./src/state/remoteLauncherFamilies.ts",
+      "default": "./src/state/remoteLauncherFamilies.ts"
+    },
     "./state/thread-search": {
       "types": "./src/state/threadSearch.ts",
       "default": "./src/state/threadSearch.ts"

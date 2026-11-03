@@ -1,13 +1,11 @@
-import { scopeThreadRef, scopedThreadKey } from "@goat/client-runtime/environment";
-import {
-  enabledEnvironmentIds,
-  type EnvironmentCatalogState,
-} from "@goat/client-runtime/state/connections";
-import type { EnvironmentThreadShell } from "@goat/client-runtime/state/models";
-import { threadFamilyRead } from "@goat/client-runtime/state/threads";
 import type { EnvironmentId, OrchestrationV2ThreadFamily, ThreadId } from "@goat/contracts";
-import { foldsUnderLauncherRow } from "@goat/client-runtime/state/launch-fold";
 import { Atom, type AsyncResult, type AtomRegistry } from "effect/reactivity";
+
+import { scopeThreadRef, scopedThreadKey } from "../environment/scoped.ts";
+import { enabledEnvironmentIds, type EnvironmentCatalogState } from "./connections.ts";
+import { foldsUnderLauncherRow } from "./launchFold.ts";
+import type { EnvironmentThreadShell } from "./models.ts";
+import { threadFamilyRead } from "./threadFamilies.ts";
 
 type LaunchedThread = Pick<
   EnvironmentThreadShell,
@@ -67,7 +65,7 @@ export function createRemoteLauncherFamilies(deps: {
       const key = keyOf(launcher.environmentId, launcher.threadId);
       refs.set(key, { environmentId: launcher.environmentId, threadId: launcher.threadId, key });
     }
-    const candidates = [...refs.values()].toSorted((a, b) => a.key.localeCompare(b.key));
+    const candidates = [...refs.values()].sort((a, b) => a.key.localeCompare(b.key));
     const present = new Set<string>();
     for (const thread of threads) {
       const key = keyOf(thread.environmentId, thread.id);
