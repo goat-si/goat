@@ -19,7 +19,7 @@ import * as ServerLogger from "../serverLogger.ts";
 import * as BrowserTraceCollector from "./BrowserTraceCollector.ts";
 import * as LogRedaction from "./LogRedaction.ts";
 import * as Metrics from "./Metrics.ts";
-import { keepLocalSqlSpan } from "./tracePolicy.ts";
+import { keepLocalSpan } from "./tracePolicy.ts";
 import * as HeapAttribution from "./HeapAttribution.ts";
 
 export const layer = Layer.unwrap(
@@ -83,7 +83,7 @@ export const layer = Layer.unwrap(
           shouldRecord:
             config.traceMinLevel === "Debug" || config.traceMinLevel === "Trace"
               ? () => true
-              : keepLocalSqlSpan,
+              : keepLocalSpan,
         });
 
         const heapAttribution = yield* HeapAttribution.make(tracer);

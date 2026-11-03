@@ -534,7 +534,7 @@ export const layer: Layer.Layer<
     // One row per statement, with a yield after each: a single tool output can be a megabyte,
     // so a page of them read at once would hold the event loop for tens of milliseconds.
     // Untraced: it runs once per page, and trimThread already spans each thread.
-    const trimEach = Effect.fn("")(function* <K extends string | number>(
+    const trimEach = Effect.fnUntraced(function* <K extends string | number>(
       keys: ReadonlyArray<K>,
       read: (key: K) => Effect.Effect<ReadonlyArray<{ readonly payload_json: string }>, SqlError>,
       write: (key: K, payload: string) => Effect.Effect<unknown, SqlError>,

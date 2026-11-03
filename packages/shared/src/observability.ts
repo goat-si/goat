@@ -193,8 +193,12 @@ export interface TraceSink {
   close: () => Effect.Effect<void>;
 }
 
+export type LocalSpanEvents = ReadonlyArray<
+  readonly [name: string, startTime: bigint, attributes: Record<string, unknown>]
+>;
+
 export interface LocalFileTracerOptions extends TraceSinkOptions {
-  readonly shouldRecord?: (span: Tracer.Span, eventCount: number) => boolean;
+  readonly shouldRecord?: (span: Tracer.Span, events: LocalSpanEvents) => boolean;
   readonly onSpanEnd?: (snapshot: {
     readonly considered: number;
     readonly suppressed: number;
@@ -510,7 +514,7 @@ class LocalFileSpan implements Tracer.Span {
     this.delegate.end(endTime, traceExit);
 
     if (this.sampled) {
-      const included = this.shouldRecord?.(this, this.events.length) ?? true;
+      const included = this.shouldRecord?.(this, this.events) ?? true;
       this.recordDecision?.(included);
       if (included) this.push(spanToTraceRecord(this));
     }

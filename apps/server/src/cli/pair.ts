@@ -328,7 +328,7 @@ const makePairServerConfig = Effect.fn(function* (input: {
     traceTimingEnabled: false,
     traceBatchWindowMs: 1_000,
     traceMaxBytes: 10 * 1024 * 1024,
-    traceMaxFiles: 10,
+    traceMaxFiles: 30,
     otlpTracesUrl: undefined,
     otlpMetricsUrl: undefined,
     otlpLogsUrl: undefined,
