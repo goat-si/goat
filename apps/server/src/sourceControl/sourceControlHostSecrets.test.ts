@@ -3,6 +3,7 @@ import * as Schema from "effect/Schema";
 import { ServerSettings } from "@goat/contracts";
 import { resolveHostSecrets } from "./sourceControlHostSecrets.ts";
 import { HostCredentialSettings } from "@goat/source-control-core/shared/definition";
+import { makeSecretResolver } from "../secrets/secretResolver.ts";
 
 const decodeSettings = Schema.decodeUnknownSync(ServerSettings);
 const decodeHostCredentialSettings = Schema.decodeUnknownSync(HostCredentialSettings);
@@ -51,4 +52,37 @@ it("fails when a selected reference cannot be read", async () => {
       Promise.reject(new Error("secret output")),
     ),
   ).rejects.toThrow("Could not resolve source control credential");
+});
+
+it("reuses one resolved read across repeated GitHub, GitCafe and Bitbucket credential requests", async () => {
+  const reference = { provider: "vault", reference: "op://work/item/token" };
+  const settings = decodeSettings({
+    secretProviders: {
+      vault: { kind: "one_password", label: "Vault", config: { account: "team" } },
+    },
+    sourceControlHosts: {
+      github: { tokens: { "github.com": reference } },
+      gitcafe: { token: reference },
+      bitbucket: { accessToken: reference },
+    },
+  });
+  const read = vi.fn().mockResolvedValue("fixture");
+  const resolve = makeSecretResolver(read);
+  for (const [kind, host] of [
+    ["github", "github.com"],
+    ["gitcafe", undefined],
+    ["bitbucket", undefined],
+  ] as const) {
+    for (let index = 0; index < 2; index++) {
+      await resolveHostSecrets(settings, kind, host, (ref) =>
+        resolve(settings.secretProviders, ref),
+      );
+    }
+  }
+  expect(read).toHaveBeenCalledTimes(1);
+  resolve.invalidate();
+  await resolveHostSecrets(settings, "github", "github.com", (ref) =>
+    resolve(settings.secretProviders, ref),
+  );
+  expect(read).toHaveBeenCalledTimes(2);
 });

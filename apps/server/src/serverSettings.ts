@@ -88,6 +88,7 @@ import {
   rejectAgentWorkspaceTerminalPolicyChange,
 } from "./AgentWorkspaceTerminalPolicy.ts";
 import { makeCheckpointReplicationAdmission } from "./serverSettingsCheckpointAdmission.ts";
+import { preserveSecretReferences } from "./provider/preserveSecretReferences.ts";
 
 import { mapSettingsSecrets, type SettingsSecret } from "./settingsSecrets.ts";
 import { makeSettingsSecretMaterializer } from "./settingsSecretMaterialization.ts";
@@ -244,7 +245,10 @@ export function applyProviderInstanceMutation(
 ): ServerSettings {
   const providerInstances = { ...settings.providerInstances };
   if (mutation.operation === "upsert" || mutation.operation === "create") {
-    providerInstances[mutation.instanceId] = mutation.instance;
+    providerInstances[mutation.instanceId] =
+      mutation.operation === "upsert"
+        ? preserveSecretReferences(providerInstances[mutation.instanceId], mutation.instance)
+        : mutation.instance;
   } else {
     delete providerInstances[mutation.instanceId];
   }

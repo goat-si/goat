@@ -317,13 +317,6 @@ instance can have its own environment variables, such as API keys or a custom
 base URL. Mark secret values as sensitive; after saving, GOAT does not display
 their original values.
 
-When secret providers are enabled, you can add a 1Password account under
-**Settings → Providers → Secret providers** and select it as the source of a
-provider variable or a GitHub, Bitbucket, or GitCafe credential. Install and sign
-in to the `op` CLI on the environment's machine, then enter a reference such as
-`op://vault/item/field`. If a provider cannot read its secret, unlock 1Password
-on that machine and refresh provider status.
-
 For provider-specific setup and accounts, see [Codex](./providers-codex.md),
 [Claude](./providers-claude.md), [OpenCode](./providers-opencode.md),
 [Antigravity](./providers-antigravity.md), [Pi](./providers-pi.md),

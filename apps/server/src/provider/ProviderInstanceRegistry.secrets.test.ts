@@ -294,6 +294,7 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
   it.effect("can publish a loading provider before starting a secret read", () =>
     Effect.gen(function* () {
       let reads = 0;
+      let invalidations = 0;
       const id = ProviderInstanceId.make("secret_test");
       const configMap = decodeProviderInstanceConfigMap({
         [id]: {
@@ -313,6 +314,9 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
         drivers: [CodexDriver],
         configMap,
         deferSecrets: true,
+        invalidateSecrets: () => {
+          invalidations++;
+        },
         resolveSecret: () => {
           reads++;
           return Effect.succeed("fixture");
@@ -320,8 +324,9 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
       });
       expect(reads).toBe(0);
       expect(yield* registry.listUnavailable).toHaveLength(1);
-      yield* mutator.reloadSecrets?.(id) ?? Effect.void;
+      yield* mutator.hydrateSecrets?.() ?? Effect.void;
       expect(reads).toBe(1);
+      expect(invalidations).toBe(0);
       expect(yield* registry.getInstance(id)).toBeDefined();
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
@@ -395,6 +400,87 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
       secret = "rotated";
       yield* mutator.reloadSecrets?.(id) ?? Effect.void;
       expect(creations).toBe(2);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("bounds secret comparison and does not read a timed-out reference again", () =>
+    Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const blocked = yield* Deferred.make<string>();
+      let reads = 0;
+      const id = ProviderInstanceId.make("secret_test");
+      const configMap = decodeProviderInstanceConfigMap({
+        [id]: {
+          driver: "codex",
+          config: makeCodexConfig({ enabled: true }),
+          environment: [
+            {
+              name: "API_KEY",
+              value: "",
+              sensitive: true,
+              secret: { provider: "vault", reference: "op://work/item/password" },
+            },
+          ],
+        },
+      });
+      const { registry, mutator } = yield* makeProviderInstanceRegistry({
+        drivers: [CodexDriver],
+        configMap,
+        resolveSecret: () => {
+          reads++;
+          return reads === 1
+            ? Effect.succeed("fixture")
+            : Deferred.succeed(started, undefined).pipe(Effect.andThen(Deferred.await(blocked)));
+        },
+      });
+      const fiber = yield* (mutator.reloadSecrets?.(id) ?? Effect.void).pipe(Effect.forkChild);
+      yield* Deferred.await(started);
+      yield* TestClock.adjust("45 seconds");
+      expect(fiber.pollUnsafe()).toBeDefined();
+      yield* Fiber.join(fiber);
+      expect(reads).toBe(2);
+      expect(yield* registry.getInstance(id)).toBeUndefined();
+      expect(yield* registry.listUnavailable).toHaveLength(1);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect("does not repeat a failed comparison while rebuilding an unavailable provider", () =>
+    Effect.gen(function* () {
+      let reads = 0;
+      const id = ProviderInstanceId.make("secret_test");
+      const configMap = decodeProviderInstanceConfigMap({
+        [id]: {
+          driver: "codex",
+          config: makeCodexConfig({ enabled: true }),
+          environment: [
+            {
+              name: "API_KEY",
+              value: "",
+              sensitive: true,
+              secret: { provider: "vault", reference: "op://work/item/password" },
+            },
+          ],
+        },
+      });
+      const { registry, mutator } = yield* makeProviderInstanceRegistry({
+        drivers: [CodexDriver],
+        configMap,
+        resolveSecret: () => {
+          reads++;
+          return reads === 1
+            ? Effect.succeed("fixture")
+            : Effect.fail(
+                new ProviderDriverError({
+                  driver: CodexDriver.driverKind,
+                  instanceId: id,
+                  detail: "locked",
+                }),
+              );
+        },
+      });
+      yield* mutator.reloadSecrets?.(id) ?? Effect.void;
+      expect(reads).toBe(2);
+      expect(yield* registry.getInstance(id)).toBeUndefined();
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 });

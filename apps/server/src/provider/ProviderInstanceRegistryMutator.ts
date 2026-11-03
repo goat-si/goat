@@ -14,6 +14,7 @@ export interface ProviderInstanceRegistryMutatorShape {
     deferSecrets?: boolean,
   ) => Effect.Effect<void>;
   readonly reloadSecrets?: (instanceId?: ProviderInstanceId) => Effect.Effect<void>;
+  readonly hydrateSecrets?: () => Effect.Effect<void>;
 }
 
 export class ProviderInstanceRegistryMutator extends Context.Service<

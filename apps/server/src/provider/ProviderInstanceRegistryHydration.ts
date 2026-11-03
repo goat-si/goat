@@ -221,8 +221,8 @@ const settingsWatcher = (
           initial.secretProviders,
           true,
         );
-      if (initial !== undefined && mutator.reloadSecrets)
-        yield* mutator.reloadSecrets().pipe(Effect.forkScoped);
+      if (initial !== undefined && mutator.hydrateSecrets)
+        yield* mutator.hydrateSecrets().pipe(Effect.forkScoped);
       const settingsChanges: Stream.Stream<
         {
           readonly settings: ServerSettings;

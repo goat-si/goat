@@ -64,6 +64,12 @@ interface RegistryState {
 
 const entryEqual = (a: ProviderInstanceConfig, b: ProviderInstanceConfig): boolean =>
   Equal.equals(a, b);
+class SecretReadUnavailable extends Schema.TaggedError<SecretReadUnavailable>()(
+  "SecretReadUnavailable",
+  {},
+) {}
+const referenceKey = (reference: SecretReference) =>
+  `${reference.provider}\u0000${reference.reference}`;
 
 /**
  * An explicit false on either the envelope or the raw config blob wins (most
@@ -253,9 +259,10 @@ const makeReconcile = <R>(input: {
   secretProviders?: ServerSettings["secretProviders"],
   rebuild?: ReadonlySet<ProviderInstanceId>,
   deferSecrets?: boolean,
+  resolveOverride?: (reference: SecretReference) => Effect.Effect<string, Error>,
 ) => Effect.Effect<void, never, R>) => {
   const { state, driversById, parentScope, resolveSecret } = input;
-  return (configMap, secretProviders, rebuild, deferSecrets) =>
+  return (configMap, secretProviders, rebuild, deferSecrets, resolveOverride) =>
     Effect.gen(function* () {
       const previousEntries = yield* Ref.get(state.entries);
       const previousUnavailable = yield* Ref.get(state.unavailable);
@@ -327,7 +334,9 @@ const makeReconcile = <R>(input: {
           entry,
           providerConfigs: providerConfigsFor(entry, secretProviders),
           deferSecrets: deferSecrets === true,
-          ...(resolveSecret ? { resolveSecret } : {}),
+          ...((resolveOverride ?? resolveSecret)
+            ? { resolveSecret: resolveOverride ?? resolveSecret }
+            : {}),
         });
         if (result.kind === "live") {
           builtEntries.set(instanceId, result.live);
@@ -426,13 +435,20 @@ export const makeProviderInstanceRegistry = Effect.fn(
 
   yield* reconcile(input.configMap, input.secretProviders, input.deferSecrets);
 
-  const reloadSecrets = (instanceId?: ProviderInstanceId) =>
+  const refreshSecrets = (instanceId: ProviderInstanceId | undefined, invalidate: boolean) =>
     reconcileSemaphore.withPermits(1)(
       Effect.gen(function* () {
-        input.invalidateSecrets?.();
+        if (invalidate) input.invalidateSecrets?.();
         const snapshot = yield* Ref.get(latest);
         const liveEntries = yield* Ref.get(entries);
         const rebuild = new Set<ProviderInstanceId>();
+        const outcomes = new Map<string, string | null>();
+        const completed = new Set<ProviderInstanceId>();
+        const targets: Array<{
+          id: ProviderInstanceId;
+          references: ReadonlyArray<SecretReference>;
+          live: LiveEntry;
+        }> = [];
         for (const [rawId, entry] of Object.entries(snapshot.configMap)) {
           if (instanceId !== undefined && rawId !== instanceId) continue;
           const references = (entry.environment ?? []).flatMap((variable) =>
@@ -446,24 +462,58 @@ export const makeProviderInstanceRegistry = Effect.fn(
             continue;
           }
           if (!live.instance.enabled) continue;
-          const values: string[] = [];
-          for (const reference of references) {
-            const value = input.resolveSecret
-              ? yield* input.resolveSecret(reference).pipe(Effect.option)
-              : undefined;
-            if (value === undefined || value._tag === "None") {
-              rebuild.add(id);
-              break;
-            }
-            values.push(value.value);
-          }
-          if (!NodeUtil.isDeepStrictEqual(values, live.resolvedSecrets)) rebuild.add(id);
+          targets.push({ id, references, live });
         }
-        yield* reconcileWithR(snapshot.configMap, snapshot.secretProviders, rebuild).pipe(
-          Effect.provideContext(driverContext),
-        );
+        yield* Effect.gen(function* () {
+          for (const { id, references, live } of targets) {
+            const values: string[] = [];
+            for (const reference of references) {
+              const key = referenceKey(reference);
+              let value = outcomes.get(key);
+              if (value === undefined) {
+                const result = input.resolveSecret
+                  ? yield* input.resolveSecret(reference).pipe(Effect.option)
+                  : undefined;
+                value = result?._tag === "Some" ? result.value : null;
+                outcomes.set(key, value);
+              }
+              if (value === null) {
+                rebuild.add(id);
+                break;
+              }
+              values.push(value);
+            }
+            if (!NodeUtil.isDeepStrictEqual(values, live.resolvedSecrets)) rebuild.add(id);
+            completed.add(id);
+          }
+        }).pipe(Effect.timeoutOption("45 seconds"));
+        for (const { id, references } of targets) {
+          if (completed.has(id)) continue;
+          rebuild.add(id);
+          for (const reference of references) {
+            const key = referenceKey(reference);
+            if (!outcomes.has(key)) outcomes.set(key, null);
+          }
+        }
+        const resolveOnce = (reference: SecretReference): Effect.Effect<string, Error> => {
+          const value = outcomes.get(referenceKey(reference));
+          if (value === null) return Effect.fail(new SecretReadUnavailable());
+          if (value !== undefined) return Effect.succeed(value);
+          return input.resolveSecret
+            ? input.resolveSecret(reference)
+            : Effect.fail(new SecretReadUnavailable());
+        };
+        yield* reconcileWithR(
+          snapshot.configMap,
+          snapshot.secretProviders,
+          rebuild,
+          undefined,
+          resolveOnce,
+        ).pipe(Effect.provideContext(driverContext));
       }),
     );
+
+  const reloadSecrets = (instanceId?: ProviderInstanceId) => refreshSecrets(instanceId, true);
 
   const registry: ProviderInstanceRegistry["Service"] = {
     getInstance: (id) => Ref.get(entries).pipe(Effect.map((map) => map.get(id)?.instance)),
@@ -488,6 +538,7 @@ export const makeProviderInstanceRegistry = Effect.fn(
   const mutator: ProviderInstanceRegistryMutator.ProviderInstanceRegistryMutatorShape = {
     reconcile,
     reloadSecrets,
+    hydrateSecrets: () => refreshSecrets(undefined, false),
   };
 
   return { registry, mutator };
