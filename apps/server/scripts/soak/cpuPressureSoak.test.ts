@@ -162,6 +162,23 @@ describe("soak observations", () => {
     );
   });
 
+  it("reports turn coverage independently and rejects unobserved or incomplete requests", () => {
+    const observations = new Observations();
+    observations.requestRun();
+    observations.issueRun("run");
+    observations.recordRun("run", "completed");
+    expect(
+      observations.report(["unrelated coverage"], counter(), counter()).counters.turnFailures.value,
+    ).toBe(0);
+    observations.requestRun();
+    expect(observations.report([], counter(), counter()).counters.turnFailures.value).toBeNull();
+    observations.issueRun("second");
+    expect(observations.report([], counter(), counter()).counters.turnFailures.value).toBeNull();
+    observations.recordRun("second", "completed");
+    observations.streamGap("stream ended");
+    expect(observations.report([], counter(), counter()).counters.turnFailures.value).toBeNull();
+  });
+
   it("joins replay restarts and deduplicates a provider death", () => {
     const lines = [
       { event: "start" as const, pid: 1, instance: "devReplay", at: "1" },

@@ -261,6 +261,8 @@ export class Observations {
   private deathRuns = new Set<string>();
   private socketEpisodes = new Set<string>();
   private runs = new Map<string, "pending" | "completed" | "failed" | "interrupted">();
+  private runRequests = 0;
+  readonly streamGaps: string[] = [];
   private windowOpen = false;
   private completedInWindow = 0;
   private completedDuringDrain = 0;
@@ -323,6 +325,12 @@ export class Observations {
     if (this.runs.size >= LIMIT) this.gap("run limit reached");
     else if (!this.runs.has(id)) this.runs.set(id, "pending");
   }
+  requestRun(): void {
+    this.runRequests++;
+  }
+  streamGap(reason: string): void {
+    if (!this.streamGaps.includes(reason)) this.streamGaps.push(reason);
+  }
   setWindowOpen(open: boolean): void {
     this.windowOpen = open;
   }
@@ -363,10 +371,18 @@ export class Observations {
     const incomplete = statuses.filter((s) => s === "pending").length;
     const reasons = [...this.gaps, ...requiredCoverage];
     const disconnects = counter(this.socketEpisodes.size, reasons);
-    const turns = counter(failures, reasons);
+    const turns = counter(failures, [
+      ...this.streamGaps,
+      ...(incomplete ? ["issued runs remain incomplete"] : []),
+      ...(this.runRequests !== statuses.length
+        ? ["issued run requests do not match observed runs"]
+        : []),
+    ]);
     const result = [disconnects, turns, provider, server].some((c) => c.observed > 0)
       ? "fail"
-      : [disconnects, turns, provider, server].some((c) => c.coverage !== "complete") || incomplete
+      : reasons.length > 0 ||
+          [disconnects, turns, provider, server].some((c) => c.coverage !== "complete") ||
+          incomplete
         ? "inconclusive"
         : "pass";
     return {

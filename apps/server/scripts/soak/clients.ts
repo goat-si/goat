@@ -245,13 +245,13 @@ export async function runWorkload(input: WorkloadInput): Promise<{
           sessionOpened++;
           yield* session.closed.pipe(
             Effect.catchCause((cause) =>
-              Effect.sync(() => {
+              Effect.gen(function* () {
                 if (previousConnection)
                   input.observations.recordSocket(previousConnection, teardown);
                 input.recordDetail({
                   type: "session.closed",
                   connectionId: previousConnection,
-                  at: new Date().toISOString(),
+                  at: DateTime.formatIso(yield* DateTime.now),
                   cause: String(cause),
                   requested: teardown,
                 });
@@ -308,6 +308,8 @@ export async function runWorkload(input: WorkloadInput): Promise<{
       drains.push(drained);
       let pending = true;
       const terminal = new Set<string>();
+      let lastSequence: number | undefined;
+      input.observations.requestRun();
       const launch = yield* client["orchestration.launchThread"]({
         commandId: CommandId.make(id()),
         threadId,
@@ -359,6 +361,7 @@ export async function runWorkload(input: WorkloadInput): Promise<{
           return;
         }
         pending = true;
+        input.observations.requestRun();
         yield* client["orchestration.dispatchCommand"]({
           type: "message.dispatch",
           commandId: CommandId.make(id()),
@@ -376,11 +379,19 @@ export async function runWorkload(input: WorkloadInput): Promise<{
       yield* client["orchestration.subscribeThread"]({ threadId }).pipe(
         Stream.runForEach((item) => {
           if (item.kind === "snapshot") {
+            lastSequence = item.snapshotSequence;
             for (const thread of item.projection.providerThreads) {
               if (thread.nativeThreadRef?.nativeId)
                 input.observations.joinProvider(thread.nativeThreadRef.nativeId, threadId);
             }
             return Effect.forEach(item.projection.runs, observe, { discard: true });
+          }
+          if (item.kind === "event" || item.kind === "unknown-event") {
+            if (lastSequence === undefined || item.sequence <= lastSequence)
+              input.observations.streamGap(
+                `thread ${threadId} stream sequence regressed or lacked snapshot`,
+              );
+            lastSequence = item.sequence;
           }
           if (
             item.kind === "event" &&
@@ -404,12 +415,17 @@ export async function runWorkload(input: WorkloadInput): Promise<{
           )
             return observe(item.event.payload);
           if (item.kind === "unknown-event")
-            input.observations.gap(`unknown event ${item.eventType}`);
+            input.observations.streamGap(`unknown event ${item.eventType}`);
           return Effect.void;
         }),
+        Effect.tap(() =>
+          Effect.sync(() => {
+            if (!teardown) input.observations.streamGap(`thread ${threadId} stream ended`);
+          }),
+        ),
         Effect.catchCause((cause) =>
           Effect.gen(function* () {
-            input.observations.gap(`thread stream ended: ${String(cause)}`);
+            if (!teardown) input.observations.streamGap(`thread stream ended: ${String(cause)}`);
             yield* Deferred.succeed(drained, undefined);
           }),
         ),
