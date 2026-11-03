@@ -228,7 +228,10 @@ it("selects the picture source for the current theme", async () => {
   const light = `${location.origin}/light.png`;
   const dark = `${location.origin}/dark.png`;
   await using screen = await render(
-    <ChatMarkdown cwd={undefined} text={`<picture><source media="(prefers-color-scheme: dark)" srcset="${dark}"><img src="${light}" alt="Shot"></picture>`} />,
+    <ChatMarkdown
+      cwd={undefined}
+      text={`<picture><source media="(prefers-color-scheme: dark)" srcset="${dark}"><img src="${light}" alt="Shot"></picture>`}
+    />,
   );
   expect(screen.container.querySelector("img")?.getAttribute("src")).toBe(light);
   await act(() => {

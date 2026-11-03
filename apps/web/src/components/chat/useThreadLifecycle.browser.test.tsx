@@ -96,7 +96,9 @@ function RestoreBranchHarness(props: {
   });
   return (
     <>
-      {lifecycle.activityBanners.map((banner) => <span key={banner.id}>{banner.actions}</span>)}
+      {lifecycle.activityBanners.map((banner) => (
+        <span key={banner.id}>{banner.actions}</span>
+      ))}
       <button
         type="button"
         disabled={lifecycle.isRestoringThreadBranch}

@@ -165,7 +165,11 @@ function rehypePreserveImageSourceMeta() {
   };
 }
 
-const IMAGE_SRC_PROTOCOLS = [...(defaultSchema.protocols?.src ?? []), "file", ...CONTEXT_LINK_PROTOCOLS];
+const IMAGE_SRC_PROTOCOLS = [
+  ...(defaultSchema.protocols?.src ?? []),
+  "file",
+  ...CONTEXT_LINK_PROTOCOLS,
+];
 
 const CHAT_MARKDOWN_SANITIZE_SCHEMA = {
   ...defaultSchema,

@@ -3,7 +3,8 @@ import { expect, it } from "vite-plus/test";
 import { appendGeneratedImageEmbeds } from "./generatedImageMarkdown.ts";
 
 it("does not duplicate a generated image already shown by a picture theme", () => {
-  const text = '<picture><source media="(prefers-color-scheme: dark)" srcset="/work/dark.png"><img src="/work/light.png"></picture>';
+  const text =
+    '<picture><source media="(prefers-color-scheme: dark)" srcset="/work/dark.png"><img src="/work/light.png"></picture>';
   expect(appendGeneratedImageEmbeds(text, ["/work/dark.png", "/work/light.png"])).toBe(text);
 });
 
