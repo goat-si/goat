@@ -6287,11 +6287,16 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           ON item.thread_id = json_extract(wanted.value, '$.threadId')
             AND item.turn_item_id = json_extract(wanted.value, '$.id')`;
               const byIdentity = new Map(
-                payloads.map((row) => [`${row.thread_id}:${row.turn_item_id}`, row.payload_json]),
+                payloads.map((row) => [
+                  `${row.thread_id.length}:${row.thread_id}${row.turn_item_id}`,
+                  row.payload_json,
+                ]),
               );
               return yield* Effect.forEach(rows, (row) =>
                 Effect.gen(function* () {
-                  const payload = byIdentity.get(`${row.sourceThreadId}:${row.sourceItemId}`);
+                  const payload = byIdentity.get(
+                    `${row.sourceThreadId.length}:${row.sourceThreadId}${row.sourceItemId}`,
+                  );
                   const item =
                     row.synthetic ??
                     (payload === undefined
@@ -6372,7 +6377,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           ON item.thread_id = json_extract(wanted.value, '$.threadId')
             AND item.turn_item_id = json_extract(wanted.value, '$.id')`;
             const byIdentity = new Map(
-              payloads.map((row) => [`${row.thread_id}:${row.turn_item_id}`, row.payload_json]),
+              payloads.map((row) => [
+                `${row.thread_id.length}:${row.thread_id}${row.turn_item_id}`,
+                row.payload_json,
+              ]),
             );
 
             const items = yield* Effect.forEach(page, (row) =>
@@ -6385,7 +6393,9 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                     visibility: row.visibility,
                     item: row.synthetic,
                   };
-                const payload = byIdentity.get(`${row.sourceThreadId}:${row.sourceItemId}`);
+                const payload = byIdentity.get(
+                  `${row.sourceThreadId.length}:${row.sourceThreadId}${row.sourceItemId}`,
+                );
                 if (payload === undefined)
                   return yield* new ProjectionStoreReadError({
                     threadId,

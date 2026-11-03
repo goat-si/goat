@@ -6288,7 +6288,7 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
       const now = yield* DateTime.now;
       const projectId = ProjectId.make("project:projection-fork-source-rollback");
       const sourceThreadId = ThreadId.make("thread:projection-fork-source-rollback:source");
-      const targetThreadId = ThreadId.make("thread:projection-fork-source-rollback:target");
+      const targetThreadId = ThreadId.make(`${sourceThreadId}:target`);
       const sourceProviderThreadId = ProviderThreadId.make(
         "provider-thread:projection-fork-source-rollback:source",
       );
@@ -6781,7 +6781,10 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
         ...Array.from({ length: 99 }, (_, index) => index + 101),
       ]) {
         const runId = ordinal < 100 ? sourceRun1Id : sourceRun2Id;
-        const id = `turn-item:projection-fork-source-rollback:lineage:${ordinal}`;
+        const id =
+          ordinal === 1
+            ? "target:turn-item:projection-fork-source-rollback:target:1"
+            : `turn-item:projection-fork-source-rollback:lineage:${ordinal}`;
         yield* sql`
           INSERT INTO orchestration_v2_projection_turn_items (
             turn_item_id, thread_id, run_id, node_id, provider_thread_id, provider_turn_id,
@@ -6812,6 +6815,22 @@ it.layer(layerTest)("ProjectionStoreV2", (it) => {
           )
         `;
       }
+      const collisionPage = yield* projectionStore.getTimelinePage(targetThreadId, {
+        view: "activity",
+        limit: 500,
+      });
+      const inheritedCollision = collisionPage.items.find(
+        (row) =>
+          row.sourceThreadId === sourceThreadId &&
+          row.sourceItemId === "target:turn-item:projection-fork-source-rollback:target:1",
+      );
+      const targetCollision = collisionPage.items.find(
+        (row) =>
+          row.sourceThreadId === targetThreadId &&
+          row.sourceItemId === "turn-item:projection-fork-source-rollback:target:1",
+      );
+      assert.equal(inheritedCollision?.item.title, "lineage 1");
+      assert.equal(targetCollision?.item.title, "target 1");
       const inheritedSupersededNodeId = NodeId.make(
         "node:projection-fork-source-rollback:inherited-superseded",
       );
