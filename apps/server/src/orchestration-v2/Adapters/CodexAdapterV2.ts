@@ -112,7 +112,14 @@ import * as CodexClient from "effect-codex-app-server/client";
 import { withCodexRequestDeadlines } from "./CodexRequestDeadline.ts";
 import { CUA_DEFERRED_NOTE, makeCodexThreadStatuses } from "./codexThreadStatuses.ts";
 import * as CodexSubagents from "./codexSubagents.ts";
-import { awaitingNativeStart, queueBlockers } from "./CodexQueuedTurnStop.ts";
+import {
+  allSettledThenFail,
+  awaitingNativeStart,
+  makeStoppedQueuedTurns,
+  queueBlockers,
+  stopLateQueuedTurn,
+  stopQueuedTurn,
+} from "./CodexQueuedTurnStop.ts";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import * as CodexSchema from "effect-codex-app-server/schema";
 import * as Cause from "effect/Cause";
@@ -2116,6 +2123,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         const stoppedNativeTurns = new Set<string>();
         // Turns a Stop ended itself; they count as running until Codex reports them ended (#1654).
         const forcedNativeTurns = new Set<string>();
+        const stoppedQueuedTurns = makeStoppedQueuedTurns();
         // Keep the run event stream open until descendant provider state is
         // terminal, otherwise the root terminal can strand child projections.
         const deferredRootTerminals = yield* Ref.make(new Map<string, DeferredCodexRootTerminal>());
@@ -4736,6 +4744,13 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         );
         yield* survivorHooks.handleNotification("turn/started", (payload) =>
           Effect.gen(function* () {
+            if (stoppedQueuedTurns.take(payload.turn.id))
+              return yield* stopLateQueuedTurn(
+                client.request("turn/interrupt", {
+                  threadId: payload.threadId,
+                  turnId: payload.turn.id,
+                }),
+              ).pipe(Effect.forkIn(scope));
             const context = (yield* Ref.get(activeTurns)).get(payload.turn.id);
             if (context !== undefined) {
               if (context.nativeStartReady !== undefined) {
@@ -6732,6 +6747,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         yield* survivorHooks.handleNotification("turn/completed", (payload) =>
           Effect.gen(function* () {
             forcedNativeTurns.delete(payload.turn.id);
+            stoppedQueuedTurns.take(payload.turn.id);
             const context = (yield* Ref.get(activeTurns)).get(payload.turn.id);
             if (context === undefined) {
               return;
@@ -7943,30 +7959,25 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                 const queuedStops = Effect.forEach(
                   queued,
                   ({ context }) =>
-                    Effect.gen(function* () {
-                      const ready = yield* Effect.timeoutOption(
-                        context.nativeStartReady === undefined
-                          ? Effect.void
-                          : Deferred.await(context.nativeStartReady),
-                        "10 seconds",
-                      );
-                      if (Option.isSome(ready)) return yield* sendInterrupt(context);
-                      yield* Effect.logWarning("orchestration-v2.codex-queued-turn-never-started", {
-                        providerSessionId: input.providerSessionId,
-                        nativeTurnId: context.nativeTurnId,
-                      });
-                      forcedNativeTurns.add(context.nativeTurnId);
-                      const forced = yield* finalizeCodexTurn({
-                        context,
-                        nativeTurnId: context.nativeTurnId,
-                        status: "interrupted",
-                        completedAt: yield* DateTime.now,
-                      });
-                      if (!forced) forcedNativeTurns.delete(context.nativeTurnId);
+                    stopQueuedTurn({
+                      context,
+                      stopped: stoppedQueuedTurns,
+                      withPermit: turnTerminalizationPermit.withPermits(1),
+                      interrupt: sendInterrupt,
+                      settle: Effect.gen(function* () {
+                        forcedNativeTurns.add(context.nativeTurnId);
+                        const forced = yield* finalizeCodexTurn({
+                          context,
+                          nativeTurnId: context.nativeTurnId,
+                          status: "interrupted",
+                          completedAt: yield* DateTime.now,
+                        });
+                        if (!forced) forcedNativeTurns.delete(context.nativeTurnId);
+                      }),
                     }),
                   { concurrency: "unbounded", discard: true },
                 );
-                yield* Effect.all([started, queuedStops], { concurrency: "unbounded" });
+                yield* allSettledThenFail([started, queuedStops]);
                 const containedTerminalKeys = new Set<string>();
                 const attemptedTerminalKeys = new Set<string>();
                 const collectTrackedTerminals = Effect.fn("CodexAdapterV2.collectTrackedTerminals")(

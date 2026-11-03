@@ -73,9 +73,13 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
   const driver = yield* CodexReplay.makeReplayDriver(transcript);
   const threadConfigs: Array<Record<string, unknown>> = [];
   const requests: Array<string> = [];
+  // Each turn/interrupt the adapter sends, by turn, for tests that await one sent in the background.
+  const interrupts = yield* Queue.unbounded<string>();
   const record = (method: string, params: unknown) =>
-    Effect.sync(() => {
+    Effect.gen(function* () {
       requests.push(method);
+      if (method === "turn/interrupt")
+        yield* Queue.offer(interrupts, (params as { turnId: string }).turnId);
       const config = (params as { config?: Record<string, unknown> } | undefined)?.config;
       if ((method === "thread/start" || method === "thread/resume") && config !== undefined)
         threadConfigs.push(config);
@@ -182,6 +186,7 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
   return {
     threadConfigs,
     requests,
+    interrupted: Queue.take(interrupts),
     startTurn,
     terminal: Queue.take(terminals),
     goalTokens: Queue.take(goalTokens),

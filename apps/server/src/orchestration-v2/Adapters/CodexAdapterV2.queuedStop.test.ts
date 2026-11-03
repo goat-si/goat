@@ -133,4 +133,89 @@ describe("Codex Stop of a turn Codex queued behind a running turn", () => {
       }),
     ).pipe(Effect.provide(layerAdapterTest)),
   );
+
+  it.effect("interrupts a queued turn that Codex starts after Stop settled it", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const f = yield* queuedBehindRunningTurn("stop-queued-starts-after-timeout");
+        interrupted(f, 5, "turn-1");
+        f.entries.push({
+          type: "emit_inbound",
+          afterMs: 15_000,
+          frame: {
+            method: "turn/started",
+            params: {
+              threadId: f.nativeThreadId,
+              turn: makeCodexReplayTurn({ id: "turn-2", status: "inProgress" }),
+            },
+          },
+        });
+        interrupted(f, 6, "turn-2");
+        const replay = yield* f.open;
+        yield* replay.startTurn(1);
+        yield* replay.startTurn(2);
+        const stop = yield* stopTurn2(replay);
+        yield* TestClock.adjust("10 seconds");
+        assert.deepStrictEqual(yield* Fiber.join(stop), Exit.void);
+        const terminals = [yield* replay.terminal, yield* replay.terminal];
+        assert.deepStrictEqual(yield* statusOf(terminals), ["interrupted", "interrupted"]);
+        assert.equal(yield* replay.interrupted, "turn-1");
+        yield* TestClock.adjust("30 seconds");
+        assert.equal(yield* replay.interrupted, "turn-2");
+      }),
+    ).pipe(Effect.provide(layerAdapterTest)),
+  );
+
+  it.effect("still interrupts the queued turn when interrupting the running turn fails", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const f = yield* queuedBehindRunningTurn("stop-queued-blocker-refused");
+        f.entries.push(
+          {
+            type: "expect_outbound",
+            frame: {
+              id: 5,
+              method: "turn/interrupt",
+              params: { threadId: f.nativeThreadId, turnId: "turn-1" },
+            },
+          },
+          // turn-1 ended on its own just before the interrupt reached Codex.
+          {
+            type: "emit_inbound",
+            frame: { id: 5, error: { code: -32600, message: "no active turn to interrupt" } },
+          },
+          {
+            type: "emit_inbound",
+            frame: {
+              method: "turn/completed",
+              params: {
+                threadId: f.nativeThreadId,
+                turn: makeCodexReplayTurn({ id: "turn-1", status: "completed" }),
+              },
+            },
+          },
+          {
+            type: "emit_inbound",
+            frame: {
+              method: "turn/started",
+              params: {
+                threadId: f.nativeThreadId,
+                turn: makeCodexReplayTurn({ id: "turn-2", status: "inProgress" }),
+              },
+            },
+          },
+        );
+        interrupted(f, 6, "turn-2");
+        const replay = yield* f.open;
+        yield* replay.startTurn(1);
+        yield* replay.startTurn(2);
+        const stop = yield* stopTurn2(replay);
+        assert.isTrue(Exit.isFailure(yield* Fiber.join(stop)));
+        assert.deepStrictEqual(
+          [yield* replay.interrupted, yield* replay.interrupted],
+          ["turn-1", "turn-2"],
+        );
+      }),
+    ).pipe(Effect.provide(layerAdapterTest)),
+  );
 });
