@@ -52,7 +52,8 @@ export const recoveryScenario = (
     | "stop-clear-crash"
     | "goal-release"
     | "goal-held"
-    | "unreadable",
+    | "unreadable"
+    | "no-root",
 ) =>
   Effect.gen(function* () {
     const bindings = yield* Ref.make<ReadonlyArray<Survivors.CodexSurvivorBinding>>([]);
@@ -381,7 +382,7 @@ export const recoveryScenario = (
           },
         });
         if (
-          kind === "terminal" ||
+          (kind === "terminal" && reviewCase !== "no-root") ||
           (mixed && kind === "plain") ||
           (reviewCase !== undefined && kind === "salted")
         ) {
@@ -838,6 +839,21 @@ export const recoveryScenario = (
         }
         if (reviewCase === "goal-held")
           assert.isEmpty(order.filter((item) => item === "read-goal" || item === "clear-goal"));
+        if (reviewCase === "no-root") {
+          const broken = yield* store.getThreadProjection(ThreadId.make("terminal"));
+          assert.equal(
+            broken.runs.find((run) => run.id === RunId.make("run-terminal"))?.status,
+            "running",
+          );
+          assert.include(order, "block:terminal");
+          assert.isTrue(
+            broken.turnItems.some((item) => JSON.stringify(item).includes("could not be verified")),
+          );
+          assert.include(
+            (yield* Ref.get(bindings)).map((binding) => binding.threadId),
+            ThreadId.make("plain"),
+          );
+        }
         return;
       }
       assert.deepEqual(

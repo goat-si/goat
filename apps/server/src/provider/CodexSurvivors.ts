@@ -26,6 +26,7 @@ import {
   type DetachedClassification,
 } from "./CodexDetachedAppServer.ts";
 import { buildCodexInitializeParams } from "./CodexProvider.ts";
+import { containRecoveryThread, type RecoveryRun } from "./CodexSurvivorRecoveryContainment.ts";
 
 export interface CodexSurvivorBinding {
   readonly instanceId: ProviderInstanceId;
@@ -546,23 +547,41 @@ export const prepareShutdownSurvivors = Effect.fn("CodexSurvivors.prepareShutdow
   },
 );
 
+/** Blocks one binding's thread when its records are inconsistent; recovery continues for the rest. */
+export interface SurvivorBindingContainment {
+  readonly survivors: CodexSurvivors["Service"];
+  readonly sink: EventSink.EventSinkV2["Service"];
+  readonly ids: IdAllocator.IdAllocatorV2["Service"];
+  readonly onBlocked: (binding: CodexSurvivorBinding) => Effect.Effect<void>;
+}
+
 export const survivorSessionIds = Effect.fn("CodexSurvivors.survivorSessionIds")(function* (input: {
   readonly bindings: ReadonlyArray<CodexSurvivorBinding>;
   readonly projections: ProjectionStore.ProjectionStoreV2["Service"];
+  readonly contain: SurvivorBindingContainment;
 }) {
   const ids = new Set<string>();
   for (const binding of input.bindings) {
-    const projection = yield* input.projections.getRuntimeRecoveryProjection(binding.threadId);
-    const thread = projection.providerThreads.find(
-      (thread) =>
-        thread.providerInstanceId === binding.instanceId &&
-        thread.nativeThreadRef?.nativeId === binding.nativeThreadId,
-    );
-    if (!thread?.providerSessionId)
-      return yield* new CodexDetachedAppServerError({
-        detail: "The Codex survivor session is unavailable.",
-      });
-    ids.add(thread.providerSessionId);
+    yield* containRecoveryThread({
+      ...input.contain,
+      projections: input.projections,
+      threadId: binding.threadId,
+      run: () => undefined,
+      onBlocked: input.contain.onBlocked(binding),
+      recover: Effect.gen(function* () {
+        const projection = yield* input.projections.getRuntimeRecoveryProjection(binding.threadId);
+        const thread = projection.providerThreads.find(
+          (thread) =>
+            thread.providerInstanceId === binding.instanceId &&
+            thread.nativeThreadRef?.nativeId === binding.nativeThreadId,
+        );
+        if (!thread?.providerSessionId)
+          return yield* new CodexDetachedAppServerError({
+            detail: "The Codex survivor session is unavailable.",
+          });
+        ids.add(thread.providerSessionId);
+      }),
+    });
   }
   return ids;
 });
@@ -574,79 +593,104 @@ export const prepareContinuations = Effect.fn("CodexSurvivors.prepareContinuatio
     readonly sink: EventSink.EventSinkV2["Service"];
     readonly outbox: EffectOutbox.EffectOutboxV2["Service"];
     readonly ids: IdAllocator.IdAllocatorV2["Service"];
+    readonly contain: SurvivorBindingContainment;
   }) {
     for (const binding of input.bindings) {
-      const projection = yield* input.projections.getRuntimeRecoveryProjection(binding.threadId);
-      const continuation = projection.runs.find(
-        (run) =>
-          run.restartContinuationOfRunId === binding.sourceRunId &&
-          ["preparing", "starting", "running", "waiting"].includes(run.status),
-      );
-      const source =
-        continuation ??
-        projection.runs.find((run) => run.id === binding.sourceRunId) ??
-        (yield* input.projections.getThreadRecords(binding.threadId, ["runs"], {
-          runIds: [binding.sourceRunId],
-        })).runs[0];
-      if (!source)
-        return yield* new CodexDetachedAppServerError({
-          detail: "The Codex survivor source run is unavailable.",
-        });
-      if (source.status === "cancelled") {
-        if (
-          !(yield* input.outbox.requeueSurvivorContinuation(binding.threadId, binding.sourceRunId))
-        )
-          return yield* new CodexDetachedAppServerError({
-            detail: "The Codex survivor continuation is unavailable.",
-          });
-        continue;
-      }
-      if (!source.activeAttemptId)
-        return yield* new CodexDetachedAppServerError({
-          detail: "The Codex survivor attempt is unavailable.",
-        });
-      const now = yield* DateTime.now;
-      const commandId = CommandId.make(`command:restart-survivor:${binding.sourceRunId}`);
-      const effect = {
-        id: `effect:restart-continuation:${binding.sourceRunId}`,
-        commandId,
+      let currentRun: RecoveryRun | undefined;
+      yield* containRecoveryThread({
+        ...input.contain,
+        projections: input.projections,
         threadId: binding.threadId,
-        request: { type: "provider-runtime.continue" as const, sourceRunId: binding.sourceRunId },
-      };
-      const event = {
-        id: yield* input.ids.allocate.event({ threadId: binding.threadId, commandId }),
-        type: "run.updated" as const,
-        threadId: binding.threadId,
-        runId: source.id,
-        providerInstanceId: source.providerInstanceId,
-        occurredAt: now,
-        payload: continuation
-          ? { ...source, status: "starting" as const, completedAt: null }
-          : {
-              ...source,
-              status: "cancelled" as const,
-              terminationCause: { kind: "server_restart" as const },
-              queuePosition: null,
-              completedAt: now,
+        run: () => currentRun,
+        onBlocked: input.contain.onBlocked(binding),
+        recover: Effect.gen(function* () {
+          const projection = yield* input.projections.getRuntimeRecoveryProjection(
+            binding.threadId,
+          );
+          const continuation = projection.runs.find(
+            (run) =>
+              run.restartContinuationOfRunId === binding.sourceRunId &&
+              ["preparing", "starting", "running", "waiting"].includes(run.status),
+          );
+          currentRun = continuation;
+          const source =
+            continuation ??
+            projection.runs.find((run) => run.id === binding.sourceRunId) ??
+            (yield* input.projections.getThreadRecords(binding.threadId, ["runs"], {
+              runIds: [binding.sourceRunId],
+            })).runs[0];
+          if (!source)
+            return yield* new CodexDetachedAppServerError({
+              detail: "The Codex survivor source run is unavailable.",
+            });
+          if (source.status === "cancelled") {
+            if (
+              !(yield* input.outbox.requeueSurvivorContinuation(
+                binding.threadId,
+                binding.sourceRunId,
+              ))
+            )
+              return yield* new CodexDetachedAppServerError({
+                detail: "The Codex survivor continuation is unavailable.",
+              });
+            return;
+          }
+          if (!source.activeAttemptId)
+            return yield* new CodexDetachedAppServerError({
+              detail: "The Codex survivor attempt is unavailable.",
+            });
+          const now = yield* DateTime.now;
+          const commandId = CommandId.make(`command:restart-survivor:${binding.sourceRunId}`);
+          const effect = {
+            id: `effect:restart-continuation:${binding.sourceRunId}`,
+            commandId,
+            threadId: binding.threadId,
+            request: {
+              type: "provider-runtime.continue" as const,
+              sourceRunId: binding.sourceRunId,
             },
-      };
-      const committed = yield* input.sink.writeIfRunCurrent({
-        threadId: binding.threadId,
-        runId: source.id,
-        activeAttemptId: source.activeAttemptId,
-        expectedStatus: source.status,
-        commandId,
-        events: [event],
-        effects: [effect],
+          };
+          const event = {
+            id: yield* input.ids.allocate.event({ threadId: binding.threadId, commandId }),
+            type: "run.updated" as const,
+            threadId: binding.threadId,
+            runId: source.id,
+            providerInstanceId: source.providerInstanceId,
+            occurredAt: now,
+            payload: continuation
+              ? { ...source, status: "starting" as const, completedAt: null }
+              : {
+                  ...source,
+                  status: "cancelled" as const,
+                  terminationCause: { kind: "server_restart" as const },
+                  queuePosition: null,
+                  completedAt: now,
+                },
+          };
+          const committed = yield* input.sink.writeIfRunCurrent({
+            threadId: binding.threadId,
+            runId: source.id,
+            activeAttemptId: source.activeAttemptId,
+            expectedStatus: source.status,
+            commandId,
+            events: [event],
+            effects: [effect],
+          });
+          if (!committed.committed)
+            return yield* new CodexDetachedAppServerError({
+              detail: "The Codex survivor source run changed during recovery.",
+            });
+          if (
+            !(yield* input.outbox.requeueSurvivorContinuation(
+              binding.threadId,
+              binding.sourceRunId,
+            ))
+          )
+            return yield* new CodexDetachedAppServerError({
+              detail: "The Codex survivor continuation is unavailable.",
+            });
+        }),
       });
-      if (!committed.committed)
-        return yield* new CodexDetachedAppServerError({
-          detail: "The Codex survivor source run changed during recovery.",
-        });
-      if (!(yield* input.outbox.requeueSurvivorContinuation(binding.threadId, binding.sourceRunId)))
-        return yield* new CodexDetachedAppServerError({
-          detail: "The Codex survivor continuation is unavailable.",
-        });
     }
   },
 );

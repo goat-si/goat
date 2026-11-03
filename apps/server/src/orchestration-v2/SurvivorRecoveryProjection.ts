@@ -162,16 +162,40 @@ export const prepare = Effect.fn("SurvivorRecoveryProjection.prepare")(function*
     }),
   );
   yield* input.survivors.setStartWake(input.outbox.notifyAvailable());
-  const terminalThreads = yield* CodexSurvivorRecovery.settleTerminalRuns(input);
+  const terminal = yield* CodexSurvivorRecovery.settleTerminalRuns(input);
   const classified = yield* CodexSurvivorRecovery.classifyRecovery({
     ...input,
-    skipThreads: terminalThreads,
+    skipThreads: new Set([...terminal.settledThreads, ...terminal.blockedThreads]),
   });
-  const bindings = yield* input.survivors.list;
+  const protectedThreads = new Set([...classified.protectedThreads, ...terminal.blockedThreads]);
+  const blockedThreads = new Set([...classified.blockedThreads, ...terminal.blockedThreads]);
+  const contain = {
+    ...input,
+    onBlocked: (binding: CodexSurvivorBinding) =>
+      input.survivors.release(binding).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            protectedThreads.add(binding.threadId);
+            blockedThreads.add(binding.threadId);
+          }),
+        ),
+      ),
+  };
   const sessions = yield* CodexSurvivors.survivorSessionIds({
-    bindings,
+    bindings: yield* input.survivors.list,
     projections: input.projections,
+    contain,
   });
-  yield* CodexSurvivors.prepareContinuations({ ...input, bindings });
-  return { ...classified, terminalThreads, bindings, sessions };
+  yield* CodexSurvivors.prepareContinuations({
+    ...input,
+    bindings: yield* input.survivors.list,
+    contain,
+  });
+  return {
+    protectedThreads,
+    blockedThreads,
+    terminalThreads: terminal.settledThreads,
+    bindings: yield* input.survivors.list,
+    sessions,
+  };
 });

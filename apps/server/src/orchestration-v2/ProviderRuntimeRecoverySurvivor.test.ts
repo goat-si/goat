@@ -38,6 +38,9 @@ it.effect.each([
 it.effect("verified loss never continues when ordinary continuation is enabled", () =>
   recoveryScenario("restart", true, "completed", false, "gone"),
 );
+it.effect("one thread's inconsistent survivor records block only that thread at startup", () =>
+  recoveryScenario("restart", false, "completed", false, "no-root"),
+);
 
 it.effect(
   "a paused goal remains fenced across a second startup before native turns are scanned",
