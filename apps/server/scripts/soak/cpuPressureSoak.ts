@@ -1,10 +1,11 @@
-// @effect-diagnostics nodeBuiltinImport:off globalTimers:off
+// @effect-diagnostics nodeBuiltinImport:off globalTimers:off globalDate:off
 import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
 import * as NodeOS from "node:os";
 import * as NodeURL from "node:url";
 import { guardChild } from "@goat/shared/errorGuards";
-import { Observations, counter } from "./observations.ts";
+import { Observations, counter, LogTail, DetailWriter } from "./observations.ts";
+import { runWorkload } from "./clients.ts";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
@@ -92,7 +93,7 @@ export function validateHome(home: string, checkout: string): string {
   return supplied;
 }
 
-export type OwnedChild = {
+type OwnedChild = {
   child: NodeChildProcess.ChildProcess;
   exited: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
   failure: Promise<never>;
@@ -116,13 +117,13 @@ function spawnOwned(
   return { child, exited, failure };
 }
 
-export async function cleanupOwned(children: OwnedChild[]): Promise<void> {
+async function cleanupOwned(children: OwnedChild[]): Promise<void> {
   for (const { child } of children)
     if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
   await Promise.all(children.map(({ exited }) => exited));
 }
 
-export function spawnServer(
+function spawnServer(
   options: SoakOptions,
   checkout: string,
   lifecyclePath: string,
@@ -159,7 +160,7 @@ export function spawnServer(
   );
 }
 
-export async function waitForReady(server: OwnedChild): Promise<void> {
+async function waitForReady(server: OwnedChild): Promise<void> {
   const ready = new Promise<void>((resolve) => {
     let buffer = "";
     const consume = (chunk: Buffer) => {
@@ -178,22 +179,48 @@ export async function waitForReady(server: OwnedChild): Promise<void> {
   ]);
 }
 
-export async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
+async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
   validateHome(options.home, checkout);
   const reportParent = NodeFS.realpathSync(NodePath.dirname(options.report));
   const root = NodeFS.realpathSync(checkout);
   if (reportParent === root || reportParent.startsWith(`${root}${NodePath.sep}`))
     throw new Error("report must be outside checkout");
+  const reportFd = NodeFS.openSync(options.report, "wx", 0o600);
   const lifecycle = `${options.report}.provider-lifecycle.ndjson`;
-  NodeFS.closeSync(NodeFS.openSync(lifecycle, "wx", 0o600));
+  const detailPath = `${options.report}.detail.ndjson`;
   const owned: OwnedChild[] = [];
+  const burners: OwnedChild[] = [];
+  const observations = new Observations();
   let server: OwnedChild | undefined;
-  let teardown = false;
   let serverExit = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  let teardown = false;
+  let stoppingBurners = false;
+  let workload:
+    | Promise<{ replayStarted: number; codexStarted: number; headlessOpened: number }>
+    | undefined;
+  let workloadResult: Awaited<NonNullable<typeof workload>> | undefined;
+  let startedAt: string | null = null;
+  let endedAt: string | null = null;
+  const abort = new AbortController();
+  const credential = NodeCrypto.randomBytes(32).toString("hex");
   const errors: string[] = [];
+  let detail: DetailWriter | undefined;
   try {
-    server = spawnServer(options, root, lifecycle, NodeCrypto.randomBytes(32).toString("hex"));
+    NodeFS.closeSync(NodeFS.openSync(lifecycle, "wx", 0o600));
+    detail = new DetailWriter(detailPath);
+    const stallPath = NodePath.join(options.home, "userdata/logs/event-loop-stalls.ndjson");
+    const tracePath = NodePath.join(options.home, "userdata/logs/server.trace.ndjson");
+    const stall = new LogTail(stallPath, (value) => {
+      observations.consumeStall(value);
+      detail?.write({ source: "stall", value });
+    });
+    const trace = new LogTail(tracePath, (value) => {
+      observations.consumeTrace(value);
+      detail?.write({ source: "trace", value });
+    });
+    if (NodeFS.existsSync(stallPath)) stall.startAtEnd();
+    if (NodeFS.existsSync(tracePath)) trace.startAtEnd();
+    server = spawnServer(options, root, lifecycle, credential);
     owned.push(server);
     process.stdout.write(`owned server pid: ${server.child.pid}\n`);
     void server.exited.then(() => {
@@ -205,46 +232,75 @@ export async function runSoak(options: SoakOptions, checkout: string): Promise<v
     ) as { pid?: number; port?: number };
     if (runtime.pid !== server.child.pid || runtime.port !== options.serverPort)
       throw new Error("server runtime identity mismatch");
-    for (let i = 0; i < 2 * NodeOS.availableParallelism(); i++) {
-      const burner = spawnOwned(
-        process.execPath,
-        [NodeURL.fileURLToPath(new URL("./burner.ts", import.meta.url))],
-        { cwd: root, stdio: "ignore" },
-      );
-      owned.push(burner);
-      process.stdout.write(`owned burner pid: ${burner.child.pid}\n`);
-    }
-    await Promise.race([
-      new Promise<void>((resolve) => {
-        timer = setTimeout(resolve, options.durationMs);
-      }),
+    let rejectBurner: (error: Error) => void = () => {};
+    const burnerFailure = new Promise<never>((_, reject) => {
+      rejectBurner = reject;
+    });
+    void burnerFailure.catch(() => {});
+    workload = runWorkload({
+      origin: `http://127.0.0.1:${options.serverPort}`,
+      credential,
+      checkout: root,
+      artifactPrefix: options.report,
+      lifecyclePath: lifecycle,
+      ...(options.projectId ? { projectId: options.projectId } : {}),
+      replayThreads: options.replayThreads,
+      codexThreads: options.codexThreads,
+      headlessClients: options.headlessClients,
+      durationMs: options.durationMs,
+      observations,
+      signal: abort.signal,
+      onWindowStart: () => {
+        startedAt = new Date().toISOString();
+        for (let i = 0; i < 2 * NodeOS.availableParallelism(); i++) {
+          const burner = spawnOwned(
+            process.execPath,
+            [NodeURL.fileURLToPath(new URL("./burner.ts", import.meta.url))],
+            { cwd: root, stdio: "ignore" },
+          );
+          burners.push(burner);
+          owned.push(burner);
+          process.stdout.write(`owned burner pid: ${burner.child.pid}\n`);
+          void burner.failure.catch(rejectBurner);
+          void burner.exited.then(() => {
+            if (!stoppingBurners && !teardown)
+              rejectBurner(new Error("burner exited during workload"));
+          });
+        }
+      },
+      onWindowEnd: async () => {
+        endedAt = new Date().toISOString();
+        stoppingBurners = true;
+        await cleanupOwned(burners);
+      },
+    });
+    workloadResult = await Promise.race([
+      workload,
       server.failure,
+      burnerFailure,
       server.exited.then(() => {
         throw new Error("server exited during workload");
       }),
-      ...owned.slice(1).map((child) =>
-        Promise.race([
-          child.failure,
-          child.exited.then(() => {
-            throw new Error("burner exited during workload");
-          }),
-        ]),
-      ),
     ]);
+    stall.read();
+    trace.read();
+    for (const gap of [...stall.gaps, ...trace.gaps]) observations.gap(gap);
+    if (stall.hasPartialLine || trace.hasPartialLine) observations.gap("partial telemetry line");
   } catch (error) {
-    errors.push(String(error));
+    errors.push(String(error).replaceAll(credential, "[redacted]"));
   } finally {
-    if (timer !== undefined) clearTimeout(timer);
     teardown = true;
+    abort.abort();
     await cleanupOwned(owned);
-    const observations = new Observations();
+    if (workload) await workload.catch(() => {});
+    detail?.close();
     const report = {
       ...observations.report(
         [
-          "client workload not connected",
+          "real client-runtime cohort not exercised",
           "provider lifecycle coverage unavailable",
-          "stall coverage unavailable",
           "saturation unverified",
+          ...(errors.length ? ["workload error"] : []),
         ],
         counter(0, ["provider lifecycle coverage unavailable"]),
         counter(serverExit ? 1 : 0),
@@ -252,13 +308,20 @@ export async function runSoak(options: SoakOptions, checkout: string): Promise<v
       home: options.home,
       serverPid: server?.child.pid ?? null,
       ownedPids: owned.map(({ child }) => child.pid),
+      window: { start: startedAt, end: endedAt },
+      workload: {
+        ...workloadResult,
+        replayRequested: options.replayThreads,
+        codexRequested: options.codexThreads,
+        headlessRequested: options.headlessClients,
+        burnersStarted: burners.length,
+        burnersRequested: 2 * NodeOS.availableParallelism(),
+      },
       errors,
-      artifacts: [lifecycle],
+      artifacts: [lifecycle, detailPath, `${options.report}.codex-script.json`],
     };
-    NodeFS.writeFileSync(options.report, `${JSON.stringify(report, null, 2)}\n`, {
-      flag: "wx",
-      mode: 0o600,
-    });
+    NodeFS.writeSync(reportFd, `${JSON.stringify(report, null, 2)}\n`);
+    NodeFS.closeSync(reportFd);
   }
 }
 
