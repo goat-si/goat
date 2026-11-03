@@ -27,6 +27,7 @@ const input = {
 const hash = "a".repeat(64);
 const fixture = (published: Union[], bind: BrowserClaimBind["Service"]["bind"]) =>
   Grants.layer.pipe(
+    Layer.provide(ServerSettings.layerTest()),
     Layer.provide(
       Layer.mergeAll(
         Layer.mock(ServerEnvironment.ServerEnvironment)({

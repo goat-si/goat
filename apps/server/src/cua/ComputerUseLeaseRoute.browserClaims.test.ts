@@ -13,6 +13,7 @@ import * as Context from "effect/Context";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { HttpRouter, HttpServer, HttpServerRequest } from "effect/http";
@@ -37,6 +38,12 @@ import { BrowserOriginGrants } from "../preview/BrowserOriginGrantsLayer.ts";
 import * as Grants from "../preview/BrowserOriginGrantsLayer.ts";
 import { BrowserClaimManifest } from "../preview/BrowserClaimManifest.ts";
 import { harness, call } from "./ComputerUseLeaseProxy.testkit.ts";
+import {
+  claimBindArgs,
+  reservationViaRoute,
+  sendApprovedBind,
+  startUntrustedBind,
+} from "./ComputerUseLeaseRouteBind.testkit.ts";
 
 const decodeDescriptor = Schema.decodeSync(ExecutionEnvironmentDescriptor);
 const threadId = ThreadId.make("thread:bot");
@@ -142,6 +149,7 @@ const threadFixture = Effect.fn("LeaseRouteTest.threadFixture")(function* (
   options: {
     readonly livenessWindowMs?: number;
     readonly grants?: BrowserOriginGrants["Service"];
+    readonly reservation?: ComputerUseLeases.ComputerUseLeases["Service"]["callReservation"];
   } = {},
 ) {
   const registry = yield* McpSessionRegistry.__testing.make(options).pipe(
@@ -177,8 +185,9 @@ const threadFixture = Effect.fn("LeaseRouteTest.threadFixture")(function* (
     releaseApps: (owner, id) => Effect.sync(() => released.push([owner, id])),
     streamOpened: () => Effect.void,
     proxy: undefined,
-    callReservation: () =>
-      Effect.succeed({ status: "admitted", reservationId: "reservation:test" } as const),
+    callReservation:
+      options.reservation ??
+      (() => Effect.succeed({ status: "admitted", reservationId: "reservation:test" } as const)),
     currentControl: () =>
       Ref.get(current).pipe(
         Effect.map((value) =>
@@ -292,7 +301,7 @@ const threadFixture = Effect.fn("LeaseRouteTest.threadFixture")(function* (
     channel: Context.get(context, ComputerUsePrimitiveChannel.ComputerUsePrimitiveChannel),
     request,
     postPrimitive,
-    reserve: (name: string, args: object) =>
+    reserve: (name: string, args: unknown, authority?: "claimBind") =>
       handler.pipe(
         Effect.provideService(
           HttpServerRequest.HttpServerRequest,
@@ -310,6 +319,7 @@ const threadFixture = Effect.fn("LeaseRouteTest.threadFixture")(function* (
                 callId: "one",
                 name,
                 args,
+                ...(authority === undefined ? {} : { authority }),
                 interruptions: 0,
                 idleEpoch: 0,
               }),
@@ -343,6 +353,7 @@ describe("computer use lease route", () => {
     Effect.gen(function* () {
       const grantContext = yield* Layer.build(
         Grants.layer.pipe(
+          Layer.provide(ServerSettings.layerTest()),
           Layer.provide(
             Layer.merge(
               Layer.mock(ServerEnvironment.ServerEnvironment)({
@@ -503,6 +514,201 @@ describe("computer use lease route", () => {
           reservationId: "reservation:test",
         });
       }).pipe(Effect.scoped, Effect.provide(ServerSettings.layerTest({ enableCua: true }))),
+  );
+
+  it.effect("a block during reservation prevents a claimed tab call from being sent", () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      let hosts: ReadonlyArray<string> = [];
+      let released = false;
+      const grants = yield* makeBrowserOriginGrants({
+        environmentId: EnvironmentId.make("environment:test"),
+        supported: () => true,
+        blockedHosts: Effect.sync(() => hosts),
+        publish: () => Effect.void,
+        bind: () =>
+          Effect.succeed({
+            targetId: "target-1",
+            tabId: "tab",
+            title: "Site",
+            url: "https://example.test",
+            driverGeneration: 1,
+          }),
+      });
+      const result = yield* grants.claim({
+        threadId,
+        pid: 42,
+        windowId: 7,
+        origin: "https://example.test",
+        windowTitle: "Browser",
+      });
+      if (result.agentResult.status !== "attached") return assert.fail("expected attached");
+      const claim = result.agentResult.claim;
+      const route = yield* threadFixture({
+        grants: { ...grants, setDriverCapability: () => Effect.void },
+        reservation: (_thread, request) =>
+          request.action === "release"
+            ? Effect.sync(() => {
+                released = true;
+                return { status: "released" as const };
+              })
+            : Deferred.succeed(entered, undefined).pipe(
+                Effect.andThen(Deferred.await(release)),
+                Effect.as({ status: "admitted" as const, reservationId: "reservation:test" }),
+              ),
+      });
+      const call = yield* route
+        .reserve("browser_click", {
+          tab_id: "tab",
+          target_id: "target-1",
+          session: "goat-claim:" + claim.claimId,
+          origin_scope: ["https://example.test"],
+        })
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(entered);
+      hosts = ["example.test"];
+      yield* grants.blockedHostsChanged(hosts);
+      yield* Deferred.succeed(release, undefined);
+      assert.deepEqual(yield* Fiber.join(call), { status: "refused", detail: "blocked_url" });
+      assert.isTrue(released);
+    }).pipe(Effect.scoped, Effect.provide(ServerSettings.layerTest({ enableCua: true }))),
+  );
+
+  it.effect("a block during bind reservation refuses and releases before driver dispatch", () =>
+    Effect.gen(function* () {
+      const bindStarted = yield* Deferred.make<void>();
+      const bindRelease = yield* Deferred.make<void>();
+      const reservationStarted = yield* Deferred.make<void>();
+      const reservationRelease = yield* Deferred.make<void>();
+      let hosts: ReadonlyArray<string> = [];
+      let releasedUnsent = false;
+      const grants = yield* makeBrowserOriginGrants({
+        environmentId: EnvironmentId.make("environment:test"),
+        supported: () => true,
+        blockedHosts: Effect.sync(() => hosts),
+        publish: () => Effect.void,
+        bind: (input) =>
+          Deferred.succeed(bindStarted, undefined).pipe(
+            Effect.andThen(Deferred.await(bindRelease)),
+            Effect.as({
+              targetId: "target-1",
+              tabId: "tab",
+              title: "Site",
+              url: input.origin,
+              driverGeneration: 1,
+            }),
+          ),
+      });
+      const pending = yield* grants.request({
+        threadId,
+        pid: 42,
+        windowId: 7,
+        origin: "https://example.test",
+        windowTitle: "Browser",
+      });
+      if (pending.status !== "pending") return assert.fail("expected pending");
+      const answer = yield* grants
+        .answer(pending.claimId, true)
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(bindStarted);
+      const route = yield* threadFixture({
+        grants: { ...grants, setDriverCapability: () => Effect.void },
+        reservation: (_thread, request) =>
+          request.action === "release"
+            ? Effect.sync(() => {
+                releasedUnsent = request.notSent === true;
+                return { status: "released" as const };
+              })
+            : Deferred.succeed(reservationStarted, undefined).pipe(
+                Effect.andThen(Deferred.await(reservationRelease)),
+                Effect.as({ status: "admitted" as const, reservationId: "reservation:test" }),
+              ),
+      });
+      const untrusted = yield* startUntrustedBind(
+        route
+          .reserve("get_browser_state", claimBindArgs(pending.claimId))
+          .pipe(Effect.scoped, Effect.orDie),
+        reservationStarted,
+      );
+      let decision: unknown;
+      const proxy = yield* harness({
+        autoAppListing: true,
+        reservation: reservationViaRoute(
+          (name, args, authority) =>
+            route.reserve(name, args, authority).pipe(Effect.scoped, Effect.orDie),
+          (value) => {
+            decision = value;
+          },
+        ),
+      });
+      yield* sendApprovedBind(proxy, yield* grants.bindingsFor(threadId), pending.claimId);
+      yield* Deferred.await(reservationStarted);
+      hosts = ["example.test"];
+      yield* Deferred.succeed(reservationRelease, undefined);
+      assert.equal((yield* proxy.primitiveReply).status, "not_started");
+      assert.deepEqual(decision, { status: "refused", detail: "blocked_url" });
+      assert.isTrue(releasedUnsent);
+      assert.equal(yield* proxy.driverQueued, 0);
+      yield* Deferred.succeed(bindRelease, undefined);
+      const result = (yield* Fiber.join(answer)).agentResult;
+      assert.equal(result.status === "refused" && result.code, "declined");
+      assert.deepEqual(yield* Fiber.join(untrusted), {
+        status: "refused",
+        detail: "outside_manifest",
+      });
+      assert.deepEqual(yield* grants.list(threadId), { claims: [], grants: [] });
+    }).pipe(Effect.scoped, Effect.provide(ServerSettings.layerTest({ enableCua: true }))),
+  );
+
+  it.effect("blocks navigation destinations and ends a claim when its origin becomes blocked", () =>
+    Effect.gen(function* () {
+      const grants = yield* makeBrowserOriginGrants({
+        environmentId: EnvironmentId.make("environment:test"),
+        supported: () => true,
+        publish: () => Effect.void,
+        bind: () =>
+          Effect.succeed({
+            targetId: "target-1",
+            tabId: "tab",
+            title: "Site",
+            url: "https://example.test",
+            driverGeneration: 1,
+          }),
+      });
+      const result = yield* grants.claim({
+        threadId,
+        pid: 42,
+        windowId: 7,
+        origin: "https://example.test",
+        windowTitle: "Browser",
+      });
+      if (result.agentResult.status !== "attached") return assert.fail("expected attached");
+      const claim = result.agentResult.claim;
+      const route = yield* threadFixture({
+        grants: { ...grants, setDriverCapability: () => Effect.void },
+      });
+      const settings = Context.get(route.context, ServerSettings.ServerSettingsService);
+      const scoped = {
+        tab_id: "tab",
+        target_id: "target-1",
+        session: "goat-claim:" + claim.claimId,
+        origin_scope: ["https://example.test"],
+      };
+      yield* settings.updateSettings({ blockedBrowserHosts: ["blocked.test"] });
+      assert.deepEqual(
+        yield* route.reserve("browser_navigate", { ...scoped, url: "https://blocked.test/" }),
+        { status: "refused", detail: "blocked_url" },
+      );
+      assert.lengthOf(yield* grants.claimsFor(threadId), 1);
+      yield* settings.updateSettings({ blockedBrowserHosts: ["example.test"] });
+      assert.deepEqual(yield* route.reserve("browser_click", scoped), {
+        status: "refused",
+        detail: "blocked_url",
+      });
+      assert.equal(yield* grants.endReason(threadId, claim.claimId), "blocked_url");
+      assert.deepEqual(yield* grants.claimsFor(threadId), []);
+    }).pipe(Effect.scoped, Effect.provide(ServerSettings.layerTest({ enableCua: true }))),
   );
 
   it.effect("revoking a service claim makes the next proxied call refuse", () =>
