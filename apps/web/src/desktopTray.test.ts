@@ -23,10 +23,19 @@ function shell(
     readonly deleted?: boolean;
     readonly subagent?: boolean;
     readonly updatedAt?: string;
+    readonly launchedBy?: {
+      readonly kind: "launch";
+      readonly via: "delegate_task";
+      readonly threadId: ReturnType<typeof ThreadId.make>;
+      readonly environmentId: EnvironmentId;
+      readonly environmentLabel: null;
+      readonly threadTitle: null;
+    };
   } = {},
-): Shell {
+): Shell & { source: { launchedBy?: NonNullable<Parameters<typeof shell>[1]>["launchedBy"] } } {
   const status = options.status === undefined ? null : options.status;
   return {
+    source: options.launchedBy ? { launchedBy: options.launchedBy } : {},
     environmentId: options.environmentId ?? local,
     id: ThreadId.make(id),
     projectId: project,
@@ -86,6 +95,28 @@ describe("deriveTrayMenu", () => {
     expect(ids(menu.running)).toEqual(["works", "waits-on-background"]);
     expect(ids(menu.pinned)).toEqual(["pinned"]);
     expect(menu.pinned[0]?.project).toBe("goat");
+  });
+
+  it("shows a remote child's request on its live parent and keeps an orphan visible", () => {
+    const child = shell("child", {
+      environmentId: remote,
+      approval: true,
+      launchedBy: {
+        kind: "launch",
+        via: "delegate_task",
+        threadId: ThreadId.make("parent"),
+        environmentId: local,
+        environmentLabel: null,
+        threadTitle: null,
+      },
+    });
+    const parent = shell("parent", { status: "running" });
+    expect(ids(deriveTrayMenu([parent, child], [], new Set([local, remote])).attention)).toEqual([
+      "parent",
+    ]);
+    expect(ids(deriveTrayMenu([parent, child], [], new Set([remote])).attention)).toEqual([
+      "child",
+    ]);
   });
 
   it("does not report work from an environment whose shells are not live, but keeps its pins", () => {

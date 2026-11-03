@@ -94,6 +94,16 @@ const thread = {
   hasPendingUserInput: false,
   session: null as { status: string } | null,
   completionNotification: undefined as string | undefined,
+  launchedBy: undefined as
+    | undefined
+    | {
+        kind: "launch";
+        via: "delegate_task";
+        threadId: string;
+        environmentId: string;
+        environmentLabel: null;
+        threadTitle: null;
+      },
   latestTurn: { turnId: "turn", state: "running", completedAt: null as string | null },
 };
 let focused = false;
@@ -122,6 +132,7 @@ function toV2ThreadShell(input: typeof thread) {
     forkedFrom: null,
     createdBy: "user",
     creationSource: "web",
+    launchedBy: input.launchedBy,
     latestRunId: latestTurn.turnId,
     activeRunId: null,
     status:
@@ -434,3 +445,33 @@ it.each([false, true])(
     );
   },
 );
+
+it("suppresses a remote child's completion under a live parent but keeps its approval visible", async () => {
+  await using app = setup();
+  const child = {
+    id: "child",
+    title: "Child",
+    launchedBy: {
+      kind: "launch" as const,
+      via: "delegate_task" as const,
+      threadId: "thread",
+      environmentId: "one",
+      environmentLabel: null,
+      threadTitle: null,
+    },
+  };
+  state.shells.set("two", shell(child));
+  app.start();
+  using _timers = fakeTimers();
+  state.shells.set(
+    "two",
+    shell({
+      ...child,
+      latestTurn: { turnId: "turn", state: "completed", completedAt: "2026-09-13T07:01:00.000Z" },
+    }),
+  );
+  await vi.advanceTimersByTimeAsync(WORKING_EXIT_GRACE_MS);
+  expect(TestNotification.sent).toEqual([]);
+  state.shells.set("two", shell({ ...child, hasPendingApprovals: true }));
+  expect(TestNotification.sent.map(({ title }) => title)).toEqual(["Approval needed"]);
+});

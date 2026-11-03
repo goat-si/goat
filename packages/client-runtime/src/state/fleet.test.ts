@@ -219,6 +219,32 @@ describe("createFleetSummaryAtom", () => {
   });
 });
 
+describe("remote delegated children", () => {
+  it("folds a remote child into its live parent and lifts its request", () => {
+    const child = shell(remote, "child", {
+      approval: true,
+      launchedBy: {
+        kind: "launch",
+        via: "delegate_task",
+        threadId: ThreadId.make("parent"),
+        environmentId: local,
+        environmentLabel: null,
+        threadTitle: null,
+      },
+    });
+    const shells = [shell(local, "parent"), child];
+    const environments = [env(local, "Mac"), env(remote, "Box")];
+    expect(summarizeFleet(shells, environments)).toMatchObject({ running: 0, attention: 1 });
+    const fleet = buildFleet({ environments, primaryEnvironmentId: local, shells, remote: [] });
+    expect(fleet.threads.map((row) => [row.title, row.state])).toEqual([["parent", "attention"]]);
+    expect(fleet.totals).toMatchObject({ running: 0, attention: 1 });
+    expect(summarizeFleet([child], [env(remote, "Box")])).toMatchObject({
+      running: 0,
+      attention: 1,
+    });
+  });
+});
+
 describe("buildFleet", () => {
   it("draws a disconnected environment without counting its stale threads", () => {
     const fleet = buildFleet({
