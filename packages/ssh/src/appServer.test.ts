@@ -169,7 +169,8 @@ describe("Git Bash managed server", () => {
   it.live("probes and issues a credential only for the requested live environment", () =>
     Effect.gen(function* () {
       const id = "11111111-1111-4111-8111-111111111111";
-      const server = yield* startAppServer({ ...attachableDescriptor, environmentId: id });
+      const descriptor = { ...attachableDescriptor, environmentId: id };
+      const server = yield* startAppServer(descriptor);
       const host = yield* makeHost({
         pid: 55140,
         port: server.port,
@@ -200,10 +201,18 @@ describe("Git Bash managed server", () => {
       expect((yield* probe()).kind).toBe("unusable");
       yield* issue(server.port).pipe(Effect.flip);
       yield* fs.writeFileString(`${dir}/environment-id`, `${id}\n`);
-      yield* issue(server.port, "22222222-2222-4222-8222-222222222222").pipe(Effect.flip);
+      descriptor.environmentId = "22222222-2222-4222-8222-222222222222";
+      expect((yield* probe()).kind).toBe("unusable");
+      yield* issue(server.port).pipe(Effect.flip);
+      descriptor.environmentId = id;
       yield* fs.remove(`${dir}/runtime-control.token`);
       yield* issue(server.port).pipe(Effect.flip);
       yield* fs.writeFileString(`${dir}/runtime-control.token`, TOKEN);
+      yield* fs.writeFileString(`${host.home}/bin/tasklist.exe`, "#!/bin/sh\nexit 0\n", {
+        mode: 0o755,
+      });
+      expect(yield* probe()).toEqual({ kind: "unusable", reason: "dead-pid" });
+      yield* issue(server.port).pipe(Effect.flip);
       yield* fs.writeFileString(`${host.home}/bin/tasklist.exe`, "#!/bin/sh\nexit 1\n", {
         mode: 0o755,
       });
