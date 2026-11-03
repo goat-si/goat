@@ -3,6 +3,7 @@ import type {
   EnvironmentId,
   ProjectId,
   ProviderInteractionMode,
+  RepositoryIdentity,
   ServerProvider,
   ServerSettings,
 } from "@goat/contracts";
@@ -212,7 +213,7 @@ export function useComposerCommandMenu({
   thread = null,
   projectCwd,
   pullRequestProjectId = null,
-  pullRequestRepository = null,
+  pullRequestRepositoryIdentity = null,
   selectedProviderStatus,
   serverConfig = null,
   hasThread,
@@ -234,7 +235,7 @@ export function useComposerCommandMenu({
   > | null;
   readonly projectCwd: string | null;
   readonly pullRequestProjectId?: ProjectId | null;
-  readonly pullRequestRepository?: string | null;
+  readonly pullRequestRepositoryIdentity?: RepositoryIdentity | null;
   readonly selectedProviderStatus: ServerProvider | null;
   /** Decides which of GOAT's built-in skills the menu lists for this provider and project. */
   readonly serverConfig?: {
@@ -260,6 +261,11 @@ export function useComposerCommandMenu({
   const navigation = useNavigation();
   const currentThreadId = thread?.id ?? null;
   const threadPullRequests = thread?.pullRequests;
+  // The server lists a fork's own origin repository, not the upstream its identity names.
+  const pullRequestRepository =
+    pullRequestRepositoryIdentity?.origin?.displayName ??
+    pullRequestRepositoryIdentity?.displayName ??
+    null;
   const [localSelection, setLocalSelection] = useState(() => ({
     ownerKey,
     ...composerSelectionAtEnd(draftMessage),

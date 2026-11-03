@@ -224,3 +224,47 @@ it.effect("lists a fork's own repository and leaves its upstream out unless aske
     );
   }),
 );
+
+it.effect("answers line counts for a fork's own and upstream rows that share a number", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [
+        project({
+          id: "p2",
+          title: "t3code",
+          workspaceRoot: "/t3",
+          repository: "pingdotgg/t3code",
+        }),
+        forkProject("p1", "/goat"),
+      ],
+      providers: [
+        fakePullRequestProvider(SourceControlProviderKind.make("github"), {
+          listChangeRequestStats: ({ changeRequests }) =>
+            Effect.succeed(
+              changeRequests.map(({ repository, number }) => ({
+                repository,
+                number,
+                additions: repository === "goat-si/goat" ? 10 : 20,
+                deletions: 0,
+              })),
+            ),
+        }),
+      ],
+    });
+
+    const { stats } = yield* service.listStats({
+      refs: [
+        { projectId: "p1" as ProjectId, repository: "goat-si/goat", number: 1 },
+        { projectId: "p1" as ProjectId, repository: "pingdotgg/t3code", number: 1 },
+      ],
+    });
+
+    assert.deepStrictEqual(
+      stats.map((stat) => [stat.projectId, stat.repository, stat.additions]).toSorted(),
+      [
+        ["p1", "goat-si/goat", 10],
+        ["p1", "pingdotgg/t3code", 20],
+      ],
+    );
+  }),
+);

@@ -1,5 +1,7 @@
 import type {
   OrchestrationProjectShell,
+  ProjectId,
+  PullRequestRef,
   RepositoryIdentity,
   SourceControlProviderInfo,
 } from "@goat/contracts";
@@ -39,6 +41,53 @@ export function projectRepositories(
 
 export const remoteHostKey = (recognized: SourceControlProviderInfo, remoteUrl: string) =>
   `${recognized.baseUrl}\n${isSshRemoteUrl(remoteUrl) ? "ssh" : "web"}`;
+
+interface ListedRepository {
+  readonly cursorKey: string;
+  readonly project: { readonly id: ProjectId };
+  readonly repository: string;
+  readonly host: string;
+}
+
+export interface StatTarget<Listed extends ListedRepository> {
+  readonly project: Listed;
+  readonly number: number;
+  /** Every project whose rows asked for this change request. */
+  readonly projectIds: ReadonlyArray<ProjectId>;
+}
+
+/**
+ * The listed repository that reads each stats ref, one read per change request. A repository the
+ * listing gave to another project (a worktree, or one project's origin that is another's upstream)
+ * still answers for the project whose rows asked.
+ */
+export function statTargets<Listed extends ListedRepository>(
+  listed: ReadonlyArray<Listed>,
+  refs: ReadonlyArray<PullRequestRef>,
+): ReadonlyArray<StatTarget<Listed>> {
+  const name = (repository: string) => repository.trim().toLowerCase();
+  const byProject = new Map(
+    listed.map((item) => [`${item.project.id} ${name(item.repository)}`, item]),
+  );
+  const targets = new Map<string, { project: Listed; number: number; projectIds: ProjectId[] }>();
+  for (const ref of refs) {
+    const repository = name(ref.repository);
+    const host = ref.host?.trim().toLowerCase();
+    const project =
+      byProject.get(`${ref.projectId} ${repository}`) ??
+      listed.find(
+        (item) =>
+          name(item.repository) === repository && (host === undefined || item.host === host),
+      );
+    if (project === undefined) continue;
+    const key = `${project.cursorKey} ${ref.number}`;
+    const held = targets.get(key);
+    if (held === undefined)
+      targets.set(key, { project, number: ref.number, projectIds: [ref.projectId] });
+    else if (!held.projectIds.includes(ref.projectId)) held.projectIds.push(ref.projectId);
+  }
+  return [...targets.values()];
+}
 
 /** An HTTP remote names its server's web host, port included. */
 export function httpRemoteHost(remoteUrl: string): string | null {

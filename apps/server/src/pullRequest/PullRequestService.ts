@@ -80,7 +80,9 @@ import {
   httpRemoteHost,
   projectRepositories,
   remoteHostKey,
+  statTargets,
   type ProjectRepository,
+  type StatTarget,
 } from "./projectRepositories.ts";
 
 import * as ProjectService from "../project/ProjectService.ts";
@@ -2636,22 +2638,9 @@ export const make = Effect.gen(function* () {
   )(function* (input) {
     if (input.refs.length === 0) return { stats: [] };
     const { supported } = yield* listWorkspaceProjects({});
-    const statKey = (projectId: string, repository: string) =>
-      `${projectId} ${repository.trim().toLowerCase()}`;
-    const byRepository = new Map(
-      supported.map((project) => [statKey(project.project.id, project.repository), project]),
-    );
-    const wanted = new Map<
-      string,
-      { readonly project: SupportedProject; readonly number: number }
-    >();
-    for (const ref of input.refs) {
-      const project = byRepository.get(statKey(ref.projectId, ref.repository));
-      if (project === undefined || project.api.listChangeRequestStats === undefined) continue;
-      wanted.set(`${project.project.id} ${ref.number}`, { project, number: ref.number });
-    }
-    const byHost = new Map<string, Array<{ project: SupportedProject; number: number }>>();
-    for (const entry of wanted.values()) {
+    const byHost = new Map<string, Array<StatTarget<SupportedProject>>>();
+    for (const entry of statTargets(supported, input.refs)) {
+      if (entry.project.api.listChangeRequestStats === undefined) continue;
       const held = byHost.get(entry.project.host);
       if (held === undefined) byHost.set(entry.project.host, [entry]);
       else held.push(entry);
@@ -2662,10 +2651,10 @@ export const make = Effect.gen(function* () {
         const first = entries[0]!;
         const readStats = first.project.api.listChangeRequestStats;
         if (readStats === undefined) return Effect.succeed<ReadonlyArray<PullRequestDiffStat>>([]);
-        const projectsByRepository = new Map(
+        const targets = new Map(
           entries.map((entry) => [
             `${entry.project.repository.toLowerCase()} ${entry.number}`,
-            entry.project,
+            entry,
           ]),
         );
         return readStats({
@@ -2678,20 +2667,15 @@ export const make = Effect.gen(function* () {
         }).pipe(
           Effect.map((read) =>
             read.flatMap((stat): ReadonlyArray<PullRequestDiffStat> => {
-              const project = projectsByRepository.get(
-                `${stat.repository.toLowerCase()} ${stat.number}`,
-              );
-              return project === undefined
-                ? []
-                : [
-                    {
-                      projectId: project.project.id,
-                      repository: project.repository,
-                      number: stat.number,
-                      additions: stat.additions,
-                      deletions: stat.deletions,
-                    },
-                  ];
+              const target = targets.get(`${stat.repository.toLowerCase()} ${stat.number}`);
+              if (target === undefined) return [];
+              return target.projectIds.map((projectId) => ({
+                projectId,
+                repository: target.project.repository,
+                number: stat.number,
+                additions: stat.additions,
+                deletions: stat.deletions,
+              }));
             }),
           ),
           Effect.orElseSucceed((): ReadonlyArray<PullRequestDiffStat> => []),

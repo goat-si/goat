@@ -962,7 +962,8 @@ export function findProjectForRepository<
     const identity = project.repositoryIdentity;
     if (
       !identity ||
-      sourceControlClients.repositorySelector(identity)?.toLowerCase() !== repository
+      (sourceControlClients.repositorySelector(identity)?.toLowerCase() !== repository &&
+        identity.origin?.displayName?.toLowerCase() !== repository)
     ) {
       return false;
     }
