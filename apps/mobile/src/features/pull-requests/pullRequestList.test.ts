@@ -56,6 +56,27 @@ it("summarizes unreachable environments and keeps other PR list errors (#2464)",
   ]);
 });
 
+it("distinguishes unreachable environments with the same or missing labels (#2464)", () => {
+  const ids = ["laptop-one", "laptop-two", "unknown-one", "unknown-two"].map(EnvironmentId.make);
+  const errors = [...ids, ids[0]!].map((environmentId) => ({
+    environmentId,
+    projectTitle: "",
+    message: "offline",
+    unreachable: true,
+  }));
+  expect(
+    pullRequestListErrorMessages(
+      errors,
+      new Map([
+        [ids[0]!, "Laptop"],
+        [ids[1]!, "Laptop"],
+      ]),
+    ),
+  ).toEqual([
+    "Couldn't reach environments: Laptop (laptop-one), Laptop (laptop-two), Environment (unknown-one), Environment (unknown-two)",
+  ]);
+});
+
 function entry(number: number, patch: Partial<PullRequestListEntry> = {}): PullRequestListEntry {
   return {
     number,

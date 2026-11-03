@@ -23,7 +23,8 @@ vi.mock("../../connection/catalog", async () => {
 vi.mock("../../state/pull-requests", async () => {
   const { AsyncResult, Atom } = await import("effect/reactivity");
   const Effect = await import("effect/Effect");
-  const { ConnectionTransientError } = await import("@goat/client-runtime/connection");
+  const { ConnectionTransientError, ConnectionBlockedError } =
+    await import("@goat/client-runtime/connection");
   const page = (nextCursors: PullRequestListResult["nextCursors"]): PullRequestListResult => ({
     entries: [],
     nextCursors,
@@ -37,6 +38,32 @@ vi.mock("../../state/pull-requests", async () => {
     const response = page(target.input.cursors ? {} : { "github.com org/repo": "next" });
     return Atom.make(
       Effect.suspend(() => {
+        if (
+          target.environmentId === "endpoint" ||
+          target.environmentId === "host" ||
+          target.environmentId === "transport" ||
+          target.environmentId === "relay"
+        )
+          return Effect.fail(
+            new ConnectionTransientError({
+              reason: (
+                {
+                  endpoint: "endpoint-unavailable",
+                  host: "host-unreachable",
+                  transport: "transport",
+                  relay: "relay-unavailable",
+                } as const
+              )[target.environmentId],
+              detail: "offline",
+            }),
+          );
+        if (target.environmentId === "auth" || target.environmentId === "permission")
+          return Effect.fail(
+            new ConnectionBlockedError({
+              reason: target.environmentId === "auth" ? "authentication" : "permission",
+              detail: "offline",
+            }),
+          );
         if (target.environmentId.startsWith("unreachable"))
           return Effect.fail(
             new ConnectionTransientError({ reason: "network", detail: "offline" }),
@@ -113,6 +140,24 @@ it("marks unreachable environments by failure type for the PR list summary (#246
     { environmentId: "unreachable-one", projectTitle: "", message: "offline", unreachable: true },
     { environmentId: "unreachable-two", projectTitle: "", message: "offline", unreachable: true },
     { environmentId: "other-error", projectTitle: "", message: "offline" },
+  ]);
+});
+
+it("groups unreachable connection failures while retaining authentication and permission errors (#2464)", async () => {
+  using probe = setup(["endpoint", "host", "transport", "relay", "auth", "permission"]);
+  await act(async () => probe.latest.onRefresh());
+  expect(probe.latest.data.errors).toEqual([
+    ...["endpoint", "host", "transport", "relay"].map((environmentId) => ({
+      environmentId,
+      projectTitle: "",
+      message: "offline",
+      unreachable: true,
+    })),
+    ...["auth", "permission"].map((environmentId) => ({
+      environmentId,
+      projectTitle: "",
+      message: "offline",
+    })),
   ]);
 });
 
