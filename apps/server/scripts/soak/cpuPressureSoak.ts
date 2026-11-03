@@ -612,6 +612,7 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
       observations.deaths,
       [
         ...(!selfCheck.providerRestart.passed ? ["provider self-check did not pass"] : []),
+        "Codex provider self-check and recovery turns not performed",
         ...(observations.lifecycle.some(
           (line) => line.instance === "devReplay" && line.event === "start",
         )

@@ -278,6 +278,38 @@ describe("soak observations", () => {
       ).counter.value,
     ).toBe(2);
   });
+  it("deduplicates sessions per PID and excludes events outside the window and requested releases", () => {
+    const lines = [
+      { event: "start" as const, pid: 1, instance: "devReplay", at: "1" },
+      { event: "session" as const, pid: 1, instance: "devReplay", at: "1", thread: "native" },
+      { event: "session" as const, pid: 1, instance: "devReplay", at: "2", thread: "native" },
+      { event: "exit" as const, pid: 1, instance: "devReplay", at: "3" },
+      { event: "start" as const, pid: 2, instance: "devReplay", at: "4" },
+      { event: "session" as const, pid: 2, instance: "devReplay", at: "4", thread: "native" },
+    ];
+    const joined = new Map([["native", "thread"]]);
+    expect(
+      providerRestarts(lines, joined, [], [], [], { start: "5", end: "6", disappeared: [] }).counter
+        .value,
+    ).toBe(0);
+    expect(
+      providerRestarts(lines.slice(0, 3), joined, [], [], [], {
+        start: "1",
+        end: "6",
+        disappeared: [],
+      }).counter.value,
+    ).toBe(0);
+    expect(
+      providerRestarts(
+        lines,
+        joined,
+        [{ thread: "thread", at: "3", status: "stopped", requested: true }],
+        [],
+        [],
+        { start: "1", end: "6", disappeared: [] },
+      ).counter.value,
+    ).toBe(0);
+  });
   it("caps detail at a complete line and flags truncation", () => {
     const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-detail-limit-"));
     try {

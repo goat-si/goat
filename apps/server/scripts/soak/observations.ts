@@ -222,7 +222,7 @@ type Lifecycle = {
   at: string;
   thread?: string;
 };
-type Release = { thread: string; at: string; status: "stopped" | "error" };
+type Release = { thread: string; at: string; status: "stopped" | "error"; requested?: boolean };
 type Death = { thread: string; instance: string; at: string };
 export function providerRestarts(
   lines: Lifecycle[],
@@ -245,7 +245,7 @@ export function providerRestarts(
       continue;
     }
     const group = groups.get(thread) ?? [];
-    group.push(session);
+    if (!group.some((existing) => existing.pid === session.pid)) group.push(session);
     groups.set(thread, group);
   }
   let extraSessions = 0;
@@ -259,6 +259,18 @@ export function providerRestarts(
       const previous = group[i - 1];
       const next = group[i];
       if (!previous || !next) continue;
+      if (!window || next.at < window.start || next.at > window.end) continue;
+      if (
+        releases.some(
+          (release) =>
+            release.thread === thread &&
+            release.requested &&
+            release.status === "stopped" &&
+            release.at >= previous.at &&
+            release.at <= next.at,
+        )
+      )
+        continue;
       extraSessions++;
       const exit = lines.find(
         (line) =>
@@ -295,6 +307,19 @@ export function providerRestarts(
         .map(([thread]) => thread);
       if (!pidThreads.length) continue;
       if (
+        pidThreads.every((thread) =>
+          releases.some(
+            (release) =>
+              release.thread === thread &&
+              release.requested &&
+              release.status === "stopped" &&
+              release.at >= window.start &&
+              release.at <= (exit?.at ?? window.end),
+          ),
+        )
+      )
+        continue;
+      if (
         disappeared &&
         sessions.some((session) => session.pid === pid && session.at < window.start)
       )
@@ -311,7 +336,12 @@ export function providerRestarts(
       if (death >= 0) matchedDeaths.add(death);
     }
   } else reasons.push("provider process exit window unavailable");
-  processExitRunEpisodes = deaths.length - matchedDeaths.size;
+  processExitRunEpisodes = window
+    ? deaths.filter(
+        (death, index) =>
+          death.at >= window.start && death.at <= window.end && !matchedDeaths.has(index),
+      ).length
+    : 0;
   if ([lines.length, releases.length, deaths.length].some((n) => n >= LIMIT))
     reasons.push("observation limit reached");
   return {
