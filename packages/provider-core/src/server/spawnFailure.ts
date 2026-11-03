@@ -17,6 +17,7 @@ export function classifySpawnFailure(
   accessDirectory = (path: string) => NodeFS.accessSync(path, NodeFS.constants.X_OK),
   command?: { binary: string; env?: NodeJS.ProcessEnv | undefined },
   statExecutable = (path: string) => NodeFS.statSync(path).isFile(),
+  processCwd = () => process.cwd(),
 ): SpawnFailure {
   const seen = new Set<unknown>();
   const pending: unknown[] = [cause];
@@ -39,6 +40,13 @@ export function classifySpawnFailure(
     if ("error" in current) pending.push(current.error);
   }
   if (cwd === undefined) {
+    if (code === "ENOENT" || code === "EACCES" || code === "EPERM" || code === "ENOTDIR") {
+      try {
+        processCwd();
+      } catch {
+        return "cwd_inaccessible";
+      }
+    }
     if (code !== "ENOENT") return "unknown";
     if (!command) return "missing";
     return executableExists(command.binary, cwd, command.env ?? process.env, statExecutable) ===
