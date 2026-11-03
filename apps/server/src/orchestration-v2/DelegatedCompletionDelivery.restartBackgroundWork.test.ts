@@ -348,14 +348,14 @@ it.layer(layerTest)("delegated background work across a server restart", (it) =>
     }),
   );
 
-  it.effect.each(["a background command", "a nested subagent"] as const)(
+  it.effect.each(["an awaited background command", "a nested subagent"] as const)(
     "finalizes a child whose run ended before %s settled",
     (blocker) =>
       Effect.gen(function* () {
         const orchestrator = yield* Orchestrator.OrchestratorV2;
         const sink = yield* EventSink.EventSinkV2;
         const now = yield* DateTime.now;
-        const key = blocker === "a background command" ? "command" : "nested";
+        const key = blocker === "an awaited background command" ? "command" : "nested";
         const threadId = ThreadId.make(`late-settle-parent-${key}`);
         const runId = RunId.make(`late-settle-parent-run-${key}`);
         const rootNodeId = NodeId.make(`late-settle-parent-root-${key}`);
@@ -504,7 +504,7 @@ it.layer(layerTest)("delegated background work across a server restart", (it) =>
           updatedAt: now,
         };
         const blockerEvent = (open: boolean) =>
-          blocker === "a background command"
+          blocker === "an awaited background command"
             ? {
                 id: EventId.make(`event:late-settle-roster-${key}-${open}`),
                 type: "provider-thread.updated" as const,
@@ -515,7 +515,7 @@ it.layer(layerTest)("delegated background work across a server restart", (it) =>
                 payload: {
                   ...providerThread,
                   pendingBackgroundTasks: open
-                    ? [{ taskId: "sleep-900", kind: "command" as const }]
+                    ? [{ taskId: "sleep-900", kind: "command" as const, awaited: true }]
                     : [],
                 },
               }
