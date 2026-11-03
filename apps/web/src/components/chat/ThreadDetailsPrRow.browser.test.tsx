@@ -13,6 +13,7 @@ const state = vi.hoisted(() => ({
   checkoutError: null as Error | null,
   addToast: vi.fn(),
   updateToast: vi.fn(),
+  repositoryTitles: null as Record<string, string> | null,
 }));
 
 vi.mock(import("~/state/entities"), async (importOriginal) => ({
@@ -54,10 +55,25 @@ const queryData = () => ({
     rebase: state.mergeMethods.includes("rebase"),
   },
 });
+vi.mock(import("~/state/pullRequests"), async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    pullRequestEnvironment: {
+      ...actual.pullRequestEnvironment,
+      detail: ((input: { input: { repository: string } }) => ({ reference: input.input })) as never,
+    },
+  };
+});
 vi.mock(import("~/state/query"), async (importOriginal) => ({
   ...(await importOriginal()),
-  useEnvironmentQuerySelector: ((_atom: unknown, select: (result: unknown) => unknown) =>
-    select(AsyncResult.success(queryData()))) as never,
+  useEnvironmentQuerySelector: ((
+    atom: { reference?: { repository: string } } | null,
+    select: (result: unknown) => unknown,
+  ) => {
+    const title = atom?.reference && state.repositoryTitles?.[atom.reference.repository];
+    return select(AsyncResult.success({ ...queryData(), ...(title ? { title } : {}) }));
+  }) as never,
   useEnvironmentQueryIsNewer: () => true,
   useEnvironmentQueryRefresh: () => ({ refresh: vi.fn(), isPending: () => false }),
   useEnvironmentQuery: (() => ({
@@ -103,6 +119,44 @@ vi.mock(import("../ui/toast"), async (original) => {
 import { act, render as renderUi } from "../../../test/render";
 import { useUiStateStore } from "~/uiStateStore";
 import { ThreadDetailsPrRow } from "./ThreadDetailsPrRow";
+
+it("shows the detected fork PR instead of an upstream PR with the same number (#2464)", async () => {
+  state.repositoryTitles = {
+    "fork/project": "Fork work",
+    "upstream/project": "Unrelated upstream work",
+  };
+  await using screen = await renderUi(
+    <ThreadDetailsPrRow
+      environmentId={EnvironmentId.make("environment")}
+      pr={{
+        number: 1,
+        title: "Fork work",
+        url: "https://github.com/fork/project/pull/1",
+        state: "open",
+        baseRef: "main",
+        headRef: "feature",
+      }}
+      number={1}
+      status={null}
+      project={
+        {
+          id: ProjectId.make("project"),
+          repositoryIdentity: {
+            canonicalKey: "github.com/upstream/project",
+            provider: "github",
+            owner: "upstream",
+            name: "project",
+          },
+        } as never
+      }
+      label="PR #1"
+      openAriaLabel="Open PR"
+      onOpen={vi.fn()}
+    />,
+  );
+  await expect.element(screen.getByText("Fork work")).toBeVisible();
+  expect(screen.queryByText("Unrelated upstream work")).toBeNull();
+});
 
 it("merges with the last selected merge method", async () => {
   await using screen = await setup();
@@ -168,6 +222,7 @@ it("requires a new merge click after passing checks become pending and pass agai
   });
   expect(dialogs()).toHaveLength(0);
   await act(async () => {
+    state.repositoryTitles = null;
     state.status = "success";
     await screen.rerender(render());
   });
@@ -188,6 +243,7 @@ async function setup() {
   state.addToast.mockReset().mockReturnValue("checkout-toast");
   state.updateToast.mockReset();
 
+  state.repositoryTitles = null;
   state.status = "success";
   state.extraStatus = null;
   state.mergeMethods = ["merge"];
