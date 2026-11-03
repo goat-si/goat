@@ -3,6 +3,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import {
   type ComputerUsePauseReason,
+  ComputerUseCallAdmission,
   EnvironmentId,
   ExecutionEnvironmentDescriptor,
   ProviderInstanceId,
@@ -38,8 +39,10 @@ import { BrowserOriginGrants } from "../preview/BrowserOriginGrantsLayer.ts";
 import * as Grants from "../preview/BrowserOriginGrantsLayer.ts";
 import { BrowserClaimManifest } from "../preview/BrowserClaimManifest.ts";
 import { harness, call } from "./ComputerUseLeaseProxy.testkit.ts";
+import { sendApprovedBind } from "./ComputerUseLeaseRouteBind.testkit.ts";
 
 const decodeDescriptor = Schema.decodeSync(ExecutionEnvironmentDescriptor);
+const decodeAdmission = Schema.decodeUnknownSync(ComputerUseCallAdmission);
 const threadId = ThreadId.make("thread:bot");
 const controlId = "control:one";
 const expiresAt = DateTime.makeUnsafe(10 * 60_000);
@@ -576,7 +579,6 @@ describe("computer use lease route", () => {
       const reservationRelease = yield* Deferred.make<void>();
       let hosts: ReadonlyArray<string> = [];
       let releasedUnsent = false;
-      let sent = false;
       const grants = yield* makeBrowserOriginGrants({
         environmentId: EnvironmentId.make("environment:test"),
         supported: () => true,
@@ -619,26 +621,29 @@ describe("computer use lease route", () => {
                 Effect.as({ status: "admitted" as const, reservationId: "reservation:test" }),
               ),
       });
-      const call = yield* route
-        .reserve("get_browser_state", {
-          pid: 42,
-          window_id: 7,
-          origin_scope: ["https://example.test"],
-          session: `goat-claim:${pending.claimId}`,
-        })
-        .pipe(Effect.forkChild({ startImmediately: true }));
+      let decision: unknown;
+      const proxy = yield* harness({
+        autoAppListing: true,
+        reservation: (request) =>
+          request.action === "reserve"
+            ? route.reserve(request.name, request.args).pipe(
+                Effect.tap((value) =>
+                  Effect.sync(() => {
+                    decision = value;
+                  }),
+                ),
+                Effect.map(decodeAdmission),
+              )
+            : Effect.succeed({ status: "released" as const }),
+      });
+      yield* sendApprovedBind(proxy, yield* grants.bindingsFor(threadId), pending.claimId);
       yield* Deferred.await(reservationStarted);
       hosts = ["example.test"];
       yield* Deferred.succeed(reservationRelease, undefined);
-      const decision = yield* Fiber.join(call);
-      sent =
-        typeof decision === "object" &&
-        decision !== null &&
-        "status" in decision &&
-        decision.status === "admitted";
+      assert.equal((yield* proxy.primitiveReply).status, "not_started");
       assert.deepEqual(decision, { status: "refused", detail: "blocked_url" });
       assert.isTrue(releasedUnsent);
-      assert.isFalse(sent);
+      assert.equal(yield* proxy.driverQueued, 0);
       yield* Deferred.succeed(bindRelease, undefined);
       const result = (yield* Fiber.join(answer)).agentResult;
       assert.equal(result.status === "refused" && result.code, "declined");
