@@ -87,6 +87,9 @@ apps this is switched off for now; see
 When an agent asks for a password for a sign-in page, the card shows the site.
 GOAT types the password into that site's password field, and the agent gets only a reference.
 
+An agent can also request a login with a username and password. The agent never sees either value;
+GOAT fills them only on the site named in the request, and each login is used once.
+
 The cursor mark shows where the agent is working; it does not prove an action
 succeeded. If an outcome is uncertain, ask the agent to inspect the target
 before it tries another action.
