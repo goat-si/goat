@@ -137,7 +137,7 @@ const threadId = ThreadId.make("thread:login-sentinel");
 const instanceId = ProviderInstanceId.make("codex");
 const sessionId = AuthSessionId.make("session:login-sentinel");
 const username = "LOGIN_USER_SENTINEL_8394";
-const password = "LOGIN_PASSWORD_SENTINEL_7241";
+const password = "  LOGIN_PASSWORD_SENTINEL_7241  ";
 const scope: McpThreadInvocationScope = {
   environmentId: EnvironmentId.make("test"),
   requestNamespace: "login-sentinel",
@@ -411,6 +411,7 @@ it.live("login sentinels stay out of agent results, thread events and browser di
             passwordFilled: true,
             verdict: "confirmed",
           });
+          expect(yield* Effect.promise(() => page.locator("#pw").inputValue())).toBe(password);
           expect(Option.isNone(yield* secrets.savedRef({ threadId, turnItemId: card.id }))).toBe(
             true,
           );
@@ -590,6 +591,7 @@ it.live("login sentinels stay out of agent results, thread events and browser di
         });
         expect(visible).not.toContain(username);
         expect(visible).not.toContain(password);
+        expect(visible).not.toContain(password.trim());
       }).pipe(
         Effect.provide(
           Harness.layerWithRegistry(

@@ -36,7 +36,7 @@ it("requires a username and masked password before saving a login", async () => 
   await expect.element(save).toBeDisabled();
   await user.fill("test-user");
   await expect.element(save).toBeDisabled();
-  await password.fill("test-password");
+  await password.fill("  pass word  ");
   await expect.element(save).toBeEnabled();
   await save.click();
   expect(state.answer).toHaveBeenCalledWith({
@@ -44,7 +44,7 @@ it("requires a username and masked password before saving a login", async () => 
     input: {
       threadId: "thread:login",
       turnItemId: "item:login",
-      answer: { type: "save_login", username: "test-user", password: "test-password" },
+      answer: { type: "save_login", username: "test-user", password: "  pass word  " },
     },
   });
 });

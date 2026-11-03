@@ -79,7 +79,7 @@ it("requires both fields and masks the login password before saving", async () =
     });
     expect(save?.disabled).toBe(true);
     await act(() => {
-      password!.value = "test-password";
+      password!.value = "  pass word  ";
       password!.dispatchEvent(new Event("input", { bubbles: true }));
     });
     expect(save?.disabled).toBe(false);
@@ -89,7 +89,7 @@ it("requires both fields and masks the login password before saving", async () =
       input: {
         threadId: "thread:login",
         turnItemId: "item:login",
-        answer: { type: "save_login", username: "test-user", password: "test-password" },
+        answer: { type: "save_login", username: "test-user", password: "  pass word  " },
       },
     });
   } finally {

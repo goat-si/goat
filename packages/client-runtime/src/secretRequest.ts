@@ -80,8 +80,8 @@ export function secretRequestAnswerInput(
   }
   if (answer.type === "save_login") {
     const username = answer.username.trim();
-    const password = answer.password.trim();
-    if (username.length === 0 || password.length === 0) return null;
+    const password = answer.password;
+    if (username.length === 0 || password.trim().length === 0) return null;
     return {
       threadId: item.threadId,
       turnItemId: item.id,

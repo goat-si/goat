@@ -12,7 +12,7 @@ export const SecretRequestAnswerInput = Schema.Struct({
     Schema.Struct({
       type: Schema.Literal("save_login"),
       username: TrimmedNonEmptyString,
-      password: TrimmedNonEmptyString,
+      password: Schema.String.check(Schema.isPattern(/\S/)),
     }),
     Schema.Struct({ type: Schema.Literal("decline") }),
   ]),

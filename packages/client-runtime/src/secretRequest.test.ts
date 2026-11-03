@@ -62,7 +62,7 @@ it("requires both login fields and builds a private login answer", () => {
   ).toEqual({
     threadId: "thread:login",
     turnItemId: "turn-item:login",
-    answer: { type: "save_login", username: "user", password: "password" },
+    answer: { type: "save_login", username: "user", password: " password " },
   });
 });
 
