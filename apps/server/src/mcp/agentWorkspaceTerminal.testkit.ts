@@ -23,6 +23,7 @@ import * as Access from "./AgentWorkspaceTerminalAccess.ts";
 import * as Audit from "./AgentWorkspaceTerminalAudit.ts";
 import * as WorkspaceEntries from "../workspace/WorkspaceEntries.ts";
 import * as WorkspaceFiles from "../workspace/WorkspaceFileSystem.ts";
+import * as ServerConfig from "../config.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import * as KnownWorkspaces from "../workspace/KnownWorkspaces.ts";
 import * as Settings from "../serverSettings.ts";
@@ -132,6 +133,7 @@ export const fixture = Effect.fn("agentWorkspaceTerminal.fixture")(function* () 
   );
   const base = Layer.merge(baseServices, layerPermissionProfilesOff);
   const files = WorkspaceFiles.layer.pipe(
+    Layer.provide(ServerConfig.layerTest(root, { prefix: "goat-agent-config-" })),
     Layer.provide(WorkspacePaths.layer),
     Layer.provide(entries),
     Layer.provide(
