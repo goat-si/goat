@@ -6,6 +6,7 @@ import { page, userEvent } from "vite-plus/test/browser";
 const state = vi.hoisted(() => ({
   update: vi.fn(),
   capabilities: [] as Array<{ codexAppServerIsolation?: boolean }>,
+  mixed: false,
 }));
 
 vi.mock(import("./SettingsScopeContext"), async (original) => ({
@@ -20,25 +21,27 @@ vi.mock(import("./SettingsScopeContext"), async (original) => ({
 vi.mock(import("./useScopedSettings"), async (original) => ({
   ...(await original()),
   useScopedSettings: (() => DEFAULT_SERVER_SETTINGS) as never,
-  useScopedSettingsMixed: () => false,
+  useScopedSettingsMixed: () => state.mixed,
   useUpdateScopedSettings: () => state.update,
 }));
 vi.mock(import("./settingsLayout"), async (original) => ({
   ...(await original()),
-  SettingsRow: ({ control, status }) => (
+  SettingsRow: ({ control, status, resetAction }) => (
     <div>
       {control}
+      {resetAction}
       <p>{status}</p>
     </div>
   ),
-  SettingResetButton: () => <></>,
+  SettingResetButton: ({ label, onClick }) => <button onClick={onClick}>Reset {label}</button>,
 }));
 
 import { CodexAppServerIsolationSetting } from "./CodexAppServerIsolationSetting";
 
-function setup(capabilities: Array<{ codexAppServerIsolation?: boolean }>) {
+function setup(capabilities: Array<{ codexAppServerIsolation?: boolean }>, mixed = false) {
   state.update.mockReset();
   state.capabilities = capabilities;
+  state.mixed = mixed;
 }
 
 describe("Codex app-server isolation setting", () => {
@@ -72,5 +75,14 @@ describe("Codex app-server isolation setting", () => {
       page.getByRole("option", { name: other === "thread" ? "One per thread" : "Shared" }),
     );
     expect(state.update).toHaveBeenCalledExactlyOnceWith({ codexAppServerIsolation: other });
+  });
+
+  it("offers a reset when the selected environments disagree", async () => {
+    setup([{ codexAppServerIsolation: true }, { codexAppServerIsolation: true }], true);
+    await using _screen = await render(<CodexAppServerIsolationSetting />);
+    await userEvent.click(page.getByRole("button", { name: "Reset Codex app-servers" }));
+    expect(state.update).toHaveBeenCalledExactlyOnceWith({
+      codexAppServerIsolation: CODEX_APP_SERVER_ISOLATION_DEFAULT,
+    });
   });
 });

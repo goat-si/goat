@@ -46,7 +46,8 @@ export function CodexAppServerIsolationSetting() {
       }
       resetAction={
         supported &&
-        settings.codexAppServerIsolation !== DEFAULT_UNIFIED_SETTINGS.codexAppServerIsolation ? (
+        (mixed ||
+          settings.codexAppServerIsolation !== DEFAULT_UNIFIED_SETTINGS.codexAppServerIsolation) ? (
           <SettingResetButton
             label="Codex app-servers"
             onClick={() =>
