@@ -123,7 +123,6 @@ describe("Codex Stop of a turn Codex queued behind a running turn", () => {
         yield* replay.startTurn(1);
         yield* replay.startTurn(2);
         const stop = yield* stopTurn2(replay);
-        yield* TestClock.adjust("10 seconds");
         assert.deepStrictEqual(yield* Fiber.join(stop), Exit.void);
         const terminals = [yield* replay.terminal, yield* replay.terminal];
         assert.deepStrictEqual(yield* statusOf(terminals), ["interrupted", "interrupted"]);

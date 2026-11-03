@@ -112,6 +112,7 @@ import * as CodexClient from "effect-codex-app-server/client";
 import { withCodexRequestDeadlines } from "./CodexRequestDeadline.ts";
 import { CUA_DEFERRED_NOTE, makeCodexThreadStatuses } from "./codexThreadStatuses.ts";
 import * as CodexSubagents from "./codexSubagents.ts";
+import { awaitingNativeStart, queueBlockers } from "./CodexQueuedTurnStop.ts";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import * as CodexSchema from "effect-codex-app-server/schema";
 import * as Cause from "effect/Cause";
@@ -7705,8 +7706,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                       (candidate) => candidate.providerThread.id === turnInput.providerThread.id,
                     )
                   : undefined);
+              const stoppedRoots = [
+                ...(activeTurn === undefined ? [] : [activeTurn]),
+                ...goalTurns,
+              ];
               const lineageRoots = Array.from(
-                new Set([...(activeTurn === undefined ? [] : [activeTurn]), ...goalTurns]),
+                new Set([...stoppedRoots, ...queueBlockers(stoppedRoots, activeTurnContexts)]),
               );
               const inLineage = (context: ActiveCodexTurnContext) =>
                 lineageRoots.some(
@@ -7917,27 +7922,51 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               });
 
               yield* Effect.gen(function* () {
-                for (const target of interruptTargets) {
-                  const context = target.context;
-                  // Null start timestamps ACK queued turns; interruption must wait for turn/started.
-                  if (context.nativeStartReady !== undefined) {
-                    const ready = yield* Deferred.await(context.nativeStartReady).pipe(
-                      Effect.timeoutOption("10 seconds"),
-                    );
-                    if (Option.isNone(ready)) {
-                      return yield* toProtocolError(
-                        "Codex did not start the queued turn within 10 seconds; Stop could not be delivered.",
-                      );
-                    }
-                  }
-                  if ((yield* Ref.get(activeTurns)).get(context.nativeTurnId) !== context) {
-                    continue;
-                  }
+                const sendInterrupt = Effect.fnUntraced(function* (
+                  context: ActiveCodexTurnContext,
+                ) {
+                  if ((yield* Ref.get(activeTurns)).get(context.nativeTurnId) !== context) return;
                   yield* client.request("turn/interrupt", {
                     threadId: yield* getNativeThreadId(context.providerThread),
                     turnId: context.nativeTurnId,
                   });
-                }
+                });
+                const queued = interruptTargets.filter(({ context }) =>
+                  awaitingNativeStart(context),
+                );
+                const started = Effect.forEach(
+                  interruptTargets.filter((target) => !queued.includes(target)),
+                  (target) => sendInterrupt(target.context),
+                  { discard: true },
+                );
+                // A queued turn that never starts cannot be interrupted, so it ends here instead.
+                const queuedStops = Effect.forEach(
+                  queued,
+                  ({ context }) =>
+                    Effect.gen(function* () {
+                      const ready = yield* Effect.timeoutOption(
+                        context.nativeStartReady === undefined
+                          ? Effect.void
+                          : Deferred.await(context.nativeStartReady),
+                        "10 seconds",
+                      );
+                      if (Option.isSome(ready)) return yield* sendInterrupt(context);
+                      yield* Effect.logWarning("orchestration-v2.codex-queued-turn-never-started", {
+                        providerSessionId: input.providerSessionId,
+                        nativeTurnId: context.nativeTurnId,
+                      });
+                      forcedNativeTurns.add(context.nativeTurnId);
+                      const forced = yield* finalizeCodexTurn({
+                        context,
+                        nativeTurnId: context.nativeTurnId,
+                        status: "interrupted",
+                        completedAt: yield* DateTime.now,
+                      });
+                      if (!forced) forcedNativeTurns.delete(context.nativeTurnId);
+                    }),
+                  { concurrency: "unbounded", discard: true },
+                );
+                yield* Effect.all([started, queuedStops], { concurrency: "unbounded" });
                 const containedTerminalKeys = new Set<string>();
                 const attemptedTerminalKeys = new Set<string>();
                 const collectTrackedTerminals = Effect.fn("CodexAdapterV2.collectTrackedTerminals")(
