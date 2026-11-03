@@ -135,6 +135,7 @@ export const makeHarness = Effect.fn("TestEnvironmentRegistry.makeHarness")(func
     readonly beforeRegistrationRemove?: (
       environmentId: EnvironmentId,
     ) => Effect.Effect<void, Persistence.ConnectionPersistenceError>;
+    readonly beforeOwnedDataClear?: (environmentId: EnvironmentId) => Effect.Effect<void>;
     readonly beforeCredentialPut?: (
       connectionId: string,
     ) => Effect.Effect<void, ConnectionTransientError>;
@@ -293,7 +294,11 @@ export const makeHarness = Effect.fn("TestEnvironmentRegistry.makeHarness")(func
   });
   const ownedDataCleanup = Persistence.EnvironmentOwnedDataCleanup.of({
     clear: (environmentId) =>
-      Ref.update(ownedDataClears, (environmentIds) => [...environmentIds, environmentId]),
+      (options?.beforeOwnedDataClear?.(environmentId) ?? Effect.void).pipe(
+        Effect.andThen(
+          Ref.update(ownedDataClears, (environmentIds) => [...environmentIds, environmentId]),
+        ),
+      ),
   });
   const networkStatus = yield* SubscriptionRef.make<"unknown" | "offline" | "online">("online");
   const connectivity = Connectivity.Connectivity.of({

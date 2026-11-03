@@ -158,6 +158,71 @@ afterEach(async () => {
 });
 
 describe("mobile GOAT Bot session selection", () => {
+  it("waits for an in-flight upload and its pending upload deletion when the environment is removed", async () => {
+    const env = EnvironmentId.make("remove-in-flight-upload");
+    const uploadId = "pending-00000000-0000-4000-8000-000000000001-pdf";
+    const file = {
+      id: "in-flight",
+      type: "file" as const,
+      name: "report.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 42,
+      fileUri: "file:///documents/in-flight.pdf",
+    };
+    harness.environments = [environment(env)];
+    harness.items = [];
+    const started = Promise.withResolvers<void>();
+    const transfer = Promise.withResolvers<void>();
+    const deleted = Promise.withResolvers<void>();
+    const finishDelete = Promise.withResolvers<void>();
+    const initialCleanup = Promise.withResolvers<void>();
+    harness.release.mockImplementation(async () => {
+      initialCleanup.resolve();
+    });
+    harness.upload.mockReset().mockImplementation(async (input) => {
+      expect(input.onMinted(uploadId)).toBe("continue");
+      started.resolve();
+      await transfer.promise;
+      return { status: "uploaded", attachmentId: uploadId };
+    });
+    const ingests: unknown[] = [];
+    harness.run.mockImplementation(async (_registry, _command, args) => {
+      if ("input" in args && "attachmentId" in args.input) {
+        expect(args.input.attachmentId).toBe(uploadId);
+        deleted.resolve();
+        await finishDelete.promise;
+        return { _tag: "Success", value: undefined };
+      }
+      if ("input" in args && "idempotencyKey" in args.input) ingests.push(args.input);
+      return { _tag: "Success", value: bot(env) };
+    });
+    await render();
+    await act(async () => {
+      expect(session.onSend("hello", [file])).toBe(true);
+      await started.promise;
+    });
+    let settled = false;
+    let removal!: Promise<void>;
+    await act(async () => {
+      removal = botSessions.disposeMobileGoatBotEnvironment(env).then(() => {
+        settled = true;
+      });
+      await initialCleanup.promise;
+    });
+    try {
+      expect(settled).toBe(false);
+    } finally {
+      transfer.resolve();
+    }
+    await deleted.promise;
+    expect(settled).toBe(false);
+    finishDelete.resolve();
+    await act(async () => {
+      await removal;
+    });
+    expect(ingests).toEqual([]);
+    expect(fileOwnership.isComposerAttachmentFileRetained(file.fileUri)).toBe(false);
+  });
   it("keeps a shared upload available for another failed message after discard (#2388)", async () => {
     const env = EnvironmentId.make("shared-upload-regression");
     const uploadId = "pending-00000000-0000-4000-8000-000000000001-pdf";
