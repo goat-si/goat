@@ -34,6 +34,7 @@ import {
 import {
   AVAILABLE_CONNECTION_STATE,
   BearerConnectionTarget,
+  ConnectionBlockedError,
   HubProxyConnectionTarget,
   PrimaryConnectionTarget,
   RelayConnectionTarget,
@@ -135,6 +136,8 @@ const makeConnectedDiscovery = Effect.fn(function* (options: {
   readonly onStrongRead?: (stored: Map<string, BearerConnectionCredential>) => void;
   /** Adds a device reached through the hub whose last attempt was refused. */
   readonly blockedDevice?: boolean;
+  /** Disables the hub between the reconnect's disconnect and connect. */
+  readonly disableDuringReconnect?: boolean;
 }) {
   const h = yield* makeRegistry;
   const firstRead = yield* Deferred.make<void>();
@@ -143,7 +146,9 @@ const makeConnectedDiscovery = Effect.fn(function* (options: {
   const strongRead = yield* Deferred.make<void>();
   const emitted = yield* Deferred.make<void>();
   const reconnected = yield* Deferred.make<void>();
-  let disconnected = false;
+  const deviceRetried = yield* Deferred.make<void>();
+  const settled = yield* Deferred.make<void>();
+  const calls: Array<"connect" | "disconnect"> = [];
   const retried: EnvironmentId[] = [];
   let reads = 0;
   let strongReads = 0;
@@ -190,7 +195,24 @@ const makeConnectedDiscovery = Effect.fn(function* (options: {
     serverVersion: "1",
     capabilities: { hubProxy: options.capability ?? true },
   });
-  const snapshot: HubNodesSnapshot = { hubEnvironmentId: HUB, nodes: [], notices: [] };
+  const snapshot: HubNodesSnapshot = {
+    hubEnvironmentId: HUB,
+    nodes: options.blockedDevice
+      ? [
+          {
+            nodeId: "node",
+            environmentId: NODE,
+            label: "Node",
+            kind: "linked",
+            routes: [],
+            status: "online",
+            lastSeenAt: null,
+            addedBy: null,
+          },
+        ]
+      : [],
+    notices: [],
+  };
   const config = { environment } as ServerConfig;
   const configs = yield* SubscriptionRef.make(config);
   const session: RpcSession = {
@@ -221,13 +243,16 @@ const makeConnectedDiscovery = Effect.fn(function* (options: {
     inboundFrames: Effect.succeed(0),
     closed: Effect.never,
   };
+  const supervisorState = yield* SubscriptionRef.make<SupervisorConnectionState>({
+    ...AVAILABLE_CONNECTION_STATE,
+    phase: "connected",
+  });
+  const supervisorSession = yield* SubscriptionRef.make(Option.some(session));
+  let entries: SubscriptionRef.SubscriptionRef<ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>>;
   const supervisor = EnvironmentSupervisor.of({
     target,
-    state: yield* SubscriptionRef.make<SupervisorConnectionState>({
-      ...AVAILABLE_CONNECTION_STATE,
-      phase: "connected",
-    }),
-    session: yield* SubscriptionRef.make(Option.some(session)),
+    state: supervisorState,
+    session: supervisorSession,
     prepared: yield* SubscriptionRef.make<Option.Option<PreparedConnection>>(
       Option.some({
         environmentId: HUB,
@@ -239,59 +264,78 @@ const makeConnectedDiscovery = Effect.fn(function* (options: {
           options.bearerAddress === undefined ? null : { _tag: "Bearer", token: "weak" },
       }),
     ),
-    connect: Effect.suspend(() =>
-      disconnected ? Deferred.succeed(reconnected, undefined).pipe(Effect.asVoid) : Effect.void,
+    connect: Effect.sync(() => calls.push("connect")).pipe(
+      Effect.andThen(Deferred.succeed(reconnected, undefined)),
     ),
-    disconnect: Effect.sync(() => {
-      disconnected = true;
+    // Like the real supervisor, a disconnect ends the session discovery is following.
+    disconnect: Effect.gen(function* () {
+      calls.push("disconnect");
+      if (calls.length > 1) return yield* Deferred.succeed(settled, undefined);
+      if (options.disableDuringReconnect)
+        yield* SubscriptionRef.update(entries, (current) => {
+          const hubEntry = current.get(HUB);
+          return hubEntry === undefined
+            ? current
+            : new Map(current).set(HUB, { ...hubEntry, enabled: false });
+        });
+      yield* SubscriptionRef.set(supervisorSession, Option.none());
+      yield* SubscriptionRef.set(supervisorState, AVAILABLE_CONNECTION_STATE);
     }),
     retryNow: Effect.void,
   });
+  entries = yield* SubscriptionRef.make<ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>>(
+    new Map([
+      ...(options.blockedDevice ? [[NODE, { ...node, enabled: true }] as const] : []),
+      [
+        HUB,
+        options.bearerAddress === undefined
+          ? { ...hub, target }
+          : options.learnedFromLan === undefined
+            ? {
+                ...bearerRoute("a", aUrl, options.bearerOverTailscale),
+                enabled: true,
+                alternateRoutes: [bearerRoute("b", "https://hub.test/")],
+              }
+            : {
+                ...bearerRoute(activeId, aUrl, true, true),
+                enabled: true,
+                alternateRoutes: [
+                  bearerRoute("a", options.learnedFromLan),
+                  bearerRoute("b", "https://hub.test/"),
+                ],
+              },
+      ],
+    ]),
+  );
   const registry = EnvironmentRegistry.of({
     ...h.registry,
-    entries: yield* SubscriptionRef.make<ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>>(
-      new Map([
-        ...(options.blockedDevice ? [[NODE, node] as const] : []),
-        [
-          HUB,
-          options.bearerAddress === undefined
-            ? { ...hub, target }
-            : options.learnedFromLan === undefined
-              ? {
-                  ...bearerRoute("a", aUrl, options.bearerOverTailscale),
-                  enabled: true,
-                  alternateRoutes: [bearerRoute("b", "https://hub.test/")],
-                }
-              : {
-                  ...bearerRoute(activeId, aUrl, true, true),
-                  enabled: true,
-                  alternateRoutes: [
-                    bearerRoute("a", options.learnedFromLan),
-                    bearerRoute("b", "https://hub.test/"),
-                  ],
-                },
-        ],
-      ]),
-    ),
+    entries,
     state: (id: EnvironmentId) =>
       Deferred.succeed(reconciled, undefined).pipe(
-        Effect.as({
-          ...AVAILABLE_CONNECTION_STATE,
-          phase: id === NODE ? ("blocked" as const) : ("connected" as const),
-        }),
+        Effect.as(
+          id === NODE
+            ? {
+                ...AVAILABLE_CONNECTION_STATE,
+                phase: "blocked" as const,
+                lastFailure: new ConnectionBlockedError({ reason: "permission", detail: "No" }),
+              }
+            : { ...AVAILABLE_CONNECTION_STATE, phase: "connected" as const },
+        ),
       ),
     retryNow: (id: EnvironmentId) =>
       Effect.sync(() => {
         retried.push(id);
-      }),
+      }).pipe(Effect.andThen(Deferred.succeed(deviceRetried, undefined))),
     followStream: (
-      _id: EnvironmentId,
+      id: EnvironmentId,
       stream: Stream.Stream<unknown, unknown, EnvironmentSupervisor>,
     ) =>
-      stream.pipe(
-        Stream.provideService(EnvironmentSupervisor, supervisor),
-        Stream.tap(() => Deferred.succeed(emitted, undefined)),
-      ),
+      id !== HUB
+        ? Stream.empty
+        : stream.pipe(
+            Stream.provideService(EnvironmentSupervisor, supervisor),
+            Stream.tap(() => Deferred.succeed(emitted, undefined)),
+          ),
   } as unknown as EnvironmentRegistry["Service"]);
   const auth: AuthSessionState = {
     authenticated: true,
@@ -361,6 +405,9 @@ const makeConnectedDiscovery = Effect.fn(function* (options: {
     emitted,
     reconnected,
     retried,
+    deviceRetried,
+    settled,
+    calls,
   };
 });
 
@@ -374,19 +421,21 @@ describe("a hub reached with a session that lacks hub:proxy", () => {
       });
       yield* Deferred.await(h.reconnected);
       expect(h.stored.get("a")?.token).toBe("strong");
+      // Ending the old session ends the stream that asked for the reconnect; it still connects.
+      expect(h.calls).toEqual(["disconnect", "connect"]);
     }).pipe(Effect.scoped),
   );
 
-  it.effect("retries a device the hub refused once the pairing with access is saved", () =>
+  it.effect("leaves the hub off when it is disabled during the reconnect", () =>
     Effect.gen(function* () {
       const h = yield* makeConnectedDiscovery({
         scopes: [],
         bearerAddress: "http://100.100.1.1:3773/",
         bearerOverTailscale: true,
-        blockedDevice: true,
+        disableDuringReconnect: true,
       });
-      yield* Deferred.await(h.reconnected);
-      expect(h.retried).toEqual([NODE]);
+      yield* Deferred.await(h.settled);
+      expect(h.calls).toEqual(["disconnect", "connect", "disconnect"]);
     }).pipe(Effect.scoped),
   );
 
@@ -449,6 +498,14 @@ describe("a hub reached with a session that lacks hub:proxy", () => {
 });
 
 describe("hub proxy discovery coordinator", () => {
+  it.effect("retries a device refused through the hub when the hub confirms access", () =>
+    Effect.gen(function* () {
+      const h = yield* makeConnectedDiscovery({ blockedDevice: true });
+      yield* Deferred.await(h.deviceRetried);
+      expect(h.retried).toEqual([NODE]);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("keeps a refused subscription terminal until the config changes", () =>
     Effect.gen(function* () {
       const h = yield* makeConnectedDiscovery({

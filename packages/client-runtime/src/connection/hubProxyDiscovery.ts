@@ -154,6 +154,26 @@ export const watchHubProxyDiscovery = <E, R>(
               }
           }
           for (const registration of changes.register) yield* registry.register(registration);
+          if (!authorized) return;
+          // A device refused through this hub waits for a signal; confirmed access can now open it.
+          for (const entry of entries.values()) {
+            const throughHub = connectionRoutes(entry).some((route) => {
+              const profile = Option.getOrNull(route.profile);
+              return (
+                profile?._tag === "HubProxyConnectionProfile" &&
+                profile.hubEnvironmentId === update.hubEnvironmentId
+              );
+            });
+            if (!entry.enabled || !throughHub) continue;
+            const deviceId = entry.target.environmentId;
+            const refused = yield* registry.state(deviceId).pipe(
+              Effect.map(
+                (state) => state.phase === "blocked" && state.lastFailure?.reason === "permission",
+              ),
+              Effect.orElseSucceed(() => false),
+            );
+            if (refused) yield* registry.retryNow(deviceId);
+          }
         }).pipe(
           Effect.catch((error) =>
             Effect.logWarning("Could not reconcile hub proxy routes.", { error }),
@@ -287,25 +307,17 @@ export const watchConnectedHubProxyDiscovery = Effect.gen(function* () {
         connectionId: activeCredentialId,
         from: credentialId,
       });
-      // A device refused through this hub waits for a signal; the saved credential can now open it.
-      for (const device of entries.values()) {
-        const throughHub = connectionRoutes(device).some((route) => {
-          const profile = Option.getOrNull(route.profile);
-          return (
-            profile?._tag === "HubProxyConnectionProfile" &&
-            profile.hubEnvironmentId === target.environmentId
-          );
-        });
-        if (!throughHub) continue;
-        const deviceId = device.target.environmentId;
-        const blocked = yield* registry.state(deviceId).pipe(
-          Effect.map((deviceState) => deviceState.phase === "blocked"),
-          Effect.orElseSucceed(() => false),
-        );
-        if (blocked) yield* registry.retryNow(deviceId);
-      }
-      // Ending the live session makes the next attempt read the saved credential.
-      yield* supervisor.disconnect.pipe(Effect.andThen(supervisor.connect));
+      // Ending the live session makes the next attempt read the saved credential. setEnabled saves
+      // the entry before it signals, so a disable that raced this pair is seen by the last check.
+      // Ending the session also ends this stream, so the pair must finish uninterrupted.
+      yield* Effect.uninterruptible(
+        Effect.gen(function* () {
+          yield* supervisor.disconnect;
+          yield* supervisor.connect;
+          const latest = (yield* SubscriptionRef.get(registry.entries)).get(target.environmentId);
+          if (latest?.enabled !== true) yield* supervisor.disconnect;
+        }),
+      );
       return true;
     }
     return false;
