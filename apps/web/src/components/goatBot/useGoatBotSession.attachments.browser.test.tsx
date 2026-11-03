@@ -22,6 +22,9 @@ const mocks = vi.hoisted(() => ({
   released: [] as Array<ReadonlyArray<string>>,
   connected: true,
   staged: null as import("./goatBotAttachments").GoatBotDraftAttachment | null,
+  stageGate: null as Promise<void> | null,
+  stageStarted: () => {},
+  stageFinished: () => {},
   uploadGate: null as Promise<void> | null,
   uploadStarted: () => {},
   uploadFinished: () => {},
@@ -78,10 +81,14 @@ vi.mock("./goatBotAttachments", async (importOriginal) => {
   const original = await importOriginal<typeof import("./goatBotAttachments")>();
   return {
     ...original,
-    stageGoatBotFiles: async (...args: Parameters<typeof original.stageGoatBotFiles>) =>
-      mocks.staged === null
+    stageGoatBotFiles: async (...args: Parameters<typeof original.stageGoatBotFiles>) => {
+      mocks.stageStarted();
+      if (mocks.stageGate) await mocks.stageGate;
+      mocks.stageFinished();
+      return mocks.staged === null
         ? original.stageGoatBotFiles(...args)
-        : { staged: [mocks.staged], error: null },
+        : { staged: [mocks.staged], error: null };
+    },
     releaseGoatBotAttachments: (
       attachments: Parameters<typeof original.releaseGoatBotAttachments>[0],
     ) => {
@@ -122,6 +129,9 @@ function setup(goatBotAttachments: boolean) {
   mocks.goatBotAttachments = goatBotAttachments;
   mocks.connected = true;
   mocks.staged = null;
+  mocks.stageGate = null;
+  mocks.stageStarted = () => {};
+  mocks.stageFinished = () => {};
   mocks.uploadGate = null;
   mocks.uploadStarted = () => {};
   mocks.uploadFinished = () => {};
@@ -204,6 +214,46 @@ it("discarding a failed message releases its uploaded files", async () => {
   await userEvent.click(screen.getByRole("button", { name: "Discard" }));
   await expect.element(screen.getByText("Not Delivered")).not.toBeInTheDocument();
   expect(mocks.released).toContainEqual(["discard.txt"]);
+});
+
+it("releases staged files when preparation finishes after the composer unmounts", async () => {
+  const port = setup(true);
+  const file = image("late-preparation");
+  let start!: () => void;
+  let finish!: () => void;
+  let complete!: () => void;
+  const started = new Promise<void>((resolve) => {
+    start = resolve;
+  });
+  const finished = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  mocks.stageGate = new Promise<void>((resolve) => {
+    complete = resolve;
+  });
+  mocks.stageStarted = start;
+  mocks.stageFinished = finish;
+  mocks.staged = file;
+  using revoked = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+  await using screen = await render(
+    <GoatBotChannelContext value={port}>
+      <Session />
+    </GoatBotChannelContext>,
+  );
+  await expect.element(screen.getByRole("button", { name: "Attach files" })).toBeVisible();
+  const input = screen.container.querySelector<HTMLInputElement>('input[type="file"]');
+  if (!input) throw new Error("expected the file picker");
+  await userEvent.upload(input, file.file);
+  await started;
+  await screen.unmount();
+  await act(async () => {
+    complete();
+    await finished;
+  });
+  expect(revoked).toHaveBeenCalledExactlyOnceWith(file.previewUrl);
+  attachments.retainGoatBotAttachments([file]);
+  attachments.releaseGoatBotAttachments([file]);
+  expect(revoked).toHaveBeenCalledTimes(2);
 });
 
 function image(id: string) {
