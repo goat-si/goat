@@ -170,7 +170,7 @@ export const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(fu
     yield* Fiber.join(running);
     return threadId;
   });
-  return { cwd, events, started, steered, layer, startFirstTurn };
+  return { adapter, cwd, events, started, steered, layer, startFirstTurn };
 });
 
 export const goalHarness = Effect.fn("goalHarness")(function* (

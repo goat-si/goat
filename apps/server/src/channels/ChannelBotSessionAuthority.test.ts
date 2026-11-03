@@ -1,10 +1,15 @@
 import { assert, describe, it } from "@effect/vitest";
 import type { ChannelConversationId, ChannelTask } from "@goat/contracts";
-import { ChannelQuestionId, ThreadId } from "@goat/contracts";
+import { ChannelQuestionId, CommandId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as Stream from "effect/Stream";
 
 import { DispatchModeLimit } from "../orchestration-v2/DispatchModeLimit.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import * as EffectWorker from "../orchestration-v2/EffectWorker.ts";
+import * as Orchestrator from "../orchestration-v2/Orchestrator.ts";
+import { nextTurnSelectionHarness } from "../orchestration-v2/testkit/SteeringHarness.ts";
 import * as ChannelBotSession from "./ChannelBotSession.ts";
 import * as ChannelDispatcher from "./ChannelDispatcher.ts";
 import * as ChannelGateway from "./ChannelGateway.ts";
@@ -16,6 +21,7 @@ import { refuseForward } from "./channelForwardRefusal.ts";
 import {
   answerForwardIdsFor,
   goatBotSessionThreadIdFor,
+  sessionLaunchIdsFor,
   taskEventIdFor,
   taskIdFor,
   turnSteerIdsFor,
@@ -124,6 +130,136 @@ const claimedFromTeammate = (key: string, memoryGrantCeiling?: "read" | "read_wr
   });
 
 describe("GOAT Bot sessions under the requester's current authority", () => {
+  it.effect("#2193 recovers a persisted real steer after authority is revoked", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const steering = yield* nextTurnSelectionHarness("channel-session-real-steer");
+        const harness = sessionHarness({ workerAdapter: steering.adapter });
+        yield* Effect.gen(function* () {
+          yield* setupBot;
+          yield* linkTeammate;
+          let task = yield* dispatchNow(yield* receiveFromTeammate("look: task", "real-steer-1"));
+          assert.strictEqual(task.status, "running");
+          const orchestrator = yield* Orchestrator.OrchestratorV2;
+          const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
+          const threadId = task.worker!.threadId;
+          harness.world.runs.delete(threadId);
+          yield* orchestrator.dispatch({
+            type: "thread.create",
+            commandId: CommandId.make("real-session-create"),
+            threadId,
+            projectId: task.target!.projectId,
+            title: "Real session",
+            modelSelection: task.target!.modelSelection,
+            runtimeMode: "auto-accept-edits",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: steering.cwd,
+            createdBy: "system",
+            creationSource: "server",
+          });
+          const running = yield* orchestrator.streamDomainEvents.pipe(
+            Stream.filter(
+              (event) =>
+                event.type === "provider-turn.updated" && event.payload.status === "running",
+            ),
+            Stream.take(1),
+            Stream.runDrain,
+            Effect.forkScoped,
+          );
+          yield* orchestrator.dispatch({
+            type: "message.dispatch",
+            commandId: CommandId.make("real-session-start"),
+            threadId,
+            messageId: sessionLaunchIdsFor(task.taskId, task.generation).messageId,
+            text: "initial request",
+            attachments: [],
+            dispatchMode: { type: "start_immediately" },
+            createdBy: "system",
+            creationSource: "server",
+          });
+          yield* worker.drain();
+          assert.strictEqual(steering.started.length, 1);
+          yield* Fiber.join(running);
+          const gateway = yield* ChannelGateway.ChannelGateway;
+          const reception = yield* ChannelReceptionService.ChannelReceptionService;
+          const ledger = yield* ChannelLedger.ChannelLedger;
+          const runtime = yield* ChannelRuntime.ChannelRuntime;
+          const runs = (yield* orchestrator.getThreadRecords(threadId, ["runs"])).runs;
+          assert.lengthOf(runs, 1);
+          yield* commitTransition(
+            ledger,
+            (yield* ledger.getTask(task.taskId))!,
+            {
+              type: "task.worker.bound",
+              payload: { worker: { ...task.worker!, runId: runs[0]!.id } },
+            },
+            { owner: runtime.ownerToken },
+          );
+          task = yield* current(task.taskId);
+          const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+          const threads = yield* ThreadManagement.ThreadManagementService;
+          const input = yield* gateway.ingest(
+            slackInput(
+              "more:" + task.taskId + " check logs",
+              "real-steer-2",
+              "1760000000.000900",
+              "U2",
+            ),
+            slackContext,
+          );
+          yield* reception.receive(input.inputId, runtime.ownerToken);
+          const ids = turnSteerIdsFor(input.inputId, "first");
+          const sql = yield* SqlClient.SqlClient;
+          yield* sql`INSERT INTO channel_bot_session_runs
+          (thread_id, message_id, task_id, task_generation, kind, created_at)
+          VALUES (${task.worker!.threadId}, ${ids.messageId}, ${task.taskId}, ${task.generation}, 'followup', '1970-01-01T00:00:00.000Z')`;
+          const sent = yield* threads.sendToThread({
+            projectId: task.target!.projectId,
+            commandId: ids.commandId,
+            threadId: task.worker!.threadId,
+            messageId: ids.messageId,
+            text: "check logs",
+            attachments: [],
+            mode: "steer",
+            targetRunId: task.worker!.runId!,
+            createdBy: "user",
+            creationSource: "server",
+          });
+          assert.strictEqual(sent.delivery, "steered");
+          assert.strictEqual(sent.run.id, task.worker!.runId);
+          const before = yield* orchestrator.getThreadRecords(task.worker!.threadId, [
+            "runs",
+            "messages",
+          ]);
+          assert.strictEqual(
+            before.messages.find((message) => message.id === ids.messageId)?.runId,
+            task.worker!.runId,
+          );
+          yield* sql`UPDATE channel_identities SET granted_scopes_json = '[]' WHERE connection_id = 'slack-1' AND external_actor_id = 'U2'`;
+          const [pending] = yield* ledger.listPendingForwards(10);
+          yield* dispatcher.forward(pending!, runtime.ownerToken);
+          const after = yield* orchestrator.getThreadRecords(task.worker!.threadId, [
+            "runs",
+            "messages",
+          ]);
+          assert.lengthOf(
+            after.messages.filter((message) => message.id === ids.messageId),
+            1,
+          );
+          assert.lengthOf(after.runs, before.runs.length);
+          assert.lengthOf((yield* current(task.taskId)).openQuestions, 0);
+          assert.isUndefined((yield* ledger.getTask(task.taskId))!.pendingAnswerMessageId);
+          assert.lengthOf(yield* ledger.listPendingForwards(10), 0);
+          const intents = yield* sql<{
+            readonly steered_into_run_id: string | null;
+          }>`SELECT steered_into_run_id FROM channel_bot_session_runs WHERE thread_id = ${task.worker!.threadId} AND message_id = ${ids.messageId}`;
+          assert.strictEqual(intents[0]?.steered_into_run_id, task.worker!.runId);
+        }).pipe(Effect.provide(harness.layer));
+      }),
+    ),
+  );
+
   it.effect(
     "#2193 preserves the newer session follow-up fence when the earlier one is refused",
     () => {
