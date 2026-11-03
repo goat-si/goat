@@ -112,6 +112,10 @@ import * as BlockedBrowser from "./blockedBrowserHosts.ts";
 import * as Restart from "./codexTurnSurvival.ts";
 
 export * from "./settingsFontSizes.ts";
+export {
+  CODEX_APP_SERVER_ISOLATION_DEFAULT,
+  CodexAppServerIsolation,
+} from "./codexTurnSurvival.ts";
 export { requiredScopesForServerSettingsPatch } from "./auth.ts";
 export const TimestampFormat = Schema.Literals(["locale", "12-hour", "24-hour"]);
 export type TimestampFormat = typeof TimestampFormat.Type;
@@ -1405,6 +1409,7 @@ export const ServerSettings = Schema.Struct({
   enableProviderUpdateChecks: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   automaticServerUpdates: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   ...Restart.RestartSettingsFields,
+  ...Restart.CodexAppServerSettingsFields,
   ...BlockedBrowser.BlockedBrowserSettingsFields,
   projectAgentBrowserAccessOverrides: Schema.Record(ProjectId, Schema.Boolean).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
@@ -1879,6 +1884,7 @@ const ServerSettingsPatchFields = Schema.Struct({
   responseStreamingMode: Schema.optionalKey(ResponseStreamingMode),
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
   ...Restart.RestartSettingsPatchFields,
+  ...Restart.CodexAppServerSettingsPatchFields,
   automaticServerUpdates: Schema.optionalKey(Schema.Boolean),
   ...BlockedBrowser.BlockedBrowserSettingsPatchFields,
   projectAgentBrowserAccessOverrides: Schema.optionalKey(

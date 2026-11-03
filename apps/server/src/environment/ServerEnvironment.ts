@@ -284,7 +284,7 @@ export const make = Effect.gen(function* () {
       threadAutoSettlementScope: true,
       threadRestartContinuation: true,
       ...(codexTransport === "auto" || codexTransport === "socket"
-        ? { codexTurnSurvival: true }
+        ? { codexTurnSurvival: true, codexAppServerIsolation: true }
         : {}),
       projectSettingsOverrides: true,
       projectProviderInstanceOverrides: true,

@@ -11,6 +11,7 @@ import type { EnvironmentConnectionPhase } from "../connection/presentation.ts";
 const SHARED_SERVER_SETTING_KEYS = [
   "continueThreadsAfterServerUpdate",
   "codexTurnsSurviveServerStop",
+  "codexAppServerIsolation",
   "sidebarAutoSettleAfterDays",
   "sidebarAutoSettleOnMerge",
   "autoResumeLimitedThreads",
@@ -24,6 +25,11 @@ const SHARED_SERVER_SETTING_KEYS = [
 export type SharedServerSettingKey = (typeof SHARED_SERVER_SETTING_KEYS)[number];
 
 const SHARED_KEY_SET = new Set<string>(SHARED_SERVER_SETTING_KEYS);
+
+type SharedCapability =
+  | "threadRestartContinuation"
+  | "codexTurnSurvival"
+  | "codexAppServerIsolation";
 
 export function splitSharedServerPatch(patch: ServerSettingsPatch): {
   sharedPatch: ServerSettingsPatch;
@@ -46,9 +52,7 @@ export function splitSharedServerPatch(patch: ServerSettingsPatch): {
 
 export function filterSharedServerPatch(
   patch: ServerSettingsPatch,
-  capabilities:
-    | Pick<ExecutionEnvironmentCapabilities, "threadRestartContinuation" | "codexTurnSurvival">
-    | undefined,
+  capabilities: Pick<ExecutionEnvironmentCapabilities, SharedCapability> | undefined,
   settings?: ServerSettings,
   sourceSettings = settings,
   targetIsSource = false,
@@ -73,6 +77,9 @@ export function filterSharedServerPatch(
   if (capabilities?.codexTurnSurvival !== true) {
     patch = Struct.omit(patch, ["codexTurnsSurviveServerStop"]);
   }
+  if (capabilities?.codexAppServerIsolation !== true) {
+    patch = Struct.omit(patch, ["codexAppServerIsolation"]);
+  }
   return capabilities?.threadRestartContinuation === true
     ? patch
     : Struct.omit(patch, ["continueThreadsAfterServerUpdate"]);
@@ -80,10 +87,7 @@ export function filterSharedServerPatch(
 
 export function pickSharedServerSettings(
   settings: ServerSettings,
-  capabilities?: Pick<
-    ExecutionEnvironmentCapabilities,
-    "threadRestartContinuation" | "codexTurnSurvival"
-  >,
+  capabilities?: Pick<ExecutionEnvironmentCapabilities, SharedCapability>,
 ): ServerSettingsPatch {
   return filterSharedServerPatch(
     Struct.pick(settings, SHARED_SERVER_SETTING_KEYS),
