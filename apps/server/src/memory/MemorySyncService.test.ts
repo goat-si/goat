@@ -1,4 +1,5 @@
 import { watchedEvents } from "../testUtils/watchedEvents.testkit.ts";
+import { fencedReleaseAfterSync } from "./MemorySyncFencedRelease.testkit.ts";
 import {
   id,
   space,
@@ -3591,6 +3592,7 @@ it.effect.each([
       );
     }),
 );
+
 it.effect("a claim frozen to a healthy model is not blocked by a held default", () =>
   Effect.gen(function* () {
     let claims = 0;
@@ -3653,6 +3655,7 @@ it.effect("a claim frozen to a healthy model is not blocked by a held default", 
     );
   }),
 );
+
 it.effect(
   "conflicts waiting on a held model do not crowd a healthy frozen claim off the page",
   () =>
@@ -3718,49 +3721,12 @@ it.effect(
       );
     }),
 );
-it.effect("a fenced release after the Hub binding changed keeps the attempt for recovery", () =>
-  Effect.gen(function* () {
-    const afterSync = yield* Deferred.make<void>();
-    const released = yield* Deferred.make<void>();
-    const model = realGeneration({
-      resolveMemoryConflict: () =>
-        Effect.fail(
-          new M.TextGenerationError({
-            operation: "resolveMemoryConflict",
-            detail: "Grok did not disclose or support the selected memory model.",
-            cause: new MemoryGenerationRunnerError({ code: "unavailable" }),
-          }),
-        ),
-    });
-    const client = peer({
-      release: () =>
-        Deferred.await(afterSync).pipe(
-          Effect.andThen(changeHub(1, { ...member, secretName: "rebound-fixture" })),
-          Effect.orDie,
-          Effect.andThen(Deferred.succeed(released, undefined)),
-          Effect.andThen(Effect.fail(new M.MemoryHubError({ code: "fenced" }))),
-        ),
-    });
-    yield* Effect.scoped(
-      Effect.gen(function* () {
-        yield* ready;
-        yield* conflict();
-        const sync = yield* Sync.MemorySyncService;
-        yield* sync.syncOnce;
-        yield* Deferred.succeed(afterSync, undefined);
-        yield* sync.scheduleConflictResolution;
-        yield* Deferred.await(released);
-        const sql = yield* SqlClient.SqlClient;
-        const tickets = yield* sql<{
-          state: string;
-        }>`SELECT json_extract(ticket_json,'$.state') AS state FROM memory_outbox WHERE kind='resolve'`;
-        assert.strictEqual(tickets.length, 1);
-        assert.notStrictEqual(tickets[0]!.state, "terminal");
-        yield* sync.shutdown;
-      }).pipe(Effect.provide(fixture(client, model).pipe(Layer.provideMerge(Hold.layer)))),
-    );
-  }),
+
+it.effect(
+  "a fenced release after the Hub binding changed keeps the attempt for recovery",
+  fencedReleaseAfterSync,
 );
+
 it.effect(
   "generation failure records one conflict report, retires the attempt, and the next attempt uses Q",
   () =>
