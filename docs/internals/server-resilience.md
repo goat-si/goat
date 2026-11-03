@@ -12,13 +12,12 @@ change.
 Node terminates the process when an `EventEmitter` emits `'error'` with no listener. Effect
 code does not protect you here: these events fire from callbacks outside any fiber.
 
-- Attach an `'error'` listener in the same statement or block that creates the emitter, before
-  any `await` or yield. This covers child processes **and** their `stdin`, `stdout` and
-  `stderr`, `ws` sockets and servers, `net`/`tls` sockets, `http`/`https` requests,
-  responses and servers, `fs` streams, `readline`, `zlib` and any piped stream, and
-  `worker_threads` workers.
+- Create emitters inside `guardErrors` or `guardChild` from [`@goat/shared/errorGuards`](../../packages/shared/src/errorGuards.ts),
+  with a route that ends or fails the owner. `guardChild` gives stdout, stderr and extra pipes
+  the child's route; only stdin may take its own route. `goat/guard-error-emitters` enforces this
+  in `apps/server` and packages; exceptions need a reasoned `oxlint-disable`.
 - A `child.once("error")` does not cover `child.stdin`. Writing to the stdin of a child that
-  closed its end raises `EPIPE` on the stdin stream.
+  closed its end raises `EPIPE` on the stdin stream; on Windows a write to a dead child fails with `EOF`.
 - A library may detach its own error listener before closing a resource. A `ws` socket released
   while still connecting emits its teardown error after Effect's socket has stopped listening,
   so the code that creates the socket keeps a listener for its whole life
