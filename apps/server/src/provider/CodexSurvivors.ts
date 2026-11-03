@@ -256,7 +256,11 @@ export class CodexSurvivors extends Context.Service<
     readonly hasGoalBlock: (threadId: ThreadId) => Effect.Effect<boolean>;
     readonly ensureAdmission: (
       threadId: ThreadId,
-      options?: { readonly allowGoalControl?: boolean },
+      options?: {
+        readonly allowGoalControl?: boolean;
+        /** The thread's project setting; without it the turn is assumed to use the socket. */
+        readonly survival?: "off" | "restart" | "always";
+      },
     ) => Effect.Effect<void, CodexDetachedAppServerError>;
   }
 >()("goat/provider/CodexSurvivors") {}
@@ -449,7 +453,18 @@ export const layer = Layer.effect(
             detail:
               "The Codex process for this thread could not be verified. The previous turn may still be running.",
           });
-        yield* detached.ensureAdmission(threadId, options);
+        const survival = options?.survival;
+        const stdio =
+          survival !== undefined &&
+          !Detached.shouldUseCodexSocketTransport(
+            Detached.codexTransportMode(detached),
+            survival,
+          ) &&
+          !(yield* Ref.get(bindings)).some((binding) => binding.threadId === threadId);
+        yield* detached.ensureAdmission(threadId, {
+          allowGoalControl: options?.allowGoalControl === true,
+          stdio,
+        });
       }),
     });
   }),

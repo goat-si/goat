@@ -19,6 +19,7 @@ import * as SurvivorContinuation from "../orchestration-v2/Adapters/CodexSurvivo
 import { refuseCodexAdmission } from "../orchestration-v2/goat/CodexTurnAdmission.ts";
 import { CodexDetachedAppServerError } from "./CodexDetachedAppServer.ts";
 import { makeLocalCommandHarness } from "../orchestration-v2/ProviderTurnStartService.localCommand.testkit.ts";
+import * as ServerSettings from "../serverSettings.ts";
 
 it.effect("a goal-only instance reconnects and releases admission after the goal pauses", () =>
   Effect.gen(function* () {
@@ -121,8 +122,12 @@ it.effect("a goal-only instance reconnects and releases admission after the goal
     };
     const admission = {
       survivors: Option.some(service),
+      settings: yield* ServerSettings.ServerSettingsService.pipe(
+        Effect.provide(ServerSettings.layerTest()),
+      ),
       driver: ProviderDriverKind.make("codex"),
       threadId,
+      projectId: ProjectId.make("project-goal-recovery"),
       settle: () => Effect.void,
     };
     assert.isTrue(yield* refuseCodexAdmission(admission));

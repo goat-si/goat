@@ -1,5 +1,5 @@
 import { assert, it } from "@effect/vitest";
-import { ProviderDriverKind, ProviderInstanceId, ThreadId } from "@goat/contracts";
+import { ProjectId, ProviderDriverKind, ProviderInstanceId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Option from "effect/Option";
@@ -11,6 +11,7 @@ import { CodexDetachedAppServerError } from "../../provider/CodexDetachedAppServ
 import { makeSurvivorNotifications } from "./CodexSurvivorContinuation.ts";
 import { makeGoalTurnFences } from "./CodexGoalTurnFences.ts";
 import { refuseCodexAdmission } from "../goat/CodexTurnAdmission.ts";
+import * as ServerSettings from "../../serverSettings.ts";
 
 const scenario = (snapshot: boolean, race = false) =>
   Effect.gen(function* () {
@@ -256,8 +257,12 @@ const resumePersistedFence = (
     yield* hooks.handleNotification("thread/goal/updated", () => Effect.void);
     const pauseAdmission = {
       survivors: Option.some(service),
+      settings: yield* ServerSettings.ServerSettingsService.pipe(
+        Effect.provide(ServerSettings.layerTest()),
+      ),
       driver: ProviderDriverKind.make("codex"),
       threadId,
+      projectId: ProjectId.make("project-goal-fence"),
       message: { text: "/goal pause" },
       settle: () => Effect.void,
     };

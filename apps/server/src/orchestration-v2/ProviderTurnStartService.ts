@@ -625,8 +625,10 @@ export const layer: Layer.Layer<
       if (
         yield* refuseCodexAdmission({
           survivors: codexSurvivors,
+          settings: serverSettings,
           driver: providerThread.driver,
           threadId: input.threadId,
+          projectId: projection.thread.projectId,
           message,
           settle: settleStartFailure,
         })

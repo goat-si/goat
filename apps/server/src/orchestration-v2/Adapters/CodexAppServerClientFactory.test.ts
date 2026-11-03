@@ -19,11 +19,13 @@ import * as ServerSettings from "../../serverSettings.ts";
 import * as ProjectionStore from "../ProjectionStore.ts";
 import * as CodexSurvivors from "../../provider/CodexSurvivors.ts";
 import { CodexDetachedAppServerError } from "../../provider/CodexDetachedAppServer.ts";
-import { CodexDetachedAppServers } from "../../provider/CodexDetachedAppServerLive.ts";
+import {
+  CodexDetachedAppServers,
+  shouldUseCodexSocketTransport,
+} from "../../provider/CodexDetachedAppServerLive.ts";
 import {
   CodexAppServerClientFactory,
   layerAppServerClientFactory,
-  shouldUseCodexSocketTransport,
 } from "./CodexAppServerClientFactory.ts";
 
 const defaultSettings = Schema.decodeSync(CodexSettings)({});

@@ -3,10 +3,13 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { assert, it } from "@effect/vitest";
-import { ProviderInstanceId, ThreadId } from "@goat/contracts";
+import { ProviderInstanceId, RunId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 import { makeDetachedAppServers } from "./CodexDetachedAppServer.ts";
+import * as Detached from "./CodexDetachedAppServerLive.ts";
+import * as Survivors from "./CodexSurvivors.ts";
 
 const withRecordDirectory = <A, E, R>(run: (directory: string) => Effect.Effect<A, E, R>) =>
   Effect.gen(function* () {
@@ -118,6 +121,67 @@ it.effect("removing an unreadable record lets the next admission through without
       assert.equal((yield* service.ensureAdmission(threadId).pipe(Effect.exit))._tag, "Failure");
       yield* Effect.promise(() => NodeFSP.rm(broken));
       yield* service.ensureAdmission(threadId);
+    }),
+  ),
+);
+
+it.effect("an unreadable record refuses only turns that would use the socket or are fenced", () =>
+  withRecordDirectory((directory) =>
+    Effect.gen(function* () {
+      const records = NodePath.join(directory, "codex-app-servers");
+      yield* Effect.promise(() => NodeFSP.mkdir(records, { recursive: true }));
+      yield* Effect.promise(() => NodeFSP.writeFile(NodePath.join(records, "broken.json"), "null"));
+      const service = yield* openService(directory, {});
+      yield* service.cleanup;
+      const fenced = ThreadId.make("thread-fenced");
+      yield* service
+        .recordStopObligation(
+          { instanceId: ProviderInstanceId.make("codex"), recordName: "missing" },
+          { threadId: fenced, nativeThreadId: "native-thread", nativeTurnId: "native-turn" },
+        )
+        .pipe(Effect.flip);
+      const bound = ThreadId.make("thread-bound");
+      const free = ThreadId.make("thread-free");
+      const admits = (
+        mode: "auto" | "unsupported",
+        threadId: ThreadId,
+        survival?: "off" | "restart" | "always",
+      ) =>
+        Effect.gen(function* () {
+          const survivors = yield* Survivors.CodexSurvivors;
+          yield* survivors.replace([
+            {
+              instanceId: ProviderInstanceId.make("codex"),
+              recordName: "codex-bound",
+              threadId: bound,
+              sourceRunId: RunId.make("run-bound"),
+              nativeThreadId: "native-bound",
+              nativeTurnId: "native-turn-bound",
+            },
+          ]);
+          const exit = yield* survivors
+            .ensureAdmission(threadId, survival === undefined ? undefined : { survival })
+            .pipe(Effect.exit);
+          return exit._tag === "Success";
+        }).pipe(
+          Effect.provide(
+            Survivors.layer.pipe(
+              Layer.provide(
+                Layer.succeed(Detached.CodexDetachedAppServers, {
+                  ...service,
+                  socketTransportEnabled: false,
+                  socketTransportMode: mode,
+                }),
+              ),
+            ),
+          ),
+        );
+      assert.isTrue(yield* admits("auto", free, "off"));
+      assert.isTrue(yield* admits("unsupported", free, "always"));
+      assert.isFalse(yield* admits("auto", free, "restart"));
+      assert.isFalse(yield* admits("auto", free));
+      assert.isFalse(yield* admits("auto", fenced, "off"));
+      assert.isFalse(yield* admits("auto", bound, "off"));
     }),
   ),
 );

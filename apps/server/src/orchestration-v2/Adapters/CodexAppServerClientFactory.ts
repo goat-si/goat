@@ -24,17 +24,16 @@ import * as ServerSettings from "../../serverSettings.ts";
 import * as CodexSurvivors from "../../provider/CodexSurvivors.ts";
 import * as ProjectionStore from "../ProjectionStore.ts";
 import { CodexDetachedAppServerError } from "../../provider/CodexDetachedAppServer.ts";
-import { CodexDetachedAppServers } from "../../provider/CodexDetachedAppServerLive.ts";
+import {
+  CodexDetachedAppServers,
+  codexTransportMode,
+  shouldUseCodexSocketTransport,
+} from "../../provider/CodexDetachedAppServerLive.ts";
 import { codexAppServerArgs, resolveCodexLaunchArgs } from "../../provider/codexLaunchArgs.ts";
 import {
   boundProviderEventForLogging,
   shouldPersistProviderEvent,
 } from "../../provider/EventNdjsonLogger.ts";
-
-export const shouldUseCodexSocketTransport = (
-  mode: "auto" | "socket" | "stdio" | "unsupported",
-  survival: "off" | "restart" | "always",
-) => mode === "socket" || (mode === "auto" && survival !== "off");
 
 const CODEX_PROVIDER = ProviderDriverKind.make("codex");
 
@@ -263,8 +262,7 @@ export const layerAppServerClientFactory: Layer.Layer<
             Effect.provide(context),
           );
         }
-        const mode =
-          detached.socketTransportMode ?? (detached.socketTransportEnabled ? "socket" : "stdio");
+        const mode = codexTransportMode(detached);
         const survival =
           mode === "auto"
             ? yield* Effect.gen(function* () {

@@ -25,20 +25,32 @@ import {
 /** Maintainer override: `socket` or `stdio` forces a transport; unset follows each project's setting. */
 const CODEX_TRANSPORT_ENV = "GOAT_CODEX_APP_SERVER_TRANSPORT";
 
+type CodexTransportMode = "auto" | "socket" | "stdio" | "unsupported";
+
 export const codexSocketTransportMode = (
   platform: NodeJS.Platform,
   environment: NodeJS.ProcessEnv,
-): "auto" | "socket" | "stdio" | "unsupported" => {
+): CodexTransportMode => {
   if (platform === "win32") return "unsupported";
   const requested = environment[CODEX_TRANSPORT_ENV]?.trim();
   return requested === "socket" || requested === "stdio" ? requested : "auto";
 };
 
+export const shouldUseCodexSocketTransport = (
+  mode: CodexTransportMode,
+  survival: "off" | "restart" | "always",
+) => mode === "socket" || (mode === "auto" && survival !== "off");
+
+export const codexTransportMode = (detached: {
+  readonly socketTransportEnabled: boolean;
+  readonly socketTransportMode?: CodexTransportMode;
+}) => detached.socketTransportMode ?? (detached.socketTransportEnabled ? "socket" : "stdio");
+
 export class CodexDetachedAppServers extends Context.Service<
   CodexDetachedAppServers,
   DetachedAppServers & {
     readonly socketTransportEnabled: boolean;
-    readonly socketTransportMode?: "auto" | "socket" | "stdio" | "unsupported";
+    readonly socketTransportMode?: CodexTransportMode;
   }
 >()("goat/provider/CodexDetachedAppServerLive/CodexDetachedAppServers") {}
 

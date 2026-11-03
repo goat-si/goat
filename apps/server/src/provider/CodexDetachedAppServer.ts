@@ -710,16 +710,18 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
 
   const ensureAdmission = Effect.fn("CodexDetachedAppServers.ensureAdmission")(function* (
     threadId: ThreadId,
-    options?: { readonly allowGoalControl?: boolean },
+    options?: { readonly allowGoalControl?: boolean; readonly stdio?: boolean },
   ) {
     const global = yield* retryGlobalBlock;
-    if (global !== undefined) return yield* new CodexDetachedAppServerError({ detail: global });
     const goal = yield* hasGoalBlock(threadId);
     const stopped =
       [...failedFences.values()].includes(threadId) ||
       [...fences.values()].some((record) =>
         record.stopObligations?.some((entry) => entry.threadId === threadId),
       );
+    // A stdio turn opens no detached process, so only a known fence on its own thread conflicts.
+    if (global !== undefined && !(options?.stdio === true && !stopped && !goal))
+      return yield* new CodexDetachedAppServerError({ detail: global });
     if (stopped || (goal && !options?.allowGoalControl))
       return yield* new CodexDetachedAppServerError({
         detail: stopped
