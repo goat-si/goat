@@ -7,7 +7,12 @@ import {
   type GoatBotRow,
 } from "@goat/client-runtime/goatBot";
 import type { EnvironmentId } from "@goat/contracts";
-import { BellIcon, CircleAlertIcon, MessageCircleQuestionIcon } from "~/components/solar";
+import {
+  BellIcon,
+  CircleAlertIcon,
+  MessageCircleQuestionIcon,
+  PaperclipIcon,
+} from "~/components/solar";
 import {
   createContext,
   Fragment,
@@ -105,13 +110,20 @@ export function GoatBotTimeline({
       element.scrollHeight - element.scrollTop - element.clientHeight < FOLLOW_THRESHOLD_PX;
     updateEdges();
   };
+  // Messages finish laying out after they render (Markdown, highlighting, images), and the
+  // column can get its height after mounting; a reader following the newest message stays there.
+  const followResize = useStableCallback(() => {
+    const scroll = scrollRef.current;
+    if (scroll !== null && followingRef.current) scroll.scrollTop = scroll.scrollHeight;
+    updateEdges();
+  });
   useLayoutEffect(() => {
     updateEdges();
     const scroll = scrollRef.current;
     const list = listRef.current;
     if (!scroll || !list) return;
-    return observeResize([scroll, list], updateEdges);
-  }, [updateEdges]);
+    return observeResize([scroll, list], followResize);
+  }, [updateEdges, followResize]);
   // New rows and the activity bubble keep the view pinned to the latest message unless the
   // reader scrolled up.
   useLayoutEffect(() => {
@@ -192,6 +204,15 @@ export function GoatBotTimeline({
                           )}
                         >
                           {row.text}
+                          {row.attachments?.map((file) => (
+                            <span
+                              key={file.id}
+                              className="flex items-center gap-1 text-sm opacity-80"
+                            >
+                              <PaperclipIcon className="size-3.5 shrink-0" aria-hidden />
+                              <span className="truncate">{file.name}</span>
+                            </span>
+                          ))}
                         </div>
                         {!failed ? (
                           <time

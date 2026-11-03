@@ -14,7 +14,7 @@ afterEach(async () => {
 });
 
 async function render(disabled = false, initialText = "") {
-  const onSend = vi.fn<(text: string) => void>();
+  const onSend = vi.fn<(text: string, attachments: ReadonlyArray<unknown>) => void>();
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -60,11 +60,11 @@ it("sends on Enter, clears, and takes the next message right away", async () => 
   const { onSend, textarea } = await render();
   await type(textarea, "  fix the flaky test  ");
   await press(textarea, {});
-  expect(onSend).toHaveBeenCalledWith("fix the flaky test");
+  expect(onSend).toHaveBeenCalledWith("fix the flaky test", []);
   expect(textarea.value).toBe("");
   await type(textarea, "and update the docs");
   await press(textarea, {});
-  expect(onSend).toHaveBeenLastCalledWith("and update the docs");
+  expect(onSend).toHaveBeenLastCalledWith("and update the docs", []);
   expect(onSend).toHaveBeenCalledTimes(2);
 });
 

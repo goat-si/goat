@@ -65,8 +65,9 @@ ledger task of kind `turn` runs in the conversation's GOAT Bot session
 ([`ChannelBotSession.ts`](../../apps/server/src/channels/ChannelBotSession.ts)), a thread with
 the `goat-bot-session:` prefix in the bot's own workspace. One session serves a conversation and
 requester, so the provider's prompt cache stays warm and notes are read once per session instead
-of once per request. Each request is still a ledger task, which keeps the chip, exactly-once
-narration, restarts that read state, and the requester's ceiling. Running a provider on the bot
+of once per request. Each request is still a ledger task, which keeps exactly-once narration,
+restarts that read state, and the requester's ceiling. Its chip carries `kind: "turn"`: clients
+follow it for the activity line but draw no card, since the bot's reply already answers it. Running a provider on the bot
 thread itself would put each new message behind the running turn.
 
 - **Binding.** `channel_bot_sessions` has a row per session generation. The binding key is the

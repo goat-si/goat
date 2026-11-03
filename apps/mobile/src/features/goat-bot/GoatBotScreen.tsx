@@ -481,6 +481,7 @@ export function GoatBotScreen(props: {
         data={session.rows}
         keyExtractor={rowKey}
         renderItem={renderItem}
+        initialScrollAtEnd
         maintainScrollAtEnd
         alignItemsAtEnd
         keyboardShouldPersistTaps="handled"
