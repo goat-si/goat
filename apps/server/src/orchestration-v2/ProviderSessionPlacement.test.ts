@@ -1,0 +1,187 @@
+import { assert, it } from "@effect/vitest";
+import {
+  type CodexAppServerIsolation,
+  CODEX_APP_SERVER_ISOLATION_DEFAULT,
+  type OrchestrationV2ProviderCapabilities,
+  type OrchestrationV2ProviderThread,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  ProviderSessionId,
+  ProviderThreadId,
+  ThreadId,
+} from "@goat/contracts";
+import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
+import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
+import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+
+import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import { keptProviderSessionId, makeProviderSessionPlacement } from "./ProviderSessionPlacement.ts";
+
+const codex = ProviderDriverKind.make("codex");
+const instanceId = ProviderInstanceId.make("codex");
+const otherInstanceId = ProviderInstanceId.make("codex-work");
+const exclusive: OrchestrationV2ProviderCapabilities = {
+  ...CodexProviderCapabilitiesV2,
+  sessions: {
+    ...CodexProviderCapabilitiesV2.sessions,
+    supportsMultipleProviderThreadsPerSession: false,
+  },
+};
+const sharedId = IdAllocator.derive.providerSession({ providerInstanceId: instanceId });
+const threadA = ThreadId.make("thread-a");
+const threadB = ThreadId.make("thread-b");
+
+const adapterWith = (capabilities: OrchestrationV2ProviderCapabilities, driver = codex) =>
+  ({ driver, getCapabilities: () => Effect.succeed(capabilities) }) as Pick<
+    ProviderAdapter.ProviderAdapterV2["Service"],
+    "driver" | "getCapabilities"
+  >;
+
+const place = (settings: { readonly codexAppServerIsolation: CodexAppServerIsolation }) =>
+  IdAllocator.IdAllocatorV2.pipe(
+    Effect.map((idAllocator) =>
+      makeProviderSessionPlacement({ idAllocator, settings: Effect.succeed(settings) }),
+    ),
+    Effect.provide(IdAllocator.layer),
+  );
+
+const providerThread = (providerSessionId: ProviderSessionId | null) =>
+  ({
+    id: ProviderThreadId.make("provider-thread-a"),
+    providerInstanceId: instanceId,
+    providerSessionId,
+    appThreadId: threadA,
+    createdAt: DateTime.makeUnsafe(0),
+  }) as OrchestrationV2ProviderThread;
+
+it.effect("thread isolation gives each new root thread its own deterministic session", () =>
+  Effect.gen(function* () {
+    const { providerSessionIdFor } = yield* place({ codexAppServerIsolation: "thread" });
+    const adapter = adapterWith(CodexProviderCapabilitiesV2);
+    const a = yield* providerSessionIdFor({
+      adapter: adapter as never,
+      providerInstanceId: instanceId,
+      threadId: threadA,
+    });
+    const again = yield* providerSessionIdFor({
+      adapter: adapter as never,
+      providerInstanceId: instanceId,
+      threadId: threadA,
+    });
+    const b = yield* providerSessionIdFor({
+      adapter: adapter as never,
+      providerInstanceId: instanceId,
+      threadId: threadB,
+    });
+    assert.strictEqual(a, "provider-session:provider-instance:codex:thread:thread-a");
+    assert.strictEqual(again, a);
+    assert.notStrictEqual(b, a);
+  }),
+);
+
+it.effect(
+  "shared isolation, the shipped default, keeps every thread on the instance's shared session",
+  () =>
+    Effect.gen(function* () {
+      assert.strictEqual(CODEX_APP_SERVER_ISOLATION_DEFAULT, "shared");
+      const { providerSessionIdFor } = yield* place({ codexAppServerIsolation: "shared" });
+      const adapter = adapterWith(CodexProviderCapabilitiesV2);
+      assert.strictEqual(
+        yield* providerSessionIdFor({
+          adapter: adapter as never,
+          providerInstanceId: instanceId,
+          threadId: threadA,
+        }),
+        sharedId,
+      );
+      assert.strictEqual(
+        yield* providerSessionIdFor({
+          adapter: adapter as never,
+          providerInstanceId: instanceId,
+          threadId: threadB,
+        }),
+        sharedId,
+      );
+    }),
+);
+
+it.effect("adapters with one thread per session still get a fresh random session", () =>
+  Effect.gen(function* () {
+    const { providerSessionIdFor } = yield* place({ codexAppServerIsolation: "thread" });
+    const adapter = adapterWith(exclusive, ProviderDriverKind.make("claudeAgent"));
+    const first = yield* providerSessionIdFor({
+      adapter: adapter as never,
+      providerInstanceId: instanceId,
+      threadId: threadA,
+    });
+    const second = yield* providerSessionIdFor({
+      adapter: adapter as never,
+      providerInstanceId: instanceId,
+      threadId: threadA,
+    });
+    assert.notStrictEqual(first, second);
+    assert.notStrictEqual(first, sharedId);
+  }),
+);
+
+it.effect("thread isolation does not split sessions of a non-Codex shared-session adapter", () =>
+  Effect.gen(function* () {
+    const { providerSessionIdFor } = yield* place({ codexAppServerIsolation: "thread" });
+    const adapter = adapterWith(CodexProviderCapabilitiesV2, ProviderDriverKind.make("opencode"));
+    assert.strictEqual(
+      yield* providerSessionIdFor({
+        adapter: adapter as never,
+        providerInstanceId: instanceId,
+        threadId: threadA,
+      }),
+      sharedId,
+    );
+  }),
+);
+
+const restartAndResume = (stored: ProviderSessionId) => ({
+  providerThread: providerThread(stored),
+  providerInstanceId: instanceId,
+  canResumeAcrossInstances: false,
+  // A restart_and_resume releases the session the thread was on.
+  releaseProviderSessionIds: [stored],
+  capabilities: CodexProviderCapabilitiesV2,
+});
+
+it("under thread isolation, a :shared thread whose session cwd no longer matches keeps :shared after a model change", () => {
+  assert.strictEqual(keptProviderSessionId(restartAndResume(sharedId)), sharedId);
+});
+
+it("under shared isolation, a per-thread session survives a worktree handoff plus a model change", () => {
+  const perThread = IdAllocator.derive.providerSession({
+    providerInstanceId: instanceId,
+    threadId: threadA,
+  });
+  assert.strictEqual(keptProviderSessionId(restartAndResume(perThread)), perThread);
+});
+
+it("a thread derives a new session only without a stored one or after its instance changes", () => {
+  assert.isNull(
+    keptProviderSessionId({ ...restartAndResume(sharedId), providerThread: providerThread(null) }),
+  );
+  assert.isNull(
+    keptProviderSessionId({ ...restartAndResume(sharedId), canResumeAcrossInstances: true }),
+  );
+  assert.isNull(
+    keptProviderSessionId({ ...restartAndResume(sharedId), providerInstanceId: otherInstanceId }),
+  );
+});
+
+it("adapters with one thread per session still replace a released session", () => {
+  const stored = ProviderSessionId.make("provider-session:random");
+  assert.isNull(keptProviderSessionId({ ...restartAndResume(stored), capabilities: exclusive }));
+  assert.strictEqual(
+    keptProviderSessionId({
+      ...restartAndResume(stored),
+      capabilities: exclusive,
+      releaseProviderSessionIds: [],
+    }),
+    stored,
+  );
+});
