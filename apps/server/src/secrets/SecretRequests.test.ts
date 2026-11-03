@@ -615,3 +615,107 @@ it.effect("stores a login answer privately and refuses the single-secret consume
     { requestKind: "login", siteOrigin: "https://example.com" },
   ),
 );
+
+it.effect("a login item is bound to its requesting thread and origin", () =>
+  withService(
+    ({ service }) =>
+      Effect.gen(function* () {
+        yield* service.answer({
+          threadId,
+          turnItemId,
+          answer: { type: "save_login", username: "test-user", password: "test-password" },
+        });
+        const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
+        const use = (owner: ThreadId, origin: string) =>
+          service.useLogin({ ref, threadId: owner, origin }, () => Effect.succeed(true));
+        assert.equal(
+          (yield* use(ThreadId.make("other-thread"), "https://example.com").pipe(Effect.flip))
+            .reason,
+          "ref_unavailable",
+        );
+        assert.equal(
+          (yield* use(threadId, "https://other.example").pipe(Effect.flip)).reason,
+          "origin_mismatch",
+        );
+        assert.isTrue(yield* use(threadId, "https://example.com"));
+      }),
+    { requestKind: "login", siteOrigin: "https://example.com" },
+  ),
+);
+
+it.effect("a partial login fill keeps the item, and concurrent complete fills use it once", () =>
+  withService(
+    ({ service }) =>
+      Effect.gen(function* () {
+        yield* service.answer({
+          threadId,
+          turnItemId,
+          answer: { type: "save_login", username: "test-user", password: "test-password" },
+        });
+        const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
+        const input = { ref, threadId, origin: "https://example.com" };
+        assert.isFalse(yield* service.useLogin(input, () => Effect.succeed(false)));
+        const results = yield* Effect.forEach(
+          [
+            service.useLogin(input, () => Effect.succeed(true)),
+            service.useLogin(input, () => Effect.succeed(true)),
+          ],
+          Effect.result,
+          { concurrency: "unbounded" },
+        );
+        assert.deepEqual(results.map((result) => result._tag).toSorted(), ["Failure", "Success"]);
+      }),
+    { requestKind: "login", siteOrigin: "https://example.com" },
+  ),
+);
+
+it.effect("keeps a completed login unavailable if deleting its stored item fails", () =>
+  withService(
+    ({ service }) =>
+      Effect.gen(function* () {
+        yield* service.answer({
+          threadId,
+          turnItemId,
+          answer: { type: "save_login", username: "test-user", password: "test-password" },
+        });
+        const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
+        const input = { ref, threadId, origin: "https://example.com" };
+        const error = yield* service
+          .useLogin(input, (item) => {
+            assert.deepEqual(item, { username: "test-user", password: "test-password" });
+            return Effect.succeed(true);
+          })
+          .pipe(Effect.flip);
+        assert.equal(error.reason, "consume_failed");
+        assert.equal(
+          (yield* service.useLogin(input, () => Effect.succeed(true)).pipe(Effect.flip)).reason,
+          "ref_unavailable",
+        );
+      }),
+    { requestKind: "login", siteOrigin: "https://example.com", removeFails: true },
+  ),
+);
+
+it.effect("an uncertain login delivery remains unavailable", () =>
+  withService(
+    ({ service }) =>
+      Effect.gen(function* () {
+        yield* service.answer({
+          threadId,
+          turnItemId,
+          answer: { type: "save_login", username: "test-user", password: "test-password" },
+        });
+        const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
+        const input = { ref, threadId, origin: "https://example.com" };
+        assert.equal(
+          yield* service.useLogin(input, () => Effect.fail("unknown delivery")).pipe(Effect.flip),
+          "unknown delivery",
+        );
+        assert.equal(
+          (yield* service.useLogin(input, () => Effect.succeed(true)).pipe(Effect.flip)).reason,
+          "ref_unavailable",
+        );
+      }),
+    { requestKind: "login", siteOrigin: "https://example.com" },
+  ),
+);

@@ -51,11 +51,14 @@ const StoredSecret = Schema.fromJsonString(
     savedAt: Schema.Number,
     origin: Schema.optional(Schema.String),
     loginThreadId: Schema.optional(Schema.String),
+    loginInFlight: Schema.optional(Schema.Boolean),
   }),
 );
-const encodeLogin = Schema.encodeEffect(
-  Schema.fromJsonString(Schema.Struct({ username: Schema.String, password: Schema.String })),
+const LoginItem = Schema.fromJsonString(
+  Schema.Struct({ username: Schema.String, password: Schema.String }),
 );
+const encodeLogin = Schema.encodeEffect(LoginItem);
+const decodeLogin = Schema.decodeUnknownOption(LoginItem);
 const encodeStored = Schema.encodeEffect(StoredSecret);
 const decodeStored = Schema.decodeUnknownOption(StoredSecret);
 
@@ -85,6 +88,13 @@ export class SecretRequests extends Context.Service<
       readonly threadId: ThreadId;
       readonly origin: string;
     }) => Effect.Effect<string, SecretRequestError>;
+    readonly useLogin: <E, R>(
+      input: { readonly ref: SecretRef; readonly threadId: ThreadId; readonly origin: string },
+      use: (item: {
+        readonly username: string;
+        readonly password: string;
+      }) => Effect.Effect<boolean, E, R>,
+    ) => Effect.Effect<boolean, SecretRequestError | E, R>;
     /** Moves a saved `file` request's value to an owner-only file and returns its path. */
     readonly saveToFile: (input: {
       readonly threadId: ThreadId;
@@ -318,6 +328,42 @@ const make = Effect.gen(function* () {
     );
   });
 
+  const useLogin: SecretRequests["Service"]["useLogin"] = (input, use) =>
+    Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const records = yield* threadManagement
+          .getThreadRecords(input.threadId, [])
+          .pipe(
+            Effect.mapError((cause) => new SecretRequestError({ reason: "load_failed", cause })),
+          );
+        const stored = yield* readRef({ ref: input.ref, projectId: records.thread.projectId });
+        if (stored.loginThreadId !== input.threadId || stored.loginInFlight === true)
+          return yield* new SecretRequestError({ reason: "ref_unavailable" });
+        if (stored.origin !== input.origin)
+          return yield* new SecretRequestError({ reason: "origin_mismatch" });
+        const login = decodeLogin(stored.value);
+        if (Option.isNone(login)) return yield* new SecretRequestError({ reason: "read_failed" });
+        const write = (entry: typeof stored) =>
+          encodeStored(entry).pipe(
+            Effect.orDie,
+            Effect.flatMap((encoded) =>
+              store.set(storeName(input.ref), new TextEncoder().encode(encoded)),
+            ),
+            Effect.mapError((cause) => new SecretRequestError({ reason: "store_failed", cause })),
+          );
+        // A crash or uncertain callback must not make a fully delivered item reusable.
+        yield* write({ ...stored, loginInFlight: true });
+        const complete = yield* restore(use(login.value));
+        if (!complete) {
+          yield* write(stored);
+          return false;
+        }
+        if (!(yield* removeLogged(storeName(input.ref))))
+          return yield* new SecretRequestError({ reason: "consume_failed" });
+        return true;
+      }),
+    ).pipe(consumeLock.withPermits(1), Effect.withSpan("SecretRequests.useLogin"));
+
   const saveToFile: SecretRequests["Service"]["saveToFile"] = Effect.fn(
     "SecretRequests.saveToFile",
   )(function* (input) {
@@ -419,7 +465,7 @@ const make = Effect.gen(function* () {
     Effect.forkScoped,
   );
 
-  return SecretRequests.of({ answer, savedRef, consume, consumeForOrigin, saveToFile });
+  return SecretRequests.of({ answer, savedRef, consume, consumeForOrigin, useLogin, saveToFile });
 });
 
 export const layer = Layer.effect(SecretRequests, make);
