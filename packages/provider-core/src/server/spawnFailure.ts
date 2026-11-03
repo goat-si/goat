@@ -16,6 +16,7 @@ export function classifySpawnFailure(
   cwd: string | undefined,
   accessDirectory = (path: string) => NodeFS.accessSync(path, NodeFS.constants.X_OK),
   command?: { binary: string; env?: NodeJS.ProcessEnv | undefined },
+  statExecutable = (path: string) => NodeFS.statSync(path).isFile(),
 ): SpawnFailure {
   const seen = new Set<unknown>();
   const pending: unknown[] = [cause];
@@ -40,7 +41,8 @@ export function classifySpawnFailure(
   if (cwd === undefined) {
     if (code !== "ENOENT") return "unknown";
     if (!command) return "missing";
-    return executableExists(command.binary, cwd, command.env ?? process.env) === false
+    return executableExists(command.binary, cwd, command.env ?? process.env, statExecutable) ===
+      false
       ? "missing"
       : "unknown";
   }
@@ -63,8 +65,16 @@ export function classifySpawnFailure(
     return "unknown";
   }
   if (code === "ENOENT") {
-    if (command && executableExists(command.binary, cwd, command.env ?? process.env))
-      return "exec_failed";
+    if (command) {
+      const exists = executableExists(
+        command.binary,
+        cwd,
+        command.env ?? process.env,
+        statExecutable,
+      );
+      if (exists === undefined) return "unknown";
+      if (exists) return "exec_failed";
+    }
     return "missing";
   }
   if (code === "EACCES" || code === "EPERM") return "permission_denied";
@@ -75,6 +85,7 @@ function executableExists(
   binary: string,
   cwd: string | undefined,
   env: NodeJS.ProcessEnv,
+  statExecutable: (path: string) => boolean,
 ): boolean | undefined {
   const paths =
     binary.includes("/") || binary.includes("\\")
@@ -84,20 +95,28 @@ function executableExists(
           .map((dir) => NodePath.join(dir || ".", binary));
   const extensions =
     env.PATHEXT && !NodePath.extname(binary) ? ["", ...env.PATHEXT.split(";")] : [""];
+  let uncertain = false;
   const found = paths.some((path) =>
     extensions.some((extension) => {
       try {
         if (cwd === undefined && !NodePath.isAbsolute(path)) return false;
-        return NodeFS.statSync(
-          (cwd === undefined ? path : NodePath.resolve(cwd, path)) + extension,
-        ).isFile();
-      } catch {
+        return statExecutable((cwd === undefined ? path : NodePath.resolve(cwd, path)) + extension);
+      } catch (error) {
+        if (
+          !error ||
+          typeof error !== "object" ||
+          !("code" in error) ||
+          (error.code !== "ENOENT" && error.code !== "ENOTDIR")
+        )
+          uncertain = true;
         return false;
       }
     }),
   );
   if (found) return true;
-  return cwd === undefined && paths.some((path) => !NodePath.isAbsolute(path)) ? undefined : false;
+  return uncertain || (cwd === undefined && paths.some((path) => !NodePath.isAbsolute(path)))
+    ? undefined
+    : false;
 }
 
 export function spawnFailureMessage(

@@ -4,7 +4,7 @@ import * as NodeOS from "node:os";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- builds a native permission-test fixture path.
 import * as NodePath from "node:path";
 import { it } from "@effect/vitest";
-import { describe, expect, vi } from "vite-plus/test";
+import { describe, expect } from "vite-plus/test";
 import type { ModelCapabilities } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { createModelCapabilities } from "@goat/shared/model";
@@ -41,14 +41,50 @@ describe("spawn failure diagnosis", () => {
 
   it.effect("does not report a missing binary when its path cannot be inspected (#2415)", () =>
     Effect.sync(() => {
-      using _stat = vi.spyOn(NodeFS, "statSync").mockImplementation(() => {
-        throw Object.assign(new Error("stat failed"), { code: "EACCES" });
-      });
+      for (const code of ["EACCES", "EIO"]) {
+        expect(
+          classifySpawnFailure(
+            { code: "ENOENT" },
+            undefined,
+            undefined,
+            { binary: NodePath.join(NodeOS.tmpdir(), "provider-cli") },
+            () => {
+              throw Object.assign(new Error("stat failed"), { code });
+            },
+          ),
+        ).toBe("unknown");
+      }
+      for (const code of ["ENOENT", "ENOTDIR"]) {
+        expect(
+          classifySpawnFailure(
+            { code: "ENOENT" },
+            undefined,
+            undefined,
+            { binary: "provider-cli", env: { PATH: NodeOS.tmpdir() } },
+            () => {
+              throw Object.assign(new Error("stat failed"), { code });
+            },
+          ),
+        ).toBe("missing");
+      }
+      const cwd = process.cwd();
       expect(
-        classifySpawnFailure({ code: "ENOENT" }, undefined, undefined, {
-          binary: NodePath.join(NodeOS.tmpdir(), "provider-cli"),
-        }),
-      ).toBe("unknown");
+        classifySpawnFailure(
+          { code: "ENOENT" },
+          cwd,
+          undefined,
+          {
+            binary: "provider-cli",
+            env: { PATH: [cwd, NodeOS.tmpdir()].join(NodePath.delimiter) },
+          },
+          (path) => {
+            if (path === NodePath.join(cwd, "provider-cli")) {
+              throw Object.assign(new Error("stat failed"), { code: "EIO" });
+            }
+            return true;
+          },
+        ),
+      ).toBe("exec_failed");
     }),
   );
 
