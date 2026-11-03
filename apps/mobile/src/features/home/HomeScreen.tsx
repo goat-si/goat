@@ -919,6 +919,8 @@ export function HomeScreen(props: HomeScreenProps) {
                 // the list in the same frame as the bar.
                 contentInsetAdjustmentBehavior="automatic"
                 contentInsetStartAdjustment={Platform.OS === "ios" ? insets.top : 0}
+                // Programmatic offsets need to account for the automatic bar inset.
+                scrollToOverflowEnabled
                 initialScrollOffset={
                   initialScrollOffset > 0
                     ? initialScrollOffset - (Platform.OS === "ios" ? insets.top : 0)
