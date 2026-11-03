@@ -79,6 +79,45 @@ export const PR_ACTION_ICONS = {
   "approve-workflows": "checkmark",
 } as const satisfies Record<PullRequestAction, AppSymbolName>;
 
+export function canExecuteImmediateMerge(
+  pr: Pick<PullRequestDetail, "autoMergeEnabled">,
+  canMerge: boolean,
+) {
+  return canMerge && pr.autoMergeEnabled !== true;
+}
+
+export function mergeControlStatus(
+  pr: Pick<PullRequestDetail, "state" | "isDraft" | "mergeability" | "autoMergeEnabled"> &
+    Partial<Pick<PullRequestDetail, "autoMergeMethod">>,
+  actionAvailable: boolean,
+  checkingStack: boolean,
+  busy: boolean,
+  terminology: ChangeRequestTerminology,
+): { label: string; icon: AppSymbolName; final?: boolean; action?: "ready" | "reopen" } | null {
+  const action =
+    pr.state === "closed" ? "reopen" : pr.state === "open" && pr.isDraft ? "ready" : null;
+  if (action && actionAvailable)
+    return {
+      label: pullRequestActionLabel(action, terminology),
+      icon: PR_ACTION_ICONS[action],
+      final: action === "reopen",
+      action,
+    };
+  if (pr.state === "merged") return { label: "Merged", icon: PullRequestGlyph.merged, final: true };
+  if (pr.state === "closed") return { label: "Closed", icon: PullRequestGlyph.closed, final: true };
+  if (pr.isDraft) return { label: "Draft", icon: PullRequestGlyph.draft };
+  if (pr.mergeability === "conflicting")
+    return { label: "Resolve conflicts to merge", icon: PullRequestGlyph.conflicting };
+  if (pr.autoMergeEnabled)
+    return {
+      label: `Auto-merge pending${pr.autoMergeMethod ? ` (${pr.autoMergeMethod})` : ""}`,
+      icon: "clock",
+    };
+  return checkingStack && !busy
+    ? { label: "Checking stack…", icon: PullRequestGlyph.merged }
+    : null;
+}
+
 export const ALL_PR_ACTIONS: readonly PullRequestAction[] = [
   "merge",
   "ready",
@@ -131,8 +170,6 @@ export function canPerformPullRequestAction(pr: ActionDetail, action: PullReques
   }
 }
 
-export const MERGE_CONFLICT_REASON = "Resolve the branch conflicts before merging.";
-
 export function mergeUnavailableReason(
   pr: ActionDetail,
   connectionAllowsWrites: boolean,
@@ -146,7 +183,7 @@ export function mergeUnavailableReason(
   if (!pr.viewerPermissions.actions.includes("merge"))
     return `Your account cannot merge this ${terminology.singular}.`;
   if (pr.isDraft) return "Mark this draft ready for review before merging.";
-  if (pr.mergeability === "conflicting") return MERGE_CONFLICT_REASON;
+  if (pr.mergeability === "conflicting") return "Resolve the branch conflicts before merging.";
   if (!allowedMergeMethods(pr).length) return "This repository has no available merge methods.";
   return null;
 }

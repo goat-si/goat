@@ -141,21 +141,21 @@ describe("SidebarLaunchGroup", () => {
       router: false,
     });
     await expect
-      .element(screen.getByRole("treeitem", { name: /^Coordinator/ }))
+      .element(screen.getByRole("button", { name: /^Coordinator/ }))
       .toHaveAttribute("data-testid", "sidebar-row-card");
     await screen.getByRole("button", { name: /^Launched threads/ }).click();
     await expect
-      .element(screen.getByRole("treeitem", { name: /^Settled lane/ }))
+      .element(screen.getByRole("button", { name: /^Settled lane/ }))
       .toHaveAttribute("data-testid", "sidebar-row-card");
     await expect
-      .element(screen.getByRole("treeitem", { name: /^Snoozed lane/ }))
+      .element(screen.getByRole("button", { name: /^Snoozed lane/ }))
       .toHaveAttribute("data-testid", "sidebar-row-slim");
     await screen
       .getByRole("button", { name: /^Launched threads/ })
       .last()
       .click();
     await expect
-      .element(screen.getByRole("treeitem", { name: /^Settled sublane/ }))
+      .element(screen.getByRole("button", { name: /^Settled sublane/ }))
       .toHaveAttribute("data-testid", "sidebar-row-slim");
   });
   it("folds launched threads into one line that expands into their rows", async () => {
