@@ -182,7 +182,7 @@ export const catalog = Layer.mergeAll(htmlRender, ...Object.values(otherRegistra
 // Only registration and early argument refusal run. No domain handler may touch live state.
 const unusedImport = () => Effect.die("Catalog registration must not import memory");
 const inertDependencies = Layer.mergeAll(
-  Layer.mock(BrowserOriginGrants)({}),
+  Layer.mock(BrowserOriginGrants)({ blockedHosts: () => undefined }),
   Layer.mock(AgentWorkspace.AgentWorkspaceMcpService)({}),
   Layer.mock(AgentTerminal.AgentTerminalMcpService)({}),
   AttachmentLifecycle.layerUnused,

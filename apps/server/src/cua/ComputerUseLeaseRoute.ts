@@ -526,37 +526,36 @@ const makeCallLayer = (serverScope: Scope.Scope) =>
         settings.value.cuaMovePointer !== "allowed" &&
         movesPersonPointer(call.value);
       const grants = yield* Effect.serviceOption(BrowserOriginGrants.BrowserOriginGrants);
-      const judge = (reserved: Extract<ComputerUseCallReservation, { action: "reserve" }>) =>
-        (Option.isSome(grants)
-          ? grants.value.snapshotFor(threadId)
-          : Effect.succeed({ claims: [], bindings: [] })
-        ).pipe(
-          Effect.map((snapshot) => {
-            if (!serverAdmitsBrowserCall(reserved.name, reserved.args, snapshot)) return false;
-            const scoped = scopeBrowserCall(reserved.name, reserved.args, snapshot.claims);
-            const binding = authorizeClaimBind(
-              "claimBind",
-              reserved.name,
-              reserved.args,
-              snapshot.bindings,
-            );
-            if ("unchanged" in scoped && binding === undefined) return true;
-            const hosts = Option.isSome(grants) ? grants.value.blockedHosts() : undefined;
-            if (hosts === undefined) return false;
-            const origins =
-              "args" in scoped ? scoped.args.origin_scope : binding ? [binding.origin] : [];
-            if (origins.some((origin) => isBlockedBrowserUrl(origin, hosts))) return false;
-            const args = reserved.args;
-            return (
-              reserved.name !== "browser_navigate" ||
-              typeof args !== "object" ||
-              args === null ||
-              !("url" in args) ||
-              typeof args.url !== "string" ||
-              !isBlockedBrowserUrl(args.url, hosts)
-            );
-          }),
+      const judge = Effect.fn("ComputerUseLeaseRoute.judgeBrowserCall")(function* (
+        reserved: Extract<ComputerUseCallReservation, { action: "reserve" }>,
+      ) {
+        const snapshot = Option.isSome(grants)
+          ? yield* grants.value.snapshotFor(threadId)
+          : { claims: [], bindings: [] };
+        if (!serverAdmitsBrowserCall(reserved.name, reserved.args, snapshot)) return false;
+        const scoped = scopeBrowserCall(reserved.name, reserved.args, snapshot.claims);
+        const binding = authorizeClaimBind(
+          "claimBind",
+          reserved.name,
+          reserved.args,
+          snapshot.bindings,
         );
+        if ("unchanged" in scoped && binding === undefined) return true;
+        const hosts = Option.isSome(grants) ? grants.value.blockedHosts() : undefined;
+        if (hosts === undefined) return false;
+        const origins =
+          "args" in scoped ? scoped.args.origin_scope : binding ? [binding.origin] : [];
+        if (origins.some((origin) => isBlockedBrowserUrl(origin, hosts))) return false;
+        const args = reserved.args;
+        return (
+          reserved.name !== "browser_navigate" ||
+          typeof args !== "object" ||
+          args === null ||
+          !("url" in args) ||
+          typeof args.url !== "string" ||
+          !isBlockedBrowserUrl(args.url, hosts)
+        );
+      });
       const result = yield* Effect.gen(function* () {
         const result: ComputerUseCallAdmission =
           deniedApp !== undefined

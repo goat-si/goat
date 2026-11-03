@@ -181,19 +181,22 @@ describe("computer use lease route", () => {
         const h = yield* harness({
           autoAppListing: true,
           judgeBrowserClaimReply: (report) =>
-            handler.pipe(
-              Effect.provideService(
-                HttpServerRequest.HttpServerRequest,
-                HttpServerRequest.fromWeb(
-                  new Request("http://goat.test/api/computer-use/lease", {
-                    method: "POST",
-                    headers: { authorization: route.credential.config.authorizationHeader },
-                    body: JSON.stringify(report),
-                  }),
+            Effect.scoped(
+              handler.pipe(
+                Effect.provideService(
+                  HttpServerRequest.HttpServerRequest,
+                  HttpServerRequest.fromWeb(
+                    new Request("http://goat.test/api/computer-use/lease", {
+                      method: "POST",
+                      headers: { authorization: route.credential.config.authorizationHeader },
+                      body: JSON.stringify(report),
+                    }),
+                  ),
                 ),
+                Effect.provideContext(route.context),
+                Effect.map((response) => response.status === 204),
+                Effect.orElseSucceed(() => false),
               ),
-              Effect.provideContext(route.context),
-              Effect.map((response) => response.status === 204),
             ),
         });
         yield* h.push({ ...active(), browserClaims: yield* grants.claimsFor(threadId) });

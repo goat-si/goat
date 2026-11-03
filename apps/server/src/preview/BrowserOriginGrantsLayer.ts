@@ -21,9 +21,10 @@ const make = Effect.gen(function* () {
   const manifest = yield* Effect.serviceOption(BrowserClaimManifest);
   const bind = yield* Effect.serviceOption(BrowserClaimBind);
   const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
+  const runSync = Effect.runSyncWith(yield* Effect.context<never>());
   const blockedHosts = () => {
     if (Option.isNone(settings) || !settings.value.committedPolicy) return undefined;
-    const policy = Effect.runSync(settings.value.committedPolicy);
+    const policy = runSync(settings.value.committedPolicy);
     return policy._tag === "committed" ? policy.blockedBrowserHosts : undefined;
   };
   let supported = false;

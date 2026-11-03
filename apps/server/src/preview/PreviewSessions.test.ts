@@ -338,6 +338,7 @@ describe("preview sessions", () => {
       Layer.provide(
         Layer.mergeAll(
           Layer.mock(BrowserOriginGrants)({
+            blockedHosts: () => undefined,
             stop: () => Effect.sync(() => void stopped.push("claims")),
           }),
           Layer.mock(ServerBrowser.ServerBrowser)({
