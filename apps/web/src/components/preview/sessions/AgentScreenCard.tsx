@@ -49,6 +49,7 @@ import { useEnvironmentScope } from "~/state/session";
 import { NativeAppIcon } from "../../chat/TimelineToolActivityIcon";
 import { FaviconImage } from "../PreviewFaviconIcon";
 import { BrowserCardActions } from "./BrowserCardActions";
+import { AgentBrowserChrome, type BrowserIntent } from "./AgentBrowserChrome";
 import { cardServerTabSnapshot, NativeBrowserPicture, useHostedTab } from "./NativeBrowserPicture";
 import { PreviewSessionThumbnail } from "./PreviewSessionThumbnail";
 import { StackDocumentContext } from "./PreviewSessionStackSurface";
@@ -241,6 +242,7 @@ export function AgentScreenCardView(props: AgentScreenCardViewProps) {
   const [stream, setStream] = useState<PreviewStreamControl | null>(null);
   // A takeover asked for and not yet answered by the stream.
   const pendingTakeover = useRef(false);
+  const pendingIntent = useRef<BrowserIntent | null>(null);
   // A tap that reveals the controls must not also open the preview under them.
   const swallowClick = useRef(false);
   const shown = revealed;
@@ -254,6 +256,7 @@ export function AgentScreenCardView(props: AgentScreenCardViewProps) {
   // stream's is, so it keeps showing the page they work in.
   const masked = !large && (session.owner === "private" || session.owner === "human");
   const hosted = floating || masked ? null : nativeTab;
+  const nativePicture = browser && props.drawnHere === true && !floating && !masked;
 
   useEffect(() => {
     if (!revealed) return;
@@ -278,6 +281,18 @@ export function AgentScreenCardView(props: AgentScreenCardViewProps) {
     pendingTakeover.current = true;
     surface.current?.takeControl();
   };
+  const dispatchIntent = (intent: BrowserIntent) => {
+    if (intent.type === "navigate") surface.current?.navigate(intent.url);
+    else if (intent.type === "history") surface.current?.history(intent.delta);
+    else surface.current?.reload();
+  };
+  const onIntent = (intent: BrowserIntent) => {
+    if (stream?.controller === "you") dispatchIntent(intent);
+    else {
+      pendingIntent.current = intent;
+      takeBrowserControl();
+    }
+  };
   const onStreamControl = (next: PreviewStreamControl | null) => {
     // The hand back did not complete the request: not saved, too late, or already answered.
     const notice = next?.handBackNotice;
@@ -288,6 +303,13 @@ export function AgentScreenCardView(props: AgentScreenCardViewProps) {
         description: HAND_BACK_NOTICE[notice],
       });
     setStream(next);
+    if (next === null || !next.canOperate || next.controller === "another-viewer")
+      pendingIntent.current = null;
+    else if (next.controller === "you" && pendingIntent.current !== null) {
+      const intent = pendingIntent.current;
+      pendingIntent.current = null;
+      if (large && !stopped && props.canOperateBrowser) dispatchIntent(intent);
+    }
     if (next === null) return;
     if (large && props.takeOverOnOpen && next.controller !== "you" && next.canOperate) {
       props.onTakeOverStarted?.();
@@ -323,6 +345,7 @@ export function AgentScreenCardView(props: AgentScreenCardViewProps) {
   const enlarge = () =>
     floating && props.drawnHere && props.onOpenInPanel ? props.onOpenInPanel() : props.onExpand();
   const collapse = () => {
+    pendingIntent.current = null;
     // The card is a passive view; control goes back to the agent before it shrinks.
     if (stream?.controller === "you") surface.current?.releaseControl();
     props.onCollapse?.();
@@ -365,7 +388,7 @@ export function AgentScreenCardView(props: AgentScreenCardViewProps) {
       session={session}
       live={props.live}
       size={large ? "large" : "card"}
-      drawnHere={props.drawnHere}
+      nativePicture={nativePicture}
       surfaceRef={surface}
       onStreamControl={onStreamControl}
     />
@@ -501,6 +524,20 @@ export function AgentScreenCardView(props: AgentScreenCardViewProps) {
           {session.handoffReason}
         </p>
       ) : null}
+      {large && browser ? (
+        <AgentBrowserChrome
+          session={session}
+          nativePicture={nativePicture}
+          hosted={hosted}
+          streamEnabled={
+            props.canOperateBrowser &&
+            !stopped &&
+            stream?.canOperate === true &&
+            stream.controller !== "another-viewer"
+          }
+          onIntent={onIntent}
+        />
+      ) : null}
       {/* The screen floats in this well; the well, not the screen, wears who holds it. */}
       <div
         className={cn(
@@ -565,6 +602,13 @@ export function AgentScreenCard(
       : () => {
           void navigate({ to: "/$environmentId/$threadId", params: threadRef });
           openBrowser(threadRef, browserTab);
+          void window.desktopBridge?.revealWindow?.().catch((error: unknown) =>
+            toastManager.add({
+              type: "error",
+              title: "Unable to reveal GOAT",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
         };
   const canControl = useAtomValue(
     previewSessionsEnvironment.control.permissionAtom(session.environmentId),

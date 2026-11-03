@@ -346,6 +346,9 @@ it("navigates only after control is granted and drops a denied navigation", asyn
   const collapse = vi.fn();
   await using screen = await render(card("large", tab, collapse));
   await connect(screen);
+  await expect.element(screen.getByRole("button", { name: "Back" })).toBeInTheDocument();
+  await expect.element(screen.getByRole("button", { name: "Forward" })).toBeInTheDocument();
+  await expect.element(screen.getByRole("button", { name: "Refresh" })).toBeInTheDocument();
   const address = screen.getByRole("combobox", { name: "Search or enter URL" });
   await userEvent.click(address);
   await userEvent.clear(address);

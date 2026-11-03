@@ -8,10 +8,10 @@ import { act, render } from "../../../../test/render";
 
 const environmentId = "env-native-cards" as EnvironmentId;
 const bridge = vi.hoisted(() => ({
-  goBack: vi.fn(),
-  goForward: vi.fn(),
-  refresh: vi.fn(),
-  navigate: vi.fn(),
+  goBack: vi.fn(async () => undefined),
+  goForward: vi.fn(async () => undefined),
+  refresh: vi.fn(async () => undefined),
+  navigate: vi.fn(async () => undefined),
   pictureInPicture: { open: vi.fn(), close: vi.fn() },
 }));
 vi.mock("../previewBridge", () => ({ previewBridge: bridge }));
@@ -48,7 +48,7 @@ vi.mock("../../../browser/ServerBrowserSurface", () => ({
   ServerBrowserSurface: () => <canvas width={4} height={4} data-testid="session-frame" />,
 }));
 
-import { applyPreviewServerEvent } from "../../../previewStateStore";
+import { applyPreviewServerEvent, resetPreviewStateForTests } from "../../../previewStateStore";
 import { AppAtomRegistryProvider } from "../../../rpc/atomRegistry";
 import { AgentScreenCard, AgentScreenCardView } from "./AgentScreenCard";
 
@@ -116,6 +116,7 @@ it("streams a tab with Take over once the server renders it, instead of waiting 
 });
 
 it("uses the hosted tab for enlarged native navigation and disables controls until hosted", async () => {
+  resetPreviewStateForTests();
   bridge.goBack.mockClear();
   bridge.refresh.mockClear();
   bridge.navigate.mockClear();
@@ -150,7 +151,9 @@ it("uses the hosted tab for enlarged native navigation and disables controls unt
   );
   await using screen = await render(view(null));
   await expect.element(screen.getByRole("button", { name: "Refresh" })).toBeDisabled();
-  await screen.rerender(view({ runtimeTabId: "hosted-tab", overlay: null }));
+  await screen.rerender(
+    view({ runtimeTabId: "hosted-tab", overlay: { canGoBack: true } as never }),
+  );
   await userEvent.click(screen.getByRole("button", { name: "Back" }));
   await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
   const address = screen.getByRole("combobox", { name: "Search or enter URL" });
