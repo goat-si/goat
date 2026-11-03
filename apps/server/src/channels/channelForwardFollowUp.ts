@@ -1,4 +1,4 @@
-import { type ChannelTask, ProjectId } from "@goat/contracts";
+import { ProjectId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -14,16 +14,7 @@ import { refuseForward } from "./channelForwardRefusal.ts";
 import { turnSteerIdsFor } from "./channelIds.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 
-type AskRequester = (
-  stored: ChannelLedger.ChannelStoredTask,
-  text: string,
-  owner: string,
-  options?: { readonly clearPendingAnswer?: boolean; readonly choices?: ReadonlyArray<string> },
-) => Effect.Effect<ChannelTask | undefined, ChannelLedger.ChannelLedgerError>;
-
-export const makeForwardFollowUp = Effect.fn("channel.makeForwardFollowUp")(function* (
-  askRequester: AskRequester,
-) {
+export const makeForwardFollowUp = Effect.fn("channel.makeForwardFollowUp")(function* () {
   const ledger = yield* ChannelLedger.ChannelLedger;
   const threads = yield* ThreadManagement.ThreadManagementService;
   const slackSettings = yield* SlackChannelSettings.SlackChannelSettings;
@@ -164,9 +155,9 @@ export const makeForwardFollowUp = Effect.fn("channel.makeForwardFollowUp")(func
     if (sent._tag === "Failure") {
       const refusal = yield* Ref.get(refused);
       if (refusal !== undefined || rejected(sent.failure)) {
-        // Read again: an earlier follow-up's question may have moved the task since.
-        const asked = yield* askRequester(
-          (yield* ledger.getTask(event.taskId)) ?? stored,
+        yield* refuseForward(
+          ledger,
+          stored,
           refusal !== undefined
             ? "The thread doing this now runs in " +
                 refusal.runtimeMode +
@@ -177,11 +168,8 @@ export const makeForwardFollowUp = Effect.fn("channel.makeForwardFollowUp")(func
                 event.payload.text +
                 '"). Say it again, or open the thread in GOAT.',
           owner,
-          { clearPendingAnswer: true },
+          pending.sequence,
         );
-        // Done only once the person has been told; otherwise the next pass tells them.
-        if (asked === undefined) return;
-        yield* ledger.completeForward({ owner, sequence: pending.sequence });
         return;
       }
       // Not known to be refused; the next pass sends it again under the same ids.

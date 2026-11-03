@@ -958,7 +958,7 @@ const make = Effect.gen(function* () {
    * completion fence set with the follow-up is lifted in the same write, so the task settles on
    * that run and never on the one before it.
    */
-  const forwardFollowUp = yield* makeForwardFollowUp(askRequester);
+  const forwardFollowUp = yield* makeForwardFollowUp();
 
   /**
    * Stops the worker of a task a person stopped from chat: a full thread stop, which also holds
@@ -1192,7 +1192,8 @@ const make = Effect.gen(function* () {
         const refusal = yield* Ref.get(refused);
         if (refusal !== undefined) {
           // Keep the answer's intent: ask again, so the requester can lower the thread or answer there.
-          yield* askRequester(
+          yield* refuseForward(
+            ledger,
             stored,
             "The coding thread now runs in " +
               refusal.runtimeMode +
@@ -1200,9 +1201,8 @@ const make = Effect.gen(function* () {
               event.payload.answer +
               "\"). Lower the thread's mode in GOAT and answer again, or answer in the thread.",
             owner,
-            { clearPendingAnswer: true },
+            pending.sequence,
           );
-          yield* ledger.completeForward({ owner, sequence: pending.sequence });
           return;
         }
         // Left pending; the next scan sends it again under the same command id.

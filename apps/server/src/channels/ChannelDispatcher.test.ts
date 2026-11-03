@@ -13,6 +13,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Ref from "effect/Ref";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as ServerConfig from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
@@ -88,6 +89,103 @@ it.effect("#2193 drops a revoked answer when its non-session task was cancelled"
     assert.lengthOf(yield* ledger.listPendingForwards(10), 0);
     assert.strictEqual((yield* onlyTask).status, "cancelled");
     assert.lengthOf((yield* onlyTask).openQuestions, 0);
+    assert.lengthOf(harness.world.sends, 0);
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect.each([
+  ["followup", false],
+  ["followup", true],
+  ["answer", false],
+  ["answer", true],
+] as const)("#2193 records a non-session mode refusal atomically %s", ([kind, restored]) => {
+  const harness = makeHarness();
+  return Effect.gen(function* () {
+    yield* setupBot;
+    yield* linkSlackUser();
+    const gateway = yield* ChannelGateway.ChannelGateway;
+    const runtime = yield* ChannelRuntime.ChannelRuntime;
+    const ledger = yield* ChannelLedger.ChannelLedger;
+    const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+    yield* gateway.ingest(slackInput("do: inspect the build", "mode-refusal-1"), slackContext);
+    yield* runtime.drain;
+    const task = yield* onlyTask;
+    if (kind === "answer") {
+      const questionId = ChannelQuestionId.make("question:mode-refusal");
+      yield* commitTransition(
+        ledger,
+        (yield* ledger.getTask(task.taskId))!,
+        {
+          type: "task.question.opened",
+          payload: { question: { questionId, text: "Which?", askedAt: task.updatedAt } },
+        },
+        { owner: runtime.ownerToken },
+      );
+      yield* commitTransition(
+        ledger,
+        (yield* ledger.getTask(task.taskId))!,
+        {
+          type: "task.question.answered",
+          payload: { questionId, answer: "the big one" },
+        },
+        { owner: runtime.ownerToken, forward: true, pendingAnswerMessageId: "answer-fence" },
+      );
+    } else {
+      yield* commitTransition(
+        ledger,
+        (yield* ledger.getTask(task.taskId))!,
+        {
+          type: "task.followup.received",
+          payload: {
+            inputId: ChannelInputId.make("input:mode-refusal"),
+            text: "check logs",
+            from: "Owner",
+            generation: task.generation,
+          },
+        },
+        { owner: runtime.ownerToken, forward: true, pendingAnswerMessageId: "followup-fence" },
+      );
+    }
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`UPDATE channel_identities SET runtime_mode_ceiling = 'approval-required' WHERE connection_id = 'slack-1' AND external_actor_id = 'U1'`;
+    const threads = yield* ThreadManagement.ThreadManagementService;
+    const send = threads.sendToThread;
+    let refuse = true;
+    let attempts = 0;
+    Object.assign(threads, {
+      sendToThread: (input: Parameters<typeof send>[0]) =>
+        Effect.gen(function* () {
+          attempts += 1;
+          if (!refuse) return yield* send(input);
+          const limit = yield* DispatchModeLimit;
+          if (limit?.refused === undefined)
+            return yield* Effect.die("missing mode refusal reference");
+          yield* Ref.set(limit.refused, {
+            threadId: input.threadId,
+            runtimeMode: "auto-accept-edits",
+            interactionMode: "default",
+            mode: "runtime",
+          });
+          return yield* Effect.fail({ _tag: "OrchestratorCommandRejectedError" } as never);
+        }),
+    });
+    const [pending] = yield* ledger.listPendingForwards(10);
+    const complete = ledger.completeForward;
+    Object.assign(ledger, {
+      completeForward: () => Effect.die("crash between question and forward completion"),
+    });
+    const first = yield* dispatcher.forward(pending!, runtime.ownerToken).pipe(Effect.exit);
+    Object.assign(ledger, { completeForward: complete });
+    assert.strictEqual(first._tag, "Success");
+    assert.lengthOf((yield* onlyTask).openQuestions, 1);
+    assert.lengthOf(yield* ledger.listPendingForwards(10), 0);
+    if (restored) {
+      refuse = false;
+      yield* sql`UPDATE channel_identities SET runtime_mode_ceiling = 'auto-accept-edits' WHERE connection_id = 'slack-1' AND external_actor_id = 'U1'`;
+    }
+    yield* dispatcher.forward(pending!, runtime.ownerToken);
+    assert.lengthOf((yield* onlyTask).openQuestions, 1);
+    assert.strictEqual(attempts, 1);
     assert.lengthOf(harness.world.sends, 0);
   }).pipe(Effect.provide(harness.layer));
 });
