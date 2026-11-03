@@ -79,7 +79,12 @@ export function secretRequestAnswerInput(
   item: Pick<SecretRequestItem, "id" | "threadId">,
   answer:
     | { readonly type: "save"; readonly secret: string }
-    | { readonly type: "save_login"; readonly username: string; readonly password: string }
+    | {
+        readonly type: "save_login";
+        readonly username: string;
+        readonly password: string;
+        readonly authenticatorSetupKey?: string;
+      }
     | ({ readonly type: "save_card" } & CardDetails)
     | { readonly type: "decline" },
 ): SecretRequestAnswerInput | null {
@@ -89,11 +94,23 @@ export function secretRequestAnswerInput(
   if (answer.type === "save_login") {
     const username = answer.username.trim();
     const password = answer.password;
+    const key = answer.authenticatorSetupKey?.trim();
     if (username.length === 0 || password.trim().length === 0) return null;
     return {
       threadId: item.threadId,
       turnItemId: item.id,
-      answer: { type: "save_login", username, password },
+      answer: {
+        type: "save_login",
+        username,
+        password,
+        ...(key
+          ? {
+              authenticatorSetupKey: key.toLowerCase().startsWith("otpauth:")
+                ? answer.authenticatorSetupKey
+                : key,
+            }
+          : {}),
+      },
     };
   }
   if (answer.type === "save_card") {

@@ -14,6 +14,8 @@ import {
   PreviewAutomationFetchResult,
   PreviewAutomationFillCardInput,
   PreviewAutomationFillCardResult,
+  PreviewAutomationFillOneTimeCodeInput,
+  PreviewAutomationFillOneTimeCodeResult,
   PreviewAutomationFillLoginInput,
   PreviewAutomationFillLoginResult,
   PreviewAutomationFillSecretInput,
@@ -304,6 +306,17 @@ const PreviewFillCardTool = Tool.make(agentSurfaceRegistry["preview.fill_card"].
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.fill_card"]));
 
+const PreviewFillOneTimeCodeTool = Tool.make(
+  agentSurfaceRegistry["preview.fill_one_time_code"].name,
+  {
+    description: agentSurfaceRegistry["preview.fill_one_time_code"].description,
+    parameters: PreviewAutomationFillOneTimeCodeInput,
+    success: Schema.Struct({ ...PreviewAutomationFillOneTimeCodeResult.fields, ...safetyFields }),
+    failure: PreviewToolFailure,
+    dependencies,
+  },
+).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["preview.fill_one_time_code"]));
+
 const PreviewScrollCollectTool = Tool.make(agentSurfaceRegistry["preview.scroll_collect"].name, {
   description: agentSurfaceRegistry["preview.scroll_collect"].description,
   parameters: PreviewAutomationScrollCollectInput,
@@ -454,6 +467,7 @@ export const PreviewToolkit = Toolkit.make(
   PreviewFillSecretTool,
   PreviewFillLoginTool,
   PreviewFillCardTool,
+  PreviewFillOneTimeCodeTool,
   PreviewHoverTool,
   PreviewSelectTool,
   PreviewDragTool,
@@ -487,6 +501,7 @@ export const PreviewStandardToolkit = Toolkit.make(
   PreviewFillSecretTool,
   PreviewFillLoginTool,
   PreviewFillCardTool,
+  PreviewFillOneTimeCodeTool,
   PreviewHoverTool,
   PreviewSelectTool,
   PreviewDragTool,

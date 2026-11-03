@@ -502,6 +502,7 @@ export const makePreviewTargetHost = Effect.fn("PreviewTargetHost.make")(functio
         tab_fill_secret: "fillSecret",
         tab_fill_login: "fillLogin",
         tab_fill_card: "fillCard",
+        tab_fill_one_time_code: "fillOneTimeCode",
         click: "click",
         right_click: "click",
         hover: "hover",

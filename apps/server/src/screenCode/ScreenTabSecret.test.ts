@@ -321,6 +321,36 @@ it.live("fillLogin sends the reference and returns confirmed delivery", () => {
   );
 });
 
+it.live("fillOneTimeCode sends the reference and returns its delivery status", () => {
+  const owned = { ...formTab, owner: "agent" as const, ownedByCaller: true };
+  const calls: unknown[] = [];
+  const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+    listBoundTabs: () => Effect.succeed([owned]),
+    invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) => {
+      if (request.operation === "fillOneTimeCode") {
+        calls.push(request.input);
+        return Effect.succeed({ filled: true, verdict: "confirmed" } as A);
+      }
+      return Effect.succeed({
+        tabId: formTab.tabId,
+        url: formTab.url,
+        control: { owner: "agent", ownedByCaller: true, generation: 0 },
+      } as A);
+    },
+  };
+  return runCells(broker, [
+    "const tab = await screen.tab('form'); return await tab.fillOneTimeCode('ref');",
+  ]).pipe(
+    Effect.map(([result]) => {
+      expect(result).toMatchObject({
+        _tag: "Success",
+        success: { status: "completed", value: { filled: true, verdict: "confirmed" } },
+      });
+      expect(calls).toEqual([{ secretRef: "ref" }]);
+    }),
+  );
+});
+
 it.live("fillCard sends the reference and returns the card delivery status", () => {
   const owned = { ...formTab, owner: "agent" as const, ownedByCaller: true };
   const calls: unknown[] = [];

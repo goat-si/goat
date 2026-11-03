@@ -55,6 +55,8 @@ interface Dependencies {
   /** Restarts the driver; true when it could. */
   readonly fence?: () => Effect.Effect<boolean>;
   readonly onFenceFailure?: () => Effect.Effect<void>;
+  readonly markFence?: () => { readonly run: Effect.Effect<boolean> } | undefined;
+  readonly onConcurrentFence?: (marked: boolean) => Effect.Effect<void>;
   readonly windowTitle?: (
     input: Pick<Request, "threadId" | "pid" | "windowId">,
   ) => Effect.Effect<string, Error>;
@@ -151,6 +153,17 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
           ...current,
           origins: current.origins.filter((origin) => !isBlockedBrowserUrl(origin, hosts)),
         };
+        if (
+          narrowing &&
+          (latest?.applied
+            ? subset(latest.value, value)
+            : latest === undefined &&
+              value.origins.length === 0 &&
+              value.existingProfiles.length === 0)
+        ) {
+          yield* advance;
+          return undefined;
+        }
         const entry = { number: ++writes, value, narrowing, applied: false };
         latest = entry;
         yield* advance;
@@ -160,30 +173,54 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
       }),
     );
   const publish = Effect.fn("BrowserOriginGrants.publishExpansion")(function* () {
-    yield* confirm((yield* write(false)).sha);
+    const result = yield* write(false);
+    if (result === undefined) return yield* new BrowserManifestNotApplied();
+    yield* confirm(result.sha);
   });
   let fencing = false;
+  let fenceOwner = 0;
+  let pendingFence: Effect.Effect<boolean> | undefined;
   const fence = Effect.fn("BrowserOriginGrants.fence")(function* (cause: unknown) {
-    if (fencing || !deps.supported()) return;
-    fencing = true;
-    yield* Effect.logWarning("Browser manifest narrowing was not applied; restarting the driver", {
-      cause,
+    const decision = yield* Effect.sync(() => {
+      if (fencing) {
+        const marked = deps.markFence?.();
+        pendingFence = marked?.run ?? Effect.suspend(() => deps.fence?.() ?? Effect.succeed(false));
+        return { status: "queued" as const, marked: marked !== undefined };
+      }
+      fencing = true;
+      return { status: "start" as const, owner: ++fenceOwner };
+    });
+    if (decision.status === "queued") {
+      yield* deps.onConcurrentFence?.(decision.marked) ?? deps.onFenceFailure?.() ?? Effect.void;
+      return;
+    }
+    yield* Effect.gen(function* () {
+      let next: Effect.Effect<boolean> = Effect.suspend(
+        () => deps.fence?.() ?? Effect.succeed(false),
+      );
+      while (true) {
+        yield* Effect.logWarning(
+          "Browser manifest narrowing was not applied; restarting the driver",
+          { cause },
+        );
+        const fenced = yield* next.pipe(Effect.catchCause(() => Effect.succeed(false)));
+        if (!fenced)
+          yield* Effect.logError("No driver fence is available").pipe(
+            Effect.andThen(deps.onFenceFailure?.() ?? Effect.void),
+          );
+        const pending = yield* Effect.sync(() => {
+          const queued = pendingFence;
+          pendingFence = undefined;
+          if (queued === undefined) fencing = false;
+          return queued;
+        });
+        if (pending === undefined) return;
+        next = pending;
+      }
     }).pipe(
-      Effect.andThen(
-        Effect.suspend(() => deps.fence?.() ?? Effect.succeed(false)).pipe(
-          Effect.catchCause(() => Effect.succeed(false)),
-        ),
-      ),
-      Effect.flatMap((fenced) =>
-        fenced
-          ? Effect.void
-          : Effect.logError("No driver fence is available").pipe(
-              Effect.andThen(deps.onFenceFailure?.() ?? Effect.void),
-            ),
-      ),
       Effect.ensuring(
         Effect.sync(() => {
-          fencing = false;
+          if (fenceOwner === decision.owner) fencing = false;
         }),
       ),
     );
@@ -219,8 +256,10 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
   const shrink = Effect.fn("BrowserOriginGrants.publishShrink")(function* () {
     const result = yield* write(true).pipe(Effect.result);
     if (result._tag === "Failure") return yield* fence(result.failure);
+    if (result.success === undefined) return;
+    const written = result.success;
     const decision = yield* Effect.sync(() => {
-      const next: Confirmation = result.success;
+      const next: Confirmation = written;
       let unsafe = false;
       if (pendingConfirmation !== undefined) {
         const newer = next.number > pendingConfirmation.number ? next : pendingConfirmation;
@@ -490,12 +529,19 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
   const revoke = Effect.fn("BrowserOriginGrants.revoke")((threadId: ThreadId, origin: string) =>
     lock.withPermits(1)(
       Effect.gen(function* () {
-        grants.delete(key(threadId, origin));
-        uncommittedGrants.delete(key(threadId, origin));
+        let removed = grants.delete(key(threadId, origin));
+        if (uncommittedGrants.delete(key(threadId, origin))) removed = true;
         for (const [id, entry] of pending)
-          if (entry.threadId === threadId && entry.origin === origin) pending.delete(id);
+          if (entry.threadId === threadId && entry.origin === origin) {
+            pending.delete(id);
+            removed = true;
+          }
         for (const [id, claim] of claims)
-          if (claim.threadId === threadId && claim.origin === origin) claims.delete(id);
+          if (claim.threadId === threadId && claim.origin === origin) {
+            claims.delete(id);
+            removed = true;
+          }
+        if (!removed) return;
         yield* shrink();
       }).pipe(Effect.uninterruptible),
     ),

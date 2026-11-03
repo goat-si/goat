@@ -50,7 +50,7 @@ interface Observation extends ReadTime { ref(n: number): ElementHandle; effect?:
   resetReason?: string; // an unsafe diff, including tab frame refs, came back full, never as "no change"
   incompleteSearch?: boolean; // a query that could not search everything: a miss proves nothing
   rolesPresent?: string[]; // app role-query miss: up to 32 sorted bare roles from this read (filtered if the driver filtered)
-  warnings?: string[]; // app driver notes and warnings, including focus restoration
+  warnings?: string[]; // apps, as on Done
   otherWindows?: { window_id: number; title: string }[]; // apps: the app's other windows on screen, as this cell listed them
   title?: string; url?: string; image?: Shot } // image: with screenshot: true
 interface TargetBase { kind: "app" | "tab"; identity: string; environment: string; generation: number;
@@ -70,7 +70,7 @@ interface TargetBase { kind: "app" | "tab"; identity: string; environment: strin
 const TAB = `// Tab Condition: { text } | { url } | { load: "load" | "domContentLoaded" | "networkIdle" } | { target } | { role, name? },
 // and with target or role: enabled?, value?, checked?, selected? (true/false or exact value of the one match) and state?: "attached" | "detached" | "visible" | "hidden".
 // text is visible page text, not the title. After goto, back, forward or reload the same tab acts on the new page.
-// Web pages in any browser are Tab work. Never click a file input: upload() it. Custom dropdown: click, observe(), click the option.
+// Never click a file input: upload() it. Custom dropdown: click, observe(), click the option.
 // Read typed CJK or autocomplete text back before Enter.
 // A canvas, map or drawing has no elements inside it: click its spot at [x, y] from tab.screenshot(). Any input but a click retires those points (stale_reference): take a new one. scroll may leave the page moving.
 // A selector that still matches nothing 2 s after its page loaded throws target_missing with nothing sent; waitFor({ target }) waits for an element that appears later.
@@ -78,8 +78,8 @@ interface Tab extends TargetBase { status(): Promise<object>; claim(): Promise<o
   hover(t: Target, o?: { timeoutMs?: number }): Promise<Done>; // moves the pointer over it, showing hover-only controls; a selector matching several hovers the first
   goto(url: string): Promise<Done>; back(): Promise<Done>; forward(): Promise<Done>; reload(): Promise<Done>; close(): Promise<Done>; // close: a tab this agent opened
   read(): Promise<object>; fetch(url: string, o?: { format?: "markdown" | "text" }): Promise<object>; // fetch runs in the page, so its CORS and CSP apply; a failure's detail is cors, csp, dns or network
-  fillLogin(secretRef: string, target?: Target): Promise<object>;
-  fillCard(secretRef: string, target?: Target): Promise<object>;
+  fillLogin(secretRef: string, t?: Target): Promise<object>; fillCard(secretRef: string, t?: Target): Promise<object>;
+  fillOneTimeCode(secretRef: string, t?: Target): Promise<object>;
   fillSecret(t: Target | { selector: string }, secretRef: string): Promise<object>; // observed elements and exact observed names are focused first; any other string is a CSS selector
   upload(t: Target, files: string[]): Promise<object>;
   dialog(action: "accept" | "dismiss", promptText?: string): Promise<object>;
@@ -94,8 +94,7 @@ const APP = `// App Condition: { role?, name?, value?, enabled?, selected? } | {
 // An await on each call, as in a for loop, sends each alone. Each gets its own result, and
 // with strict input guards on, later group members are not run after a failed step: read every result; a step went
 // unsent only when its own result says nothingSent.
-// observe() also lists the app's other windows on screen as otherWindows: [{ window_id, title }]; one an input
-// opened (a chat, a document) is read by binding it: screen.app({ bundle_id, window_id }).
+// A window in otherWindows that an input opened (a chat, a document) is read by binding it: screen.app({ bundle_id, window_id }).
 // A large window keeps its toolbar and visible items first; omitted names what it left out and the next part:
 // app.observe({ after: n }) reads it from the same read. app.observe({ query: { role?, name?, text?, id? } })
 // searches up to 4,096 elements for ones matching every field, with their ancestors as context.
@@ -140,7 +139,7 @@ export const screenTargetApi = (surfaces: {
     ...(tab ? [SCREEN_TAB] : []),
     "  discover(): Promise<{ apps: unknown; windows: unknown; tabs: unknown; unavailable: object }>; // app and window rows another thread uses now carry inUse: true and holderThreadId (it may have just finished); holdersUnknown: true means some rows could not be checked",
     "  state: object; // state values survive later turns until reset; targets survive cells of one turn, but targets must be bound again each turn; rebinding the same unmoved window returns the same target within a turn. A refused stale target names why and the call to bind it again.",
-    "  debug: boolean; // diagnostics for inputs and observation timing in this cell; initially false",
+    "  debug: boolean; // initially false",
     "};",
     ...(app
       ? []

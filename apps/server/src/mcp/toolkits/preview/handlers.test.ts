@@ -296,6 +296,8 @@ it.effect("preview results and failures expose safety and a next step after MCP 
             passwordFilled: true,
             verdict: "confirmed",
           } as A);
+        if (request.operation === "fillOneTimeCode")
+          return Effect.succeed({ filled: true, verdict: "confirmed" } as A);
         if (request.operation === "fillCard")
           return Effect.succeed({
             numberFilled: true,
@@ -399,6 +401,16 @@ it.effect("preview results and failures expose safety and a next step after MCP 
     expect(login.structuredContent).toMatchObject({
       usernameFilled: true,
       passwordFilled: true,
+      verdict: "confirmed",
+      safety: { possibleCommit: true, retryClass: "never" },
+    });
+    const code = yield* server.callTool({
+      name: "goat_preview_fill_one_time_code",
+      arguments: { secretRef: "secret-ref" },
+    });
+    expect(code.isError, JSON.stringify(code)).not.toBe(true);
+    expect(code.structuredContent).toMatchObject({
+      filled: true,
       verdict: "confirmed",
       safety: { possibleCommit: true, retryClass: "never" },
     });

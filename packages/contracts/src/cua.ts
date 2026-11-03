@@ -413,6 +413,9 @@ export const DesktopCuaDriverReport = Schema.Union([
     type: Schema.Literal("cuaDriverReport"),
     requestId: TrimmedNonEmptyString,
     status: Schema.Literal("ready"),
+    hostGeneration: Schema.optionalKey(
+      Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })),
+    ),
     mcp: CuaDriverMcpConfiguration,
   }),
   Schema.Struct({
@@ -420,6 +423,9 @@ export const DesktopCuaDriverReport = Schema.Union([
     type: Schema.Literal("cuaDriverReport"),
     requestId: TrimmedNonEmptyString,
     status: Schema.Literals(["stopped", "unavailable"]),
+    hostGeneration: Schema.optionalKey(
+      Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })),
+    ),
     message: Schema.optionalKey(Schema.String),
     /** Set when the reason is one of the typed ones; older desktops send only the message. */
     block: ForwardCompatibleOptional(CuaAgentBlock),

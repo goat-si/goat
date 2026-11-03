@@ -199,6 +199,7 @@ const supportsOperation = (
   ((operation !== "fillSecret" &&
     operation !== "fillLogin" &&
     operation !== "fillCard" &&
+    operation !== "fillOneTimeCode" &&
     operation !== "open" &&
     operation !== "claim") ||
     connection.inProcess);

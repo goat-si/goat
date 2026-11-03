@@ -190,11 +190,11 @@ const caller = ThreadId.make("thread:caller");
 
 // Writes each built-in profile may run: the declared mapping's effect, pinned for review.
 const ALLOWED_WRITES: Readonly<Record<string, number>> = {
-  observer: 64,
-  worker: 119,
-  manager: 133,
-  "merge-manager": 135,
-  owner: 172,
+  observer: 65,
+  worker: 120,
+  manager: 134,
+  "merge-manager": 136,
+  owner: 173,
 };
 
 it("classifies login fill with the same capability and effect as secret fill", () => {
@@ -212,6 +212,14 @@ it("classifies card fill with the same capability and effect as secret fill", ()
   expect(card.capability).toBe(secret.capability);
   expect(card.effect).toBe(secret.effect);
   expect(card.requires).toBe(secret.requires);
+});
+
+it("classifies one-time code fill with the same capability and effect as secret fill", () => {
+  const secret = entryAt("preview.fill_secret");
+  const code = entryAt("preview.fill_one_time_code");
+  expect(code.capability).toBe(secret.capability);
+  expect(code.effect).toBe(secret.effect);
+  expect(code.requires).toBe(secret.requires);
 });
 
 it.effect.each(Object.keys(BUILTIN_PERMISSION_PROFILES))(

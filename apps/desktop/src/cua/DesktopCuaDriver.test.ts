@@ -150,6 +150,74 @@ describe("DesktopCuaDriver", () => {
     ),
   );
 
+  it.effect("a failed desktop host stop cannot report a completed stop", () =>
+    Effect.gen(function* () {
+      const test = yield* fixture({ failStop: true });
+      yield* test.request("first");
+      assert.equal((yield* test.next).status, "ready");
+      yield* test.request("first", false);
+      assert.equal((yield* test.next).status, "unavailable");
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("a failed stop cleans up and a new host can start with a newer generation", () =>
+    Effect.gen(function* () {
+      const test = yield* fixture({ failStopOnce: true });
+      yield* test.request("first");
+      const first = yield* test.next;
+      if (first.status !== "ready" || first.hostGeneration === undefined)
+        return assert.fail("expected first host generation");
+      yield* test.request("first", false);
+      assert.equal((yield* test.next).status, "unavailable");
+      yield* test.request("next");
+      const next = yield* test.next;
+      assert.equal(next.status, "ready");
+      if (next.status !== "ready" || next.hostGeneration === undefined)
+        return assert.fail("expected replacement host generation");
+      assert.isAbove(next.hostGeneration, first.hostGeneration);
+      yield* test.request("next", false);
+      assert.equal((yield* test.next).status, "stopped");
+      assert.deepEqual(test.counts(), { starts: 2, stops: 2, destroys: 2 });
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("reports one host generation across reuse and a newer one after stop", () =>
+    Effect.gen(function* () {
+      const test = yield* fixture();
+      yield* test.request("first");
+      const first = yield* test.next;
+      if (
+        first.status !== "ready" ||
+        !("hostGeneration" in first) ||
+        typeof first.hostGeneration !== "number"
+      )
+        return assert.fail("ready report must identify the spawned host generation");
+      yield* test.request("reuse");
+      const reused = yield* test.next;
+      assert.equal(
+        "hostGeneration" in reused ? reused.hostGeneration : undefined,
+        first.hostGeneration,
+      );
+      yield* test.request("first", false);
+      const late = yield* test.next;
+      assert.equal(late.status, "stopped");
+      assert.isFalse("hostGeneration" in late);
+      assert.equal(test.counts().stops, 0);
+      yield* test.request("reuse", false);
+      const stopped = yield* test.next;
+      assert.equal(stopped.status, "stopped");
+      assert.equal(
+        "hostGeneration" in stopped ? stopped.hostGeneration : undefined,
+        first.hostGeneration,
+      );
+      yield* test.request("fresh");
+      const fresh = yield* test.next;
+      if (!("hostGeneration" in fresh) || typeof fresh.hostGeneration !== "number")
+        return assert.fail("replacement report must identify its host generation");
+      assert.isAbove(fresh.hostGeneration, first.hostGeneration);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("hosts with the app identity, preserves the descriptor, reuses and releases once", () =>
     Effect.gen(function* () {
       vi.stubEnv("GOAT_CUA_DRIVER_PATH", "/ignored-in-packaged-app");
@@ -157,11 +225,15 @@ describe("DesktopCuaDriver", () => {
         Effect.gen(function* () {
           const test = yield* fixture();
           yield* test.request("first");
-          assert.deepEqual(yield* test.next, {
+          const first = yield* test.next;
+          if (first.status !== "ready" || first.hostGeneration === undefined)
+            return assert.fail("expected a host generation");
+          assert.deepEqual(first, {
             version: 1,
             type: "cuaDriverReport",
             requestId: "first",
             status: "ready",
+            hostGeneration: first.hostGeneration,
             mcp: descriptor,
           });
           assert.deepEqual(test.constructors, [
@@ -177,6 +249,7 @@ describe("DesktopCuaDriver", () => {
             type: "cuaDriverReport",
             requestId: "reuse",
             status: "ready",
+            hostGeneration: first.hostGeneration,
             mcp: descriptor,
           });
           yield* test.request("disable", false);
@@ -244,7 +317,9 @@ describe("DesktopCuaDriver", () => {
         yield* test.grantPermissions;
         yield* test.restart;
         yield* test.request("granted");
-        assert.equal((yield* test.next).status, "ready");
+        const granted = yield* test.next;
+        if (granted.status !== "ready" || granted.hostGeneration === undefined)
+          return assert.fail("expected a host generation");
         assert.equal(test.constructors[0]?.path, "/dev/cua-driver");
         yield* test.restart;
         assert.deepEqual(yield* test.next, {
@@ -252,6 +327,7 @@ describe("DesktopCuaDriver", () => {
           type: "cuaDriverReport",
           requestId: "granted",
           status: "stopped",
+          hostGeneration: granted.hostGeneration,
         });
         yield* test.request("fresh-permissions");
         assert.equal((yield* test.next).status, "ready");
@@ -394,7 +470,9 @@ describe("DesktopCuaDriver verification", () => {
           vi.stubEnv("GOAT_CUA_DRIVER_PATH", "/dev/cua-driver");
           const test = yield* fixture({ platform: "darwin", isPackaged: false });
           yield* test.request("agent");
-          assert.equal((yield* test.next).status, "ready");
+          const agent = yield* test.next;
+          if (agent.status !== "ready" || agent.hostGeneration === undefined)
+            return assert.fail("expected a host generation");
           assert.deepEqual(yield* test.verify, {
             verified: true,
             steps: VERIFICATION_IDS.map((id) => ({ id, ok: true })),
@@ -405,6 +483,7 @@ describe("DesktopCuaDriver verification", () => {
             type: "cuaDriverReport",
             requestId: "agent",
             status: "stopped",
+            hostGeneration: agent.hostGeneration,
           });
           assert.deepEqual(test.toolCalls, [
             { name: "check_permissions", input: {} },

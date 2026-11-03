@@ -39,6 +39,7 @@ export const PREVIEW_AUTOMATION_SERVER_OPERATIONS = [
   "fillSecret",
   "fillLogin",
   "fillCard",
+  "fillOneTimeCode",
   "read",
   "signInState",
 ] as const;

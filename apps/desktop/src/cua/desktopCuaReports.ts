@@ -15,6 +15,7 @@ export function cuaDriverReports(
     status: "stopped" | "unavailable",
     message?: string,
     block?: CuaAgentBlock,
+    hostGeneration?: number,
   ) =>
     isClosed()
       ? Effect.void
@@ -23,6 +24,7 @@ export function cuaDriverReports(
           type: "cuaDriverReport",
           requestId,
           status,
+          ...(hostGeneration === undefined ? {} : { hostGeneration }),
           ...(message === undefined ? {} : { message }),
           ...(block === undefined ? {} : { block }),
         });

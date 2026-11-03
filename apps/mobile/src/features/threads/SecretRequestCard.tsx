@@ -97,6 +97,7 @@ function PendingSecretRequestForm(props: {
   });
   const [secret, setSecret] = useState("");
   const [username, setUsername] = useState("");
+  const [setupKey, setSetupKey] = useState("");
   const [cardValues, setCardValues] = useState(EMPTY_CARD);
   const login = item.requestKind === "login";
   const card = item.requestKind === "card";
@@ -119,6 +120,7 @@ function PendingSecretRequestForm(props: {
     if (result._tag === "Success") {
       setSecret("");
       setUsername("");
+      setSetupKey("");
       setCardValues(EMPTY_CARD);
       return;
     }
@@ -192,11 +194,35 @@ function PendingSecretRequestForm(props: {
           returnKeyType="done"
           onSubmitEditing={() =>
             void send(
-              login ? { type: "save_login", username, password: secret } : { type: "save", secret },
+              login
+                ? {
+                    type: "save_login",
+                    username,
+                    password: secret,
+                    authenticatorSetupKey: setupKey,
+                  }
+                : { type: "save", secret },
             )
           }
         />
       )}
+      {login ? (
+        <TextInput
+          accessibilityLabel="Authenticator setup key"
+          placeholder="Authenticator setup key (optional)"
+          value={setupKey}
+          onChangeText={setSetupKey}
+          editable={canAnswer && !submitting}
+          onFocus={markOpened}
+          secureTextEntry
+          autoCorrect={false}
+          autoCapitalize="none"
+          autoComplete="off"
+          textContentType="none"
+          importantForAutofill="no"
+          spellCheck={false}
+        />
+      ) : null}
       {error !== null ? (
         <Text
           accessibilityRole="alert"
@@ -223,7 +249,12 @@ function PendingSecretRequestForm(props: {
             card
               ? cardReply
               : login
-                ? { type: "save_login", username, password: secret }
+                ? {
+                    type: "save_login",
+                    username,
+                    password: secret,
+                    authenticatorSetupKey: setupKey,
+                  }
                 : { type: "save", secret },
           )
         }

@@ -30,20 +30,24 @@ it("requires a username and masked password before saving a login", async () => 
   );
   const user = screen.getByLabelText("Username");
   const password = screen.getByLabelText("Password");
+  const setupKey = screen.getByLabelText("Authenticator setup key (optional)");
   const save = screen.getByRole("button", { name: "Save securely" });
   await expect.element(user).toBeVisible();
   // Password managers must not fill or save these credentials under GOAT's own site.
-  for (const field of [user, password]) {
+  for (const field of [user, password, setupKey]) {
     await expect.element(field).toHaveAttribute("autocomplete", "off");
     await expect.element(field).toHaveAttribute("data-1p-ignore");
     await expect.element(field).toHaveAttribute("data-lpignore", "true");
     await expect.element(field).toHaveAttribute("data-bwignore");
   }
   await expect.element(password).toHaveAttribute("type", "text");
+  await expect.element(setupKey).toHaveAttribute("type", "text");
+  await expect.element(setupKey).toHaveAttribute("style", "-webkit-text-security: disc;");
   await expect.element(save).toBeDisabled();
   await user.fill("test-user");
   await expect.element(save).toBeDisabled();
   await password.fill("  pass word  ");
+  await setupKey.fill("  abcd efgh  ");
   await expect.element(save).toBeEnabled();
   await save.click();
   expect(state.answer).toHaveBeenCalledWith({
@@ -51,7 +55,12 @@ it("requires a username and masked password before saving a login", async () => 
     input: {
       threadId: "thread:login",
       turnItemId: "item:login",
-      answer: { type: "save_login", username: "test-user", password: "  pass word  " },
+      answer: {
+        type: "save_login",
+        username: "test-user",
+        password: "  pass word  ",
+        authenticatorSetupKey: "abcd efgh",
+      },
     },
   });
 });
