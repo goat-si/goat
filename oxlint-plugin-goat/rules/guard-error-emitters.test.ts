@@ -15,6 +15,8 @@ describe("goat/guard-error-emitters", () => {
     import * as T from "node:tty";
     import * as W from "node:worker_threads";
     import * as WS from "ws";
+    import WebSocket, { WebSocketServer } from "ws";
+    const closed = WebSocket.CLOSED;
     guardChild((CP.spawn("a") as unknown)!, route);
     guardChild(CP.fork("a"), route);
     guard(R.createInterface({}), route);

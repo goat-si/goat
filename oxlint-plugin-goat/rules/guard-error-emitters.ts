@@ -142,7 +142,7 @@ export default defineRule({
           parent.type !== "TSNonNullExpression"
         )
           return;
-        if (parent.type === "ImportSpecifier" || parent.type === "ImportDeclaration") return;
+        if (parent.type.startsWith("Import")) return;
         // A local const alias is tracked where it is called; an exported or reassignable one escapes.
         if (parent.type === "VariableDeclarator") {
           const declaration = parent.parent;
