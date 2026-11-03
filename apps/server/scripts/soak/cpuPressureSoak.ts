@@ -300,6 +300,7 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
   let workloadResult: Awaited<NonNullable<typeof workload>> | undefined;
   let startedAt: string | null = null;
   let endedAt: string | null = null;
+  let loadStartedAt: string | null = null;
   let drainEndedAt: string | null = null;
   let disappeared: number[] = [];
   const selfCheck = {
@@ -466,8 +467,7 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
       },
       signal: abort.signal,
       onWindowStart: () => {
-        startedAt = new Date().toISOString();
-        observations.setWindowOpen(true);
+        loadStartedAt = new Date().toISOString();
         for (let i = 0; i < 2 * NodeOS.availableParallelism(); i++) {
           const burner = spawnOwned(
             process.execPath,
@@ -486,6 +486,9 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
               rejectBurner(new Error("burner exited during workload"));
           });
         }
+        startedAt = new Date().toISOString();
+        process.stdout.write(`SOAK-WINDOW start=${startedAt}\n`);
+        observations.setWindowOpen(true);
         sampleCpu();
         cpuTimer = setInterval(sampleCpu, 5000);
       },
@@ -493,6 +496,7 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
         if (cpuTimer !== undefined) clearInterval(cpuTimer);
         sampleCpu();
         endedAt = new Date().toISOString();
+        process.stdout.write(`SOAK-WINDOW end=${endedAt}\n`);
         observations.setWindowOpen(false);
         stoppingBurners = true;
         await cleanupOwned(burners);
@@ -655,6 +659,8 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
       ownedPids: owned.map(({ child }) => child.pid),
       cleanupSurvivors,
       window: { start: startedAt, end: endedAt, drainEnd: drainEndedAt },
+      loadStartedAt,
+      drainEndedAt,
       selfCheck,
       telemetry: { notes: telemetryNotes, detailTruncated: detail?.truncated ?? false },
       memoryPressure: {
