@@ -16,11 +16,12 @@ const span = (
     readonly events?: ReadonlyArray<string>;
     readonly attributes?: Record<string, unknown>;
     readonly unfinished?: boolean;
+    readonly parent?: Tracer.AnySpan;
   } = {},
 ) => {
   const native = new Tracer.NativeSpan({
     name,
-    parent: options.root ? Option.none() : Option.some(parent),
+    parent: options.root ? Option.none() : Option.some(options.parent ?? parent),
     annotations: Context.empty(),
     links: [],
     startTime: 0n,
@@ -34,6 +35,13 @@ const span = (
   return native;
 };
 const keep = (native: Tracer.NativeSpan) => keepLocalSpan(native, native.events);
+
+it("keeps a fast parent when its recorded child ends first (#2465)", () => {
+  const hotParent = span("SqliteWriter.send");
+  const child = span("child", { parent: hotParent });
+  assert.isTrue(keep(child));
+  assert.isTrue(keep(hotParent));
+});
 
 it("leaves out only fast successful hot spans and uncontended SQL", () => {
   assert.isFalse(keep(span("SqliteWriter.send")));
