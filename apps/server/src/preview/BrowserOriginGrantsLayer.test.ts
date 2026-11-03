@@ -12,8 +12,51 @@ import * as ServerSettings from "../serverSettings.ts";
 import * as Grants from "./BrowserOriginGrantsLayer.ts";
 import { BrowserClaimManifest } from "./BrowserClaimManifest.ts";
 import { BrowserClaimBind } from "./BrowserClaimBind.ts";
+import { makeTestBrowserOriginGrants } from "./BrowserOriginGrants.testkit.ts";
 
 const decodeDescriptor = Schema.decodeSync(ExecutionEnvironmentDescriptor);
+
+it.effect("a no-URL reply is refused when its claim origin is blocked before observation", () =>
+  Effect.gen(function* () {
+    let hosts: ReadonlyArray<string> = [];
+    const service = yield* makeTestBrowserOriginGrants({
+      environmentId: EnvironmentId.make("environment:test"),
+      supported: () => true,
+      blockedHosts: () => hosts,
+      publish: () => Effect.void,
+      bind: (input) =>
+        Effect.succeed({
+          targetId: "target",
+          tabId: "tab",
+          title: "Site",
+          url: input.origin,
+          driverGeneration: 1,
+        }),
+    });
+    const threadId = ThreadId.make("thread:test");
+    const request = yield* service.request({
+      threadId,
+      pid: 42,
+      windowId: 7,
+      origin: "https://example.test",
+      windowTitle: "Browser",
+    });
+    if (request.status !== "pending") return assert.fail("expected pending");
+    const answer = yield* service.answer(request.claimId, true);
+    if (answer.agentResult.status !== "attached") return assert.fail("expected attached");
+    hosts = ["example.test"];
+    assert.isFalse(
+      yield* service.judgeReply(
+        threadId,
+        request.claimId,
+        answer.agentResult.claim.claimGeneration,
+        [],
+        false,
+      ),
+    );
+    assert.equal(yield* service.endReason(threadId, request.claimId), "origin_changed");
+  }),
+);
 
 it.effect("a block followed by an unblock still ends an existing claim", () =>
   Effect.gen(function* () {

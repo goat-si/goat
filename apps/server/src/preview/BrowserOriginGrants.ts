@@ -574,6 +574,8 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
       if (hosts === undefined && !outside) return "refused" as const;
       const bad =
         outside ||
+        (hosts !== undefined &&
+          current.origins.some((origin) => isBlockedBrowserUrl(origin, hosts))) ||
         urls.some((url) => {
           try {
             return (
