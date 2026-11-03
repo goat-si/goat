@@ -1,5 +1,6 @@
 import { liveInCheckPhase } from "./checkPhase.ts";
 import * as Effect from "effect/Effect";
+import * as Cause from "effect/Cause";
 import type { AgentScopeShape } from "@goat/shared/AgentScope";
 import * as NodeOS from "node:os";
 import * as ProcessRunner from "../processRunner.ts";
@@ -247,9 +248,19 @@ export const makeAgentMemoryGuard = Effect.fn("AgentMemoryGuard.make")(function*
         partial,
       });
   });
-  yield* Effect.forever(Effect.sleep("30 seconds").pipe(Effect.andThen(tick))).pipe(
-    Effect.forkScoped,
-  );
+  yield* Effect.forever(
+    Effect.sleep("30 seconds").pipe(
+      Effect.andThen(
+        tick.pipe(
+          Effect.catchCause((cause) =>
+            Cause.hasInterrupts(cause)
+              ? Effect.failCause(cause)
+              : Effect.logWarning("Agent memory guard tick failed", cause),
+          ),
+        ),
+      ),
+    ),
+  ).pipe(Effect.forkScoped);
   return {
     watch,
     clear,

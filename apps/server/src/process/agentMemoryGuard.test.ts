@@ -156,6 +156,20 @@ describe("agent memory guard", () => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("continues sampling after a defective tick", () =>
+    Effect.gen(function* () {
+      const f = yield* fixture();
+      yield* f.watch();
+      f.setBeforeCheck(Effect.die(new Error("check failed")));
+      yield* f.tick();
+      expect(f.samples()).toBe(1);
+      f.setBeforeCheck(Effect.void);
+      yield* f.tick();
+      expect(f.samples()).toBe(2);
+      expect(f.signals).toEqual([10, -10]);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("does not signal a root absent from the snapshot", () =>
     Effect.gen(function* () {
       const f = yield* fixture();
