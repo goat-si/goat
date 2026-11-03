@@ -90,6 +90,7 @@ export class CuaDriver extends Context.Service<
     readonly publishBrowserManifest?: (union: Union) => Effect.Effect<string, Error>;
     /** Restarts the running driver, so a manifest it would not reload stops counting. */
     readonly fenceBrowserManifest?: Effect.Effect<boolean>;
+    readonly afterBrowserFenceFailure?: (disable: Effect.Effect<void>) => Effect.Effect<void>;
     readonly refreshManifest?: (
       apps: ReadonlyArray<string>,
     ) => Effect.Effect<void, CuaDriverHostError>;
@@ -344,6 +345,12 @@ export const make = Effect.fn("CuaDriver.make")(function* (
           (entry.host?.hostGeneration === undefined ||
             (entry.host.hostGeneration() === entry.hostGeneration &&
               generations.allows(entry.hostGeneration))),
+        () =>
+          active === entry &&
+          !entry.revoked &&
+          entry.host?.hostGeneration !== undefined &&
+          entry.host.hostGeneration() === entry.hostGeneration &&
+          generations.newer(entry.hostGeneration),
       );
       yield* Deferred.succeed(entry.result, Option.some(withCuaDriverPrivacyEnvironment(mcp)));
       entry.watcher = yield* entry.host.waitForExit.pipe(
@@ -501,6 +508,7 @@ export const make = Effect.fn("CuaDriver.make")(function* (
         }),
       );
     }),
+    afterBrowserFenceFailure: capability.afterFenceFailure,
     ...(refresh ? { refreshManifest } : {}),
     acquire,
     x11Display: Effect.sync(() =>
@@ -899,6 +907,7 @@ export const layer = Layer.effect(
             new BrowserClaimManifestUnavailable({ cause: "Driver configuration is unavailable." }),
           ),
         driver.fenceBrowserManifest,
+        driver.afterBrowserFenceFailure,
       );
     return driver;
   }),

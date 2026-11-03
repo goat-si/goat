@@ -4,6 +4,12 @@ export const makeCuaDriverGenerationFence = () => {
   let newest = 0;
   let lastSeen: number | undefined;
   let sawUnknown = false;
+  const newer = (generation: number | undefined) =>
+    fenced &&
+    !unknown &&
+    generation !== undefined &&
+    Number.isSafeInteger(generation) &&
+    generation > newest;
   return {
     observe: (generation: number | undefined) => {
       if (generation === undefined || !Number.isSafeInteger(generation) || generation < 1)
@@ -17,11 +23,7 @@ export const makeCuaDriverGenerationFence = () => {
         unknown = true;
       else newest = Math.max(newest, generation);
     },
-    allows: (generation: number | undefined) =>
-      !fenced ||
-      (!unknown &&
-        generation !== undefined &&
-        Number.isSafeInteger(generation) &&
-        generation > newest),
+    allows: (generation: number | undefined) => !fenced || newer(generation),
+    newer,
   };
 };
