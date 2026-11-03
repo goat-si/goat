@@ -9,6 +9,7 @@ import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import {
   OPENCODE2_HTTP_PROTOCOL,
   OpenCode2OrchestratorReplayHarness,
+  layerRegistry,
 } from "./Adapters/OpenCode2AdapterV2.testkit.ts";
 import { provideDeterministicTestRuntime } from "./testkit/DeterministicRuntime.ts";
 import type { OrchestratorV2ScenarioStep } from "./testkit/OrchestratorScenario.ts";
@@ -25,6 +26,7 @@ import {
 it.effect("records queued replacement when a waiting message becomes Steer", () =>
   Effect.gen(function* () {
     const name = "opencode2-queued-replaced";
+    const steerSent = Promise.withResolvers<void>();
     const cwd = yield* checkpointWorkspace(name);
     const thread = threadCommands({ name, worktreePath: cwd });
     const ids = yield* IdAllocator.IdAllocatorV2;
@@ -61,6 +63,7 @@ it.effect("records queued replacement when a waiting message becomes Steer", () 
           },
         }),
         out("session.prompt", { sessionID: SESSION, text: "<any>" }),
+        reply("session.prompt", "<hang>"),
         out("session.interrupt", { sessionID: SESSION }),
         reply("session.interrupt", { interrupted: true }),
       ],
@@ -76,7 +79,16 @@ it.effect("records queued replacement when a waiting message becomes Steer", () 
     ];
     const result = yield* runOrchestratorV2ProviderReplayScenario(
       { name, transcript, commands: [thread.create, first, second, promote], steps },
-      OpenCode2OrchestratorReplayHarness,
+      {
+        ...OpenCode2OrchestratorReplayHarness,
+        makeProviderAdapterRegistryLayer: (transcript, options) =>
+          layerRegistry(transcript, {
+            ...options,
+            onHang: () => steerSent.resolve(),
+          }),
+      },
+      // Shutdown interrupts the active session; wait until the steer has reached OpenCode.
+      { afterSteps: Effect.promise(() => steerSent.promise) },
     ).pipe(provideDeterministicTestRuntime);
     const projection = result.projections.get(thread.threadId);
     assert.isDefined(projection);
