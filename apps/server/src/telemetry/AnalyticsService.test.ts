@@ -4,6 +4,12 @@ import { assert, it } from "@effect/vitest";
 import * as Clock from "effect/Clock";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Context from "effect/Context";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
+import * as Logger from "effect/Logger";
+import * as Scope from "effect/Scope";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
@@ -172,7 +178,7 @@ const sendFor = (
     yield* Effect.gen(function* () {
       yield* record;
       for (let second = 0; second < minutes * 60; second += 1) {
-        yield* TestClock.adjust("1 second");
+        yield* TestClock.adjust("2 seconds");
       }
     }).pipe(Effect.provide(runtimeLayer));
     return batches;
@@ -234,6 +240,51 @@ it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
       assert.equal(batches.length, 1);
     }),
   );
+
+  it.effect("shutdown drops a blocked analytics batch after one second", () => {
+    const logs: Array<unknown> = [];
+    const logger = Logger.make(({ message }) => {
+      logs.push(message);
+    });
+    return Effect.gen(function* () {
+      const started = yield* Deferred.make<void>();
+      const blocked = yield* Deferred.make<void>();
+      const client = HttpClient.make((request) =>
+        Deferred.succeed(started, undefined).pipe(
+          Effect.andThen(Deferred.await(blocked)),
+          Effect.andThen(respondWithStatus(204)(request)),
+        ),
+      );
+      const runtimeLayer = AnalyticsService.layer.pipe(
+        Layer.provideMerge(
+          ServerConfig.ServerConfig.layerTest(process.cwd(), {
+            prefix: "goat-telemetry-deadline-",
+          }),
+        ),
+        Layer.provide(
+          ConfigProvider.layer(ConfigProvider.fromUnknown({ GOAT_TELEMETRY_ENABLED: true })),
+        ),
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.succeed(HostProcess.Platform, "linux"),
+            Layer.succeed(HostProcess.Architecture, "x64"),
+            Layer.succeed(HttpClient.HttpClient, client),
+          ),
+        ),
+      );
+      const scope = yield* Scope.make();
+      const context = yield* Layer.buildWithScope(runtimeLayer, scope);
+      const analytics = Context.get(context, AnalyticsService.AnalyticsService);
+      yield* analytics.record("test.shutdown", {});
+      const closing = yield* Scope.close(scope, Exit.void).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.await(started);
+      yield* TestClock.adjust("1 second");
+      yield* Fiber.join(closing);
+      assert.deepInclude(logs, ["Dropped telemetry events at shutdown deadline", { events: 1 }]);
+    }).pipe(Effect.provide(Logger.layer([logger], { mergeWithExisting: false })));
+  });
 
   it.effect("flush drains all buffered events across multiple batches", () =>
     Effect.gen(function* () {
@@ -422,7 +473,7 @@ it.layer(NodeServices.layer)("AnalyticsService test", (it) => {
           const analytics = yield* AnalyticsService.AnalyticsService;
           yield* analytics.record("server.boot.heartbeat", { threadCount: 1, projectCount: 1 });
           for (let second = 0; second < 120; second += 1) {
-            yield* TestClock.adjust("1 second");
+            yield* TestClock.adjust("2 seconds");
           }
         }).pipe(Effect.provide(runtimeLayer));
 

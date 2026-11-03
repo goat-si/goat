@@ -5,6 +5,7 @@
  * endpoint instead. Each event carries a uuid, so a retried copy can be told
  * from a new event.
  */
+import { timedShutdownPhase } from "@goat/shared/timedShutdownPhase";
 import * as HostProcess from "@goat/shared/HostProcess";
 import type { ClientOs } from "@goat/contracts";
 import * as Clock from "effect/Clock";
@@ -139,6 +140,7 @@ export const make = Effect.gen(function* () {
   const { distinctId, installId } = yield* getTelemetryIdentity;
   const crypto = yield* Crypto.Crypto;
   const bufferRef = yield* Ref.make<ReadonlyArray<BufferedAnalyticsEvent>>([]);
+  const inFlightRef = yield* Ref.make<ReadonlyArray<BufferedAnalyticsEvent>>([]);
   const deliveryRef = yield* Ref.make<DeliveryState>({
     failedBatch: [],
     batchAttempts: 0,
@@ -240,7 +242,9 @@ export const make = Effect.gen(function* () {
         return;
       }
 
+      yield* Ref.set(inFlightRef, batch);
       const sent = yield* Effect.result(sendBatch(batch));
+      yield* Ref.set(inFlightRef, []);
       if (Result.isSuccess(sent)) {
         yield* Ref.set(deliveryRef, {
           failedBatch: [],
@@ -345,7 +349,23 @@ export const make = Effect.gen(function* () {
     disableYield: true,
   }).pipe(Effect.forkScoped);
 
-  yield* Effect.addFinalizer(() => flush);
+  yield* Effect.addFinalizer(() =>
+    timedShutdownPhase(
+      "analyticsFlush",
+      Effect.gen(function* () {
+        const result = yield* Effect.interruptible(flush.pipe(Effect.timeoutOption("1 second")));
+        if (Option.isNone(result)) {
+          const buffered = yield* Ref.get(bufferRef);
+          const delivery = yield* Ref.get(deliveryRef);
+          const inFlight = yield* Ref.get(inFlightRef);
+          const dropped = buffered.length + Math.max(delivery.failedBatch.length, inFlight.length);
+          yield* Effect.logWarning("Dropped telemetry events at shutdown deadline", {
+            events: dropped,
+          });
+        }
+      }),
+    ),
+  );
 
   return AnalyticsService.of({ record, flush, recordOwners });
 });

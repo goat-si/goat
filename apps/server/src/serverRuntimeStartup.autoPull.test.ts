@@ -135,7 +135,7 @@ it.effect.each([
           }),
           Layer.mock(ProviderRuntimeRecovery.ProviderRuntimeRecoveryService)({
             recover: Effect.succeed(recovery),
-            prepareForShutdown: Effect.void,
+            prepareForShutdown: Effect.succeed({ candidates: 0, continued: 0 }),
             reconcile: () => Effect.succeed(recovery),
           }),
           Layer.mock(Orchestrator.OrchestratorV2)({ recoverDelegatedTasks: Effect.void }),

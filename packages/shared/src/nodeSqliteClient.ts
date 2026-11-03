@@ -1,3 +1,4 @@
+import { timedShutdownPhase } from "./timedShutdownPhase.ts";
 import * as NodeSqlite from "node:sqlite";
 import * as NodeWorkerThreads from "node:worker_threads";
 import { guardErrors } from "./errorGuards.ts";
@@ -419,10 +420,13 @@ const makeReader = Effect.fn("SqliteReader.make")(function* (options: SqliteClie
   });
 
   yield* Effect.addFinalizer(() =>
-    Effect.promise(async () => {
-      await current?.worker.terminate();
-      await retiring;
-    }),
+    timedShutdownPhase(
+      "sqliteReaderRetirement",
+      Effect.promise(async () => {
+        await current?.worker.terminate();
+        await retiring;
+      }),
+    ),
   );
 
   const startupTimeout = Duration.fromInputUnsafe(

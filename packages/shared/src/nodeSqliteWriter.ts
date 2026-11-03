@@ -1,3 +1,4 @@
+import { timedShutdownPhase } from "./timedShutdownPhase.ts";
 import * as NodeWorkerThreads from "node:worker_threads";
 import { guardErrors } from "./errorGuards.ts";
 import { identity } from "effect/Function";
@@ -190,20 +191,23 @@ export const makeWriter = Effect.fn("SqliteWriter.make")(function* (
     );
   }, Effect.uninterruptible);
   yield* Effect.addFinalizer(() =>
-    Effect.suspend(() => {
-      closing = true;
-      return initialized && stopped === undefined
-        ? send({ type: "close" }).pipe(
-            Effect.flatMap((reply) =>
-              reply.error === undefined
-                ? Effect.void
-                : Effect.logWarning("SQLite writer close failed"),
-            ),
-            Effect.catch(() => Effect.logWarning("SQLite writer close failed")),
-            requests.withPermits(1),
-          )
-        : Effect.void;
-    }),
+    timedShutdownPhase(
+      "sqliteWriterClose",
+      Effect.suspend(() => {
+        closing = true;
+        return initialized && stopped === undefined
+          ? send({ type: "close" }).pipe(
+              Effect.flatMap((reply) =>
+                reply.error === undefined
+                  ? Effect.void
+                  : Effect.logWarning("SQLite writer close failed"),
+              ),
+              Effect.catch(() => Effect.logWarning("SQLite writer close failed")),
+              requests.withPermits(1),
+            )
+          : Effect.void;
+      }),
+    ),
   );
   let startupRefused = false;
   yield* recover(

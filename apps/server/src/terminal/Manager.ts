@@ -1,3 +1,4 @@
+import { timedShutdownPhase } from "@goat/shared/timedShutdownPhase";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Effect's Crypto digest is effectful; a sync hash keeps historyPath a plain function.
 import * as NodeCrypto from "node:crypto";
 
@@ -2324,32 +2325,35 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   ).pipe(Effect.forkIn(workerScope));
 
   yield* Effect.addFinalizer(() =>
-    Effect.gen(function* () {
-      const sessions = yield* modifyManagerState(
-        (state) =>
-          [
-            [...state.sessions.values()],
-            {
-              ...state,
-              sessions: new Map(),
-            },
-          ] as const,
-      );
+    timedShutdownPhase(
+      "terminalSessions",
+      Effect.gen(function* () {
+        const sessions = yield* modifyManagerState(
+          (state) =>
+            [
+              [...state.sessions.values()],
+              {
+                ...state,
+                sessions: new Map(),
+              },
+            ] as const,
+        );
 
-      const cleanupSession = Effect.fn("terminal.cleanupSession")(function* (
-        session: TerminalSessionState,
-      ) {
-        cleanupProcessHandles(session);
-        if (!session.process) return;
-        yield* clearKillFiber(session.process);
-        yield* runKillEscalation(session.process, session.threadId, session.terminalId);
-      });
+        const cleanupSession = Effect.fn("terminal.cleanupSession")(function* (
+          session: TerminalSessionState,
+        ) {
+          cleanupProcessHandles(session);
+          if (!session.process) return;
+          yield* clearKillFiber(session.process);
+          yield* runKillEscalation(session.process, session.threadId, session.terminalId);
+        });
 
-      yield* Effect.forEach(sessions, cleanupSession, {
-        concurrency: "unbounded",
-        discard: true,
-      });
-    }).pipe(Effect.ignoreCause({ log: true })),
+        yield* Effect.forEach(sessions, cleanupSession, {
+          concurrency: "unbounded",
+          discard: true,
+        });
+      }).pipe(Effect.ignoreCause({ log: true })),
+    ),
   );
 
   /** Runs under the checkout's lease; claims of other GOAT servers that cannot be read fail like an unreachable cwd. */

@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./timedShutdownPhase": {
+      "types": "./src/timedShutdownPhase.ts",
+      "import": "./src/timedShutdownPhase.ts"
+    },
     "./toolPriority": {
       "types": "./src/toolPriority.ts",
       "import": "./src/toolPriority.ts"
