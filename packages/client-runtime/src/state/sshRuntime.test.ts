@@ -470,3 +470,14 @@ it.each([
     }),
   ).toBe(text);
 });
+
+it("shows a compatible runtime's update detail in recovery", () => {
+  const base = {
+    host: "box",
+    runtimeVersion: "1.2.2",
+    requestedVersion: "1.2.3",
+    detail: "Update on host",
+  } as const;
+  expect(sshRuntimeRecoveryText({ ...base, state: "ready" })).toBe("Update on host");
+  expect(sshRuntimeRecoveryText({ ...base, state: "providers_not_ready" })).toBe("Update on host");
+});

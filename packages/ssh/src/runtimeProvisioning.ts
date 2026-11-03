@@ -19,6 +19,7 @@ import {
   decodeRemoteJsonOutput,
   isNodeScriptRunner,
   matchesSignals,
+  compatibleRuntimeUpdateBlocked,
   liveRuntimeBlocksUpdate,
   notifyRuntimePhase,
   REMOTE_ARCHIVE_LAUNCH_TIMEOUT_MS,
@@ -405,9 +406,15 @@ sh -c ${shellSingleQuote(installer)} -- --version
             runner: { ...runner, archiveVersion: selectedVersion },
             retainedRunnerSha256: retained ? (from.retainedRunnerSha256 ?? null) : null,
             ...(from.liveStatus === "live" &&
+            (liveOrder === undefined || liveOrder < 0) &&
             liveRuntimeBlocksUpdate(from, liveOrder, liveCompatible, selectedVersion === version)
               ? {
-                  updateBlocked: `A GOAT server that this app didn't start or cannot replace is running on ${target.alias}. Stop it on the host, then reconnect.`,
+                  updateBlocked: compatibleRuntimeUpdateBlocked(
+                    target.alias,
+                    selectedVersion,
+                    version,
+                    liveOrder,
+                  ),
                 }
               : {}),
           } satisfies PreparedRemoteRuntime),

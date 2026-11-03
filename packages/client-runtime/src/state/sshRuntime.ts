@@ -201,11 +201,13 @@ export function sshRuntimeRecoveryText(status: SshHostStatus) {
         : "Register your public SSH key on the host, then try again.";
     case "providers_not_ready":
       return (
-        [status.providers?.fixes[0]?.instruction, deferredRecovery].filter(Boolean).join(" ") ||
-        null
+        [status.providers?.fixes[0]?.instruction, deferredRecovery ?? status.detail]
+          .filter(Boolean)
+          .join(" ") || null
       );
     case "ready": {
       if (deferredRecovery) return deferredRecovery;
+      if (status.detail) return status.detail;
       if (status.runtimeVersion === null) return null;
       if (status.runtimeVersion === status.requestedVersion) return null;
       const order = sshRuntimeBuildOrder(status);

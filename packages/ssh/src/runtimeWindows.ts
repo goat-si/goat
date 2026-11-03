@@ -4,7 +4,7 @@ import {
   EnvironmentId,
   type RuntimeSessionRequest,
 } from "@goat/contracts";
-import { parseSemver } from "@goat/shared/semver";
+import { compareRuntimeBuilds, parseSemver } from "@goat/shared/semver";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -14,6 +14,7 @@ import type * as SshAuth from "./auth.ts";
 import { runSshCommand } from "./command.ts";
 import { SshCommandError, SshLaunchError, SshPairingError } from "./errors.ts";
 import {
+  compatibleRuntimeUpdateBlocked,
   matchesSignals,
   notifyRuntimePhase,
   type PreparedRemoteRuntime,
@@ -259,6 +260,10 @@ export const prepareWindowsRuntime = Effect.fn("ssh.windows.prepare")(function* 
     return yield* failure(
       `GOAT ${selected?.version ?? "unknown"} on ${target.alias} cannot serve this app's protocol.`,
     );
+  const order = compareRuntimeBuilds(
+    { version: selected.version },
+    { version, commitTime: runner?.archiveCommitTime },
+  );
   return {
     ...requestedRuntime(runner),
     runner: { ...runner, archiveVersion: selected.version },
@@ -269,9 +274,16 @@ export const prepareWindowsRuntime = Effect.fn("ssh.windows.prepare")(function* 
     mayUpgradeOwnedServer: false,
     installedExecutableSha256: selected.sha256,
     nativeWindows: selected,
-    ...(selected.version === version
-      ? {}
-      : { updateBlocked: "GOAT does not replace a runtime on native Windows automatically." }),
+    ...(order === undefined || order < 0
+      ? {
+          updateBlocked: compatibleRuntimeUpdateBlocked(
+            target.alias,
+            selected.version,
+            version,
+            order,
+          ),
+        }
+      : {}),
   } satisfies PreparedRemoteRuntime;
 });
 

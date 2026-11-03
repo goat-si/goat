@@ -80,6 +80,7 @@ import {
   decodeRemoteJsonOutput,
   isNodeScriptRunner,
   matchesSignals,
+  compatibleRuntimeUpdateBlocked,
   liveRuntimeBlocksUpdate,
   notifyRuntimePhase,
   REMOTE_ARCHIVE_CHECKSUMS_SECONDS,
@@ -2530,7 +2531,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       snapshot = { ...base, state: "ready", refreshDeferred, detail: refreshDeferred.detail };
       acquisitionFailures.set(key, result.selectedRuntime.upgradeFailure);
     } else if (!("type" in result) && result.selectedRuntime.updateBlocked !== undefined) {
-      snapshot = { ...base, state: "update_blocked", detail: result.selectedRuntime.updateBlocked };
+      snapshot = { ...base, state: "ready", detail: result.selectedRuntime.updateBlocked };
     } else {
       snapshot = { ...base, state: "ready" };
       if (runtimeVersion === requestedVersion) acquisitionFailures.delete(key);
@@ -4267,12 +4268,11 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         const compatible = matchesSignals(probe.liveSignals, requestedVersion);
         const runsRequested = probe.liveVersion === requestedVersion;
         const blocked = liveRuntimeBlocksUpdate(probe, order, compatible, runsRequested);
-        compatibleLive =
+        const binaryVerified =
           compatible &&
-          probe.identityAbsent !== true &&
-          probe.liveBinarySignals !== undefined &&
-          probe.liveBinarySignals.serverVersion === probe.liveVersion &&
+          probe.liveBinarySignals?.serverVersion === probe.liveVersion &&
           matchesSignals(probe.liveBinarySignals, requestedVersion);
+        compatibleLive = binaryVerified && probe.identityAbsent !== true;
         if (!compatible && !blocked) {
           return {
             kind: "error",
@@ -4282,19 +4282,18 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
           } satisfies SshHostResult;
         }
         const providers = observed?.status?.providers;
+        const servesUnmanaged = blocked && binaryVerified;
+        const readyState = providers?.ready === false ? "providers_not_ready" : "ready";
         snapshot = {
           ...base,
           runtimeVersion: probe.liveVersion,
-          state: blocked
-            ? "update_blocked"
-            : providers?.ready === false
-              ? "providers_not_ready"
-              : "ready",
+          state: blocked && !servesUnmanaged ? "update_blocked" : readyState,
           ...(providers === undefined ? {} : { providers }),
-          ...(blocked
+          ...(blocked && !(servesUnmanaged && order === 0)
             ? {
-                detail:
-                  order !== undefined && order > 0
+                detail: servesUnmanaged
+                  ? compatibleRuntimeUpdateBlocked(host, probe.liveVersion, requestedVersion, order)
+                  : order !== undefined && order > 0
                     ? `${host} runs a newer GOAT (${probe.liveVersion}). Update this app from the update button next to Settings.`
                     : `A GOAT server that this app didn't start or cannot replace is running on ${host}. Stop it on the host, then reconnect.`,
               }

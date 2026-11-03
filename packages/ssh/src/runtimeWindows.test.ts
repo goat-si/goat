@@ -4,9 +4,11 @@ import {
   AuthSessionId,
   type DesktopSshEnvironmentTarget,
   EnvironmentId,
+  ORCHESTRATION_PROTOCOL_VERSION,
   type RuntimeSessionRequest,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
 import { vi } from "vite-plus/test";
 
 import { issueExistingServerCredential } from "./appServer.ts";
@@ -16,6 +18,8 @@ import {
   issueWindowsCredential,
   NATIVE_WINDOWS,
   nativeWindowsAfter,
+  prepareWindowsRuntime,
+  launchWindowsRuntime,
 } from "./runtimeWindows.ts";
 import { powershellCommand, WINDOWS_LOADER, windowsFrame } from "./runtimeWindowsScripts.ts";
 
@@ -242,5 +246,32 @@ it.effect("a native credential for a changed environment is refused before issui
     ).pipe(Effect.flip);
     expect(refused._tag).toBe("SshPairingError");
     expect(calls).toHaveLength(3);
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect.each([
+  { version: "0.0.44", detail: "update GOAT on" },
+  { version: "0.0.45-dev.deadbeef", detail: "suggests no update" },
+  { version: "99.0.0", detail: undefined },
+])("selects compatible Windows runtime $version with appropriate detail", ({ version, detail }) =>
+  Effect.gen(function* () {
+    const signals = {
+      serverVersion: version,
+      sshRuntimeProtocolVersion: SSH_RUNTIME_PROTOCOL_VERSION,
+      orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
+    };
+    const state = {
+      selection: { ...selection, version },
+      live: true,
+      signals,
+      binarySignals: signals,
+      reused: true,
+    };
+    setup([{ stdout: JSON.stringify(state) }, { stdout: JSON.stringify(state) }]);
+    const selected = yield* prepareWindowsRuntime(target, {}, { archiveVersion: "0.0.45" });
+    const launched = yield* launchWindowsRuntime(target, {}, selected);
+    expect(launched.status).toBe("ready");
+    if (detail) expect(launched.selectedRuntime.updateBlocked).toContain(detail);
+    else expect(launched.selectedRuntime.updateBlocked).toBeUndefined();
   }).pipe(Effect.provide(NodeServices.layer)),
 );
