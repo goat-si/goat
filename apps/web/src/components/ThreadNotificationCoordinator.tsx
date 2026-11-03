@@ -79,7 +79,9 @@ export function startThreadNotifications(
 
   let cachedParents:
     | {
-        readonly inputs: ReadonlyArray<readonly [EnvironmentId, object]>;
+        readonly inputs: ReadonlyArray<
+          readonly [EnvironmentId, ReadonlyArray<OrchestrationV2ThreadShell>]
+        >;
         readonly expiresAt: number;
         readonly parents: ReadonlyMap<string, EnvironmentThreadShell>;
       }
@@ -97,7 +99,8 @@ export function startThreadNotifications(
       inputs.length === cachedParents.inputs.length &&
       inputs.every(
         ([id, snapshot], index) =>
-          cachedParents?.inputs[index]?.[0] === id && cachedParents.inputs[index]?.[1] === snapshot,
+          cachedParents?.inputs[index]?.[0] === id &&
+          cachedParents.inputs[index]?.[1] === snapshot.threads,
       )
     )
       return cachedParents.parents;
@@ -142,7 +145,11 @@ export function startThreadNotifications(
       const at = Date.parse(item.snoozedUntil ?? "");
       if (at > now && at < expiresAt) expiresAt = at;
     }
-    cachedParents = { inputs, expiresAt, parents };
+    cachedParents = {
+      inputs: inputs.map(([id, snapshot]) => [id, snapshot.threads]),
+      expiresAt,
+      parents,
+    };
     return parents;
   };
 

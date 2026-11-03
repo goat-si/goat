@@ -626,3 +626,29 @@ it("reuses the fold for separately timed completions across cursor-only snapshot
   expect(TestNotification.sent).toEqual([]);
   expect(state.foldBuilds).toBe(1);
 });
+
+it("refreshes the notification parent when its thread rows change", async () => {
+  await using app = setup();
+  const child = {
+    id: "child",
+    launchedBy: {
+      kind: "launch" as const,
+      via: "delegate_task" as const,
+      threadId: "thread",
+      environmentId: "one",
+      environmentLabel: null,
+      threadTitle: null,
+    },
+  };
+  state.shells.set("two", shell(child));
+  app.start();
+  state.shells.set("two", shell({ ...child, hasPendingApprovals: true }));
+  state.shells.set("two", shell(child));
+  state.shells.set("one", shell({ title: "Renamed parent" }));
+  state.shells.set("two", shell({ ...child, hasPendingUserInput: true }));
+  expect(TestNotification.sent.map(({ options }) => options.body)).toEqual([
+    "Test thread",
+    "Renamed parent",
+  ]);
+  expect(state.foldBuilds).toBe(2);
+});
