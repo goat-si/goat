@@ -80,6 +80,7 @@ interface Tab extends TargetBase { status(): Promise<object>; claim(): Promise<o
   read(): Promise<object>; fetch(url: string, o?: { format?: "markdown" | "text" }): Promise<object>; // fetch runs in the page, so its CORS and CSP apply; a failure's detail is cors, csp, dns or network
   fillLogin(secretRef: string, target?: Target): Promise<object>;
   fillCard(secretRef: string, target?: Target): Promise<object>;
+  fillOneTimeCode(secretRef: string, target?: Target): Promise<object>;
   fillSecret(t: Target | { selector: string }, secretRef: string): Promise<object>; // observed elements and exact observed names are focused first; any other string is a CSS selector
   upload(t: Target, files: string[]): Promise<object>;
   dialog(action: "accept" | "dismiss", promptText?: string): Promise<object>;

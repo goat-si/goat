@@ -46,6 +46,31 @@ const request = (documentGeneration?: number): PreviewAutomationRequest => ({
 });
 
 describe("screen expectation at the input gate", () => {
+  it("permits only secret fills on a private tab and still refuses an older generation", () => {
+    const control = new SessionControl("agent");
+    control.setPrivate(true);
+    const privateTab = { ...tab(2), control };
+    const current = request();
+    const expected = { ...current.screenExpectation!, controlGeneration: control.generation };
+    expect(() =>
+      assertScreenExpectation(privateTab, {
+        ...current,
+        operation: "fillOneTimeCode",
+        screenExpectation: expected,
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertScreenExpectation(privateTab, { ...current, screenExpectation: expected }),
+    ).toThrow();
+    control.setPrivate(false);
+    expect(() =>
+      assertScreenExpectation(privateTab, {
+        ...current,
+        operation: "fillOneTimeCode",
+        screenExpectation: expected,
+      }),
+    ).toThrow();
+  });
   it("refuses a screenshot point once the page has moved to another document", () => {
     expect(() => assertScreenExpectation(tab(2), request(1))).toThrow(
       "The page changed since that screenshot",

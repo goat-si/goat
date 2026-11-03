@@ -302,6 +302,12 @@ export class SessionControl {
       throw new BrowserControlInterrupted("Browser observation changed; refresh the tab snapshot.");
   }
 
+  assertSecretGeneration(expectedGeneration: number) {
+    this.assertOpen();
+    if (this.epoch !== expectedGeneration)
+      throw new BrowserControlInterrupted("Browser observation changed; refresh the tab snapshot.");
+  }
+
   private agentBlocked() {
     if (this.privateMode) return refused(PRIVATE_MESSAGE, "privateMode");
     if (this.agentStopped) return refused(STOPPED_MESSAGE, "stopped");

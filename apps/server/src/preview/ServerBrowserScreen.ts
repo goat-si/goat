@@ -140,7 +140,9 @@ export const assertScreenExpectation = (tab: ScreenTab, request: PreviewAutomati
     expected.browserInstanceId !== SERVER_BROWSER_AUTOMATION_CLIENT_ID
   )
     throw new BrowserControlInterrupted("Exact browser tab changed.");
-  tab.control.assertObservedGeneration(expected.controlGeneration);
+  if (["fillSecret", "fillLogin", "fillCard", "fillOneTimeCode"].includes(request.operation))
+    tab.control.assertSecretGeneration(expected.controlGeneration);
+  else tab.control.assertObservedGeneration(expected.controlGeneration);
   if (originOf(tab.page.url()) !== expected.origin)
     throw new BrowserControlInterrupted("Page origin changed; bind and observe again.");
   if (

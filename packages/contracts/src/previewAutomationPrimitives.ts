@@ -155,6 +155,15 @@ export const PreviewAutomationFillLoginResult = Schema.Struct({
 });
 export type PreviewAutomationFillLoginResult = typeof PreviewAutomationFillLoginResult.Type;
 
+export const PreviewAutomationFillOneTimeCodeInput = PreviewAutomationFillLoginInput;
+export const PreviewAutomationFillOneTimeCodeResult = Schema.Struct({
+  filled: Schema.Boolean,
+  verdict: Schema.Literals(["confirmed", "unverifiable", "refused"]),
+  code: Schema.optional(Schema.String),
+});
+export type PreviewAutomationFillOneTimeCodeResult =
+  typeof PreviewAutomationFillOneTimeCodeResult.Type;
+
 export const PreviewAutomationFillCardInput = PreviewAutomationFillLoginInput;
 export const PreviewAutomationFillCardResult = Schema.Struct({
   numberFilled: Schema.Boolean,

@@ -73,11 +73,18 @@ it("requires both fields and masks the login password before saving", async () =
     );
     const user = container.querySelector<HTMLInputElement>('input[aria-label="Username"]');
     const password = container.querySelector<HTMLInputElement>('input[aria-label="Password"]');
+    const setupKey = container.querySelector<HTMLInputElement>(
+      'input[aria-label="Authenticator setup key"]',
+    );
     const save = Array.from(container.querySelectorAll("button")).find(
       (button) => button.textContent === "Save securely",
     );
     expect(user).not.toBeNull();
     expect(password?.type).toBe("password");
+    expect(setupKey?.type).toBe("password");
+    expect(setupKey?.dataset.autocomplete).toBe("off");
+    expect(setupKey?.dataset.contentType).toBe("none");
+    expect(setupKey?.dataset.autofill).toBe("no");
     expect(save?.disabled).toBe(true);
     await act(() => {
       user!.value = "test-user";
@@ -89,13 +96,22 @@ it("requires both fields and masks the login password before saving", async () =
       password!.dispatchEvent(new Event("input", { bubbles: true }));
     });
     expect(save?.disabled).toBe(false);
+    await act(() => {
+      setupKey!.value = "  abcd efgh  ";
+      setupKey!.dispatchEvent(new Event("input", { bubbles: true }));
+    });
     await act(() => save!.click());
     expect(state.answer).toHaveBeenCalledWith({
       environmentId: "test",
       input: {
         threadId: "thread:login",
         turnItemId: "item:login",
-        answer: { type: "save_login", username: "test-user", password: "  pass word  " },
+        answer: {
+          type: "save_login",
+          username: "test-user",
+          password: "  pass word  ",
+          authenticatorSetupKey: "abcd efgh",
+        },
       },
     });
   } finally {

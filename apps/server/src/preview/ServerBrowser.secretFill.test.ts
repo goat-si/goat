@@ -98,6 +98,7 @@ const makeSecrets = (beforeConsume: () => Promise<unknown> = async () => {}) => 
     saveToFile: unused,
     useLogin: unused,
     useCard: unused,
+    useOneTimeCode: unused,
     consumeForOrigin: (input) =>
       Effect.promise(beforeConsume).pipe(
         Effect.andThen(() => {
