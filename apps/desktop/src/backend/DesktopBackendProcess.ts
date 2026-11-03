@@ -27,6 +27,7 @@ import * as Stream from "effect/Stream";
 import { HttpClient } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
+import { makeStartupProgress } from "./DesktopBackendStartupProgress.ts";
 import { makeControlDispatch, makeControlLineFramer } from "./DesktopBackendControlDispatch.ts";
 const DEFAULT_BACKEND_READINESS_TIMEOUT = Duration.minutes(1);
 const DEFAULT_BACKEND_READINESS_INTERVAL = Duration.millis(100);
@@ -199,7 +200,7 @@ interface RunBackendProcessOptions extends DesktopBackendStartConfig {
   readonly onStarted?: (pid: number) => Effect.Effect<void>;
   readonly onExitObserved?: () => Effect.Effect<void>;
   readonly onReady?: () => Effect.Effect<void>;
-  readonly onReadinessFailure?: (error: BackendReadinessTimeoutError) => Effect.Effect<void>;
+  readonly onReadinessFailure?: (reason: string) => Effect.Effect<void>;
   readonly onOutput?: (
     streamName: BackendProcessOutputStream,
     chunk: Uint8Array,
@@ -283,6 +284,7 @@ export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
   const outputFibers: Array<Fiber.Fiber<void, never>> = [];
   return yield* Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const progress = yield* makeStartupProgress();
     const bootstrapJson = yield* encodeBootstrapJson(options.bootstrap).pipe(
       Effect.mapError(
         (cause) =>
@@ -295,7 +297,8 @@ export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
           }),
       ),
     );
-    const onOutput = options.onOutput ?? (() => Effect.void);
+    const onOutput = (stream: BackendProcessOutputStream, chunk: Uint8Array) =>
+      progress.activity.pipe(Effect.andThen(options.onOutput?.(stream, chunk) ?? Effect.void));
     const bootstrapStream = Stream.encodeText(Stream.make(`${bootstrapJson}\n`));
     const additionalFds: Record<`fd${number}`, ChildProcess.AdditionalFdConfig> = {};
     if (options.bootstrapDelivery === "fd3") {
@@ -461,16 +464,20 @@ export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
         httpBaseUrl: options.httpBaseUrl,
         timeout: options.readinessTimeout ?? DEFAULT_BACKEND_READINESS_TIMEOUT,
       }).pipe(
-        Effect.flatMap(() => options.onReady?.() ?? Effect.void),
+        Effect.flatMap(() =>
+          progress.ready.pipe(Effect.andThen(options.onReady?.() ?? Effect.void)),
+        ),
         Effect.as(true),
         Effect.catchTags({
-          BackendReadinessTimeoutError: (error) =>
-            (options.onReadinessFailure?.(error) ?? Effect.void).pipe(Effect.as(false)),
+          BackendReadinessTimeoutError: () => Effect.succeed(false),
         }),
       ),
     );
 
     yield* probeReadiness().pipe(Effect.repeat({ while: (ready) => !ready }), Effect.forkScoped);
+    const progressFiber = yield* progress
+      .watch((reason) => options.onReadinessFailure?.(reason) ?? Effect.void)
+      .pipe(Effect.forkScoped);
 
     const exit = yield* handle.exitCode.pipe(
       Effect.map((exitCode) => ({
@@ -501,6 +508,7 @@ export const runBackendProcess = Effect.fn("runBackendProcess")(function* (
       }),
       Effect.exit,
     );
+    yield* Fiber.interrupt(progressFiber);
     if (Exit.isSuccess(exit)) {
       yield* options.onExitObserved?.() ?? Effect.void;
     }

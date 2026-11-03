@@ -612,7 +612,26 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
     ),
   );
 
+  const startupPhase = yield* Ref.make("starting keybindings runtime");
+  const startupStarted = yield* Clock.monotonicTimeNanos;
+  const heartbeat =
+    serverConfig.mode === "desktop"
+      ? yield* Effect.forkScoped(
+          Effect.gen(function* () {
+            yield* Effect.sleep("15 seconds");
+            yield* Effect.logInfo("Server still starting", {
+              phase: yield* Ref.get(startupPhase),
+              elapsedMs: Number(((yield* Clock.monotonicTimeNanos) - startupStarted) / 1_000_000n),
+            });
+          }).pipe(Effect.forever),
+          { startImmediately: true },
+        )
+      : null;
+  const stopHeartbeat =
+    heartbeat === null ? Effect.void : Fiber.interrupt(heartbeat).pipe(Effect.asVoid);
+
   const startup = Effect.gen(function* () {
+    yield* Ref.set(startupPhase, "starting keybindings runtime");
     yield* Effect.logDebug("startup phase: starting keybindings runtime");
     yield* runStartupPhase(
       "keybindings.start",
@@ -627,6 +646,7 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
       ),
     );
 
+    yield* Ref.set(startupPhase, "starting server settings runtime");
     yield* Effect.logDebug("startup phase: starting server settings runtime");
     yield* runStartupPhase(
       "settings.start",
@@ -643,6 +663,7 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
       ),
     );
 
+    yield* Ref.set(startupPhase, "waiting for http listener");
     yield* Effect.logDebug("startup phase: waiting for http listener");
     yield* runStartupPhase("http.wait", Deferred.await(httpListening));
     yield* runStartupPhase("auxiliary-roots.parked", options?.awaitAuxiliaryParked ?? Effect.void);
@@ -776,6 +797,7 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
 
     const updateOutcome = yield* launcher.prepareTrial;
 
+    yield* Ref.set(startupPhase, "publishing welcome event");
     yield* Effect.logDebug("startup phase: publishing welcome event", {
       environmentId: environment.environmentId,
       cwd: welcomeBase.cwd,
@@ -799,6 +821,8 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
     yield* options?.activate ?? Effect.void;
     yield* Effect.logDebug("Accepting commands");
     yield* commandGate.signalCommandReady;
+    yield* stopHeartbeat;
+    yield* Ref.set(startupPhase, "publishing ready event");
     yield* Effect.logDebug("startup phase: publishing ready event");
     yield* runStartupPhase(
       "ready.publish",
@@ -812,6 +836,7 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
         },
       }),
     );
+    yield* Ref.set(startupPhase, "complete");
     yield* Effect.logDebug("startup phase: complete");
     yield* flushCompileCache;
   }).pipe(
@@ -827,7 +852,7 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
   );
 
   yield* Effect.forkScoped(
-    Effect.exit(startup).pipe(
+    Effect.exit(startup.pipe(Effect.ensuring(stopHeartbeat))).pipe(
       Effect.flatMap((startupExit) => {
         if (Exit.isSuccess(startupExit)) return Effect.void;
         const error = new ServerRuntimeStartupError({

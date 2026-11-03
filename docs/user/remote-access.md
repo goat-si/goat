@@ -846,4 +846,4 @@ appear only under **Headless server**. To hide it, switch off **Headless server 
 in **Settings → Connections**. To stop it starting at all, remove this computer from the other
 GOAT's SSH hosts.
 
-If a desktop-managed server repeatedly exits, automatic recovery pauses instead of restarting indefinitely. Choose **Server recovery…** in the desktop File menu to retry, stop the server, or open its logs. The pause survives restarting the desktop app.
+If a desktop-managed server exits repeatedly in a short time, automatic recovery pauses. Slower repeated exits keep restarting and show one desktop notification per crash pattern. Choose **Server recovery…** in the desktop File menu to open the logs or, when recovery is paused, retry or stop the server. The pause survives restarting the desktop app.

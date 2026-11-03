@@ -32,3 +32,92 @@ it.effect("Retry, Stop, Open logs and dismissal preserve their distinct outcomes
     }
   }),
 );
+
+it.effect("slow crash information opens logs only when requested", () =>
+  Effect.gen(function* () {
+    for (const response of [0, 1]) {
+      const opened: string[] = [];
+      const show = makeRecoveryDialog(
+        {
+          showMessageBox: (options) => {
+            assert.deepEqual(options.buttons, ["Open logs", "Close"]);
+            assert.equal(options.type, "info");
+            return Effect.succeed({ response, checkboxChecked: false });
+          },
+        },
+        (path) =>
+          Effect.sync(() => {
+            opened.push(path);
+          }),
+      );
+      yield* show({
+        label: "Test",
+        reason: "slow-crash",
+        history: [{ at: 0, outcome: "exit" }],
+        retry: Effect.die("unexpected"),
+        stop: Effect.die("unexpected"),
+        logPath: "/logs",
+      });
+      assert.deepEqual(opened, response === 0 ? ["/logs"] : []);
+    }
+  }),
+);
+
+it.effect("separate servers can show their recovery dialogs in sequence", () =>
+  Effect.gen(function* () {
+    const shown: string[] = [];
+    const dialog = {
+      showMessageBox: (options: { readonly message?: string }) =>
+        Effect.sync(() => {
+          shown.push(options.message ?? "");
+          return { response: 1, checkboxChecked: false };
+        }),
+    };
+    const first = makeRecoveryDialog(dialog, () => Effect.void);
+    const second = makeRecoveryDialog(dialog, () => Effect.void);
+    for (const [label, show] of [
+      ["one", first],
+      ["two", second],
+    ] as const) {
+      yield* show({
+        label,
+        reason: "slow-crash",
+        history: [{ at: 0, outcome: "exit" }],
+        retry: Effect.void,
+        stop: Effect.void,
+        logPath: "/logs",
+      });
+    }
+    assert.deepEqual(shown, [
+      "one: the server keeps restarting",
+      "two: the server keeps restarting",
+    ]);
+  }),
+);
+it.effect("a full slow-crash history is shown as a lower bound", () =>
+  Effect.gen(function* () {
+    const details: string[] = [];
+    const show = makeRecoveryDialog(
+      {
+        showMessageBox: (options) =>
+          Effect.sync(() => {
+            details.push(options.detail ?? "");
+            return { response: 1, checkboxChecked: false };
+          }),
+      },
+      () => Effect.void,
+    );
+    for (const count of [4, 8]) {
+      yield* show({
+        label: "Test",
+        reason: "slow-crash",
+        history: Array.from({ length: count }, (_, at) => ({ at, outcome: "code=1" })),
+        retry: Effect.void,
+        stop: Effect.void,
+        logPath: "/logs",
+      });
+    }
+    assert.match(details[0] ?? "", /^4 exits in the last 6 hours/);
+    assert.match(details[1] ?? "", /^at least 8 exits in the last 6 hours/);
+  }),
+);

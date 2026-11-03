@@ -1,3 +1,4 @@
+import { slowCrashCount } from "./DesktopBackendSlowCrash.ts";
 import { makeRecoveryDialog } from "./DesktopBackendRecoveryDialog.ts";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
@@ -26,6 +27,7 @@ import * as DesktopBrowserHost from "../preview/DesktopBrowserHost.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
 import * as ElectronDialog from "../electron/ElectronDialog.ts";
+import * as ElectronNotification from "../electron/ElectronNotification.ts";
 import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronShell from "../electron/ElectronShell.ts";
 
@@ -112,6 +114,7 @@ export const layer = Layer.effect(
     const configuration = yield* DesktopBackendConfiguration.DesktopBackendConfiguration;
     const desktopWindow = yield* DesktopWindow.DesktopWindow;
     const electronDialog = yield* ElectronDialog.ElectronDialog;
+    const notification = yield* ElectronNotification.ElectronNotification;
     const electronApp = yield* ElectronApp.ElectronApp;
     const electronShell = yield* ElectronShell.ElectronShell;
     const appSettings = yield* DesktopAppSettings.DesktopAppSettings;
@@ -160,9 +163,24 @@ export const layer = Layer.effect(
       },
     );
 
+    const noticeFor =
+      (id: BackendInstanceId) =>
+      (
+        info: import("./DesktopBackendSlowCrash.ts").SlowCrashInfo,
+        onFailure: (reason: string) => Effect.Effect<void>,
+      ) =>
+        notification.show(
+          id,
+          `GOAT's server (${info.label}) keeps restarting`,
+          `It stopped ${slowCrashCount(info.history)} times in the last 6 hours (latest: ${info.history.at(-1)?.outcome ?? "unknown"}). GOAT restarts it automatically.`,
+          ElectronShell.openLogsPath(info.logPath),
+          onFailure,
+        );
     const onRecoveryPaused = makeRecoveryDialog(electronDialog, ElectronShell.openLogsPath);
+    yield* Effect.addFinalizer(() => notification.close(DesktopBackendManager.PRIMARY_INSTANCE_ID));
     const primary = yield* DesktopBackendManager.makeBackendInstance({
       onRecoveryPaused,
+      onSlowCrash: noticeFor(DesktopBackendManager.PRIMARY_INSTANCE_ID),
       id: DesktopBackendManager.PRIMARY_INSTANCE_ID,
       // Resolve lazily: startup loads persisted settings after pool initialization.
       label: configuration.resolvePrimaryLabel,
@@ -246,9 +264,13 @@ export const layer = Layer.effect(
             return Effect.gen(function* () {
               // Provide the child Scope last so the captured pool Scope cannot shadow it and orphan stop/restart finalizers.
               const instanceScope = yield* Scope.fork(layerScope, "sequential");
+              yield* Scope.addFinalizer(instanceScope, notification.close(spec.id));
               const instance = yield* DesktopBackendManager.makeBackendInstance({
                 ...spec,
-                onRecoveryPaused: spec.onRecoveryPaused ?? onRecoveryPaused,
+                onRecoveryPaused:
+                  spec.onRecoveryPaused ??
+                  makeRecoveryDialog(electronDialog, ElectronShell.openLogsPath),
+                onSlowCrash: spec.onSlowCrash ?? noticeFor(spec.id),
               }).pipe(Scope.provide(instanceScope), Effect.provide(factoryContext));
               const next = new Map(current);
               next.set(spec.id, {

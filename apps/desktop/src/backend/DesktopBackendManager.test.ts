@@ -23,21 +23,18 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
-
 import * as DesktopBackendManager from "./DesktopBackendManager.ts";
 import { registerBackendStopTests } from "./DesktopBackendStopTestHelpers.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
 import * as DesktopTelemetryPublisher from "../telemetry/DesktopTelemetryPublisher.ts";
 import * as DesktopBrowserHost from "../preview/DesktopBrowserHost.ts";
 import * as DesktopWslEnvironment from "../wsl/DesktopWslEnvironment.ts";
-
 const decodeDesktopBackendBootstrap = Schema.decodeEffect(
   Schema.fromJsonString(DesktopBackendBootstrap),
 );
 const encodeDesktopTelemetryControl = Schema.encodeSync(
   Schema.fromJsonString(DesktopTelemetryControlMessage),
 );
-
 const baseConfig: DesktopBackendManager.DesktopBackendStartConfig = {
   executablePath: "/electron",
   args: ["/server/bin.mjs", "--bootstrap-fd", "3"],
@@ -62,14 +59,12 @@ const baseConfig: DesktopBackendManager.DesktopBackendStartConfig = {
   captureOutput: true,
   preflightFailure: Option.none(),
 };
-
 const configWithObservability: DesktopBackendBootstrapValue = {
   ...baseConfig.bootstrap,
   tailscaleServeEnabled: true,
   desktopTelemetryFd: 4,
   otlpTracesUrl: "http://127.0.0.1:4318/v1/traces",
 };
-
 export function makeProcess(options?: {
   readonly stdout?: Stream.Stream<Uint8Array, PlatformError.PlatformError>;
   readonly stderr?: Stream.Stream<Uint8Array, PlatformError.PlatformError>;
@@ -91,7 +86,6 @@ export function makeProcess(options?: {
     unref: Effect.succeed(Effect.void),
   });
 }
-
 function layerHttpClient(
   handler: (
     request: HttpClientRequest.HttpClientRequest,
@@ -102,11 +96,9 @@ function layerHttpClient(
     HttpClient.make((request) => handler(request)),
   );
 }
-
 const layerHealthyHttpClient = layerHttpClient((request) =>
   Effect.succeed(HttpClientResponse.fromWeb(request, new Response(null, { status: 200 }))),
 );
-
 function decodeBootstrap(raw: string) {
   return decodeDesktopBackendBootstrap(raw);
 }
@@ -114,6 +106,7 @@ function decodeBootstrap(raw: string) {
 interface MakeInstanceInput {
   readonly fileSystem?: Partial<FileSystem.FileSystem>;
   readonly onRecoveryPaused?: DesktopBackendManager.BackendInstanceSpec["onRecoveryPaused"];
+  readonly onSlowCrash?: DesktopBackendManager.BackendInstanceSpec["onSlowCrash"];
   readonly spawnerLayer: Layer.Layer<ChildProcessSpawner.ChildProcessSpawner>;
   readonly httpClientLayer?: Layer.Layer<HttpClient.HttpClient>;
   readonly backendOutputLog?: Partial<DesktopObservability.DesktopBackendOutputLogShape>;
@@ -194,6 +187,7 @@ export function makeTestInstance(input: MakeInstanceInput) {
     id: DesktopBackendManager.PRIMARY_INSTANCE_ID,
     label: Effect.succeed("Windows"),
     ...(input.onRecoveryPaused ? { onRecoveryPaused: input.onRecoveryPaused } : {}),
+    ...(input.onSlowCrash ? { onSlowCrash: input.onSlowCrash } : {}),
     configResolve: input.configResolve ?? Effect.succeed(input.config ?? baseConfig),
     ...(input.onStartupFailure ? { onStartupFailure: input.onStartupFailure } : {}),
     ...(input.onReady ? { onReady: () => input.onReady! } : {}),
@@ -824,7 +818,7 @@ describe("DesktopBackendManager", () => {
         yield* Deferred.await(probed);
         yield* TestClock.adjust(Duration.minutes(1));
         const failure = yield* Queue.take(reports);
-        assert.equal(failure.reason, "The server started but did not become ready in time.");
+        assert.equal(failure.reason, "The server printed nothing for 60 seconds.");
         assert.equal(failure.output, "Server bootstrap stalled");
       }).pipe(Effect.provide(TestClock.layer())),
     ),

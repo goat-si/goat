@@ -67,3 +67,47 @@ export function makeBackendReadinessWait(
       ),
   );
 }
+
+export const markBackendReady = Effect.fn("desktop.backendStartup.markReady")(
+  (
+    mutex: import("effect/Semaphore").Semaphore,
+    state: Ref.Ref<import("./DesktopBackendProcess.ts").BackendManagerState>,
+    runId: number,
+    blocked: () => boolean,
+    onReady: Effect.Effect<void>,
+  ) =>
+    mutex.withPermits(1)(
+      Effect.gen(function* () {
+        const accepted = yield* Ref.modify(state, (latest) => {
+          const active = Option.getOrUndefined(latest.active);
+          return active?.id !== runId || active.stopRequested || !latest.desiredRunning || blocked()
+            ? ([false, latest] as const)
+            : ([true, { ...latest, ready: true, startupRetryAttempt: 0 }] as const);
+        });
+        if (accepted) yield* onReady;
+        return accepted;
+      }),
+    ),
+);
+
+export const reportStartupFailureIfCurrent = Effect.fn("desktop.backendStartup.reportIfCurrent")(
+  (
+    mutex: import("effect/Semaphore").Semaphore,
+    state: Ref.Ref<import("./DesktopBackendProcess.ts").BackendManagerState>,
+    runId: number,
+    report: Effect.Effect<void>,
+  ) =>
+    mutex.withPermits(1)(
+      Effect.gen(function* () {
+        const current = yield* Ref.get(state);
+        const active = Option.getOrUndefined(current.active);
+        if (
+          active?.id === runId &&
+          !active.stopRequested &&
+          current.desiredRunning &&
+          !current.ready
+        )
+          yield* report;
+      }),
+    ),
+);

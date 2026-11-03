@@ -1,3 +1,5 @@
+import { registerStartupProgressTests } from "./DesktopBackendStartupProgressTestHelpers.ts";
+import { registerSlowCrashTests } from "./DesktopBackendSlowCrashTestHelpers.ts";
 import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeHttpClient from "@effect/platform-node/NodeHttpClient";
@@ -33,6 +35,8 @@ export function registerBackendStopTests({
   baseConfig: Parameters<typeof Harness.makeTestInstance>[0]["config"] & {};
 }) {
   registerStopIntentTests({ makeTestInstance, makeProcess, baseConfig });
+  registerStartupProgressTests({ makeTestInstance, makeProcess });
+  registerSlowCrashTests({ makeTestInstance, makeProcess, baseConfig });
   it.effect("PR 2418: stop cancels a pending backend restart", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -439,7 +443,7 @@ export function registerBackendStopTests({
         const allowExit = yield* Deferred.make<void>();
         const spawned = yield* Deferred.make<void>();
         const exited = yield* Deferred.make<void>();
-        let reads = 0;
+        let blockExitClock = false;
         const clock = {
           currentTimeMillisUnsafe: () => realClock.currentTimeMillisUnsafe(),
           currentTimeMillis: realClock.currentTimeMillis,
@@ -448,7 +452,7 @@ export function registerBackendStopTests({
           monotonicTimeNanosUnsafe: () => realClock.monotonicTimeNanosUnsafe(),
           sleep: realClock.sleep.bind(realClock),
           monotonicTimeNanos: Effect.suspend(() =>
-            ++reads === 1
+            blockExitClock
               ? Deferred.succeed(readingExit, undefined).pipe(
                   Effect.andThen(Deferred.await(allowExit)),
                   Effect.as(10_000_000n),
@@ -489,8 +493,10 @@ export function registerBackendStopTests({
         }).pipe(Effect.provideService(Clock.Clock, clock));
         yield* instance.start.pipe(Effect.provideService(Clock.Clock, clock));
         yield* Deferred.await(spawned);
+        blockExitClock = true;
         yield* Deferred.succeed(exited, undefined);
         yield* Deferred.await(readingExit);
+        blockExitClock = false;
         const stopping = yield* instance
           .stop("quit")
           .pipe(

@@ -14,6 +14,7 @@ import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
 import * as DesktopTelemetryPublisher from "../telemetry/DesktopTelemetryPublisher.ts";
 import * as DesktopBrowserHost from "../preview/DesktopBrowserHost.ts";
 import * as ElectronDialog from "../electron/ElectronDialog.ts";
+import * as ElectronNotification from "../electron/ElectronNotification.ts";
 import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronShell from "../electron/ElectronShell.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
@@ -22,7 +23,10 @@ import * as DesktopBackendConfiguration from "./DesktopBackendConfiguration.ts";
 import * as DesktopBackendPool from "./DesktopBackendPool.ts";
 import type { DesktopBackendStartConfig } from "./DesktopBackendManager.ts";
 
-function layerPool(labelRef: Ref.Ref<string>): Layer.Layer<DesktopBackendPool.DesktopBackendPool> {
+function layerPool(
+  labelRef: Ref.Ref<string>,
+  closed: string[] = [],
+): Layer.Layer<DesktopBackendPool.DesktopBackendPool> {
   return DesktopBackendPool.layer.pipe(
     Layer.provideMerge(
       Layer.mergeAll(
@@ -81,6 +85,13 @@ function layerPool(labelRef: Ref.Ref<string>): Layer.Layer<DesktopBackendPool.De
         DesktopState.layer,
         DesktopWslEnvironment.layerTest(),
         ElectronDialog.layer,
+        Layer.succeed(ElectronNotification.ElectronNotification, {
+          show: () => Effect.void,
+          close: (id) =>
+            Effect.sync(() => {
+              closed.push(id);
+            }),
+        }),
         ElectronApp.layer,
         ElectronShell.layer,
         Layer.succeed(DesktopWindow.DesktopWindow, {
@@ -106,8 +117,9 @@ function layerPool(labelRef: Ref.Ref<string>): Layer.Layer<DesktopBackendPool.De
 }
 
 describe("DesktopBackendPool", () => {
-  it.effect("unregister stops the registered instance", () =>
-    Effect.scoped(
+  it.effect("unregister stops the registered instance and closes its notice", () => {
+    const closed: string[] = [];
+    return Effect.scoped(
       Effect.gen(function* () {
         const id = DesktopBackendPool.BackendInstanceId("wsl:Ubuntu");
         const pool = yield* DesktopBackendPool.DesktopBackendPool;
@@ -146,7 +158,8 @@ describe("DesktopBackendPool", () => {
         assert.equal(stopped.desiredRunning, false);
         assert.equal(stopped.restartScheduled, false);
         assert.equal(Option.isNone(yield* pool.get(id)), true);
-      }).pipe(Effect.provide(layerPool(Ref.makeUnsafe("Windows")))),
-    ),
-  );
+        assert.include(closed, id);
+      }).pipe(Effect.provide(layerPool(Ref.makeUnsafe("Windows"), closed))),
+    );
+  });
 });
