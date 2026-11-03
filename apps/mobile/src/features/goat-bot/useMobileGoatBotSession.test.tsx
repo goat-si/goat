@@ -30,6 +30,8 @@ const harness = vi.hoisted(() => ({
   shellReads: [] as Array<string | null>,
   upload: vi.fn(),
   verify: vi.fn(),
+  release: vi.fn(async (_attachments: ReadonlyArray<unknown>) => {}),
+  key: vi.fn(() => "request"),
 }));
 const preparedConnection = Symbol("prepared connection");
 vi.mock("@goat/client-runtime/state/attachments", async (original) => ({
@@ -46,7 +48,7 @@ vi.mock("../../state/session", () => ({
   environmentSession: { preparedConnectionValueAtom: () => preparedConnection },
 }));
 vi.mock("../../state/use-composer-drafts", () => ({
-  releaseUnusedComposerAttachmentFiles: async () => {},
+  releaseUnusedComposerAttachmentFiles: harness.release,
 }));
 const connection = AsyncResult.success({ phase: "connected", generation: 1 });
 vi.mock("@effect/atom-react", () => ({
@@ -92,7 +94,7 @@ vi.mock("../../state/entities", () => ({
 vi.mock("../../state/shell", () => ({
   useEnvironmentShellReadiness: () => ({ status: "loading" }),
 }));
-vi.mock("../../lib/uuid", () => ({ uuidv4: () => "request" }));
+vi.mock("../../lib/uuid", () => ({ uuidv4: () => harness.key() }));
 vi.mock("./useMobileGoatBotHomeMode", () => ({
   useMobileGoatBotHomeMode: () => ({
     ...harness,
@@ -100,6 +102,8 @@ vi.mock("./useMobileGoatBotHomeMode", () => ({
   }),
 }));
 import { useMobileGoatBotSession } from "./useMobileGoatBotSession";
+import * as botSessions from "./useMobileGoatBotSession";
+import * as fileOwnership from "../../lib/composerAttachmentFiles";
 
 const permissionAtom = Atom.make(true);
 const connectionAtom = Atom.make(connection);
@@ -141,6 +145,8 @@ beforeEach(() => {
   harness.botRef = null;
   harness.loaded = true;
   harness.save.mockReset();
+  harness.release.mockReset().mockResolvedValue(undefined);
+  harness.key.mockReset().mockReturnValue("request");
   harness.run.mockReset().mockImplementation(async (_registry, _command, { environmentId }) => ({
     _tag: "Success",
     value: bot(environmentId),
@@ -152,6 +158,109 @@ afterEach(async () => {
 });
 
 describe("mobile GOAT Bot session selection", () => {
+  it("keeps a shared upload available for another failed message after discard (#2388)", async () => {
+    const env = EnvironmentId.make("shared-upload-regression");
+    const uploadId = "pending-00000000-0000-4000-8000-000000000001-pdf";
+    const file = {
+      id: "local",
+      type: "file" as const,
+      name: "report.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 42,
+      fileUri: "file:///documents/report.pdf",
+      uploadedAttachmentId: uploadId,
+      uploadEnvironmentId: env,
+    };
+    harness.environments = [environment(env)];
+    harness.items = [];
+    harness.key.mockReturnValueOnce("first").mockReturnValueOnce("second");
+    let exists = true;
+    const cleanup = Promise.withResolvers<void>();
+    harness.release.mockImplementation(async () => {
+      const isRetained = Reflect.get(fileOwnership, "isComposerAttachmentUploadRetained");
+      if (typeof isRetained !== "function" || !isRetained(env, uploadId)) exists = false;
+      cleanup.resolve();
+    });
+    harness.verify.mockImplementation(async () => ({ status: exists ? "verified" : "missing" }));
+    harness.upload
+      .mockReset()
+      .mockResolvedValue({ status: "uploaded", attachmentId: "replacement" });
+    const received: Array<{ idempotencyKey: string; attachments: unknown }> = [];
+    const first = Promise.withResolvers<void>();
+    const second = Promise.withResolvers<void>();
+    const retried = Promise.withResolvers<void>();
+    harness.run.mockImplementation(async (_registry, _command, args) => {
+      if (!("input" in args) || !("idempotencyKey" in args.input))
+        return { _tag: "Success", value: bot(env) };
+      received.push(args.input);
+      [first, second, retried][received.length - 1]?.resolve();
+      return received.length < 3
+        ? { _tag: "Failure", cause: "lost receipt" }
+        : { _tag: "Success", value: { inputId: "accepted", state: "accepted" } };
+    });
+    await render();
+    await act(async () => {
+      session.onSend("first", [file]);
+      await first.promise;
+    });
+    await act(async () => {
+      session.onSend("second", [file]);
+      await second.promise;
+    });
+    await act(async () => {
+      session.onDiscardInput("first");
+      await cleanup.promise;
+    });
+    expect(exists).toBe(true);
+    await act(async () => {
+      session.onRetryInput("second");
+      await retried.promise;
+    });
+    expect(received[2]).toMatchObject({
+      idempotencyKey: "second",
+      attachments: [{ id: uploadId }],
+    });
+    expect(harness.upload).not.toHaveBeenCalled();
+  });
+
+  it("keeps failed uploads on disconnect and releases them when the environment is removed (#2388)", async () => {
+    const env = EnvironmentId.make("removed-upload-regression");
+    const file = {
+      id: "local",
+      type: "file" as const,
+      name: "report.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 42,
+      fileUri: "file:///documents/removed.pdf",
+      uploadedAttachmentId: "pending-removed",
+      uploadEnvironmentId: env,
+    };
+    harness.environments = [environment(env)];
+    harness.items = [];
+    harness.verify.mockReset().mockResolvedValue({ status: "verified" });
+    const sent = Promise.withResolvers<void>();
+    harness.run.mockImplementation(async (_registry, _command, args) => {
+      if (!("input" in args) || !("idempotencyKey" in args.input))
+        return { _tag: "Success", value: bot(env) };
+      sent.resolve();
+      return { _tag: "Failure", cause: "lost receipt" };
+    });
+    await render();
+    await act(async () => {
+      session.onSend("hello", [file]);
+      await sent.promise;
+    });
+    harness.environments = [environment(env, false)];
+    await render();
+    expect(harness.release).not.toHaveBeenCalled();
+    const dispose = Reflect.get(botSessions, "disposeMobileGoatBotEnvironment");
+    expect(dispose).toBeTypeOf("function");
+    await act(async () => {
+      await dispose(env);
+    });
+    expect(harness.release).toHaveBeenCalledWith([file]);
+    expect(fileOwnership.isComposerAttachmentFileRetained(file.fileUri)).toBe(false);
+  });
   it("retries an ambiguous send with the same uploaded references and client key (#2388)", async () => {
     const env = EnvironmentId.make("retry-attachments");
     const uploadedId = "pending-00000000-0000-4000-8000-000000000001-pdf";
