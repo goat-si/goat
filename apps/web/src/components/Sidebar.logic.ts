@@ -1042,7 +1042,10 @@ export function resolveSidebarWokeAtForRow(input: {
 
 type SidebarPriorityMember = ThreadStatusInput &
   ThreadSnoozeShell &
-  Pick<SidebarThreadSummary, "settledOverride" | "pinnedAt" | "deletedAt">;
+  Pick<SidebarThreadSummary, "settledOverride" | "pinnedAt" | "deletedAt"> & {
+    readonly lineage?: SidebarThreadSummary["lineage"] | undefined;
+    readonly source: Pick<SidebarThreadSummary["source"], "launchedBy">;
+  };
 
 /** Priority membership shared by the section and the activity bell. Holds are not included. */
 export function isSidebarPriorityMember(input: {

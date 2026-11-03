@@ -1,4 +1,3 @@
-import type { OrchestrationV2ThreadLauncher } from "@goat/contracts";
 import { isRemoteDelegatedChild } from "@goat/shared/threadLaunchState";
 
 import { scopeThreadRef, scopedThreadKey } from "../environment/scoped.ts";
@@ -94,13 +93,7 @@ export type ThreadPriorityInput = ThreadListStatusInput &
   Omit<UnseenCompletionInput, "lastVisitedAt"> & {
     readonly lastVisitedAt?: string | null | undefined;
     readonly lineage?: Pick<EnvironmentThreadShell["lineage"], "relationshipToParent"> | undefined;
-    readonly source?:
-      | {
-          readonly launchedBy?:
-            | Pick<OrchestrationV2ThreadLauncher, "kind" | "via" | "environmentId">
-            | undefined;
-        }
-      | undefined;
+    readonly source?: Pick<EnvironmentThreadShell["source"], "launchedBy"> | undefined;
   };
 
 /** 0: a request waits on the user; 1: work runs; 2: unread. Priority never changes lifecycle. */

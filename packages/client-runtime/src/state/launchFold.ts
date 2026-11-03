@@ -62,13 +62,15 @@ type LaunchOwnerThread = Pick<LaunchFoldThread, "environmentId" | "id" | "lineag
 const keyOf = (thread: Pick<LaunchFoldThread, "environmentId" | "id">) =>
   scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
 
-const isRemoteTaskChild = (thread: Pick<LaunchFoldThread, "lineage" | "source">) =>
+type LaunchRecordThread = Pick<LaunchFoldThread, "lineage" | "pinnedAt"> & {
+  readonly source: Pick<LaunchFoldThread["source"], "launchedBy">;
+};
+
+const isRemoteTaskChild = (thread: Omit<LaunchRecordThread, "pinnedAt">) =>
   isRemoteDelegatedChild({ lineage: thread.lineage, launchedBy: thread.source.launchedBy });
 
 /** Whether a thread folds under its launcher's row: agent launches and remote task.create children. */
-export function foldsUnderLauncherRow(
-  thread: Pick<LaunchFoldThread, "lineage" | "source" | "pinnedAt">,
-): boolean {
+export function foldsUnderLauncherRow(thread: LaunchRecordThread): boolean {
   const launchedBy = thread.source.launchedBy;
   return (
     foldsUnderLauncher({ lineage: thread.lineage, pinnedAt: thread.pinnedAt, launchedBy }) ||
