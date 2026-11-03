@@ -131,16 +131,30 @@ export const makeBrowserCapabilityLifecycle = Effect.fn("CuaDriver.makeBrowserCa
     readonly setDriverCapability?: (supported: boolean) => Effect.Effect<void>;
   }) {
     const lock = yield* Semaphore.make(1);
+    let accepted: (() => boolean) | undefined;
     return {
-      fence: lock.withPermits(1)(options.setDriverCapability?.(false) ?? Effect.void),
-      probe: (mcp: CuaDriverMcpConfiguration, current: () => boolean) => {
+      fence: lock.withPermits(1)(
+        Effect.suspend(() => {
+          accepted = undefined;
+          return options.setDriverCapability?.(false) ?? Effect.void;
+        }),
+      ),
+      afterFenceFailure: Effect.fn("CuaDriver.afterFenceFailure")((disable: Effect.Effect<void>) =>
+        lock.withPermits(1)(Effect.suspend(() => (accepted?.() ? Effect.void : disable))),
+      ),
+      probe: (mcp: CuaDriverMcpConfiguration, current: () => boolean, newer: () => boolean) => {
         const probe = options.probeBrowserClaims;
         const set = options.setDriverCapability;
         if (!probe || !set) return Effect.void;
         return probe(mcp).pipe(
           Effect.flatMap((result) =>
             lock.withPermits(1)(
-              Effect.suspend(() => (current() ? set(supportsBrowserClaims(result)) : Effect.void)),
+              Effect.gen(function* () {
+                if (!current()) return;
+                const supported = supportsBrowserClaims(result);
+                yield* set(supported);
+                accepted = supported && current() ? newer : undefined;
+              }),
             ),
           ),
           Effect.forkDetach({ startImmediately: true }),

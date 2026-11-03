@@ -14,6 +14,7 @@ import {
   ComputerUseRequestInput,
   ComputerUseRequestResult,
   CuaHostStatus,
+  CuaDriverMcpConfiguration,
   CuaAgentBlock,
   cuaAgentBlockMessage,
   cuaAgentBlockUnder,
@@ -24,6 +25,7 @@ import {
   DesktopTelemetryControlMessage,
   DesktopHostTelemetryMessage,
 } from "./resourceTelemetry.ts";
+import { ForwardCompatibleOptional, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { HostStatusEntry } from "./hostStatus.ts";
 import { ProviderHostRow } from "./providerHostSync.ts";
 
@@ -60,6 +62,66 @@ const metrics = {
   threads: { running: 0, waiting: 0, queued: 0 },
   quotas: [],
 };
+
+it("carries host generations while older telemetry decoders ignore the extra field", () => {
+  const ready = {
+    version: 1,
+    type: "cuaDriverReport",
+    requestId: "r1",
+    status: "ready",
+    mcp: { command: "/driver", args: [], environment: [] },
+    hostGeneration: 7,
+  } as const;
+  expect(decodeTelemetryMessage(ready)).toEqual(ready);
+  const legacyReport = Schema.Union([
+    Schema.Struct({
+      version: Schema.Literal(1),
+      type: Schema.Literal("cuaDriverReport"),
+      requestId: TrimmedNonEmptyString,
+      status: Schema.Literal("ready"),
+      mcp: CuaDriverMcpConfiguration,
+    }),
+    Schema.Struct({
+      version: Schema.Literal(1),
+      type: Schema.Literal("cuaDriverReport"),
+      requestId: TrimmedNonEmptyString,
+      status: Schema.Literals(["stopped", "unavailable"]),
+      message: Schema.optionalKey(Schema.String),
+      block: ForwardCompatibleOptional(CuaAgentBlock),
+    }),
+  ]);
+  const messages = DesktopHostTelemetryMessage.members;
+  const legacyTelemetry = Schema.Union([
+    messages[0],
+    messages[1],
+    messages[2],
+    legacyReport,
+    messages[4],
+    messages[5],
+    messages[6],
+    messages[7],
+    messages[8],
+    messages[9],
+  ]);
+  const { hostGeneration: _, ...older } = ready;
+  expect(Schema.decodeSync(legacyTelemetry)(ready)).toEqual(older);
+  expect(decodeTelemetryMessage(older)).toEqual(older);
+  const stopped = {
+    version: 1,
+    type: "cuaDriverReport",
+    requestId: "r1",
+    status: "stopped",
+    hostGeneration: 7,
+  } as const;
+  expect(decodeTelemetryMessage(stopped)).toEqual(stopped);
+  expect(Schema.decodeSync(legacyTelemetry)(stopped)).toEqual({
+    version: 1,
+    type: "cuaDriverReport",
+    requestId: "r1",
+    status: "stopped",
+  });
+  expect(() => decodeTelemetryMessage({ ...ready, hostGeneration: 0 })).toThrow();
+});
 
 describe("computer use on the wire", () => {
   it("carries a bounded primitive request on both lease streams", () => {

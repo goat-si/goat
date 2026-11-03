@@ -50,7 +50,15 @@ const make = Effect.gen(function* () {
       Option.isSome(manifest) && manifest.value.fence
         ? manifest.value.fence
         : Effect.succeed(false),
-    onFenceFailure: () => disable(),
+    onFenceFailure: () =>
+      Option.isSome(manifest) && manifest.value.onFenceFailure
+        ? manifest.value.onFenceFailure(disable())
+        : disable(),
+    markFence: () => (Option.isSome(manifest) ? manifest.value.markFence?.() : undefined),
+    onConcurrentFence: (marked) =>
+      marked && Option.isSome(manifest) && manifest.value.onFenceFailure
+        ? manifest.value.onFenceFailure(disable())
+        : disable(),
     confirm: () =>
       Option.isSome(manifest)
         ? manifest.value.readConfig
