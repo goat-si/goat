@@ -23,6 +23,7 @@ vi.mock("../../connection/catalog", async () => {
 vi.mock("../../state/pull-requests", async () => {
   const { AsyncResult, Atom } = await import("effect/reactivity");
   const Effect = await import("effect/Effect");
+  const { ConnectionTransientError } = await import("@goat/client-runtime/connection");
   const page = (nextCursors: PullRequestListResult["nextCursors"]): PullRequestListResult => ({
     entries: [],
     nextCursors,
@@ -36,6 +37,11 @@ vi.mock("../../state/pull-requests", async () => {
     const response = page(target.input.cursors ? {} : { "github.com org/repo": "next" });
     return Atom.make(
       Effect.suspend(() => {
+        if (target.environmentId.startsWith("unreachable"))
+          return Effect.fail(
+            new ConnectionTransientError({ reason: "network", detail: "offline" }),
+          );
+        if (target.environmentId === "other-error") return Effect.fail(new Error("offline"));
         if (target.environmentId === "offline")
           return Effect.fail(new Error("Environment is not connected."));
         if (target.input.cursors && mocks.failPage) return Effect.fail(new Error("Page failed."));
@@ -97,6 +103,18 @@ function setup(ids: readonly string[]) {
     },
   };
 }
+
+it("marks unreachable environments by failure type for the PR list summary (#2464)", async () => {
+  using probe = setup(["unreachable-one", "unreachable-two", "other-error"]);
+  await act(async () => probe.latest.onRefresh());
+  expect(
+    probe.latest.data.errors.map(({ environmentId, ...error }) => ({ environmentId, ...error })),
+  ).toEqual([
+    { environmentId: "unreachable-one", projectTitle: "", message: "offline", unreachable: true },
+    { environmentId: "unreachable-two", projectTitle: "", message: "offline", unreachable: true },
+    { environmentId: "other-error", projectTitle: "", message: "offline" },
+  ]);
+});
 
 it("keeps a refresh failure in the source errors and allows healthy pagination", async () => {
   using probe = setup(["healthy", "offline"]);
