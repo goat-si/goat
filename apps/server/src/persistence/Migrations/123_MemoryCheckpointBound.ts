@@ -42,7 +42,7 @@ export default Effect.gen(function* () {
     LEFT JOIN memory_payloads p ON p.space=r.space AND p.payload_ref=r.payload_ref
     WHERE NOT EXISTS(SELECT 1 FROM memory_tombstones t WHERE t.space=i.space AND t.memory_id=i.memory_id)
     GROUP BY i.space,i.memory_id ORDER BY i.space,i.memory_id`;
-  for (let offset = 0; offset < identities.length; ) {
+  for (let offset = 0; offset < identities.length;) {
     const chunk = [];
     let bytes = 0;
     for (const row of identities.slice(offset, offset + 100)) {
