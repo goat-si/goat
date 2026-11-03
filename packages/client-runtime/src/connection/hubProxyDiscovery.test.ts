@@ -35,6 +35,7 @@ import {
   AVAILABLE_CONNECTION_STATE,
   BearerConnectionTarget,
   ConnectionBlockedError,
+  ConnectionTransientError,
   HubProxyConnectionTarget,
   PrimaryConnectionTarget,
   RelayConnectionTarget,
@@ -136,8 +137,9 @@ const makeConnectedDiscovery = Effect.fn(function* (options: {
   readonly onStrongRead?: (stored: Map<string, BearerConnectionCredential>) => void;
   /** Adds a device reached through the hub whose last attempt was refused. */
   readonly blockedDevice?: boolean;
-  /** Disables the hub between the reconnect's disconnect and connect. */
-  readonly disableDuringReconnect?: boolean;
+  /** Credential reads and writes that fail before the store answers again. */
+  readonly failStoreReads?: number;
+  readonly failStoreWrites?: number;
 }) {
   const h = yield* makeRegistry;
   const firstRead = yield* Deferred.make<void>();
@@ -147,8 +149,9 @@ const makeConnectedDiscovery = Effect.fn(function* (options: {
   const emitted = yield* Deferred.make<void>();
   const reconnected = yield* Deferred.make<void>();
   const deviceRetried = yield* Deferred.make<void>();
-  const settled = yield* Deferred.make<void>();
-  const calls: Array<"connect" | "disconnect"> = [];
+  const storeFailed = yield* Deferred.make<void>();
+  let storeReads = 0;
+  let storeWrites = 0;
   const retried: EnvironmentId[] = [];
   let reads = 0;
   let strongReads = 0;
@@ -243,16 +246,13 @@ const makeConnectedDiscovery = Effect.fn(function* (options: {
     inboundFrames: Effect.succeed(0),
     closed: Effect.never,
   };
-  const supervisorState = yield* SubscriptionRef.make<SupervisorConnectionState>({
-    ...AVAILABLE_CONNECTION_STATE,
-    phase: "connected",
-  });
-  const supervisorSession = yield* SubscriptionRef.make(Option.some(session));
-  let entries: SubscriptionRef.SubscriptionRef<ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>>;
   const supervisor = EnvironmentSupervisor.of({
     target,
-    state: supervisorState,
-    session: supervisorSession,
+    state: yield* SubscriptionRef.make<SupervisorConnectionState>({
+      ...AVAILABLE_CONNECTION_STATE,
+      phase: "connected",
+    }),
+    session: yield* SubscriptionRef.make(Option.some(session)),
     prepared: yield* SubscriptionRef.make<Option.Option<PreparedConnection>>(
       Option.some({
         environmentId: HUB,
@@ -264,26 +264,11 @@ const makeConnectedDiscovery = Effect.fn(function* (options: {
           options.bearerAddress === undefined ? null : { _tag: "Bearer", token: "weak" },
       }),
     ),
-    connect: Effect.sync(() => calls.push("connect")).pipe(
-      Effect.andThen(Deferred.succeed(reconnected, undefined)),
-    ),
-    // Like the real supervisor, a disconnect ends the session discovery is following.
-    disconnect: Effect.gen(function* () {
-      calls.push("disconnect");
-      if (calls.length > 1) return yield* Deferred.succeed(settled, undefined);
-      if (options.disableDuringReconnect)
-        yield* SubscriptionRef.update(entries, (current) => {
-          const hubEntry = current.get(HUB);
-          return hubEntry === undefined
-            ? current
-            : new Map(current).set(HUB, { ...hubEntry, enabled: false });
-        });
-      yield* SubscriptionRef.set(supervisorSession, Option.none());
-      yield* SubscriptionRef.set(supervisorState, AVAILABLE_CONNECTION_STATE);
-    }),
+    connect: Effect.void,
+    disconnect: Effect.void,
     retryNow: Effect.void,
   });
-  entries = yield* SubscriptionRef.make<ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>>(
+  const entries = yield* SubscriptionRef.make<ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>>(
     new Map([
       ...(options.blockedDevice ? [[NODE, { ...node, enabled: true }] as const] : []),
       [
@@ -326,6 +311,8 @@ const makeConnectedDiscovery = Effect.fn(function* (options: {
       Effect.sync(() => {
         retried.push(id);
       }).pipe(Effect.andThen(Deferred.succeed(deviceRetried, undefined))),
+    reconnect: (id: EnvironmentId) =>
+      id === HUB ? Deferred.succeed(reconnected, undefined).pipe(Effect.asVoid) : Effect.void,
     followStream: (
       id: EnvironmentId,
       stream: Stream.Stream<unknown, unknown, EnvironmentSupervisor>,
@@ -375,12 +362,25 @@ const makeConnectedDiscovery = Effect.fn(function* (options: {
     Effect.provideService(
       ConnectionCredentialStore,
       ConnectionCredentialStore.of({
-        get: (id) => Effect.sync(() => Option.fromUndefinedOr(stored.get(id))),
+        get: (id) =>
+          ++storeReads <= (options.failStoreReads ?? 0)
+            ? Deferred.succeed(storeFailed, undefined).pipe(
+                Effect.andThen(
+                  Effect.fail(new ConnectionTransientError({ reason: "network", detail: "Busy" })),
+                ),
+              )
+            : Effect.sync(() => Option.fromUndefinedOr(stored.get(id))),
         put: (id, credential, expected) =>
-          Effect.sync(() => {
-            if (expected === undefined || (stored.get(id)?.token ?? null) === expected)
-              stored.set(id, credential);
-          }),
+          ++storeWrites <= (options.failStoreWrites ?? 0)
+            ? Deferred.succeed(storeFailed, undefined).pipe(
+                Effect.andThen(
+                  Effect.fail(new ConnectionTransientError({ reason: "network", detail: "Busy" })),
+                ),
+              )
+            : Effect.sync(() => {
+                if (expected === undefined || (stored.get(id)?.token ?? null) === expected)
+                  stored.set(id, credential);
+              }),
         remove: (id) =>
           Effect.sync(() => {
             stored.delete(id);
@@ -406,8 +406,7 @@ const makeConnectedDiscovery = Effect.fn(function* (options: {
     reconnected,
     retried,
     deviceRetried,
-    settled,
-    calls,
+    storeFailed,
   };
 });
 
@@ -421,22 +420,24 @@ describe("a hub reached with a session that lacks hub:proxy", () => {
       });
       yield* Deferred.await(h.reconnected);
       expect(h.stored.get("a")?.token).toBe("strong");
-      // Ending the old session ends the stream that asked for the reconnect; it still connects.
-      expect(h.calls).toEqual(["disconnect", "connect"]);
     }).pipe(Effect.scoped),
   );
 
-  it.effect("leaves the hub off when it is disabled during the reconnect", () =>
-    Effect.gen(function* () {
-      const h = yield* makeConnectedDiscovery({
-        scopes: [],
-        bearerAddress: "http://100.100.1.1:3773/",
-        bearerOverTailscale: true,
-        disableDuringReconnect: true,
-      });
-      yield* Deferred.await(h.settled);
-      expect(h.calls).toEqual(["disconnect", "connect", "disconnect"]);
-    }).pipe(Effect.scoped),
+  it.effect.each([{ failStoreReads: 1 }, { failStoreWrites: 1 }])(
+    "retries after the credential store failed for a moment (%j)",
+    (failure) =>
+      Effect.gen(function* () {
+        const h = yield* makeConnectedDiscovery({
+          scopes: [],
+          bearerAddress: "http://100.100.1.1:3773/",
+          bearerOverTailscale: true,
+          ...failure,
+        });
+        yield* Deferred.await(h.storeFailed);
+        yield* TestClock.adjust("1 second");
+        yield* Deferred.await(h.reconnected);
+        expect(h.stored.get("a")?.token).toBe("strong");
+      }).pipe(Effect.scoped),
   );
 
   it.effect("retries a hub-access check that failed for a moment", () =>

@@ -253,7 +253,6 @@ export const watchConnectedHubProxyDiscovery = Effect.gen(function* () {
   // order can pick the one without hub:proxy. The active credential then takes the saved one that
   // has it, unless that token would travel over plain HTTP, and the hub reconnects with it.
   const adoptSavedHubAccess = Effect.fn("HubProxyDiscovery.adoptSavedHubAccess")(function* (
-    supervisor: EnvironmentSupervisor["Service"],
     prepared: PreparedConnection,
   ) {
     const target = prepared.target;
@@ -278,9 +277,8 @@ export const watchConnectedHubProxyDiscovery = Effect.gen(function* () {
     for (const credentialId of candidates) {
       if (sharing.some((shared) => sendsTokenInClear(routes, shared, undefined, credentialId)))
         continue;
-      const saved = Option.getOrUndefined(
-        yield* credentials.get(credentialId).pipe(Effect.orElseSucceed(() => Option.none())),
-      );
+      // Store and transient network failures go to the discovery retry rather than a verdict.
+      const saved = Option.getOrUndefined(yield* credentials.get(credentialId));
       if (saved === undefined || saved.token === current.token) continue;
       const state = yield* fetchEnvironmentSessionState({
         prepared: { ...prepared, httpAuthorization: { _tag: "Bearer", token: saved.token } },
@@ -295,11 +293,6 @@ export const watchConnectedHubProxyDiscovery = Effect.gen(function* () {
         (yield* credentials.put(activeCredentialId, saved, current.token).pipe(
           Effect.andThen(credentials.get(activeCredentialId)),
           Effect.map((stored) => Option.isSome(stored) && stored.value.token === saved.token),
-          Effect.catch((error) =>
-            Effect.logWarning("Could not save the hub credential that has hub access.", {
-              error,
-            }).pipe(Effect.as(false)),
-          ),
         ));
       if (!written) return false;
       yield* Effect.logInfo("Using the saved hub credential that has hub access.", {
@@ -307,17 +300,7 @@ export const watchConnectedHubProxyDiscovery = Effect.gen(function* () {
         connectionId: activeCredentialId,
         from: credentialId,
       });
-      // Ending the live session makes the next attempt read the saved credential. setEnabled saves
-      // the entry before it signals, so a disable that raced this pair is seen by the last check.
-      // Ending the session also ends this stream, so the pair must finish uninterrupted.
-      yield* Effect.uninterruptible(
-        Effect.gen(function* () {
-          yield* supervisor.disconnect;
-          yield* supervisor.connect;
-          const latest = (yield* SubscriptionRef.get(registry.entries)).get(target.environmentId);
-          if (latest?.enabled !== true) yield* supervisor.disconnect;
-        }),
-      );
+      yield* registry.reconnect(target.environmentId);
       return true;
     }
     return false;
@@ -432,7 +415,7 @@ export const watchConnectedHubProxyDiscovery = Effect.gen(function* () {
                       );
                       const sessionScopes = auth.permissions ?? auth.scopes ?? [];
                       if (!auth.authenticated || !sessionScopes.includes(AuthHubProxyScope))
-                        return (yield* adoptSavedHubAccess(supervisor, prepared.value))
+                        return (yield* adoptSavedHubAccess(prepared.value))
                           ? Stream.empty
                           : Stream.fromEffect(emptyUpdate);
                       return subscribeNodes({}).pipe(
