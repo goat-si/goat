@@ -1051,10 +1051,9 @@ export const make = Effect.gen(function* () {
     );
     yield* Effect.sleep(AUTO_UPDATE_POLL_INTERVAL).pipe(
       Effect.andThen(checkForUpdates("poll")),
-      Effect.forever,
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) {
-          return Effect.void;
+          return Effect.failCause(cause);
         }
         const error = new DesktopUpdatePollerError({ poller: "poll", cause });
         return logUpdaterError(error.message, {
@@ -1063,6 +1062,7 @@ export const make = Effect.gen(function* () {
           poller: error.poller,
         });
       }),
+      Effect.forever,
       Effect.forkScoped,
     );
   }).pipe(Effect.withSpan("desktop.updates.startPollers"));
