@@ -86,4 +86,31 @@ it("waits for the branch repository before relinking a fork PR (#2464)", async (
   expect(state.writes).toEqual([
     expect.objectContaining({ repository: "fork/project", number: 11 }),
   ]);
+  state.branch = null;
+  state.answer = null;
+  state.writes = [];
+  await screen.rerender(<Harness />);
+  await act(async () => {});
+  expect(state.writes).toEqual([]);
+  state.answer = { entries: [fork as never], errors: [], truncated: false };
+  await screen.rerender(<Harness />);
+  await act(async () => {});
+  expect(state.writes).toEqual([
+    expect.objectContaining({ repository: "fork/project", number: 11 }),
+  ]);
+  state.answer = { entries: [], errors: [], truncated: true };
+  state.writes = [];
+  await screen.rerender(<Harness />);
+  await act(async () => {});
+  expect(state.writes).toEqual([]);
+  state.answer = { entries: [], errors: [{ message: "unavailable" } as never], truncated: false };
+  await screen.rerender(<Harness />);
+  await act(async () => {});
+  expect(state.writes).toEqual([]);
+  state.answer = { entries: [], errors: [], truncated: false };
+  await screen.rerender(<Harness />);
+  await act(async () => {});
+  expect(state.writes).toEqual([
+    expect.objectContaining({ repository: "upstream/project", number: 11 }),
+  ]);
 });

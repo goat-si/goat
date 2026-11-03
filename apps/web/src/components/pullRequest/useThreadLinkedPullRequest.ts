@@ -14,6 +14,8 @@ import {
 import { useEffect, useRef } from "react";
 import { selectActiveRightPanelSurface, useRightPanelStore } from "../../rightPanelStore";
 import { useQuietThreadShell } from "../../state/entities";
+import { relinkPullRequestList } from "../../state/pullRequests";
+import { useEnvironmentQuery } from "../../state/query";
 import { threadEnvironment } from "../../state/threads";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { useLinkedThreadPullRequest } from "../ThreadStatusIndicators";
@@ -37,12 +39,42 @@ export function useThreadLinkedPullRequest(input: {
   const persistedStatus = useLinkedThreadPullRequest(input.environmentId, persisted);
   const detected = gitStatus?.pr;
   const branchPullRequest = useQuietThreadShell(serverThreadRef)?.branchPullRequest;
-  const detectedRepository =
+  const matchingBranch =
     detected &&
     branchPullRequest &&
     sourceControlClients.isSameChangeRequest(detected.url, branchPullRequest.url)
-      ? branchPullRequest.repository
-      : projectRepository;
+      ? branchPullRequest
+      : null;
+  const needsLookup =
+    matchingBranch === null &&
+    detected?.state === "open" &&
+    persisted !== null &&
+    (persistedStatus?.pr.state === "merged" || persistedStatus?.pr.state === "closed") &&
+    gitStatus?.refName === threadBranch &&
+    detected.headRef === threadBranch &&
+    projectId !== null &&
+    input.environmentId !== null;
+  const listed = useEnvironmentQuery(
+    needsLookup && input.environmentId !== null && projectId !== null && detected
+      ? relinkPullRequestList({ environmentId: input.environmentId, projectId, url: detected.url })
+      : null,
+  );
+  const listedMatch =
+    detected && listed.isSuccess && !listed.isPending
+      ? listed.data?.entries.find((entry) =>
+          sourceControlClients.isSameChangeRequest(entry.url, detected.url),
+        )
+      : undefined;
+  const detectedRepository =
+    matchingBranch?.repository ??
+    listedMatch?.repository ??
+    (listed.isSuccess &&
+    !listed.isPending &&
+    listed.data &&
+    listed.data.errors.length === 0 &&
+    !listed.data.truncated
+      ? projectRepository
+      : null);
   const replacement: ThreadLinkedPullRequest | null =
     persisted === null ||
     (persistedStatus?.pr.state !== "merged" && persistedStatus?.pr.state !== "closed") ||

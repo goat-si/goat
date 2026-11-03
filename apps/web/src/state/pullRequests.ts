@@ -7,6 +7,7 @@ import {
 } from "@goat/client-runtime/state/pull-requests";
 import {
   PullRequestListResult,
+  WS_METHODS,
   type EnvironmentId,
   type ProjectId,
   type PullRequestChecksState,
@@ -22,6 +23,7 @@ import {
   threadPullRequestKeyOf,
   visibleThreadPullRequests,
 } from "@goat/client-runtime/thread-pull-requests";
+import { createEnvironmentRpcQueryAtomFamily } from "@goat/client-runtime/state/runtime";
 import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -367,6 +369,26 @@ export function restoredPullRequestList(
 }
 
 // Answers are stamped on arrival: older servers leave no other ordering for same-dated reads.
+const relinkPullRequestLists = Atom.family((_url: string) =>
+  createEnvironmentRpcQueryAtomFamily(connectionAtomRuntime, {
+    label: "environment-data:pull-requests:relink-list",
+    tag: WS_METHODS.pullRequestsList,
+    staleTimeMs: 0,
+    idleTtlMs: 0,
+  }),
+);
+
+export function relinkPullRequestList(target: {
+  environmentId: EnvironmentId;
+  projectId: ProjectId;
+  url: string;
+}) {
+  return relinkPullRequestLists(target.url)({
+    environmentId: target.environmentId,
+    input: { state: "open", projectId: target.projectId, includeUpstream: true, limit: 500 },
+  });
+}
+
 export const pullRequestEnvironment = createPullRequestEnvironmentAtoms(connectionAtomRuntime, {
   list: ({ environmentId, input }, answer, registry) =>
     Effect.map(Clock.currentTimeMillis, (observedAt) => {
