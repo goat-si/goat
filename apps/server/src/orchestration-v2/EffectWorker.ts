@@ -36,7 +36,7 @@ import * as ThreadTitleRegenerationService from "./ThreadTitleRegenerationServic
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { makeComputerUseStop } from "./goat/ComputerUseStop.ts";
-import { continueRestartedRun } from "./RestartContinuation.ts";
+import { makeRestartContinuation } from "./RestartContinuation.ts";
 import * as AutomationHold from "../automationHold.ts";
 import { isNonRetryableProviderTurnControlFailure } from "./providerTurnControlFailure.ts";
 
@@ -53,7 +53,6 @@ export class OrchestrationEffectExecutorV2 extends Context.Service<
 >()("goat/orchestration-v2/EffectWorker/OrchestrationEffectExecutorV2") {}
 
 const WORKSPACE_LEASE_RETRY_MS = 1_000;
-
 export const layerExecutor: Layer.Layer<
   OrchestrationEffectExecutorV2,
   never,
@@ -80,6 +79,7 @@ export const layerExecutor: Layer.Layer<
       yield* ThreadTitleRegenerationService.ThreadTitleRegenerationService;
     const threads = yield* ThreadManagementService.ThreadManagementService;
     const settings = yield* ServerSettings.ServerSettingsService;
+    const continueRestartedRun = yield* makeRestartContinuation(providerTurnStart);
     const stopComputerUse = yield* makeComputerUseStop;
     return OrchestrationEffectExecutorV2.of({
       execute: Effect.fn("OrchestrationEffectExecutorV2.execute")(function (effect, options) {

@@ -5,6 +5,7 @@ import {
   DEFAULT_SERVER_SETTINGS,
   ProjectId,
   ProviderInstanceId,
+  ThreadId,
   ProviderDriverKind,
   CommandId,
   EnvironmentId,
@@ -42,6 +43,7 @@ import * as EffectWorker from "./orchestration-v2/EffectWorker.ts";
 import * as LegacyV1ThreadImporter from "./orchestration-v2/legacy/LegacyV1ThreadImporter.ts";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
 import * as ProjectStore from "./orchestration-v2/ProjectStore.ts";
+import * as ProjectionStore from "./orchestration-v2/ProjectionStore.ts";
 import * as ProviderRuntimeRecovery from "./orchestration-v2/ProviderRuntimeRecoveryService.ts";
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
 import * as ThreadLaunch from "./orchestration-v2/ThreadLaunchService.ts";
@@ -52,6 +54,7 @@ import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import { ServerActivation } from "./serverActivation.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as CodexDetachedAppServerLive from "./provider/CodexDetachedAppServerLive.ts";
+import * as CodexSurvivors from "./provider/CodexSurvivors.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
@@ -75,6 +78,8 @@ const bootstrapScenario = (
   intent: Option.Option<DesktopStopIntent> = Option.none(),
   readerEffect: Effect.Effect<Option.Option<DesktopStopIntent>> = Effect.succeed(intent),
   hold: Effect.Effect<void> = Effect.void,
+  onGoalOpen?: () => void,
+  cleanupFails = false,
 ) =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -145,15 +150,63 @@ const bootstrapScenario = (
             return recovery;
           }),
           prepareForShutdown: Effect.succeed({ candidates: 0, continued: 0 }),
+          prepareForShutdownWithStopKind: () => Effect.succeed({ candidates: 0, continued: 0 }),
           reconcile: () => Effect.succeed(recovery),
         }),
         Layer.mock(Orchestrator.OrchestratorV2)({ recoverDelegatedTasks: Effect.void }),
+        Layer.mock(CodexSurvivors.CodexSurvivors)({
+          list: Effect.succeed([]),
+          classifyRecord: () => Effect.succeed({ type: "verified", pgid: 123, members: [] }),
+        }),
         Layer.mock(CodexDetachedAppServerLive.CodexDetachedAppServers)({
-          cleanup: Effect.succeed([]),
+          cleanup: cleanupFails ? Effect.die("cleanup failed") : Effect.succeed([]),
+          loadRecords: Effect.succeed(
+            onGoalOpen === undefined
+              ? []
+              : [
+                  {
+                    version: 1,
+                    name: "codex-abcdefabcdef",
+                    instanceId: "codex",
+                    socketPath: "/tmp/goal.sock",
+                    pgid: 123,
+                    bootId: "boot",
+                    state: "running",
+                    stderrMode: "discard",
+                    createdAt: "2026-01-01T00:00:00Z",
+                    goalBlocks: [
+                      { threadId: ThreadId.make("goal-thread"), nativeThreadId: "native-goal" },
+                    ],
+                  },
+                ],
+          ),
           beginServerShutdown: Effect.void,
           socketTransportEnabled: false,
         }),
-        Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({ shutdown }),
+        Layer.mock(ProjectionStore.ProjectionStoreV2)({
+          getThreadRecords: () =>
+            Effect.succeed({
+              thread: {
+                id: ThreadId.make("goal-thread"),
+                projectId,
+                modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "test" },
+                runtimeMode: "full-access",
+                interactionMode: "default",
+                worktreePath: "/workspace",
+                deletedAt: null,
+              },
+              providerThreads: [],
+              providerSessions: [],
+            } as never),
+        }),
+        Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
+          shutdown,
+          open: () =>
+            Effect.sync(() => {
+              onGoalOpen?.();
+              return {} as never;
+            }),
+        }),
         Layer.mock(AgentAwarenessRelay.AgentAwarenessRelay)({ start: () => Effect.void }),
         Layer.mock(EffectWorker.OrchestrationEffectWorkerV2)({
           configureConcurrency: () => Effect.void,
@@ -932,5 +985,42 @@ it.effect("automatic pull only updates enabled, behind, clean default-branch che
       { ...overrides({ "/opted-out": false }), defaultAutoPull: true },
     ).pipe(Effect.provideService(GitVcsDriver.GitVcsDriver, git));
     assert.deepStrictEqual(pulled, ["/inherited"]);
+  }),
+);
+
+it.effect("startup attaches a retained goal-only Codex instance before readiness", () =>
+  Effect.gen(function* () {
+    let opened = 0;
+    yield* bootstrapScenario(
+      "disabled-codex",
+      Effect.void,
+      undefined,
+      Option.none(),
+      Effect.succeedNone,
+      Effect.void,
+      () => {
+        opened++;
+      },
+    );
+    assert.equal(opened, 1);
+  }),
+);
+
+it.effect("a failed detached cleanup does not attempt goal reconnection", () =>
+  Effect.gen(function* () {
+    let opened = 0;
+    yield* bootstrapScenario(
+      "disabled-codex",
+      Effect.void,
+      undefined,
+      Option.none(),
+      Effect.succeedNone,
+      Effect.void,
+      () => {
+        opened++;
+      },
+      true,
+    );
+    assert.equal(opened, 0);
   }),
 );

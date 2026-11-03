@@ -27,7 +27,10 @@ const CODEX_TRANSPORT_ENV = "GOAT_CODEX_APP_SERVER_TRANSPORT";
 
 export class CodexDetachedAppServers extends Context.Service<
   CodexDetachedAppServers,
-  DetachedAppServers & { readonly socketTransportEnabled: boolean }
+  DetachedAppServers & {
+    readonly socketTransportEnabled: boolean;
+    readonly socketTransportMode?: "auto" | "socket" | "stdio" | "unsupported";
+  }
 >()("goat/provider/CodexDetachedAppServerLive/CodexDetachedAppServers") {}
 
 const PROCESS_ROW = /^\s*(\d+)\s+(\d+)\s+(.*)$/;
@@ -164,14 +167,7 @@ const layer = Layer.effect(
       const exited = yield* Deferred.make<number | null>();
       const child = yield* Effect.try({
         try: () => {
-          const stderr = NodeFS.openSync(
-            input.stderrPath,
-            NodeFS.constants.O_WRONLY |
-              NodeFS.constants.O_CREAT |
-              NodeFS.constants.O_TRUNC |
-              NodeFS.constants.O_APPEND,
-            0o600,
-          );
+          const stderr = NodeFS.openSync("/dev/null", "w");
           try {
             const child = guardChild(
               NodeChildProcess.spawn(
@@ -244,6 +240,14 @@ const layer = Layer.effect(
       ...service,
       socketTransportEnabled:
         platform !== "win32" && environment[CODEX_TRANSPORT_ENV]?.trim() === "socket",
+      socketTransportMode:
+        platform === "win32"
+          ? ("unsupported" as const)
+          : environment[CODEX_TRANSPORT_ENV]?.trim() === "socket"
+            ? ("socket" as const)
+            : environment[CODEX_TRANSPORT_ENV]?.trim() === "stdio"
+              ? ("stdio" as const)
+              : ("auto" as const),
     };
   }),
 );

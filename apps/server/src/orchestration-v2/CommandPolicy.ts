@@ -19,6 +19,9 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 
+const SURVIVOR_STEERING_REFUSAL =
+  "This Codex turn is still running from before the server restarted. Stop it or wait for it to finish before steering.";
+
 export const MessageDispatchDecisionV2 = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("start_run"),
@@ -76,6 +79,7 @@ export class CommandPolicyMessageDispatchError extends Schema.TaggedError<Comman
   },
 ) {
   override get message(): string {
+    if (this.cause === SURVIVOR_STEERING_REFUSAL) return SURVIVOR_STEERING_REFUSAL;
     return `Failed to choose message dispatch policy for command ${this.commandId}.`;
   }
 }
@@ -521,6 +525,26 @@ const decideMessageDispatch: CommandPolicyV2Shape["decideMessageDispatch"] = (in
       );
       const modelSelection =
         input.requestedModelSelection ?? input.projection.thread.modelSelection;
+
+      if (
+        (input.requestedMode.type === "steer_active" ||
+          input.requestedMode.type === "restart_active") &&
+        activeRun?.id === input.requestedMode.targetRunId &&
+        input.projection.providerTurns.some(
+          (turn) =>
+            turn.runAttemptId === activeRun.activeAttemptId &&
+            turn.status === "running" &&
+            turn.survivingRestart !== undefined,
+        )
+      ) {
+        return Effect.fail(
+          new CommandPolicyMessageDispatchError({
+            commandId: input.commandId,
+            threadId: input.projection.thread.id,
+            cause: SURVIVOR_STEERING_REFUSAL,
+          }),
+        );
+      }
 
       switch (input.requestedMode.type) {
         case "steer_active": {

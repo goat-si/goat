@@ -1,5 +1,6 @@
 import { ProviderUpdateChecksSetting } from "./ProviderUpdateChecksSetting";
 import { AgentMemoryLimitSetting } from "./AgentMemoryLimitSetting";
+import { RestartContinuationSettings } from "./RestartContinuationSettings";
 import { SettingsGroup } from "./SettingsGroup";
 import { NotificationSettings } from "./NotificationSettings";
 import { PRIVACY_POLICY_URL } from "../../legalLinks";
@@ -429,6 +430,7 @@ export function useSettingsRestore(onRestored?: () => void) {
   } = useTheme();
   const settings = useScopedSettings();
   const updateSettings = useUpdateScopedSettings();
+  const { connectedEnvironments } = useSettingsScope();
   const [botThreadsShown, setBotThreadsShown] = useShowBotThreads();
 
   const isTextGenerationModelDirty = !Equal.equals(
@@ -555,6 +557,10 @@ export function useSettingsRestore(onRestored?: () => void) {
     DEFAULT_UNIFIED_SETTINGS.continueThreadsAfterServerUpdate
       ? ["Continue threads after restarts"]
       : []),
+    ...(settings.codexTurnsSurviveServerStop !==
+    DEFAULT_UNIFIED_SETTINGS.codexTurnsSurviveServerStop
+      ? ["Keep Codex turns running"]
+      : []),
     ...(isBackgroundActivityDirty ? ["Background activity"] : []),
     ...(settings.agentMemoryLimitGiB !== null ? ["Agent memory limit"] : []),
     ...(settings.defaultThreadEnvMode !== DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode
@@ -678,6 +684,12 @@ export function useSettingsRestore(onRestored?: () => void) {
       automaticServerUpdates: DEFAULT_UNIFIED_SETTINGS.automaticServerUpdates,
       continueThreadsAfterServerUpdate: DEFAULT_UNIFIED_SETTINGS.continueThreadsAfterServerUpdate,
       agentMemoryLimitGiB: DEFAULT_UNIFIED_SETTINGS.agentMemoryLimitGiB,
+      ...(connectedEnvironments.length > 0 &&
+      connectedEnvironments.every(
+        (target) => target.serverConfig?.environment.capabilities.codexTurnSurvival === true,
+      )
+        ? { codexTurnsSurviveServerStop: DEFAULT_UNIFIED_SETTINGS.codexTurnsSurviveServerStop }
+        : {}),
       backgroundActivity: DEFAULT_UNIFIED_SETTINGS.backgroundActivity,
       backgroundActivityProfile: DEFAULT_UNIFIED_SETTINGS.backgroundActivityProfile,
       automaticGitFetchInterval: DEFAULT_UNIFIED_SETTINGS.automaticGitFetchInterval,
@@ -849,11 +861,6 @@ export function GeneralSettingsPanel() {
   const supportsAutoSettlementScope = connectedEnvironments.every(
     (target) => target.serverConfig?.environment.capabilities.threadAutoSettlementScope === true,
   );
-  const supportsRestartContinuation =
-    connectedEnvironments.length > 0 &&
-    connectedEnvironments.every(
-      (target) => target.serverConfig?.environment.capabilities.threadRestartContinuation === true,
-    );
   const supportsAutomaticServerUpdates =
     connectedEnvironmentsSupportAutomaticServerUpdates(connectedEnvironments);
 
@@ -1312,43 +1319,7 @@ export function GeneralSettingsPanel() {
           }
         />
 
-        <SettingsRow
-          {...searchableSetting("continue-threads-after-server-update")}
-          serverScoped
-          settingKeys={["continueThreadsAfterServerUpdate"]}
-          description="Automatically resume interrupted threads after an update, crash, or machine restart on the selected environments."
-          status={
-            !supportsRestartContinuation
-              ? "All selected connected environments must support restart continuation."
-              : undefined
-          }
-          resetAction={
-            supportsRestartContinuation &&
-            settings.continueThreadsAfterServerUpdate !==
-              DEFAULT_UNIFIED_SETTINGS.continueThreadsAfterServerUpdate ? (
-              <SettingResetButton
-                label="continue threads after restarts"
-                onClick={() =>
-                  updateSettings({
-                    continueThreadsAfterServerUpdate:
-                      DEFAULT_UNIFIED_SETTINGS.continueThreadsAfterServerUpdate,
-                  })
-                }
-              />
-            ) : null
-          }
-          control={
-            <ScopedSwitch
-              settingKeys={["continueThreadsAfterServerUpdate"]}
-              checked={settings.continueThreadsAfterServerUpdate}
-              disabled={!supportsRestartContinuation}
-              onCheckedChange={(checked) =>
-                updateSettings({ continueThreadsAfterServerUpdate: Boolean(checked) })
-              }
-              aria-label="Continue threads after restarts"
-            />
-          }
-        />
+        <RestartContinuationSettings />
 
         <BackgroundActivitySettingsRow />
       </SettingsSection>

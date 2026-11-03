@@ -597,6 +597,13 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   ...UPDATES_SETTINGS_SEARCH_ITEMS,
   {
+    id: "codex-turn-survival",
+    title: "Keep Codex turns running",
+    to: "/settings/general",
+    scope: "project-defaults",
+    searchTerms: ["survive restart update quit codex progress"],
+  },
+  {
     id: "new-threads",
     title: "New threads",
     to: "/settings/general",
@@ -1165,11 +1172,8 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["restore reopen deleted history projects"],
   },
 ] as const satisfies ReadonlyArray<SettingsSearchItem>;
-
 export type SettingsSearchItemId = (typeof SETTINGS_SEARCH_ITEMS)[number]["id"];
-
 const SEARCH_ITEMS_BY_ID = new Map(SETTINGS_SEARCH_ITEMS.map((item) => [item.id, item] as const));
-
 const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScope | null>> = {
   "/settings/memory": null,
   "/settings/diagnostics": "environment",
@@ -1190,7 +1194,6 @@ const SETTINGS_CATEGORY_SCOPES: Readonly<Record<SettingsPath, SettingsSearchScop
   "/settings/beta": null,
   "/settings/archived": "project-defaults",
 };
-
 export function getSettingsSearchTargetScope(targetId: string) {
   const items: readonly SettingsSearchItem[] = SETTINGS_SEARCH_ITEMS;
   const item =
@@ -1204,7 +1207,6 @@ export function getSettingsSearchTargetScope(targetId: string) {
       }
     : null;
 }
-
 interface AutoSettlementSearchEnvironment {
   readonly environmentId: EnvironmentId;
   readonly connection: { readonly phase: EnvironmentConnectionPhase };
@@ -1214,7 +1216,6 @@ interface AutoSettlementSearchEnvironment {
     };
   } | null;
 }
-
 export function getThreadAutoSettlementSearchAvailability(
   environments: readonly AutoSettlementSearchEnvironment[],
   scope?: Pick<ResolvedSettingsScope, "kind" | "environmentIds">,
@@ -1241,7 +1242,6 @@ export function getThreadAutoSettlementSearchAvailability(
       selected.every((environment) => eligibleEnvironmentIds.includes(environment.environmentId)),
   };
 }
-
 export function isSettingsSearchScopeAvailable(
   requiredScope: SettingsSearchScope | null,
   scopeKind: ResolvedSettingsScope["kind"],

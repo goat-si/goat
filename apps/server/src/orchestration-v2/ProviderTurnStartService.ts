@@ -1,8 +1,10 @@
 import { isRegisteredAttach } from "./providerTurnStartHelpers.ts";
 import { withAgentOom } from "./agentOomFailure.ts";
 import { AgentScope } from "@goat/shared/AgentScope";
+import { makeDeliverySession } from "./goat/ProviderTurnDeliverySession.ts";
 import { makeRecreateMissingWorktree } from "./goat/RecreateWorktree.ts";
 import { makeProviderTurnHandoffRecovery } from "./goat/ProviderTurnHandoffRecovery.ts";
+import { refuseCodexAdmission } from "./goat/CodexTurnAdmission.ts";
 import * as MemorySnapshot from "../memory/MemorySnapshot.ts";
 import { projectComposerContextForProvider } from "@goat/shared/composerContextReferences";
 import {
@@ -34,6 +36,7 @@ import * as ServerConfig from "../config.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderAuthService from "../provider/ProviderAuthService.ts";
+import * as CodexSurvivors from "../provider/CodexSurvivors.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { makeIsManagedWorktreePath } from "../worktreesDirectory.ts";
 import * as EventSink from "./EventSink.ts";
@@ -137,6 +140,7 @@ export const layer: Layer.Layer<
     const recreateMissingWorktree = yield* makeRecreateMissingWorktree;
     const projects = yield* ProjectService.ProjectService;
     const providerAuth = yield* ProviderAuthService.ProviderAuthService;
+    const codexSurvivors = yield* Effect.serviceOption(CodexSurvivors.CodexSurvivors);
     const projectionStore = yield* ProjectionStore.ProjectionStoreV2;
     const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
     const memorySnapshot = yield* Effect.serviceOption(MemorySnapshot.MemorySnapshot);
@@ -246,41 +250,6 @@ export const layer: Layer.Layer<
               }).pipe(Effect.as(undefined)),
         ),
       );
-
-    const makeDeliverySession = (
-      session: ProviderAdapter.ProviderAdapterV2SessionRuntime,
-      startWithHandoffs: (
-        input: Parameters<ProviderAdapter.ProviderAdapterV2SessionRuntime["startTurn"]>[0],
-        compact?: boolean,
-      ) => ReturnType<ProviderAdapter.ProviderAdapterV2SessionRuntime["startTurn"]>,
-    ) => {
-      let deliver: typeof startWithHandoffs | undefined = startWithHandoffs;
-      const start = (
-        input: Parameters<ProviderAdapter.ProviderAdapterV2SessionRuntime["startTurn"]>[0],
-        compact = false,
-      ) =>
-        Effect.suspend(() => {
-          if (deliver !== undefined) return deliver(input, compact);
-          return compact && session.compactThread !== undefined
-            ? session.compactThread(input)
-            : session.startTurn(input);
-        }).pipe(
-          Effect.ensuring(
-            Effect.sync(() => {
-              deliver = undefined;
-            }),
-          ),
-        );
-      return {
-        ...session,
-        startTurn: (input: Parameters<typeof session.startTurn>[0]) => start(input),
-        ...(session.compactThread === undefined
-          ? {}
-          : {
-              compactThread: (input: Parameters<typeof session.startTurn>[0]) => start(input, true),
-            }),
-      };
-    };
 
     const start = Effect.fn("orchestrationV2.providerTurnStart.start")(function* (input: {
       readonly threadId: ThreadId;
@@ -653,6 +622,16 @@ export const layer: Layer.Layer<
           });
         },
       );
+      if (
+        yield* refuseCodexAdmission({
+          survivors: codexSurvivors,
+          driver: providerThread.driver,
+          threadId: input.threadId,
+          message,
+          settle: settleStartFailure,
+        })
+      )
+        return;
       const { worktreePath, branch } = projection.thread;
       if (!cloud && worktreePath !== null) {
         // Removal may hold this lease for minutes. Return to the outbox's

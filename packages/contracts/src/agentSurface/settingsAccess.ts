@@ -46,6 +46,7 @@ export const SETTINGS_ACCESS = {
   responseStreamingMode: agent,
   enableProviderUpdateChecks: agent,
   continueThreadsAfterServerUpdate: agent,
+  codexTurnsSurviveServerStop: agent,
   automaticServerUpdates: agent,
   enableAgentBrowserAccess: person(GRANTS_AGENTS),
   blockedBrowserHosts: person("It controls which browser hosts agents may use; a person decides."),

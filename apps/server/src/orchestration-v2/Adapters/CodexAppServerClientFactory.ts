@@ -9,15 +9,20 @@ import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventLoggers";
 import { AgentScope, handleAgentProcess } from "@goat/shared/AgentScope";
 import { resolveSpawnCommand } from "@goat/shared/shell";
+import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import * as CodexClient from "effect-codex-app-server/client";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Scope from "effect/Scope";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { codexAppServerEnvironment } from "../../provider/CodexProvider.ts";
+import * as ServerSettings from "../../serverSettings.ts";
+import * as CodexSurvivors from "../../provider/CodexSurvivors.ts";
+import * as ProjectionStore from "../ProjectionStore.ts";
 import { CodexDetachedAppServerError } from "../../provider/CodexDetachedAppServer.ts";
 import { CodexDetachedAppServers } from "../../provider/CodexDetachedAppServerLive.ts";
 import { codexAppServerArgs, resolveCodexLaunchArgs } from "../../provider/codexLaunchArgs.ts";
@@ -25,6 +30,11 @@ import {
   boundProviderEventForLogging,
   shouldPersistProviderEvent,
 } from "../../provider/EventNdjsonLogger.ts";
+
+export const shouldUseCodexSocketTransport = (
+  mode: "auto" | "socket" | "stdio" | "unsupported",
+  survival: "off" | "restart" | "always",
+) => mode === "socket" || (mode === "auto" && survival !== "off");
 
 const CODEX_PROVIDER = ProviderDriverKind.make("codex");
 
@@ -184,6 +194,7 @@ export const layerAppServerClientFactory: Layer.Layer<
   | ChildProcessSpawner.ChildProcessSpawner
   | ProviderEventLoggers.ProviderEventLoggers
   | CodexDetachedAppServers
+  | ServerSettings.ServerSettingsService
 > = Layer.effect(
   CodexAppServerClientFactory,
   Effect.gen(function* () {
@@ -191,6 +202,9 @@ export const layerAppServerClientFactory: Layer.Layer<
     const { native: nativeEventLogger } = yield* ProviderEventLoggers.ProviderEventLoggers;
     const agentScope = yield* AgentScope;
     const detached = yield* CodexDetachedAppServers;
+    const settings = yield* ServerSettings.ServerSettingsService;
+    const projections = yield* Effect.serviceOption(ProjectionStore.ProjectionStoreV2);
+    const survivors = yield* Effect.serviceOption(CodexSurvivors.CodexSurvivors);
 
     return CodexAppServerClientFactory.of({
       open: Effect.fn("CodexAppServerClientFactory.open")(function* (input) {
@@ -230,7 +244,41 @@ export const layerAppServerClientFactory: Layer.Layer<
                 logOutgoing: true,
                 logger: protocolLogger,
               };
-        if (detached.socketTransportEnabled) {
+        const survivor = Option.isSome(survivors)
+          ? yield* survivors.value.get(input.instanceId, input.threadId)
+          : undefined;
+        const records = new Set(yield* detached.listPreservedForInstance(input.instanceId));
+        if (survivor !== undefined) records.add(survivor.recordName);
+        if (records.size > 1)
+          return yield* openError("Multiple retained Codex processes prevent a safe connection.");
+        const recordName = [...records][0];
+        if (recordName !== undefined) {
+          const existing = yield* detached
+            .connectExisting(input.instanceId, recordName)
+            .pipe(Effect.mapError(openError));
+          const context = yield* Layer.build(
+            CodexClient.layerMessageChannel(existing.channel, clientOptions),
+          );
+          return yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
+            Effect.provide(context),
+          );
+        }
+        const mode =
+          detached.socketTransportMode ?? (detached.socketTransportEnabled ? "socket" : "stdio");
+        const survival =
+          mode === "auto"
+            ? yield* Effect.gen(function* () {
+                const current = yield* settings.getSettings;
+                if (Option.isNone(projections))
+                  return yield* new CodexDetachedAppServerError({
+                    detail: "Codex transport could not resolve this thread's project settings.",
+                  });
+                const thread = yield* projections.value.getThread(input.threadId);
+                return resolveProjectSettings(current, thread.projectId).settings
+                  .codexTurnsSurviveServerStop;
+              }).pipe(Effect.mapError(openError))
+            : "off";
+        if (shouldUseCodexSocketTransport(mode, survival)) {
           const attempt = yield* Scope.fork(scope);
           const opened = yield* detached
             .open({

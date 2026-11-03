@@ -6,6 +6,7 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { assert, it, vi } from "@effect/vitest";
+import { ProviderInstanceId, ThreadId } from "@goat/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -170,7 +171,7 @@ it.effect("startup deletes a reused group record without signalling the unrelate
 );
 
 it.effect(
-  "startup warns about leaderless possible leftovers and removes the record without signalling",
+  "startup blocks leaderless possible leftovers without signalling or deleting the record",
   () =>
     withRecordDirectory((directory) =>
       Effect.gen(function* () {
@@ -199,10 +200,17 @@ it.effect(
             }),
         });
         const outcomes = yield* service.cleanup;
-        assert.equal(outcomes[0]?.outcome, "cleaned");
+        assert.equal(outcomes[0]?.outcome, "blocked");
         assert.deepEqual(signals, []);
         assert.deepEqual(warnings, [[1235]]);
-        assert.deepEqual(yield* Effect.promise(() => NodeFSP.readdir(dir)), []);
+        assert.equal(
+          (yield* service.ensureNotBlocked(record.instanceId).pipe(Effect.exit))._tag,
+          "Failure",
+        );
+        assert.deepEqual((yield* Effect.promise(() => NodeFSP.readdir(dir))).sort(), [
+          `${record.name}.json`,
+          `${record.name}.pid`,
+        ]);
       }),
     ),
 );
@@ -440,25 +448,22 @@ const openInput = {
     Effect.succeed({ command: "codex", args: ["app-server", "--listen", "unix://" + socket] }),
 };
 
-it.effect(
-  "open fails with Codex's last stderr line when it exits before accepting connections",
-  () =>
-    withRecordDirectory((directory) =>
-      Effect.gen(function* () {
-        const service = yield* openService(directory, {
-          exitCode: 2,
-          stderr: "starting\nerror: unknown config key\n",
-        });
-        const error = yield* service.open(openInput).pipe(Effect.scoped, Effect.flip);
-        assert.include(error.message, "error: unknown config key");
-        assert.deepEqual(
-          yield* Effect.promise(() =>
-            NodeFSP.readdir(NodePath.join(directory, "codex-app-servers")),
-          ),
-          [],
-        );
-      }),
-    ),
+it.effect("open reports the exit code and manual diagnosis hint", () =>
+  withRecordDirectory((directory) =>
+    Effect.gen(function* () {
+      const service = yield* openService(directory, {
+        exitCode: 2,
+        stderr: "starting\nerror: unknown config key\n",
+      });
+      const error = yield* service.open(openInput).pipe(Effect.scoped, Effect.flip);
+      assert.include(error.message, "code 2");
+      assert.include(error.message, "codex app-server");
+      assert.deepEqual(
+        yield* Effect.promise(() => NodeFSP.readdir(NodePath.join(directory, "codex-app-servers"))),
+        [],
+      );
+    }),
+  ),
 );
 
 it.effect("open refuses a socket path Codex cannot bind", () =>
@@ -509,6 +514,7 @@ it.effect(
           recordedSocket = opened.record.socketPath;
           assert.equal(opened.record.pgid, 4321);
           assert.equal(opened.record.state, "running");
+          assert.equal(opened.record.stderrMode, "discard");
         }).pipe(Effect.scoped);
         assert.deepEqual(signals, ["SIGTERM"]);
         assert.deepEqual(
@@ -691,34 +697,6 @@ it.effect("a command construction failure removes its spawning record", () =>
   ),
 );
 
-it.effect("scoped stderr maintenance truncates oversized logs and preserves small logs", () =>
-  withRecordDirectory((directory) =>
-    Effect.gen(function* () {
-      const stderrPaths: string[] = [];
-      const service = yield* openService(directory, { stderrPaths });
-      yield* service.open(openInput);
-      yield* service.open(openInput);
-      const [large, small] = stderrPaths;
-      assert.isDefined(large);
-      assert.isDefined(small);
-      if (large === undefined || small === undefined) return;
-      yield* Effect.promise(() => NodeFSP.writeFile(large, Buffer.alloc(4 * 1024 * 1024 + 1)));
-      yield* Effect.promise(() => NodeFSP.writeFile(small, "keep this"));
-      let changed: () => void = () => {};
-      const changedPromise = new Promise<void>((resolve) => {
-        changed = resolve;
-      });
-      const watcher = NodeFS.watch(large, () => changed());
-      watcher.on("error", () => {});
-      yield* Effect.addFinalizer(() => Effect.sync(() => watcher.close()));
-      yield* TestClock.adjust("30 seconds");
-      yield* Effect.promise(() => changedPromise);
-      assert.equal((yield* Effect.promise(() => NodeFSP.stat(large))).size, 0);
-      assert.equal(yield* Effect.promise(() => NodeFSP.readFile(small, "utf8")), "keep this");
-    }),
-  ),
-);
-
 it.effect("signals its live child before consulting the process table", () =>
   withRecordDirectory((directory) =>
     Effect.gen(function* () {
@@ -835,11 +813,19 @@ it.live("spawn errors are observed from the moment the child is created", () =>
       const originalClose = fsModule.closeSync;
       let child: ReturnType<typeof NodeChildProcess.spawn> | undefined;
       let listenersAtClose = -1;
+      let stderrIsNull = false;
       let closed: Promise<void> = Promise.resolve();
       using spawnSpy = vi.spyOn(childProcessModule, "spawn").mockImplementation((...args) => {
         const spawned = originalSpawn(...args);
         if (Array.isArray(args[1]) && args[1].includes("goat-codex")) {
           child = spawned;
+          const stdio = args[2]?.stdio;
+          const descriptor = Array.isArray(stdio) ? stdio[2] : undefined;
+          if (typeof descriptor === "number") {
+            const actual = NodeFS.fstatSync(descriptor);
+            const expected = NodeFS.statSync("/dev/null");
+            stderrIsNull = actual.dev === expected.dev && actual.ino === expected.ino;
+          }
           closed = new Promise<void>((resolve) => spawned.once("close", () => resolve()));
         }
         return spawned;
@@ -862,6 +848,7 @@ it.live("spawn errors are observed from the moment the child is created", () =>
       assert.instanceOf(error, CodexDetachedAppServerError);
       yield* Effect.promise(() => closed);
       assert.isAtLeast(listenersAtClose, 1);
+      assert.isTrue(stderrIsNull);
     }).pipe(
       Effect.provide(
         DetachedLive.layerLive.pipe(
@@ -870,5 +857,98 @@ it.live("spawn errors are observed from the moment the child is created", () =>
         ),
       ),
     ),
+  ),
+);
+
+it.effect("startup restores goal and stop fences without a survivor binding", () =>
+  withRecordDirectory((directory) =>
+    Effect.gen(function* () {
+      const dir = NodePath.join(directory, "codex-app-servers");
+      yield* Effect.promise(() => NodeFSP.mkdir(dir));
+      const threadId = ThreadId.make("restored-thread");
+      const goal = { threadId, nativeThreadId: "native-thread" };
+      const stop = { ...goal, nativeTurnId: "native-turn" };
+      const saved = { ...record, state: "spawning", stopObligations: [stop], goalBlocks: [goal] };
+      yield* Effect.promise(() =>
+        NodeFSP.writeFile(NodePath.join(dir, record.name + ".json"), JSON.stringify(saved)),
+      );
+      const service = yield* openService(directory, {});
+      yield* service.cleanup;
+      const key = {
+        instanceId: ProviderInstanceId.make(record.instanceId),
+        recordName: record.name,
+      };
+      assert.deepEqual(yield* service.getGoalBlocks(threadId), [{ record: key, block: goal }]);
+      assert.deepEqual(yield* service.getStopObligations(threadId), [{ record: key, block: stop }]);
+    }),
+  ),
+);
+
+it.effect("a goal block cannot clear while another record fences that thread", () =>
+  withRecordDirectory((directory) =>
+    Effect.gen(function* () {
+      const service = yield* openService(directory, {});
+      const a = yield* service.open(openInput);
+      const b = yield* service.open(openInput);
+      const first = { instanceId: ProviderInstanceId.make("codex"), recordName: a.record.name };
+      const second = { instanceId: ProviderInstanceId.make("codex"), recordName: b.record.name };
+      const threadId = ThreadId.make("thread-across-records");
+      const goal = { threadId, nativeThreadId: "native-thread" };
+      const stop = { ...goal, nativeTurnId: "native-turn" };
+      yield* service.recordGoalBlock(first, goal);
+      yield* service.recordStopObligation(second, stop);
+      yield* service.clearGoalBlock(first, goal);
+      assert.isTrue(yield* service.hasGoalBlock(threadId));
+      yield* service.clearStopObligation(second, stop);
+      yield* service.clearGoalBlock(first, goal);
+      assert.isFalse(yield* service.hasGoalBlock(threadId));
+    }),
+  ),
+);
+
+it.effect("an unreadable record prevents thread admission", () =>
+  withRecordDirectory((directory) =>
+    Effect.gen(function* () {
+      const dir = NodePath.join(directory, "codex-app-servers");
+      yield* Effect.promise(() => NodeFSP.mkdir(dir));
+      yield* Effect.promise(() => NodeFSP.writeFile(NodePath.join(dir, "unknown.json"), "null"));
+      const service = yield* openService(directory, {});
+      yield* service.cleanup;
+      assert.equal(
+        (yield* service.ensureAdmission(ThreadId.make("any-thread")).pipe(Effect.exit))._tag,
+        "Failure",
+      );
+    }),
+  ),
+);
+
+it.effect("records can be loaded before cleanup without terminating their processes", () =>
+  withRecordDirectory((directory) =>
+    Effect.gen(function* () {
+      const dir = NodePath.join(directory, "codex-app-servers");
+      yield* Effect.promise(() => NodeFSP.mkdir(dir));
+      const threadId = ThreadId.make("thread-before-recovery");
+      const saved = { ...record, goalBlocks: [{ threadId, nativeThreadId: "native" }] };
+      yield* Effect.promise(() =>
+        NodeFSP.writeFile(NodePath.join(dir, record.name + ".json"), JSON.stringify(saved)),
+      );
+      yield* Effect.promise(() =>
+        NodeFSP.writeFile(NodePath.join(dir, record.name + ".pid"), "1234"),
+      );
+      const service = yield* makeDetachedAppServers({
+        stateDir: directory,
+        bootId: Effect.succeed("boot-one"),
+        processTable: processTable([{ pid: 1234, pgid: 1234, argv: socketPath }]),
+        socketAccepts: () => Effect.succeed(false),
+        signalGroup: () => Effect.die("must not signal"),
+      });
+      const records = yield* service.loadRecords;
+      assert.equal(records[0]?.name, record.name);
+      assert.isTrue(yield* service.hasGoalBlock(threadId));
+      assert.deepEqual((yield* Effect.promise(() => NodeFSP.readdir(dir))).sort(), [
+        record.name + ".json",
+        record.name + ".pid",
+      ]);
+    }),
   ),
 );

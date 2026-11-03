@@ -80,7 +80,7 @@ const PAGE_PROJECT_KEYS: Record<SettingsPage, readonly ProjectScopedServerSettin
     "agentWorkspaceAccess",
     "agentTerminalAccess",
   ],
-  maintenance: ["continueThreadsAfterServerUpdate"],
+  maintenance: ["continueThreadsAfterServerUpdate", "codexTurnsSurviveServerStop"],
 };
 
 const SUBMODULE_CHOICES: ReadonlyArray<{
@@ -342,6 +342,9 @@ function ServerSettingsDetail(props: {
     (target) =>
       target.environment.serverConfig.environment.capabilities.threadRestartContinuation === true,
   );
+  const supportsCodexSurvival = targets.every(
+    (target) => target.environment.serverConfig.environment.capabilities.codexTurnSurvival === true,
+  );
   const supportsAutomaticServerUpdates = targets.every(
     (target) =>
       target.environment.serverConfig.environment.capabilities.automaticServerUpdates === true,
@@ -469,6 +472,34 @@ function ServerSettingsDetail(props: {
                         separated={index > 0}
                         disabled={disabledFor("defaultRuntimeMode")}
                         onPress={() => write({ defaultRuntimeMode: choice.mode })}
+                      />
+                    ))}
+                  </SettingsSection>
+                  <SettingsSection
+                    title="Keep Codex turns running"
+                    trailing={
+                      pendingWrites === 0 && uniform("codexTurnsSurviveServerStop") === null ? (
+                        <MixedValuesLabel projectSelected={projectSelected} />
+                      ) : null
+                    }
+                  >
+                    {(
+                      [
+                        { mode: "off", label: "Off" },
+                        { mode: "restart", label: "Restarts and updates (default)" },
+                        { mode: "always", label: "Also after quitting the app" },
+                      ] as const
+                    ).map((choice, index) => (
+                      <SettingsChoiceRow
+                        key={choice.mode}
+                        label={choice.label}
+                        description="Keep the current Codex turn running on macOS or Linux."
+                        selected={uniform("codexTurnsSurviveServerStop") === choice.mode}
+                        separated={index > 0}
+                        disabled={
+                          disabledFor("codexTurnsSurviveServerStop") || !supportsCodexSurvival
+                        }
+                        onPress={() => write({ codexTurnsSurviveServerStop: choice.mode })}
                       />
                     ))}
                   </SettingsSection>

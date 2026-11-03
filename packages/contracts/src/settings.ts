@@ -109,6 +109,7 @@ import { CuaSettingsFields, CuaSettingsPatchFields } from "./computerUseSettings
 import { SnoozeSettingsFields, SnoozeSettingsPatchFields } from "./snoozePresets.ts";
 import { BuiltInSkillProjectOverrideFields } from "./builtinSkills.ts";
 import * as BlockedBrowser from "./blockedBrowserHosts.ts";
+import * as Restart from "./codexTurnSurvival.ts";
 
 export * from "./settingsFontSizes.ts";
 export { requiredScopesForServerSettingsPatch } from "./auth.ts";
@@ -1087,6 +1088,7 @@ export const PROJECT_SCOPED_SERVER_SETTING_KEYS = [
   "sidebarAutoSettleAfterDays",
   "sidebarAutoSettleKeepPullRequests",
   "continueThreadsAfterServerUpdate",
+  "codexTurnsSurviveServerStop",
   "responseStreamingMode",
   "standingInstructions",
 ] as const;
@@ -1137,7 +1139,7 @@ export const ProjectSettingsOverrides = Schema.Struct({
   sidebarAutoSettleOnMerge: Schema.optionalKey(Schema.Boolean),
   sidebarAutoSettleAfterDays: Schema.optionalKey(Schema.NullOr(SidebarAutoSettleAfterDays)),
   sidebarAutoSettleKeepPullRequests: Schema.optionalKey(Schema.Boolean),
-  continueThreadsAfterServerUpdate: Schema.optionalKey(Schema.Boolean),
+  ...Restart.RestartSettingsPatchFields,
   responseStreamingMode: Schema.optionalKey(ResponseStreamingMode),
   standingInstructions: Schema.optionalKey(StandingInstructions),
   providerInstances: Schema.optionalKey(
@@ -1402,9 +1404,7 @@ export const ServerSettings = Schema.Struct({
   ),
   enableProviderUpdateChecks: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   automaticServerUpdates: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
-  continueThreadsAfterServerUpdate: Schema.Boolean.pipe(
-    Schema.withDecodingDefault(Effect.succeed(true)),
-  ),
+  ...Restart.RestartSettingsFields,
   ...BlockedBrowser.BlockedBrowserSettingsFields,
   projectAgentBrowserAccessOverrides: Schema.Record(ProjectId, Schema.Boolean).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
@@ -1878,7 +1878,7 @@ const ServerSettingsPatchFields = Schema.Struct({
   channelAutoPlacement: Schema.optionalKey(Schema.Boolean),
   responseStreamingMode: Schema.optionalKey(ResponseStreamingMode),
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
-  continueThreadsAfterServerUpdate: Schema.optionalKey(Schema.Boolean),
+  ...Restart.RestartSettingsPatchFields,
   automaticServerUpdates: Schema.optionalKey(Schema.Boolean),
   ...BlockedBrowser.BlockedBrowserSettingsPatchFields,
   projectAgentBrowserAccessOverrides: Schema.optionalKey(
