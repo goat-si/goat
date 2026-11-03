@@ -6,6 +6,7 @@ import {
   removeConnectionFromCatalog,
   setConnectionEnabledInCatalog,
   setRoutesInCatalog,
+  putConnectionCredentialInCatalog,
   removeCatalogValue,
   replaceCatalogValue,
   Persistence,
@@ -130,14 +131,10 @@ export const layer = Layer.effectContext(
             ),
           ),
         ),
-      put: (connectionId, credential) =>
-        catalog.update((document) => ({
-          ...document,
-          credentials: replaceCatalogValue(document.credentials, (value) => value.connectionId, {
-            connectionId,
-            credential,
-          }),
-        })),
+      put: (connectionId, credential, expectedToken) =>
+        catalog.update((document) =>
+          putConnectionCredentialInCatalog(document, connectionId, credential, expectedToken),
+        ),
       remove: (connectionId) =>
         catalog.update((document) => ({
           ...document,

@@ -14,8 +14,11 @@ import * as RpcSession from "../rpc/session.ts";
 import type { ConnectionCatalogEntry } from "./catalog.ts";
 import * as Driver from "./driver.ts";
 import * as Resolver from "./resolver.ts";
+import { hubProxyRefusal } from "./hubProxyHttp.ts";
 import {
   ConnectionAttemptSuperseded,
+  ConnectionTransientError,
+  HubProxyConnectionTarget,
   SshConnectionTarget,
   type PreparedConnection,
 } from "./model.ts";
@@ -58,6 +61,38 @@ function driverWith(prepare: Resolver.ConnectionResolver["Service"]["prepare"]) 
 }
 
 describe("SSH driver routing", () => {
+  it.effect("keeps retrying an unreachable direct route and names the hub's refusal", () =>
+    Effect.gen(function* () {
+      const refusal = hubProxyRefusal({ requiredScope: "hub:proxy" });
+      const error = yield* Driver.connectOverRoutes(
+        {
+          ...entry,
+          alternateRoutes: [
+            {
+              target: new HubProxyConnectionTarget({
+                environmentId: target.environmentId,
+                label: target.label,
+                connectionId: "hub:fixture",
+              }),
+              profile: Option.none(),
+            },
+          ],
+        },
+        () => Effect.succeed("unchecked"),
+        (route) =>
+          route.target._tag === "HubProxyConnectionTarget"
+            ? Effect.fail(refusal)
+            : Effect.fail(
+                new ConnectionTransientError({ reason: "endpoint-unavailable", detail: "Offline" }),
+              ),
+      ).pipe(Effect.flip);
+      expect(error).toMatchObject({
+        _tag: "ConnectionTransientError",
+        reason: "endpoint-unavailable",
+      });
+      expect(error.detail).toContain(refusal.detail);
+    }),
+  );
   it.effect("stops a neutral attempt before trying a fallback route", () =>
     Effect.gen(function* () {
       const routes: string[] = [];

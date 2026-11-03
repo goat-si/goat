@@ -339,12 +339,14 @@ function tokenAllowsPlainHttp(
 /**
  * Whether connecting over `route` would send a paired token over plain HTTP
  * that it wasn't paired over. Checked against the token the route borrows,
- * so a route learned before this rule existed is refused too.
+ * so a route learned before this rule existed is refused too, or against
+ * `credentialId` when another route's token would be sent there.
  */
 export function sendsTokenInClear(
   routes: ReadonlyArray<ConnectionRoute>,
   route: ConnectionRoute,
   tailscale?: boolean,
+  credentialId = credentialConnectionId(connectionRouteId(route.target)),
 ): boolean {
   const profile = Option.getOrNull(route.profile);
   if (profile?._tag !== "BearerConnectionProfile" || profile.authorization === "t3-connect") {
@@ -353,7 +355,6 @@ export function sendsTokenInClear(
   if ((tailscale ?? profile.network === "tailscale") || !profile.httpBaseUrl.startsWith("http:")) {
     return false;
   }
-  const credentialId = credentialConnectionId(connectionRouteId(route.target));
   return (
     credentialId !== connectionRouteId(route.target) && !tokenAllowsPlainHttp(routes, credentialId)
   );
