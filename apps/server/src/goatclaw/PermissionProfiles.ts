@@ -1,5 +1,6 @@
 import {
   GoatclawRole,
+  type ForwardedPermissionProfile,
   type GoatclawSettings,
   OrchestratorMcpFailure,
   PermissionProfile,
@@ -60,7 +61,7 @@ export function intersectProfiles(
 }
 
 interface CheckContext {
-  readonly forwarded?: PermissionProfile | undefined;
+  readonly forwarded?: ForwardedPermissionProfile | undefined;
   readonly host?: string | undefined;
   readonly lanesRunning?: number | undefined;
   readonly runtimeMode?: RuntimeMode | undefined;
@@ -75,7 +76,7 @@ interface ClaimInput {
   readonly childThreadId?: ThreadId | undefined;
   readonly host?: string | undefined;
   readonly worktree?: boolean | undefined;
-  readonly forwarded?: PermissionProfile | undefined;
+  readonly forwarded?: ForwardedPermissionProfile | undefined;
   /**
    * A role launch: the child runs under the role's stored profile narrowed by the caller's, and
    * is refused when that lacks a capability the role's work uses.
@@ -111,6 +112,17 @@ export const directWriteProfile = (effective: EffectiveProfile): EffectiveProfil
       ),
     },
   };
+};
+
+export const remoteSendCeiling = (
+  effective: EffectiveProfile,
+  admitted: PermissionProfileView,
+): ForwardedPermissionProfile | undefined => {
+  if (!admitted.enabled) return undefined;
+  const role = effective.narrowing?.role;
+  return role === undefined
+    ? admitted.profile
+    : { ...admitted.profile, capabilities: effective.profile.capabilities, delegationRole: role };
 };
 
 /**
@@ -152,7 +164,7 @@ export class PermissionProfiles extends Context.Service<
     readonly resolve: (
       scope: McpInvocationScope,
       runtimeMode?: RuntimeMode,
-      forwarded?: PermissionProfile,
+      forwarded?: ForwardedPermissionProfile,
     ) => Effect.Effect<EffectiveProfile, OrchestratorMcpFailure>;
     readonly check: (
       scope: McpInvocationScope,
@@ -169,7 +181,7 @@ export class PermissionProfiles extends Context.Service<
       threadId: ThreadId,
       callerMode: RuntimeMode,
       targetMode: RuntimeMode,
-      forwarded?: PermissionProfile,
+      forwarded?: ForwardedPermissionProfile,
     ) => Effect.Effect<void, OrchestratorMcpFailure>;
     readonly recheck: (
       scope: McpInvocationScope,
@@ -330,7 +342,7 @@ export const layer = Layer.effect(
     const resolve = Effect.fn("PermissionProfiles.resolve")(function* (
       scope: McpInvocationScope,
       runtimeMode?: RuntimeMode,
-      forwarded?: PermissionProfile,
+      forwarded?: ForwardedPermissionProfile,
       targetThreadId?: ThreadId,
     ) {
       const threadId = targetThreadId ?? scope.thread?.threadId;
@@ -356,7 +368,7 @@ export const layer = Layer.effect(
         forwarded === undefined ? bound.profile : intersectProfiles(bound.profile, forwarded);
       const narrowing: ProfileNarrowing = {
         named: bound.narrowing.named,
-        role: bound.narrowing.role,
+        role: forwarded?.delegationRole ?? bound.narrowing.role,
         ceilings:
           forwarded === undefined
             ? bound.narrowing.ceilings
@@ -429,7 +441,7 @@ export const layer = Layer.effect(
       threadId: ThreadId,
       callerMode: RuntimeMode,
       targetMode: RuntimeMode,
-      forwarded?: PermissionProfile,
+      forwarded?: ForwardedPermissionProfile,
     ) {
       const caller = yield* resolve(scope, callerMode, forwarded);
       if (!caller.enabled) return;

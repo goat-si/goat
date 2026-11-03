@@ -825,11 +825,9 @@ const make = Effect.gen(function* () {
           host === undefined
             ? undefined
             : yield* local.admitRemoteSend(scope, {
+                ...input,
                 host,
-                threadId: input.threadId,
-                ...(input.clientRequestId === undefined
-                  ? {}
-                  : { clientRequestId: input.clientRequestId }),
+                forwarded: input.permissionProfileCeiling,
               });
         const ceiling = admission?.ceiling;
         const ceilingAdvice =

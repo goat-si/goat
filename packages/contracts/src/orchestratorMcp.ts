@@ -68,7 +68,7 @@ import {
   ProviderOptionSelectionValue,
 } from "./model.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
-import { GoatclawCeilingAdvice, PermissionProfile } from "./permissionProfiles.ts";
+import { ForwardedPermissionProfile, GoatclawCeilingAdvice } from "./permissionProfiles.ts";
 
 const OrchestratorMcpPrompt = TrimmedNonEmptyString.check(Schema.isMaxLength(120_000));
 const OrchestratorMcpTitle = TrimmedNonEmptyString.check(Schema.isMaxLength(512));
@@ -808,7 +808,7 @@ export const OrchestratorMcpThreadSendInput = Schema.Struct({
   capabilities: Schema.optional(Schema.Array(TurnCapability)),
   clientRequestId: Schema.optional(OrchestratorMcpClientRequestId),
   /** Set by the GOAT that forwards a send from a goatclaw-profiled caller; outside dispatch only. */
-  permissionProfileCeiling: Schema.optional(PermissionProfile),
+  permissionProfileCeiling: Schema.optional(ForwardedPermissionProfile),
   /** Set by the GOAT that forwards a send from one of its threads; a label, never authority. */
   remoteSender: Schema.optional(RemoteSenderAttribution),
 });

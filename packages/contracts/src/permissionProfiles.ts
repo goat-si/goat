@@ -183,6 +183,12 @@ export const GoatclawRole = Schema.Literals([
   "issue-sweeper",
 ]);
 export type GoatclawRole = typeof GoatclawRole.Type;
+export const ForwardedPermissionProfile = Schema.Struct({
+  ...PermissionProfile.fields,
+  /** The sending role limits grants to roleless targets; it does not add capabilities. */
+  delegationRole: Schema.optional(GoatclawRole),
+});
+export type ForwardedPermissionProfile = typeof ForwardedPermissionProfile.Type;
 export const GOATCLAW_ROLE_PROFILES: Readonly<Record<GoatclawRole, string>> = {
   supervisor: "owner",
   "domain-manager": "manager",

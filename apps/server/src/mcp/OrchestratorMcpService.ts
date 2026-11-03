@@ -146,6 +146,7 @@ import * as SecretRequests from "../secrets/SecretRequests.ts";
 import { makeRequestSecret } from "./SecretRequestTool.ts";
 import { acceptRemoteSender, withRemoteSender } from "./remoteSender.ts";
 import { stableCommandId, stablePart } from "./stableCommandId.ts";
+import { makeRemoteSendAdmission, type RemoteSendAdmission } from "./remoteSendAdmission.ts";
 import { makeContinueReviewTask } from "./reviewContinuation.ts";
 import { makeRemoteTaskTargets } from "./goat/RemoteTaskTargets.ts";
 import { statusFromShell } from "./threadStatus.ts";
@@ -201,16 +202,7 @@ export interface OrchestratorMcpServiceShape {
    * `threads.remote` for it and a lane. `ceiling` is what the destination must enforce; undefined
    * while goatclaw is off. `settle` keeps the lane on that thread's dispatch, or frees it.
    */
-  readonly admitRemoteSend: (
-    scope: McpInvocationScope,
-    input: { readonly host: string; readonly threadId: string; readonly clientRequestId?: string },
-  ) => Effect.Effect<
-    {
-      readonly ceiling: import("@goat/contracts").PermissionProfile | undefined;
-      readonly settle: (sent: boolean) => Effect.Effect<void, OrchestratorMcpFailure>;
-    },
-    OrchestratorMcpFailure
-  >;
+  readonly admitRemoteSend: RemoteSendAdmission;
   readonly capabilities: (
     scope: McpInvocationScope,
     input?: OrchestratorMcpCapabilitiesInput,
@@ -2069,31 +2061,7 @@ const make = Effect.gen(function* () {
   return OrchestratorMcpService.of({
     permissionProfile: (scope) =>
       permissions.resolve(scope).pipe(Effect.map(({ narrowing: _narrowing, ...view }) => view)),
-    admitRemoteSend: Effect.fn("OrchestratorMcpService.admitRemoteSend")(function* (scope, input) {
-      const effective = yield* permissions.resolve(scope);
-      if (!effective.enabled) return { ceiling: undefined, settle: () => Effect.void };
-      const context = { host: input.host, runtimeMode: effective.runtimeMode };
-      yield* permissions.require(scope, "threads.launch", context);
-      yield* permissions.require(scope, "threads.remote", context);
-      const id = stableCommandId({
-        scope,
-        requestKey: yield* requestKey(input.clientRequestId),
-        operation: `remote-send:${input.host}:${input.threadId}`,
-      });
-      const admitted = yield* permissions.claim(scope, {
-        id,
-        host: input.host,
-        runtimeMode: effective.runtimeMode,
-        remoteThreadId: input.threadId,
-      });
-      return {
-        ceiling: admitted.enabled ? admitted.profile : undefined,
-        settle: (sent: boolean) =>
-          sent
-            ? permissions.completeRemote(id, input.host, input.threadId)
-            : permissions.release(id),
-      };
-    }),
+    admitRemoteSend: makeRemoteSendAdmission(permissions, requestKey),
     scheduleTask: Effect.fn("OrchestratorMcpService.scheduleTask")(function* (scope, input) {
       const { parent, limits } = yield* loadCaller(scope);
       const projectId = yield* resolveProjectTarget(parent, input.projectId);

@@ -6,7 +6,7 @@ import {
   GOATCLAW_ROLE_PROFILES,
   GoatclawRole,
   OrchestratorMcpFailure,
-  PermissionProfile,
+  ForwardedPermissionProfile,
   ProviderInteractionMode,
   RuntimeMode,
 } from "@goat/contracts";
@@ -98,7 +98,7 @@ const encodeResult = Schema.encodeEffect(ResultJson);
 const decodeLiteral = Schema.decodeEffect(LiteralJson);
 const encodeLiteral = Schema.encodeEffect(LiteralJson);
 const decodeKey = Schema.decodeUnknownEffect(KeyedClientRequestId);
-const decodeForwarded = Schema.decodeUnknownOption(PermissionProfile);
+const decodeForwarded = Schema.decodeUnknownOption(ForwardedPermissionProfile);
 const decodeRole = Schema.decodeUnknownOption(GoatclawRole);
 
 /**
@@ -127,7 +127,7 @@ const Grant = Schema.Struct({
   correlated: Schema.optionalKey(Schema.Literal(true)),
   correlationId: Schema.optionalKey(Schema.String),
   roleName: Schema.optionalKey(GoatclawRole),
-  forwardedCeiling: Schema.optionalKey(PermissionProfile),
+  forwardedCeiling: Schema.optionalKey(ForwardedPermissionProfile),
 });
 type Grant = typeof Grant.Type;
 const GrantJson = Schema.fromJsonString(Grant);

@@ -391,6 +391,8 @@ Every check that compares a role thread's grant with its caller's, such as the
 recheck before an SSH launch and a send's target check and rebinding, derives it
 with the same `roleProfile`; comparing against the caller's plain profile reads the
 kept capability as a narrowing, refusing the launch or send or stripping it.
+Remote sends carry the caller's role with the profile ceiling so the destination applies the same
+target-role rule.
 Creating and cloning a project are the one environment write a calling thread at
 `auto` may run, because worker agents run at `auto` at most. When goatclaw governs
 the thread its profile decides, full access included, before and again after
