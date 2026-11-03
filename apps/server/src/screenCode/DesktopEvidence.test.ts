@@ -9,6 +9,34 @@ import { CellWindowTracker, withInputTiming } from "./DesktopWindows.ts";
 import { finishCellTracker } from "./DesktopEvidence.ts";
 import { terminalFailure } from "../cua/ComputerUseTerminal.ts";
 
+it.effect("a successful window listing with lock-like data completes the evidence read", () =>
+  Effect.gen(function* () {
+    const tracker = new CellWindowTracker();
+    tracker.recordBefore(42, undefined);
+    const result = yield* finishCellTracker(
+      { tracker, connectionGeneration: "driver:one" },
+      context,
+      { cellDeadlineMillis: 10000 },
+      () =>
+        Effect.succeed({
+          requestId: "request",
+          registrationId: "registration",
+          controlId: "control",
+          connectionGeneration: "driver:one",
+          runId: "r",
+          turnId: "t",
+          callId: 1,
+          status: "settled" as const,
+          result: {
+            isError: false,
+            structuredContent: { code: "screen_locked", effect: "unknown", windows: [] },
+          },
+        }),
+    ).pipe(Effect.result);
+    expect(result._tag).toBe("Success");
+  }),
+);
+
 it.effect.each(["stopped_by_person", "screen_locked"] as const)(
   "end-of-cell read keeps terminal %s",
   (reason) =>

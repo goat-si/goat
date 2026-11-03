@@ -92,7 +92,7 @@ const driverFailure = (
   tool: string,
   args: Record<string, unknown>,
 ): ScreenRunError | undefined => {
-  const error = driverError(reply);
+  const error = driverError(reply, tool, args);
   if (error === undefined) return undefined;
   const structured = object(object(reply.result)?.structuredContent);
   const code = structured?.code ?? object(structured?.refusal)?.code;

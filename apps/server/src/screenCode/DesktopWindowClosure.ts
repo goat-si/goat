@@ -95,7 +95,8 @@ export const waitForOutcome = Effect.fn("DesktopWindowClosure.waitForOutcome")(f
           ),
         );
   const reply = Option.getOrUndefined(listed);
-  const error = reply === undefined ? undefined : driverError(reply);
+  const error =
+    reply === undefined ? undefined : driverError(reply, "list_windows", { pid: deps.target.pid });
   if (error?.code === "stopped_by_person" || error?.code === "screen_locked")
     return yield* Effect.fail(error);
   const closure =

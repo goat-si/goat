@@ -3,13 +3,8 @@
 import * as Schema from "effect/Schema";
 import type { ComputerUsePrimitiveReply, ScreenRunError } from "@goat/contracts";
 import { ComputerUseRefusalDetail, ComputerUseRefusalReason } from "@goat/contracts";
-import { driverOutcomeSafety } from "../cua/ComputerUseDriverOutcome.ts";
-import {
-  replaceWithTerminal,
-  terminalErrorState,
-  terminalReplyState,
-  terminalFailure,
-} from "../cua/ComputerUseTerminal.ts";
+import { driverReplyEvidence, driverOutcomeSafety } from "../cua/ComputerUseDriverOutcome.ts";
+import { replaceWithTerminal, terminalFailure } from "../cua/ComputerUseTerminal.ts";
 import type { ScreenHostDispatchResult } from "./ScreenHostBridge.ts";
 
 const isRefusalReason = Schema.is(ComputerUseRefusalReason);
@@ -67,8 +62,12 @@ const driverEvidence = (structured: Record<string, unknown> | undefined) => {
     ...(code === undefined ? [] : [`driver:code=${code.slice(0, 80)}`]),
   ];
 };
-export const driverError = (reply: ComputerUsePrimitiveReply): ScreenRunError | undefined => {
-  const error = classifyDriverError(reply);
+export const driverError = (
+  reply: ComputerUsePrimitiveReply,
+  tool?: string,
+  args?: unknown,
+): ScreenRunError | undefined => {
+  const error = classifyDriverError(reply, tool, args);
   const evidence = driverEvidence(object(object(reply.result)?.structuredContent));
   return error === undefined || evidence.length === 0 ? error : { ...error, evidence };
 };
@@ -85,45 +84,36 @@ export const driverFailureNextStep = (
     ? "Earlier input may have landed. Observe before acting; never resend it."
     : error.nextStep;
 };
-const classifyDriverError = (reply: ComputerUsePrimitiveReply): ScreenRunError | undefined => {
+const classifyDriverError = (
+  reply: ComputerUsePrimitiveReply,
+  tool?: string,
+  args?: unknown,
+): ScreenRunError | undefined => {
   const result = object(reply.result);
   const structured = object(result?.structuredContent);
   const nested = string(object(structured?.refusal)?.code);
   const outer = string(structured?.code);
-  const terminal = (code: string | undefined) =>
-    code === "stopped_by_person" || code === "screen_locked" ? code : undefined;
-  const rpc = terminalErrorState(reply.error);
-  const state = replaceWithTerminal(
-    terminalReplyState(reply.result, reply.status),
-    rpc,
-    terminal(nested),
-    terminal(outer),
-  );
-  const merged = state.reason;
-  const driverCode = merged ?? nested ?? outer;
-  const safety = state.possibleCommit
-    ? terminalFailure(state, "list_apps", {}, true)?.safety
-    : undefined;
+  const evidence = driverReplyEvidence(tool, reply, args);
+  if (evidence.successfulRead) return undefined;
+  const driverCode = evidence.terminal ?? nested ?? outer;
+  const safety =
+    evidence.effectStarted && evidence.terminal !== undefined
+      ? terminalFailure(replaceWithTerminal(evidence.terminal, true), "list_apps", {}, true)?.safety
+      : undefined;
   const said =
-    merged !== undefined && merged !== (nested ?? outer)
+    evidence.terminal !== undefined && evidence.terminal !== (nested ?? outer)
       ? undefined
       : refusalText(result, structured);
-  if (
-    (reply.status === "unknown_outcome" ||
-      reply.status === "not_started" ||
-      result?.isError === true ||
-      reply.error !== undefined) &&
-    (driverCode === "stopped_by_person" || driverCode === "screen_locked")
-  )
+  if (evidence.terminal !== undefined)
     return {
       ...fail(
-        driverCode,
+        evidence.terminal,
         said ??
-          (driverCode === "screen_locked"
+          (evidence.terminal === "screen_locked"
             ? "The screen is locked; stop until the person unlocks it."
             : "The person stopped computer use; do not retry this turn."),
       ),
-      effectStarted: reply.status === "unknown_outcome" || state.possibleCommit,
+      effectStarted: evidence.effectStarted,
       ...(safety === undefined ? {} : { safety }),
       ...refusalOf(structured),
     };
@@ -136,11 +126,6 @@ const classifyDriverError = (reply: ComputerUsePrimitiveReply): ScreenRunError |
     driverCode === undefined
   )
     return { ...fail("unsupported", said), ...refusalOf(structured) };
-  if (driverCode === "screen_locked")
-    return {
-      ...fail("screen_locked", "The screen is locked; stop until the person unlocks it."),
-      ...refusalOf(structured),
-    };
   if (
     driverCode === "user_interacting" &&
     (structured?.effect === undefined || structured.effect === "refused")
