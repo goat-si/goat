@@ -1169,7 +1169,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ),
     );
 
-  const { providerSessionIdFor } = makeProviderSessionPlacement({
+  const { providerSessionIdFor } = yield* makeProviderSessionPlacement({
     idAllocator,
     settings: serverSettings.getSettings.pipe(Effect.orDie),
   });

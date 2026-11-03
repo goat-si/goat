@@ -12,10 +12,12 @@ import {
 } from "@goat/contracts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import { CODEX_TRANSPORT_ENV } from "../provider/CodexDetachedAppServerLive.ts";
 import { keptProviderSessionId, makeProviderSessionPlacement } from "./ProviderSessionPlacement.ts";
 
 const codex = ProviderDriverKind.make("codex");
@@ -40,7 +42,7 @@ const adapterWith = (capabilities: OrchestrationV2ProviderCapabilities, driver =
 
 const place = (settings: { readonly codexAppServerIsolation: CodexAppServerIsolation }) =>
   IdAllocator.IdAllocatorV2.pipe(
-    Effect.map((idAllocator) =>
+    Effect.flatMap((idAllocator) =>
       makeProviderSessionPlacement({ idAllocator, settings: Effect.succeed(settings) }),
     ),
     Effect.provide(IdAllocator.layer),
@@ -54,6 +56,42 @@ const providerThread = (providerSessionId: ProviderSessionId | null) =>
     appThreadId: threadA,
     createdAt: DateTime.makeUnsafe(0),
   }) as OrchestrationV2ProviderThread;
+
+it.effect.each([
+  { name: "Windows", platform: "win32", environment: {}, expected: sharedId },
+  {
+    name: "forced stdio",
+    platform: "linux",
+    environment: { [CODEX_TRANSPORT_ENV]: "stdio" },
+    expected: sharedId,
+  },
+  ...(["darwin", "linux"] as const).map((platform) => ({
+    name: `${platform} auto`,
+    platform,
+    environment: {},
+    expected: IdAllocator.derive.providerSession({
+      providerInstanceId: instanceId,
+      threadId: threadA,
+    }),
+  })),
+] as const)(
+  "thread isolation uses the available placement on $name",
+  ({ platform, environment, expected }) =>
+    Effect.gen(function* () {
+      const { providerSessionIdFor } = yield* place({ codexAppServerIsolation: "thread" });
+      assert.strictEqual(
+        yield* providerSessionIdFor({
+          adapter: adapterWith(CodexProviderCapabilitiesV2) as never,
+          providerInstanceId: instanceId,
+          threadId: threadA,
+        }),
+        expected,
+      );
+    }).pipe(
+      Effect.provideService(HostProcess.Platform, platform),
+      Effect.provideService(HostProcess.Environment, environment),
+    ),
+);
 
 it.effect("thread isolation gives each new root thread its own deterministic session", () =>
   Effect.gen(function* () {
