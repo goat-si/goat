@@ -2290,7 +2290,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       const linuxConfig = linux.linux as Record<string, unknown>;
       assert.strictEqual(linuxConfig.executableName, "goat-desktop");
       assert.strictEqual(linuxConfig.syncDesktopName, true);
-      assert.match(String(linux.afterPack), /link-legacy-linux-executable\.ts$/);
+      assert.match(String(linux.afterPack), /desktop-after-pack\.ts$/);
       const fpm = (linux.deb as { fpm: string[] }).fpm;
       // electron-builder appends its positional file mappings after these, so options lead.
       assert.deepStrictEqual(fpm.slice(0, 6), [
