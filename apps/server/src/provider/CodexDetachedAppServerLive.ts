@@ -94,17 +94,34 @@ const layer = Layer.effect(
       }),
     };
 
+    // Only "nothing there" and "nobody listening" prove a dead socket; any other failure is unverifiable.
     const socketAccepts = (path: string) =>
-      Effect.callback<boolean>((resume) => {
+      Effect.callback<boolean, CodexDetachedAppServerError>((resume) => {
         const socket = NodeNet.connect({ path });
-        const done = (accepted: boolean) => {
+        socket.once("connect", () => {
           socket.destroy();
-          resume(Effect.succeed(accepted));
-        };
-        socket.once("connect", () => done(true));
-        socket.once("error", () => done(false));
+          resume(Effect.succeed(true));
+        });
+        socket.once("error", (cause: NodeJS.ErrnoException) => {
+          socket.destroy();
+          resume(
+            cause.code === "ENOENT" || cause.code === "ECONNREFUSED"
+              ? Effect.succeed(false)
+              : Effect.fail(
+                  new CodexDetachedAppServerError({ detail: "Codex socket probe failed.", cause }),
+                ),
+          );
+        });
         return Effect.sync(() => socket.destroy());
-      }).pipe(Effect.timeoutOrElse({ duration: "2 seconds", orElse: () => Effect.succeed(false) }));
+      }).pipe(
+        Effect.timeoutOrElse({
+          duration: "2 seconds",
+          orElse: () =>
+            Effect.fail(
+              new CodexDetachedAppServerError({ detail: "Codex socket probe timed out." }),
+            ),
+        }),
+      );
 
     const signalGroup = (pgid: number, signal: "SIGTERM" | "SIGKILL") =>
       Effect.try({

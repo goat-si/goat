@@ -11,6 +11,8 @@ import WebSocket from "ws";
 
 const MAX_MESSAGE_BYTES = 64 * 1024 * 1024;
 const FRAGMENT_BYTES = 8 * 1024 * 1024;
+// Received messages the protocol has not consumed yet; a stalled reader drops the connection instead.
+const MAX_PENDING_BYTES = 256 * 1024 * 1024;
 
 export class CodexAppServerSocketError extends Schema.TaggedError<CodexAppServerSocketError>()(
   "CodexAppServerSocketError",
@@ -19,8 +21,14 @@ export class CodexAppServerSocketError extends Schema.TaggedError<CodexAppServer
 
 export const connectCodexAppServerSocket = Effect.fn("CodexAppServerSocket.connect")(function* (
   socketPath: string,
+  options: { readonly maxPendingBytes?: number } = {},
 ) {
-  const incoming = yield* Queue.unbounded<string, Cause.Done<void>>();
+  const maxPendingBytes = options.maxPendingBytes ?? MAX_PENDING_BYTES;
+  let pendingBytes = 0;
+  const incoming = yield* Queue.unbounded<
+    { readonly text: string; readonly bytes: number },
+    Cause.Done<void>
+  >();
   const closed = yield* Deferred.make<CodexError.CodexAppServerError>();
   const gate = yield* Semaphore.make(1);
   const ws = yield* Effect.acquireRelease(
@@ -46,7 +54,17 @@ export const connectCodexAppServerSocket = Effect.fn("CodexAppServerSocket.conne
     Queue.endUnsafe(incoming);
   };
   ws.on("message", (data) => {
-    Queue.offerUnsafe(incoming, data.toString());
+    const text = data.toString();
+    const bytes = Buffer.byteLength(text);
+    if (pendingBytes + bytes > maxPendingBytes) {
+      finish(
+        new Error("Codex sent more than " + maxPendingBytes + " bytes GOAT had not processed."),
+      );
+      ws.terminate();
+      return;
+    }
+    pendingBytes += bytes;
+    Queue.offerUnsafe(incoming, { text, bytes });
   });
   ws.on("close", (code, reason) =>
     finish(new Error(`WebSocket closed (${code}): ${reason.toString()}`)),
@@ -93,7 +111,12 @@ export const connectCodexAppServerSocket = Effect.fn("CodexAppServerSocket.conne
     gate.withPermits(1),
   );
   return {
-    incoming: Stream.fromQueue(incoming),
+    incoming: Stream.fromQueue(incoming).pipe(
+      Stream.map((message) => {
+        pendingBytes -= message.bytes;
+        return message.text;
+      }),
+    ),
     send,
     closed: Deferred.await(closed),
   } satisfies CodexAppServerMessageChannel;

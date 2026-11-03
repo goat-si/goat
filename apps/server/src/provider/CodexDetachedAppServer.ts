@@ -28,7 +28,6 @@ export interface DetachedAppServerRecord {
   readonly name: string;
   readonly socketPath: string;
   readonly pgid?: number | undefined;
-  readonly unit?: string | undefined;
   readonly bootId: string | null;
   readonly state: "spawning" | "running" | "terminating";
   readonly createdAt: string;
@@ -188,6 +187,21 @@ const tryIo = <A>(detail: string, run: () => Promise<A>) =>
 const isErrno = (cause: unknown, code: string) =>
   typeof cause === "object" && cause !== null && (cause as { code?: unknown }).code === code;
 
+/** Reads at most the last bytes of a log that Codex may have grown without bound. */
+const readTail = async (path: string, bytes: number) => {
+  const handle = await NodeFSP.open(path, "r").catch(() => undefined);
+  if (handle === undefined) return "";
+  try {
+    const { size } = await handle.stat();
+    const length = Math.min(size, bytes);
+    const buffer = Buffer.alloc(length);
+    await handle.read(buffer, 0, length, size - length);
+    return buffer.toString("utf8");
+  } finally {
+    await handle.close();
+  }
+};
+
 const lastStderrLine = (text: string) =>
   text
     .split(/\r?\n/)
@@ -201,6 +215,8 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
   const directory = NodePath.join(deps.stateDir, RECORD_DIRECTORY);
   const shuttingDown = yield* Ref.make(false);
   const blocked = yield* Ref.make(new Map<string, DetachedAppServerRecord>());
+  /** Set when a record cannot be attributed to a provider instance or the records cannot be listed. */
+  const globallyBlocked = yield* Ref.make<string | undefined>(undefined);
   const warn = deps.warnPossibleLeftovers ?? (() => Effect.void);
   const paths = (name: string) => ({
     record: NodePath.join(directory, name + ".json"),
@@ -303,16 +319,19 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
   const terminate = Effect.fn("CodexDetachedAppServers.terminate")(function* (
     record: DetachedAppServerRecord,
   ) {
-    const classification = yield* classify(record);
-    if (classification.type === "gone" || classification.type === "mismatch")
-      return yield* finishGone(record, classification);
-    if (classification.type === "unverifiable") return yield* markBlocked(record);
-    const target = { ...record, pgid: classification.pgid };
+    let pgid = record.pgid;
     for (const signal of ["SIGTERM", "SIGKILL"] as const) {
-      yield* deps.signalGroup(classification.pgid, signal).pipe(Effect.ignore);
-      if (yield* awaitGone(target)) return yield* finishGone(target, { type: "gone" });
+      // Re-verified before every signal: the group may have ended and its id been reused meanwhile.
+      const current: DetachedAppServerRecord = { ...record, pgid };
+      const classification = yield* classify(current);
+      if (classification.type === "gone" || classification.type === "mismatch")
+        return yield* finishGone(current, classification);
+      if (classification.type === "unverifiable") return yield* markBlocked(current);
+      pgid = classification.pgid;
+      yield* deps.signalGroup(pgid, signal).pipe(Effect.ignore);
+      if (yield* awaitGone({ ...record, pgid })) return yield* finishGone(record, { type: "gone" });
     }
-    return yield* markBlocked(target);
+    return yield* markBlocked({ ...record, pgid });
   });
 
   const cleanupRecord = Effect.fn("CodexDetachedAppServers.cleanupRecord")(function* (
@@ -341,6 +360,7 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
 
   /** Startup barrier: every record left by an earlier server run is cleaned, tombstoned or blocked. */
   const cleanup = Effect.gen(function* () {
+    yield* Ref.set(globallyBlocked, undefined);
     const entries = yield* tryIo("Could not list Codex process records.", async () => {
       try {
         return await NodeFSP.readdir(directory);
@@ -348,16 +368,21 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
         if (isErrno(cause, "ENOENT")) return [];
         throw cause;
       }
-    });
+    }).pipe(Effect.tapError((error) => Ref.set(globallyBlocked, error.detail)));
     const outcomes: Array<{ readonly name: string; readonly outcome: DetachedOutcome }> = [];
     for (const entry of entries.filter((name) => name.endsWith(".json")).sort()) {
       const name = entry.slice(0, -".json".length);
       const record = yield* readRecord(NodePath.join(directory, entry)).pipe(Effect.option);
       if (record._tag === "None" || record.value.name !== name) {
+        // No trustworthy instance id: any Codex provider could still own this process.
+        yield* Ref.set(globallyBlocked, "A Codex process record (" + name + ") is unreadable.");
         outcomes.push({ name, outcome: "blocked" });
         continue;
       }
-      outcomes.push({ name, outcome: yield* cleanupRecord(record.value) });
+      const outcome = yield* cleanupRecord(record.value).pipe(
+        Effect.catch(() => markBlocked(record.value)),
+      );
+      outcomes.push({ name, outcome });
     }
     return outcomes;
   }).pipe(Effect.withSpan("CodexDetachedAppServers.cleanup"));
@@ -365,6 +390,14 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
   const ensureNotBlocked = Effect.fn("CodexDetachedAppServers.ensureNotBlocked")(function* (
     instanceId: string,
   ) {
+    if ((yield* Ref.get(globallyBlocked)) !== undefined) yield* cleanup.pipe(Effect.ignore);
+    const global = yield* Ref.get(globallyBlocked);
+    if (global !== undefined)
+      return yield* new CodexDetachedAppServerError({
+        detail:
+          global +
+          " GOAT will not start Codex until it can confirm no process from before the restart is still running.",
+      });
     for (const record of (yield* Ref.get(blocked)).values()) {
       if (record.instanceId !== instanceId) continue;
       const outcome = yield* cleanupRecord(record).pipe(
@@ -378,22 +411,27 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
             " is still running and could not be stopped. GOAT will not start Codex for this provider until it stops.",
         });
     }
-  });
+  }, Effect.asVoid);
 
   /** Server shutdown signals and moves on; any other close waits for the group to exit. */
   const close = Effect.fn("CodexDetachedAppServers.close")(function* (
     record: DetachedAppServerRecord,
   ) {
     if (!(yield* Ref.get(shuttingDown))) return { outcome: yield* terminate(record) };
-    const classification = yield* classify(record);
-    if (classification.type !== "verified")
-      return {
-        outcome:
-          classification.type === "unverifiable"
-            ? ("blocked" as const)
-            : yield* finishGone(record, classification),
-      };
-    yield* deps.signalGroup(classification.pgid, "SIGTERM").pipe(Effect.ignore);
+    // Within the launcher's deadline: one process-table read, and a signal only to a group that
+    // still carries this record's socket path. Anything else is left to the next startup.
+    const pgid = record.pgid;
+    const members =
+      pgid === undefined
+        ? []
+        : yield* deps.processTable.groupMembers(pgid).pipe(
+            Effect.timeoutOption("1 second"),
+            Effect.map((result) => (result._tag === "Some" ? result.value : [])),
+            Effect.orElseSucceed(() => []),
+          );
+    if (pgid === undefined || !members.some((member) => member.argv.includes(record.socketPath)))
+      return { outcome: "blocked" as const };
+    yield* deps.signalGroup(pgid, "SIGTERM").pipe(Effect.ignore);
     const exists = yield* tryIo("Could not check a Codex process record.", () =>
       NodeFSP.access(paths(record.name).record).then(
         () => true,
@@ -446,17 +484,15 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
       stderrPath: files.stderr,
     }).pipe(Effect.tapError(() => cleanupRecord(spawning).pipe(Effect.ignore)));
     const running: DetachedAppServerRecord = { ...spawning, pgid: launched.pid, state: "running" };
-    yield* writeRecord(running);
     yield* Effect.addFinalizer(() => close(running).pipe(Effect.ignore));
+    yield* writeRecord(running);
     const channel = yield* connect(socketPath).pipe(
       Effect.retry(READINESS),
       Effect.timeoutOption(READINESS_LIMIT),
       Effect.raceFirst(
         launched.exited.pipe(
           Effect.flatMap((code) =>
-            tryIo("Could not read the Codex log.", () =>
-              NodeFSP.readFile(files.stderr, "utf8").catch(() => ""),
-            ).pipe(
+            tryIo("Could not read the Codex log.", () => readTail(files.stderr, 8192)).pipe(
               Effect.flatMap((stderr) =>
                 Effect.fail(
                   new CodexDetachedAppServerError({
@@ -464,7 +500,7 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
                       "Codex app-server exited before it accepted connections (code " +
                       String(code) +
                       ")" +
-                      ((line) => (line ? ": " + line : "."))(lastStderrLine(stderr.slice(-8192))),
+                      ((line) => (line ? ": " + line : "."))(lastStderrLine(stderr)),
                   }),
                 ),
               ),

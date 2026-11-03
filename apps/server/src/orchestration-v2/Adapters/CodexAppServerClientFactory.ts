@@ -265,6 +265,9 @@ export const layerAppServerClientFactory: Layer.Layer<
               ),
               Effect.option,
             );
+          // A detached attempt that could not be stopped must not be bypassed by a stdio spawn.
+          if (opened._tag === "None")
+            yield* detached.ensureNotBlocked(input.instanceId).pipe(Effect.mapError(openError));
           if (opened._tag === "Some") {
             const context = yield* Layer.build(
               CodexClient.layerMessageChannel(opened.value.channel, clientOptions),

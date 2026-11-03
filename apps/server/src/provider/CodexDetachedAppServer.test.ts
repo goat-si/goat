@@ -563,3 +563,54 @@ it.effect("cleanup removes GOAT's socket alias once the recorded group is gone",
     }),
   ),
 );
+
+it.effect("the group is re-verified before SIGKILL and an unprovable group is not killed", () =>
+  withRecordDirectory((directory) =>
+    Effect.gen(function* () {
+      const signals: string[] = [];
+      const service = yield* makeDetachedAppServers({
+        stateDir: directory,
+        bootId: Effect.succeed("boot-one"),
+        processTable: {
+          groupMembers: () =>
+            signals.length === 0
+              ? Effect.succeed([{ pid: 1234, pgid: 1234, argv: "codex " + socketPath }])
+              : Effect.fail(new CodexDetachedAppServerError({ detail: "ps unavailable" })),
+          ownerOfSocket: () => Effect.void.pipe(Effect.as(undefined)),
+        },
+        socketAccepts: () => Effect.succeed(false),
+        signalGroup: (_pgid: number, signal: string) =>
+          Effect.sync(() => {
+            signals.push(signal);
+          }),
+      });
+      const closing = yield* service.close(record).pipe(Effect.forkScoped);
+      yield* TestClock.adjust("5 seconds");
+      assert.equal((yield* Fiber.join(closing)).outcome, "blocked");
+      assert.deepEqual(signals, ["SIGTERM"]);
+    }),
+  ),
+);
+
+it.effect("an unreadable record blocks every Codex provider until it is resolved", () =>
+  withRecordDirectory((directory) =>
+    Effect.gen(function* () {
+      const dir = NodePath.join(directory, "codex-app-servers");
+      yield* Effect.promise(() => NodeFSP.mkdir(dir));
+      const broken = NodePath.join(dir, "unknown-instance.json");
+      yield* Effect.promise(() => NodeFSP.writeFile(broken, "{not json"));
+      const service = yield* makeDetachedAppServers({
+        stateDir: directory,
+        bootId: Effect.succeed("boot-one"),
+        processTable: processTable([]),
+        socketAccepts: () => Effect.succeed(false),
+        signalGroup: () => Effect.die("unexpected signal"),
+      });
+      assert.equal((yield* service.cleanup)[0]?.outcome, "blocked");
+      const error = yield* service.ensureNotBlocked("any-provider").pipe(Effect.flip);
+      assert.include(error.message, "unreadable");
+      yield* Effect.promise(() => NodeFSP.rm(broken));
+      yield* service.ensureNotBlocked("any-provider");
+    }),
+  ),
+);

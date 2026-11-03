@@ -117,7 +117,7 @@ and vendor frames, so Grok and fx recordings lose their vendor-only behavior.
 
 ### Codex socket transport
 
-\`GOAT_CODEX_APP_SERVER_TRANSPORT=socket\` runs each Codex provider instance's app-server outside the server process, connected over a WebSocket on a private Unix socket (macOS and Linux; Windows keeps stdio). It exists to test the transport before Codex turns can survive server restarts; the server still stops the process when it shuts down. GOAT records each process under \`<state>/codex-app-servers\` and, at startup, stops anything a crashed run left there before any Codex session opens. A leftover it cannot identify blocks Codex for that provider with an error naming the process group, until the group exits.
+`GOAT_CODEX_APP_SERVER_TRANSPORT=socket` runs each Codex provider instance's app-server outside the server process, connected over a WebSocket on a private Unix socket (macOS and Linux; Windows keeps stdio). It exists to test the transport before Codex turns can survive server restarts; the server still stops the process when it shuts down. GOAT records each process under `<state>/codex-app-servers` and, at startup, stops anything a crashed run left there before any Codex session opens. A leftover it cannot identify blocks Codex for that provider with an error naming the process group, until the group exits.
 
 ### Sharing and remote debugging
 
