@@ -496,7 +496,11 @@ const make = Effect.gen(function* () {
     if (url === "about:blank" || url.startsWith("chrome-error://")) return;
     const title = (await tab.page.title().catch(() => "")).slice(0, 512);
     if (tab.loading || tab.page.url() !== url) return;
-    report(tab, { _tag: "Success", url: url.slice(0, 2048), title });
+    report(tab, {
+      _tag: "Success",
+      url: ServerBrowserPage.withoutDataPayload(url).slice(0, 2048),
+      title,
+    });
   };
 
   const reportLiveTabs = () => {
@@ -831,6 +835,7 @@ const make = Effect.gen(function* () {
     tab.control.onChange(ServerBrowserScreen.authorityReporter(tab, screen.notify));
     tab.control.onChange(() => (broadcastControl(tab), reportLiveTabs()));
     reportLiveTabs();
+    if (desktop) void page.waitForLoadState("load").then(() => reportLoaded(tab), constVoid);
     // Existing desktop and popup PDFs can start loading before interception attaches.
     if (
       snapshot.navStatus._tag === "Loading" &&
@@ -1342,7 +1347,7 @@ const make = Effect.gen(function* () {
         ...profiles.status(),
       };
     }
-    const url = tab.page.url();
+    const url = ServerBrowserPage.withoutDataPayload(tab.page.url());
     const viewport = tab.desktop ? await layoutSize(tab) : tab.page.viewportSize();
     const status = {
       available: true,
@@ -1368,7 +1373,10 @@ const make = Effect.gen(function* () {
         .filter((candidate) => candidate.threadId === tab.threadId)
         .map((candidate) => ({
           tabId: candidate.tabId,
-          url: candidate.page.url() === "about:blank" ? null : candidate.page.url(),
+          url:
+            candidate.page.url() === "about:blank"
+              ? null
+              : ServerBrowserPage.withoutDataPayload(candidate.page.url()),
           ...(candidate.openerTabId === undefined ? {} : { openerTabId: candidate.openerTabId }),
           owner: tabOwner(candidate),
           ownedByCaller: candidate.control.agentId === agentSessionId,

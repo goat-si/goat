@@ -466,7 +466,7 @@ it.layer(NodeServices.layer)("prunePinnedRuntimes", (it) => {
       // The launcher found on PATH is remembered for a service that cannot see it.
       assert.equal(
         yield* fs.readFileString(path.join(baseDir, "runtime", "launchers")),
-        `${path.join(customBinDir, "goat")}\n${path.join(binDir, "goat")}\n`,
+        `${path.join(customBinDir, "goat")}\n\n${path.join(binDir, "goat")}\n`,
       );
       assert.deepEqual((yield* fs.readDirectory(versionsDir)).toSorted(), [
         ".staging-abc",

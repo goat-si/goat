@@ -25,7 +25,7 @@ use smithay_client_toolkit::{
 };
 use std::{
     fs::OpenOptions,
-    io::BufWriter,
+    io::Write,
     os::unix::fs::OpenOptionsExt,
     path::Path,
     time::{Duration, Instant},
@@ -140,16 +140,63 @@ pub(super) fn capture_on(connection: Connection, address: u64, directory: &Path)
         pixels.format,
         state.inverted,
     )?;
-    let file = OpenOptions::new()
+    let png = encode_png(&rgba, pixels.width, pixels.height, MAX_PNG_BYTES)?;
+    OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(0o600)
-        .open(directory.join("capture.png"))?;
-    let mut encoder = png::Encoder::new(BufWriter::new(file), pixels.width, pixels.height);
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
-    encoder.write_header()?.write_image_data(&rgba)?;
+        .open(directory.join("capture.png"))?
+        .write_all(&png)?;
     Ok(())
+}
+
+/// The desktop app rejects larger capture PNGs (`linuxCaptureSession.ts`).
+const MAX_PNG_BYTES: usize = 32 * 1024 * 1024;
+
+struct LimitedPng {
+    bytes: Vec<u8>,
+    limit: usize,
+    exceeded: bool,
+}
+
+impl Write for LimitedPng {
+    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+        if data.len() > self.limit.saturating_sub(self.bytes.len()) {
+            self.exceeded = true;
+            return Err(std::io::Error::other("PNG size limit exceeded"));
+        }
+        self.bytes.extend_from_slice(data);
+        Ok(data.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn encode_png(rgba: &[u8], width: u32, height: u32, limit: usize) -> Result<Vec<u8>> {
+    for level in [2, 6] {
+        let mut png = LimitedPng {
+            bytes: Vec::new(),
+            limit,
+            exceeded: false,
+        };
+        let encoded = {
+            let mut encoder = png::Encoder::new(&mut png, width, height);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            encoder.set_deflate_compression(png::DeflateCompression::Level(level));
+            encoder
+                .write_header()
+                .and_then(|mut writer| writer.write_image_data(rgba))
+        };
+        if png.exceeded {
+            continue;
+        }
+        encoded?;
+        return Ok(png.bytes);
+    }
+    Err("Capture is too large.".into())
 }
 
 fn image_size(width: u32, height: u32, stride: u32) -> Result<usize> {
@@ -330,5 +377,26 @@ mod tests {
             [10, 20, 30, 255]
         );
         assert!(to_rgba(&bytes[..2], 1, 1, 4, wl_shm::Format::Argb8888, false).is_err());
+    }
+    #[test]
+    fn falls_back_to_smaller_png_when_fast_encode_exceeds_limit() {
+        let (width, height) = (256, 256);
+        let rgba: Vec<u8> = (0..width * height * 4)
+            .map(|i| (((i / 4) % 251) ^ (i % 7)) as u8)
+            .collect();
+        let decode = |png: &[u8]| {
+            let mut reader = png::Decoder::new(std::io::Cursor::new(png))
+                .read_info()
+                .unwrap();
+            let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
+            reader.next_frame(&mut pixels).unwrap();
+            pixels
+        };
+        let fast = encode_png(&rgba, width, height, usize::MAX).unwrap();
+        let fallback = encode_png(&rgba, width, height, fast.len() - 1).unwrap();
+        assert!(fallback.len() < fast.len());
+        assert_eq!(decode(&fast), rgba);
+        assert_eq!(decode(&fallback), rgba);
+        assert!(encode_png(&rgba, width, height, fallback.len() - 1).is_err());
     }
 }

@@ -1,6 +1,8 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect } from "vite-plus/test";
+import { it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
 
-import { agentDeviceQuickStart, pngDimensions } from "./handlers.ts";
+import { agentDeviceQuickStart, pngDimensions, resolveHostId } from "./handlers.ts";
 
 const device = {
   hostId: "local",
@@ -13,6 +15,32 @@ const device = {
 };
 
 describe("device tool helpers", () => {
+  it.effect("rejects ambiguous labels while preferring an exact host ID", () =>
+    Effect.gen(function* () {
+      const hosts = [
+        {
+          id: "one",
+          label: "Mini",
+          kind: "ssh" as const,
+          platforms: [],
+          hubInstalled: true,
+          agentDeviceInstalled: true,
+        },
+        {
+          id: "two",
+          label: "mini",
+          kind: "ssh" as const,
+          platforms: [],
+          hubInstalled: true,
+          agentDeviceInstalled: true,
+        },
+      ];
+      expect(yield* resolveHostId(hosts, "one")).toBe("one");
+      const error = yield* Effect.flip(resolveHostId(hosts, "MINI"));
+      expect(error.reason).toContain("Mini (one), mini (two)");
+    }),
+  );
+
   it("uses the absolute launcher in every quick-start command", () => {
     const text = agentDeviceQuickStart(
       device,

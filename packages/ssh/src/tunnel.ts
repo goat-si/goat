@@ -2728,6 +2728,10 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
         readonly error: SshEnvironmentEffectError;
       },
     ): Effect.fn.Return<T, SshEnvironmentEffectError, SshEnvironmentEffectContext> {
+      if (SshAuth.isSshAgentSigningFailure(input.error)) {
+        if (input.authSecret !== null) authSecrets.delete(input.key);
+        return yield* input.error;
+      }
       if (!SshAuth.isSshAuthFailure(input.error)) {
         return yield* input.error;
       }

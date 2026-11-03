@@ -68,12 +68,35 @@ it.layer(NodeServices.layer)("goat update launcher", (it) => {
 
       const repointed = yield* repointLauncher({
         launchedAs: launcher,
-        versionsDir: path.join(root, "runtime/goat/versions"),
+        baseDir: root,
         targetEntryPath: newExe,
       });
 
       assert.deepStrictEqual(Option.getOrUndefined(repointed), launcher);
       assert.equal(yield* fs.readLink(launcher), newExe);
+      assert.include(yield* fs.readFileString(path.join(root, "runtime", "launchers")), launcher);
+    }).pipe(Effect.scoped, Effect.provideService(HostProcess.Platform, "linux")),
+  );
+
+  it.effect("does not repoint a launcher when its record cannot be written", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-update-" });
+      const oldExe = path.join(root, "runtime/goat/versions/1/goat");
+      const newExe = path.join(root, "runtime/goat/versions/2/goat");
+      const launcher = path.join(root, "bin/goat");
+      yield* fs.makeDirectory(path.dirname(oldExe), { recursive: true });
+      yield* fs.makeDirectory(path.dirname(launcher), { recursive: true });
+      yield* fs.makeDirectory(path.join(root, "runtime/launchers"));
+      yield* fs.symlink(oldExe, launcher);
+      const error = yield* repointLauncher({
+        launchedAs: launcher,
+        baseDir: root,
+        targetEntryPath: newExe,
+      }).pipe(Effect.flip);
+      assert.include(error.reason, "Could not record");
+      assert.equal(yield* fs.readLink(launcher), oldExe);
     }).pipe(Effect.scoped, Effect.provideService(HostProcess.Platform, "linux")),
   );
 
@@ -100,7 +123,7 @@ it.layer(NodeServices.layer)("goat update launcher", (it) => {
       for (const launchedAs of [copy, foreign, otherLauncher, undefined]) {
         const repointed = yield* repointLauncher({
           launchedAs,
-          versionsDir: path.join(root, "runtime/goat/versions"),
+          baseDir: root,
           targetEntryPath: newExe,
         });
         assert.equal(repointed._tag, "None", launchedAs ?? "undefined");

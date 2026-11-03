@@ -660,7 +660,7 @@ const capture = async (
     input.page,
     {
       ...page,
-      url: mask(page.url),
+      url: mask(withoutDataPayload(page.url)),
       title: mask(page.title),
       // Mask text before truncating so a value crossing the cut cannot leak its prefix.
       visibleText: mask(page.visibleText, MAX_VISIBLE_TEXT_LENGTH),

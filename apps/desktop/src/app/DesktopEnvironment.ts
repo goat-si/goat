@@ -85,7 +85,6 @@ export class DesktopEnvironment extends Context.Service<
     /** The channel's GOAT Computer Use bundle id, whatever app id this checkout runs as. */
     readonly computerUseHelperBundleId: string;
     readonly linuxDesktopEntryName: string;
-    readonly linuxWmClass: string;
     readonly linuxApplicationsDir: string;
     readonly desktopLauncherPath: Option.Option<string>;
     readonly appImagePath: Option.Option<string>;
@@ -267,7 +266,6 @@ const make = Effect.fn("desktop.environment.make")(function* (
     ),
     computerUseHelperBundleId: computerUseHelperBundleIdForChannel(channel),
     linuxDesktopEntryName: resolveLinuxDesktopEntryName(isDevelopment),
-    linuxWmClass: isDevelopment ? "t3code-dev" : "t3code",
     linuxApplicationsDir,
     desktopLauncherPath: config.desktopLauncherPath,
     appImagePath: config.appImagePath,
