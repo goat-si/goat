@@ -1549,6 +1549,7 @@ const make = Effect.gen(function* () {
       );
     }
     if (task.remote !== undefined) {
+      const parentProjection = yield* Effect.cached(loadProjection(scope.thread.threadId, false));
       const status = isTerminalTaskStatus(task.status) ? task.status : "running";
       const terminal = isTerminalTaskStatus(status);
       // The coordinator records the remote run's open questions before announcing them.
@@ -1576,10 +1577,7 @@ const make = Effect.gen(function* () {
         ...(task.reviewLedger === undefined ? {} : { reviewLedger: task.reviewLedger }),
         ...(task.role === "review"
           ? {
-              reviewRound: yield* reviewRoundFor(
-                yield* loadProjection(scope.thread.threadId, false),
-                task,
-              ),
+              reviewRound: yield* reviewRoundFor(yield* parentProjection, task),
             }
           : {}),
         ...(task.modelSelection === undefined ? {} : { modelSelection: task.modelSelection }),
@@ -1602,7 +1600,7 @@ const make = Effect.gen(function* () {
         yield* acknowledgeTaskResult(
           scope,
           task,
-          yield* loadProjection(scope.thread.threadId, false),
+          yield* parentProjection,
           response.status,
           acknowledgementOperation,
         );
