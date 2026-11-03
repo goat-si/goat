@@ -1847,6 +1847,8 @@ const make = Effect.gen(function* () {
         Stream.mapError(streamError),
         // The item can commit after its request; other transcript items need no read.
         Stream.filter(({ thread, stored }) => {
+          if (thread === "parent" && stored.event.type === "subagent.updated")
+            return stored.event.payload.id === taskId;
           if (stored.event.type !== "turn-item.updated") return true;
           if (thread === "parent") {
             return (
