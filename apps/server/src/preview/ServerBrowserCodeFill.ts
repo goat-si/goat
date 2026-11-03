@@ -61,6 +61,7 @@ export const fillCode = async (input: {
   readonly code: string;
   readonly register: (value: string) => void;
   readonly protect: (field: Field) => () => void;
+  readonly canDispatch?: () => boolean;
   readonly onDispatch?: () => void;
 }) => {
   const found = await input.send("Runtime.callFunctionOn", {
@@ -87,6 +88,9 @@ export const fillCode = async (input: {
     });
     pending = field.result?.objectId;
     if (field.exceptionDetails || !pending) throw new Error("Could not retain the code field.");
+    if (input.canDispatch && !input.canDispatch()) {
+      return { filled: false, verdict: "refused" as const, code: "form_changed" };
+    }
     input.register(input.code);
     const unprotect = input.protect({ objectId: pending, value: input.code });
     const fieldId = pending;
