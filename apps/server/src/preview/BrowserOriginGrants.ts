@@ -117,7 +117,16 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
       return yield* new BrowserManifestNotApplied();
   });
   const write = (value: Union) =>
-    writeLock.withPermits(1)(advance.pipe(Effect.andThen(deps.publish(value))));
+    writeLock.withPermits(1)(
+      Effect.gen(function* () {
+        const hosts = yield* deps.blockedHosts ?? Effect.succeed([]);
+        yield* advance;
+        return yield* deps.publish({
+          ...value,
+          origins: value.origins.filter((origin) => !isBlockedBrowserUrl(origin, hosts)),
+        });
+      }),
+    );
   const publish = Effect.fn("BrowserOriginGrants.publishExpansion")(function* (value: Union) {
     yield* confirm(yield* write(value));
   });

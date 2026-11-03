@@ -67,3 +67,33 @@ it.effect("a blocked active tab declines to the agent and rolls back its grant",
     assert.deepEqual(published.at(-1), []);
   }),
 );
+
+it.effect("a previously granted origin is not republished after it becomes blocked", () =>
+  Effect.gen(function* () {
+    let hosts: ReadonlyArray<string> = [];
+    const published: Array<ReadonlyArray<string>> = [];
+    const service = yield* makeTestBrowserOriginGrants({
+      environmentId: EnvironmentId.make("environment:test"),
+      supported: () => true,
+      blockedHosts: Effect.sync(() => hosts),
+      publish: (union) =>
+        Effect.sync(() => {
+          published.push(union.origins);
+        }),
+      bind: (request) =>
+        Effect.succeed({
+          targetId: "target",
+          tabId: `tab-${request.windowId}`,
+          title: "Site",
+          url: request.origin,
+          driverGeneration: 1,
+        }),
+    });
+    const first = yield* service.claim(input);
+    assert.equal(first.agentResult.status, "attached");
+    hosts = ["example.test"];
+    const second = yield* service.claim({ ...input, windowId: 8, origin: "https://other.test" });
+    assert.equal(second.agentResult.status, "attached");
+    assert.notInclude(published.at(-1) ?? [], "https://example.test");
+  }),
+);
