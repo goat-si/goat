@@ -577,6 +577,37 @@ export const readForwardDescriptor = Effect.fn("ssh/appServer.readForwardDescrip
   );
 });
 
+/**
+ * The environment the server behind an open forward serves now, when it could still issue
+ * runtime sessions to this client; undefined when it does not answer or no longer qualifies.
+ */
+export const readForwardEnvironment = Effect.fn("ssh/appServer.readForwardEnvironment")(function* (
+  httpBaseUrl: string,
+  timeoutMs: number,
+) {
+  const client = yield* HttpClient.HttpClient;
+  const body = yield* client.get(new URL(GOAT_ENVIRONMENT_PATH, httpBaseUrl).toString()).pipe(
+    Effect.flatMap((response) =>
+      response.status === 200 ? response.text : Effect.succeed(undefined),
+    ),
+    Effect.timeoutOption(`${timeoutMs} millis`),
+    Effect.map(Option.getOrUndefined),
+    Effect.orElseSucceed(() => undefined),
+  );
+  const descriptor = decodeAppServerDescriptor(body ?? "");
+  if (
+    Option.isNone(descriptor) ||
+    descriptor.value.environmentId === undefined ||
+    descriptor.value.capabilities.runtimeSessions !== true ||
+    compareRuntimeProtocols(CLIENT_PROTOCOL_RANGES, descriptor.value) !== "compatible"
+  )
+    return undefined;
+  return {
+    environmentId: descriptor.value.environmentId,
+    version: descriptor.value.serverVersion,
+  };
+});
+
 /** The launch result for an attachable app server; nothing on the host is started or written. */
 export const appServerLaunch = Effect.fn("ssh/appServer.launch")(function* (
   target: DesktopSshEnvironmentTarget,
