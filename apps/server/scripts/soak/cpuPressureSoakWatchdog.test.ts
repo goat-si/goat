@@ -68,6 +68,7 @@ it.live.skipIf(process.platform === "win32")(
         );
         let stdout = "";
         let stderr = "";
+        if (!child.stdout || !child.stderr) throw new Error("missing shell output pipes");
         child.stdout.setEncoding("utf8");
         child.stdout.on("data", (chunk: string) => {
           stdout += chunk;

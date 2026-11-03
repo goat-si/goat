@@ -283,7 +283,7 @@ export function serverEnvironment(
   };
 }
 
-export const soakServerGateScript = 'IFS= read -r <&3 || exit 1; exec "$@"';
+export const soakServerGateScript = 'IFS= read -r gate <&3 || exit 1; exec "$@"';
 
 export async function spawnWatchedServer(
   command: string,
