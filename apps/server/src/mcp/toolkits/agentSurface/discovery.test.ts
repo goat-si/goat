@@ -4,6 +4,7 @@ import {
   EnvironmentId,
   MemoryReadInput,
   MemoryRecallInput,
+  MemoryRememberInput,
   MemorySearchInput,
   ProviderInstanceId,
   ThreadId,
@@ -246,6 +247,7 @@ const dynamicInputs: Readonly<Record<string, Schema.Codec<unknown, unknown>>> = 
   "memory.search": MemorySearchInput,
   "memory.recall": MemoryRecallInput,
   "memory.read": MemoryReadInput,
+  "memory.remember": MemoryRememberInput,
 };
 
 const describedProperty = (property: unknown) => {
