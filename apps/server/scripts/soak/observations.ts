@@ -22,6 +22,17 @@ export function counter(observed = 0, reasons: string[] = []): Counter {
 
 const LIMIT = 100_000;
 const MAX_LINE = 1024 * 1024;
+export function linuxMemoryPressure(contents: string): 1 | 2 | 4 {
+  const parse = (name: string) => {
+    const line = contents.split("\n").find((entry) => entry.startsWith(`${name} `));
+    const match = line?.match(/(?:^|\s)avg10=(\d+(?:\.\d+)?)(?:\s|$)/);
+    if (!match?.[1]) throw new Error(`missing Linux memory pressure ${name}`);
+    return Number(match[1]);
+  };
+  const some = parse("some");
+  const full = parse("full");
+  return full > 0 ? 4 : some >= 10 ? 2 : 1;
+}
 export function codexEvidence(contents: string, excludedThreads: readonly string[] = []) {
   const turns = new Map<string, { scheduled?: number; started?: number; completed?: number }>();
   const errors: string[] = [];

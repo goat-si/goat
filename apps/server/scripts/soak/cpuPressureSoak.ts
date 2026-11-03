@@ -13,6 +13,7 @@ import {
   saturation,
   providerRestarts,
   codexEvidence,
+  linuxMemoryPressure,
 } from "./observations.ts";
 import { runWorkload } from "./clients.ts";
 import * as NodeFS from "node:fs";
@@ -337,6 +338,39 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
   let detail: DetailWriter | undefined;
   let sampleTimer: ReturnType<typeof setInterval> | undefined;
   let progressTimer: ReturnType<typeof setInterval> | undefined;
+  let memoryTimer: ReturnType<typeof setInterval> | undefined;
+  const memorySamples: Array<{ at: string; level: 1 | 2 | 4 }> = [];
+  let memoryAbort: string | null = null;
+  // oxlint-disable-next-line goat/no-global-process-runtime -- This standalone driver samples its own host.
+  const hostPlatform = NodeOS.platform();
+  const sampleMemory = () => {
+    try {
+      let level: 1 | 2 | 4;
+      if (hostPlatform === "darwin") {
+        const result = NodeChildProcess.spawnSync(
+          "sysctl",
+          ["-n", "kern.memorystatus_vm_pressure_level"],
+          { encoding: "utf8", timeout: 4000 },
+        );
+        const value = Number(result.stdout?.trim());
+        if (result.status !== 0 || (value !== 1 && value !== 2 && value !== 4))
+          throw new Error("memory pressure sysctl failed");
+        level = value;
+      } else if (hostPlatform === "linux")
+        level = linuxMemoryPressure(NodeFS.readFileSync("/proc/pressure/memory", "utf8"));
+      else throw new Error("memory pressure monitoring unsupported");
+      memorySamples.push({ at: new Date().toISOString(), level });
+      if (level === 4) {
+        memoryAbort = "memory pressure critical";
+        stop(memoryAbort);
+        void cleanupOwned(burners);
+      }
+    } catch (error) {
+      memoryAbort = `memory pressure monitor failed: ${String(error)}`;
+      stop(memoryAbort);
+      void cleanupOwned(burners);
+    }
+  };
   let cpuTimer: ReturnType<typeof setInterval> | undefined;
   let previousCpu: ReturnType<typeof NodeOS.cpus> | undefined;
   let previousCpuAt = 0;
@@ -375,6 +409,9 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
     });
     if (NodeFS.existsSync(stallPath)) stall.startAtEnd();
     if (NodeFS.existsSync(tracePath)) trace.startAtEnd();
+    sampleMemory();
+    if (memoryAbort) throw new Error(memoryAbort);
+    memoryTimer = setInterval(sampleMemory, 5000);
     const sample = () => {
       try {
         provider.read();
@@ -509,6 +546,7 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
   } finally {
     teardown = true;
     if (sampleTimer !== undefined) clearInterval(sampleTimer);
+    if (memoryTimer !== undefined) clearInterval(memoryTimer);
     if (cpuTimer !== undefined) clearInterval(cpuTimer);
     if (progressTimer !== undefined) clearInterval(progressTimer);
     abort.abort();
@@ -608,6 +646,7 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
           ...(errors.length ? ["workload error"] : []),
         ],
       ),
+      ...(memoryAbort ? { result: "aborted", abortReason: memoryAbort } : {}),
       home: options.home,
       serverPid: server?.child.pid ?? null,
       ownedPids: owned.map(({ child }) => child.pid),
@@ -615,6 +654,13 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
       window: { start: startedAt, end: endedAt, drainEnd: drainEndedAt },
       selfCheck,
       telemetry: { notes: telemetryNotes, detailTruncated: detail?.truncated ?? false },
+      memoryPressure: {
+        samples: memorySamples,
+        maxLevel: memorySamples.length
+          ? Math.max(...memorySamples.map((sample) => sample.level))
+          : null,
+        linuxPolicy: "full avg10 > 0 is critical; some avg10 >= 10 is warning",
+      },
       saturation: cpu,
       codexEvidence: codex,
       workloadGaps,

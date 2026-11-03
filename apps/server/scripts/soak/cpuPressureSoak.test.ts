@@ -94,9 +94,16 @@ import {
   cpuBusy,
   saturation,
   codexEvidence,
+  linuxMemoryPressure,
 } from "./observations.ts";
 
 describe("soak observations", () => {
+  it("classifies Linux memory pressure and rejects missing data", () => {
+    expect(linuxMemoryPressure("some avg10=0.00 avg60=0\nfull avg10=0.00 avg60=0\n")).toBe(1);
+    expect(linuxMemoryPressure("some avg10=10.00 avg60=0\nfull avg10=0.00 avg60=0\n")).toBe(2);
+    expect(linuxMemoryPressure("some avg10=1.00 avg60=0\nfull avg10=0.01 avg60=0\n")).toBe(4);
+    expect(() => linuxMemoryPressure("some avg10=0.00\n")).toThrow();
+  });
   it("requires observed delayed Codex start and long completion", () => {
     const lines = [
       { event: "scheduled", threadId: "one", turnId: "turn", at: "2026-01-01T00:00:00.000Z" },
