@@ -267,6 +267,24 @@ describe("searchSettings", () => {
     }
   });
 
+  it("finds WSL only while retaining the Connections destination", () => {
+    const row = SETTINGS_SEARCH_ITEMS.find((item) => item.id === "wsl-backend");
+    expect(row).toMatchObject({
+      to: "/settings/connections",
+      desktopOnly: true,
+      windowsOnly: true,
+    });
+    if (!row) throw new Error("WSL backend setting missing");
+    try {
+      vi.stubGlobal("navigator", { platform: "Win32" });
+      expect(searchSettings("wsl only", [{ ...row, desktopOnly: false }])[0]?.id).toBe(
+        "wsl-backend",
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("keeps catalog result ids unique", () => {
     const ids = SETTINGS_SEARCH_ITEMS.map((item) => item.id);
     expect(new Set(ids).size).toBe(ids.length);
