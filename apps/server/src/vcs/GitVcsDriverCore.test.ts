@@ -274,6 +274,108 @@ it.effect.each(["origin", "github"] as const)(
     }).pipe(Effect.provide(layerTest)),
 );
 
+it.effect.each(["on a branch", "detached", "unborn"] as const)(
+  "reads only the repository root for review requests that ignore the branch when %s",
+  (state) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const spawnedArgs: Array<ReadonlyArray<string>> = [];
+        const spawner = ChildProcessSpawner.make((command) => {
+          if (ChildProcess.isStandardCommand(command)) spawnedArgs.push(command.args.map(String));
+          return delegate.spawn(command);
+        });
+        const driver = yield* makeGitVcsDriverCore().pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          Effect.provide(layerServerConfig),
+        );
+        const discoveries = () => {
+          const commands = spawnedArgs.filter(
+            (args) =>
+              args.includes("--show-toplevel") ||
+              args.includes("--git-common-dir") ||
+              (args.includes("symbolic-ref") && args.includes("HEAD")),
+          );
+          spawnedArgs.length = 0;
+          return commands.length;
+        };
+        const cwd = yield* makeTmpDir();
+        if (state === "unborn") {
+          yield* git(cwd, ["init", "-b", "main"]);
+        } else {
+          yield* initRepoWithCommit(cwd);
+          yield* writeTextFile(cwd, "committed.txt", "committed\n");
+          yield* git(cwd, ["add", "."]);
+          yield* git(cwd, ["commit", "-m", "add file"]);
+          if (state === "detached") yield* git(cwd, ["checkout", "--detach"]);
+        }
+        yield* writeTextFile(cwd, "new.txt", "new\n");
+        spawnedArgs.length = 0;
+
+        const workingTree = yield* driver.getReviewDiffPreview({
+          cwd,
+          file: { path: "new.txt", previousPath: null, sourceKind: "working-tree" },
+        });
+        assert.equal(discoveries(), 1);
+        assert.deepStrictEqual(
+          workingTree.sources
+            .find((source) => source.kind === "working-tree")!
+            .files!.map((file) => file.path),
+          ["new.txt"],
+        );
+
+        const general = yield* driver.getReviewDiffPreview({ cwd });
+        assert.equal(discoveries(), 3);
+        assert.equal(
+          general.sources.find((source) => source.kind === "branch-range")!.headRef,
+          state === "detached" ? "HEAD" : yield* git(cwd, ["branch", "--show-current"]),
+        );
+      }),
+    ).pipe(Effect.provide(layerTest)),
+);
+
+it.effect.each([{ kind: "working-tree", request: { sourceKind: "working-tree" } }] as const)(
+  "keeps $kind review requests safe without a worktree root",
+  ({ request }) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const bareRoot = yield* makeTmpDir("git-review-bare-");
+        const spawner = ChildProcessSpawner.make((command) =>
+          delegate.spawn(
+            ChildProcess.isStandardCommand(command) && command.options.cwd === bareRoot
+              ? ChildProcess.setEnv(command, { GIT_DIR: bareRoot })
+              : command,
+          ),
+        );
+        const driver = yield* makeGitVcsDriverCore().pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          Effect.provide(layerServerConfig),
+        );
+        const path = yield* Path.Path;
+        const file = { path: "README.md", previousPath: null, sourceKind: request.sourceKind };
+        const input = (cwd: string) => ({
+          cwd,
+          file,
+          ...("commitSha" in request ? { commitSha: request.commitSha } : {}),
+        });
+        const source = yield* makeTmpDir();
+        yield* initRepoWithCommit(source);
+        yield* git(source, ["clone", "--bare", source, bareRoot]);
+        const nonRepository = yield* makeTmpDir();
+        for (const cwd of [bareRoot, nonRepository, path.join(nonRepository, "missing")]) {
+          assert.isEmpty((yield* driver.getReviewDiffPreview(input(cwd))).sources);
+        }
+
+        const brokenConfig = yield* makeTmpDir();
+        yield* initRepoWithCommit(brokenConfig);
+        yield* writeTextFile(brokenConfig, ".git/config", "[broken");
+        const error = yield* driver.getReviewDiffPreview(input(brokenConfig)).pipe(Effect.flip);
+        assert.equal(error.operation, "GitVcsDriver.resolveRepositoryPaths.commonDir");
+      }),
+    ).pipe(Effect.provide(layerTest)),
+);
+
 describe("pullCurrentBranch", () => {
   // A fast-forward that prints over 1 MB takes thousands of files, so the real pull's output is
   // padded past the cap instead.
