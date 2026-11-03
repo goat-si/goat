@@ -13,13 +13,22 @@ import {
 } from "@goat/client-runtime/state/runtime";
 import type { EnvironmentId, OrchestrationV2ProjectedTurnItem } from "@goat/contracts";
 import { CheckIcon, LockIcon, MinusIcon, ShieldCheckIcon } from "~/components/solar";
-import { useId, useRef, useState, type FormEvent } from "react";
+import { useId, useRef, useState, type CSSProperties, type FormEvent } from "react";
 
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { WorkLogRow } from "./WorkLog";
+
+const EMPTY_CARD = { number: "", expiryMonth: "", expiryYear: "", cvc: "", name: "" };
+const CARD_FIELDS = [
+  ["number", "Card number"],
+  ["expiryMonth", "Expiry month"],
+  ["expiryYear", "Expiry year"],
+  ["cvc", "CVC"],
+  ["name", "Name on card"],
+] as const;
 
 export function SecretRequestCard(props: {
   readonly environmentId: EnvironmentId;
@@ -85,18 +94,16 @@ function PendingSecretRequestForm(props: {
   });
   const [secret, setSecret] = useState("");
   const [username, setUsername] = useState("");
+  const [cardValues, setCardValues] = useState(EMPTY_CARD);
   const login = item.requestKind === "login";
+  const card = item.requestKind === "card";
+  const cardReply = { type: "save_card" as const, ...cardValues };
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Enter and click can both submit before a render.
   const inFlight = useRef(false);
 
-  const send = async (
-    reply:
-      | { readonly type: "save"; readonly secret: string }
-      | { readonly type: "save_login"; readonly username: string; readonly password: string }
-      | { readonly type: "decline" },
-  ) => {
+  const send = async (reply: Parameters<typeof secretRequestAnswerInput>[1]) => {
     const input = secretRequestAnswerInput(item, reply);
     if (input === null || inFlight.current) return;
     inFlight.current = true;
@@ -109,6 +116,7 @@ function PendingSecretRequestForm(props: {
     if (result._tag === "Success") {
       setSecret("");
       setUsername("");
+      setCardValues(EMPTY_CARD);
       return;
     }
     if (!isAtomCommandInterrupted(result)) {
@@ -119,7 +127,11 @@ function PendingSecretRequestForm(props: {
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     void send(
-      login ? { type: "save_login", username, password: secret } : { type: "save", secret },
+      card
+        ? cardReply
+        : login
+          ? { type: "save_login", username, password: secret }
+          : { type: "save", secret },
     );
   };
 
@@ -141,7 +153,7 @@ function PendingSecretRequestForm(props: {
       }}
     >
       <div className="flex min-w-0 flex-col gap-1">
-        {login ? (
+        {login || card ? (
           <div className="text-sm font-medium text-foreground">{item.label}</div>
         ) : (
           <label htmlFor={inputId} className="text-sm font-medium text-foreground">
@@ -150,7 +162,48 @@ function PendingSecretRequestForm(props: {
         )}
         {item.reason.trim() ? <p className="text-sm text-muted-foreground">{item.reason}</p> : null}
       </div>
-      {login ? (
+      {card ? (
+        <div className="flex min-w-0 flex-col gap-2">
+          {CARD_FIELDS.map(([key, label]) => {
+            const id = key === "number" ? inputId : `${inputId}-${key}`;
+            return (
+              <div key={key} className="flex min-w-0 flex-col gap-1">
+                <label htmlFor={id} className="text-sm text-foreground">
+                  {label}
+                </label>
+                <Input
+                  id={id}
+                  type="text"
+                  style={
+                    key === "cvc" ? ({ WebkitTextSecurity: "disc" } as CSSProperties) : undefined
+                  }
+                  autoComplete="off"
+                  autoCorrect="off"
+                  autoCapitalize="off"
+                  spellCheck={false}
+                  data-1p-ignore
+                  data-lpignore="true"
+                  data-bwignore
+                  value={cardValues[key]}
+                  disabled={!canAnswer || submitting}
+                  onChange={(event) => {
+                    const value = event.currentTarget.value;
+                    setCardValues((previous) => ({ ...previous, [key]: value }));
+                  }}
+                />
+              </div>
+            );
+          })}
+          <Button
+            type="submit"
+            disabled={
+              !canAnswer || submitting || secretRequestAnswerInput(item, cardReply) === null
+            }
+          >
+            Save securely
+          </Button>
+        </div>
+      ) : login ? (
         <div className="flex min-w-0 flex-col gap-2">
           <label htmlFor={inputId} className="text-sm text-foreground">
             Username

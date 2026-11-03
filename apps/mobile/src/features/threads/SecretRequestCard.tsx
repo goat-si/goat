@@ -23,6 +23,14 @@ import { Button } from "../../components/ui/Button";
 
 const LOCK_SYMBOL: AppSymbolName = { ios: "lock", android: "lock" };
 const PRIVATE_SYMBOL: AppSymbolName = { ios: "checkmark.shield", android: "lock" };
+const EMPTY_CARD = { number: "", expiryMonth: "", expiryYear: "", cvc: "", name: "" };
+const CARD_FIELDS = [
+  ["number", "Card number"],
+  ["expiryMonth", "Expiry month"],
+  ["expiryYear", "Expiry year"],
+  ["cvc", "CVC"],
+  ["name", "Name on card"],
+] as const;
 
 export function SecretRequestCard(props: {
   readonly environmentId: EnvironmentId;
@@ -89,18 +97,16 @@ function PendingSecretRequestForm(props: {
   });
   const [secret, setSecret] = useState("");
   const [username, setUsername] = useState("");
+  const [cardValues, setCardValues] = useState(EMPTY_CARD);
   const login = item.requestKind === "login";
+  const card = item.requestKind === "card";
+  const cardReply = { type: "save_card" as const, ...cardValues };
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Submit then a tap can both run before a re-render; this guard is synchronous.
   const inFlight = useRef(false);
 
-  const send = async (
-    reply:
-      | { readonly type: "save"; readonly secret: string }
-      | { readonly type: "save_login"; readonly username: string; readonly password: string }
-      | { readonly type: "decline" },
-  ) => {
+  const send = async (reply: Parameters<typeof secretRequestAnswerInput>[1]) => {
     const input = secretRequestAnswerInput(item, reply);
     if (input === null || inFlight.current) return;
     inFlight.current = true;
@@ -113,6 +119,7 @@ function PendingSecretRequestForm(props: {
     if (result._tag === "Success") {
       setSecret("");
       setUsername("");
+      setCardValues(EMPTY_CARD);
       return;
     }
     if (!isAtomCommandInterrupted(result)) {
@@ -146,27 +153,50 @@ function PendingSecretRequestForm(props: {
           spellCheck={false}
         />
       ) : null}
-      <TextInput
-        accessibilityLabel={login ? "Password" : item.label}
-        placeholder={login ? "Password" : (item.placeholder ?? SECRET_REQUEST_DEFAULT_PLACEHOLDER)}
-        value={secret}
-        onChangeText={setSecret}
-        editable={canAnswer && !submitting}
-        onFocus={markOpened}
-        secureTextEntry
-        autoCorrect={false}
-        autoCapitalize="none"
-        autoComplete="off"
-        textContentType="none"
-        importantForAutofill="no"
-        spellCheck={false}
-        returnKeyType="done"
-        onSubmitEditing={() =>
-          void send(
-            login ? { type: "save_login", username, password: secret } : { type: "save", secret },
-          )
-        }
-      />
+      {card ? (
+        CARD_FIELDS.map(([key, label]) => (
+          <TextInput
+            key={key}
+            accessibilityLabel={label}
+            placeholder={label}
+            value={cardValues[key]}
+            onChangeText={(value) => setCardValues((previous) => ({ ...previous, [key]: value }))}
+            editable={canAnswer && !submitting}
+            onFocus={markOpened}
+            secureTextEntry={key === "cvc"}
+            autoCorrect={false}
+            autoCapitalize="none"
+            autoComplete="off"
+            textContentType="none"
+            importantForAutofill="no"
+            spellCheck={false}
+          />
+        ))
+      ) : (
+        <TextInput
+          accessibilityLabel={login ? "Password" : item.label}
+          placeholder={
+            login ? "Password" : (item.placeholder ?? SECRET_REQUEST_DEFAULT_PLACEHOLDER)
+          }
+          value={secret}
+          onChangeText={setSecret}
+          editable={canAnswer && !submitting}
+          onFocus={markOpened}
+          secureTextEntry
+          autoCorrect={false}
+          autoCapitalize="none"
+          autoComplete="off"
+          textContentType="none"
+          importantForAutofill="no"
+          spellCheck={false}
+          returnKeyType="done"
+          onSubmitEditing={() =>
+            void send(
+              login ? { type: "save_login", username, password: secret } : { type: "save", secret },
+            )
+          }
+        />
+      )}
       {error !== null ? (
         <Text
           accessibilityRole="alert"
@@ -183,12 +213,18 @@ function PendingSecretRequestForm(props: {
         disabled={
           !canAnswer ||
           submitting ||
-          secret.trim().length === 0 ||
+          (card
+            ? secretRequestAnswerInput(item, cardReply) === null
+            : secret.trim().length === 0) ||
           (login && username.trim().length === 0)
         }
         onPress={() =>
           void send(
-            login ? { type: "save_login", username, password: secret } : { type: "save", secret },
+            card
+              ? cardReply
+              : login
+                ? { type: "save_login", username, password: secret }
+                : { type: "save", secret },
           )
         }
       />

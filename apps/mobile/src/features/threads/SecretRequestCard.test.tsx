@@ -15,6 +15,9 @@ vi.mock("../../components/ui/AppText", () => ({
     accessibilityLabel: string;
     value: string;
     secureTextEntry?: boolean;
+    autoComplete?: string;
+    textContentType?: string;
+    importantForAutofill?: string;
     editable?: boolean;
     onChangeText: (value: string) => void;
   }) => (
@@ -22,6 +25,9 @@ vi.mock("../../components/ui/AppText", () => ({
       aria-label={props.accessibilityLabel}
       value={props.value}
       type={props.secureTextEntry ? "password" : "text"}
+      data-autocomplete={props.autoComplete}
+      data-content-type={props.textContentType}
+      data-autofill={props.importantForAutofill}
       disabled={!props.editable}
       onInput={(event) => props.onChangeText(event.currentTarget.value)}
     />
@@ -124,6 +130,81 @@ it("keeps the existing masked single-secret form", async () => {
     const secret = container.querySelector<HTMLInputElement>('input[aria-label="API secret"]');
     expect(secret?.type).toBe("password");
     expect(container.querySelector('input[aria-label="Username"]')).toBeNull();
+  } finally {
+    await act(() => root.unmount());
+    vi.unstubAllGlobals();
+  }
+});
+
+it("validates all card fields, masks the CVC and saves the card", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  state.answer.mockReset().mockResolvedValue({ _tag: "Success", value: undefined });
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  const item = {
+    type: "secret_request",
+    id: TurnItemId.make("item:card"),
+    threadId: ThreadId.make("thread:card"),
+    label: "Payment",
+    reason: "Pay",
+    secretStatus: "pending",
+    requestKind: "card",
+    siteOrigin: "https://card.test",
+  };
+  try {
+    await act(() =>
+      root.render(
+        <SecretRequestCard
+          environmentId={EnvironmentId.make("test")}
+          projectedItem={{ item, visibility: "local" } as never}
+          iconColor="black"
+        />,
+      ),
+    );
+    const fields = ["Card number", "Expiry month", "Expiry year", "CVC", "Name on card"].map(
+      (label) => container.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`),
+    );
+    const save = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.textContent === "Save securely",
+    );
+    expect(fields.every(Boolean)).toBe(true);
+    for (const field of fields) {
+      expect(field?.dataset.autocomplete).toBe("off");
+      expect(field?.dataset.contentType).toBe("none");
+      expect(field?.dataset.autofill).toBe("no");
+    }
+    expect(fields[3]?.type).toBe("password");
+    expect(save?.disabled).toBe(true);
+    for (const [index, value] of [
+      "4242 4242-4242 4242",
+      "01",
+      "29",
+      "003",
+      "  Example Name  ",
+    ].entries()) {
+      await act(() => {
+        const field = fields[index]!;
+        field.value = value;
+        field.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+    }
+    expect(save?.disabled).toBe(false);
+    await act(() => save!.click());
+    expect(state.answer).toHaveBeenCalledWith({
+      environmentId: "test",
+      input: {
+        threadId: "thread:card",
+        turnItemId: "item:card",
+        answer: {
+          type: "save_card",
+          number: "4242424242424242",
+          expiryMonth: "01",
+          expiryYear: "2029",
+          cvc: "003",
+          name: "  Example Name  ",
+        },
+      },
+    });
   } finally {
     await act(() => root.unmount());
     vi.unstubAllGlobals();
