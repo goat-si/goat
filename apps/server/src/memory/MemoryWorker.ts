@@ -303,7 +303,7 @@ const make = Effect.gen(function* () {
       modelSelection === null ? undefined : `${space ?? ""}|${encodeSelection(modelSelection)}`;
     const scanContinuations =
       scanKey !== undefined && (scanKey !== continuationScanKey || now >= continuationScanDueAt);
-    // Indexed thread tails bound scan cost; deterministic settled work must not be re-derived.
+    // Tail probes cost per thread. Unfinished or cancelled work settles a run; ids are deterministic.
     const continuations = scanContinuations
       ? yield* query(
           selectContinuationCandidates(sql, {
@@ -434,7 +434,7 @@ const make = Effect.gen(function* () {
             );
             if (candidate.metadata.kind !== "summary") continue;
             if (!chunk) {
-              // An invalidated run stays invalidated; settling it avoids repeated scans.
+              // Events only append, so an invalidated run stays invalidated; settle it or scans reread it.
               if (continuationSequences.has(row.sequence))
                 work.push({
                   ...candidate,
@@ -983,8 +983,8 @@ const make = Effect.gen(function* () {
     yield* forkParked(
       Effect.gen(function* () {
         yield* Stream.runForEach(yield* store.subscribeWake, () => wake).pipe(Effect.forkScoped);
-        const catchUp = events.stream({ afterSequence: watermark }).pipe(catchUpWakes);
-        yield* catchUp.pipe(
+        yield* events.stream({ afterSequence: watermark }).pipe(
+          catchUpWakes,
           Stream.runForEach(() => wake),
           Effect.ignore,
           Effect.forkScoped,
