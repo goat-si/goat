@@ -134,6 +134,7 @@ import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import { resolveScheduledTaskBaseRef } from "./ScheduledTaskBaseRef.ts";
 import {
   clientRuntimeModeCeiling,
   type McpInvocationScope,
@@ -389,14 +390,6 @@ function agentStopReason(reason: string | undefined): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function scheduledTaskWorkspaceStrategy(
-  boundToThread: boolean,
-): ScheduledTask["workspaceStrategy"] {
-  return boundToThread
-    ? { type: "root" }
-    : { type: "worktree", baseRef: "main", startFromOrigin: true };
 }
 
 /**
@@ -2147,7 +2140,13 @@ const make = Effect.gen(function* () {
           : { notificationPolicy: input.notificationPolicy }),
         projectId,
         threadId: bindToCurrentThread && parent !== undefined ? parent.thread.id : null,
-        workspaceStrategy: scheduledTaskWorkspaceStrategy(bindToCurrentThread),
+        workspaceStrategy: bindToCurrentThread
+          ? { type: "root" }
+          : {
+              type: "worktree",
+              baseRef: yield* resolveScheduledTaskBaseRef(gitDriver, project.workspaceRoot),
+              startFromOrigin: true,
+            },
         modelSelection,
         runtimeMode: limits.runtimeMode,
         interactionMode: limits.interactionMode,
@@ -2229,7 +2228,16 @@ const make = Effect.gen(function* () {
       const workspaceStrategy =
         input.bindToCurrentThread === undefined
           ? existing.workspaceStrategy
-          : scheduledTaskWorkspaceStrategy(input.bindToCurrentThread);
+          : input.bindToCurrentThread
+            ? { type: "root" as const }
+            : {
+                type: "worktree" as const,
+                baseRef: yield* resolveScheduledTaskBaseRef(
+                  gitDriver,
+                  (yield* requireProject(existing.projectId)).workspaceRoot,
+                ),
+                startFromOrigin: true,
+              };
       const upsertInput: ScheduledTaskUpsertInput = {
         id: existing.id,
         title: input.title ?? existing.title,
