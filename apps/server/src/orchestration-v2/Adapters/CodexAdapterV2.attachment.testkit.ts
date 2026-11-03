@@ -72,8 +72,10 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
 ) {
   const driver = yield* CodexReplay.makeReplayDriver(transcript);
   const threadConfigs: Array<Record<string, unknown>> = [];
+  const requests: Array<string> = [];
   const record = (method: string, params: unknown) =>
     Effect.sync(() => {
+      requests.push(method);
       const config = (params as { config?: Record<string, unknown> } | undefined)?.config;
       if ((method === "thread/start" || method === "thread/resume") && config !== undefined)
         threadConfigs.push(config);
@@ -130,7 +132,10 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
     modelSelection: CODEX_TEST_MODEL_SELECTION,
     runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
   });
-  const terminals = yield* Queue.unbounded<void>();
+  const terminals = yield* Queue.unbounded<{
+    readonly providerTurnId: string;
+    readonly status: string;
+  }>();
   const goalTokens = yield* Queue.unbounded<number>();
   // Every status a subagent task was given, in order.
   const subagentStatuses: Array<string> = [];
@@ -139,7 +144,7 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
   yield* runtime.events.pipe(
     Stream.runForEach((event) =>
       event.type === "turn.terminal"
-        ? Queue.offer(terminals, undefined)
+        ? Queue.offer(terminals, { providerTurnId: event.providerTurnId, status: event.status })
         : event.type === "subagent.updated"
           ? Effect.sync(() => void subagentStatuses.push(event.subagent.status))
           : event.type === "node.updated"
@@ -176,6 +181,7 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
     });
   return {
     threadConfigs,
+    requests,
     startTurn,
     terminal: Queue.take(terminals),
     goalTokens: Queue.take(goalTokens),
