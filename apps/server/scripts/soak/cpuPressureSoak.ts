@@ -26,6 +26,7 @@ export type SoakOptions = {
   headlessClients: number;
   codexThreads: number;
   durationMs: number;
+  selfCheck: boolean;
 };
 
 export function parseArgs(argv: string[]): SoakOptions {
@@ -39,6 +40,7 @@ export function parseArgs(argv: string[]): SoakOptions {
     "headless-clients",
     "codex-threads",
     "duration-ms",
+    "self-check",
   ]);
   for (let i = 0; i < argv.length; i += 2) {
     const key = argv[i];
@@ -71,6 +73,8 @@ export function parseArgs(argv: string[]): SoakOptions {
   const report = required("report");
   if (!NodePath.isAbsolute(home) || !NodePath.isAbsolute(report))
     throw new Error("home and report must be absolute");
+  const selfCheck = values.get("self-check") ?? "true";
+  if (selfCheck !== "true" && selfCheck !== "false") throw new Error("invalid --self-check");
   return {
     home,
     report,
@@ -80,6 +84,7 @@ export function parseArgs(argv: string[]): SoakOptions {
     headlessClients: integer("headless-clients", 20, 1, 1000),
     codexThreads: integer("codex-threads", 2, 1, 1000),
     durationMs: integer("duration-ms", 1800000, 1, 86400000),
+    selfCheck: selfCheck === "true",
   };
 }
 
@@ -242,6 +247,17 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
   let workloadResult: Awaited<NonNullable<typeof workload>> | undefined;
   let startedAt: string | null = null;
   let endedAt: string | null = null;
+  let drainEndedAt: string | null = null;
+  let disappeared: number[] = [];
+  const selfCheck = {
+    enabled: options.selfCheck,
+    clientDisconnect: { observed: 0, passed: false },
+    providerRestart: { observed: 0, passed: false },
+    nativeIds: [] as string[],
+    pids: [] as number[],
+  };
+  const telemetryNotes: string[] = [];
+  const providerGaps: string[] = [];
   const abort = new AbortController();
   const credential = NodeCrypto.randomBytes(32).toString("hex");
   const errors: string[] = [];
@@ -326,6 +342,7 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
       codexThreads: options.codexThreads,
       headlessClients: options.headlessClients,
       durationMs: options.durationMs,
+      selfCheck,
       observations,
       recordDetail: (value) => {
         try {
@@ -387,9 +404,26 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
       throw new Error("server runtime identity was not published");
     runtimeConfirmed = true;
     sample();
-    for (const gap of [...stall.gaps, ...trace.gaps, ...provider.gaps]) observations.gap(gap);
-    if (stall.hasPartialLine || trace.hasPartialLine || provider.hasPartialLine)
-      observations.gap("partial telemetry line");
+    drainEndedAt = new Date().toISOString();
+    for (const gap of [...stall.gaps, ...trace.gaps]) telemetryNotes.push(gap);
+    if (stall.hasPartialLine || trace.hasPartialLine) telemetryNotes.push("partial telemetry line");
+    providerGaps.push(...provider.gaps);
+    if (provider.hasPartialLine) providerGaps.push("partial lifecycle line");
+    const pids = new Set(
+      observations.lifecycle
+        .filter((line) => line.event === "session" && !selfCheck.pids.includes(line.pid))
+        .map((line) => line.pid),
+    );
+    disappeared = [...pids].filter((pid) => {
+      try {
+        process.kill(pid, 0);
+        return false;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ESRCH") return true;
+        providerGaps.push(`cannot inspect provider pid ${pid}`);
+        return false;
+      }
+    });
   } catch (error) {
     errors.push(String(error).replaceAll(credential, "[redacted]"));
   } finally {
@@ -402,13 +436,34 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
     if (workload) await workload.catch(() => {});
     detail?.close();
     const cpu = saturation(cpuSamples, cpuGaps);
+    const acceptanceLines = observations.lifecycle.filter(
+      (line) =>
+        !selfCheck.pids.includes(line.pid) &&
+        (line.event !== "session" ||
+          !line.thread ||
+          observations.joins.has(line.thread) ||
+          !startedAt ||
+          line.at >= startedAt),
+    );
+    const excludedPids = new Set(
+      observations.lifecycle
+        .filter(
+          (line) =>
+            line.event === "session" &&
+            line.thread &&
+            !observations.joins.has(line.thread) &&
+            startedAt &&
+            line.at < startedAt,
+        )
+        .map((line) => line.pid),
+    );
     const provider = providerRestarts(
-      observations.lifecycle,
+      acceptanceLines.filter((line) => !excludedPids.has(line.pid)),
       observations.joins,
       observations.releases,
       observations.deaths,
       [
-        "provider forced-exit coverage test not performed",
+        ...(!selfCheck.providerRestart.passed ? ["provider self-check did not pass"] : []),
         ...(observations.lifecycle.some(
           (line) => line.instance === "devReplay" && line.event === "start",
         )
@@ -419,13 +474,16 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
         )
           ? []
           : ["no Codex lifecycle start observed"]),
-        ...observations.gaps,
+        ...providerGaps,
+        ...observations.lifecycleGaps,
+        ...observations.streamGaps,
+        ...(errors.length ? ["workload error"] : []),
       ],
+      startedAt && drainEndedAt ? { start: startedAt, end: drainEndedAt, disappeared } : undefined,
     );
     const report = {
       ...observations.report(
         [
-          "client-runtime session coverage lacks a forced disconnect test",
           ...(!cpu.verified ? ["saturation unverified"] : []),
           ...(errors.length ? ["workload error"] : []),
         ],
@@ -434,11 +492,23 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
           serverExit ? 1 : 0,
           runtimeConfirmed ? [] : ["server runtime identity unavailable"],
         ),
+        [
+          ...observations.socketGaps,
+          ...(!selfCheck.clientDisconnect.passed
+            ? ["client disconnect self-check did not pass"]
+            : []),
+          ...(workloadResult?.headlessOpened === options.headlessClients
+            ? []
+            : ["headless clients did not all attach"]),
+          ...(errors.length ? ["workload error"] : []),
+        ],
       ),
       home: options.home,
       serverPid: server?.child.pid ?? null,
       ownedPids: owned.map(({ child }) => child.pid),
-      window: { start: startedAt, end: endedAt },
+      window: { start: startedAt, end: endedAt, drainEnd: drainEndedAt },
+      selfCheck,
+      telemetry: { notes: telemetryNotes, detailTruncated: detail?.truncated ?? false },
       saturation: cpu,
       providerRestartParts: provider,
       workload: {

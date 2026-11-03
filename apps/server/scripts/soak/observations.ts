@@ -140,11 +140,22 @@ export class LogTail {
 
 export class DetailWriter {
   private readonly fd: number;
-  constructor(path: string) {
+  private readonly limit: number;
+  private bytes = 0;
+  truncated = false;
+  constructor(path: string, limit = 64 * 1024 * 1024) {
+    this.limit = limit;
     this.fd = NodeFS.openSync(path, "wx", 0o600);
   }
   write(value: unknown): void {
-    NodeFS.writeSync(this.fd, `${JSON.stringify(value)}\n`);
+    const line = `${JSON.stringify(value)}\n`;
+    const size = Buffer.byteLength(line);
+    if (this.bytes + size > this.limit) {
+      this.truncated = true;
+      return;
+    }
+    NodeFS.writeSync(this.fd, line);
+    this.bytes += size;
   }
   close(): void {
     NodeFS.closeSync(this.fd);
@@ -166,90 +177,98 @@ export function providerRestarts(
   releases: Release[],
   deaths: Death[],
   coverageReasons: string[],
-): {
-  counter: Counter;
-  replayExtraPids: number;
-  codexExtraPids: number;
-  processExitEpisodes: number;
-  subtractedStoppedReleases: number;
-} {
+  window?: { start: string; end: string; disappeared: number[] },
+) {
+  const reasons = [...coverageReasons];
   const starts = lines.filter((line) => line.event === "start");
   const sessions = lines.filter((line) => line.event === "session");
-  const groups = new Map<string, Array<Lifecycle>>();
-  const reasons = [...coverageReasons];
-  for (const start of starts) {
-    const native = sessions
-      .filter((entry) => entry.pid === start.pid && entry.instance === start.instance)
-      .map((entry) => entry.thread)
-      .filter((thread): thread is string => thread !== undefined);
-    const threads =
-      start.instance === "devReplay"
-        ? [
-            ...new Set(
-              native.map((id) => joins.get(id)).filter((id): id is string => id !== undefined),
-            ),
-          ]
-        : [start.instance];
-    if (start.instance === "devReplay" && threads.length !== 1) {
-      reasons.push(`unjoined replay pid ${start.pid}`);
+  const sessionPids = new Set(sessions.map((line) => line.pid));
+  const probeStarts = starts.filter((line) => !sessionPids.has(line.pid)).length;
+  const groups = new Map<string, Lifecycle[]>();
+  for (const session of sessions) {
+    const thread = session.thread && joins.get(session.thread);
+    if (!thread) {
+      reasons.push(`unjoined session pid ${session.pid}`);
       continue;
     }
-    for (const thread of threads) {
-      const key = `${start.instance === "devReplay" ? "replay" : "codex"}:${thread}`;
-      const group = groups.get(key) ?? [];
-      if (!group.some((entry) => entry.pid === start.pid)) group.push(start);
-      groups.set(key, group);
-    }
+    const group = groups.get(thread) ?? [];
+    group.push(session);
+    groups.set(thread, group);
   }
-  let replayExtraPids = 0,
-    codexExtraPids = 0,
-    processExitEpisodes = 0,
-    subtractedStoppedReleases = 0;
+  let extraSessions = 0;
+  let processExitEpisodes = 0;
+  let processExitRunEpisodes = 0;
+  const matchedPids = new Set<number>();
   const matchedDeaths = new Set<number>();
-  for (const [key, group] of groups) {
+  for (const [thread, group] of groups) {
     group.sort((a, b) => a.at.localeCompare(b.at));
-    const name = key.slice(key.indexOf(":") + 1);
     for (let i = 1; i < group.length; i++) {
       const previous = group[i - 1];
-      const current = group[i];
-      if (previous === undefined || current === undefined) continue;
-      if (
-        key.startsWith("codex:") &&
-        releases.some((r) => r.status === "stopped" && r.at >= previous.at && r.at < current.at)
-      ) {
-        reasons.push("Codex stopped releases need instance/session coverage");
-      }
-      const stopped =
-        key.startsWith("replay:") &&
-        releases.some(
-          (r) =>
-            r.thread === name && r.status === "stopped" && r.at >= previous.at && r.at < current.at,
-        );
-      if (stopped) {
-        subtractedStoppedReleases++;
-        continue;
-      }
-      if (key.startsWith("replay:")) replayExtraPids++;
-      else codexExtraPids++;
-      const index = deaths.findIndex(
-        (death, n) =>
-          !matchedDeaths.has(n) &&
-          (key.startsWith("replay:") ? death.thread === name : death.instance === name) &&
-          death.at >= previous.at &&
-          death.at < current.at,
+      const next = group[i];
+      if (!previous || !next) continue;
+      extraSessions++;
+      const exit = lines.find(
+        (line) =>
+          line.event === "exit" &&
+          line.pid === previous.pid &&
+          line.at >= previous.at &&
+          line.at <= next.at,
       );
-      if (index >= 0) matchedDeaths.add(index);
+      if (exit) matchedPids.add(previous.pid);
+      const death = deaths.findIndex(
+        (entry, index) =>
+          !matchedDeaths.has(index) &&
+          entry.thread === thread &&
+          entry.at >= previous.at &&
+          entry.at <= next.at,
+      );
+      if (death >= 0) matchedDeaths.add(death);
     }
   }
-  processExitEpisodes = deaths.length - matchedDeaths.size;
+  if (window) {
+    for (const pid of sessionPids) {
+      const exit = lines.find(
+        (line) =>
+          line.event === "exit" &&
+          line.pid === pid &&
+          line.at >= window.start &&
+          line.at <= window.end,
+      );
+      const anyExit = lines.find((line) => line.event === "exit" && line.pid === pid);
+      const disappeared = !anyExit && window.disappeared.includes(pid);
+      if ((!exit && !disappeared) || matchedPids.has(pid)) continue;
+      const pidThreads = [...groups]
+        .filter(([, group]) => group.some((session) => session.pid === pid))
+        .map(([thread]) => thread);
+      if (!pidThreads.length) continue;
+      if (
+        disappeared &&
+        sessions.some((session) => session.pid === pid && session.at < window.start)
+      )
+        reasons.push(`provider pid ${pid} disappearance time unknown`);
+      processExitEpisodes++;
+      matchedPids.add(pid);
+      const death = deaths.findIndex(
+        (entry, index) =>
+          !matchedDeaths.has(index) &&
+          pidThreads.includes(entry.thread) &&
+          entry.at >= window.start &&
+          entry.at <= window.end,
+      );
+      if (death >= 0) matchedDeaths.add(death);
+    }
+  } else reasons.push("provider process exit window unavailable");
+  processExitRunEpisodes = deaths.length - matchedDeaths.size;
   if ([lines.length, releases.length, deaths.length].some((n) => n >= LIMIT))
     reasons.push("observation limit reached");
   return {
-    counter: counter(replayExtraPids + codexExtraPids + processExitEpisodes, [...new Set(reasons)]),
-    replayExtraPids,
-    codexExtraPids,
+    counter: counter(extraSessions + processExitEpisodes + processExitRunEpisodes, [
+      ...new Set(reasons),
+    ]),
+    probeStarts,
+    extraSessions,
     processExitEpisodes,
-    subtractedStoppedReleases,
+    processExitRunEpisodes,
   };
 }
 
@@ -263,6 +282,8 @@ export class Observations {
   private runs = new Map<string, "pending" | "completed" | "failed" | "interrupted">();
   private runRequests = 0;
   readonly streamGaps: string[] = [];
+  readonly lifecycleGaps: string[] = [];
+  readonly socketGaps: string[] = [];
   private windowOpen = false;
   private completedInWindow = 0;
   private completedDuringDrain = 0;
@@ -285,21 +306,23 @@ export class Observations {
       (line.event === "session" && typeof line.thread !== "string")
     )
       throw new Error("invalid lifecycle record");
-    if (this.lifecycle.length >= LIMIT) this.gap("lifecycle observation limit reached");
+    if (this.lifecycle.length >= LIMIT)
+      this.lifecycleGaps.push("lifecycle observation limit reached");
     else this.lifecycle.push(line as Lifecycle);
   }
   joinProvider(native: string, thread: string): void {
     const existing = this.joins.get(native);
-    if (existing && existing !== thread) this.gap(`ambiguous native thread ${native}`);
+    if (existing && existing !== thread)
+      this.lifecycleGaps.push(`ambiguous native thread ${native}`);
     else this.joins.set(native, thread);
   }
   releaseProvider(thread: string, at: string, status: "stopped" | "error"): void {
-    if (this.releases.length >= LIMIT) this.gap("release observation limit reached");
+    if (this.releases.length >= LIMIT) this.lifecycleGaps.push("release observation limit reached");
     else this.releases.push({ thread, at, status });
   }
   providerDeath(run: string, thread: string, instance: string, at: string): void {
     if (this.deathRuns.has(run)) return;
-    if (this.deaths.length >= LIMIT) this.gap("death observation limit reached");
+    if (this.deaths.length >= LIMIT) this.lifecycleGaps.push("death observation limit reached");
     else {
       this.deathRuns.add(run);
       this.deaths.push({ thread, instance, at });
@@ -362,15 +385,20 @@ export class Observations {
     if (!this.gaps.includes(reason)) this.gaps.push(reason);
   }
   private add(set: Set<string>, value: string): void {
-    if (set.size >= LIMIT) this.gap("socket limit reached");
+    if (set.size >= LIMIT) this.socketGaps.push("socket limit reached");
     else set.add(value);
   }
-  report(requiredCoverage: string[], provider: Counter, server: Counter) {
+  report(
+    requiredCoverage: string[],
+    provider: Counter,
+    server: Counter,
+    socketCoverage = requiredCoverage,
+  ) {
     const statuses = [...this.runs.values()];
     const failures = statuses.filter((s) => s === "failed" || s === "interrupted").length;
     const incomplete = statuses.filter((s) => s === "pending").length;
     const reasons = [...this.gaps, ...requiredCoverage];
-    const disconnects = counter(this.socketEpisodes.size, reasons);
+    const disconnects = counter(this.socketEpisodes.size, socketCoverage);
     const turns = counter(failures, [
       ...this.streamGaps,
       ...(incomplete ? ["issued runs remain incomplete"] : []),

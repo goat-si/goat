@@ -161,6 +161,13 @@ describe("soak observations", () => {
       "inconclusive",
     );
   });
+  it("does not let trace telemetry gaps obscure socket coverage", () => {
+    const observations = new Observations();
+    observations.gap("file rotated or truncated");
+    const result = observations.report([], counter(), counter(), []);
+    expect(result.counters.clientDisconnects.value).toBe(0);
+    expect(result.counters.clientDisconnects.coverage).toBe("complete");
+  });
 
   it("reports turn coverage independently and rejects unobserved or incomplete requests", () => {
     const observations = new Observations();
@@ -179,37 +186,71 @@ describe("soak observations", () => {
     expect(observations.report([], counter(), counter()).counters.turnFailures.value).toBeNull();
   });
 
-  it("joins replay restarts and deduplicates a provider death", () => {
+  it("ignores probes and deduplicates session replacement, exit, and terminated run", () => {
     const lines = [
+      { event: "start" as const, pid: 9, instance: "codex", at: "1" },
       { event: "start" as const, pid: 1, instance: "devReplay", at: "1" },
       { event: "session" as const, pid: 1, instance: "devReplay", at: "1", thread: "native" },
+      { event: "exit" as const, pid: 1, instance: "devReplay", at: "2" },
       { event: "start" as const, pid: 2, instance: "devReplay", at: "3" },
       { event: "session" as const, pid: 2, instance: "devReplay", at: "3", thread: "native" },
     ];
     const joined = new Map([["native", "thread"]]);
+    const window = { start: "1", end: "4", disappeared: [1] };
     const death = [{ thread: "thread", instance: "devReplay", at: "2" }];
-    expect(providerRestarts(lines, joined, [], death, []).counter.value).toBe(1);
+    expect(providerRestarts(lines, joined, [], death, [], window)).toMatchObject({
+      counter: { value: 1 },
+      probeStarts: 1,
+      extraSessions: 1,
+      processExitEpisodes: 0,
+    });
+    expect(providerRestarts(lines, new Map(), [], [], [], window).counter.value).toBeNull();
+    expect(providerRestarts(lines.slice(0, 4), joined, [], death, [], window).counter.value).toBe(
+      1,
+    );
     expect(
-      providerRestarts(lines, joined, [{ thread: "thread", at: "2", status: "stopped" }], [], [])
-        .counter.value,
-    ).toBe(0);
-    expect(providerRestarts(lines, new Map(), [], [], []).counter.value).toBeNull();
+      providerRestarts(
+        lines.slice(0, 4),
+        joined,
+        [{ thread: "thread", at: "2", status: "stopped" }],
+        [],
+        [],
+        window,
+      ).counter.value,
+    ).toBe(1);
   });
-  it("counts Codex process deaths once and leaves ambiguous releases unknown", () => {
+  it("counts a missing process and unmatched terminated run independently", () => {
     const lines = [
       { event: "start" as const, pid: 1, instance: "codex", at: "1" },
-      { event: "start" as const, pid: 2, instance: "codex", at: "3" },
+      { event: "session" as const, pid: 1, instance: "codex", at: "1", thread: "native" },
     ];
-    const deaths = [{ thread: "thread", instance: "codex", at: "2" }];
-    expect(providerRestarts(lines, new Map(), [], deaths, []).counter.value).toBe(1);
+    const joined = new Map([["native", "thread"]]);
+    const window = { start: "1", end: "4", disappeared: [1] };
+    expect(providerRestarts(lines, joined, [], [], [], window).counter.value).toBe(1);
     expect(
-      providerRestarts(lines, new Map(), [{ thread: "thread", at: "2", status: "stopped" }], [], [])
-        .counter.value,
-    ).toBeNull();
-    const observations = new Observations();
-    observations.providerDeath("run", "thread", "codex", "2");
-    observations.providerDeath("run", "thread", "codex", "2");
-    expect(observations.deaths).toHaveLength(1);
+      providerRestarts(
+        lines,
+        joined,
+        [],
+        [{ thread: "another", instance: "codex", at: "2" }],
+        [],
+        window,
+      ).counter.value,
+    ).toBe(2);
+  });
+  it("caps detail at a complete line and flags truncation", () => {
+    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-detail-limit-"));
+    try {
+      const path = NodePath.join(dir, "detail");
+      const writer = new DetailWriter(path, 8);
+      writer.write({ n: 1 });
+      writer.write({ n: 2 });
+      writer.close();
+      expect(writer.truncated).toBe(true);
+      expect(NodeFS.readFileSync(path, "utf8")).toBe('{"n":1}\n');
+    } finally {
+      NodeFS.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

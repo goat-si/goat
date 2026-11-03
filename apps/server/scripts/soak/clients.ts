@@ -31,10 +31,11 @@ import { PrimaryConnectionTarget } from "../../../../packages/client-runtime/src
 import { make as makeRpcSession } from "../../../../packages/client-runtime/src/rpc/session.ts";
 // oxlint-disable-next-line goat/no-rpc-permission-bypass -- The soak measures the session transport itself.
 import { drainNodeIo } from "../../../../packages/client-runtime/src/rpc/protocol.ts";
-import type { Observations } from "./observations.ts";
+import { Observations, providerRestarts } from "./observations.ts";
 
 const id = () => NodeCrypto.randomUUID();
 const decodeTicket = Schema.decodeUnknownSync(Schema.toCodecJson(AuthWebSocketTicketResult));
+const decodeLifecycle = Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown));
 
 async function authenticate(origin: string, credential: string): Promise<string> {
   const response = await fetch(`${origin}/api/auth/browser-session`, {
@@ -85,6 +86,13 @@ export interface WorkloadInput {
   codexThreads: number;
   headlessClients: number;
   durationMs: number;
+  selfCheck: {
+    enabled: boolean;
+    clientDisconnect: { observed: number; passed: boolean };
+    providerRestart: { observed: number; passed: boolean };
+    nativeIds: string[];
+    pids: number[];
+  };
   observations: Observations;
   recordDetail: (value: unknown) => void;
   signal: AbortSignal;
@@ -100,7 +108,9 @@ export async function runWorkload(input: WorkloadInput): Promise<{
 }> {
   const cookie = await authenticate(input.origin, input.credential);
   const tickets = await Promise.all(
-    Array.from({ length: input.headlessClients + 1 }, () => getTicket(input.origin, cookie)),
+    Array.from({ length: input.headlessClients + 1 + (input.selfCheck.enabled ? 1 : 0) }, () =>
+      getTicket(input.origin, cookie),
+    ),
   );
   const script = `${input.artifactPrefix}.codex-script.json`;
   NodeFS.writeFileSync(script, JSON.stringify({ rootThreadId: "soak", notifications: [] }), {
@@ -177,10 +187,11 @@ export async function runWorkload(input: WorkloadInput): Promise<{
         },
       },
     });
-    const opened = yield* Effect.forEach(tickets.slice(1), () => Deferred.make<void, Error>(), {
+    const headlessTickets = tickets.slice(1, input.headlessClients + 1);
+    const opened = yield* Effect.forEach(headlessTickets, () => Deferred.make<void, Error>(), {
       concurrency: "unbounded",
     });
-    for (const [index, ticket] of tickets.slice(1).entries()) {
+    for (const [index, ticket] of headlessTickets.entries()) {
       const realSession = index < Math.ceil(input.headlessClients / 2);
       let previousConnection: string | undefined;
       let connectionNumber = 0;
@@ -281,6 +292,128 @@ export async function runWorkload(input: WorkloadInput): Promise<{
       );
     }
     yield* Effect.forEach(opened, Deferred.await, { concurrency: "unbounded" });
+    if (input.selfCheck.enabled) {
+      const selfTicket = tickets[input.headlessClients + 1];
+      if (!selfTicket) return yield* Effect.die(new Error("missing self-check ticket"));
+      const selfSocket = new Observations();
+      yield* Effect.promise(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            const url = `${input.origin.replace(/^http/, "ws")}/ws?wsTicket=${encodeURIComponent(selfTicket)}&${ORCHESTRATION_PROTOCOL_QUERY_PARAM}=${ORCHESTRATION_PROTOCOL_VERSION}`;
+            const socket = new WebSocket(url);
+            socket.addEventListener("open", () => socket.close());
+            socket.addEventListener("error", () => {
+              selfSocket.recordSocket("self", false);
+              reject(new Error("self-check socket error"));
+            });
+            socket.addEventListener("close", () => {
+              selfSocket.recordSocket("self", false);
+              resolve();
+            });
+          }),
+      );
+      input.selfCheck.clientDisconnect.observed = selfSocket.report(
+        [],
+        { value: 0, observed: 0, coverage: "complete", reasons: [], evidence: [] },
+        { value: 0, observed: 0, coverage: "complete", reasons: [], evidence: [] },
+      ).counters.clientDisconnects.observed;
+      input.selfCheck.clientDisconnect.passed = input.selfCheck.clientDisconnect.observed === 1;
+      const selfThread = ThreadId.make(id());
+      const selfStart = DateTime.formatIso(yield* DateTime.now);
+      const selfObserved = new Observations();
+      const finished = yield* Deferred.make<void>();
+      yield* client["orchestration.launchThread"]({
+        commandId: CommandId.make(id()),
+        threadId: selfThread,
+        projectId,
+        title: "Soak self-check",
+        generateTitle: false,
+        modelSelection: { instanceId: ProviderInstanceId.make("devReplay"), model: "todo-list" },
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+        workspaceStrategy: { type: "root" },
+        initialMessage: {
+          messageId: MessageId.make(id()),
+          text: "GOAT_SOAK_EXIT",
+          attachments: [],
+        },
+      });
+      const selfRun = (run: OrchestrationV2Run) => {
+        if (run.terminationCause?.kind === "provider_process_exit")
+          selfObserved.providerDeath(
+            run.id,
+            selfThread,
+            run.providerInstanceId,
+            DateTime.formatIso(run.completedAt ?? run.requestedAt),
+          );
+        return ["completed", "failed", "interrupted", "cancelled", "rolled_back"].includes(
+          run.status,
+        )
+          ? Deferred.succeed(finished, undefined).pipe(Effect.asVoid)
+          : Effect.void;
+      };
+      yield* client["orchestration.subscribeThread"]({ threadId: selfThread }).pipe(
+        Stream.runForEach((item) => {
+          if (item.kind === "snapshot") {
+            for (const thread of item.projection.providerThreads)
+              if (thread.nativeThreadRef?.nativeId)
+                selfObserved.joinProvider(thread.nativeThreadRef.nativeId, selfThread);
+            return Effect.forEach(item.projection.runs, selfRun, { discard: true });
+          }
+          if (
+            item.kind === "event" &&
+            item.event.type === "provider-thread.updated" &&
+            item.event.payload.nativeThreadRef?.nativeId
+          )
+            selfObserved.joinProvider(item.event.payload.nativeThreadRef.nativeId, selfThread);
+          if (
+            item.kind === "event" &&
+            (item.event.type === "run.created" || item.event.type === "run.updated")
+          )
+            return selfRun(item.event.payload);
+          if (item.kind === "unknown-event")
+            selfObserved.streamGap(`unknown event ${item.eventType}`);
+          return Effect.void;
+        }),
+        Effect.catchCause((cause) =>
+          Effect.sync(() => {
+            selfObserved.streamGap(String(cause));
+          }).pipe(Effect.andThen(Deferred.succeed(finished, undefined)), Effect.asVoid),
+        ),
+        Effect.forkScoped,
+      );
+      yield* Deferred.await(finished);
+      const lines = NodeFS.readFileSync(input.lifecyclePath, "utf8").split("\n").filter(Boolean);
+      for (const line of lines) selfObserved.consumeLifecycle(yield* decodeLifecycle(line));
+      const nativeIds = [...selfObserved.joins.keys()];
+      const pids = selfObserved.lifecycle
+        .filter(
+          (line) => line.event === "session" && line.thread && nativeIds.includes(line.thread),
+        )
+        .map((line) => line.pid);
+      input.selfCheck.nativeIds.push(...nativeIds);
+      input.selfCheck.pids.push(...pids);
+      const selfLines = selfObserved.lifecycle.filter((line) => pids.includes(line.pid));
+      const disappeared = pids.filter((pid) => {
+        try {
+          process.kill(pid, 0);
+          return false;
+        } catch (error) {
+          return (error as NodeJS.ErrnoException).code === "ESRCH";
+        }
+      });
+      const selfProvider = providerRestarts(
+        selfLines,
+        selfObserved.joins,
+        [],
+        selfObserved.deaths,
+        selfObserved.streamGaps,
+        { start: selfStart, end: DateTime.formatIso(yield* DateTime.now), disappeared },
+      );
+      input.selfCheck.providerRestart.observed = selfProvider.counter.observed;
+      input.selfCheck.providerRestart.passed =
+        pids.length === 1 && selfProvider.counter.value === 1;
+    }
     const drains: Array<Deferred.Deferred<void>> = [];
     const total = input.replayThreads + input.codexThreads;
     const windowEnded = yield* Deferred.make<void>();
@@ -310,7 +443,7 @@ export async function runWorkload(input: WorkloadInput): Promise<{
       const terminal = new Set<string>();
       let lastSequence: number | undefined;
       input.observations.requestRun();
-      const launch = yield* client["orchestration.launchThread"]({
+      yield* client["orchestration.launchThread"]({
         commandId: CommandId.make(id()),
         threadId,
         projectId,
@@ -375,7 +508,6 @@ export async function runWorkload(input: WorkloadInput): Promise<{
           creationSource: "web",
         });
       });
-      for (const run of launch.projection.runs) yield* observe(run);
       yield* client["orchestration.subscribeThread"]({ threadId }).pipe(
         Stream.runForEach((item) => {
           if (item.kind === "snapshot") {
