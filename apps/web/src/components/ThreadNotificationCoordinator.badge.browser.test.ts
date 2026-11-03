@@ -144,7 +144,7 @@ function toV2ThreadShell(input: typeof thread) {
     },
     forkedFrom: null,
     createdBy: "user",
-    creationSource: "web",
+    creationSource: input.subagentOf === null ? "web" : "mcp",
     launchedBy: input.launchedBy,
     latestRunId: latestTurn.turnId,
     activeRunId: null,
