@@ -27,6 +27,7 @@ export const emptyRecoveryRecord = (): RecoveryRecord => ({
   outcome: "",
 });
 const SLOW_WINDOW_MS = 6 * 60 * 60_000;
+export const SLOW_CRASH_HISTORY_LIMIT = 8;
 
 export function pruneSlowCrash(record: RecoveryRecord, now: number): RecoveryRecord {
   const history = (record.history ?? []).filter(
@@ -63,7 +64,9 @@ export function recordRestart(
 ): RecoveryRecord {
   if (record.pause !== null) return record;
   const pruned = pruneSlowCrash(record, now);
-  const history = [...(pruned.history ?? []), { at: now, outcome: outcome.slice(0, 64) }].slice(-8);
+  const history = [...(pruned.history ?? []), { at: now, outcome: outcome.slice(0, 64) }].slice(
+    -SLOW_CRASH_HISTORY_LIMIT,
+  );
   const key = slowCrashKey(history);
   const attempts =
     now < record.lastWallTime

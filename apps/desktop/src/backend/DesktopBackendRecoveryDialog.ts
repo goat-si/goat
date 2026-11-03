@@ -1,6 +1,7 @@
 import * as Effect from "effect/Effect";
 import type * as ElectronDialog from "../electron/ElectronDialog.ts";
 import type { BackendInstanceSpec } from "./DesktopBackendManager.ts";
+import { slowCrashCount } from "./DesktopBackendSlowCrash.ts";
 const recoveryReason = (reason: string) => {
   switch (reason) {
     case "crash-loop":
@@ -29,7 +30,7 @@ export const makeRecoveryDialog = (
             type: "info",
             title: "Server recovery",
             message: `${actions.label}: the server keeps restarting`,
-            detail: `${actions.history.length} exits in the last 6 hours (latest: ${latest}).\n\nLogs: ${actions.logPath}`,
+            detail: `${slowCrashCount(actions.history)} exits in the last 6 hours (latest: ${latest}).\n\nLogs: ${actions.logPath}`,
             buttons: ["Open logs", "Close"],
             cancelId: 1,
             defaultId: 1,

@@ -700,7 +700,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
       ? yield* recovery.fail(yield* Clock.currentTimeMillis, String(current.nextRunId - 1), reason)
       : { record: yield* recovery.current, notify: false };
     const record = result.record;
-    if (result.notify)
+    if (result.notify && record.pause === null)
       yield* Effect.forkIn(
         notifySlowCrash(record, spec.label, logPath, backendOutputLog.recordStop, spec.onSlowCrash),
         parentScope,

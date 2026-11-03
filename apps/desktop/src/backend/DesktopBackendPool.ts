@@ -1,3 +1,4 @@
+import { slowCrashCount } from "./DesktopBackendSlowCrash.ts";
 import { makeRecoveryDialog } from "./DesktopBackendRecoveryDialog.ts";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
@@ -171,7 +172,7 @@ export const layer = Layer.effect(
         notification.show(
           id,
           `GOAT's server (${info.label}) keeps restarting`,
-          `It stopped ${info.history.length} times in the last 6 hours (latest: ${info.history.at(-1)?.outcome ?? "unknown"}). GOAT restarts it automatically.`,
+          `It stopped ${slowCrashCount(info.history)} times in the last 6 hours (latest: ${info.history.at(-1)?.outcome ?? "unknown"}). GOAT restarts it automatically.`,
           ElectronShell.openLogsPath(info.logPath),
           onFailure,
         );

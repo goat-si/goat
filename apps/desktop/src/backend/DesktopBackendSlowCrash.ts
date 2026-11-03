@@ -1,5 +1,5 @@
 import * as Effect from "effect/Effect";
-import type { RecoveryRecord } from "./DesktopBackendRecoveryPolicy.ts";
+import { SLOW_CRASH_HISTORY_LIMIT, type RecoveryRecord } from "./DesktopBackendRecoveryPolicy.ts";
 import type * as DesktopObservability from "../app/DesktopObservability.ts";
 
 export interface SlowCrashInfo {
@@ -7,6 +7,12 @@ export interface SlowCrashInfo {
   readonly logPath: string;
   readonly history: ReadonlyArray<{ readonly at: number; readonly outcome: string }>;
 }
+
+/** The history keeps only the newest entries, so a full one is a lower bound. */
+export const slowCrashCount = (history: SlowCrashInfo["history"]) =>
+  history.length >= SLOW_CRASH_HISTORY_LIMIT
+    ? `at least ${history.length}`
+    : String(history.length);
 
 export interface RecoveryActions {
   readonly label: string;

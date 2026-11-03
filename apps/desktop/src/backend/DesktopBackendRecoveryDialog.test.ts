@@ -94,3 +94,30 @@ it.effect("separate servers can show their recovery dialogs in sequence", () =>
     ]);
   }),
 );
+it.effect("a full slow-crash history is shown as a lower bound", () =>
+  Effect.gen(function* () {
+    const details: string[] = [];
+    const show = makeRecoveryDialog(
+      {
+        showMessageBox: (options) =>
+          Effect.sync(() => {
+            details.push(options.detail ?? "");
+            return { response: 1, checkboxChecked: false };
+          }),
+      },
+      () => Effect.void,
+    );
+    for (const count of [4, 8]) {
+      yield* show({
+        label: "Test",
+        reason: "slow-crash",
+        history: Array.from({ length: count }, (_, at) => ({ at, outcome: "code=1" })),
+        retry: Effect.void,
+        stop: Effect.void,
+        logPath: "/logs",
+      });
+    }
+    assert.match(details[0] ?? "", /^4 exits in the last 6 hours/);
+    assert.match(details[1] ?? "", /^at least 8 exits in the last 6 hours/);
+  }),
+);

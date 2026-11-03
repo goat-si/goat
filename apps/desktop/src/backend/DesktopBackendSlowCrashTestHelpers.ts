@@ -122,4 +122,38 @@ export function registerSlowCrashTests({
       }),
     ),
   );
+  it.effect("a crash that also pauses recovery does not claim automatic restarts", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const exits = yield* Queue.unbounded<Deferred.Deferred<ChildProcessSpawner.ExitCode>>();
+        const notices = yield* Queue.unbounded<SlowCrashInfo>();
+        const dialogs = yield* Queue.unbounded<RecoveryActions>();
+        const spawnerLayer = Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make(() =>
+            Effect.gen(function* () {
+              const exit = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
+              yield* Queue.offer(exits, exit);
+              return makeProcess({ exitCode: Deferred.await(exit) });
+            }),
+          ),
+        );
+        const instance = yield* makeTestInstance({
+          config: baseConfig,
+          spawnerLayer,
+          onSlowCrash: (info) => Queue.offer(notices, info).pipe(Effect.asVoid),
+          onRecoveryPaused: (actions) => Queue.offer(dialogs, actions).pipe(Effect.asVoid),
+        });
+        yield* instance.start;
+        // The 4th exit starts the pattern; the 6th ties the outcomes (new key) and trips the fast pause.
+        for (const code of [1, 1, 1, 2, 2, 2]) {
+          const exit = yield* Queue.take(exits);
+          yield* Deferred.succeed(exit, ChildProcessSpawner.ExitCode(code));
+          yield* TestClock.adjust("31 seconds");
+        }
+        assert.equal((yield* Queue.take(dialogs)).reason, "crash-loop");
+        assert.equal(yield* Queue.size(notices), 1);
+      }),
+    ),
+  );
 }
