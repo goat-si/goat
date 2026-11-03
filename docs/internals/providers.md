@@ -97,7 +97,7 @@ train, so the registry stays authoritative for them. A Chocolatey install of Cla
 manual-only: its package directory is writable only by administrators, and `claude update` through
 the shim installs a native copy elsewhere. The latest version comes from `choco search`, and the
 card shows `choco upgrade claude-code` without running it.
-See the [resolver](../../apps/server/src/provider/providerMaintenance.ts).
+See the [resolver](../../packages/provider-core/src/server/maintenanceResolver.ts).
 
 Ownership is cached per instance and re-read immediately before an update runs. The
 [runner](../../apps/server/src/provider/providerMaintenanceRunner.ts) refuses when the lock key
