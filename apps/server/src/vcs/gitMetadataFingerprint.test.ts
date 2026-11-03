@@ -1,4 +1,5 @@
 import { assert, it } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
@@ -161,7 +162,10 @@ it.effect.each([false, true])(
         ...fs,
         stat: (file) =>
           file === configPath
-            ? Effect.succeed({ ...info, mtime: Option.some(new Date(0)) })
+            ? Effect.succeed({
+                ...info,
+                mtime: Option.some(DateTime.toDateUtc(DateTime.makeUnsafe(0))),
+              })
             : fs.stat(file),
         open: (file, options) =>
           fs.open(file, options).pipe(
