@@ -17,6 +17,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import { type McpSchema, Tool } from "effect/ai";
 
 import * as Sqlite from "../persistence/Sqlite.ts";
+import * as Profiles from "../goatclaw/PermissionProfiles.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import {
   serveEnforcingCatalogOverHttp,
@@ -25,7 +26,7 @@ import {
 import { ScreenToolkit } from "./toolkits/screen/tools.ts";
 
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
-import { AGENT_DEVICE_ACCESS_OFF, availability } from "./toolAvailability.ts";
+import { AGENT_DEVICE_ACCESS_OFF, availability, callerProfile } from "./toolAvailability.ts";
 
 const toolkits = { ...standardToolkits, screen: ScreenToolkit };
 
@@ -115,6 +116,40 @@ const enforcing = (goatclaw: { readonly enabled: boolean; readonly defaultProfil
     Sqlite.layerMemory,
     ServerSettings.layerTest({ goatclaw, agentToolListing: "full" }),
   );
+
+it.effect("#2194: discovery refuses a supervisor's direct PR merge and close", () =>
+  Effect.gen(function* () {
+    const profiles = yield* Profiles.PermissionProfiles;
+    const supervisor = ThreadId.make("supervisor");
+    yield* profiles.claim(callers.outside, {
+      id: "supervisor",
+      childThreadId: supervisor,
+      runtimeMode: "full-access",
+      role: "supervisor",
+    });
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`INSERT INTO orchestration_v2_projection_threads
+      (thread_id, project_id, title, default_provider, runtime_mode, interaction_mode, created_at, updated_at, payload_json)
+      VALUES (${supervisor}, 'project', 'Supervisor', 'codex', 'full-access', 'default', '2026-10-25', '2026-10-25', '{}')`;
+    const scope = {
+      ...callers.thread,
+      thread: { ...callers.thread.thread!, threadId: supervisor },
+    };
+    const profile = yield* callerProfile(profiles, scope);
+    for (const path of ["pull_request.merge", "pull_request.close"] as const) {
+      expect(availability(agentSurfaceRegistry[path], scope, true, profile)).toMatchObject({
+        now: false,
+        reason: expect.stringContaining("pr.merge"),
+      });
+    }
+  }).pipe(
+    Effect.provide(
+      Profiles.layer.pipe(
+        Layer.provideMerge(enforcing({ enabled: true, defaultProfile: "owner" })),
+      ),
+    ),
+  ),
+);
 
 it.effect.each(Object.keys(BUILTIN_PERMISSION_PROFILES))(
   "goat_describe and tools/list withhold tools for missing explicit grants or a %s thread's profile",

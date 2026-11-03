@@ -55,7 +55,11 @@ const profileRefusal = (entry: AgentSurfaceEntry, profile: CallerProfile) => {
   if (!profile.resolved) return profile.reason;
   if (!profile.effective.enabled) return undefined;
   if (entry.capability === undefined) return "It declares no goatclaw capability.";
-  const checked = Profiles.checkProfile(profile.effective, entry.capability, {});
+  const checked = Profiles.checkProfile(
+    Profiles.directWriteProfile(profile.effective),
+    entry.capability,
+    {},
+  );
   return checked.ok
     ? undefined
     : `Needs the goatclaw ${entry.capability} capability. ${checked.reason}`;
