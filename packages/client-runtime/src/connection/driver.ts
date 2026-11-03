@@ -275,42 +275,54 @@ export const make = Effect.gen(function* () {
               : effect,
           );
           const openProbeSocket = Effect.gen(function* () {
-            const check = yield* checkDescriptor(prepared.httpBaseUrl, prepared.environmentId);
-            if (check !== "answered")
-              return yield* new ConnectionTransientError({
-                reason: "endpoint-unavailable",
-                detail: "Probe endpoint identity could not be verified.",
-              });
             let fresh = prepared;
-            if (prepared.httpAuthorization?._tag === "Bearer") {
-              const issued = yield* issueRemoteWebSocketTicket({
-                httpBaseUrl: prepared.httpBaseUrl,
-                bearerToken: prepared.httpAuthorization.token,
-                use: "rpc",
-              }).pipe(
-                Effect.provideService(HttpClient.HttpClient, httpClient),
-                Effect.mapError(
-                  () =>
-                    new ConnectionTransientError({
-                      reason: "endpoint-unavailable",
-                      detail: "Probe ticket could not be issued.",
-                    }),
-                ),
-              );
-              const url = new URL(prepared.socketUrl);
-              url.searchParams.set("wsTicket", Redacted.value(issued.ticket));
-              fresh = { ...prepared, socketUrl: url.toString() };
-            } else if (
-              prepared.httpAuthorization !== null ||
-              route.target._tag === "RelayConnectionTarget" ||
-              route.target._tag === "HubProxyConnectionTarget"
-            ) {
+            if (route.target._tag === "HubProxyConnectionTarget") {
+              // The hub serves the node descriptor only to an authenticated caller; prepare checks it.
               fresh = yield* resolver.prepare(routeEntry(entry, route));
-              if (fresh.httpBaseUrl !== prepared.httpBaseUrl)
+              if (
+                fresh.environmentId !== prepared.environmentId ||
+                fresh.httpBaseUrl !== prepared.httpBaseUrl
+              )
                 return yield* new ConnectionTransientError({
                   reason: "endpoint-unavailable",
                   detail: "Probe endpoint changed.",
                 });
+            } else {
+              const check = yield* checkDescriptor(prepared.httpBaseUrl, prepared.environmentId);
+              if (check !== "answered")
+                return yield* new ConnectionTransientError({
+                  reason: "endpoint-unavailable",
+                  detail: "Probe endpoint identity could not be verified.",
+                });
+              if (prepared.httpAuthorization?._tag === "Bearer") {
+                const issued = yield* issueRemoteWebSocketTicket({
+                  httpBaseUrl: prepared.httpBaseUrl,
+                  bearerToken: prepared.httpAuthorization.token,
+                  use: "rpc",
+                }).pipe(
+                  Effect.provideService(HttpClient.HttpClient, httpClient),
+                  Effect.mapError(
+                    () =>
+                      new ConnectionTransientError({
+                        reason: "endpoint-unavailable",
+                        detail: "Probe ticket could not be issued.",
+                      }),
+                  ),
+                );
+                const url = new URL(prepared.socketUrl);
+                url.searchParams.set("wsTicket", Redacted.value(issued.ticket));
+                fresh = { ...prepared, socketUrl: url.toString() };
+              } else if (
+                prepared.httpAuthorization !== null ||
+                route.target._tag === "RelayConnectionTarget"
+              ) {
+                fresh = yield* resolver.prepare(routeEntry(entry, route));
+                if (fresh.httpBaseUrl !== prepared.httpBaseUrl)
+                  return yield* new ConnectionTransientError({
+                    reason: "endpoint-unavailable",
+                    detail: "Probe endpoint changed.",
+                  });
+              }
             }
             const config = yield* session.initialConfig;
             return yield* sessions.openProbe(

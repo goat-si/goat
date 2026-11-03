@@ -3,10 +3,12 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as TestClock from "effect/testing/TestClock";
+import * as Connectivity from "./connectivity.ts";
 import * as EnvironmentSupervisor from "./supervisor.ts";
-import type { ConnectionAttemptError } from "./model.ts";
+import type { ConnectionAttemptError, NetworkStatus } from "./model.ts";
 import { TARGET, awaitState, makeHarness, transient } from "./supervisorTestSupport.ts";
 
 const entry = { target: TARGET, profile: Option.none(), enabled: true };
@@ -159,5 +161,35 @@ it.effect("fresh probe RPC failure keeps the old socket", () =>
     yield* TestClock.adjust("10 seconds");
     expect(yield* Deferred.isDone(started)).toBe(true);
     expect(yield* Ref.get(h.sessionCount)).toBe(1);
+  }),
+);
+
+it.effect("a held network status lookup cannot stall disconnect or offline handling", () =>
+  Effect.gen(function* () {
+    const harness = yield* makeHarness({ openProbeSocket: opened() });
+    const network = yield* SubscriptionRef.make<NetworkStatus>("online");
+    const held = yield* Deferred.make<NetworkStatus>();
+    let lookups = 0;
+    const supervisor = yield* EnvironmentSupervisor.make(entry, { initiallyDesired: true }).pipe(
+      Effect.provideService(Connectivity.Connectivity, {
+        // Mobile asks the OS for network state; a lookup after startup never answers here.
+        status: Effect.suspend(() =>
+          lookups++ === 0 ? Effect.succeed("online" as const) : Deferred.await(held),
+        ),
+        changes: SubscriptionRef.changes(network).pipe(Stream.drop(1)),
+      }),
+      Effect.provide(harness.dependencies),
+    );
+    yield* awaitState(supervisor.state, (state) => state.phase === "connected");
+    yield* harness.wake("network-changed");
+    yield* SubscriptionRef.set(network, "offline");
+    yield* supervisor.disconnect;
+    yield* TestClock.adjust("1 second");
+    expect(yield* Ref.get(harness.releaseCount)).toBe(1);
+    expect(yield* SubscriptionRef.get(supervisor.state)).toMatchObject({
+      desired: false,
+      network: "offline",
+    });
+    expect(lookups).toBe(1);
   }),
 );

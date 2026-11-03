@@ -824,7 +824,8 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     target,
     loopback,
     currentRoutes,
-    currentNetwork: connectivity.status,
+    // The OS lookup behind connectivity.status can hang on mobile; intent mirrors every change.
+    currentNetwork: Ref.get(intent).pipe(Effect.map((current) => current.network)),
     signals,
     resetRetryState,
     probeUnanswered,
