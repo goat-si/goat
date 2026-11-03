@@ -257,7 +257,7 @@ const makeReportLayer = (serverScope?: Scope.Scope) =>
           "browserClaimsSupported" in value
             ? value.browserClaimsSupported
               ? Effect.void
-              : grants.value.setDriverCapability(false)
+              : grants.value.stop(threadId)
             : grants.value.end(
                 threadId,
                 value.browserClaimEnded.claimId,

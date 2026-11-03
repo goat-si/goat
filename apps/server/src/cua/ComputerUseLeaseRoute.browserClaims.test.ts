@@ -240,74 +240,83 @@ describe("computer use lease route", () => {
     }).pipe(Effect.scoped),
   );
 
-  it.effect("thread capability reports cannot raise support and can lower server support", () =>
-    Effect.gen(function* () {
-      const grantContext = yield* Layer.build(
-        Grants.layer.pipe(
-          Layer.provide(ServerSettings.layerTest()),
-          Layer.provide(
-            Layer.merge(
-              Layer.mock(ServerEnvironment.ServerEnvironment)({
-                getDescriptor: Effect.succeed(
-                  decodeDescriptor({
-                    environmentId: EnvironmentId.make("environment:test"),
-                    label: "Test",
-                    platform: { os: "linux", arch: "x64" },
-                    serverVersion: "test",
-                    capabilities: { repositoryIdentity: true },
-                  }),
-                ),
-              }),
-              Layer.succeed(BrowserClaimManifest, {
-                publish: () => Effect.succeed("a".repeat(64)),
-                readConfig: Effect.succeed({
-                  capability_manifest: {
-                    sha256: "a".repeat(64),
-                    file_sha256: "a".repeat(64),
-                    reload_error: null,
-                  },
+  it.effect(
+    "thread capability reports cannot raise support and end only their thread's claims",
+    () =>
+      Effect.gen(function* () {
+        const grantContext = yield* Layer.build(
+          Grants.layer.pipe(
+            Layer.provide(ServerSettings.layerTest()),
+            Layer.provide(
+              Layer.merge(
+                Layer.mock(ServerEnvironment.ServerEnvironment)({
+                  getDescriptor: Effect.succeed(
+                    decodeDescriptor({
+                      environmentId: EnvironmentId.make("environment:test"),
+                      label: "Test",
+                      platform: { os: "linux", arch: "x64" },
+                      serverVersion: "test",
+                      capabilities: { repositoryIdentity: true },
+                    }),
+                  ),
                 }),
-                install: () => Effect.void,
-              }),
+                Layer.succeed(BrowserClaimManifest, {
+                  publish: () => Effect.succeed("a".repeat(64)),
+                  readConfig: Effect.succeed({
+                    capability_manifest: {
+                      sha256: "a".repeat(64),
+                      file_sha256: "a".repeat(64),
+                      reload_error: null,
+                    },
+                  }),
+                  install: () => Effect.void,
+                }),
+              ),
             ),
           ),
-        ),
-      );
-      const grants = Context.get(grantContext, BrowserOriginGrants);
-      const f = yield* threadFixture({ grants });
-      const handler = yield* HttpRouter.toHttpEffect(LeaseRoute.reportLayer);
-      const report = (supported: boolean) =>
-        handler.pipe(
-          Effect.provideService(
-            HttpServerRequest.HttpServerRequest,
-            HttpServerRequest.fromWeb(
-              new Request("http://goat.test/api/computer-use/lease", {
-                method: "POST",
-                headers: { authorization: f.credential.config.authorizationHeader },
-                body: JSON.stringify({ browserClaimsSupported: supported }),
-              }),
-            ),
-          ),
-          Effect.provideContext(f.context),
         );
-      const input = {
-        threadId,
-        pid: 42,
-        windowId: 7,
-        origin: "https://example.test",
-        windowTitle: "Browser",
-      };
-      assert.equal((yield* report(true)).status, 204);
-      const spoofed = yield* grants.request(input);
-      assert.equal(spoofed.status, "refused");
-      if (spoofed.status === "refused") assert.equal(spoofed.code, "unavailable");
-      yield* grants.setDriverCapability(true);
-      assert.equal((yield* grants.request(input)).status, "pending");
-      assert.equal((yield* report(false)).status, 204);
-      const lowered = yield* grants.request(input);
-      assert.equal(lowered.status, "refused");
-      if (lowered.status === "refused") assert.equal(lowered.code, "unavailable");
-    }).pipe(Effect.scoped),
+        const grants = Context.get(grantContext, BrowserOriginGrants);
+        const f = yield* threadFixture({ grants });
+        const handler = yield* HttpRouter.toHttpEffect(LeaseRoute.reportLayer);
+        const report = (supported: boolean) =>
+          handler.pipe(
+            Effect.provideService(
+              HttpServerRequest.HttpServerRequest,
+              HttpServerRequest.fromWeb(
+                new Request("http://goat.test/api/computer-use/lease", {
+                  method: "POST",
+                  headers: { authorization: f.credential.config.authorizationHeader },
+                  body: JSON.stringify({ browserClaimsSupported: supported }),
+                }),
+              ),
+            ),
+            Effect.provideContext(f.context),
+          );
+        const input = {
+          threadId,
+          pid: 42,
+          windowId: 7,
+          origin: "https://example.test",
+          windowTitle: "Browser",
+        };
+        assert.equal((yield* report(true)).status, 204);
+        const spoofed = yield* grants.request(input);
+        assert.equal(spoofed.status, "refused");
+        if (spoofed.status === "refused") assert.equal(spoofed.code, "unavailable");
+        yield* grants.setDriverCapability(true);
+        assert.equal((yield* grants.request(input)).status, "pending");
+        const other = ThreadId.make("thread:other");
+        assert.equal(
+          (yield* grants.request({ ...input, threadId: other, windowId: 8 })).status,
+          "pending",
+        );
+        assert.equal((yield* report(false)).status, 204);
+        assert.deepEqual(
+          (yield* grants.listAll()).pending.map((entry) => entry.threadId),
+          [other],
+        );
+        assert.equal((yield* grants.request({ ...input, windowId: 9 })).status, "pending");
+      }).pipe(Effect.scoped),
   );
   it.effect("does not advertise a claim revoked while its change subscription is starting", () =>
     Effect.gen(function* () {

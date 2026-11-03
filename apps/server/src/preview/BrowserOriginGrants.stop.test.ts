@@ -12,6 +12,41 @@ class NarrowWriteFailure extends Schema.TaggedError<NarrowWriteFailure>()(
   {},
 ) {}
 
+it.effect("repeated stops do not rewrite an unchanged manifest", () =>
+  Effect.gen(function* () {
+    let writes = 0;
+    const service = yield* makeTestBrowserOriginGrants({
+      environmentId: EnvironmentId.make("environment:test"),
+      supported: () => true,
+      publish: () =>
+        Effect.sync(() => {
+          writes++;
+        }),
+      bind: (input) =>
+        Effect.succeed({
+          targetId: "target",
+          tabId: "tab",
+          title: "Site",
+          url: input.origin,
+          driverGeneration: 1,
+        }),
+    });
+    const threadId = ThreadId.make("thread:test");
+    const answer = yield* service.claim({
+      threadId,
+      pid: 42,
+      windowId: 7,
+      origin: "https://example.test",
+      windowTitle: "Browser",
+    });
+    assert.equal(answer.agentResult.status, "attached");
+    yield* service.stop(threadId);
+    const afterFirst = writes;
+    yield* service.stop(threadId);
+    assert.equal(writes, afterFirst);
+  }),
+);
+
 it.effect("a failed narrowing write fences the driver", () =>
   Effect.gen(function* () {
     let failWrites = false;

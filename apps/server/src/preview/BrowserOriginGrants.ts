@@ -419,6 +419,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     Effect.gen(function* () {
       const stopped = yield* Effect.sync(() => {
         const signals: Array<Deferred.Deferred<void>> = [];
+        let removed = false;
         for (const [id, entry] of pending)
           if (threadId === undefined || entry.threadId === threadId) {
             pending.delete(id);
@@ -427,16 +428,19 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
               grants.delete(key(entry.threadId, entry.origin));
             signals.push(entry.stopped);
             sequence++;
+            removed = true;
           }
         for (const [id, claim] of claims)
           if (threadId === undefined || claim.threadId === threadId) {
             claims.delete(id);
             ended.set(id, { threadId: claim.threadId, reason: "stopped" });
             sequence++;
+            removed = true;
           }
-        return signals;
+        return { signals, removed };
       });
-      for (const signal of stopped) yield* Deferred.succeed(signal, undefined);
+      if (!stopped.removed) return;
+      for (const signal of stopped.signals) yield* Deferred.succeed(signal, undefined);
       yield* shrink(union());
     }).pipe(Effect.uninterruptible),
   );
