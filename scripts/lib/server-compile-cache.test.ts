@@ -126,3 +126,34 @@ it.each(["app", "server"])(
     }
   },
 );
+
+it("generates macOS x64 bytecode on an ARM64 host under Rosetta", async () => {
+  const { spawnSync } = await import("node:child_process");
+  const hook = NodeURL.fileURLToPath(
+    new URL("../prepare-server-compile-cache.cjs", import.meta.url),
+  );
+  const result = spawnSync(
+    process.execPath,
+    [
+      "-e",
+      `
+    const cp = require('node:child_process');
+    const { EventEmitter } = require('node:events');
+    cp.spawn = (executable, args, options) => {
+      require('node:assert/strict').match(executable, /Fixture\\.app\\/Contents\\/MacOS\\/Fixture$/);
+      require('node:assert/strict').equal(options.env.ELECTRON_RUN_AS_NODE, '1');
+      require('node:assert/strict').match(args[0], /prepare-server-compile-cache-runner\\.cjs$/);
+      require('node:assert/strict').equal(require('node:fs').existsSync(args[0]), true);
+      const child = new EventEmitter(); child.stdio = [null, null, null]; child.stdin = null;
+      process.nextTick(() => child.emit('close', 0)); return child;
+    };
+    Object.defineProperty(process, 'platform', { value: 'darwin' });
+    Object.defineProperty(process, 'arch', { value: 'arm64' });
+    require(${JSON.stringify(hook)})({appOutDir: '/tmp/fixture', electronPlatformName: 'darwin', arch: 1, packager: {appInfo: {productFilename: 'Fixture'}}}).catch(e => {console.error(e); process.exitCode = 1;});
+  `,
+    ],
+    { encoding: "utf8" },
+  );
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stdout).toContain("Prepared server bytecode");
+});

@@ -348,7 +348,8 @@ The C toolchain, pkg-config, and libsecret headers are also needed for Linux des
 ### macOS DMG prerequisites
 
 Install the Xcode Command Line Tools with `xcode-select --install` and install Rust.
-For a cross-architecture or universal build, add the requested Rust targets:
+macOS x64 desktop builds on Apple Silicon prepare server bytecode under Rosetta. Install Rosetta
+before building that target. For a cross-architecture or universal build, add the requested Rust targets:
 
 ```sh
 rustup target add aarch64-apple-darwin x86_64-apple-darwin

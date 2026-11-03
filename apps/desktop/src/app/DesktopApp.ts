@@ -348,7 +348,8 @@ const startup = Effect.gen(function* () {
   yield* (yield* DesktopCuaDriver.DesktopCuaDriver).listen;
   yield* DesktopRemoteUpdates.listen;
   yield* DesktopStartupRecovery.listen;
-  yield* linuxUrlHandler.register;
+  // Portal identity is prepared pre-ready; MIME helpers must not gate the backend or window.
+  yield* linuxUrlHandler.register.pipe(Effect.forkScoped);
   yield* bootstrap.pipe(Effect.catchCause((cause) => fatalStartupCause("bootstrap", cause)));
 }).pipe(Effect.withSpan("desktop.startup"));
 

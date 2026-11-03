@@ -12,7 +12,15 @@ module.exports = async ({ appOutDir, electronPlatformName, arch, packager }) => 
     return;
   }
   const targetArch = ["ia32", "x64", "armv7l", "arm64", "universal"][arch];
-  if (electronPlatformName !== process.platform || targetArch !== process.arch) {
+  const runsWithRosetta =
+    electronPlatformName === "darwin" &&
+    process.platform === "darwin" &&
+    process.arch === "arm64" &&
+    targetArch === "x64";
+  if (
+    electronPlatformName !== process.platform ||
+    (targetArch !== process.arch && !runsWithRosetta)
+  ) {
     console.log(
       `[server-compile-cache] Skipping unexecutable target ${electronPlatformName}/${targetArch}`,
     );
@@ -43,16 +51,14 @@ module.exports = async ({ appOutDir, electronPlatformName, arch, packager }) => 
   env.GOAT_HOME = state;
   let result;
   try {
+    const runner = path.join(state, "prepare-server-compile-cache-runner.cjs");
+    fs.writeFileSync(
+      runner,
+      `require(${JSON.stringify(helper)}).generatePreparedServerCache(${JSON.stringify(resources)}).then(()=>process.exit(0),e=>{console.error(e);process.exit(1)})`,
+    );
     result = await new Promise((resolve, reject) => {
       const child = guardChild(
-        spawn(
-          executable,
-          [
-            "-e",
-            `require(${JSON.stringify(helper)}).generatePreparedServerCache(${JSON.stringify(resources)}).then(()=>process.exit(0),e=>{console.error(e);process.exit(1)})`,
-          ],
-          { env, stdio: "inherit", timeout: 120000 },
-        ),
+        spawn(executable, [runner], { env, stdio: "inherit", timeout: 120000 }),
         reject,
       );
       child.once("close", (status) => resolve(status));

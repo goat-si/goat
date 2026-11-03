@@ -273,9 +273,13 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
   const connectivity = yield* Connectivity.Connectivity;
   const driver = yield* ConnectionDriver.ConnectionDriver;
   const wakeups = yield* ConnectionWakeups.ConnectionWakeups;
+  const targetNetwork = (network: NetworkStatus): NetworkStatus =>
+    network === "offline" && target._tag === "PrimaryConnectionTarget" ? "unknown" : network;
+  const initialNetwork = yield* connectivity.status;
+  const observedNetwork = yield* Ref.make(initialNetwork);
   const initialIntent: SupervisorIntent = {
     desired: options?.initiallyDesired ?? false,
-    network: yield* connectivity.status,
+    network: targetNetwork(initialNetwork),
   };
   const intent = yield* Ref.make(initialIntent);
   const attemptSequence = yield* Ref.make(0);
@@ -775,6 +779,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     ignoreOffline: Ref.Ref<boolean>,
     sequence: number,
   ) {
+    let deviceOffline = (yield* connectivity.status) === "offline";
     for (;;) {
       const next = yield* Queue.take(signals);
       switch (next._tag) {
@@ -785,7 +790,10 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
           if (next.attemptSequence === sequence) return false;
           break;
         case "NetworkChanged":
-          if (next.network === "offline" && !(yield* Ref.get(ignoreOffline))) {
+          if (target._tag === "PrimaryConnectionTarget") {
+            if (next.network === "offline") deviceOffline = true;
+            else if (deviceOffline) return true;
+          } else if (next.network === "offline" && !(yield* Ref.get(ignoreOffline))) {
             return false;
           }
           break;
@@ -1347,11 +1355,14 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
 
   yield* connectivity.changes.pipe(
     Stream.runForEach((network) =>
-      Ref.modify(intent, (current) =>
-        current.network === network ? [false, current] : ([true, { ...current, network }] as const),
-      ).pipe(
+      Ref.modify(observedNetwork, (current) => [current !== network, network] as const).pipe(
         Effect.flatMap((changed) =>
-          changed ? signal({ _tag: "NetworkChanged", network }) : Effect.void,
+          changed
+            ? Ref.update(intent, (current) => ({
+                ...current,
+                network: targetNetwork(network),
+              })).pipe(Effect.andThen(signal({ _tag: "NetworkChanged", network })))
+            : Effect.void,
         ),
       ),
     ),

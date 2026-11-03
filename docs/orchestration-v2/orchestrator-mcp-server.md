@@ -648,6 +648,18 @@ failure in the thread. Only a run whose preparation failed qualifies
 and a new `goat_thread_send` is the way forward there. The launch watch reports
 the retried run like the original.
 
+### Scheduled tasks
+
+`goat_schedule_create`, `goat_schedule_list`, `goat_schedule_update`, and
+`goat_schedule_delete` manage recurring work. Schedules run on intervals, at
+fixed local times, or from qualifying webhook requests, without an active turn.
+Runs bind to the caller's thread by default when it belongs to the task's project;
+otherwise they start fresh threads. Set `bindToCurrentThread: false` for a fresh
+thread per run. `goat_schedule_update` with `enabled: false` pauses future runs;
+deletion is permanent and does not stop work already dispatched. Unsigned webhook
+URLs can be triggered by anyone holding the URL; signatures, filters, and dedupe
+can reject or suppress requests.
+
 ## Delegated Task Lifecycle
 
 The MCP server is a command ingress into V2. It does not call provider adapters

@@ -115,7 +115,7 @@ Fix:
 
 ## Sign-in, account, or link problems
 
-GOAT Connect does not have an active link between your account and the host.
+This device’s GOAT Connect sign-in is not ready yet, or GOAT Connect does not have an active link between your account and the host.
 
 - **The host is linked to a different account.** Sign in to the same GOAT Connect
   account on this device and on the host. On the host, run `goat connect logout`,
@@ -126,6 +126,7 @@ GOAT Connect does not have an active link between your account and the host.
 - **The host was linked, but the server did not apply the link yet.** Restart
   the server on the host: quit and reopen the GOAT desktop app, run
   `goat service restart`, or stop `goat serve` and run it again.
+- **This device is still loading its GOAT Connect sign-in.** Wait a moment; GOAT retries on its own. If it keeps waiting, reload or restart GOAT on this device.
 - **This device's sign-in expired, or the host no longer accepts this
   device.** Sign out of GOAT Connect and sign in again.
 - **Your account reached its tunnel limit.** Remove an environment you do not
