@@ -162,9 +162,13 @@ resumes without adding provider prompt text unless the turn lost background work
 other adapters receive the continuation message through their normal turn path.
 
 Codex can keep a turn running through the restart instead. With
-`codexTurnsSurviveServerStop` on, macOS and Linux run each Codex instance's app-server
-[detached](../../apps/server/src/provider/CodexDetachedAppServer.ts) on a private
-Unix socket, and shutdown leaves it running when the stop is a restart: a runtime drain
+`codexTurnsSurviveServerStop` on, macOS and Linux run each Codex provider session's
+app-server [detached](../../apps/server/src/provider/CodexDetachedAppServer.ts) on a
+private Unix socket. Threads of an instance share one session unless
+`codexAppServerIsolation` is `"thread"`, which gives each new root thread its own session
+and process; native subagents stay in their root's. Each process record names its session,
+and shutdown, recovery and reconnection pair a thread only with its own session's record.
+Shutdown leaves the process running when the stop is a restart: a runtime drain
 marks one in-process, and the desktop's stop intent names relaunch, update or recovery
 retry. Recovery classifies survivors before it reconciles anything, so a still-running
 native turn is never cancelled, and survival does not depend on the continuation
