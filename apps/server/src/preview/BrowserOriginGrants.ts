@@ -43,6 +43,7 @@ interface Dependencies {
   readonly confirm: (sha256: string) => Effect.Effect<unknown, Error>;
   /** Restarts the driver; true when it could. */
   readonly fence?: () => Effect.Effect<boolean>;
+  readonly onFenceFailure?: () => Effect.Effect<void>;
   readonly windowTitle?: (
     input: Pick<Request, "threadId" | "pid" | "windowId">,
   ) => Effect.Effect<string, Error>;
@@ -115,7 +116,11 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     }).pipe(
       Effect.andThen(deps.fence?.() ?? Effect.succeed(false)),
       Effect.flatMap((fenced) =>
-        fenced ? Effect.void : Effect.logError("No driver fence is available"),
+        fenced
+          ? Effect.void
+          : Effect.logError("No driver fence is available").pipe(
+              Effect.andThen(deps.onFenceFailure?.() ?? Effect.void),
+            ),
       ),
     );
   const shrink = Effect.fn("BrowserOriginGrants.publishShrink")(function* (value: Union) {

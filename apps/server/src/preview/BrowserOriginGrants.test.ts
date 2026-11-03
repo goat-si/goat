@@ -1,11 +1,19 @@
 import { assert, it } from "@effect/vitest";
-import { EnvironmentId, ThreadId } from "@goat/contracts";
+import { EnvironmentId, ExecutionEnvironmentDescriptor, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
 import * as Schema from "effect/Schema";
+import * as Context from "effect/Context";
+import * as Layer from "effect/Layer";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import { BrowserClaimManifest } from "./BrowserClaimManifest.ts";
+import { BrowserClaimBind } from "./BrowserClaimBind.ts";
+import * as Grants from "./BrowserOriginGrantsLayer.ts";
 import { makeTestBrowserOriginGrants as makeBrowserOriginGrants } from "./BrowserOriginGrants.testkit.ts";
 import { makeBrowserOriginGrants as makeUnconfirmedGrants } from "./BrowserOriginGrants.ts";
+
+const decodeDescriptor = Schema.decodeSync(ExecutionEnvironmentDescriptor);
 
 it.effect("does not bind before approval and hides a mismatch as a decline", () =>
   Effect.gen(function* () {
@@ -320,6 +328,68 @@ it.effect("restarts the driver when a narrower manifest cannot be written", () =
     yield* service.revoke(threadId, "https://example.test").pipe(Effect.result);
     assert.equal(fences, 1);
   }),
+);
+
+it.effect("a failed fence stops new claims", () =>
+  Effect.gen(function* () {
+    let failWrites = false;
+    const hash = "a".repeat(64);
+    const context = yield* Layer.build(
+      Grants.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.mock(ServerEnvironment.ServerEnvironment)({
+              getDescriptor: Effect.succeed(
+                decodeDescriptor({
+                  environmentId: EnvironmentId.make("environment:test"),
+                  label: "Test",
+                  platform: { os: "linux", arch: "x64" },
+                  serverVersion: "test",
+                  capabilities: { repositoryIdentity: true },
+                }),
+              ),
+            }),
+            Layer.succeed(BrowserClaimManifest, {
+              publish: () =>
+                failWrites ? Effect.fail(new ManifestConfirmationMismatch()) : Effect.succeed(hash),
+              readConfig: Effect.succeed({
+                capability_manifest: { sha256: hash, file_sha256: hash, reload_error: null },
+              }),
+              fence: Effect.succeed(false),
+              install: () => Effect.void,
+            }),
+            Layer.succeed(BrowserClaimBind, {
+              bind: (input) =>
+                Effect.succeed({
+                  targetId: "target-1",
+                  tabId: "tab-1",
+                  title: "Site",
+                  url: input.origin,
+                  driverGeneration: 1,
+                }),
+            }),
+          ),
+        ),
+      ),
+    );
+    const service = Context.get(context, Grants.BrowserOriginGrants);
+    yield* service.setDriverCapability(true);
+    const input = {
+      threadId: ThreadId.make("thread:test"),
+      pid: 42,
+      windowId: 7,
+      origin: "https://example.test",
+      windowTitle: "Browser",
+    };
+    const request = yield* service.request(input);
+    if (request.status !== "pending") return assert.fail("expected pending request");
+    yield* service.answer(request.claimId, true);
+    failWrites = true;
+    yield* service.revoke(input.threadId, input.origin);
+    const next = yield* service.request(input);
+    assert.equal(next.status, "refused");
+    if (next.status === "refused") assert.equal(next.code, "unavailable");
+  }).pipe(Effect.scoped),
 );
 
 it.effect("refuses a claim when manifest confirmation fails and restores the previous union", () =>
