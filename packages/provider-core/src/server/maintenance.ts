@@ -19,6 +19,8 @@ export interface ProviderMaintenanceCapabilities {
    * install to update.
    */
   readonly installPath?: string;
+  /** Displayed for manual updates; never executed by T3 Code. */
+  readonly manualCommand?: string;
 }
 
 export interface ProviderMaintenanceCommandAction {
