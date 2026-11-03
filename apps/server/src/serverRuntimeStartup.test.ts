@@ -60,6 +60,11 @@ type BootstrapScenario =
 const bootstrapScenario = (
   scenario: BootstrapScenario,
   shutdown: Effect.Effect<void> = Effect.void,
+  ordering?: {
+    log: string[];
+    settings: Deferred.Deferred<void>;
+    auxiliary: Deferred.Deferred<void>;
+  },
 ) =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -115,11 +120,17 @@ const bootstrapScenario = (
         Layer.mock(Keybindings.Keybindings)({ start: Effect.void }),
         Layer.mock(LegacyV1ThreadImporter.LegacyV1ThreadImporter)({
           pendingThreadCount: Effect.succeed(0),
-          reconcileShells: Effect.succeed(imports),
+          reconcileShells: Effect.sync(() => {
+            ordering?.log.push("legacy-import");
+            return imports;
+          }),
           importPendingTranscripts: Effect.succeed(imports),
         }),
         Layer.mock(ProviderRuntimeRecovery.ProviderRuntimeRecoveryService)({
-          recover: Effect.succeed(recovery),
+          recover: Effect.sync(() => {
+            ordering?.log.push("recovery");
+            return recovery;
+          }),
           prepareForShutdown: Effect.void,
           reconcile: () => Effect.succeed(recovery),
         }),
@@ -142,11 +153,14 @@ const bootstrapScenario = (
             Effect.sync(() => {
               const published = { ...event, sequence: events.length + 1 };
               events.push(published);
+              if (event.type === "ready") ordering?.log.push("ready");
               return published;
             }),
         }),
         Layer.mock(ServerSettings.ServerSettingsService)({
-          start: Effect.void,
+          start: ordering
+            ? Deferred.succeed(ordering.settings, undefined).pipe(Effect.asVoid)
+            : Effect.void,
           getSettings: Effect.succeed({
             ...DEFAULT_SERVER_SETTINGS,
             defaultModelSelection:
@@ -241,9 +255,29 @@ const bootstrapScenario = (
       );
       yield* Effect.gen(function* () {
         const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
-        yield* startup.markHttpListening;
+        if (ordering) {
+          yield* Deferred.await(ordering.settings);
+          yield* TestClock.adjust(0);
+          assert.notInclude(ordering.log, "legacy-import");
+          ordering.log.push("listening");
+          yield* startup.markHttpListening;
+          yield* TestClock.adjust(0);
+          assert.include(ordering.log, "aux-parked");
+          assert.notInclude(ordering.log, "legacy-import");
+          yield* Deferred.succeed(ordering.auxiliary, undefined);
+        } else yield* startup.markHttpListening;
         const ready = yield* Effect.exit(startup.awaitCommandReady);
         assert.equal(Exit.isSuccess(ready), scenario !== "project-failure");
+        if (ordering) {
+          yield* TestClock.adjust(0);
+          assert.deepStrictEqual(ordering.log, [
+            "listening",
+            "aux-parked",
+            "legacy-import",
+            "recovery",
+            "ready",
+          ]);
+        }
         const welcome = events.find((event) => event.type === "welcome");
         if (scenario === "project-failure") {
           assert.isUndefined(welcome);
@@ -255,11 +289,29 @@ const bootstrapScenario = (
           }
         }
       }).pipe(
-        Effect.provide(ServerRuntimeStartup.layerWithOptions().pipe(Layer.provide(dependencies))),
+        Effect.provide(
+          ServerRuntimeStartup.layerWithOptions(
+            ordering
+              ? {
+                  awaitAuxiliaryParked: Effect.sync(() => {
+                    ordering.log.push("aux-parked");
+                  }).pipe(Effect.andThen(Deferred.await(ordering.auxiliary))),
+                }
+              : undefined,
+          ).pipe(Layer.provide(dependencies)),
+        ),
         Effect.provideService(ServerActivation, Effect.never),
       );
     }),
   );
+
+it.effect("waits for the HTTP listener and routes before legacy import and recovery", () =>
+  Effect.gen(function* () {
+    const settings = yield* Deferred.make<void>();
+    const auxiliary = yield* Deferred.make<void>();
+    yield* bootstrapScenario("disabled-codex", Effect.void, { log: [], settings, auxiliary });
+  }),
+);
 
 it.effect.each([
   "disabled-codex",
