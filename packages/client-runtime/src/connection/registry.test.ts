@@ -1531,6 +1531,28 @@ describe("EnvironmentRegistry", () => {
     }),
   );
 
+  it.effect("reconciles a platform registration after a direct replacement (#2340)", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness([]);
+      yield* Effect.gen(function* () {
+        const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+        const original = new PrimaryConnectionRegistration({ target: TARGET });
+        const replacement = new PrimaryConnectionRegistration({
+          target: new PrimaryConnectionTarget({ ...TARGET, label: "Replacement" }),
+        });
+        yield* registry.reconcilePlatform([original]);
+        yield* registry.registerPlatform(replacement);
+        expect(
+          (yield* SubscriptionRef.get(registry.entries)).get(TARGET.environmentId)?.target.label,
+        ).toBe("Replacement");
+        yield* registry.reconcilePlatform([original]);
+        expect(
+          (yield* SubscriptionRef.get(registry.entries)).get(TARGET.environmentId)?.target.label,
+        ).toBe(TARGET.label);
+      }).pipe(Effect.provide(harness.layer), Effect.scoped);
+    }),
+  );
+
   it.effect("platform refreshes preserve unsupported state for the same endpoint", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness([]);

@@ -104,6 +104,61 @@ const layerLsofScanner = (input: {
     ),
   );
 
+effectIt.effect.each(["linux", "win32"] as const)(
+  "disables listener discovery on %s while probing configured URLs (#2342)",
+  (platform) => {
+    const commands: string[] = [];
+    const procReads: string[] = [];
+    const requests: string[] = [];
+    const configuredUrl = `http://localhost:${LSOF_TEST_PORT}/docs`;
+    const missing = FileSystem.makeNoop({});
+    const fileSystem = FileSystem.layerNoop({
+      readFileString: (path) => {
+        procReads.push(path);
+        return missing.readFileString(path);
+      },
+      readDirectory: (path) => {
+        procReads.push(path);
+        return missing.readDirectory(path);
+      },
+      readLink: (path) => {
+        procReads.push(path);
+        return missing.readLink(path);
+      },
+    });
+    const fetchFn = ((input: Parameters<typeof globalThis.fetch>[0]) => {
+      requests.push(String(input));
+      return Promise.resolve(new Response("docs", { headers: { "content-type": "text/html" } }));
+    }) as typeof globalThis.fetch;
+    const layer = PortScanner.layer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          fileSystem,
+          Layer.succeed(ProcessRunner.ProcessRunner, {
+            run: (input) => {
+              commands.push(input.command);
+              return processProbeFailure(input);
+            },
+          }),
+          Layer.succeed(HostProcess.Platform, platform),
+          Layer.succeed(HostProcess.Environment, { GOAT_PORT_DISCOVERY: "0" }),
+          FetchHttpClient.layer.pipe(Layer.provide(Layer.succeed(FetchHttpClient.Fetch, fetchFn))),
+        ),
+      ),
+    );
+    return Effect.gen(function* () {
+      const scanner = yield* ownedScanner();
+      const servers = yield* scanner.scan([configuredUrl]);
+      expect(commands).toEqual([]);
+      expect(procReads).toEqual([]);
+      expect(requests).toEqual([configuredUrl]);
+      expect(servers.map((server) => ({ url: server.url, terminal: server.terminal }))).toEqual([
+        { url: configuredUrl, terminal: null },
+      ]);
+    }).pipe(Effect.provide(layer));
+  },
+);
+
 effectIt.effect("keeps a full configured URL when the discovered server root fails", () => {
   const requests: string[] = [];
   const configuredUrl = `http://localhost:${LSOF_TEST_PORT}/docs`;
