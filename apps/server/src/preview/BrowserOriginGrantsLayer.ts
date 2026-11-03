@@ -23,7 +23,12 @@ const make = Effect.gen(function* () {
   const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
   const runSync = Effect.runSyncWith(yield* Effect.context<never>());
   const blockedHosts = () => {
-    if (Option.isNone(settings) || !settings.value.committedPolicy) return undefined;
+    if (
+      Option.isNone(settings) ||
+      !settings.value.committedPolicy ||
+      !settings.value.committedPolicyChanges
+    )
+      return undefined;
     const policy = runSync(settings.value.committedPolicy);
     return policy._tag === "committed" ? policy.blockedBrowserHosts : undefined;
   };
@@ -73,12 +78,10 @@ const make = Effect.gen(function* () {
       });
   });
   disable = () => setDriverCapability(false);
-  if (Option.isSome(settings)) {
-    const changes = yield* settings.value.subscribeChanges;
+  if (Option.isSome(settings) && settings.value.committedPolicyChanges) {
+    const changes = yield* settings.value.committedPolicyChanges;
     yield* changes.pipe(
-      Stream.runForEach((value) =>
-        service.blockOrigins(blockedHosts() === undefined ? undefined : value.blockedBrowserHosts),
-      ),
+      Stream.runForEach((hosts) => service.blockOrigins(hosts)),
       Effect.forkScoped({ startImmediately: true }),
     );
     yield* service.blockOrigins(blockedHosts());

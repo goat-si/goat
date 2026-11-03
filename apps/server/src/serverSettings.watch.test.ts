@@ -83,6 +83,24 @@ it.effect("committed policy feeds fail closed when a subscriber falls behind", (
   }).pipe(Effect.scoped, Effect.provide(ServerSettingsModule.layerTest())),
 );
 
+it.effect(
+  "independent policy subscribers each receive restrictions published before stream startup",
+  () =>
+    Effect.gen(function* () {
+      const service = yield* ServerSettingsModule.ServerSettingsService;
+      const subscribe = service.committedPolicyChanges;
+      if (subscribe === undefined) return assert.fail("missing policy feed");
+      const first = yield* subscribe;
+      const second = yield* subscribe;
+      yield* service.updateSettings({ blockedBrowserHosts: ["example.test"] });
+      yield* service.updateSettings({ blockedBrowserHosts: [] });
+      const firstQueue = yield* first.pipe(Stream.toQueue({ capacity: "unbounded" }));
+      const secondQueue = yield* second.pipe(Stream.toQueue({ capacity: "unbounded" }));
+      assert.deepEqual(yield* Queue.take(firstQueue), ["example.test"]);
+      assert.deepEqual(yield* Queue.take(secondQueue), ["example.test"]);
+    }).pipe(Effect.scoped, Effect.provide(ServerSettingsModule.layerTest())),
+);
+
 it.layer(NodeServices.layer)("settings watcher recovery", (it) => {
   it.effect.each([
     ["primary", "error"],
