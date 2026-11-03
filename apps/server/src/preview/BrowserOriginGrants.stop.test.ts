@@ -184,6 +184,69 @@ it.effect("concurrent narrowings keep at most one confirmation in flight", () =>
   }),
 );
 
+it.effect("a coalesced narrowing fences when a later union is not its subset", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    let writes = 0;
+    let fences = 0;
+    const service = yield* makeBrowserOriginGrants({
+      environmentId: EnvironmentId.make("environment:test"),
+      supported: () => true,
+      publish: () => Effect.sync(() => String(++writes).padStart(64, "0")),
+      confirm: (sha) =>
+        (sha === String(4).padStart(64, "0")
+          ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)))
+          : Effect.void
+        ).pipe(
+          Effect.as({ capability_manifest: { sha256: sha, file_sha256: sha, reload_error: null } }),
+        ),
+      fence: () =>
+        Effect.sync(() => {
+          fences++;
+          return true;
+        }),
+      bind: (input) =>
+        Effect.succeed({
+          targetId: "target",
+          tabId: "tab-" + input.windowId,
+          title: "Site",
+          url: input.origin,
+          driverGeneration: 1,
+        }),
+    });
+    const threads = [
+      ThreadId.make("thread:a"),
+      ThreadId.make("thread:b"),
+      ThreadId.make("thread:c"),
+      ThreadId.make("thread:d"),
+    ];
+    const attach = Effect.fnUntraced(function* (index: number) {
+      const threadId = threads[index];
+      if (threadId === undefined) return yield* Effect.die("missing thread");
+      const result = yield* service.claim({
+        threadId,
+        pid: 42,
+        windowId: index + 1,
+        origin: `https://site${index}.test`,
+        windowTitle: "Browser",
+      });
+      assert.equal(result.agentResult.status, "attached");
+    });
+    yield* attach(0);
+    yield* attach(1);
+    yield* attach(2);
+    yield* service.stop(threads[0]!);
+    yield* Deferred.await(entered);
+    yield* service.stop(threads[1]!);
+    yield* attach(3);
+    yield* service.stop(threads[2]!);
+    yield* Deferred.succeed(release, undefined);
+    yield* service.settled;
+    assert.equal(fences, 1);
+  }),
+);
+
 it.effect("stopping one thread ends its claims and preserves other claims and grants", () =>
   Effect.gen(function* () {
     const service = yield* makeTestBrowserOriginGrants({

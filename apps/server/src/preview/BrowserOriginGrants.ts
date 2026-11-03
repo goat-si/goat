@@ -131,9 +131,21 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     yield* confirm((yield* write(value, false)).sha);
   });
   let confirming: Deferred.Deferred<void> | undefined;
-  let pendingConfirmation:
-    | { readonly sha: string; readonly number: number; readonly value: Union }
-    | undefined;
+  type Confirmation = {
+    readonly sha: string;
+    readonly number: number;
+    readonly value: Union;
+    readonly unsafe: boolean;
+  };
+  let activeConfirmation: Confirmation | undefined;
+  let pendingConfirmation: Confirmation | undefined;
+  const subset = (newer: Union, older: Union) =>
+    newer.origins.every((origin) => older.origins.includes(origin)) &&
+    newer.existingProfiles.every((profile) =>
+      older.existingProfiles.some(
+        (old) => old.pid === profile.pid && old.windowId === profile.windowId,
+      ),
+    );
   const fence = (cause: unknown) =>
     Effect.logWarning("Browser manifest narrowing was not applied; restarting the driver", {
       cause,
@@ -157,22 +169,23 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
         const next = yield* Effect.sync(() => {
           const item = pendingConfirmation;
           pendingConfirmation = undefined;
+          activeConfirmation = item;
           if (item === undefined) confirming = undefined;
           return item;
         });
         if (next === undefined) return;
+        if (next.unsafe) {
+          yield* fence("A coalesced narrowing was superseded by a wider union");
+          continue;
+        }
         yield* confirm(next.sha).pipe(
           Effect.catchCause((cause) => {
             const newer = latest;
-            const subset =
-              newer !== undefined &&
-              newer.value.origins.every((origin) => next.value.origins.includes(origin)) &&
-              newer.value.existingProfiles.every((profile) =>
-                next.value.existingProfiles.some(
-                  (old) => old.pid === profile.pid && old.windowId === profile.windowId,
-                ),
-              );
-            return newer && newer.number > next.number && newer.narrowing && newer.applied && subset
+            return newer &&
+              newer.number > next.number &&
+              newer.narrowing &&
+              newer.applied &&
+              subset(newer.value, next.value)
               ? Effect.void
               : fence(cause);
           }),
@@ -186,7 +199,18 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     if (result._tag === "Failure") return yield* fence(result.failure);
     const done = yield* Deferred.make<void>();
     const start = yield* Effect.sync(() => {
-      pendingConfirmation = { ...result.success, value };
+      const next: Confirmation = { ...result.success, value, unsafe: false };
+      if (pendingConfirmation !== undefined) {
+        const newer = next.number > pendingConfirmation.number ? next : pendingConfirmation;
+        const older = next.number > pendingConfirmation.number ? pendingConfirmation : next;
+        pendingConfirmation = {
+          ...newer,
+          unsafe: pendingConfirmation.unsafe || !subset(newer.value, older.value),
+        };
+      } else if (activeConfirmation !== undefined && activeConfirmation.number > next.number) {
+        if (!subset(activeConfirmation.value, next.value))
+          pendingConfirmation = { ...next, unsafe: true };
+      } else pendingConfirmation = next;
       if (confirming !== undefined) return false;
       confirming = done;
       return true;
