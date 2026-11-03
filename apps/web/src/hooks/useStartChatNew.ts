@@ -36,11 +36,12 @@ export function createStartChatNew(router: AnyRouter): () => Promise<void> {
       openCommandPalette({ open: "new-thread-in" });
       return;
     }
-    await startNewThreadFromContext({
+    const started = await startNewThreadFromContext({
       activeDraftThread,
       activeThread: activeThread ?? undefined,
       defaultProjectRef,
       handleNewThread,
     });
+    if (!started) openCommandPalette({ open: "new-thread-in" });
   };
 }

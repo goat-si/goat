@@ -2809,6 +2809,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         activeThread: newThreadContext.activeThread ?? undefined,
         defaultProjectRef: newThreadContext.defaultProjectRef,
         handleNewThread,
+      }).then((started) => {
+        if (!started) openCommandPalette({ open: "new-thread-in" });
       });
       return;
     }
@@ -2829,12 +2831,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           projectGroups.length,
         )
       ) {
-        await startNewThreadFromContext({
+        const started = await startNewThreadFromContext({
           activeDraftThread: newThreadContext.activeDraftThread,
           activeThread: newThreadContext.activeThread ?? undefined,
           defaultProjectRef: newThreadContext.defaultProjectRef,
           handleNewThread: newThreadContext.handleNewThread,
         });
+        if (!started) openCommandPalette({ open: "new-thread-in" });
       } else {
         openCommandPalette({ open: "new-thread-in" });
       }
