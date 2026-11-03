@@ -19,12 +19,19 @@ import type * as Electron from "electron";
 import * as NodeEvents from "node:events";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
+import * as DesktopShellEnvironment from "../shell/DesktopShellEnvironment.ts";
 import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronPowerMonitor from "../electron/ElectronPowerMonitor.ts";
 import * as DesktopTelemetryPublisher from "./DesktopTelemetryPublisher.ts";
 import { collectTelemetry } from "./DesktopTelemetryPublisher.testkit.ts";
 import * as DesktopRendererHistory from "./DesktopRendererHistory.ts";
 import { fixture } from "../cua/DesktopCuaDriver.testkit.ts";
+
+const layerShell = Layer.succeed(DesktopShellEnvironment.DesktopShellEnvironment, {
+  installIntoProcess: Effect.succeed(true),
+  awaitDiscovery: Effect.succeed(true),
+  updates: Stream.empty,
+});
 
 const layerHistory = Layer.succeed(DesktopRendererHistory.DesktopRendererHistory, {
   register: () => Effect.void,
@@ -63,26 +70,30 @@ function layerElectronApp(
   } satisfies ElectronApp.ElectronApp["Service"]);
 }
 
-const layerCuaRouting = DesktopTelemetryPublisher.layer.pipe(
-  Layer.provide(
-    Layer.mergeAll(
-      layerElectronApp([]),
-      layerHistory,
-      Layer.succeed(
-        ElectronPowerMonitor.ElectronPowerMonitor,
-        ElectronPowerMonitor.ElectronPowerMonitor.of({
-          isOnBatteryPower: Effect.succeed(false),
-          getSystemIdleTime: Effect.succeed(0),
-          getSystemIdleState: () => Effect.succeed("active"),
-          getCurrentThermalState: Effect.succeed("nominal"),
-          onSimpleEvent: () => Effect.void,
-          onThermalStateChange: () => Effect.void,
-          onSpeedLimitChange: () => Effect.void,
-        }),
+const makeLayerCuaRouting = (shell = layerShell) =>
+  DesktopTelemetryPublisher.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        layerElectronApp([]),
+        layerHistory,
+        shell,
+        Layer.succeed(
+          ElectronPowerMonitor.ElectronPowerMonitor,
+          ElectronPowerMonitor.ElectronPowerMonitor.of({
+            isOnBatteryPower: Effect.succeed(false),
+            getSystemIdleTime: Effect.succeed(0),
+            getSystemIdleState: () => Effect.succeed("active"),
+            getCurrentThermalState: Effect.succeed("nominal"),
+            onSimpleEvent: () => Effect.void,
+            onThermalStateChange: () => Effect.void,
+            onSpeedLimitChange: () => Effect.void,
+          }),
+        ),
       ),
     ),
-  ),
-);
+  );
+
+const layerCuaRouting = makeLayerCuaRouting();
 
 describe("DesktopTelemetryPublisher", () => {
   it.effect("coalesces requests during a blocked listing into one fresh follow-up listing", () =>
@@ -671,7 +682,7 @@ describe("DesktopTelemetryPublisher", () => {
         }),
       );
       const layer = DesktopTelemetryPublisher.layer.pipe(
-        Layer.provide(Layer.mergeAll(layerElectronApp([]), layerPower, layerHistory)),
+        Layer.provide(Layer.mergeAll(layerElectronApp([]), layerPower, layerHistory, layerShell)),
       );
       const scope = yield* Scope.make();
 

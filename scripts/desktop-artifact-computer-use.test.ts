@@ -184,11 +184,11 @@ describe("desktop computer use payload", () => {
     assert.isFalse(ignored("/dist/mac-arm64/GOAT.app"));
     // A universal merge rewrites the helper's Info.plist; the afterPack hook puts the staged one
     // back before GOAT.app is signed (#1340).
-    assert.match(String(config.afterPack), /mac-after-pack\.ts$/);
+    assert.match(String(config.afterPack), /desktop-after-pack\.ts$/);
     // A mac build without the helper still drops the camera request; other platforms keep theirs.
     assert.match(
       String(withComputerUseHelper({ mac: {} }, undefined).afterPack),
-      /mac-after-pack\.ts$/,
+      /desktop-after-pack\.ts$/,
     );
     assert.notProperty(withComputerUseHelper({ linux: {} }, undefined), "afterPack");
     assert.deepEqual(computerUseHelperEnvironment(helper), {

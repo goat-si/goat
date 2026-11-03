@@ -49,6 +49,8 @@ it.effect(
   "opens one preview tab on a keyed retry and rechecks browser access before replay",
   () => {
     const opened: Array<unknown> = [];
+    const operations: Array<string> = [];
+    let failNavigation = false;
     const runIds: Array<string | undefined> = [];
     const scope: McpInvocationContext.McpInvocationScope = {
       environmentId: EnvironmentId.make("preview-retry-environment"),
@@ -88,9 +90,25 @@ it.effect(
           request: Parameters<
             PreviewAutomationBroker.PreviewAutomationBroker["Service"]["invoke"]
           >[0],
-        ) =>
-          Effect.sync(() => {
+        ) => {
+          if (failNavigation && request.operation === "navigate") {
+            return Effect.fail(
+              new PreviewAutomationTimeoutError({
+                environmentId: scope.environmentId,
+                threadId: ThreadId.make("preview-retry-thread"),
+                providerSessionId: "preview-retry-session",
+                providerInstanceId: ProviderInstanceId.make("codex"),
+                clientId: "browser",
+                connectionId: PreviewAutomationConnectionId.make("connection"),
+                operation: "navigate",
+                requestId: "navigate-failure",
+                timeoutMs: 1,
+              }),
+            );
+          }
+          return Effect.sync(() => {
             opened.push(request.input);
+            operations.push(request.operation);
             runIds.push(request.runId);
             return {
               available: true,
@@ -100,12 +118,13 @@ it.effect(
               title: "Example",
               loading: false,
             } as A;
-          }),
+          });
+        },
       }),
     );
     return Effect.gen(function* () {
       const server = yield* McpServer.McpServer;
-      const noteCall = (name: string, args: Record<string, string>) =>
+      const noteCall = (name: string, args: Record<string, unknown>) =>
         server
           .callTool({ name, arguments: args })
           .pipe(
@@ -153,6 +172,15 @@ it.effect(
       yield* open("preview-2");
       yield* open(undefined);
       expect(opened).toHaveLength(3);
+      const target = { kind: "environment-port", port: 3000, path: "/settings" };
+      const result = yield* noteCall("goat_preview_open", { target });
+      expect(result.isError, JSON.stringify(result)).not.toBe(true);
+      expect(operations.slice(-2)).toEqual(["open", "navigate"]);
+      expect(opened.at(-1)).toEqual({ target });
+      failNavigation = true;
+      const failed = yield* noteCall("goat_preview_open", { target, clientRequestId: "partial" });
+      expect(failed.isError).toBe(true);
+      expect(JSON.stringify(failed)).toContain("write_partial");
     }).pipe(
       Effect.provide(
         McpHttpServer.toolkitRegistration(

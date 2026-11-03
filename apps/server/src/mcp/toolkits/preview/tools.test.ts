@@ -1,5 +1,6 @@
 import { expect, it } from "@effect/vitest";
 import { Tool } from "effect/ai";
+import * as Schema from "effect/Schema";
 
 import { PreviewToolkit } from "./tools.ts";
 
@@ -38,4 +39,19 @@ it("exports provider-compatible object schemas", () => {
       `${tool.name} must allow an explicit collaborative browser tab target`,
     ).toBeDefined();
   }
+});
+
+it("preview open accepts an environment port target (#28027)", () => {
+  const decode = Schema.decodeUnknownSync(PreviewToolkit.tools.preview_open.parametersSchema);
+  expect(decode({ target: { kind: "environment-port", port: 3000 } })).toEqual({
+    target: { kind: "environment-port", port: 3000 },
+  });
+  expect(() => decode({ target: { kind: "environment-port", port: 0 } })).toThrow();
+  expect(() =>
+    decode({
+      target: { kind: "environment-port", port: 3000 },
+      tabId: "tab",
+      reuseExistingTab: false,
+    }),
+  ).toThrow();
 });

@@ -225,7 +225,7 @@ export const signedComputerUseHelper = (
 export const computerUseHelperEnvironment = (helper: StagedComputerUseHelper | undefined) =>
   helper ? { [COMPUTER_USE_HELPER_ENV]: helper.bundle } : {};
 
-const MAC_AFTER_PACK = NodeURL.fileURLToPath(new URL("./mac-after-pack.ts", import.meta.url));
+const MAC_AFTER_PACK = NodeURL.fileURLToPath(new URL("./desktop-after-pack.ts", import.meta.url));
 
 /**
  * Keeps electron-builder's signer off the helper createBuildConfig placed in Contents/Helpers,

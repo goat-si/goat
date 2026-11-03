@@ -688,7 +688,7 @@ export function selectRequestCredential(
 ) {
   const cookieToken =
     request.cookies[cookieName] ?? request.cookies[legacyScopedSessionCookieName(cookieName)];
-  if (cookieToken !== undefined) {
+  if (cookieToken) {
     return {
       token: cookieToken,
       source: request.cookies[cookieName] !== undefined ? "cookie" : "legacy-cookie",
