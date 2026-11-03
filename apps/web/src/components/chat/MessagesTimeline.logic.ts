@@ -2437,9 +2437,7 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
 
   switch (a.kind) {
     case "working":
-      return (
-        a.createdAt === (b as typeof a).createdAt && a.compacting === (b as typeof a).compacting
-      );
+      return shallow(a, b);
     case "thinking": {
       const bt = b as typeof a;
       return a.createdAt === bt.createdAt && a.groupId === bt.groupId && a.expanded === bt.expanded;
