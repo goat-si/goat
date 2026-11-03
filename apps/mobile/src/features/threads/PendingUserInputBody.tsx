@@ -1,7 +1,12 @@
 import type { RuntimeRequestId } from "@goat/contracts";
 import type { ThreadUserInputQuestion } from "@goat/client-runtime/state/thread-requests";
+import {
+  markdownProseDirection,
+  textDirection,
+  type TextDirection,
+} from "@goat/shared/textDirection";
 import type { ReactNode } from "react";
-import { Pressable, View } from "react-native";
+import { Platform, Pressable, View } from "react-native";
 import { AppText as Text } from "../../components/ui/AppText";
 import { cn } from "../../lib/cn";
 import {
@@ -33,19 +38,37 @@ type BodyProps = {
 };
 
 /** Renders question text as markdown so agent-provided links open on tap. */
-function QuestionText(props: { readonly markdown: string }) {
+function QuestionText(props: {
+  readonly markdown: string;
+  readonly setDirection: TextDirection | undefined;
+}) {
   const styles = useMarkdownPreviewStyles();
   const openLink = useOpenPullRequest();
   return (
     <SelectableMarkdownText
       markdown={props.markdown}
       textStyle={styles.nativeTextStyle}
+      writingDirection={markdownProseDirection(props.markdown)}
+      textAlign={
+        Platform.OS === "android" ? undefined : props.setDirection === "rtl" ? "right" : "left"
+      }
       onLinkPress={(href) => void openLink(href)}
     />
   );
 }
 
+function proseDirectionStyle(text: string, setDirection: TextDirection | undefined) {
+  const direction = textDirection(text);
+  return {
+    ...(direction ? { direction, writingDirection: direction } : null),
+    textAlign: (direction === "rtl") === (setDirection === "rtl") ? "left" : "right",
+  } as const;
+}
+
 export function PendingUserInputBody(props: BodyProps) {
+  const setDirection = markdownProseDirection(
+    props.pendingUserInput.questions.map((q) => q.question).join("\n"),
+  );
   const canRespond = props.pendingUserInput.responseCapability !== "not_resumable";
   const responseDisabled =
     Boolean(props.disabled) ||
@@ -63,10 +86,13 @@ export function PendingUserInputBody(props: BodyProps) {
         const draft = props.drafts[question.id];
         return (
           <View key={question.id} className="gap-2 pt-1">
-            <Text className="font-goat-bold text-xs uppercase tracking-[1px] text-foreground-muted">
+            <Text
+              style={proseDirectionStyle(question.header, setDirection)}
+              className="font-goat-bold text-xs uppercase tracking-[1px] text-foreground-muted"
+            >
               {question.header}
             </Text>
-            <QuestionText markdown={question.question} />
+            <QuestionText markdown={question.question} setDirection={setDirection} />
             <View className="gap-2">
               {question.options.map((option) => {
                 const optionValue = option.value ?? option.label.trim();
@@ -89,6 +115,7 @@ export function PendingUserInputBody(props: BodyProps) {
                   >
                     <View className="min-w-0 flex-1 gap-0.5">
                       <Text
+                        style={proseDirectionStyle(option.label, setDirection)}
                         className={cn(
                           "font-goat-bold text-sm",
                           selected ? "text-foreground" : "text-foreground-secondary",
@@ -97,7 +124,10 @@ export function PendingUserInputBody(props: BodyProps) {
                         {option.label}
                       </Text>
                       {description ? (
-                        <Text className="font-sans text-sm leading-5 text-foreground-muted">
+                        <Text
+                          style={proseDirectionStyle(description, setDirection)}
+                          className="font-sans text-sm leading-5 text-foreground-muted"
+                        >
                           {description}
                         </Text>
                       ) : null}

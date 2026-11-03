@@ -276,10 +276,16 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
       mimeTypes: { [GOAT_CONTEXT_CLIPBOARD_UTI]: props.contextClipboardFragment! },
     };
   }, [props.contextClipboardFragment, props.markdown]);
-  const markdownStyle = useMemo(
-    () => ({ ...enrichedStyle(props.textStyle, themeAppearance === "dark"), linkVariants }),
-    [props.textStyle, themeAppearance, linkVariants],
-  );
+  const markdownStyle = useMemo(() => {
+    const style = enrichedStyle(props.textStyle, themeAppearance === "dark");
+    return {
+      ...style,
+      paragraph: props.textAlign
+        ? { ...style.paragraph, textAlign: props.textAlign }
+        : style.paragraph,
+      linkVariants,
+    };
+  }, [props.textStyle, props.textAlign, themeAppearance, linkVariants]);
   const renderers = useMemo(
     () =>
       renderImage
@@ -325,6 +331,7 @@ export function MobileEnrichedMarkdownText(props: SelectableMarkdownTextProps) {
         <EnrichedMarkdownText
           markdown={markdown}
           markdownStyle={markdownStyle}
+          writingDirection={props.writingDirection}
           onLinksChange={onLinksChange}
           renderers={renderers}
           resolveImageSource={resolveNativeImageSource}

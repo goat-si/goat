@@ -159,7 +159,7 @@ function AudioChip(props: AudioPreviewProps) {
           middleTruncateAttachmentName(props.name)
         )}
       </ContextChipLabel>
-      <span className="shrink-0 text-3xs text-current">
+      <span dir="ltr" className="shrink-0 text-3xs text-current">
         {props.failed
           ? "Unavailable"
           : loading
