@@ -685,6 +685,10 @@ const make = Effect.gen(function* () {
     }).pipe(Effect.flatMap((held) => (held ? changed : Effect.void)));
 
   const driver = yield* Effect.serviceOption(CuaDriver.CuaDriver);
+  const [appCatalog] = yield* Effect.cachedInvalidateWithTTL(
+    Option.isSome(driver) ? driver.value.appCatalog : Effect.succeed([]),
+    "5 seconds",
+  );
   const { desktop, linuxHelper, detection } = yield* makeLeaseSafety(changed);
   // Private mode reports are disabled until their host signal is trustworthy (#1695). Restore
   // them only with privateModeOn in ComputerUsePrivateMode.ts.
@@ -707,7 +711,7 @@ const make = Effect.gen(function* () {
 
   const calls = makeCallReservation({
     admission,
-    appCatalog: Option.isSome(driver) ? driver.value.appCatalog : Effect.succeed([]),
+    appCatalog,
     controls,
     reservations,
     changed,
