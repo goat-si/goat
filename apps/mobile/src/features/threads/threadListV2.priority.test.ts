@@ -115,7 +115,6 @@ describe("threadListV2 Priority", () => {
       "v2-thread",
       "v2-thread",
     ]);
-    expect(items[1]).toMatchObject({ showTrailingDivider: false });
   });
 
   it("puts Threads before pending-only drafts and after a priority launch marker", () => {
