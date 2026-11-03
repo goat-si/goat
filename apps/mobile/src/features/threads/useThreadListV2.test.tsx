@@ -28,9 +28,15 @@ vi.mock("../../state/preferences", async () => {
     updateMobilePreferencesAtom: Atom.make(null).pipe(Atom.keepAlive),
   };
 });
+function isListedSettled() {
+  return true;
+}
+function unloadedSettledCount() {
+  return 0;
+}
 // Older settled pages are network-backed; every loaded settled row is listed here.
 vi.mock("../../state/olderSettledShelf", () => ({
-  useOlderSettledShelf: () => ({ isListed: () => true, unloadedCount: () => 0 }),
+  useOlderSettledShelf: () => ({ isListed: isListedSettled, unloadedCount: unloadedSettledCount }),
   useOlderSettledShelfGrowth: () => {},
 }));
 // Launcher family reads go through the live connection runtime.
@@ -185,4 +191,56 @@ describe("mobile thread list with GOAT Bot threads", () => {
     await list.showBotThreads(false);
     expect(list.read().ids).toEqual(["coding", "mine", "settled-mine"]);
   });
+});
+
+it("reuses the thread layout and rows across unrelated navigation renders", async () => {
+  const registry = AtomRegistry.make();
+  using _registry = { [Symbol.dispose]: () => registry.dispose() };
+  const environments = new Set([environmentId]);
+  const input: Parameters<typeof useThreadListV2>[0] = {
+    threads,
+    pendingTasks: [],
+    environmentId: null,
+    projectRefs: null,
+    searchQuery: "",
+    searchMatches: new Map(),
+    settlementEnvironmentIds: environments,
+    snoozeEnvironmentIds: environments,
+    pinReorderEnvironmentIds: environments,
+    activeReorderEnvironmentIds: environments,
+    queuedThreadKeys: new Set(),
+    settledLimit: 10,
+    now: NOW,
+    pendingOrder: null,
+    shelfPreferencesLoaded: true,
+    workingShelfEnabled: false,
+    workingShelfExpanded: true,
+    snoozedShelfExpanded: true,
+    settledShelfExpanded: true,
+    selectedThreadKey: null,
+  };
+  let result: ListResult | undefined;
+  function List() {
+    const value = useThreadListV2(input);
+    useLayoutEffect(() => {
+      result = value;
+    });
+    return null;
+  }
+  const root = createRoot(document.createElement("div"));
+  using _root = { [Symbol.dispose]: () => act(() => root.unmount()) };
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  using _globals = { [Symbol.dispose]: () => vi.unstubAllGlobals() };
+  const render = (tab: string) =>
+    root.render(
+      <RegistryContext.Provider value={registry}>
+        <List />
+        <span>{tab}</span>
+      </RegistryContext.Provider>,
+    );
+  await act(async () => render("threads"));
+  const initial = result!;
+  await act(async () => render("settings"));
+  expect(result!.layout).toBe(initial.layout);
+  expect(result!.items).toBe(initial.items);
 });
