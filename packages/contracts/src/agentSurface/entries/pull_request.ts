@@ -56,6 +56,28 @@ export const pullRequestEntries = {
       openWorldHint: false,
     },
   }),
+  "pull_request.unlink_many": entry({
+    resource: "pull_request",
+    verb: "unlink_many",
+    name: "goat_pull_request_unlink_many",
+    toolkit: "pullRequests",
+    summary: "Unlink pull requests by state",
+    description:
+      "Unlink all visible pull requests whose last known state matches the requested states. Unknown states remain linked.",
+    guide: "Select one or more states. This removes links without closing pull requests.",
+    effect: "destructive",
+    capability: "pr.open",
+    hostRoutable: false,
+    requires: "either",
+    dryRun: "unsupported",
+    humanSteps: [],
+    idempotencyReason: "Unlinking already absent links changes nothing.",
+    annotations: {
+      title: "Unlink pull requests by state",
+      idempotentHint: true,
+      openWorldHint: false,
+    },
+  }),
   "pull_request.list": entry({
     resource: "pull_request",
     verb: "list",

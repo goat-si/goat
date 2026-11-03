@@ -11,6 +11,11 @@ export const pullRequestToolDefinitions = {
     "unlink-pr",
     "pull-request",
   ),
+  goat_pull_request_unlink_many: tool(
+    ["Unlink", "Unlinking", "Unlinked", "pull requests"],
+    "unlink-pr",
+    "pull-request",
+  ),
   list_thread_pull_requests: tool(
     ["Check", "Checking", "Checked", "linked pull requests"],
     "list-prs",

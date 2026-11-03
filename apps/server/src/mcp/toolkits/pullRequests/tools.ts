@@ -278,6 +278,20 @@ export const UnlinkPullRequestResult = Schema.Struct({
 });
 export type UnlinkPullRequestResult = typeof UnlinkPullRequestResult.Type;
 
+export const UnlinkPullRequestsResult = Schema.Struct({
+  unlinked: Schema.Array(
+    Schema.Struct({
+      host: Schema.String,
+      repository: Schema.String,
+      state: PullRequestState,
+      numbers: Schema.Array(Schema.Int),
+    }),
+  ),
+  unlinkedCount: Schema.Int,
+  remaining: Schema.Int,
+});
+export type UnlinkPullRequestsResult = typeof UnlinkPullRequestsResult.Type;
+
 export const WatchPullRequestResult = Schema.Struct({
   ...PullRequestIdentity,
   watching: Schema.Boolean,
@@ -332,6 +346,17 @@ const UnlinkPullRequestTool = Tool.make(agentSurfaceRegistry["pull_request.unlin
   failure: PullRequestToolError,
   dependencies,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["pull_request.unlink"]));
+
+const UnlinkPullRequestsTool = Tool.make(agentSurfaceRegistry["pull_request.unlink_many"].name, {
+  description: agentSurfaceRegistry["pull_request.unlink_many"].description,
+  parameters: Schema.Struct({
+    threadId: Schema.optional(ThreadId.annotate({ description: "Thread. Default: this thread." })),
+    states: Schema.Array(PullRequestState).check(Schema.isMinLength(1)),
+  }),
+  success: UnlinkPullRequestsResult,
+  failure: PullRequestToolError,
+  dependencies,
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["pull_request.unlink_many"]));
 
 const ListThreadPullRequestsTool = Tool.make(agentSurfaceRegistry["pull_request.list"].name, {
   description: agentSurfaceRegistry["pull_request.list"].description,
@@ -552,6 +577,7 @@ export const PullRequestsToolkit = Toolkit.make(
   ...makeWriteTools(GuideTarget.fields, PullRequestToolError),
   LinkPullRequestTool,
   UnlinkPullRequestTool,
+  UnlinkPullRequestsTool,
   ListThreadPullRequestsTool,
   WatchPullRequestTool,
   UnwatchPullRequestTool,
