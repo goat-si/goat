@@ -1,7 +1,8 @@
 import { OrchestrationV2RunStatus } from "./orchestrationV2RunStatus.ts";
 import * as Restart from "./codexTurnSurvival.ts";
 export { OrchestrationV2RunStatus } from "./orchestrationV2RunStatus.ts";
-import { Handoff, HandoffJson, HandoffActor, HandoffState } from "./handoff.ts";
+import { Handoff, HandoffJson, HandoffActor } from "./handoff.ts";
+import { HandoffTransitionCommand } from "./handoffTransitionCommand.ts";
 import {
   MemoryCurrentAccess,
   MemoryProviderCapabilities,
@@ -3594,15 +3595,7 @@ const OrchestrationV2InternalCommand = Schema.Union([
     nodeId: NodeId,
     handoff: Handoff,
   }),
-  Schema.Struct({
-    type: Schema.Literal("handoff.transition"),
-    commandId: CommandId,
-    threadId: ThreadId,
-    handoffId: TurnItemId,
-    state: HandoffState,
-    actor: HandoffActor,
-    computerUseScope: Schema.optionalKey(Schema.Literals(["session", "always"])),
-  }),
+  HandoffTransitionCommand,
   Schema.Struct({
     type: Schema.Literal("delegated_task.remote.register"),
     role: Schema.optional(OrchestrationV2TaskRole),

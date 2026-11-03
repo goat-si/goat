@@ -145,6 +145,7 @@ export const makeHumanHandoffs = (deps: HumanHandoffDeps) => {
         now,
         ended,
         command.computerUseScope,
+        command.resultMessage,
       );
       // Secret completion is only recorded after SecretRequests stores the value.
       if (existing.type === "secret_request" && handoff.state === "completed")

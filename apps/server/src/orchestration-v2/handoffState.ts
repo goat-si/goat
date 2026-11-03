@@ -23,6 +23,7 @@ export function transitionHandoff(
   now: DateTime.Utc,
   runEnded: boolean,
   computerUseScope?: "session" | "always",
+  resultMessage?: string,
 ) {
   if (
     computerUseScope !== undefined &&
@@ -77,6 +78,7 @@ export function transitionHandoff(
     ...record,
     state: next,
     actor: expired ? { type: "server" as const } : actor,
+    ...(resolved && !expired && resultMessage !== undefined ? { resultMessage } : {}),
     ...(next === "completed" && computerUseScope !== undefined ? { computerUseScope } : {}),
     ...(resolved
       ? {

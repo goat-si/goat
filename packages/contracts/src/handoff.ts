@@ -46,6 +46,7 @@ export const Handoff = Schema.Struct({
   createdAt: Schema.DateTimeUtc,
   resolvedAt: Schema.optional(Schema.DateTimeUtc),
   resolvedBy: Schema.optional(TrimmedNonEmptyString),
+  resultMessage: Schema.optionalKey(Schema.String),
   actor: HandoffActor,
   /** A computer use grant's approved apps; a grant without them admits every app. */
   apps: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
