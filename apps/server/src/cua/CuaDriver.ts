@@ -63,6 +63,7 @@ export { catalogName } from "./CuaAppListing.ts";
 import * as InstalledDesktopApps from "./installedDesktopApps.ts";
 import * as CuaDriverInstallation from "./CuaDriverInstallation.ts";
 import { honoredSignals } from "./ComputerUsePrivateMode.ts";
+import { desktopStopAcknowledged } from "./CuaDriverStop.ts";
 import * as StandaloneCuaManifest from "./StandaloneCuaManifest.ts";
 import * as LinuxReadiness from "./LinuxReadiness.ts";
 import { LinuxHelperReport } from "./linuxHelperHost/LinuxHelperReport.ts";
@@ -115,7 +116,6 @@ export class CuaDriverHostError extends Schema.TaggedError<CuaDriverHostError>()
 export const CUA_DRIVER_REFUSED_MESSAGE =
   "Cua Driver refused GOAT's capability manifest or launch options. The server log has the driver's reason.";
 export type CuaDriverError = CuaDriverStartError | CuaDriverHostError;
-
 export { agentBlock } from "./cuaDriverBlock.ts";
 const decodeMcp = Schema.decodeEffect(CuaDriverMcpConfiguration);
 const isStartError = Schema.is(CuaDriverStartError);
@@ -125,14 +125,13 @@ export interface CuaDriverHost {
   readonly stop: Effect.Effect<void, CuaDriverError>;
   readonly waitForExit: Effect.Effect<void, CuaDriverError>;
 }
-
 export class CuaDriver extends Context.Service<
   CuaDriver,
   {
     readonly readBrowserConfig?: Effect.Effect<unknown, Error>;
     readonly publishBrowserManifest?: (union: Union) => Effect.Effect<string, Error>;
     /** Restarts the running driver, so a manifest it would not reload stops counting. */
-    readonly fenceBrowserManifest?: Effect.Effect<void>;
+    readonly fenceBrowserManifest?: Effect.Effect<boolean>;
     readonly refreshManifest?: (
       apps: ReadonlyArray<string>,
     ) => Effect.Effect<void, CuaDriverHostError>;
@@ -192,16 +191,14 @@ export class CuaDriver extends Context.Service<
     };
   }
 >()("goat/cua/CuaDriver") {}
-
 export interface CuaX11Display {
   readonly DISPLAY: string;
   readonly XAUTHORITY?: string;
 }
-
 interface Acquisition {
   readonly result: Deferred.Deferred<Option.Option<CuaDriverMcpConfiguration>>;
   host?: CuaDriverHost;
-  cleanup?: Fiber.Fiber<void>;
+  cleanup?: Fiber.Fiber<boolean>;
   watcher?: Fiber.Fiber<void> | undefined;
   revoked: boolean;
   running?: boolean;
@@ -303,16 +300,26 @@ export const make = Effect.fn("CuaDriver.make")(function* (
     if (entry.watcher) yield* Fiber.interrupt(entry.watcher).pipe(Effect.forkDetach);
     if (!entry.cleanup && entry.host) {
       entry.cleanup = yield* entry.host.stop.pipe(
+        Effect.as(true),
         Effect.catch((error) =>
           Effect.sync(() => {
-            if (active === entry || active === undefined) failure = Option.some(error);
+            if (
+              (active === entry || active === undefined) &&
+              (entry.mcp !== undefined || Option.isNone(failure))
+            )
+              failure = Option.some(error);
+            return false;
           }),
         ),
-        Effect.ignoreCause({ log: true }),
+        Effect.catchCause((cause) =>
+          Effect.logError("Driver stop failed", { cause }).pipe(Effect.as(false)),
+        ),
         Effect.forkDetach({ startImmediately: true }),
       );
     }
-    if (entry.cleanup) yield* Fiber.join(entry.cleanup).pipe(Effect.timeoutOption("4 seconds"));
+    if (!entry.cleanup) return false;
+    const stopped = yield* Fiber.join(entry.cleanup).pipe(Effect.timeoutOption("4 seconds"));
+    return Option.getOrElse(stopped, () => false);
   });
   const revoke = Effect.fnUntraced(function* (entry: Acquisition) {
     entry.revoked = true;
@@ -322,9 +329,8 @@ export const make = Effect.fn("CuaDriver.make")(function* (
       yield* capability.fence;
     }
     yield* Deferred.succeed(entry.result, Option.none());
-    yield* stop(entry);
+    return yield* stop(entry);
   });
-
   yield* Effect.addFinalizer(() =>
     timedShutdownPhase(
       "cuaCleanup",
@@ -342,7 +348,6 @@ export const make = Effect.fn("CuaDriver.make")(function* (
     ),
     Effect.forkScoped,
   );
-
   const start = Effect.fnUntraced(
     function* (entry: Acquisition) {
       if (entry.revoked) return;
@@ -408,7 +413,6 @@ export const make = Effect.fn("CuaDriver.make")(function* (
         ),
       ),
   );
-
   const enabled = settings.getSettings.pipe(
     Effect.map((value) => !closed && value.enableCua),
     Effect.catch((cause) =>
@@ -510,7 +514,7 @@ export const make = Effect.fn("CuaDriver.make")(function* (
       ),
     ),
     fenceBrowserManifest: lifecycle.withPermit(
-      Effect.suspend(() => (active === undefined ? Effect.void : revoke(active))),
+      Effect.suspend(() => (active === undefined ? Effect.succeed(false) : revoke(active))),
     ),
     ...(refresh ? { refreshManifest } : {}),
     acquire,
@@ -708,7 +712,6 @@ export const makeStandaloneHostFactory = Effect.fn("CuaDriver.makeStandaloneHost
         let starting: Promise<EmbeddedDriverConnection> | undefined;
         let stopping: Promise<void> | undefined;
         const watchers = new Map<AbortController, Promise<unknown>>();
-
         const start = Effect.tryPromise({
           try: () => {
             if (stopping) return Promise.reject(new CuaDriverHostError({ operation: "start" }));
@@ -732,7 +735,6 @@ export const makeStandaloneHostFactory = Effect.fn("CuaDriver.makeStandaloneHost
               : new CuaDriverStartError({ binaryPath, cause }),
           ),
         );
-
         const stop = Effect.tryPromise({
           try: () =>
             (stopping ??= (async () => {
@@ -848,7 +850,8 @@ export const makeDesktopHostFactory = Effect.fn("CuaDriver.makeDesktopHostFactor
           .pipe(
             Effect.mapError((cause) => new CuaDriverHostError({ operation: "desktop", cause })),
           );
-        yield* Deferred.await(stopped).pipe(Effect.ignore, Effect.timeoutOption("3 seconds"));
+        if (!(yield* desktopStopAcknowledged(stopped)))
+          return yield* new CuaDriverHostError({ operation: "stop" });
       }).pipe(Effect.ensuring(Scope.close(scope, Exit.void)));
       return { start, stop, waitForExit: Deferred.await(stopped) } satisfies CuaDriverHost;
     });
