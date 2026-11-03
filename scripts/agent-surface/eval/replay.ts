@@ -25,6 +25,7 @@ export interface ReplayExpectation {
   readonly notCalls?: ReadonlyArray<string>;
   readonly order?: ReadonlyArray<string>;
   readonly maxCalls?: Readonly<Record<string, number>>;
+  readonly newThreads?: ReadonlyArray<Json>;
   readonly endsTurnAfter?: string;
   readonly shellMustNot?: ReadonlyArray<string>;
   readonly textMust?: ReadonlyArray<string>;
@@ -139,6 +140,34 @@ export const gradeReplay = (
   }
   for (const [tool, max] of Object.entries(expected.maxCalls ?? {}))
     add(`maxCalls ${tool} <= ${max}`, count(tool) <= max);
+  if (expected.newThreads !== undefined) {
+    const requests = calls.flatMap((call): Array<{ request: Json; brief: Json | undefined }> => {
+      if (call.isError) return [];
+      if (call.tool === canonical("thread.launch"))
+        return [{ request: call.input, brief: call.input["message"] }];
+      if (call.tool !== canonical("thread.create_many") || !Array.isArray(call.input["threads"]))
+        return [];
+      return call.input["threads"].map((request) => ({
+        request,
+        brief: isObject(request) ? request["prompt"] : undefined,
+      }));
+    });
+    const distinct = (values: ReadonlyArray<Json>, used: ReadonlySet<number>): boolean => {
+      if (values.length === 0) return true;
+      const [first, ...rest] = values;
+      if (first === undefined) return false;
+      return requests.some(
+        ({ request, brief }, index) =>
+          !used.has(index) &&
+          matches(first, typeof first === "string" ? brief : request) &&
+          distinct(rest, new Set([...used, index])),
+      );
+    };
+    add(
+      "newThreads",
+      requests.length === expected.newThreads.length && distinct(expected.newThreads, new Set()),
+    );
+  }
   if (expected.endsTurnAfter)
     add(
       `endsTurnAfter ${expected.endsTurnAfter}`,

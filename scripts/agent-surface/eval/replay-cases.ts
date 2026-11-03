@@ -6,6 +6,36 @@ const threadId = "11111111-1111-4111-8111-111111111111";
 
 export const replayCases: ReadonlyArray<ReplayCase> = [
   {
+    id: "separate-thread-not-task",
+    upstreamId: "tt-separate-thread-i-can-follow",
+    role: "top",
+    experience: "Separate work requested as a thread must remain visible to the user.",
+    priorTurns: [],
+    prompt: "Put the CSV export bug in a separate thread I can follow; do not fix it here.",
+    expect: { newThreads: ["~csv"], notCalls: ["task.create"], textMust: ["goat-thread://v1/"] },
+  },
+  {
+    id: "background-research-is-task",
+    upstreamId: "tt-background-research-no-agent-word",
+    role: "top",
+    experience: "Background research is delegated work, not a separate top-level thread.",
+    priorTurns: [],
+    prompt: "In the background, investigate the cache export and report back.",
+    expect: {
+      calls: [{ tool: "task.create", args: { task: "~cache" } }],
+      notCalls: ["thread.launch", "thread.create_many", "thread.wait"],
+    },
+  },
+  {
+    id: "application-task-is-not-delegation",
+    upstreamId: "tt-control-task-queue",
+    role: "top",
+    experience: "An application task queue question does not request an agent or thread.",
+    priorTurns: [],
+    prompt: "Explain the configured limit in the application task queue.",
+    expect: { notCalls: ["thread.launch", "thread.create_many", "task.create"] },
+  },
+  {
     id: "review-round-creates-new-task",
     upstreamId: "review-round-uses-thread-send",
     role: "top",
