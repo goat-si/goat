@@ -50,16 +50,36 @@ interface AppServer {
 /** A loopback stand-in for the GOAT app's server: its descriptor and its runtime session route. */
 const startAppServer = (descriptor: object, sessionStatus = 200, replaceAfterDescriptor = false) =>
   Effect.acquireRelease(
-    Effect.callback<AppServer & { readonly server: NodeHttp.Server }>((resume) => {
+    Effect.callback<
+      AppServer & { readonly server: NodeHttp.Server; readonly replacement?: NodeHttp.Server }
+    >((resume) => {
       const sessions: AppServer["sessions"] = [];
-      let controlToken = TOKEN;
+      let replacement: NodeHttp.Server | undefined;
       const server = NodeHttp.createServer((request, response) => {
         let body = "";
         request.on("data", (chunk) => (body += chunk));
         request.on("end", () => {
           if (request.method === "GET" && request.url === "/.well-known/goat/environment") {
-            response.end(JSON.stringify(descriptor));
-            if (replaceAfterDescriptor) controlToken = "replacement-control-secret";
+            if (!replaceAfterDescriptor) {
+              response.end(JSON.stringify(descriptor));
+              return;
+            }
+            const address = server.address();
+            if (typeof address !== "object" || address === null)
+              throw new Error("missing listener");
+            replacement = NodeHttp.createServer((nextRequest, nextResponse) => {
+              const header = nextRequest.headers["x-goat-runtime-control"];
+              sessions.push({
+                header: typeof header === "string" ? header : undefined,
+                body: null,
+              });
+              nextResponse.statusCode = header === "replacement-control-secret" ? 200 : 403;
+              nextResponse.end(JSON.stringify({ error: "unauthorized" }));
+            });
+            server.close();
+            replacement.listen(address.port, "127.0.0.1", () =>
+              response.end(JSON.stringify(descriptor)),
+            );
             return;
           }
           if (request.method === "POST" && request.url === "/.well-known/goat/runtime/session") {
@@ -68,7 +88,7 @@ const startAppServer = (descriptor: object, sessionStatus = 200, replaceAfterDes
               header: typeof header === "string" ? header : undefined,
               body: JSON.parse(body),
             });
-            response.statusCode = header === controlToken ? sessionStatus : 403;
+            response.statusCode = header === TOKEN ? sessionStatus : 403;
             response.end(
               JSON.stringify({ token: "app-session-token", expiresAt: "2026-10-27T00:00:00.000Z" }),
             );
@@ -83,13 +103,19 @@ const startAppServer = (descriptor: object, sessionStatus = 200, replaceAfterDes
         resume(
           Effect.succeed({
             server,
+            get replacement() {
+              return replacement;
+            },
             sessions,
             port: typeof address === "object" && address !== null ? address.port : 0,
           }),
         );
       });
     }),
-    ({ server }) => Effect.callback<void>((resume) => void server.close(() => resume(Effect.void))),
+    ({ server, replacement }) =>
+      Effect.callback<void>(
+        (resume) => void (replacement ?? server).close(() => resume(Effect.void)),
+      ),
   );
 
 const attachableDescriptor = {
