@@ -1,4 +1,5 @@
 import { expect, it } from "@effect/vitest";
+import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import {
   BUILTIN_PERMISSION_PROFILES,
   EnvironmentId,
@@ -11,6 +12,9 @@ import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
+import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
+import { requireDeclaredCapability } from "../mcp/McpToolAccess.ts";
+import { availability, callerProfile } from "../mcp/toolAvailability.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { PermissionProfiles, layer } from "./PermissionProfiles.ts";
@@ -50,6 +54,72 @@ const seed = (id: string, mode: RuntimeMode) =>
 const { manager, worker } = BUILTIN_PERMISSION_PROFILES;
 const mergeManager = BUILTIN_PERMISSION_PROFILES["merge-manager"]!;
 
+it.effect.each(["pull_request.merge", "pull_request.close"] as const)(
+  "#2194: a worker-launched supervisor is refused direct %s",
+  (path) =>
+    Effect.gen(function* () {
+      const profiles = yield* PermissionProfiles;
+      yield* seed("person", "auto");
+      yield* profiles.claim(threadScope("person"), {
+        id: "supervisor",
+        childThreadId: ThreadId.make("supervisor"),
+        runtimeMode: "auto",
+        role: "supervisor",
+      });
+      yield* seed("supervisor", "auto");
+      const result = yield* requireDeclaredCapability(profiles, path, "write", {}).pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, threadScope("supervisor")),
+        Effect.match({ onFailure: (error) => error.code, onSuccess: () => "admitted" }),
+      );
+      expect(result).toBe("capability_denied");
+    }).pipe(Effect.provide(fixture("worker"))),
+);
+
+it.effect.each(["pull_request.merge", "pull_request.close"] as const)(
+  "#2194: discovery does not advertise %s to a worker-launched supervisor",
+  (path) =>
+    Effect.gen(function* () {
+      const profiles = yield* PermissionProfiles;
+      yield* seed("person", "auto");
+      yield* profiles.claim(threadScope("person"), {
+        id: "supervisor",
+        childThreadId: ThreadId.make("supervisor"),
+        runtimeMode: "auto",
+        role: "supervisor",
+      });
+      yield* seed("supervisor", "auto");
+      const scope = threadScope("supervisor");
+      const profile = yield* callerProfile(profiles, scope);
+      expect(availability(agentSurfaceRegistry[path], scope, true, profile)).toMatchObject({
+        now: false,
+      });
+    }).pipe(Effect.provide(fixture("worker"))),
+);
+
+it.effect("#2194: a worker-launched supervisor cannot launch a merge manager", () =>
+  Effect.gen(function* () {
+    const profiles = yield* PermissionProfiles;
+    yield* seed("person", "auto");
+    yield* profiles.claim(threadScope("person"), {
+      id: "supervisor",
+      childThreadId: ThreadId.make("supervisor"),
+      runtimeMode: "auto",
+      role: "supervisor",
+    });
+    yield* seed("supervisor", "auto");
+    const result = yield* profiles
+      .claim(threadScope("supervisor"), {
+        id: "merger",
+        runtimeMode: "auto",
+        role: "merge-manager",
+      })
+      .pipe(Effect.match({ onFailure: (error) => error.message, onSuccess: () => "admitted" }));
+    expect(result).toBe(
+      "A merge-manager launch needs pr.merge, which this caller's profile does not allow.",
+    );
+  }).pipe(Effect.provide(fixture("worker"))),
+);
+
 // #858: goat_ssh_thread_launch claims a supervisor, then rechecks right before the remote launch.
 it.effect(
   "an SSH supervisor launch passes its recheck until its profile or a ceiling narrows",
@@ -59,7 +129,6 @@ it.effect(
       const settings = yield* ServerSettings.ServerSettingsService;
       const launch = { host: "box", runtimeMode: "full-access", role: "supervisor" } as const;
       const recheck = { host: "box", role: "supervisor" } as const;
-      // manager reaches other machines but cannot merge; the supervisor keeps pr.merge.
       const admitted = yield* profiles.claim(outside, { ...launch, id: "unchanged" });
       expect(admitted.profile.capabilities).toContain("pr.merge");
       yield* profiles.recheck(outside, admitted, recheck);
@@ -90,11 +159,11 @@ it.effect(
       expect(
         (yield* profiles.recheck(outside, admitted, recheck).pipe(Effect.flip)).message,
       ).toContain("narrowed");
-    }).pipe(Effect.provide(fixture("manager"))),
+    }).pipe(Effect.provide(fixture("owner"))),
 );
 
 it.effect(
-  "the thread that launched a supervisor can resume it and it can still merge; a ceiling without merge cannot send",
+  "an owner can resume a supervisor and it can launch a merger; a narrower ceiling cannot send",
   () =>
     Effect.gen(function* () {
       const profiles = yield* PermissionProfiles;
@@ -127,5 +196,5 @@ it.effect(
           .assertTarget(outside, supervisor, "auto", "auto", worker)
           .pipe(Effect.flip)).message,
       ).toContain("exceeds the caller's ceiling");
-    }).pipe(Effect.provide(fixture("worker"))),
+    }).pipe(Effect.provide(fixture("owner"))),
 );
