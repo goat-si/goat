@@ -46,6 +46,18 @@ const makeHarness = Effect.fn("test.ssh_runtime_auto_update.harness")(function* 
   const fs = yield* FileSystem.FileSystem;
   const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-ssh-auto-update-" });
   const goatHome = NodePath.join(home, ".goat");
+  const baseConfig = yield* ServerConfig.ServerConfig.pipe(
+    Effect.provide(
+      ServerConfig.layerTest(
+        process.cwd(),
+        options.otherBaseDir === true ? NodePath.join(home, "other") : goatHome,
+      ),
+    ),
+  );
+  // This seam is test-only: production home cannot be a file while the updater activates.
+  const config = options.homeIsFile
+    ? { ...baseConfig, stateDir: yield* fs.makeTempDirectoryScoped({ prefix: "goat-ssh-state-" }) }
+    : baseConfig;
   const stateDir = NodePath.join(goatHome, "ssh-launch", "runtime");
   const versionDir = (version: string) =>
     NodePath.join(goatHome, "runtime", "goat", "versions", version);
@@ -109,7 +121,7 @@ const makeHarness = Effect.fn("test.ssh_runtime_auto_update.harness")(function* 
     runDetached: (input) =>
       Effect.gen(function* () {
         state.markerAtLaunch = yield* fs
-          .readFileString(NodePath.join(goatHome, "userdata", "ssh-runtime-auto-update.json"))
+          .readFileString(NodePath.join(config.stateDir, "ssh-runtime-auto-update.json"))
           .pipe(Effect.orElseSucceed(() => undefined));
         state.launches.push(input);
         yield* Deferred.succeed(launchStarted, undefined);
@@ -142,14 +154,6 @@ const makeHarness = Effect.fn("test.ssh_runtime_auto_update.harness")(function* 
           if (file.startsWith(dir + "/")) files.delete(file);
       }),
   });
-  const config = yield* ServerConfig.ServerConfig.pipe(
-    Effect.provide(
-      ServerConfig.layerTest(
-        process.cwd(),
-        options.otherBaseDir === true ? NodePath.join(home, "other") : goatHome,
-      ),
-    ),
-  );
   const memory = yield* ProjectionStore.ProjectionStoreV2.pipe(
     Effect.provide(ProjectionStore.layerMemory),
   );
