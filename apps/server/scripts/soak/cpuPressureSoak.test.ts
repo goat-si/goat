@@ -150,3 +150,44 @@ describe("soak observations", () => {
     expect(providerRestarts(lines, new Map(), [], [], []).counter.value).toBeNull();
   });
 });
+
+import { parseArgs, validateHome } from "./cpuPressureSoak.ts";
+
+describe("soak input safety", () => {
+  it("rejects invalid ports, counts, paths and unknown flags", () => {
+    const args = ["--home", "/tmp/home", "--report", "/tmp/report", "--server-port", "3333"];
+    expect(parseArgs(args).serverPort).toBe(3333);
+    for (const extra of [
+      ["--duration-ms", "0"],
+      ["--headless-clients", "-1"],
+      ["--other", "1"],
+      ["--server-port", "2"],
+    ]) {
+      expect(() => parseArgs([...args, ...extra])).toThrow();
+    }
+    expect(() =>
+      parseArgs(["--home", "relative", "--report", "/tmp/report", "--server-port", "1"]),
+    ).toThrow();
+  });
+
+  it("refuses homes and databases that escape the checkout through symlinks", () => {
+    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-home-"));
+    const checkout = NodePath.join(dir, "checkout");
+    const home = NodePath.join(checkout, ".goat");
+    try {
+      NodeFS.mkdirSync(NodePath.join(home, "userdata"), { recursive: true });
+      NodeFS.writeFileSync(NodePath.join(home, "userdata", "statev2.sqlite"), "copy");
+      expect(validateHome(home, checkout)).toBe(home);
+      expect(() => validateHome(dir, checkout)).toThrow();
+      NodeFS.rmSync(NodePath.join(home, "userdata", "statev2.sqlite"));
+      NodeFS.symlinkSync(
+        NodePath.join(dir, "outside"),
+        NodePath.join(home, "userdata", "statev2.sqlite"),
+      );
+      NodeFS.writeFileSync(NodePath.join(dir, "outside"), "live");
+      expect(() => validateHome(home, checkout)).toThrow();
+    } finally {
+      NodeFS.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
