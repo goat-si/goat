@@ -6,6 +6,7 @@ import {
   type ServerProvider,
 } from "@goat/contracts";
 import { expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -193,37 +194,30 @@ it.effect("an explicit false keeps the first subscription on full provider lists
   ),
 );
 
-it.effect(
-  "a full-list subscription that never answers ends the config stream after 75 seconds",
-  () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const { session, socket } = yield* connected;
-        const closed = yield* session.closed.pipe(
-          Effect.flip,
-          Effect.forkChild({ startImmediately: true }),
-        );
-        const changes = yield* awaitRequest(socket, 0);
-        send(socket, changes.id, [unreadableChange]);
-        yield* awaitRequest(socket, 1);
-        // The socket stays alive (a Pong within every silence budget); only the new RPC is quiet.
-        for (const _step of Array.from({ length: 8 })) {
-          yield* TestClock.adjust("10 seconds");
-          socket.serverMessage(encodeJson({ _tag: "Pong" }));
-        }
-        const outcome = yield* Fiber.join(closed).pipe(
-          Effect.timeoutOption("1 second"),
-          Effect.forkChild({ startImmediately: true }),
-        );
-        yield* TestClock.adjust("1 second");
-        const error = Option.getOrThrowWith(
-          yield* Fiber.join(outcome),
-          () => new Error("the config stream kept waiting for the full-list subscription"),
-        );
-        expect(error).toMatchObject({ reason: "transport" });
-        expect(error.message).toContain("full provider lists");
-      }),
-    ),
+it.effect("a silent full-list subscription retries without replacing the session", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { session, socket } = yield* connected;
+      const closed = yield* Deferred.make<void>();
+      yield* session.closed.pipe(
+        Effect.exit,
+        Effect.andThen(Deferred.succeed(closed, undefined)),
+        Effect.forkChild({ startImmediately: true }),
+      );
+      const changes = yield* awaitRequest(socket, 0);
+      send(socket, changes.id, [unreadableChange]);
+      const first = yield* awaitRequest(socket, 1);
+      for (const _step of Array.from({ length: 8 })) {
+        yield* TestClock.adjust("10 seconds");
+        socket.serverMessage(encodeJson({ _tag: "Pong" }));
+      }
+      expect(configRequests(socket)).toHaveLength(3);
+      expect(interrupted(socket, first.id)).toBe(true);
+      expect(yield* Deferred.isDone(closed)).toBe(false);
+      const retried = configRequests(socket)[2];
+      expect(retried?.payload).not.toHaveProperty("providerStatusChanges");
+    }),
+  ),
 );
 
 /** Keeps the socket inside its 15 s silence budget for `seconds`; only RPC answers stay quiet. */

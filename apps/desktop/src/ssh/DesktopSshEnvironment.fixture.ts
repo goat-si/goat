@@ -1,11 +1,12 @@
 import type { ServerConfig } from "@goat/contracts";
+import type { WsRpcProtocolClient } from "@goat/client-runtime/rpc";
 import type * as SshTunnel from "@goat/ssh/tunnel";
 import * as Effect from "effect/Effect";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/process";
 
-export const probeCapableConfig = {
+const probeCapableConfig = {
   environment: { capabilities: { connectionProbe: true } },
 } as ServerConfig;
 
@@ -38,3 +39,13 @@ export const successfulProcess = (stdout: string) =>
     getOutputFd: () => Stream.empty,
     unref: Effect.succeed(Effect.void),
   });
+
+export const probeSession = (probe: Effect.Effect<void>) => ({
+  client: {} as WsRpcProtocolClient,
+  initialConfig: Effect.succeed(probeCapableConfig),
+  subscribeServerConfig: () => Stream.never,
+  ready: Effect.void,
+  probe,
+  inboundFrames: Effect.succeed(0),
+  closed: Effect.never,
+});

@@ -291,6 +291,7 @@ it.effect.each(["managed", "learned direct"] as const)(
                 ? Effect.never
                 : Effect.succeed({
                     session,
+                    openProbeSocket: Effect.never,
                     prepared: {
                       environmentId: hubId,
                       label: "Hub",

@@ -27,6 +27,7 @@ import * as Socket from "effect/socket/Socket";
 
 import {
   makeWsRpcProtocolClient,
+  drainNodeIo,
   PING_TIMEOUT,
   makeWsRpcSocketProtocol,
   type WsRpcProtocolClient,
@@ -66,6 +67,7 @@ export interface RpcSession {
 }
 
 export interface RpcSessionOptions {
+  readonly drainIo?: Effect.Effect<void>;
   readonly environmentThemes?: boolean;
   readonly usageLimitSources?: boolean;
   readonly usageLimitsCommand?: boolean;
@@ -77,6 +79,17 @@ export class RpcSessionFactory extends Context.Service<
     readonly connect: (
       connection: PreparedConnection,
     ) => Effect.Effect<RpcSession, ConnectionAttemptError, Scope.Scope>;
+    readonly openProbe: (
+      connection: PreparedConnection,
+      cheap: boolean,
+    ) => Effect.Effect<
+      {
+        readonly probe: Effect.Effect<void, ConnectionAttemptError>;
+        readonly drainIo: Effect.Effect<void>;
+      },
+      never,
+      Scope.Scope
+    >;
   }
 >()("@goat/client-runtime/rpc/session/RpcSessionFactory") {}
 
@@ -223,7 +236,7 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
               detail: !wasConnected
                 ? `${connection.label} could not establish a WebSocket connection.${networkHint}`
                 : timedOut
-                  ? `${connection.label} stopped responding for ${Duration.toSeconds(silenceTimeout)}s. ${UNRESPONSIVE_HOST_HINT}`
+                  ? `${connection.label} stopped responding for 300s. ${UNRESPONSIVE_HOST_HINT}`
                   : `${connection.label} disconnected.`,
               ...socketFailureLocation(via),
             }),
@@ -248,7 +261,7 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
     );
     const layerProtocol = Layer.effect(
       RpcClient.Protocol,
-      makeWsRpcSocketProtocol(Ref.set(pingTimedOut, true), silenceTimeout),
+      makeWsRpcSocketProtocol(Ref.set(pingTimedOut, true), silenceTimeout, options.drainIo),
     ).pipe(
       Layer.provide(
         Layer.mergeAll(
@@ -456,7 +469,35 @@ export const make = Effect.fn("RpcSessionFactory.make")(function* (
     } satisfies RpcSession;
   });
 
-  return RpcSessionFactory.of({ connect });
+  const openProbe = Effect.fn("RpcSession.openProbe")(function* (
+    connection: PreparedConnection,
+    cheap: boolean,
+  ) {
+    const via = connection.target._tag === "RelayConnectionTarget" ? "relay" : "direct";
+    const layerSocket = Socket.layerWebSocket(connection.socketUrl, {
+      openTimeout: SOCKET_OPEN_TIMEOUT,
+    }).pipe(Layer.provide(Layer.succeed(Socket.WebSocketConstructor, webSocketConstructor)));
+    const layerProtocol = Layer.effect(
+      RpcClient.Protocol,
+      makeWsRpcSocketProtocol(Effect.void, undefined, options.drainIo),
+    ).pipe(Layer.provide(Layer.mergeAll(layerSocket, RpcSerialization.layerJson)));
+    const context = yield* Layer.build(layerProtocol);
+    const client = yield* makeWsRpcProtocolClient.pipe(Effect.provide(context));
+    return {
+      probe: cheap
+        ? client[WS_METHODS.serverProbe]({}).pipe(
+            Effect.mapError((error) => mapSessionRpcError(error, "", via)),
+            Effect.asVoid,
+          )
+        : client[WS_METHODS.serverGetConfig]({}).pipe(
+            Effect.mapError((error) => mapSessionRpcError(error, "", via)),
+            Effect.asVoid,
+          ),
+      drainIo: options.drainIo ?? drainNodeIo,
+    };
+  });
+
+  return RpcSessionFactory.of({ connect, openProbe });
 });
 
 export const layer = (options: RpcSessionOptions) => Layer.effect(RpcSessionFactory, make(options));

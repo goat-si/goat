@@ -5,6 +5,7 @@ import {
   WsMemoryAdministrationRpcGroup,
   WsMemoryImportRpcGroup,
 } from "@goat/contracts";
+import { advanceQuiet } from "@goat/shared/stallAwareQuiet";
 import * as Effect from "effect/Effect";
 import * as Clock from "effect/Clock";
 import * as Deferred from "effect/Deferred";
@@ -24,38 +25,49 @@ type RpcClientFactory = typeof makeWsRpcProtocolClient;
 export type WsRpcProtocolClient =
   RpcClientFactory extends Effect.Effect<infer Client, any, any> ? Client : never;
 
-// Pings go out every 5 seconds, and a server busy for a few seconds stops
-// answering them. Allow 15 seconds without any frame before dropping the socket.
 export const PING_TIMEOUT = "15 seconds";
+const SOCKET_SILENCE_TIMEOUT = "300 seconds";
 
-// The upstream pinger treats a frozen event loop as silence when a ping is
-// outstanding. Keep its ping sender, but own the deadline at the socket boundary
-// so one late timer per received frame grants the resumed reader a full budget.
+export const drainNodeIo = Effect.callback<void>((resume) => {
+  const id = setImmediate(() => resume(Effect.void));
+  return Effect.sync(() => clearImmediate(id));
+});
+
 export const makeWsRpcSocketProtocol = Effect.fnUntraced(function* (
   onTimeout: Effect.Effect<void>,
-  silenceTimeout: Duration.Duration = Duration.fromInputUnsafe(PING_TIMEOUT),
+  slowTimeout: Duration.Duration = Duration.fromInputUnsafe(PING_TIMEOUT),
+  drainIo: Effect.Effect<void> = drainNodeIo,
 ) {
   const socket = yield* Socket.Socket;
   const serialization = yield* RpcSerialization.RpcSerialization;
   const clock = yield* Clock.Clock;
-  let lastFrame = clock.currentTimeMillisUnsafe();
-  let freezeGraceUsed = false;
+  let generation = 0;
   const guardedSocket = {
     ...socket,
     reader: Effect.gen(function* () {
       const reader = yield* socket.reader;
       const expired = yield* Deferred.make<never, Socket.SocketError>();
-      lastFrame = clock.currentTimeMillisUnsafe();
-      freezeGraceUsed = false;
+      let state = {
+        lastActivity: generation,
+        lastTick: clock.monotonicTimeNanosUnsafe(),
+        quiet: 0n,
+      };
+      let slow = false;
       yield* Effect.gen(function* () {
         while (true) {
-          const deadline = clock.currentTimeMillisUnsafe() + 5_000;
-          yield* clock.sleep(Duration.millis(5_000));
-          const now = clock.currentTimeMillisUnsafe();
-          if (now - deadline > 2_000 && !freezeGraceUsed) {
-            lastFrame = now;
-            freezeGraceUsed = true;
-          } else if (now - lastFrame > Duration.toMillis(silenceTimeout)) {
+          yield* Effect.sleep("5 seconds");
+          yield* drainIo;
+          state = advanceQuiet(state, clock.monotonicTimeNanosUnsafe(), generation, 5_000_000_000n);
+          if (slow && state.quiet === 0n) {
+            slow = false;
+            yield* Effect.annotateCurrentSpan({ "connection.slow": false });
+          }
+          if (!slow && state.quiet >= Duration.toNanosUnsafe(slowTimeout)) {
+            slow = true;
+            yield* Effect.annotateCurrentSpan({ "connection.slow": true });
+            yield* Effect.logInfo("WebSocket is slow to receive frames");
+          }
+          if (state.quiet >= Duration.toNanosUnsafe(SOCKET_SILENCE_TIMEOUT)) {
             yield* onTimeout;
             yield* Deferred.fail(
               expired,
@@ -66,11 +78,12 @@ export const makeWsRpcSocketProtocol = Effect.fnUntraced(function* (
             return;
           }
         }
-      }).pipe(Effect.forkScoped);
-      return {
-        ...reader,
-        pull: reader.pull.pipe(Effect.raceFirst(Deferred.await(expired))),
-      };
+      }).pipe(
+        Effect.ensuring(Effect.annotateCurrentSpan({ "connection.slow": false })),
+        Effect.withSpan("environment.websocket.silence"),
+        Effect.forkScoped,
+      );
+      return { ...reader, pull: reader.pull.pipe(Effect.raceFirst(Deferred.await(expired))) };
     }),
   };
   const liveSerialization = {
@@ -80,12 +93,8 @@ export const makeWsRpcSocketProtocol = Effect.fnUntraced(function* (
       return {
         ...parser,
         decode: (data: Uint8Array | string) => {
-          const frames = parser.decode(data);
-          if (frames.length > 0) {
-            lastFrame = clock.currentTimeMillisUnsafe();
-            freezeGraceUsed = false;
-          }
-          return frames;
+          generation += 1;
+          return parser.decode(data);
         },
       };
     },

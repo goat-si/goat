@@ -60,7 +60,7 @@ describe("desktop wakeups", () => {
     );
   });
 
-  it.effect("probes on focus and online, skipping a focus right after another wakeup", () =>
+  it.effect("the window online event is a network change while focus remains a probe", () =>
     Effect.gen(function* () {
       const shell = makeDesktopShell();
       const seen: Array<DesktopWakeup> = [];
@@ -76,7 +76,7 @@ describe("desktop wakeups", () => {
       shell.dispatch("focus");
       shell.dispatch("online");
       yield* settle;
-      expect(seen).toEqual(["application-active-long", "application-active-probe"]);
+      expect(seen).toEqual(["application-active-long", "network-changed"]);
 
       shell.advance(FOCUS_PROBE_MIN_INTERVAL_MS);
       shell.dispatch("focus");
@@ -84,7 +84,7 @@ describe("desktop wakeups", () => {
       yield* settle;
       expect(seen).toEqual([
         "application-active-long",
-        "application-active-probe",
+        "network-changed",
         "application-active-probe",
       ]);
 
@@ -174,7 +174,7 @@ describe("desktop wakeups", () => {
       shell.dispatch("focus");
       shell.dispatch("focus");
       yield* settle;
-      expect(seen).toEqual(["application-active-probe", "suspend", "application-active-probe"]);
+      expect(seen).toEqual(["network-changed", "suspend", "application-active-probe"]);
       yield* Fiber.interrupt(fiber);
     }),
   );

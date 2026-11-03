@@ -106,7 +106,9 @@ export const makeFactory = Effect.fn("TestRpcSessionFactory.make")(function* (
     Queue.offerUnsafe(sockets.changes, undefined);
     return socket as unknown as globalThis.WebSocket;
   });
-  const layer = RpcSession.layer(options).pipe(Layer.provide(layerConstructor));
+  const layer = RpcSession.layer({ drainIo: Effect.void, ...options }).pipe(
+    Layer.provide(layerConstructor),
+  );
   const factory = yield* RpcSession.RpcSessionFactory.pipe(Effect.provide(layer));
   return { factory, sockets };
 });

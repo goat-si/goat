@@ -11,7 +11,7 @@ export const FOCUS_PROBE_MIN_INTERVAL_MS = 30_000;
 
 export type DesktopWakeup = Extract<
   Wakeups.ConnectionWakeup,
-  "suspend" | "application-active-probe" | "application-active-long"
+  "suspend" | "application-active-probe" | "application-active-long" | "network-changed"
 >;
 
 export function desktopSystemWakeup(event: DesktopSystemWakeEvent): DesktopWakeup {
@@ -31,9 +31,8 @@ export interface DesktopWakeupSources {
 
 /**
  * Connection wakeups only the desktop shell can report: waking from sleep and
- * unlocking the screen. Window focus and the browser's online event become
- * quick probes there too, since a laptop lid can close and open without the
- * page ever turning hidden. Focus is skipped right after another wakeup.
+ * unlocking the screen. Window focus probes the connection, and the browser's
+ * online event reports a network change. Focus is skipped after another wakeup.
  */
 export function desktopWakeups(sources: DesktopWakeupSources): Stream.Stream<DesktopWakeup> {
   return Stream.callback<DesktopWakeup>((queue) =>
@@ -51,7 +50,7 @@ export function desktopWakeups(sources: DesktopWakeupSources): Stream.Stream<Des
             emit("application-active-probe");
           }
         };
-        const onOnline = () => emit("application-active-probe");
+        const onOnline = () => emit("network-changed");
         const unsubscribe = sources.onSystemWake((event) => {
           const now = sources.nowMs();
           const wakeup = desktopSystemWakeup(event);

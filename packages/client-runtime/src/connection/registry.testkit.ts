@@ -414,7 +414,16 @@ export const makeHarness = Effect.fn("TestEnvironmentRegistry.makeHarness")(func
         () => Ref.update(releasedSessions, (count) => count + 1),
       );
       yield* session.ready;
-      return { prepared, session };
+      return {
+        prepared,
+        session,
+        openProbeSocket: Effect.fail(
+          new ConnectionTransientError({
+            reason: "endpoint-unavailable",
+            detail: "No probe fixture.",
+          }),
+        ),
+      };
     });
   const driver = ConnectionDriver.ConnectionDriver.of({
     connect: (entry, reportProgress) =>
