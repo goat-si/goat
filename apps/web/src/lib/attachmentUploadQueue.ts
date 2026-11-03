@@ -320,6 +320,12 @@ async function runUpload(job: UploadJob): Promise<void> {
   });
   job.abort = null;
   if (result.status === "cancelled" || job.cancelled) {
+    if (result.status === "failed" && result.step === "cleanup") {
+      console.warn("[attachments] could not delete cancelled upload", {
+        attachmentId: result.attachmentId,
+        error: result.error,
+      });
+    }
     return;
   }
   if (result.status === "uploaded") {

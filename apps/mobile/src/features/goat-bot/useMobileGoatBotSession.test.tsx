@@ -300,6 +300,7 @@ describe("mobile GOAT Bot session selection", () => {
     const started = Promise.withResolvers<void>();
     const transfer = Promise.withResolvers<never>();
     const failed = Promise.withResolvers<void>();
+    const deletes: unknown[] = [];
     let signal: AbortSignal | undefined;
     harness.environments = [environment(env)];
     harness.items = [];
@@ -319,6 +320,7 @@ describe("mobile GOAT Bot session selection", () => {
       return { status: "uploaded", attachmentId: "pending-held" };
     });
     harness.run.mockImplementation(async (_registry, _command, args) => {
+      if ("input" in args && "attachmentId" in args.input) deletes.push(args.input.attachmentId);
       if ("input" in args && "idempotencyKey" in args.input) {
         failed.resolve();
         return { _tag: "Failure", cause: "offline" };
@@ -348,6 +350,7 @@ describe("mobile GOAT Bot session selection", () => {
     expect(settled).toBe(true);
     expect(signal?.aborted).toBe(true);
     expect(fileOwnership.isComposerAttachmentFileRetained(file.fileUri)).toBe(true);
+    expect(deletes).toEqual([]);
   });
   it("keeps a shared upload available for another failed message after discard (#2388)", async () => {
     const env = EnvironmentId.make("shared-upload-regression");

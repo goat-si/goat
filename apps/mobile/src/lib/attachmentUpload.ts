@@ -400,6 +400,12 @@ export async function prepareTurnAttachments(input: {
         },
       });
       if (result.status !== "uploaded") {
+        if (controller.signal.aborted && result.status === "failed" && result.step === "cleanup") {
+          console.warn("[attachments] could not delete cancelled upload", {
+            attachmentId: result.attachmentId,
+            error: result.error,
+          });
+        }
         throw result.status === "failed" && result.error !== undefined
           ? result.error
           : new Error(`Upload failed for '${attachment.name}'.`);

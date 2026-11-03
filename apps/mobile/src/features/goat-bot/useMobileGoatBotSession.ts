@@ -69,7 +69,7 @@ interface Session {
   readonly queue: ReturnType<typeof createGoatBotSendQueue<DraftComposerAttachment>>;
   readonly pending: ReadonlyArray<GoatBotPendingInput>;
   readonly retain: (key: string, attachments: ReadonlyArray<DraftComposerAttachment>) => void;
-  readonly dispose: () => Promise<void>;
+  readonly dispose: () => void;
 }
 
 const sessions = new Map<EnvironmentId, Session>();
@@ -91,9 +91,9 @@ function update(environmentId: EnvironmentId, session: Session) {
 export async function disposeMobileGoatBotEnvironment(environmentId: EnvironmentId): Promise<void> {
   const session = sessions.get(environmentId);
   if (!session) return;
+  session.dispose();
   sessions.delete(environmentId);
   for (const listener of listeners) listener();
-  await session.dispose();
 }
 
 function newSession(environmentId: EnvironmentId): Session {
@@ -251,13 +251,16 @@ function newSession(environmentId: EnvironmentId): Session {
       );
       retainUploads(key, attachments);
     },
-    dispose: async () => {
+    dispose: () => {
       disposed = true;
       const upload = activeUpload;
       upload?.controller.abort();
-      if (upload?.transfer) await upload.transfer.catch(() => undefined);
-      queue.dispose();
-      await Promise.all(pendingCleanup);
+      void (async () => {
+        if (upload?.transfer) await upload.transfer.catch(() => undefined);
+        await Promise.all(pendingCleanup);
+        queue.dispose();
+        await Promise.all(pendingCleanup);
+      })().catch((error) => console.warn("[goat-bot] could not release attachment files", error));
     },
   };
 }
