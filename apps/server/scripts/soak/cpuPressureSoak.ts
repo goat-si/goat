@@ -169,6 +169,7 @@ function spawnServer(
 
 async function waitForReady(server: OwnedChild, directory: string, port: number): Promise<void> {
   let watcher: NodeFS.FSWatcher | undefined;
+  let readinessTimer: ReturnType<typeof setInterval> | undefined;
   const ready = new Promise<void>((resolve, reject) => {
     const check = () => {
       try {
@@ -178,6 +179,7 @@ async function waitForReady(server: OwnedChild, directory: string, port: number)
       }
     };
     watcher = guardErrors(NodeFS.watch(directory, check), reject);
+    readinessTimer = setInterval(check, 250);
     check();
   });
   try {
@@ -189,6 +191,7 @@ async function waitForReady(server: OwnedChild, directory: string, port: number)
       }),
     ]);
   } finally {
+    if (readinessTimer !== undefined) clearInterval(readinessTimer);
     watcher?.close();
   }
 }
