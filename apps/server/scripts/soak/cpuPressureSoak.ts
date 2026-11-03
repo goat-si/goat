@@ -4,7 +4,14 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeOS from "node:os";
 import * as NodeURL from "node:url";
 import { guardChild } from "@goat/shared/errorGuards";
-import { Observations, counter, LogTail, DetailWriter } from "./observations.ts";
+import {
+  Observations,
+  counter,
+  LogTail,
+  DetailWriter,
+  cpuBusy,
+  saturation,
+} from "./observations.ts";
 import { runWorkload } from "./clients.ts";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
@@ -227,6 +234,26 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
   let detail: DetailWriter | undefined;
   let sampleTimer: ReturnType<typeof setInterval> | undefined;
   let progressTimer: ReturnType<typeof setInterval> | undefined;
+  let cpuTimer: ReturnType<typeof setInterval> | undefined;
+  let previousCpu: ReturnType<typeof NodeOS.cpus> | undefined;
+  let previousCpuAt = 0;
+  const cpuSamples: Array<{ at: string; perCore: number[]; busy: number }> = [];
+  const cpuGaps: string[] = [];
+  const sampleCpu = () => {
+    const now = Date.now();
+    const cpus = NodeOS.cpus();
+    if (previousCpu) {
+      if (now - previousCpuAt > 7500) cpuGaps.push("CPU sampling interval exceeded 7.5 seconds");
+      const perCore = cpuBusy(
+        previousCpu.map((cpu) => cpu.times),
+        cpus.map((cpu) => cpu.times),
+      );
+      const busy = perCore.reduce((sum, value) => sum + value, 0) / perCore.length;
+      cpuSamples.push({ at: new Date(now).toISOString(), perCore, busy });
+    }
+    previousCpu = cpus;
+    previousCpuAt = now;
+  };
   try {
     NodeFS.closeSync(NodeFS.openSync(lifecycle, "wx", 0o600));
     detail = new DetailWriter(detailPath);
@@ -310,8 +337,12 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
               rejectBurner(new Error("burner exited during workload"));
           });
         }
+        sampleCpu();
+        cpuTimer = setInterval(sampleCpu, 5000);
       },
       onWindowEnd: async () => {
+        if (cpuTimer !== undefined) clearInterval(cpuTimer);
+        sampleCpu();
         endedAt = new Date().toISOString();
         observations.setWindowOpen(false);
         stoppingBurners = true;
@@ -348,17 +379,19 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
   } finally {
     teardown = true;
     if (sampleTimer !== undefined) clearInterval(sampleTimer);
+    if (cpuTimer !== undefined) clearInterval(cpuTimer);
     if (progressTimer !== undefined) clearInterval(progressTimer);
     abort.abort();
     await cleanupOwned(owned);
     if (workload) await workload.catch(() => {});
     detail?.close();
+    const cpu = saturation(cpuSamples, cpuGaps);
     const report = {
       ...observations.report(
         [
           "real client-runtime cohort not exercised",
           "provider lifecycle coverage unavailable",
-          "saturation unverified",
+          ...(!cpu.verified ? ["saturation unverified"] : []),
           ...(errors.length ? ["workload error"] : []),
         ],
         counter(0, ["provider lifecycle coverage unavailable"]),
@@ -371,6 +404,7 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
       serverPid: server?.child.pid ?? null,
       ownedPids: owned.map(({ child }) => child.pid),
       window: { start: startedAt, end: endedAt },
+      saturation: cpu,
       workload: {
         ...workloadResult,
         replayRequested: options.replayThreads,

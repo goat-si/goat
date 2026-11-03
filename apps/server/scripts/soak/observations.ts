@@ -22,6 +22,50 @@ export function counter(observed = 0, reasons: string[] = []): Counter {
 
 const LIMIT = 100_000;
 const MAX_LINE = 1024 * 1024;
+type CpuTimes = { user: number; nice: number; sys: number; idle: number; irq: number };
+
+export function cpuBusy(previous: readonly CpuTimes[], current: readonly CpuTimes[]): number[] {
+  if (previous.length !== current.length || current.length === 0) return [];
+  return current.map((now, index) => {
+    const before = previous[index];
+    if (!before) return NaN;
+    const total = (Object.keys(now) as Array<keyof CpuTimes>).reduce(
+      (sum, key) => sum + now[key] - before[key],
+      0,
+    );
+    const idle = now.idle - before.idle;
+    return total > 0 && idle >= 0 && idle <= total ? (100 * (total - idle)) / total : NaN;
+  });
+}
+
+export function saturation(
+  samples: readonly { at: string; perCore: number[]; busy: number }[],
+  gaps: readonly string[],
+) {
+  const values = samples.map((sample) => sample.busy);
+  if (values.length === 0 || values.some((value) => !Number.isFinite(value))) {
+    return {
+      verified: false,
+      min: null,
+      avg: null,
+      p10: null,
+      samples,
+      gaps: [...gaps, "invalid or missing CPU samples"],
+    };
+  }
+  const sorted = [...values].sort((a, b) => a - b);
+  const min = sorted[0] ?? null;
+  const avg = values.reduce((sum, value) => sum + value, 0) / values.length;
+  const p10 = sorted[Math.floor((sorted.length - 1) * 0.1)] ?? null;
+  return {
+    verified: gaps.length === 0 && avg >= 90 && p10 !== null && p10 >= 80,
+    min,
+    avg,
+    p10,
+    samples,
+    gaps: [...gaps],
+  };
+}
 export class LogTail {
   readonly path: string;
   private readonly consume: (value: unknown) => void;

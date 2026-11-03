@@ -79,9 +79,30 @@ describe("soak Codex fixture", () => {
   });
 });
 
-import { DetailWriter, LogTail, Observations, counter, providerRestarts } from "./observations.ts";
+import {
+  DetailWriter,
+  LogTail,
+  Observations,
+  counter,
+  providerRestarts,
+  cpuBusy,
+  saturation,
+} from "./observations.ts";
 
 describe("soak observations", () => {
+  it("measures CPU deltas and refuses unsaturated or incomplete samples", () => {
+    const before = [{ user: 0, nice: 0, sys: 0, idle: 0, irq: 0 }];
+    const after = [{ user: 90, nice: 0, sys: 0, idle: 10, irq: 0 }];
+    expect(cpuBusy(before, after)).toEqual([90]);
+    const samples = [
+      { at: "1", perCore: [90], busy: 90 },
+      { at: "2", perCore: [100], busy: 100 },
+    ];
+    expect(saturation(samples, []).verified).toBe(true);
+    expect(saturation(samples, ["gap"]).verified).toBe(false);
+    expect(saturation([{ at: "1", perCore: [79], busy: 79 }], []).verified).toBe(false);
+    expect(saturation([], []).verified).toBe(false);
+  });
   it("writes detail as separate JSON lines", () => {
     const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-detail-"));
     try {
