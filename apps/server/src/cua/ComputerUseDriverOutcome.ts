@@ -188,6 +188,11 @@ function classifiedSafety(
   );
   const reportedInput = isRecord(structured.safety) && structured.safety.possibleCommit === true;
   const lockedEffectStarted =
+    effect === "write" &&
+    (error !== undefined ||
+      result.isError === true ||
+      envelope.status === "unknown_outcome" ||
+      envelope.status === "not_started") &&
     (structured.code === "screen_locked" || nestedCode === "screen_locked") &&
     structured.effect !== undefined &&
     structured.effect !== "refused";

@@ -60,6 +60,21 @@ it("does not interpret a successful read's terminal-looking data as input", () =
   assert.equal(safety.code, "read_completed");
 });
 
+it("a successful read with screen-lock-looking data remains a completed read", () => {
+  const safety = driverOutcomeSafety("list_apps", {
+    status: "settled",
+    result: {
+      isError: false,
+      structuredContent: { code: "screen_locked", effect: "unknown" },
+    },
+  });
+  assert.deepInclude(safety, {
+    possibleCommit: false,
+    writeStatus: "not_applicable",
+    code: "read_completed",
+  });
+});
+
 describe("macOS input tool errors after dispatch reach the agent as may-have-acted", () => {
   it("a forwarded write with effect unknown or a tool_call cancellation error exposes possibleCommit true and retryClass never", () => {
     for (const code of [
