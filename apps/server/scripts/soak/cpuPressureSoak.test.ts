@@ -186,6 +186,12 @@ describe("soak input safety", () => {
       );
       NodeFS.writeFileSync(NodePath.join(dir, "outside"), "live");
       expect(() => validateHome(home, checkout)).toThrow();
+      NodeFS.rmSync(NodePath.join(home, "userdata", "statev2.sqlite"));
+      NodeFS.linkSync(
+        NodePath.join(dir, "outside"),
+        NodePath.join(home, "userdata", "statev2.sqlite"),
+      );
+      expect(() => validateHome(home, checkout)).toThrow();
     } finally {
       NodeFS.rmSync(dir, { recursive: true, force: true });
     }

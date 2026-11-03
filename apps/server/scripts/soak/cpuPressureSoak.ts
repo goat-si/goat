@@ -87,6 +87,7 @@ export function validateHome(home: string, checkout: string): string {
   if (
     !realDatabase.startsWith(`${supplied}${NodePath.sep}`) ||
     !NodeFS.statSync(realDatabase).isFile() ||
+    NodeFS.statSync(realDatabase).nlink !== 1 ||
     NodeFS.statSync(realDatabase).size === 0
   )
     throw new Error("missing or unsafe copied database");
@@ -205,6 +206,7 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
   const credential = NodeCrypto.randomBytes(32).toString("hex");
   const errors: string[] = [];
   let detail: DetailWriter | undefined;
+  let sampleTimer: ReturnType<typeof setInterval> | undefined;
   try {
     NodeFS.closeSync(NodeFS.openSync(lifecycle, "wx", 0o600));
     detail = new DetailWriter(detailPath);
@@ -218,8 +220,21 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
       observations.consumeTrace(value);
       detail?.write({ source: "trace", value });
     });
+    const provider = new LogTail(lifecycle, (value) =>
+      detail?.write({ source: "provider", value }),
+    );
     if (NodeFS.existsSync(stallPath)) stall.startAtEnd();
     if (NodeFS.existsSync(tracePath)) trace.startAtEnd();
+    const sample = () => {
+      try {
+        provider.read();
+        if (NodeFS.existsSync(stallPath)) stall.read();
+        if (NodeFS.existsSync(tracePath)) trace.read();
+      } catch (error) {
+        observations.gap(`telemetry failed: ${String(error)}`);
+      }
+    };
+    sampleTimer = setInterval(sample, 5000);
     server = spawnServer(options, root, lifecycle, credential);
     owned.push(server);
     process.stdout.write(`owned server pid: ${server.child.pid}\n`);
@@ -282,14 +297,15 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
         throw new Error("server exited during workload");
       }),
     ]);
-    stall.read();
-    trace.read();
-    for (const gap of [...stall.gaps, ...trace.gaps]) observations.gap(gap);
-    if (stall.hasPartialLine || trace.hasPartialLine) observations.gap("partial telemetry line");
+    sample();
+    for (const gap of [...stall.gaps, ...trace.gaps, ...provider.gaps]) observations.gap(gap);
+    if (stall.hasPartialLine || trace.hasPartialLine || provider.hasPartialLine)
+      observations.gap("partial telemetry line");
   } catch (error) {
     errors.push(String(error).replaceAll(credential, "[redacted]"));
   } finally {
     teardown = true;
+    if (sampleTimer !== undefined) clearInterval(sampleTimer);
     abort.abort();
     await cleanupOwned(owned);
     if (workload) await workload.catch(() => {});
