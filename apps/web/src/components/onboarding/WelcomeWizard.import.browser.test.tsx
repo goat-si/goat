@@ -305,6 +305,7 @@ it("keeps the project selection after going back a stage", async () => {
 
   await clickStage("Agents, step 2");
   await click("Continue");
+  await click("Continue");
   expect(pageText()).toContain("Import your projects");
   expect(pageText()).toContain("0 of 2 selected");
 });
@@ -316,6 +317,7 @@ it("ticks the recent projects of a computer added after the selection changed", 
 
   state.addedEnvironments = ["remote"];
   await clickStage("Connect, step 1");
+  await click("Continue");
   await click("Continue");
   await click("Continue");
   expect(pageText()).toContain("2 of 4 selected");
