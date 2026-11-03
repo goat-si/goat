@@ -183,12 +183,14 @@ it.effect("a held network status lookup cannot stall disconnect or offline handl
     yield* awaitState(supervisor.state, (state) => state.phase === "connected");
     yield* harness.wake("network-changed");
     yield* SubscriptionRef.set(network, "offline");
+    yield* TestClock.adjust("10 seconds");
+    expect(yield* Ref.get(harness.sessionCount)).toBe(1);
     yield* supervisor.disconnect;
     yield* TestClock.adjust("1 second");
     expect(yield* Ref.get(harness.releaseCount)).toBe(1);
     expect(yield* SubscriptionRef.get(supervisor.state)).toMatchObject({
       desired: false,
-      network: "offline",
+      network: "unknown",
     });
     expect(lookups).toBe(1);
   }),
