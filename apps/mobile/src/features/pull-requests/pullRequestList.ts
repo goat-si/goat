@@ -74,6 +74,29 @@ export type EnvironmentPullRequestListEntry = PullRequestListEntry & {
   readonly environmentId: EnvironmentId;
 };
 
+export function pullRequestListErrorMessages(
+  errors: readonly {
+    readonly environmentId: EnvironmentId;
+    readonly projectTitle: string;
+    readonly message: string;
+    readonly unreachable?: boolean;
+  }[],
+  environmentLabels: ReadonlyMap<EnvironmentId, string>,
+): string[] {
+  const unreachable = new Set<string>();
+  const messages: string[] = [];
+  for (const error of errors) {
+    const label = environmentLabels.get(error.environmentId) || "Environment";
+    if (error.unreachable) unreachable.add(label);
+    else messages.push(`${error.projectTitle || label}: ${error.message}`);
+  }
+  if (unreachable.size)
+    messages.unshift(
+      `Couldn't reach ${unreachable.size === 1 ? "environment" : "environments"}: ${[...unreachable].join(", ")}`,
+    );
+  return messages;
+}
+
 export const scopedPullRequestListKey = (entry: EnvironmentPullRequestListEntry) =>
   `${entry.environmentId}:${pullRequestListKey(entry)}`;
 

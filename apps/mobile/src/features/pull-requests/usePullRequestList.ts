@@ -311,11 +311,20 @@ export function usePullRequestList(targets: readonly ListTarget[]) {
       sources.flatMap(({ target, result }) => {
         if (result._tag !== "Failure") return [];
         const cause = Cause.squash(result.cause);
+        const unreachable =
+          typeof cause === "object" &&
+          cause !== null &&
+          "_tag" in cause &&
+          (cause._tag === "EnvironmentRpcUnavailableError" ||
+            (cause._tag === "ConnectionTransientError" &&
+              "reason" in cause &&
+              (cause.reason === "network" || cause.reason === "timeout")));
         return [
           {
             environmentId: target.environmentId,
             projectTitle: "",
             message: cause instanceof Error ? cause.message : "Couldn't load pull requests.",
+            ...(unreachable ? { unreachable: true as const } : {}),
           },
         ];
       }),

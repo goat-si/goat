@@ -30,7 +30,31 @@ import {
   withListedPullRequests,
   withoutScratchProjectScope,
   pullRequestProjectChoices,
+  pullRequestListErrorMessages,
 } from "./pullRequestList";
+
+it("summarizes unreachable environments and keeps other PR list errors (#2464)", () => {
+  const one = EnvironmentId.make("one");
+  const two = EnvironmentId.make("two");
+  expect(
+    pullRequestListErrorMessages(
+      [
+        { environmentId: one, projectTitle: "", message: "offline", unreachable: true },
+        { environmentId: two, projectTitle: "", message: "offline", unreachable: true },
+        { environmentId: one, projectTitle: "Project", message: "offline" },
+        { environmentId: two, projectTitle: "", message: "Permission denied" },
+      ],
+      new Map([
+        [one, "Laptop"],
+        [two, "Desktop"],
+      ]),
+    ),
+  ).toEqual([
+    "Couldn't reach environments: Laptop, Desktop",
+    "Project: offline",
+    "Desktop: Permission denied",
+  ]);
+});
 
 function entry(number: number, patch: Partial<PullRequestListEntry> = {}): PullRequestListEntry {
   return {
