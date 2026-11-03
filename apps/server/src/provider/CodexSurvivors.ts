@@ -11,6 +11,7 @@ import type * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
 import type * as EffectOutbox from "../orchestration-v2/EffectOutbox.ts";
 import type * as EventSink from "../orchestration-v2/EventSink.ts";
 import type * as ServerSettings from "../serverSettings.ts";
+import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as DateTime from "effect/DateTime";
@@ -454,6 +455,7 @@ export const layer = Layer.effect(
   }),
 );
 
+/** Protection is recorded with each retention, so an interrupted pass leaves the two consistent. */
 export const prepareShutdownSurvivors = Effect.fn("CodexSurvivors.prepareShutdownSurvivors")(
   function* (input: {
     readonly detached: Detached.CodexDetachedAppServers["Service"];
@@ -462,22 +464,23 @@ export const prepareShutdownSurvivors = Effect.fn("CodexSurvivors.prepareShutdow
     readonly settings: ServerSettings.ServerSettingsService["Service"];
     readonly stopKind: "quit" | "restart";
     readonly bindings: ReadonlyArray<CodexSurvivorBinding>;
+    readonly threadIds: ReadonlyArray<ThreadId>;
+    readonly protect: { readonly threads: Set<ThreadId>; readonly sessions: Set<string> };
   }) {
     const settings = yield* input.settings.getSettings;
     const records = yield* input.detached.loadRecords;
-    const threads = new Set<ThreadId>();
-    const sessions = new Set<string>();
-    if (!records.some((item) => item.state === "running" && item.stderrMode === "discard"))
-      return { threads, sessions };
+    if (!records.some((item) => item.state === "running" && item.stderrMode === "discard")) return;
     const prepared = new Map<
       string,
       { setting: "restart" | "always"; threads: Set<ThreadId>; sessions: Set<string> }
     >();
-    for (const threadId of yield* input.projections.getRecoveryThreadIds("runtime")) {
+    const prepareThread = Effect.fn("CodexSurvivors.prepareShutdownSurvivorThread")(function* (
+      threadId: ThreadId,
+    ) {
       const projection = yield* input.projections.getRuntimeRecoveryProjection(threadId);
       const setting = resolveProjectSettings(settings, projection.thread.projectId).settings
         .codexTurnsSurviveServerStop;
-      if (setting === "off" || (setting === "restart" && input.stopKind !== "restart")) continue;
+      if (setting === "off" || (setting === "restart" && input.stopKind !== "restart")) return;
       for (const run of projection.runs) {
         const binding = input.bindings.find(
           (value) => value.threadId === threadId && value.sourceRunId === run.id,
@@ -527,23 +530,57 @@ export const prepareShutdownSurvivors = Effect.fn("CodexSurvivors.prepareShutdow
         if (thread.providerSessionId != null) entry.sessions.add(thread.providerSessionId);
         prepared.set(record.name, entry);
       }
-    }
+    });
+    const candidates = new Set([
+      ...input.threadIds,
+      ...input.bindings.map((item) => item.threadId),
+    ]);
+    yield* Effect.forEach(
+      candidates,
+      (threadId) =>
+        prepareThread(threadId).pipe(
+          Effect.catchCauseIf(
+            (cause) => !Cause.hasInterruptsOnly(cause),
+            (cause) =>
+              Effect.logWarning("Failed to prepare a Codex turn to survive shutdown", {
+                threadId,
+                cause,
+              }),
+          ),
+        ),
+      { concurrency: 4, discard: true },
+    );
     // An app-server that cannot be retained closes with its session; its thread stays unprotected.
-    for (const [name, entry] of prepared) {
-      const retained = yield* input.detached
-        .retainOnClose(name, { setting: entry.setting, stopKind: input.stopKind, prepared: true })
-        .pipe(
-          Effect.catch((cause) =>
-            Effect.logWarning("Codex app-server not retained for shutdown", { name, cause }).pipe(
-              Effect.as(false),
+    yield* Effect.forEach(
+      prepared,
+      ([name, entry]) =>
+        Effect.uninterruptibleMask((restore) =>
+          restore(
+            input.detached.retainOnClose(name, {
+              setting: entry.setting,
+              stopKind: input.stopKind,
+              prepared: true,
+            }),
+          ).pipe(
+            Effect.catchCauseIf(
+              (cause) => !Cause.hasInterruptsOnly(cause),
+              (cause) =>
+                Effect.logWarning("Codex app-server not retained for shutdown", {
+                  name,
+                  cause,
+                }).pipe(Effect.as(false)),
+            ),
+            Effect.tap((retained) =>
+              Effect.sync(() => {
+                if (!retained) return;
+                for (const threadId of entry.threads) input.protect.threads.add(threadId);
+                for (const sessionId of entry.sessions) input.protect.sessions.add(sessionId);
+              }),
             ),
           ),
-        );
-      if (!retained) continue;
-      for (const threadId of entry.threads) threads.add(threadId);
-      for (const sessionId of entry.sessions) sessions.add(sessionId);
-    }
-    return { threads, sessions };
+        ),
+      { concurrency: "unbounded", discard: true },
+    );
   },
 );
 

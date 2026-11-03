@@ -25,13 +25,12 @@ const prepareOrdinaryContinuations = Effect.fn(
   readonly settings: ServerSettings.ServerSettingsService["Service"];
   readonly projections: ProjectionStore.ProjectionStoreV2["Service"];
   readonly sink: EventSink.EventSinkV2["Service"];
+  readonly candidates: ReadonlyArray<ThreadId>;
   readonly protectedThreads: ReadonlySet<ThreadId>;
 }) {
   const enabled = yield* input.settings.getSettings.pipe(Effect.orElseSucceed(() => null));
   if (!enabled) return { candidates: 0, continued: 0 };
-  const threadIds = (yield* backgroundReads(
-    input.projections.getRecoveryThreadIds("shutdown-continuation"),
-  )).filter((threadId) => !input.protectedThreads.has(threadId));
+  const threadIds = input.candidates.filter((threadId) => !input.protectedThreads.has(threadId));
   return yield* runShutdownContinuationTasks(threadIds, (threadId) =>
     backgroundReads(
       Effect.gen(function* () {
@@ -75,36 +74,51 @@ const prepareOrdinaryContinuations = Effect.fn(
   );
 });
 
+// Leaves most of the desktop's five-second grace to continuations, session close and reconcile.
+const SURVIVOR_PREPARATION_BUDGET = "2 seconds";
+
 export const prepare = Effect.fn("ProviderRuntimeShutdown.prepare")(function* (input: {
   readonly stopKind: "restart" | "quit";
   readonly settings: ServerSettings.ServerSettingsService["Service"];
   readonly projections: ProjectionStore.ProjectionStoreV2["Service"];
   readonly sink: EventSink.EventSinkV2["Service"];
 }) {
-  const empty = { threads: new Set<ThreadId>(), sessions: new Set<string>() };
-  if (yield* AutomationHold.isHeld) return { ...empty, summary: { candidates: 0, continued: 0 } };
+  const prepared = { threads: new Set<ThreadId>(), sessions: new Set<string>() };
+  if (yield* AutomationHold.isHeld)
+    return { ...prepared, summary: { candidates: 0, continued: 0 } };
+  const candidates = yield* backgroundReads(
+    input.projections.getRecoveryThreadIds("shutdown-continuation"),
+  );
   const detached = yield* Effect.serviceOption(CodexDetached.CodexDetachedAppServers);
   const survivors = yield* Effect.serviceOption(CodexSurvivors.CodexSurvivors);
-  // A failure before any retention leaves every app-server to close with its session.
-  const prepared = Option.isSome(detached)
-    ? yield* backgroundReads(
-        CodexSurvivors.prepareShutdownSurvivors({
-          ...input,
-          detached: detached.value,
-          bindings: Option.isSome(survivors) ? yield* survivors.value.list : [],
-        }),
-      ).pipe(
-        Effect.catchCauseIf(
-          (cause) => !Cause.hasInterruptsOnly(cause),
-          (cause) =>
-            Effect.logWarning("Failed to prepare Codex turns to survive shutdown", { cause }).pipe(
-              Effect.as(empty),
-            ),
-        ),
-      )
-    : empty;
+  if (Option.isSome(detached)) {
+    // Retention and protection are recorded together, so a failure or timeout keeps what was retained.
+    const finished = yield* backgroundReads(
+      CodexSurvivors.prepareShutdownSurvivors({
+        ...input,
+        detached: detached.value,
+        bindings: Option.isSome(survivors) ? yield* survivors.value.list : [],
+        threadIds: candidates,
+        protect: prepared,
+      }),
+    ).pipe(
+      Effect.timeoutOption(SURVIVOR_PREPARATION_BUDGET),
+      Effect.catchCauseIf(
+        (cause) => !Cause.hasInterruptsOnly(cause),
+        (cause) =>
+          Effect.logWarning("Failed to prepare Codex turns to survive shutdown", { cause }).pipe(
+            Effect.as(Option.some(undefined)),
+          ),
+      ),
+    );
+    if (Option.isNone(finished))
+      yield* Effect.logWarning("Codex survivor preparation ran out of its shutdown budget", {
+        retainedThreads: prepared.threads.size,
+      });
+  }
   const ordinary = yield* prepareOrdinaryContinuations({
     ...input,
+    candidates,
     protectedThreads: prepared.threads,
   });
   return {

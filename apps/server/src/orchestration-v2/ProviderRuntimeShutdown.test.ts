@@ -127,78 +127,108 @@ it.effect.each(
   }),
 );
 
-it.effect(
-  "an app-server that refuses retention closes with its session without failing shutdown",
-  () =>
+const twoRecordShutdown = (
+  retainOnClose: (name: string) => Effect.Effect<boolean, CodexDetachedAppServerError>,
+) => {
+  const threads = { kept: ThreadId.make("kept-thread"), other: ThreadId.make("other-thread") };
+  const detached = Layer.mock(Detached.CodexDetachedAppServers)({
+    socketTransportEnabled: true,
+    loadRecords: Effect.succeed([
+      { name: "kept", instanceId: "codex-kept", state: "running", stderrMode: "discard" },
+      { name: "other", instanceId: "codex-other", state: "running", stderrMode: "discard" },
+    ] as never),
+    retainOnClose,
+  });
+  const projection = (name: keyof typeof threads) => ({
+    thread: { id: threads[name], projectId: "project" },
+    providerThreads: [{ id: `pt-${name}`, driver: "codex", cloudTask: undefined }],
+    providerSessions: [],
+    runs: [
+      {
+        id: RunId.make(`run-${name}`),
+        status: "running",
+        providerThreadId: `pt-${name}`,
+        providerInstanceId: ProviderInstanceId.make(`codex-${name}`),
+        activeAttemptId: RunAttemptId.make("attempt"),
+      },
+    ],
+  });
+  return Recovery.layer.pipe(
+    Layer.provideMerge(
+      Layer.mock(ProjectionStore.ProjectionStoreV2)({
+        getRecoveryThreadIds: () => Effect.succeed([threads.kept, threads.other]),
+        getRuntimeRecoveryProjection: (threadId) =>
+          Effect.succeed(projection(threadId === threads.kept ? "kept" : "other") as never),
+        getThreadRecords: () =>
+          Effect.succeed({
+            providerTurns: [
+              {
+                id: ProviderTurnId.make("turn"),
+                runAttemptId: RunAttemptId.make("attempt"),
+                status: "running",
+                ordinal: 1,
+              },
+            ],
+          } as never),
+      }),
+    ),
+    Layer.provideMerge(detached),
+    Layer.provideMerge(layerTest),
+    Layer.provideMerge(
+      ServerSettings.layerTest({
+        codexTurnsSurviveServerStop: "always",
+        continueThreadsAfterServerUpdate: false,
+      }),
+    ),
+  );
+};
+
+const prepareQuit = Effect.gen(function* () {
+  return yield* (yield* Recovery.ProviderRuntimeRecoveryService).prepareForShutdownWithStopKind(
+    "quit",
+  );
+});
+
+// The unprotected thread falls to the ordinary shutdown path, which counts it as a candidate.
+it.effect.each(["failure", "defect"] as const)(
+  "an app-server whose retention fails (%s) closes with its session; the retained one stays protected",
+  (outcome) =>
     Effect.gen(function* () {
       const retained: string[] = [];
-      const threads = {
-        kept: ThreadId.make("kept-thread"),
-        refused: ThreadId.make("refused-thread"),
-      };
-      const detached = Layer.mock(Detached.CodexDetachedAppServers)({
-        socketTransportEnabled: true,
-        loadRecords: Effect.succeed([
-          { name: "kept", instanceId: "codex-kept", state: "running", stderrMode: "discard" },
-          { name: "refused", instanceId: "codex-refused", state: "running", stderrMode: "discard" },
-        ] as never),
-        retainOnClose: (name) =>
-          name === "refused"
-            ? Effect.fail(new CodexDetachedAppServerError({ detail: "not verified" }))
-            : Effect.sync(() => {
-                retained.push(name);
-                return true;
-              }),
-      });
-      const projection = (name: keyof typeof threads) => ({
-        thread: { id: threads[name], projectId: "project" },
-        providerThreads: [{ id: `pt-${name}`, driver: "codex", cloudTask: undefined }],
-        providerSessions: [],
-        runs: [
-          {
-            id: RunId.make(`run-${name}`),
-            status: "running",
-            providerThreadId: `pt-${name}`,
-            providerInstanceId: ProviderInstanceId.make(`codex-${name}`),
-            activeAttemptId: RunAttemptId.make("attempt"),
-          },
-        ],
-      });
-      const layer = Recovery.layer.pipe(
-        Layer.provideMerge(
-          Layer.mock(ProjectionStore.ProjectionStoreV2)({
-            getRecoveryThreadIds: () => Effect.succeed([threads.kept, threads.refused]),
-            getRuntimeRecoveryProjection: (threadId) =>
-              Effect.succeed(projection(threadId === threads.kept ? "kept" : "refused") as never),
-            getThreadRecords: () =>
-              Effect.succeed({
-                providerTurns: [
-                  {
-                    id: ProviderTurnId.make("turn"),
-                    runAttemptId: RunAttemptId.make("attempt"),
-                    status: "running",
-                    ordinal: 1,
-                  },
-                ],
-              } as never),
-          }),
-        ),
-        Layer.provideMerge(detached),
-        Layer.provideMerge(layerTest),
-        Layer.provideMerge(
-          ServerSettings.layerTest({
-            codexTurnsSurviveServerStop: "always",
-            continueThreadsAfterServerUpdate: false,
-          }),
+      const summary = yield* prepareQuit.pipe(
+        Effect.provide(
+          twoRecordShutdown((name) =>
+            name === "kept"
+              ? Effect.sync(() => {
+                  retained.push(name);
+                  return true;
+                })
+              : outcome === "failure"
+                ? Effect.fail(new CodexDetachedAppServerError({ detail: "not verified" }))
+                : Effect.die("classification crashed"),
+          ),
         ),
       );
-      const summary = yield* Effect.gen(function* () {
-        return yield* (yield* Recovery.ProviderRuntimeRecoveryService).prepareForShutdownWithStopKind(
-          "quit",
-        );
-      }).pipe(Effect.provide(layer));
       assert.deepEqual(retained, ["kept"]);
-      // The refused thread is left to the ordinary shutdown path, which is offered it as a candidate.
       assert.deepEqual(summary, { candidates: 2, continued: 1 });
     }),
+);
+
+it.effect("survivor preparation that overruns its budget keeps what it already retained", () =>
+  Effect.gen(function* () {
+    const verifying = yield* Deferred.make<void>();
+    const preparing = yield* prepareQuit.pipe(
+      Effect.provide(
+        twoRecordShutdown((name) =>
+          name === "kept"
+            ? Effect.succeed(true)
+            : Deferred.succeed(verifying, undefined).pipe(Effect.andThen(Effect.never)),
+        ),
+      ),
+      Effect.forkChild({ startImmediately: true }),
+    );
+    yield* Deferred.await(verifying);
+    yield* TestClock.adjust("2 seconds");
+    assert.deepEqual(yield* Fiber.join(preparing), { candidates: 2, continued: 1 });
+  }),
 );
