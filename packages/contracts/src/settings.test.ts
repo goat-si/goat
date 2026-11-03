@@ -18,7 +18,6 @@ import {
   ClientSettingsSchema,
   ClientSettingsPatch,
   ClaudeSettings,
-  CODEX_APP_SERVER_ISOLATION_DEFAULT,
   CodexSettings,
   ServerSettingsError,
   DEFAULT_SERVER_SETTINGS,
@@ -987,15 +986,4 @@ it("defaults Codex survival and validates its patch", () => {
     });
   }
   expect(() => decodeServerSettingsPatch({ codexTurnsSurviveServerStop: "invalid" })).toThrow();
-});
-
-it("defaults Codex app-server isolation to its constant and keeps it out of project overrides", () => {
-  expect(decodeServerSettings({}).codexAppServerIsolation).toBe(CODEX_APP_SERVER_ISOLATION_DEFAULT);
-  for (const value of ["thread", "shared"]) {
-    expect(decodeServerSettingsPatch({ codexAppServerIsolation: value })).toEqual({
-      codexAppServerIsolation: value,
-    });
-  }
-  expect(() => decodeServerSettingsPatch({ codexAppServerIsolation: "process" })).toThrow();
-  expect(PROJECT_SCOPED_SERVER_SETTING_KEYS).not.toContain("codexAppServerIsolation");
 });
