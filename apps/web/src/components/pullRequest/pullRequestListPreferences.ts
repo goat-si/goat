@@ -32,6 +32,8 @@ export interface PullRequestListPreferences {
   readonly author?: string;
   readonly labels?: ReadonlyArray<string>;
   readonly sort?: PullRequestListSort;
+  /** Also list the upstream repositories forks were made from. */
+  readonly upstream?: "include";
 }
 
 export type PullRequestListPreferencePatch = {
@@ -57,6 +59,7 @@ const PullRequestListPreferencesSchema = Schema.Struct({
   author: Schema.optional(BoundedPreference),
   labels: Schema.optional(Schema.Array(BoundedPreference).check(Schema.isMaxLength(10))),
   sort: Schema.optional(PullRequestListSort),
+  upstream: Schema.optional(Schema.Literal("include")),
 });
 
 const decodePullRequestListPreferences = Schema.decodeUnknownOption(
@@ -87,6 +90,7 @@ export function pullRequestListPreferences(
     ...(search.author ? { author: search.author } : {}),
     ...(search.labels && search.labels.length > 0 ? { labels: search.labels } : {}),
     ...(search.sort && search.sort !== "ready" ? { sort: search.sort } : {}),
+    ...(search.upstream ? { upstream: search.upstream } : {}),
   };
 }
 

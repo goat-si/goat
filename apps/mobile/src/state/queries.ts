@@ -1,4 +1,5 @@
 import {
+  composerPullRequestRepository,
   composerPullRequestsFromLinks,
   filterComposerPullRequestMatches,
   withLinkedComposerPullRequestsFirst,
@@ -106,6 +107,8 @@ export function useComposerPullRequestSearch(input: {
   environmentId: EnvironmentId | null;
   projectId: ProjectId | null;
   repository: string | null;
+  /** The upstream a fork's identity selects, which servers listed before forks listed their own. */
+  selectedRepository?: string | null;
   threadPullRequests?: ReadonlyArray<ThreadPullRequestLink> | undefined;
   query: string | null;
 }) {
@@ -134,27 +137,33 @@ export function useComposerPullRequestSearch(input: {
         })
       : null,
   );
+  const repository = composerPullRequestRepository({
+    own: input.repository,
+    selected: input.selectedRepository ?? null,
+    projectId: input.projectId,
+    listed: list.data?.entries ?? [],
+  });
   const number = numeric && query ? Number(query) : null;
   const hasExact = list.data?.entries.some(
     (entry) =>
-      entry.number === number && entry.repository.toLowerCase() === input.repository?.toLowerCase(),
+      entry.number === number && entry.repository.toLowerCase() === repository?.toLowerCase(),
   );
   const exact = useEnvironmentQuery(
     ready && number !== null && Number.isSafeInteger(number) && number > 0 && !hasExact
       ? composerPullRequests.detail({
           environmentId: input.environmentId!,
-          input: { projectId: input.projectId!, repository: input.repository!, number },
+          input: { projectId: input.projectId!, repository: repository!, number },
         })
       : null,
   );
   const entries = (() => {
-    if (input.query === null || input.projectId === null || input.repository === null) return [];
+    if (input.query === null || input.projectId === null || repository === null) return [];
     if (/^\d*$/.test(input.query)) {
       return filterComposerPullRequestMatches({
         entries: ready ? [...(exact.data ? [exact.data] : []), ...(list.data?.entries ?? [])] : [],
         linked,
         projectId: input.projectId,
-        repository: input.repository,
+        repository,
         query: input.query,
         limit: 20,
       });
@@ -170,7 +179,7 @@ export function useComposerPullRequestSearch(input: {
     const found = [...(exact.data ? [exact.data] : []), ...(list.data?.entries ?? [])].filter(
       (entry) =>
         entry.projectId === input.projectId &&
-        entry.repository.toLowerCase() === input.repository?.toLowerCase() &&
+        entry.repository.toLowerCase() === repository?.toLowerCase() &&
         words.every((word) =>
           `${entry.title} ${entry.headBranch} ${entry.baseBranch}`.toLowerCase().includes(word),
         ),
@@ -187,6 +196,7 @@ export function useComposerPullRequestSearch(input: {
     });
   })();
   return {
+    repository,
     entries,
     isPending: input.query !== null && (query !== input.query || list.isPending || exact.isPending),
     error: list.error ?? list.data?.errors[0]?.message ?? exact.error,

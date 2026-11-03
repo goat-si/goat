@@ -25,6 +25,7 @@ import {
   pullRequestProjectOrderIsEqual,
   retainPullRequestStatsAnswers,
   withShownPullRequestStats,
+  pullRequestStatOf,
   withAnsweredPullRequestStats,
   withListedPullRequests,
   withoutScratchProjectScope,
@@ -223,6 +224,52 @@ describe("shown PR diff stats", () => {
     expect(retainPullRequestStatsAnswers([{ environmentId: first, stats: [] }], previous)).toEqual([
       { environmentId: first, stats: [] },
     ]);
+  });
+
+  it("keeps counts apart for one repository path on two hosts, and reads host-less answers", () => {
+    const environmentId = EnvironmentId.make("env-one");
+    const row = (host: string) => ({
+      ...entry(1, { host, additions: 0, deletions: 0 }),
+      environmentId,
+    });
+    const stat = { projectId: entry(1).projectId, repository: "org/repo", number: 1, deletions: 0 };
+    const shown = withShownPullRequestStats(
+      [row("git.cafe"), row("github.com")],
+      [
+        {
+          environmentId,
+          stats: [
+            { ...stat, host: "git.cafe", additions: 3 },
+            { ...stat, host: "github.com", additions: 9 },
+          ],
+        },
+      ],
+    );
+    expect(shown.map(({ additions }) => additions)).toEqual([3, 9]);
+    const older = withShownPullRequestStats(
+      [row("github.com")],
+      [{ environmentId, stats: [{ ...stat, additions: 5 }] }],
+    );
+    expect(older.at(0)?.additions).toBe(5);
+  });
+
+  it("reads a listed row's counts from a server that answers without a host", () => {
+    const query = {
+      refs: [
+        { projectId: entry(1).projectId, host: "github.com", repository: "org/repo", number: 1 },
+      ],
+    };
+    const { cache } = withListedPullRequests(EMPTY_PULL_REQUEST_STATS_CACHE, [entry(1)]);
+    const answered = withAnsweredPullRequestStats(cache, query, [
+      {
+        projectId: entry(1).projectId,
+        repository: "org/repo",
+        number: 1,
+        additions: 4,
+        deletions: 1,
+      },
+    ]);
+    expect(pullRequestStatOf(answered.stats, entry(1))?.additions).toBe(4);
   });
 
   it("fills offline counts per environment without replacing newer row counts", () => {

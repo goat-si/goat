@@ -9,6 +9,27 @@ export interface ComposerPullRequestMatch {
   readonly updatedAt: string;
 }
 
+/**
+ * The repository a project's composer searches: a fork's own origin, unless the server listed the
+ * upstream the project's identity selects, as servers did before forks listed their own repository.
+ */
+export function composerPullRequestRepository(input: {
+  readonly own: string | null;
+  readonly selected: string | null;
+  readonly projectId: string | null;
+  readonly listed: ReadonlyArray<{ readonly projectId: string; readonly repository: string }>;
+}): string | null {
+  if (input.own === null) return null;
+  const names = [input.own, input.selected].flatMap((name) =>
+    name === null ? [] : [name.trim().toLowerCase()],
+  );
+  const listed = input.listed.find(
+    (entry) =>
+      entry.projectId === input.projectId && names.includes(entry.repository.trim().toLowerCase()),
+  );
+  return listed?.repository ?? input.own;
+}
+
 export function withLinkedComposerPullRequestsFirst<
   Entry extends ComposerPullRequestMatch,
   Linked extends ComposerPullRequestMatch & { readonly title: string; readonly headBranch: string },

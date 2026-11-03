@@ -127,6 +127,9 @@ export function PullRequestListFilters(props: {
       case "sort":
         props.onChange({ ...value, sort: next as PullRequestListControls["sort"] });
         break;
+      case "upstream":
+        props.onChange({ ...value, includeUpstream: next === "include" ? true : undefined });
+        break;
       case "project": {
         const project = projects.find(
           (project) => JSON.stringify([project.environmentId, project.id]) === next,
@@ -200,7 +203,8 @@ export function PullRequestListFilters(props: {
     Number(Boolean(value.filters.draft)) +
     Number(Boolean(value.filters.review)) +
     Number(Boolean(value.filters.checks)) +
-    Number(Boolean(value.projectId));
+    Number(Boolean(value.projectId)) +
+    Number(Boolean(value.includeUpstream));
   const more: MenuProps["actions"] = [
     {
       id: "drafts",
@@ -235,6 +239,11 @@ export function PullRequestListFilters(props: {
         ]),
         value.projectId ? JSON.stringify([value.projectEnvironmentId, value.projectId]) : "",
       ),
+    },
+    {
+      id: id("upstream", value.includeUpstream ? "" : "include"),
+      title: "Include upstream repos",
+      state: value.includeUpstream ? "on" : "off",
     },
     { id: "sort", title: SORTS[value.sort], subactions: choices("sort", SORTS, value.sort) },
   ];

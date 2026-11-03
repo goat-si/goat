@@ -505,6 +505,7 @@ const PullRequestSearchTool = Tool.make(agentSurfaceRegistry["pull_request.searc
     involvement: PullRequestListInput.fields.involvement,
     filters: PullRequestListInput.fields.filters,
     projectId: PullRequestListInput.fields.projectId,
+    includeUpstream: PullRequestListInput.fields.includeUpstream,
     query: PullRequestListInput.fields.query,
     limit: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 50 }))),
     cursors: PullRequestListInput.fields.cursors,

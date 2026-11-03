@@ -490,6 +490,8 @@ export function PullRequestFiltersMenu({
   projectEnvironmentId,
   unavailable,
   onProject,
+  includeUpstream,
+  onIncludeUpstream,
 }: {
   onOpenChange?: (open: boolean) => void;
   state: PullRequestListState;
@@ -514,6 +516,8 @@ export function PullRequestFiltersMenu({
   projectEnvironmentId: EnvironmentId | undefined;
   unavailable: ReadonlyMap<string, string>;
   onProject: (projectId: ProjectId | undefined, environmentId: EnvironmentId | undefined) => void;
+  includeUpstream: boolean;
+  onIncludeUpstream: (include: boolean) => void;
 }) {
   const selectedLabels = (filters.labels ?? []).flatMap((group) => group);
   const filterCount = [
@@ -526,6 +530,7 @@ export function PullRequestFiltersMenu({
     filters.review,
     filters.checks,
     filters.author,
+    includeUpstream,
     ...selectedLabels,
   ].filter(Boolean).length;
   const updateFilters = (next: Partial<PullRequestListFilters>) =>
@@ -654,6 +659,9 @@ export function PullRequestFiltersMenu({
             else if (projectId !== undefined) onProject(undefined, undefined);
           }}
         />
+        <MenuCheckboxItem checked={includeUpstream} onCheckedChange={onIncludeUpstream}>
+          Include upstream repos
+        </MenuCheckboxItem>
       </MenuPopup>
     </Menu>
   );
