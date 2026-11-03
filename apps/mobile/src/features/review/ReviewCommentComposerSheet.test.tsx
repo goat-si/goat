@@ -82,17 +82,16 @@ it.each(["picker", "paste"] as const)(
   "releases a review comment %s result after unmount",
   async (method) => {
     mocks.release.mockReset().mockResolvedValue(undefined);
-    const pending =
-      Promise.withResolvers<
-        ReadonlyArray<{
-          id: string;
-          type: "image";
-          name: string;
-          mimeType: string;
-          sizeBytes: number;
-          fileUri: string;
-        }>
-      >();
+    const pending = Promise.withResolvers<
+      ReadonlyArray<{
+        id: string;
+        type: "image";
+        name: string;
+        mimeType: string;
+        sizeBytes: number;
+        fileUri: string;
+      }>
+    >();
     mocks.pick.mockImplementation(() =>
       pending.promise.then((images) => ({ images, error: null })),
     );
@@ -112,8 +111,6 @@ it.each(["picker", "paste"] as const)(
       root.render(
         <ReviewCommentComposerSheet
           route={{
-            key: "review",
-            name: "ReviewCommentComposer",
             params: { environmentId: EnvironmentId.make("env"), threadId: ThreadId.make("thread") },
           }}
         />,

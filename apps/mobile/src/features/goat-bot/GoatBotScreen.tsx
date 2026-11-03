@@ -404,14 +404,18 @@ export function GoatBotScreen(props: {
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<ReadonlyArray<DraftComposerAttachment>>([]);
   const draftFiles = useRef(new Map<string, () => void>());
+  const pickerLifetime = useRef<AbortController | null>(null);
   // oxlint-disable-next-line goat/react-effect-budget -- Release draft file ownership when the screen unmounts.
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    const controller = new AbortController();
+    pickerLifetime.current = controller;
+    return () => {
+      controller.abort();
+      pickerLifetime.current = null;
       for (const release of draftFiles.current.values()) release();
       draftFiles.current.clear();
-    },
-    [],
-  );
+    };
+  }, []);
   const [inputHeight, setInputHeight] = useState(44);
   const inputMaxHeight = goatBotInputMaxHeight(useWindowDimensions().height);
   const renderItem = useCallback(
@@ -539,7 +543,12 @@ export function GoatBotScreen(props: {
               disabled={!session.canSend}
               existingCount={attachments.length}
               maxUploadBytes={support.maxUploadBytes}
+              getLifetime={() => pickerLifetime.current?.signal}
               onPicked={(picked) => {
+                if (!pickerLifetime.current || pickerLifetime.current.signal.aborted) {
+                  releaseGoatBotAttachments(picked);
+                  return;
+                }
                 for (const attachment of picked) {
                   if (attachment.fileUri !== undefined) {
                     draftFiles.current.set(
