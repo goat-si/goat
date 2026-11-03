@@ -15,6 +15,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { isBlockedBrowserUrl } from "@goat/shared/preview";
 import {
+  browserClaimSession,
   manifestApplied,
   scopeBrowserCall,
   serverAdmitsBrowserCall,
@@ -46,6 +47,7 @@ interface Dependencies {
   readonly environmentId: EnvironmentId;
   readonly supported: () => boolean;
   readonly blockedHosts?: Effect.Effect<ReadonlyArray<string>, Error>;
+  readonly blockedHostsNow?: () => ReadonlyArray<string> | undefined;
   readonly bindAvailable?: () => boolean;
   readonly publish: (union: Union) => Effect.Effect<string, Error>;
   readonly confirm: (sha256: string) => Effect.Effect<unknown, Error>;
@@ -644,6 +646,60 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
       pids: pidValues(),
     })),
   );
+  const judgeClaimCall = Effect.fn("BrowserOriginGrants.judgeClaimCall")(
+    (
+      threadId: ThreadId,
+      name: string,
+      args: unknown,
+      expected?: { readonly claimId: string; readonly claimGeneration: number },
+      authority?: "claimBind",
+    ) =>
+      Effect.sync(() => {
+        if ("unchanged" in scopeBrowserCall(name, args, [])) return "admit" as const;
+        const hosts = deps.blockedHostsNow?.();
+        if (hosts === undefined) return "blocked" as const;
+        const binding = authorizeClaimBind(authority, name, args, bindingValues(threadId));
+        if (binding !== undefined)
+          return isBlockedBrowserUrl(binding.origin, hosts)
+            ? ("blocked" as const)
+            : ("admit" as const);
+        const input =
+          typeof args === "object" && args !== null && !Array.isArray(args)
+            ? (args as Record<string, unknown>)
+            : undefined;
+        const prefix = browserClaimSession("");
+        const claimId =
+          expected?.claimId ??
+          (typeof input?.session === "string" && input.session.startsWith(prefix)
+            ? input.session.slice(prefix.length)
+            : undefined);
+        const endedClaim = claimId === undefined ? undefined : ended.get(claimId);
+        if (endedClaim?.threadId === threadId && endedClaim.reason === "blocked_url")
+          return "blocked" as const;
+        if (expected !== undefined) {
+          const claim = claims.get(expected.claimId);
+          if (claim?.threadId !== threadId || claim.claimGeneration !== expected.claimGeneration)
+            return "outside" as const;
+        }
+        if (!serverAdmitsBrowserCall(name, args, { claims: claimValues(threadId), bindings: [] }))
+          return "outside" as const;
+        const result = blockedClaimCall(
+          name,
+          args,
+          hosts,
+          [...claims.values()].filter((claim) => claim.threadId === threadId),
+        );
+        if (result.blocked && result.claim)
+          return {
+            status: "blocked" as const,
+            claim: {
+              claimId: result.claim.claimId,
+              claimGeneration: result.claim.claimGeneration,
+            },
+          };
+        return result.blocked ? ("blocked" as const) : ("admit" as const);
+      }),
+  );
   const admitClaimCall = Effect.fn("BrowserOriginGrants.admitClaimCall")(function* (
     threadId: ThreadId,
     name: string,
@@ -763,6 +819,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     driverRestarted,
     bindingsFor,
     snapshotFor,
+    judgeClaimCall,
     admitClaimCall,
     verifyBindCall,
     claimsFor,

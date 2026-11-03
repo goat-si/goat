@@ -18,6 +18,7 @@ class BrowserClaimBindUnavailable extends Schema.TaggedError<BrowserClaimBindUna
 const make = Effect.gen(function* () {
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const settings = yield* ServerSettings.ServerSettingsService;
+  const runSync = Effect.runSyncWith(yield* Effect.context<never>());
   const changes = yield* settings.subscribeChanges;
   const { environmentId } = yield* environment.getDescriptor;
   const manifest = yield* Effect.serviceOption(BrowserClaimManifest);
@@ -26,6 +27,13 @@ const make = Effect.gen(function* () {
   let disable = () => Effect.void;
   const service = yield* makeBrowserOriginGrants({
     environmentId,
+    blockedHostsNow: () => {
+      if (settings.committedPolicy === undefined) return undefined;
+      const policy = runSync(settings.committedPolicy);
+      return policy._tag === "committed" && Array.isArray(policy.blockedBrowserHosts)
+        ? policy.blockedBrowserHosts
+        : undefined;
+    },
     blockedHosts:
       settings.blockedBrowserHostsSnapshot ??
       settings.getSettings.pipe(Effect.map((value) => value.blockedBrowserHosts)),

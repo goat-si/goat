@@ -227,7 +227,7 @@ describe("computer use lease route", () => {
 
   it.effect("validation refuses a claim whose origin is currently blocked", () =>
     Effect.gen(function* () {
-      const { control, route, scoped, setBlocked } = yield* claimedAdmissionFixture();
+      const { grants, control, route, scoped, setBlocked } = yield* claimedAdmissionFixture();
       const reserved = yield* route.postCall({
         action: "reserve",
         controlId: control.controlId,
@@ -253,6 +253,7 @@ describe("computer use lease route", () => {
         reservationId: reserved.reservationId,
       });
       assert.deepEqual(validation, { status: "refused", detail: "blocked_url" });
+      assert.deepEqual(yield* grants.claimsFor(threadId), []);
     }).pipe(Effect.scoped),
   );
 

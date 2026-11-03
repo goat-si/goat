@@ -70,10 +70,7 @@ import {
   settlementHistoryKey,
 } from "./ComputerUseHistoryBackground.ts";
 import { deniedCallApp } from "./ComputerUseCallSafety.ts";
-import {
-  browserClaimSession,
-  serverAdmitsBrowserCall,
-} from "./ComputerUseLeaseProxyBrowserClaims.ts";
+import { serverAdmitsBrowserCall } from "./ComputerUseLeaseProxyBrowserClaims.ts";
 
 const encodeUpdate = Schema.encodeSync(Schema.fromJsonString(ComputerUseLeaseUpdate));
 const encodeThreadUpdate = Schema.encodeSync(Schema.fromJsonString(ComputerUseLeaseThreadUpdate));
@@ -526,49 +523,28 @@ const makeCallLayer = (serverScope: Scope.Scope) =>
       let outsideManifest = false;
       let blockedBrowser = false;
       let blockedByJudge = false;
+      let blockedClaim: { readonly claimId: string; readonly claimGeneration: number } | undefined;
       let selectedClaim: { readonly claimId: string; readonly claimGeneration: number } | undefined;
       let selectedBind: { readonly claimId: string; readonly origin: string } | undefined;
       const grants = yield* Effect.serviceOption(BrowserOriginGrants.BrowserOriginGrants);
       const judge = Effect.fn("ComputerUseLeaseRoute.judgeBrowserCall")(function* (
         reserved: Extract<ComputerUseCallReservation, { action: "reserve" }>,
       ) {
-        if (call.value.action === "validate" && Option.isSome(grants)) {
-          const checked = yield* grants.value
-            .admitClaimCall(
-              threadId,
-              reserved.name,
-              reserved.args,
-              settings.value.blockedBrowserHosts,
-              undefined,
-              reserved.authority,
-            )
-            .pipe(Effect.option);
-          if (Option.isNone(checked)) return false;
-          if (checked.value.status === "blocked") {
-            blockedByJudge = true;
-            return false;
-          }
-          if (checked.value.status === "outside") {
-            const args = reserved.args;
-            const prefix = browserClaimSession("");
-            if (
-              typeof args === "object" &&
-              args !== null &&
-              "session" in args &&
-              typeof args.session === "string" &&
-              args.session.startsWith(prefix)
-            ) {
-              blockedByJudge =
-                (yield* grants.value.endReason(threadId, args.session.slice(prefix.length))) ===
-                "blocked_url";
-            }
-            return false;
-          }
-        }
-        const snapshot = Option.isSome(grants)
-          ? yield* grants.value.snapshotFor(threadId)
-          : { claims: [], bindings: [] };
-        return serverAdmitsBrowserCall(reserved.name, reserved.args, snapshot);
+        if (Option.isNone(grants))
+          return serverAdmitsBrowserCall(reserved.name, reserved.args, {
+            claims: [],
+            bindings: [],
+          });
+        const decision = yield* grants.value.judgeClaimCall(
+          threadId,
+          reserved.name,
+          reserved.args,
+          selectedClaim,
+          reserved.authority,
+        );
+        blockedByJudge = decision === "blocked" || typeof decision === "object";
+        if (typeof decision === "object") blockedClaim = decision.claim;
+        return decision === "admit";
       });
       if (call.value.action === "reserve" && deniedApp === undefined && !pointerLocked) {
         if (Option.isSome(grants)) {
@@ -606,8 +582,16 @@ const makeCallLayer = (serverScope: Scope.Scope) =>
                 : outsideManifest
                   ? { status: "refused", detail: "outside_manifest" }
                   : yield* leases.callReservation(threadId, call.value, judge);
-        if (result.status === "refused" && result.detail === "outside_manifest" && blockedByJudge)
+        if (result.status === "refused" && result.detail === "outside_manifest" && blockedByJudge) {
+          if (blockedClaim && Option.isSome(grants))
+            yield* grants.value.end(
+              threadId,
+              blockedClaim.claimId,
+              blockedClaim.claimGeneration,
+              "blocked_url",
+            );
           result = { status: "refused", detail: "blocked_url" };
+        }
         if (
           call.value.action === "reserve" &&
           (selectedClaim || selectedBind) &&
