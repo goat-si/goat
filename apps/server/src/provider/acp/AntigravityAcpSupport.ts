@@ -89,9 +89,8 @@ export function isQualifiedAntigravityRelease(version: string | null | undefined
  * 1.4.5 appends `systemPrompt.append` to its system instructions on new, load and resume, and
  * keeps none of it between processes, so every activation sends it again.
  */
-const antigravityAppendsSystemPrompt = (
-  initializeResult: EffectAcpSchema.InitializeResponse,
-) => isQualifiedAntigravityRelease(initializeResult.agentInfo?.version);
+const antigravityAppendsSystemPrompt = (initializeResult: EffectAcpSchema.InitializeResponse) =>
+  isQualifiedAntigravityRelease(initializeResult.agentInfo?.version);
 
 export function antigravitySessionMeta(
   initializeResult: EffectAcpSchema.InitializeResponse,
