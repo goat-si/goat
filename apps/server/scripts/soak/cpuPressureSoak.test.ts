@@ -14,6 +14,10 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import { isSoakExitPrompt } from "../dev-replay-agent.ts";
+import {
+  codexSocketTransportMode,
+  shouldUseCodexSocketTransport,
+} from "../../src/provider/CodexDetachedAppServerLive.ts";
 import { holdSoakWindow, openRelay } from "./clients.ts";
 
 it("relays bytes and disconnects the owned connection", async () => {
@@ -49,6 +53,51 @@ it("relays bytes and disconnects the owned connection", async () => {
 });
 
 describe("soak Codex fixture", () => {
+  it.live("reports unknown Codex methods in the soak result (#2468)", () =>
+    Effect.promise(async () => {
+      const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-codex-unknown-"));
+      const script = NodePath.join(dir, "script.json");
+      const log = NodePath.join(dir, "lifecycle");
+      NodeFS.writeFileSync(script, JSON.stringify({ rootThreadId: "unused", notifications: [] }));
+      const fixture = new URL(
+        "../../src/provider/testFixtures/codexCollabMockPeer.mjs",
+        import.meta.url,
+      );
+      const child = guardChild(
+        NodeChildProcess.spawn(process.execPath, [fixture.pathname], {
+          stdio: ["pipe", "pipe", "ignore"],
+          env: {
+            ...process.env,
+            GOAT_CODEX_COLLAB_SCRIPT: script,
+            GOAT_CODEX_MOCK_SOAK: "1",
+            GOAT_SOAK_PROVIDER_LIFECYCLE_LOG: log,
+          },
+        }),
+        () => {},
+      );
+      const exited = new Promise<number | null>((resolve) => child.once("exit", resolve));
+      const lines = NodeReadline.createInterface({ input: child.stdout })[Symbol.asyncIterator]();
+      try {
+        child.stdin.write(`${JSON.stringify({ id: 1, method: "future/method" })}\n`);
+        child.stdin.write(`${JSON.stringify({ id: 2, method: "future/method" })}\n`);
+        expect(JSON.parse((await lines.next()).value as string).error.code).toBe(-32601);
+        expect(JSON.parse((await lines.next()).value as string).error.code).toBe(-32601);
+        child.stdin.end();
+        expect(await exited).toBe(0);
+        const observations = new Observations();
+        for (const line of NodeFS.readFileSync(log, "utf8").trim().split("\n"))
+          observations.consumeLifecycle(JSON.parse(line));
+        expect(observations.report([], counter(), counter()).counters).toMatchObject({
+          unknownCodexMethods: { observed: 2 },
+        });
+      } finally {
+        if (child.exitCode === null && child.signalCode === null) child.kill();
+        await exited;
+        NodeFS.rmSync(dir, { recursive: true, force: true });
+      }
+    }),
+  );
+
   it("forces one Codex exit then completes a recovery turn containing old history", async () => {
     const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-codex-recover-"));
     const script = NodePath.join(dir, "script.json");
@@ -697,6 +746,60 @@ import {
 } from "./cpuPressureSoak.ts";
 
 describe("soak input safety", () => {
+  it("allows only the server's required environment (#2468)", async () => {
+    const soak = await import("./cpuPressureSoak.ts");
+    const env = soak.serverEnvironment(
+      {
+        PATH: "/bin",
+        HOME: "/home/example",
+        LANG: "en_US.UTF-8",
+        SECRET_TOKEN: "secret",
+        VITE_WS_URL: "bad",
+        GOAT_CODEX_APP_SERVER_TRANSPORT: "socket",
+      },
+      "/tmp/lifecycle",
+      "credential",
+    );
+    expect(env).toMatchObject({
+      PATH: "/bin",
+      HOME: "/home/example",
+      LANG: "en_US.UTF-8",
+      GOAT_DEV_AUTH_TOKEN: "credential",
+      GOAT_SOAK_PROVIDER_LIFECYCLE_LOG: "/tmp/lifecycle",
+      GOAT_CODEX_APP_SERVER_TRANSPORT: "stdio",
+    });
+    for (const survival of ["off", "restart", "always"] as const)
+      expect(shouldUseCodexSocketTransport(codexSocketTransportMode("linux", env), survival)).toBe(
+        false,
+      );
+    expect(env).not.toHaveProperty("SECRET_TOKEN");
+    expect(env).not.toHaveProperty("VITE_WS_URL");
+  });
+  it.live("starts the server directly on Windows without a watchdog", () =>
+    Effect.promise(async () => {
+      const { spawnWatchedServer } = await import("./cpuPressureSoak.ts");
+      const owned = await spawnWatchedServer(
+        process.execPath,
+        ["-e", "process.stdin.resume()"],
+        {
+          stdio: ["pipe", "pipe", "pipe"],
+        },
+        "ignore",
+        "win32",
+      );
+      try {
+        expect(owned.server.child.spawnfile).toBe(process.execPath);
+        expect(owned.watchdog).toBeUndefined();
+      } finally {
+        await cleanupOwned([owned.server]);
+        if (owned.watchdog) {
+          owned.watchdog.child.stdin?.end();
+          await owned.watchdog.exited;
+        }
+      }
+    }),
+  );
+
   it("routes only termination signals to cleanup and removes the handlers", () => {
     const emitter = new NodeEvents.EventEmitter();
     const reasons: string[] = [];
