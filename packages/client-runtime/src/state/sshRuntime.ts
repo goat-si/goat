@@ -124,7 +124,9 @@ export function sshRuntimeStatusText(status: SshHostStatus): string {
       const order = sshRuntimeBuildOrder(status);
       const label =
         order !== undefined && order < 0
-          ? "Update available"
+          ? sshRuntimeCanBeUpdated(status)
+            ? "Update available"
+            : "Kept"
           : order !== undefined && order > 0
             ? "Newer than this app"
             : "Kept";

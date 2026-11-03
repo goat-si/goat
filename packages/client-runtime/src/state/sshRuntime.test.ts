@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { Atom, AtomRegistry } from "effect/reactivity";
 import { describe, expect, it } from "vite-plus/test";
+import { it as effectIt } from "@effect/vitest";
 
 import {
   createSshRuntimeState,
@@ -33,6 +34,19 @@ function harness(reply: SshHostResult = waiting) {
 }
 
 describe("Desktop SSH runtime state", () => {
+  effectIt.effect("keeps an older runtime label when it cannot be updated", () =>
+    Effect.sync(() => {
+      expect(
+        sshRuntimeStatusText({
+          host: "box",
+          state: "ready",
+          runtimeVersion: "1.2.2",
+          requestedVersion: "1.2.3",
+          detail: "This runtime cannot be replaced.",
+        }),
+      ).toBe("Kept · Runtime 1.2.2");
+    }),
+  );
   it.each([
     ["0.4.2", "0.4.3", "Update available", null, -1],
     ["0.5.0", "0.4.3", "Newer than this app", "Update this app to manage it.", 1],
