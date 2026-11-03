@@ -2,11 +2,12 @@ import { assert, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
-import { HttpClient } from "effect/http";
+import { HttpClient, HttpClientResponse } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
 import type * as Harness from "./DesktopBackendManager.test.ts";
 
@@ -70,5 +71,79 @@ export function registerStartupProgressTests({
         assert.equal(yield* Queue.size(reports), 0);
       }),
     ),
+  );
+  it.effect.each(["ready", "stop"] as const)(
+    "startup failure cannot overwrite %s while its snapshot is pending",
+    (action) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const probed = yield* Deferred.make<void>();
+          const allowReady = yield* Deferred.make<void>();
+          const ready = yield* Deferred.make<void>();
+          const snapshotStarted = yield* Deferred.make<void>();
+          const releaseSnapshot = yield* Deferred.make<void>();
+          const snapshotDone = yield* Deferred.make<void>();
+          const stopping = yield* Deferred.make<void>();
+          const reports = yield* Queue.unbounded<string>();
+          const spawnerLayer = Layer.succeed(
+            ChildProcessSpawner.ChildProcessSpawner,
+            ChildProcessSpawner.make(() =>
+              Effect.gen(function* () {
+                const exit = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
+                yield* Scope.addFinalizer(
+                  yield* Scope.Scope,
+                  Deferred.succeed(exit, ChildProcessSpawner.ExitCode(0)).pipe(Effect.asVoid),
+                );
+                return makeProcess({ exitCode: Deferred.await(exit) });
+              }),
+            ),
+          );
+          const httpClientLayer = Layer.succeed(
+            HttpClient.HttpClient,
+            HttpClient.make((request) =>
+              Deferred.succeed(probed, undefined).pipe(
+                Effect.andThen(Deferred.await(allowReady)),
+                Effect.as(HttpClientResponse.fromWeb(request, new Response(null, { status: 200 }))),
+              ),
+            ),
+          );
+          const instance = yield* makeTestInstance({
+            spawnerLayer,
+            httpClientLayer,
+            onReady: Deferred.succeed(ready, undefined).pipe(Effect.asVoid),
+            onStartupFailure: (failure) => Queue.offer(reports, failure.reason).pipe(Effect.asVoid),
+            backendOutputLog: {
+              markStop: Deferred.succeed(stopping, undefined).pipe(Effect.asVoid),
+              persistFailureSnapshot: () =>
+                Deferred.succeed(snapshotStarted, undefined).pipe(
+                  Effect.andThen(Deferred.await(releaseSnapshot)),
+                  Effect.andThen(Deferred.succeed(snapshotDone, undefined)),
+                  Effect.uninterruptible,
+                  Effect.asVoid,
+                ),
+            },
+          });
+          yield* instance.start;
+          yield* Deferred.await(probed);
+          yield* TestClock.adjust("60 seconds");
+          yield* Deferred.await(snapshotStarted);
+          if (action === "ready") {
+            yield* Deferred.succeed(allowReady, undefined);
+            yield* TestClock.adjust("1 second");
+            yield* Deferred.await(ready);
+          } else {
+            const stop = yield* instance
+              .stop("quit")
+              .pipe(Effect.forkChild({ startImmediately: true }));
+            yield* Deferred.await(stopping);
+            yield* Deferred.succeed(releaseSnapshot, undefined);
+            yield* Fiber.join(stop);
+          }
+          yield* Deferred.succeed(releaseSnapshot, undefined);
+          yield* Deferred.await(snapshotDone);
+          yield* TestClock.adjust("1 second");
+          assert.equal(yield* Queue.size(reports), 0);
+        }),
+      ),
   );
 }

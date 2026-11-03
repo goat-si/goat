@@ -4,7 +4,7 @@ import * as Deferred from "effect/Deferred";
 import { vi } from "vite-plus/test";
 
 interface FakeNotice {
-  readonly emit: (event: string, ...args: string[]) => boolean;
+  readonly emit: (event: string, ...args: unknown[]) => boolean;
   readonly listenerCount: (event: string) => number;
   closed: boolean;
 }
@@ -44,6 +44,7 @@ it.effect("a replacement closes the previous notification and failed delivery is
     yield* notifications.show("one", "title", "body", Effect.void, failure);
     const [first, second] = fixture.notices;
     assert.isTrue(first?.closed);
+    assert.doesNotThrow(() => first?.emit("error", new Error("late error")));
     assert.equal(first?.listenerCount("click"), 0);
     second?.emit("failed", "event", "failure");
     yield* Deferred.await(failed);
@@ -51,6 +52,7 @@ it.effect("a replacement closes the previous notification and failed delivery is
     yield* notifications.show("one", "title", "body", Effect.void, failure);
     yield* notifications.close("one");
     assert.isTrue(fixture.notices[2]?.closed);
+    assert.doesNotThrow(() => fixture.notices[2]?.emit("error", new Error("late error")));
   }),
 );
 

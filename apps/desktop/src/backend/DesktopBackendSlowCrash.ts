@@ -46,7 +46,7 @@ export const publishSlowCrash = Effect.fn("desktop.backendInstance.publishSlowCr
   );
 });
 
-export const slowCrashInfo = (
+const slowCrashInfo = (
   record: RecoveryRecord,
   label: string,
   logPath: string,

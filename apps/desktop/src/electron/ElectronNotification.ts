@@ -2,7 +2,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Electron from "electron";
-import * as NodeEvents from "node:events";
+import { guardErrors } from "@goat/shared/errorGuards";
 
 export class ElectronNotification extends Context.Service<
   ElectronNotification,
@@ -46,7 +46,11 @@ export const make = () => {
         previous?.cleanup();
         previous?.notification.close();
         if (!Electron.Notification.isSupported()) throw new Error("notifications unsupported");
-        const notification = new Electron.Notification({ title, body });
+        const notification = guardErrors(new Electron.Notification({ title, body }), (error) => {
+          if (active.get(id)?.notification !== notification) return;
+          cleanup();
+          run(onFailure(error.message));
+        });
         const cleanup = () => {
           if (active.get(id)?.notification === notification) active.delete(id);
           notification.removeListener("close", onClose);
@@ -62,11 +66,6 @@ export const make = () => {
           cleanup();
           run(onFailure(message));
         };
-        NodeEvents.EventEmitter.prototype.on.call(notification, "error", (error: Error) => {
-          if (active.get(id)?.notification !== notification) return;
-          cleanup();
-          run(onFailure(error.message));
-        });
         notification.on("close", onClose);
         notification.on("click", onClickEvent);
         notification.on("failed", onFailed);

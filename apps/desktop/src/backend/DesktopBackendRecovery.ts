@@ -51,10 +51,20 @@ export const makeRecoveryBudget = Effect.fn("DesktopBackendRecovery.makeRecovery
       if (path === undefined) return Effect.void;
       const target = path;
       const temporary = `${target}.${NodeCrypto.randomUUID()}.tmp`;
+      let encoded = encodeRecoveryRecord(record);
+      while (new TextEncoder().encode(encoded).length > 4096 && (record.history?.length ?? 0) > 0) {
+        record = Object.assign({}, record, { history: (record.history ?? []).slice(1) });
+        encoded = encodeRecoveryRecord(record);
+      }
+      while (new TextEncoder().encode(encoded).length > 4096 && record.outcome.length > 0) {
+        record = {
+          ...record,
+          outcome: record.outcome.slice(0, Math.floor(record.outcome.length / 2)),
+        };
+        encoded = encodeRecoveryRecord(record);
+      }
       return fs.makeDirectory(NodePath.dirname(target), { recursive: true, mode: 0o700 }).pipe(
-        Effect.andThen(
-          fs.writeFileString(temporary, encodeRecoveryRecord(record), { mode: 0o600 }),
-        ),
+        Effect.andThen(fs.writeFileString(temporary, encoded, { mode: 0o600 })),
         Effect.andThen(fs.rename(temporary, target)),
         Effect.catchCause(() =>
           Effect.sync(() => {

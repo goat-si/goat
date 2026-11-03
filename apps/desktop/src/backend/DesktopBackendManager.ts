@@ -30,6 +30,8 @@ import { makeRecoveryBudget } from "./DesktopBackendRecovery.ts";
 import {
   makeStartupFailureReporter,
   makeBackendReadinessWait,
+  markBackendReady,
+  reportStartupFailureIfCurrent,
   type BackendStartupFailure,
 } from "./DesktopBackendStartup.ts";
 export type { BackendStartupFailure } from "./DesktopBackendStartup.ts";
@@ -589,26 +591,13 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
             );
           }),
           onReady: Effect.fn("desktop.backendInstance.onReady")(function* () {
-            const isCurrentRun = yield* Ref.modify(state, (latest) => {
-              const activeRun = Option.getOrUndefined(latest.active);
-              if (
-                activeRun?.id !== runId ||
-                activeRun.stopRequested ||
-                !latest.desiredRunning ||
-                recoveryStatus === "blocked"
-              ) {
-                return [false, latest] as const;
-              }
-
-              return [
-                true,
-                {
-                  ...latest,
-                  ready: true,
-                  startupRetryAttempt: 0,
-                },
-              ] as const;
-            });
+            const isCurrentRun = yield* markBackendReady(
+              mutex,
+              state,
+              runId,
+              () => recoveryStatus === "blocked",
+              spec.onReady?.(config.value.httpBaseUrl) ?? Effect.void,
+            );
             if (!isCurrentRun) {
               return;
             }
@@ -641,7 +630,6 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
               ),
               Effect.forkIn(runScope),
             );
-            yield* spec.onReady?.(config.value.httpBaseUrl) ?? Effect.void;
             if (
               config.value.runningDistro !== undefined &&
               config.value.wslRuntimeId !== undefined
@@ -658,7 +646,12 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
                 reason,
               });
               yield* backendOutputLog.persistFailureSnapshot({ details: reason });
-              yield* startupFailure.report(reason);
+              yield* reportStartupFailureIfCurrent(
+                mutex,
+                state,
+                runId,
+                startupFailure.report(reason),
+              );
             },
           ),
           onOutput: (streamName, chunk) =>
@@ -708,8 +701,9 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
       : { record: yield* recovery.current, notify: false };
     const record = result.record;
     if (result.notify)
-      yield* Effect.forkDetach(
+      yield* Effect.forkIn(
         notifySlowCrash(record, spec.label, logPath, backendOutputLog.recordStop, spec.onSlowCrash),
+        parentScope,
       );
     if (record.pause !== null) {
       recoveryStatus = record.pause;

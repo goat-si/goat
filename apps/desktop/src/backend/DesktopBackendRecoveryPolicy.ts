@@ -37,7 +37,7 @@ export function pruneSlowCrash(record: RecoveryRecord, now: number): RecoveryRec
   return { ...rest, history };
 }
 
-export function slowCrashKey(
+function slowCrashKey(
   history: ReadonlyArray<{ readonly at: number; readonly outcome: string }>,
 ): string | undefined {
   if (history.length < 4) return undefined;

@@ -1,6 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Scope from "effect/Scope";
@@ -70,5 +71,55 @@ export function registerSlowCrashTests({
           assert.equal(yield* Queue.size(dialogs), 0);
         }),
       ),
+  );
+  it.effect("closing the instance cancels a pending slow-crash notice", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const owner = yield* Scope.make("sequential");
+        const exits = yield* Queue.unbounded<Deferred.Deferred<ChildProcessSpawner.ExitCode>>();
+        const ready = yield* Queue.unbounded<void>();
+        const noticeStarted = yield* Deferred.make<void>();
+        const releaseNotice = yield* Deferred.make<void>();
+        const delivered = yield* Deferred.make<void>();
+        const spawnerLayer = Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make(() =>
+            Effect.gen(function* () {
+              const exit = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
+              yield* Scope.addFinalizer(
+                yield* Scope.Scope,
+                Deferred.succeed(exit, ChildProcessSpawner.ExitCode(0)).pipe(Effect.asVoid),
+              );
+              yield* Queue.offer(exits, exit);
+              return makeProcess({ exitCode: Deferred.await(exit) });
+            }),
+          ),
+        );
+        const instance = yield* makeTestInstance({
+          config: baseConfig,
+          spawnerLayer,
+          onReady: Queue.offer(ready, undefined).pipe(Effect.asVoid),
+          onSlowCrash: () =>
+            Deferred.succeed(noticeStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(releaseNotice)),
+              Effect.andThen(Deferred.succeed(delivered, undefined)),
+              Effect.asVoid,
+            ),
+        }).pipe(Scope.provide(owner));
+        yield* instance.start;
+        for (let n = 0; n < 4; n++) {
+          yield* Queue.take(ready);
+          const exit = yield* Queue.take(exits);
+          yield* TestClock.adjust("10 minutes");
+          yield* Deferred.succeed(exit, ChildProcessSpawner.ExitCode(1));
+          yield* TestClock.adjust("30 seconds");
+        }
+        yield* Deferred.await(noticeStarted);
+        yield* Scope.close(owner, Exit.void);
+        yield* Deferred.succeed(releaseNotice, undefined);
+        yield* TestClock.adjust("1 second");
+        assert.isFalse(yield* Deferred.isDone(delivered));
+      }),
+    ),
   );
 }

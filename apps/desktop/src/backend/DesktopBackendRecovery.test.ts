@@ -84,3 +84,31 @@ it.effect("a fourth exit after a lapse notifies even when its key is unchanged",
     assert.isTrue((yield* owner.fail(6 * 60 * 60_000 + 1, "b", "same")).notify);
   }).pipe(Effect.provide(FileSystem.layerNoop({}))),
 );
+
+it.effect("escaped and multibyte outcomes remain below the recovery record byte limit", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = NodePath.join(yield* fs.makeTempDirectoryScoped(), "owner.json");
+      const owner = yield* makeRecoveryBudget();
+      yield* owner.initialize(path);
+      for (let n = 0; n < 8; n++) {
+        yield* owner.fail(
+          n * 700_000,
+          "\u0001".repeat(128),
+          ("\u0001".repeat(32) + "😀".repeat(32)).repeat(4),
+        );
+        yield* owner.reset;
+      }
+      yield* owner.fail(
+        8 * 700_000,
+        "\u0001".repeat(128),
+        ("\u0001".repeat(32) + "😀".repeat(32)).repeat(4),
+      );
+      assert.isAtMost(new TextEncoder().encode(yield* fs.readFileString(path)).length, 4096);
+      const next = yield* makeRecoveryBudget();
+      yield* next.initialize(path);
+      assert.isNull((yield* next.current).pause);
+    }),
+  ).pipe(Effect.provide(NodeServices.layer)),
+);
