@@ -66,7 +66,6 @@ export const layer = (path: string | undefined, pid: number) =>
                 }),
               )
               .pipe(
-                Effect.interruptible,
                 Effect.timeoutOption("1 second"),
                 Effect.map((result) =>
                   Option.isSome(result) ? result.value : Option.flatten(cached),

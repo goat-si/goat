@@ -24,6 +24,86 @@ export function registerStopIntentTests({
   makeProcess: typeof Harness.makeProcess;
   baseConfig: Parameters<typeof Harness.makeTestInstance>[0]["config"] & {};
 }) {
+  it.effect.each(["written", "timeout"] as const)(
+    "an interrupted finalizer waits for the pending stop intent before releasing the backend: %s",
+    (outcome) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const ready = yield* Deferred.make<void>();
+          const renameStarted = yield* Deferred.make<void>();
+          const allowRename = yield* Deferred.make<void>();
+          const released = yield* Deferred.make<void>();
+          const stopping = yield* Deferred.make<void>();
+          const ownerReady = yield* Deferred.make<void>();
+          const exit = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
+          const spawnerLayer = Layer.succeed(
+            ChildProcessSpawner.ChildProcessSpawner,
+            ChildProcessSpawner.make(() =>
+              Effect.gen(function* () {
+                const kill = Deferred.succeed(released, undefined).pipe(
+                  Effect.andThen(Deferred.succeed(exit, ChildProcessSpawner.ExitCode(0))),
+                  Effect.asVoid,
+                );
+                yield* Scope.addFinalizer(yield* Scope.Scope, kill);
+                return makeProcess({ exitCode: Deferred.await(exit), kill: () => kill });
+              }),
+            ),
+          );
+          const instance = yield* makeTestInstance({
+            spawnerLayer,
+            config: {
+              ...baseConfig,
+              bootstrap: { ...baseConfig.bootstrap, desktopStopIntentPath: "/intent.json" },
+            },
+            onReady: Deferred.succeed(ready, undefined).pipe(Effect.asVoid),
+            fileSystem: {
+              makeDirectory: () => Effect.void,
+              writeFileString: () => Effect.void,
+              rename: () =>
+                Deferred.succeed(renameStarted, undefined).pipe(
+                  Effect.andThen(Deferred.await(allowRename)),
+                ),
+              remove: () => Effect.void,
+            },
+          });
+          yield* instance.start;
+          yield* Deferred.await(ready);
+          const owner = yield* Effect.scoped(
+            Effect.gen(function* () {
+              yield* Effect.addFinalizer(() =>
+                Deferred.succeed(stopping, undefined).pipe(Effect.andThen(instance.stop("quit"))),
+              );
+              yield* Deferred.succeed(ownerReady, undefined);
+              return yield* Effect.never;
+            }),
+          ).pipe(Effect.forkChild({ startImmediately: true }));
+          yield* Deferred.await(ownerReady);
+          const interrupt = yield* Fiber.interrupt(owner).pipe(
+            Effect.forkChild({ startImmediately: true }),
+          );
+          yield* Deferred.await(stopping);
+          yield* Deferred.await(renameStarted);
+          yield* TestClock.adjust(0);
+          const releasedEarly = yield* Deferred.isDone(released);
+          let beforeDeadline = false;
+          let atDeadline = true;
+          if (outcome === "timeout") {
+            yield* TestClock.adjust("999 millis");
+            beforeDeadline = yield* Deferred.isDone(released);
+            yield* TestClock.adjust("1 millis");
+            atDeadline = yield* Deferred.isDone(released);
+          }
+          yield* Deferred.succeed(allowRename, undefined);
+          yield* Fiber.join(interrupt);
+          const wasReleased = yield* Deferred.isDone(released);
+          assert.isFalse(releasedEarly);
+          assert.isFalse(beforeDeadline);
+          assert.isTrue(atDeadline);
+          assert.isTrue(wasReleased);
+        }),
+      ),
+  );
+
   it.effect.each([false, true])(
     "writes the stop reason before releasing a pending spawn (late: %s)",
     (late) =>
