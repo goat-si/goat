@@ -576,7 +576,10 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
       const binding = authorizeClaimBind("claimBind", name, args, bindingValues(threadId));
       if (Option.isNone(hosts) || !binding || isBlockedBrowserUrl(binding.origin, hosts.value))
         return { status: "blocked" as const };
-      return { status: "admit" as const };
+      return {
+        status: "admit" as const,
+        bind: { claimId: binding.claimId, origin: binding.origin },
+      };
     }
     return yield* lock.withPermits(1)(
       Effect.gen(function* () {
@@ -635,6 +638,24 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
       }),
     );
   });
+  const verifyBindCall = Effect.fn("BrowserOriginGrants.verifyBindCall")(function* (
+    threadId: ThreadId,
+    name: string,
+    args: unknown,
+    fallbackHosts: ReadonlyArray<string>,
+    expected: { readonly claimId: string; readonly origin: string },
+  ) {
+    const hosts = yield* (deps.blockedHosts ?? Effect.succeed(fallbackHosts)).pipe(Effect.option);
+    if (Option.isNone(hosts)) return { status: "blocked" as const };
+    const binding = authorizeClaimBind("claimBind", name, args, bindingValues(threadId));
+    if (!binding || binding.claimId !== expected.claimId || binding.origin !== expected.origin)
+      return { status: "outside" as const };
+    return {
+      status: isBlockedBrowserUrl(binding.origin, hosts.value)
+        ? ("blocked" as const)
+        : ("admit" as const),
+    };
+  });
   return {
     request,
     requestWindow,
@@ -653,6 +674,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     bindingsFor,
     snapshotFor,
     admitClaimCall,
+    verifyBindCall,
     claimsFor,
     claimedPids,
     revision: SubscriptionRef.get(version),

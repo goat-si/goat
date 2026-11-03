@@ -523,6 +523,7 @@ const makeCallLayer = (serverScope: Scope.Scope) =>
       let outsideManifest = false;
       let blockedBrowser = false;
       let selectedClaim: { readonly claimId: string; readonly claimGeneration: number } | undefined;
+      let selectedBind: { readonly claimId: string; readonly origin: string } | undefined;
       const grants = yield* Effect.serviceOption(BrowserOriginGrants.BrowserOriginGrants);
       if (call.value.action === "reserve" && deniedApp === undefined && !pointerLocked) {
         if (Option.isSome(grants)) {
@@ -539,6 +540,8 @@ const makeCallLayer = (serverScope: Scope.Scope) =>
           outsideManifest = checked.value.status === "outside";
           if (checked.value.status === "admit" && "claim" in checked.value)
             selectedClaim = checked.value.claim;
+          if (checked.value.status === "admit" && "bind" in checked.value)
+            selectedBind = checked.value.bind;
         } else
           outsideManifest = !serverAdmitsBrowserCall(call.value.name, call.value.args, {
             claims: [],
@@ -558,19 +561,27 @@ const makeCallLayer = (serverScope: Scope.Scope) =>
                   : yield* leases.callReservation(threadId, call.value);
         if (
           call.value.action === "reserve" &&
-          selectedClaim &&
+          (selectedClaim || selectedBind) &&
           result.status === "admitted" &&
           Option.isSome(grants)
         ) {
-          const verified = yield* grants.value
-            .admitClaimCall(
-              threadId,
-              call.value.name,
-              call.value.args,
-              settings.value.blockedBrowserHosts,
-              selectedClaim,
-            )
-            .pipe(Effect.option);
+          const verified = yield* (
+            selectedBind
+              ? grants.value.verifyBindCall(
+                  threadId,
+                  call.value.name,
+                  call.value.args,
+                  settings.value.blockedBrowserHosts,
+                  selectedBind,
+                )
+              : grants.value.admitClaimCall(
+                  threadId,
+                  call.value.name,
+                  call.value.args,
+                  settings.value.blockedBrowserHosts,
+                  selectedClaim,
+                )
+          ).pipe(Effect.option);
           if (Option.isNone(verified) || verified.value.status !== "admit") {
             if (result.reservationId !== null)
               yield* leases.callReservation(threadId, {

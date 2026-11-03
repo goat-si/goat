@@ -4,16 +4,23 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import { makeTestBrowserOriginGrants } from "./BrowserOriginGrants.testkit.ts";
+
+class HostsUnavailable extends Schema.TaggedError<HostsUnavailable>()("HostsUnavailable", {}) {}
 
 it.effect("exposes binding authority only after approval and only to the owning thread", () =>
   Effect.gen(function* () {
     const entered = yield* Deferred.make<void>();
     const release = yield* Deferred.make<void>();
     const threadId = ThreadId.make("thread:one");
+    let hostsAvailable = true;
     const service = yield* makeTestBrowserOriginGrants({
       environmentId: EnvironmentId.make("environment:test"),
       supported: () => true,
+      blockedHosts: Effect.suspend(() =>
+        hostsAvailable ? Effect.succeed([]) : Effect.fail(new HostsUnavailable()),
+      ),
       publish: () => Effect.void,
       bind: () =>
         Deferred.succeed(entered, undefined).pipe(
@@ -62,10 +69,34 @@ it.effect("exposes binding authority only after approval and only to the owning 
       );
     assert.isTrue(Option.isSome(yield* Deferred.poll(admitted)));
     assert.equal((yield* Fiber.join(bindCall)).status, "admit");
+    const bindArgs = {
+      pid: 42,
+      window_id: 7,
+      origin_scope: ["https://example.test"],
+      session: `goat-claim:${request.claimId}`,
+    };
+    const bindIdentity = { claimId: request.claimId, origin: "https://example.test" };
+    assert.equal(
+      (yield* service.verifyBindCall(threadId, "get_browser_state", bindArgs, [], bindIdentity))
+        .status,
+      "admit",
+    );
+    hostsAvailable = false;
+    assert.equal(
+      (yield* service.verifyBindCall(threadId, "get_browser_state", bindArgs, [], bindIdentity))
+        .status,
+      "blocked",
+    );
+    hostsAvailable = true;
     assert.deepEqual(yield* service.bindingsFor(ThreadId.make("thread:other")), []);
     yield* Deferred.succeed(release, undefined);
     assert.equal((yield* Fiber.join(answer)).agentResult.status, "attached");
     assert.deepEqual(yield* service.bindingsFor(threadId), []);
+    assert.equal(
+      (yield* service.verifyBindCall(threadId, "get_browser_state", bindArgs, [], bindIdentity))
+        .status,
+      "outside",
+    );
   }),
 );
 
