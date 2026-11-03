@@ -91,10 +91,9 @@ describe("runAttachmentUploadCycle", () => {
       onMinted: () => "cancel",
     });
     expect(result).toMatchObject({
-      status: "failed",
-      step: "cleanup",
+      status: "cancelled",
       attachmentId: "pending-denied",
-      error: failure,
+      cleanupFailure: { step: "cleanup", error: failure },
     });
   });
   it("waits for pending upload deletion when cancelled after minting", async () => {
