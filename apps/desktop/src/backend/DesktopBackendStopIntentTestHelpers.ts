@@ -23,6 +23,65 @@ export function registerStopIntentTests({
   makeProcess: typeof Harness.makeProcess;
   baseConfig: Parameters<typeof Harness.makeTestInstance>[0]["config"] & {};
 }) {
+  it.effect("writes the stop reason before killing a backend whose spawn was pending", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const spawning = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const stopping = yield* Deferred.make<void>();
+        const exited = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
+        let temporary = "";
+        let written = "";
+        let intentAtKill = "";
+        const spawnerLayer = Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make(() =>
+            Effect.gen(function* () {
+              yield* Deferred.succeed(spawning, undefined);
+              yield* Deferred.await(release);
+              const kill = Effect.sync(() => {
+                intentAtKill = written;
+              }).pipe(
+                Effect.andThen(Deferred.succeed(exited, ChildProcessSpawner.ExitCode(0))),
+                Effect.asVoid,
+              );
+              yield* Scope.addFinalizer(yield* Scope.Scope, kill);
+              return makeProcess({ exitCode: Deferred.await(exited), kill: () => kill });
+            }),
+          ),
+        );
+        const instance = yield* makeTestInstance({
+          spawnerLayer,
+          config: {
+            ...baseConfig,
+            bootstrap: { ...baseConfig.bootstrap, desktopStopIntentPath: "/intent.json" },
+          },
+          fileSystem: {
+            makeDirectory: () => Effect.void,
+            writeFileString: (_path, content) =>
+              Effect.sync(() => {
+                temporary = content;
+              }),
+            rename: () =>
+              Effect.sync(() => {
+                written = temporary;
+              }),
+          },
+          backendOutputLog: { markStop: Deferred.succeed(stopping, undefined).pipe(Effect.asVoid) },
+        });
+        yield* instance.start;
+        yield* Deferred.await(spawning);
+        const stop = yield* instance.stop("relaunch").pipe(Effect.forkChild);
+        yield* Deferred.await(stopping);
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(stop);
+        const intent = yield* decodeStopIntent(intentAtKill);
+        assert.equal(intent.pid, 123);
+        assert.equal(intent.reason, "relaunch");
+      }),
+    ),
+  );
+
   it.effect.each(["write", "concurrent", "failure", "timeout", "unobserved", "no-path"] as const)(
     "stop intent is safe before release: %s",
     (scenario) =>

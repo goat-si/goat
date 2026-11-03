@@ -550,10 +550,11 @@ export const writeBackendStopIntent = Effect.fn("desktop.backendInstance.writeSt
       recordStop,
       bounded,
     };
-    if (input.path === undefined || Option.isNone(input.pid)) {
+    if (input.path === undefined) {
       yield* Deferred.succeed(input.done, undefined);
       return;
     }
+    if (Option.isNone(input.pid)) return;
     const path = input.path;
     const pid = input.pid.value;
     const temporary = `${path}.tmp`;

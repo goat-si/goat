@@ -7,7 +7,6 @@ import {
   type DesktopBackendStartConfig,
   type PreflightFailure,
   writeBackendStopIntent,
-  waitForBackendStopIntent,
   removeBackendStopIntent,
   recordBackendStopRequest,
   initialBackendManagerState,
@@ -557,7 +556,20 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
                   preserve: true,
                 });
                 const active = Option.getOrUndefined((yield* Ref.get(state)).active);
-                if (active?.id === runId && active.stopRequested) yield* backendOutputLog.markStop;
+                if (active?.id === runId && active.stopRequested) {
+                  if (active.intentPath !== undefined && Option.isSome(active.stopRequest)) {
+                    yield* Effect.forkDetach(
+                      writeBackendStopIntent(
+                        active,
+                        active.stopRequest.value.reason,
+                        fileSystem,
+                        backendOutputLog.recordStop,
+                        yield* Ref.get(active.boundedStop),
+                      ),
+                    );
+                  }
+                  yield* backendOutputLog.markStop;
+                }
               }),
             );
           }),
@@ -660,7 +672,12 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
               ),
             ),
         }).pipe(
-          Effect.ensuring(Deferred.succeed(spawnReady, undefined).pipe(Effect.asVoid)),
+          Effect.ensuring(
+            Deferred.succeed(spawnReady, undefined).pipe(
+              Effect.andThen(Deferred.succeed(intentWritten, undefined)),
+              Effect.asVoid,
+            ),
+          ),
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
           Effect.provideService(HttpClient.HttpClient, httpClient),
           Scope.provide(runScope),
@@ -855,7 +872,6 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
             level: "WARN",
             details: `pid=pending reason=${reason}`,
           });
-          yield* waitForBackendStopIntent(run.intentWritten);
           const closed = yield* closeRun(
             run,
             options?.timeout

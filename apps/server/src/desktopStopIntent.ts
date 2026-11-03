@@ -36,10 +36,15 @@ export const layer = (path: string | undefined, pid: number) =>
                 const contents = yield* fs.readFileString(path).pipe(
                   Effect.asSome,
                   Effect.catch((error) =>
-                    (error.reason._tag === "NotFound"
-                      ? Effect.void
-                      : Effect.logWarning("Failed to read desktop stop intent", { cause: error })
-                    ).pipe(Effect.as(Option.none<string>())),
+                    Effect.gen(function* () {
+                      if (error.reason._tag !== "NotFound") {
+                        yield* Effect.logWarning("Failed to read desktop stop intent", {
+                          cause: error,
+                        });
+                        cached = Option.some(Option.none());
+                      }
+                      return Option.none<string>();
+                    }),
                   ),
                 );
                 if (Option.isNone(contents)) return Option.none<DesktopStopIntent>();
