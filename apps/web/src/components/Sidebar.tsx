@@ -1,4 +1,3 @@
-import { isSidebarEnvironmentDisconnected } from "./Sidebar.logic";
 import { liveShellEnvironmentIdsAtom } from "../state/shell";
 import { type EnvironmentId, type ScopedProjectRef } from "@goat/contracts";
 import { threadChipCopyTarget } from "@goat/client-runtime/thread-reference";
@@ -214,6 +213,7 @@ import {
   type SidebarListItem,
   type SidebarSection,
   resolveSidebarRowThreadId,
+  isSidebarEnvironmentDisconnected,
 } from "./Sidebar.logic";
 import {
   createSidebarCollisionDetection,
