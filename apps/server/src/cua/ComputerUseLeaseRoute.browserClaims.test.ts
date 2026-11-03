@@ -343,6 +343,7 @@ describe("computer use lease route", () => {
     Effect.gen(function* () {
       const grantContext = yield* Layer.build(
         Grants.layer.pipe(
+          Layer.provide(ServerSettings.layerTest()),
           Layer.provide(
             Layer.merge(
               Layer.mock(ServerEnvironment.ServerEnvironment)({
@@ -503,6 +504,56 @@ describe("computer use lease route", () => {
           reservationId: "reservation:test",
         });
       }).pipe(Effect.scoped, Effect.provide(ServerSettings.layerTest({ enableCua: true }))),
+  );
+
+  it.effect("blocks navigation destinations and ends a claim when its origin becomes blocked", () =>
+    Effect.gen(function* () {
+      const grants = yield* makeBrowserOriginGrants({
+        environmentId: EnvironmentId.make("environment:test"),
+        supported: () => true,
+        publish: () => Effect.void,
+        bind: () =>
+          Effect.succeed({
+            targetId: "target-1",
+            tabId: "tab",
+            title: "Site",
+            url: "https://example.test",
+            driverGeneration: 1,
+          }),
+      });
+      const result = yield* grants.claim({
+        threadId,
+        pid: 42,
+        windowId: 7,
+        origin: "https://example.test",
+        windowTitle: "Browser",
+      });
+      if (result.agentResult.status !== "attached") return assert.fail("expected attached");
+      const claim = result.agentResult.claim;
+      const route = yield* threadFixture({
+        grants: { ...grants, setDriverCapability: () => Effect.void },
+      });
+      const settings = Context.get(route.context, ServerSettings.ServerSettingsService);
+      const scoped = {
+        tab_id: "tab",
+        target_id: "target-1",
+        session: "goat-claim:" + claim.claimId,
+        origin_scope: ["https://example.test"],
+      };
+      yield* settings.updateSettings({ blockedBrowserHosts: ["blocked.test"] });
+      assert.deepEqual(
+        yield* route.reserve("browser_navigate", { ...scoped, url: "https://blocked.test/" }),
+        { status: "refused", detail: "blocked_url" },
+      );
+      assert.lengthOf(yield* grants.claimsFor(threadId), 1);
+      yield* settings.updateSettings({ blockedBrowserHosts: ["example.test"] });
+      assert.deepEqual(yield* route.reserve("browser_click", scoped), {
+        status: "refused",
+        detail: "blocked_url",
+      });
+      assert.equal(yield* grants.endReason(threadId, claim.claimId), "blocked_url");
+      assert.deepEqual(yield* grants.claimsFor(threadId), []);
+    }).pipe(Effect.scoped, Effect.provide(ServerSettings.layerTest({ enableCua: true }))),
   );
 
   it.effect("revoking a service claim makes the next proxied call refuse", () =>

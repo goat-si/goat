@@ -65,6 +65,7 @@ export const BrowserClaimEndReason = Schema.Literals([
   "stopped",
   "driver_restarted",
   "origin_changed",
+  "blocked_url",
   "origin_mismatch",
   "refused",
   "tab_closed",

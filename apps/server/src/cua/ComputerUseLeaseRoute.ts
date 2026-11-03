@@ -46,6 +46,7 @@ import * as Handoffs from "../handoffs/Handoffs.ts";
 import { stopComputerUseFromHelper } from "./ComputerUseRpcHandlers.ts";
 import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
 import * as BrowserOriginGrants from "../preview/BrowserOriginGrantsLayer.ts";
+import { blockedClaimCall } from "../preview/BrowserClaimBlockedHosts.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ComputerUseAgentConnections from "./ComputerUseAgentConnections.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
@@ -511,12 +512,30 @@ const makeCallLayer = (serverScope: Scope.Scope) =>
         settings.value.cuaMovePointer !== "allowed" &&
         movesPersonPointer(call.value);
       let outsideManifest = false;
+      let blockedBrowser = false;
       if (call.value.action === "reserve" && deniedApp === undefined && !pointerLocked) {
         const grants = yield* Effect.serviceOption(BrowserOriginGrants.BrowserOriginGrants);
         const snapshot = Option.isSome(grants)
           ? yield* grants.value.snapshotFor(threadId)
           : { claims: [], bindings: [] };
         outsideManifest = !serverAdmitsBrowserCall(call.value.name, call.value.args, snapshot);
+        if (!outsideManifest && Option.isSome(grants)) {
+          const live = yield* grants.value.list(threadId);
+          const decision = blockedClaimCall(
+            call.value.name,
+            call.value.args,
+            settings.value.blockedBrowserHosts,
+            live.claims,
+          );
+          blockedBrowser = decision.blocked === true;
+          if (decision.claim)
+            yield* grants.value.end(
+              threadId,
+              decision.claim.claimId,
+              decision.claim.claimGeneration,
+              "blocked_url",
+            );
+        }
       }
       const result = yield* Effect.gen(function* () {
         const result: ComputerUseCallAdmission =
@@ -524,9 +543,11 @@ const makeCallLayer = (serverScope: Scope.Scope) =>
             ? { status: "refused", detail: "app_not_allowed", app: deniedApp }
             : pointerLocked
               ? { status: "refused", detail: "pointer_locked" }
-              : outsideManifest
-                ? { status: "refused", detail: "outside_manifest" }
-                : yield* leases.callReservation(threadId, call.value);
+              : blockedBrowser
+                ? { status: "refused", detail: "blocked_url" }
+                : outsideManifest
+                  ? { status: "refused", detail: "outside_manifest" }
+                  : yield* leases.callReservation(threadId, call.value);
         const stamp = historyStamp(yield* Clock.currentTimeMillis);
         if (call.value.action === "reserve" && result.status === "refused") {
           const sql = yield* Effect.serviceOption(SqlClient.SqlClient);

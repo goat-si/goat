@@ -151,7 +151,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     string,
     {
       readonly threadId: ThreadId;
-      readonly reason: "origin_changed" | "driver_restarted" | "stopped";
+      readonly reason: "origin_changed" | "blocked_url" | "driver_restarted" | "stopped";
     }
   >();
   let sequence = 0;
@@ -407,7 +407,12 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     );
   });
   const end = Effect.fn("BrowserOriginGrants.end")(
-    (threadId: ThreadId, claimId: string, generation: number, reason: "origin_changed") =>
+    (
+      threadId: ThreadId,
+      claimId: string,
+      generation: number,
+      reason: "origin_changed" | "blocked_url",
+    ) =>
       lock.withPermits(1)(
         Effect.gen(function* () {
           const claim = claims.get(claimId);
