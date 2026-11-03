@@ -30,6 +30,7 @@ import {
   shouldUseCodexSocketTransport,
 } from "../../provider/CodexDetachedAppServerLive.ts";
 import { codexAppServerArgs, resolveCodexLaunchArgs } from "../../provider/codexLaunchArgs.ts";
+import { codexNativeLaunch } from "../../provider/codexNativeLaunch.ts";
 import {
   boundProviderEventForLogging,
   shouldPersistProviderEvent,
@@ -220,7 +221,7 @@ export const layerAppServerClientFactory: Layer.Layer<
           ...codexAppServerEnvironment(input.environment),
           ...(input.settings.homePath ? { CODEX_HOME: input.settings.homePath } : {}),
         };
-        const launch = {
+        const launch = yield* codexNativeLaunch({
           command: input.settings.binaryPath || "codex",
           args: codexAppServerArgs(
             resolveCodexLaunchArgs(input.settings.launchArgs, input.environment),
@@ -229,7 +230,7 @@ export const layerAppServerClientFactory: Layer.Layer<
           cwd: input.runtimePolicy.cwd ?? undefined,
           env: environment,
           threadId: input.threadId,
-        };
+        });
         const protocolLogger = makeCodexAppServerProtocolLogger({
           nativeEventLogger,
           threadId: input.threadId,
@@ -282,7 +283,7 @@ export const layerAppServerClientFactory: Layer.Layer<
             .open({
               instanceId: input.instanceId,
               cwd: launch.cwd,
-              env: environment,
+              env: launch.env,
               command: (socketPath) =>
                 makeCodexAppServerLaunch({
                   ...launch,
