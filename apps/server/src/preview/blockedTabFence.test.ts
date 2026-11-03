@@ -182,6 +182,40 @@ it.effect("a newly blocked current frame cuts an already dispatched input", () =
   ),
 );
 
+it.effect("a blocked blob frame refuses agent input", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const activity = yield* PreviewAgentActivity.PreviewAgentActivity;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      yield* settings.updateSettings({ blockedBrowserHosts: ["blocked.example"] });
+      const fence = yield* makeBlockedTabFence();
+      const threadId = ThreadId.make("blocked-blob-frame");
+      const end = yield* activity.begin(threadId, "run");
+      const tab = {
+        threadId,
+        tabId: "tab",
+        closing: false,
+        page: { frames: () => [{ url: () => "blob:https://blocked.example/uuid" }] },
+      };
+      const refusal = yield* Effect.promise(() =>
+        fence.assertTab(tab, "run").then(
+          () => null,
+          (error: unknown) => error,
+        ),
+      );
+      expect(refusal).toMatchObject({ reason: "blocked_url" });
+      yield* end;
+    }),
+  ).pipe(
+    Effect.provide(
+      Layer.mergeAll(PreviewAgentActivity.layer, ServerSettings.layerTest()).pipe(
+        Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "goat-blob-fence-" })),
+        Layer.provideMerge(NodeServices.layer),
+      ),
+    ),
+  ),
+);
+
 it.effect("a synchronous frame check sees newly blocked hosts and fences the turn", () =>
   Effect.scoped(
     Effect.gen(function* () {

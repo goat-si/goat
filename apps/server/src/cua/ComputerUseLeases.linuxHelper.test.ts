@@ -70,7 +70,7 @@ it.effect.skip(
           frames: false,
         });
         assert.isFalse(yield* Queue.take(watching));
-        const control = yield* leases.control(thread, Option.none());
+        const control = Option.getOrThrow(yield* leases.control(thread, Option.none()));
         yield* PubSub.take(signals);
         assert.isTrue(yield* Queue.take(watching));
         yield* Queue.offer(reports, {

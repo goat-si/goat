@@ -411,6 +411,8 @@ describe("orchestration V2 thread fork", () => {
           runtimePolicyOverride: { cwd, ...CODEX_READ_ONLY_NEVER_POLICY },
         },
         CodexOrchestratorReplayHarness,
+        // One recorded app-server serves the source thread and its fork.
+        { codexAppServerIsolation: "shared" },
       ).pipe(provideDeterministicTestRuntime);
 
       const targetProjection = result.projections.get(materialized.targetThreadId);

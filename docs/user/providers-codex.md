@@ -167,3 +167,30 @@ In an existing Codex thread, send `/feedback` with an optional description, for
 example `/feedback The agent stopped before finishing the tests`. This uploads
 the conversation and Codex logs to OpenAI. The returned thread ID can be shared
 with OpenAI support.
+
+## Keep a turn running across a restart
+
+On macOS and Linux, **Settings → General → Keep Codex turns running** controls
+whether an active Codex turn stays running when the GOAT server stops. The default,
+**Restarts and updates**, keeps it running across server restarts and updates;
+**Also after quitting the app** includes quitting the desktop app. Choose **Off**
+to disable this behavior. Windows does not support it. This setting is independent
+of **Continue threads after restarts**, which controls ordinary continuation of
+interrupted threads.
+
+After GOAT reconnects, progress from a surviving turn appears when the turn
+finishes. GOAT tools are unavailable for the rest of that turn. You can stop the
+turn, but Steer is refused while GOAT is waiting for it. Goal threads do not
+survive a restart; once blocked work has stopped, you can continue the thread.
+
+## Give each thread its own Codex app-server
+
+On macOS and Linux, **Settings → General → Codex app-servers** controls how many
+Codex processes an environment runs. **Shared**, the default, runs one app-server
+for every thread of a Codex provider. **One per thread** gives each new thread its
+own app-server, so a crash or restart of that process stops only its thread. Each
+app-server uses its own memory, so many open threads use more memory than one
+shared process. Subagents always run in their parent thread's app-server.
+
+The setting applies to new threads. Existing threads keep the process they started
+with, so switching back to **Shared** takes effect for threads you start afterwards.

@@ -13,7 +13,16 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as SubscriptionRef from "effect/SubscriptionRef";
-import { manifestApplied } from "../cua/ComputerUseLeaseProxyBrowserClaims.ts";
+import * as Stream from "effect/Stream";
+import { isBlockedBrowserUrl } from "@goat/shared/preview";
+import {
+  browserClaimSession,
+  manifestApplied,
+  scopeBrowserCall,
+  serverAdmitsBrowserCall,
+} from "../cua/ComputerUseLeaseProxyBrowserClaims.ts";
+import { authorizeClaimBind } from "../cua/ComputerUseClaimBindAuthority.ts";
+import { blockedClaimCall } from "./BrowserClaimBlockedHosts.ts";
 
 export interface Request {
   readonly threadId: ThreadId;
@@ -38,11 +47,14 @@ export interface Union {
 interface Dependencies {
   readonly environmentId: EnvironmentId;
   readonly supported: () => boolean;
+  readonly blockedHosts?: Effect.Effect<ReadonlyArray<string>, Error>;
+  readonly blockedHostsNow?: () => ReadonlyArray<string> | undefined;
   readonly bindAvailable?: () => boolean;
   readonly publish: (union: Union) => Effect.Effect<string, Error>;
   readonly confirm: (sha256: string) => Effect.Effect<unknown, Error>;
   /** Restarts the driver; true when it could. */
   readonly fence?: () => Effect.Effect<boolean>;
+  readonly onFenceFailure?: () => Effect.Effect<void>;
   readonly windowTitle?: (
     input: Pick<Request, "threadId" | "pid" | "windowId">,
   ) => Effect.Effect<string, Error>;
@@ -80,6 +92,11 @@ const invalidOrigin = {
   code: "invalid_origin",
   message: "Expected a canonical HTTP origin.",
 } as const;
+const blocked = {
+  status: "refused",
+  code: "blocked_url",
+  message: "This site is blocked in browser settings.",
+} as const;
 const isOrigin = Schema.is(BrowserOrigin);
 const originOf = (url: string) => {
   try {
@@ -93,6 +110,11 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
   deps: Dependencies,
 ) {
   const lock = yield* Semaphore.make(1);
+  const blockedUrl = (url: string) =>
+    (deps.blockedHosts ?? Effect.succeed([])).pipe(
+      Effect.map((hosts) => isBlockedBrowserUrl(url, hosts)),
+      Effect.orElseSucceed(() => true),
+    );
   const writeLock = yield* Semaphore.make(1);
   const version = yield* SubscriptionRef.make(0);
   let currentRevision = 0;
@@ -104,42 +126,139 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     if (!manifestApplied(yield* deps.confirm(sha), sha))
       return yield* new BrowserManifestNotApplied();
   });
-  const write = (value: Union) =>
-    writeLock.withPermits(1)(advance.pipe(Effect.andThen(deps.publish(value))));
-  const publish = Effect.fn("BrowserOriginGrants.publishExpansion")(function* (value: Union) {
-    yield* confirm(yield* write(value));
+  let writes = 0;
+  let latest:
+    | {
+        readonly number: number;
+        readonly value: Union;
+        readonly narrowing: boolean;
+        applied: boolean;
+      }
+    | undefined;
+  const subset = (newer: Union, older: Union) =>
+    newer.origins.every((origin) => older.origins.includes(origin)) &&
+    newer.existingProfiles.every((profile) =>
+      older.existingProfiles.some(
+        (old) => old.pid === profile.pid && old.windowId === profile.windowId,
+      ),
+    );
+  const write = (narrowing: boolean) =>
+    writeLock.withPermits(1)(
+      Effect.gen(function* () {
+        const hosts = yield* deps.blockedHosts ?? Effect.succeed([]);
+        const current = union();
+        const value = {
+          ...current,
+          origins: current.origins.filter((origin) => !isBlockedBrowserUrl(origin, hosts)),
+        };
+        const entry = { number: ++writes, value, narrowing, applied: false };
+        latest = entry;
+        yield* advance;
+        const sha = yield* deps.publish(value);
+        entry.applied = true;
+        return { sha, number: entry.number, value };
+      }),
+    );
+  const publish = Effect.fn("BrowserOriginGrants.publishExpansion")(function* () {
+    yield* confirm((yield* write(false)).sha);
   });
-  const shrink = Effect.fn("BrowserOriginGrants.publishShrink")(function* (value: Union) {
-    const sha = yield* write(value);
-    // Narrowing never waits on the driver, but a driver that keeps a wider manifest is
-    // restarted: its old browser windows and origins must not outlive the claims that named them.
-    yield* confirm(sha).pipe(
-      Effect.catch((cause) =>
-        Effect.logWarning("Browser manifest shrink was not confirmed; restarting the driver", {
-          cause,
-        }).pipe(
-          Effect.andThen(deps.fence?.() ?? Effect.succeed(false)),
-          Effect.flatMap((fenced) =>
-            fenced
-              ? Effect.void
-              : Effect.logError("Browser manifest shrink was not confirmed and no fence exists"),
-          ),
+  let fencing = false;
+  const fence = Effect.fn("BrowserOriginGrants.fence")(function* (cause: unknown) {
+    if (fencing || !deps.supported()) return;
+    fencing = true;
+    yield* Effect.logWarning("Browser manifest narrowing was not applied; restarting the driver", {
+      cause,
+    }).pipe(
+      Effect.andThen(
+        Effect.suspend(() => deps.fence?.() ?? Effect.succeed(false)).pipe(
+          Effect.catchCause(() => Effect.succeed(false)),
         ),
       ),
-      Effect.forkDetach({ startImmediately: true }),
+      Effect.flatMap((fenced) =>
+        fenced
+          ? Effect.void
+          : Effect.logError("No driver fence is available").pipe(
+              Effect.andThen(deps.onFenceFailure?.() ?? Effect.void),
+            ),
+      ),
+      Effect.ensuring(
+        Effect.sync(() => {
+          fencing = false;
+        }),
+      ),
     );
+  }, Effect.uninterruptible);
+  type Confirmation = { readonly sha: string; readonly number: number; readonly value: Union };
+  let activeConfirmation: Confirmation | undefined;
+  let pendingConfirmation: Confirmation | undefined;
+  let confirming = false;
+  const confirmNarrowings = Effect.fn("BrowserOriginGrants.confirmNarrowings")(function* () {
+    while (true) {
+      const next = yield* Effect.sync(() => {
+        const item = pendingConfirmation;
+        pendingConfirmation = undefined;
+        activeConfirmation = item;
+        if (item === undefined) confirming = false;
+        return item;
+      });
+      if (next === undefined) return;
+      yield* confirm(next.sha).pipe(
+        Effect.catchCause((cause) => {
+          const newer = latest;
+          return newer &&
+            newer.number > next.number &&
+            newer.narrowing &&
+            newer.applied &&
+            subset(newer.value, next.value)
+            ? Effect.void
+            : fence(cause);
+        }),
+      );
+    }
   });
+  const shrink = Effect.fn("BrowserOriginGrants.publishShrink")(function* () {
+    const result = yield* write(true).pipe(Effect.result);
+    if (result._tag === "Failure") return yield* fence(result.failure);
+    const decision = yield* Effect.sync(() => {
+      const next: Confirmation = result.success;
+      let unsafe = false;
+      if (pendingConfirmation !== undefined) {
+        const newer = next.number > pendingConfirmation.number ? next : pendingConfirmation;
+        const older = next.number > pendingConfirmation.number ? pendingConfirmation : next;
+        unsafe = !subset(newer.value, older.value);
+        pendingConfirmation = newer;
+      } else if (activeConfirmation !== undefined && activeConfirmation.number > next.number) {
+        if (!subset(activeConfirmation.value, next.value)) {
+          pendingConfirmation = next;
+          unsafe = true;
+        }
+      } else pendingConfirmation = next;
+      if (confirming) return { start: false, unsafe };
+      confirming = true;
+      return { start: true, unsafe };
+    });
+    if (decision.unsafe) yield* fence("A coalesced narrowing was superseded by a wider union");
+    if (decision.start)
+      yield* confirmNarrowings().pipe(Effect.forkDetach({ startImmediately: true }));
+  }, Effect.uninterruptible);
   const pending = new Map<string, Pending>();
   const claims = new Map<string, LiveTabClaim>();
   // The bind's driver target, kept off LiveTabClaim so people and agents never see it.
   const targets = new WeakMap<LiveTabClaim, string>();
+  const windowTitles = new WeakMap<LiveTabClaim, string>();
   const grants = new Map<string, BrowserOriginGrant>();
   const uncommittedGrants = new Set<string>();
+  const blockedClaimEnds = new Map<string, ThreadId>();
+  const rememberBlockedClaim = (claimId: string, threadId: ThreadId) => {
+    blockedClaimEnds.set(claimId, threadId);
+    if (blockedClaimEnds.size > 50)
+      blockedClaimEnds.delete(blockedClaimEnds.keys().next().value ?? "");
+  };
   const ended = new Map<
     string,
     {
       readonly threadId: ThreadId;
-      readonly reason: "origin_changed" | "driver_restarted" | "stopped";
+      readonly reason: "origin_changed" | "blocked_url" | "driver_restarted" | "stopped";
     }
   >();
   let sequence = 0;
@@ -190,6 +309,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
       Effect.gen(function* () {
         if (!deps.supported()) return unavailable;
         if (!isOrigin(input.origin)) return invalidOrigin;
+        if (yield* blockedUrl(input.origin)) return blocked;
         const createdAt = yield* Clock.currentTimeMillis;
         const claimId = `browser-claim:${++sequence}`;
         const stopped = yield* Deferred.make<void>();
@@ -204,6 +324,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
   ) {
     if (!deps.supported()) return unavailable;
     if (!isOrigin(input.origin)) return invalidOrigin;
+    if (yield* blockedUrl(input.origin)) return blocked;
     if (!deps.windowTitle) return yield* new BrowserManifestNotApplied();
     const windowTitle = yield* deps.windowTitle(input);
     return yield* request({ ...input, windowTitle });
@@ -215,6 +336,11 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
         if (entry === undefined || !approved || !deps.supported()) {
           if (pending.delete(claimId)) yield* advance;
           return { agentResult: decline };
+        }
+        if (yield* blockedUrl(entry.origin)) {
+          pending.delete(claimId);
+          yield* advance;
+          return { agentResult: blocked };
         }
         if (deps.bindAvailable?.() === false) {
           pending.delete(claimId);
@@ -239,10 +365,10 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
             grants.delete(grantKey);
             uncommittedGrants.delete(grantKey);
           }
-          yield* shrink(union());
-        });
+          yield* shrink();
+        }).pipe(Effect.uninterruptible);
         const result = yield* Effect.gen(function* () {
-          const applied = yield* untilRestart(publish(union()), signal, entry.stopped);
+          const applied = yield* untilRestart(publish(), signal, entry.stopped);
           if (Option.isNone(applied)) return { agentResult: decline };
           if (epoch !== driverEpoch) return { agentResult: decline };
           if (!deps.supported()) return yield* rollback.pipe(Effect.as({ agentResult: decline }));
@@ -256,6 +382,14 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
           const tab = bound.value;
           if (epoch !== driverEpoch) return { agentResult: decline };
           if (!deps.supported()) return yield* rollback.pipe(Effect.as({ agentResult: decline }));
+          if ((yield* blockedUrl(entry.origin)) || (yield* blockedUrl(tab.url))) {
+            yield* rollback;
+            return {
+              agentResult: decline,
+              personMessage: "blocked_url: This site is blocked in browser settings.",
+            };
+          }
+          if (pending.get(claimId) !== entry) return { agentResult: decline };
           if (originOf(tab.url) !== entry.origin) {
             yield* rollback;
             return { agentResult: decline, personMessage: `This tab is not on ${entry.origin}` };
@@ -273,6 +407,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
           };
           uncommittedGrants.delete(grantKey);
           targets.set(claim, tab.targetId);
+          windowTitles.set(claim, entry.windowTitle);
           claims.set(claimId, claim);
           pending.delete(claimId);
           yield* advance;
@@ -290,13 +425,21 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     ),
   );
   const list = Effect.fn("BrowserOriginGrants.list")((threadId: ThreadId) =>
-    Effect.sync(() => ({
-      claims: [...claims.values()].filter((claim) => claim.threadId === threadId),
-      grants: [...grants.values()].filter(
-        (grant) =>
-          grant.threadId === threadId && !uncommittedGrants.has(key(grant.threadId, grant.origin)),
-      ),
-    })),
+    Effect.sync(() => {
+      const endedClaims = [...blockedClaimEnds]
+        .filter(([, owner]) => owner === threadId)
+        .slice(-50)
+        .map(([claimId]) => ({ claimId, reason: "blocked_url" as const }));
+      return {
+        claims: [...claims.values()].filter((claim) => claim.threadId === threadId),
+        grants: [...grants.values()].filter(
+          (grant) =>
+            grant.threadId === threadId &&
+            !uncommittedGrants.has(key(grant.threadId, grant.origin)),
+        ),
+        ...(endedClaims.length === 0 ? {} : { ended: endedClaims }),
+      };
+    }),
   );
   const claim = Effect.fn("BrowserOriginGrants.claim")(function* (input: Request) {
     const result = yield* request(input);
@@ -312,7 +455,11 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
   });
   const listAll = Effect.fn("BrowserOriginGrants.listAll")(() =>
     Effect.sync(() => ({
-      claims: [...claims.values()],
+      supported: deps.supported(),
+      claims: [...claims.values()].map((claim) => ({
+        ...claim,
+        windowTitle: windowTitles.get(claim) ?? claim.title,
+      })),
       grants: [...grants.values()].filter(
         (grant) => !uncommittedGrants.has(key(grant.threadId, grant.origin)),
       ),
@@ -335,9 +482,9 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
         const claim = claims.get(claimId);
         if (!claim) return false;
         claims.delete(claimId);
-        yield* shrink(union());
+        yield* shrink();
         return true;
-      }),
+      }).pipe(Effect.uninterruptible),
     ),
   );
   const revoke = Effect.fn("BrowserOriginGrants.revoke")((threadId: ThreadId, origin: string) =>
@@ -349,48 +496,85 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
           if (entry.threadId === threadId && entry.origin === origin) pending.delete(id);
         for (const [id, claim] of claims)
           if (claim.threadId === threadId && claim.origin === origin) claims.delete(id);
-        yield* shrink(union());
-      }),
+        yield* shrink();
+      }).pipe(Effect.uninterruptible),
     ),
   );
-  const stop = Effect.fn("BrowserOriginGrants.stop")(function* (threadId?: ThreadId) {
-    const stopped = yield* Effect.sync(() => {
-      const signals: Array<Deferred.Deferred<void>> = [];
-      for (const [id, entry] of pending)
-        if (threadId === undefined || entry.threadId === threadId) {
-          pending.delete(id);
-          ended.set(id, { threadId: entry.threadId, reason: "stopped" });
-          if (uncommittedGrants.delete(key(entry.threadId, entry.origin)))
-            grants.delete(key(entry.threadId, entry.origin));
-          signals.push(entry.stopped);
-          sequence++;
-        }
-      for (const [id, claim] of claims)
-        if (threadId === undefined || claim.threadId === threadId) {
-          claims.delete(id);
-          ended.set(id, { threadId: claim.threadId, reason: "stopped" });
-          sequence++;
-        }
-      return signals;
-    });
-    for (const signal of stopped) yield* Deferred.succeed(signal, undefined);
-    yield* shrink(union()).pipe(
-      Effect.catch((cause) =>
-        Effect.logWarning("Could not publish stopped browser claims", { cause }),
+  const stop = Effect.fn("BrowserOriginGrants.stop")((threadId?: ThreadId) =>
+    Effect.gen(function* () {
+      const stopped = yield* Effect.sync(() => {
+        const signals: Array<Deferred.Deferred<void>> = [];
+        let removed = false;
+        for (const [id, entry] of pending)
+          if (threadId === undefined || entry.threadId === threadId) {
+            pending.delete(id);
+            ended.set(id, { threadId: entry.threadId, reason: "stopped" });
+            if (uncommittedGrants.delete(key(entry.threadId, entry.origin)))
+              grants.delete(key(entry.threadId, entry.origin));
+            signals.push(entry.stopped);
+            sequence++;
+            removed = true;
+          }
+        for (const [id, claim] of claims)
+          if (threadId === undefined || claim.threadId === threadId) {
+            claims.delete(id);
+            ended.set(id, { threadId: claim.threadId, reason: "stopped" });
+            sequence++;
+            removed = true;
+          }
+        return { signals, removed };
+      });
+      if (!stopped.removed) return;
+      for (const signal of stopped.signals) yield* Deferred.succeed(signal, undefined);
+      yield* shrink();
+    }).pipe(Effect.uninterruptible),
+  );
+  const blockedHostsChanged = Effect.fn("BrowserOriginGrants.blockedHostsChanged")(
+    (hosts: ReadonlyArray<string>) =>
+      lock.withPermits(1)(
+        Effect.gen(function* () {
+          const signals: Array<Deferred.Deferred<void>> = [];
+          let changed = false;
+          for (const [id, entry] of pending) {
+            if (!isBlockedBrowserUrl(entry.origin, hosts)) continue;
+            pending.delete(id);
+            ended.set(id, { threadId: entry.threadId, reason: "blocked_url" });
+            if (uncommittedGrants.delete(key(entry.threadId, entry.origin)))
+              grants.delete(key(entry.threadId, entry.origin));
+            signals.push(entry.stopped);
+            changed = true;
+          }
+          for (const [id, claim] of claims) {
+            if (!isBlockedBrowserUrl(claim.origin, hosts)) continue;
+            claims.delete(id);
+            ended.set(id, { threadId: claim.threadId, reason: "blocked_url" });
+            rememberBlockedClaim(id, claim.threadId);
+            changed = true;
+          }
+          for (const signal of signals) yield* Deferred.succeed(signal, undefined);
+          if (changed) yield* advance;
+          if (changed || claims.size > 0 || [...pending.values()].some((entry) => entry.granted))
+            yield* shrink();
+        }).pipe(Effect.uninterruptible),
       ),
-    );
-  });
+  );
   const end = Effect.fn("BrowserOriginGrants.end")(
-    (threadId: ThreadId, claimId: string, generation: number, reason: "origin_changed") =>
+    (
+      threadId: ThreadId,
+      claimId: string,
+      generation: number,
+      reason: "origin_changed" | "blocked_url",
+    ) =>
       lock.withPermits(1)(
         Effect.gen(function* () {
           const claim = claims.get(claimId);
           if (claim?.threadId !== threadId || claim.claimGeneration !== generation) return false;
           claims.delete(claimId);
           ended.set(claimId, { threadId, reason });
-          yield* shrink(union());
+          if (reason === "blocked_url") rememberBlockedClaim(claimId, threadId);
+          yield* shrink();
           return true;
-        }),
+        }).pipe(Effect.uninterruptible),
       ),
   );
   const endReason = Effect.fn("BrowserOriginGrants.endReason")(
@@ -423,8 +607,9 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
       uncommittedGrants.clear();
     });
     yield* Deferred.succeed(previousSignal, undefined);
-    yield* shrink(union());
-  });
+    // The driver is being revoked, so this cleanup write cannot initiate another fence.
+    yield* write(true).pipe(Effect.ignore);
+  }, Effect.uninterruptible);
   const bindingValues = (threadId: ThreadId) =>
     [...pending.values()]
       .filter((entry) => entry.threadId === threadId && entry.granted)
@@ -468,7 +653,165 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
       pids: pidValues(),
     })),
   );
+  const judgeClaimCall = Effect.fn("BrowserOriginGrants.judgeClaimCall")(
+    (
+      threadId: ThreadId,
+      name: string,
+      args: unknown,
+      expected?: { readonly claimId: string; readonly claimGeneration: number },
+      authority?: "claimBind",
+    ) =>
+      Effect.sync(() => {
+        if ("unchanged" in scopeBrowserCall(name, args, [])) return "admit" as const;
+        const hosts = deps.blockedHostsNow?.();
+        if (hosts === undefined) return "blocked" as const;
+        const binding = authorizeClaimBind(authority, name, args, bindingValues(threadId));
+        if (binding !== undefined)
+          return isBlockedBrowserUrl(binding.origin, hosts)
+            ? ("blocked" as const)
+            : ("admit" as const);
+        const input =
+          typeof args === "object" && args !== null && !Array.isArray(args)
+            ? (args as Record<string, unknown>)
+            : undefined;
+        const prefix = browserClaimSession("");
+        const claimId =
+          expected?.claimId ??
+          (typeof input?.session === "string" && input.session.startsWith(prefix)
+            ? input.session.slice(prefix.length)
+            : undefined);
+        const endedClaim = claimId === undefined ? undefined : ended.get(claimId);
+        if (endedClaim?.threadId === threadId && endedClaim.reason === "blocked_url")
+          return "blocked" as const;
+        if (expected !== undefined) {
+          const claim = claims.get(expected.claimId);
+          if (claim?.threadId !== threadId || claim.claimGeneration !== expected.claimGeneration)
+            return "outside" as const;
+        }
+        if (!serverAdmitsBrowserCall(name, args, { claims: claimValues(threadId), bindings: [] }))
+          return "outside" as const;
+        const result = blockedClaimCall(
+          name,
+          args,
+          hosts,
+          [...claims.values()].filter((claim) => claim.threadId === threadId),
+        );
+        if (result.blocked && result.claim)
+          return {
+            status: "blocked" as const,
+            claim: {
+              claimId: result.claim.claimId,
+              claimGeneration: result.claim.claimGeneration,
+            },
+          };
+        return result.blocked ? ("blocked" as const) : ("admit" as const);
+      }),
+  );
+  const admitClaimCall = Effect.fn("BrowserOriginGrants.admitClaimCall")(function* (
+    threadId: ThreadId,
+    name: string,
+    args: unknown,
+    fallbackHosts: ReadonlyArray<string>,
+    expected?: { readonly claimId: string; readonly claimGeneration: number },
+    authority?: "claimBind",
+  ) {
+    if ("unchanged" in scopeBrowserCall(name, args, [])) return { status: "admit" as const };
+    // Approved bind calls execute while answer owns the lock; they cannot acquire it again.
+    if (
+      expected === undefined &&
+      authorizeClaimBind(authority, name, args, bindingValues(threadId))
+    ) {
+      const hosts = yield* (deps.blockedHosts ?? Effect.succeed(fallbackHosts)).pipe(Effect.option);
+      const binding = authorizeClaimBind(authority, name, args, bindingValues(threadId));
+      if (Option.isNone(hosts) || !binding || isBlockedBrowserUrl(binding.origin, hosts.value))
+        return { status: "blocked" as const };
+      return {
+        status: "admit" as const,
+        bind: { claimId: binding.claimId, origin: binding.origin },
+      };
+    }
+    return yield* lock.withPermits(1)(
+      Effect.gen(function* () {
+        const hosts = yield* (deps.blockedHosts ?? Effect.succeed(fallbackHosts)).pipe(
+          Effect.option,
+        );
+        if (Option.isNone(hosts)) return { status: "blocked" as const };
+        if (expected && !claims.has(expected.claimId))
+          return {
+            status:
+              ended.get(expected.claimId)?.threadId === threadId &&
+              ended.get(expected.claimId)?.reason === "blocked_url"
+                ? ("blocked" as const)
+                : ("outside" as const),
+          };
+        const snapshot = { claims: claimValues(threadId), bindings: [] };
+        if (!serverAdmitsBrowserCall(name, args, snapshot)) return { status: "outside" as const };
+        const decision = blockedClaimCall(
+          name,
+          args,
+          hosts.value,
+          [...claims.values()].filter((claim) => claim.threadId === threadId),
+        );
+        if (decision.blocked) {
+          if (decision.claim) {
+            const claim = decision.claim;
+            yield* Effect.gen(function* () {
+              claims.delete(claim.claimId);
+              ended.set(claim.claimId, { threadId, reason: "blocked_url" });
+              rememberBlockedClaim(claim.claimId, threadId);
+              yield* shrink();
+            }).pipe(Effect.uninterruptible);
+          }
+          return { status: "blocked" as const };
+        }
+        const input =
+          typeof args === "object" && args !== null && !Array.isArray(args)
+            ? (args as Record<string, unknown>)
+            : undefined;
+        const claim =
+          name.startsWith("browser_") || name === "get_browser_state" || name === "page"
+            ? [...claims.values()].find(
+                (value) => value.threadId === threadId && value.tab.tabId === input?.tab_id,
+              )
+            : undefined;
+        if (
+          expected &&
+          (!claim ||
+            claim.claimId !== expected.claimId ||
+            claim.claimGeneration !== expected.claimGeneration)
+        )
+          return { status: "outside" as const };
+        return claim
+          ? {
+              status: "admit" as const,
+              claim: { claimId: claim.claimId, claimGeneration: claim.claimGeneration },
+            }
+          : { status: "admit" as const };
+      }),
+    );
+  });
+  const verifyBindCall = Effect.fn("BrowserOriginGrants.verifyBindCall")(function* (
+    threadId: ThreadId,
+    name: string,
+    args: unknown,
+    fallbackHosts: ReadonlyArray<string>,
+    expected: { readonly claimId: string; readonly origin: string },
+    authority?: "claimBind",
+  ) {
+    const hosts = yield* (deps.blockedHosts ?? Effect.succeed(fallbackHosts)).pipe(Effect.option);
+    if (Option.isNone(hosts)) return { status: "blocked" as const };
+    const binding = authorizeClaimBind(authority, name, args, bindingValues(threadId));
+    if (!binding || binding.claimId !== expected.claimId || binding.origin !== expected.origin)
+      return { status: "outside" as const };
+    return {
+      status: isBlockedBrowserUrl(binding.origin, hosts.value)
+        ? ("blocked" as const)
+        : ("admit" as const),
+    };
+  });
   return {
+    claimsSupported: Effect.sync(deps.supported),
+    capabilityChanged: advance,
     request,
     requestWindow,
     answer,
@@ -476,14 +819,19 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     claimWindow,
     list,
     listAll,
+    subscribe: () => SubscriptionRef.changes(version).pipe(Stream.mapEffect(() => listAll())),
     endPerson,
     revoke,
     stop,
+    blockedHostsChanged,
     end,
     endReason,
     driverRestarted,
     bindingsFor,
     snapshotFor,
+    judgeClaimCall,
+    admitClaimCall,
+    verifyBindCall,
     claimsFor,
     claimedPids,
     revision: SubscriptionRef.get(version),

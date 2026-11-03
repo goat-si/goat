@@ -7,7 +7,12 @@ import {
   type GoatBotRow,
 } from "@goat/client-runtime/goatBot";
 import type { EnvironmentId } from "@goat/contracts";
-import { BellIcon, CircleAlertIcon, MessageCircleQuestionIcon } from "~/components/solar";
+import {
+  BellIcon,
+  CircleAlertIcon,
+  MessageCircleQuestionIcon,
+  PaperclipIcon,
+} from "~/components/solar";
 import {
   createContext,
   Fragment,
@@ -41,6 +46,7 @@ export function GoatBotTimeline({
   environmentId = null,
   replyingSince = null,
   onRetry,
+  onDiscard,
   onPick,
 }: {
   readonly rows: ReadonlyArray<GoatBotRow>;
@@ -48,6 +54,7 @@ export function GoatBotTimeline({
   readonly environmentId?: EnvironmentId | null;
   readonly replyingSince?: string | null;
   readonly onRetry: (clientKey: string) => void;
+  readonly onDiscard?: ((clientKey: string) => void) | undefined;
   /** Sends a question's choice as the user's answer; absent while the bot can't take messages. */
   readonly onPick?: ((answer: string) => void) | undefined;
 }) {
@@ -105,13 +112,20 @@ export function GoatBotTimeline({
       element.scrollHeight - element.scrollTop - element.clientHeight < FOLLOW_THRESHOLD_PX;
     updateEdges();
   };
+  // Messages finish laying out after they render (Markdown, highlighting, images), and the
+  // column can get its height after mounting; a reader following the newest message stays there.
+  const followResize = useStableCallback(() => {
+    const scroll = scrollRef.current;
+    if (scroll !== null && followingRef.current) scroll.scrollTop = scroll.scrollHeight;
+    updateEdges();
+  });
   useLayoutEffect(() => {
     updateEdges();
     const scroll = scrollRef.current;
     const list = listRef.current;
     if (!scroll || !list) return;
-    return observeResize([scroll, list], updateEdges);
-  }, [updateEdges]);
+    return observeResize([scroll, list], followResize);
+  }, [updateEdges, followResize]);
   // New rows and the activity bubble keep the view pinned to the latest message unless the
   // reader scrolled up.
   useLayoutEffect(() => {
@@ -192,6 +206,15 @@ export function GoatBotTimeline({
                           )}
                         >
                           {row.text}
+                          {row.attachments?.map((file) => (
+                            <span
+                              key={file.id}
+                              className="flex items-center gap-1 text-sm opacity-80"
+                            >
+                              <PaperclipIcon className="size-3.5 shrink-0" aria-hidden />
+                              <span className="truncate">{file.name}</span>
+                            </span>
+                          ))}
                         </div>
                         {!failed ? (
                           <time
@@ -215,10 +238,15 @@ export function GoatBotTimeline({
                         </button>
                       ) : null}
                     </div>
-                    {row.delivery.state === "failed" ? (
-                      <span className="mt-1 text-xs leading-4 font-medium text-destructive-foreground">
-                        {row.delivery.rejectionReason ?? "Not Delivered"}
-                      </span>
+                    {delivery.state === "failed" ? (
+                      <div className="mt-1 flex items-center gap-2 text-xs leading-4 font-medium text-destructive-foreground">
+                        <span>{delivery.rejectionReason ?? "Not Delivered"}</span>
+                        {onDiscard ? (
+                          <button type="button" onClick={() => onDiscard(delivery.clientKey)}>
+                            Discard
+                          </button>
+                        ) : null}
+                      </div>
                     ) : row.showReceipt ? (
                       <span
                         className="mt-1 text-xs leading-4 font-medium text-muted-foreground"

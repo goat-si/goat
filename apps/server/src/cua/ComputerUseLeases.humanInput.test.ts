@@ -27,8 +27,8 @@ layer("ComputerUseLeases person and agent input", (it) => {
       yield* runMigrations();
       const leases = yield* ComputerUseLeases.ComputerUseLeases;
       yield* leases.stopAll;
-      const mine = yield* leases.control(thread, Option.none());
-      const bots = yield* leases.control(other, Option.none());
+      const mine = Option.getOrThrow(yield* leases.control(thread, Option.none()));
+      const bots = Option.getOrThrow(yield* leases.control(other, Option.none()));
       const call = (state: "start" | "end", at: number) =>
         leases.agentInput(other, bots.controlId, { call: "7", state, at });
       // Only a live control's own proxy records its calls.
@@ -83,8 +83,8 @@ layer("ComputerUseLeases person and agent input", (it) => {
         yield* runMigrations();
         const leases = yield* ComputerUseLeases.ComputerUseLeases;
         yield* leases.stopAll;
-        const mine = yield* leases.control(thread, Option.none());
-        const bots = yield* leases.control(other, Option.none());
+        const mine = Option.getOrThrow(yield* leases.control(thread, Option.none()));
+        const bots = Option.getOrThrow(yield* leases.control(other, Option.none()));
         // An old proxy, or another thread's control id, pauses nobody.
         assert.equal(
           yield* leases.humanInput(thread, "control:old", [{ at: 0, source: "pointer" }]),
@@ -126,8 +126,8 @@ it.effect("a person's key while another agent clicks leaves every agent active",
     yield* runMigrations();
     const leases = yield* ComputerUseLeases.ComputerUseLeases;
     yield* leases.stopAll;
-    const mine = yield* leases.control(thread, Option.none());
-    const bots = yield* leases.control(other, Option.none());
+    const mine = Option.getOrThrow(yield* leases.control(thread, Option.none()));
+    const bots = Option.getOrThrow(yield* leases.control(other, Option.none()));
     // The bot's click posts pointer events only; a keyboard event during it is a person's.
     yield* TestClock.adjust(30_000);
     assert.isTrue(
@@ -155,8 +155,8 @@ it.effect("back-to-back agent calls keep classifying a person's input without pa
     yield* runMigrations();
     const leases = yield* ComputerUseLeases.ComputerUseLeases;
     yield* leases.stopAll;
-    const mine = yield* leases.control(thread, Option.none());
-    const bots = yield* leases.control(other, Option.none());
+    const mine = Option.getOrThrow(yield* leases.control(thread, Option.none()));
+    const bots = Option.getOrThrow(yield* leases.control(other, Option.none()));
     // A click every 400 ms, each answered after 100 ms: its cover never lapses. The server's
     // own clock moves with it, so old calls are forgotten as it goes.
     yield* TestClock.adjust(30_000);
@@ -186,8 +186,8 @@ it.effect("a call's tail still classifies an event as long as the server admits 
     yield* runMigrations();
     const leases = yield* ComputerUseLeases.ComputerUseLeases;
     yield* leases.stopAll;
-    const mine = yield* leases.control(thread, Option.none());
-    const bots = yield* leases.control(other, Option.none());
+    const mine = Option.getOrThrow(yield* leases.control(thread, Option.none()));
+    const bots = Option.getOrThrow(yield* leases.control(other, Option.none()));
     yield* TestClock.adjust(30_000);
     const report = { call: "tail", kinds: ["pointer"] as const };
     yield* leases.agentInput(other, bots.controlId, { ...report, state: "start", at: 30_000 });
@@ -209,7 +209,7 @@ it.effect(
       yield* runMigrations();
       const leases = yield* ComputerUseLeases.ComputerUseLeases;
       yield* leases.stopAll;
-      const mine = yield* leases.control(thread, Option.none());
+      const mine = Option.getOrThrow(yield* leases.control(thread, Option.none()));
       yield* TestClock.adjust(30_000);
       // An event from 12 s ago: any call that covered it is forgotten by now.
       assert.equal(
@@ -228,8 +228,8 @@ it.effect("two agents taking turns remain active through a person's input", () =
     yield* runMigrations();
     const leases = yield* ComputerUseLeases.ComputerUseLeases;
     yield* leases.stopAll;
-    const mine = yield* leases.control(thread, Option.none());
-    const bots = yield* leases.control(other, Option.none());
+    const mine = Option.getOrThrow(yield* leases.control(thread, Option.none()));
+    const bots = Option.getOrThrow(yield* leases.control(other, Option.none()));
     // Each agent clicks every 800 ms, so its own cover lapses between clicks; offset by 400 ms,
     // the two together never lapse.
     yield* TestClock.adjust(30_000);
@@ -257,8 +257,8 @@ it.effect("a batch of events is judged one by one without pausing the admitted a
     yield* runMigrations();
     const leases = yield* ComputerUseLeases.ComputerUseLeases;
     yield* leases.stopAll;
-    const mine = yield* leases.control(thread, Option.none());
-    const bots = yield* leases.control(other, Option.none());
+    const mine = Option.getOrThrow(yield* leases.control(thread, Option.none()));
+    const bots = Option.getOrThrow(yield* leases.control(other, Option.none()));
     yield* TestClock.adjust(30_000);
     yield* leases.agentInput(other, bots.controlId, {
       call: "9",
@@ -292,8 +292,8 @@ it.effect(
       yield* runMigrations();
       const leases = yield* ComputerUseLeases.ComputerUseLeases;
       yield* leases.stopAll;
-      const mine = yield* leases.control(thread, Option.none());
-      const bots = yield* leases.control(other, Option.none());
+      const mine = Option.getOrThrow(yield* leases.control(thread, Option.none()));
+      const bots = Option.getOrThrow(yield* leases.control(other, Option.none()));
       yield* TestClock.adjust(30_000);
       yield* leases.agentInput(other, bots.controlId, {
         call: "11",

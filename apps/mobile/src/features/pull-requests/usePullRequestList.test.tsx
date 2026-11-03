@@ -23,6 +23,8 @@ vi.mock("../../connection/catalog", async () => {
 vi.mock("../../state/pull-requests", async () => {
   const { AsyncResult, Atom } = await import("effect/reactivity");
   const Effect = await import("effect/Effect");
+  const { ConnectionTransientError, ConnectionBlockedError } =
+    await import("@goat/client-runtime/connection");
   const page = (nextCursors: PullRequestListResult["nextCursors"]): PullRequestListResult => ({
     entries: [],
     nextCursors,
@@ -36,6 +38,37 @@ vi.mock("../../state/pull-requests", async () => {
     const response = page(target.input.cursors ? {} : { "github.com org/repo": "next" });
     return Atom.make(
       Effect.suspend(() => {
+        if (
+          target.environmentId === "endpoint" ||
+          target.environmentId === "host" ||
+          target.environmentId === "transport" ||
+          target.environmentId === "relay"
+        )
+          return Effect.fail(
+            new ConnectionTransientError({
+              reason: (
+                {
+                  endpoint: "endpoint-unavailable",
+                  host: "host-unreachable",
+                  transport: "transport",
+                  relay: "relay-unavailable",
+                } as const
+              )[target.environmentId],
+              detail: "offline",
+            }),
+          );
+        if (target.environmentId === "auth" || target.environmentId === "permission")
+          return Effect.fail(
+            new ConnectionBlockedError({
+              reason: target.environmentId === "auth" ? "authentication" : "permission",
+              detail: "offline",
+            }),
+          );
+        if (target.environmentId.startsWith("unreachable"))
+          return Effect.fail(
+            new ConnectionTransientError({ reason: "network", detail: "offline" }),
+          );
+        if (target.environmentId === "other-error") return Effect.fail(new Error("offline"));
         if (target.environmentId === "offline")
           return Effect.fail(new Error("Environment is not connected."));
         if (target.input.cursors && mocks.failPage) return Effect.fail(new Error("Page failed."));
@@ -63,7 +96,7 @@ vi.mock("../../state/pull-requests", async () => {
 
 import { usePullRequestList } from "./usePullRequestList";
 
-function setup(ids: readonly string[]) {
+function setup(ids: readonly string[], labels = new Map<EnvironmentId, string>()) {
   mocks.failPage = false;
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   const registry = AtomRegistry.make();
@@ -73,7 +106,7 @@ function setup(ids: readonly string[]) {
   }));
   let latest: ReturnType<typeof usePullRequestList>;
   function Probe() {
-    const result = usePullRequestList(targets);
+    const result = usePullRequestList(targets, labels);
     useLayoutEffect(() => {
       latest = result;
     });
@@ -97,6 +130,49 @@ function setup(ids: readonly string[]) {
     },
   };
 }
+
+it("summarizes unreachable environments in empty PR list details while retaining other errors (#2464)", async () => {
+  using probe = setup(
+    ["unreachable-one", "unreachable-two", "other-error"],
+    new Map([
+      [EnvironmentId.make("unreachable-one"), "Laptop"],
+      [EnvironmentId.make("unreachable-two"), "Desktop"],
+    ]),
+  );
+  await act(async () => probe.latest.onRefresh());
+  expect(probe.latest.entries).toEqual([]);
+  expect(probe.latest.error).toBe("Couldn't reach environments: Laptop, Desktop\noffline");
+});
+
+it("marks unreachable environments by failure type for the PR list summary (#2464)", async () => {
+  using probe = setup(["unreachable-one", "unreachable-two", "other-error"]);
+  await act(async () => probe.latest.onRefresh());
+  expect(
+    probe.latest.data.errors.map(({ environmentId, ...error }) => ({ environmentId, ...error })),
+  ).toEqual([
+    { environmentId: "unreachable-one", projectTitle: "", message: "offline", unreachable: true },
+    { environmentId: "unreachable-two", projectTitle: "", message: "offline", unreachable: true },
+    { environmentId: "other-error", projectTitle: "", message: "offline" },
+  ]);
+});
+
+it("groups unreachable connection failures while retaining authentication and permission errors (#2464)", async () => {
+  using probe = setup(["endpoint", "host", "transport", "relay", "auth", "permission"]);
+  await act(async () => probe.latest.onRefresh());
+  expect(probe.latest.data.errors).toEqual([
+    ...["endpoint", "host", "transport", "relay"].map((environmentId) => ({
+      environmentId,
+      projectTitle: "",
+      message: "offline",
+      unreachable: true,
+    })),
+    ...["auth", "permission"].map((environmentId) => ({
+      environmentId,
+      projectTitle: "",
+      message: "offline",
+    })),
+  ]);
+});
 
 it("keeps a refresh failure in the source errors and allows healthy pagination", async () => {
   using probe = setup(["healthy", "offline"]);

@@ -149,6 +149,15 @@ export const layer: Layer.Layer<
           session: Option.none(),
         };
       }
+      if (providerTurn.survivingRestart !== undefined && input.operation !== "interrupt") {
+        return yield* new ProviderTurnControlError({
+          threadId: input.threadId,
+          operation: input.operation,
+          providerTurnId: input.providerTurnId,
+          cause:
+            "This Codex turn is still running from before the server restarted. Stop it or wait for it to finish before steering.",
+        });
+      }
       const session = yield* sessions.get(input.providerSessionId);
       if (Option.isNone(session)) {
         if (input.operation === "interrupt" && providerThread.cloudTask !== undefined) {
@@ -202,6 +211,14 @@ export const layer: Layer.Layer<
             ? loaded.session
             : yield* sessions.get(input.providerSessionId);
           if (Option.isNone(session)) {
+            if (loaded.providerTurn.survivingRestart !== undefined) {
+              return yield* new ProviderTurnControlError({
+                threadId: input.threadId,
+                operation: "interrupt",
+                providerTurnId: input.providerTurnId,
+                cause: "The Codex session is unavailable; GOAT cannot confirm the turn stopped.",
+              });
+            }
             if (loaded.providerThread.cloudTask !== undefined) {
               return yield* new ProviderTurnControlError({
                 threadId: input.threadId,

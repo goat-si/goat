@@ -22,6 +22,7 @@ import {
   AuthOrchestrationReadScope,
   AuthSettingsWriteScope,
   COMPUTER_USE_GRANT_HANDOFF_PATH,
+  BROWSER_CLAIM_ANSWER_HANDOFF_PATH,
   computerUseGrantLiveUntil,
   isHandoffPending,
   isProviderHandoffPath,
@@ -82,6 +83,7 @@ function HumanHandoffCardContent(props: HumanHandoffCardProps) {
   const { handoff } = props;
   const isSsh = handoff.target.path.startsWith("ssh.");
   const isComputerUse = handoff.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH;
+  const isBrowserClaim = handoff.target.path === BROWSER_CLAIM_ANSWER_HANDOFF_PATH;
   const isAppRequest =
     isComputerUse &&
     handoff.apps !== undefined &&
@@ -182,6 +184,7 @@ function HumanHandoffCardContent(props: HumanHandoffCardProps) {
   ) => {
     if (
       inFlight.current ||
+      (isBrowserClaim && action === "completed" && !canWriteSettings) ||
       (isProvider && (!canTarget || !(action === "opened" ? canOpen : allowed)))
     )
       return;
@@ -262,7 +265,8 @@ function HumanHandoffCardContent(props: HumanHandoffCardProps) {
           </View>
         ) : (
           <Text className="font-sans text-sm text-foreground-muted">
-            {handoff.resolvedBy ? `${resolvedLabel} by ${handoff.resolvedBy}` : resolvedLabel}
+            {(isBrowserClaim ? handoff.resultMessage : undefined) ??
+              (handoff.resolvedBy ? `${resolvedLabel} by ${handoff.resolvedBy}` : resolvedLabel)}
           </Text>
         )
       ) : props.inherited ? (
@@ -342,7 +346,12 @@ function HumanHandoffCardContent(props: HumanHandoffCardProps) {
                           ? "I've added the key"
                           : "I've completed this step"
                 }
-                disabled={busy || !allowed || ((isSsh || isProvider) && !canTarget)}
+                disabled={
+                  busy ||
+                  !allowed ||
+                  ((isSsh || isProvider) && !canTarget) ||
+                  (isBrowserClaim && !canWriteSettings)
+                }
                 onPress={() => void act("completed", isAppRequest ? "session" : undefined)}
               />
               {isAppRequest ? (

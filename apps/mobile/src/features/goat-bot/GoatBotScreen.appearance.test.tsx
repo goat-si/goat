@@ -9,6 +9,13 @@ import { expect, it, vi } from "vite-plus/test";
 
 const appearance = vi.hoisted(() => ({ mode: "dark" as "light" | "dark", baseFontSize: 16 }));
 const screenSession = vi.hoisted(() => ({ activity: null as GoatBotActivity | null }));
+const list = vi.hoisted(() => ({ props: null as Record<string, unknown> | null }));
+const picker = vi.hoisted(() => ({
+  onPicked: null as
+    | ((files: ReadonlyArray<import("../../lib/composerImages").DraftComposerAttachment>) => void)
+    | null,
+  release: vi.fn(),
+}));
 
 vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
   useAppearancePreferences: () => ({
@@ -68,14 +75,18 @@ vi.mock("react-native-svg", () => ({ default: () => null, Path: () => null }));
 // The native Markdown renderer cannot load under Vitest.
 vi.mock("./GoatBotMarkdown", () => ({ GoatBotMarkdown: () => null }));
 vi.mock("./GoatBotComposerAttachments", () => ({
-  GoatBotAttachButton: () => null,
+  GoatBotAttachButton: (props: { onPicked: typeof picker.onPicked }) => {
+    picker.onPicked = props.onPicked;
+    return null;
+  },
   GoatBotAttachmentStrip: () => null,
-  releaseGoatBotAttachments: () => {},
+  releaseGoatBotAttachments: picker.release,
 }));
 vi.mock("@legendapp/list/react-native", () => ({
-  LegendList: ({ ListFooterComponent }: { ListFooterComponent?: ReactNode }) => (
-    <>{ListFooterComponent}</>
-  ),
+  LegendList: (props: { ListFooterComponent?: ReactNode }) => {
+    list.props = props;
+    return <>{props.ListFooterComponent}</>;
+  },
 }));
 vi.mock("@react-navigation/elements", async () => ({
   HeaderHeightContext: (await import("react")).createContext<number | undefined>(undefined),
@@ -107,6 +118,7 @@ vi.mock("./useMobileGoatBotSession", () => ({
     availability: "ready",
     rows: [],
     canSend: true,
+    attachmentSupport: { maxUploadBytes: null },
     onSend: () => true,
     onRetryInput: () => {},
     replyingSince: null,
@@ -115,6 +127,7 @@ vi.mock("./useMobileGoatBotSession", () => ({
 }));
 
 import { GoatBotScreen, GoatBotTimelineRow } from "./GoatBotScreen";
+import { isComposerAttachmentFileRetained } from "../../lib/composerAttachmentFiles";
 
 const props = { canSend: true, onSend: () => true, onRetry: () => {}, onSelectThread: () => {} };
 const bot: Extract<GoatBotRow, { kind: "bot" }> = {
@@ -143,6 +156,31 @@ async function render(element: ReactNode) {
     },
   };
 }
+
+it("releases a picker result that arrives after the GOAT Bot screen unmounts", async () => {
+  picker.release.mockClear();
+  picker.onPicked = null;
+  const file = {
+    id: "late-pick",
+    type: "file" as const,
+    name: "report.pdf",
+    mimeType: "application/pdf",
+    sizeBytes: 4,
+    fileUri: "file:///documents/late-pick.pdf",
+  };
+  const picked = Promise.withResolvers<ReadonlyArray<typeof file>>();
+  const view = await render(<GoatBotScreen visible />);
+  const onPicked = picker.onPicked;
+  if (!onPicked) throw new Error("expected attachment picker");
+  const completion = picked.promise.then(onPicked);
+  await view.unmount();
+  await act(async () => {
+    picked.resolve([file]);
+    await completion;
+  });
+  expect(isComposerAttachmentFileRetained(file.fileUri)).toBe(false);
+  expect(picker.release).toHaveBeenCalledWith([file]);
+});
 
 it("marks a failed answer as danger and prefixes its accessibility label", async () => {
   const view = await render(<GoatBotTimelineRow {...props} row={bot} />);
@@ -233,4 +271,15 @@ it("shows the shared reader's reading and working text below the conversation", 
   const idle = await render(<GoatBotScreen visible />);
   expect(idle.container.textContent).not.toContain("Run df -h");
   await idle.unmount();
+});
+
+it("opens the conversation at its newest message and keeps following it", async () => {
+  const view = await render(<GoatBotScreen visible />);
+  // Without initialScrollAtEnd a long conversation opened at its oldest message.
+  expect(list.props).toMatchObject({
+    initialScrollAtEnd: true,
+    maintainScrollAtEnd: true,
+    alignItemsAtEnd: true,
+  });
+  await view.unmount();
 });

@@ -10,6 +10,10 @@ it("normalizes additions and removes the selected host", () => {
     ok: true,
     hosts: ["existing.test", "example.com"],
   });
+  expect(addBlockedBrowserHost(["existing.test"], "example.com:8443")).toEqual({
+    ok: true,
+    hosts: ["existing.test", "example.com"],
+  });
   expect(addBlockedBrowserHost(["example.com"], "EXAMPLE.COM")).toEqual({
     ok: true,
     hosts: ["example.com"],

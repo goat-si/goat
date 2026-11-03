@@ -265,7 +265,12 @@ describe("fleetHostRows", () => {
       },
       createdAt: "2026-10-24T09:00:00.000Z",
       updatedAt: "2026-10-24T09:00:00.000Z",
-      source: {},
+      latestUserMessageAt: null,
+      pinnedAt: null,
+      settledOverride: null,
+      snoozedUntil: null,
+      snoozedAt: null,
+      source: { pendingRuntimeRequest: null },
     };
     const fleet = buildFleet({
       environments: [

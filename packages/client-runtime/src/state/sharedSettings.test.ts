@@ -3,7 +3,11 @@ import { describe, expect, it } from "@effect/vitest";
 
 import { filterSharedServerPatch, pickSharedServerSettings } from "./sharedSettings.ts";
 
-const restartCapabilities = { threadRestartContinuation: true };
+const restartCapabilities = {
+  threadRestartContinuation: true,
+  codexTurnSurvival: true,
+  codexAppServerIsolation: true,
+};
 
 describe("filterSharedServerPatch", () => {
   it.each([true, false])(
@@ -87,4 +91,30 @@ describe("filterSharedServerPatch", () => {
       );
     },
   );
+});
+
+it("shares Codex survival only with supporting environments", () => {
+  const patch = {
+    codexTurnsSurviveServerStop: "always" as const,
+    continueThreadsAfterServerUpdate: true,
+  };
+  expect(filterSharedServerPatch(patch, restartCapabilities)).toEqual(patch);
+  expect(filterSharedServerPatch(patch, { threadRestartContinuation: true })).toEqual({
+    continueThreadsAfterServerUpdate: true,
+  });
+  expect(
+    pickSharedServerSettings(DEFAULT_SERVER_SETTINGS, restartCapabilities)
+      .codexTurnsSurviveServerStop,
+  ).toBe("restart");
+});
+
+it("shares Codex app-server isolation only with environments that advertise it", () => {
+  const patch = { codexAppServerIsolation: "thread" as const, sidebarAutoSettleAfterDays: 7 };
+  expect(filterSharedServerPatch(patch, restartCapabilities)).toEqual(patch);
+  expect(
+    filterSharedServerPatch(patch, { threadRestartContinuation: true, codexTurnSurvival: true }),
+  ).toEqual({ sidebarAutoSettleAfterDays: 7 });
+  expect(
+    pickSharedServerSettings(DEFAULT_SERVER_SETTINGS, restartCapabilities).codexAppServerIsolation,
+  ).toBe(DEFAULT_SERVER_SETTINGS.codexAppServerIsolation);
 });

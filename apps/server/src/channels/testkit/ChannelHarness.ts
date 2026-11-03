@@ -333,6 +333,7 @@ export function makeHarness(
     readonly fakeSlackTransport?: boolean;
     /** Exercise durable launch receipts instead of the scripted worker launch. */
     readonly realWorkerLaunch?: boolean;
+    readonly workerAdapter?: ProviderAdapter.ProviderAdapterV2["Service"];
     /** Other machines over SSH; defaults to a machine that knows no SSH hosts. */
     readonly sshRemote?: Layer.Layer<SshRemoteDispatch.SshRemoteDispatch>;
     /** The state database; defaults to a fresh in-memory one. A file lets a test restart. */
@@ -356,7 +357,7 @@ export function makeHarness(
   const layerOrchestrator = ProviderReplayHarness.layerWithRegistry(
     { name: "channel-scenarios" },
     ProviderAdapterRegistry.layerFromAdapters([
-      {
+      options.workerAdapter ?? {
         ...refusingAdapter,
         openSession: () =>
           Effect.sync(() => providerCalls.push("openSession")).pipe(

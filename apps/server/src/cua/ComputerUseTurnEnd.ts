@@ -52,6 +52,7 @@ export const layer = Layer.effectDiscard(
           ),
         ),
       );
+    const changes = yield* settings.subscribeChanges;
     if (!(yield* settings.getSettings).enableCua) yield* disable;
     else yield* revalidate;
     yield* forkParked(
@@ -65,7 +66,7 @@ export const layer = Layer.effectDiscard(
             : Effect.void,
       ),
     );
-    yield* (yield* settings.subscribeChanges).pipe(
+    yield* changes.pipe(
       Stream.runForEach((value) => (value.enableCua ? revalidate : disable)),
       Effect.forkScoped,
     );

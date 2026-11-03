@@ -7,6 +7,7 @@ import {
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Stream from "effect/Stream";
 import { RpcInstrumentation } from "../observability/RpcInstrumentation.ts";
 import {
   canResolveHumanStep,
@@ -29,6 +30,7 @@ export const requirePerson = (resolver: HumanStepResolver) =>
 export const makeBrowserClaimsRpcHandlers = (
   grants: Option.Option<BrowserOriginGrants["Service"]>,
   session: { readonly subject: string },
+  windows?: () => Effect.Effect<typeof import("@goat/contracts").BrowserClaimWindows.Type, Error>,
 ) => {
   const person = requirePerson(sessionResolver(session));
   const service = Effect.fromOption(
@@ -37,6 +39,21 @@ export const makeBrowserClaimsRpcHandlers = (
   );
   const failure = () => new BrowserClaimsRpcError({ message: "Browser claim operation failed." });
   return ServerWsBrowserClaimsRpcGroup.of({
+    [WS_METHODS.browserClaimsWindows]: () =>
+      person.pipe(
+        Effect.andThen(service),
+        Effect.flatMap(() =>
+          windows
+            ? windows().pipe(
+                Effect.mapError(
+                  () => new BrowserClaimsRpcError({ message: "Browser windows are unavailable." }),
+                ),
+              )
+            : Effect.fail(
+                new BrowserClaimsRpcError({ message: "Browser windows are unavailable." }),
+              ),
+        ),
+      ),
     [WS_METHODS.browserClaimsClaim]: (input) =>
       person.pipe(
         Effect.andThen(service),
@@ -65,6 +82,13 @@ export const makeBrowserClaimsRpcHandlers = (
       person.pipe(
         Effect.andThen(service),
         Effect.flatMap((value) => value.listAll()),
+      ),
+    [WS_METHODS.browserClaimsSubscribe]: () =>
+      Stream.unwrap(
+        person.pipe(
+          Effect.andThen(service),
+          Effect.map((value) => value.subscribe()),
+        ),
       ),
   });
 };

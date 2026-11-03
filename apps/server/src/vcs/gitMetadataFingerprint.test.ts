@@ -1,7 +1,10 @@
 import { assert, it } from "@effect/vitest";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as TestClock from "effect/testing/TestClock";
 import { git, initRepoWithCommit, layerTest, makeTmpDir } from "./testing/gitFixture.ts";
 import { makeGitMetadataFingerprint, splitBranchSections } from "./gitMetadataFingerprint.ts";
 
@@ -142,3 +145,177 @@ it("reads escaped, repeated and CRLF branch sections as git names them", () => {
     ]),
   });
 });
+
+it.effect.each([false, true])(
+  "#2462: a same-stamp config rewrite is visible (during read: %s)",
+  (duringRead) =>
+    Effect.gen(function* () {
+      const { cwd } = yield* setup;
+      const fs = yield* FileSystem.FileSystem;
+      const configPath = (yield* Path.Path).join(cwd, ".git", "config");
+      const original = yield* fs.readFileString(configPath);
+      const replacement = original.replace("project.git", "changed.git");
+      assert.notEqual(replacement, original);
+      assert.equal(replacement.length, original.length);
+      const info = yield* fs.stat(configPath);
+      let rewriteOnRead = duringRead;
+      const testFs: FileSystem.FileSystem = {
+        ...fs,
+        stat: (file) =>
+          file === configPath
+            ? Effect.succeed({
+                ...info,
+                mtime: Option.some(DateTime.toDateUtc(DateTime.makeUnsafe(0))),
+              })
+            : fs.stat(file),
+        open: (file, options) =>
+          fs.open(file, options).pipe(
+            Effect.map((handle) => ({
+              ...handle,
+              readAlloc: (size) =>
+                handle.readAlloc(size).pipe(
+                  Effect.tap(() => {
+                    if (file !== configPath || !rewriteOnRead) return Effect.void;
+                    rewriteOnRead = false;
+                    return fs.writeFileString(configPath, replacement);
+                  }),
+                ),
+            })),
+          ),
+      };
+      const read = yield* makeGitMetadataFingerprint().pipe(
+        Effect.provideService(FileSystem.FileSystem, testFs),
+      );
+      const before = yield* read(cwd, "main");
+      if (!duringRead) yield* fs.writeFileString(configPath, replacement);
+      const after = yield* read(cwd, "main");
+      assert.isNotNull(before);
+      assert.isNotNull(after);
+      assert.notEqual(after?.repository, before?.repository);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);
+
+it.each(["#", ";"])("#2462: branch headers accept a trailing %s comment", (comment) => {
+  assert.deepEqual(splitBranchSections(`[branch "main"] ${comment} comment\n\tremote = origin\n`), {
+    shared: "",
+    branches: new Map([["main", "\tremote = origin"]]),
+  });
+});
+
+it.effect.each([
+  { label: "include", extra: "[include]\n\tpath = shared.inc\n" },
+  { label: "oversized", extra: `[core]\n\tnote = ${"x".repeat(300 * 1024)}\n` },
+])("#2462: same-stamp rewrites invalidate the $label fallback", ({ extra }) =>
+  Effect.gen(function* () {
+    const { cwd, append } = yield* setup;
+    yield* append(extra);
+    const fs = yield* FileSystem.FileSystem;
+    const configPath = (yield* Path.Path).join(cwd, ".git", "config");
+    const original = yield* fs.readFileString(configPath);
+    const replacement = original.replace("project.git", "changed.git");
+    assert.notEqual(original, replacement);
+    assert.equal(original.length, replacement.length);
+    const info = yield* fs.stat(configPath);
+    const testFs: FileSystem.FileSystem = {
+      ...fs,
+      stat: (file) =>
+        file === configPath
+          ? Effect.succeed({
+              ...info,
+              mtime: Option.some(DateTime.toDateUtc(DateTime.makeUnsafe(0))),
+            })
+          : fs.stat(file),
+    };
+    const read = yield* makeGitMetadataFingerprint().pipe(
+      Effect.provideService(FileSystem.FileSystem, testFs),
+    );
+    const before = yield* read(cwd, "main");
+    yield* fs.writeFileString(configPath, replacement);
+    const after = yield* read(cwd, "main");
+    assert.isNotNull(before);
+    assert.isNotNull(after);
+    assert.notEqual(after?.repository, before?.repository);
+  }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);
+
+it.effect("#2462: two-second racy window expires before reuse and later writes are seen", () =>
+  Effect.gen(function* () {
+    const { cwd } = yield* setup;
+    const fs = yield* FileSystem.FileSystem;
+    const configPath = (yield* Path.Path).join(cwd, ".git", "config");
+    const original = yield* fs.readFileString(configPath);
+    const replacement = original.replace("project.git", "changed.git");
+    const info = yield* fs.stat(configPath);
+    let mtime = 0;
+    let reads = 0;
+    const testFs: FileSystem.FileSystem = {
+      ...fs,
+      stat: (file) =>
+        file === configPath
+          ? Effect.succeed({
+              ...info,
+              mtime: Option.some(DateTime.toDateUtc(DateTime.makeUnsafe(mtime))),
+            })
+          : fs.stat(file),
+      open: (file, options) => {
+        if (file === configPath) reads++;
+        return fs.open(file, options);
+      },
+    };
+    const read = yield* makeGitMetadataFingerprint().pipe(
+      Effect.provideService(FileSystem.FileSystem, testFs),
+    );
+    yield* TestClock.adjust("1500 millis");
+    const before = yield* read(cwd, "main");
+    yield* fs.writeFileString(configPath, replacement);
+    const changed = yield* read(cwd, "main");
+    assert.isNotNull(before);
+    assert.isNotNull(changed);
+    assert.notEqual(changed?.repository, before?.repository);
+    yield* TestClock.adjust("501 millis");
+    const stable = yield* read(cwd, "main");
+    const readsAtStable = reads;
+    assert.deepEqual(yield* read(cwd, "main"), stable);
+    assert.equal(reads, readsAtStable);
+    yield* TestClock.adjust("1 second");
+    mtime = 3001;
+    yield* fs.writeFileString(configPath, original);
+    const later = yield* read(cwd, "main");
+    assert.isNotNull(later);
+    assert.notEqual(later?.repository, stable?.repository);
+  }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);
+
+it.effect("#2462: non-UTF-8 config values fingerprint and same-stamp byte changes invalidate", () =>
+  Effect.gen(function* () {
+    const { cwd } = yield* setup;
+    const fs = yield* FileSystem.FileSystem;
+    const configPath = (yield* Path.Path).join(cwd, ".git", "config");
+    const original = yield* fs.readFile(configPath);
+    const suffix = new TextEncoder().encode("\n[core]\n\tnote = ");
+    const config = new Uint8Array([...original, ...suffix, 0xff, 0x0a]);
+    yield* fs.writeFile(configPath, config);
+    const info = yield* fs.stat(configPath);
+    const testFs: FileSystem.FileSystem = {
+      ...fs,
+      stat: (file) =>
+        file === configPath
+          ? Effect.succeed({
+              ...info,
+              mtime: Option.some(DateTime.toDateUtc(DateTime.makeUnsafe(0))),
+            })
+          : fs.stat(file),
+    };
+    const read = yield* makeGitMetadataFingerprint().pipe(
+      Effect.provideService(FileSystem.FileSystem, testFs),
+    );
+    const before = yield* read(cwd, "main");
+    assert.isNotNull(before);
+    assert.deepEqual(yield* read(cwd, "main"), before);
+    config[config.length - 2] = 0xfe;
+    yield* fs.writeFile(configPath, config);
+    const after = yield* read(cwd, "main");
+    assert.isNotNull(after);
+    assert.notEqual(after?.repository, before?.repository);
+  }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);

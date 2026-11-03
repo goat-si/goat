@@ -11,6 +11,7 @@ import {
   AuthOrchestrationReadScope,
   AuthSettingsWriteScope,
   COMPUTER_USE_GRANT_HANDOFF_PATH,
+  BROWSER_CLAIM_ANSWER_HANDOFF_PATH,
   computerUseGrantLiveUntil,
   isHandoffPending,
   isProviderHandoffPath,
@@ -97,6 +98,7 @@ function HandoffCardContent(props: HandoffCardProps) {
   const { handoff } = props;
   const isSsh = handoff.target.path.startsWith("ssh.");
   const isComputerUse = handoff.target.path === COMPUTER_USE_GRANT_HANDOFF_PATH;
+  const isBrowserClaim = handoff.target.path === BROWSER_CLAIM_ANSWER_HANDOFF_PATH;
   const isAppRequest =
     isComputerUse &&
     handoff.apps !== undefined &&
@@ -198,6 +200,7 @@ function HandoffCardContent(props: HandoffCardProps) {
   ) => {
     if (
       inFlight.current ||
+      (isBrowserClaim && action === "completed" && !canWriteSettings) ||
       (isProvider && (!canTarget || !(action === "opened" ? canOpen : canRespond)))
     )
       return;
@@ -281,7 +284,8 @@ function HandoffCardContent(props: HandoffCardProps) {
           </div>
         ) : (
           <p className="text-sm text-muted-foreground">
-            {handoff.resolvedBy ? `${resolvedLabel} by ${handoff.resolvedBy}` : resolvedLabel}
+            {(isBrowserClaim ? handoff.resultMessage : undefined) ??
+              (handoff.resolvedBy ? `${resolvedLabel} by ${handoff.resolvedBy}` : resolvedLabel)}
           </p>
         )
       ) : props.inherited ? (
@@ -313,6 +317,7 @@ function HandoffCardContent(props: HandoffCardProps) {
                 human={human}
                 busy={busy}
                 allowed={canRespond && (!(isSsh || isProvider) || canTarget)}
+                approveAllowed={!isBrowserClaim || canWriteSettings}
                 approveLabel={
                   isAppRequest
                     ? "Allow for this conversation"

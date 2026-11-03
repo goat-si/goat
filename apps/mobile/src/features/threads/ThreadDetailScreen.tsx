@@ -212,7 +212,6 @@ import { resolveThreadFeedSubmissionAnchor } from "./thread-feed-live-follow";
 import { useOpenLinkedThread } from "./useOpenLinkedThread";
 import { useGlobalVoiceInput } from "../voice-input/VoiceInputProvider";
 import { useOfflineSnapshotAge } from "../connection/useOfflineSnapshotAge";
-
 export interface ThreadDetailScreenProps {
   readonly cloudState: CloudTaskState;
   readonly cloudRun?: CloudRunCard | null;
@@ -243,7 +242,9 @@ export interface ThreadDetailScreenProps {
   readonly onDismissFeedback: (id: MessageId) => void;
   readonly selectedThreadFeed: ReadonlyArray<ThreadFeedEntry>;
   readonly pendingHandoff?: HandoffEndpoints | null;
-  readonly activityRun: ThreadFeedLatestRun | null;
+  readonly activityRun:
+    | (ThreadFeedLatestRun & { readonly survivingRestartNotice?: string | null })
+    | null;
   readonly activeWorkStartedAt: string | null;
   readonly runlessWorkActive?: boolean;
   readonly providerSubagentStatus?: ProviderSubagentStatus | null;
@@ -323,15 +324,12 @@ export interface ThreadDetailScreenProps {
   readonly onDismissUserInput: () => Promise<unknown>;
   readonly showContent?: boolean;
 }
-
 const USAGE_LIMITS_PANEL_GAP = 12;
 const USAGE_LIMITS_PANEL_MIN_HEIGHT = 44;
-
 const USER_INPUT_TOGGLE_TIMING = {
   duration: USER_INPUT_TOGGLE_DURATION_MS,
   easing: Easing.out(Easing.cubic),
 };
-
 // A scheduled wake can happen without a newer server update, so the tracker
 // is told when one takes effect. The shell's updatedAt ticks while a run
 // streams; the tracker follows it outside React.
@@ -353,16 +351,13 @@ const wakeAwareVisitShell = Atom.family((key: string) => {
     return { ...shell, wokeAt };
   }).pipe(Atom.withLabel(`mobile-thread-visit-shell:${key}`));
 });
-
 const threadVisitTracker = createThreadVisitTracker({
   threadShellAtom: (ref) => wakeAwareVisitShell(threadKey(ref)),
   visit: threadEnvironment.visit,
 });
-
 const NO_RUN_STOP_ATOM = Atom.make<RunStopPresentation | null>(null).pipe(
   Atom.withLabel("mobile-thread-run-stop:empty"),
 );
-
 // Connection failures survive retries and app suspension.
 const RECONNECT_ERROR_DELAY_MS = 5_000;
 
@@ -1592,6 +1587,11 @@ function ThreadDetailBody(
                     });
                   }}
                 />
+                {floatingStatus?.kind === "working" && props.activityRun?.survivingRestartNotice ? (
+                  <Text className="px-3 text-xs text-foreground-muted">
+                    {props.activityRun.survivingRestartNotice}
+                  </Text>
+                ) : null}
                 <ComposerCards maxWidth={contentMaxWidth} onHeight={handleCardsHeight}>
                   <ChildThreadApprovals
                     threadRef={props.selectedThreadDetailRef}

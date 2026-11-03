@@ -1,3 +1,4 @@
+import { timedShutdownPhase } from "@goat/shared/timedShutdownPhase";
 import {
   CommandId,
   DEFAULT_MODEL,
@@ -38,8 +39,12 @@ import * as EffectWorker from "./orchestration-v2/EffectWorker.ts";
 import * as LegacyV1ThreadImporter from "./orchestration-v2/legacy/LegacyV1ThreadImporter.ts";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
 import * as ProviderRuntimeRecovery from "./orchestration-v2/ProviderRuntimeRecoveryService.ts";
+import * as ProjectionStore from "./orchestration-v2/ProjectionStore.ts";
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
 import * as CodexDetachedAppServerLive from "./provider/CodexDetachedAppServerLive.ts";
+import * as CodexSurvivors from "./provider/CodexSurvivors.ts";
+import * as CodexGoalSessionRecovery from "./provider/CodexGoalSessionRecovery.ts";
+import * as RuntimeDrain from "./runtimeDrain.ts";
 import * as ThreadLaunch from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadManagement from "./orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "./project/ProjectService.ts";
@@ -533,36 +538,19 @@ const runOrderedV2StartupPhases = Effect.fn("serverRuntimeStartup.runOrderedV2St
   },
 );
 
-const timedShutdownPhase = Effect.fn("serverRuntimeStartup.timedShutdownPhase")(function* <A, E, R>(
-  phase: string,
-  effect: Effect.Effect<A, E, R>,
-) {
-  const start = yield* Clock.monotonicTimeNanos;
-  yield* Effect.logInfo("Server shutdown phase started", { phase });
-  return yield* effect.pipe(
-    Effect.onExit((exit) =>
-      Effect.gen(function* () {
-        const durationMs = Number(((yield* Clock.monotonicTimeNanos) - start) / 1_000_000n);
-        const outcome = Exit.isSuccess(exit)
-          ? "success"
-          : Cause.hasInterruptsOnly(exit.cause)
-            ? "interrupted"
-            : "failure";
-        yield* Effect.logInfo("Server shutdown phase finished", { phase, durationMs, outcome });
-      }),
-    ),
-  );
-});
-
 const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: StartupOptions) {
   const serverConfig = yield* ServerConfig.ServerConfig;
   const intentReader = yield* DesktopStopIntentReader.DesktopStopIntentReader;
+  const restartMarker = yield* Effect.serviceOption(RuntimeDrain.RuntimeRestartMarker);
   const keybindings = yield* Keybindings.Keybindings;
   const legacyV1ThreadImporter = yield* LegacyV1ThreadImporter.LegacyV1ThreadImporter;
   const providerRuntimeRecovery = yield* ProviderRuntimeRecovery.ProviderRuntimeRecoveryService;
   const orchestrator = yield* Orchestrator.OrchestratorV2;
   const providerSessions = yield* ProviderSessionManager.ProviderSessionManagerV2;
   const codexDetached = yield* CodexDetachedAppServerLive.CodexDetachedAppServers;
+  const codexSurvivors = yield* CodexSurvivors.CodexSurvivors;
+  const projections = yield* ProjectionStore.ProjectionStoreV2;
+  const projects = yield* ProjectStore.ProjectStoreV2;
   const agentAwarenessRelay = yield* AgentAwarenessRelay.AgentAwarenessRelay;
   const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
@@ -577,7 +565,9 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
   yield* Effect.addFinalizer(() =>
     Effect.gen(function* () {
       const intent = yield* intentReader.atShutdown;
+      const marked = Option.isSome(restartMarker) ? yield* restartMarker.value.isRestart : false;
       yield* Effect.logInfo("Server shutdown intent", {
+        stopKind: RuntimeDrain.stopKind(marked, intent),
         reason: Option.match(intent, { onNone: () => "unknown", onSome: (value) => value.reason }),
         requestedAt: Option.getOrUndefined(Option.map(intent, (value) => value.requestedAt)),
       });
@@ -596,7 +586,10 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
       yield* codexDetached.beginServerShutdown;
       yield* timedShutdownPhase(
         "prepareForShutdown",
-        providerRuntimeRecovery.prepareForShutdown,
+        providerRuntimeRecovery.prepareForShutdownWithStopKind(
+          RuntimeDrain.stopKind(marked, intent),
+        ),
+        (summary) => summary,
       ).pipe(Effect.ensuring(timedShutdownPhase("providerSessions", providerSessions.shutdown)));
       const reconciliation = yield* timedShutdownPhase(
         "reconcile",
@@ -692,7 +685,13 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
           ),
         ),
       ),
-      recover: runStartupPhase("orchestration-v2.recovery", providerRuntimeRecovery.recover),
+      recover: runStartupPhase(
+        "orchestration-v2.recovery",
+        providerRuntimeRecovery.recover.pipe(
+          Effect.provideService(CodexSurvivors.CodexSurvivors, codexSurvivors),
+          Effect.provideService(CodexDetachedAppServerLive.CodexDetachedAppServers, codexDetached),
+        ),
+      ),
       cleanupDetachedProviders: runStartupPhase(
         "codex.detached-cleanup",
         codexDetached.cleanup.pipe(
@@ -700,6 +699,21 @@ const make = Effect.fn("serverRuntimeStartup.make")(function* (options?: Startup
             outcomes.length === 0
               ? Effect.void
               : Effect.logInfo("Codex app-servers from an earlier run handled", { outcomes }),
+          ),
+          Effect.andThen(
+            CodexGoalSessionRecovery.attachGoalOnlySessions({
+              detached: codexDetached,
+              survivors: codexSurvivors,
+              projections,
+              projects,
+              sessions: providerSessions,
+            }).pipe(
+              Effect.catchCause((cause) =>
+                Effect.logWarning("Codex goal session recovery failed", {
+                  cause: Cause.pretty(cause),
+                }),
+              ),
+            ),
           ),
           Effect.catchCause((cause) =>
             Effect.logWarning("Codex app-server cleanup failed", { cause: Cause.pretty(cause) }),
@@ -884,3 +898,10 @@ export const layerWithOptions = (options?: StartupOptions) =>
 /** Shares the Codex process service with the provider factory, so cleanup and shutdown see one state. */
 export const layerLiveWithOptions = (options?: StartupOptions) =>
   layerWithOptions(options).pipe(Layer.provide(CodexDetachedAppServerLive.layerLive));
+
+export const layerSurvivorsAndStopIntent = Layer.mergeAll(
+  DesktopStopIntentReader.layerFromServerConfig,
+  RuntimeDrain.layerRestartMarker,
+  ProjectionStore.layer,
+  CodexSurvivors.layer.pipe(Layer.provideMerge(CodexDetachedAppServerLive.layerLive)),
+);

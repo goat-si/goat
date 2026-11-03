@@ -11,7 +11,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
-import { HttpClient } from "effect/http";
+import { HttpClient, HttpClientResponse } from "effect/http";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import * as SshAuth from "./auth.ts";
 import * as SshTunnel from "./tunnel.ts";
@@ -28,19 +28,59 @@ import {
 } from "./tunnel.fixture.ts";
 import { protocolExecutable, makeProtocolFixture } from "./tunnel.protocol.fixture.ts";
 
+/** Answers identity reads through a recorded forward from the owner server behind it. */
+const forwardingHttpClient = (forwards: ReadonlyMap<number, number>) =>
+  HttpClient.make((request) => {
+    const url = new URL(request.url);
+    const remote = forwards.get(Number(url.port));
+    const empty = HttpClientResponse.fromWeb(request, new Response("", { status: 200 }));
+    if (remote === undefined || url.pathname !== "/.well-known/goat/environment")
+      return Effect.succeed(empty);
+    return Effect.callback<HttpClientResponse.HttpClientResponse>((resume) => {
+      NodeHttp.get(`http://127.0.0.1:${remote}${url.pathname}`, (response) => {
+        let body = "";
+        response.on("data", (chunk) => (body += String(chunk)));
+        response.on("end", () =>
+          resume(
+            Effect.succeed(
+              HttpClientResponse.fromWeb(
+                request,
+                new Response(body, { status: response.statusCode ?? 500 }),
+              ),
+            ),
+          ),
+        );
+      }).on("error", () => resume(Effect.succeed(empty)));
+    });
+  });
+
+const recordForwards = (
+  transport: ChildProcessSpawner.ChildProcessSpawner["Service"],
+  forwards: Map<number, number>,
+) =>
+  ChildProcessSpawner.make((command) => {
+    if (command._tag === "StandardCommand" && command.args.includes("-N")) {
+      const [local, , remote] = (command.args[command.args.indexOf("-L") + 1] ?? "").split(":");
+      forwards.set(Number(local), Number(remote));
+    }
+    return transport.spawn(command);
+  });
+
 const startOwner = (environmentId: string, token: string) =>
   Effect.acquireRelease(
     Effect.callback<{
       readonly server: NodeHttp.Server;
       readonly port: number;
       readonly sessions: string[];
+      readonly identity: { environmentId: string };
     }>((resume) => {
       const sessions: string[] = [];
+      const identity = { environmentId };
       const server = NodeHttp.createServer((request, response) => {
         if (request.url === "/.well-known/goat/environment") {
           response.end(
             JSON.stringify({
-              environmentId,
+              environmentId: identity.environmentId,
               serverVersion: ARCHIVE.archiveVersion,
               sshRuntimeProtocolVersion: SSH_RUNTIME_PROTOCOL_VERSION,
               orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
@@ -65,6 +105,7 @@ const startOwner = (environmentId: string, token: string) =>
             server,
             port: typeof address === "object" && address !== null ? address.port : 0,
             sessions,
+            identity,
           }),
         );
       });
@@ -89,11 +130,15 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           ...testNetService,
           reserveLoopbackPort: () => Effect.sync(() => localPort++),
         });
+        const forwardPorts = new Map<number, number>();
         const layer = Layer.mergeAll(
           NodeServices.layer,
-          Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, fixture.transport),
+          Layer.succeed(
+            ChildProcessSpawner.ChildProcessSpawner,
+            recordForwards(fixture.transport, forwardPorts),
+          ),
           Layer.succeed(FileSystem.FileSystem, fixture.observedFs),
-          Layer.succeed(HttpClient.HttpClient, testHttpClient),
+          Layer.succeed(HttpClient.HttpClient, forwardingHttpClient(forwardPorts)),
           Layer.succeed(NetService.NetService, net),
           SshAuth.SshPasswordPrompt.disabledLayer,
         ).pipe((base) =>
@@ -138,6 +183,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           assert.equal(stillPrimary.remoteServerKind, "managed");
           assert.equal(stillPrimary.httpBaseUrl, primary.httpBaseUrl);
           yield* fixture.fs.writeFileString(`${appDir}/environment-id`, "replaced-owner\n");
+          app.identity.environmentId = "replaced-owner";
           yield* manager.existingEnvironment!(uploadTarget, appId).pipe(Effect.flip);
           assert.notInclude(
             yield* fixture.fs.readFileString(`${fixture.test}/events`),
@@ -220,10 +266,14 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             ...testNetService,
             reserveLoopbackPort: () => Effect.sync(() => localPort++),
           });
+          const forwardPorts = new Map<number, number>();
           const layer = Layer.mergeAll(
             NodeServices.layer,
-            Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, transport),
-            Layer.succeed(HttpClient.HttpClient, testHttpClient),
+            Layer.succeed(
+              ChildProcessSpawner.ChildProcessSpawner,
+              recordForwards(transport, forwardPorts),
+            ),
+            Layer.succeed(HttpClient.HttpClient, forwardingHttpClient(forwardPorts)),
             Layer.succeed(NetService.NetService, net),
             SshAuth.SshPasswordPrompt.disabledLayer,
           ).pipe((base) =>
@@ -264,6 +314,7 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
             if ("type" in stillPrimary) return;
             assert.equal(stillPrimary.httpBaseUrl, primary.httpBaseUrl);
             yield* fs.writeFileString(`${home}/.goat/userdata/environment-id`, "replaced-owner\n");
+            managed.identity.environmentId = "replaced-owner";
             yield* manager.existingEnvironment!(uploadTarget, EnvironmentId.make(managedId)).pipe(
               Effect.flip,
             );

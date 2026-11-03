@@ -10,7 +10,7 @@ import type {
   BrowserImportSource,
   BrowserImportSourceId,
 } from "./browserImport.ts";
-import { AuthAccessTokenResult, AuthSessionState, AuthWebSocketTicketResult } from "./auth.ts";
+import { AuthAccessTokenResult, AuthSessionState } from "./auth.ts";
 import { AdvertisedEndpoint } from "./remoteAccess.ts";
 import type { DesktopBridgeParts } from "./desktopBridgeParts.ts";
 import type { SystemSettingsPane } from "./desktopPermissions.ts";
@@ -1258,7 +1258,7 @@ export interface DesktopBridge extends DesktopBridgeParts {
   issueSshWebSocketTicket: (
     httpBaseUrl: string,
     bearerToken: string,
-  ) => Promise<AuthWebSocketTicketResult>;
+  ) => Promise<{ readonly ticket: string; readonly expiresAt: string }>;
   onSshPasswordPrompt: (listener: (request: DesktopSshPasswordPromptRequest) => void) => () => void;
   resolveSshPasswordPrompt: (requestId: string, password: string | null) => Promise<void>;
   getServerExposureState: () => Promise<DesktopServerExposureState>;

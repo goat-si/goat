@@ -116,6 +116,11 @@ describe("channel worker brief", () => {
       // GOAT drops lines with these prefixes before delivery, so verification must be prose.
       assert.include(brief, "never start a line with NOT RUN:");
       assert.notInclude(brief, "NOT RUN line");
+      if (supervisor)
+        assert.include(
+          brief,
+          'ask the person through goat_call {path:"decision.request"} for a merge manager',
+        );
     },
   );
 

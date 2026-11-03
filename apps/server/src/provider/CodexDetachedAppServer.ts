@@ -2,13 +2,21 @@
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
+import { type ProviderInstanceId, ProviderSessionId, ThreadId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as Scope from "effect/Scope";
 import type { CodexAppServerMessageChannel } from "effect-codex-app-server/client";
+import { blocksSession, recordKey, servesSession } from "./CodexRecordSessions.ts";
+import type {
+  CodexGoalBlock,
+  CodexInstanceRecordKey,
+  CodexStopObligation,
+} from "./CodexSurvivors.ts";
 
 /**
  * Ownership of a Codex app-server that runs outside the GOAT server process. A signal is only ever
@@ -25,23 +33,41 @@ export interface DetachedProcess {
 export interface DetachedAppServerRecord {
   readonly version: 1;
   readonly instanceId: string;
+  readonly providerSessionId?: ProviderSessionId | undefined;
   readonly name: string;
   readonly socketPath: string;
   readonly pgid?: number | undefined;
   readonly bootId: string | null;
   readonly state: "spawning" | "running" | "terminating";
   readonly createdAt: string;
+  readonly stderrMode?: "discard" | undefined;
+  readonly stopObligations?: ReadonlyArray<CodexStopObligation> | undefined;
+  readonly goalBlocks?: ReadonlyArray<CodexGoalBlock> | undefined;
 }
 
 const DetachedRecordSchema = Schema.Struct({
   version: Schema.Literal(1),
   instanceId: Schema.NonEmptyString,
+  providerSessionId: Schema.optional(ProviderSessionId),
   name: Schema.NonEmptyString,
   socketPath: Schema.NonEmptyString,
   pgid: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))),
   bootId: Schema.NullOr(Schema.String),
   state: Schema.Literals(["spawning", "running", "terminating"]),
   createdAt: Schema.String,
+  stderrMode: Schema.optional(Schema.Literal("discard")),
+  stopObligations: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        threadId: ThreadId,
+        nativeThreadId: Schema.NonEmptyString,
+        nativeTurnId: Schema.NonEmptyString,
+      }),
+    ),
+  ),
+  goalBlocks: Schema.optional(
+    Schema.Array(Schema.Struct({ threadId: ThreadId, nativeThreadId: Schema.NonEmptyString })),
+  ),
 });
 const decodeRecord = Schema.decodeUnknownSync(DetachedRecordSchema);
 
@@ -64,7 +90,7 @@ export type DetachedClassification =
   | { readonly type: "mismatch" }
   | { readonly type: "unverifiable" };
 
-export type DetachedOutcome = "cleaned" | "tombstoned" | "blocked" | "signalled";
+export type DetachedOutcome = "cleaned" | "tombstoned" | "blocked" | "signalled" | "retained";
 
 export class CodexDetachedAppServerError extends Schema.TaggedError<CodexDetachedAppServerError>()(
   "CodexDetachedAppServerError",
@@ -82,8 +108,6 @@ const READINESS = Schedule.spaced("50 millis");
 const READINESS_LIMIT = "30 seconds";
 const MAX_SOCKET_PATH_BYTES = 103;
 const ABANDONED = "abandoned";
-// In PR-A the process never outlives the server, so scoped maintenance bounds its log.
-const MAX_STDERR_LOG_BYTES = 4 * 1024 * 1024;
 
 /** Runs as the detached group leader: publishes its pid with link(2), then execs Codex in place. */
 export const PID_HANDSHAKE_SCRIPT =
@@ -191,6 +215,7 @@ export interface DetachedAppServersDependencies {
 
 export interface DetachedOpenInput {
   readonly instanceId: string;
+  readonly providerSessionId: ProviderSessionId;
   /** Builds the wrapped launch once the socket path is known (the path goes into argv). */
   readonly command: (
     socketPath: string,
@@ -213,34 +238,21 @@ const tryIo = <A>(detail: string, run: () => Promise<A>) =>
 const isErrno = (cause: unknown, code: string) =>
   typeof cause === "object" && cause !== null && (cause as { code?: unknown }).code === code;
 
-/** Reads at most the last bytes of the detached stderr log. */
-const readTail = async (path: string, bytes: number) => {
-  const handle = await NodeFSP.open(path, "r").catch(() => undefined);
-  if (handle === undefined) return "";
-  try {
-    const { size } = await handle.stat();
-    const length = Math.min(size, bytes);
-    const buffer = Buffer.alloc(length);
-    await handle.read(buffer, 0, length, size - length);
-    return buffer.toString("utf8");
-  } finally {
-    await handle.close();
-  }
-};
-
-const lastStderrLine = (text: string) =>
-  text
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .at(-1);
-
 export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(function* (
   deps: DetachedAppServersDependencies,
 ) {
   const directory = NodePath.join(deps.stateDir, RECORD_DIRECTORY);
   const runSync = Effect.runSyncWith(yield* Effect.context<never>());
   const owned = new Map<string, DetachedLaunched>();
+  const stopping = new Map<string, DetachedAppServerRecord>();
+  const launching = new Set<string>();
+  const retained = new Set<string>();
+  const recoveryRetained = new Set<string>();
+  const adoptedClosed = new Set<string>();
+  // One gate keeps infrequent record writes and cross-instance fence checks atomic.
+  const recordGate = yield* Semaphore.make(1);
+  const fences = new Map<string, DetachedAppServerRecord>();
+  const failedFences = new Map<string, ThreadId>();
   const shuttingDown = yield* Ref.make(false);
   const blocked = yield* Ref.make(new Map<string, DetachedAppServerRecord>());
   /** Set when a record cannot be attributed to a provider instance or the records cannot be listed. */
@@ -256,7 +268,7 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
     NodeFSP.mkdir(directory, { recursive: true, mode: 0o700 }),
   );
 
-  const writeRecord = Effect.fn("CodexDetachedAppServers.writeRecord")(function* (
+  const writeRecordUnlocked = Effect.fn("CodexDetachedAppServers.writeRecord")(function* (
     record: DetachedAppServerRecord,
   ) {
     yield* ensureDirectory;
@@ -268,21 +280,38 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
     });
   });
 
-  const removeRecord = (record: DetachedAppServerRecord) =>
-    tryIo("Could not remove a Codex process record.", async () => {
-      const files = paths(record.name);
-      // GOAT's alias in its private socket directory; Codex removes its own socket on a clean exit.
-      await NodeFSP.rm(record.socketPath, { force: true });
-      await NodeFSP.rm(files.record, { force: true });
-      await NodeFSP.rm(files.pid, { force: true });
-      await NodeFSP.rm(files.stderr, { force: true });
-    });
+  const writeRecord = (record: DetachedAppServerRecord) =>
+    recordGate.withPermit(
+      Effect.gen(function* () {
+        const previous =
+          record.state === "spawning" ? undefined : yield* readRecord(paths(record.name).record);
+        const next =
+          previous === undefined
+            ? record
+            : {
+                ...record,
+                providerSessionId: record.providerSessionId ?? previous.providerSessionId,
+                stopObligations: previous.stopObligations,
+                goalBlocks: previous.goalBlocks,
+              };
+        yield* writeRecordUnlocked(next);
+        fences.set(next.name, next);
+      }),
+    );
 
-  const truncateStderr = (path: string) =>
-    tryIo("Could not truncate a Codex stderr log.", async () => {
-      const stat = await NodeFSP.stat(path);
-      if (stat.size > MAX_STDERR_LOG_BYTES) await NodeFSP.truncate(path, 0);
-    }).pipe(Effect.catch((error) => Effect.logDebug(error.detail, error.cause)));
+  const removeRecord = (record: DetachedAppServerRecord) =>
+    recordGate.withPermit(
+      tryIo("Could not remove a Codex process record.", async () => {
+        const files = paths(record.name);
+        // GOAT's alias in its private socket directory; Codex removes its own socket on a clean exit.
+        await NodeFSP.rm(record.socketPath, { force: true });
+        await NodeFSP.rm(files.record, { force: true });
+        await NodeFSP.rm(files.pid, { force: true });
+        await NodeFSP.rm(files.stderr, { force: true });
+        fences.delete(record.name);
+        recoveryRetained.delete(record.name);
+      }),
+    );
 
   const readPidFile = (name: string) =>
     tryIo("Could not read a Codex pid file.", async () => {
@@ -334,7 +363,11 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
 
   const settledOrGone = (record: DetachedAppServerRecord) =>
     classify(record).pipe(
-      Effect.map((result) => result.type === "gone" || result.type === "mismatch"),
+      Effect.map(
+        (result) =>
+          (result.type === "gone" && !result.possibleLeftovers?.length) ||
+          result.type === "mismatch",
+      ),
     );
 
   const awaitGone = (record: DetachedAppServerRecord) =>
@@ -353,8 +386,10 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
     record: DetachedAppServerRecord,
     classification: DetachedClassification,
   ) {
-    if (classification.type === "gone" && classification.possibleLeftovers?.length)
+    if (classification.type === "gone" && classification.possibleLeftovers?.length) {
       yield* warn(classification.possibleLeftovers);
+      return yield* markBlocked(record);
+    }
     yield* removeRecord(record);
     yield* Ref.update(blocked, (current) => {
       const next = new Map(current);
@@ -374,6 +409,10 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
       const current: DetachedAppServerRecord = { ...record, pgid };
       if (!(yield* signalOwned(current, signal))) {
         const classification = yield* classify(current, signal);
+        if (classification.type === "gone" && classification.possibleLeftovers?.length) {
+          yield* warn(classification.possibleLeftovers);
+          return yield* markBlocked(current);
+        }
         if (classification.type === "gone" || classification.type === "mismatch")
           return yield* finishGone(current, classification);
         if (classification.type === "unverifiable") return yield* markBlocked(current);
@@ -407,6 +446,183 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
       decodeRecord(JSON.parse(await NodeFSP.readFile(file, "utf8"))),
     );
 
+  const classifyRecord = Effect.fn("CodexDetachedAppServers.classifyRecord")(function* (
+    key: CodexInstanceRecordKey,
+  ) {
+    if (key.recordName !== NodePath.basename(key.recordName))
+      return { type: "unverifiable" as const };
+    const record = yield* readRecord(paths(key.recordName).record).pipe(Effect.option);
+    if (record._tag === "None" || record.value.name !== key.recordName)
+      return { type: "unverifiable" as const };
+    if (record.value.instanceId !== key.instanceId) return { type: "mismatch" as const };
+    if (record.value.state === "spawning") return { type: "unverifiable" as const };
+    return yield* classify(record.value);
+  });
+
+  const mutateFence = (
+    key: CodexInstanceRecordKey,
+    change: (record: DetachedAppServerRecord) => DetachedAppServerRecord,
+  ) =>
+    recordGate.withPermit(
+      Effect.gen(function* () {
+        const record = yield* readRecord(paths(key.recordName).record);
+        if (record.name !== key.recordName || record.instanceId !== key.instanceId)
+          return yield* new CodexDetachedAppServerError({
+            detail: "The Codex process record does not match this provider.",
+          });
+        const next = change(record);
+        yield* writeRecordUnlocked(next);
+        fences.set(next.name, next);
+      }),
+    );
+
+  const sameStop = (a: CodexStopObligation, b: CodexStopObligation) =>
+    a.threadId === b.threadId &&
+    a.nativeThreadId === b.nativeThreadId &&
+    a.nativeTurnId === b.nativeTurnId;
+  const sameGoal = (a: CodexGoalBlock, b: CodexGoalBlock) =>
+    a.threadId === b.threadId && a.nativeThreadId === b.nativeThreadId;
+  const stopKey = (key: CodexInstanceRecordKey, stop: CodexStopObligation) =>
+    JSON.stringify([
+      "stop",
+      key.instanceId,
+      key.recordName,
+      stop.threadId,
+      stop.nativeThreadId,
+      stop.nativeTurnId,
+    ]);
+  const goalKey = (key: CodexInstanceRecordKey, goal: CodexGoalBlock) =>
+    JSON.stringify(["goal", key.instanceId, key.recordName, goal.threadId, goal.nativeThreadId]);
+  const recordStopObligation = (key: CodexInstanceRecordKey, stop: CodexStopObligation) =>
+    Effect.sync(() => {
+      failedFences.set(stopKey(key, stop), stop.threadId);
+    }).pipe(
+      Effect.andThen(
+        mutateFence(key, (record) => ({
+          ...record,
+          stopObligations: [
+            ...(record.stopObligations ?? []).filter((entry) => !sameStop(entry, stop)),
+            stop,
+          ],
+        })),
+      ),
+      Effect.tap(() =>
+        Effect.sync(() => {
+          failedFences.delete(stopKey(key, stop));
+        }),
+      ),
+    );
+  const clearStopObligation = (key: CodexInstanceRecordKey, stop: CodexStopObligation) =>
+    mutateFence(key, (record) => ({
+      ...record,
+      stopObligations: (record.stopObligations ?? []).filter((entry) => !sameStop(entry, stop)),
+    }));
+  const assignSession = (key: CodexInstanceRecordKey, providerSessionId: ProviderSessionId) =>
+    mutateFence(key, (record) => ({
+      ...record,
+      providerSessionId: record.providerSessionId ?? providerSessionId,
+    })).pipe(Effect.asVoid);
+  const recordGoalBlock = (key: CodexInstanceRecordKey, goal: CodexGoalBlock) =>
+    Effect.sync(() => {
+      failedFences.set(goalKey(key, goal), goal.threadId);
+    }).pipe(
+      Effect.andThen(
+        mutateFence(key, (record) => ({
+          ...record,
+          goalBlocks: [
+            ...(record.goalBlocks ?? []).filter((entry) => !sameGoal(entry, goal)),
+            goal,
+          ],
+        })),
+      ),
+      Effect.tap(() =>
+        Effect.sync(() => {
+          failedFences.delete(goalKey(key, goal));
+        }),
+      ),
+    );
+  const clearGoalBlock = (key: CodexInstanceRecordKey, goal: CodexGoalBlock) =>
+    mutateFence(key, (record) => ({
+      ...record,
+      goalBlocks:
+        [...failedFences.values()].includes(goal.threadId) ||
+        [...fences.values()].some((entry) =>
+          entry.stopObligations?.some((stop) => stop.threadId === goal.threadId),
+        )
+          ? record.goalBlocks
+          : (record.goalBlocks ?? []).filter((entry) => !sameGoal(entry, goal)),
+    }));
+  const getGoalBlocks = (threadId: ThreadId) =>
+    Effect.sync(() =>
+      [...fences.values()].flatMap((record) =>
+        (record.goalBlocks ?? [])
+          .filter((block) => block.threadId === threadId)
+          .map((block) => ({ record: recordKey(record), block })),
+      ),
+    );
+  const listGoalBlocksByInstance = Effect.fn("CodexDetachedAppServers.listGoalBlocksByInstance")(
+    (instanceId: ProviderInstanceId) =>
+      Effect.sync(() =>
+        [...fences.values()]
+          .filter((record) => record.instanceId === instanceId)
+          .flatMap((record) =>
+            (record.goalBlocks ?? []).map((block) => ({ record: recordKey(record), block })),
+          ),
+      ),
+  );
+  const getStopObligations = (threadId: ThreadId) =>
+    Effect.sync(() =>
+      [...fences.values()].flatMap((record) =>
+        (record.stopObligations ?? [])
+          .filter((block) => block.threadId === threadId)
+          .map((block) => ({ record: recordKey(record), block })),
+      ),
+    );
+  const hasGoalBlock = (threadId: ThreadId) =>
+    Effect.sync(() =>
+      [...fences.values()].some((record) =>
+        record.goalBlocks?.some((entry) => entry.threadId === threadId),
+      ),
+    );
+  const stopFencedThreads = Effect.sync(() => [
+    ...new Set([
+      ...[...failedFences]
+        .filter(([key]) => key.startsWith('["stop",'))
+        .map(([, threadId]) => threadId),
+      ...[...fences.values()].flatMap((record) =>
+        (record.stopObligations ?? []).map((entry) => entry.threadId),
+      ),
+    ]),
+  ]);
+  const loadRecords = Effect.gen(function* () {
+    yield* Ref.set(globallyBlocked, "Codex process records have not been loaded.");
+    const entries = yield* tryIo("Could not list Codex process records.", async () => {
+      try {
+        return await NodeFSP.readdir(directory);
+      } catch (cause) {
+        if (isErrno(cause, "ENOENT")) return [];
+        throw cause;
+      }
+    });
+    const records: DetachedAppServerRecord[] = [];
+    let unreadable: string | undefined;
+    for (const entry of entries.filter((value) => value.endsWith(".json")).sort()) {
+      const name = entry.slice(0, -5);
+      const result = yield* readRecord(NodePath.join(directory, entry)).pipe(Effect.option);
+      if (result._tag === "None" || result.value.name !== name) {
+        unreadable = "A Codex process record (" + name + ") is unreadable.";
+        continue;
+      }
+      fences.set(name, result.value);
+      records.push(result.value);
+    }
+    yield* Ref.set(globallyBlocked, unreadable);
+    const result: typeof records & { readonly globalBlock?: string } = records;
+    if (unreadable !== undefined)
+      Object.defineProperty(result, "globalBlock", { value: unreadable });
+    return result;
+  }).pipe(Effect.withSpan("CodexDetachedAppServers.loadRecords"));
+
   /** Startup barrier: every record left by an earlier server run is cleaned, tombstoned or blocked. */
   const cleanup = Effect.gen(function* () {
     yield* Ref.set(globallyBlocked, "Codex process cleanup did not complete.");
@@ -422,13 +638,35 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
     const outcomes: Array<{ readonly name: string; readonly outcome: DetachedOutcome }> = [];
     for (const entry of entries.filter((name) => name.endsWith(".json")).sort()) {
       const name = entry.slice(0, -".json".length);
-      yield* truncateStderr(paths(name).stderr);
+      // Cleanup also reruns beside live sessions; only records from earlier runs are reconsidered.
+      if (owned.has(name) || launching.has(name)) continue;
       const record = yield* readRecord(NodePath.join(directory, entry)).pipe(Effect.option);
       if (record._tag === "None" || record.value.name !== name) {
         unreadable = true;
         // No trustworthy instance id: any Codex provider could still own this process.
         yield* Ref.set(globallyBlocked, "A Codex process record (" + name + ") is unreadable.");
         outcomes.push({ name, outcome: "blocked" });
+        continue;
+      }
+      fences.set(name, record.value);
+      if (
+        recoveryRetained.has(name) ||
+        (record.value.goalBlocks?.length ?? 0) > 0 ||
+        (record.value.stopObligations?.length ?? 0) > 0
+      ) {
+        const current = yield* classify(record.value);
+        if (current.type === "gone" && current.possibleLeftovers?.length)
+          yield* warn(current.possibleLeftovers);
+        if (current.type === "verified") recoveryRetained.add(name);
+        const outcome =
+          current.type === "verified"
+            ? ("retained" as const)
+            : record.value.state === "running" &&
+                current.type === "gone" &&
+                !current.possibleLeftovers?.length
+              ? yield* finishGone(record.value, current)
+              : yield* markBlocked(record.value);
+        outcomes.push({ name, outcome });
         continue;
       }
       const outcome = yield* cleanupRecord(record.value);
@@ -438,12 +676,18 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
     return outcomes;
   }).pipe(Effect.withSpan("CodexDetachedAppServers.cleanup"));
 
-  const ensureNotBlocked = Effect.fn("CodexDetachedAppServers.ensureNotBlocked")(function* (
-    instanceId: string,
-  ) {
+  /** A removed or repaired record clears the global block on the next check, without a restart. */
+  const retryGlobalBlock = Effect.gen(function* () {
     if ((yield* Ref.get(globallyBlocked)) !== undefined)
       yield* cleanup.pipe(Effect.catchCause(() => Effect.void));
-    const global = yield* Ref.get(globallyBlocked);
+    return yield* Ref.get(globallyBlocked);
+  });
+
+  const ensureNotBlocked = Effect.fn("CodexDetachedAppServers.ensureNotBlocked")(function* (
+    instanceId: string,
+    providerSessionId: ProviderSessionId,
+  ) {
+    const global = yield* retryGlobalBlock;
     if (global !== undefined)
       return yield* new CodexDetachedAppServerError({
         detail:
@@ -451,7 +695,7 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
           " GOAT will not start Codex until it can confirm no process from before the restart is still running.",
       });
     for (const record of (yield* Ref.get(blocked)).values()) {
-      if (record.instanceId !== instanceId) continue;
+      if (!blocksSession(record, instanceId, providerSessionId)) continue;
       const outcome = yield* cleanupRecord(record).pipe(
         Effect.orElseSucceed(() => "blocked" as const),
       );
@@ -463,13 +707,52 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
             " is still running and could not be stopped. GOAT will not start Codex for this provider until it stops.",
         });
     }
+    if (
+      [...stopping.values()].some((record) => blocksSession(record, instanceId, providerSessionId))
+    )
+      return yield* new CodexDetachedAppServerError({
+        detail:
+          "A Codex process for this session is still stopping. GOAT will not start another one until it exits.",
+      });
+    const unassigned = [...recoveryRetained].some((name) => {
+      const record = fences.get(name);
+      return record?.instanceId === instanceId && record.providerSessionId === undefined;
+    });
+    if (unassigned)
+      return yield* new CodexDetachedAppServerError({
+        detail:
+          "A Codex process from before the restart is still running work GOAT cannot assign to one session. GOAT will not start Codex for this provider until it stops.",
+      });
   }, Effect.asVoid);
+
+  const ensureAdmission = Effect.fn("CodexDetachedAppServers.ensureAdmission")(function* (
+    threadId: ThreadId,
+    options?: { readonly allowGoalControl?: boolean; readonly stdio?: boolean },
+  ) {
+    const global = yield* retryGlobalBlock;
+    const goal = yield* hasGoalBlock(threadId);
+    const stopped =
+      [...failedFences.values()].includes(threadId) ||
+      [...fences.values()].some((record) =>
+        record.stopObligations?.some((entry) => entry.threadId === threadId),
+      );
+    // A stdio turn opens no detached process, so only a known fence on its own thread conflicts.
+    if (global !== undefined && !(options?.stdio === true && !stopped && !goal))
+      return yield* new CodexDetachedAppServerError({ detail: global });
+    if (stopped || (goal && !options?.allowGoalControl))
+      return yield* new CodexDetachedAppServerError({
+        detail: stopped
+          ? "Codex is running work on this thread from before the restart."
+          : "Codex is still running a goal on this thread from before the restart. Send /goal pause or /goal clear to continue here.",
+      });
+  });
 
   /** Server shutdown signals and moves on; any other close waits for the group to exit. */
   const close = Effect.fn("CodexDetachedAppServers.close")(function* (
     record: DetachedAppServerRecord,
   ) {
     if (!(yield* Ref.get(shuttingDown))) return { outcome: yield* terminate(record) };
+    if (retained.has(record.name)) return { outcome: "retained" as const };
     if (!(yield* signalOwned(record, "SIGTERM"))) {
       const classification = yield* classify(record, "SIGTERM").pipe(
         Effect.timeoutOption("1 second"),
@@ -486,6 +769,16 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
     if (exists) yield* writeRecord({ ...record, state: "terminating" }).pipe(Effect.ignore);
     return { outcome: "signalled" as const };
   });
+
+  const closeFinalizer = (record: DetachedAppServerRecord) =>
+    Effect.suspend(() => {
+      stopping.set(record.name, record);
+      return close(record).pipe(
+        Effect.catch(() => markBlocked(record)),
+        Effect.ignore,
+        Effect.ensuring(Effect.sync(() => stopping.delete(record.name))),
+      );
+    });
 
   const socketDirectory =
     deps.socketDirectory ??
@@ -512,41 +805,35 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
     const spawning: DetachedAppServerRecord = {
       version: 1,
       instanceId: input.instanceId,
+      providerSessionId: input.providerSessionId,
       name,
       socketPath,
       bootId,
       state: "spawning",
+      stderrMode: "discard",
       createdAt: DateTime.formatIso(yield* DateTime.now),
     };
-    yield* writeRecord(spawning);
-    const wrapped = yield* input
-      .command(socketPath)
-      .pipe(Effect.tapError(() => removeRecord(spawning).pipe(Effect.ignore)));
-    const launched = yield* launch({
-      command: wrapped.command,
-      args: wrapped.args,
-      cwd: input.cwd,
-      env: input.env,
-      pidFile: files.pid,
-      stderrPath: files.stderr,
-    }).pipe(Effect.tapError(() => cleanupRecord(spawning).pipe(Effect.ignore)));
+    launching.add(name);
+    const launched = yield* Effect.gen(function* () {
+      yield* writeRecord(spawning);
+      const wrapped = yield* input
+        .command(socketPath)
+        .pipe(Effect.tapError(() => removeRecord(spawning).pipe(Effect.ignore)));
+      const started = yield* launch({
+        command: wrapped.command,
+        args: wrapped.args,
+        cwd: input.cwd,
+        env: input.env,
+        pidFile: files.pid,
+        stderrPath: files.stderr,
+      }).pipe(Effect.tapError(() => cleanupRecord(spawning).pipe(Effect.ignore)));
+      return started;
+    }).pipe(Effect.onError(() => Effect.sync(() => launching.delete(name))));
     const running: DetachedAppServerRecord = { ...spawning, pgid: launched.pid, state: "running" };
     owned.set(running.name, launched);
+    launching.delete(name);
     yield* Effect.addFinalizer(() =>
-      close(running).pipe(
-        Effect.ignore,
-        Effect.ensuring(
-          Effect.sync(() => {
-            owned.delete(running.name);
-          }),
-        ),
-      ),
-    );
-    yield* Effect.sleep("30 seconds").pipe(
-      Effect.andThen(
-        truncateStderr(files.stderr).pipe(Effect.repeat(Schedule.spaced("30 seconds"))),
-      ),
-      Effect.forkScoped,
+      closeFinalizer(running).pipe(Effect.ensuring(Effect.sync(() => owned.delete(running.name)))),
     );
     yield* writeRecord(running);
     const channel = yield* connect(socketPath).pipe(
@@ -555,18 +842,13 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
       Effect.raceFirst(
         launched.exited.pipe(
           Effect.flatMap((code) =>
-            tryIo("Could not read the Codex log.", () => readTail(files.stderr, 8192)).pipe(
-              Effect.flatMap((stderr) =>
-                Effect.fail(
-                  new CodexDetachedAppServerError({
-                    detail:
-                      "Codex app-server exited before it accepted connections (code " +
-                      String(code) +
-                      ")" +
-                      ((line) => (line ? ": " + line : "."))(lastStderrLine(stderr)),
-                  }),
-                ),
-              ),
+            Effect.fail(
+              new CodexDetachedAppServerError({
+                detail:
+                  "Codex app-server exited before it accepted connections (code " +
+                  String(code) +
+                  "). Run codex app-server manually to diagnose the failure.",
+              }),
             ),
           ),
         ),
@@ -584,8 +866,125 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
     return { channel, record: running };
   });
 
+  const preserveForRecovery = Effect.fn("CodexDetachedAppServers.preserveForRecovery")(function* (
+    name: string,
+  ) {
+    const record = fences.get(name);
+    if (
+      !record ||
+      record.stderrMode !== "discard" ||
+      record.state !== "running" ||
+      (yield* classify(record)).type !== "verified"
+    )
+      return yield* new CodexDetachedAppServerError({
+        detail: "The Codex process cannot be preserved for recovery.",
+      });
+    recoveryRetained.add(name);
+  });
+
+  const listPreservedForSession = Effect.fn("CodexDetachedAppServers.listPreservedForSession")(
+    (instanceId: string, providerSessionId: ProviderSessionId) =>
+      Effect.sync(() =>
+        [...recoveryRetained].filter((name) => {
+          const record = fences.get(name);
+          return record !== undefined && servesSession(record, instanceId, providerSessionId);
+        }),
+      ),
+  );
+
+  /**
+   * Without a session this is a status probe, whose close never touches the process. A session
+   * adopts it: closing outside shutdown stops it like an owned one, unless a goal still runs there.
+   */
+  const connectExisting = Effect.fn("CodexDetachedAppServers.connectExisting")(function* (
+    instanceId: string,
+    name: string,
+    providerSessionId?: ProviderSessionId,
+  ) {
+    const record = fences.get(name);
+    const global = yield* Ref.get(globallyBlocked);
+    if (
+      global !== undefined ||
+      record?.instanceId !== instanceId ||
+      record.stderrMode !== "discard" ||
+      record.state !== "running" ||
+      (providerSessionId !== undefined && !servesSession(record, instanceId, providerSessionId)) ||
+      deps.connect === undefined
+    )
+      return yield* new CodexDetachedAppServerError({
+        detail: "The existing Codex process cannot be verified for recovery.",
+      });
+    const before = yield* classify(record);
+    if (before.type !== "verified")
+      return yield* new CodexDetachedAppServerError({
+        detail: "The existing Codex process cannot be verified for recovery.",
+      });
+    const channel = yield* deps.connect(record.socketPath);
+    const after = yield* classify(record);
+    if (after.type !== "verified" || after.pgid !== before.pgid)
+      return yield* new CodexDetachedAppServerError({
+        detail: "The existing Codex process changed while connecting.",
+      });
+    yield* Effect.addFinalizer(() =>
+      Effect.gen(function* () {
+        if (adoptedClosed.has(name) || providerSessionId === undefined) return;
+        const current = { ...(fences.get(name) ?? record), pgid: after.pgid };
+        if (!(yield* Ref.get(shuttingDown)) && (current.goalBlocks?.length ?? 0) > 0) return;
+        adoptedClosed.add(name);
+        yield* closeFinalizer(current);
+      }),
+    );
+    return { channel, record: { ...record, pgid: after.pgid } };
+  });
+
+  const retainOnClose = Effect.fn("CodexDetachedAppServers.retainOnClose")(function* (
+    name: string,
+    decision: {
+      readonly setting: "off" | "restart" | "always";
+      readonly stopKind: "restart" | "quit";
+      readonly prepared: boolean;
+    },
+  ) {
+    if (
+      !decision.prepared ||
+      decision.setting === "off" ||
+      (decision.setting === "restart" && decision.stopKind !== "restart")
+    ) {
+      retained.delete(name);
+      return false;
+    }
+    const record = fences.get(name);
+    if (
+      (!owned.has(name) && !recoveryRetained.has(name)) ||
+      record?.stderrMode !== "discard" ||
+      (!owned.has(name) && (yield* classify(record)).type !== "verified")
+    )
+      return yield* new CodexDetachedAppServerError({
+        detail: "The Codex process cannot be retained safely.",
+      });
+    retained.add(name);
+    return true;
+  });
+
   return {
     cleanup,
+    loadRecords,
+    classifyRecord,
+    connectExisting,
+    preserveForRecovery,
+    listPreservedForSession,
+    retainOnClose,
+    recordStopObligation,
+    clearStopObligation,
+    assignSession,
+    getStopObligations,
+    stopFencedThreads,
+    getGoalBlocks,
+    listGoalBlocksByInstance,
+    recordGoalBlock,
+    clearGoalBlock,
+    hasGoalBlock,
+    ensureAdmission,
     ensureNotBlocked,
     close,
     open,

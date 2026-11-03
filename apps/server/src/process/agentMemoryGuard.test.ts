@@ -2,6 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
+import * as Logger from "effect/Logger";
 import * as TestClock from "effect/testing/TestClock";
 
 import {
@@ -107,15 +108,64 @@ describe("agent memory guard", () => {
     }).pipe(Effect.scoped),
   );
 
-  it.effect("does not attribute a shared process kill", () =>
-    Effect.gen(function* () {
+  it.effect(
+    "a shared provider over the limit is never signalled and warns once per episode",
+    () => {
+      const messages: unknown[] = [];
+      const logger = Logger.make(({ message }) => messages.push(message));
+      return Effect.gen(function* () {
+        const f = yield* fixture({ shared: true });
+        f.setRows([
+          root,
+          descendant,
+          { pid: 12, ppid: 10, pgid: 12, rssBytes: 30, zombie: false },
+          { pid: 13, ppid: 12, pgid: 13, rssBytes: 40, zombie: false },
+          { pid: 14, ppid: 10, pgid: 14, rssBytes: 20, zombie: false },
+          { pid: 15, ppid: 10, pgid: 15, rssBytes: 10, zombie: false },
+        ]);
+        yield* f.watch();
+        yield* f.tick();
+        yield* f.tick();
+        expect(f.signals).toEqual([]);
+        expect(yield* f.guard.oomKilled("thread")).toBe(false);
+        expect(messages).toEqual([
+          [
+            "Agent memory limit exceeded (shared provider, not stopped)",
+            {
+              pid: 10,
+              rssBytes: 210,
+              limitBytes: 100,
+              processCount: 6,
+              largestChildSubtrees: [
+                { pid: 12, rssBytes: 70 },
+                { pid: 11, rssBytes: 50 },
+                { pid: 14, rssBytes: 20 },
+              ],
+            },
+          ],
+        ]);
+      }).pipe(Effect.scoped, Effect.provide(Logger.layer([logger], { mergeWithExisting: false })));
+    },
+  );
+
+  it.effect("a shared provider warns again only after its tree drops below the limit", () => {
+    const messages: unknown[] = [];
+    const logger = Logger.make(({ message }) => messages.push(message));
+    return Effect.gen(function* () {
       const f = yield* fixture({ shared: true });
       yield* f.watch();
       yield* f.tick();
-      expect(f.signals).toEqual([10, -10]);
-      expect(yield* f.guard.oomKilled("thread")).toBe(false);
-    }).pipe(Effect.scoped),
-  );
+      yield* f.tick();
+      expect(messages).toHaveLength(1);
+      f.setRows([root]);
+      yield* f.tick();
+      f.setRows([root, descendant]);
+      yield* f.tick();
+      yield* f.tick();
+      expect(messages).toHaveLength(2);
+      expect(f.signals).toEqual([]);
+    }).pipe(Effect.scoped, Effect.provide(Logger.layer([logger], { mergeWithExisting: false })));
+  });
 
   it.effect("does not mark a cleared generation", () =>
     Effect.gen(function* () {

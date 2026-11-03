@@ -30,6 +30,7 @@ import * as Harness from "../orchestration-v2/testkit/ProviderReplayHarness.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as Handoffs from "./Handoffs.ts";
+import { BrowserClaimResponder } from "./BrowserClaimResponder.ts";
 
 export const threadId = ThreadId.make("thread:handoff-tests");
 export const instanceId = ProviderInstanceId.make("codex");
@@ -102,6 +103,7 @@ export const durableHandoffs = (
   options: {
     readonly environmentId: EnvironmentId;
     readonly sessions: Effect.Effect<ReadonlyArray<AuthClientSession>>;
+    readonly browserClaimResponder?: BrowserClaimResponder["Service"];
   },
 ) =>
   Effect.gen(function* () {
@@ -130,6 +132,9 @@ export const durableHandoffs = (
         listActive: () => options.sessions,
       }),
       Layer.mock(SecretRequests.SecretRequests)({}),
+      ...(options.browserClaimResponder
+        ? [Layer.succeed(BrowserClaimResponder, options.browserClaimResponder)]
+        : []),
     );
     const start = Layer.build(Layer.fresh(Handoffs.layer).pipe(Layer.provide(dependencies))).pipe(
       Effect.map((context) => Context.get(context, Handoffs.Handoffs)),

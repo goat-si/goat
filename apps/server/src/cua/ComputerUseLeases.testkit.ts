@@ -24,6 +24,7 @@ export const layerInteractive = (input: {
         acquire: input.acquire.pipe(Effect.map(Option.some)),
         listedApps: Effect.succeedNone,
         appCatalog: Effect.succeed([]),
+        availableAppCatalog: Effect.succeedSome([]),
         lastFailure: Effect.succeed(Option.none()),
         block: Effect.succeed(undefined),
         status: Effect.succeed({ platform: "darwin", running: true }),
@@ -37,11 +38,13 @@ export const layerInteractive = (input: {
       channelOrigin: () => Effect.succeed(undefined),
       active: () => Effect.succeed(Option.none()),
       control: (threadId) =>
-        Effect.succeed({
-          controlId: "control:test",
-          threadId,
-          expiresAt: DateTime.makeUnsafe("2030-01-01T00:00:00.000Z"),
-        }),
+        Effect.succeed(
+          Option.some({
+            controlId: "control:test",
+            threadId,
+            expiresAt: DateTime.makeUnsafe("2030-01-01T00:00:00.000Z"),
+          }),
+        ),
       // A full access thread takes this one: every app, no grant (D16).
       everyAppControl: (threadId) =>
         Effect.succeed(

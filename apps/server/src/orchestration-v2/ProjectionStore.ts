@@ -1,3 +1,4 @@
+import * as RestartCandidates from "./RestartContinuationCandidates.ts";
 import * as LatestAnswer from "./ProjectionLatestAnswer.ts";
 import * as LaunchEdges from "./ProjectionLaunchEdges.ts";
 import * as RunNotification from "./ProjectionRunNotification.ts";
@@ -218,12 +219,12 @@ export const ProjectionStoreV2Error = Schema.Union([
 export type ProjectionStoreV2Error = typeof ProjectionStoreV2Error.Type;
 
 export type ProjectionRecoveryKind =
+  | "shutdown-continuation"
   | "queued-runs"
   | "runtime"
   | "runtime-cleanup"
   | "subagent-results"
   | "delegated-completions";
-
 export type ProjectionLimitRecoveryCandidate = Pick<
   OrchestrationV2ThreadShell,
   | "id"
@@ -392,6 +393,7 @@ export interface ProjectionRecordFilter {
   readonly turnItemRunIds?: ReadonlyArray<RunId | null>;
   readonly turnItemNodeIds?: ReadonlyArray<NodeId>;
   readonly runIds?: ReadonlyArray<RunId>;
+  readonly ancestryRunIds?: ReadonlyArray<RunId>;
   readonly runtimeRequestIds?: ReadonlyArray<RuntimeRequestId>;
   readonly runStatuses?: ReadonlyArray<OrchestrationV2Run["status"]>;
   /** Keeps the thread's highest-ordinal run even when `runStatuses` excludes it. */
@@ -829,6 +831,8 @@ function needsRecovery(
 ): boolean {
   if (projection.thread.deletedAt !== null) return false;
   switch (kind) {
+    case "shutdown-continuation":
+      return RestartCandidates.isRestartContinuationCandidate(projection);
     case "queued-runs":
       return (
         projection.thread.archivedAt === null &&
@@ -3824,6 +3828,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             SELECT payload_json
             FROM orchestration_v2_projection_run_attempts
             WHERE thread_id = ${threadId}
+              ${filter?.ancestryRunIds === undefined ? sql`` : sql`AND run_id IN (SELECT value FROM json_each(${encodeIdList(filter.ancestryRunIds)}))`}
             ORDER BY run_id ASC, attempt_ordinal ASC
           `
               : sql<PayloadRow>`
@@ -3976,6 +3981,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
             WHERE thread_id = ${threadId}
               ${filter?.providerTurnAttemptIds === undefined ? sql`` : sql`AND run_attempt_id IN (SELECT value FROM json_each(${encodeIdList(filter.providerTurnAttemptIds)}))`}
               ${filter?.providerTurnThreadIds === undefined ? sql`` : sql`AND provider_thread_id IN (SELECT value FROM json_each(${encodeIdList(filter.providerTurnThreadIds)}))`}
+              ${filter?.ancestryRunIds === undefined ? sql`` : sql`AND run_attempt_id IN (SELECT attempt_id FROM orchestration_v2_projection_run_attempts WHERE thread_id = ${threadId} AND run_id IN (SELECT value FROM json_each(${encodeIdList(filter.ancestryRunIds)})))`}
               ${
                 filter?.latestProviderTurnUsageOnly === true
                   ? sql`AND json_extract(payload_json, '$.tokenUsage') IS NOT NULL
@@ -4589,9 +4595,10 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       },
       Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })),
     );
-
     const getRecoveryThreadIds = Effect.fn("ProjectionStore.getRecoveryThreadIds")(
       function* (kind: ProjectionRecoveryKind) {
+        if (kind === "shutdown-continuation")
+          return yield* RestartCandidates.selectRestartContinuationCandidates(sql);
         const candidates = (() => {
           switch (kind) {
             case "queued-runs":
@@ -4743,7 +4750,6 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       },
       Effect.mapError((cause) => new ProjectionStoreSetupError({ cause })),
     );
-
     const getUnreadableThreadIds = Effect.fn("ProjectionStore.getUnreadableThreadIds")(
       function* () {
         const actualThreadIds = new Set<ThreadId>();
@@ -5041,7 +5047,6 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       (effect, threadId, _runIds) =>
         effect.pipe(Effect.mapError((cause) => new ProjectionStoreReadError({ threadId, cause }))),
     );
-
     const getThreadProjection: ProjectionStoreV2Shape["getThreadProjection"] = (threadId) =>
       readProjection(threadId, new Set()).pipe(Effect.map(({ projection }) => projection));
 
@@ -6146,7 +6151,6 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         ),
         Effect.mapError(controlReadError(threadId)),
       );
-
     const getThreadSnapshot: ProjectionStoreV2Shape["getThreadSnapshot"] = (threadId) =>
       sql
         .withTransaction(
@@ -6751,7 +6755,6 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
 
       return { providerThreadsByThreadId, pendingTurnItemsByThreadId };
     });
-
     const getSettlementCandidates: ProjectionStoreV2Shape["getSettlementCandidates"] = (threadId) =>
       sql
         .withTransaction(
@@ -8262,7 +8265,13 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
                   filter.providerTurnAttemptIds.includes(row.runAttemptId))) &&
               (filter?.providerTurnThreadIds === undefined ||
                 filter.providerTurnThreadIds.includes(row.providerThreadId)) &&
-              (filter?.latestProviderTurnUsageOnly !== true || row.tokenUsage !== undefined),
+              (filter?.latestProviderTurnUsageOnly !== true || row.tokenUsage !== undefined) &&
+              (filter?.ancestryRunIds === undefined ||
+                projection.attempts.some(
+                  (attempt) =>
+                    attempt.id === row.runAttemptId &&
+                    filter.ancestryRunIds?.includes(attempt.runId),
+                )),
           );
           const selected = {
             ...projection,
@@ -8303,6 +8312,10 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
                 (filter?.runStatuses === undefined ||
                   filter.runStatuses.includes(row.status) ||
                   (filter.includeLatestRun === true && row.id === latestRun?.id)),
+            ),
+            attempts: projection.attempts.filter(
+              (row) =>
+                filter?.ancestryRunIds === undefined || filter.ancestryRunIds.includes(row.runId),
             ),
             contextTransfers: projection.contextTransfers.filter(
               (row) =>

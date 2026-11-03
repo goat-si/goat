@@ -6,6 +6,23 @@ import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Scope from "effect/Scope";
 
+/** Holds reopens of one session key while its release runs; a scope close extends the hold. */
+export interface ReopenLatch {
+  /** Keeps the hold only for a removed runtime that opts in; otherwise ends it now. */
+  readonly keepFor: (
+    removed:
+      | { readonly runtime: { readonly reopenAfterClose?: true }; readonly scope: Scope.Closeable }
+      | undefined,
+  ) => Effect.Effect<void>;
+}
+
+interface LatchState {
+  readonly key: string;
+  readonly done: Deferred.Deferred<void>;
+  closing: boolean;
+  removedScope?: Scope.Closeable;
+}
+
 /**
  * Closes provider session scopes within a bound. A close can wedge on a misbehaving
  * adapter finalizer (e.g. a provider process that never yields its message stream),
@@ -21,6 +38,74 @@ export const makeScopeCloser = (timeoutMs: number) => {
   // Releases count from before they remove their session: in between, neither the
   // session map nor `pending` shows them to a shutdown.
   const releases = new Set<Deferred.Deferred<void>>();
+  const latches = new Map<string, Set<LatchState>>();
+  const latchStates = new WeakMap<ReopenLatch, LatchState>();
+
+  const openLatch = (latch: LatchState) => {
+    const held = latches.get(latch.key);
+    held?.delete(latch);
+    if (held?.size === 0) latches.delete(latch.key);
+    Deferred.doneUnsafe(latch.done, Effect.void);
+  };
+
+  // An opted-in runtime holds reopens of its key until its close ends, so a new process never
+  // starts beside one still terminating. Registered before removal, so no reopen slips between.
+  const holdReopen = <A, E, R>(
+    key: string,
+    release: (latch: ReopenLatch) => Effect.Effect<A, E, R>,
+  ) =>
+    Effect.suspend(() => {
+      const state: LatchState = { key, done: Deferred.makeUnsafe<void>(), closing: false };
+      const latch: ReopenLatch = {
+        keepFor: (removed) =>
+          Effect.sync(() => {
+            if (removed !== undefined) state.removedScope = removed.scope;
+            if (removed?.runtime.reopenAfterClose !== true) openLatch(state);
+          }),
+      };
+      latchStates.set(latch, state);
+      const held = latches.get(key) ?? new Set();
+      held.add(state);
+      latches.set(key, held);
+      // A release cut short after removing its session still closes it, holding reopens till then.
+      return release(latch).pipe(
+        Effect.ensuring(
+          Effect.suspend(() => {
+            if (state.closing) return Effect.void;
+            if (state.removedScope === undefined) return Effect.sync(() => openLatch(state));
+            return closeWithin(state.removedScope, { reason: "release_interrupted", latch }).pipe(
+              Effect.forkDetach,
+              Effect.asVoid,
+            );
+          }),
+        ),
+      );
+    });
+
+  /**
+   * Runs `lookup` once no hold is left on the key, again if a release registered meanwhile.
+   * None when holds outlive the bound.
+   */
+  const awaitReopen = <A>(
+    key: string,
+    lookup: Effect.Effect<A>,
+  ): Effect.Effect<Option.Option<A>> => {
+    const settle: Effect.Effect<A> = Effect.suspend(() => {
+      const held = [...(latches.get(key) ?? [])];
+      if (held.length > 0)
+        return Effect.forEach(held, (latch) => Deferred.await(latch.done), {
+          concurrency: "unbounded",
+          discard: true,
+        }).pipe(Effect.andThen(settle));
+      return lookup.pipe(
+        Effect.filterOrElse(
+          () => !latches.has(key),
+          () => settle,
+        ),
+      );
+    });
+    return settle.pipe(Effect.timeoutOption(timeoutMs));
+  };
 
   const trackRelease = <A, E, R>(release: Effect.Effect<A, E, R>) =>
     Effect.suspend(() => {
@@ -38,14 +123,26 @@ export const makeScopeCloser = (timeoutMs: number) => {
 
   const closeWithin = Effect.fn("ProviderSessionManager.closeScopeWithin")(function* (
     scope: Scope.Closeable,
-    annotations: { readonly providerSessionId?: ProviderSessionId; readonly reason: string },
+    {
+      latch,
+      ...annotations
+    }: {
+      readonly providerSessionId?: ProviderSessionId;
+      readonly reason: string;
+      readonly latch?: ReopenLatch;
+    },
   ) {
     const closeFiber = yield* Scope.close(scope, Exit.void).pipe(
       Effect.exit,
       Effect.forkDetach({ startImmediately: true }),
     );
     pending.add(closeFiber);
-    closeFiber.addObserver(() => pending.delete(closeFiber));
+    const held = latch === undefined ? undefined : latchStates.get(latch);
+    if (held !== undefined) held.closing = true;
+    closeFiber.addObserver(() => {
+      pending.delete(closeFiber);
+      if (held !== undefined) openLatch(held);
+    });
     const closeExit = yield* Fiber.join(closeFiber).pipe(Effect.timeoutOption(timeoutMs));
     if (Option.isNone(closeExit)) {
       yield* Effect.logWarning("orchestration-v2.provider-session-scope-close-timeout", {
@@ -88,5 +185,5 @@ export const makeScopeCloser = (timeoutMs: number) => {
   /** Waits, within the same bound, for every release and close still running. */
   const awaitPendingReleases = awaitSettled.pipe(Effect.timeoutOption(timeoutMs), Effect.asVoid);
 
-  return { closeWithin, trackRelease, awaitPendingReleases };
+  return { closeWithin, trackRelease, awaitPendingReleases, holdReopen, awaitReopen };
 };

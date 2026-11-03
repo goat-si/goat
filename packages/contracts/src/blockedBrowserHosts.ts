@@ -5,7 +5,12 @@ import * as SchemaTransformation from "effect/SchemaTransformation";
 export function normalizeBlockedBrowserHost(value: string): string | null {
   const input = value.trim();
   if (!input || /[\s/@?#\\]/u.test(input)) return null;
-  if (input.startsWith("[") ? !/^\[[\da-f:.]+\]$/i.test(input) : input.includes(":")) return null;
+  if (
+    input.startsWith("[")
+      ? !/^\[[\da-f:.]+\](?::\d+)?$/i.test(input)
+      : !/^[^:]+(?::\d+)?$/.test(input)
+  )
+    return null;
   try {
     return new URL(`http://${input}/`).hostname.replace(/\.$/, "") || null;
   } catch {

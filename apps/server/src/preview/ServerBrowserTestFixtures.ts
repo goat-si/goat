@@ -68,7 +68,12 @@ export function makeSession(
         return { data: (input as { format: string }).format === "png" ? PNG_HEADER : "ZnJhbWU=" };
       }
       // Snapshots shrink their screenshot in the page; the header stands in for the result.
-      if (method === "Runtime.callFunctionOn") return { result: { value: PNG_HEADER } };
+      if (method === "Runtime.callFunctionOn")
+        return {
+          result: {
+            value: (input as { arguments?: unknown[] }).arguments?.length === 4 ? null : PNG_HEADER,
+          },
+        };
       if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "main" } } };
       // Snapshots read password fields from their own isolated world in each frame.
       if (method === "Page.createIsolatedWorld") {

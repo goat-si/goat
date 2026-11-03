@@ -69,10 +69,12 @@ vi.mock("../../../state/previewSessions", async () => {
   };
 });
 vi.mock("../../../state/use-atom-command", () => ({ useAtomCommand: () => state.control }));
-vi.mock("../../../state/session", () => ({
+vi.mock("../../../state/session", async (original) => ({
+  ...(await original<typeof import("../../../state/session")>()),
   useEnvironmentScope: (_environmentId: string, scope: string) => state.scopes.has(scope),
 }));
-vi.mock("../../../state/environments", () => ({
+vi.mock("../../../state/environments", async (original) => ({
+  ...(await original<typeof import("../../../state/environments")>()),
   usePrimaryEnvironmentId: () => state.environmentId,
 }));
 vi.mock("../../../state/entities", () => ({

@@ -241,6 +241,34 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
     }),
   );
   it.effect.each([
+    { platform: "darwin", environment: {}, survival: true },
+    { platform: "linux", environment: {}, survival: true },
+    { platform: "win32", environment: {}, survival: false },
+    {
+      platform: "linux",
+      environment: { GOAT_CODEX_APP_SERVER_TRANSPORT: "stdio" },
+      survival: false,
+    },
+  ] as const)(
+    "advertises Codex turn survival and app-server isolation only where the socket transport runs ($platform)",
+    ({ platform, environment, survival }) =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const baseDir = yield* fs.makeTempDirectoryScoped();
+        const descriptor = yield* Effect.gen(function* () {
+          const server = yield* ServerEnvironment.ServerEnvironment;
+          return yield* server.getDescriptor;
+        }).pipe(
+          Effect.provide(layerServerEnvironment(baseDir)),
+          Effect.provideService(HostProcess.Platform, platform),
+          Effect.provideService(HostProcess.Environment, environment),
+        );
+        expect(descriptor.capabilities.threadRestartContinuation).toBe(true);
+        expect(descriptor.capabilities.codexTurnSurvival === true).toBe(survival);
+        expect(descriptor.capabilities.codexAppServerIsolation === true).toBe(survival);
+      }),
+  );
+  it.effect.each([
     { name: "missing", content: undefined },
     { name: "empty", content: "" },
     { name: "whitespace-only", content: " \t\n" },

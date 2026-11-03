@@ -1,3 +1,4 @@
+import { survivingRestartNotice } from "./threadExecution.ts";
 import {
   TurnItemId,
   RuntimeRequestId,
@@ -592,4 +593,20 @@ describe("presentPendingBackgroundWork", () => {
     ]);
     expect(presentation?.items[0]?.label).toBe("mv a.ts b.ts\ncat > b.ts <<'EOF'\nexport {};\nEOF");
   });
+});
+
+it("shows restart waiting only for the active surviving provider turn", () => {
+  const turn = {
+    runAttemptId: "attempt",
+    ordinal: 1,
+    status: "running",
+    survivingRestart: { nativeStartedAt: null },
+  } as const;
+  const run = { activeAttemptId: "attempt", status: "running" } as const;
+  expect(survivingRestartNotice(run, [turn])).toBe(
+    "Running since before the server restarted. Progress shows when this turn finishes.",
+  );
+  expect(survivingRestartNotice({ ...run, status: "completed" }, [turn])).toBeNull();
+  expect(survivingRestartNotice(run, [{ ...turn, status: "completed" }])).toBeNull();
+  expect(survivingRestartNotice(run, [{ ...turn, survivingRestart: undefined }])).toBeNull();
 });

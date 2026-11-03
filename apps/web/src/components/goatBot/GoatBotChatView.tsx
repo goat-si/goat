@@ -12,6 +12,7 @@ import { Button } from "../ui/button";
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from "../ui/empty";
 import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { GoatBotAvatar } from "./GoatBotAvatar";
+import type { GoatBotAttachmentSupport, GoatBotDraftAttachment } from "./goatBotAttachments";
 import { GoatBotComposer } from "./GoatBotComposer";
 import { GoatBotModeButton } from "./GoatBotModeButton";
 import { GoatBotModelPicker } from "./GoatBotModelPicker";
@@ -39,8 +40,14 @@ export interface GoatBotChatViewProps {
   readonly rows: ReadonlyArray<GoatBotRow>;
   /** When GOAT Bot started reading a message it is still answering. */
   readonly replyingSince?: string | null | undefined;
-  readonly onSend: (text: string) => void;
+  readonly onSend: (
+    text: string,
+    attachments?: ReadonlyArray<GoatBotDraftAttachment>,
+  ) => boolean | void;
+  /** What GOAT Bot's server takes with a message; null when it takes no files. */
+  readonly attachmentSupport?: GoatBotAttachmentSupport | null | undefined;
   readonly onRetryInput: (clientKey: string) => void;
+  readonly onDiscardInput?: (clientKey: string) => void;
   /** Asks the server for its bot again, after a failure or a busy global agent. */
   readonly onRetryAvailability?: (() => void) | undefined;
   /** The old global agent, which keeps its coding view and history. */
@@ -66,7 +73,9 @@ export function GoatBotChatView({
   rows,
   replyingSince = null,
   onSend,
+  attachmentSupport = null,
   onRetryInput,
+  onDiscardInput,
   onRetryAvailability,
   legacyAgentRoute,
   removal = null,
@@ -162,7 +171,8 @@ export function GoatBotChatView({
           environmentId={environmentId}
           replyingSince={removed ? null : replyingSince}
           onRetry={onRetryInput}
-          onPick={canSend ? onSend : undefined}
+          onDiscard={onDiscardInput}
+          onPick={canSend ? (answer) => onSend(answer) : undefined}
         />
       ) : removal !== null ? (
         <GoatBotRemovedNotice
@@ -196,6 +206,7 @@ export function GoatBotChatView({
         initialText={seed?.text ?? ""}
         disabled={!canSend}
         placeholder={canSend ? "Message GOAT Bot" : "GOAT Bot isn't available"}
+        attachmentSupport={attachmentSupport}
         onSend={onSend}
       />
     </div>

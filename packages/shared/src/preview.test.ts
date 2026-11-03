@@ -11,19 +11,31 @@ import {
 } from "./preview.ts";
 
 describe("blocked browser hosts", () => {
-  it("normalizes hosts and rejects URLs, ports and malformed entries", () => {
+  it("normalizes hosts including ports and rejects URLs and malformed entries", () => {
     expect(normalizeBlockedBrowserHost(" EXAMPLE.com. ")).toBe("example.com");
     expect(normalizeBlockedBrowserHost("BÜCHER.example")).toBe("xn--bcher-kva.example");
     expect(normalizeBlockedBrowserHost("[2001:0db8::1]")).toBe("[2001:db8::1]");
+    expect(normalizeBlockedBrowserHost("example.com:443")).toBe("example.com");
+    expect(normalizeBlockedBrowserHost("[2001:db8::1]:8080")).toBe("[2001:db8::1]");
     for (const invalid of [
       "",
       "https://example.com",
-      "example.com:443",
+      "example.com:abc",
+      "example.com:99999",
       "example.com/a",
       "user@example.com",
     ]) {
       expect(normalizeBlockedBrowserHost(invalid)).toBeNull();
     }
+  });
+
+  it("blob: and ws: frame URLs are matched by their origin host", () => {
+    const hosts = ["blocked.example"];
+    expect(isBlockedBrowserUrl("blob:https://blocked.example/uuid", hosts)).toBe(true);
+    expect(isBlockedBrowserUrl("ws://blocked.example/socket", hosts)).toBe(true);
+    expect(isBlockedBrowserUrl("wss://sub.blocked.example/", hosts)).toBe(true);
+    expect(isBlockedBrowserUrl("blob:https://allowed.example/x", hosts)).toBe(false);
+    expect(isBlockedBrowserUrl("data:text/plain,blocked.example", hosts)).toBe(false);
   });
 
   it("matches hosts and subdomains on every port, with exact IP matching", () => {

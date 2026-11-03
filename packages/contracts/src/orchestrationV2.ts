@@ -1,6 +1,8 @@
 import { OrchestrationV2RunStatus } from "./orchestrationV2RunStatus.ts";
+import * as Restart from "./codexTurnSurvival.ts";
 export { OrchestrationV2RunStatus } from "./orchestrationV2RunStatus.ts";
-import { Handoff, HandoffJson, HandoffActor, HandoffState } from "./handoff.ts";
+import { Handoff, HandoffJson, HandoffActor } from "./handoff.ts";
+import { HandoffTransitionCommand } from "./handoffTransitionCommand.ts";
 import {
   MemoryCurrentAccess,
   MemoryProviderCapabilities,
@@ -917,11 +919,8 @@ export const OrchestrationV2Subagent = Schema.Struct({
   parentModelSelection: Schema.optional(ModelSelection),
   reviewLedger: Schema.optional(Schema.Array(ReviewLedgerEntry)),
   continuedFrom: Schema.optional(NodeId),
-  // Parent-wake policy for app-owned tasks: "always" offers a continuation on
-  // every terminal (async delegations; queue_after_active sequences it behind
-  // a live parent run), "settled_only" offers only when the parent has no
-  // live run (wait-mode delegations, whose result returns through the
-  // blocking tool call). Absent on legacy records; treated as settled_only.
+  // "always" offers a continuation on every terminal, queued behind an active parent;
+  // "settled_only" (the legacy default) requires no live run; wait-mode uses the blocking tool call.
   completionWake: Schema.optional(Schema.Literals(["always", "settled_only"])),
   completionDelivery: Schema.optional(OrchestrationV2DelegatedCompletionTaskDelivery),
   /**
@@ -1214,6 +1213,7 @@ export const OrchestrationV2ProviderTurn = Schema.Struct({
   ]),
   startedAt: Schema.NullOr(Schema.DateTimeUtc),
   completedAt: Schema.NullOr(Schema.DateTimeUtc),
+  ...Restart.SurvivingRestartFields,
   tokenUsage: Schema.optional(OrchestrationV2ProviderTurnTokenUsage),
   turnTokenUsage: Schema.optional(TurnTokenUsage),
 });
@@ -2504,6 +2504,7 @@ export type OrchestrationV2ContextTransferJson = typeof OrchestrationV2ContextTr
 
 export const OrchestrationV2ProviderTurnJson = OrchestrationV2ProviderTurn.mapFields((fields) => ({
   ...fields,
+  ...Restart.SurvivingRestartJsonFields,
   startedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
   completedAt: Schema.NullOr(Schema.DateTimeUtcFromString),
 }));
@@ -3603,15 +3604,7 @@ const OrchestrationV2InternalCommand = Schema.Union([
     nodeId: NodeId,
     handoff: Handoff,
   }),
-  Schema.Struct({
-    type: Schema.Literal("handoff.transition"),
-    commandId: CommandId,
-    threadId: ThreadId,
-    handoffId: TurnItemId,
-    state: HandoffState,
-    actor: HandoffActor,
-    computerUseScope: Schema.optionalKey(Schema.Literals(["session", "always"])),
-  }),
+  HandoffTransitionCommand,
   Schema.Struct({
     type: Schema.Literal("delegated_task.remote.register"),
     role: Schema.optional(OrchestrationV2TaskRole),

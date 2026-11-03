@@ -40,6 +40,7 @@ import {
   type EnvironmentPullRequestListEntry,
   withoutScratchProjectScope,
   pullRequestProjectChoices,
+  pullRequestListErrorMessages,
 } from "./pullRequestList";
 import { useDebouncedValue } from "../../state/queries";
 import { useWorkspaceTabs } from "../workspace/WorkspaceTabsContext";
@@ -148,7 +149,11 @@ export function PullRequestsScreen(
         })),
     [environments, environmentId, configs, controls, query],
   );
-  const result = usePullRequestList(targets);
+  const environmentLabels = useMemo(
+    () => new Map(environments.map((item) => [item.environmentId, item.environmentLabel])),
+    [environments],
+  );
+  const result = usePullRequestList(targets, environmentLabels);
   const connectedTargets = targets.filter((target) =>
     environments.some(
       (environment) =>
@@ -335,10 +340,7 @@ export function PullRequestsScreen(
             {result.data?.errors.length ? (
               <PullRequestListErrors
                 key={JSON.stringify(targets)}
-                messages={result.data.errors.map(
-                  (error) =>
-                    `${error.projectTitle || environments.find((environment) => environment.environmentId === error.environmentId)?.environmentLabel || "Environment"}: ${error.message}`,
-                )}
+                messages={pullRequestListErrorMessages(result.data.errors, environmentLabels)}
               />
             ) : null}
           </>

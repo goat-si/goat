@@ -65,6 +65,7 @@ import {
   type PrimaryEnvironmentTarget,
 } from "../environments/primary/target";
 import { clearComposerDraftsEnvironment } from "../composerDraftStore";
+import { disposeGoatBotEnvironment } from "../components/goatBot/goatBotEnvironmentLifecycle";
 import { isHostedStaticApp } from "../hostedPairing";
 import { isLocalEnvironmentDisabled } from "../localEnvironment";
 import { randomUUID } from "../lib/utils";
@@ -1263,18 +1264,17 @@ const layerPlatformConnectionSource = Layer.effect(
     });
   }),
 );
-
 const layerEnvironmentOwnedDataCleanup = Layer.succeed(
   Persistence.EnvironmentOwnedDataCleanup,
   Persistence.EnvironmentOwnedDataCleanup.of({
     clear: Effect.fn("Persistence.EnvironmentOwnedDataCleanup.clear")(function (environmentId) {
       return Effect.sync(() => {
+        disposeGoatBotEnvironment(environmentId);
         clearComposerDraftsEnvironment(environmentId);
       });
     }),
   }),
 );
-
 const layerRpcRequestObserver = Layer.succeed(
   EnvironmentRpcRequestObserver,
   EnvironmentRpcRequestObserver.of({

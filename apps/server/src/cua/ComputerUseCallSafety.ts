@@ -1,5 +1,8 @@
 import { cuaAppKey, isExcludedCuaApplication } from "@goat/shared/cuaDriverManifest";
+import type { ComputerUseApp } from "@goat/contracts";
 import { batchAppScope, isBatchTool } from "./ComputerUseBatchScope.ts";
+import { isTerminalCuaApplicationInCatalog } from "./ComputerUseTerminalApps.ts";
+import { launchAlternateTarget } from "./ComputerUseLaunchTargets.ts";
 
 export const deniedCallApp = (
   call: {
@@ -10,6 +13,7 @@ export const deniedCallApp = (
   },
   denied: ReadonlyArray<string>,
   nonPersonFullAccess = false,
+  catalog: ReadonlyArray<ComputerUseApp> = [],
 ): string | undefined => {
   const keys = new Set(denied.map(cuaAppKey));
   const args =
@@ -26,10 +30,11 @@ export const deniedCallApp = (
           .map(([, value]) => String(value))
       : [];
   if (call.name === "launch_app" && (denied.length > 0 || nonPersonFullAccess)) {
-    const alternate = args.find(
-      ([key, value]) => key !== "bundle_id" && key !== "session" && typeof value === "string",
-    );
-    if (alternate !== undefined) return String(alternate[1]);
+    const alternate = launchAlternateTarget(call.args);
+    if (alternate !== undefined)
+      return typeof alternate[1] === "string" && alternate[1].length > 0
+        ? alternate[1]
+        : alternate[0];
     if (
       !args.some(
         ([key, value]) => key === "bundle_id" && typeof value === "string" && value.length > 0,
@@ -50,9 +55,6 @@ export const deniedCallApp = (
       app !== undefined &&
       (isExcludedCuaApplication(app) ||
         keys.has(cuaAppKey(app)) ||
-        (nonPersonFullAccess &&
-          ["com.apple.terminal", "com.googlecode.iterm2", "terminal", "iterm", "iterm2"].includes(
-            cuaAppKey(app),
-          ))),
+        (nonPersonFullAccess && isTerminalCuaApplicationInCatalog(app, catalog))),
   );
 };

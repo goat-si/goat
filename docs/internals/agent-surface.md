@@ -383,12 +383,10 @@ thread or browser, a person who completes the step, or another grant such as
 `memory:write`. The type refuses a write without one. Tools whose thread callers
 only ask a person, such as provider sign-in and sync, declare `none` so a profile
 never preempts the person's decision.
-The pull request merge and close tools require `pr.merge`.
-Supervisors retaining `pr.merge` can access those tools; the retention decision is tracked in [#2194](https://github.com/goat-si/goat/issues/2194).
-Every check that compares a role thread's grant with its caller's, such as the
-recheck before an SSH launch and a send's target check and rebinding, derives it
-with the same `roleProfile`; comparing against the caller's plain profile reads the
-kept capability as a narrowing, refusing the launch or send or stripping it.
+The pull request merge and close tools require `pr.merge`. A supervisor can launch a merge manager
+only when its own grant includes `pr.merge`; otherwise it asks a person through `decision.request`.
+A role's grant is its stored profile intersected with the caller's grant, including at SSH launch
+rechecks and send target checks.
 Creating and cloning a project are the one environment write a calling thread at
 `auto` may run, because worker agents run at `auto` at most. When goatclaw governs
 the thread its profile decides, full access included, before and again after

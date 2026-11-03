@@ -12,8 +12,9 @@ export { normalizeBlockedBrowserHost };
 export function isBlockedBrowserUrl(url: string, hosts: readonly string[]): boolean {
   try {
     const parsed = new URL(url);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
-    const host = parsed.hostname.replace(/\.$/, "");
+    const target = parsed.protocol === "blob:" ? new URL(parsed.origin) : parsed;
+    if (!["http:", "https:", "ws:", "wss:"].includes(target.protocol)) return false;
+    const host = target.hostname.replace(/\.$/, "");
     return hosts.some((entry) => {
       const blocked = normalizeBlockedBrowserHost(entry);
       if (blocked === null) return false;

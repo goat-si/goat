@@ -3,6 +3,7 @@ import { EnvironmentId, ProviderInstanceId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { BrowserOriginGrants } from "../../../preview/BrowserOriginGrantsLayer.ts";
+import { BrowserClaimHandoffs } from "../../../preview/BrowserClaimHandoffs.ts";
 import { makeTestBrowserOriginGrants } from "../../../preview/BrowserOriginGrants.testkit.ts";
 import * as BrowserClaims from "./browserClaims/handlers.ts";
 import { BrowserClaimToolkit } from "./browserClaims/tools.ts";
@@ -45,6 +46,9 @@ it.effect("agent request only creates pending approval and never binds or grants
       windowId: 7,
       origin: "https://example.test",
     }).pipe(
+      Effect.provideService(BrowserClaimHandoffs, {
+        request: (input) => grants.requestWindow(input).pipe(Effect.orDie),
+      }),
       Effect.provideService(BrowserOriginGrants, {
         ...grants,
         setDriverCapability: () => Effect.void,

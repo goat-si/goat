@@ -3,6 +3,7 @@ import { BUILTIN_PERMISSION_PROFILES, GoatclawRole } from "@goat/contracts";
 import {
   GOATCLAW_LANE_DEFAULTS,
   GOATCLAW_REPORT_PROTOCOL,
+  GOATCLAW_SUPERVISOR_DELEGATION,
   goatclawRoleBrief,
   goatclawRoleTemplate,
 } from "./RoleTemplates.ts";
@@ -22,6 +23,12 @@ describe("goatclaw role templates", () => {
     expect(merges("issue-sweeper")).toBe(false);
     // The supervisor holds owner but is read-only by its instructions.
     expect(goatclawRoleTemplate("supervisor").preamble).toContain("change nothing yourself");
+    expect(goatclawRoleTemplate("supervisor").preamble).toContain(
+      "Start a merge manager only when your own grant allows merging.",
+    );
+    expect(GOATCLAW_SUPERVISOR_DELEGATION).toContain(
+      'ask the person through goat_call {path:"decision.request"} for a merge manager',
+    );
   });
 
   it("states the merge policy and the close-the-issue rule where merges happen", () => {

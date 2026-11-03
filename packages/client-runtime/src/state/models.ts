@@ -78,6 +78,7 @@ export interface EnvironmentThreadStructure {
 }
 
 export interface ThreadRunSummary {
+  readonly survivingRestartNotice?: string | null;
   readonly completionNotification?: string | undefined;
   readonly runId: RunId;
   readonly status: OrchestrationV2RunStatus;

@@ -403,6 +403,8 @@ export type ChannelTaskEvent = typeof ChannelTaskEvent.Type;
  */
 export const ChannelTaskChip = Schema.Struct({
   taskId: ChannelTaskId,
+  /** Copied from the task; GOAT Bot's own turns are not shown as cards. Missing on older chips. */
+  kind: Schema.optional(ChannelTaskKind),
   conversationId: ChannelConversationId,
   /** Newer chips replace older ones; an update with a lower version is ignored. */
   taskVersion: PositiveInt,

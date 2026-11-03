@@ -3,10 +3,13 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import { BrowserClaimBind } from "./BrowserClaimBind.ts";
 import { BrowserClaimManifest } from "./BrowserClaimManifest.ts";
 import { makeBrowserOriginGrants } from "./BrowserOriginGrants.ts";
+import { BrowserClaimResponder } from "../handoffs/BrowserClaimResponder.ts";
 
 class BrowserClaimBindUnavailable extends Schema.TaggedError<BrowserClaimBindUnavailable>()(
   "BrowserClaimBindUnavailable",
@@ -15,12 +18,26 @@ class BrowserClaimBindUnavailable extends Schema.TaggedError<BrowserClaimBindUna
 
 const make = Effect.gen(function* () {
   const environment = yield* ServerEnvironment.ServerEnvironment;
+  const settings = yield* ServerSettings.ServerSettingsService;
+  const runSync = Effect.runSyncWith(yield* Effect.context<never>());
+  const changes = yield* settings.subscribeChanges;
   const { environmentId } = yield* environment.getDescriptor;
   const manifest = yield* Effect.serviceOption(BrowserClaimManifest);
   const bind = yield* Effect.serviceOption(BrowserClaimBind);
   let supported = false;
+  let disable = () => Effect.void;
   const service = yield* makeBrowserOriginGrants({
     environmentId,
+    blockedHostsNow: () => {
+      if (settings.committedPolicy === undefined) return undefined;
+      const policy = runSync(settings.committedPolicy);
+      return policy._tag === "committed" && Array.isArray(policy.blockedBrowserHosts)
+        ? policy.blockedBrowserHosts
+        : undefined;
+    },
+    blockedHosts:
+      settings.blockedBrowserHostsSnapshot ??
+      settings.getSettings.pipe(Effect.map((value) => value.blockedBrowserHosts)),
     supported: () => supported && Option.isSome(manifest),
     bindAvailable: () => Option.isSome(bind),
     publish: (union) =>
@@ -33,6 +50,7 @@ const make = Effect.gen(function* () {
       Option.isSome(manifest) && manifest.value.fence
         ? manifest.value.fence
         : Effect.succeed(false),
+    onFenceFailure: () => disable(),
     confirm: () =>
       Option.isSome(manifest)
         ? manifest.value.readConfig
@@ -50,16 +68,27 @@ const make = Effect.gen(function* () {
             new BrowserClaimBindUnavailable({ cause: "Browser claim binding is unavailable." }),
           ),
   });
+  const responder = yield* Effect.serviceOption(BrowserClaimResponder);
+  if (Option.isSome(responder)) yield* responder.value.register(service.answer);
+  yield* changes.pipe(
+    Stream.map((value) => value.blockedBrowserHosts),
+    Stream.changesWith((a, b) => a.length === b.length && a.every((host, i) => host === b[i])),
+    Stream.runForEach((hosts) => service.blockedHostsChanged(hosts)),
+    Effect.forkScoped,
+  );
   const setDriverCapability = Effect.fn("BrowserOriginGrants.setDriverCapability")(function* (
     value: boolean,
   ) {
     if (supported === value) return;
-    if (value) supported = true;
-    else
+    if (value) {
+      supported = true;
+      yield* service.capabilityChanged;
+    } else
       yield* service.driverRestarted(() => {
         supported = false;
       });
   });
+  disable = () => setDriverCapability(false);
   return { ...service, setDriverCapability };
 });
 

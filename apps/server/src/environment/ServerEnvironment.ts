@@ -32,6 +32,10 @@ import { resolveServiceLauncherMode } from "../cloud/serviceLauncherClient.ts";
 import * as ServerConfig from "../config.ts";
 import * as MemoryHubHttp from "../memory/MemoryHubHttp.ts";
 import * as ProcessRunner from "../processRunner.ts";
+import {
+  codexAppServerIsolationAvailable,
+  codexSocketTransportMode,
+} from "../provider/CodexDetachedAppServerLive.ts";
 import * as Settings from "../serverSettings.ts";
 import { resolveServerEnvironmentLabel } from "./ServerEnvironmentLabel.ts";
 import { makeAppServerLive } from "./hostAppServer.ts";
@@ -207,6 +211,7 @@ export const make = Effect.gen(function* () {
   const identity = yield* ServerEnvironmentIdentity;
   const hostPlatform = yield* HostProcess.Platform;
   const hostArchitecture = yield* HostProcess.Architecture;
+  const codexTransport = codexSocketTransportMode(hostPlatform, yield* HostProcess.Environment);
   const environmentId = yield* identity.getEnvironmentId;
   const { instanceId } = yield* RuntimeIdentity.RuntimeIdentity;
   const cwdBaseName = path.basename(serverConfig.cwd).trim();
@@ -281,6 +286,9 @@ export const make = Effect.gen(function* () {
       storageUsage: true,
       threadAutoSettlementScope: true,
       threadRestartContinuation: true,
+      ...(codexAppServerIsolationAvailable(codexTransport)
+        ? { codexTurnSurvival: true, codexAppServerIsolation: true }
+        : {}),
       projectSettingsOverrides: true,
       projectProviderInstanceOverrides: true,
       providerInstancePreconditions: true,

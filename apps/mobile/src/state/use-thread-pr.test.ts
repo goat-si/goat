@@ -125,6 +125,26 @@ describe("resolveThreadPrSource compatibility", () => {
   };
   const branchRef = { ...legacyRef, number: 2, url: "https://github.com/sample-tools/goat/pull/2" };
 
+  it("keeps the server's fork repository distinct from an upstream PR with the same number (#2464)", () => {
+    const fork = {
+      ...legacyRef,
+      repository: "fork/goat",
+      url: "https://github.com/fork/goat/pull/1",
+    };
+    expect(
+      resolveThreadPrSource(
+        { pullRequests: [], linkedPullRequest: legacyRef, branchPullRequest: fork },
+        { threadPullRequests: true },
+      ).pullRequestRef,
+    ).toEqual(fork);
+    expect(
+      resolveThreadPrSource(
+        { pullRequests: [], linkedPullRequest: legacyRef, branchPullRequest: fork },
+        { threadPullRequestLinking: true },
+      ).pullRequestRef,
+    ).toEqual(legacyRef);
+  });
+
   it("polls the legacy reference when only the older linking capability exists", () => {
     expect(
       resolveThreadPrSource(

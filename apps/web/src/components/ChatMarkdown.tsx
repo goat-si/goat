@@ -178,6 +178,7 @@ import { PullRequestLinkPreview } from "./pullRequest/PullRequestLinkPreview";
 import { MarkdownCodeBlock, SuspenseShikiCodeBlock } from "./chat/MarkdownCodeBlock";
 import { createMarkdownRenderer } from "./chat/markdownRenderer";
 import { splitMarkdownBlocks } from "./chat/markdownStreamBlocks";
+import { sameMarkdownSource, type MarkdownSourceProps } from "./chat/markdownSourceProps";
 import { MarkdownMermaidCodeBlock } from "./chat/MarkdownMermaidCodeBlock";
 import { MarkdownTable } from "./chat/MarkdownTable";
 import { MarkdownDetails } from "./chat/MarkdownDetails";
@@ -1660,15 +1661,7 @@ const MarkdownSource = memo(function MarkdownSource({
   rehypePlugins,
   shared,
   cache,
-}: {
-  text: string;
-  remarkPlugins: PluggableList;
-  rehypePlugins: PluggableList;
-  /** The plugins are one of the shared sets. */
-  shared: boolean;
-  /** The text will not change again; streamed text would only fill the cache with prefixes. */
-  cache: boolean;
-}) {
+}: MarkdownSourceProps) {
   // Per-instance plugins, such as the incremental parser, set up their state on every render.
   const render = shared
     ? markdownRenderer(remarkPlugins, rehypePlugins)
@@ -1681,7 +1674,7 @@ const MarkdownSource = memo(function MarkdownSource({
   return (
     <ChatMarkdownTextContext value={text}>{render(text, shared && cache)}</ChatMarkdownTextContext>
   );
-});
+}, sameMarkdownSource);
 
 function ChatMarkdown({
   text,

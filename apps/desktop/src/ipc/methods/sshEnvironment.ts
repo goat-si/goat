@@ -27,7 +27,7 @@ import {
   EnvironmentScopeRequiredError,
   AuthAccessTokenResult,
   AuthSessionState,
-  AuthWebSocketTicketResult,
+  AuthWebSocketTicketResultJson,
   isCloudMachineAlias,
 } from "@goat/contracts";
 import { SshHostAnswered, targetConnectionKey } from "@goat/ssh/command";
@@ -335,7 +335,7 @@ export const fetchSshSessionState = DesktopIpc.makeIpcMethod({
 export const issueSshWebSocketTicket = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.ISSUE_SSH_WEBSOCKET_TOKEN_CHANNEL,
   payload: DesktopSshBearerRequestInputSchema,
-  result: AuthWebSocketTicketResult,
+  result: AuthWebSocketTicketResultJson,
   handler: Effect.fn("desktop.ipc.sshEnvironment.issueWebSocketTicket")(function* ({
     httpBaseUrl,
     bearerToken,

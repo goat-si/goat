@@ -9,6 +9,7 @@ import * as Schema from "effect/Schema";
 import { isSvgAttachment } from "@goat/shared/image";
 
 import {
+  attachmentPathCandidatesById,
   parseThreadSegmentFromAttachmentId,
   PENDING_ATTACHMENT_THREAD_SEGMENT,
   planAttachmentClaim,
@@ -22,6 +23,7 @@ export class AttachmentClaimError extends Schema.TaggedError<AttachmentClaimErro
   "AttachmentClaimError",
   {
     message: Schema.String,
+    attachmentProblem: Schema.optionalKey(Schema.Literal("expired")),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {}
@@ -108,6 +110,30 @@ export const claimPendingAttachments = Effect.fn("AttachmentClaims.claimPendingA
                   attachmentId: attachment.id,
                 });
                 if (!claim.ok) {
+                  if (claim.reason === "attachment not found (removed or expired)") {
+                    const candidates = attachmentPathCandidatesById({
+                      attachmentsDir: serverConfig.attachmentsDir,
+                      attachmentId: attachment.id,
+                    });
+                    for (const path of candidates) {
+                      const result = yield* Effect.result(fileSystem.stat(path));
+                      if (result._tag === "Failure" && result.failure.reason._tag !== "NotFound") {
+                        return yield* new AttachmentClaimError({
+                          message: `Attachment '${attachment.name}' cannot be sent: attachment not found.`,
+                          cause: result.failure,
+                        });
+                      }
+                      if (result._tag === "Success") {
+                        return yield* new AttachmentClaimError({
+                          message: `Attachment '${attachment.name}' cannot be sent: attachment not found.`,
+                        });
+                      }
+                    }
+                    return yield* new AttachmentClaimError({
+                      message: `Attachment '${attachment.name}' cannot be sent: ${claim.reason}.`,
+                      attachmentProblem: "expired",
+                    });
+                  }
                   return yield* new AttachmentClaimError({
                     message: `Attachment '${attachment.name}' cannot be sent: ${claim.reason}.`,
                   });
@@ -118,6 +144,9 @@ export const claimPendingAttachments = Effect.fn("AttachmentClaims.claimPendingA
                     (cause) =>
                       new AttachmentClaimError({
                         message: `Attachment '${attachment.name}' cannot be sent: attachment not found.`,
+                        ...(cause.reason._tag === "NotFound"
+                          ? { attachmentProblem: "expired" as const }
+                          : {}),
                         cause,
                       }),
                   ),

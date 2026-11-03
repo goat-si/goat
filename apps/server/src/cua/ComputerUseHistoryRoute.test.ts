@@ -142,7 +142,7 @@ it.effect("accepts outcomes only for the authenticated thread and its control", 
       assert.equal(settled[0]?.appId, "real.app");
       assert.equal(settled[0]?.typedLength, null);
       yield* f.leases.stop(f.a);
-      const replacement = yield* f.leases.control(f.a, Option.none());
+      const replacement = Option.getOrThrow(yield* f.leases.control(f.a, Option.none()));
       assert.notEqual(replacement.controlId, f.first.controlId);
       assert.equal((yield* send(f.first.controlId)).status, 409);
       assert.equal((yield* history.listForThread(f.a)).length, 1);
@@ -218,7 +218,11 @@ it.effect("accepts outcomes only for the authenticated thread and its control", 
       Layer.mergeAll(
         database,
         serviceLayer,
-        ServerSettings.layerTest({ computerUseKeepTypedText: true, cuaStrictInputGuards: true }),
+        ServerSettings.layerTest({
+          enableCua: true,
+          computerUseKeepTypedText: true,
+          cuaStrictInputGuards: true,
+        }),
       ),
     ),
   ),
@@ -231,7 +235,7 @@ it.effect("bounds ended control ownership while retaining recent controls for th
       const controls = yield* Effect.forEach(Array.from({ length: 130 }), () =>
         Effect.gen(function* () {
           yield* f.leases.stop(f.a);
-          return yield* f.leases.control(f.a, Option.none());
+          return Option.getOrThrow(yield* f.leases.control(f.a, Option.none()));
         }),
       );
       assert.isFalse(yield* f.leases.ownsControl(f.a, f.first.controlId));

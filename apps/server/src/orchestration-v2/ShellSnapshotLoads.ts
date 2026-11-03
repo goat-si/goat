@@ -9,6 +9,7 @@ import * as ProjectStore from "./ProjectStore.ts";
 import { loadShellSnapshotParts } from "./ShellStream.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
 
+// A joiner may receive an older snapshot and must replay from that snapshot's sequence.
 export const makeSingleFlight = Effect.fn("ShellSnapshotLoads.makeSingleFlight")(function* <
   A,
   E,

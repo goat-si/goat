@@ -1,3 +1,4 @@
+import { sourceControlClients } from "@goat/client-runtime/source-control-clients";
 import { ThreadDetailsControl } from "./chat/ThreadDetailsControl";
 import { ComposerContextLabel } from "./ComposerContextLabel";
 import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePullRequests";
@@ -568,6 +569,21 @@ export function BranchToolbarBranchSelector({
   );
   const prNumber = currentLinkedPr?.number ?? displayedPr?.number;
   const prUrl = currentLinkedPr?.url ?? displayedPr?.url;
+  const storedReference =
+    currentLinkedPr ??
+    (!supportsMultiplePullRequests ? serverThread?.linkedPullRequest : null) ??
+    serverThread?.branchPullRequest;
+  const storedLink = storedReference
+    ? sourceControlClients.parseChangeRequestUrl(storedReference.url)?.link
+    : undefined;
+  const storedHost = storedLink?.authority ?? storedLink?.host;
+  const rowReference =
+    prUrl && storedReference && sourceControlClients.isSameChangeRequest(prUrl, storedReference.url)
+      ? {
+          ...storedReference,
+          ...(storedHost === undefined ? {} : { host: storedHost }),
+        }
+      : null;
   const openPrLink = useOpenPrLink(threadRef);
   const panelPrLabel =
     prNumber === undefined
@@ -751,7 +767,7 @@ export function BranchToolbarBranchSelector({
             environmentId={environmentId}
             pr={displayedPr}
             number={prNumber}
-            reference={currentLinkedPr}
+            reference={rowReference}
             status={displayedPrStatus}
             project={activeProject}
             label={panelPrLabel}

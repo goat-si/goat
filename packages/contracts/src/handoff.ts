@@ -46,6 +46,7 @@ export const Handoff = Schema.Struct({
   createdAt: Schema.DateTimeUtc,
   resolvedAt: Schema.optional(Schema.DateTimeUtc),
   resolvedBy: Schema.optional(TrimmedNonEmptyString),
+  resultMessage: Schema.optionalKey(Schema.String),
   actor: HandoffActor,
   /** A computer use grant's approved apps; a grant without them admits every app. */
   apps: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
@@ -95,6 +96,7 @@ export const isProviderHandoffPath = (path: string) => PROVIDER_SETTINGS_HANDOFF
  * because the person often answers after the bot or scheduled turn that asked has ended.
  */
 export const COMPUTER_USE_GRANT_HANDOFF_PATH = "computer_use.grant";
+export const BROWSER_CLAIM_ANSWER_HANDOFF_PATH = "browser_claim.answer";
 
 /**
  * A person approving a hub membership change. The asking turn has usually ended, so these run
@@ -130,6 +132,7 @@ export const PREVIEW_HANDOFF_PATH = "preview.handoff";
 /** Handoffs that expire on their clock instead of when the requesting run ends. */
 export const isClockedHandoffPath = (path: string) =>
   isProviderHandoffPath(path) ||
+  path === BROWSER_CLAIM_ANSWER_HANDOFF_PATH ||
   path === COMPUTER_USE_GRANT_HANDOFF_PATH ||
   isHubDeviceHandoffPath(path) ||
   path === CLOUD_AGENT_LAUNCH_HANDOFF_PATH ||

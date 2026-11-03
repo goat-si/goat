@@ -415,12 +415,12 @@ const makeGrants = (
         ? undefined
         : (yield* settings.value.getSettings).goatclaw.profiles[GOATCLAW_ROLE_PROFILES[role]];
     // What claim grants a role launch: the role's profile within the caller's.
-    const roleProfile =
+    const roleGrant =
       role === undefined || !view.enabled
         ? undefined
         : named === undefined
           ? { ...view.profile, capabilities: [], hosts: [] }
-          : Profiles.roleProfile(role, named, view);
+          : Profiles.intersectProfiles(named, view.profile);
     return {
       profileId: view.enabled ? view.profile.id : null,
       ceiling: view.runtimeMode,
@@ -435,15 +435,15 @@ const makeGrants = (
             }
           : null,
         role:
-          roleProfile === undefined
+          roleGrant === undefined
             ? null
             : {
-                capabilities: roleProfile.capabilities,
+                capabilities: roleGrant.capabilities,
                 runtimeMode:
-                  rank(roleProfile.runtimeModeCeiling) < rank(view.runtimeMode)
-                    ? roleProfile.runtimeModeCeiling
+                  rank(roleGrant.runtimeModeCeiling) < rank(view.runtimeMode)
+                    ? roleGrant.runtimeModeCeiling
                     : view.runtimeMode,
-                hosts: roleProfile.hosts ?? null,
+                hosts: roleGrant.hosts ?? null,
               },
         scopes,
         readOnly,

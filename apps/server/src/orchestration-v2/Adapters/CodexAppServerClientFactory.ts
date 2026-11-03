@@ -9,24 +9,36 @@ import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventLoggers";
 import { AgentScope, handleAgentProcess } from "@goat/shared/AgentScope";
 import { resolveSpawnCommand } from "@goat/shared/shell";
+import { resolveProjectSettings } from "@goat/shared/projectSettings";
 import * as CodexClient from "effect-codex-app-server/client";
 import * as Context from "effect/Context";
+import type * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Scope from "effect/Scope";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { codexAppServerEnvironment } from "../../provider/CodexProvider.ts";
+import * as ServerSettings from "../../serverSettings.ts";
+import * as CodexSurvivors from "../../provider/CodexSurvivors.ts";
+import * as ProjectionStore from "../ProjectionStore.ts";
 import { CodexDetachedAppServerError } from "../../provider/CodexDetachedAppServer.ts";
-import { CodexDetachedAppServers } from "../../provider/CodexDetachedAppServerLive.ts";
+import {
+  CodexDetachedAppServers,
+  codexTransportMode,
+  shouldUseCodexSocketTransport,
+} from "../../provider/CodexDetachedAppServerLive.ts";
 import { codexAppServerArgs, resolveCodexLaunchArgs } from "../../provider/codexLaunchArgs.ts";
+import { codexNativeLaunch } from "../../provider/codexNativeLaunch.ts";
 import {
   boundProviderEventForLogging,
   shouldPersistProviderEvent,
 } from "../../provider/EventNdjsonLogger.ts";
 
 const CODEX_PROVIDER = ProviderDriverKind.make("codex");
+const CODEX_STDIO_FORCE_KILL_AFTER = "5 seconds";
 
 export interface CodexAppServerClientFactoryShape {
   readonly open: (input: {
@@ -58,6 +70,7 @@ export const makeCodexAppServerSpawnCommand = Effect.fn(
   readonly env?: NodeJS.ProcessEnv | undefined;
   readonly extendEnv?: boolean | undefined;
   readonly threadId?: string | undefined;
+  readonly forceKillAfter?: Duration.Input | undefined;
 }) {
   const launch = yield* (yield* AgentScope).wrap({
     command: input.command,
@@ -76,6 +89,7 @@ export const makeCodexAppServerSpawnCommand = Effect.fn(
     ...(input.env === undefined ? {} : { env: input.env }),
     ...(input.extendEnv === undefined ? {} : { extendEnv: input.extendEnv }),
     shell: spawnCommand.shell,
+    forceKillAfter: input.forceKillAfter ?? CODEX_STDIO_FORCE_KILL_AFTER,
   });
 });
 
@@ -184,6 +198,7 @@ export const layerAppServerClientFactory: Layer.Layer<
   | ChildProcessSpawner.ChildProcessSpawner
   | ProviderEventLoggers.ProviderEventLoggers
   | CodexDetachedAppServers
+  | ServerSettings.ServerSettingsService
 > = Layer.effect(
   CodexAppServerClientFactory,
   Effect.gen(function* () {
@@ -191,6 +206,9 @@ export const layerAppServerClientFactory: Layer.Layer<
     const { native: nativeEventLogger } = yield* ProviderEventLoggers.ProviderEventLoggers;
     const agentScope = yield* AgentScope;
     const detached = yield* CodexDetachedAppServers;
+    const settings = yield* ServerSettings.ServerSettingsService;
+    const projections = yield* Effect.serviceOption(ProjectionStore.ProjectionStoreV2);
+    const survivors = yield* Effect.serviceOption(CodexSurvivors.CodexSurvivors);
 
     return CodexAppServerClientFactory.of({
       open: Effect.fn("CodexAppServerClientFactory.open")(function* (input) {
@@ -202,12 +220,14 @@ export const layerAppServerClientFactory: Layer.Layer<
             cause,
           });
         // A process left by an earlier server run may still hold this provider's threads.
-        yield* detached.ensureNotBlocked(input.instanceId).pipe(Effect.mapError(openError));
+        yield* detached
+          .ensureNotBlocked(input.instanceId, input.providerSessionId)
+          .pipe(Effect.mapError(openError));
         const environment = {
           ...codexAppServerEnvironment(input.environment),
           ...(input.settings.homePath ? { CODEX_HOME: input.settings.homePath } : {}),
         };
-        const launch = {
+        const launch = yield* codexNativeLaunch({
           command: input.settings.binaryPath || "codex",
           args: codexAppServerArgs(
             resolveCodexLaunchArgs(input.settings.launchArgs, input.environment),
@@ -216,7 +236,7 @@ export const layerAppServerClientFactory: Layer.Layer<
           cwd: input.runtimePolicy.cwd ?? undefined,
           env: environment,
           threadId: input.threadId,
-        };
+        });
         const protocolLogger = makeCodexAppServerProtocolLogger({
           nativeEventLogger,
           threadId: input.threadId,
@@ -230,13 +250,69 @@ export const layerAppServerClientFactory: Layer.Layer<
                 logOutgoing: true,
                 logger: protocolLogger,
               };
-        if (detached.socketTransportEnabled) {
+        const survivor = Option.isSome(survivors)
+          ? yield* survivors.value.get(input.instanceId, input.threadId)
+          : undefined;
+        const records = new Set(
+          yield* detached.listPreservedForSession(input.instanceId, input.providerSessionId),
+        );
+        if (survivor !== undefined) {
+          // One native thread must never be loaded by two sessions' processes.
+          const owner = Option.isNone(projections)
+            ? undefined
+            : yield* projections.value.getThreadRecords(input.threadId, ["providerThreads"]).pipe(
+                Effect.map(
+                  (thread) =>
+                    thread.providerThreads.find(
+                      (item) =>
+                        item.providerInstanceId === input.instanceId &&
+                        item.nativeThreadRef?.nativeId === survivor.nativeThreadId,
+                    )?.providerSessionId,
+                ),
+                Effect.mapError(openError),
+              );
+          if (owner !== input.providerSessionId)
+            return yield* openError(
+              "The Codex turn from before the restart runs in another session.",
+            );
+          records.add(survivor.recordName);
+        }
+        if (records.size > 1)
+          return yield* openError("Multiple retained Codex processes prevent a safe connection.");
+        const recordName = [...records][0];
+        if (recordName !== undefined) {
+          const existing = yield* detached
+            .connectExisting(input.instanceId, recordName, input.providerSessionId)
+            .pipe(Effect.mapError(openError));
+          const context = yield* Layer.build(
+            CodexClient.layerMessageChannel(existing.channel, clientOptions),
+          );
+          return yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
+            Effect.provide(context),
+          );
+        }
+        const mode = codexTransportMode(detached);
+        const survival =
+          mode === "auto"
+            ? yield* Effect.gen(function* () {
+                const current = yield* settings.getSettings;
+                if (Option.isNone(projections))
+                  return yield* new CodexDetachedAppServerError({
+                    detail: "Codex transport could not resolve this thread's project settings.",
+                  });
+                const thread = yield* projections.value.getThread(input.threadId);
+                return resolveProjectSettings(current, thread.projectId).settings
+                  .codexTurnsSurviveServerStop;
+              }).pipe(Effect.mapError(openError))
+            : "off";
+        if (shouldUseCodexSocketTransport(mode, survival)) {
           const attempt = yield* Scope.fork(scope);
           const opened = yield* detached
             .open({
               instanceId: input.instanceId,
+              providerSessionId: input.providerSessionId,
               cwd: launch.cwd,
-              env: environment,
+              env: launch.env,
               command: (socketPath) =>
                 makeCodexAppServerLaunch({
                   ...launch,
@@ -267,7 +343,9 @@ export const layerAppServerClientFactory: Layer.Layer<
             );
           // A detached attempt that could not be stopped must not be bypassed by a stdio spawn.
           if (opened._tag === "None")
-            yield* detached.ensureNotBlocked(input.instanceId).pipe(Effect.mapError(openError));
+            yield* detached
+              .ensureNotBlocked(input.instanceId, input.providerSessionId)
+              .pipe(Effect.mapError(openError));
           if (opened._tag === "Some") {
             const context = yield* Layer.build(
               CodexClient.layerMessageChannel(opened.value.channel, clientOptions),

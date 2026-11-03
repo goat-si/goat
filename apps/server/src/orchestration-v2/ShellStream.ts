@@ -109,7 +109,7 @@ export function activeShellRowsForSubscriber(
   index?: ShellSnapshotIndex,
 ): {
   readonly threads: ReadonlyArray<OrchestrationV2ThreadShell>;
-  readonly subagentThreadIds: Set<string>;
+  readonly subagentThreadIds: ReadonlySet<string>;
 } {
   return {
     threads: omitIdleSubagents
@@ -193,7 +193,7 @@ export function shellSnapshotForSubscriber(
   index?: ShellSnapshotIndex,
 ): {
   readonly snapshot: OrchestrationV2ShellSnapshot;
-  readonly subagentThreadIds: Set<string>;
+  readonly subagentThreadIds: ReadonlySet<string>;
 } {
   const rows = activeShellRowsForSubscriber(base.threads, options.omitIdleSubagents, index);
   if (!options.omitOlderSettled) {

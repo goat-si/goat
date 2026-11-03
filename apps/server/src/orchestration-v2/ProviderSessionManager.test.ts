@@ -5487,27 +5487,60 @@ it.effect.each(turnStartMemoryCases)(
           });
           if (testCase.kind === "channel") {
             const taskId = ChannelTaskId.make("memory-channel-task");
+            let forwardPending = true;
+            const channelTask: ChannelLedger.ChannelStoredTask = {
+              ownerId: "owner",
+              pendingAnswerMessageId: undefined,
+              completionHold: undefined,
+              task: {
+                taskId,
+                conversationId: MemoryContracts.ChannelConversationId.make("memory-conversation"),
+                originBindingId: MemoryContracts.ChannelBindingId.make("memory-binding"),
+                originInputId: MemoryContracts.ChannelInputId.make("memory-input"),
+                originAddress: {
+                  kind: "goat",
+                  environmentId: EnvironmentId.make("fixture"),
+                  threadId,
+                },
+                requester: {
+                  ownerId: "owner",
+                  principalId: "owner",
+                  displayName: "Requester",
+                  originKind: "goat",
+                  runtimeModeCeiling: "full-access",
+                  grantedScopes: ["orchestration:operate"],
+                },
+                title: "Memory channel task",
+                instruction: "Continue",
+                status: "running",
+                version: 1,
+                generation: 1,
+                openQuestions: [],
+                createdAt: DateTime.formatIso(now),
+                updatedAt: DateTime.formatIso(now),
+                worker: { environmentId: EnvironmentId.make("fixture"), threadId, generation: 1 },
+                target: {
+                  environmentId: EnvironmentId.make("fixture"),
+                  projectId: ProjectId.make("project-1"),
+                  modelSelection,
+                  runtimeMode: "full-access",
+                  interactionMode: "default",
+                  workspaceStrategy: { type: "root" },
+                },
+              },
+            };
             const dispatcherLayer = ChannelDispatcher.layer.pipe(
               Layer.provide(Layer.mock(UsageLimitSources.UsageLimitSources)({})),
               Layer.provide(
                 Layer.mergeAll(
                   Layer.mock(ChannelLedger.ChannelLedger)({
-                    getTask: () =>
-                      Effect.succeed({
-                        ownerId: "owner",
-                        pendingAnswerMessageId: undefined,
-                        completionHold: undefined,
-                        task: {
-                          taskId,
-                          worker: { threadId },
-                          target: { projectId: ProjectId.make("project-1") },
-                          requester: {
-                            displayName: "Requester",
-                            runtimeModeCeiling: "full-access",
-                          },
-                        },
-                      } as ChannelLedger.ChannelStoredTask),
-                    completeForward: () => Effect.void,
+                    getTask: () => Effect.succeed(channelTask),
+                    isForwardPending: (sequence) =>
+                      Effect.succeed(sequence === 1 && forwardPending),
+                    completeForward: ({ sequence }) =>
+                      Effect.sync(() => {
+                        if (sequence === 1) forwardPending = false;
+                      }),
                   }),
                   Layer.mock(ThreadManagement.ThreadManagementService)({
                     sendToThread: (input) =>

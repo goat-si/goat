@@ -124,11 +124,17 @@ function stampDraftFileUpload(job: DraftFileOwner, attachmentId: string): void {
 
 function deletePendingUpload(environmentId: EnvironmentId, attachmentId: string): void {
   if (!readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)) return;
-  deletePendingAttachmentUpload({
+  void deletePendingAttachmentUpload({
     registry: appAtomRegistry,
     remove: attachmentEnvironment.remove,
     environmentId,
     attachmentId,
+  }).then((result) => {
+    if (!result.ok)
+      console.warn("[attachments] could not delete pending upload", {
+        attachmentId,
+        error: result.error,
+      });
   });
 }
 
@@ -314,6 +320,12 @@ async function runUpload(job: UploadJob): Promise<void> {
   });
   job.abort = null;
   if (result.status === "cancelled" || job.cancelled) {
+    if (result.status === "cancelled" && result.cleanupFailure !== undefined) {
+      console.warn("[attachments] could not delete cancelled upload", {
+        attachmentId: result.attachmentId,
+        error: result.cleanupFailure.error,
+      });
+    }
     return;
   }
   if (result.status === "uploaded") {

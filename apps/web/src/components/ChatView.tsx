@@ -2146,7 +2146,6 @@ export default function ChatView(props: ChatViewProps) {
       ? (activeThreadShell?.linkedPullRequest ?? activeThread?.linkedPullRequest ?? null)
       : (activeThread?.linkedPullRequest ?? null),
     projectId: activeProject?.id ?? null,
-    projectRepository: activeProjectRepository,
     threadBranch: activeThread?.branch ?? null,
     gitStatus: gitStatusQuery.data ?? null,
   });

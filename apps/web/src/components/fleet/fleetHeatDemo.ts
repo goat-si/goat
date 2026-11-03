@@ -200,7 +200,12 @@ function runningShell(environmentId: EnvironmentId, id: string): FleetShell {
     lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: ThreadId.make(id) },
     createdAt: at,
     updatedAt: at,
-    source: {},
+    latestUserMessageAt: null,
+    pinnedAt: null,
+    settledOverride: null,
+    snoozedUntil: null,
+    snoozedAt: null,
+    source: { pendingRuntimeRequest: null },
   };
 }
 

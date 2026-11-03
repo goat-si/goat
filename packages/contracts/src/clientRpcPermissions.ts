@@ -87,11 +87,13 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.memoryHubSettingsUpdate]: AuthSettingsWriteScope,
   [WS_METHODS.memoryReadSource]: AuthMemoryReadScope,
 
+  [WS_METHODS.browserClaimsWindows]: AuthOrchestrationOperateScope,
   [WS_METHODS.browserClaimsClaim]: AuthOrchestrationOperateScope,
   [WS_METHODS.browserClaimsAnswer]: AuthOrchestrationOperateScope,
   [WS_METHODS.browserClaimsRevoke]: AuthOrchestrationOperateScope,
   [WS_METHODS.browserClaimsEnd]: AuthOrchestrationOperateScope,
   [WS_METHODS.browserClaimsList]: AuthOrchestrationReadScope,
+  [WS_METHODS.browserClaimsSubscribe]: AuthOrchestrationReadScope,
   [WS_METHODS.previewClose]: AuthPreviewOperateScope,
   [WS_METHODS.serverRunStorageCleanup]: AuthSettingsWriteScope,
   // Lets a copied state's automation act; settings:write already governs channels and links.

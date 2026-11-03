@@ -282,5 +282,11 @@ it("requires settings authority only when a person widens browser access", () =>
   ).toEqual(["orchestration:operate"]);
   for (const method of [WS_METHODS.browserClaimsRevoke, WS_METHODS.browserClaimsEnd])
     expect(clientRpcRequiredScopes(method, {})).toEqual(["orchestration:operate"]);
+  expect(clientRpcRequiredScopes(WS_METHODS.browserClaimsWindows, {})).toEqual([
+    "orchestration:operate",
+  ]);
   expect(clientRpcRequiredScopes(WS_METHODS.browserClaimsList, {})).toEqual(["orchestration:read"]);
+  expect(clientRpcRequiredScopes(WS_METHODS.browserClaimsSubscribe, {})).toEqual([
+    "orchestration:read",
+  ]);
 });

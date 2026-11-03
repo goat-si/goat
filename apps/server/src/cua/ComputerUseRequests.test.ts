@@ -31,6 +31,78 @@ import {
   withRequests,
 } from "./ComputerUseRequests.testkit.ts";
 
+it.effect("non-person full access refuses terminal catalog aliases", () =>
+  withHarness(({ orchestrator }) =>
+    Effect.gen(function* () {
+      const runId = (yield* orchestrator.getThreadProjection(threadId)).runs.at(-1)!.id;
+      yield* withRequests(
+        orchestrator,
+        supported,
+        ({ request, leases }) =>
+          Effect.gen(function* () {
+            yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+              cuaStrictInputGuards: true,
+            });
+            yield* leases.everyAppControl(threadId, false, { runId });
+            for (const app of ["org.example.shell", "/opt/shell-binary"]) {
+              assert.deepInclude(yield* request({ apps: [app] }), {
+                kind: "refused",
+                code: "app_not_allowed",
+                unknownApps: [app],
+              });
+            }
+          }),
+        undefined,
+        undefined,
+        undefined,
+        Option.none(),
+        undefined,
+        "remote",
+        undefined,
+        [
+          { id: "org.example.shell", name: "GNOME Terminal" },
+          { id: "org.gnome.Terminal", name: "Shell", executables: ["/opt/shell-binary"] },
+        ],
+      );
+    }),
+  ),
+);
+
+it.effect("non-person full access refuses Linux and Windows terminal requests", () =>
+  withHarness(({ orchestrator }) =>
+    Effect.gen(function* () {
+      const runId = (yield* orchestrator.getThreadProjection(threadId)).runs.at(-1)!.id;
+      yield* withRequests(
+        orchestrator,
+        supported,
+        ({ request, leases }) =>
+          Effect.gen(function* () {
+            yield* (yield* ServerSettings.ServerSettingsService).updateSettings({
+              cuaStrictInputGuards: true,
+            });
+            yield* leases.everyAppControl(threadId, false, { runId });
+            for (const app of [
+              "/usr/bin/gnome-terminal",
+              "C:\\Windows\\System32\\WindowsTerminal.exe",
+            ]) {
+              assert.deepInclude(yield* request({ apps: [app] }), {
+                kind: "refused",
+                code: "app_not_allowed",
+                unknownApps: [app],
+              });
+            }
+          }),
+        undefined,
+        undefined,
+        undefined,
+        Option.none(),
+        undefined,
+        "remote",
+      );
+    }),
+  ),
+);
+
 it.effect("an organization denial refuses before approval", () =>
   withHarness(({ orchestrator }) =>
     withRequests(orchestrator, supported, ({ request }) =>
@@ -519,14 +591,16 @@ it.effect.each(["first", "existing"] as const)(
           );
           if (admitted.expiresAt === null) return assert.fail("admission needs an expiry");
           if (ordering === "existing")
-            yield* leases.control(threadId, yield* leases.active(threadId));
+            Option.getOrThrow(yield* leases.control(threadId, yield* leases.active(threadId)));
           const focus = yield* request({ foreground: true, minutes: 5 });
           if (focus.kind !== "needs_human") return assert.fail("foreground needs approval");
           yield* handoffs.respond(
             { threadId, handoffId: focus.handoff.handoffId, action: "completed" },
             sessionId,
           );
-          const control = yield* leases.control(threadId, yield* leases.active(threadId));
+          const control = Option.getOrThrow(
+            yield* leases.control(threadId, yield* leases.active(threadId)),
+          );
           const state = yield* leases.controlState(threadId, control.controlId);
           assert.equal(state._tag, "active");
           assert.isUndefined(state._tag === "active" ? state.apps : state);
@@ -631,7 +705,7 @@ it.effect(
           assert.isFalse(yield* leases.foregroundAvailable(threadId, purpose));
           const completed = yield* handoffs.respond({ ...address, action: "completed" }, sessionId);
           assert.deepEqual(completed.computerUseForeground, { purpose, target: "desktop" });
-          yield* leases.control(threadId, yield* leases.active(threadId));
+          Option.getOrThrow(yield* leases.control(threadId, yield* leases.active(threadId)));
           assert.isTrue(yield* leases.foregroundAvailable(threadId, purpose));
           assert.equal((yield* request({ foreground: true })).kind, "available");
           assert.equal(
@@ -673,7 +747,7 @@ it.effect(
               sessionId,
             );
             assert.equal(completed.state, "completed");
-            yield* leases.control(threadId, yield* leases.active(threadId));
+            Option.getOrThrow(yield* leases.control(threadId, yield* leases.active(threadId)));
             assert.isFalse(yield* leases.foregroundAvailable(threadId, purpose));
             assert.equal((yield* request({ foreground: true })).kind, "needs_human");
           }),

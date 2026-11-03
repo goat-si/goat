@@ -32,6 +32,7 @@ import * as ServerConfig from "../config.ts";
 import * as GitWorkflow from "../git/GitWorkflowService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProviderAuthService from "../provider/ProviderAuthService.ts";
+import * as CodexSurvivors from "../provider/CodexSurvivors.ts";
 import * as ContextHandoffService from "./ContextHandoffService.ts";
 import * as EventSink from "./EventSink.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
@@ -56,6 +57,7 @@ export const layerWorktreeLocation = (worktreesDir = managedWorktreesDir) =>
 export function makeLocalCommandHarness(input: {
   readonly oomKilled?: boolean;
   readonly text: string;
+  readonly ensureCodexAdmission?: CodexSurvivors.CodexSurvivors["Service"]["ensureAdmission"];
   readonly worktreePath?: string;
   readonly worktreesDir?: string;
   readonly workspaceRoot?: string;
@@ -437,24 +439,27 @@ export function makeLocalCommandHarness(input: {
       : Effect.void,
   );
   // Refuses a sign-out no person wrote, as ProviderAuthService does.
-  const tryHandlePromptCommand = vi.fn((request: { readonly byPerson: boolean }) =>
-    !request.byPerson
-      ? Effect.fail(
-          new ProviderSetupError({
-            instanceId: oldInstanceId,
-            operation: "logout",
-            detail: "Only a person can sign out of a provider.",
-          }),
-        )
-      : input.logoutFailure === undefined
-        ? Effect.succeed(true)
-        : Effect.fail(
-            new ProviderSetupError({
-              instanceId: oldInstanceId,
-              operation: "logout",
-              detail: input.logoutFailure,
-            }),
-          ),
+  const tryHandlePromptCommand = vi.fn(
+    (request: { readonly byPerson: boolean; readonly text: string }) =>
+      request.text.trim() !== "/logout"
+        ? Effect.succeed(false)
+        : !request.byPerson
+          ? Effect.fail(
+              new ProviderSetupError({
+                instanceId: oldInstanceId,
+                operation: "logout",
+                detail: "Only a person can sign out of a provider.",
+              }),
+            )
+          : input.logoutFailure === undefined
+            ? Effect.succeed(true)
+            : Effect.fail(
+                new ProviderSetupError({
+                  instanceId: oldInstanceId,
+                  operation: "logout",
+                  detail: input.logoutFailure,
+                }),
+              ),
   );
   const writeIfRunCurrent = vi.fn(({ events: incoming, activeAttemptId, expectedStatus }) =>
     "writeFailure" in input
@@ -507,6 +512,11 @@ export function makeLocalCommandHarness(input: {
           ...AgentScope.defaultValue(),
           oomKilled: () => Effect.succeed(input.oomKilled === true),
         }),
+        input.ensureCodexAdmission === undefined
+          ? Layer.empty
+          : Layer.mock(CodexSurvivors.CodexSurvivors)({
+              ensureAdmission: input.ensureCodexAdmission,
+            }),
         Layer.mock(ContextHandoffService.ContextHandoffServiceV2)({
           prepareProviderHandoff: () => Effect.die("history read must fail first"),
         }),

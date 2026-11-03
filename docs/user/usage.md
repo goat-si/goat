@@ -285,8 +285,8 @@ agent launches onto an overloaded machine, a delivery to `"off"` to silence that
 GOAT checks the memory of each agent, together with the processes it started, every 30 seconds.
 When one goes over the limit, GOAT stops it and its turn fails with "Killed: out of memory."; the
 thread continues with the next message. Codex and OpenCode run one server that several threads can
-share, so the limit applies to that server as a whole, and stopping it interrupts every turn running
-on it. Muse agents are not covered.
+share. GOAT only warns when a shared server exceeds the limit, because stopping it would end every
+session using it on the machine. Muse agents are not covered.
 
 The automatic limit is half of the machine's RAM, up to 16 GiB. Change it under **Settings → General
 → Updates and background → Agent memory limit**. Set a custom limit in GiB, or set it to 0 to turn

@@ -36,6 +36,54 @@ const grant = (overrides: Partial<Handoff> = {}): Handoff => ({
 const person = { type: "client", label: "Jun's Mac" } as const;
 const minute = (n: number) => DateTime.makeUnsafe(n * 60_000);
 
+it.effect("browser claim cards outlive the asking turn and expire on their deadline", () =>
+  Effect.gen(function* () {
+    const card = grant({
+      target: { environmentId: EnvironmentId.make("host"), path: "browser_claim.answer" },
+    });
+    assert.equal(
+      (yield* transitionHandoff(card, "completed", person, minute(10), true)).state,
+      "completed",
+    );
+    assert.equal(
+      (yield* transitionHandoff(card, "completed", person, minute(31), true)).state,
+      "expired",
+    );
+  }),
+);
+
+it.effect(
+  "a claim decision timestamp cannot bypass another handoff's deadline or postdate expiry",
+  () =>
+    Effect.gen(function* () {
+      const card = grant({
+        target: { environmentId: EnvironmentId.make("host"), path: "browser_claim.answer" },
+      });
+      const invalidLate = yield* transitionHandoff(
+        card,
+        "completed",
+        person,
+        minute(35),
+        false,
+        undefined,
+        "Attached",
+        minute(31),
+      ).pipe(Effect.result);
+      assert.equal(invalidLate._tag, "Failure");
+      const invalidOther = yield* transitionHandoff(
+        grant(),
+        "completed",
+        person,
+        minute(35),
+        false,
+        undefined,
+        "Attached",
+        minute(10),
+      ).pipe(Effect.result);
+      assert.equal(invalidOther._tag, "Failure");
+    }),
+);
+
 describe("computer use grant handoffs", () => {
   it.effect("outlive the turn that asked and expire on their clock", () =>
     Effect.gen(function* () {
