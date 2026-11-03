@@ -119,14 +119,20 @@ export async function runWorkload(
       if (!project || !NodeFS.existsSync(project.workspaceRoot))
         return yield* Effect.die(new Error("requested project unavailable"));
     } else {
-      projectId = ProjectId.make(id());
-      yield* client["projects.mutate"]({
-        type: "project.create",
-        commandId: CommandId.make(id()),
-        projectId,
-        title: "CPU pressure soak",
-        workspaceRoot: input.checkout,
-      });
+      const existing = shell.value.snapshot.projects.find(
+        (project) => project.workspaceRoot === input.checkout,
+      );
+      if (existing) projectId = existing.id;
+      else {
+        projectId = ProjectId.make(id());
+        yield* client["projects.mutate"]({
+          type: "project.create",
+          commandId: CommandId.make(id()),
+          projectId,
+          title: "CPU pressure soak",
+          workspaceRoot: input.checkout,
+        });
+      }
     }
     const codexInstance = ProviderInstanceId.make(`soak-${id()}`);
     yield* client["server.updateSettings"]({
