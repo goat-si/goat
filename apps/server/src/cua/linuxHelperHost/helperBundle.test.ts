@@ -55,7 +55,7 @@ function bundle(files: Record<string, string> = {}) {
   };
 }
 
-// quarantine: #2191 The check reads POSIX permission bits, which Windows does not have.
+// The bundle check reads POSIX permission bits, which Windows does not have.
 describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
   "Linux helper bundle check",
   () => {
