@@ -451,6 +451,7 @@ export function providerRestarts(
 
 export class Observations {
   readonly lifecycle: Lifecycle[] = [];
+  private unknownCodexMethods = 0;
   readonly replayThreads = new Set<string>();
   readonly codexInstances = new Set<string>();
   readonly joins = new Map<string, string>();
@@ -483,6 +484,17 @@ export class Observations {
   consumeLifecycle(value: unknown): void {
     if (typeof value !== "object" || value === null) throw new Error("invalid lifecycle record");
     const line = value as Record<string, unknown>;
+    if (line.event === "unknown-method") {
+      if (
+        typeof line.method !== "string" ||
+        typeof line.pid !== "number" ||
+        typeof line.instance !== "string" ||
+        typeof line.at !== "string"
+      )
+        throw new Error("invalid unknown method record");
+      this.unknownCodexMethods++;
+      return;
+    }
     if (
       (line.event !== "start" && line.event !== "session" && line.event !== "exit") ||
       typeof line.pid !== "number" ||
@@ -615,6 +627,7 @@ export class Observations {
         turnFailures: turns,
         providerRestarts: provider,
         serverRestarts: server,
+        unknownCodexMethods: counter(this.unknownCodexMethods, this.lifecycleGaps),
       },
       runs: {
         issued: statuses.length,

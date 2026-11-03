@@ -227,18 +227,8 @@ function spawnServer(
   checkout: string,
   lifecyclePath: string,
   credential: string,
-): OwnedChild {
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    GOAT_DEV_AUTH_TOKEN: credential,
-    GOAT_TELEMETRY_ENABLED: "false",
-    GOAT_SOAK_PROVIDER_LIFECYCLE_LOG: lifecyclePath,
-  };
-  delete env.VITE_HTTP_URL;
-  delete env.VITE_WS_URL;
-  delete env.GOAT_SERVICE_LAUNCHER_CONTEXT;
-  delete env.GOAT_BOOT_SERVICE_UNIT;
-  return spawnOwned(
+) {
+  return spawnWatchedServer(
     process.execPath,
     [
       NodePath.join(checkout, "apps/server/src/bin.ts"),
@@ -253,8 +243,109 @@ function spawnServer(
       `http://127.0.0.1:${options.serverPort}`,
       "--no-browser",
     ],
-    { cwd: checkout, env, stdio: ["ignore", "pipe", "pipe"] },
+    {
+      cwd: checkout,
+      env: serverEnvironment(process.env, lifecyclePath, credential),
+      stdio: ["ignore", "pipe", "pipe"],
+    },
   );
+}
+
+export function serverEnvironment(
+  source: NodeJS.ProcessEnv,
+  lifecyclePath: string,
+  credential: string,
+): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const key of [
+    "PATH",
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "TMPDIR",
+    "TMP",
+    "TEMP",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "SYSTEMROOT",
+    "WINDIR",
+  ]) {
+    if (source[key] !== undefined) env[key] = source[key];
+  }
+  return {
+    ...env,
+    GOAT_DEV_AUTH_TOKEN: credential,
+    GOAT_TELEMETRY_ENABLED: "false",
+    GOAT_SOAK_PROVIDER_LIFECYCLE_LOG: lifecyclePath,
+  };
+}
+
+export async function spawnWatchedServer(
+  command: string,
+  args: string[],
+  options: NodeChildProcess.SpawnOptions,
+  watchdogOutput: number | "ignore" = "ignore",
+) {
+  // oxlint-disable-next-line goat/no-global-process-runtime -- This standalone driver requires POSIX process groups.
+  if (process.platform === "win32") throw new Error("soak watchdog requires POSIX process groups");
+  const stdio = options.stdio;
+  if (!Array.isArray(stdio) || stdio.length !== 3)
+    throw new Error("server requires three stdio entries");
+  // The gate closes if the driver dies before the watchdog can claim the process group.
+  const server = spawnOwned(
+    "/bin/sh",
+    ["-c", 'IFS= read -r <&3 || exit 1; exec "$@"', "soak-server", command, ...args],
+    { ...options, stdio: [...stdio, "pipe"], detached: true },
+  );
+  const pgid = server.child.pid;
+  if (pgid === undefined) {
+    await server.failure;
+    throw new Error("server spawn failed");
+  }
+  const watchdogCode = `
+    const fs = require("node:fs");
+    const pgid = Number(process.argv[1]);
+    process.stdin.resume();
+    process.stdin.on("end", () => {
+      try { process.kill(-pgid, "SIGKILL"); }
+      catch (error) { if (error.code !== "ESRCH") throw error; }
+    });
+    fs.writeSync(3, "ready\\n");
+  `;
+  const watchdog = spawnOwned(process.execPath, ["-e", watchdogCode, String(pgid)], {
+    stdio: ["pipe", watchdogOutput, "pipe", "pipe"],
+  });
+  const readyPipe = watchdog.child.stdio[3];
+  try {
+    if (!readyPipe || !("once" in readyPipe))
+      throw new Error("watchdog readiness pipe unavailable");
+    await Promise.race([
+      new Promise<void>((resolve, reject) => {
+        readyPipe.once("data", () => resolve());
+        readyPipe.once("error", reject);
+        readyPipe.once("end", () => reject(new Error("watchdog exited before readiness")));
+      }),
+      watchdog.failure,
+      server.failure,
+      server.exited.then(() => {
+        throw new Error("server exited before watchdog readiness");
+      }),
+      watchdog.exited.then(() => {
+        throw new Error("watchdog exited before readiness");
+      }),
+    ]);
+    const gate = server.child.stdio[3];
+    if (!gate || !("write" in gate) || typeof gate.write !== "function")
+      throw new Error("server gate unavailable");
+    gate.write("start\n");
+    return { server, watchdog };
+  } catch (error) {
+    watchdog.child.stdin?.end();
+    await cleanupOwned([server, watchdog]);
+    throw error;
+  }
 }
 
 async function waitForReady(server: OwnedChild, directory: string, port: number): Promise<void> {
@@ -317,6 +408,7 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
   const burners: OwnedChild[] = [];
   const observations = new Observations();
   let server: OwnedChild | undefined;
+  let watchdog: OwnedChild | undefined;
   let serverExit = false;
   let runtimeConfirmed = false;
   let teardown = false;
@@ -452,8 +544,10 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
       }
     };
     sampleTimer = setInterval(sample, 5000);
-    server = spawnServer(options, root, lifecycle, credential);
-    owned.push(server);
+    const watched = await spawnServer(options, root, lifecycle, credential);
+    server = watched.server;
+    watchdog = watched.watchdog;
+    owned.push(server, watchdog);
     server.child.stdout?.resume();
     server.child.stderr?.resume();
     process.stdout.write(`owned server pid: ${server.child.pid}\n`);
@@ -462,6 +556,10 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
     });
     await Promise.race([
       waitForReady(server, NodePath.join(options.home, "userdata"), options.serverPort),
+      watchdog.failure,
+      watchdog.exited.then(() => {
+        throw new Error("server watchdog exited before readiness");
+      }),
       stopped,
     ]);
     runtimeConfirmed = verifyRuntimeState(
@@ -540,6 +638,10 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
     workloadResult = await Promise.race([
       workload,
       server.failure,
+      watchdog.failure,
+      watchdog.exited.then(() => {
+        throw new Error("server watchdog exited during workload");
+      }),
       burnerFailure,
       stopped,
       server.exited.then(() => {
@@ -587,7 +689,13 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
     if (cpuTimer !== undefined) clearInterval(cpuTimer);
     if (progressTimer !== undefined) clearInterval(progressTimer);
     abort.abort();
-    cleanupSurvivors = await cleanupOwned(owned);
+    cleanupSurvivors = await cleanupOwned(owned.filter((child) => child !== watchdog));
+    if (watchdog) {
+      watchdog.child.stdin?.end();
+      const watchdogExit = await watchdog.exited;
+      if (watchdogExit.code !== 0)
+        errors.push(`server watchdog failed: ${watchdogExit.code ?? watchdogExit.signal}`);
+    }
     if (workload) await workload.catch(() => {});
     detail?.close();
     const cpu = saturation(cpuSamples, cpuGaps);
@@ -681,6 +789,7 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
       ],
       startedAt && drainEndedAt ? { start: startedAt, end: drainEndedAt, disappeared } : undefined,
     );
+    observations.lifecycleGaps.push(...providerGaps);
     const report = {
       ...observations.report(
         [
@@ -712,8 +821,6 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
       serverPid: server?.child.pid ?? null,
       ownedPids: owned.map(({ child }) => child.pid),
       cleanupSurvivors,
-      terminationResidual:
-        "A SIGKILL of the driver can orphan the server; owned PIDs are printed at spawn.",
       window: { start: startedAt, end: endedAt, drainEnd: drainEndedAt },
       loadStartedAt,
       drainEndedAt,
