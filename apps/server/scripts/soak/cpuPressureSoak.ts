@@ -131,10 +131,42 @@ function spawnOwned(
   return { child, exited, failure };
 }
 
-export async function cleanupOwned(children: OwnedChild[]): Promise<void> {
-  for (const { child } of children)
-    if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
-  await Promise.all(children.map(({ exited }) => exited));
+const cleanupInFlight = new WeakMap<OwnedChild, Promise<boolean>>();
+export async function cleanupOwned(children: OwnedChild[]): Promise<number[]> {
+  const results = await Promise.all(
+    children.map((owned) => {
+      const existing = cleanupInFlight.get(owned);
+      if (existing) return existing;
+      const cleanup = (async () => {
+        const { child, exited } = owned;
+        const alive = () =>
+          child.pid !== undefined && child.exitCode === null && child.signalCode === null;
+        const wait = async (ms: number) => {
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          try {
+            await Promise.race([
+              exited,
+              new Promise<void>((resolve) => {
+                timer = setTimeout(resolve, ms);
+              }),
+            ]);
+          } finally {
+            if (timer !== undefined) clearTimeout(timer);
+          }
+        };
+        if (alive()) child.kill("SIGTERM");
+        if (alive()) await wait(10_000);
+        if (alive()) child.kill("SIGKILL");
+        if (alive()) await wait(1_000);
+        return alive();
+      })();
+      cleanupInFlight.set(owned, cleanup);
+      return cleanup;
+    }),
+  );
+  return children.flatMap((owned, index) =>
+    results[index] && owned.child.pid !== undefined ? [owned.child.pid] : [],
+  );
 }
 
 function spawnServer(
@@ -261,6 +293,27 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
   const abort = new AbortController();
   const credential = NodeCrypto.randomBytes(32).toString("hex");
   const errors: string[] = [];
+  let cleanupSurvivors: number[] = [];
+  let rejectStop: (reason: Error) => void = () => {};
+  const stopped = new Promise<never>((_, reject) => {
+    rejectStop = reject;
+  });
+  void stopped.catch(() => {});
+  let stopping = false;
+  const stop = (reason: string) => {
+    if (stopping) return;
+    stopping = true;
+    abort.abort();
+    rejectStop(new Error(reason));
+  };
+  const onSignal = (signal: NodeJS.Signals) => stop(`driver received ${signal}`);
+  const onException = (error: Error) => stop(`driver uncaught exception: ${error.message}`);
+  const onRejection = (error: unknown) => stop(`driver unhandled rejection: ${String(error)}`);
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
+  process.on("SIGHUP", onSignal);
+  process.on("uncaughtException", onException);
+  process.on("unhandledRejection", onRejection);
   let detail: DetailWriter | undefined;
   let sampleTimer: ReturnType<typeof setInterval> | undefined;
   let progressTimer: ReturnType<typeof setInterval> | undefined;
@@ -320,7 +373,10 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
     void server.exited.then(() => {
       if (!teardown) serverExit = true;
     });
-    await waitForReady(server, NodePath.join(options.home, "userdata"), options.serverPort);
+    await Promise.race([
+      waitForReady(server, NodePath.join(options.home, "userdata"), options.serverPort),
+      stopped,
+    ]);
     runtimeConfirmed = verifyRuntimeState(
       NodePath.join(options.home, "userdata"),
       server.child.pid,
@@ -358,7 +414,10 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
         for (let i = 0; i < 2 * NodeOS.availableParallelism(); i++) {
           const burner = spawnOwned(
             process.execPath,
-            [NodeURL.fileURLToPath(new URL("./burner.ts", import.meta.url))],
+            [
+              NodeURL.fileURLToPath(new URL("./burner.ts", import.meta.url)),
+              String(options.durationMs + 60_000),
+            ],
             { cwd: root, stdio: "ignore" },
           );
           burners.push(burner);
@@ -390,6 +449,7 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
       workload,
       server.failure,
       burnerFailure,
+      stopped,
       server.exited.then(() => {
         throw new Error("server exited during workload");
       }),
@@ -432,7 +492,7 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
     if (cpuTimer !== undefined) clearInterval(cpuTimer);
     if (progressTimer !== undefined) clearInterval(progressTimer);
     abort.abort();
-    await cleanupOwned(owned);
+    cleanupSurvivors = await cleanupOwned(owned);
     if (workload) await workload.catch(() => {});
     detail?.close();
     const cpu = saturation(cpuSamples, cpuGaps);
@@ -506,6 +566,7 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
       home: options.home,
       serverPid: server?.child.pid ?? null,
       ownedPids: owned.map(({ child }) => child.pid),
+      cleanupSurvivors,
       window: { start: startedAt, end: endedAt, drainEnd: drainEndedAt },
       selfCheck,
       telemetry: { notes: telemetryNotes, detailTruncated: detail?.truncated ?? false },
@@ -530,6 +591,11 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
     };
     NodeFS.writeSync(reportFd, `${JSON.stringify(report, null, 2)}\n`);
     NodeFS.closeSync(reportFd);
+    process.off("SIGINT", onSignal);
+    process.off("SIGTERM", onSignal);
+    process.off("SIGHUP", onSignal);
+    process.off("uncaughtException", onException);
+    process.off("unhandledRejection", onRejection);
   }
 }
 
