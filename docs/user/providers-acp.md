@@ -99,7 +99,8 @@ including when another client performs the import.
 
 The thread keeps the native session's title and last-update value as provider metadata without
 overwriting a title you set in GOAT. Agents that report ACP context usage drive the composer's
-context meter and cumulative cost metadata. Text resources and links render as assistant output;
+context meter and cumulative cost metadata. To enable the meter if hidden, see
+[commands and skills](./composer.md#commands-and-skills). Text resources and links render as assistant output;
 binary resources, images, and audio that GOAT cannot render yet appear as explicit placeholders
 instead of disappearing.
 

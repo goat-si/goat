@@ -304,7 +304,10 @@ tasks they delegate. Turn it off for every project, or for one project, in **Set
 Integrations → Agent tools**; on mobile, under **Agent behavior**.
 
 Send `/compact` in an existing conversation to reduce context usage when the
-provider supports it. Web and desktop also offer compaction from the context meter.
+provider supports it. On web and desktop, the context meter is enabled by default and appears
+when the provider reports usage. To enable it if hidden, open **Settings → General → Legacy →
+Context window indicator (legacy)**. Open the meter for usage details and **Compact context**
+when the provider supports compaction.
 
 Claude instances can also compact idle threads for you. See
 [compact long conversations](./providers-claude.md#compact-long-conversations).
