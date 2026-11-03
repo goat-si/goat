@@ -216,7 +216,9 @@ export const layerAppServerClientFactory: Layer.Layer<
             cause,
           });
         // A process left by an earlier server run may still hold this provider's threads.
-        yield* detached.ensureNotBlocked(input.instanceId).pipe(Effect.mapError(openError));
+        yield* detached
+          .ensureNotBlocked(input.instanceId, input.providerSessionId)
+          .pipe(Effect.mapError(openError));
         const environment = {
           ...codexAppServerEnvironment(input.environment),
           ...(input.settings.homePath ? { CODEX_HOME: input.settings.homePath } : {}),
@@ -247,14 +249,36 @@ export const layerAppServerClientFactory: Layer.Layer<
         const survivor = Option.isSome(survivors)
           ? yield* survivors.value.get(input.instanceId, input.threadId)
           : undefined;
-        const records = new Set(yield* detached.listPreservedForInstance(input.instanceId));
-        if (survivor !== undefined) records.add(survivor.recordName);
+        const records = new Set(
+          yield* detached.listPreservedForSession(input.instanceId, input.providerSessionId),
+        );
+        if (survivor !== undefined) {
+          // One native thread must never be loaded by two sessions' processes.
+          const owner = Option.isNone(projections)
+            ? undefined
+            : yield* projections.value.getThreadRecords(input.threadId, ["providerThreads"]).pipe(
+                Effect.map(
+                  (thread) =>
+                    thread.providerThreads.find(
+                      (item) =>
+                        item.providerInstanceId === input.instanceId &&
+                        item.nativeThreadRef?.nativeId === survivor.nativeThreadId,
+                    )?.providerSessionId,
+                ),
+                Effect.mapError(openError),
+              );
+          if (owner !== input.providerSessionId)
+            return yield* openError(
+              "The Codex turn from before the restart runs in another session.",
+            );
+          records.add(survivor.recordName);
+        }
         if (records.size > 1)
           return yield* openError("Multiple retained Codex processes prevent a safe connection.");
         const recordName = [...records][0];
         if (recordName !== undefined) {
           const existing = yield* detached
-            .connectExisting(input.instanceId, recordName)
+            .connectExisting(input.instanceId, recordName, input.providerSessionId)
             .pipe(Effect.mapError(openError));
           const context = yield* Layer.build(
             CodexClient.layerMessageChannel(existing.channel, clientOptions),
@@ -282,6 +306,7 @@ export const layerAppServerClientFactory: Layer.Layer<
           const opened = yield* detached
             .open({
               instanceId: input.instanceId,
+              providerSessionId: input.providerSessionId,
               cwd: launch.cwd,
               env: launch.env,
               command: (socketPath) =>
@@ -314,7 +339,9 @@ export const layerAppServerClientFactory: Layer.Layer<
             );
           // A detached attempt that could not be stopped must not be bypassed by a stdio spawn.
           if (opened._tag === "None")
-            yield* detached.ensureNotBlocked(input.instanceId).pipe(Effect.mapError(openError));
+            yield* detached
+              .ensureNotBlocked(input.instanceId, input.providerSessionId)
+              .pipe(Effect.mapError(openError));
           if (opened._tag === "Some") {
             const context = yield* Layer.build(
               CodexClient.layerMessageChannel(opened.value.channel, clientOptions),

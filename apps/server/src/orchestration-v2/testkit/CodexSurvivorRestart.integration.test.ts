@@ -240,6 +240,8 @@ const runRestartScenario = (
             stderrMode: "discard",
           },
         ]),
+        // The record predates sessions; startup assigns it the session its running turn uses.
+        assignSession: () => Effect.void,
         preserveForRecovery: () => Effect.void.pipe(Effect.as(undefined)),
       });
       const shared = Layer.merge(

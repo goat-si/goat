@@ -6,7 +6,7 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { assert, it, vi } from "@effect/vitest";
-import { ProviderInstanceId, ThreadId } from "@goat/contracts";
+import { ProviderInstanceId, ProviderSessionId, ThreadId } from "@goat/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -23,6 +23,7 @@ import {
 } from "./CodexDetachedAppServer.ts";
 
 const socketPath = "/tmp/goat-test/codex/unique.sock";
+const anySession = ProviderSessionId.make("session");
 const record = {
   version: 1 as const,
   instanceId: "codex-instance",
@@ -204,7 +205,7 @@ it.effect(
         assert.deepEqual(signals, []);
         assert.deepEqual(warnings, [[1235]]);
         assert.equal(
-          (yield* service.ensureNotBlocked(record.instanceId).pipe(Effect.exit))._tag,
+          (yield* service.ensureNotBlocked(record.instanceId, anySession).pipe(Effect.exit))._tag,
           "Failure",
         );
         assert.deepEqual((yield* Effect.promise(() => NodeFSP.readdir(dir))).sort(), [
@@ -307,14 +308,16 @@ it.effect("a failed process lookup blocks opens until the stale group is demonst
       });
       const outcomes = yield* service.cleanup;
       assert.equal(outcomes[0]?.outcome, "blocked");
-      const error = yield* service.ensureNotBlocked(record.instanceId).pipe(Effect.flip);
+      const error = yield* service
+        .ensureNotBlocked(record.instanceId, anySession)
+        .pipe(Effect.flip);
       assert.include(String(error), "could not be stopped");
       assert.deepEqual((yield* Effect.promise(() => NodeFSP.readdir(dir))).sort(), [
         `${record.name}.json`,
         `${record.name}.pid`,
       ]);
       unavailable = false;
-      yield* service.ensureNotBlocked(record.instanceId);
+      yield* service.ensureNotBlocked(record.instanceId, anySession);
       assert.deepEqual(yield* Effect.promise(() => NodeFSP.readdir(dir)), []);
     }),
   ),
@@ -444,6 +447,7 @@ const openService = (
 
 const openInput = {
   instanceId: "codex",
+  providerSessionId: anySession,
   command: (socket: string) =>
     Effect.succeed({ command: "codex", args: ["app-server", "--listen", "unix://" + socket] }),
 };
@@ -622,10 +626,10 @@ it.effect("an unreadable record blocks every Codex provider until it is resolved
         signalGroup: () => Effect.die("unexpected signal"),
       });
       assert.equal((yield* service.cleanup)[0]?.outcome, "blocked");
-      const error = yield* service.ensureNotBlocked("any-provider").pipe(Effect.flip);
+      const error = yield* service.ensureNotBlocked("any-provider", anySession).pipe(Effect.flip);
       assert.include(error.message, "unreadable");
       yield* Effect.promise(() => NodeFSP.rm(broken));
-      yield* service.ensureNotBlocked("any-provider");
+      yield* service.ensureNotBlocked("any-provider", anySession);
     }),
   ),
 );
@@ -647,7 +651,7 @@ it.effect("invalid record shapes block every provider", () =>
         yield* Effect.promise(() => NodeFSP.writeFile(path, JSON.stringify(value)));
         assert.equal((yield* service.cleanup)[0]?.outcome, "blocked");
         for (const provider of ["first", "second"]) {
-          const error = yield* service.ensureNotBlocked(provider).pipe(Effect.flip);
+          const error = yield* service.ensureNotBlocked(provider, anySession).pipe(Effect.flip);
           assert.include(error.message, "unreadable");
         }
       }
@@ -672,7 +676,7 @@ it.effect("a cleanup defect leaves all providers blocked", () =>
       });
       yield* service.cleanup.pipe(Effect.exit);
       for (const provider of ["first", "second"]) {
-        const error = yield* service.ensureNotBlocked(provider).pipe(Effect.flip);
+        const error = yield* service.ensureNotBlocked(provider, anySession).pipe(Effect.flip);
         assert.include(error.message, "cleanup did not complete");
       }
     }),

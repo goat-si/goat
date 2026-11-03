@@ -1,8 +1,8 @@
 import { ProviderInstanceId } from "@goat/contracts";
-import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import { servesSession } from "./CodexRecordSessions.ts";
 import type * as CodexSurvivors from "./CodexSurvivors.ts";
 import type * as CodexDetached from "./CodexDetachedAppServerLive.ts";
 import type * as ProjectionStore from "../orchestration-v2/ProjectionStore.ts";
@@ -24,13 +24,17 @@ export const attachGoalOnlySessions = Effect.fn("CodexGoalSessionRecovery.attach
     )
       return;
     const bindings = yield* input.survivors.list;
-    const processed = new Set<string>();
     for (const record of records) {
-      if ((record.goalBlocks?.length ?? 0) === 0 || processed.has(record.instanceId)) continue;
-      processed.add(record.instanceId);
-      if (records.filter((entry) => entry.instanceId === record.instanceId).length !== 1) {
-        yield* Effect.logWarning("Multiple Codex records prevent goal session recovery", {
+      if ((record.goalBlocks?.length ?? 0) === 0) continue;
+      const providerSessionId = record.providerSessionId;
+      if (
+        providerSessionId === undefined ||
+        records.filter((entry) => servesSession(entry, record.instanceId, providerSessionId))
+          .length !== 1
+      ) {
+        yield* Effect.logWarning("Codex goal session recovery needs one record per session", {
           instanceId: record.instanceId,
+          recordName: record.name,
         });
         continue;
       }
@@ -63,9 +67,12 @@ export const attachGoalOnlySessions = Effect.fn("CodexGoalSessionRecovery.attach
               thread.providerInstanceId === instanceId &&
               thread.nativeThreadRef?.nativeId === goal.nativeThreadId,
           );
-          const providerSessionId =
-            providerThread?.providerSessionId ??
-            IdAllocator.derive.providerSession({ providerInstanceId: instanceId });
+          // Opening another session here would load this native thread in a second process.
+          if (
+            providerThread?.providerSessionId != null &&
+            providerThread.providerSessionId !== providerSessionId
+          )
+            return false;
           const oldSession = projection.providerSessions.find(
             (session) => session.id === providerSessionId,
           );

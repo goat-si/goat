@@ -13,7 +13,12 @@ import * as NodeUtil from "node:util";
 import type * as CodexClient from "effect-codex-app-server/client";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
-import type { ProviderInstanceId, ProviderDriverKind, ProviderTurnId } from "@goat/contracts";
+import type {
+  ProviderInstanceId,
+  ProviderDriverKind,
+  ProviderSessionId,
+  ProviderTurnId,
+} from "@goat/contracts";
 import type {
   CodexGoalBlock,
   CodexInstanceRecordKey,
@@ -55,9 +60,13 @@ export const makeSurvivorNotifications = Effect.fn("CodexSurvivorContinuation.no
     readonly client: CodexClient.CodexAppServerClient["Service"];
     readonly survivors: Option.Option<CodexSurvivors["Service"]>;
     readonly instanceId: ProviderInstanceId;
+    /** Keeps only the work of the process that serves this session. */
+    readonly providerSessionId?: ProviderSessionId;
     readonly scope: Scope.Scope;
   }) {
     const { client } = input;
+    const serves = (record: CodexInstanceRecordKey) =>
+      input.providerSessionId === undefined || record.providerSessionId === input.providerSessionId;
     const waiting: SurvivorWaiting = new Map();
     const tracked: SurvivorWaiting = new Map();
     const goals = new Map<
@@ -68,12 +77,13 @@ export const makeSurvivorNotifications = Effect.fn("CodexSurvivorContinuation.no
     if (Option.isSome(input.survivors)) {
       const service = input.survivors.value;
       for (const goal of yield* service.listGoalBlocksByInstance(input.instanceId)) {
+        if (!serves(goal.record)) continue;
         const group = goals.get(goal.block.nativeThreadId) ?? [];
         group.push(goal);
         goals.set(goal.block.nativeThreadId, group);
       }
       for (const binding of yield* service.list) {
-        if (binding.instanceId !== input.instanceId) continue;
+        if (binding.instanceId !== input.instanceId || !serves(binding)) continue;
         const entry = {
           nativeTurnId: binding.nativeTurnId,
           signals: yield* Queue.bounded<SurvivorSignal>(64),

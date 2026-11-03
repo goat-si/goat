@@ -38,7 +38,13 @@ it.effect.each(
     const detached = Layer.mock(Detached.CodexDetachedAppServers)({
       socketTransportEnabled: true,
       loadRecords: Effect.succeed([
-        { name: "record", instanceId: "codex", state: "running", stderrMode: "discard" },
+        {
+          name: "record",
+          instanceId: "codex",
+          providerSessionId: "session",
+          state: "running",
+          stderrMode: "discard",
+        },
       ] as never),
       retainOnClose: (name) =>
         Effect.sync(() => {
@@ -49,7 +55,9 @@ it.effect.each(
     const threadId = ThreadId.make("retention-thread");
     const projection = {
       thread: { id: threadId, projectId: "project" },
-      providerThreads: [{ id: "pt", driver: "codex", cloudTask: undefined }],
+      providerThreads: [
+        { id: "pt", driver: "codex", providerSessionId: "session", cloudTask: undefined },
+      ],
       runs: [
         {
           id: RunId.make("run"),
@@ -133,15 +141,27 @@ const twoRecordShutdown = (
   const threads = { kept: ThreadId.make("kept-thread"), other: ThreadId.make("other-thread") };
   const detached = Layer.mock(Detached.CodexDetachedAppServers)({
     socketTransportEnabled: true,
-    loadRecords: Effect.succeed([
-      { name: "kept", instanceId: "codex-kept", state: "running", stderrMode: "discard" },
-      { name: "other", instanceId: "codex-other", state: "running", stderrMode: "discard" },
-    ] as never),
+    loadRecords: Effect.succeed(
+      (["kept", "other"] as const).map((name) => ({
+        name,
+        instanceId: `codex-${name}`,
+        providerSessionId: `session-${name}`,
+        state: "running",
+        stderrMode: "discard",
+      })) as never,
+    ),
     retainOnClose,
   });
   const projection = (name: keyof typeof threads) => ({
     thread: { id: threads[name], projectId: "project" },
-    providerThreads: [{ id: `pt-${name}`, driver: "codex", cloudTask: undefined }],
+    providerThreads: [
+      {
+        id: `pt-${name}`,
+        driver: "codex",
+        providerSessionId: `session-${name}`,
+        cloudTask: undefined,
+      },
+    ],
     providerSessions: [],
     runs: [
       {

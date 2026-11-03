@@ -42,7 +42,7 @@ it.effect("a socket attempt that leaves an unstoppable process refuses the stdio
           Layer.mock(CodexDetachedAppServers)({
             socketTransportEnabled: true,
             socketTransportMode: "socket",
-            listPreservedForInstance: () => Effect.succeed([]),
+            listPreservedForSession: () => Effect.succeed([]),
             open: () => Effect.fail(new CodexDetachedAppServerError({ detail: "not ready" })),
             ensureNotBlocked: () =>
               Effect.suspend(() =>
@@ -94,7 +94,7 @@ it.effect("socket and stdio launches both cap Codex's jemalloc arenas", () =>
           Layer.mock(CodexDetachedAppServers)({
             socketTransportEnabled: true,
             socketTransportMode: "socket",
-            listPreservedForInstance: () => Effect.succeed([]),
+            listPreservedForSession: () => Effect.succeed([]),
             ensureNotBlocked: () => Effect.void,
             open: (input) =>
               Effect.sync(() => launchEnvs.push(input.env)).pipe(
@@ -170,7 +170,7 @@ it.effect("automatic transport uses the project survival setting before opening 
           Layer.mock(CodexDetachedAppServers)({
             socketTransportEnabled: false,
             socketTransportMode: "auto",
-            listPreservedForInstance: () => Effect.succeed([]),
+            listPreservedForSession: () => Effect.succeed([]),
             ensureNotBlocked: () => Effect.void,
             open: () =>
               Effect.sync(() => {
@@ -214,7 +214,18 @@ it.effect("an identified survivor never falls back to a new Codex process", () =
       Layer.provide(
         Layer.mergeAll(
           Layer.mock(ServerSettings.ServerSettingsService)({}),
-          Layer.mock(ProjectionStore.ProjectionStoreV2)({}),
+          Layer.mock(ProjectionStore.ProjectionStoreV2)({
+            getThreadRecords: () =>
+              Effect.succeed({
+                providerThreads: [
+                  {
+                    providerInstanceId: instanceId,
+                    providerSessionId: ProviderSessionId.make("session"),
+                    nativeThreadRef: { nativeId: "native-thread" },
+                  },
+                ],
+              } as never),
+          }),
           Layer.mock(CodexSurvivors.CodexSurvivors)({
             get: () =>
               Effect.succeed({
@@ -229,7 +240,7 @@ it.effect("an identified survivor never falls back to a new Codex process", () =
           Layer.mock(CodexDetachedAppServers)({
             socketTransportEnabled: true,
             socketTransportMode: "socket",
-            listPreservedForInstance: () => Effect.succeed([]),
+            listPreservedForSession: () => Effect.succeed([]),
             ensureNotBlocked: () => Effect.void,
             connectExisting: () =>
               Effect.sync(() => {
@@ -303,7 +314,7 @@ it.effect(
               socketTransportEnabled: true,
               socketTransportMode: "socket",
               ensureNotBlocked: () => Effect.void,
-              listPreservedForInstance: () => Effect.succeed(["codex-abcdefabcdef"]),
+              listPreservedForSession: () => Effect.succeed(["codex-abcdefabcdef"]),
               connectExisting: (_instance, name) =>
                 Effect.sync(() => {
                   connected++;
@@ -364,7 +375,7 @@ it.effect("a preserved process reconnects after its last goal block clears", () 
             socketTransportEnabled: true,
             socketTransportMode: "socket",
             ensureNotBlocked: () => Effect.void,
-            listPreservedForInstance: () => Effect.succeed(["codex-abcdefabcdef"]),
+            listPreservedForSession: () => Effect.succeed(["codex-abcdefabcdef"]),
             connectExisting: () =>
               Effect.sync(() => {
                 connected++;

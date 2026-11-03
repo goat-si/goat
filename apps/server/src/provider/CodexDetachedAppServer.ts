@@ -2,7 +2,7 @@
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
-import { ProviderInstanceId, ThreadId } from "@goat/contracts";
+import { type ProviderInstanceId, ProviderSessionId, ThreadId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
@@ -11,6 +11,7 @@ import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Scope from "effect/Scope";
 import type { CodexAppServerMessageChannel } from "effect-codex-app-server/client";
+import { blocksSession, recordKey, servesSession } from "./CodexRecordSessions.ts";
 import type {
   CodexGoalBlock,
   CodexInstanceRecordKey,
@@ -32,6 +33,7 @@ export interface DetachedProcess {
 export interface DetachedAppServerRecord {
   readonly version: 1;
   readonly instanceId: string;
+  readonly providerSessionId?: ProviderSessionId | undefined;
   readonly name: string;
   readonly socketPath: string;
   readonly pgid?: number | undefined;
@@ -46,6 +48,7 @@ export interface DetachedAppServerRecord {
 const DetachedRecordSchema = Schema.Struct({
   version: Schema.Literal(1),
   instanceId: Schema.NonEmptyString,
+  providerSessionId: Schema.optional(ProviderSessionId),
   name: Schema.NonEmptyString,
   socketPath: Schema.NonEmptyString,
   pgid: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))),
@@ -212,6 +215,7 @@ export interface DetachedAppServersDependencies {
 
 export interface DetachedOpenInput {
   readonly instanceId: string;
+  readonly providerSessionId: ProviderSessionId;
   /** Builds the wrapped launch once the socket path is known (the path goes into argv). */
   readonly command: (
     socketPath: string,
@@ -285,6 +289,7 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
             ? record
             : {
                 ...record,
+                providerSessionId: record.providerSessionId ?? previous.providerSessionId,
                 stopObligations: previous.stopObligations,
                 goalBlocks: previous.goalBlocks,
               };
@@ -303,6 +308,7 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
         await NodeFSP.rm(files.pid, { force: true });
         await NodeFSP.rm(files.stderr, { force: true });
         fences.delete(record.name);
+        recoveryRetained.delete(record.name);
       }),
     );
 
@@ -510,6 +516,11 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
       ...record,
       stopObligations: (record.stopObligations ?? []).filter((entry) => !sameStop(entry, stop)),
     }));
+  const assignSession = (key: CodexInstanceRecordKey, providerSessionId: ProviderSessionId) =>
+    mutateFence(key, (record) => ({
+      ...record,
+      providerSessionId: record.providerSessionId ?? providerSessionId,
+    })).pipe(Effect.asVoid);
   const recordGoalBlock = (key: CodexInstanceRecordKey, goal: CodexGoalBlock) =>
     Effect.sync(() => {
       failedFences.set(goalKey(key, goal), goal.threadId);
@@ -545,13 +556,7 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
       [...fences.values()].flatMap((record) =>
         (record.goalBlocks ?? [])
           .filter((block) => block.threadId === threadId)
-          .map((block) => ({
-            record: {
-              instanceId: ProviderInstanceId.make(record.instanceId),
-              recordName: record.name,
-            },
-            block,
-          })),
+          .map((block) => ({ record: recordKey(record), block })),
       ),
     );
   const listGoalBlocksByInstance = Effect.fn("CodexDetachedAppServers.listGoalBlocksByInstance")(
@@ -560,10 +565,7 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
         [...fences.values()]
           .filter((record) => record.instanceId === instanceId)
           .flatMap((record) =>
-            (record.goalBlocks ?? []).map((block) => ({
-              record: { instanceId, recordName: record.name },
-              block,
-            })),
+            (record.goalBlocks ?? []).map((block) => ({ record: recordKey(record), block })),
           ),
       ),
   );
@@ -572,13 +574,7 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
       [...fences.values()].flatMap((record) =>
         (record.stopObligations ?? [])
           .filter((block) => block.threadId === threadId)
-          .map((block) => ({
-            record: {
-              instanceId: ProviderInstanceId.make(record.instanceId),
-              recordName: record.name,
-            },
-            block,
-          })),
+          .map((block) => ({ record: recordKey(record), block })),
       ),
     );
   const hasGoalBlock = (threadId: ThreadId) =>
@@ -688,6 +684,7 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
 
   const ensureNotBlocked = Effect.fn("CodexDetachedAppServers.ensureNotBlocked")(function* (
     instanceId: string,
+    providerSessionId: ProviderSessionId,
   ) {
     const global = yield* retryGlobalBlock;
     if (global !== undefined)
@@ -697,7 +694,7 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
           " GOAT will not start Codex until it can confirm no process from before the restart is still running.",
       });
     for (const record of (yield* Ref.get(blocked)).values()) {
-      if (record.instanceId !== instanceId) continue;
+      if (!blocksSession(record, instanceId, providerSessionId)) continue;
       const outcome = yield* cleanupRecord(record).pipe(
         Effect.orElseSucceed(() => "blocked" as const),
       );
@@ -709,6 +706,15 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
             " is still running and could not be stopped. GOAT will not start Codex for this provider until it stops.",
         });
     }
+    const unassigned = [...recoveryRetained].some((name) => {
+      const record = fences.get(name);
+      return record?.instanceId === instanceId && record.providerSessionId === undefined;
+    });
+    if (unassigned)
+      return yield* new CodexDetachedAppServerError({
+        detail:
+          "A Codex process from before the restart is still running work GOAT cannot assign to one session. GOAT will not start Codex for this provider until it stops.",
+      });
   }, Effect.asVoid);
 
   const ensureAdmission = Effect.fn("CodexDetachedAppServers.ensureAdmission")(function* (
@@ -781,6 +787,7 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
     const spawning: DetachedAppServerRecord = {
       version: 1,
       instanceId: input.instanceId,
+      providerSessionId: input.providerSessionId,
       name,
       socketPath,
       bootId,
@@ -809,6 +816,7 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
     launching.delete(name);
     yield* Effect.addFinalizer(() =>
       close(running).pipe(
+        Effect.catch(() => markBlocked(running)),
         Effect.ignore,
         Effect.ensuring(
           Effect.sync(() => {
@@ -864,16 +872,24 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
     recoveryRetained.add(name);
   });
 
-  const listPreservedForInstance = Effect.fn("CodexDetachedAppServers.listPreservedForInstance")(
-    (instanceId: string) =>
+  const listPreservedForSession = Effect.fn("CodexDetachedAppServers.listPreservedForSession")(
+    (instanceId: string, providerSessionId: ProviderSessionId) =>
       Effect.sync(() =>
-        [...recoveryRetained].filter((name) => fences.get(name)?.instanceId === instanceId),
+        [...recoveryRetained].filter((name) => {
+          const record = fences.get(name);
+          return record !== undefined && servesSession(record, instanceId, providerSessionId);
+        }),
       ),
   );
 
+  /**
+   * Without a session this is a status probe. A session adopts the process: closing it outside
+   * shutdown stops the process like an owned one, unless a goal still runs there.
+   */
   const connectExisting = Effect.fn("CodexDetachedAppServers.connectExisting")(function* (
     instanceId: string,
     name: string,
+    providerSessionId?: ProviderSessionId,
   ) {
     const record = fences.get(name);
     const global = yield* Ref.get(globallyBlocked);
@@ -882,6 +898,7 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
       record?.instanceId !== instanceId ||
       record.stderrMode !== "discard" ||
       record.state !== "running" ||
+      (providerSessionId !== undefined && !servesSession(record, instanceId, providerSessionId)) ||
       deps.connect === undefined
     )
       return yield* new CodexDetachedAppServerError({
@@ -900,9 +917,15 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
       });
     yield* Effect.addFinalizer(() =>
       Effect.gen(function* () {
-        if (!(yield* Ref.get(shuttingDown)) || adoptedClosed.has(name)) return;
+        const shutdown = yield* Ref.get(shuttingDown);
+        const current = { ...(fences.get(name) ?? record), pgid: after.pgid };
+        if (adoptedClosed.has(name) || (!shutdown && providerSessionId === undefined)) return;
+        if (!shutdown && (current.goalBlocks?.length ?? 0) > 0) return;
         adoptedClosed.add(name);
-        yield* close(record).pipe(Effect.ignore);
+        yield* close(current).pipe(
+          Effect.catch(() => markBlocked(current)),
+          Effect.ignore,
+        );
       }),
     );
     return { channel, record: { ...record, pgid: after.pgid } };
@@ -943,10 +966,11 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
     classifyRecord,
     connectExisting,
     preserveForRecovery,
-    listPreservedForInstance,
+    listPreservedForSession,
     retainOnClose,
     recordStopObligation,
     clearStopObligation,
+    assignSession,
     getStopObligations,
     stopFencedThreads,
     getGoalBlocks,

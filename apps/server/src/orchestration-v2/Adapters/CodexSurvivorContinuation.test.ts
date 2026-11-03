@@ -1,8 +1,16 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import { ProviderInstanceId, ThreadId } from "@goat/contracts";
+import * as Option from "effect/Option";
+import * as Scope from "effect/Scope";
+import type * as CodexClient from "effect-codex-app-server/client";
+import { ProviderInstanceId, ProviderSessionId, RunId, ThreadId } from "@goat/contracts";
 import { CodexDetachedAppServerError } from "../../provider/CodexDetachedAppServer.ts";
-import { interruptSurvivor, readSurvivorResult } from "./CodexSurvivorContinuation.ts";
+import type { CodexSurvivors } from "../../provider/CodexSurvivors.ts";
+import {
+  interruptSurvivor,
+  makeSurvivorNotifications,
+  readSurvivorResult,
+} from "./CodexSurvivorContinuation.ts";
 
 it.effect("deduplicates native items repeated across history pages", () =>
   Effect.gen(function* () {
@@ -115,4 +123,56 @@ it.effect("a survivor interrupt is sent only after its stop obligation is durabl
     );
     assert.deepEqual(events, ["record", "interrupt"]);
   }),
+);
+
+it.effect("a session tracks only its own process's survivor and resumes only its goals", () =>
+  Effect.gen(function* () {
+    const instanceId = ProviderInstanceId.make("codex");
+    const record = (key: string) => ({
+      instanceId,
+      recordName: "codex-" + key.repeat(12),
+      providerSessionId: ProviderSessionId.make("session-" + key),
+    });
+    const binding = (key: string) => ({
+      ...record(key),
+      threadId: ThreadId.make("survivor-" + key),
+      sourceRunId: RunId.make("run-" + key),
+      nativeThreadId: "native-survivor-" + key,
+      nativeTurnId: "turn-" + key,
+    });
+    const goal = (key: string) => ({
+      record: record(key),
+      block: { threadId: ThreadId.make("goal-" + key), nativeThreadId: "native-goal-" + key },
+    });
+    const resumed: string[] = [];
+    const service = {
+      list: Effect.succeed([binding("a"), binding("b")]),
+      listGoalBlocksByInstance: () => Effect.succeed([goal("a"), goal("b")]),
+      getGoalBlocks: (threadId: ThreadId) =>
+        Effect.succeed([goal("a"), goal("b")].filter((entry) => entry.block.threadId === threadId)),
+      getStopObligations: () => Effect.succeed([]),
+    } as unknown as CodexSurvivors["Service"];
+    const client = {
+      setRequestGuard: () => Effect.void,
+      handleServerNotification: () => Effect.void,
+      request: () => Effect.succeed({ data: [], nextCursor: null, goal: { status: "active" } }),
+      raw: {
+        request: (method: string, params: { readonly threadId: string }) =>
+          Effect.sync(() => {
+            if (method === "thread/resume") resumed.push(params.threadId);
+            return {};
+          }),
+      },
+    } as unknown as CodexClient.CodexAppServerClient["Service"];
+    const notifications = yield* makeSurvivorNotifications({
+      client,
+      survivors: Option.some(service),
+      instanceId,
+      providerSessionId: ProviderSessionId.make("session-a"),
+      scope: yield* Scope.Scope,
+    });
+    assert.deepEqual([...notifications.waiting.keys()], ["native-survivor-a"]);
+    yield* notifications.resumeGoalThreads;
+    assert.deepEqual(resumed, ["native-goal-a"]);
+  }).pipe(Effect.scoped),
 );
