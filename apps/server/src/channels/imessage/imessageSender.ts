@@ -2,6 +2,7 @@
 import * as NodeChildProcess from "node:child_process";
 import * as NodeTimers from "node:timers";
 
+import { guardChild } from "@goat/shared/errorGuards";
 import { ChannelGatewayError } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
@@ -43,11 +44,14 @@ export function makeOsascriptImessageSender(
         }
         let child: NodeChildProcess.ChildProcessWithoutNullStreams;
         try {
-          child = (input.spawnProcess ?? NodeChildProcess.spawn)(
-            "/usr/bin/osascript",
-            ["-l", "AppleScript", "-", chatGuid, text],
-            { shell: false, stdio: ["pipe", "pipe", "pipe"] },
-          ) as NodeChildProcess.ChildProcessWithoutNullStreams;
+          child = guardChild(
+            (input.spawnProcess ?? NodeChildProcess.spawn)(
+              "/usr/bin/osascript",
+              ["-l", "AppleScript", "-", chatGuid, text],
+              { shell: false, stdio: ["pipe", "pipe", "pipe"] },
+            ) as NodeChildProcess.ChildProcessWithoutNullStreams,
+            () => finish({ outcome: started ? "unknown" : "not_sent", code: "unknown" }),
+          );
         } catch {
           resolve({ outcome: "not_sent", code: "unknown" });
           return;
@@ -77,12 +81,6 @@ export function makeOsascriptImessageSender(
           stderr = (stderr + chunk.toString("utf8")).slice(-4096);
         });
         child.stdout.on("data", () => {});
-        child.stdin.once("error", () =>
-          finish({ outcome: started ? "unknown" : "not_sent", code: "unknown" }),
-        );
-        child.once("error", () =>
-          finish({ outcome: started ? "unknown" : "not_sent", code: "unknown" }),
-        );
         child.once("close", (code) => {
           if (done) return;
           if (code === 0) {

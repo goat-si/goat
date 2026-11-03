@@ -8,6 +8,7 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodeHttp from "node:http";
 import * as NodePath from "node:path";
 import * as NodeUtil from "node:util";
+import { guardChild, type ErrorRoute } from "@goat/shared/errorGuards";
 
 import {
   adoptLegacyEnv,
@@ -785,22 +786,24 @@ export class Launcher {
         : {}),
     };
     const spawnArguments = runtimeSpawnArguments(paths);
-    const child = NodeChildProcess.spawn(spawnArguments.command, spawnArguments.args, {
-      env: {
-        ...this.#environment,
-        ...withLegacyEnvNames({ [SERVICE_LAUNCHER_CONTEXT_ENV]: JSON.stringify(context) }),
-      },
-      stdio: ["inherit", "inherit", "inherit", "ipc"],
+    const spawned = Promise.withResolvers<void>();
+    // Fails the start until the child spawns; afterwards an error is queued like its other events.
+    let onChildError: ErrorRoute = spawned.reject;
+    const child = guardChild(
+      NodeChildProcess.spawn(spawnArguments.command, spawnArguments.args, {
+        env: {
+          ...this.#environment,
+          ...withLegacyEnvNames({ [SERVICE_LAUNCHER_CONTEXT_ENV]: JSON.stringify(context) }),
+        },
+        stdio: ["inherit", "inherit", "inherit", "ipc"],
+      }),
+      (error) => onChildError(error),
+    );
+    child.once("spawn", () => {
+      onChildError = (error) => this.#enqueue(() => Promise.reject(error));
+      spawned.resolve();
     });
-    await new Promise<void>((resolve, reject) => {
-      const onError = (error: Error) => reject(error);
-      child.once("error", onError);
-      child.once("spawn", () => {
-        child.removeListener("error", onError);
-        child.on("error", (error) => this.#enqueue(() => Promise.reject(error)));
-        resolve();
-      });
-    });
+    await spawned.promise;
     if (this.#stopping) {
       await terminateChild(child);
       return;

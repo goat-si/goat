@@ -3,6 +3,7 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeOS from "node:os";
 import * as NodeReadlinePromises from "node:readline/promises";
 
+import { guardChild } from "@goat/shared/errorGuards";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { isCommandAvailable, resolveSpawnCommand } from "@goat/shared/shell";
 import * as Config from "effect/Config";
@@ -124,14 +125,14 @@ const runInteractiveSession = (input: {
   readonly cwd: string;
 }) =>
   Effect.callback<number, TriageAgentSpawnError>((resume) => {
-    const child = NodeChildProcess.spawn(input.command, [...input.args], {
-      cwd: input.cwd,
-      // The Windows desktop launcher supplies terminal input through the reopened console.
-      stdio: [interactiveStdin(), "inherit", "inherit"],
-      shell: input.shell,
-    });
-    child.once("error", (cause) =>
-      resume(Effect.fail(new TriageAgentSpawnError({ command: input.command, cause }))),
+    const child = guardChild(
+      NodeChildProcess.spawn(input.command, [...input.args], {
+        cwd: input.cwd,
+        // The Windows desktop launcher supplies terminal input through the reopened console.
+        stdio: [interactiveStdin(), "inherit", "inherit"],
+        shell: input.shell,
+      }),
+      (cause) => resume(Effect.fail(new TriageAgentSpawnError({ command: input.command, cause }))),
     );
     child.once("exit", (code, signal) => resume(Effect.succeed(code ?? (signal === null ? 0 : 1))));
   });

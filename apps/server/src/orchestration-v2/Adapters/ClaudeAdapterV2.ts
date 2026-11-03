@@ -91,6 +91,7 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk/sdk-tools";
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- the SDK takes a Node ChildProcess for the CLI.
 import * as NodeChildProcess from "node:child_process";
+import { guardChild } from "@goat/shared/errorGuards";
 import { parseCliArgs } from "@goat/shared/cliArgs";
 import { fromLenientJson } from "@goat/shared/schemaJson";
 import { AgentScope } from "@goat/shared/AgentScope";
@@ -388,16 +389,19 @@ export function spawnClaudeProcessGroup(
   options: ClaudeSpawnOptions,
   onExit?: () => void,
 ): ClaudeSpawnedProcess {
-  const child = NodeChildProcess.spawn(
-    "/bin/sh",
-    ["-c", CLAUDE_GROUP_WATCH_SCRIPT, "goat-claude", options.command, ...options.args],
-    {
-      cwd: options.cwd,
-      env: options.env,
-      signal: options.signal,
-      stdio: ["pipe", "pipe", "ignore", "pipe"],
-      detached: true,
-    },
+  const child = guardChild(
+    NodeChildProcess.spawn(
+      "/bin/sh",
+      ["-c", CLAUDE_GROUP_WATCH_SCRIPT, "goat-claude", options.command, ...options.args],
+      {
+        cwd: options.cwd,
+        env: options.env,
+        signal: options.signal,
+        stdio: ["pipe", "pipe", "ignore", "pipe"],
+        detached: true,
+      },
+    ),
+    reportedBySdkTransport,
   );
   child.once("exit", () => {
     try {
@@ -1009,13 +1013,16 @@ export const layerQueryRunner: Layer.Layer<
             options.spawnClaudeCodeProcess ??
             ((spawnOptions: ClaudeSpawnOptions) => {
               if (platform !== "win32") return spawnClaudeProcessGroup(spawnOptions, stopScope);
-              const child = NodeChildProcess.spawn(spawnOptions.command, spawnOptions.args, {
-                cwd: spawnOptions.cwd,
-                env: spawnOptions.env,
-                signal: spawnOptions.signal,
-                windowsHide: true,
-                stdio: ["pipe", "pipe", "pipe"],
-              });
+              const child = guardChild(
+                NodeChildProcess.spawn(spawnOptions.command, spawnOptions.args, {
+                  cwd: spawnOptions.cwd,
+                  env: spawnOptions.env,
+                  signal: spawnOptions.signal,
+                  windowsHide: true,
+                  stdio: ["pipe", "pipe", "pipe"],
+                }),
+                reportedBySdkTransport,
+              );
               child.stderr
                 .setEncoding("utf8")
                 .on("data", (chunk: string) => options.stderr?.(chunk));

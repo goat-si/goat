@@ -4,6 +4,7 @@
 // @effect-diagnostics preferSchemaOverJson:off
 import * as NodeChildProcess from "node:child_process";
 import * as NodeReadline from "node:readline";
+import { guardChild } from "@goat/shared/errorGuards";
 
 /**
  * The Linux helper's one engine: a `cua-driver mcp` child. On Linux bare `mcp` owns its runtime
@@ -81,16 +82,19 @@ export async function startDriver(options: {
   readonly expectedVersion: string;
 }): Promise<DriverClient> {
   // Its own process group, so a forced stop reaches anything the driver started.
-  const child = NodeChildProcess.spawn(options.executable, ["mcp"], {
-    stdio: ["pipe", "pipe", "ignore"],
-    env: { ...options.environment },
-    detached: true,
-  });
-  const exited = new Promise<void>((resolve) => {
-    child.once("exit", () => resolve());
-    child.once("error", () => resolve());
-  });
-  child.stdin.on("error", () => undefined);
+  const ended = Promise.withResolvers<void>();
+  const child = guardChild(
+    NodeChildProcess.spawn(options.executable, ["mcp"], {
+      stdio: ["pipe", "pipe", "ignore"],
+      env: { ...options.environment },
+      detached: true,
+    }),
+    () => ended.resolve(),
+    // A driver that stopped reading is gone only once it exits, which resolves ended.
+    () => {},
+  );
+  child.once("exit", () => ended.resolve());
+  const exited = ended.promise;
   const pending = new Map<number, Pending>();
   let gone = false;
   void exited.then(() => {

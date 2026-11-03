@@ -2,6 +2,7 @@
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
+import { guardChild } from "@goat/shared/errorGuards";
 import type { OrchestratorMcpFailure } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -61,13 +62,15 @@ const detach = Effect.fn("ChildOpenCodexStartup.detach")(function* (input: Start
         try {
           NodeFS.mkdirSync(input.opencodexHome, { recursive: true, mode: 0o700 });
           log = NodeFS.openSync(NodePath.join(input.opencodexHome, "goat-start.log"), "a", 0o600);
-          const child = NodeChildProcess.spawn(input.binaryPath, ["start"], {
-            detached: true,
-            shell: false,
-            env: { ...input.environment, OPENCODEX_HOME: input.opencodexHome },
-            stdio: ["ignore", log, log],
-          });
-          child.once("error", reject);
+          const child = guardChild(
+            NodeChildProcess.spawn(input.binaryPath, ["start"], {
+              detached: true,
+              shell: false,
+              env: { ...input.environment, OPENCODEX_HOME: input.opencodexHome },
+              stdio: ["ignore", log, log],
+            }),
+            reject,
+          );
           child.once("spawn", () => {
             child.unref();
             resolve();

@@ -2,6 +2,7 @@
 // Windows cleanup must outlive this executable to delete its directory; scoped ChildProcess kills children on exit.
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
+import { guardChild } from "@goat/shared/errorGuards";
 
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as Console from "effect/Console";
@@ -80,26 +81,27 @@ export const findOwnedLauncher = Effect.fn("cli.uninstall.find_launcher")(functi
 
 // cmd.exe needs verbatim quoting and a literal path, with delayed expansion disabled.
 export function spawnWindowsRemoval(comspec: string, dir: string, onError: (error: Error) => void) {
-  const child = NodeChildProcess.spawn(
-    comspec,
-    [
-      "/d",
-      "/v:off",
-      "/s",
-      "/c",
-      '"ping -n 3 127.0.0.1 >nul & rmdir /s /q "%GOAT_UNINSTALL_RUNTIME%""',
-    ],
-    {
-      env: { ...process.env, GOAT_UNINSTALL_RUNTIME: dir },
-      windowsVerbatimArguments: true,
-      detached: true,
-      stdio: "ignore",
-      windowsHide: true,
-    },
-  );
   // A missing shell fails after spawn returns, when the uninstall has already finished.
-  child.on("error", onError);
-  return child;
+  return guardChild(
+    NodeChildProcess.spawn(
+      comspec,
+      [
+        "/d",
+        "/v:off",
+        "/s",
+        "/c",
+        '"ping -n 3 127.0.0.1 >nul & rmdir /s /q "%GOAT_UNINSTALL_RUNTIME%""',
+      ],
+      {
+        env: { ...process.env, GOAT_UNINSTALL_RUNTIME: dir },
+        windowsVerbatimArguments: true,
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true,
+      },
+    ),
+    onError,
+  );
 }
 
 const removalNotScheduled = (dir: string) =>

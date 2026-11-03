@@ -8,6 +8,7 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodePath from "node:path";
 import * as NodeOS from "node:os";
 
+import { guardChild } from "@goat/shared/errorGuards";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -288,16 +289,18 @@ const superviseReplacement = async (
       } else {
         const log = NodeFS.openSync(input.logFile, "a");
         try {
-          const child = NodeChildProcess.spawn(runner, args, {
-            cwd: serverWorkingDirectory(NodeOS.homedir()),
-            detached: true,
-            stdio: ["ignore", log, log],
-            env: { ...process.env, ...env },
-          });
-          const spawned = await new Promise<boolean>((resolve) => {
-            child.once("error", () => resolve(false));
-            child.once("spawn", () => resolve(true));
-          });
+          const started = Promise.withResolvers<boolean>();
+          const child = guardChild(
+            NodeChildProcess.spawn(runner, args, {
+              cwd: serverWorkingDirectory(NodeOS.homedir()),
+              detached: true,
+              stdio: ["ignore", log, log],
+              env: { ...process.env, ...env },
+            }),
+            () => started.resolve(false),
+          );
+          child.once("spawn", () => started.resolve(true));
+          const spawned = await started.promise;
           if (spawned) {
             child.unref();
             pid = child.pid;

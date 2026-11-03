@@ -9,6 +9,7 @@ import { BoundedLines } from "./boundedLines.ts";
 
 // @effect-diagnostics-next-line nodeBuiltinImport:off -- Electron main and the standalone server both call this outside an Effect runtime.
 import * as NodeChildProcess from "node:child_process";
+import { guardChild } from "./errorGuards.ts";
 
 import {
   CUA_DRIVER_PROBED_SESSION_NAMES,
@@ -552,10 +553,14 @@ export function listCuaDriverApplications(input: {
   readonly signal?: AbortSignal;
 }): Promise<ReadonlyArray<CuaDriverListedApp>> {
   return new Promise((resolve, reject) => {
-    const child = NodeChildProcess.spawn(
-      input.binaryPath,
-      input.platform === "darwin" ? ["mcp", "--direct"] : ["mcp"],
-      { stdio: ["pipe", "pipe", "ignore"], env: { ...input.environment }, windowsHide: true },
+    const child = guardChild(
+      NodeChildProcess.spawn(
+        input.binaryPath,
+        input.platform === "darwin" ? ["mcp", "--direct"] : ["mcp"],
+        { stdio: ["pipe", "pipe", "ignore"], env: { ...input.environment }, windowsHide: true },
+      ),
+      // A driver that exits before reading closes stdin; that write fails here, not as an uncaught error.
+      (error) => finish(error),
     );
     let settled = false;
     let closeLines = () => {};
@@ -578,10 +583,6 @@ export function listCuaDriverApplications(input: {
       LIST_APPS_TIMEOUT_MS,
     );
     const send = (message: object) => child.stdin.write(JSON.stringify(message) + "\n");
-    child.on("error", (error) => finish(error));
-    // A driver that exits before reading leaves the pipe closed: that write fails here, not
-    // as an uncaught error in the process that asked for the listing.
-    child.stdin.on("error", (error) => finish(error));
     if (input.signal?.aborted) onAbort();
     else input.signal?.addEventListener("abort", onAbort, { once: true });
     child.on("exit", (code) =>
