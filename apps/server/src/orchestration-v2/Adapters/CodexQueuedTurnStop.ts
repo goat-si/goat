@@ -73,6 +73,8 @@ export const stopQueuedTurn = Effect.fn("CodexAdapterV2.stopQueuedTurn")(functio
   readonly interrupt: (context: T) => Effect.Effect<void, E, R>;
   readonly settle: Effect.Effect<unknown, never, R>;
   readonly full: Effect.Effect<never, EF>;
+  /** The turns still tracked; a turn that already ended is left alone. */
+  readonly activeTurns: Effect.Effect<ReadonlyMap<string, unknown>>;
 }) {
   const { context } = input;
   const ready = yield* Effect.timeoutOption(
@@ -80,7 +82,8 @@ export const stopQueuedTurn = Effect.fn("CodexAdapterV2.stopQueuedTurn")(functio
     "10 seconds",
   );
   const decision = yield* input.withPermit(
-    Effect.sync(() => {
+    Effect.map(input.activeTurns, (turns) => {
+      if (turns.get(context.nativeTurnId) !== context) return "ended" as const;
       if (Option.isSome(ready) || !awaitingNativeStart(context)) return "started" as const;
       const nativeThreadId = context.providerThread.nativeThreadRef?.nativeId ?? "";
       return input.stopped.add(context.nativeTurnId, nativeThreadId)
@@ -88,6 +91,7 @@ export const stopQueuedTurn = Effect.fn("CodexAdapterV2.stopQueuedTurn")(functio
         : ("full" as const);
     }),
   );
+  if (decision === "ended") return;
   if (decision === "started") return yield* input.interrupt(context);
   if (decision === "full") return yield* input.full;
   yield* Effect.logWarning("orchestration-v2.codex-queued-turn-never-started", {

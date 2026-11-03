@@ -7960,6 +7960,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                     context,
                     stopped: stoppedQueuedTurns,
                     withPermit: turnTerminalizationPermit.withPermits(1),
+                    activeTurns: Ref.get(activeTurns),
                     interrupt: sendInterrupt,
                     // Never started, so it has no subagents a failed Stop must keep running.
                     settle: Effect.flatMap(DateTime.now, (completedAt) =>

@@ -34,20 +34,46 @@ describe("CodexQueuedTurnStop", () => {
     }),
   );
 
+  const queuedTurn = Effect.gen(function* () {
+    return {
+      nativeTurnId: "queued-turn",
+      nativeStartReady: yield* Deferred.make<void>(),
+      subagent: null,
+      providerThread: { nativeThreadRef: { nativeId: "thread" } },
+    };
+  });
+
+  it.effect("leaves a queued turn that ended before Stop gave up on it unrecorded", () =>
+    Effect.gen(function* () {
+      const stopped = makeStoppedQueuedTurns();
+      let settled = false;
+      const stop = yield* stopQueuedTurn({
+        context: yield* queuedTurn,
+        stopped,
+        withPermit: (effect) => effect,
+        activeTurns: Effect.succeed(new Map()),
+        interrupt: () => Effect.die("an ended turn is not interrupted"),
+        settle: Effect.sync(() => (settled = true)),
+        full: Effect.die("an ended turn does not need room"),
+      }).pipe(Effect.forkScoped);
+      yield* TestClock.adjust("10 seconds");
+      yield* Fiber.join(stop);
+      assert.isFalse(settled);
+      assert.isFalse(stopped.has("queued-turn"));
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("keeps a queued turn active and fails Stop when no more stopped turns fit", () =>
     Effect.gen(function* () {
       const stopped = makeStoppedQueuedTurns(1);
       assert.isTrue(stopped.add("earlier-turn", "thread"));
       let settled = false;
+      const context = yield* queuedTurn;
       const stop = yield* stopQueuedTurn({
-        context: {
-          nativeTurnId: "queued-turn",
-          nativeStartReady: yield* Deferred.make<void>(),
-          subagent: null,
-          providerThread: { nativeThreadRef: { nativeId: "thread" } },
-        },
+        context,
         stopped,
         withPermit: (effect) => effect,
+        activeTurns: Effect.succeed(new Map([[context.nativeTurnId, context]])),
         interrupt: () => Effect.die("a queued turn that never started is not interrupted"),
         settle: Effect.sync(() => (settled = true)),
         full: Effect.fail("full" as const),
