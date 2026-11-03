@@ -104,7 +104,7 @@ const setup = Effect.fn("MobileThreadTest.setup")(function* (options?: {
   const session: RpcSession = {
     client,
     initialConfig: Effect.succeed({} as never),
-    subscribeServerConfig: (input) => client.subscribeServerConfig(input),
+    subscribeServerConfig: (input) => client.subscribeServerConfig(input ?? {}),
     ready: Effect.void,
     probe: Effect.void,
     inboundFrames: Effect.succeed(0),
