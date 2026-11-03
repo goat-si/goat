@@ -22,7 +22,7 @@ import {
 } from "./CodexDetachedAppServer.ts";
 
 /** Opt-in maintainer switch until restart survival ships; stdio stays the default. */
-export const CODEX_TRANSPORT_ENV = "GOAT_CODEX_APP_SERVER_TRANSPORT";
+const CODEX_TRANSPORT_ENV = "GOAT_CODEX_APP_SERVER_TRANSPORT";
 
 export class CodexDetachedAppServers extends Context.Service<
   CodexDetachedAppServers,
@@ -31,7 +31,7 @@ export class CodexDetachedAppServers extends Context.Service<
 
 const PROCESS_ROW = /^\s*(\d+)\s+(\d+)\s+(.*)$/;
 
-export const parseProcessRows = (stdout: string): ReadonlyArray<DetachedProcess> =>
+const parseProcessRows = (stdout: string): ReadonlyArray<DetachedProcess> =>
   stdout.split("\n").flatMap((line) => {
     const match = PROCESS_ROW.exec(line);
     return match ? [{ pid: Number(match[1]), pgid: Number(match[2]), argv: match[3] ?? "" }] : [];
@@ -39,7 +39,7 @@ export const parseProcessRows = (stdout: string): ReadonlyArray<DetachedProcess>
 
 const fail = (detail: string) => new CodexDetachedAppServerError({ detail });
 
-export const layer = Layer.effect(
+const layer = Layer.effect(
   CodexDetachedAppServers,
   Effect.gen(function* () {
     const config = yield* ServerConfig.ServerConfig;

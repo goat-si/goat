@@ -64,7 +64,7 @@ export class CodexDetachedAppServerError extends Schema.TaggedError<CodexDetache
   }
 }
 
-export const RECORD_DIRECTORY = "codex-app-servers";
+const RECORD_DIRECTORY = "codex-app-servers";
 const TERM_GRACE = "5 seconds";
 const POLL = Schedule.spaced("250 millis");
 const READINESS = Schedule.spaced("50 millis");
