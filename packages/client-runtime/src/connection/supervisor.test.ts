@@ -143,6 +143,21 @@ describe("retryDelayMs", () => {
 });
 
 describe("EnvironmentSupervisor", () => {
+  it.effect("reconnects a connected bearer lease when its credential is replaced", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ prepare: () => Effect.succeed(preparedFor(LAN_TARGET)) });
+      const supervisor = yield* EnvironmentSupervisor.make({ ...LAN_ROUTE, enabled: true }, {
+        initiallyDesired: true,
+      }).pipe(Effect.provide(harness.dependencies));
+      yield* awaitState(supervisor.state, (state) => state.phase === "connected");
+      expect(supervisor.reconnect).toBeDefined();
+      if (supervisor.reconnect === undefined) throw new Error("Reconnect is unavailable");
+      yield* supervisor.reconnect;
+      yield* awaitState(supervisor.state, (state) => state.phase === "connected" && state.generation >= 2);
+      expect(yield* Ref.get(harness.sessionCount)).toBe(2);
+      expect(yield* Ref.get(harness.releaseCount)).toBe(1);
+    }),
+  );
   it.effect("does not attempt a connection until it is desired", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness();

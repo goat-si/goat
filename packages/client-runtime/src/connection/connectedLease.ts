@@ -104,6 +104,7 @@ export function makeConnectedLeaseMonitor(input: {
           : CONNECTION_PROBE_TIMEOUT;
       case "ConnectRequested":
       case "DisconnectRequested":
+      case "ReconnectRequested":
       case "BetterRouteAvailable":
         return undefined;
     }

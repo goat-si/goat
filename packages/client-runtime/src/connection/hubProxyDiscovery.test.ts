@@ -25,17 +25,21 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import {
+  BearerConnectionCredential,
+  BearerConnectionProfile,
   HubProxyConnectionProfile,
   type ConnectionCatalogEntry,
   type ConnectionRegistration,
 } from "./catalog.ts";
 import {
   AVAILABLE_CONNECTION_STATE,
+  BearerConnectionTarget,
   HubProxyConnectionTarget,
   PrimaryConnectionTarget,
   RelayConnectionTarget,
 } from "./model.ts";
 import { EnvironmentRegistry } from "./registry.ts";
+import { ConnectionCredentialStore } from "./credentialStore.ts";
 import {
   watchConnectedHubProxyDiscovery,
   watchHubProxyDiscovery,
@@ -126,6 +130,7 @@ const makeConnectedDiscovery = Effect.fn(function* (options: {
   readonly subscriptionError?: HubNodesError;
   readonly capability?: boolean;
   readonly missingMethod?: boolean;
+  readonly bearerAddress?: string;
 }) {
   const h = yield* makeRegistry;
   const firstRead = yield* Deferred.make<void>();
@@ -133,12 +138,23 @@ const makeConnectedDiscovery = Effect.fn(function* (options: {
   const reconciled = yield* Deferred.make<void>();
   let reads = 0;
   let subscriptions = 0;
-  const target = new PrimaryConnectionTarget({
+  const primary = new PrimaryConnectionTarget({
     environmentId: HUB,
     label: "Hub",
     httpBaseUrl: "https://hub.test",
     wsBaseUrl: "wss://hub.test",
   });
+  const target = options.bearerAddress === undefined ? primary : new BearerConnectionTarget({
+    environmentId: HUB, label: "Hub", connectionId: "a",
+  });
+  const aUrl = options.bearerAddress ?? primary.httpBaseUrl;
+  const bearerRoute = (id: string, url: string) => ({
+    target: new BearerConnectionTarget({ environmentId: HUB, label: "Hub", connectionId: id }),
+    profile: Option.some(new BearerConnectionProfile({ connectionId: id, environmentId: HUB, label: "Hub", httpBaseUrl: url, wsBaseUrl: url.replace(/^http/, "ws") })),
+  });
+  const stored = new Map([["a", new BearerConnectionCredential({ token: "weak" })], ["b", new BearerConnectionCredential({ token: "strong" })]]);
+  const requests: string[] = [];
+  const reconnected = yield* Deferred.make<void>();
   const environment = yield* decodeDescriptor({
     environmentId: HUB,
     label: "Hub",
@@ -189,19 +205,20 @@ const makeConnectedDiscovery = Effect.fn(function* (options: {
         environmentId: HUB,
         label: "Hub",
         target,
-        httpBaseUrl: target.httpBaseUrl,
-        socketUrl: target.wsBaseUrl,
-        httpAuthorization: null,
+        httpBaseUrl: aUrl,
+        socketUrl: aUrl.replace(/^http/, "ws"),
+        httpAuthorization: options.bearerAddress === undefined ? null : { _tag: "Bearer", token: "weak" },
       }),
     ),
     connect: Effect.void,
     disconnect: Effect.void,
     retryNow: Effect.void,
+    reconnect: Deferred.succeed(reconnected, undefined).pipe(Effect.asVoid),
   });
   const registry = EnvironmentRegistry.of({
     ...h.registry,
     entries: yield* SubscriptionRef.make<ReadonlyMap<EnvironmentId, ConnectionCatalogEntry>>(
-      new Map([[HUB, { ...hub, target }]]),
+      new Map([[HUB, options.bearerAddress === undefined ? { ...hub, target } : { ...bearerRoute("a", aUrl), enabled: true, alternateRoutes: [bearerRoute("b", "https://hub.test/")] }]]),
     ),
     state: () =>
       Deferred.succeed(reconciled, undefined).pipe(
@@ -226,17 +243,24 @@ const makeConnectedDiscovery = Effect.fn(function* (options: {
     Effect.gen(function* () {
       reads++;
       yield* Deferred.succeed(firstRead, undefined);
+      const header = request.headers.authorization ?? "";
+      requests.push(header);
       return HttpClientResponse.fromWeb(
         request,
         reads <= (options.failReads ?? 0)
           ? new Response("unavailable", { status: 503 })
-          : Response.json(auth),
+          : Response.json(header === "Bearer strong" ? { ...auth, scopes: [AuthHubProxyScope] } : auth),
       );
     }),
   );
   const work = yield* watchConnectedHubProxyDiscovery.pipe(
     Effect.provideService(EnvironmentRegistry, registry),
     Effect.provideService(HttpClient.HttpClient, httpClient),
+    Effect.provideService(ConnectionCredentialStore, ConnectionCredentialStore.of({
+      get: (id) => Effect.sync(() => Option.fromUndefinedOr(stored.get(id))),
+      put: (id, credential, expected) => Effect.sync(() => { if (expected === undefined || (stored.get(id)?.token ?? null) === expected) stored.set(id, credential); }),
+      remove: (id) => Effect.sync(() => { stored.delete(id); }),
+    })),
     Effect.forkScoped,
   );
   return {
@@ -249,8 +273,29 @@ const makeConnectedDiscovery = Effect.fn(function* (options: {
     config,
     configs,
     counts: () => ({ reads, subscriptions }),
+    stored, requests, reconnected,
   };
 });
+
+it.effect("converges a stronger saved hub credential over the active tailnet address", () =>
+  Effect.gen(function* () {
+    const h = yield* makeConnectedDiscovery({ scopes: [], bearerAddress: "http://100.100.1.1:3773/" });
+    yield* Deferred.await(h.reconciled);
+    expect(h.stored.get("a")?.token).toBe("strong");
+    expect(yield* Deferred.isDone(h.reconnected)).toBe(true);
+    expect(h.requests).toContain("Bearer strong");
+  }).pipe(Effect.scoped),
+);
+
+it.effect("does not send an HTTPS paired credential over a plain LAN address", () =>
+  Effect.gen(function* () {
+    const h = yield* makeConnectedDiscovery({ scopes: [], bearerAddress: "http://192.168.1.5:3773/" });
+    yield* Deferred.await(h.reconciled);
+    expect(h.stored.get("a")?.token).toBe("weak");
+    expect(h.requests).not.toContain("Bearer strong");
+    expect(yield* Deferred.isDone(h.reconnected)).toBe(false);
+  }).pipe(Effect.scoped),
+);
 
 describe("hub proxy discovery coordinator", () => {
   it.effect("keeps a refused subscription terminal until the config changes", () =>

@@ -69,6 +69,7 @@ export type SupervisorSignal =
   | { readonly _tag: "ConnectRequested" }
   | { readonly _tag: "DisconnectRequested" }
   | { readonly _tag: "RetryRequested" }
+  | { readonly _tag: "ReconnectRequested" }
   | { readonly _tag: "NetworkChanged"; readonly network: NetworkStatus }
   | { readonly _tag: "Wakeup"; readonly reason: ConnectionWakeups.ConnectionWakeup }
   | { readonly _tag: "BetterRouteAvailable"; readonly routeId: string };
@@ -262,6 +263,7 @@ export class EnvironmentSupervisor extends Context.Service<
     readonly connect: Effect.Effect<void>;
     readonly disconnect: Effect.Effect<void>;
     readonly retryNow: Effect.Effect<void>;
+    readonly reconnect?: Effect.Effect<void>;
   }
 >()("@goat/client-runtime/connection/supervisor/EnvironmentSupervisor") {}
 
@@ -774,6 +776,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
         case "DisconnectRequested":
           return false;
         case "RetryRequested":
+        case "ReconnectRequested":
           yield* Ref.set(resetRetryState, true);
           if (next.attemptSequence === sequence) return false;
           break;
@@ -813,6 +816,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     if (next._tag === "DisconnectRequested") {
       return "end" as const;
     }
+    if (next._tag === "ReconnectRequested") return "reset" as const;
     if (next._tag === "BetterRouteAvailable") {
       yield* Ref.set(preferredRouteId, Option.some(next.routeId));
       return "reset" as const;
@@ -1149,6 +1153,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
             case "ConnectRequested":
             case "DisconnectRequested":
             case "RetryRequested":
+            case "ReconnectRequested":
             case "NetworkChanged":
               return next;
             case "BetterRouteAvailable":
@@ -1366,6 +1371,10 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     Effect.andThen(signal({ _tag: "RetryRequested" })),
     Effect.withSpan("EnvironmentSupervisor.retryNow"),
   );
+  const reconnect = Ref.set(resetRetryState, true).pipe(
+    Effect.andThen(signal({ _tag: "ReconnectRequested" })),
+    Effect.withSpan("EnvironmentSupervisor.reconnect"),
+  );
 
   yield* Effect.addFinalizer(() => Queue.shutdown(signals).pipe(Effect.andThen(clearLease)));
 
@@ -1377,5 +1386,6 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     connect,
     disconnect,
     retryNow,
+    reconnect,
   });
 });
