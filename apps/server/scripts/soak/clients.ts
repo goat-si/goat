@@ -195,6 +195,10 @@ export interface WorkloadInput {
     enabled: boolean;
     clientDisconnect: { observed: number; passed: boolean };
     providerRestart: { observed: number; passed: boolean };
+    codexProviderRestart: { observed: number; passed: boolean };
+    replayRecovery: boolean;
+    codexRecovery: boolean;
+    instances: string[];
     nativeIds: string[];
     pids: number[];
   };
@@ -264,34 +268,47 @@ export async function runWorkload(input: WorkloadInput): Promise<{
       }
     }
     const codexInstance = ProviderInstanceId.make(`soak-${id()}`);
-    yield* client["server.updateSettings"]({
-      patch: {},
-      providerInstanceMutation: {
-        operation: "create",
-        instanceId: codexInstance,
-        instance: {
-          driver: ProviderDriverKind.make("codex"),
-          enabled: true,
-          displayName: "Soak Codex",
-          config: {
-            binaryPath: NodePath.join(
-              input.checkout,
-              "apps/server/src/provider/testFixtures/codexCollabMockPeer.sh",
-            ),
-          },
-          environment: [
-            { name: "GOAT_CODEX_COLLAB_SCRIPT", value: script, sensitive: false },
-            { name: "GOAT_CODEX_MOCK_SOAK", value: "1", sensitive: false },
-            { name: "GOAT_SOAK_PROVIDER_INSTANCE", value: codexInstance, sensitive: false },
-            {
-              name: "GOAT_SOAK_PROVIDER_LIFECYCLE_LOG",
-              value: input.lifecyclePath,
-              sensitive: false,
+    const selfCodexInstance = ProviderInstanceId.make(`soak-check-${id()}`);
+    const registerCodex = (instanceId: ProviderInstanceId, fast: boolean) =>
+      client["server.updateSettings"]({
+        patch: {},
+        providerInstanceMutation: {
+          operation: "create",
+          instanceId,
+          instance: {
+            driver: ProviderDriverKind.make("codex"),
+            enabled: true,
+            displayName: fast ? "Soak self-check Codex" : "Soak Codex",
+            config: {
+              binaryPath: NodePath.join(
+                input.checkout,
+                "apps/server/src/provider/testFixtures/codexCollabMockPeer.sh",
+              ),
             },
-          ],
+            environment: [
+              { name: "GOAT_CODEX_COLLAB_SCRIPT", value: script, sensitive: false },
+              { name: "GOAT_CODEX_MOCK_SOAK", value: "1", sensitive: false },
+              { name: "GOAT_SOAK_PROVIDER_INSTANCE", value: instanceId, sensitive: false },
+              {
+                name: "GOAT_SOAK_PROVIDER_LIFECYCLE_LOG",
+                value: input.lifecyclePath,
+                sensitive: false,
+              },
+              ...(fast
+                ? [
+                    { name: "GOAT_CODEX_MOCK_LATENCIES_MS", value: "0", sensitive: false },
+                    { name: "GOAT_CODEX_MOCK_TURN_MS", value: "0", sensitive: false },
+                  ]
+                : []),
+            ],
+          },
         },
-      },
-    });
+      });
+    yield* registerCodex(codexInstance, false);
+    if (input.selfCheck.enabled) {
+      yield* registerCodex(selfCodexInstance, true);
+      input.selfCheck.instances.push(selfCodexInstance);
+    }
     const relay = yield* Effect.acquireRelease(
       Effect.promise(() =>
         openRelay(input.origin, input.headlessClients + 1, (error) =>
@@ -399,101 +416,163 @@ export async function runWorkload(input: WorkloadInput): Promise<{
     }
     yield* Effect.forEach(opened, Deferred.await, { concurrency: "unbounded" });
     if (input.selfCheck.enabled) {
-      const selfThread = ThreadId.make(id());
-      const selfStart = DateTime.formatIso(yield* DateTime.now);
-      const selfObserved = new Observations();
-      const finished = yield* Deferred.make<void>();
-      yield* client["orchestration.launchThread"]({
-        commandId: CommandId.make(id()),
-        threadId: selfThread,
-        projectId,
-        title: "Soak self-check",
-        generateTitle: false,
-        modelSelection: { instanceId: ProviderInstanceId.make("devReplay"), model: "todo-list" },
-        runtimeMode: "approval-required",
-        interactionMode: "default",
-        workspaceStrategy: { type: "root" },
-        initialMessage: {
-          messageId: MessageId.make(id()),
-          text: "GOAT_SOAK_EXIT",
-          attachments: [],
-        },
-      });
-      const selfRun = (run: OrchestrationV2Run) => {
-        if (run.terminationCause?.kind === "provider_process_exit")
-          selfObserved.providerDeath(
-            run.id,
-            selfThread,
-            run.providerInstanceId,
-            DateTime.formatIso(run.completedAt ?? run.requestedAt),
-          );
-        return ["completed", "failed", "interrupted", "cancelled", "rolled_back"].includes(
-          run.status,
-        )
-          ? Deferred.succeed(finished, undefined).pipe(Effect.asVoid)
-          : Effect.void;
-      };
-      yield* client["orchestration.subscribeThread"]({ threadId: selfThread }).pipe(
-        Stream.runForEach((item) => {
-          if (item.kind === "snapshot") {
-            for (const thread of item.projection.providerThreads)
-              if (thread.nativeThreadRef?.nativeId)
-                selfObserved.joinProvider(thread.nativeThreadRef.nativeId, selfThread);
-            return Effect.forEach(item.projection.runs, selfRun, { discard: true });
+      const checkProvider = Effect.fn("Soak.checkProvider")(function* (
+        instanceId: ProviderInstanceId,
+        model: string,
+        codex: boolean,
+      ) {
+        const threadId = ThreadId.make(id());
+        const selfStart = DateTime.formatIso(yield* DateTime.now);
+        const observed = new Observations();
+        const first = yield* Deferred.make<OrchestrationV2Run, Error>();
+        const recovered = yield* Deferred.make<OrchestrationV2Run, Error>();
+        let firstId: string | undefined;
+        let recoveryRequested = false;
+        const modelSelection = { instanceId, model };
+        yield* client["orchestration.launchThread"]({
+          commandId: CommandId.make(id()),
+          threadId,
+          projectId,
+          title: "Soak self-check",
+          generateTitle: false,
+          modelSelection,
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+          workspaceStrategy: { type: "root" },
+          initialMessage: {
+            messageId: MessageId.make(id()),
+            text: "GOAT_SOAK_EXIT",
+            attachments: [],
+          },
+        });
+        const onRun = (run: OrchestrationV2Run) => {
+          if (run.terminationCause?.kind === "provider_process_exit")
+            observed.providerDeath(
+              run.id,
+              threadId,
+              run.providerInstanceId,
+              DateTime.formatIso(run.completedAt ?? run.requestedAt),
+            );
+          if (
+            !["completed", "failed", "interrupted", "cancelled", "rolled_back"].includes(run.status)
+          )
+            return Effect.void;
+          if (!firstId) {
+            firstId = run.id;
+            return Deferred.succeed(first, run).pipe(Effect.asVoid);
           }
-          if (
-            item.kind === "event" &&
-            item.event.type === "provider-thread.updated" &&
-            item.event.payload.nativeThreadRef?.nativeId
-          )
-            selfObserved.joinProvider(item.event.payload.nativeThreadRef.nativeId, selfThread);
-          if (
-            item.kind === "event" &&
-            (item.event.type === "run.created" || item.event.type === "run.updated")
-          )
-            return selfRun(item.event.payload);
-          if (item.kind === "unknown-event")
-            selfObserved.streamGap(`unknown event ${item.eventType}`);
+          if (recoveryRequested && run.id !== firstId)
+            return Deferred.succeed(recovered, run).pipe(Effect.asVoid);
           return Effect.void;
-        }),
-        Effect.catchCause((cause) =>
-          Effect.sync(() => {
-            selfObserved.streamGap(String(cause));
-          }).pipe(Effect.andThen(Deferred.succeed(finished, undefined)), Effect.asVoid),
-        ),
-        Effect.forkScoped,
-      );
-      yield* Deferred.await(finished);
-      const lines = NodeFS.readFileSync(input.lifecyclePath, "utf8").split("\n").filter(Boolean);
-      for (const line of lines) selfObserved.consumeLifecycle(yield* decodeLifecycle(line));
-      const nativeIds = [...selfObserved.joins.keys()];
-      const pids = selfObserved.lifecycle
-        .filter(
-          (line) => line.event === "session" && line.thread && nativeIds.includes(line.thread),
-        )
-        .map((line) => line.pid);
-      input.selfCheck.nativeIds.push(...nativeIds);
-      input.selfCheck.pids.push(...pids);
-      const selfLines = selfObserved.lifecycle.filter((line) => pids.includes(line.pid));
-      const disappeared = pids.filter((pid) => {
-        try {
-          process.kill(pid, 0);
-          return false;
-        } catch (error) {
-          return (error as NodeJS.ErrnoException).code === "ESRCH";
-        }
+        };
+        yield* client["orchestration.subscribeThread"]({ threadId }).pipe(
+          Stream.runForEach((item) => {
+            if (item.kind === "snapshot") {
+              for (const thread of item.projection.providerThreads)
+                if (thread.nativeThreadRef?.nativeId)
+                  observed.joinProvider(thread.nativeThreadRef.nativeId, threadId);
+              return Effect.forEach(item.projection.runs, onRun, { discard: true });
+            }
+            if (
+              item.kind === "event" &&
+              item.event.type === "provider-thread.updated" &&
+              item.event.payload.nativeThreadRef?.nativeId
+            )
+              observed.joinProvider(item.event.payload.nativeThreadRef.nativeId, threadId);
+            if (
+              item.kind === "event" &&
+              (item.event.type === "run.created" || item.event.type === "run.updated")
+            )
+              return onRun(item.event.payload);
+            if (item.kind === "unknown-event")
+              observed.streamGap(`unknown event ${item.eventType}`);
+            return Effect.void;
+          }),
+          Effect.catchCause((cause) =>
+            Effect.sync(() => observed.streamGap(String(cause))).pipe(
+              Effect.andThen(
+                Effect.all([
+                  Deferred.fail(first, new Error("self-check thread stream ended")),
+                  Deferred.fail(recovered, new Error("self-check thread stream ended")),
+                ]),
+              ),
+              Effect.asVoid,
+            ),
+          ),
+          Effect.forkScoped,
+        );
+        yield* Deferred.await(first);
+        const readLifecycle = Effect.fn("Soak.readSelfCheckLifecycle")(function* () {
+          const life = new Observations();
+          for (const line of NodeFS.readFileSync(input.lifecyclePath, "utf8")
+            .split("\n")
+            .filter(Boolean))
+            life.consumeLifecycle(yield* decodeLifecycle(line));
+          return life.lifecycle;
+        });
+        const before = yield* readLifecycle();
+        const nativeIds = [...observed.joins.keys()];
+        const initialPids = [
+          ...new Set(
+            before
+              .filter(
+                (line) =>
+                  line.event === "session" && line.thread && nativeIds.includes(line.thread),
+              )
+              .map((line) => line.pid),
+          ),
+        ];
+        const disappeared = initialPids.filter((pid) => {
+          try {
+            process.kill(pid, 0);
+            return false;
+          } catch (error) {
+            return (error as NodeJS.ErrnoException).code === "ESRCH";
+          }
+        });
+        const result = providerRestarts(
+          before.filter((line) => initialPids.includes(line.pid)),
+          observed.joins,
+          [],
+          observed.deaths,
+          observed.streamGaps,
+          { start: selfStart, end: DateTime.formatIso(yield* DateTime.now), disappeared },
+        );
+        const restart = codex
+          ? input.selfCheck.codexProviderRestart
+          : input.selfCheck.providerRestart;
+        restart.observed = result.counter.observed;
+        restart.passed = initialPids.length === 1 && result.counter.value === 1;
+        recoveryRequested = true;
+        yield* client["orchestration.dispatchCommand"]({
+          type: "message.dispatch",
+          commandId: CommandId.make(id()),
+          threadId,
+          messageId: MessageId.make(id()),
+          text: "Recovery turn",
+          attachments: [],
+          modelSelection,
+          dispatchMode: { type: "start_immediately" },
+          createdBy: "user",
+          creationSource: "web",
+        });
+        const recovery = yield* Deferred.await(recovered);
+        if (codex) input.selfCheck.codexRecovery = recovery.status === "completed";
+        else input.selfCheck.replayRecovery = recovery.status === "completed";
+        const after = yield* readLifecycle();
+        const allNativeIds = [...observed.joins.keys()];
+        input.selfCheck.nativeIds.push(...allNativeIds);
+        input.selfCheck.pids.push(
+          ...after
+            .filter(
+              (line) =>
+                line.event === "session" && line.thread && allNativeIds.includes(line.thread),
+            )
+            .map((line) => line.pid),
+        );
       });
-      const selfProvider = providerRestarts(
-        selfLines,
-        selfObserved.joins,
-        [],
-        selfObserved.deaths,
-        selfObserved.streamGaps,
-        { start: selfStart, end: DateTime.formatIso(yield* DateTime.now), disappeared },
-      );
-      input.selfCheck.providerRestart.observed = selfProvider.counter.observed;
-      input.selfCheck.providerRestart.passed =
-        pids.length === 1 && selfProvider.counter.value === 1;
+      yield* checkProvider(ProviderInstanceId.make("devReplay"), "todo-list", false);
+      yield* checkProvider(selfCodexInstance, "gpt-5.6-sol", true);
     }
     const drains: Array<Deferred.Deferred<void>> = [];
     const total = input.replayThreads + input.codexThreads;

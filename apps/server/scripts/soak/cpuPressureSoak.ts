@@ -307,6 +307,10 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
     enabled: options.selfCheck,
     clientDisconnect: { observed: 0, passed: false },
     providerRestart: { observed: 0, passed: false },
+    codexProviderRestart: { observed: 0, passed: false },
+    replayRecovery: false,
+    codexRecovery: false,
+    instances: [] as string[],
     nativeIds: [] as string[],
     pids: [] as number[],
   };
@@ -587,6 +591,7 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
     const acceptanceLines = observations.lifecycle.filter(
       (line) =>
         !selfCheck.pids.includes(line.pid) &&
+        !selfCheck.instances.includes(line.instance) &&
         (line.event !== "session" ||
           !line.thread ||
           observations.joins.has(line.thread) ||
@@ -612,7 +617,11 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
       observations.deaths,
       [
         ...(!selfCheck.providerRestart.passed ? ["provider self-check did not pass"] : []),
-        "Codex provider self-check and recovery turns not performed",
+        ...(!selfCheck.codexProviderRestart.passed
+          ? ["Codex provider self-check did not pass"]
+          : []),
+        ...(!selfCheck.replayRecovery ? ["Replay recovery turn did not complete"] : []),
+        ...(!selfCheck.codexRecovery ? ["Codex recovery turn did not complete"] : []),
         ...(observations.lifecycle.some(
           (line) => line.instance === "devReplay" && line.event === "start",
         )

@@ -81,7 +81,9 @@ function soakRequest(message) {
     if (
       lifecycleLog &&
       Array.isArray(params.input) &&
-      params.input.some((item) => item?.text === "GOAT_SOAK_EXIT")
+      params.input.some(
+        (item) => typeof item?.text === "string" && item.text.includes("GOAT_SOAK_EXIT"),
+      )
     )
       process.exit(1);
     const turnId = NodeCrypto.randomUUID();

@@ -44,6 +44,45 @@ it("relays bytes and disconnects the owned connection", async () => {
 });
 
 describe("soak Codex fixture", () => {
+  it("exits a Codex process for an embedded self-check marker", async () => {
+    const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-codex-marker-"));
+    const script = NodePath.join(dir, "script.json");
+    const log = NodePath.join(dir, "lifecycle.ndjson");
+    NodeFS.writeFileSync(script, JSON.stringify({ rootThreadId: "unused", notifications: [] }));
+    const fixture = new URL(
+      "../../src/provider/testFixtures/codexCollabMockPeer.mjs",
+      import.meta.url,
+    );
+    const child = guardChild(
+      NodeChildProcess.spawn(process.execPath, [fixture.pathname], {
+        stdio: ["pipe", "pipe", "ignore"],
+        env: {
+          ...process.env,
+          GOAT_CODEX_COLLAB_SCRIPT: script,
+          GOAT_CODEX_MOCK_SOAK: "1",
+          GOAT_SOAK_PROVIDER_LIFECYCLE_LOG: log,
+        },
+      }),
+      () => {},
+    );
+    const exited = new Promise<number | null>((resolve) => child.once("exit", resolve));
+    const lines = NodeReadline.createInterface({ input: child.stdout })[Symbol.asyncIterator]();
+    try {
+      child.stdin?.write(
+        `${JSON.stringify({ id: 1, method: "thread/start", params: { cwd: "/tmp" } })}\n`,
+      );
+      const result = JSON.parse((await lines.next()).value as string);
+      child.stdin?.write(
+        `${JSON.stringify({ id: 2, method: "turn/start", params: { threadId: result.result.thread.id, input: [{ text: "prefix GOAT_SOAK_EXIT suffix" }] } })}\n`,
+      );
+      expect(await exited).toBe(1);
+      expect(NodeFS.readFileSync(log, "utf8")).toContain('"event":"exit"');
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill();
+      await exited;
+      NodeFS.rmSync(dir, { recursive: true, force: true });
+    }
+  });
   it("recognizes the self-check marker embedded in a Replay prompt", () => {
     expect(isSoakExitPrompt([{ type: "text", text: "user request: GOAT_SOAK_EXIT" }])).toBe(true);
     expect(isSoakExitPrompt([{ type: "text", text: "ordinary prompt" }])).toBe(false);
