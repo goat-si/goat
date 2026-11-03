@@ -96,7 +96,7 @@ vi.mock("../../state/pull-requests", async () => {
 
 import { usePullRequestList } from "./usePullRequestList";
 
-function setup(ids: readonly string[]) {
+function setup(ids: readonly string[], labels = new Map<EnvironmentId, string>()) {
   mocks.failPage = false;
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   const registry = AtomRegistry.make();
@@ -106,7 +106,7 @@ function setup(ids: readonly string[]) {
   }));
   let latest: ReturnType<typeof usePullRequestList>;
   function Probe() {
-    const result = usePullRequestList(targets);
+    const result = usePullRequestList(targets, labels);
     useLayoutEffect(() => {
       latest = result;
     });
@@ -130,6 +130,19 @@ function setup(ids: readonly string[]) {
     },
   };
 }
+
+it("summarizes unreachable environments in empty PR list details while retaining other errors (#2464)", async () => {
+  using probe = setup(
+    ["unreachable-one", "unreachable-two", "other-error"],
+    new Map([
+      [EnvironmentId.make("unreachable-one"), "Laptop"],
+      [EnvironmentId.make("unreachable-two"), "Desktop"],
+    ]),
+  );
+  await act(async () => probe.latest.onRefresh());
+  expect(probe.latest.entries).toEqual([]);
+  expect(probe.latest.error).toBe("Couldn't reach environments: Laptop, Desktop\noffline");
+});
 
 it("marks unreachable environments by failure type for the PR list summary (#2464)", async () => {
   using probe = setup(["unreachable-one", "unreachable-two", "other-error"]);
