@@ -40,6 +40,7 @@ import {
 import { ComputerUseHelperError, helperBundle, type HelperFeatures } from "./ComputerUseHelper.ts";
 import { managerPerChannel } from "./ComputerUseHelperService.ts";
 import { makeStopFirstRequests } from "./desktopCuaRequests.ts";
+import { nextDesktopCuaGeneration } from "./desktopCuaGeneration.ts";
 import { cuaDriverReports } from "./desktopCuaReports.ts";
 import { makeAppsRequestHandler } from "./desktopCuaApps.ts";
 import { makeHelperFollowers } from "./helperFollowers.ts";
@@ -206,7 +207,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       entry.cleanup = (async () => {
         if (!entry.helper) await settle(entry.started);
         entry.abort.abort();
-        await settle(Promise.resolve().then(() => entry.host.stop()));
+        await Promise.resolve().then(() => entry.host.stop());
         await settle(entry.started);
         if (entry.monitor) await entry.monitor;
         entry.host.uniffiDestroy();
@@ -236,13 +237,15 @@ export const make = Effect.fn("desktop.cua.make")(function* (
   const restartHost = Effect.gen(function* () {
     const request = owned ? currentRequest : undefined;
     currentRequest = undefined;
+    const generation = owned?.generation;
     const stopped = yield* stop;
     if (request)
-      yield* stopped ? report(request.requestId, "stopped") : unavailable(request.requestId);
+      yield* stopped
+        ? report(request.requestId, "stopped", undefined, undefined, generation)
+        : unavailable(request.requestId);
   });
   const restart = mutex.withPermits(1)(restartHost);
   const driverPath = () => bundledDriverPath(environment);
-
   /**
    * Packaged macOS must keep computer use under the helper's TCC identity (ADR-0023), even when
    * the helper is missing. Development and Windows can still use the in-process driver.
@@ -302,7 +305,6 @@ export const make = Effect.fn("desktop.cua.make")(function* (
             return { accessibility: granted, screenRecording: granted };
           })
         : native.checkGrants();
-
   // An unpackaged Electron on macOS runs under Electron's own bundle id. Agents never get GOAT
   // or its helper as a target; the grant check reads GOAT's own window.
   const hostBundleIds = (engine: Engine) => [
@@ -311,7 +313,6 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     ...(environment.platform === "win32" ? [native.executablePath] : []),
     ...(engine.kind === "helper" ? [engine.bundle.bundleId] : []),
   ];
-
   // Both request-time listings and manifest refreshes must stay inside the helper's seal check.
   const helperListing = (engine: Engine, signal?: AbortSignal) =>
     engine.kind === "helper" &&
@@ -349,6 +350,8 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     };
     const manifestPath = yield* Effect.tryPromise(() => native.prepareManifest(manifestInput));
     if (closed) return undefined;
+    const generation = nextDesktopCuaGeneration();
+    if (generation === undefined) return undefined;
     let host: NativeHost;
     if (engine.kind === "helper") {
       helperSeen = true;
@@ -391,6 +394,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     const abort = new AbortController();
     const refreshListing = helperListing(engine, abort.signal);
     const entry: OwnedHost = {
+      generation,
       manifestPath: scope === "agents" ? manifestPath : undefined,
       host,
       abort,
@@ -502,6 +506,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
 
     // macOS caches TCC answers per process, so only a fresh driver sees new grants.
     const request = owned ? currentRequest : undefined;
+    const generation = owned?.generation;
     currentRequest = undefined;
     const stopped = yield* stop;
     // The probe's own helper said what this build can do (#1532), on every platform; the
@@ -510,7 +515,9 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     // earlier leaves that helper, and what it said, as they were.
     if (stopped && selected?.kind === "helper") learnHelper(grants.features);
     if (request)
-      yield* stopped ? report(request.requestId, "stopped") : unavailable(request.requestId);
+      yield* stopped
+        ? report(request.requestId, "stopped", undefined, undefined, generation)
+        : unavailable(request.requestId);
     const connection: Option.Option<EmbeddedDriverConnection> =
       selected && stopped
         ? yield* spawn(selected, "verify").pipe(
@@ -753,8 +760,11 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       return yield* report(request.requestId, "stopped");
     currentRequest = request;
     if (!request.enabled) {
+      const generation = owned?.generation;
       const stopped = yield* stop;
-      yield* stopped ? report(request.requestId, "stopped") : unavailable(request.requestId);
+      yield* stopped
+        ? report(request.requestId, "stopped", undefined, undefined, generation)
+        : unavailable(request.requestId);
       return;
     }
     if (owned?.cleanup) {
@@ -845,6 +855,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
         type: "cuaDriverReport",
         requestId: request.requestId,
         status: "ready",
+        hostGeneration: entry.generation,
         mcp,
       });
     }).pipe(

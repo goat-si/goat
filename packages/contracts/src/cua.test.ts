@@ -61,6 +61,33 @@ const metrics = {
   quotas: [],
 };
 
+it("carries host generations while older telemetry decoders ignore the extra field", () => {
+  const ready = {
+    version: 1,
+    type: "cuaDriverReport",
+    requestId: "r1",
+    status: "ready",
+    mcp: { command: "/driver", args: [], environment: [] },
+    hostGeneration: 7,
+  } as const;
+  expect(decodeTelemetryMessage(ready)).toEqual(ready);
+  const legacyReport = Schema.Struct({
+    version: Schema.Literal(1),
+    type: Schema.Literal("cuaDriverReport"),
+    requestId: Schema.String,
+    status: Schema.Literal("ready"),
+    mcp: Schema.Struct({
+      command: Schema.String,
+      args: Schema.Array(Schema.String),
+      environment: Schema.Array(Schema.Struct({ name: Schema.String, value: Schema.String })),
+    }),
+  });
+  const legacyTelemetry = Schema.Union([legacyReport]);
+  const { hostGeneration: _, ...older } = ready;
+  expect(Schema.decodeUnknownSync(legacyTelemetry)(ready)).toEqual(older);
+  expect(decodeTelemetryMessage(older)).toEqual(older);
+});
+
 describe("computer use on the wire", () => {
   it("carries a bounded primitive request on both lease streams", () => {
     const request = {

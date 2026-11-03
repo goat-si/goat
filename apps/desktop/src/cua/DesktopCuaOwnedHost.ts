@@ -3,6 +3,7 @@ import type { NativeHost } from "./DesktopCuaNative.ts";
 import type { refreshDesktopManifest } from "./DesktopCuaManifest.ts";
 
 export interface OwnedHost {
+  readonly generation: number;
   readonly manifestPath: string | undefined;
   readonly host: NativeHost;
   readonly abort: AbortController;
