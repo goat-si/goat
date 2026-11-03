@@ -136,6 +136,7 @@ export function useThreadListV2(input: {
   const priority = usePriorityHolds();
   // Other lists' held rows; this list's own Priority rows come from its layout below.
   useSyncExternalStore(subscribeHeldPriorityKeys, () => heldPriorityKeys(priority.listId));
+  // Folded and lifted rows sit outside the ordered sections on every reorder path.
   const reorderExcludedKeys = threadListV2ReorderExcludedKeys({
     threads,
     owners: launchOwners,
