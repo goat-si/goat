@@ -548,6 +548,13 @@ const make = Effect.gen(function* () {
     if (forPerson.has(controlId)) return { _tag: "paused", reason: "takeover" };
     const own = stoppedCards.own(grants, threadId);
     yield* settle(threadId);
+    const otherControls = [...controls.values()].filter(
+      (other) =>
+        other.threadId !== threadId &&
+        other.everyApp !== undefined &&
+        acting(other) &&
+        DateTime.toEpochMillis(other.expiresAt) > DateTime.toEpochMillis(now),
+    );
     const focus = foreground.grants(threadId, controlId, own, DateTime.toEpochMillis(now));
     const focusState = focus.length === 0 ? {} : { foreground: focus };
     // While a run holds implied foreground, re-check soon so a missed run end still ends it.
@@ -558,6 +565,7 @@ const make = Effect.gen(function* () {
         until,
         ...focus.map((grant) => grant.expiresAtMillis),
         ...others.map((lease) => DateTime.toEpochMillis(lease.expiresAt)),
+        ...otherControls.map((other) => DateTime.toEpochMillis(other.expiresAt)),
       );
       return {
         _tag: "active",
@@ -568,7 +576,7 @@ const make = Effect.gen(function* () {
         wakeAt: Math.min(validUntil, DateTime.toEpochMillis(now) + recheck),
         validUntil,
         ...focusState,
-        ...(others.length === 0 ? {} : ({ shared: true } as const)),
+        ...(others.length === 0 && otherControls.length === 0 ? {} : ({ shared: true } as const)),
         ...(record.idle === true ? ({ idle: true } as const) : {}),
         ...(record.idleEpoch === undefined ? {} : { idleEpoch: record.idleEpoch }),
       } as const;

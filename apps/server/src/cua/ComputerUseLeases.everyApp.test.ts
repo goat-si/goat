@@ -43,6 +43,55 @@ const everyAppLayer = ComputerUseLeases.layer.pipe(
   ),
 );
 
+it.effect("another thread's live full-access control makes taking the screen shared", () =>
+  Effect.gen(function* () {
+    yield* runMigrations();
+    const leases = yield* ComputerUseLeases.ComputerUseLeases;
+    const settings = yield* ServerSettings.ServerSettingsService;
+    const owner = ThreadId.make("thread:shared-owner");
+    const other = ThreadId.make("thread:shared-other");
+    yield* threadIn(other, "full-access");
+    yield* settings.updateSettings({ cuaStrictInputGuards: true });
+    const control = yield* leases.control(owner, Option.none());
+    const focus = yield* foregroundGrant(owner, "handoff:shared-focus");
+    yield* leases.everyAppControl(other, false);
+    const request = {
+      action: "reserve" as const,
+      controlId: control.controlId,
+      connectionId: "c",
+      callId: "one",
+      interruptions: 0,
+      idleEpoch: 0,
+      name: "bring_to_front",
+      args: { pid: 42, window_id: 7 },
+      foregroundGrantId: focus.handoffId,
+    };
+    assert.deepInclude(yield* leases.callReservation(owner, request), {
+      status: "refused",
+      detail: "screen_shared",
+    });
+    yield* settings.updateSettings({ cuaStrictInputGuards: false });
+    assert.equal(
+      (yield* leases.callReservation(owner, { ...request, callId: "two" })).status,
+      "admitted",
+    );
+    yield* settings.updateSettings({ cuaStrictInputGuards: true });
+    yield* leases.stop(other);
+    assert.notProperty(yield* leases.controlState(owner, control.controlId), "shared");
+  }).pipe(Effect.provide(everyAppLayer)),
+);
+
+it.effect("a thread's own full-access control alone does not share the screen", () =>
+  Effect.gen(function* () {
+    yield* runMigrations();
+    const leases = yield* ComputerUseLeases.ComputerUseLeases;
+    const owner = ThreadId.make("thread:only-full-access");
+    yield* threadIn(owner, "full-access");
+    const control = Option.getOrThrow(yield* leases.everyAppControl(owner, false));
+    assert.notProperty(yield* leases.controlState(owner, control.controlId), "shared");
+  }).pipe(Effect.provide(everyAppLayer)),
+);
+
 it.effect("updates the origin policy when a full access control is reused", () =>
   Effect.gen(function* () {
     yield* runMigrations();
