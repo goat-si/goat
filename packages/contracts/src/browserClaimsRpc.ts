@@ -15,6 +15,7 @@ import {
 } from "./browserClaims.ts";
 
 export const BROWSER_CLAIMS_WS_METHODS = {
+  browserClaimsWindows: "browserClaims.windows",
   browserClaimsClaim: "browserClaims.claim",
   browserClaimsAnswer: "browserClaims.answer",
   browserClaimsRevoke: "browserClaims.revoke",
@@ -49,7 +50,29 @@ const answer = Schema.Struct({
   agentResult: BrowserClaimResult,
   personMessage: Schema.optionalKey(Schema.String),
 });
+export const BrowserClaimWindows = Schema.Struct({
+  windows: Schema.Array(
+    Schema.Struct({
+      pid: PositiveInt,
+      windowId: PositiveInt,
+      title: Schema.String,
+      app: Schema.String,
+    }),
+  ),
+  refused: Schema.Array(
+    Schema.Struct({
+      pid: PositiveInt,
+      app: Schema.String,
+      reason: Schema.Literals(["browser_process_protected", "outside_manifest"]),
+    }),
+  ),
+});
 export const BrowserClaimsRpcs = RpcGroup.make(
+  Rpc.make(BROWSER_CLAIMS_WS_METHODS.browserClaimsWindows, {
+    payload: Schema.Struct({}),
+    success: BrowserClaimWindows,
+    error: errors,
+  }),
   Rpc.make(BROWSER_CLAIMS_WS_METHODS.browserClaimsClaim, {
     payload: BrowserClaimRequestInput,
     success: answer,

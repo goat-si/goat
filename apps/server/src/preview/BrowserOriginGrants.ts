@@ -665,6 +665,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     };
   });
   return {
+    claimsSupported: Effect.sync(deps.supported),
     request,
     requestWindow,
     answer,

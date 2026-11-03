@@ -30,6 +30,7 @@ export const requirePerson = (resolver: HumanStepResolver) =>
 export const makeBrowserClaimsRpcHandlers = (
   grants: Option.Option<BrowserOriginGrants["Service"]>,
   session: { readonly subject: string },
+  windows?: () => Effect.Effect<typeof import("@goat/contracts").BrowserClaimWindows.Type, Error>,
 ) => {
   const person = requirePerson(sessionResolver(session));
   const service = Effect.fromOption(
@@ -38,6 +39,21 @@ export const makeBrowserClaimsRpcHandlers = (
   );
   const failure = () => new BrowserClaimsRpcError({ message: "Browser claim operation failed." });
   return ServerWsBrowserClaimsRpcGroup.of({
+    [WS_METHODS.browserClaimsWindows]: () =>
+      person.pipe(
+        Effect.andThen(service),
+        Effect.flatMap(() =>
+          windows
+            ? windows().pipe(
+                Effect.mapError(
+                  () => new BrowserClaimsRpcError({ message: "Browser windows are unavailable." }),
+                ),
+              )
+            : Effect.fail(
+                new BrowserClaimsRpcError({ message: "Browser windows are unavailable." }),
+              ),
+        ),
+      ),
     [WS_METHODS.browserClaimsClaim]: (input) =>
       person.pipe(
         Effect.andThen(service),
