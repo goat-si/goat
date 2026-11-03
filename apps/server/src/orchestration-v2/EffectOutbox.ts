@@ -233,10 +233,14 @@ export interface EffectOutboxV2Shape {
   readonly listByCommandId: (
     commandId: CommandId,
   ) => Effect.Effect<ReadonlyArray<OrchestrationEffectV2>, EffectOutboxError>;
+  readonly listNeverAttemptedStarts: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ReadonlyArray<OrchestrationEffectV2>, EffectOutboxError>;
   readonly cancelUnsettled: (input: {
     readonly threadId: ThreadId;
     readonly effectTypes: ReadonlyArray<OrchestrationEffectRequestV2["type"]>;
     readonly reason: string;
+    readonly preserveNeverAttemptedStarts?: boolean;
   }) => Effect.Effect<ReadonlyArray<string>, EffectOutboxError>;
   readonly signalCancellations: (effectIds: ReadonlyArray<string>) => Effect.Effect<void>;
   readonly awaitCancellation: (effectId: string) => Effect.Effect<void>;
@@ -546,8 +550,20 @@ export const layer = Layer.effect(
               : new EffectOutboxError({ operation: "list", cause }),
           ),
         ),
+      listNeverAttemptedStarts: (threadId) =>
+        sql<EffectRow>`SELECT * FROM orchestration_v2_effect_outbox
+          WHERE thread_id = ${threadId} AND effect_type = 'provider-turn.start'
+            AND status = 'pending' AND attempt_count = 0`.pipe(
+          NodeSqliteClient.readOnly,
+          Effect.flatMap((rows) => decodeRows("list", rows)),
+          Effect.mapError((cause) =>
+            isEffectOutboxError(cause)
+              ? cause
+              : new EffectOutboxError({ operation: "list", cause }),
+          ),
+        ),
       cancelUnsettled: Effect.fn("EffectOutbox.cancelUnsettled")(
-        function* ({ threadId, effectTypes, reason }) {
+        function* ({ threadId, effectTypes, reason, preserveNeverAttemptedStarts = false }) {
           if (effectTypes.length === 0) return [];
           const now = DateTime.formatIso(yield* DateTime.now);
           const rows = yield* sql<{ readonly effect_id: string }>`
@@ -562,6 +578,7 @@ export const layer = Layer.effect(
             WHERE thread_id = ${threadId}
               AND status IN ('pending', 'running')
               AND effect_type IN ${sql.in(effectTypes)}
+              AND ${preserveNeverAttemptedStarts ? sql`NOT (effect_type = 'provider-turn.start' AND status = 'pending' AND attempt_count = 0)` : sql`1 = 1`}
             RETURNING effect_id
           `;
           return rows.map(({ effect_id }) => effect_id);
@@ -611,6 +628,7 @@ export const layer = Layer.effect(
             last_error = 'Cancelled because the server process ended before the effect completed.'
           WHERE status IN ('pending', 'running')
             AND effect_type IN ${sql.in(PROCESS_BOUND_EFFECT_TYPES)}
+            AND NOT (effect_type = 'provider-turn.start' AND status = 'pending' AND attempt_count = 0)
           RETURNING effect_id
         `;
         const requeuedRows = yield* sql<{ readonly effect_id: string }>`

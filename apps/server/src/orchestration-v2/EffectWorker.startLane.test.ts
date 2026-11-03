@@ -15,6 +15,8 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as Queue from "effect/Queue";
+import * as Stream from "effect/Stream";
 import * as HostPressureMonitor from "../fleet/pressure/HostPressureMonitor.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
@@ -293,6 +295,139 @@ it.effect("start lane preserves FIFO while a steer can claim when it is full", (
           Layer.provide(monitor),
           Layer.provide(SqlitePersistence.layerMemory),
         ),
+      ),
+    );
+  }),
+);
+
+it.effect("start lane daemon wakes each pending start under sustained critical pressure", () =>
+  Effect.gen(function* () {
+    const entered = yield* Queue.unbounded<string>();
+    const releases = yield* Effect.forEach([1, 2, 3], () => Deferred.make<void>());
+    const monitor = Layer.mock(HostPressureMonitor.HostPressureMonitor)({
+      current: Effect.succeed({
+        level: "critical",
+        since: "2026-01-01T00:00:00.000Z",
+        reasons: [],
+        loadPerCore: null,
+        eventLoopDelayMs: null,
+      }),
+    });
+    yield* Effect.gen(function* () {
+      const outbox = yield* EffectOutbox.EffectOutboxV2;
+      const workerLayer = EffectWorker.layer.pipe(
+        Layer.provide(
+          Layer.merge(
+            Layer.succeed(EffectOutbox.EffectOutboxV2, outbox),
+            Layer.mock(EffectWorker.OrchestrationEffectExecutorV2)({
+              execute: (effect) => {
+                const n = Number(effect.id.at(-1)) - 1;
+                const gate = releases[n];
+                return gate === undefined
+                  ? Effect.die("missing start gate")
+                  : Queue.offer(entered, effect.id).pipe(Effect.andThen(Deferred.await(gate)));
+              },
+            }),
+          ),
+        ),
+      );
+      yield* outbox.enqueue(
+        [1, 2, 3].map((n) => ({
+          id: `start-lane:daemon:${n}`,
+          commandId: CommandId.make(`start-lane:daemon:${n}`),
+          threadId: ThreadId.make(`start-lane:daemon:${n}`),
+          request: {
+            type: "provider-turn.start" as const,
+            runId: RunId.make(`start-lane:daemon:${n}`),
+          },
+        })),
+      );
+      yield* Effect.gen(function* () {
+        yield* EffectWorker.runDaemonWithOptions({ concurrency: 1 }).pipe(Effect.forkScoped);
+        yield* outbox.notifyAvailable(3);
+        for (const n of [1, 2, 3]) {
+          assert.equal(yield* Queue.take(entered), `start-lane:daemon:${n}`);
+          if (n < 3)
+            assert.deepInclude(Option.getOrThrow(yield* outbox.get(`start-lane:daemon:${n + 1}`)), {
+              status: "pending",
+              attemptCount: 0,
+            });
+          const gate = releases[n - 1];
+          if (gate === undefined) return yield* Effect.die("missing start gate");
+          yield* Deferred.succeed(gate, undefined);
+        }
+        yield* outbox.awaitSettled("start-lane:daemon:3");
+      }).pipe(Effect.provide(workerLayer), Effect.scoped);
+    }).pipe(
+      Effect.provide(
+        EffectOutbox.layer.pipe(
+          Layer.provide(monitor),
+          Layer.provide(SqlitePersistence.layerMemory),
+        ),
+      ),
+    );
+  }),
+);
+
+it.effect("start lane server pressure boundary shares one monitor with the runtime", () =>
+  Effect.gen(function* () {
+    const constructions = yield* Ref.make(0);
+    const reads = yield* Ref.make(0);
+    const monitor = Layer.effect(
+      HostPressureMonitor.HostPressureMonitor,
+      Ref.update(constructions, (n) => n + 1).pipe(
+        Effect.as(
+          HostPressureMonitor.HostPressureMonitor.of({
+            current: Ref.update(reads, (n) => n + 1).pipe(
+              Effect.as({
+                level: "critical" as const,
+                since: "2026-01-01T00:00:00.000Z",
+                reasons: [],
+                loadPerCore: null,
+                eventLoopDelayMs: null,
+              }),
+            ),
+            sample: Effect.succeed({
+              level: "critical",
+              since: "2026-01-01T00:00:00.000Z",
+              reasons: [],
+              loadPerCore: null,
+              eventLoopDelayMs: null,
+            }),
+            disk: Stream.empty,
+          }),
+        ),
+      ),
+    );
+    const productionBoundary = RuntimeLayer.layerStores.pipe(
+      RuntimeLayer.provideHostPressure(monitor),
+    );
+    yield* Effect.gen(function* () {
+      const outbox = yield* EffectOutbox.EffectOutboxV2;
+      const supplied = yield* HostPressureMonitor.HostPressureMonitor;
+      yield* supplied.current;
+      yield* outbox.enqueue(
+        [1, 2].map((n) => ({
+          id: `start-lane:boundary:${n}`,
+          commandId: CommandId.make(`start-lane:boundary:${n}`),
+          threadId: ThreadId.make(`start-lane:boundary:${n}`),
+          request: {
+            type: "provider-turn.start" as const,
+            runId: RunId.make(`start-lane:boundary:${n}`),
+          },
+        })),
+      );
+      assert.isTrue(
+        Option.isSome(yield* outbox.claimNext({ workerId: "boundary", leaseDurationMs: 30_000 })),
+      );
+      assert.isTrue(
+        Option.isNone(yield* outbox.claimNext({ workerId: "boundary", leaseDurationMs: 30_000 })),
+      );
+      assert.equal(yield* Ref.get(constructions), 1);
+      assert.equal(yield* Ref.get(reads), 3);
+    }).pipe(
+      Effect.provide(
+        Layer.merge(productionBoundary, monitor).pipe(Layer.provide(SqlitePersistence.layerMemory)),
       ),
     );
   }),

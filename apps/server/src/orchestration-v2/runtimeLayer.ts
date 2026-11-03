@@ -1,4 +1,5 @@
 import * as Handoffs from "../handoffs/Handoffs.ts";
+import * as HostPressureMonitor from "../fleet/pressure/HostPressureMonitor.ts";
 import * as PermissionProfiles from "../goatclaw/PermissionProfiles.ts";
 import * as AdapterInfrastructure from "../provider/ProviderOrchestrationAdapterInfrastructure.ts";
 import * as RemoteReportInbox from "../remoteReports/RemoteReportInbox.ts";
@@ -69,6 +70,11 @@ import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import * as CloudTaskSource from "./CloudTaskSourceService.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+
+export const provideHostPressure =
+  <E2, RIn2>(monitor: Layer.Layer<HostPressureMonitor.HostPressureMonitor, E2, RIn2>) =>
+  <ROut, E, RIn>(runtime: Layer.Layer<ROut, E, RIn>) =>
+    runtime.pipe(Layer.provide(monitor));
 
 export const layerEventInfrastructure = Layer.mergeAll(
   OrchestrationEventStore.layer,
