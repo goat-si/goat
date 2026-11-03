@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as Grants from "./BrowserOriginGrantsLayer.ts";
 import { BrowserClaimManifest } from "./BrowserClaimManifest.ts";
 import { BrowserClaimBind } from "./BrowserClaimBind.ts";
@@ -34,6 +35,7 @@ it.effect("reports unsupported capability as unavailable and removes claims from
   }).pipe(
     Effect.provide(
       Grants.layer.pipe(
+        Layer.provide(ServerSettings.layerTest()),
         Layer.provide(
           Layer.mergeAll(
             Layer.mock(ServerEnvironment.ServerEnvironment)({
@@ -95,6 +97,7 @@ it.effect("refuses an approved claim as unavailable when the bind service is abs
   }).pipe(
     Effect.provide(
       Grants.layer.pipe(
+        Layer.provide(ServerSettings.layerTest()),
         Layer.provide(
           Layer.merge(
             Layer.mock(ServerEnvironment.ServerEnvironment)({
@@ -146,6 +149,7 @@ it.effect(
     }).pipe(
       Effect.provide(
         Grants.layer.pipe(
+          Layer.provide(ServerSettings.layerTest()),
           Layer.provide(
             Layer.mock(ServerEnvironment.ServerEnvironment)({
               getDescriptor: Effect.succeed(
@@ -181,6 +185,7 @@ it.effect("does not publish a browser union while driver capability is unavailab
   }).pipe(
     Effect.provide(
       Grants.layer.pipe(
+        Layer.provide(ServerSettings.layerTest()),
         Layer.provide(
           Layer.merge(
             Layer.mock(ServerEnvironment.ServerEnvironment)({
