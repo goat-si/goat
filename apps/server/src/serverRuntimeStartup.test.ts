@@ -377,6 +377,7 @@ it.effect("shutdown finalizer bounds stalled intent I/O and logs unknown", () =>
       const fiber = yield* bootstrapScenario(
         "disabled-codex",
         Effect.void,
+        undefined,
         Option.none(),
         reader.atShutdown,
       ).pipe(
