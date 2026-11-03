@@ -25,6 +25,7 @@ type ExecFileSyncLike = (
   options: {
     encoding: "utf8";
     timeout: number;
+    readonly killSignal?: NodeJS.Signals;
     detached?: true;
     stdio?: ["ignore", "pipe", "ignore"];
   },
@@ -303,6 +304,8 @@ export const readEnvironmentFromLoginShell: ShellEnvironmentReader = (
   const output = execFile(shell, ["-ilc", buildEnvironmentCaptureCommand(shell, names)], {
     encoding: "utf8",
     timeout: 5000,
+    // Interactive shells can ignore SIGTERM, the default timeout signal.
+    killSignal: "SIGKILL",
     detached: true,
     stdio: ["ignore", "pipe", "ignore"],
   });
