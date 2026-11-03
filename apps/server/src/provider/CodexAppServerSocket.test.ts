@@ -142,3 +142,27 @@ it.live("a reader that falls behind its byte budget drops the connection", () =>
     assert.include(String(error.cause), "had not processed");
   }).pipe(Effect.scoped),
 );
+
+it.live("a stalled reader drops a flood of empty messages", () =>
+  Effect.gen(function* () {
+    const dir = yield* Effect.promise(() => NodeFSP.mkdtemp("/tmp/gcs-"));
+    const server = NodeHttp.createServer();
+    const wss = new WebSocketServer({ server });
+    yield* Effect.addFinalizer(() =>
+      Effect.promise(async () => {
+        wss.close();
+        server.close();
+        await NodeFSP.rm(dir, { recursive: true, force: true });
+      }),
+    );
+    const path = NodePath.join(dir, "socket");
+    server.listen(path);
+    yield* Effect.promise(() => new Promise<void>((resolve) => server.once("listening", resolve)));
+    const peer = new Promise<import("ws").WebSocket>((resolve) => wss.once("connection", resolve));
+    const channel = yield* connectCodexAppServerSocket(path, { maxPendingMessages: 2 });
+    const socket = yield* Effect.promise(() => peer);
+    for (let index = 0; index < 3; index++) socket.send("");
+    const error = yield* channel.closed;
+    assert.include(String(error.cause), "had not processed");
+  }).pipe(Effect.scoped),
+);

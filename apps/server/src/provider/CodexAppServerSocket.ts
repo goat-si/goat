@@ -13,6 +13,7 @@ const MAX_MESSAGE_BYTES = 64 * 1024 * 1024;
 const FRAGMENT_BYTES = 8 * 1024 * 1024;
 // Received messages the protocol has not consumed yet; a stalled reader drops the connection instead.
 const MAX_PENDING_BYTES = 256 * 1024 * 1024;
+const MAX_PENDING_MESSAGES = 4096;
 
 export class CodexAppServerSocketError extends Schema.TaggedError<CodexAppServerSocketError>()(
   "CodexAppServerSocketError",
@@ -21,10 +22,12 @@ export class CodexAppServerSocketError extends Schema.TaggedError<CodexAppServer
 
 export const connectCodexAppServerSocket = Effect.fn("CodexAppServerSocket.connect")(function* (
   socketPath: string,
-  options: { readonly maxPendingBytes?: number } = {},
+  options: { readonly maxPendingBytes?: number; readonly maxPendingMessages?: number } = {},
 ) {
   const maxPendingBytes = options.maxPendingBytes ?? MAX_PENDING_BYTES;
+  const maxPendingMessages = options.maxPendingMessages ?? MAX_PENDING_MESSAGES;
   let pendingBytes = 0;
+  let pendingMessages = 0;
   const incoming = yield* Queue.unbounded<
     { readonly text: string; readonly bytes: number },
     Cause.Done<void>
@@ -56,14 +59,17 @@ export const connectCodexAppServerSocket = Effect.fn("CodexAppServerSocket.conne
   ws.on("message", (data) => {
     const text = data.toString();
     const bytes = Buffer.byteLength(text);
-    if (pendingBytes + bytes > maxPendingBytes) {
+    if (pendingBytes + bytes > maxPendingBytes || pendingMessages >= maxPendingMessages) {
       finish(
-        new Error("Codex sent more than " + maxPendingBytes + " bytes GOAT had not processed."),
+        new Error(
+          "Codex sent more bytes or messages than GOAT had not processed within its limit.",
+        ),
       );
       ws.terminate();
       return;
     }
     pendingBytes += bytes;
+    pendingMessages++;
     Queue.offerUnsafe(incoming, { text, bytes });
   });
   ws.on("close", (code, reason) =>
@@ -114,6 +120,7 @@ export const connectCodexAppServerSocket = Effect.fn("CodexAppServerSocket.conne
     incoming: Stream.fromQueue(incoming).pipe(
       Stream.map((message) => {
         pendingBytes -= message.bytes;
+        pendingMessages--;
         return message.text;
       }),
     ),

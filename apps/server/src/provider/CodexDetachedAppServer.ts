@@ -33,6 +33,18 @@ export interface DetachedAppServerRecord {
   readonly createdAt: string;
 }
 
+const DetachedRecordSchema = Schema.Struct({
+  version: Schema.Literal(1),
+  instanceId: Schema.NonEmptyString,
+  name: Schema.NonEmptyString,
+  socketPath: Schema.NonEmptyString,
+  pgid: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))),
+  bootId: Schema.NullOr(Schema.String),
+  state: Schema.Literals(["spawning", "running", "terminating"]),
+  createdAt: Schema.String,
+});
+const decodeRecord = Schema.decodeUnknownSync(DetachedRecordSchema);
+
 export interface DetachedProcessTable {
   readonly groupMembers: (
     pgid: number,
@@ -353,14 +365,14 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
   });
 
   const readRecord = (file: string) =>
-    tryIo(
-      "Could not read a Codex process record.",
-      async () => JSON.parse(await NodeFSP.readFile(file, "utf8")) as DetachedAppServerRecord,
+    tryIo("Could not read a Codex process record.", async () =>
+      decodeRecord(JSON.parse(await NodeFSP.readFile(file, "utf8"))),
     );
 
   /** Startup barrier: every record left by an earlier server run is cleaned, tombstoned or blocked. */
   const cleanup = Effect.gen(function* () {
-    yield* Ref.set(globallyBlocked, undefined);
+    yield* Ref.set(globallyBlocked, "Codex process cleanup did not complete.");
+    let unreadable = false;
     const entries = yield* tryIo("Could not list Codex process records.", async () => {
       try {
         return await NodeFSP.readdir(directory);
@@ -374,23 +386,24 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
       const name = entry.slice(0, -".json".length);
       const record = yield* readRecord(NodePath.join(directory, entry)).pipe(Effect.option);
       if (record._tag === "None" || record.value.name !== name) {
+        unreadable = true;
         // No trustworthy instance id: any Codex provider could still own this process.
         yield* Ref.set(globallyBlocked, "A Codex process record (" + name + ") is unreadable.");
         outcomes.push({ name, outcome: "blocked" });
         continue;
       }
-      const outcome = yield* cleanupRecord(record.value).pipe(
-        Effect.catch(() => markBlocked(record.value)),
-      );
+      const outcome = yield* cleanupRecord(record.value);
       outcomes.push({ name, outcome });
     }
+    if (!unreadable) yield* Ref.set(globallyBlocked, undefined);
     return outcomes;
   }).pipe(Effect.withSpan("CodexDetachedAppServers.cleanup"));
 
   const ensureNotBlocked = Effect.fn("CodexDetachedAppServers.ensureNotBlocked")(function* (
     instanceId: string,
   ) {
-    if ((yield* Ref.get(globallyBlocked)) !== undefined) yield* cleanup.pipe(Effect.ignore);
+    if ((yield* Ref.get(globallyBlocked)) !== undefined)
+      yield* cleanup.pipe(Effect.catchCause(() => Effect.void));
     const global = yield* Ref.get(globallyBlocked);
     if (global !== undefined)
       return yield* new CodexDetachedAppServerError({
@@ -474,7 +487,9 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
       createdAt: DateTime.formatIso(yield* DateTime.now),
     };
     yield* writeRecord(spawning);
-    const wrapped = yield* input.command(socketPath);
+    const wrapped = yield* input
+      .command(socketPath)
+      .pipe(Effect.tapError(() => removeRecord(spawning).pipe(Effect.ignore)));
     const launched = yield* launch({
       command: wrapped.command,
       args: wrapped.args,

@@ -614,3 +614,70 @@ it.effect("an unreadable record blocks every Codex provider until it is resolved
     }),
   ),
 );
+
+it.effect("invalid record shapes block every provider", () =>
+  withRecordDirectory((directory) =>
+    Effect.gen(function* () {
+      const dir = NodePath.join(directory, "codex-app-servers");
+      yield* Effect.promise(() => NodeFSP.mkdir(dir));
+      const path = NodePath.join(dir, record.name + ".json");
+      const service = yield* makeDetachedAppServers({
+        stateDir: directory,
+        bootId: Effect.succeed("boot-one"),
+        processTable: processTable([]),
+        socketAccepts: () => Effect.succeed(false),
+        signalGroup: () => Effect.void,
+      });
+      for (const value of [null, { ...record, instanceId: undefined }]) {
+        yield* Effect.promise(() => NodeFSP.writeFile(path, JSON.stringify(value)));
+        assert.equal((yield* service.cleanup)[0]?.outcome, "blocked");
+        for (const provider of ["first", "second"]) {
+          const error = yield* service.ensureNotBlocked(provider).pipe(Effect.flip);
+          assert.include(error.message, "unreadable");
+        }
+      }
+    }),
+  ),
+);
+
+it.effect("a cleanup defect leaves all providers blocked", () =>
+  withRecordDirectory((directory) =>
+    Effect.gen(function* () {
+      const dir = NodePath.join(directory, "codex-app-servers");
+      yield* Effect.promise(() => NodeFSP.mkdir(dir));
+      yield* Effect.promise(() =>
+        NodeFSP.writeFile(NodePath.join(dir, record.name + ".json"), JSON.stringify(record)),
+      );
+      const service = yield* makeDetachedAppServers({
+        stateDir: directory,
+        bootId: Effect.die("unexpected"),
+        processTable: processTable([]),
+        socketAccepts: () => Effect.succeed(false),
+        signalGroup: () => Effect.void,
+      });
+      yield* service.cleanup.pipe(Effect.exit);
+      for (const provider of ["first", "second"]) {
+        const error = yield* service.ensureNotBlocked(provider).pipe(Effect.flip);
+        assert.include(error.message, "cleanup did not complete");
+      }
+    }),
+  ),
+);
+
+it.effect("a command construction failure removes its spawning record", () =>
+  withRecordDirectory((directory) =>
+    Effect.gen(function* () {
+      const service = yield* openService(directory, {});
+      yield* service
+        .open({
+          ...openInput,
+          command: () => Effect.fail(new CodexDetachedAppServerError({ detail: "failed" })),
+        })
+        .pipe(Effect.scoped, Effect.exit);
+      assert.deepEqual(
+        yield* Effect.promise(() => NodeFSP.readdir(NodePath.join(directory, "codex-app-servers"))),
+        [],
+      );
+    }),
+  ),
+);
