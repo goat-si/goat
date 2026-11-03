@@ -120,10 +120,14 @@ export interface AttachmentByteUpload {
 
 export type AttachmentUploadCycleResult =
   | { readonly status: "uploaded"; readonly attachmentId: string }
-  | { readonly status: "cancelled"; readonly attachmentId: string | null }
+  | {
+      readonly status: "cancelled";
+      readonly attachmentId: string | null;
+      readonly cleanupFailure?: { readonly step: "cleanup"; readonly error: unknown };
+    }
   | {
       readonly status: "failed";
-      readonly step: "mint" | "resolve-url" | "transfer" | "cleanup";
+      readonly step: "mint" | "resolve-url" | "transfer";
       readonly attachmentId: string | null;
       readonly error: unknown;
     };
@@ -170,7 +174,11 @@ export async function runAttachmentUploadCycle<E, RE>(input: {
       attachmentId,
     });
     if (!deletion.ok)
-      return { status: "failed", step: "cleanup", attachmentId, error: deletion.error };
+      return {
+        status: "cancelled",
+        attachmentId,
+        cleanupFailure: { step: "cleanup", error: deletion.error },
+      };
     return { status: "cancelled", attachmentId };
   }
 
