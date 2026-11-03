@@ -318,7 +318,12 @@ export function usePullRequestList(targets: readonly ListTarget[]) {
           (cause._tag === "EnvironmentRpcUnavailableError" ||
             (cause._tag === "ConnectionTransientError" &&
               "reason" in cause &&
-              (cause.reason === "network" || cause.reason === "timeout")));
+              (cause.reason === "network" ||
+                cause.reason === "timeout" ||
+                cause.reason === "transport" ||
+                cause.reason === "endpoint-unavailable" ||
+                cause.reason === "relay-unavailable" ||
+                cause.reason === "host-unreachable")));
         return [
           {
             environmentId: target.environmentId,

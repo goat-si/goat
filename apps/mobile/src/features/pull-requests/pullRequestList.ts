@@ -83,17 +83,24 @@ export function pullRequestListErrorMessages(
   }[],
   environmentLabels: ReadonlyMap<EnvironmentId, string>,
 ): string[] {
-  const unreachable = new Set<string>();
+  const unreachable = new Map<EnvironmentId, string>();
   const messages: string[] = [];
   for (const error of errors) {
     const label = environmentLabels.get(error.environmentId) || "Environment";
-    if (error.unreachable) unreachable.add(label);
+    if (error.unreachable) unreachable.set(error.environmentId, label);
     else messages.push(`${error.projectTitle || label}: ${error.message}`);
   }
-  if (unreachable.size)
-    messages.unshift(
-      `Couldn't reach ${unreachable.size === 1 ? "environment" : "environments"}: ${[...unreachable].join(", ")}`,
+  if (unreachable.size) {
+    const labelCounts = new Map<string, number>();
+    for (const label of unreachable.values())
+      labelCounts.set(label, (labelCounts.get(label) ?? 0) + 1);
+    const names = [...unreachable].map(([id, label]) =>
+      (labelCounts.get(label) ?? 0) > 1 ? `${label} (${id})` : label,
     );
+    messages.unshift(
+      `Couldn't reach ${unreachable.size === 1 ? "environment" : "environments"}: ${names.join(", ")}`,
+    );
+  }
   return messages;
 }
 

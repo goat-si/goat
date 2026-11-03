@@ -57,7 +57,9 @@ it("summarizes unreachable environments and keeps other PR list errors (#2464)",
 });
 
 it("distinguishes unreachable environments with the same or missing labels (#2464)", () => {
-  const ids = ["laptop-one", "laptop-two", "unknown-one", "unknown-two"].map(EnvironmentId.make);
+  const ids = ["laptop-one", "laptop-two", "unknown-one", "unknown-two"].map((id) =>
+    EnvironmentId.make(id),
+  );
   const errors = [...ids, ids[0]!].map((environmentId) => ({
     environmentId,
     projectTitle: "",
