@@ -18,6 +18,7 @@ import {
   issueExistingServerCredential,
   probeExistingServer,
   readForwardEnvironment,
+  type ExistingServerProbe,
 } from "./appServer.ts";
 import { targetConnectionKey } from "./command.ts";
 import { SshLaunchError, SshPairingError } from "./errors.ts";
@@ -144,15 +145,21 @@ export function makeExistingServerRoutes(input: {
     const known = input.resolvedTargets.get(targetConnectionKey(target)) ?? target;
     const key = targetConnectionKey(known);
     const auth = input.authFor(key);
+    const seen: Partial<Record<"app" | "managed", ExistingServerProbe>> = {};
     for (const kind of first === "app"
       ? (["app", "managed"] as const)
       : (["managed", "app"] as const)) {
       const owner = yield* probeExistingServer(known, kind, auth);
       if (owner.kind === "live" && owner.environmentId === environmentId)
         return { kind, owner, target: known, key };
+      seen[kind] = owner;
     }
+    const describe = (probe: ExistingServerProbe | undefined) =>
+      probe === undefined
+        ? "unknown"
+        : `${probe.kind}${probe.kind !== "live" && probe.reason ? ` ${probe.reason}` : ""}`;
     return yield* new SshLaunchError({
-      message: `GOAT environment ${environmentId} on ${target.alias} is unavailable (app: ${app.kind}${app.kind !== "live" && app.reason ? ` ${app.reason}` : ""}; managed: ${managed.kind}${managed.kind !== "live" && managed.reason ? ` ${managed.reason}` : ""}).`,
+      message: `GOAT environment ${environmentId} on ${target.alias} is unavailable (app: ${describe(seen.app)}; managed: ${describe(seen.managed)}).`,
       stdout: "",
     });
   });
