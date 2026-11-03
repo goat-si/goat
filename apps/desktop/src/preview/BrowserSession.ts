@@ -34,6 +34,7 @@ const ALLOWED_PREVIEW_PERMISSIONS: ReadonlySet<string> = new Set([
   // and every preview guest, so a page that goes fullscreen fills its own
   // webview instead of taking over the whole GOAT window.
   "fullscreen",
+  "pointerLock",
   // Loopback requests already succeed in Electron 44; permission-aware widgets query first.
   "loopback-network",
   // Deliberately NOT local-fonts: preview sessions run untrusted web content,
