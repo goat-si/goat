@@ -313,7 +313,7 @@ export const TEST_TITLES: readonly (readonly [path: string, from: string, to: st
     "keeps GOAT credentials paired with each running signal endpoint",
   ],
   [
-    "apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.test.ts",
+    "apps/server/src/orchestration-v2/Adapters/ClaudeAdapterV2.launchArgs.test.ts",
     "sends append launch arguments to Claude after the T3 instructions",
     "sends append launch arguments to Claude after the GOAT instructions",
   ],
