@@ -144,15 +144,50 @@ it.each([
   },
 );
 
-it("does not relink an unrelated detected PR without a matching validated branch reference (#2464)", async () => {
+it.each([
+  { name: "no reference", branch: null },
+  {
+    name: "stale reference",
+    branch: {
+      projectId,
+      repository: "fork/project",
+      number: 11,
+      url: "https://github.com/fork/project/pull/11",
+    },
+  },
+  {
+    name: "unrelated reference",
+    branch: {
+      projectId,
+      repository: "other/project",
+      number: 11,
+      url: "https://github.com/other/project/pull/11",
+    },
+  },
+])("does not relink an unrelated detected PR with $name (#2464)", async ({ branch }) => {
   state.identity = github;
-  state.branch = null;
+  state.branch = branch;
   state.writes = [];
   state.persistedState = "closed";
   await using screen = await render(<Harness url="https://github.com/other/project/pull/11" />);
   await act(async () => {});
   expect(screen.container.textContent).toContain(persisted.repository);
   expect(state.writes).toEqual([]);
+});
+
+it("waits for the matching server reference before relinking (#2464)", async () => {
+  state.identity = github;
+  state.branch = null;
+  state.writes = [];
+  state.persistedState = "closed";
+  const url = "https://github.com/fork/project/pull/11";
+  await using screen = await render(<Harness url={url} />);
+  await act(async () => {});
+  expect(state.writes).toEqual([]);
+  state.branch = { projectId, repository: "fork/project", number: 11, url };
+  await screen.rerender(<Harness url={url} />);
+  await act(async () => {});
+  expect(state.writes).toEqual([{ projectId, repository: "fork/project", number: 11, url }]);
 });
 
 it("leaves an explicitly linked open PR unchanged (#2464)", async () => {
