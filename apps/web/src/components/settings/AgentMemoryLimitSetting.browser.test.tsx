@@ -11,11 +11,11 @@ vi.mock(import("./useScopedSettings"), async (original) => ({
   useScopedSettingsWriteAllowed: () => true,
   useUpdateScopedSettings: () => state.update,
 }));
-vi.mock(import("./ScopedSwitch"), () => ({ ScopedSwitch: () => null }));
+vi.mock(import("./ScopedSwitch"), () => ({ ScopedSwitch: () => <></> }));
 vi.mock(import("./settingsLayout"), async (original) => ({
   ...(await original()),
   SettingsRow: ({ control }) => <div>{control}</div>,
-  SettingResetButton: () => null,
+  SettingResetButton: () => <></>,
 }));
 
 import { AgentMemoryLimitSetting } from "./AgentMemoryLimitSetting";
