@@ -690,6 +690,35 @@ describe("manager on a host running the app server", () => {
         leaveRemoteServerRunning: true,
       }).pipe(Layer.provideMerge(base)),
     );
+  it.live("finds a different managed environment on Git Bash and reports unusable records", () =>
+    Effect.gen(function* () {
+      const id = "11111111-1111-4111-8111-111111111111";
+      const other = "22222222-2222-4222-8222-222222222222";
+      const server = yield* startAppServer({ ...attachableDescriptor, environmentId: id });
+      const host = yield* makeHost({
+        pid: 55140,
+        port: server.port,
+        stateDir: ".goat/userdata",
+        windows: true,
+      });
+      const fs = yield* FileSystem.FileSystem;
+      yield* fs.writeFileString(`${host.home}/.goat/userdata/environment-id`, `${id}\n`);
+      yield* Effect.gen(function* () {
+        const manager = yield* SshEnvironmentManager;
+        expect(yield* manager.existingEnvironmentOther!(uploadTarget, other)).toEqual({
+          kind: "live",
+          environmentId: id,
+        });
+        expect(yield* manager.existingEnvironmentOther!(uploadTarget, id)).toEqual({
+          kind: "absent",
+        });
+        yield* fs.remove(`${host.home}/.goat/userdata/runtime-control.token`);
+        expect(yield* manager.existingEnvironmentOther!(uploadTarget, other)).toEqual({
+          kind: "unavailable",
+        });
+      }).pipe(Effect.provide(managerLayer(host.spawner)));
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
   const appProbes = (scripts: ReadonlyArray<string>) =>
     scripts.filter((script) => script.includes("GOAT_APP_SERVER=live")).length;
 
