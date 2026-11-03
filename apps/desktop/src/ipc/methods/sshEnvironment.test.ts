@@ -10,7 +10,7 @@ import {
   SshPasswordPromptError,
   SshPreparationTimeoutError,
 } from "@goat/ssh/errors";
-import { SshHostResult } from "@goat/contracts";
+import { AuthWebSocketTicketResultJson, SshHostResult, type DesktopBridge } from "@goat/contracts";
 import * as SshTunnel from "@goat/ssh/tunnel";
 import * as NetService from "@goat/shared/Net";
 import * as DesktopSshPasswordPrompts from "../../ssh/DesktopSshPasswordPrompts.ts";
@@ -24,6 +24,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
+import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import * as Tracer from "effect/Tracer";
@@ -37,10 +38,12 @@ import {
   ensureSshEnvironment,
   requireReadiedCloudMachine,
   getSshHostStatus,
+  issueSshWebSocketTicket,
   updateSshRuntime,
 } from "./sshEnvironment.ts";
 
 const decodeSshHostResult = Schema.decodeUnknownEffect(SshHostResult);
+const decodeWebSocketTicket = Schema.decodeUnknownEffect(AuthWebSocketTicketResultJson);
 
 vi.mock("electron", () => ({}));
 
@@ -90,6 +93,27 @@ const unusedSshService = {
 } satisfies DesktopSshEnvironment.DesktopSshEnvironment["Service"];
 
 describe("SSH runtime IPC", () => {
+  it.effect("sends a cloneable ticket result the renderer can decode (#2341)", () => {
+    const expiresAt = "2026-11-03T12:00:00.000Z";
+    const layer = layerHttpClient((request) =>
+      Effect.succeed(jsonResponse(request, { ticket: "test-ticket", expiresAt })),
+    );
+    return Effect.gen(function* () {
+      const encoded = yield* issueSshWebSocketTicket.handler({
+        httpBaseUrl: "http://127.0.0.1:3201/",
+        bearerToken: "test-bearer",
+      });
+      const received = structuredClone(encoded);
+      const expected = { ticket: "test-ticket", expiresAt } satisfies Awaited<
+        ReturnType<DesktopBridge["issueSshWebSocketTicket"]>
+      >;
+      assert.deepEqual(received, expected);
+      const decoded = yield* decodeWebSocketTicket(received);
+      assert.isTrue(Redacted.isRedacted(decoded.ticket));
+      assert.equal(Redacted.value(decoded.ticket), "test-ticket");
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("decodes structured status and failures over IPC", () =>
     Effect.gen(function* () {
       const results = [

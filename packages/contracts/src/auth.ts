@@ -273,6 +273,7 @@ export const AuthWebSocketTicketResult = Schema.Struct({
   expiresAt: Schema.DateTimeUtc,
 });
 export type AuthWebSocketTicketResult = typeof AuthWebSocketTicketResult.Type;
+export const AuthWebSocketTicketResultJson = Schema.toCodecJson(AuthWebSocketTicketResult);
 
 /**
  * Media routes share a ticket across requests; RPC uses a separate ticket.
