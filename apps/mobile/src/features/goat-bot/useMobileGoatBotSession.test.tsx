@@ -16,6 +16,7 @@ import {
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Schema from "effect/Schema";
+import * as Option from "effect/Option";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const harness = vi.hoisted(() => ({
@@ -27,6 +28,25 @@ const harness = vi.hoisted(() => ({
   items: [] as ReadonlyArray<unknown>,
   workerShell: null as object | null,
   shellReads: [] as Array<string | null>,
+  upload: vi.fn(),
+  verify: vi.fn(),
+}));
+const preparedConnection = Symbol("prepared connection");
+vi.mock("@goat/client-runtime/state/attachments", async (original) => ({
+  ...(await original<typeof import("@goat/client-runtime/state/attachments")>()),
+  runAttachmentUploadCycle: harness.upload,
+  verifyPersistedAttachmentUpload: harness.verify,
+}));
+vi.mock("../../state/assets", () => ({ assetEnvironment: { createUrl: {} } }));
+vi.mock("../../state/attachments", () => ({
+  attachmentEnvironment: { createUploadUrl: {}, remove: {} },
+}));
+vi.mock("../../state/session", () => ({
+  readEnvironmentScope: () => true,
+  environmentSession: { preparedConnectionValueAtom: () => preparedConnection },
+}));
+vi.mock("../../state/use-composer-drafts", () => ({
+  releaseUnusedComposerAttachmentFiles: async () => {},
 }));
 const connection = AsyncResult.success({ phase: "connected", generation: 1 });
 vi.mock("@effect/atom-react", () => ({
@@ -84,7 +104,10 @@ import { useMobileGoatBotSession } from "./useMobileGoatBotSession";
 const permissionAtom = Atom.make(true);
 const connectionAtom = Atom.make(connection);
 const detailAtom = Atom.make<unknown>(null);
-const registry = Object.assign(AtomRegistry.make(), { get: () => connection });
+const registry = Object.assign(AtomRegistry.make(), {
+  get: (atom: unknown) =>
+    atom === preparedConnection ? Option.some({ httpBaseUrl: "https://example.test" }) : connection,
+});
 let root: Root | null = null;
 let session: ReturnType<typeof useMobileGoatBotSession>;
 function Consumer() {
@@ -129,6 +152,77 @@ afterEach(async () => {
 });
 
 describe("mobile GOAT Bot session selection", () => {
+  it("retries an ambiguous send with the same uploaded references and client key (#2388)", async () => {
+    const env = EnvironmentId.make("retry-attachments");
+    const uploadedId = "pending-00000000-0000-4000-8000-000000000001-pdf";
+    const file = {
+      id: "local",
+      type: "file" as const,
+      name: "report.pdf",
+      mimeType: "application/pdf",
+      sizeBytes: 42,
+      fileUri: "file:///documents/report.pdf",
+    };
+    harness.environments = [environment(env)];
+    harness.items = [];
+    harness.upload.mockReset().mockResolvedValue({ status: "uploaded", attachmentId: uploadedId });
+    harness.verify.mockReset().mockResolvedValue({ status: "verified" });
+    const ingests: Array<{ idempotencyKey: string; attachments: unknown }> = [];
+    const firstAttempt = Promise.withResolvers<void>();
+    const secondAttempt = Promise.withResolvers<void>();
+    harness.run.mockImplementation(async (_registry, _command, args) => {
+      if (!("input" in args) || !("idempotencyKey" in args.input))
+        return { _tag: "Success", value: bot(env) };
+      ingests.push(args.input);
+      if (ingests.length === 1) firstAttempt.resolve();
+      else secondAttempt.resolve();
+      return ingests.length === 1
+        ? { _tag: "Failure", cause: "lost receipt" }
+        : { _tag: "Success", value: { inputId: "accepted", state: "accepted" } };
+    });
+    await render();
+    await act(async () => {
+      expect(session.onSend("hello", [file])).toBe(true);
+      await firstAttempt.promise;
+    });
+    expect(session.rows.some((row) => row.kind === "user" && row.delivery.state === "failed")).toBe(
+      true,
+    );
+    await act(async () => {
+      session.onRetryInput("request");
+      await secondAttempt.promise;
+    });
+    expect(ingests).toHaveLength(2);
+    expect(
+      ingests.map(({ idempotencyKey, attachments }) => ({ idempotencyKey, attachments })),
+    ).toEqual([
+      {
+        idempotencyKey: "request",
+        attachments: [
+          {
+            type: "file",
+            id: uploadedId,
+            name: "report.pdf",
+            mimeType: "application/pdf",
+            sizeBytes: 42,
+          },
+        ],
+      },
+      {
+        idempotencyKey: "request",
+        attachments: [
+          {
+            type: "file",
+            id: uploadedId,
+            name: "report.pdf",
+            mimeType: "application/pdf",
+            sizeBytes: 42,
+          },
+        ],
+      },
+    ]);
+    expect(harness.upload).toHaveBeenCalledTimes(1);
+  });
   it("keeps a missing legacy stored bot offline without ensuring on another server", async () => {
     harness.botRef = bot(EnvironmentId.make("missing-A"));
     harness.environments = [environment("missing-B")];

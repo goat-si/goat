@@ -1,4 +1,5 @@
 import { PrimaryConnectionTarget } from "@goat/client-runtime/connection";
+import { createGoatBotSendQueue } from "@goat/client-runtime/goatBot";
 import { createEnvironmentThreadShellAtoms } from "@goat/client-runtime/state/threads";
 import {
   applyShellStreamEvent,
@@ -1032,76 +1033,73 @@ describe("mobile composer drafts", () => {
     expect(appAtomRegistry.get(composerDraftsAtom)[draftKey]?.attachments).toHaveLength(101);
   });
 
-  it("keeps shared attachment files until every draft releases them", async () => {
-    const outboxLoad = vi.spyOn(threadOutboxManager, "load").mockResolvedValue(true);
-    onTestFinished(() => outboxLoad.mockRestore());
-    const file = {
-      id: "file-1",
-      type: "file" as const,
-      name: "report.pdf",
-      mimeType: "application/pdf",
-      sizeBytes: 42,
-      fileUri: "file:///documents/t3-composer-attachments/report.pdf",
-    };
-    appAtomRegistry.set(composerDraftsAtom, {
-      source: { text: "First draft", attachments: [file] },
-      copied: { text: "Second draft", attachments: [file] },
-    });
-
-    await releaseUnusedComposerAttachmentFiles([file]);
-    expect(composerAttachmentCleanupMocks.remove).not.toHaveBeenCalled();
-
-    appAtomRegistry.set(composerDraftsAtom, {
-      copied: { text: "Second draft", attachments: [file] },
-    });
-    await releaseUnusedComposerAttachmentFiles([file]);
-    expect(composerAttachmentCleanupMocks.remove).not.toHaveBeenCalled();
-
-    appAtomRegistry.set(composerDraftsAtom, {});
-    await releaseUnusedComposerAttachmentFiles([file]);
-    expect(composerAttachmentCleanupMocks.remove).toHaveBeenCalledWith(file.fileUri);
-  });
-
-  it("retains a referenced file-backed image and releases it once unreferenced", async () => {
-    const outboxLoad = vi.spyOn(threadOutboxManager, "load").mockResolvedValue(true);
-    onTestFinished(() => outboxLoad.mockRestore());
-    const image = {
-      id: "image-1",
-      type: "image" as const,
-      name: "photo.png",
-      mimeType: "image/png",
-      sizeBytes: 3,
-      fileUri: "file:///documents/t3-composer-attachments/photo.png",
-      previewUri: "file:///documents/t3-composer-attachments/photo.png",
-    };
-    appAtomRegistry.set(composerDraftsAtom, {
-      "environment-1:thread-1": { text: "look at this", attachments: [image] },
-    });
-
-    await releaseUnusedComposerAttachmentFiles([image]);
-    expect(composerAttachmentCleanupMocks.remove).not.toHaveBeenCalled();
-
-    appAtomRegistry.set(composerDraftsAtom, {});
-    appAtomRegistry.set(threadOutboxManager.queuedMessagesByThreadKeyAtom, {
-      "environment-1:thread-1": [
-        {
-          environmentId: EnvironmentId.make("environment-1"),
-          threadId: ThreadId.make("thread-1"),
-          messageId: MessageId.make("queued-image"),
-          commandId: CommandId.make("command-image"),
-          text: "look at this",
-          attachments: [image],
-          createdAt: "2026-08-31T12:00:00.000Z",
+  it.each([
+    ["draft", "file"],
+    ["queued message", "file"],
+    ["draft", "image"],
+    ["queued message", "image"],
+  ] as const)(
+    "keeps a discarded GOAT Bot attachment while another %s owns the %s (#2388)",
+    async (owner, type) => {
+      const load = vi.spyOn(threadOutboxManager, "load").mockResolvedValue(true);
+      onTestFinished(() => load.mockRestore());
+      await waitForComposerDraftsLoaded();
+      const environmentId = EnvironmentId.make("environment-1");
+      const threadId = ThreadId.make("thread-1");
+      const metadata = {
+        id: "shared",
+        name: "report.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 42,
+        fileUri: "file:///documents/t3-composer-attachments/shared.pdf",
+      };
+      const file =
+        type === "image"
+          ? { ...metadata, type, previewUri: metadata.fileUri }
+          : { ...metadata, type };
+      if (owner === "draft") {
+        appAtomRegistry.set(composerDraftsAtom, { shared: { text: "draft", attachments: [file] } });
+      } else {
+        appAtomRegistry.set(threadOutboxManager.queuedMessagesByThreadKeyAtom, {
+          shared: [
+            {
+              environmentId,
+              threadId,
+              messageId: MessageId.make("other"),
+              commandId: CommandId.make("other"),
+              text: "queued",
+              attachments: [file],
+              createdAt: "2026-08-31T12:00:00.000Z",
+            },
+          ],
+        });
+      }
+      let cleanup: Promise<void> | undefined;
+      const queue = createGoatBotSendQueue<DraftComposerAttachment>({
+        makeKey: () => "failed",
+        canDispatch: () => false,
+        send: async () => ({ requestKey: "unused" }),
+        onChange: () => {},
+        onForget: (_key, attachments) => {
+          cleanup = releaseUnusedComposerAttachmentFiles(attachments);
         },
-      ],
-    });
-    await releaseUnusedComposerAttachmentFiles([image]);
-    expect(composerAttachmentCleanupMocks.remove).not.toHaveBeenCalled();
-
-    appAtomRegistry.set(threadOutboxManager.queuedMessagesByThreadKeyAtom, {});
-    await releaseUnusedComposerAttachmentFiles([image]);
-    expect(composerAttachmentCleanupMocks.remove).toHaveBeenCalledExactlyOnceWith(image.fileUri);
-  });
+      });
+      queue.submit("failed", { environmentId, threadId }, [file]);
+      queue.discard("failed");
+      expect(queue.pendingInputs()).toEqual([]);
+      expect(cleanup).toBeDefined();
+      await cleanup;
+      expect(composerAttachmentCleanupMocks.remove).not.toHaveBeenCalled();
+      appAtomRegistry.set(composerDraftsAtom, {});
+      appAtomRegistry.set(threadOutboxManager.queuedMessagesByThreadKeyAtom, {});
+      cleanup = undefined;
+      queue.submit("unreferenced", { environmentId, threadId }, [file]);
+      queue.discard("failed");
+      expect(cleanup).toBeDefined();
+      await cleanup;
+      expect(composerAttachmentCleanupMocks.remove).toHaveBeenCalledExactlyOnceWith(file.fileUri);
+    },
+  );
 
   it("keeps an image through an inline read after its draft is removed", async () => {
     const { prepareTurnAttachments } =
