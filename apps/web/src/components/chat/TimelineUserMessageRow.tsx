@@ -70,6 +70,7 @@ import {
 import { chatMarkdownClipboardPayload } from "../../markdown-clipboard";
 import type { ChatMarkdownContextReference } from "../ChatMarkdown";
 import { cn } from "~/lib/utils";
+import { markdownProseDirection } from "~/textDirection";
 import { formatChatTimestampTooltip, formatDayAwareTimestamp } from "../../timestampFormat";
 import { WorkflowOpeningBlock } from "./WorkflowOpeningBlock";
 import { TimelineRowCtx, TimelineRowActivityCtx, type TimelineRow } from "./timelineRowContext";
@@ -899,6 +900,7 @@ const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBody(prop
         <div
           ref={revealRef}
           className={cn("relative", isCollapsed && "max-h-44 overflow-hidden")}
+          dir={markdownProseDirection(props.text)}
           data-user-message-body="true"
           data-thread-find-text="true"
           data-thread-find-fold={isCollapsed ? "" : undefined}

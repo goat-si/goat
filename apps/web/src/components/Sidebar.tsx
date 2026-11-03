@@ -249,34 +249,12 @@ import {
   type SidebarSweepAction,
 } from "./sidebar/SidebarThreadRow";
 import { SidebarDraftBlock } from "./sidebar/SidebarDraftBlock";
+import { sameSidebarProviderEntries } from "./sidebar/sidebarProviderEquality";
 import {
   SidebarDragBoundary,
   SidebarSectionHeader,
   SidebarSectionPlaceholder,
 } from "./sidebar/SidebarListMarkers";
-
-function sameSidebarProviderEntries(
-  left: ReadonlyMap<string, SidebarProviderEntry>,
-  right: ReadonlyMap<string, SidebarProviderEntry>,
-): boolean {
-  if (left.size !== right.size) return false;
-  for (const [instanceId, entry] of right) {
-    const other = left.get(instanceId);
-    if (
-      other === undefined ||
-      other.driverKind !== entry.driverKind ||
-      other.enabled !== entry.enabled ||
-      other.displayName !== entry.displayName ||
-      other.accentColor !== entry.accentColor ||
-      other.acpRegistryAgentId !== entry.acpRegistryAgentId ||
-      other.acpRegistryIconUrl !== entry.acpRegistryIconUrl ||
-      other.models !== entry.models
-    ) {
-      return false;
-    }
-  }
-  return true;
-}
 
 // Resolve providers per environment because default instance ids collide across environments.
 const sidebarProviderEntriesAtom = Atom.make((get) => {
@@ -324,6 +302,10 @@ function sameHolds(left: SidebarPriorityHolds, right: SidebarPriorityHolds): boo
     if (!right.has(key) || right.get(key) !== settledOverride) return false;
   }
   return true;
+}
+
+function scrollSidebarToTop(content: HTMLElement | null) {
+  content?.closest("[data-slot=scroll-area-viewport]")?.scrollTo({ top: 0 });
 }
 
 function threadShellKey(thread: Pick<SidebarThreadSummary, "environmentId" | "id">): string {
@@ -902,6 +884,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const [renamingTitle, setRenamingTitle] = useState("");
   const settlingThreadKeysRef = useRef(new Set<string>());
   const threadListRef = useRef<HTMLUListElement | null>(null);
+  const sidebarContentRef = useRef<HTMLDivElement | null>(null);
   const dragLabelOffsetRef = useRef(0);
   const listMotionRef = useRef<ReturnType<typeof createSidebarListMotion> | null>(null);
   const [dragState, setDragState] = useState<{
@@ -929,9 +912,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const openSubagent = openSubagentEntry?.thread ?? null;
 
   // A selection made under one scope can hold threads the next scope hides.
+  // The viewport outlives the scope and does not anchor, so a new list starts at the top.
   const setProjectScopeKeys = (keys: readonly string[]) => {
     clearSelection();
     setPersistedProjectScopeKeys(keys);
+    scrollSidebarToTop(sidebarContentRef.current);
   };
   // A scope whose project is gone reads as all projects once every snapshot has
   // loaded. The stored key is left alone, so the scope returns with its project.
@@ -2845,6 +2830,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       <ThreadContextDragGhost />
       <SidebarChromeHeader isElectron={isElectron} />
       <SidebarContent
+        ref={sidebarContentRef}
         className="min-h-full"
         fixedHeader={
           <>
