@@ -30,7 +30,68 @@ import {
   withListedPullRequests,
   withoutScratchProjectScope,
   pullRequestProjectChoices,
+  pullRequestListErrorMessages,
 } from "./pullRequestList";
+
+it("summarizes unreachable environments and keeps other PR list errors (#2464)", () => {
+  const one = EnvironmentId.make("one");
+  const two = EnvironmentId.make("two");
+  expect(
+    pullRequestListErrorMessages(
+      [
+        { environmentId: one, projectTitle: "", message: "offline", unreachable: true },
+        { environmentId: two, projectTitle: "", message: "offline", unreachable: true },
+        { environmentId: one, projectTitle: "Project", message: "offline" },
+        { environmentId: two, projectTitle: "", message: "Permission denied" },
+      ],
+      new Map([
+        [one, "Laptop"],
+        [two, "Desktop"],
+      ]),
+    ),
+  ).toEqual([
+    "Couldn't reach environments: Laptop, Desktop",
+    "Project: offline",
+    "Desktop: Permission denied",
+  ]);
+});
+
+it.each([undefined, ""])(
+  "identifies a single unreachable environment with missing label %s (#2464)",
+  (label) => {
+    const id = EnvironmentId.make("unknown-one");
+    const labels = label === undefined ? new Map<EnvironmentId, string>() : new Map([[id, label]]);
+    expect(
+      pullRequestListErrorMessages(
+        [{ environmentId: id, projectTitle: "", message: "offline", unreachable: true }],
+        labels,
+      ),
+    ).toEqual(["Couldn't reach environment: Environment (unknown-one)"]);
+  },
+);
+
+it("distinguishes unreachable environments with the same or missing labels (#2464)", () => {
+  const ids = ["laptop-one", "laptop-two", "unknown-one", "unknown-two"].map((id) =>
+    EnvironmentId.make(id),
+  );
+  const errors = [...ids, ids[0]!].map((environmentId) => ({
+    environmentId,
+    projectTitle: "",
+    message: "offline",
+    unreachable: true,
+  }));
+  expect(
+    pullRequestListErrorMessages(
+      errors,
+      new Map([
+        [ids[0]!, "Laptop"],
+        [ids[1]!, "Laptop"],
+      ]),
+    ),
+  ).toEqual([
+    "Couldn't reach environments: Laptop (laptop-one), Laptop (laptop-two), Environment (unknown-one), Environment (unknown-two)",
+  ]);
+});
 
 function entry(number: number, patch: Partial<PullRequestListEntry> = {}): PullRequestListEntry {
   return {
