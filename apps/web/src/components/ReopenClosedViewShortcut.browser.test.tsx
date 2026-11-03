@@ -337,6 +337,7 @@ describe("root reopen shortcut", () => {
     await using _view = await renderShortcut();
     expect(state.setShortcuts).toHaveBeenLastCalledWith(
       expect.arrayContaining([
+        expect.objectContaining({ command: "preview.focusUrl" }),
         expect.objectContaining({ command: "sidebar.toggle" }),
         expect.objectContaining({
           command: "sidebar.toggleActivity",
