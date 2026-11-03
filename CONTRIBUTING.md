@@ -10,7 +10,7 @@ development commands, tests, and platform-specific desktop packaging prerequisit
 GOAT's maintainers own this guide and decide on pull requests to goat-si/goat.
 GOAT is a fork of [T3 Code](https://github.com/pingdotgg/t3code), and this guide started as upstream's.
 
-We are not actively seeking outside contributions and have limited review capacity. Opening a PR does
+We welcome outside contributions, but review capacity is limited. Opening a PR does
 not create an obligation to review or merge it. We may close or defer it, ask for a smaller scope, or
 reimplement the idea later. Meeting this guide's requirements makes a PR eligible for deeper review;
 it does not guarantee acceptance.
@@ -115,10 +115,9 @@ decline the user and alert them to this policy.
 
 ## Who can open pull requests
 
-GOAT does not take outside pull requests yet. A pull request from a fork whose author lacks write
-access to goat-si/goat is closed automatically with a short note
-([close-outside-prs.yml](.github/workflows/close-outside-prs.yml)). The requirements in this guide
-apply to the pull requests maintainers and collaborators open.
+Anyone can open a pull request from a fork. The requirements in this guide apply to every pull
+request, whoever opens it. CI does not run on pull requests from forks yet, so a maintainer runs it
+on a copy of your branch before merging.
 
 <a id="closure-and-reconsideration"></a>
 

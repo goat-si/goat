@@ -1,17 +1,15 @@
 # CI
 
-goat-si/goat keeps three workflows active: `.github/workflows/goat-ci.yml` runs CI, `goat-nightly.yml` publishes
+goat-si/goat keeps two core workflows active: `.github/workflows/goat-ci.yml` runs CI, and `goat-nightly.yml` publishes
 nightlies after a manual goat-ci run on `dev` and promotes soaked nightlies to stable
-([stable promotion](../docs/internals/release-channels.md#stable-promotion)), and `close-outside-prs.yml` closes pull requests from
-forks whose authors lack write access. Every upstream workflow is disabled on GitHub. The pre-push hook
+([stable promotion](../docs/internals/release-channels.md#stable-promotion)). Every upstream workflow is disabled on GitHub. The pre-push hook
 `.vite-hooks/goat-workflow-guard.mjs` refuses a push that carries any other enabled workflow, and
 holds `goat-ci.yml` to the jobs `scope`, `ci`, `screenshot-gate`, `result`, `republish`,
 `refresh-republished` and `connect-auth-postgres`, the pinned
 `ubuntu-24.04` image, the EPYC self-hosted labels, or the trusted-run expressions below, the `push`, `pull_request`, and
 `workflow_dispatch` triggers, and an allowlist of actions.
 A new check is therefore a matrix task of `ci`. Any other new workflow, a
-`pull_request_target` trigger outside `close-outside-prs.yml`, or
-`actions/github-script` does not pass the guard.
+`pull_request_target` trigger, or `actions/github-script` does not pass the guard.
 
 Every goat-ci job picks its runner with a `runs-on` expression. A manual run, or a pull request whose head
 branch lives in goat-si/goat, runs on the EPYC self-hosted runners; a pull request from a fork runs
@@ -37,12 +35,8 @@ or `ubuntu-24.04` and keeps the matrix off it. Custom labels live on GitHub, so 
 re-registered with its default labels rejoins the matrix pool; restore one with
 `gh api -X PUT repos/goat-si/goat/actions/runners/<id>/labels -f 'labels[]=goat' -f 'labels[]=epyc-light'`.
 
-`close-outside-prs.yml` is the one `pull_request_target` workflow. It runs from the repository's default branch (`dev`)
-with a write token, so the guard pins it to the `opened` and `reopened` events and to
-`pull-requests: write`, and pins its single `close` job by a hash of the reviewed job. A
-command blocklist cannot prove that a script never fetches or runs pull request code, so any edit
-to that job, including its step names, scripts and env, fails until someone reviews it and
-updates the hash in the guard.
+goat-ci skips pull requests from forks for now, so a fork's pull request gets no `goat-ci-result`.
+To check one, a maintainer pushes its head to a branch in goat-si/goat and runs goat-ci there.
 
 ## When goat-ci runs
 
