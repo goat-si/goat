@@ -3591,7 +3591,6 @@ it.effect.each([
       );
     }),
 );
-
 it.effect("a claim frozen to a healthy model is not blocked by a held default", () =>
   Effect.gen(function* () {
     let claims = 0;
@@ -3654,7 +3653,6 @@ it.effect("a claim frozen to a healthy model is not blocked by a held default", 
     );
   }),
 );
-
 it.effect(
   "conflicts waiting on a held model do not crowd a healthy frozen claim off the page",
   () =>
@@ -3720,9 +3718,10 @@ it.effect(
       );
     }),
 );
-
 it.effect("a fenced release after the Hub binding changed keeps the attempt for recovery", () =>
   Effect.gen(function* () {
+    const afterSync = yield* Deferred.make<void>();
+    const released = yield* Deferred.make<void>();
     const model = realGeneration({
       resolveMemoryConflict: () =>
         Effect.fail(
@@ -3734,11 +3733,11 @@ it.effect("a fenced release after the Hub binding changed keeps the attempt for 
         ),
     });
     const client = peer({
-      // Settings moved to another Hub binding, so the client fences locally: the old lease
-      // may still be live at the Hub, and the attempt must not be retired on that answer.
       release: () =>
-        changeHub(1, { ...member, secretName: "rebound-fixture" }).pipe(
+        Deferred.await(afterSync).pipe(
+          Effect.andThen(changeHub(1, { ...member, secretName: "rebound-fixture" })),
           Effect.orDie,
+          Effect.andThen(Deferred.succeed(released, undefined)),
           Effect.andThen(Effect.fail(new M.MemoryHubError({ code: "fenced" }))),
         ),
     });
@@ -3748,7 +3747,9 @@ it.effect("a fenced release after the Hub binding changed keeps the attempt for 
         yield* conflict();
         const sync = yield* Sync.MemorySyncService;
         yield* sync.syncOnce;
+        yield* Deferred.succeed(afterSync, undefined);
         yield* sync.scheduleConflictResolution;
+        yield* Deferred.await(released);
         const sql = yield* SqlClient.SqlClient;
         const tickets = yield* sql<{
           state: string;
@@ -3760,7 +3761,6 @@ it.effect("a fenced release after the Hub binding changed keeps the attempt for 
     );
   }),
 );
-
 it.effect(
   "generation failure records one conflict report, retires the attempt, and the next attempt uses Q",
   () =>
