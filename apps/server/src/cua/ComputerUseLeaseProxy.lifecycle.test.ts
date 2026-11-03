@@ -395,7 +395,8 @@ describe("proxy lifecycle ownership across foreground expiry", () => {
         if (ending === "expiry") yield* TestClock.adjust("5 minutes");
         else if (ending === "stop") assert.isTrue(yield* leases.stop(thread));
         else if (ending === "pause") yield* leases.pause("takeover");
-        else if (ending === "replacement") yield* leases.control(thread, Option.none());
+        else if (ending === "replacement")
+          Option.getOrThrow(yield* leases.control(thread, Option.none()));
         else assert.isTrue(yield* leases.turnEnded(thread));
         yield* h.killed;
         const cancellation = yield* h.nextDispatch;
@@ -453,7 +454,7 @@ describe("proxy lifecycle ownership across foreground expiry", () => {
         if (ending === "pause" || ending === "idle" || ending === "expiry") {
           if (ending === "pause") yield* leases.resume;
           if (ending === "idle") {
-            const reused = yield* leases.control(thread, Option.some(admission));
+            const reused = Option.getOrThrow(yield* leases.control(thread, Option.some(admission)));
             assert.equal(reused.controlId, control.controlId);
           }
           yield* h.restarted;

@@ -208,7 +208,7 @@ it.effect("expiry while a request waits retires the earlier mention", () =>
               sessionId,
             );
             const runId = (yield* orchestrator.getThreadProjection(threadId)).runs.at(-1)!.id;
-            yield* leases.control(threadId, Option.none(), runId);
+            Option.getOrThrow(yield* leases.control(threadId, Option.none(), runId));
             const waiting = yield* request(
               { apps: ["com.example.Editor"], minutes: 5 },
               Duration.minutes(10),

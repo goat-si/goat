@@ -1294,6 +1294,7 @@ const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const writeSemaphore = yield* Semaphore.make(1);
   const cuaPolicy = yield* makeCuaCommittedPolicy;
+  const publishCua = cuaPolicy.commit;
   const checkpointAdmission = makeCheckpointReplicationAdmission();
   const routeState = yield* Effect.serviceOption(CodexRoute.CodexRouteState);
   const hubMarkerRef = yield* Ref.make<HubTransitionMarker | null>(null);
@@ -1473,8 +1474,8 @@ const make = Effect.gen(function* () {
           rename: (from, to) =>
             fs.rename(from, to).pipe(
               Effect.tap(() =>
-                publishCommittedHub(settings).pipe(
-                  Effect.andThen(cuaPolicy.publish(settings, Option.none())),
+                publishCua(settings).pipe(
+                  Effect.andThen(publishCommittedHub(settings)),
                   Effect.andThen(providerPolicy.publish(settings.enableAgentMemoryAccess)),
                   Effect.andThen(ownerPublication.publish(ownerProjection(settings))),
                 ),
@@ -1721,7 +1722,6 @@ const make = Effect.gen(function* () {
   );
 
   const materializeSettingsSecrets = yield* makeSettingsSecretMaterializer;
-
   const materializeChanges = (changes: Stream.Stream<ServerSettings>) =>
     changes.pipe(
       Stream.mapEffect((settings) =>

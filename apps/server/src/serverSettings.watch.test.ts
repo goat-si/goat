@@ -336,20 +336,26 @@ it.effect("computer use policy is published at rename before cleanup", () =>
       const service = yield* ServerSettingsModule.ServerSettingsService;
       yield* service.start;
       assert.isDefined(service.committedPolicy);
-      assert.deepStrictEqual(yield* service.committedPolicy, {
-        _tag: "committed",
-        enableCua: false,
-        blockedBrowserHosts: [],
-      });
+      assert.deepStrictEqual(
+        yield* service.committedPolicy ?? Effect.die("missing committed policy"),
+        {
+          _tag: "committed",
+          enableCua: false,
+          blockedBrowserHosts: [],
+        },
+      );
       yield* service.updateSettings({ enableCua: true });
       hold = true;
       const writer = yield* service.updateSettings({ enableCua: false }).pipe(Effect.forkChild);
       yield* Deferred.await(entered);
-      assert.deepStrictEqual(yield* service.committedPolicy, {
-        _tag: "committed",
-        enableCua: false,
-        blockedBrowserHosts: [],
-      });
+      assert.deepStrictEqual(
+        yield* service.committedPolicy ?? Effect.die("missing committed policy"),
+        {
+          _tag: "committed",
+          enableCua: false,
+          blockedBrowserHosts: [],
+        },
+      );
       yield* Deferred.succeed(release, undefined);
       yield* Fiber.join(writer);
     }).pipe(
@@ -381,27 +387,42 @@ it.effect("computer use policy follows locked reloads and fails closed on read f
         config.settingsPath,
         JSON.stringify({ enableCua: true, blockedBrowserHosts: ["example.com"] }),
       );
-      assert.deepStrictEqual(yield* service.committedPolicy, { _tag: "unavailable" });
+      assert.deepStrictEqual(
+        yield* service.committedPolicy ?? Effect.die("missing committed policy"),
+        { _tag: "unavailable" },
+      );
       yield* service.start;
-      assert.deepStrictEqual(yield* service.committedPolicy, {
-        _tag: "committed",
-        enableCua: true,
-        blockedBrowserHosts: ["example.com"],
-      });
+      assert.deepStrictEqual(
+        yield* service.committedPolicy ?? Effect.die("missing committed policy"),
+        {
+          _tag: "committed",
+          enableCua: true,
+          blockedBrowserHosts: ["example.com"],
+        },
+      );
       failRead = true;
       yield* Effect.exit(service.updateSettings({ standingInstructions: "test" }));
-      assert.deepStrictEqual(yield* service.committedPolicy, { _tag: "unavailable" });
+      assert.deepStrictEqual(
+        yield* service.committedPolicy ?? Effect.die("missing committed policy"),
+        { _tag: "unavailable" },
+      );
       failRead = false;
       yield* fs.writeFileString(config.settingsPath, "{");
       yield* Effect.exit(service.updateSettings({ standingInstructions: "test" }));
-      assert.deepStrictEqual(yield* service.committedPolicy, { _tag: "unavailable" });
+      assert.deepStrictEqual(
+        yield* service.committedPolicy ?? Effect.die("missing committed policy"),
+        { _tag: "unavailable" },
+      );
       yield* fs.writeFileString(config.settingsPath, JSON.stringify({ enableCua: false }));
       yield* service.updateSettings({ standingInstructions: "test" });
-      assert.deepStrictEqual(yield* service.committedPolicy, {
-        _tag: "committed",
-        enableCua: false,
-        blockedBrowserHosts: [],
-      });
+      assert.deepStrictEqual(
+        yield* service.committedPolicy ?? Effect.die("missing committed policy"),
+        {
+          _tag: "committed",
+          enableCua: false,
+          blockedBrowserHosts: [],
+        },
+      );
     }).pipe(
       Effect.provide(layerServerSettings()),
       Effect.provideService(FileSystem.FileSystem, controlledFs),
@@ -426,11 +447,14 @@ it.effect("computer use policy follows external edits at watcher revalidation", 
       yield* notify(config.settingsPath);
       yield* TestClock.adjust(100);
       yield* changes.pipe(Stream.runHead);
-      assert.deepStrictEqual(yield* service.committedPolicy, {
-        _tag: "committed",
-        enableCua: true,
-        blockedBrowserHosts: ["example.com"],
-      });
+      assert.deepStrictEqual(
+        yield* service.committedPolicy ?? Effect.die("missing committed policy"),
+        {
+          _tag: "committed",
+          enableCua: true,
+          blockedBrowserHosts: ["example.com"],
+        },
+      );
     }),
   ).pipe(Effect.provide(NodeServices.layer)),
 );

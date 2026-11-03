@@ -81,14 +81,14 @@ const fakeLeases = (input: {
     control: (threadId, grant) =>
       Effect.sync(() => {
         minted.push(grant);
-        return {
+        return Option.some({
           controlId: Option.isSome(grant) ? "control:unattended" : "control:interactive",
           threadId,
           expiresAt: Option.isSome(grant)
             ? grant.value.expiresAt
             : DateTime.makeUnsafe("2026-10-21T13:00:00.000Z"),
           ...(Option.isSome(grant) ? { handoffId: grant.value.handoffId } : {}),
-        };
+        });
       }),
     currentControl: () => Effect.die("unused"),
     controlState: () => Effect.die("unused"),

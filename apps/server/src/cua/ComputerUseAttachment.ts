@@ -177,7 +177,7 @@ export const computerUseAttachment = Effect.fn("ComputerUse.attachment")(functio
           nonPerson: input.origin._tag === "unattended",
         })
         .pipe(Effect.orElseSucceed(() => Option.none()))
-    : Option.some(yield* leases.value.control(input.threadId, lease, input.runId));
+    : yield* leases.value.control(input.threadId, lease, input.runId);
   if (Option.isNone(control)) return none("held", blockUserConfig);
   // Sessions are also prepared outside a turn: a re-attach, a rollback, a memory policy
   // rotation. With no run open, no turn end will settle the control this minted or reused,

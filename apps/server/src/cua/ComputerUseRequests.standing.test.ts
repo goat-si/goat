@@ -140,7 +140,9 @@ it.effect.each(["end", "stop all", "person esc", "disable"] as const)(
             if (termination === "stop all")
               yield* stopAllComputerUse(Option.some(leases), handoffs, sessionId);
             if (termination === "person esc") {
-              const control = yield* leases.control(threadId, yield* leases.active(threadId));
+              const control = Option.getOrThrow(
+                yield* leases.control(threadId, yield* leases.active(threadId)),
+              );
               let stops = 0;
               const observed = {
                 ...handoffs,
@@ -206,7 +208,9 @@ it.effect("a delayed Escape after turn end revokes session approval", () =>
           },
           sessionId,
         );
-        const control = yield* leases.control(threadId, yield* leases.active(threadId));
+        const control = Option.getOrThrow(
+          yield* leases.control(threadId, yield* leases.active(threadId)),
+        );
         const gate = yield* Deferred.make<void>();
         const report = yield* Deferred.await(gate).pipe(
           Effect.andThen(

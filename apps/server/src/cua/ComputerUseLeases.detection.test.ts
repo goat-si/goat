@@ -117,7 +117,7 @@ it.effect.skip(
         assert.isTrue((yield* leases.detection).frames);
         yield* Ref.set(accepted, Option.some(supported));
 
-        const control = yield* leases.control(thread, Option.none());
+        const control = Option.getOrThrow(yield* leases.control(thread, Option.none()));
         // The new control is announced to session lists first.
         yield* PubSub.take(signals);
         yield* Queue.offer(reports, {

@@ -36,12 +36,14 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
+import * as Scheduler from "effect/Scheduler";
 import type * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as SqlClient from "effect/sql/SqlClient";
 import { resolveSelfInvocation, type SelfInvocation } from "@goat/shared/nodeRuntime";
 
 import * as CuaDriver from "./CuaDriver.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as ChannelBotDirectory from "../channels/ChannelBotDirectory.ts";
 import { makeCallReservations } from "./ComputerUseCallReservations.ts";
 import type { AppHolder } from "./ComputerUseAppLeases.ts";
@@ -154,7 +156,7 @@ export class ComputerUseLeases extends Context.Service<
       threadId: ThreadId,
       lease: Option.Option<ComputerUseLease>,
       runId?: RunId,
-    ) => Effect.Effect<ComputerUseControl>;
+    ) => Effect.Effect<Option.Option<ComputerUseControl>>;
     /**
      * A control on every app without a grant, for a run whose thread is in full access (D16). It
      * ends once the thread leaves full access. None for unattended work while another thread
@@ -412,17 +414,22 @@ const make = Effect.gen(function* () {
     nonPerson = false,
   ) {
     const now = yield* DateTime.now;
+    const settings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
     // Checked and claimed with no yield between, so two unattended turns cannot both pass.
     if (everyApp === "unattended" && unattendedEveryApp(threadId, now) !== undefined)
       return undefined;
     const handoffId = Option.isSome(lease) ? lease.value.handoffId : undefined;
     // A driver started for this thread after all; the session list drops the blocked entry.
-    if (blockedTurns.delete(threadId)) yield* changed;
     // Read, decision, state change and notice are one synchronous, uninterruptible step: a Stop
     // cannot land between the read and the write, and an interrupt cannot skip the notice of a
     // grant this added or dropped (#1617, #1653).
     return yield* Effect.uninterruptible(
       Effect.suspend(() => {
+        if (Option.isSome(settings) && settings.value.committedPolicy !== undefined) {
+          const policy = Effect.runSync(settings.value.committedPolicy);
+          if (policy._tag !== "committed" || !policy.enableCua) return Effect.succeed(undefined);
+        }
+        const unblocked = blockedTurns.delete(threadId);
         const existing = controls.get(threadId);
         if (
           existing !== undefined &&
@@ -446,7 +453,7 @@ const make = Effect.gen(function* () {
           const moved =
             DateTime.toEpochMillis(reused.expiresAt) !== DateTime.toEpochMillis(existing.expiresAt);
           const notice =
-            implyFocus(reused) || existing.idle === true || moved || identityChanged
+            implyFocus(reused) || existing.idle === true || moved || identityChanged || unblocked
               ? changed
               : Effect.void;
           return Effect.as(notice, reused as ComputerUseControl);
@@ -482,13 +489,11 @@ const make = Effect.gen(function* () {
         implyFocus(next);
         return Effect.as(changed, next as ComputerUseControl);
       }),
-    );
+    ).pipe(Effect.provideService(Scheduler.PreventSchedulerYield, true));
   });
 
   const control = (threadId: ThreadId, lease: Option.Option<ComputerUseLease>, runId?: RunId) =>
-    mint(threadId, lease, undefined, runId).pipe(
-      Effect.map((record) => record as ComputerUseControl),
-    );
+    mint(threadId, lease, undefined, runId).pipe(Effect.map(Option.fromNullishOr));
 
   const everyAppControl = Effect.fn("ComputerUseLeases.everyAppControl")(function* (
     threadId: ThreadId,

@@ -192,6 +192,11 @@ export const makeCallReservation = <C extends AdmissionControl, E>(deps: {
           : undefined;
         if (denied !== undefined)
           return { status: "refused", detail: "app_not_allowed", app: denied } as const;
+        if (Option.isSome(settings) && settings.value.committedPolicy !== undefined) {
+          const policy = Effect.runSync(settings.value.committedPolicy);
+          if (policy._tag !== "committed" || !policy.enableCua)
+            return { status: "refused", detail: "disabled" } as const;
+        }
         // Confirmation retains the original ticket and its conflict coverage until cleanup.
         const decision: ComputerUseCallAdmission =
           request.action === "validate"

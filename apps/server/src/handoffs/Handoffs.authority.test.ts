@@ -196,7 +196,7 @@ it.effect(
             expect(approved.state).toBe("completed");
             const admission = yield* leases.active(threadId);
             expect(Option.isSome(admission)).toBe(true);
-            const control = yield* leases.control(threadId, admission);
+            const control = Option.getOrThrow(yield* leases.control(threadId, admission));
             expect(yield* leases.foregroundAvailable(threadId, "Check build")).toBe(false);
             expect(
               yield* leases.callReservation(threadId, {

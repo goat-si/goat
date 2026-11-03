@@ -52,7 +52,7 @@ layer("ComputerUseLeases blocked turns", (it) => {
         // A later turn that gets a driver is no longer blocked.
         const granted = ThreadId.make("thread-granted");
         yield* leases.blocked(granted, block);
-        yield* leases.control(granted, Option.none());
+        Option.getOrThrow(yield* leases.control(granted, Option.none()));
         assert.deepEqual(yield* leases.blockedTurns, []);
       }),
   );
@@ -77,7 +77,7 @@ layer("ComputerUseLeases blocked turns", (it) => {
         yield* leases.blocked(first, block);
         assert.isTrue(yield* woke);
         // Its first control clears it.
-        yield* leases.control(first, Option.none());
+        Option.getOrThrow(yield* leases.control(first, Option.none()));
         assert.isTrue(yield* woke);
         yield* leases.stop(first);
         yield* woke;
