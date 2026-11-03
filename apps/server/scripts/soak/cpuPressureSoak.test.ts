@@ -14,6 +14,10 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import { isSoakExitPrompt } from "../dev-replay-agent.ts";
+import {
+  codexSocketTransportMode,
+  shouldUseCodexSocketTransport,
+} from "../../src/provider/CodexDetachedAppServerLive.ts";
 import { holdSoakWindow, openRelay } from "./clients.ts";
 
 it("relays bytes and disconnects the owned connection", async () => {
@@ -761,47 +765,81 @@ describe("soak input safety", () => {
       LANG: "en_US.UTF-8",
       GOAT_DEV_AUTH_TOKEN: "credential",
       GOAT_SOAK_PROVIDER_LIFECYCLE_LOG: "/tmp/lifecycle",
+      GOAT_CODEX_APP_SERVER_TRANSPORT: "stdio",
     });
+    for (const survival of ["off", "restart", "always"] as const)
+      expect(shouldUseCodexSocketTransport(codexSocketTransportMode("linux", env), survival)).toBe(
+        false,
+      );
     expect(env).not.toHaveProperty("SECRET_TOKEN");
     expect(env).not.toHaveProperty("VITE_WS_URL");
   });
-  it.live("kills the server group after a SIGKILLed driver (#2468)", () =>
+  it.live("starts the server directly on Windows without a watchdog", () =>
     Effect.promise(async () => {
-      const moduleUrl = new URL("./cpuPressureSoak.ts", import.meta.url).href;
-      const serverCode = `const {spawn} = require("node:child_process"); const c = spawn(process.execPath, ["-e", "process.stdin.resume()"], {stdio:["pipe","ignore","ignore"]}); c.once("spawn", () => console.log(c.pid)); process.stdin.resume();`;
-      const driverCode = `const m = await import(${JSON.stringify(moduleUrl)}); const owned = await m.spawnWatchedServer(process.execPath, ["-e", ${JSON.stringify(serverCode)}], {stdio:["pipe","pipe","ignore"]}, 1); const lines = (await import("node:readline")).createInterface({input:owned.server.child.stdout})[Symbol.asyncIterator](); const grandchild = (await lines.next()).value; console.log("fixture-ready " + owned.server.child.pid + " " + grandchild); process.stdin.resume();`;
-      const driver = guardChild(
-        NodeChildProcess.spawn(process.execPath, ["--input-type=module", "-e", driverCode], {
+      const { spawnWatchedServer } = await import("./cpuPressureSoak.ts");
+      const owned = await spawnWatchedServer(
+        process.execPath,
+        ["-e", "process.stdin.resume()"],
+        {
           stdio: ["pipe", "pipe", "pipe"],
-        }),
-        () => {},
+        },
+        "ignore",
+        "win32",
       );
-      const exited = new Promise<NodeJS.Signals | null>((resolve) =>
-        driver.once("exit", (_, signal) => resolve(signal)),
-      );
-      const lines = NodeReadline.createInterface({ input: driver.stdout })[Symbol.asyncIterator]();
-      let pgid: number | undefined;
       try {
-        const line = await lines.next();
-        expect(line.done).toBe(false);
-        expect(line.value).toMatch(/^fixture-ready \d+ \d+$/);
-        pgid = Number((line.value as string).split(" ")[1]);
-        driver.kill("SIGKILL");
-        expect(await exited).toBe("SIGKILL");
-        expect((await lines.next()).done).toBe(true);
-        expect(() => process.kill(-pgid!, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
+        expect(owned.server.child.spawnfile).toBe(process.execPath);
+        expect(owned.watchdog).toBeUndefined();
       } finally {
-        if (driver.exitCode === null && driver.signalCode === null) driver.kill("SIGKILL");
-        await exited;
-        if (pgid !== undefined) {
-          try {
-            process.kill(-pgid, "SIGKILL");
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
-          }
+        await cleanupOwned([owned.server]);
+        if (owned.watchdog) {
+          owned.watchdog.child.stdin?.end();
+          await owned.watchdog.exited;
         }
       }
     }),
+  );
+  // oxlint-disable-next-line goat/no-global-process-runtime -- Process groups are unavailable on Windows.
+  it.live.skipIf(process.platform === "win32")(
+    "kills the server group after a SIGKILLed driver (#2468)",
+    () =>
+      Effect.promise(async () => {
+        const moduleUrl = new URL("./cpuPressureSoak.ts", import.meta.url).href;
+        const serverCode = `const {spawn} = require("node:child_process"); const c = spawn(process.execPath, ["-e", "process.stdin.resume()"], {stdio:["pipe","ignore","ignore"]}); c.once("spawn", () => console.log(c.pid)); process.stdin.resume();`;
+        const driverCode = `const m = await import(${JSON.stringify(moduleUrl)}); const owned = await m.spawnWatchedServer(process.execPath, ["-e", ${JSON.stringify(serverCode)}], {stdio:["pipe","pipe","ignore"]}, 1); const lines = (await import("node:readline")).createInterface({input:owned.server.child.stdout})[Symbol.asyncIterator](); const grandchild = (await lines.next()).value; console.log("fixture-ready " + owned.server.child.pid + " " + grandchild); process.stdin.resume();`;
+        const driver = guardChild(
+          NodeChildProcess.spawn(process.execPath, ["--input-type=module", "-e", driverCode], {
+            stdio: ["pipe", "pipe", "pipe"],
+          }),
+          () => {},
+        );
+        const exited = new Promise<NodeJS.Signals | null>((resolve) =>
+          driver.once("exit", (_, signal) => resolve(signal)),
+        );
+        const lines = NodeReadline.createInterface({ input: driver.stdout })[
+          Symbol.asyncIterator
+        ]();
+        let pgid: number | undefined;
+        try {
+          const line = await lines.next();
+          expect(line.done).toBe(false);
+          expect(line.value).toMatch(/^fixture-ready \d+ \d+$/);
+          pgid = Number((line.value as string).split(" ")[1]);
+          driver.kill("SIGKILL");
+          expect(await exited).toBe("SIGKILL");
+          expect((await lines.next()).done).toBe(true);
+          expect(() => process.kill(-pgid!, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
+        } finally {
+          if (driver.exitCode === null && driver.signalCode === null) driver.kill("SIGKILL");
+          await exited;
+          if (pgid !== undefined) {
+            try {
+              process.kill(-pgid, "SIGKILL");
+            } catch (error) {
+              if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+            }
+          }
+        }
+      }),
   );
 
   it("routes only termination signals to cleanup and removes the handlers", () => {
