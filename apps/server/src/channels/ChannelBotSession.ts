@@ -158,7 +158,6 @@ const make = Effect.gen(function* () {
   // One binding decision at a time keeps generations and the one-current-row rule simple.
   const gate = yield* Semaphore.make(1);
   const nowIso = DateTime.now.pipe(Effect.map(DateTime.formatIso));
-
   const { currentRow, setState, touch, writeIntent, recordRun } = sessionStore(sql);
 
   const fail = (
@@ -779,6 +778,7 @@ const make = Effect.gen(function* () {
               '"). Say it again, or open the thread in GOAT.',
         owner,
         pending.sequence,
+        own,
       );
       return;
     }
@@ -823,7 +823,7 @@ const make = Effect.gen(function* () {
               '"). Answer again, or answer in the thread.',
         owner,
         pending.sequence,
-        ids.messageId,
+        [ids.messageId],
       );
       return;
     }

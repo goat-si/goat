@@ -124,6 +124,53 @@ const claimedFromTeammate = (key: string, memoryGrantCeiling?: "read" | "read_wr
   });
 
 describe("GOAT Bot sessions under the requester's current authority", () => {
+  it.effect(
+    "#2193 preserves the newer session follow-up fence when the earlier one is refused",
+    () => {
+      const harness = sessionHarness();
+      return Effect.gen(function* () {
+        yield* setupBot;
+        yield* linkTeammate;
+        const task = yield* dispatchNow(yield* receiveFromTeammate("look: task", "two-session-1"));
+        const gateway = yield* ChannelGateway.ChannelGateway;
+        const reception = yield* ChannelReceptionService.ChannelReceptionService;
+        const ledger = yield* ChannelLedger.ChannelLedger;
+        const runtime = yield* ChannelRuntime.ChannelRuntime;
+        const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+        const first = yield* gateway.ingest(
+          slackInput("more:" + task.taskId + " first", "two-session-2", "1760000000.000900", "U2"),
+          slackContext,
+        );
+        yield* reception.receive(first.inputId, runtime.ownerToken);
+        const second = yield* gateway.ingest(
+          slackInput("more:" + task.taskId + " second", "two-session-3", "1760000000.000900", "U2"),
+          slackContext,
+        );
+        yield* reception.receive(second.inputId, runtime.ownerToken);
+        const [firstForward, secondForward] = yield* ledger.listPendingForwards(10);
+        assert.isDefined(firstForward);
+        assert.isDefined(secondForward);
+        const secondFence = turnSteerIdsFor(second.inputId, "first").messageId;
+        assert.strictEqual(
+          (yield* ledger.getTask(task.taskId))!.pendingAnswerMessageId,
+          secondFence,
+        );
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`UPDATE channel_identities SET granted_scopes_json = '[]' WHERE connection_id = 'slack-1' AND external_actor_id = 'U2'`;
+        yield* dispatcher.forward(firstForward!, runtime.ownerToken);
+        assert.strictEqual(
+          (yield* ledger.getTask(task.taskId))!.pendingAnswerMessageId,
+          secondFence,
+        );
+        assert.lengthOf(yield* ledger.listPendingForwards(10), 1);
+        yield* dispatcher.forward(secondForward!, runtime.ownerToken);
+        assert.isUndefined((yield* ledger.getTask(task.taskId))!.pendingAnswerMessageId);
+        assert.lengthOf(yield* ledger.listPendingForwards(10), 0);
+        assert.lengthOf(harness.world.sends, 0);
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
   it.effect.each([
     [true, false, false],
     [false, false, false],
@@ -204,7 +251,7 @@ describe("GOAT Bot sessions under the requester's current authority", () => {
             "permission changed",
             runtime.ownerToken,
             pending!.sequence,
-            answerFence,
+            [answerFence],
           );
         else yield* dispatcher.forward(pending!, runtime.ownerToken);
         assert.lengthOf(yield* ledger.listPendingForwards(10), 0);

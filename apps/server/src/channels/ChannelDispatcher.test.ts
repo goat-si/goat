@@ -31,7 +31,7 @@ import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
-import { answerForwardIdsFor, taskEventIdFor } from "./channelIds.ts";
+import { answerForwardIdsFor, taskEventIdFor, turnSteerIdsFor } from "./channelIds.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import {
   defaultScript,
@@ -45,6 +45,55 @@ import {
   slackContext,
   slackInput,
 } from "./testkit/ChannelHarness.ts";
+
+it.effect(
+  "#2193 preserves the newer non-session follow-up fence when the earlier one is refused",
+  () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      yield* linkSlackUser();
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+      yield* gateway.ingest(slackInput("do: inspect the build", "two-worker-1"), slackContext);
+      yield* runtime.drain;
+      const task = yield* onlyTask;
+      const firstInput = ChannelInputId.make("input:two-worker-first");
+      const secondInput = ChannelInputId.make("input:two-worker-second");
+      for (const inputId of [firstInput, secondInput]) {
+        yield* commitTransition(
+          ledger,
+          (yield* ledger.getTask(task.taskId))!,
+          {
+            type: "task.followup.received",
+            payload: { inputId, text: "follow-up", from: "Owner", generation: task.generation },
+          },
+          {
+            owner: runtime.ownerToken,
+            forward: true,
+            pendingAnswerMessageId: turnSteerIdsFor(inputId, "first").messageId,
+          },
+        );
+      }
+      const [firstForward, secondForward] = yield* ledger.listPendingForwards(10);
+      assert.isDefined(firstForward);
+      assert.isDefined(secondForward);
+      const secondFence = turnSteerIdsFor(secondInput, "first").messageId;
+      assert.strictEqual((yield* ledger.getTask(task.taskId))!.pendingAnswerMessageId, secondFence);
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`UPDATE channel_identities SET granted_scopes_json = '[]' WHERE connection_id = 'slack-1' AND external_actor_id = 'U1'`;
+      yield* dispatcher.forward(firstForward!, runtime.ownerToken);
+      assert.strictEqual((yield* ledger.getTask(task.taskId))!.pendingAnswerMessageId, secondFence);
+      assert.lengthOf(yield* ledger.listPendingForwards(10), 1);
+      yield* dispatcher.forward(secondForward!, runtime.ownerToken);
+      assert.isUndefined((yield* ledger.getTask(task.taskId))!.pendingAnswerMessageId);
+      assert.lengthOf(yield* ledger.listPendingForwards(10), 0);
+      assert.lengthOf(harness.world.sends, 0);
+    }).pipe(Effect.provide(harness.layer));
+  },
+);
 
 it.effect.each([true, false])(
   "#2193 drops a revoked answer on a cancelled non-session task, owns fence: %s",

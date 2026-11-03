@@ -1157,7 +1157,7 @@ const make = Effect.gen(function* () {
           "The requester’s permission changed; your answer was not sent. Open the thread in GOAT.",
           owner,
           pending.sequence,
-          ids.messageId,
+          [ids.messageId],
         ).pipe(
           Effect.mapError(
             (cause) =>
@@ -1207,7 +1207,7 @@ const make = Effect.gen(function* () {
               "\"). Lower the thread's mode in GOAT and answer again, or answer in the thread.",
             owner,
             pending.sequence,
-            ids.messageId,
+            [ids.messageId],
           );
           return;
         }

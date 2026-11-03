@@ -47,6 +47,10 @@ export const makeForwardFollowUp = Effect.fn("channel.makeForwardFollowUp")(func
     ) {
       return;
     }
+    const own: ReadonlyArray<string> = [
+      turnSteerIdsFor(event.payload.inputId, "first").messageId,
+      turnSteerIdsFor(event.payload.inputId, "queued").messageId,
+    ];
     // A person stopped the worker's run in GOAT after this follow-up was recorded. Sending it
     // would start the worker again; instead the follow-up is dropped and the fence lifted, so
     // reconciliation records the stop as it does for any stopped run.
@@ -79,14 +83,10 @@ export const makeForwardFollowUp = Effect.fn("channel.makeForwardFollowUp")(func
         .getThreadRecords(worker.threadId, ["messages", "runs"])
         .pipe(Effect.option);
       if (Option.isNone(projection)) return;
-      const ids = [
-        turnSteerIdsFor(event.payload.inputId, "first").messageId,
-        turnSteerIdsFor(event.payload.inputId, "queued").messageId,
-      ];
-      const message = projection.value.messages.find((candidate) => ids.includes(candidate.id));
+      const message = projection.value.messages.find((candidate) => own.includes(candidate.id));
       acceptedRun = projection.value.runs.find(
         (run) =>
-          ids.includes(run.userMessageId) || (message !== undefined && run.id === message.runId),
+          own.includes(run.userMessageId) || (message !== undefined && run.id === message.runId),
       );
       if (message !== undefined && acceptedRun === undefined) return;
       if (acceptedRun === undefined) {
@@ -96,6 +96,7 @@ export const makeForwardFollowUp = Effect.fn("channel.makeForwardFollowUp")(func
           "The requester’s permission changed; your follow-up was not sent. Open the thread in GOAT.",
           owner,
           pending.sequence,
+          own,
         ).pipe(
           Effect.mapError(
             (cause) =>
@@ -169,6 +170,7 @@ export const makeForwardFollowUp = Effect.fn("channel.makeForwardFollowUp")(func
                 '"). Say it again, or open the thread in GOAT.',
           owner,
           pending.sequence,
+          own,
         );
         return;
       }
@@ -191,10 +193,6 @@ export const makeForwardFollowUp = Effect.fn("channel.makeForwardFollowUp")(func
     }
     // Bind the task to the run that took the follow-up. Only the follow-up that set the fence
     // lifts it; an earlier one leaves a later one's fence in place.
-    const own = [
-      turnSteerIdsFor(event.payload.inputId, "first").messageId,
-      turnSteerIdsFor(event.payload.inputId, "queued").messageId,
-    ] as ReadonlyArray<string>;
     const ownsFence =
       latest.pendingAnswerMessageId !== undefined && own.includes(latest.pendingAnswerMessageId);
     if (ownsFence || latest.task.worker.runId !== sent.success.run.id) {

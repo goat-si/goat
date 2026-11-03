@@ -10,9 +10,12 @@ export const refuseForward = Effect.fn("channel.refuseForward")(function* (
   text: string,
   owner: string,
   sequence: number,
-  answerMessageId?: string,
+  messageIds: ReadonlyArray<string>,
 ) {
   const latest = (yield* ledger.getTask(stored.task.taskId)) ?? stored;
+  const ownsFence =
+    latest.pendingAnswerMessageId !== undefined &&
+    messageIds.includes(latest.pendingAnswerMessageId);
   if (
     latest.task.status === "completed" ||
     latest.task.status === "failed" ||
@@ -21,7 +24,7 @@ export const refuseForward = Effect.fn("channel.refuseForward")(function* (
     yield* ledger.completeForward({
       owner,
       sequence,
-      clearPendingAnswerMessageId: answerMessageId,
+      clearPendingAnswerMessageId: ownsFence ? latest.pendingAnswerMessageId : undefined,
     });
     return;
   }
@@ -44,9 +47,7 @@ export const refuseForward = Effect.fn("channel.refuseForward")(function* (
     {
       owner,
       narrate: true,
-      ...(answerMessageId !== undefined && latest.pendingAnswerMessageId !== answerMessageId
-        ? {}
-        : { pendingAnswerMessageId: null }),
+      ...(ownsFence ? { pendingAnswerMessageId: null } : {}),
       completeForwardSequence: sequence,
     },
   );
