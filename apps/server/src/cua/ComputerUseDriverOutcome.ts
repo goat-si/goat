@@ -187,13 +187,18 @@ function classifiedSafety(
     (code) => code === "stopped_by_person" || code === "screen_locked",
   );
   const reportedInput = isRecord(structured.safety) && structured.safety.possibleCommit === true;
+  const lockedEffectStarted =
+    (structured.code === "screen_locked" || nestedCode === "screen_locked") &&
+    structured.effect !== undefined &&
+    structured.effect !== "refused";
   if (
-    terminal &&
-    (error !== undefined ||
-      result.isError === true ||
-      envelope.status === "unknown_outcome" ||
-      envelope.status === "not_started") &&
-    (reportedInput || (envelope.status === "unknown_outcome" && effect === "write"))
+    lockedEffectStarted ||
+    (terminal &&
+      (error !== undefined ||
+        result.isError === true ||
+        envelope.status === "unknown_outcome" ||
+        envelope.status === "not_started") &&
+      (reportedInput || (envelope.status === "unknown_outcome" && effect === "write")))
   )
     return {
       ...classifyActionOutcome({ effect: "write", status: "indeterminate", dispatched: true }),

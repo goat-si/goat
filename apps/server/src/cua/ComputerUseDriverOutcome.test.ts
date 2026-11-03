@@ -30,6 +30,24 @@ const parsed = (line: string) =>
     result: { structuredContent: Record<string, unknown>; content: Array<{ text: string }> };
   };
 
+it("a stop reason retains a screen lock's possible input effect", () => {
+  for (const effect of ["unknown", "committed", "unverifiable"]) {
+    const structuredContent = {
+      code: "screen_locked",
+      refusal: { code: "stopped_by_person" },
+      effect,
+    };
+    assert.deepInclude(
+      driverOutcomeSafety("click", { result: { isError: true, structuredContent } }),
+      {
+        possibleCommit: true,
+        retryClass: "never",
+        code: "write_indeterminate",
+      },
+    );
+  }
+});
+
 it("does not interpret a successful read's terminal-looking data as input", () => {
   const safety = driverOutcomeSafety("list_apps", {
     status: "settled",

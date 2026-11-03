@@ -102,7 +102,7 @@ const classifyDriverError = (reply: ComputerUsePrimitiveReply): ScreenRunError |
   const merged = state.reason;
   const driverCode = merged ?? nested ?? outer;
   const lockedEffectStarted =
-    driverCode === "screen_locked" &&
+    (nested === "screen_locked" || outer === "screen_locked") &&
     structured?.effect !== undefined &&
     structured.effect !== "refused";
   const possibleCommit = state.possibleCommit || lockedEffectStarted;

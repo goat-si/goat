@@ -19,6 +19,75 @@ const replyIdentity = {
   callId: 1,
 };
 
+it("a stop reason retains a screen lock's possible input effect", () => {
+  expect(
+    driverError({
+      ...replyIdentity,
+      status: "settled",
+      result: {
+        isError: true,
+        structuredContent: {
+          code: "screen_locked",
+          refusal: { code: "stopped_by_person" },
+          effect: "unknown",
+        },
+      },
+    }),
+  ).toMatchObject({
+    code: "stopped_by_person",
+    effectStarted: true,
+    safety: { possibleCommit: true, retryClass: "never", code: "write_indeterminate" },
+  });
+});
+
+it.live("a stopped screen-lock input reaches the host as possibly committed", () => {
+  const { host, sent } = fixture({
+    click: new DriverError({
+      code: "screen_locked",
+      refusal: { code: "stopped_by_person" },
+      effect: "unknown",
+    }),
+  });
+  return Effect.gen(function* () {
+    const service = yield* ScreenRunService;
+    const result = yield* service
+      .runCell({
+        runId: "r",
+        turnId: "t",
+        threadId: "thread",
+        environmentId: "env",
+        invocation: context.invocation,
+        source:
+          "const app = await screen.app({bundle_id: 'org.example.Editor', window_id: 7}); await app.click({x: 1, y: 2});",
+      })
+      .pipe(Effect.flip);
+    expect(result).toMatchObject({
+      code: "stopped_by_person",
+      effectStarted: true,
+      safety: { possibleCommit: true, retryClass: "never" },
+    });
+    expect(sent.filter((entry) => entry.tool === "click")).toHaveLength(1);
+    yield* service.finishTurn({
+      runId: "r",
+      turnId: "t",
+      threadId: "thread",
+      environmentId: "env",
+      reason: "test",
+    });
+  }).pipe(
+    Effect.provide(
+      ScreenRunService.layerWithRuntime({
+        dispatcher: createScreenDispatchRouter({ app: host }),
+        invocation: {
+          command: process.execPath,
+          entrypoint: NodeURL.fileURLToPath(new URL("../bin.ts", import.meta.url)),
+        },
+        assetResolver: () => resolveScreenRuntimeAsset("dev"),
+      }).pipe(Layer.provide(NodeServices.layer)),
+    ),
+  );
+});
+
 it.each([
   { isError: true, content: { code: "screen_locked", effect: "unknown" } },
   { isError: true, content: { refusal: { code: "screen_locked" }, effect: "committed" } },
