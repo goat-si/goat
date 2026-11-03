@@ -6,6 +6,13 @@ import {
   BACKEND_STOP_TIMEOUT,
   type DesktopBackendStartConfig,
   type PreflightFailure,
+  writeBackendStopIntent,
+  removeBackendStopIntent,
+  waitForBackendStopIntent,
+  recordBackendStopRequest,
+  initialBackendManagerState,
+  type ActiveBackendRun,
+  type BackendManagerState,
 } from "./DesktopBackendProcess.ts";
 export * from "./DesktopBackendProcess.ts";
 // @effect-diagnostics nodeBuiltinImport:off -- Path joining here is a pure platform operation.
@@ -41,6 +48,7 @@ import {
   SERVER_EXIT_CODE_DATABASE_AHEAD,
   SERVER_EXIT_CODE_STATE_DIR_OWNED,
   PRIMARY_LOCAL_ENVIRONMENT_ID,
+  type DesktopStopReason,
 } from "@goat/contracts";
 
 import * as DesktopObservability from "../app/DesktopObservability.ts";
@@ -73,12 +81,7 @@ export const PRIMARY_INSTANCE_ID: BackendInstanceId = BackendInstanceId(
   PRIMARY_LOCAL_ENVIRONMENT_ID,
 );
 
-export type BackendStopReason =
-  | "quit"
-  | "update-install"
-  | "recovery-retry"
-  | "recovery-stop"
-  | "instance-closed";
+export type BackendStopReason = DesktopStopReason;
 
 export interface DesktopBackendInstance {
   readonly id: BackendInstanceId;
@@ -114,46 +117,6 @@ export interface BackendInstanceSpec {
   }) => Effect.Effect<void>;
 }
 
-interface ActiveBackendRun {
-  readonly id: number;
-  readonly scope: Scope.Closeable;
-  readonly spawnReady: Deferred.Deferred<void>;
-  readonly boundedStop: Ref.Ref<boolean>;
-  readonly fiber: Option.Option<Fiber.Fiber<void, never>>;
-  readonly pid: Option.Option<number>;
-  readonly exitObserved: boolean;
-  readonly stopRequested: boolean;
-  readonly stopRequest: Option.Option<{
-    readonly reason: BackendStopReason;
-    readonly atNanos: bigint;
-  }>;
-  readonly exitAtNanos: Option.Option<bigint>;
-}
-
-interface BackendManagerState {
-  readonly desiredRunning: boolean;
-  readonly ready: boolean;
-  readonly config: Option.Option<DesktopBackendStartConfig>;
-  readonly active: Option.Option<ActiveBackendRun>;
-  readonly restartAttempt: number;
-  readonly startupRetryAttempt: number;
-  readonly preflightFailureAttempt: number;
-  readonly restartFiber: Option.Option<Fiber.Fiber<void, never>>;
-  readonly nextRunId: number;
-}
-
-const initialState: BackendManagerState = {
-  desiredRunning: false,
-  ready: false,
-  config: Option.none(),
-  active: Option.none(),
-  restartAttempt: 0,
-  startupRetryAttempt: 0,
-  preflightFailureAttempt: 0,
-  restartFiber: Option.none(),
-  nextRunId: 1,
-};
-
 const activePid = (active: Option.Option<ActiveBackendRun>): Option.Option<number> =>
   Option.flatMap(active, (run) => run.pid);
 
@@ -187,7 +150,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
   const wslEnvironment = yield* DesktopWslEnvironment.DesktopWslEnvironment;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const httpClient = yield* HttpClient.HttpClient;
-  const state = yield* Ref.make(initialState);
+  const state = yield* Ref.make(initialBackendManagerState);
   const mutex = yield* Semaphore.make(1);
   const startupFailure = yield* makeStartupFailureReporter(spec.onStartupFailure);
   const recovery = yield* makeRecoveryBudget();
@@ -374,6 +337,15 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
         const runScope = yield* Scope.make("sequential");
         const spawnReady = yield* Deferred.make<void>();
         const boundedStop = yield* Ref.make(false);
+        const intent = {
+          requested: yield* Ref.make(false),
+          written: yield* Deferred.make<void>(),
+          settled: yield* Deferred.make<void>(),
+        };
+        if (config.value.bootstrap.desktopStopIntentPath === undefined) {
+          yield* Deferred.succeed(intent.written, undefined);
+          yield* Deferred.succeed(intent.settled, undefined);
+        }
         const runId = yield* Ref.modify(state, (latest) => [
           latest.nextRunId,
           {
@@ -382,6 +354,8 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
               id: latest.nextRunId,
               scope: runScope,
               spawnReady,
+              intent,
+              intentPath: config.value.bootstrap.desktopStopIntentPath,
               boundedStop,
               fiber: Option.none(),
               pid: Option.none(),
@@ -475,6 +449,15 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
                   ] as const;
                 },
               );
+
+              if (observedExit || startedPid === undefined)
+                yield* Effect.forkDetach(
+                  removeBackendStopIntent(
+                    fileSystem,
+                    config.value.bootstrap.desktopStopIntentPath,
+                    intent,
+                  ),
+                );
 
               if (!isCurrentRun && observedExit && startedPid !== undefined) {
                 const write = backendOutputLog.recordStop({
@@ -584,7 +567,9 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
                   preserve: true,
                 });
                 const active = Option.getOrUndefined((yield* Ref.get(state)).active);
-                if (active?.id === runId && active.stopRequested) yield* backendOutputLog.markStop;
+                if (active?.id === runId && active.stopRequested) {
+                  yield* backendOutputLog.markStop;
+                }
               }),
             );
           }),
@@ -695,7 +680,12 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
             onFailure: (error) => finalizeRun(error.message),
             onSuccess: (exit) => finalizeRun(exit.reason, Option.getOrUndefined(exit.code)),
           }),
-          Effect.ensuring(Scope.close(runScope, Exit.void).pipe(Effect.ignore)),
+          Effect.ensuring(
+            waitForBackendStopIntent(intent).pipe(
+              Effect.andThen(Scope.close(runScope, Exit.void)),
+              Effect.ignore,
+            ),
+          ),
         );
 
         // A pending spawn must outlive instance teardown to release any late child.
@@ -793,6 +783,9 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
     recoveryStatus = "stopped";
     const locked = Effect.gen(function* () {
       const atNanos = yield* Clock.monotonicTimeNanos;
+      const currentRun = Option.getOrUndefined((yield* Ref.get(state)).active);
+      if (currentRun && !currentRun.exitObserved && !currentRun.stopRequested)
+        yield* Ref.set(currentRun.intent.requested, true);
       const result = yield* Ref.modify(state, (latest) => {
         const active = Option.map(latest.active, (run) =>
           run.exitObserved || run.stopRequested
@@ -821,6 +814,15 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
       const run = Option.getOrUndefined(result.active);
       if (run && options?.timeout) yield* Ref.set(run.boundedStop, true);
       if (run && result.newStopRequest) {
+        yield* Effect.forkDetach(
+          writeBackendStopIntent(
+            run,
+            reason,
+            fileSystem,
+            backendOutputLog.recordStop,
+            options?.timeout !== undefined,
+          ),
+        );
         yield* backendOutputLog.markStop;
       }
       return result;
@@ -847,13 +849,12 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
     const { active, restartFiber, notifyShutdown, newStopRequest } = acquired.value;
     const run = Option.getOrUndefined(active);
     if (run && newStopRequest) {
-      const write = backendOutputLog.recordStop({
-        message: "backend stop requested",
-        level: "INFO",
-        details: `pid=${Option.match(run.pid, { onNone: () => "pending", onSome: String })} reason=${reason} graceMs=${Duration.toMillis(DEFAULT_BACKEND_TERMINATE_GRACE)} timeoutMs=${options?.timeout ? Duration.toMillis(options.timeout) : "none"}`,
-      });
-      if (options?.timeout) yield* Effect.forkDetach(write);
-      else yield* write;
+      yield* recordBackendStopRequest(
+        run.pid,
+        reason,
+        options?.timeout,
+        backendOutputLog.recordStop,
+      );
     }
 
     const finish = Effect.gen(function* () {

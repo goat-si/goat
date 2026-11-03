@@ -110,6 +110,7 @@ import * as GitManager from "./git/GitManager.ts";
 import * as EnvironmentTheme from "./environmentTheme.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
+import * as DesktopStopIntentReader from "./desktopStopIntent.ts";
 import * as ServerOwnership from "./serverOwnership.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import * as ServerSettings from "./serverSettings.ts";
@@ -916,10 +917,9 @@ const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
     OpenCodeRuntime.layer.pipe(
       Layer.provide(
         Layer.unwrap(
-          Effect.gen(function* () {
-            const config = yield* ServerConfig.ServerConfig;
-            return OpenCodeServerLedger.layer({ stateDir: config.stateDir });
-          }),
+          Effect.map(ServerConfig.ServerConfig, (config) =>
+            OpenCodeServerLedger.layer({ stateDir: config.stateDir }),
+          ),
         ),
       ),
     ),
@@ -943,6 +943,7 @@ const layerRuntimeCoreDependencies = layerRuntimeCoreDependenciesBase.pipe(
   ),
 );
 const layerRuntimeDependencies = layerRuntimeCoreDependencies.pipe(
+  Layer.provideMerge(DesktopStopIntentReader.layerFromServerConfig),
   Layer.provideMerge(layerUsage),
   Layer.provideMerge(layerBackground),
   Layer.provideMerge(layerResourceDiagnostics),

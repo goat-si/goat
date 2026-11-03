@@ -21,6 +21,7 @@ import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopObservability from "../app/DesktopObservability.ts";
 import { BACKEND_STOP_TIMEOUT } from "./DesktopBackendProcess.ts";
 import type * as Harness from "./DesktopBackendManager.test.ts";
+import { registerStopIntentTests } from "./DesktopBackendStopIntentTestHelpers.ts";
 
 export function registerBackendStopTests({
   makeTestInstance,
@@ -31,6 +32,7 @@ export function registerBackendStopTests({
   makeProcess: typeof Harness.makeProcess;
   baseConfig: Parameters<typeof Harness.makeTestInstance>[0]["config"] & {};
 }) {
+  registerStopIntentTests({ makeTestInstance, makeProcess, baseConfig });
   it.effect("PR 2418: stop cancels a pending backend restart", () =>
     Effect.scoped(
       Effect.gen(function* () {

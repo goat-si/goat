@@ -260,6 +260,7 @@ export const make = DesktopLifecycle.of({
     yield* Effect.gen(function* () {
       yield* Effect.yieldNow;
       yield* Ref.set(state.quitting, true);
+      yield* Ref.set(state.stopReason, "relaunch");
       yield* requestDesktopShutdownAndWait();
       if (environment.isDevelopment) {
         yield* electronApp.exit(75);
