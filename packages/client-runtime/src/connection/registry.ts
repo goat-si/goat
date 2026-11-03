@@ -740,12 +740,6 @@ export const make = Effect.gen(function* () {
     },
   );
 
-  const registerPlatform = Effect.fn("EnvironmentRegistry.registerPlatform")(function* (
-    registration: PrimaryConnectionRegistration,
-  ) {
-    yield* installPlatformRegistration(registration);
-  });
-
   /** Succeeds with `false` when a best-effort write failed, so an identical repeat retries it. */
   const applyPlatformRegistrations = Effect.fn("EnvironmentRegistry.reconcilePlatform")(function* (
     platformRegistrations: ReadonlyArray<PlatformConnectionRegistration>,
@@ -765,6 +759,12 @@ export const make = Effect.gen(function* () {
 
   const reconcileLock = yield* Semaphore.make(1);
   let appliedPlatformRegistrations: ReadonlyArray<PlatformConnectionRegistration> | undefined;
+  const registerPlatform = Effect.fn("EnvironmentRegistry.registerPlatform")(function* (
+    registration: PrimaryConnectionRegistration,
+  ) {
+    appliedPlatformRegistrations = undefined;
+    yield* installPlatformRegistration(registration);
+  }, reconcileLock.withPermits(1));
   // Untraced: platforms repeat unchanged registrations every few seconds, and a
   // span per poll would make idle clients export traces continuously.
   const reconcilePlatform = Effect.fnUntraced(function* (
