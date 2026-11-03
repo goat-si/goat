@@ -56,6 +56,20 @@ it("summarizes unreachable environments and keeps other PR list errors (#2464)",
   ]);
 });
 
+it.each([undefined, ""])(
+  "identifies a single unreachable environment with missing label %s (#2464)",
+  (label) => {
+    const id = EnvironmentId.make("unknown-one");
+    const labels = label === undefined ? new Map<EnvironmentId, string>() : new Map([[id, label]]);
+    expect(
+      pullRequestListErrorMessages(
+        [{ environmentId: id, projectTitle: "", message: "offline", unreachable: true }],
+        labels,
+      ),
+    ).toEqual(["Couldn't reach environment: Environment (unknown-one)"]);
+  },
+);
+
 it("distinguishes unreachable environments with the same or missing labels (#2464)", () => {
   const ids = ["laptop-one", "laptop-two", "unknown-one", "unknown-two"].map((id) =>
     EnvironmentId.make(id),
