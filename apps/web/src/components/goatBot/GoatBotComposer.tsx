@@ -13,6 +13,7 @@ import { ComposerAttachAction } from "../chat/ComposerAttachAction";
 import { toastManager } from "../ui/toast";
 import {
   releaseGoatBotAttachments,
+  releaseUnownedGoatBotAttachments,
   retainGoatBotAttachments,
   stageGoatBotFiles,
   type GoatBotAttachmentSupport,
@@ -44,6 +45,7 @@ export function GoatBotComposer({
   const [attachments, setDraftAttachments] = useState<ReadonlyArray<GoatBotDraftAttachment>>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const draftRef = useRef(attachments);
+  const lifetime = useRef<AbortController | null>(null);
   const setAttachments = (
     update: (
       current: ReadonlyArray<GoatBotDraftAttachment>,
@@ -55,7 +57,15 @@ export function GoatBotComposer({
       return next;
     });
   // oxlint-disable-next-line goat/react-effect-budget -- unsent previews are browser object URLs.
-  useEffect(() => () => releaseGoatBotAttachments(draftRef.current), [draftRef]);
+  useEffect(() => {
+    const controller = new AbortController();
+    lifetime.current = controller;
+    return () => {
+      controller.abort();
+      lifetime.current = null;
+      releaseGoatBotAttachments(draftRef.current);
+    };
+  }, [draftRef]);
   const trimmed = text.trim();
   const canSubmit = !disabled && (trimmed.length > 0 || attachments.length > 0);
   const submit = () => {
@@ -68,10 +78,16 @@ export function GoatBotComposer({
   };
   const addFiles = async (files: ReadonlyArray<File>) => {
     if (attachmentSupport === null || files.length === 0) return false;
+    const signal = lifetime.current?.signal;
+    if (!signal) return false;
     const { staged, error } = await stageGoatBotFiles(files, {
       existingCount: draftRef.current.length,
       support: attachmentSupport,
     });
+    if (signal.aborted) {
+      releaseUnownedGoatBotAttachments(staged);
+      return false;
+    }
     if (staged.length > 0) {
       retainGoatBotAttachments(staged);
       setAttachments((current) => [...current, ...staged]);

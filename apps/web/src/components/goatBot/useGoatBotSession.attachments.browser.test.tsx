@@ -256,6 +256,50 @@ it("releases staged files when preparation finishes after the composer unmounts"
   expect(revoked).toHaveBeenCalledTimes(2);
 });
 
+it("keeps a staged preview shared with another owner after the composer unmounts", async () => {
+  const port = setup(true);
+  const owner = image("live-preview-owner");
+  const staged = { ...image("late-preview-alias"), previewUrl: owner.previewUrl };
+  let start!: () => void;
+  let finish!: () => void;
+  let complete!: () => void;
+  const started = new Promise<void>((resolve) => {
+    start = resolve;
+  });
+  const finished = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  mocks.stageGate = new Promise<void>((resolve) => {
+    complete = resolve;
+  });
+  mocks.stageStarted = start;
+  mocks.stageFinished = finish;
+  mocks.staged = staged;
+  using revoked = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+  attachments.retainGoatBotAttachments([owner]);
+  try {
+    await using screen = await render(
+      <GoatBotChannelContext value={port}>
+        <Session />
+      </GoatBotChannelContext>,
+    );
+    await expect.element(screen.getByRole("button", { name: "Attach files" })).toBeVisible();
+    const input = screen.container.querySelector<HTMLInputElement>('input[type="file"]');
+    if (!input) throw new Error("expected the file picker");
+    await userEvent.upload(input, staged.file);
+    await started;
+    await screen.unmount();
+    await act(async () => {
+      complete();
+      await finished;
+    });
+    expect(revoked).not.toHaveBeenCalledWith(owner.previewUrl);
+  } finally {
+    attachments.releaseGoatBotAttachments([owner]);
+  }
+  expect(revoked).toHaveBeenCalledExactlyOnceWith(owner.previewUrl);
+});
+
 function image(id: string) {
   return {
     id,

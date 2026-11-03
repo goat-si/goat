@@ -183,6 +183,24 @@ export function retainGoatBotAttachments(attachments: ReadonlyArray<GoatBotDraft
   }
 }
 
+export function releaseUnownedGoatBotAttachments(
+  attachments: ReadonlyArray<GoatBotDraftAttachment>,
+) {
+  const revoked = new Set<string>();
+  for (const attachment of attachments) {
+    if (
+      attachment.type === "image" &&
+      !previewOwners.has(attachment.previewUrl) &&
+      !revoked.has(attachment.previewUrl)
+    ) {
+      revoked.add(attachment.previewUrl);
+      URL.revokeObjectURL(attachment.previewUrl);
+    }
+    if (!attachmentOwners.has(attachment.id)) pendingRelease.set(attachment.id, attachment);
+  }
+  releaseUnownedUploads();
+}
+
 /** Drops uploads and previews after their last draft or message owner releases them. */
 export function releaseGoatBotAttachments(attachments: ReadonlyArray<GoatBotDraftAttachment>) {
   for (const attachment of attachments) {
