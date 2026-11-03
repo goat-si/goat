@@ -4438,6 +4438,12 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                       ${booleanInt(options.autoResume)}
                       OR (${booleanInt(options.snooze)} AND julianday(json_extract(item.payload_json, '$.failure.resetAt')) > julianday(${DateTime.formatIso(options.now)}))
                     )
+                    AND NOT EXISTS (
+                      SELECT 1 FROM orchestration_v2_projection_threads parent
+                      WHERE json_extract(t.payload_json, '$.lineage.relationshipToParent') = 'subagent'
+                        AND parent.thread_id = json_extract(t.payload_json, '$.lineage.parentThreadId')
+                        AND json_extract(parent.payload_json, '$.settledOverride') = 'settled'
+                    )
                   )
                 )
               )
@@ -7948,19 +7954,28 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
                 )
                   return true;
                 if (thread.lastErrorClass !== "usage_limit") return false;
+                const source = state.projections.get(thread.id)?.thread;
+                const parentSettled =
+                  source?.lineage.relationshipToParent === "subagent" &&
+                  source.lineage.parentThreadId !== null &&
+                  state.projections.get(source.lineage.parentThreadId)?.thread.settledOverride ===
+                    "settled";
                 if (
                   !Number.isFinite(resetMs) ||
                   resetMs <= DateTime.toEpochMillis(thread.latestRunCompletedAt ?? thread.updatedAt)
                 )
                   return (
                     options.withoutReset === true &&
-                    thread.limitRecovery?.runId !== thread.latestRunId
+                    thread.limitRecovery?.runId !== thread.latestRunId &&
+                    !parentSettled
                   );
                 if (
                   thread.limitRecovery?.runId !== thread.latestRunId ||
                   thread.limitRecovery.resetAt !== thread.usageLimitResetAt
                 ) {
-                  return options.autoResume || (options.snooze && resetMs > nowMs);
+                  return (
+                    !parentSettled && (options.autoResume || (options.snooze && resetMs > nowMs))
+                  );
                 }
                 return (
                   thread.limitRecovery.autoResume &&
