@@ -11,7 +11,6 @@ import {
   RuntimeRequestId,
   ThreadId,
   TurnItemId,
-  type OrchestrationV2ShellSnapshot,
   type OrchestrationV2ThreadShellSnapshot,
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
@@ -30,24 +29,6 @@ const driver = ProviderDriverKind.make("codex");
 const modelSelection = { instanceId: providerInstanceId, model: "gpt-5.4" };
 const id = (name: string) => ThreadId.make(`thread:shell-equivalence:${name}`);
 const runId = (name: string) => RunId.make(`run:shell-equivalence:${name}`);
-
-type SnapshotIndex = {
-  readonly subagentThreadIds: ReadonlyArray<ThreadId>;
-  readonly subagentParentIds: ReadonlySet<string>;
-};
-type SnapshotRead = OrchestrationV2ThreadShellSnapshot & { readonly shellIndex?: SnapshotIndex };
-type SubscriberOptions = {
-  readonly omitIdleSubagents: boolean;
-  readonly omitOlderSettled: boolean;
-  readonly now: DateTime.Utc;
-};
-// The current reader ignores the option and the current subscriber ignores the optional index.
-// Once the optimized reader exists, the same comparison exercises the indexed path.
-const subscriber: (
-  base: OrchestrationV2ShellSnapshot,
-  options: SubscriberOptions,
-  index?: SnapshotIndex,
-) => ReturnType<typeof shellSnapshotForSubscriber> = shellSnapshotForSubscriber;
 
 const createThread = Effect.fn("shellEquivalence.createThread")(function* (input: {
   readonly name: string;
@@ -350,7 +331,9 @@ it.effect.each(cases)(
 
       const full = yield* store.getShellSnapshot({ location: "active" });
       const optimizedOptions = { location: "active" as const, omitIdleSubagents: true };
-      const optimized: SnapshotRead = yield* store.getShellSnapshot(optimizedOptions);
+      const optimized: ProjectionStore.ShellSnapshotRead =
+        yield* store.getShellSnapshot(optimizedOptions);
+      const shellIndex: ProjectionStore.ShellSnapshotIndex | undefined = optimized.shellIndex;
       const options = { omitIdleSubagents: true, omitOlderSettled: scenario === cases[5], now };
       const base = (threads: OrchestrationV2ThreadShellSnapshot) =>
         buildActiveShellSnapshot({
@@ -358,9 +341,14 @@ it.effect.each(cases)(
           threads,
           snapshotSequence: threads.snapshotSequence,
         });
-      const expected = subscriber(base(full), options);
-      const actual = subscriber(base(optimized), options, optimized.shellIndex);
-      assert.deepEqual(actual, expected);
+      for (const omitOlderSettled of [false, true]) {
+        const subscriberOptions = { omitIdleSubagents: true, omitOlderSettled, now };
+        const expected = shellSnapshotForSubscriber(base(full), subscriberOptions);
+        const actual = shellSnapshotForSubscriber(base(optimized), subscriberOptions, shellIndex);
+        assert.deepEqual(actual.snapshot, expected.snapshot);
+        assert.deepEqual(actual.subagentThreadIds, expected.subagentThreadIds);
+      }
+      const expected = shellSnapshotForSubscriber(base(full), options);
 
       const visible = new Set(expected.snapshot.threads.map((thread) => thread.id));
       if (scenario === cases[0]) {
