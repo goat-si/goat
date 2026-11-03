@@ -36,7 +36,7 @@ const BATCH_TRANSCRIPT_BYTES = 512 * 1024;
 const STEP_TEXT_CAP = 4_000;
 const TOOL_INPUT_CAP = 1_000;
 
-/** T3's title for a batch whose launch text it never saw. */
+/** GOAT's title for a batch whose launch text it never saw. */
 export const ANTIGRAVITY_SUBAGENT_BATCH_TITLE = "Antigravity subagent batch";
 
 interface AntigravityChildLaunch {
@@ -106,7 +106,7 @@ function protoFields(bytes: Uint8Array): ReadonlyArray<readonly [number, Uint8Ar
   return fields;
 }
 
-// Keep a leading byte order mark: T3 stores launch text with it.
+// Keep a leading byte order mark: GOAT stores launch text with it.
 const textDecoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 const messages = (bytes: Uint8Array, field: number) =>
   protoFields(bytes).flatMap(([number, value]) => (number === field ? [value] : []));
@@ -278,7 +278,7 @@ function findInvokeRecord(
     // An unreadable record could be an identical launch, so uniqueness is unproven.
     if (record === undefined) return undefined;
     if (record.toolCallId !== undefined && claimed.has(record.toolCallId)) continue;
-    // T3 stored the launch from the bounded tool payload, so bound the record the same way.
+    // GOAT stored the launch from the bounded tool payload, so bound the record the same way.
     const described = describeAntigravitySubagentLaunches(
       record.launches.map((launch) => ({
         role: boundAntigravityToolText(launch.role),

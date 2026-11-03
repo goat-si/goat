@@ -78,7 +78,7 @@ function antigravityWritesRunWorkflowSkill(version: string | null | undefined): 
 }
 
 /**
- * Releases T3 qualified for native range reads and linked video. On 1.4.5 the client-read path
+ * Releases GOAT qualified for native range reads and linked video. On 1.4.5 the client-read path
  * sends a whole file to serve one line, and the native reader keeps diff edits.
  */
 export function isQualifiedAntigravityRelease(version: string | null | undefined): boolean {

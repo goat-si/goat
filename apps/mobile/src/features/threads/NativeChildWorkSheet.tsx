@@ -76,7 +76,7 @@ function NativeChild(props: { readonly child: OrchestrationV2NativeChildWork }) 
   const { child } = props;
   return (
     <View className="gap-2">
-      <Text className="font-t3-bold text-sm text-foreground">{child.role || "Subagent"}</Text>
+      <Text className="font-goat-bold text-sm text-foreground">{child.role || "Subagent"}</Text>
       <Text selectable className="font-sans text-sm text-foreground-secondary">
         {child.prompt}
       </Text>
@@ -91,7 +91,7 @@ function NativeChild(props: { readonly child: OrchestrationV2NativeChildWork }) 
         <View className="gap-2 border-l border-border ps-3">
           {child.steps.map((step) => (
             <View key={step.index} className="gap-1">
-              <Text className="font-t3-bold text-xs text-foreground-secondary">
+              <Text className="font-goat-bold text-xs text-foreground-secondary">
                 {stepLabel(step.type)}
                 {step.status !== null && step.status !== "DONE"
                   ? ` · ${stepLabel(step.status)}`

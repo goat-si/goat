@@ -1027,7 +1027,7 @@ describe("AntigravityAdapterV2 session system prompt", () => {
         const mockAgentPath = yield* path.fromFileUrl(
           new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
         );
-        const logs = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-antigravity-log-" });
+        const logs = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-antigravity-log-" });
         const requestLog = path.join(logs, "requests.ndjson");
         type RuntimeService = AcpSessionRuntime.AcpSessionRuntime["Service"];
         const promptReceived = yield* Deferred.make<Parameters<RuntimeService["prompt"]>[0]>();
@@ -1064,7 +1064,7 @@ describe("AntigravityAdapterV2 session system prompt", () => {
           // @effect-diagnostics-next-line effectSucceedWithVoid:off - This optional result requires undefined, not the wider void type.
           defaultModel: Effect.succeed(undefined),
         });
-        const workspace = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-ag-sp-" });
+        const workspace = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-ag-sp-" });
         const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
           runtimeMode: "full-access",
           interactionMode: "default",

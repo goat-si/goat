@@ -192,7 +192,7 @@ it.layer(NodeServices.layer)("readAntigravityChildWork", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const outside = yield* fs.makeTempDirectoryScoped({ prefix: "t3-agy-outside-" });
+      const outside = yield* fs.makeTempDirectoryScoped({ prefix: "goat-agy-outside-" });
       const secret = path.join(outside, "transcript.jsonl");
       yield* fs.writeFileString(secret, JSON.stringify(transcriptLines[3]) + "\n");
       const named = yield* makeProfile({
