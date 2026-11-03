@@ -20,6 +20,57 @@ const replyIdentity = {
   callId: 1,
 };
 
+it.each(["unknown", "committed", "unverifiable"])(
+  "a not-started RPC lock with %s effect may have acted",
+  (effect) => {
+    for (const error of [
+      { code: "screen_locked", effect },
+      { code: "screen_locked", data: { effect } },
+      { code: -32602, data: { refusal: { code: "screen_locked" }, effect } },
+    ]) {
+      const reply = { ...replyIdentity, status: "not_started" as const, error };
+      expect(driverError(reply, "click")).toMatchObject({
+        code: "screen_locked",
+        effectStarted: true,
+      });
+      expect(driverOutcomeSafety("click", reply).possibleCommit).toBe(true);
+    }
+  },
+);
+
+it.each(["unknown", "committed", "unverifiable"])(
+  "a settled write with %s effect keeps the person's stop",
+  (effect) => {
+    const reply = {
+      ...replyIdentity,
+      status: "settled" as const,
+      result: {
+        isError: false,
+        structuredContent: {
+          code: "screen_locked",
+          refusal: { code: "stopped_by_person" },
+          effect,
+        },
+      },
+    };
+    expect(driverError(reply, "click")).toMatchObject({
+      code: "stopped_by_person",
+      effectStarted: true,
+    });
+    expect(driverOutcomeSafety("click", reply).possibleCommit).toBe(true);
+  },
+);
+
+it("a settled write with a lock code and no refusal may have acted", () => {
+  const reply = {
+    ...replyIdentity,
+    status: "settled" as const,
+    result: { isError: false, structuredContent: { code: "screen_locked" } },
+  };
+  expect(driverError(reply, "click")).toMatchObject({ code: "screen_locked", effectStarted: true });
+  expect(driverOutcomeSafety("click", reply).possibleCommit).toBe(true);
+});
+
 it("terminal reply classifiers agree on possible commit across read and write envelopes", () => {
   const cases = [
     {
@@ -42,6 +93,60 @@ it("terminal reply classifiers agree on possible commit across read and write en
       isError: true,
       content: { code: "screen_locked", refusal: { code: "stopped_by_person" }, effect: "unknown" },
       expected: true,
+    },
+    ...["unknown", "committed", "unverifiable"].flatMap((effect) => [
+      {
+        tool: "click",
+        status: "not_started" as const,
+        isError: false,
+        content: {},
+        error: { code: "screen_locked", effect },
+        expected: true,
+        expectedCode: "screen_locked",
+      },
+      {
+        tool: "click",
+        status: "not_started" as const,
+        isError: false,
+        content: {},
+        error: { code: "screen_locked", data: { effect } },
+        expected: true,
+        expectedCode: "screen_locked",
+      },
+      {
+        tool: "click",
+        status: "settled" as const,
+        isError: false,
+        content: { code: "screen_locked", refusal: { code: "stopped_by_person" }, effect },
+        expected: true,
+        expectedCode: "stopped_by_person",
+      },
+    ]),
+    {
+      tool: "click",
+      status: "settled" as const,
+      isError: false,
+      content: { code: "screen_locked" },
+      expected: true,
+      expectedCode: "screen_locked",
+    },
+    {
+      tool: "list_windows",
+      status: "not_started" as const,
+      isError: false,
+      content: {},
+      error: { code: "screen_locked", data: { effect: "unknown" } },
+      expected: false,
+      expectedCode: "screen_locked",
+    },
+    {
+      tool: "click",
+      status: "unknown_outcome" as const,
+      isError: false,
+      content: {},
+      error: { code: "screen_locked", effect: "unknown" },
+      expected: true,
+      expectedCode: "screen_locked",
     },
     {
       tool: "click",
@@ -93,9 +198,11 @@ it("terminal reply classifiers agree on possible commit across read and write en
       ...replyIdentity,
       status: entry.status,
       result: { isError: entry.isError, structuredContent: entry.content },
-      ...(entry.error ? { error: entry.error } : {}),
+      ...("error" in entry && entry.error ? { error: entry.error } : {}),
     };
     const error = driverError(reply, entry.tool);
+    if ("expectedCode" in entry)
+      expect(error?.code, JSON.stringify(entry)).toBe(entry.expectedCode);
     expect(error?.effectStarted ?? false, JSON.stringify(entry)).toBe(entry.expected);
     expect(driverOutcomeSafety(entry.tool, reply).possibleCommit, JSON.stringify(entry)).toBe(
       entry.expected,
@@ -193,7 +300,7 @@ it.each([
 });
 
 it.each([undefined, "refused"])("screen_locked with no effect stays unsent %#", (effect) => {
-  for (const isError of [true, false]) {
+  for (const isError of effect === "refused" ? [true, false] : [true]) {
     expect(
       driverError({
         ...replyIdentity,

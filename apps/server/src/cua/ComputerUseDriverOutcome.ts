@@ -134,15 +134,18 @@ export const driverLockedEffectStarted = (
     )
   )
     return false;
-  return [result.structuredContent, error?.data].some((value) => {
-    if (!isRecord(value) || (tool === "run_script" && scriptSentNothing(value))) return false;
-    const nested = isRecord(value.refusal) ? value.refusal.code : undefined;
+  const reported = (values: readonly unknown[]) => {
+    const fields = values.filter(isRecord);
+    if (tool === "run_script" && fields.some(scriptSentNothing)) return false;
     return (
-      (value.code === "screen_locked" || nested === "screen_locked") &&
-      value.effect !== undefined &&
-      value.effect !== "refused"
+      fields.some(
+        (value) =>
+          value.code === "screen_locked" ||
+          (isRecord(value.refusal) && value.refusal.code === "screen_locked"),
+      ) && fields.some((value) => value.effect !== undefined && value.effect !== "refused")
     );
-  });
+  };
+  return reported([result.structuredContent]) || reported([error, error?.data]);
 };
 
 /** The safety a reply already carries, as GOAT marked it on an earlier pass. */

@@ -112,12 +112,12 @@ const classifyDriverError = (
   const driverCode = merged ?? nested ?? outer;
   const lockedEffectStarted = driverLockedEffectStarted(tool, reply, args);
   const successfulWrite =
-    driverCode === "screen_locked" &&
+    (driverCode === "screen_locked" || driverCode === "stopped_by_person") &&
     reply.status === "settled" &&
     result?.isError !== true &&
     reply.error === undefined &&
-    structured?.effect !== undefined &&
-    structured.effect !== "refused" &&
+    structured?.effect !== "refused" &&
+    structured?.status !== "refused" &&
     !isReadOnlyCall(tool, args) &&
     driverOutcomeSafety(tool, reply, args).possibleCommit;
   const possibleCommit = state.possibleCommit || lockedEffectStarted || successfulWrite;
@@ -132,7 +132,8 @@ const classifyDriverError = (
     (reply.status === "unknown_outcome" ||
       reply.status === "not_started" ||
       result?.isError === true ||
-      reply.error !== undefined) &&
+      reply.error !== undefined ||
+      !isReadOnlyCall(tool, args)) &&
     (driverCode === "stopped_by_person" || driverCode === "screen_locked")
   )
     return {
