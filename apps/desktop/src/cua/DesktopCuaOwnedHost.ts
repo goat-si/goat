@@ -19,3 +19,30 @@ export interface OwnedHost {
   monitor?: Promise<void>;
   cleanup?: Promise<void>;
 }
+
+export const settleOwnedHost = (promise: Promise<unknown>) =>
+  promise.then(
+    () => undefined,
+    () => undefined,
+  );
+
+export const retireOwnedHost = (entry: OwnedHost, release: () => void): Promise<void> => {
+  if (!entry.cleanup) {
+    entry.cleanup = (async () => {
+      if (!entry.helper) await settleOwnedHost(entry.started);
+      entry.abort.abort();
+      try {
+        await Promise.resolve().then(() => entry.host.stop());
+      } finally {
+        await settleOwnedHost(entry.started);
+        if (entry.monitor) await settleOwnedHost(entry.monitor);
+        try {
+          entry.host.uniffiDestroy();
+        } finally {
+          release();
+        }
+      }
+    })();
+  }
+  return entry.cleanup;
+};

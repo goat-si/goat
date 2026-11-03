@@ -160,6 +160,27 @@ describe("DesktopCuaDriver", () => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("a failed stop cleans up and a new host can start with a newer generation", () =>
+    Effect.gen(function* () {
+      const test = yield* fixture({ failStopOnce: true });
+      yield* test.request("first");
+      const first = yield* test.next;
+      if (first.status !== "ready" || first.hostGeneration === undefined)
+        return assert.fail("expected first host generation");
+      yield* test.request("first", false);
+      assert.equal((yield* test.next).status, "unavailable");
+      yield* test.request("next");
+      const next = yield* test.next;
+      assert.equal(next.status, "ready");
+      if (next.status !== "ready" || next.hostGeneration === undefined)
+        return assert.fail("expected replacement host generation");
+      assert.isAbove(next.hostGeneration, first.hostGeneration);
+      yield* test.request("next", false);
+      assert.equal((yield* test.next).status, "stopped");
+      assert.deepEqual(test.counts(), { starts: 2, stops: 2, destroys: 2 });
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("reports one host generation across reuse and a newer one after stop", () =>
     Effect.gen(function* () {
       const test = yield* fixture();

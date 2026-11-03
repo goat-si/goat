@@ -45,7 +45,7 @@ import { cuaDriverReports } from "./desktopCuaReports.ts";
 import { makeAppsRequestHandler } from "./desktopCuaApps.ts";
 import { makeHelperFollowers } from "./helperFollowers.ts";
 import { refreshDesktopManifest, listenBrowserManifestRequests } from "./DesktopCuaManifest.ts";
-import type { OwnedHost } from "./DesktopCuaOwnedHost.ts";
+import { retireOwnedHost, settleOwnedHost, type OwnedHost } from "./DesktopCuaOwnedHost.ts";
 import { agentRouteFailure } from "./agentRouteProbe.ts";
 import {
   captureCheckFailure,
@@ -94,11 +94,6 @@ export class DesktopCuaDriver extends Context.Service<
   }
 >()("@goat/desktop/cua/DesktopCuaDriver") {}
 const decodeMcp = Schema.decodeEffect(CuaDriverMcpConfiguration);
-const settle = (promise: Promise<unknown>) =>
-  promise.then(
-    () => undefined,
-    () => undefined,
-  );
 const VERIFICATION_STEPS = 7;
 const decodeJson = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Unknown));
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
@@ -201,21 +196,10 @@ export const make = Effect.fn("desktop.cua.make")(function* (
       );
     });
 
-  // A helper host's stop cancels its start; an uncancellable UniFFI start settles first.
-  const retire = (entry: OwnedHost): Promise<void> => {
-    if (!entry.cleanup) {
-      entry.cleanup = (async () => {
-        if (!entry.helper) await settle(entry.started);
-        entry.abort.abort();
-        await Promise.resolve().then(() => entry.host.stop());
-        await settle(entry.started);
-        if (entry.monitor) await entry.monitor;
-        entry.host.uniffiDestroy();
-        if (owned === entry) owned = undefined;
-      })();
-    }
-    return entry.cleanup;
-  };
+  const retire = (entry: OwnedHost) =>
+    retireOwnedHost(entry, () => {
+      if (owned === entry) owned = undefined;
+    });
   const stop = Effect.suspend(() => {
     const entry = owned;
     return entry
@@ -418,7 +402,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     owned = entry;
     void entry.started.then(
       (connection) => {
-        entry.monitor = settle(
+        entry.monitor = settleOwnedHost(
           Promise.resolve().then(() =>
             host.waitForExit(connection.generation, { signal: entry.abort.signal }).finally(() => {
               // Judged on the exit itself: wrapping hops would let a retire's abort land first.

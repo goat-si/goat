@@ -107,6 +107,7 @@ export const fixture = Effect.fn(function* (
     denyPermissions?: boolean;
     failFirstStart?: boolean;
     failStop?: boolean;
+    failStopOnce?: boolean;
     /**
      * helperStart holds the first agent helper's start, checkStart the first readiness check
      * helper's, until release or that host's stop.
@@ -574,7 +575,8 @@ export const fixture = Effect.fn(function* (
         async stop() {
           stops++;
           Deferred.doneUnsafe(stopping, Exit.void);
-          if (options.failStop) throw new Error("stop failed");
+          if (options.failStop || (options.failStopOnce && stops === 1))
+            throw new Error("stop failed");
           if (this.first && options.hold === "stop") await gate.promise;
         }
         waitForExit(generation: string, operation?: { signal: AbortSignal }) {
