@@ -68,6 +68,8 @@ const bootstrapScenario = (
     log: string[];
     settings: Deferred.Deferred<void>;
     auxiliary: Deferred.Deferred<void>;
+    checkHeartbeat?: Effect.Effect<void>;
+    checkStopped?: Effect.Effect<void>;
   },
   intent: Option.Option<DesktopStopIntent> = Option.none(),
   readerEffect: Effect.Effect<Option.Option<DesktopStopIntent>> = Effect.succeed(intent),
@@ -117,7 +119,7 @@ const bootstrapScenario = (
           logWebSocketEvents: false,
           tailscaleServeEnabled: false,
           tailscaleServePort: 443,
-          mode: "web",
+          mode: ordering?.checkHeartbeat ? "desktop" : "web",
           cwd: "/bootstrap-project",
           host: "localhost",
           port: 3773,
@@ -273,11 +275,13 @@ const bootstrapScenario = (
           yield* TestClock.adjust(0);
           assert.include(ordering.log, "aux-parked");
           assert.notInclude(ordering.log, "legacy-import");
+          yield* ordering.checkHeartbeat ?? Effect.void;
           yield* Deferred.succeed(ordering.auxiliary, undefined);
         } else yield* startup.markHttpListening;
         const ready = yield* Effect.exit(startup.awaitCommandReady);
+        yield* ordering?.checkStopped ?? Effect.void;
         assert.equal(Exit.isSuccess(ready), scenario !== "project-failure");
-        if (ordering) {
+        if (ordering && scenario !== "project-failure") {
           yield* TestClock.adjust(0);
           assert.deepStrictEqual(ordering.log, [
             "listening",
@@ -320,6 +324,58 @@ it.effect("waits for the HTTP listener and routes before legacy import and recov
     const auxiliary = yield* Deferred.make<void>();
     yield* bootstrapScenario("disabled-codex", Effect.void, { log: [], settings, auxiliary });
   }),
+);
+
+it.effect.each(["disabled-codex", "project-failure"] as const)(
+  "desktop startup heartbeat stops after %s",
+  (scenario) =>
+    Effect.gen(function* () {
+      const settings = yield* Deferred.make<void>();
+      const auxiliary = yield* Deferred.make<void>();
+      const messages: unknown[] = [];
+      const logger = Logger.make(({ message }) => {
+        messages.push(message);
+      });
+      const checkHeartbeat = Effect.gen(function* () {
+        yield* TestClock.adjust("30 seconds");
+        const heartbeats = messages.filter(
+          (message) => Array.isArray(message) && message[0] === "Server still starting",
+        );
+        assert.equal(heartbeats.length, 2);
+        assert.deepStrictEqual(
+          heartbeats.map((message) => (Array.isArray(message) ? message[1]?.elapsedMs : undefined)),
+          [15000, 30000],
+        );
+        assert.isTrue(
+          heartbeats.every(
+            (message) =>
+              Array.isArray(message) && message[1]?.phase === "waiting for http listener",
+          ),
+        );
+      });
+      const checkStopped = Effect.gen(function* () {
+        const count = messages.filter(
+          (message) => Array.isArray(message) && message[0] === "Server still starting",
+        ).length;
+        yield* TestClock.adjust("30 seconds");
+        assert.equal(
+          messages.filter(
+            (message) => Array.isArray(message) && message[0] === "Server still starting",
+          ).length,
+          count,
+        );
+      });
+      yield* bootstrapScenario(scenario, Effect.void, {
+        log: [],
+        settings,
+        auxiliary,
+        checkHeartbeat,
+        checkStopped,
+      }).pipe(Effect.provide(Logger.layer([logger], { mergeWithExisting: false })));
+      const count = messages.length;
+      yield* TestClock.adjust("30 seconds");
+      assert.equal(messages.length, count);
+    }),
 );
 
 it.effect.each([

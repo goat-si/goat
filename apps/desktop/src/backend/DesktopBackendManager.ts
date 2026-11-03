@@ -651,14 +651,12 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
             }
           }),
           onReadinessFailure: Effect.fn("desktop.backendInstance.onReadinessFailure")(
-            function* (error) {
+            function* (reason) {
               yield* logInstanceWarning("backend readiness check failed during bootstrap", {
-                error: error.message,
+                reason,
               });
-              yield* backendOutputLog.persistFailureSnapshot({
-                details: error.message,
-              });
-              yield* startupFailure.report("The server started but did not become ready in time.");
+              yield* backendOutputLog.persistFailureSnapshot({ details: reason });
+              yield* startupFailure.report(reason);
             },
           ),
           onOutput: (streamName, chunk) =>

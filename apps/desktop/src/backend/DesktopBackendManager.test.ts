@@ -824,7 +824,7 @@ describe("DesktopBackendManager", () => {
         yield* Deferred.await(probed);
         yield* TestClock.adjust(Duration.minutes(1));
         const failure = yield* Queue.take(reports);
-        assert.equal(failure.reason, "The server started but did not become ready in time.");
+        assert.equal(failure.reason, "The server printed nothing for 60 seconds.");
         assert.equal(failure.output, "Server bootstrap stalled");
       }).pipe(Effect.provide(TestClock.layer())),
     ),
