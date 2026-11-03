@@ -4,6 +4,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as TestClock from "effect/testing/TestClock";
 import * as RuntimeDrain from "./runtimeDrain.ts";
 import * as RuntimeAdmission from "./runtimeAdmission.ts";
@@ -19,6 +20,7 @@ const setup = (
     readonly started: Deferred.Deferred<void>;
     readonly gate: Deferred.Deferred<void>;
   },
+  lifecycleOrder?: string[],
 ) =>
   Effect.gen(function* () {
     const checked = yield* Deferred.make<void>();
@@ -29,9 +31,17 @@ const setup = (
     const dependencies = Layer.mergeAll(
       RuntimeAdmission.layer,
       ServerLifecycleEvents.layer,
+      Layer.succeed(RuntimeDrain.RuntimeRestartMarker, {
+        markRestart: Effect.sync(() => {
+          lifecycleOrder?.push("marked");
+        }),
+        isRestart: Effect.succeed(false),
+      }),
       Layer.succeed(RuntimeIdentity.RuntimeIdentity, { instanceId: input.expectedInstanceId }),
       Layer.succeed(RuntimeDrain.RuntimeShutdown, {
-        shutdown: Deferred.succeed(stopped, undefined).pipe(Effect.asVoid),
+        shutdown: Effect.sync(() => {
+          lifecycleOrder?.push("shutdown");
+        }).pipe(Effect.andThen(Deferred.succeed(stopped, undefined)), Effect.asVoid),
       }),
       Layer.succeed(ProjectionStore.ProjectionStoreV2, {
         ...memory,
@@ -291,4 +301,33 @@ it.effect("a refresh still being arbitrated joins a drain another request starte
       yield* Deferred.await(stopped);
     }).pipe(Effect.provide(context));
   }).pipe(Effect.scoped),
+);
+
+it.effect("marks a restart before runtime drain invokes shutdown", () =>
+  Effect.gen(function* () {
+    const order: string[] = [];
+    const { context, checked, stopped } = yield* setup("idle", undefined, undefined, order);
+    yield* Effect.gen(function* () {
+      const drain = yield* RuntimeDrain.RuntimeDrain;
+      const request = yield* drain.request(input).pipe(Effect.forkScoped);
+      yield* Deferred.await(checked);
+      yield* Fiber.join(request);
+      yield* TestClock.adjust(Duration.millis(250));
+      yield* Deferred.await(stopped);
+      assert.deepEqual(order, ["marked", "shutdown"]);
+    }).pipe(Effect.provide(context));
+  }).pipe(Effect.scoped),
+);
+
+it.effect("classifies an in-process mark or desktop restart intent as restart", () =>
+  Effect.sync(() => {
+    const intent = (
+      reason: "quit" | "relaunch" | "update-install" | "recovery-retry" | "recovery-stop",
+    ) => Option.some({ version: 1 as const, reason, requestedAt: "2026-01-01T00:00:00Z" });
+    assert.equal(RuntimeDrain.stopKind(true, intent("quit")), "restart");
+    for (const reason of ["relaunch", "update-install", "recovery-retry"] as const)
+      assert.equal(RuntimeDrain.stopKind(false, intent(reason)), "restart");
+    assert.equal(RuntimeDrain.stopKind(false, intent("recovery-stop")), "quit");
+    assert.equal(RuntimeDrain.stopKind(false, Option.none()), "quit");
+  }),
 );

@@ -40,6 +40,7 @@ vi.mock(import("../../localApi"), async (original) => ({
 }));
 
 import { useSettingsRestore } from "./SettingsPanels";
+import { SettingsScopeProvider } from "./SettingsScopeContext";
 import { resetSnoozeRows } from "./SnoozePresetsSettings.logic";
 
 async function changedLabels(settings: UnifiedSettings) {
@@ -52,7 +53,11 @@ async function changedLabels(settings: UnifiedSettings) {
     });
     return null;
   }
-  await using _screen = await render(<Probe />);
+  await using _screen = await render(
+    <SettingsScopeProvider search={{}} onChange={() => {}}>
+      <Probe />
+    </SettingsScopeProvider>,
+  );
   return labels;
 }
 
@@ -93,7 +98,11 @@ it("restores automatic server updates after an opt-out", async () => {
     });
     return null;
   }
-  await using _screen = await render(<Probe />);
+  await using _screen = await render(
+    <SettingsScopeProvider search={{}} onChange={() => {}}>
+      <Probe />
+    </SettingsScopeProvider>,
+  );
   expect(restore!.changedSettingLabels).toEqual(["Automatic server updates"]);
   await act(() => restore!.restoreDefaults());
   expect(state.update.mock.calls[0]?.[0].automaticServerUpdates).toBe(true);
@@ -118,7 +127,11 @@ it("restores Show GOAT Bot threads to off with the other device defaults", async
     });
     return null;
   }
-  await using _screen = await render(<Probe />);
+  await using _screen = await render(
+    <SettingsScopeProvider search={{}} onChange={() => {}}>
+      <Probe />
+    </SettingsScopeProvider>,
+  );
   expect(restore!.changedSettingLabels).toEqual(["Show GOAT Bot threads"]);
   await act(() => restore!.restoreDefaults());
   expect(localStorage.getItem(key)).toBe("false");

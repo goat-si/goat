@@ -22,12 +22,36 @@ import {
   privateSocketDirectory,
 } from "./CodexDetachedAppServer.ts";
 
-/** Opt-in maintainer switch until restart survival ships; stdio stays the default. */
+/** Maintainer override: `socket` or `stdio` forces a transport; unset follows each project's setting. */
 const CODEX_TRANSPORT_ENV = "GOAT_CODEX_APP_SERVER_TRANSPORT";
+
+type CodexTransportMode = "auto" | "socket" | "stdio" | "unsupported";
+
+export const codexSocketTransportMode = (
+  platform: NodeJS.Platform,
+  environment: NodeJS.ProcessEnv,
+): CodexTransportMode => {
+  if (platform === "win32") return "unsupported";
+  const requested = environment[CODEX_TRANSPORT_ENV]?.trim();
+  return requested === "socket" || requested === "stdio" ? requested : "auto";
+};
+
+export const shouldUseCodexSocketTransport = (
+  mode: CodexTransportMode,
+  survival: "off" | "restart" | "always",
+) => mode === "socket" || (mode === "auto" && survival !== "off");
+
+export const codexTransportMode = (detached: {
+  readonly socketTransportEnabled: boolean;
+  readonly socketTransportMode?: CodexTransportMode;
+}) => detached.socketTransportMode ?? (detached.socketTransportEnabled ? "socket" : "stdio");
 
 export class CodexDetachedAppServers extends Context.Service<
   CodexDetachedAppServers,
-  DetachedAppServers & { readonly socketTransportEnabled: boolean }
+  DetachedAppServers & {
+    readonly socketTransportEnabled: boolean;
+    readonly socketTransportMode?: CodexTransportMode;
+  }
 >()("goat/provider/CodexDetachedAppServerLive/CodexDetachedAppServers") {}
 
 const PROCESS_ROW = /^\s*(\d+)\s+(\d+)\s+(.*)$/;
@@ -164,14 +188,7 @@ const layer = Layer.effect(
       const exited = yield* Deferred.make<number | null>();
       const child = yield* Effect.try({
         try: () => {
-          const stderr = NodeFS.openSync(
-            input.stderrPath,
-            NodeFS.constants.O_WRONLY |
-              NodeFS.constants.O_CREAT |
-              NodeFS.constants.O_TRUNC |
-              NodeFS.constants.O_APPEND,
-            0o600,
-          );
+          const stderr = NodeFS.openSync("/dev/null", "w");
           try {
             const child = guardChild(
               NodeChildProcess.spawn(
@@ -240,10 +257,11 @@ const layer = Layer.effect(
         ),
       socketDirectory,
     });
+    const socketTransportMode = codexSocketTransportMode(platform, environment);
     return {
       ...service,
-      socketTransportEnabled:
-        platform !== "win32" && environment[CODEX_TRANSPORT_ENV]?.trim() === "socket",
+      socketTransportEnabled: socketTransportMode === "socket",
+      socketTransportMode,
     };
   }),
 );

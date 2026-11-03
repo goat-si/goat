@@ -208,9 +208,7 @@ export function threadReadTargetId(entry: Pick<WorkLogEntry, "structuredPayload"
     input !== null && typeof input === "object" && "threadId" in input ? input.threadId : null;
   return typeof threadId === "string" && threadId.trim().length > 0 ? threadId.trim() : null;
 }
-
 const THREAD_READ_OBJECT = " a GOAT thread";
-
 export function threadReadTargetTitle(
   shell: Pick<ThreadShell, "title" | "archivedAt" | "deletedAt"> | null,
 ) {
@@ -514,7 +512,7 @@ export interface TimelineDurationMessage {
 
 export type TimelineLatestRun = Pick<
   ThreadRunSummary,
-  "runId" | "status" | "startedAt" | "completedAt" | "turnEnded"
+  "runId" | "status" | "startedAt" | "completedAt" | "turnEnded" | "survivingRestartNotice"
 >;
 
 const LIVE_ACTIVITY_ROW_ID = "live-activity-row";
@@ -560,6 +558,7 @@ type MessagesTimelineRowContent =
       kind: "working";
       id: string;
       createdAt: string | null;
+      survivingRestartNotice?: string | null;
       /** A running compaction owns the working row, so its divider appears only once it ends. */
       compacting?: true;
     }
@@ -1695,6 +1694,7 @@ export function deriveMessagesTimelineRows(input: {
     nextRows.push({
       kind: "working",
       id: "working-indicator-row",
+      survivingRestartNotice: input.latestRun?.survivingRestartNotice ?? null,
       createdAt:
         (compactsOnReturn ? undefined : resumeCompactionEntry?.entry.createdAt) ??
         input.activeTurnStartedAt ??
@@ -2437,9 +2437,7 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
 
   switch (a.kind) {
     case "working":
-      return (
-        a.createdAt === (b as typeof a).createdAt && a.compacting === (b as typeof a).compacting
-      );
+      return shallow(a, b);
     case "thinking": {
       const bt = b as typeof a;
       return a.createdAt === bt.createdAt && a.groupId === bt.groupId && a.expanded === bt.expanded;

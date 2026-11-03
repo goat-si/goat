@@ -822,3 +822,40 @@ it.effect("restart preserves recovery without a live session", () =>
     }).pipe(Effect.provide(f.layer));
   }),
 );
+
+it.effect("a missing survivor session cannot confirm that Stop succeeded", () =>
+  Effect.gen(function* () {
+    const f = yield* restartWaitFixture(false, { sessionMissing: true });
+    yield* Ref.update(f.state, (projection) => ({
+      ...projection,
+      providerTurns: projection.providerTurns.map((turn) => ({
+        ...turn,
+        survivingRestart: { nativeStartedAt: null },
+      })),
+    }));
+    yield* Effect.gen(function* () {
+      const control = yield* ProviderTurnControlService.ProviderTurnControlServiceV2;
+      const error = yield* control.interrupt(f.input).pipe(Effect.flip);
+      assert.instanceOf(error, ProviderTurnControlService.ProviderTurnControlError);
+      assert.include(String(error.cause), "cannot confirm");
+    }).pipe(Effect.provide(f.layer));
+  }),
+);
+
+it.effect("restart cannot start replacement work for a survivor with no session", () =>
+  Effect.gen(function* () {
+    const f = yield* restartWaitFixture(false, { sessionMissing: true });
+    yield* Ref.update(f.state, (projection) => ({
+      ...projection,
+      providerTurns: projection.providerTurns.map((turn) => ({
+        ...turn,
+        survivingRestart: { nativeStartedAt: null },
+      })),
+    }));
+    yield* Effect.gen(function* () {
+      const control = yield* ProviderTurnControlService.ProviderTurnControlServiceV2;
+      const error = yield* control.interruptAndAwaitTerminal(f.input).pipe(Effect.flip);
+      assert.equal(error.operation, "restart");
+    }).pipe(Effect.provide(f.layer));
+  }),
+);

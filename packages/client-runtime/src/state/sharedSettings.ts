@@ -10,6 +10,7 @@ import type { EnvironmentConnectionPhase } from "../connection/presentation.ts";
 
 const SHARED_SERVER_SETTING_KEYS = [
   "continueThreadsAfterServerUpdate",
+  "codexTurnsSurviveServerStop",
   "sidebarAutoSettleAfterDays",
   "sidebarAutoSettleOnMerge",
   "autoResumeLimitedThreads",
@@ -45,7 +46,9 @@ export function splitSharedServerPatch(patch: ServerSettingsPatch): {
 
 export function filterSharedServerPatch(
   patch: ServerSettingsPatch,
-  capabilities: Pick<ExecutionEnvironmentCapabilities, "threadRestartContinuation"> | undefined,
+  capabilities:
+    | Pick<ExecutionEnvironmentCapabilities, "threadRestartContinuation" | "codexTurnSurvival">
+    | undefined,
   settings?: ServerSettings,
   sourceSettings = settings,
   targetIsSource = false,
@@ -67,6 +70,9 @@ export function filterSharedServerPatch(
   ) {
     patch = Struct.omit(patch, ["textGenerationModelSelection"]);
   }
+  if (capabilities?.codexTurnSurvival !== true) {
+    patch = Struct.omit(patch, ["codexTurnsSurviveServerStop"]);
+  }
   return capabilities?.threadRestartContinuation === true
     ? patch
     : Struct.omit(patch, ["continueThreadsAfterServerUpdate"]);
@@ -74,7 +80,10 @@ export function filterSharedServerPatch(
 
 export function pickSharedServerSettings(
   settings: ServerSettings,
-  capabilities?: Pick<ExecutionEnvironmentCapabilities, "threadRestartContinuation">,
+  capabilities?: Pick<
+    ExecutionEnvironmentCapabilities,
+    "threadRestartContinuation" | "codexTurnSurvival"
+  >,
 ): ServerSettingsPatch {
   return filterSharedServerPatch(
     Struct.pick(settings, SHARED_SERVER_SETTING_KEYS),

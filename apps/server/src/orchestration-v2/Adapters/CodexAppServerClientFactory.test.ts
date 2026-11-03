@@ -1,13 +1,28 @@
 import { assert, it } from "@effect/vitest";
-import { CodexSettings, ProviderInstanceId, ProviderSessionId, ThreadId } from "@goat/contracts";
+import {
+  CodexSettings,
+  DEFAULT_SERVER_SETTINGS,
+  ProjectId,
+  ProviderInstanceId,
+  ProviderSessionId,
+  RunId,
+  ThreadId,
+  type OrchestrationV2AppThread,
+} from "@goat/contracts";
 import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventLoggers";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import { ChildProcessSpawner } from "effect/process";
 
+import * as ServerSettings from "../../serverSettings.ts";
+import * as ProjectionStore from "../ProjectionStore.ts";
+import * as CodexSurvivors from "../../provider/CodexSurvivors.ts";
 import { CodexDetachedAppServerError } from "../../provider/CodexDetachedAppServer.ts";
-import { CodexDetachedAppServers } from "../../provider/CodexDetachedAppServerLive.ts";
+import {
+  CodexDetachedAppServers,
+  shouldUseCodexSocketTransport,
+} from "../../provider/CodexDetachedAppServerLive.ts";
 import {
   CodexAppServerClientFactory,
   layerAppServerClientFactory,
@@ -22,8 +37,12 @@ it.effect("a socket attempt that leaves an unstoppable process refuses the stdio
     const layer = layerAppServerClientFactory.pipe(
       Layer.provide(
         Layer.mergeAll(
+          Layer.mock(ServerSettings.ServerSettingsService)({}),
+          Layer.mock(ProjectionStore.ProjectionStoreV2)({}),
           Layer.mock(CodexDetachedAppServers)({
             socketTransportEnabled: true,
+            socketTransportMode: "socket",
+            listPreservedForInstance: () => Effect.succeed([]),
             open: () => Effect.fail(new CodexDetachedAppServerError({ detail: "not ready" })),
             ensureNotBlocked: () =>
               Effect.suspend(() =>
@@ -61,5 +80,269 @@ it.effect("a socket attempt that leaves an unstoppable process refuses the stdio
     assert.equal(error._tag, "ProviderAdapterOpenSessionError");
     assert.equal(blockChecks, 2);
     assert.isFalse(spawned);
+  }),
+);
+
+it.effect("socket transport follows survival policy, override, and platform", () =>
+  Effect.sync(() => {
+    assert.isTrue(shouldUseCodexSocketTransport("auto", "restart"));
+    assert.isTrue(shouldUseCodexSocketTransport("auto", "always"));
+    assert.isFalse(shouldUseCodexSocketTransport("auto", "off"));
+    assert.isTrue(shouldUseCodexSocketTransport("socket", "off"));
+    assert.isFalse(shouldUseCodexSocketTransport("stdio", "always"));
+    assert.isFalse(shouldUseCodexSocketTransport("unsupported", "always"));
+  }),
+);
+
+it.effect("automatic transport uses the project survival setting before opening Codex", () =>
+  Effect.gen(function* () {
+    let socketAttempted = false;
+    const layer = layerAppServerClientFactory.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.mock(ServerSettings.ServerSettingsService)({
+            getSettings: Effect.succeed({
+              ...DEFAULT_SERVER_SETTINGS,
+              codexTurnsSurviveServerStop: "restart",
+            }),
+          }),
+          Layer.mock(ProjectionStore.ProjectionStoreV2)({
+            getThread: () =>
+              Effect.succeed({
+                projectId: ProjectId.make("project-a"),
+              } as OrchestrationV2AppThread),
+          }),
+          Layer.mock(CodexDetachedAppServers)({
+            socketTransportEnabled: false,
+            socketTransportMode: "auto",
+            listPreservedForInstance: () => Effect.succeed([]),
+            ensureNotBlocked: () => Effect.void,
+            open: () =>
+              Effect.sync(() => {
+                socketAttempted = true;
+              }).pipe(Effect.andThen(Effect.die("observed socket attempt"))),
+          }),
+          Layer.mock(ChildProcessSpawner.ChildProcessSpawner)({
+            spawn: () => Effect.die("unexpected stdio"),
+          }),
+          Layer.succeed(ProviderEventLoggers.ProviderEventLoggers, {
+            native: undefined,
+            canonical: undefined,
+          }),
+        ),
+      ),
+    );
+    yield* Effect.gen(function* () {
+      const factory = yield* CodexAppServerClientFactory;
+      yield* factory
+        .open({
+          instanceId: ProviderInstanceId.make("codex"),
+          threadId: ThreadId.make("thread-a"),
+          providerSessionId: ProviderSessionId.make("session-a"),
+          runtimePolicy: { runtimeMode: "full-access", interactionMode: "default", cwd: null },
+          settings: defaultSettings,
+          environment: {},
+        })
+        .pipe(Effect.scoped, Effect.exit);
+    }).pipe(Effect.provide(layer));
+    assert.isTrue(socketAttempted);
+  }),
+);
+
+it.effect("an identified survivor never falls back to a new Codex process", () =>
+  Effect.gen(function* () {
+    const instanceId = ProviderInstanceId.make("codex");
+    const threadId = ThreadId.make("thread-survivor");
+    let attempts = 0;
+    let spawned = false;
+    const layer = layerAppServerClientFactory.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.mock(ServerSettings.ServerSettingsService)({}),
+          Layer.mock(ProjectionStore.ProjectionStoreV2)({}),
+          Layer.mock(CodexSurvivors.CodexSurvivors)({
+            get: () =>
+              Effect.succeed({
+                instanceId,
+                threadId,
+                recordName: "codex-abcdefabcdef",
+                sourceRunId: RunId.make("run-source"),
+                nativeThreadId: "native-thread",
+                nativeTurnId: "native-turn",
+              }),
+          }),
+          Layer.mock(CodexDetachedAppServers)({
+            socketTransportEnabled: true,
+            socketTransportMode: "socket",
+            listPreservedForInstance: () => Effect.succeed([]),
+            ensureNotBlocked: () => Effect.void,
+            connectExisting: () =>
+              Effect.sync(() => {
+                attempts++;
+              }).pipe(
+                Effect.andThen(
+                  Effect.fail(new CodexDetachedAppServerError({ detail: "unverified" })),
+                ),
+              ),
+            open: () =>
+              Effect.sync(() => {
+                spawned = true;
+              }).pipe(Effect.andThen(Effect.die("unexpected launch"))),
+          }),
+          Layer.mock(ChildProcessSpawner.ChildProcessSpawner)({
+            spawn: () => Effect.die("unexpected stdio"),
+          }),
+          Layer.succeed(ProviderEventLoggers.ProviderEventLoggers, {
+            native: undefined,
+            canonical: undefined,
+          }),
+        ),
+      ),
+    );
+    const result = yield* Effect.gen(function* () {
+      const factory = yield* CodexAppServerClientFactory;
+      return yield* factory
+        .open({
+          instanceId,
+          threadId,
+          providerSessionId: ProviderSessionId.make("session"),
+          runtimePolicy: { runtimeMode: "full-access", interactionMode: "default", cwd: null },
+          settings: defaultSettings,
+          environment: {},
+        })
+        .pipe(Effect.scoped, Effect.exit);
+    }).pipe(Effect.provide(layer));
+    assert.equal(result._tag, "Failure");
+    assert.equal(attempts, 1);
+    assert.isFalse(spawned);
+  }),
+);
+
+it.effect(
+  "a goal-only retained instance reconnects for an unrelated session without spawning",
+  () =>
+    Effect.gen(function* () {
+      const instanceId = ProviderInstanceId.make("codex");
+      let connected = 0;
+      let spawned = false;
+      const layer = layerAppServerClientFactory.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.mock(ServerSettings.ServerSettingsService)({}),
+            Layer.mock(ProjectionStore.ProjectionStoreV2)({}),
+            Layer.mock(CodexSurvivors.CodexSurvivors)({
+              get: () => Effect.void.pipe(Effect.as(undefined)),
+              list: Effect.succeed([]),
+              listGoalBlocksByInstance: () =>
+                Effect.succeed([
+                  {
+                    record: { instanceId, recordName: "codex-abcdefabcdef" },
+                    block: {
+                      threadId: ThreadId.make("goal-thread"),
+                      nativeThreadId: "native-goal",
+                    },
+                  },
+                ]),
+            }),
+            Layer.mock(CodexDetachedAppServers)({
+              socketTransportEnabled: true,
+              socketTransportMode: "socket",
+              ensureNotBlocked: () => Effect.void,
+              listPreservedForInstance: () => Effect.succeed(["codex-abcdefabcdef"]),
+              connectExisting: (_instance, name) =>
+                Effect.sync(() => {
+                  connected++;
+                  assert.equal(name, "codex-abcdefabcdef");
+                }).pipe(
+                  Effect.andThen(
+                    Effect.fail(new CodexDetachedAppServerError({ detail: "test connection" })),
+                  ),
+                ),
+              open: () =>
+                Effect.sync(() => {
+                  spawned = true;
+                }).pipe(Effect.andThen(Effect.die("unexpected launch"))),
+            }),
+            Layer.mock(ChildProcessSpawner.ChildProcessSpawner)({
+              spawn: () => Effect.die("unexpected stdio"),
+            }),
+            Layer.succeed(ProviderEventLoggers.ProviderEventLoggers, {
+              native: undefined,
+              canonical: undefined,
+            }),
+          ),
+        ),
+      );
+      yield* Effect.gen(function* () {
+        const factory = yield* CodexAppServerClientFactory;
+        yield* factory
+          .open({
+            instanceId,
+            threadId: ThreadId.make("unrelated"),
+            providerSessionId: ProviderSessionId.make("session"),
+            runtimePolicy: { runtimeMode: "full-access", interactionMode: "default", cwd: null },
+            settings: defaultSettings,
+            environment: {},
+          })
+          .pipe(Effect.scoped, Effect.exit);
+      }).pipe(Effect.provide(layer));
+      assert.equal(connected, 1);
+      assert.isFalse(spawned);
+    }),
+);
+
+it.effect("a preserved process reconnects after its last goal block clears", () =>
+  Effect.gen(function* () {
+    const instanceId = ProviderInstanceId.make("codex");
+    let connected = 0;
+    const layer = layerAppServerClientFactory.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.mock(ServerSettings.ServerSettingsService)({}),
+          Layer.mock(ProjectionStore.ProjectionStoreV2)({}),
+          Layer.mock(CodexSurvivors.CodexSurvivors)({
+            get: () => Effect.void.pipe(Effect.as(undefined)),
+            list: Effect.succeed([]),
+            listGoalBlocksByInstance: () => Effect.succeed([]),
+          }),
+          Layer.mock(CodexDetachedAppServers)({
+            socketTransportEnabled: true,
+            socketTransportMode: "socket",
+            ensureNotBlocked: () => Effect.void,
+            listPreservedForInstance: () => Effect.succeed(["codex-abcdefabcdef"]),
+            connectExisting: () =>
+              Effect.sync(() => {
+                connected++;
+              }).pipe(
+                Effect.andThen(
+                  Effect.fail(new CodexDetachedAppServerError({ detail: "test connection" })),
+                ),
+              ),
+            open: () => Effect.die("unexpected launch"),
+          }),
+          Layer.mock(ChildProcessSpawner.ChildProcessSpawner)({
+            spawn: () => Effect.die("unexpected stdio"),
+          }),
+          Layer.succeed(ProviderEventLoggers.ProviderEventLoggers, {
+            native: undefined,
+            canonical: undefined,
+          }),
+        ),
+      ),
+    );
+    yield* Effect.gen(function* () {
+      const factory = yield* CodexAppServerClientFactory;
+      yield* factory
+        .open({
+          instanceId,
+          threadId: ThreadId.make("thread"),
+          providerSessionId: ProviderSessionId.make("session"),
+          runtimePolicy: { runtimeMode: "full-access", interactionMode: "default", cwd: null },
+          settings: defaultSettings,
+          environment: {},
+        })
+        .pipe(Effect.scoped, Effect.exit);
+    }).pipe(Effect.provide(layer));
+    assert.equal(connected, 1);
   }),
 );

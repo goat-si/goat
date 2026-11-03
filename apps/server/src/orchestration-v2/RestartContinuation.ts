@@ -12,11 +12,16 @@ import {
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import type { ProjectionRuntimeRecoveryState } from "./ProjectionStore.ts";
 
 import * as ServerSettings from "../serverSettings.ts";
 import { isNativeMaintenanceCommand } from "./CommandPolicy.ts";
 import * as ThreadManagementService from "./ThreadManagementService.ts";
+import * as CodexSurvivors from "../provider/CodexSurvivors.ts";
+import * as EffectOutbox from "./EffectOutbox.ts";
+import { survivorQueuedRuns } from "./goat/CodexSurvivorQueuedRuns.ts";
+import * as ProviderTurnStart from "./ProviderTurnStartService.ts";
 import {
   awaitingProviderThreadId,
   cancelledRosterTaskWork,
@@ -34,6 +39,24 @@ import {
 const CONTINUE_PROMPT = "Continue where you left off.";
 
 const CONTINUATION_LOOP_WINDOW_MS = 5 * 60 * 1_000;
+
+export const makeRestartContinuation = Effect.fn("RestartContinuation.make")(function* (
+  starter: ProviderTurnStart.ProviderTurnStartServiceV2["Service"],
+) {
+  const survivors = yield* Effect.serviceOption(CodexSurvivors.CodexSurvivors);
+  const outbox = yield* Effect.serviceOption(EffectOutbox.EffectOutboxV2);
+  return (input: { readonly threadId: ThreadId; readonly sourceRunId: RunId }) => {
+    const continuation = continueRestartedRun(input).pipe(
+      Effect.provideService(ProviderTurnStart.ProviderTurnStartServiceV2, starter),
+    );
+    const withSurvivors = Option.isSome(survivors)
+      ? continuation.pipe(Effect.provideService(CodexSurvivors.CodexSurvivors, survivors.value))
+      : continuation;
+    return Option.isSome(outbox)
+      ? withSurvivors.pipe(Effect.provideService(EffectOutbox.EffectOutboxV2, outbox.value))
+      : withSurvivors;
+  };
+});
 
 function restartContinuationBlocked(
   projection: Pick<
@@ -185,7 +208,6 @@ export const continueRestartedRun = Effect.fn("RestartContinuation.continueResta
   function* (input: { readonly threadId: ThreadId; readonly sourceRunId: RunId }) {
     const settings = yield* ServerSettings.ServerSettingsService;
     const enabled = yield* settings.getSettings.pipe(Effect.orElseSucceed(() => null));
-    if (!enabled) return;
     const threads = yield* ThreadManagementService.ThreadManagementService;
     const messageId = MessageId.make(`message:restart-continuation:${input.sourceRunId}`);
     const projection = yield* threads.getThreadRecords(
@@ -193,18 +215,39 @@ export const continueRestartedRun = Effect.fn("RestartContinuation.continueResta
       ["messages", "runs", "providerTurns", "attempts", "runtimeRequests", "turnItems"],
       { messageIds: [messageId], turnItemTypes: ["secret_request"] },
     );
+    const source = projection.runs.find((run) => run.id === input.sourceRunId);
+    const survivorService = yield* Effect.serviceOption(CodexSurvivors.CodexSurvivors);
+    const binding = Option.isSome(survivorService)
+      ? (yield* survivorService.value.list).find(
+          (candidate) => candidate.threadId === input.threadId,
+        )
+      : undefined;
+    const survivor =
+      binding !== undefined &&
+      binding.instanceId === source?.providerInstanceId &&
+      (binding.sourceRunId === source?.id ||
+        binding.sourceRunId === source?.restartContinuationOfRunId);
+    if (binding !== undefined && !survivor) return;
     if (
-      !resolveProjectSettings(enabled, projection.thread.projectId).settings
-        .continueThreadsAfterServerUpdate
+      !survivor &&
+      (!enabled ||
+        !resolveProjectSettings(enabled, projection.thread.projectId).settings
+          .continueThreadsAfterServerUpdate)
     )
       return;
-    if (projection.messages.some((message) => message.id === messageId)) return;
-    const source = projection.runs.find((run) => run.id === input.sourceRunId);
+    const existingContinuation = survivor
+      ? projection.runs.find((run) => run.restartContinuationOfRunId === source?.id)
+      : undefined;
+    const messageExists = projection.messages.some((message) => message.id === messageId);
+    if (!survivor && messageExists) return;
     if (
       !source ||
       !(
         isRestartContinuationSource(source, projection.providerTurns) ||
-        continuationFailedBeforePrompt(source, projection.providerTurns)
+        continuationFailedBeforePrompt(source, projection.providerTurns) ||
+        (survivor &&
+          source.status === "starting" &&
+          source.restartContinuationOfRunId !== undefined)
       ) ||
       restartContinuationBlocked(
         projection,
@@ -214,10 +257,21 @@ export const continueRestartedRun = Effect.fn("RestartContinuation.continueResta
       )
     )
       return;
+    const outbox = yield* Effect.serviceOption(EffectOutbox.EffectOutboxV2);
+    const queuedRuns =
+      survivor && Option.isSome(outbox)
+        ? yield* survivorQueuedRuns(
+            outbox.value,
+            { threadId: input.threadId, restartContinuationOfRunId: binding?.sourceRunId },
+            projection,
+          )
+        : new Set<RunId>();
     if (
       projection.runs.some(
         (run) =>
+          !queuedRuns.has(run.id) &&
           run.id !== source.id &&
+          run.id !== existingContinuation?.id &&
           run.status !== "queued" &&
           !cancelledBeforeStart(run) &&
           runRanAfter(run, source),
@@ -238,7 +292,7 @@ export const continueRestartedRun = Effect.fn("RestartContinuation.continueResta
       if (DateTime.toEpochMillis(run.requestedAt) < loopWindowStart) break;
       chainLength += 1;
     }
-    if (chainLength >= MAX_CONTINUATION_CHAIN) {
+    if (!survivor && chainLength >= MAX_CONTINUATION_CHAIN) {
       yield* Effect.logWarning("Not continuing a run restarted too many times in a row", {
         threadId: input.threadId,
         sourceRunId: input.sourceRunId,
@@ -250,13 +304,29 @@ export const continueRestartedRun = Effect.fn("RestartContinuation.continueResta
       ["messages", "turnItems"],
       {
         messageIds: [source.userMessageId],
-        turnItemRunIds: [source.id],
+        turnItemRunIds:
+          survivor && binding !== undefined
+            ? [
+                ...new Set([
+                  source.id,
+                  binding.sourceRunId,
+                  ...(source.restartContinuationOfRunId === undefined
+                    ? []
+                    : [source.restartContinuationOfRunId]),
+                ]),
+              ]
+            : [source.id],
         turnItemTypes: ["run_interrupt_request"],
       },
     );
     if (
       sourceRecords.turnItems.some(
-        (item) => item.runId === source.id && item.type === "run_interrupt_request",
+        (item) =>
+          (item.runId === source.id ||
+            (survivor &&
+              (item.runId === binding?.sourceRunId ||
+                item.runId === source.restartContinuationOfRunId))) &&
+          item.type === "run_interrupt_request",
       )
     )
       return;
@@ -290,6 +360,23 @@ export const continueRestartedRun = Effect.fn("RestartContinuation.continueResta
       (message) => message.id === source.userMessageId,
     );
     if (sourceMessage !== undefined && isNativeMaintenanceCommand(sourceMessage)) return;
+    if (
+      survivor &&
+      (existingContinuation !== undefined ||
+        (source.status === "starting" && source.restartContinuationOfRunId !== undefined))
+    ) {
+      const existing = existingContinuation ?? source;
+      if (existing.status === "starting") {
+        const starter = yield* Effect.serviceOption(ProviderTurnStart.ProviderTurnStartServiceV2);
+        if (Option.isNone(starter))
+          return yield* Effect.die(
+            "Provider turn start service is unavailable for survivor adoption",
+          );
+        yield* starter.value.start({ threadId: input.threadId, runId: existing.id });
+      }
+      return;
+    }
+    if (messageExists) return;
     const note = restartContinuationNote(
       source,
       projection.runs,

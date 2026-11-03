@@ -51,6 +51,30 @@ function latestMatchingRun(
   );
 }
 
+export function survivingRestartNotice(
+  run: { readonly activeAttemptId: string | null; readonly status: string },
+  turns: ReadonlyArray<{
+    readonly runAttemptId: string | null;
+    readonly ordinal: number;
+    readonly status: string;
+    readonly survivingRestart?: { readonly nativeStartedAt: unknown } | undefined;
+  }>,
+): string | null {
+  if (!ACTIVITY_RUN_STATUSES.has(run.status) || run.activeAttemptId === null) return null;
+  let turn: (typeof turns)[number] | undefined;
+  for (const candidate of turns) {
+    if (
+      candidate.runAttemptId === run.activeAttemptId &&
+      (!turn || candidate.ordinal > turn.ordinal)
+    ) {
+      turn = candidate;
+    }
+  }
+  return turn?.status === "running" && turn.survivingRestart !== undefined
+    ? "Running since before the server restarted. Progress shows when this turn finishes."
+    : null;
+}
+
 function summarizeThreadRun(
   projection: ThreadStructure,
   run: OrchestrationV2ThreadProjection["runs"][number],
@@ -60,6 +84,7 @@ function summarizeThreadRun(
     : undefined;
   return {
     runId: run.id,
+    survivingRestartNotice: survivingRestartNotice(run, projection.providerTurns),
     completionNotification: run.completionNotification,
     status: run.status,
     requestedAt: DateTime.formatIso(run.requestedAt),

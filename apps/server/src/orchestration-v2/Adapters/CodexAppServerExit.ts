@@ -19,12 +19,13 @@ export const makeCodexSessionEvents = Effect.fn("CodexAppServerExit.makeCodexSes
   function* (
     client: CodexClient.CodexAppServerClient["Service"],
     providerSessionId: ProviderSessionId,
+    onTerminated: Effect.Effect<void> = Effect.void,
   ) {
     const events: CodexSessionEventQueue = yield* Queue.unbounded<
       ProviderAdapter.ProviderAdapterV2Event,
       ProviderAdapter.ProviderAdapterEventStreamError
     >();
-    yield* failEventsOnAppServerExit(client, events, providerSessionId);
+    yield* failEventsOnAppServerExit(client, events, providerSessionId, onTerminated);
     return events;
   },
 );
@@ -33,17 +34,22 @@ const failEventsOnAppServerExit = (
   client: CodexClient.CodexAppServerClient["Service"],
   events: CodexSessionEventQueue,
   providerSessionId: ProviderSessionId,
+  onTerminated: Effect.Effect<void>,
 ) =>
   client.terminated.pipe(
     Effect.flatMap((cause) =>
-      Queue.fail(
-        events,
-        new ProviderAdapter.ProviderAdapterEventStreamError({
-          driver: ProviderDriverKind.make("codex"),
-          providerSessionId,
-          source: "provider_process_exit",
-          cause,
-        }),
+      onTerminated.pipe(
+        Effect.andThen(
+          Queue.fail(
+            events,
+            new ProviderAdapter.ProviderAdapterEventStreamError({
+              driver: ProviderDriverKind.make("codex"),
+              providerSessionId,
+              source: "provider_process_exit",
+              cause,
+            }),
+          ),
+        ),
       ),
     ),
     Effect.forkScoped,

@@ -44,6 +44,9 @@ const decodeServerSettings = Schema.decodeUnknownSync(ServerSettings);
 const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const decodeClaudeSettings = Schema.decodeUnknownSync(ClaudeSettings);
+const decodeMemoryHubSettings = Schema.decodeSync(MemoryHubSettings);
+const decodeUnknownMemoryHubSettings = Schema.decodeUnknownSync(MemoryHubSettings);
+const decodeMemoryHubSettingsUpdate = Schema.decodeSync(MemoryHubSettingsUpdateInput);
 
 it("defaults blocked browser hosts to empty and normalizes valid writes", () => {
   expect(decodeServerSettings({}).blockedBrowserHosts).toEqual([]);
@@ -723,7 +726,7 @@ describe("memory hub settings", () => {
       "https://hub.invalid#secret",
     ])
       expect(() =>
-        Schema.decodeSync(MemoryHubSettings)({
+        decodeMemoryHubSettings({
           mode: "member",
           hubEnvironmentId: "env",
           endpoint,
@@ -734,7 +737,7 @@ describe("memory hub settings", () => {
   });
   it("replaces memory hub configuration as one dedicated admin field", () => {
     expect(
-      Schema.decodeSync(MemoryHubSettingsUpdateInput)({
+      decodeMemoryHubSettingsUpdate({
         requestId: "00000000-0000-4000-8000-000000000001",
         expectedVersion: 0,
         action: "configure",
@@ -742,7 +745,7 @@ describe("memory hub settings", () => {
       }),
     ).toMatchObject({ settings: { mode: "disabled" } });
     expect(() =>
-      Schema.decodeUnknownSync(MemoryHubSettings)({
+      decodeUnknownMemoryHubSettings({
         mode: "disabled",
         endpoint: "https://old.invalid",
       }),
@@ -960,4 +963,14 @@ it("validates the per-agent memory limit setting", () => {
   expect(() => decodeServerSettingsPatch({ agentMemoryLimitGiB: -1 })).toThrow();
   expect(() => decodeServerSettingsPatch({ agentMemoryLimitGiB: 1025 })).toThrow();
   expect(() => decodeServerSettingsPatch({ agentMemoryLimitGiB: 1.5 })).toThrow();
+});
+
+it("defaults Codex survival and validates its patch", () => {
+  expect(decodeServerSettings({}).codexTurnsSurviveServerStop).toBe("restart");
+  for (const value of ["off", "restart", "always"]) {
+    expect(decodeServerSettingsPatch({ codexTurnsSurviveServerStop: value })).toEqual({
+      codexTurnsSurviveServerStop: value,
+    });
+  }
+  expect(() => decodeServerSettingsPatch({ codexTurnsSurviveServerStop: "invalid" })).toThrow();
 });

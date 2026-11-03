@@ -59,6 +59,12 @@ export class CodexAppServerClient extends Context.Service<
       method: M,
       payload: CodexRpc.ClientNotificationParamsByMethod[M],
     ) => Effect.Effect<void, CodexError.CodexAppServerError>;
+    readonly setRequestGuard: (
+      guard: (
+        method: string,
+        params: unknown,
+      ) => Effect.Effect<void, CodexError.CodexAppServerError>,
+    ) => Effect.Effect<void>;
     readonly handleServerRequest: <M extends CodexRpc.ServerRequestMethod>(
       method: M,
       handler: (
@@ -115,6 +121,10 @@ export const make = Effect.fn("effect-codex-app-server/CodexAppServerClient.make
   let unknownRequestHandler:
     | ((method: string, params: unknown) => Effect.Effect<unknown, CodexError.CodexAppServerError>)
     | undefined;
+  let requestGuard: (
+    method: string,
+    params: unknown,
+  ) => Effect.Effect<void, CodexError.CodexAppServerError> = () => Effect.void;
   let unknownNotificationHandler:
     | ((method: string, params: unknown) => Effect.Effect<void, CodexError.CodexAppServerError>)
     | undefined;
@@ -213,21 +223,26 @@ export const make = Effect.fn("effect-codex-app-server/CodexAppServerClient.make
   const dispatchRequest = (
     request: CodexProtocol.CodexAppServerIncomingRequest,
   ): Effect.Effect<unknown, CodexError.CodexAppServerError> => {
-    if (request.method in CodexRpc.SERVER_REQUEST_PARAMS) {
-      const method = request.method as CodexRpc.ServerRequestMethod;
-      const payloadSchema = getServerRequestParamSchema(method);
-      const responseSchema = getServerRequestResponseSchema(method);
-      const handler = requestHandlers.get(method);
+    const dispatch = () => {
+      if (request.method in CodexRpc.SERVER_REQUEST_PARAMS) {
+        const method = request.method as CodexRpc.ServerRequestMethod;
+        const payloadSchema = getServerRequestParamSchema(method);
+        const responseSchema = getServerRequestResponseSchema(method);
+        const handler = requestHandlers.get(method);
 
-      return decodeOptionalPayload(method, payloadSchema, request.params).pipe(
-        Effect.flatMap((decoded) => runHandler(handler, decoded, method)),
-        Effect.flatMap((result) => encodeOptionalPayload(method, responseSchema, result)),
-      );
-    }
+        return decodeOptionalPayload(method, payloadSchema, request.params).pipe(
+          Effect.flatMap((decoded) => runHandler(handler, decoded, method)),
+          Effect.flatMap((result) => encodeOptionalPayload(method, responseSchema, result)),
+        );
+      }
 
-    return unknownRequestHandler
-      ? unknownRequestHandler(request.method, request.params)
-      : Effect.fail(CodexError.CodexAppServerRequestError.methodNotFound(request.method));
+      return unknownRequestHandler
+        ? unknownRequestHandler(request.method, request.params)
+        : Effect.fail(CodexError.CodexAppServerRequestError.methodNotFound(request.method));
+    };
+    return requestGuard(request.method, request.params).pipe(
+      Effect.andThen(Effect.suspend(dispatch)),
+    );
   };
 
   const terminated = yield* Deferred.make<CodexError.CodexAppServerError>();
@@ -279,6 +294,11 @@ export const make = Effect.fn("effect-codex-app-server/CodexAppServerClient.make
       respondError: transport.respondError,
     },
     terminated: Deferred.await(terminated),
+    setRequestGuard: Effect.fn("CodexAppServerClient.setRequestGuard")((guard) =>
+      Effect.sync(() => {
+        requestGuard = guard;
+      }),
+    ),
     request,
     notify,
     handleServerRequest: Effect.fn("CodexAppServerClient.handleServerRequest")(

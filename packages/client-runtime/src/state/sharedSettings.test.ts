@@ -3,7 +3,7 @@ import { describe, expect, it } from "@effect/vitest";
 
 import { filterSharedServerPatch, pickSharedServerSettings } from "./sharedSettings.ts";
 
-const restartCapabilities = { threadRestartContinuation: true };
+const restartCapabilities = { threadRestartContinuation: true, codexTurnSurvival: true };
 
 describe("filterSharedServerPatch", () => {
   it.each([true, false])(
@@ -87,4 +87,19 @@ describe("filterSharedServerPatch", () => {
       );
     },
   );
+});
+
+it("shares Codex survival only with supporting environments", () => {
+  const patch = {
+    codexTurnsSurviveServerStop: "always" as const,
+    continueThreadsAfterServerUpdate: true,
+  };
+  expect(filterSharedServerPatch(patch, restartCapabilities)).toEqual(patch);
+  expect(filterSharedServerPatch(patch, { threadRestartContinuation: true })).toEqual({
+    continueThreadsAfterServerUpdate: true,
+  });
+  expect(
+    pickSharedServerSettings(DEFAULT_SERVER_SETTINGS, restartCapabilities)
+      .codexTurnsSurviveServerStop,
+  ).toBe("restart");
 });

@@ -309,3 +309,41 @@ it.effect("message channel stream errors and raw newlines terminate the client",
     assert.equal(error.operation, "read-input-stream");
   }).pipe(Effect.scoped),
 );
+
+it.effect("a request guard refuses replay before a registered approval handler runs", () =>
+  Effect.gen(function* () {
+    const incoming = yield* Queue.unbounded<string, Cause.Done<void>>();
+    const outgoing = yield* Queue.unbounded<string>();
+    const handled = yield* Ref.make(false);
+    const context = yield* Layer.build(
+      CodexClient.layerMessageChannel({
+        incoming: Stream.fromQueue(incoming),
+        send: (message) => Queue.offer(outgoing, message).pipe(Effect.asVoid),
+        closed: Effect.never,
+      }),
+    );
+    const client = Context.get(context, CodexClient.CodexAppServerClient);
+    yield* client.handleServerRequest("item/tool/requestUserInput", () =>
+      Ref.set(handled, true).pipe(Effect.as({ answers: {} })),
+    );
+    yield* client.setRequestGuard((method) =>
+      method === "item/tool/requestUserInput"
+        ? Effect.fail(
+            new CodexError.CodexAppServerRequestError({ code: -32000, errorMessage: "cancelled" }),
+          )
+        : Effect.void,
+    );
+    yield* Queue.offer(
+      incoming,
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 7,
+        method: "item/tool/requestUserInput",
+        params: { threadId: "thread", turnId: "turn", itemId: "item", questions: [] },
+      }),
+    );
+    const response = JSON.parse(yield* Queue.take(outgoing));
+    assert.equal(response.error.message, "cancelled");
+    assert.isFalse(yield* Ref.get(handled));
+  }).pipe(Effect.scoped),
+);

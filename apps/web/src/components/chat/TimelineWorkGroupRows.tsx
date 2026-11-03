@@ -305,6 +305,9 @@ export function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: 
           <BackgroundWorktreeSetupChip snapshot={backgroundWorktreeSetup} />
         ) : null}
       </div>
+      {row.survivingRestartNotice ? (
+        <div className="px-1 text-work-log text-secondary-label">{row.survivingRestartNotice}</div>
+      ) : null}
     </div>
   );
 }

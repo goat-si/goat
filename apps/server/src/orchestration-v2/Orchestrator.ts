@@ -1,3 +1,4 @@
+import { survivorQueuedRuns } from "./goat/CodexSurvivorQueuedRuns.ts";
 import {
   completionDeliveryRun,
   completionDeliveryMessage,
@@ -99,7 +100,6 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
-
 import * as ProjectStore from "./ProjectStore.ts";
 import {
   isCheckpointRestoreIsolated,
@@ -5430,6 +5430,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     }
     if (yield* acceptStaleAutomatedContinuation(command, projection, events)) return;
 
+    const survivorQueued = yield* survivorQueuedRuns(effectOutbox, command, projection);
     if (command.restartContinuationOfRunId !== undefined) {
       const source = projection.runs.find((run) => run.id === command.restartContinuationOfRunId);
       if (
@@ -5444,6 +5445,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         projection.runs.some(
           (run) =>
             run.id !== source.id &&
+            !survivorQueued.has(run.id) &&
             run.status !== "queued" &&
             !cancelledBeforeStart(run) &&
             runRanAfter(run, source),
@@ -5870,7 +5872,8 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       projection.thread.worktreePath === null
         ? latestRun
         : undefined;
-    const queueBehindRun = activeRun ?? worktreeMissingRun;
+    const queueBehindRun =
+      activeRun && survivorQueued.has(activeRun.id) ? undefined : (activeRun ?? worktreeMissingRun);
     const pendingMergeBackTransfers = pendingMergeBackTransfersForThread(projection);
     const startsOrQueuesRun =
       dispatchMode.type === "defer_start" ||
