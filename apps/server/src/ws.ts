@@ -244,6 +244,7 @@ import {
   coalesceThreadLiveStream,
 } from "./orchestration-v2/ThreadLiveEventCoalescer.ts";
 import * as ThreadManagementService from "./orchestration-v2/ThreadManagementService.ts";
+import * as ShellSnapshotLoads from "./orchestration-v2/ShellSnapshotLoads.ts";
 import * as ThreadMessageIntake from "./orchestration-v2/ThreadMessageIntake.ts";
 import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
 import {
@@ -1030,7 +1031,7 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
     readonly omitIdleSubagents?: boolean;
     readonly omitOlderSettled?: boolean;
   }) {
-    const sql = yield* SqlClient.SqlClient;
+    const shellLoads = yield* ShellSnapshotLoads.ShellSnapshotLoads;
     const threadManagement = yield* ThreadManagementService.ThreadManagementService;
     const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
     const projects = yield* ProjectStore.ProjectStoreV2;
@@ -1057,12 +1058,7 @@ export const subscribeOrchestrationV2Shell = Effect.fn("ws.orchestrationV2.subsc
     );
     const loadSnapshot = Effect.fn("ws.orchestrationV2.loadShellSnapshot")(function* () {
       const omitIdleSubagents = input.omitIdleSubagents === true;
-      const parts = yield* loadShellSnapshotParts({
-        sql,
-        readThreads: threadManagement.readShellSnapshot({ location: "active", omitIdleSubagents }),
-        listProjects: projects.listShells(),
-        latestSequence: applicationEvents.latestApplicationSequence,
-      });
+      const parts = yield* shellLoads.active(omitIdleSubagents);
       const base = buildActiveShellSnapshot(parts);
       const options = {
         omitIdleSubagents,

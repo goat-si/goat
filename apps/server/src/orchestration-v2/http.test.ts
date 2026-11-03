@@ -1,3 +1,4 @@
+import * as ShellSnapshotLoads from "./ShellSnapshotLoads.ts";
 import {
   AuthSessionId,
   type AuthEnvironmentScope,
@@ -130,6 +131,7 @@ const serveOrchestrationHttp = (allowed: () => boolean) =>
     });
     const routes = HttpApiBuilder.layer(TranscriptTestApi).pipe(
       Layer.provide(OrchestrationHttp.layer),
+      Layer.provide(ShellSnapshotLoads.layer),
       Layer.provide(
         Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
           getEnvironmentId: Effect.succeed(environmentId),
