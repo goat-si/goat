@@ -6,11 +6,14 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { assert, it, vi } from "@effect/vitest";
-import { ProviderInstanceId, ThreadId } from "@goat/contracts";
+import { ProviderInstanceId, ProviderSessionId, ThreadId } from "@goat/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { TestClock } from "effect/testing";
 import * as ServerConfig from "../config.ts";
@@ -23,6 +26,7 @@ import {
 } from "./CodexDetachedAppServer.ts";
 
 const socketPath = "/tmp/goat-test/codex/unique.sock";
+const anySession = ProviderSessionId.make("session");
 const record = {
   version: 1 as const,
   instanceId: "codex-instance",
@@ -204,7 +208,7 @@ it.effect(
         assert.deepEqual(signals, []);
         assert.deepEqual(warnings, [[1235]]);
         assert.equal(
-          (yield* service.ensureNotBlocked(record.instanceId).pipe(Effect.exit))._tag,
+          (yield* service.ensureNotBlocked(record.instanceId, anySession).pipe(Effect.exit))._tag,
           "Failure",
         );
         assert.deepEqual((yield* Effect.promise(() => NodeFSP.readdir(dir))).sort(), [
@@ -307,14 +311,16 @@ it.effect("a failed process lookup blocks opens until the stale group is demonst
       });
       const outcomes = yield* service.cleanup;
       assert.equal(outcomes[0]?.outcome, "blocked");
-      const error = yield* service.ensureNotBlocked(record.instanceId).pipe(Effect.flip);
+      const error = yield* service
+        .ensureNotBlocked(record.instanceId, anySession)
+        .pipe(Effect.flip);
       assert.include(String(error), "could not be stopped");
       assert.deepEqual((yield* Effect.promise(() => NodeFSP.readdir(dir))).sort(), [
         `${record.name}.json`,
         `${record.name}.pid`,
       ]);
       unavailable = false;
-      yield* service.ensureNotBlocked(record.instanceId);
+      yield* service.ensureNotBlocked(record.instanceId, anySession);
       assert.deepEqual(yield* Effect.promise(() => NodeFSP.readdir(dir)), []);
     }),
   ),
@@ -444,9 +450,49 @@ const openService = (
 
 const openInput = {
   instanceId: "codex",
+  providerSessionId: anySession,
   command: (socket: string) =>
     Effect.succeed({ command: "codex", args: ["app-server", "--listen", "unix://" + socket] }),
 };
+
+it.effect("a session whose app-server is still stopping cannot open another one", () =>
+  withRecordDirectory((directory) =>
+    Effect.gen(function* () {
+      const stopping = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const service = yield* makeDetachedAppServers({
+        stateDir: directory,
+        bootId: Effect.succeed("boot-one"),
+        processTable: {
+          ...processTable([]),
+          groupMembers: () =>
+            Deferred.succeed(stopping, undefined).pipe(
+              Effect.andThen(Deferred.await(release)),
+              Effect.as([]),
+            ),
+        },
+        socketAccepts: () => Effect.succeed(false),
+        signalGroup: () => Effect.void,
+        socketDirectory: Effect.succeed("/tmp/goat-test/codex"),
+        launch: () =>
+          Effect.succeed({ pid: 4321, exited: Effect.never, signalIfAlive: () => true }),
+        connect: () =>
+          Effect.succeed({ incoming: Stream.never, send: () => Effect.void, closed: Effect.never }),
+      });
+      const scope = yield* Scope.make();
+      yield* service.open(openInput).pipe(Effect.provideService(Scope.Scope, scope));
+      const closing = yield* Scope.close(scope, Exit.void).pipe(Effect.forkScoped);
+      yield* Deferred.await(stopping);
+      const same = yield* service.ensureNotBlocked("codex", anySession).pipe(Effect.exit);
+      yield* service.ensureNotBlocked("codex", ProviderSessionId.make("other"));
+      yield* service.ensureNotBlocked("other", anySession);
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(closing);
+      yield* service.ensureNotBlocked("codex", anySession);
+      assert.equal(same._tag, "Failure");
+    }),
+  ),
+);
 
 it.effect("open reports the exit code and manual diagnosis hint", () =>
   withRecordDirectory((directory) =>
@@ -622,10 +668,10 @@ it.effect("an unreadable record blocks every Codex provider until it is resolved
         signalGroup: () => Effect.die("unexpected signal"),
       });
       assert.equal((yield* service.cleanup)[0]?.outcome, "blocked");
-      const error = yield* service.ensureNotBlocked("any-provider").pipe(Effect.flip);
+      const error = yield* service.ensureNotBlocked("any-provider", anySession).pipe(Effect.flip);
       assert.include(error.message, "unreadable");
       yield* Effect.promise(() => NodeFSP.rm(broken));
-      yield* service.ensureNotBlocked("any-provider");
+      yield* service.ensureNotBlocked("any-provider", anySession);
     }),
   ),
 );
@@ -647,7 +693,7 @@ it.effect("invalid record shapes block every provider", () =>
         yield* Effect.promise(() => NodeFSP.writeFile(path, JSON.stringify(value)));
         assert.equal((yield* service.cleanup)[0]?.outcome, "blocked");
         for (const provider of ["first", "second"]) {
-          const error = yield* service.ensureNotBlocked(provider).pipe(Effect.flip);
+          const error = yield* service.ensureNotBlocked(provider, anySession).pipe(Effect.flip);
           assert.include(error.message, "unreadable");
         }
       }
@@ -672,7 +718,7 @@ it.effect("a cleanup defect leaves all providers blocked", () =>
       });
       yield* service.cleanup.pipe(Effect.exit);
       for (const provider of ["first", "second"]) {
-        const error = yield* service.ensureNotBlocked(provider).pipe(Effect.flip);
+        const error = yield* service.ensureNotBlocked(provider, anySession).pipe(Effect.flip);
         assert.include(error.message, "cleanup did not complete");
       }
     }),

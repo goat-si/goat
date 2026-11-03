@@ -11,6 +11,7 @@ import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as RecoveryFailure from "./CodexSurvivorRecoveryFailure.ts";
 import { containRecoveryThread, type RecoveryRun } from "./CodexSurvivorRecoveryContainment.ts";
 import { hasNoNativeTurn } from "./CodexSurvivorQueuedStart.ts";
+import { blocksSession, bootstrapRecordSessions } from "./CodexRecordSessions.ts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -32,8 +33,16 @@ export const classifyRecovery = Effect.fn("CodexSurvivors.classifyRecovery")(fun
   readonly ids: IdAllocator.IdAllocatorV2["Service"];
   readonly skipThreads?: ReadonlySet<ThreadId>;
 }) {
-  const records = yield* input.detached.loadRecords;
-  const globalBlock = records.globalBlock;
+  const loaded = yield* input.detached.loadRecords;
+  const globalBlock = loaded.globalBlock;
+  const records =
+    globalBlock === undefined
+      ? yield* bootstrapRecordSessions({
+          records: loaded,
+          projections: input.projections,
+          assignSession: input.detached.assignSession,
+        })
+      : loaded;
   const settings = yield* input.settings.getSettings;
   const threadIds = yield* input.projections.getRecoveryThreadIds("runtime-cleanup");
   const protectedThreads = new Set<ThreadId>();
@@ -134,7 +143,7 @@ export const classifyRecovery = Effect.fn("CodexSurvivors.classifyRecovery")(fun
           }
           const matches = records.filter(
             (value) =>
-              value.instanceId === run.providerInstanceId &&
+              blocksSession(value, run.providerInstanceId, providerThread.providerSessionId) &&
               value.state === "running" &&
               value.stderrMode === "discard",
           );
@@ -281,12 +290,14 @@ export const classifyRecovery = Effect.fn("CodexSurvivors.classifyRecovery")(fun
           const binding: CodexSurvivorBinding = {
             instanceId: run.providerInstanceId,
             recordName: record.name,
+            providerSessionId: record.providerSessionId,
             threadId,
             sourceRunId: run.restartContinuationOfRunId ?? run.id,
             nativeThreadId: nativeThread.nativeId,
             nativeTurnId: turn.nativeTurnRef.nativeId,
           };
-          if (matches.length !== 1) {
+          // A record without a session cannot be adopted by one; it is fenced like an ambiguous match.
+          if (matches.length !== 1 || record.providerSessionId === undefined) {
             for (const match of matches)
               yield* input.survivors
                 .recordStopObligation(

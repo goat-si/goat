@@ -77,6 +77,7 @@ it.effect("a goal-only instance reconnects and releases admission after the goal
     const record = {
       name: key.recordName,
       instanceId,
+      providerSessionId: ProviderSessionId.make("session"),
       state: "running",
       stderrMode: "discard",
       goalBlocks: [block],
@@ -176,6 +177,7 @@ it.effect("an instance with a survivor binding does not open a second recovery s
         {
           instanceId,
           name: recordName,
+          providerSessionId: "session",
           state: "running",
           stderrMode: "discard",
           goalBlocks: [{ threadId: ThreadId.make("goal"), nativeThreadId: "native" }],
@@ -199,5 +201,55 @@ it.effect("an instance with a survivor binding does not open a second recovery s
       sessions,
     } as never);
     assert.equal(opened, 0);
+  }),
+);
+
+it.effect("each goal-only process reopens the session its record names", () =>
+  Effect.gen(function* () {
+    const instanceId = ProviderInstanceId.make("codex");
+    const goal = (key: string) => ({
+      instanceId,
+      name: "codex-" + key.repeat(12),
+      providerSessionId: "session-" + key,
+      state: "running",
+      stderrMode: "discard",
+      goalBlocks: [{ threadId: ThreadId.make("goal-" + key), nativeThreadId: "native-" + key }],
+    });
+    const opened: string[] = [];
+    yield* GoalRecovery.attachGoalOnlySessions({
+      detached: { loadRecords: Effect.succeed([goal("a"), goal("b")]) },
+      survivors: {
+        list: Effect.succeed([]),
+        classifyRecord: () => Effect.succeed({ type: "verified", pgid: 1, members: [] }),
+      },
+      projections: {
+        getThreadRecords: (threadId: ThreadId) =>
+          Effect.succeed({
+            thread: {
+              projectId: ProjectId.make("project"),
+              modelSelection: { instanceId, model: "codex-model" },
+              runtimeMode: "full-access",
+              interactionMode: "default",
+              worktreePath: "/workspace",
+              deletedAt: null,
+            },
+            providerThreads: [
+              {
+                providerInstanceId: instanceId,
+                providerSessionId: ProviderSessionId.make(threadId.replace("goal-", "session-")),
+                nativeThreadRef: { nativeId: threadId.replace("goal-", "native-") },
+              },
+            ],
+            providerSessions: [],
+          }),
+      },
+      sessions: {
+        open: (input: { readonly threadId: ThreadId; readonly providerSessionId: string }) =>
+          Effect.sync(() => {
+            opened.push(input.threadId + "@" + input.providerSessionId);
+          }),
+      },
+    } as never);
+    assert.deepEqual(opened, ["goal-a@session-a", "goal-b@session-b"]);
   }),
 );

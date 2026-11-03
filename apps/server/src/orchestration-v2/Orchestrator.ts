@@ -1,4 +1,5 @@
 import { survivorQueuedRuns } from "./goat/CodexSurvivorQueuedRuns.ts";
+import { keptProviderSessionId, makeProviderSessionPlacement } from "./ProviderSessionPlacement.ts";
 import {
   completionDeliveryRun,
   completionDeliveryMessage,
@@ -220,7 +221,6 @@ export { OrchestratorQuestionAlreadyAnsweredError };
 import { canonicalUserInputAnswers, messageQuestionReplies } from "./userInputAnswers.ts";
 import * as ChannelBotDirectory from "../channels/ChannelBotDirectory.ts";
 import { makeTimelineRecords, OrchestratorChannelBotThreadError } from "./goat/TimelineRecords.ts";
-import type * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as ServerSettings from "../serverSettings.ts";
 
 export class OrchestratorDispatchError extends Schema.TaggedError<OrchestratorDispatchError>()(
@@ -1169,25 +1169,10 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       ),
     );
 
-  const providerSessionIdFor = (input: {
-    readonly adapter: ProviderAdapter.ProviderAdapterV2["Service"];
-    readonly providerInstanceId: ProviderInstanceId;
-    readonly threadId: ThreadId;
-  }) =>
-    input.adapter.getCapabilities().pipe(
-      Effect.flatMap((capabilities) =>
-        capabilities.sessions.supportsMultipleProviderThreadsPerSession
-          ? Effect.succeed(
-              idAllocator.derive.providerSession({
-                providerInstanceId: input.providerInstanceId,
-              }),
-            )
-          : idAllocator.allocate.providerSession({
-              providerInstanceId: input.providerInstanceId,
-              threadId: input.threadId,
-            }),
-      ),
-    );
+  const { providerSessionIdFor } = yield* makeProviderSessionPlacement({
+    idAllocator,
+    settings: serverSettings.getSettings.pipe(Effect.orDie),
+  });
 
   const enforceCommandPolicy =
     (command: OrchestrationV2ServerCommand) =>
@@ -1994,11 +1979,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
               ),
             )));
       const providerSessionId =
-        (!canResumeAcrossInstances &&
-        queuedProviderThread.providerSessionId !== null &&
-        !switchPlan?.releaseProviderSessionIds.includes(queuedProviderThread.providerSessionId)
-          ? queuedProviderThread.providerSessionId
-          : null) ??
+        keptProviderSessionId({
+          providerThread: queuedProviderThread,
+          providerInstanceId: queuedRun.providerInstanceId,
+          canResumeAcrossInstances,
+          releaseProviderSessionIds: switchPlan?.releaseProviderSessionIds,
+          capabilities: targetCapabilities,
+        }) ??
         (yield* providerAdapters.get(queuedRun.providerInstanceId).pipe(
           Effect.flatMap((adapter) =>
             providerSessionIdFor({

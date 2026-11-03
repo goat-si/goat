@@ -8,6 +8,7 @@ import { assert, it } from "@effect/vitest";
 import {
   EnvironmentId,
   ProviderInstanceId,
+  ProviderSessionId,
   ProviderTurnId,
   RunAttemptId,
   RunId,
@@ -71,7 +72,9 @@ const projections = Layer.mock(ProjectionStore.ProjectionStoreV2)({
   getRuntimeRecoveryProjection: () =>
     Effect.succeed({
       thread: { id: threadId, projectId: "project" },
-      providerThreads: [{ id: "pt", driver: "codex", cloudTask: undefined }],
+      providerThreads: [
+        { id: "pt", driver: "codex", providerSessionId: "session", cloudTask: undefined },
+      ],
       runs: [
         {
           id: RunId.make("run"),
@@ -262,6 +265,7 @@ const stopServer = (intent: "relaunch" | "quit" | "none") =>
         const instance = yield* detached
           .open({
             instanceId: "codex",
+            providerSessionId: ProviderSessionId.make("session"),
             command: (path) =>
               Effect.sync(() => {
                 socketPath = path;

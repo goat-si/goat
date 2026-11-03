@@ -604,6 +604,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["survive restart update quit codex progress"],
   },
   {
+    id: "codex-app-server-isolation",
+    title: "Codex app-servers",
+    to: "/settings/general",
+    scope: "environment-defaults",
+    searchTerms: ["codex app server process per thread shared isolation crash memory"],
+  },
+  {
     id: "new-threads",
     title: "New threads",
     to: "/settings/general",

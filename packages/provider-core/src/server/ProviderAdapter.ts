@@ -610,6 +610,13 @@ export interface ProviderAdapterV2SessionRuntime {
   /** Manager runtimes broadcast independent subscriptions; adapters may expose only a single-consumer stream. */
   readonly subscribeEvents?: Effect.Effect<ProviderAdapterV2EventSubscription>;
   readonly hasPendingBackgroundWork?: Effect.Effect<boolean>;
+  /**
+   * Live work in the process that idle release must not cut off, even past its pin ceiling.
+   * Past the ceiling the runtime confirms cached state with the provider first.
+   */
+  readonly holdsLiveWork?: (input: { readonly pastPinCeiling: boolean }) => Effect.Effect<boolean>;
+  /** Set when a reopen of this session must wait until its scope has closed, process included. */
+  readonly reopenAfterClose?: true;
   /** Root-subscription probe; replacement checks opt in to subagents owned by the live process. */
   readonly hasPendingBackgroundWorkForThread?: (
     providerThread: OrchestrationV2ProviderThread,

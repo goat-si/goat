@@ -1,4 +1,4 @@
-import { ThreadId } from "@goat/contracts";
+import { ProviderSessionId, ThreadId } from "@goat/contracts";
 
 export const survivorRecords = (reviewCase: string | undefined) =>
   ["plain", "goal", "salted", "stop", "terminal"]
@@ -6,6 +6,7 @@ export const survivorRecords = (reviewCase: string | undefined) =>
     .map((kind) => ({
       version: 1 as const,
       instanceId: `codex-${kind}`,
+      providerSessionId: ProviderSessionId.make(`session-${kind}`),
       name: `codex-${kind}-abcdefabcdef`,
       socketPath: `/tmp/${kind}.sock`,
       pgid: kind === "plain" ? 1001 : 1002,

@@ -2,6 +2,7 @@ import {
   CommandId,
   latestProviderTurnForAttempt,
   type ProviderInstanceId,
+  type ProviderSessionId,
   type RunId,
   type ThreadId,
 } from "@goat/contracts";
@@ -27,11 +28,14 @@ import {
   type DetachedClassification,
 } from "./CodexDetachedAppServer.ts";
 import { buildCodexInitializeParams } from "./CodexProvider.ts";
+import { servesSession } from "./CodexRecordSessions.ts";
 import { containRecoveryThread, type RecoveryRun } from "./CodexSurvivorRecoveryContainment.ts";
 
 export interface CodexSurvivorBinding {
   readonly instanceId: ProviderInstanceId;
   readonly recordName: string;
+  /** The session of the record; bindings never cross from one session's process to another's. */
+  readonly providerSessionId?: ProviderSessionId | undefined;
   readonly threadId: ThreadId;
   readonly sourceRunId: RunId;
   readonly nativeThreadId: string;
@@ -52,6 +56,7 @@ export interface CodexGoalBlock {
 export interface CodexInstanceRecordKey {
   readonly instanceId: ProviderInstanceId;
   readonly recordName: string;
+  readonly providerSessionId?: ProviderSessionId | undefined;
 }
 
 export const readGoalStatus = Effect.fn("CodexSurvivors.readGoalStatus")(
@@ -510,7 +515,7 @@ export const prepareShutdownSurvivors = Effect.fn("CodexSurvivors.prepareShutdow
         if (thread?.driver !== "codex") continue;
         const matches = records.filter(
           (item) =>
-            item.instanceId === run.providerInstanceId &&
+            servesSession(item, run.providerInstanceId, thread.providerSessionId) &&
             item.state === "running" &&
             item.stderrMode === "discard" &&
             (binding === undefined || binding.recordName === item.name),

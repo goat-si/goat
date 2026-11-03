@@ -515,3 +515,90 @@ it.effect(
       );
     }).pipe(Effect.scoped),
 );
+
+it.effect("shutdown retains each session's process for the thread running on it", () =>
+  Effect.gen(function* () {
+    const directory = yield* Effect.acquireRelease(
+      Effect.promise(() => NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-shutdown-"))),
+      (path) => Effect.promise(() => NodeFSP.rm(path, { recursive: true, force: true })),
+    );
+    const dir = NodePath.join(directory, "codex-app-servers");
+    yield* Effect.promise(() => NodeFSP.mkdir(dir));
+    const sessions = ["a", "b"] as const;
+    const recordFor = (key: (typeof sessions)[number], index: number) => ({
+      version: 1,
+      name: "codex-" + key.repeat(12),
+      instanceId: "codex",
+      providerSessionId: "session-" + key,
+      socketPath: "/tmp/goat-shutdown-" + key + ".sock",
+      pgid: 2001 + index,
+      bootId: "boot",
+      state: "running",
+      createdAt: "2026-01-01T00:00:00Z",
+      stderrMode: "discard",
+    });
+    const records = sessions.map(recordFor);
+    for (const record of records)
+      yield* Effect.promise(() =>
+        NodeFSP.writeFile(NodePath.join(dir, record.name + ".json"), JSON.stringify(record)),
+      );
+    const detached = yield* makeDetachedAppServers({
+      stateDir: directory,
+      bootId: Effect.succeed("boot"),
+      processTable: {
+        groupMembers: (pgid) =>
+          Effect.succeed(
+            records
+              .filter((record) => record.pgid === pgid)
+              .map((record) => ({ pid: pgid, pgid, argv: record.socketPath })),
+          ),
+        ownerOfSocket: () => Effect.void.pipe(Effect.as(undefined)),
+      },
+      socketAccepts: () => Effect.succeed(false),
+      signalGroup: () => Effect.void,
+    });
+    yield* detached.loadRecords;
+    for (const record of records) yield* detached.preserveForRecovery(record.name);
+    const projections = {
+      getRuntimeRecoveryProjection: (threadId: ThreadId) =>
+        Effect.succeed({
+          thread: { projectId: "project" },
+          runs: [
+            {
+              id: "run-" + threadId,
+              status: "running",
+              activeAttemptId: "attempt-" + threadId,
+              providerThreadId: "provider-" + threadId,
+              providerInstanceId: "codex",
+            },
+          ],
+          providerThreads: [
+            {
+              id: "provider-" + threadId,
+              driver: "codex",
+              providerSessionId: "session-" + threadId,
+            },
+          ],
+        }),
+      getThreadRecords: (threadId: ThreadId) =>
+        Effect.succeed({
+          providerTurns: [{ runAttemptId: "attempt-" + threadId, ordinal: 1, status: "running" }],
+        }),
+    };
+    const protect = { threads: new Set<ThreadId>(), sessions: new Set<string>() };
+    yield* Survivors.prepareShutdownSurvivors({
+      detached: { ...detached, socketTransportEnabled: true },
+      projections: projections as never,
+      sink: { writeWithEffects: () => Effect.void } as never,
+      settings: yield* ServerSettings.ServerSettingsService.pipe(
+        Effect.provide(ServerSettings.layerTest({ codexTurnsSurviveServerStop: "restart" })),
+      ),
+      stopKind: "restart",
+      bindings: [],
+      threadIds: sessions.map((key) => ThreadId.make(key)),
+      protect,
+    });
+    assert.deepEqual([...protect.threads].sort(), ["a", "b"]);
+    assert.deepEqual([...protect.sessions].sort(), ["session-a", "session-b"]);
+  }).pipe(Effect.scoped),
+);

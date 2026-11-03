@@ -190,6 +190,7 @@ import {
   codexTerminalFailure,
 } from "./CodexFailureClass.ts";
 import { codexTurnSkills } from "./CodexTurnSkills.ts";
+import { descendsFromCodexThread, makeCodexLiveWork } from "./CodexLiveWork.ts";
 import type { CodexTurnStartInput } from "./CodexTurnStartInput.ts";
 import { codexThreadMcpEnvironment, makeCodexConfiguredBrowser } from "./CodexThreadEnvironment.ts";
 
@@ -1245,16 +1246,6 @@ const approvalOwnerCodexTurn = (
   return { owner, subagent };
 };
 
-/** Whether this turn, or any turn it descends from, belongs to the provider thread. */
-const descendsFromCodexThread = (
-  context: ActiveCodexTurnContext | undefined,
-  providerThreadId: string,
-): boolean => {
-  for (let turn = context; turn; turn = turn.subagent?.parentContext)
-    if (turn.providerThread.id === providerThreadId) return true;
-  return false;
-};
-
 const isDescendantCodexTurn = (
   candidate: ActiveCodexTurnContext,
   ancestor: ActiveCodexTurnContext,
@@ -2029,6 +2020,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           client,
           survivors,
           instanceId: adapterOptions.instanceId,
+          providerSessionId: input.providerSessionId,
           scope,
         });
         const events = yield* survivorHooks.makeSessionEvents(input.providerSessionId);
@@ -7295,54 +7287,21 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
           providerSession: session,
           events: Stream.fromEffectRepeat(Queue.take(events)),
           canReuseContextUsage: canReuseCodexContextUsage,
-          // Idle release can beat delayed subagent resumes: Codex reports them completed between turns with no resume-expected signal.
-          hasPendingBackgroundWork: Effect.gen(function* () {
-            for (const items of (yield* Ref.get(runningCommandItemsByTurn)).values()) {
-              if (items.size > 0) {
-                return true;
-              }
-            }
-            for (const items of (yield* Ref.get(runningDynamicToolsByTurn)).values()) {
-              if (items.size > 0) {
-                return true;
-              }
-            }
-            if ((yield* Ref.get(pendingMcpAppCaptures)).size > 0) {
-              return true;
-            }
-            for (const state of imageTurns.values()) {
-              if (state.running.size > 0 || state.saved.size > 0) return true;
-            }
-            for (const subagent of (yield* Ref.get(subagentThreads)).values()) {
-              if (subagent.task.status === "running") {
-                return true;
-              }
-            }
-            return false;
-          }),
-          hasPendingBackgroundWorkForThread: Effect.fn(
-            "CodexAdapterV2.hasPendingBackgroundWorkForThread",
-          )(function* (providerThread) {
-            // Owned through any turn it descends from, even one gone from both maps while its work
-            // runs (#1571), so an intermediate parent's thread counts its running subagents too.
-            const owned = (context: ActiveCodexTurnContext) =>
-              descendsFromCodexThread(context, providerThread.id);
-            const active = yield* Ref.get(activeTurns);
-            for (const context of [
-              ...active.values(),
-              ...(yield* Ref.get(settledTurns)).values(),
-            ]) {
-              if (!owned(context)) continue;
-              if (yield* turnHasRetainedBackgroundWork(context.nativeTurnId)) return true;
-              if (context.subagent !== null && active.has(context.nativeTurnId)) return true;
-            }
-            for (const subagent of (yield* Ref.get(subagentThreads)).values())
-              if (
-                (subagent.task.status === "running" || subagent.task.status === "pending") &&
-                owned(subagent.parentContext)
-              )
-                return true;
-            return false;
+          reopenAfterClose: true,
+          ...makeCodexLiveWork({
+            client,
+            activeTurns: Ref.get(activeTurns),
+            settledTurns: Ref.get(settledTurns),
+            runningCommandItems: Ref.get(runningCommandItemsByTurn),
+            runningDynamicTools: Ref.get(runningDynamicToolsByTurn),
+            pendingMcpAppCaptures: Ref.get(pendingMcpAppCaptures),
+            imageTurns,
+            subagentThreads: Ref.get(subagentThreads),
+            pendingSubagentTurns: Ref.get(pendingSubagentTurns),
+            pendingRuntimeRequests: Ref.get(pendingRuntimeRequests),
+            goalsByNativeThread,
+            survivors: survivorHooks,
+            turnHasRetainedBackgroundWork,
           }),
           ensureThread: (threadInput) =>
             ensureInitialized.pipe(

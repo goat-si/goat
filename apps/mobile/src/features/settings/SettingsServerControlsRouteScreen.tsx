@@ -1,7 +1,11 @@
 import { useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { SettingsRow } from "./components/SettingsRow";
 import { AllowedApps } from "./computerUse/AllowedApps";
-import { AuthSettingsWriteScope, type EnvironmentId } from "@goat/contracts";
+import {
+  AuthSettingsWriteScope,
+  CODEX_APP_SERVER_ISOLATION_DEFAULT,
+  type EnvironmentId,
+} from "@goat/contracts";
 import { readEnvironmentScope, useEnvironmentsWithScope } from "../../state/session";
 import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScrollView";
 import { AppText as Text } from "../../components/ui/AppText";
@@ -345,6 +349,10 @@ function ServerSettingsDetail(props: {
   const supportsCodexSurvival = targets.every(
     (target) => target.environment.serverConfig.environment.capabilities.codexTurnSurvival === true,
   );
+  const supportsCodexIsolation = targets.every(
+    (target) =>
+      target.environment.serverConfig.environment.capabilities.codexAppServerIsolation === true,
+  );
   const supportsAutomaticServerUpdates = targets.every(
     (target) =>
       target.environment.serverConfig.environment.capabilities.automaticServerUpdates === true,
@@ -500,6 +508,39 @@ function ServerSettingsDetail(props: {
                           disabledFor("codexTurnsSurviveServerStop") || !supportsCodexSurvival
                         }
                         onPress={() => write({ codexTurnsSurviveServerStop: choice.mode })}
+                      />
+                    ))}
+                  </SettingsSection>
+                  <SettingsSection
+                    title="Codex app-servers"
+                    trailing={
+                      pendingWrites === 0 && uniform("codexAppServerIsolation") === null ? (
+                        <MixedValuesLabel projectSelected={projectSelected} />
+                      ) : null
+                    }
+                  >
+                    {(
+                      [
+                        { mode: "thread", label: "One per thread" },
+                        { mode: "shared", label: "Shared" },
+                      ] as const
+                    ).map((choice, index) => (
+                      <SettingsChoiceRow
+                        key={choice.mode}
+                        label={
+                          choice.mode === CODEX_APP_SERVER_ISOLATION_DEFAULT
+                            ? `${choice.label} (default)`
+                            : choice.label
+                        }
+                        description={
+                          projectSelected
+                            ? "Environment-wide setting. Select All projects to change it."
+                            : "Applies to new Codex threads. Existing threads keep their process."
+                        }
+                        selected={uniform("codexAppServerIsolation") === choice.mode}
+                        separated={index > 0}
+                        disabled={disabledFor("codexAppServerIsolation") || !supportsCodexIsolation}
+                        onPress={() => write({ codexAppServerIsolation: choice.mode })}
                       />
                     ))}
                   </SettingsSection>
