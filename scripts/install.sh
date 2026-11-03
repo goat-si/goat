@@ -36,6 +36,14 @@ if [ -z "${GOAT_HOME:-}" ] && [ ! -d "$HOME/.goat/userdata" ] && [ -d "$HOME/.t3
 fi
 # goat-rename: legacy-end
 goat_home="${GOAT_HOME:-$HOME/.goat}"
+case "$goat_home" in
+  /*) ;;
+  *)
+    # Preserve trailing newlines in the working directory.
+    goat_cwd="$(pwd -P && printf .)"
+    goat_home="${goat_cwd%??}/$goat_home"
+    ;;
+esac
 bin_dir="${GOAT_INSTALL_BIN_DIR:-$HOME/.local/bin}"
 
 fail() {
