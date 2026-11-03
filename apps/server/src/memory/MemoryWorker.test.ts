@@ -1,5 +1,10 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as M from "@goat/contracts";
+import {
+  backgroundReads,
+  failFastReaderAdmission,
+  makeReaderAdmission,
+} from "../../../../packages/shared/src/readerAdmission.ts";
 import * as TestClock from "effect/testing/TestClock";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -40,6 +45,50 @@ import {
 } from "./MemoryWorker.testkit.ts";
 import { countingTracer } from "../observability/countingTracer.testkit.ts";
 describe("MemoryWorker", () => {
+  it.effect(
+    "started sweeps use background admission while an unstarted drain stays interactive",
+    () =>
+      Effect.gen(function* () {
+        const gate = yield* makeReaderAdmission({
+          limit: 2,
+          backgroundLimit: 1,
+          timeout: null,
+          backgroundTimeout: null,
+          honorFailFast: true,
+          agingMs: 5000,
+        });
+        const held = yield* backgroundReads(gate.acquire());
+        const observations: Array<string> = [];
+        const fixture = live(false, undefined, false, 0, false, undefined, undefined, (store) => ({
+          ...store,
+          pendingForgetIntents: (limit) =>
+            Effect.gen(function* () {
+              const result = yield* Effect.result(failFastReaderAdmission(gate.acquire()));
+              observations.push(result._tag === "Success" ? "admitted" : "refused");
+              if (result._tag === "Success") yield* gate.release(result.success);
+              return yield* store.pendingForgetIntents(limit);
+            }),
+        }));
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const worker = yield* Worker.MemoryWorker;
+            yield* worker.drain;
+            assert.deepStrictEqual(observations, ["admitted"]);
+          }).pipe(Effect.provide(fixture)),
+        );
+        observations.length = 0;
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const worker = yield* Worker.MemoryWorker;
+            yield* worker.start();
+            yield* worker.drain;
+            assert.isAbove(observations.length, 0);
+            assert.isTrue(observations.every((value) => value === "refused"));
+          }).pipe(Effect.provide(fixture)),
+        );
+        yield* gate.release(held);
+      }),
+  );
   it.effect("started idle worker drains without waking itself", () =>
     Effect.scoped(
       Effect.gen(function* () {

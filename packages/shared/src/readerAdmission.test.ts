@@ -657,6 +657,54 @@ const holdSlot = (sql: SqlClient.SqlClient) =>
     };
   });
 
+it.effect("background statements leave a pool slot for an interactive statement", () =>
+  withReaderClient(
+    (sql) =>
+      Effect.gen(function* () {
+        const before = startedWorkers.length;
+        const warm = [yield* holdSlot(sql), yield* holdSlot(sql), yield* holdSlot(sql)];
+        const workers = startedWorkers.slice(before);
+        assert.equal(workers.length, 3);
+        for (const holder of warm) yield* holder.release;
+        const entered = yield* Deferred.make<void>();
+        const requests: Array<() => void> = [];
+        using spies = new DisposableStack();
+        for (const worker of workers) {
+          const send = worker.postMessage.bind(worker);
+          const spy = vi.spyOn(worker, "postMessage").mockImplementation((...args) => {
+            requests.push(() => send(...args));
+            if (requests.length === 3) Deferred.doneUnsafe(entered, Effect.void);
+          });
+          spies.defer(() => spy.mockRestore());
+        }
+        const reads = [];
+        for (let i = 0; i < 3; i++)
+          reads.push(
+            yield* Effect.forkChild(
+              backgroundReads(countEntries(sql).pipe(SqliteClient.readOnly)),
+              {
+                startImmediately: true,
+              },
+            ),
+          );
+        yield* Deferred.await(entered);
+        const fourth = yield* Effect.forkChild(
+          backgroundReads(countEntries(sql).pipe(SqliteClient.readOnly)),
+          { startImmediately: true },
+        );
+        assert.isUndefined(fourth.pollUnsafe());
+        assert.equal(yield* countEntries(sql).pipe(SqliteClient.readOnly), 1);
+        assert.isUndefined(fourth.pollUnsafe());
+        spies.dispose();
+        requests[0]!();
+        assert.equal(yield* Fiber.join(fourth), 1);
+        for (const request of requests.slice(1)) request();
+        for (const read of reads) assert.equal(yield* Fiber.join(read), 1);
+      }),
+    { readerPoolSize: 4 },
+  ),
+);
+
 it.effect(
   "statement and transaction reads interrupted while waiting for a reader slot free every slot",
   () =>
