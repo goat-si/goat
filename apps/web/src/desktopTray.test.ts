@@ -130,6 +130,28 @@ describe("deriveTrayMenu", () => {
     ]);
   });
 
+  it("shows a folded remote child's guest request on its idle parent", () => {
+    const parent = shell("parent", { status: "idle" });
+    const child = shell("child", {
+      environmentId: remote,
+      guests: 1,
+      launchedBy: {
+        kind: "launch",
+        via: "delegate_task",
+        threadId: ThreadId.make("parent"),
+        environmentId: local,
+        environmentLabel: null,
+        threadTitle: null,
+      },
+    });
+    expect(ids(deriveTrayMenu([parent, child], [], new Set([local, remote])).attention)).toEqual([
+      "parent",
+    ]);
+    expect(ids(deriveTrayMenu([parent, child], [], new Set([remote])).attention)).toEqual([
+      "child",
+    ]);
+  });
+
   it("does not report work from an environment whose shells are not live, but keeps its pins", () => {
     const menu = deriveTrayMenu(
       [

@@ -9,6 +9,7 @@ import { expect, it, vi } from "vite-plus/test";
 import { fakeTimers, stubGlobal } from "../../test/render";
 
 const state = vi.hoisted(() => ({
+  foldBuilds: 0,
   mode: "notifications",
   inApp: false,
   toast: vi.fn(),
@@ -18,6 +19,16 @@ const state = vi.hoisted(() => ({
   badge: vi.fn(),
   settingsListeners: new Set<() => void>(),
 }));
+vi.mock(import("@goat/client-runtime/state/launch-fold"), async (original) => {
+  const actual = await original();
+  return {
+    ...actual,
+    foldLaunchedThreads: (...args: Parameters<typeof actual.foldLaunchedThreads>) => {
+      state.foldBuilds++;
+      return actual.foldLaunchedThreads(...args);
+    },
+  };
+});
 vi.mock(import("./ui/toast"), async (original) => {
   const actual = await original();
   return { ...actual, toastManager: { ...actual.toastManager, add: state.toast as never } };
@@ -182,6 +193,7 @@ function shell(overrides: Partial<typeof thread> = {}, ...others: Partial<typeof
 // starting the service.
 function setup() {
   vi.clearAllMocks();
+  state.foldBuilds = 0;
   const stack = new AsyncDisposableStack();
   registry = AtomRegistry.make();
   const testRegistry = registry;
@@ -512,4 +524,30 @@ it("notifies for a remote child when the parent environment is offline", async (
   expect(TestNotification.sent.map(({ title, options }) => [title, options.body])).toEqual([
     ["Thread completed", "Child"],
   ]);
+});
+
+it("reuses one launch fold for a burst of remote child completions", async () => {
+  await using app = setup();
+  const children = Array.from({ length: 12 }, (_, index) => ({
+    id: `child-${index}`,
+    launchedBy: {
+      kind: "launch" as const,
+      via: "delegate_task" as const,
+      threadId: "thread",
+      environmentId: "one",
+      environmentLabel: null,
+      threadTitle: null,
+    },
+  }));
+  state.shells.set("two", shell(children[0]!, ...children.slice(1)));
+  app.start();
+  using _timers = fakeTimers();
+  const completed = children.map((child) => ({
+    ...child,
+    latestTurn: { turnId: "turn", state: "completed", completedAt: "2026-09-13T07:01:00.000Z" },
+  }));
+  state.shells.set("two", shell(completed[0]!, ...completed.slice(1)));
+  await vi.advanceTimersByTimeAsync(WORKING_EXIT_GRACE_MS);
+  expect(TestNotification.sent).toEqual([]);
+  expect(state.foldBuilds).toBe(1);
 });
