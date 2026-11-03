@@ -605,7 +605,6 @@ export async function runWorkload(input: WorkloadInput): Promise<{
     }
     const drains: Array<Deferred.Deferred<void>> = [];
     const total = input.replayThreads + input.codexThreads;
-    const windowEnded = yield* Deferred.make<void>();
     const windowStarted = yield* Deferred.make<void>();
     for (let index = 0; index < total; index++) {
       const replay = index < input.replayThreads;
@@ -752,8 +751,7 @@ export async function runWorkload(input: WorkloadInput): Promise<{
         Effect.sync(() => {
           windowOpen = false;
         }).pipe(Effect.andThen(Effect.promise(() => input.onWindowEnd(endedAtMs)))),
-    }).pipe(Effect.andThen(Deferred.succeed(windowEnded, undefined)), Effect.forkScoped);
-    yield* Deferred.await(windowEnded);
+    });
     yield* Effect.forEach(drains, Deferred.await, { concurrency: "unbounded" });
     teardown = true;
   });
