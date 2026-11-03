@@ -137,6 +137,133 @@ it.effect("concurrent narrowings keep at most one confirmation in flight", () =>
   }),
 );
 
+it.effect("a narrowing failure is fenced even after support was lowered", () =>
+  Effect.gen(function* () {
+    let supported = true;
+    let failWrites = false;
+    let fences = 0;
+    const service = yield* makeBrowserOriginGrants({
+      environmentId: EnvironmentId.make("environment:test"),
+      supported: () => supported,
+      publish: () =>
+        failWrites ? Effect.fail(new NarrowWriteFailure()) : Effect.succeed("a".repeat(64)),
+      confirm: () =>
+        Effect.succeed({
+          capability_manifest: {
+            sha256: "a".repeat(64),
+            file_sha256: "a".repeat(64),
+            reload_error: null,
+          },
+        }),
+      fence: () =>
+        Effect.sync(() => {
+          fences++;
+          return true;
+        }),
+      bind: (input) =>
+        Effect.succeed({
+          targetId: "target",
+          tabId: "tab",
+          title: "Site",
+          url: input.origin,
+          driverGeneration: 1,
+        }),
+    });
+    const threadId = ThreadId.make("thread:test");
+    assert.equal(
+      (yield* service.claim({
+        threadId,
+        pid: 42,
+        windowId: 7,
+        origin: "https://example.test",
+        windowTitle: "Browser",
+      })).agentResult.status,
+      "attached",
+    );
+    supported = false;
+    failWrites = true;
+    yield* service.stop(threadId);
+    assert.equal(fences, 1);
+  }),
+);
+
+it.effect("multiple narrowing failures record each and coalesce one follow-up fence", () =>
+  Effect.gen(function* () {
+    const entered = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    let failWrites = false;
+    let fences = 0;
+    let marked = 0;
+    const service = yield* makeBrowserOriginGrants({
+      environmentId: EnvironmentId.make("environment:test"),
+      supported: () => true,
+      publish: () =>
+        failWrites ? Effect.fail(new NarrowWriteFailure()) : Effect.succeed("a".repeat(64)),
+      confirm: () =>
+        Effect.succeed({
+          capability_manifest: {
+            sha256: "a".repeat(64),
+            file_sha256: "a".repeat(64),
+            reload_error: null,
+          },
+        }),
+      fence: () =>
+        Effect.gen(function* () {
+          fences++;
+          yield* Deferred.succeed(entered, undefined);
+          yield* Deferred.await(release);
+          return true;
+        }),
+      markFence: () => {
+        marked++;
+        return {
+          run: Effect.sync(() => {
+            fences++;
+            return true;
+          }),
+        };
+      },
+      onConcurrentFence: () => Effect.void,
+      bind: (input) =>
+        Effect.succeed({
+          targetId: "target",
+          tabId: `tab-${input.windowId}`,
+          title: "Site",
+          url: input.origin,
+          driverGeneration: 1,
+        }),
+    });
+    const threads = [
+      ThreadId.make("thread:a"),
+      ThreadId.make("thread:b"),
+      ThreadId.make("thread:c"),
+    ];
+    for (const [index, threadId] of threads.entries())
+      assert.equal(
+        (yield* service.claim({
+          threadId,
+          pid: 42,
+          windowId: index + 1,
+          origin: `https://site${index}.test`,
+          windowTitle: "Browser",
+        })).agentResult.status,
+        "attached",
+      );
+    failWrites = true;
+    const first = yield* service
+      .stop(threads[0]!)
+      .pipe(Effect.forkChild({ startImmediately: true }));
+    yield* Deferred.await(entered);
+    yield* service.stop(threads[1]!);
+    yield* service.stop(threads[2]!);
+    const observed = { marked, fences };
+    yield* Deferred.succeed(release, undefined);
+    yield* Fiber.join(first);
+    assert.deepEqual(observed, { marked: 2, fences: 1 });
+    assert.equal(fences, 2);
+  }),
+);
+
 it.effect("direct stop writes use the live union after waiting for another write", () =>
   Effect.gen(function* () {
     const entered = yield* Deferred.make<void>();

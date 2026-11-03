@@ -17,11 +17,13 @@ export class BrowserClaimManifest extends Context.Service<
     /** Restarts the driver when it would not confirm a narrower manifest; false without one. */
     readonly fence?: Effect.Effect<boolean>;
     readonly onFenceFailure?: (disable: Effect.Effect<void>) => Effect.Effect<void>;
+    readonly markFence?: () => { readonly run: Effect.Effect<boolean> } | undefined;
     readonly install: (
       publish: (union: Union) => Effect.Effect<string, Error>,
       readConfig: Effect.Effect<unknown, Error>,
       fence?: Effect.Effect<boolean>,
       onFenceFailure?: (disable: Effect.Effect<void>) => Effect.Effect<void>,
+      markFence?: () => { readonly run: Effect.Effect<boolean> },
     ) => Effect.Effect<void>;
   }
 >()("goat/preview/BrowserClaimManifest") {}
@@ -33,6 +35,7 @@ export const layer = Layer.effect(
     let reader: Effect.Effect<unknown, Error> | undefined;
     let fencer: Effect.Effect<boolean> | undefined;
     let onFailure: ((disable: Effect.Effect<void>) => Effect.Effect<void>) | undefined;
+    let mark: (() => { readonly run: Effect.Effect<boolean> }) | undefined;
     return {
       publish: Effect.fn("BrowserClaimManifest.publish")((union: Union) =>
         Effect.suspend(() =>
@@ -54,12 +57,14 @@ export const layer = Layer.effect(
       onFenceFailure: Effect.fn("BrowserClaimManifest.onFenceFailure")(
         (disable: Effect.Effect<void>) => Effect.suspend(() => onFailure?.(disable) ?? disable),
       ),
-      install: (publish, readConfig, fence, onFenceFailure) =>
+      markFence: () => mark?.(),
+      install: (publish, readConfig, fence, onFenceFailure, markFence) =>
         Effect.sync(() => {
           writer = publish;
           reader = readConfig;
           fencer = fence;
           onFailure = onFenceFailure;
+          mark = markFence;
         }),
     };
   }),

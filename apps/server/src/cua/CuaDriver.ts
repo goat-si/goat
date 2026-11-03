@@ -91,6 +91,7 @@ export class CuaDriver extends Context.Service<
     /** Restarts the running driver, so a manifest it would not reload stops counting. */
     readonly fenceBrowserManifest?: Effect.Effect<boolean>;
     readonly afterBrowserFenceFailure?: (disable: Effect.Effect<void>) => Effect.Effect<void>;
+    readonly markBrowserFence?: () => { readonly run: Effect.Effect<boolean> };
     readonly refreshManifest?: (
       apps: ReadonlyArray<string>,
     ) => Effect.Effect<void, CuaDriverHostError>;
@@ -470,6 +471,21 @@ export const make = Effect.fn("CuaDriver.make")(function* (
       yield* revoke(entry);
     }
   }, lifecycle.withPermit);
+  const prepareBrowserFence = (requireCurrent: boolean) => {
+    const entry = active;
+    const generation = entry?.hostGeneration;
+    generations.fence(entry === undefined && !requireCurrent ? generations.last() : generation);
+    return lifecycle.withPermit(
+      Effect.gen(function* () {
+        if (entry === undefined) return false;
+        const stopped = yield* revoke(entry);
+        if (!entry.host?.hostGeneration) return stopped;
+        return (
+          stopped && generation !== undefined && entry.host.stoppedGeneration?.() === generation
+        );
+      }),
+    );
+  };
   return CuaDriver.of({
     readBrowserConfig: Effect.gen(function* () {
       const entry = active;
@@ -490,24 +506,8 @@ export const make = Effect.fn("CuaDriver.make")(function* (
           ),
       ),
     ),
-    fenceBrowserManifest: Effect.suspend(() => {
-      const requested = active;
-      generations.fence(requested === undefined ? generations.last() : requested.hostGeneration);
-      return lifecycle.withPermit(
-        Effect.gen(function* () {
-          const entry = active;
-          if (entry === undefined) return false;
-          generations.fence(entry.hostGeneration);
-          const stopped = yield* revoke(entry);
-          if (!entry.host?.hostGeneration) return stopped;
-          return (
-            stopped &&
-            entry.hostGeneration !== undefined &&
-            entry.host.stoppedGeneration?.() === entry.hostGeneration
-          );
-        }),
-      );
-    }),
+    fenceBrowserManifest: Effect.suspend(() => prepareBrowserFence(false)),
+    markBrowserFence: () => ({ run: prepareBrowserFence(true) }),
     afterBrowserFenceFailure: capability.afterFenceFailure,
     ...(refresh ? { refreshManifest } : {}),
     acquire,
@@ -908,6 +908,7 @@ export const layer = Layer.effect(
           ),
         driver.fenceBrowserManifest,
         driver.afterBrowserFenceFailure,
+        driver.markBrowserFence,
       );
     return driver;
   }),
