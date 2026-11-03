@@ -18,6 +18,8 @@ const CLAUDE_GROUP_WATCH_SCRIPT = [
 export function spawnClaudeProcessGroup(
   options: SpawnOptions,
   onExit?: () => void,
+  onStderr: (text: string) => void = () => {},
+  onStderrClose: () => void = () => {},
 ): SpawnedProcess {
   const child = guardChild(
     NodeChildProcess.spawn(
@@ -27,13 +29,14 @@ export function spawnClaudeProcessGroup(
         cwd: options.cwd,
         env: options.env,
         signal: options.signal,
-        stdio: ["pipe", "pipe", "ignore", "pipe"],
+        stdio: ["pipe", "pipe", "pipe", "pipe"],
         detached: true,
       },
     ),
     // The SDK reports the CLI exit after any broken pipe ends the process.
     () => child.kill("SIGKILL"),
   );
+  child.stderr?.setEncoding("utf8").on("data", onStderr).once("close", onStderrClose);
   child.once("exit", () => {
     try {
       signalProcessGroup(child.pid ?? 0, "SIGKILL");
