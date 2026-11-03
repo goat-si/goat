@@ -296,7 +296,11 @@ export const requireDeclaredCapability = (
       return;
     }
     if (capability !== "none")
-      yield* admitCapability(tool, capability, Profiles.checkProfile(effective, capability, {}));
+      yield* admitCapability(
+        tool,
+        capability,
+        Profiles.checkProfile(Profiles.directWriteProfile(effective), capability, {}),
+      );
     for (const host of hosts)
       yield* admitHost(tool, host, Profiles.checkProfile(effective, "threads.remote", { host }));
   });

@@ -11,6 +11,8 @@ import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
+import * as McpInvocationContext from "../mcp/McpInvocationContext.ts";
+import { requireDeclaredCapability } from "../mcp/McpToolAccess.ts";
 import * as Sqlite from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { PermissionProfiles, layer } from "./PermissionProfiles.ts";
@@ -49,6 +51,114 @@ const seed = (id: string, mode: RuntimeMode) =>
   );
 const { manager, worker } = BUILTIN_PERMISSION_PROFILES;
 const mergeManager = BUILTIN_PERMISSION_PROFILES["merge-manager"]!;
+
+it.effect.each(["pull_request.merge", "pull_request.close"] as const)(
+  "#2194: a supervisor can launch a merge manager but cannot directly call %s",
+  (path) =>
+    Effect.gen(function* () {
+      const profiles = yield* PermissionProfiles;
+      yield* seed("person", "auto");
+      yield* profiles.claim(threadScope("person"), {
+        id: "supervisor",
+        childThreadId: ThreadId.make("supervisor"),
+        runtimeMode: "auto",
+        role: "supervisor",
+      });
+      yield* seed("supervisor", "auto");
+      expect(
+        (yield* profiles.claim(threadScope("supervisor"), {
+          id: "merger",
+          runtimeMode: "auto",
+          role: "merge-manager",
+        })).profile.capabilities,
+      ).toContain("pr.merge");
+      const direct = requireDeclaredCapability(profiles, path, "write", {}).pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, threadScope("supervisor")),
+        Effect.match({ onFailure: (error) => error.code, onSuccess: () => "admitted" }),
+      );
+      expect(yield* direct).toBe("capability_denied");
+      yield* profiles.assertTarget(
+        threadScope("person"),
+        ThreadId.make("supervisor"),
+        "auto",
+        "auto",
+      );
+      yield* profiles.claim(threadScope("person"), {
+        id: "resume",
+        childThreadId: ThreadId.make("supervisor"),
+        runtimeMode: "auto",
+      });
+      expect(yield* direct).toBe("capability_denied");
+    }).pipe(Effect.provide(fixture("worker"))),
+);
+
+it.effect("#2194: an ordinary owner retains direct PR writes", () =>
+  Effect.gen(function* () {
+    const profiles = yield* PermissionProfiles;
+    yield* profiles.claim(outside, {
+      id: "owner-thread",
+      childThreadId: ThreadId.make("owner"),
+      runtimeMode: "full-access",
+    });
+    yield* seed("owner", "full-access");
+    const result = yield* requireDeclaredCapability(
+      profiles,
+      "pull_request.merge",
+      "write",
+      {},
+    ).pipe(
+      Effect.provideService(McpInvocationContext.McpInvocationContext, threadScope("owner")),
+      Effect.match({ onFailure: (error) => error.code, onSuccess: () => "admitted" }),
+    );
+    expect(result).toBe("admitted");
+    yield* profiles.claim(threadScope("owner"), {
+      id: "owner-supervisor",
+      childThreadId: ThreadId.make("owner-supervisor"),
+      runtimeMode: "full-access",
+      role: "supervisor",
+    });
+    yield* seed("owner-supervisor", "full-access");
+    const supervisorResult = yield* requireDeclaredCapability(
+      profiles,
+      "pull_request.merge",
+      "write",
+      {},
+    ).pipe(
+      Effect.provideService(
+        McpInvocationContext.McpInvocationContext,
+        threadScope("owner-supervisor"),
+      ),
+      Effect.match({ onFailure: (error) => error.code, onSuccess: () => "admitted" }),
+    );
+    expect(supervisorResult).toBe("capability_denied");
+  }).pipe(Effect.provide(fixture("owner"))),
+);
+
+it.effect("#2194: a supervisor can launch a merge manager locally and over SSH", () =>
+  Effect.gen(function* () {
+    const profiles = yield* PermissionProfiles;
+    yield* seed("manager", "full-access");
+    yield* profiles.claim(threadScope("manager"), {
+      id: "supervisor",
+      childThreadId: ThreadId.make("supervisor"),
+      runtimeMode: "full-access",
+      role: "supervisor",
+    });
+    yield* seed("supervisor", "full-access");
+    for (const [path, host] of [
+      ["thread.launch", undefined],
+      ["ssh.thread_launch", "box"],
+    ] as const) {
+      yield* requireDeclaredCapability(profiles, path, "write", { host }).pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, threadScope("supervisor")),
+      );
+      const launch = { id: path, runtimeMode: "full-access", role: "merge-manager", host } as const;
+      const granted = yield* profiles.claim(threadScope("supervisor"), launch);
+      expect(granted.profile.capabilities).toContain("pr.merge");
+      yield* profiles.recheck(threadScope("supervisor"), granted, { role: "merge-manager", host });
+    }
+  }).pipe(Effect.provide(fixture("manager"))),
+);
 
 // #858: goat_ssh_thread_launch claims a supervisor, then rechecks right before the remote launch.
 it.effect(

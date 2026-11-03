@@ -383,8 +383,10 @@ thread or browser, a person who completes the step, or another grant such as
 `memory:write`. The type refuses a write without one. Tools whose thread callers
 only ask a person, such as provider sign-in and sync, declare `none` so a profile
 never preempts the person's decision.
-The pull request merge and close tools require `pr.merge`.
-Supervisors retaining `pr.merge` can access those tools; the retention decision is tracked in [#2194](https://github.com/goat-si/goat/issues/2194).
+The pull request merge and close tools require `pr.merge`. A role's kept capabilities allow it to
+launch other roles; they do not admit its own direct writes.
+This distinction requires the role on the thread's binding. Older bindings and SSH launches do
+not record it, so their direct writes still use the full effective profile.
 Every check that compares a role thread's grant with its caller's, such as the
 recheck before an SSH launch and a send's target check and rebinding, derives it
 with the same `roleProfile`; comparing against the caller's plain profile reads the

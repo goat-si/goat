@@ -95,8 +95,24 @@ interface ClaimInput {
 export interface ProfileNarrowing {
   readonly named: PermissionProfile;
   readonly ceilings: ReadonlyArray<PermissionProfile>;
+  readonly role?: GoatclawRole | undefined;
 }
 export type EffectiveProfile = PermissionProfileView & { readonly narrowing?: ProfileNarrowing };
+
+export const directWriteProfile = (effective: EffectiveProfile): EffectiveProfile => {
+  const role = effective.narrowing?.role;
+  if (role === undefined) return effective;
+  const kept = goatclawRoleTemplate(role).keeps;
+  return {
+    ...effective,
+    profile: {
+      ...effective.profile,
+      capabilities: effective.profile.capabilities.filter(
+        (capability) => !kept.includes(capability),
+      ),
+    },
+  };
+};
 
 /**
  * What a role launch grants: the role's stored profile within the caller's, plus what the role
@@ -224,6 +240,14 @@ const ownerOf = (scope: McpInvocationScope) =>
     : `thread:${scope.thread.threadId}`;
 const encodeProfile = Schema.encodeSync(Schema.fromJsonString(PermissionProfile));
 const decodeProfile = Schema.decodeUnknownEffect(Schema.fromJsonString(PermissionProfile));
+const encodeBinding = Schema.encodeSync(
+  Schema.fromJsonString(
+    Schema.Struct({ ...PermissionProfile.fields, goatclawRole: Schema.optional(GoatclawRole) }),
+  ),
+);
+const decodeBindingRole = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(Schema.Struct({ goatclawRole: Schema.optional(GoatclawRole) })),
+);
 
 /** Names the stored profile when it refuses, else the first ceiling that narrowed it to refusal. */
 const refuser = (effective: EffectiveProfile, refuses: (profile: PermissionProfile) => boolean) => {
@@ -289,13 +313,17 @@ export const layer = Layer.effect(
       const named = policy.profiles[profileId];
       if (named === undefined)
         return yield* refusal(`Permission profile ${profileId} no longer exists.`);
-      if (binding === undefined) return { profile: named, narrowing: { named, ceilings: [] } };
+      if (binding === undefined)
+        return { profile: named, narrowing: { named, ceilings: [], role: undefined } };
       const ceiling = yield* decodeProfile(binding.ceiling_json).pipe(
+        Effect.mapError(storageFailure),
+      );
+      const { goatclawRole } = yield* decodeBindingRole(binding.ceiling_json).pipe(
         Effect.mapError(storageFailure),
       );
       return {
         profile: intersectProfiles(named, ceiling),
-        narrowing: { named, ceilings: [ceiling] },
+        narrowing: { named, ceilings: [ceiling], role: goatclawRole },
       };
     });
     const resolve = Effect.fn("PermissionProfiles.resolve")(function* (
@@ -327,6 +355,7 @@ export const layer = Layer.effect(
         forwarded === undefined ? bound.profile : intersectProfiles(bound.profile, forwarded);
       const narrowing: ProfileNarrowing = {
         named: bound.narrowing.named,
+        role: bound.narrowing.role,
         ceilings:
           forwarded === undefined
             ? bound.narrowing.ceilings
@@ -652,8 +681,19 @@ export const layer = Layer.effect(
                         ? yield* reachGrant(previous.profile_id, granted)
                         : granted.profile,
                     );
+              const previousRole =
+                previous === undefined
+                  ? undefined
+                  : (yield* decodeBindingRole(previous.ceiling_json).pipe(
+                      Effect.mapError(storageFailure),
+                    )).goatclawRole;
+              const bindingRole = previousRole ?? input.role;
+              const bindingJson = encodeBinding({
+                ...inherited,
+                ...(bindingRole === undefined ? {} : { goatclawRole: bindingRole }),
+              });
               yield* sql`INSERT INTO goatclaw_thread_profiles (thread_id, profile_id, ceiling_json, owner_key)
-          VALUES (${input.childThreadId}, ${previous?.profile_id ?? granted.profile.id}, ${encodeProfile(inherited)}, ${owner})
+          VALUES (${input.childThreadId}, ${previous?.profile_id ?? granted.profile.id}, ${bindingJson}, ${owner})
           ON CONFLICT(thread_id) DO UPDATE SET ceiling_json = excluded.ceiling_json`;
             }
             return granted;
