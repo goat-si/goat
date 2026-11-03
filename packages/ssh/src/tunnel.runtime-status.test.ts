@@ -594,7 +594,11 @@ describe("SSH runtime status", () => {
         const status = successfulStatus(result);
         assert.equal(status.state, "ready");
         assert.equal(status.runtimeVersion, "1.2.2");
-        assert.equal(status.refreshDeferred?.requestedVersion, ARCHIVE.archiveVersion);
+        if (drain) assert.equal(status.refreshDeferred?.requestedVersion, ARCHIVE.archiveVersion);
+        else {
+          assert.isUndefined(status.refreshDeferred);
+          assert.include(status.detail ?? "", "didn't start or cannot replace");
+        }
         assert.isUndefined(status.failure);
         f.setProbe({
           ...stopped,

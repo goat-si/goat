@@ -221,7 +221,7 @@ export const statusRuntimeProbe = Effect.fn("ssh.windows.statusRuntimeProbe")(fu
                 ? {
                     liveVersion: state.selection.version,
                     livePort: state.selection.port,
-                    liveOwned: true,
+                    liveOwned: false,
                     liveDrain: false,
                     liveSignals: state.signals,
                     liveBinarySignals: state.binarySignals,

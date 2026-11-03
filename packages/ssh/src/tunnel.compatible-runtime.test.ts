@@ -4,7 +4,13 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SshTunnel from "./tunnel.ts";
 import { ARCHIVE, uploadTarget } from "./tunnel.fixture.ts";
-import { fixture, signals, stopped, successfulStatus } from "./tunnel.runtime-status.fixture.ts";
+import {
+  fixture,
+  retained,
+  signals,
+  stopped,
+  successfulStatus,
+} from "./tunnel.runtime-status.fixture.ts";
 
 const decodeProviders = Schema.decodeEffect(SshHostProviders);
 const live = (version: string) => ({
@@ -20,6 +26,73 @@ const live = (version: string) => ({
 });
 
 describe("compatible SSH runtime", () => {
+  it.effect.each([
+    ["owned undrainable older", "1.2.2", true, false, true],
+    ["unowned older", "1.2.2", false, false, true],
+    ["unowned equal", ARCHIVE.archiveVersion, false, false, false],
+    ["unowned newer", "1.2.4", false, false, false],
+  ] as const)(
+    "keeps %s after an archive acquisition failure",
+    ([_name, version, owned, drain, detail]) => {
+      const f = fixture(retained);
+      f.setLaunchVersion("1.2.2");
+      return Effect.gen(function* () {
+        const manager = yield* SshTunnel.SshEnvironmentManager;
+        yield* manager.ensureEnvironment(uploadTarget);
+        f.setProbe({ ...live(version), liveOwned: owned, liveDrain: drain });
+        const result = yield* manager.status(uploadTarget);
+        assert.equal(result.kind, "ok", JSON.stringify(result));
+        const status = successfulStatus(result);
+        assert.equal(status.state, "ready");
+        assert.isUndefined(status.refreshDeferred);
+        assert.isUndefined(status.failure);
+        if (detail) assert.include(status.detail ?? "", "didn't start or cannot replace");
+        else assert.isUndefined(status.detail);
+      }).pipe(Effect.provide(f.layer), Effect.scoped);
+    },
+  );
+
+  it.effect("reports a newer incompatible unowned runtime as newer", () => {
+    const version = "1.2.4";
+    const f = fixture({
+      ...live(version),
+      liveOwned: false,
+      liveSignals: {
+        ...signals(version),
+        orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION + 1,
+      },
+    });
+    return Effect.gen(function* () {
+      const manager = yield* SshTunnel.SshEnvironmentManager;
+      const status = successfulStatus(yield* manager.status(uploadTarget));
+      assert.equal(status.state, "update_blocked");
+      assert.include(status.detail ?? "", "runs a newer GOAT");
+    }).pipe(Effect.provide(f.layer), Effect.scoped);
+  });
+  it.effect("reconnects when a newer compatible unowned runtime moves ports", () => {
+    const f = fixture({ ...live("1.2.4"), liveOwned: false });
+    f.setLaunchVersion("1.2.4");
+    return Effect.gen(function* () {
+      const manager = yield* SshTunnel.SshEnvironmentManager;
+      yield* manager.ensureEnvironment(uploadTarget, { keyOnly: true });
+      f.setProbe({ ...live("1.2.4"), liveOwned: false, livePort: 3883 });
+      f.setLaunchPort(3883);
+      assert.equal(successfulStatus(yield* manager.status(uploadTarget)).state, "ready");
+      yield* manager.readyEnvironment(uploadTarget).pipe(Effect.flip);
+      assert.equal(
+        (yield* manager.ensureEnvironment(uploadTarget, { keyOnly: true })).remotePort,
+        3883,
+      );
+    }).pipe(Effect.provide(f.layer), Effect.scoped);
+  });
+
+  it.effect("blocks a newer unowned runtime with mismatched binary signals", () => {
+    const f = fixture({ ...live("1.2.4"), liveOwned: false, liveBinarySignals: signals("1.2.3") });
+    return Effect.gen(function* () {
+      const manager = yield* SshTunnel.SshEnvironmentManager;
+      assert.equal(successfulStatus(yield* manager.status(uploadTarget)).state, "update_blocked");
+    }).pipe(Effect.provide(f.layer), Effect.scoped);
+  });
   it.effect("reconnects when a compatible unowned runtime moves ports", () => {
     const f = fixture({ ...live("1.2.2"), liveOwned: false });
     f.setLaunchVersion("1.2.2");

@@ -58,8 +58,9 @@ const runWithDoubles = (bin: string, body: string) =>
   });
 
 describe("Windows SSH host", () => {
-  it.effect("keeps an older compatible native Windows runtime ready without replacing it", () => {
-    const version = "1.2.2";
+  const nativeRuntime = (scenario: "older" | "moved" | "missing" | "mismatch") => {
+    const version =
+      scenario === "older" ? "1.2.2" : scenario === "mismatch" ? "1.2.4" : ARCHIVE.archiveVersion;
     const signals = {
       serverVersion: version,
       sshRuntimeProtocolVersion: SSH_RUNTIME_PROTOCOL_VERSION,
@@ -78,6 +79,8 @@ describe("Windows SSH host", () => {
       port: 3773,
     };
     const operations: string[] = [];
+    let port = 3773;
+    let binarySignals: typeof signals | undefined = signals;
     const spawner = ChildProcessSpawner.make((command) =>
       Effect.gen(function* () {
         if (command._tag !== "StandardCommand") return yield* Effect.die("unexpected command");
@@ -103,10 +106,10 @@ describe("Windows SSH host", () => {
           operations.push(request.op);
           return makeSuccessfulProcess(
             JSON.stringify({
-              selection,
+              selection: { ...selection, port },
               live: true,
               signals,
-              binarySignals: signals,
+              binarySignals,
               reused: true,
             }),
           );
@@ -133,13 +136,42 @@ describe("Windows SSH host", () => {
     return Effect.gen(function* () {
       const manager = yield* SshEnvironmentManager;
       yield* manager.ensureEnvironment(uploadTarget, { keyOnly: true });
+      if (scenario === "moved") port = 3883;
+      if (scenario === "missing") binarySignals = undefined;
+      if (scenario === "mismatch") binarySignals = { ...signals, serverVersion: "1.2.1" };
       const status = yield* manager.status(uploadTarget);
-      assert.equal(status.status?.state, "ready");
-      assert.include(status.status?.detail ?? "", "didn't start or cannot replace");
-      yield* manager.readyEnvironment(uploadTarget);
+      if (scenario === "missing" || scenario === "mismatch") {
+        assert.equal(status.status?.state, "update_blocked");
+        if (scenario === "mismatch")
+          assert.include(status.status?.detail ?? "", "didn't start or cannot replace");
+      } else {
+        assert.equal(status.status?.state, "ready");
+        if (scenario === "older")
+          assert.include(status.status?.detail ?? "", "didn't start or cannot replace");
+        if (scenario === "moved") {
+          yield* manager.readyEnvironment(uploadTarget).pipe(Effect.flip);
+          assert.equal(
+            (yield* manager.ensureEnvironment(uploadTarget, { keyOnly: true })).remotePort,
+            3883,
+          );
+        }
+        yield* manager.readyEnvironment(uploadTarget);
+      }
       assert.isFalse(operations.some((op) => op === "install" || op === "stop"));
     }).pipe(Effect.provide(layer), Effect.scoped);
-  });
+  };
+  it.effect("keeps an older compatible native Windows runtime ready without replacing it", () =>
+    nativeRuntime("older"),
+  );
+  it.effect("reconnects to a moved equal-version native Windows runtime without replacing it", () =>
+    nativeRuntime("moved"),
+  );
+  it.effect("blocks an equal-version native Windows runtime with missing binary signals", () =>
+    nativeRuntime("missing"),
+  );
+  it.effect("blocks a newer native Windows runtime with mismatched binary signals", () =>
+    nativeRuntime("mismatch"),
+  );
   it.effect("maps a native server's command line to the POSIX launch identity", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

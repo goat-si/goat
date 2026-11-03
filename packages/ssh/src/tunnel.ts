@@ -55,7 +55,7 @@ import {
 import { REMOTE_NODE_ENGINE_CHECK_SCRIPT } from "./remoteNodeEngineCheck.ts";
 import { ensureSshMaster } from "./master.ts";
 import { makeOwnedSshTunnelCommand, ownedAuthDirectory } from "./tunnelOwner.ts";
-import { staleUnmanagedAttachment as staleAttachment } from "./tunnelAttachment.ts";
+import { admitLive } from "./tunnelAttachment.ts";
 import {
   SSH_READY_PROBE_TIMEOUT_MS,
   type SshReadinessBudget,
@@ -4242,6 +4242,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       const base = { host, requestedVersion };
       let snapshot: SshHostStatus;
       let compatibleLive = false;
+      let admission: ReturnType<typeof admitLive> | undefined;
       if (probe.liveStatus === "live") {
         if (
           probe.liveVersion === undefined ||
@@ -4276,19 +4277,19 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
           } satisfies SshHostResult;
         }
         const providers = observed?.status?.providers;
-        const servesUnmanaged = blocked && binaryVerified;
-        staleUnmanagedAttachment = staleAttachment(entry, servesUnmanaged, probe);
+        admission = admitLive(entry, { ...probe, blocked, compatible, binaryVerified, order });
         const readyState = providers?.ready === false ? "providers_not_ready" : "ready";
+        staleUnmanagedAttachment = admission.staleEntry;
         snapshot = {
           ...base,
           runtimeVersion: probe.liveVersion,
-          state: blocked && !servesUnmanaged ? "update_blocked" : readyState,
+          state: admission.restricted ? "update_blocked" : readyState,
           ...(providers === undefined ? {} : { providers }),
-          ...(blocked && !(servesUnmanaged && order === 0)
+          ...(admission.restricted || admission.explainsUpdate
             ? {
-                detail: servesUnmanaged
+                detail: !admission.restricted
                   ? compatibleRuntimeUpdateBlocked(host, probe.liveVersion, requestedVersion, order)
-                  : order !== undefined && order > 0
+                  : admission.newer
                     ? `${host} runs a newer GOAT (${probe.liveVersion}). Update this app from the update button next to Settings.`
                     : `A GOAT server that this app didn't start or cannot replace is running on ${host}. Stop it on the host, then reconnect.`,
               }
@@ -4372,6 +4373,7 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
       } else if (compatibleLive && snapshot.runtimeVersion === requestedVersion) {
         clearArchiveDeferral = { failure: previousFailure, intent: pendingReplacements.get(key) };
       } else if (
+        admission?.unreplaceable !== true &&
         compatibleLive &&
         previousFailure?.reason === "archive_unavailable" &&
         previousFailure.archive?.requestedVersion === requestedVersion
@@ -4386,8 +4388,9 @@ const makeSshEnvironmentManager = Effect.fn("ssh/tunnel.SshEnvironmentManager.ma
           refreshDeferred,
         };
       } else if (
-        previousFailure?.reason === "archive_unavailable" ||
-        previousFailure?.reason === "unsupported_platform"
+        admission?.unreplaceable !== true &&
+        (previousFailure?.reason === "archive_unavailable" ||
+          previousFailure?.reason === "unsupported_platform")
       ) {
         snapshot = {
           ...base,
