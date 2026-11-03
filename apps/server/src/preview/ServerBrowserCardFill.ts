@@ -106,13 +106,7 @@ export const fillCard = async (input: {
     cvc: input.card.cvc,
     name: input.card.name,
   };
-  for (const value of Object.values(values)) input.register(value);
-  for (const value of [
-    String(Number(month)),
-    input.card.expiryYear.slice(-2),
-    `${input.card.expiryYear}-${month}`,
-  ])
-    input.register(value);
+  for (const value of [input.card.number, input.card.cvc, input.card.name]) input.register(value);
   const found = await input.send("Runtime.callFunctionOn", {
     functionDeclaration: FIND_FIELDS,
     executionContextId: input.contextId,

@@ -110,13 +110,13 @@ it.live("matches expiry select options by value or text", () =>
   ),
 );
 
-it.live("masks alternate expiry representations before setting them", () =>
+it.live("registers card number, CVC and name without registering expiry values", () =>
   withForm(
     '<input autocomplete="cc-number"><input id="expiry" type="month" autocomplete="cc-exp"><input autocomplete="cc-csc">',
     async ({ fill, read, masked }) => {
       expect(await fill()).toMatchObject({ verdict: "confirmed" });
       expect(await read("#expiry")).toBe("2029-01");
-      expect(masked).toEqual(expect.arrayContaining(["2029-01", "29"]));
+      expect(masked).toEqual([card.number, card.cvc, card.name]);
     },
   ),
 );
