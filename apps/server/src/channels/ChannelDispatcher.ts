@@ -165,7 +165,6 @@ const make = Effect.gen(function* () {
     text: string,
     owner: string,
     options: {
-      readonly clearPendingAnswer?: boolean;
       readonly choices?: ReadonlyArray<string>;
     } = {},
   ) =>
@@ -193,7 +192,6 @@ const make = Effect.gen(function* () {
         {
           owner,
           narrate: true,
-          ...(options.clearPendingAnswer ? { pendingAnswerMessageId: null } : {}),
         },
       );
     });

@@ -61,7 +61,10 @@ export const makeForwardFollowUp = Effect.fn("channel.makeForwardFollowUp")(func
     });
     if (newest?.status === "cancelled") {
       const latest = (yield* ledger.getTask(event.taskId)) ?? stored;
-      if (latest.pendingAnswerMessageId !== undefined) {
+      if (
+        latest.pendingAnswerMessageId !== undefined &&
+        own.includes(latest.pendingAnswerMessageId)
+      ) {
         const lifted = yield* commitTransition(
           ledger,
           latest,

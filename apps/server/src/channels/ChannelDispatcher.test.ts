@@ -46,6 +46,49 @@ import {
   slackInput,
 } from "./testkit/ChannelHarness.ts";
 
+it.effect("#2193 preserves the newer follow-up fence when the worker run is cancelled", () => {
+  const harness = makeHarness();
+  return Effect.gen(function* () {
+    yield* setupBot;
+    yield* linkSlackUser();
+    const gateway = yield* ChannelGateway.ChannelGateway;
+    const runtime = yield* ChannelRuntime.ChannelRuntime;
+    const ledger = yield* ChannelLedger.ChannelLedger;
+    const dispatcher = yield* ChannelDispatcher.ChannelDispatcher;
+    yield* gateway.ingest(slackInput("do: inspect the build", "cancel-two-1"), slackContext);
+    yield* runtime.drain;
+    const task = yield* onlyTask;
+    const first = ChannelInputId.make("input:cancel-first");
+    const second = ChannelInputId.make("input:cancel-second");
+    for (const inputId of [first, second]) {
+      yield* commitTransition(
+        ledger,
+        (yield* ledger.getTask(task.taskId))!,
+        {
+          type: "task.followup.received",
+          payload: { inputId, text: "follow-up", from: "Owner", generation: task.generation },
+        },
+        {
+          owner: runtime.ownerToken,
+          forward: true,
+          pendingAnswerMessageId: turnSteerIdsFor(inputId, "first").messageId,
+        },
+      );
+    }
+    const [older, newer] = yield* ledger.listPendingForwards(10);
+    const newerFence = turnSteerIdsFor(second, "first").messageId;
+    assert.strictEqual((yield* ledger.getTask(task.taskId))!.pendingAnswerMessageId, newerFence);
+    harness.world.setStatus(task.worker!.threadId, 1, "cancelled");
+    yield* dispatcher.forward(older!, runtime.ownerToken);
+    assert.strictEqual((yield* ledger.getTask(task.taskId))!.pendingAnswerMessageId, newerFence);
+    assert.lengthOf(yield* ledger.listPendingForwards(10), 1);
+    yield* dispatcher.forward(newer!, runtime.ownerToken);
+    assert.isUndefined((yield* ledger.getTask(task.taskId))!.pendingAnswerMessageId);
+    assert.lengthOf(yield* ledger.listPendingForwards(10), 0);
+    assert.lengthOf(harness.world.sends, 0);
+  }).pipe(Effect.provide(harness.layer));
+});
+
 it.effect(
   "#2193 preserves the newer non-session follow-up fence when the earlier one is refused",
   () => {
