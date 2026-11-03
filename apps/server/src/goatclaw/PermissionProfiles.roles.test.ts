@@ -2,12 +2,14 @@ import { expect, it } from "@effect/vitest";
 import {
   BUILTIN_PERMISSION_PROFILES,
   EnvironmentId,
+  PermissionProfile,
   ProviderInstanceId,
   type RuntimeMode,
   ThreadId,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
@@ -51,6 +53,87 @@ const seed = (id: string, mode: RuntimeMode) =>
   );
 const { manager, worker } = BUILTIN_PERMISSION_PROFILES;
 const mergeManager = BUILTIN_PERMISSION_PROFILES["merge-manager"]!;
+const encodeProfile = Schema.encodeSync(Schema.fromJsonString(PermissionProfile));
+
+it.effect.each(["pull_request.merge", "pull_request.close"] as const)(
+  "#2194: sending to a roleless owner never grants its kept capability to %s",
+  (path) =>
+    Effect.gen(function* () {
+      const profiles = yield* PermissionProfiles;
+      yield* seed("person", "full-access");
+      yield* profiles.claim(threadScope("person"), {
+        id: "supervisor",
+        childThreadId: ThreadId.make("supervisor"),
+        runtimeMode: "full-access",
+        role: "supervisor",
+      });
+      yield* seed("supervisor", "full-access");
+      yield* profiles.bind(ThreadId.make("target"), "owner", "owner");
+      yield* seed("target", "full-access");
+      yield* profiles.claim(threadScope("supervisor"), {
+        id: "send",
+        childThreadId: ThreadId.make("target"),
+        runtimeMode: "full-access",
+      });
+      const result = yield* requireDeclaredCapability(profiles, path, "write", {}).pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, threadScope("target")),
+        Effect.match({ onFailure: (error) => error.code, onSuccess: () => "admitted" }),
+      );
+      expect(result).toBe("capability_denied");
+    }).pipe(Effect.provide(fixture("owner"))),
+);
+
+it.effect(
+  "#2194: a supervisor cannot send to a roleless owner whose merge grant exceeds its own direct grant",
+  () =>
+    Effect.gen(function* () {
+      const profiles = yield* PermissionProfiles;
+      yield* seed("person", "full-access");
+      yield* profiles.claim(threadScope("person"), {
+        id: "supervisor",
+        childThreadId: ThreadId.make("supervisor"),
+        runtimeMode: "full-access",
+        role: "supervisor",
+      });
+      yield* seed("supervisor", "full-access");
+      yield* profiles.bind(ThreadId.make("target"), "owner", "owner");
+      yield* seed("target", "full-access");
+      const result = yield* profiles
+        .assertTarget(
+          threadScope("supervisor"),
+          ThreadId.make("target"),
+          "full-access",
+          "full-access",
+        )
+        .pipe(Effect.match({ onFailure: (error) => error.code, onSuccess: () => "admitted" }));
+      expect(result).toBe("capability_denied");
+      const owner = BUILTIN_PERMISSION_PROFILES.owner!;
+      const ceiling = encodeProfile({
+        ...owner,
+        capabilities: owner.capabilities.filter((capability) => capability !== "pr.merge"),
+      });
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`UPDATE goatclaw_thread_profiles SET ceiling_json = ${ceiling} WHERE thread_id = 'target'`;
+      yield* profiles.assertTarget(
+        threadScope("supervisor"),
+        ThreadId.make("target"),
+        "full-access",
+        "full-access",
+      );
+      yield* profiles.claim(threadScope("supervisor"), {
+        id: "send",
+        childThreadId: ThreadId.make("target"),
+        runtimeMode: "full-access",
+      });
+      for (const path of ["pull_request.merge", "pull_request.close"]) {
+        const result = yield* requireDeclaredCapability(profiles, path, "write", {}).pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, threadScope("target")),
+          Effect.match({ onFailure: (error) => error.code, onSuccess: () => "admitted" }),
+        );
+        expect(result).toBe("capability_denied");
+      }
+    }).pipe(Effect.provide(fixture("owner"))),
+);
 
 it.effect.each(["pull_request.merge", "pull_request.close"] as const)(
   "#2194: a supervisor can launch a merge manager but cannot directly call %s",

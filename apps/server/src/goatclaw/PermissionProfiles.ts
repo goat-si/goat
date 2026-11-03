@@ -1,5 +1,4 @@
 import {
-  GOATCLAW_ROLE_PROFILES,
   GoatclawRole,
   type GoatclawSettings,
   OrchestratorMcpFailure,
@@ -414,20 +413,14 @@ export const layer = Layer.effect(
       // roleProfile keeps the role profile's id, so the child is bound under the role's profile.
       return { named, profile: roleProfile(role, named, caller) };
     });
-    /**
-     * What a caller grants a thread bound under `profileId` when it reaches that thread without
-     * launching it, as a send does: a role thread that keeps capabilities gets the role's grant,
-     * so a kept capability is neither read as exceeding the caller nor stripped on rebinding.
-     */
+    /** What a caller grants an existing thread, using its role only when the binding records one. */
     const reachGrant = Effect.fn("PermissionProfiles.reachGrant")(function* (
-      profileId: string | undefined,
+      role: GoatclawRole | undefined,
       caller: EffectiveProfile,
     ) {
-      const role = GoatclawRole.literals.find(
-        (role) =>
-          GOATCLAW_ROLE_PROFILES[role] === profileId && goatclawRoleTemplate(role).keeps.length > 0,
-      );
-      return role === undefined ? caller.profile : (yield* roleGrant(role, caller)).profile;
+      return role === undefined
+        ? directWriteProfile(caller).profile
+        : (yield* roleGrant(role, caller)).profile;
     });
     const assertTarget = Effect.fn("PermissionProfiles.assertTarget")(function* (
       scope: McpInvocationScope,
@@ -441,8 +434,7 @@ export const layer = Layer.effect(
       const target = yield* resolve(scope, targetMode, undefined, threadId);
       const within = (ceiling: PermissionProfile) =>
         encodeProfile(intersectProfiles(target.profile, ceiling)) === encodeProfile(target.profile);
-      if (within(caller.profile)) return;
-      if (within(yield* reachGrant(target.narrowing?.named.id, caller))) return;
+      if (within(yield* reachGrant(target.narrowing?.role, caller))) return;
       return yield* refusal("The target thread's permission profile exceeds the caller's ceiling.");
     });
     const recheck = Effect.fn("PermissionProfiles.recheck")(function* (
@@ -676,11 +668,6 @@ export const layer = Layer.effect(
                   : (yield* decodeBindingRole(previous.ceiling_json).pipe(
                       Effect.mapError(storageFailure),
                     )).goatclawRole;
-              const resumeGrant =
-                previousRole !== undefined &&
-                missingRoleCapabilities(previousRole, effective.profile).length === 0
-                  ? effective
-                  : granted;
               const inherited =
                 previous === undefined
                   ? { ...granted.profile, ...(narrower === undefined ? {} : { id: narrower.id }) }
@@ -689,7 +676,7 @@ export const layer = Layer.effect(
                         Effect.mapError(storageFailure),
                       ),
                       input.role === undefined
-                        ? yield* reachGrant(previous.profile_id, resumeGrant)
+                        ? yield* reachGrant(previousRole, effective)
                         : granted.profile,
                     );
               const bindingRole = previousRole ?? input.role;
