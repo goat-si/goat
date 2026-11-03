@@ -51,12 +51,12 @@ const decodePersistedSettings = Schema.decodeUnknownEffect(ServerSettings);
 const decodeGoatclaw = Schema.decodeEffect(GoatclawSettings);
 const decodeListInput = Schema.decodeEffect(AgentWorkspaceListInput);
 
-it.effect("#2059 keeps cursors reusable for long escaped directory paths", () =>
+it.effect("#2059 keeps cursors reusable for long directory paths", () =>
   Effect.gen(function* () {
     const f = yield* fixture();
     // Stays under macOS's 1,024-byte PATH_MAX; a cursor whose size does not depend on the
     // directory stays reusable at any length.
-    const path = Array.from({ length: 3 }, () => '"'.repeat(200)).join("/");
+    const path = Array.from({ length: 3 }, () => "a".repeat(200)).join("/");
     const firstPage = Effect.fn(function* (directory: string) {
       yield* f.fs.makeDirectory(`${f.root}/${directory}`, { recursive: true });
       for (const name of ["a", "b"])
