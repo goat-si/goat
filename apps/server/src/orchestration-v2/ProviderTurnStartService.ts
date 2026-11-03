@@ -92,14 +92,12 @@ const isProviderAdapterOpenSessionError = Schema.is(
 export interface ProviderTurnStartServiceV2Shape {
   /**
    * Starts the run's provider turn. When `willRetry` is true, a session open
-   * failure is returned so the caller can retry. A workspace lease deadline
-   * gives contention its own wait budget, independent of normal failures.
+   * failure is returned so the caller can retry. Workspace contention is always returned.
    */
   readonly start: (input: {
     readonly threadId: ThreadId;
     readonly runId: RunId;
     readonly willRetry?: boolean;
-    readonly workspaceLeaseDeadline?: DateTime.Utc;
     readonly reattach?: boolean;
   }) => Effect.Effect<void, ProviderTurnStartError>;
 }
@@ -288,7 +286,6 @@ export const layer: Layer.Layer<
       readonly threadId: ThreadId;
       readonly runId: RunId;
       readonly willRetry?: boolean;
-      readonly workspaceLeaseDeadline?: DateTime.Utc;
       readonly reattach?: boolean;
       /** Called once this start attaches a registered cloud task instead of submitting. */
       readonly onAttach?: () => void;
@@ -688,36 +685,10 @@ export const layer: Layer.Layer<
           }).pipe(Effect.result),
         );
         if (Option.isNone(prepared)) {
-          const reason =
-            "The workspace is busy with checkout removal or preparation. Retry the turn when it finishes.";
-          const now = yield* DateTime.now;
-          const deadlineExceeded =
-            input.workspaceLeaseDeadline !== undefined &&
-            DateTime.toEpochMillis(now) >= DateTime.toEpochMillis(input.workspaceLeaseDeadline);
-          if (
-            !deadlineExceeded &&
-            (input.workspaceLeaseDeadline !== undefined ||
-              input.willRetry === true ||
-              input.reattach === true)
-          ) {
-            return yield* new ProviderTurnStartError({
-              runId,
-              cause: new WorkspaceLeaseBusyError({}),
-            });
-          }
-          yield* settleRunBeforeStart({
-            signal: "workspace-lease-busy",
-            status: "failed",
-            now,
-            providerInstanceId: run.providerInstanceId,
-            itemProviderThreadId: providerThread.id,
-            item: {
-              type: "error",
-              title: "Workspace is busy",
-              failure: makeProviderFailure({ message: reason, class: "validation_error" }),
-            },
+          return yield* new ProviderTurnStartError({
+            runId,
+            cause: new WorkspaceLeaseBusyError({}),
           });
-          return;
         }
         if (prepared.value._tag === "Failure") {
           if (input.willRetry === true) return yield* prepared.value.failure;
