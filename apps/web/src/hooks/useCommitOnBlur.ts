@@ -24,7 +24,7 @@ export function useCommitOnBlur(
     normalizeDraft,
   }: {
     multiline?: boolean;
-    normalizeDraft?: (previous: string, next: string) => string;
+    normalizeDraft?: ((previous: string, next: string) => string) | undefined;
     /** Mixed fields can explicitly clear all targets even when their placeholder value is empty. */
     commitUnchanged?: boolean;
   } = {},
