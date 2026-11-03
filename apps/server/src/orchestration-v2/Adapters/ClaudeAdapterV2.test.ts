@@ -2363,7 +2363,11 @@ describe("ClaudeAdapterV2 MCP credential channel", () => {
 });
 
 describe("ClaudeAdapterV2 native session identity", () => {
-  const openTurnWithOrdinal = (providerTurnOrdinal: number, nativeThreadHasTurns?: boolean) =>
+  const openTurnWithOrdinal = (
+    providerTurnOrdinal: number,
+    nativeThreadHasTurns?: boolean,
+    importedNativeThreadId?: string,
+  ) =>
     Effect.scoped(
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
@@ -2371,14 +2375,31 @@ describe("ClaudeAdapterV2 native session identity", () => {
         const attachmentsDir = yield* fileSystem.makeTempDirectoryScoped({
           prefix: "goat-claude-v2-session-identity-",
         });
+        const path = yield* Path.Path;
+        if (importedNativeThreadId !== undefined) {
+          yield* fileSystem.makeDirectory(
+            path.join(attachmentsDir, "projects", "-other", `${importedNativeThreadId}.jsonl`),
+            { recursive: true },
+          );
+          const projectDir = path.join(attachmentsDir, "projects", "-workspace");
+          yield* fileSystem.makeDirectory(projectDir, { recursive: true });
+          yield* fileSystem.writeFileString(
+            path.join(projectDir, `${importedNativeThreadId}.jsonl`),
+            JSON.stringify({
+              type: "user",
+              message: { role: "user", content: "hello" },
+              sessionId: importedNativeThreadId,
+            }) + "\n",
+          );
+        }
         const openedQueries: Array<ClaudeAdapterV2.ClaudeAgentSdkQueryOpenInput> = [];
         const adapter = yield* ClaudeAdapterV2.makeClaudeAdapterV2({
           instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
           settings: DEFAULT_CLAUDE_SETTINGS,
-          environment: {},
+          environment: { CLAUDE_CONFIG_DIR: attachmentsDir },
           attachmentsDir,
           fileSystem,
-          path: yield* Path.Path,
+          path,
           crypto: yield* Crypto.Crypto,
           idAllocator,
           queryRunner: {
@@ -2411,12 +2432,47 @@ describe("ClaudeAdapterV2 native session identity", () => {
           modelSelection: CLAUDE_TEST_MODEL_SELECTION,
           runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
         });
-        const providerThread = yield* runtime.ensureThread({
-          threadId,
-          modelSelection: CLAUDE_TEST_MODEL_SELECTION,
-          runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
-        });
         const now = yield* DateTime.now;
+        const providerThread =
+          importedNativeThreadId === undefined
+            ? yield* runtime.ensureThread({
+                threadId,
+                modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+                runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+              })
+            : yield* runtime.resumeThread({
+                threadId,
+                modelSelection: CLAUDE_TEST_MODEL_SELECTION,
+                runtimePolicy: CLAUDE_TEST_RUNTIME_POLICY,
+                providerThread: {
+                  id: idAllocator.derive.providerThread({
+                    driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
+                    providerInstanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
+                    nativeThreadId: importedNativeThreadId,
+                  }),
+                  driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
+                  providerInstanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
+                  providerSessionId: null,
+                  appThreadId: threadId,
+                  ownerNodeId: null,
+                  nativeThreadRef: {
+                    driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
+                    nativeId: importedNativeThreadId,
+                    strength: "strong",
+                  },
+                  nativeConversationHeadRef: null,
+                  status: "not_loaded",
+                  firstRunOrdinal: null,
+                  lastRunOrdinal: null,
+                  handoffIds: [],
+                  forkedFrom: null,
+                  contextUsage: null,
+                  nativeMetadata: null,
+                  goal: null,
+                  createdAt: now,
+                  updatedAt: now,
+                },
+              });
         yield* runtime.startTurn(
           makeClaudeTestTurnInput({
             threadId,
@@ -2449,6 +2505,14 @@ describe("ClaudeAdapterV2 native session identity", () => {
       const openedQueries = yield* openTurnWithOrdinal(4, false);
       assert.equal(openedQueries[0]?.options.sessionId, "native-session-identity");
       assert.equal(openedQueries[0]?.options.resume, undefined);
+    }),
+  );
+  it.effect("resumes an imported native session on its first GOAT turn", () =>
+    Effect.gen(function* () {
+      const openedQueries = yield* openTurnWithOrdinal(1, false, "imported-native-session");
+      assert.equal(openedQueries.length, 1);
+      assert.equal(openedQueries[0]?.options.resume, "imported-native-session");
+      assert.equal(openedQueries[0]?.options.sessionId, undefined);
     }),
   );
 });
