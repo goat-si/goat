@@ -533,6 +533,8 @@ const makeCallLayer = (serverScope: Scope.Scope) =>
               call.value.name,
               call.value.args,
               settings.value.blockedBrowserHosts,
+              undefined,
+              call.value.authority,
             )
             .pipe(Effect.option);
           if (Option.isNone(checked)) return HttpServerResponse.empty({ status: 503 });
@@ -573,6 +575,7 @@ const makeCallLayer = (serverScope: Scope.Scope) =>
                   call.value.args,
                   settings.value.blockedBrowserHosts,
                   selectedBind,
+                  call.value.authority,
                 )
               : grants.value.admitClaimCall(
                   threadId,
@@ -580,6 +583,7 @@ const makeCallLayer = (serverScope: Scope.Scope) =>
                   call.value.args,
                   settings.value.blockedBrowserHosts,
                   selectedClaim,
+                  call.value.authority,
                 )
           ).pipe(Effect.option);
           if (Option.isNone(verified) || verified.value.status !== "admit") {

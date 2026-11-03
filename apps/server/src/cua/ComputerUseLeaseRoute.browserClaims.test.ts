@@ -3,7 +3,6 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import {
   type ComputerUsePauseReason,
-  ComputerUseCallAdmission,
   EnvironmentId,
   ExecutionEnvironmentDescriptor,
   ProviderInstanceId,
@@ -39,10 +38,14 @@ import { BrowserOriginGrants } from "../preview/BrowserOriginGrantsLayer.ts";
 import * as Grants from "../preview/BrowserOriginGrantsLayer.ts";
 import { BrowserClaimManifest } from "../preview/BrowserClaimManifest.ts";
 import { harness, call } from "./ComputerUseLeaseProxy.testkit.ts";
-import { sendApprovedBind } from "./ComputerUseLeaseRouteBind.testkit.ts";
+import {
+  claimBindArgs,
+  reservationViaRoute,
+  sendApprovedBind,
+  startUntrustedBind,
+} from "./ComputerUseLeaseRouteBind.testkit.ts";
 
 const decodeDescriptor = Schema.decodeSync(ExecutionEnvironmentDescriptor);
-const decodeAdmission = Schema.decodeUnknownSync(ComputerUseCallAdmission);
 const threadId = ThreadId.make("thread:bot");
 const controlId = "control:one";
 const expiresAt = DateTime.makeUnsafe(10 * 60_000);
@@ -298,7 +301,7 @@ const threadFixture = Effect.fn("LeaseRouteTest.threadFixture")(function* (
     channel: Context.get(context, ComputerUsePrimitiveChannel.ComputerUsePrimitiveChannel),
     request,
     postPrimitive,
-    reserve: (name: string, args: unknown) =>
+    reserve: (name: string, args: unknown, authority?: "claimBind") =>
       handler.pipe(
         Effect.provideService(
           HttpServerRequest.HttpServerRequest,
@@ -316,6 +319,7 @@ const threadFixture = Effect.fn("LeaseRouteTest.threadFixture")(function* (
                 callId: "one",
                 name,
                 args,
+                ...(authority === undefined ? {} : { authority }),
                 interruptions: 0,
                 idleEpoch: 0,
               }),
@@ -621,22 +625,22 @@ describe("computer use lease route", () => {
                 Effect.as({ status: "admitted" as const, reservationId: "reservation:test" }),
               ),
       });
+      const untrusted = yield* startUntrustedBind(
+        route
+          .reserve("get_browser_state", claimBindArgs(pending.claimId))
+          .pipe(Effect.scoped, Effect.orDie),
+        reservationStarted,
+      );
       let decision: unknown;
       const proxy = yield* harness({
         autoAppListing: true,
-        reservation: (request) =>
-          request.action === "reserve"
-            ? route.reserve(request.name, request.args).pipe(
-                Effect.scoped,
-                Effect.orDie,
-                Effect.tap((value) =>
-                  Effect.sync(() => {
-                    decision = value;
-                  }),
-                ),
-                Effect.map(decodeAdmission),
-              )
-            : Effect.succeed({ status: "released" as const }),
+        reservation: reservationViaRoute(
+          (name, args, authority) =>
+            route.reserve(name, args, authority).pipe(Effect.scoped, Effect.orDie),
+          (value) => {
+            decision = value;
+          },
+        ),
       });
       yield* sendApprovedBind(proxy, yield* grants.bindingsFor(threadId), pending.claimId);
       yield* Deferred.await(reservationStarted);
@@ -649,6 +653,10 @@ describe("computer use lease route", () => {
       yield* Deferred.succeed(bindRelease, undefined);
       const result = (yield* Fiber.join(answer)).agentResult;
       assert.equal(result.status === "refused" && result.code, "declined");
+      assert.deepEqual(yield* Fiber.join(untrusted), {
+        status: "refused",
+        detail: "outside_manifest",
+      });
       assert.deepEqual(yield* grants.list(threadId), { claims: [], grants: [] });
     }).pipe(Effect.scoped, Effect.provide(ServerSettings.layerTest({ enableCua: true }))),
   );

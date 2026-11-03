@@ -294,6 +294,7 @@ describe("computer use on the wire", () => {
       { ...validation, name: "list_apps" },
       { ...validation, args: {} },
       { ...validation, foregroundGrantId: "handoff:fresh" },
+      { ...validation, authority: "claimBind" },
     ])
       expect(() => decodeCallReservation(invalid)).toThrow();
     for (const action of ["release", "close"]) {
@@ -320,6 +321,10 @@ describe("computer use on the wire", () => {
       args: { pid: 42, window_id: 7 },
     };
     expect(decode(request)).toEqual(request);
+    expect(decode({ ...request, authority: "claimBind" })).toEqual({
+      ...request,
+      authority: "claimBind",
+    });
     const { idleEpoch: _idleEpoch, ...missingIdleEpoch } = request;
     for (const invalid of [
       missingIdleEpoch,
@@ -328,6 +333,7 @@ describe("computer use on the wire", () => {
       { ...request, interruptions: -1 },
       { ...request, idleEpoch: -1 },
       { ...request, name: "" },
+      { ...request, authority: "forged" },
     ])
       expect(() => decode(invalid)).toThrow();
     const refusal = { status: "refused", detail: "target_busy", holderThreadId: "thread:holder" };

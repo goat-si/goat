@@ -565,15 +565,16 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     args: unknown,
     fallbackHosts: ReadonlyArray<string>,
     expected?: { readonly claimId: string; readonly claimGeneration: number },
+    authority?: "claimBind",
   ) {
     if ("unchanged" in scopeBrowserCall(name, args, [])) return { status: "admit" as const };
     // Approved bind calls execute while answer owns the lock; they cannot acquire it again.
     if (
       expected === undefined &&
-      authorizeClaimBind("claimBind", name, args, bindingValues(threadId))
+      authorizeClaimBind(authority, name, args, bindingValues(threadId))
     ) {
       const hosts = yield* (deps.blockedHosts ?? Effect.succeed(fallbackHosts)).pipe(Effect.option);
-      const binding = authorizeClaimBind("claimBind", name, args, bindingValues(threadId));
+      const binding = authorizeClaimBind(authority, name, args, bindingValues(threadId));
       if (Option.isNone(hosts) || !binding || isBlockedBrowserUrl(binding.origin, hosts.value))
         return { status: "blocked" as const };
       return {
@@ -595,7 +596,7 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
                 ? ("blocked" as const)
                 : ("outside" as const),
           };
-        const snapshot = { claims: claimValues(threadId), bindings: bindingValues(threadId) };
+        const snapshot = { claims: claimValues(threadId), bindings: [] };
         if (!serverAdmitsBrowserCall(name, args, snapshot)) return { status: "outside" as const };
         const decision = blockedClaimCall(
           name,
@@ -644,10 +645,11 @@ export const makeBrowserOriginGrants = Effect.fn("BrowserOriginGrants.make")(fun
     args: unknown,
     fallbackHosts: ReadonlyArray<string>,
     expected: { readonly claimId: string; readonly origin: string },
+    authority?: "claimBind",
   ) {
     const hosts = yield* (deps.blockedHosts ?? Effect.succeed(fallbackHosts)).pipe(Effect.option);
     if (Option.isNone(hosts)) return { status: "blocked" as const };
-    const binding = authorizeClaimBind("claimBind", name, args, bindingValues(threadId));
+    const binding = authorizeClaimBind(authority, name, args, bindingValues(threadId));
     if (!binding || binding.claimId !== expected.claimId || binding.origin !== expected.origin)
       return { status: "outside" as const };
     return {
