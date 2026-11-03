@@ -66,6 +66,7 @@ export function PullRequestFilterSearchScreen({
       input: {
         kind,
         ...(controls.projectId ? { projectId: ProjectId.make(controls.projectId) } : {}),
+        ...(controls.includeUpstream ? { includeUpstream: true } : {}),
         ...(sent ? { query: sent } : {}),
       },
     })),

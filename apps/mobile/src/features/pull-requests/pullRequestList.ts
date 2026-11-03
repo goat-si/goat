@@ -78,8 +78,13 @@ export const scopedPullRequestListKey = (entry: EnvironmentPullRequestListEntry)
   `${entry.environmentId}:${pullRequestListKey(entry)}`;
 
 export const pullRequestStatKey = (
-  row: Pick<PullRequestDiffStat, "projectId" | "repository" | "number">,
-) => `${row.projectId}:${row.repository}:${row.number}`;
+  row: Pick<PullRequestDiffStat, "projectId" | "host" | "repository" | "number">,
+) => `${row.projectId}:${row.host ?? ""}:${row.repository}:${row.number}`;
+/** A server that answers counts without a host files them under none. */
+const statKeys = (row: Parameters<typeof pullRequestStatKey>[0]) => [
+  pullRequestStatKey(row),
+  pullRequestStatKey({ ...row, host: undefined }),
+];
 
 export interface PullRequestStatsCache {
   readonly stats: ReadonlyMap<string, PullRequestDiffStat>;
@@ -98,7 +103,7 @@ export function withListedPullRequests(
   cache: PullRequestStatsCache,
   entries: readonly Pick<
     PullRequestListEntry,
-    "projectId" | "repository" | "number" | "updatedAt"
+    "projectId" | "host" | "repository" | "number" | "updatedAt"
   >[],
 ): {
   readonly cache: PullRequestStatsCache;
@@ -113,12 +118,13 @@ export function withListedPullRequests(
   const updatedAt = new Map(cache.updatedAt);
   const refresh = new Set<PullRequestListStatsInput>();
   for (const entry of moved) {
-    const key = pullRequestStatKey(entry);
-    const query = answeredBy.get(key);
-    if (query) refresh.add(query);
-    stats.delete(key);
-    answeredBy.delete(key);
-    updatedAt.set(key, entry.updatedAt);
+    for (const key of statKeys(entry)) {
+      const query = answeredBy.get(key);
+      if (query) refresh.add(query);
+      stats.delete(key);
+      answeredBy.delete(key);
+    }
+    updatedAt.set(pullRequestStatKey(entry), entry.updatedAt);
   }
   return { cache: { stats, answeredBy, updatedAt }, refresh: [...refresh] };
 }
@@ -200,7 +206,9 @@ export function withShownPullRequestStats(
     // Live rows use recorded stats; a retained offline answer must not refill an evicted count.
     if (listedStats?.get(entry.environmentId)?.updatedAt.has(pullRequestStatKey(entry)))
       return entry;
-    const stat = shown.get(`${entry.environmentId}:${pullRequestStatKey(entry)}`);
+    const stat = statKeys(entry)
+      .map((key) => shown.get(`${entry.environmentId}:${key}`))
+      .find((row) => row !== undefined);
     if (!stat || entry.additions + entry.deletions !== 0) return entry;
     if (stat.additions + stat.deletions === 0) return entry;
     changed = true;

@@ -225,6 +225,33 @@ describe("shown PR diff stats", () => {
     ]);
   });
 
+  it("keeps counts apart for one repository path on two hosts, and reads host-less answers", () => {
+    const environmentId = EnvironmentId.make("env-one");
+    const row = (host: string) => ({
+      ...entry(1, { host, additions: 0, deletions: 0 }),
+      environmentId,
+    });
+    const stat = { projectId: entry(1).projectId, repository: "org/repo", number: 1, deletions: 0 };
+    const shown = withShownPullRequestStats(
+      [row("git.cafe"), row("github.com")],
+      [
+        {
+          environmentId,
+          stats: [
+            { ...stat, host: "git.cafe", additions: 3 },
+            { ...stat, host: "github.com", additions: 9 },
+          ],
+        },
+      ],
+    );
+    expect(shown.map(({ additions }) => additions)).toEqual([3, 9]);
+    const older = withShownPullRequestStats(
+      [row("github.com")],
+      [{ environmentId, stats: [{ ...stat, additions: 5 }] }],
+    );
+    expect(older.at(0)?.additions).toBe(5);
+  });
+
   it("fills offline counts per environment without replacing newer row counts", () => {
     const first = EnvironmentId.make("env-one");
     const second = EnvironmentId.make("env-two");

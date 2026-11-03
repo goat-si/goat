@@ -501,6 +501,8 @@ export type PullRequestStack = typeof PullRequestStack.Type;
 
 export const PullRequestDiffStat = Schema.Struct({
   projectId: ProjectId,
+  /** Keeps a fork's own and upstream repositories apart when they share a path on two hosts. */
+  host: Schema.optional(TrimmedNonEmptyString),
   repository: TrimmedNonEmptyString,
   number: PositiveInt,
   additions: NonNegativeInt,
@@ -527,6 +529,7 @@ export const PullRequestFilterOptionsInput = Schema.Struct({
   projectId: Schema.optional(ProjectId),
   projectIds: Schema.optional(Schema.Array(ProjectId).check(Schema.isMaxLength(100))),
   host: Schema.optional(TrimmedNonEmptyString),
+  includeUpstream: PullRequestListInput.fields.includeUpstream,
   query: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(100))),
 });
 export type PullRequestFilterOptionsInput = typeof PullRequestFilterOptionsInput.Type;

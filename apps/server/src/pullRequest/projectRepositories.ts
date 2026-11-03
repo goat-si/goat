@@ -34,17 +34,10 @@ export function projectRepositories(
       continue;
     }
     own.push({ project, identity: fork, upstream: false });
-    // The same path on another host is a mirror (a GitCafe origin of a GitHub repository), not
-    // the repository it was forked from; listing it would show every change request twice.
-    if (identity && repositoryPath(fork) !== repositoryPath(identity)) {
-      upstream.push({ project, identity, upstream: true });
-    }
+    upstream.push({ project, identity, upstream: true });
   }
   return [...own, ...upstream];
 }
-
-const repositoryPath = (identity: RepositoryIdentity) =>
-  identity.canonicalKey.split("/").slice(1).join("/").toLowerCase();
 
 export const remoteHostKey = (recognized: SourceControlProviderInfo, remoteUrl: string) =>
   `${recognized.baseUrl}\n${isSshRemoteUrl(remoteUrl) ? "ssh" : "web"}`;
@@ -54,6 +47,7 @@ interface ListedRepository {
   readonly project: { readonly id: ProjectId };
   readonly repository: string;
   readonly host: string;
+  readonly upstream: boolean;
 }
 
 export interface StatTarget<Listed extends ListedRepository> {
@@ -73,24 +67,20 @@ export function statTargets<Listed extends ListedRepository>(
   refs: ReadonlyArray<PullRequestRef>,
 ): ReadonlyArray<StatTarget<Listed>> {
   const name = (repository: string) => repository.trim().toLowerCase();
-  const byProject = new Map(
-    listed.map((item) => [`${item.project.id} ${name(item.repository)}`, item]),
-  );
   const targets = new Map<string, { project: Listed; number: number; projectIds: ProjectId[] }>();
   for (const ref of refs) {
     const repository = name(ref.repository);
     const host = ref.host?.trim().toLowerCase();
-    const own = byProject.get(`${ref.projectId} ${repository}`);
     const elsewhere = listed.filter(
       (item) => name(item.repository) === repository && (host === undefined || item.host === host),
     );
-    // Without a host, a name another project lists on two hosts cannot say which one was meant.
+    const mine = elsewhere.filter((item) => item.project.id === ref.projectId);
+    // Without a host, a fork's own repository answers before a same-path upstream on another
+    // host, and a name other projects list on two hosts cannot say which one was meant.
     const project =
-      own !== undefined && (host === undefined || own.host === host)
-        ? own
-        : new Set(elsewhere.map((item) => item.host)).size === 1
-          ? elsewhere[0]
-          : undefined;
+      mine.find((item) => !item.upstream) ??
+      mine[0] ??
+      (new Set(elsewhere.map((item) => item.host)).size === 1 ? elsewhere[0] : undefined);
     if (project === undefined) continue;
     const key = `${project.cursorKey} ${ref.number}`;
     const held = targets.get(key);

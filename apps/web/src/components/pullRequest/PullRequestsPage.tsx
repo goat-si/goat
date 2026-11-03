@@ -355,9 +355,8 @@ export function PullRequestsPage() {
   const filterOptionScope = environmentQueries.map(({ environmentId, projectIds }) => ({
     environmentId,
     input: {
-      ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
+      ...listScope,
       ...(projectIds ? { projectIds } : {}),
-      ...(search.host ? { host: search.host } : {}),
     },
   }));
   const partitionsWanted = search.involvement === "all" && typedQuery.length === 0;

@@ -100,7 +100,7 @@ describe("visible pull request line-count targets", () => {
     );
     expect([...keys]).toEqual([secondKey]);
     expect(pullRequestStatsBatches(entriesByKey, keys)[0]?.input.refs).toEqual([
-      { projectId: "project-1", repository: "goat-si/goat", number: 2 },
+      { projectId: "project-1", host: "github.com", repository: "goat-si/goat", number: 2 },
     ]);
   });
 
@@ -126,6 +126,24 @@ describe("visible pull request line-count targets", () => {
     const counted = (repository: string) =>
       withDiffStat(entry({ number: 1, repository, additions: 0, deletions: 0 }), stats).additions;
     expect([counted("goat-si/goat"), counted("pingdotgg/t3code")]).toEqual([3, 9]);
+  });
+
+  it("keeps line counts apart for one repository path on two hosts, and reads host-less answers", () => {
+    const stat = {
+      environmentId: ENV_1,
+      projectId: "project-1",
+      repository: "goat-si/goat",
+      number: 1,
+    };
+    const stats = mergePullRequestDiffStats(new Map(), [
+      { ...stat, host: "git.cafe", additions: 3, deletions: 0 },
+      { ...stat, host: "github.com", additions: 9, deletions: 0 },
+    ]);
+    const counted = (host: string, from = stats) =>
+      withDiffStat(entry({ number: 1, host, additions: 0, deletions: 0 }), from).additions;
+    expect([counted("git.cafe"), counted("github.com")]).toEqual([3, 9]);
+    const older = mergePullRequestDiffStats(new Map(), [{ ...stat, additions: 5, deletions: 0 }]);
+    expect(counted("github.com", older)).toBe(5);
   });
 
   it("keeps every per-environment batch within the stats contract limit", () => {

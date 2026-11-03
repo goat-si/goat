@@ -2509,11 +2509,10 @@ export const make = Effect.gen(function* () {
     "PullRequestService.filterOptions",
   )(function* (input) {
     const { supported } = yield* listWorkspaceProjects(input);
+    const listed = supported.filter((item) => input.includeUpstream || !item.upstream);
     // Worktrees of one checkout are separate projects over the same repository.
     const repositories = [
-      ...new Map(
-        supported.filter((item) => !item.upstream).map((project) => [project.cursorKey, project]),
-      ).values(),
+      ...new Map(listed.map((project) => [project.cursorKey, project])).values(),
     ];
     const refOf = (project: SupportedProject) => ({
       cwd: project.project.workspaceRoot,
@@ -2671,6 +2670,7 @@ export const make = Effect.gen(function* () {
               if (target === undefined) return [];
               return target.projectIds.map((projectId) => ({
                 projectId,
+                host: target.project.host,
                 repository: target.project.repository,
                 number: stat.number,
                 additions: stat.additions,
@@ -3421,9 +3421,17 @@ export const make = Effect.gen(function* () {
 
   const listStatsCache = yield* Cache.makeWith(
     (key: string) => {
-      const [, refs] = JSON.parse(key) as [number, ReadonlyArray<[string, string, number, number]>];
+      const [, refs] = JSON.parse(key) as [
+        number,
+        ReadonlyArray<[string, string, number, number, string | null]>,
+      ];
       return listStatsUncached({
-        refs: refs.map(([projectId, repository, number]) => ({ projectId, repository, number })),
+        refs: refs.map(([projectId, repository, number, , host]) => ({
+          projectId,
+          repository,
+          number,
+          ...(host === null ? {} : { host }),
+        })),
       } as unknown as PullRequestListStatsInput).pipe(
         Effect.flatMap((result) =>
           Clock.currentTimeMillis.pipe(Effect.map((at) => ({ result, at }))),
@@ -3439,9 +3447,14 @@ export const make = Effect.gen(function* () {
     JSON.stringify([
       listingsEpoch,
       [...refs]
-        .map((ref) => [ref.projectId, ref.repository, ref.number, refEpoch(ref)] as const)
+        .map(
+          (ref) =>
+            [ref.projectId, ref.repository, ref.number, refEpoch(ref), ref.host ?? null] as const,
+        )
         .toSorted((left, right) =>
-          `${left[0]} ${left[1]} ${left[2]}`.localeCompare(`${right[0]} ${right[1]} ${right[2]}`),
+          `${left[0]} ${left[1]} ${left[2]} ${left[4]}`.localeCompare(
+            `${right[0]} ${right[1]} ${right[2]} ${right[4]}`,
+          ),
         ),
     ]);
   const listStats: PullRequestService["Service"]["listStats"] = Effect.fn(
@@ -3473,7 +3486,8 @@ export const make = Effect.gen(function* () {
         (stat) =>
           stat.projectId === ref.projectId &&
           stat.repository.toLowerCase() === ref.repository.toLowerCase() &&
-          stat.number === ref.number,
+          stat.number === ref.number &&
+          (ref.host === undefined || stat.host === ref.host.toLowerCase()),
       );
       if (stat !== undefined) recordStats(key, stat, at);
     }

@@ -305,6 +305,7 @@ export interface PullRequestStatsTarget {
   readonly input: {
     readonly refs: ReadonlyArray<{
       readonly projectId: ProjectId;
+      readonly host: string;
       readonly repository: string;
       readonly number: number;
     }>;
@@ -339,7 +340,7 @@ export function pullRequestStatsKeysToRequest(
         entry.additions === 0 &&
         entry.deletions === 0 &&
         !requested.has(key) &&
-        !statsByRow.has(pullRequestDiffStatKey(entry))
+        pullRequestDiffStatOf(statsByRow, entry) === undefined
       );
     }),
   );
@@ -364,6 +365,7 @@ export function pullRequestStatsBatches(
       key,
       ref: {
         projectId: entry.projectId,
+        host: entry.host,
         repository: entry.repository,
         number: entry.number,
       },
@@ -492,6 +494,7 @@ export function mergePullRequestDiffStats(
   stats: ReadonlyArray<{
     readonly environmentId: string;
     readonly projectId: string;
+    readonly host?: string | undefined;
     readonly repository: string;
     readonly number: number;
     readonly additions: number;
@@ -512,9 +515,22 @@ export function mergePullRequestDiffStats(
 export const pullRequestDiffStatKey = (row: {
   readonly environmentId: string;
   readonly projectId: string;
+  readonly host?: string | undefined;
   readonly repository: string;
   readonly number: number;
-}) => `${row.environmentId} ${row.projectId} ${row.repository.toLowerCase()} ${row.number}`;
+}) =>
+  `${row.environmentId} ${row.projectId} ${row.host?.toLowerCase() ?? ""} ${row.repository.toLowerCase()} ${row.number}`;
+
+/** A server that answers counts without a host files them under none. */
+export function pullRequestDiffStatOf<Value>(
+  statsByRow: ReadonlyMap<string, Value>,
+  row: Parameters<typeof pullRequestDiffStatKey>[0],
+): Value | undefined {
+  return (
+    statsByRow.get(pullRequestDiffStatKey(row)) ??
+    statsByRow.get(pullRequestDiffStatKey({ ...row, host: undefined }))
+  );
+}
 
 export interface MergedPullRequestList {
   readonly viewers: PullRequestViewers;
@@ -784,7 +800,7 @@ export function withDiffStat<
   statsByRow: ReadonlyMap<string, { readonly additions: number; readonly deletions: number }>,
 ): Entry {
   if (entry.additions !== 0 || entry.deletions !== 0) return entry;
-  const stat = statsByRow.get(pullRequestDiffStatKey(entry));
+  const stat = pullRequestDiffStatOf(statsByRow, entry);
   return stat === undefined ? entry : { ...entry, ...stat };
 }
 
