@@ -56,102 +56,112 @@ const layer = Store.layer.pipe(
   ),
 );
 
-it.effect("batches migration 123 reads while preserving each space's forget reservation (#2412)", () =>
-  Effect.gen(function* () {
-    const sql = yield* SqlClient.SqlClient;
-    const store = yield* Store.MemoryStore;
-    const otherSpace = M.MemorySpaceId.make(id(2));
-    const expected: Array<{
-      space: string;
-      memory_id: string;
-      reserve_bytes: number;
-      reserve_keys: number;
-    }> = [];
-    for (let n = 0; n < 205; n++) {
-      const original = upsert(n);
-      const targetSpace = n === 204 ? otherSpace : space;
-      const base = n === 204 ? upsert(0) : original;
-      if (base.kind !== "upsert") throw new Error("Expected an upsert");
-      const op = decodeOperation({
-        ...base,
-        memorySpaceId: targetSpace,
-        revision: { ...base.revision, memorySpaceId: targetSpace },
+it.effect(
+  "batches migration 123 reads while preserving each space's forget reservation (#2412)",
+  () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const store = yield* Store.MemoryStore;
+      const otherSpace = M.MemorySpaceId.make(id(2));
+      const expected: Array<{
+        space: string;
+        memory_id: string;
+        reserve_bytes: number;
+        reserve_keys: number;
+      }> = [];
+      for (let n = 0; n < 205; n++) {
+        const original = upsert(n);
+        const targetSpace = n === 204 ? otherSpace : space;
+        const base = n === 204 ? upsert(0) : original;
+        if (base.kind !== "upsert") throw new Error("Expected an upsert");
+        const op = decodeOperation({
+          ...base,
+          memorySpaceId: targetSpace,
+          revision: { ...base.revision, memorySpaceId: targetSpace },
+        });
+        if (op.kind !== "upsert") throw new Error("Expected an upsert");
+        yield* store.transact(
+          Effect.gen(function* () {
+            const ledger = yield* store.appendHubEntryTx({
+              operation: op,
+              operationDigest: memoryOperationDigest(op),
+              outcome: "accepted",
+              now: 0,
+            });
+            const decided = decideMemoryOperation(
+              yield* store.loadAggregate(targetSpace, op.memoryId),
+              op,
+              Store.hubAdmission,
+              scanMemoryValue(op),
+            );
+            yield* store.apply({ ...decided, receipt: ledger.entry.receipt });
+          }),
+        );
+        const records: M.MemoryImportLineageRecord[] =
+          n === 0 || n === 204
+            ? [
+                {
+                  memorySpaceId: targetSpace,
+                  memoryId: op.memoryId,
+                  kind: "sourceKey",
+                  sourceKey: {
+                    environmentId: env,
+                    sourceId: M.MemoryImportSourceId.make(id(9000 + n)),
+                    sourceItemKey: `source-${n}`,
+                  },
+                },
+              ]
+            : [];
+        for (const record of records)
+          yield* sql`INSERT INTO memory_import_lineage(space,memory_id,kind,key,record_json) VALUES (${targetSpace},${op.memoryId},'sourceKey',${`key-${n}`},${JSON.stringify(record)})`;
+        const reservation = yield* measureForgetReservation(
+          op,
+          [{ revision: op.revision, payload: op.payload }],
+          records,
+        );
+        expected.push({
+          space: targetSpace,
+          memory_id: op.memoryId,
+          reserve_bytes: M.MEMORY_IDENTITY_CORE_MAX_BYTES + reservation.bytes,
+          reserve_keys: reservation.keys,
+        });
+      }
+      yield* sql`UPDATE memory_identity_ledger SET reserve_bytes=0,reserve_keys=0`;
+      const statements: string[] = [];
+      const tracer = Tracer.make({
+        span(options) {
+          const span = new Tracer.NativeSpan(options);
+          const end = span.end.bind(span);
+          span.end = (time, exit) => {
+            end(time, exit);
+            const query = span.attributes.get("db.query.text");
+            if (typeof query === "string") statements.push(query);
+          };
+          return span;
+        },
       });
-      if (op.kind !== "upsert") throw new Error("Expected an upsert");
-      yield* store.transact(
-        Effect.gen(function* () {
-          const ledger = yield* store.appendHubEntryTx({
-            operation: op,
-            operationDigest: memoryOperationDigest(op),
-            outcome: "accepted",
-            now: 0,
-          });
-          const decided = decideMemoryOperation(
-            yield* store.loadAggregate(targetSpace, op.memoryId),
-            op,
-            Store.hubAdmission,
-            scanMemoryValue(op),
-          );
-          yield* store.apply({ ...decided, receipt: ledger.entry.receipt });
-        }),
+      yield* sql.withTransaction(migration).pipe(Effect.withTracer(tracer));
+      assert.deepStrictEqual(
+        yield* sql`SELECT space,memory_id,reserve_bytes,reserve_keys FROM memory_identity_ledger ORDER BY space,memory_id`,
+        expected.sort(
+          (a, b) => a.space.localeCompare(b.space) || a.memory_id.localeCompare(b.memory_id),
+        ),
       );
-      const records: M.MemoryImportLineageRecord[] =
-        n === 0 || n === 204
-          ? [{
-              memorySpaceId: targetSpace,
-              memoryId: op.memoryId,
-              kind: "sourceKey",
-              sourceKey: {
-                environmentId: env,
-                sourceId: M.MemoryImportSourceId.make(id(9000 + n)),
-                sourceItemKey: `source-${n}`,
-              },
-            }]
-          : [];
-      for (const record of records)
-        yield* sql`INSERT INTO memory_import_lineage(space,memory_id,kind,key,record_json) VALUES (${targetSpace},${op.memoryId},'sourceKey',${`key-${n}`},${JSON.stringify(record)})`;
-      const reservation = yield* measureForgetReservation(op, [{ revision: op.revision, payload: op.payload }], records);
-      expected.push({
-        space: targetSpace,
-        memory_id: op.memoryId,
-        reserve_bytes: M.MEMORY_IDENTITY_CORE_MAX_BYTES + reservation.bytes,
-        reserve_keys: reservation.keys,
-      });
-    }
-    yield* sql`UPDATE memory_identity_ledger SET reserve_bytes=0,reserve_keys=0`;
-    const statements: string[] = [];
-    const tracer = Tracer.make({
-      span(options) {
-        const span = new Tracer.NativeSpan(options);
-        const end = span.end.bind(span);
-        span.end = (time, exit) => {
-          end(time, exit);
-          const query = span.attributes.get("db.query.text");
-          if (typeof query === "string") statements.push(query);
-        };
-        return span;
-      },
-    });
-    yield* sql.withTransaction(migration).pipe(Effect.withTracer(tracer));
-    assert.deepStrictEqual(
-      yield* sql`SELECT space,memory_id,reserve_bytes,reserve_keys FROM memory_identity_ledger ORDER BY space,memory_id`,
-      expected.sort((a, b) => a.space.localeCompare(b.space) || a.memory_id.localeCompare(b.memory_id)),
-    );
-    const revisionReads = statements.filter(
-      (query) =>
-        /FROM memory_revisions r LEFT JOIN memory_payloads p/.test(query) &&
-        !query.includes("ORDER BY r.revision_id"),
-    );
-    const lineageReads = statements.filter(
-      (query) =>
-        /SELECT .*record_json FROM memory_import_lineage/.test(query) &&
-        !query.includes("ORDER BY kind,key"),
-    );
-    assert.isAbove(revisionReads.length, 1);
-    assert.isAbove(lineageReads.length, 1);
-    assert.isBelow(revisionReads.length, 10);
-    assert.isBelow(lineageReads.length, 10);
-  }).pipe(Effect.provide(layer)),
+      const revisionReads = statements.filter(
+        (query) =>
+          /FROM memory_revisions r LEFT JOIN memory_payloads p/.test(query) &&
+          !query.includes("ORDER BY r.revision_id"),
+      );
+      const lineageReads = statements.filter(
+        (query) =>
+          /SELECT .*record_json FROM memory_import_lineage/.test(query) &&
+          !query.includes("ORDER BY kind,key"),
+      );
+      assert.isAbove(revisionReads.length, 1);
+      assert.isAbove(lineageReads.length, 1);
+      assert.isBelow(revisionReads.length, 10);
+      assert.isBelow(lineageReads.length, 10);
+    }).pipe(Effect.provide(layer)),
 );
 const decodeOperation = Schema.decodeUnknownSync(M.MemoryOperation);
 const upsert = (n: number) =>
