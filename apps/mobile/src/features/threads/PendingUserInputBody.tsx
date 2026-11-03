@@ -67,7 +67,13 @@ function proseDirectionStyle(text: string, setDirection: TextDirection | undefin
 
 export function PendingUserInputBody(props: BodyProps) {
   const setDirection = markdownProseDirection(
-    props.pendingUserInput.questions.map((q) => q.question).join("\n"),
+    props.pendingUserInput.questions
+      .flatMap((question) => [
+        question.header,
+        question.question,
+        ...question.options.flatMap((option) => [option.label, option.description ?? ""]),
+      ])
+      .join(" "),
   );
   const canRespond = props.pendingUserInput.responseCapability !== "not_resumable";
   const responseDisabled =

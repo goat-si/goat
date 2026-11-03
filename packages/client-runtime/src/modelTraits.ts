@@ -7,7 +7,7 @@ import {
 } from "@goat/shared/model";
 import { REASONING_EFFORT_OPTION_IDS } from "./state/threadExecution.ts";
 
-export const REASONING_SELECT_DESCRIPTOR_IDS: ReadonlySet<string> = new Set([
+const REASONING_SELECT_DESCRIPTOR_IDS: ReadonlySet<string> = new Set([
   ...REASONING_EFFORT_OPTION_IDS,
   "thinking",
 ]);
