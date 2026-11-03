@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off -- fixtures use an isolated temporary record directory.
+import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -697,9 +698,122 @@ it.effect("scoped stderr maintenance truncates oversized logs and preserves smal
       if (large === undefined || small === undefined) return;
       yield* Effect.promise(() => NodeFSP.writeFile(large, Buffer.alloc(4 * 1024 * 1024 + 1)));
       yield* Effect.promise(() => NodeFSP.writeFile(small, "keep this"));
+      let changed: () => void = () => {};
+      const changedPromise = new Promise<void>((resolve) => {
+        changed = resolve;
+      });
+      const watcher = NodeFS.watch(large, () => changed());
+      watcher.on("error", () => {});
+      yield* Effect.addFinalizer(() => Effect.sync(() => watcher.close()));
       yield* TestClock.adjust("30 seconds");
+      yield* Effect.promise(() => changedPromise);
       assert.equal((yield* Effect.promise(() => NodeFSP.stat(large))).size, 0);
       assert.equal(yield* Effect.promise(() => NodeFSP.readFile(small, "utf8")), "keep this");
     }),
   ),
+);
+
+it.effect("signals its live child before consulting the process table", () =>
+  withRecordDirectory((directory) =>
+    Effect.gen(function* () {
+      const calls: string[] = [];
+      let signalled = false;
+      const service = yield* makeDetachedAppServers({
+        stateDir: directory,
+        bootId: Effect.succeed("boot-one"),
+        processTable: {
+          ...processTable([]),
+          groupMembers: () =>
+            Effect.sync(() => {
+              calls.push("ps");
+              return [];
+            }),
+        },
+        socketAccepts: () => Effect.succeed(false),
+        signalGroup: () =>
+          Effect.sync(() => {
+            calls.push("fallback");
+          }),
+        socketDirectory: Effect.succeed("/tmp/goat-test/codex"),
+        launch: () =>
+          Effect.succeed({
+            pid: 4321,
+            exited: Effect.never,
+            signalIfAlive: () => {
+              calls.push("child");
+              signalled = true;
+              return true;
+            },
+          }),
+        connect: () =>
+          Effect.succeed({ incoming: Stream.never, send: () => Effect.void, closed: Effect.never }),
+      });
+      yield* service.open(openInput).pipe(Effect.scoped);
+      assert.isTrue(signalled);
+      assert.equal(calls[0], "child");
+      assert.notInclude(calls, "fallback");
+    }),
+  ),
+);
+
+it.effect("an exited leader probes before the final process read and signals immediately", () =>
+  withRecordDirectory((directory) =>
+    Effect.gen(function* () {
+      const calls: string[] = [];
+      let socket = "";
+      let gone = false;
+      const service = yield* makeDetachedAppServers({
+        stateDir: directory,
+        bootId: Effect.succeed("boot-one"),
+        processTable: {
+          ...processTable([]),
+          groupMembers: () =>
+            Effect.sync(() => {
+              calls.push("ps");
+              return gone ? [] : [{ pid: 4322, pgid: 4321, argv: socket }];
+            }),
+        },
+        socketAccepts: () =>
+          Effect.sync(() => {
+            calls.push("probe");
+            return false;
+          }),
+        signalGroup: () =>
+          Effect.sync(() => {
+            assert.equal(calls.at(-1), "ps");
+            calls.push("signal");
+            gone = true;
+          }),
+        socketDirectory: Effect.succeed("/tmp/goat-test/codex"),
+        launch: () =>
+          Effect.succeed({
+            pid: 4321,
+            exited: Effect.never,
+            signalIfAlive: () => {
+              calls.push("exited");
+              return false;
+            },
+          }),
+        connect: () =>
+          Effect.succeed({ incoming: Stream.never, send: () => Effect.void, closed: Effect.never }),
+      });
+      yield* Effect.gen(function* () {
+        socket = (yield* service.open(openInput)).record.socketPath;
+      }).pipe(Effect.scoped);
+      assert.deepEqual(calls.slice(0, 4), ["exited", "probe", "ps", "signal"]);
+    }),
+  ),
+);
+
+it.effect("does not verify a socket owner missing from the final process-table read", () =>
+  Effect.gen(function* () {
+    const result = yield* classifyDetachedAppServer(record, {
+      processTable: {
+        groupMembers: () => Effect.succeed([]),
+        ownerOfSocket: () => Effect.succeed({ pid: 1235, pgid: 1234, argv: socketPath }),
+      },
+      socketAccepts: () => Effect.succeed(true),
+    });
+    assert.equal(result.type, "unverifiable");
+  }),
 );

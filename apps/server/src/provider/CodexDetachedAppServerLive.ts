@@ -201,7 +201,20 @@ const layer = Layer.effect(
       child.once("error", () => Deferred.doneUnsafe(exited, Effect.succeed(null)));
       child.unref();
       if (child.pid === undefined) return yield* fail("Codex app-server did not start.");
-      return { pid: child.pid, exited: Deferred.await(exited) };
+      return {
+        pid: child.pid,
+        exited: Deferred.await(exited),
+        signalIfAlive: (signal: "SIGTERM" | "SIGKILL") => {
+          if (child.exitCode !== null || child.signalCode !== null || child.pid === undefined)
+            return false;
+          try {
+            process.kill(-child.pid, signal);
+          } catch (cause) {
+            if ((cause as NodeJS.ErrnoException).code !== "ESRCH") throw cause;
+          }
+          return true;
+        },
+      };
     });
 
     const service = yield* makeDetachedAppServers({

@@ -114,31 +114,42 @@ export const classifyDetachedAppServer = Effect.fn("CodexDetachedAppServers.clas
   dependencies: {
     readonly processTable: DetachedProcessTable;
     readonly socketAccepts: (path: string) => Effect.Effect<boolean, CodexDetachedAppServerError>;
+    readonly onVerified?: (pgid: number) => void;
   },
 ): Effect.fn.Return<DetachedClassification> {
   if (record.pgid === undefined) return { type: "unverifiable" };
   const pgid = record.pgid;
   return yield* Effect.gen(function* () {
-    const members = yield* dependencies.processTable.groupMembers(pgid);
     const accepting = yield* dependencies.socketAccepts(record.socketPath);
     const owner = accepting
       ? yield* dependencies.processTable.ownerOfSocket(record.socketPath)
       : undefined;
-    const matching = members.filter((member) => member.argv.includes(record.socketPath));
-    if (accepting) {
-      if (!owner || !owner.argv.includes(record.socketPath))
+    if (owner && owner.pgid !== pgid) {
+      const recordedMembers = yield* dependencies.processTable.groupMembers(pgid);
+      if (recordedMembers.some((member) => member.argv.includes(record.socketPath)))
         return { type: "unverifiable" } as const;
-      if (matching.length > 0 && owner.pgid !== record.pgid)
-        return { type: "unverifiable" } as const;
-      return { type: "verified", pgid: owner.pgid, members } as const;
     }
-    if (matching.length > 0) return { type: "verified", pgid, members } as const;
-    if (members.length === 0) return { type: "gone" } as const;
-    // A live leader without our socket path means the id now belongs to another process group.
-    if (members.some((member) => member.pid === record.pgid)) return { type: "mismatch" } as const;
-    // Without the socket path nothing proves these belong to our spawn (the id may have been reused
-    // after our group ended), so they are reported, never signalled.
-    return { type: "gone", possibleLeftovers: members.map((member) => member.pid) } as const;
+    return yield* dependencies.processTable.groupMembers(owner?.pgid ?? pgid).pipe(
+      Effect.map((members) => {
+        const matching = members.filter((member) => member.argv.includes(record.socketPath));
+        if (accepting) {
+          if (!owner || !owner.argv.includes(record.socketPath))
+            return { type: "unverifiable" } as const;
+          if (!matching.some((member) => member.pid === owner.pid))
+            return { type: "unverifiable" } as const;
+          dependencies.onVerified?.(owner.pgid);
+          return { type: "verified", pgid: owner.pgid, members } as const;
+        }
+        if (matching.length > 0) {
+          dependencies.onVerified?.(pgid);
+          return { type: "verified", pgid, members } as const;
+        }
+        if (members.length === 0) return { type: "gone" } as const;
+        if (members.some((member) => member.pid === record.pgid))
+          return { type: "mismatch" } as const;
+        return { type: "gone", possibleLeftovers: members.map((member) => member.pid) } as const;
+      }),
+    );
   }).pipe(Effect.orElseSucceed(() => ({ type: "unverifiable" }) as const));
 });
 
@@ -153,6 +164,7 @@ export interface DetachedLaunchInput {
 
 export interface DetachedLaunched {
   readonly pid: number;
+  readonly signalIfAlive?: (signal: "SIGTERM" | "SIGKILL") => boolean;
   /** Completes with the exit code once the launched process exits. */
   readonly exited: Effect.Effect<number | null>;
 }
@@ -227,6 +239,8 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
   deps: DetachedAppServersDependencies,
 ) {
   const directory = NodePath.join(deps.stateDir, RECORD_DIRECTORY);
+  const runSync = Effect.runSyncWith(yield* Effect.context<never>());
+  const owned = new Map<string, DetachedLaunched>();
   const shuttingDown = yield* Ref.make(false);
   const blocked = yield* Ref.make(new Map<string, DetachedAppServerRecord>());
   /** Set when a record cannot be attributed to a provider instance or the records cannot be listed. */
@@ -297,11 +311,26 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
       }
     });
 
-  const classify = (record: DetachedAppServerRecord) =>
+  const classify = (record: DetachedAppServerRecord, signal?: "SIGTERM" | "SIGKILL") =>
     classifyDetachedAppServer(record, {
       processTable: deps.processTable,
       socketAccepts: deps.socketAccepts,
+      ...(signal === undefined
+        ? {}
+        : {
+            onVerified: (pgid: number) => {
+              // Without pidfd on macOS, reuse still requires a new group leader in this final read-to-signal window.
+              runSync(deps.signalGroup(pgid, signal).pipe(Effect.ignore));
+            },
+          }),
     });
+
+  const signalOwned = (record: DetachedAppServerRecord, signal: "SIGTERM" | "SIGKILL") =>
+    Effect.try({
+      try: () => owned.get(record.name)?.signalIfAlive?.(signal) ?? false,
+      catch: (cause) =>
+        new CodexDetachedAppServerError({ detail: "Could not signal Codex app-server.", cause }),
+    }).pipe(Effect.orElseSucceed(() => false));
 
   const settledOrGone = (record: DetachedAppServerRecord) =>
     classify(record).pipe(
@@ -343,12 +372,13 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
     for (const signal of ["SIGTERM", "SIGKILL"] as const) {
       // Re-verified before every signal: the group may have ended and its id been reused meanwhile.
       const current: DetachedAppServerRecord = { ...record, pgid };
-      const classification = yield* classify(current);
-      if (classification.type === "gone" || classification.type === "mismatch")
-        return yield* finishGone(current, classification);
-      if (classification.type === "unverifiable") return yield* markBlocked(current);
-      pgid = classification.pgid;
-      yield* deps.signalGroup(pgid, signal).pipe(Effect.ignore);
+      if (!(yield* signalOwned(current, signal))) {
+        const classification = yield* classify(current, signal);
+        if (classification.type === "gone" || classification.type === "mismatch")
+          return yield* finishGone(current, classification);
+        if (classification.type === "unverifiable") return yield* markBlocked(current);
+        pgid = classification.pgid;
+      }
       if (yield* awaitGone({ ...record, pgid })) return yield* finishGone(record, { type: "gone" });
     }
     return yield* markBlocked({ ...record, pgid });
@@ -440,20 +470,13 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
     record: DetachedAppServerRecord,
   ) {
     if (!(yield* Ref.get(shuttingDown))) return { outcome: yield* terminate(record) };
-    // Within the launcher's deadline: one process-table read, and a signal only to a group that
-    // still carries this record's socket path. Anything else is left to the next startup.
-    const pgid = record.pgid;
-    const members =
-      pgid === undefined
-        ? []
-        : yield* deps.processTable.groupMembers(pgid).pipe(
-            Effect.timeoutOption("1 second"),
-            Effect.map((result) => (result._tag === "Some" ? result.value : [])),
-            Effect.orElseSucceed(() => []),
-          );
-    if (pgid === undefined || !members.some((member) => member.argv.includes(record.socketPath)))
-      return { outcome: "blocked" as const };
-    yield* deps.signalGroup(pgid, "SIGTERM").pipe(Effect.ignore);
+    if (!(yield* signalOwned(record, "SIGTERM"))) {
+      const classification = yield* classify(record, "SIGTERM").pipe(
+        Effect.timeoutOption("1 second"),
+      );
+      if (classification._tag === "None" || classification.value.type !== "verified")
+        return { outcome: "blocked" as const };
+    }
     const exists = yield* tryIo("Could not check a Codex process record.", () =>
       NodeFSP.access(paths(record.name).record).then(
         () => true,
@@ -508,7 +531,17 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
       stderrPath: files.stderr,
     }).pipe(Effect.tapError(() => cleanupRecord(spawning).pipe(Effect.ignore)));
     const running: DetachedAppServerRecord = { ...spawning, pgid: launched.pid, state: "running" };
-    yield* Effect.addFinalizer(() => close(running).pipe(Effect.ignore));
+    owned.set(running.name, launched);
+    yield* Effect.addFinalizer(() =>
+      close(running).pipe(
+        Effect.ignore,
+        Effect.ensuring(
+          Effect.sync(() => {
+            owned.delete(running.name);
+          }),
+        ),
+      ),
+    );
     yield* Effect.sleep("30 seconds").pipe(
       Effect.andThen(
         truncateStderr(files.stderr).pipe(Effect.repeat(Schedule.spaced("30 seconds"))),
