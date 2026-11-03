@@ -110,6 +110,17 @@ it.live("matches expiry select options by value or text", () =>
   ),
 );
 
+it.live("masks alternate expiry representations before setting them", () =>
+  withForm(
+    '<input autocomplete="cc-number"><input id="expiry" type="month" autocomplete="cc-exp"><input autocomplete="cc-csc">',
+    async ({ fill, read, masked }) => {
+      expect(await fill()).toMatchObject({ verdict: "confirmed" });
+      expect(await read("#expiry")).toBe("2029-01");
+      expect(masked).toEqual(expect.arrayContaining(["2029-01", "29"]));
+    },
+  ),
+);
+
 it.live("reports the exact expiry fields set before an unmatched option stops delivery", () =>
   withForm(
     '<input id="number" autocomplete="cc-number"><select id="month" autocomplete="cc-exp-month"><option value="01">January</option></select><select id="year" autocomplete="cc-exp-year"><option value="2030">2030</option></select><input id="cvc" autocomplete="cc-csc">',
