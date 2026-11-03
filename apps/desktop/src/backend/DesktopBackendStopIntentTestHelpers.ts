@@ -4,6 +4,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
 import * as Scope from "effect/Scope";
 import * as Schema from "effect/Schema";
@@ -101,6 +102,7 @@ export function registerStopIntentTests({
           const allowRename = yield* Deferred.make<void>();
           const released = yield* Deferred.make<void>();
           const renameFinished = yield* Deferred.make<void>();
+          const removed = yield* Deferred.make<void>();
           const warned = yield* Deferred.make<void>();
           const exit = yield* Deferred.make<
             ChildProcessSpawner.ExitCode,
@@ -198,7 +200,12 @@ export function registerStopIntentTests({
               remove: (name) =>
                 Effect.sync(() => {
                   files.delete(name);
-                }),
+                }).pipe(
+                  Effect.andThen(
+                    name === path ? Deferred.succeed(removed, undefined) : Effect.void,
+                  ),
+                  Effect.asVoid,
+                ),
             },
           });
           yield* instance.start;
@@ -229,6 +236,7 @@ export function registerStopIntentTests({
             assert.equal(written.reason, "update-install");
             assert.equal(written.version, 1);
             assert.isString(written.requestedAt);
+            if (scenario !== "unobserved") yield* Deferred.await(removed);
             assert.equal(files.has(path), scenario === "unobserved");
           } else {
             assert.isUndefined(atRelease);
@@ -251,5 +259,201 @@ export function registerStopIntentTests({
           }
         }),
       ),
+  );
+  it.effect.each(["settled", "timeout"] as const)(
+    "exit observation failure waits for a pending intent before release: %s",
+    (outcome) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const ready = yield* Deferred.make<void>();
+          const renameStarted = yield* Deferred.make<void>();
+          const allowRename = yield* Deferred.make<void>();
+          const exit = yield* Deferred.make<
+            ChildProcessSpawner.ExitCode,
+            PlatformError.PlatformError
+          >();
+          const killed = yield* Deferred.make<void>();
+          const paused = yield* Deferred.make<void>();
+          const failure = PlatformError.systemError({
+            _tag: "Unknown",
+            module: "ChildProcess",
+            method: "exitCode",
+            cause: new Error("status failed"),
+          });
+          const spawnerLayer = Layer.succeed(
+            ChildProcessSpawner.ChildProcessSpawner,
+            ChildProcessSpawner.make(() =>
+              Effect.gen(function* () {
+                yield* Scope.addFinalizer(
+                  yield* Scope.Scope,
+                  Deferred.succeed(killed, undefined).pipe(Effect.asVoid),
+                );
+                return makeProcess({ exitCode: Deferred.await(exit) });
+              }),
+            ),
+          );
+          const instance = yield* makeTestInstance({
+            spawnerLayer,
+            config: {
+              ...baseConfig,
+              bootstrap: { ...baseConfig.bootstrap, desktopStopIntentPath: "/intent.json" },
+            },
+            onReady: Deferred.succeed(ready, undefined).pipe(Effect.asVoid),
+            onRecoveryPaused: () => Deferred.succeed(paused, undefined).pipe(Effect.asVoid),
+            fileSystem: {
+              makeDirectory: () => Effect.void,
+              writeFileString: () => Effect.void,
+              rename: () =>
+                Deferred.succeed(renameStarted, undefined).pipe(
+                  Effect.andThen(Deferred.await(allowRename)),
+                ),
+            },
+          });
+          yield* instance.start;
+          yield* Deferred.await(ready);
+          const stop = yield* instance
+            .stop("quit")
+            .pipe(Effect.forkChild({ startImmediately: true }));
+          yield* Deferred.await(renameStarted);
+          yield* Deferred.fail(exit, failure);
+          yield* Deferred.await(paused);
+          const earlyKill = yield* Deferred.await(killed).pipe(
+            Effect.timeoutOption("1 millis"),
+            Effect.forkChild({ startImmediately: true }),
+          );
+          yield* TestClock.adjust("1 millis");
+          const result = yield* Fiber.join(earlyKill);
+          if (outcome === "timeout") {
+            yield* TestClock.adjust("999 millis");
+            yield* Deferred.await(killed);
+          }
+          yield* Deferred.succeed(allowRename, undefined);
+          yield* Fiber.join(stop);
+          assert.isTrue(Option.isNone(result));
+        }),
+      ),
+  );
+
+  it.effect("late intent rename is removed after the observed exit", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const ready = yield* Deferred.make<void>();
+        const renameStarted = yield* Deferred.make<void>();
+        const allowRename = yield* Deferred.make<void>();
+        const removed = yield* Deferred.make<void>();
+        const renamed = yield* Deferred.make<void>();
+        const exit = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
+        const files = new Map<string, string>();
+        const path = "/intent.json";
+        const spawnerLayer = Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make(() =>
+            Effect.gen(function* () {
+              yield* Scope.addFinalizer(
+                yield* Scope.Scope,
+                Deferred.succeed(exit, ChildProcessSpawner.ExitCode(0)).pipe(Effect.asVoid),
+              );
+              return makeProcess({ exitCode: Deferred.await(exit) });
+            }),
+          ),
+        );
+        const instance = yield* makeTestInstance({
+          spawnerLayer,
+          config: {
+            ...baseConfig,
+            bootstrap: { ...baseConfig.bootstrap, desktopStopIntentPath: path },
+          },
+          onReady: Deferred.succeed(ready, undefined).pipe(Effect.asVoid),
+          fileSystem: {
+            makeDirectory: () => Effect.void,
+            writeFileString: (name, value) =>
+              Effect.sync(() => {
+                files.set(name, value);
+              }),
+            rename: (from, to) =>
+              Deferred.succeed(renameStarted, undefined).pipe(
+                Effect.andThen(Deferred.await(allowRename)),
+                Effect.andThen(
+                  Effect.sync(() => {
+                    const value = files.get(from);
+                    if (value !== undefined) files.set(to, value);
+                    files.delete(from);
+                  }),
+                ),
+                Effect.andThen(Deferred.succeed(renamed, undefined)),
+                Effect.asVoid,
+              ),
+            remove: (name) =>
+              Effect.sync(() => {
+                files.delete(name);
+              }).pipe(
+                Effect.andThen(name === path ? Deferred.succeed(removed, undefined) : Effect.void),
+                Effect.asVoid,
+              ),
+          },
+        });
+        yield* instance.start;
+        yield* Deferred.await(ready);
+        const stop = yield* instance
+          .stop("quit")
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Deferred.await(renameStarted);
+        yield* TestClock.adjust("1 second");
+        yield* Fiber.join(stop);
+        yield* Deferred.succeed(allowRename, undefined);
+        yield* Deferred.await(renamed);
+        yield* Deferred.await(removed);
+        assert.isFalse(files.has(path));
+      }),
+    ),
+  );
+
+  it.effect("stalled intent removal does not block recovery scheduling", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const ready = yield* Deferred.make<void>();
+        const exit = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
+        const removing = yield* Deferred.make<void>();
+        const allowRemove = yield* Deferred.make<void>();
+        const scheduled = yield* Deferred.make<void>();
+        const spawnerLayer = Layer.succeed(
+          ChildProcessSpawner.ChildProcessSpawner,
+          ChildProcessSpawner.make(() =>
+            Effect.succeed(makeProcess({ exitCode: Deferred.await(exit) })),
+          ),
+        );
+        const instance = yield* makeTestInstance({
+          spawnerLayer,
+          config: {
+            ...baseConfig,
+            bootstrap: { ...baseConfig.bootstrap, desktopStopIntentPath: "/intent.json" },
+          },
+          onReady: Deferred.succeed(ready, undefined).pipe(Effect.asVoid),
+          backendOutputLog: {
+            persistFailure: () => Deferred.succeed(scheduled, undefined).pipe(Effect.asVoid),
+          },
+          fileSystem: {
+            remove: () =>
+              Deferred.succeed(removing, undefined).pipe(
+                Effect.andThen(Deferred.await(allowRemove)),
+              ),
+          },
+        });
+        yield* instance.start;
+        yield* Deferred.await(ready);
+        yield* Deferred.succeed(exit, ChildProcessSpawner.ExitCode(1));
+        yield* Deferred.await(removing);
+        const observed = yield* Deferred.await(scheduled).pipe(
+          Effect.timeoutOption("1 millis"),
+          Effect.forkChild({ startImmediately: true }),
+        );
+        yield* TestClock.adjust("1 millis");
+        const result = yield* Fiber.join(observed);
+        const restartScheduled = (yield* instance.snapshot).restartScheduled;
+        yield* Deferred.succeed(allowRemove, undefined);
+        assert.isTrue(Option.isSome(result));
+        assert.isTrue(restartScheduled);
+      }),
+    ),
   );
 }

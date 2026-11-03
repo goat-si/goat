@@ -534,7 +534,7 @@ export const writeBackendStopIntent = Effect.fn("desktop.backendInstance.writeSt
     run: {
       readonly intentPath: string | undefined;
       readonly pid: Option.Option<number>;
-      readonly intentWritten: Deferred.Deferred<void>;
+      readonly intent: BackendStopIntentHandle;
     },
     reason: DesktopStopReason,
     fs: FileSystem.FileSystem,
@@ -544,14 +544,15 @@ export const writeBackendStopIntent = Effect.fn("desktop.backendInstance.writeSt
     const input = {
       path: run.intentPath,
       pid: run.pid,
-      done: run.intentWritten,
+      intent: run.intent,
       reason,
       fs,
       recordStop,
       bounded,
     };
     if (input.path === undefined) {
-      yield* Deferred.succeed(input.done, undefined);
+      yield* Deferred.succeed(input.intent.written, undefined);
+      yield* Deferred.succeed(input.intent.settled, undefined);
       return;
     }
     const path = input.path;
@@ -573,10 +574,13 @@ export const writeBackendStopIntent = Effect.fn("desktop.backendInstance.writeSt
       yield* input.fs.rename(temporary, path);
     });
     const fiber = yield* Effect.forkDetach(
-      write.pipe(Effect.onError(() => input.fs.remove(temporary).pipe(Effect.ignore))),
+      write.pipe(
+        Effect.onError(() => input.fs.remove(temporary).pipe(Effect.ignore)),
+        Effect.ensuring(Deferred.succeed(input.intent.settled, undefined)),
+      ),
     );
     const result = yield* Fiber.await(fiber).pipe(Effect.timeoutOption(INTENT_WRITE_TIMEOUT));
-    yield* Deferred.succeed(input.done, undefined);
+    yield* Deferred.succeed(input.intent.written, undefined);
     if (Option.isNone(result) || result.value._tag === "Failure") {
       const warning = input.recordStop({
         message: "backend stop intent not written",
@@ -589,11 +593,37 @@ export const writeBackendStopIntent = Effect.fn("desktop.backendInstance.writeSt
   },
 );
 
-export const waitForBackendStopIntent = (done: Deferred.Deferred<void>) =>
-  Deferred.await(done).pipe(Effect.timeoutOption(INTENT_WRITE_TIMEOUT), Effect.asVoid);
+export interface BackendStopIntentHandle {
+  readonly requested: Ref.Ref<boolean>;
+  readonly written: Deferred.Deferred<void>;
+  readonly settled: Deferred.Deferred<void>;
+}
 
-export const removeBackendStopIntent = (fs: FileSystem.FileSystem, path: string | undefined) =>
-  path === undefined ? Effect.void : fs.remove(path).pipe(Effect.ignore);
+export const waitForBackendStopIntent = (intent: BackendStopIntentHandle) =>
+  Ref.get(intent.requested).pipe(
+    Effect.flatMap((requested) =>
+      requested
+        ? Deferred.await(intent.written).pipe(
+            Effect.timeoutOption(INTENT_WRITE_TIMEOUT),
+            Effect.asVoid,
+          )
+        : Effect.void,
+    ),
+    Effect.interruptible,
+  );
+
+export const removeBackendStopIntent = (
+  fs: FileSystem.FileSystem,
+  path: string | undefined,
+  intent: BackendStopIntentHandle,
+) =>
+  path === undefined
+    ? Effect.void
+    : Ref.get(intent.requested).pipe(
+        Effect.flatMap((requested) => (requested ? Deferred.await(intent.settled) : Effect.void)),
+        Effect.andThen(fs.remove(path).pipe(Effect.ignore)),
+        Effect.andThen(fs.remove(`${path}.tmp`).pipe(Effect.ignore)),
+      );
 
 export const recordBackendStopRequest = (
   pid: Option.Option<number>,
@@ -613,7 +643,7 @@ export interface ActiveBackendRun {
   readonly id: number;
   readonly scope: Scope.Closeable;
   readonly spawnReady: Deferred.Deferred<void>;
-  readonly intentWritten: Deferred.Deferred<void>;
+  readonly intent: BackendStopIntentHandle;
   readonly intentPath: string | undefined;
   readonly boundedStop: Ref.Ref<boolean>;
   readonly fiber: Option.Option<Fiber.Fiber<void, never>>;

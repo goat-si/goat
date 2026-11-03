@@ -8,6 +8,7 @@ import {
   type PreflightFailure,
   writeBackendStopIntent,
   removeBackendStopIntent,
+  waitForBackendStopIntent,
   recordBackendStopRequest,
   initialBackendManagerState,
   type ActiveBackendRun,
@@ -336,9 +337,15 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
         const runScope = yield* Scope.make("sequential");
         const spawnReady = yield* Deferred.make<void>();
         const boundedStop = yield* Ref.make(false);
-        const intentWritten = yield* Deferred.make<void>();
-        if (config.value.bootstrap.desktopStopIntentPath === undefined)
-          yield* Deferred.succeed(intentWritten, undefined);
+        const intent = {
+          requested: yield* Ref.make(false),
+          written: yield* Deferred.make<void>(),
+          settled: yield* Deferred.make<void>(),
+        };
+        if (config.value.bootstrap.desktopStopIntentPath === undefined) {
+          yield* Deferred.succeed(intent.written, undefined);
+          yield* Deferred.succeed(intent.settled, undefined);
+        }
         const runId = yield* Ref.modify(state, (latest) => [
           latest.nextRunId,
           {
@@ -347,7 +354,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
               id: latest.nextRunId,
               scope: runScope,
               spawnReady,
-              intentWritten,
+              intent,
               intentPath: config.value.bootstrap.desktopStopIntentPath,
               boundedStop,
               fiber: Option.none(),
@@ -372,11 +379,6 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
           reason: string,
           exitCode?: number,
         ) {
-          if (observedExit || startedPid === undefined)
-            yield* removeBackendStopIntent(
-              fileSystem,
-              config.value.bootstrap.desktopStopIntentPath,
-            );
           const stateDirOwned = exitCode === SERVER_EXIT_CODE_STATE_DIR_OWNED;
           const databaseAhead = exitCode === SERVER_EXIT_CODE_DATABASE_AHEAD;
           yield* mutex.withPermits(1)(
@@ -447,6 +449,15 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
                   ] as const;
                 },
               );
+
+              if (observedExit || startedPid === undefined)
+                yield* Effect.forkDetach(
+                  removeBackendStopIntent(
+                    fileSystem,
+                    config.value.bootstrap.desktopStopIntentPath,
+                    intent,
+                  ),
+                );
 
               if (!isCurrentRun && observedExit && startedPid !== undefined) {
                 const write = backendOutputLog.recordStop({
@@ -661,12 +672,7 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
               ),
             ),
         }).pipe(
-          Effect.ensuring(
-            Deferred.succeed(spawnReady, undefined).pipe(
-              Effect.andThen(Deferred.succeed(intentWritten, undefined)),
-              Effect.asVoid,
-            ),
-          ),
+          Effect.ensuring(Deferred.succeed(spawnReady, undefined).pipe(Effect.asVoid)),
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
           Effect.provideService(HttpClient.HttpClient, httpClient),
           Scope.provide(runScope),
@@ -674,7 +680,12 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
             onFailure: (error) => finalizeRun(error.message),
             onSuccess: (exit) => finalizeRun(exit.reason, Option.getOrUndefined(exit.code)),
           }),
-          Effect.ensuring(Scope.close(runScope, Exit.void).pipe(Effect.ignore)),
+          Effect.ensuring(
+            waitForBackendStopIntent(intent).pipe(
+              Effect.andThen(Scope.close(runScope, Exit.void)),
+              Effect.ignore,
+            ),
+          ),
         );
 
         // A pending spawn must outlive instance teardown to release any late child.
@@ -772,6 +783,9 @@ export const makeBackendInstance = Effect.fn("makeBackendInstance")(function* (
     recoveryStatus = "stopped";
     const locked = Effect.gen(function* () {
       const atNanos = yield* Clock.monotonicTimeNanos;
+      const currentRun = Option.getOrUndefined((yield* Ref.get(state)).active);
+      if (currentRun && !currentRun.exitObserved && !currentRun.stopRequested)
+        yield* Ref.set(currentRun.intent.requested, true);
       const result = yield* Ref.modify(state, (latest) => {
         const active = Option.map(latest.active, (run) =>
           run.exitObserved || run.stopRequested

@@ -3,7 +3,11 @@ import * as Deferred from "effect/Deferred";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Scope from "effect/Scope";
-import { BACKEND_SPAWN_SETTLE_TIMEOUT, waitForBackendStopIntent } from "./DesktopBackendProcess.ts";
+import {
+  BACKEND_SPAWN_SETTLE_TIMEOUT,
+  waitForBackendStopIntent,
+  type BackendStopIntentHandle,
+} from "./DesktopBackendProcess.ts";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -43,7 +47,7 @@ export const closeRun = (
   run: {
     readonly scope: Scope.Closeable;
     readonly spawnReady: Deferred.Deferred<void>;
-    readonly intentWritten: Deferred.Deferred<void>;
+    readonly intent: BackendStopIntentHandle;
     readonly fiber: Option.Option<Fiber.Fiber<void, never>>;
   },
   onSpawnPending: Effect.Effect<void>,
@@ -58,7 +62,7 @@ export const closeRun = (
       Effect.timeoutOption(BACKEND_SPAWN_SETTLE_TIMEOUT),
     );
     if (Option.isNone(settled)) yield* onSpawnPending;
-    yield* waitForBackendStopIntent(run.intentWritten);
+    yield* waitForBackendStopIntent(run.intent);
     yield* Scope.close(run.scope, Exit.void);
     if (Option.isSome(settled)) yield* waitForFiber;
   });
