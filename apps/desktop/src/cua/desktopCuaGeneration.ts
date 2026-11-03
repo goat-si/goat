@@ -1,3 +1,10 @@
+import * as Schema from "effect/Schema";
+
+export class DesktopCuaGenerationExhausted extends Schema.TaggedError<DesktopCuaGenerationExhausted>()(
+  "DesktopCuaGenerationExhausted",
+  {},
+) {}
+
 let generation = 0;
 
 export const nextDesktopCuaGeneration = () => {

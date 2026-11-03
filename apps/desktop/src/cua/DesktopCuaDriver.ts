@@ -40,7 +40,7 @@ import {
 import { ComputerUseHelperError, helperBundle, type HelperFeatures } from "./ComputerUseHelper.ts";
 import { managerPerChannel } from "./ComputerUseHelperService.ts";
 import { makeStopFirstRequests } from "./desktopCuaRequests.ts";
-import { nextDesktopCuaGeneration } from "./desktopCuaGeneration.ts";
+import { DesktopCuaGenerationExhausted, nextDesktopCuaGeneration } from "./desktopCuaGeneration.ts";
 import { cuaDriverReports } from "./desktopCuaReports.ts";
 import { makeAppsRequestHandler } from "./desktopCuaApps.ts";
 import { makeHelperFollowers } from "./helperFollowers.ts";
@@ -351,7 +351,7 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     const manifestPath = yield* Effect.tryPromise(() => native.prepareManifest(manifestInput));
     if (closed) return undefined;
     const generation = nextDesktopCuaGeneration();
-    if (generation === undefined) return undefined;
+    if (generation === undefined) return yield* new DesktopCuaGenerationExhausted();
     let host: NativeHost;
     if (engine.kind === "helper") {
       helperSeen = true;
@@ -434,7 +434,6 @@ export const make = Effect.fn("desktop.cua.make")(function* (
     );
     return entry;
   });
-
   // check_permissions only reports booleans, so the grants count as working once the
   // restarted driver also reads a GOAT window's accessibility tree and captures its pixels.
   /** The generation the running check spawned; serialized by the mutex. */

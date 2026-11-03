@@ -17,6 +17,7 @@ import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
+import * as Scheduler from "effect/Scheduler";
 import * as Stream from "effect/Stream";
 import * as ServerSettings from "../serverSettings.ts";
 import * as DesktopTelemetryReceiver from "../resourceTelemetry/DesktopTelemetryReceiver.ts";
@@ -69,7 +70,11 @@ const makeService = Effect.fnUntraced(function* (
       ),
     }),
   );
-  return { service };
+  return {
+    service,
+    setEnabled: (value: boolean) =>
+      Ref.set(enabled, value).pipe(Effect.andThen(PubSub.publish(changes, value))),
+  };
 });
 
 const fenceFixture = Effect.fn("CuaDriverTest.fenceFixture")(function* (
@@ -100,6 +105,402 @@ const fenceFixture = Effect.fn("CuaDriverTest.fenceFixture")(function* (
   yield* service.acquire;
   yield* Deferred.await(host.watching);
   return { manifest, grants };
+});
+
+const generationFixture = Effect.fn("CuaDriverTest.generationFixture")(function* (
+  initialGeneration: number | undefined,
+  stoppedGeneration: number | undefined,
+  laterStopGeneration?: number,
+  laterReadyGeneration?: number,
+) {
+  const reports = yield* PubSub.unbounded<DesktopCuaDriverReport>();
+  const stopRequested = yield* Deferred.make<void>();
+  const releaseStop = yield* Deferred.make<void>();
+  const firstSupported = yield* Deferred.make<void>();
+  const secondProbeStarted = yield* Deferred.make<void>();
+  const releaseSecondProbe = yield* Deferred.make<void>();
+  const secondProbeFinished = yield* Deferred.make<void>();
+  const thirdSupported = yield* Deferred.make<void>();
+  const healthy = {
+    status: "healthy" as const,
+    lastSampleAt: Option.none(),
+    lastError: Option.none(),
+  };
+  let generation = initialGeneration;
+  let firstId = "";
+  let starts = 0;
+  let probes = 0;
+  let supported = false;
+  const tools = {
+    tools: [{ name: "get_browser_state", inputSchema: { properties: { origin_scope: {} } } }],
+  };
+  const factory = yield* CuaDriver.makeDesktopHostFactory().pipe(
+    Effect.provide(
+      DesktopTelemetryReceiver.layerTest({
+        health: Effect.succeed(healthy),
+        subscribeHealth: Effect.succeed({ latest: healthy, changes: Stream.empty }),
+        cuaReports: Stream.fromPubSub(reports),
+        requestCuaDriver: (requestId, enabled) =>
+          Effect.gen(function* () {
+            if (enabled) {
+              starts++;
+              if (starts === 1) firstId = requestId;
+              const ready = {
+                version: 1,
+                type: "cuaDriverReport",
+                requestId,
+                status: "ready",
+                mcp,
+              } as const;
+              yield* PubSub.publish(
+                reports,
+                generation === undefined ? ready : { ...ready, hostGeneration: generation },
+              );
+              if (starts === 1 && laterReadyGeneration !== undefined)
+                yield* PubSub.publish(reports, { ...ready, hostGeneration: laterReadyGeneration });
+            } else {
+              if (requestId === firstId) {
+                yield* Deferred.succeed(stopRequested, undefined);
+                yield* Deferred.await(releaseStop);
+              }
+              const stopped = {
+                version: 1,
+                type: "cuaDriverReport",
+                requestId,
+                status: "stopped",
+              } as const;
+              const stoppedHost = requestId === firstId ? stoppedGeneration : generation;
+              yield* PubSub.publish(
+                reports,
+                stoppedHost === undefined ? stopped : { ...stopped, hostGeneration: stoppedHost },
+              );
+              if (requestId === firstId && laterStopGeneration !== undefined)
+                yield* PubSub.publish(reports, { ...stopped, hostGeneration: laterStopGeneration });
+            }
+          }),
+      }),
+    ),
+  );
+  const { service, setEnabled } = yield* makeService(factory, true, undefined, {
+    probeBrowserClaims: () =>
+      Effect.suspend(() => {
+        probes++;
+        return probes === 2
+          ? Deferred.succeed(secondProbeStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(releaseSecondProbe)),
+              Effect.ensuring(Deferred.succeed(secondProbeFinished, undefined)),
+              Effect.as(tools),
+            )
+          : Effect.succeed(tools);
+      }),
+    setDriverCapability: (value) =>
+      Effect.sync(() => {
+        supported = value;
+      }).pipe(
+        Effect.andThen(
+          value && starts === 1
+            ? Deferred.succeed(firstSupported, undefined).pipe(Effect.asVoid)
+            : Effect.void,
+        ),
+        Effect.andThen(
+          value && starts === 3
+            ? Deferred.succeed(thirdSupported, undefined).pipe(Effect.asVoid)
+            : Effect.void,
+        ),
+      ),
+  });
+  const grants = yield* makeBrowserOriginGrants({
+    environmentId: EnvironmentId.make("environment:test"),
+    supported: () => supported,
+    publish: () => Effect.void,
+    bind: () => Effect.die("not used"),
+  });
+  if (!service.fenceBrowserManifest) return yield* Effect.die("missing fence");
+  return {
+    request: grants.request({
+      threadId: ThreadId.make("thread:test"),
+      pid: 42,
+      windowId: 7,
+      origin: "https://example.test",
+      windowTitle: "Browser",
+    }),
+    service,
+    setEnabled,
+    fence: service.fenceBrowserManifest,
+    stopRequested,
+    releaseStop,
+    firstSupported,
+    secondProbeStarted,
+    releaseSecondProbe,
+    secondProbeFinished,
+    thirdSupported,
+    setGeneration: (value: number | undefined) =>
+      Effect.sync(() => {
+        generation = value;
+      }),
+    supported: () => supported,
+  };
+});
+
+it.layer(ServerSettings.layerTest())("desktop generation fences", (it) => {
+  it.effect("a duplicate ready report cannot lower the fenced host generation", () =>
+    Effect.gen(function* () {
+      const f = yield* generationFixture(2, undefined, undefined, 1);
+      yield* f.service.acquire;
+      yield* Deferred.await(f.firstSupported);
+      const fencing = yield* f.fence.pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(f.stopRequested);
+      yield* f.service.acquire;
+      yield* Deferred.await(f.secondProbeStarted);
+      yield* Deferred.succeed(f.releaseStop, undefined);
+      yield* Fiber.join(fencing);
+      yield* Deferred.succeed(f.releaseSecondProbe, undefined);
+      yield* Deferred.await(f.secondProbeFinished);
+      expect(f.supported()).toBe(false);
+      expect((yield* f.request).status).toBe("refused");
+    }).pipe(
+      Effect.provideService(Scheduler.PreventSchedulerYield, true),
+      Effect.scoped,
+      Effect.provide(NodeCrypto.layer),
+    ),
+  );
+
+  it.effect("a late stop of a reused fenced host does not confirm the fence", () =>
+    Effect.gen(function* () {
+      const f = yield* generationFixture(1, undefined);
+      yield* f.service.acquire;
+      yield* Deferred.await(f.firstSupported);
+      const fencing = yield* f.fence.pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(f.stopRequested);
+      yield* f.service.acquire;
+      yield* Deferred.await(f.secondProbeStarted);
+      yield* Deferred.succeed(f.releaseStop, undefined);
+      const stopped = yield* Fiber.join(fencing);
+      yield* Deferred.succeed(f.releaseSecondProbe, undefined);
+      expect(stopped).toBe(false);
+      expect(f.supported()).toBe(false);
+      expect((yield* f.request).status).toBe("refused");
+    }).pipe(Effect.scoped, Effect.provide(NodeCrypto.layer)),
+  );
+
+  it.effect("a delayed probe of the fenced generation cannot restore browser support", () =>
+    Effect.gen(function* () {
+      const f = yield* generationFixture(1, undefined);
+      yield* f.service.acquire;
+      yield* Deferred.await(f.firstSupported);
+      const fencing = yield* f.fence.pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(f.stopRequested);
+      yield* f.service.acquire;
+      yield* Deferred.await(f.secondProbeStarted);
+      yield* Deferred.succeed(f.releaseStop, undefined);
+      yield* Fiber.join(fencing);
+      yield* Deferred.succeed(f.releaseSecondProbe, undefined);
+      yield* Deferred.await(f.secondProbeFinished);
+      expect(f.supported()).toBe(false);
+      expect((yield* f.request).status).toBe("refused");
+    }).pipe(
+      Effect.provideService(Scheduler.PreventSchedulerYield, true),
+      Effect.scoped,
+      Effect.provide(NodeCrypto.layer),
+    ),
+  );
+
+  it.effect("only a newer host generation can restore browser support after a fence", () =>
+    Effect.gen(function* () {
+      const f = yield* generationFixture(1, undefined);
+      yield* f.service.acquire;
+      yield* Deferred.await(f.firstSupported);
+      const fencing = yield* f.fence.pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(f.stopRequested);
+      yield* f.service.acquire;
+      yield* Deferred.await(f.secondProbeStarted);
+      yield* Deferred.succeed(f.releaseStop, undefined);
+      yield* Fiber.join(fencing);
+      yield* Deferred.succeed(f.releaseSecondProbe, undefined);
+      yield* Deferred.await(f.secondProbeFinished);
+      expect(f.supported()).toBe(false);
+      expect((yield* f.request).status).toBe("refused");
+      yield* f.fence;
+      yield* f.setGeneration(2);
+      yield* f.service.acquire;
+      yield* Deferred.await(f.thirdSupported);
+      expect(f.supported()).toBe(true);
+      expect((yield* f.request).status).toBe("pending");
+    }).pipe(
+      Effect.provideService(Scheduler.PreventSchedulerYield, true),
+      Effect.scoped,
+      Effect.provide(NodeCrypto.layer),
+    ),
+  );
+
+  it.effect("a fence with no active acquisition still blocks a reused desktop host", () =>
+    Effect.gen(function* () {
+      const f = yield* generationFixture(undefined, undefined);
+      yield* f.service.acquire;
+      yield* Deferred.await(f.firstSupported);
+      yield* f.setEnabled(false);
+      yield* Deferred.await(f.stopRequested);
+      expect(yield* f.fence).toBe(false);
+      yield* f.setEnabled(true);
+      yield* f.service.acquire;
+      yield* Deferred.await(f.secondProbeStarted);
+      yield* Deferred.succeed(f.releaseStop, undefined);
+      yield* Deferred.succeed(f.releaseSecondProbe, undefined);
+      yield* Deferred.await(f.secondProbeFinished);
+      expect(f.supported()).toBe(false);
+      expect((yield* f.request).status).toBe("refused");
+    }).pipe(
+      Effect.provideService(Scheduler.PreventSchedulerYield, true),
+      Effect.scoped,
+      Effect.provide(NodeCrypto.layer),
+    ),
+  );
+
+  it.effect("a new host can pass a fence requested after the old acquisition was revoked", () =>
+    Effect.gen(function* () {
+      const f = yield* generationFixture(1, undefined);
+      yield* f.service.acquire;
+      yield* Deferred.await(f.firstSupported);
+      yield* f.setEnabled(false);
+      yield* Deferred.await(f.stopRequested);
+      expect(yield* f.fence).toBe(false);
+      yield* f.setGeneration(2);
+      yield* f.setEnabled(true);
+      yield* f.service.acquire;
+      yield* Deferred.await(f.secondProbeStarted);
+      yield* Deferred.succeed(f.releaseStop, undefined);
+      yield* Deferred.succeed(f.releaseSecondProbe, undefined);
+      yield* Deferred.await(f.secondProbeFinished);
+      expect(f.supported()).toBe(true);
+      expect((yield* f.request).status).toBe("pending");
+    }).pipe(
+      Effect.provideService(Scheduler.PreventSchedulerYield, true),
+      Effect.scoped,
+      Effect.provide(NodeCrypto.layer),
+    ),
+  );
+
+  it.effect("a later stop report cannot replace the first unconfirmed stop", () =>
+    Effect.gen(function* () {
+      const f = yield* generationFixture(1, undefined, 1);
+      yield* f.service.acquire;
+      yield* Deferred.await(f.firstSupported);
+      const fencing = yield* f.fence.pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(f.stopRequested);
+      yield* Deferred.succeed(f.releaseStop, undefined);
+      expect(yield* Fiber.join(fencing)).toBe(false);
+    }).pipe(
+      Effect.provideService(Scheduler.PreventSchedulerYield, true),
+      Effect.scoped,
+      Effect.provide(NodeCrypto.layer),
+    ),
+  );
+
+  it.effect("a queued fence blocks a delayed probe before acquiring the lifecycle permit", () =>
+    Effect.gen(function* () {
+      const probeStarted = yield* Deferred.make<void>();
+      const releaseProbe = yield* Deferred.make<void>();
+      const probeFinished = yield* Deferred.make<void>();
+      const refreshEntered = yield* Deferred.make<void>();
+      const releaseRefresh = yield* Deferred.make<void>();
+      let supported = false;
+      const host: CuaDriver.CuaDriverHost = {
+        start: Effect.succeed(mcp),
+        stop: Effect.void,
+        waitForExit: Effect.never,
+        hostGeneration: () => 1,
+        stoppedGeneration: () => 1,
+      };
+      const { service } = yield* makeService(Effect.succeed(host), true, undefined, {
+        refreshManifest: () =>
+          Deferred.succeed(refreshEntered, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseRefresh)),
+            Effect.as(false),
+          ),
+        probeBrowserClaims: () =>
+          Deferred.succeed(probeStarted, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseProbe)),
+            Effect.ensuring(Deferred.succeed(probeFinished, undefined)),
+            Effect.as({
+              tools: [
+                { name: "get_browser_state", inputSchema: { properties: { origin_scope: {} } } },
+              ],
+            }),
+          ),
+        setDriverCapability: (value) =>
+          Effect.sync(() => {
+            supported = value;
+          }),
+      });
+      yield* service.acquire;
+      yield* Deferred.await(probeStarted);
+      if (!service.refreshManifest || !service.fenceBrowserManifest)
+        return expect.fail("missing lifecycle hooks");
+      const refresh = yield* service
+        .refreshManifest([])
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(refreshEntered);
+      const fence = yield* service.fenceBrowserManifest.pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Deferred.succeed(releaseProbe, undefined);
+      yield* Deferred.await(probeFinished);
+      const accepted = supported;
+      yield* Deferred.succeed(releaseRefresh, undefined);
+      yield* Fiber.join(refresh);
+      yield* Fiber.join(fence);
+      expect(accepted).toBe(false);
+    }).pipe(Effect.provideService(Scheduler.PreventSchedulerYield, true), Effect.scoped),
+  );
+
+  it.effect("a stop for another generation cannot confirm the fenced host", () =>
+    Effect.gen(function* () {
+      const f = yield* generationFixture(1, 2);
+      yield* f.service.acquire;
+      yield* Deferred.await(f.firstSupported);
+      const fencing = yield* f.fence.pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(f.stopRequested);
+      yield* Deferred.succeed(f.releaseStop, undefined);
+      expect(yield* Fiber.join(fencing)).toBe(false);
+    }).pipe(Effect.scoped, Effect.provide(NodeCrypto.layer)),
+  );
+
+  it.effect("a confirmed stop of the fenced generation succeeds", () =>
+    Effect.gen(function* () {
+      const f = yield* generationFixture(1, 1);
+      yield* f.service.acquire;
+      yield* Deferred.await(f.firstSupported);
+      const fencing = yield* f.fence.pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(f.stopRequested);
+      yield* Deferred.succeed(f.releaseStop, undefined);
+      expect(yield* Fiber.join(fencing)).toBe(true);
+    }).pipe(Effect.scoped, Effect.provide(NodeCrypto.layer)),
+  );
+
+  it.effect("an older desktop without generations cannot restore support after a fence", () =>
+    Effect.gen(function* () {
+      const f = yield* generationFixture(undefined, undefined);
+      yield* f.service.acquire;
+      yield* Deferred.await(f.firstSupported);
+      expect(f.supported()).toBe(true);
+      expect((yield* f.request).status).toBe("pending");
+      const fencing = yield* f.fence.pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(f.stopRequested);
+      yield* f.service.acquire;
+      yield* Deferred.await(f.secondProbeStarted);
+      yield* Deferred.succeed(f.releaseStop, undefined);
+      const stopped = yield* Fiber.join(fencing);
+      yield* Deferred.succeed(f.releaseSecondProbe, undefined);
+      yield* Deferred.await(f.secondProbeFinished);
+      expect(stopped).toBe(false);
+      expect(f.supported()).toBe(false);
+      expect((yield* f.request).status).toBe("refused");
+    }).pipe(
+      Effect.provideService(Scheduler.PreventSchedulerYield, true),
+      Effect.scoped,
+      Effect.provide(NodeCrypto.layer),
+    ),
+  );
 });
 
 it.layer(ServerSettings.layerTest())("browser manifest driver fence", (it) => {

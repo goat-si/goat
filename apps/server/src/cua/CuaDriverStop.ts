@@ -1,7 +1,7 @@
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
-import type { CuaDriverError } from "./CuaDriver.ts";
+import type { CuaDriverError } from "./CuaDriverErrors.ts";
 
 export const desktopStopAcknowledged = Effect.fn("CuaDriver.desktopStopAcknowledged")(function* (
   stopped: Deferred.Deferred<void, CuaDriverError>,
