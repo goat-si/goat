@@ -385,8 +385,8 @@ only ask a person, such as provider sign-in and sync, declare `none` so a profil
 never preempts the person's decision.
 The pull request merge and close tools require `pr.merge`. A role's kept capabilities allow it to
 launch other roles; they do not admit its own direct writes.
-This distinction requires the role on the thread's binding. Older bindings do not record it, so
-their direct writes still use the full effective profile.
+This distinction requires the role on the thread's binding. Older bindings do not record it, and
+older remote hosts may ignore a forwarded role, so those writes use the full effective profile.
 Every check that compares a role thread's grant with its caller's, such as the
 recheck before an SSH launch and a send's target check and rebinding, derives it
 with the same `roleProfile`; comparing against the caller's plain profile reads the
