@@ -1365,6 +1365,23 @@ describe("extractMcpToolCallIdentity", () => {
     }
   });
 
+  it("recognizes Kiro @goat titles only for known tools", () => {
+    for (const [title, expected] of [
+      ["@goat/html_render", { server: "goat", tool: "html_render" }],
+      ["@goat/delegate_task", { server: "goat", tool: "delegate_task" }],
+      ["@goat/not_a_real_tool", undefined],
+    ] as const) {
+      const call = toolCallFromUpdate({
+        sessionUpdate: "tool_call",
+        toolCallId: "kiro",
+        kind: "other",
+        title,
+        status: "pending",
+      });
+      expect(extractMcpToolCallIdentity(call), title).toEqual(expected);
+    }
+  });
+
   it("does not claim an agent's own tool that shares a T3 tool name", () => {
     const toolCall = toolCallFromUpdate({
       sessionUpdate: "tool_call",
