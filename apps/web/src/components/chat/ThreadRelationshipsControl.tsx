@@ -631,9 +631,12 @@ export function ThreadRelationshipsPanel(props: {
                 <ArrowRightIcon className="size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
               </TooltipTrigger>
               <TooltipPopup side="left">
-                {launcherShell === undefined
-                  ? "This related thread is unavailable"
-                  : `Open ${launchedBy.kind === "promotion" ? "original parent" : "launching"} thread in this chat`}
+                <span className="block font-medium">{launcherTitle}</span>
+                <span className="block text-muted-foreground">
+                  {launcherShell === undefined
+                    ? "This related thread is unavailable"
+                    : `Open ${launchedBy.kind === "promotion" ? "original parent" : "launching"} thread in this chat`}
+                </span>
               </TooltipPopup>
             </Tooltip>
           </li>
@@ -723,7 +726,10 @@ export function ThreadRelationshipsPanel(props: {
                   childProject={project}
                 />
               ) : (
-                relationshipHint
+                <>
+                  <span className="block font-medium">{threadTitle}</span>
+                  <span className="block text-muted-foreground">{relationshipHint}</span>
+                </>
               );
               const relationshipContent = (
                 <>

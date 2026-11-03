@@ -406,6 +406,7 @@ import type { CodexArtifactTemplate } from "@goat/shared/codexArtifactTemplates"
 
 const EMPTY_FEEDBACK_SUBMISSIONS: ReadonlyArray<CodexFeedbackSubmission> = [];
 const EMPTY_AUTO_UPDATE_ENVIRONMENTS: ReadonlyArray<EnvironmentPresentation> = [];
+const EMPTY_COMPOSER_BANNER_ITEMS: ReadonlyArray<ComposerBannerStackItem> = [];
 
 const EMPTY_PENDING_FILE_SURFACE_IDS: ReadonlySet<string> = new Set();
 
@@ -1554,6 +1555,7 @@ export default function ChatView(props: ChatViewProps) {
     isConnecting ||
     isCompacting ||
     runlessWorkStartedAt !== null;
+  const setThreadErrorStable = useStableCallback(setThreadError);
   const activeContextWindow = deriveLatestContextWindowSnapshot(
     serverVisibleTurnItems ?? [],
     activeThreadLiveTokenUsage,
@@ -3798,7 +3800,7 @@ export default function ChatView(props: ChatViewProps) {
                                 activeThreadId={activeThreadId}
                                 activeThreadEnvironmentId={activeThread?.environmentId}
                                 activeThread={activeThread}
-                                promptHistoryMessages={timelineMessages}
+                                promptHistoryEntries={timelineEntries}
                                 isServerThread={isServerThread}
                                 isLocalDraftThread={isLocalDraftThread}
                                 forceExpandedOnMobile={
@@ -3841,7 +3843,11 @@ export default function ChatView(props: ChatViewProps) {
                                 }
                                 isPreparingWorktree={isPreparingWorktree && !sendQueuesBehindSetup}
                                 queuedRunsControl={queuedRunsControl}
-                                bannerItems={composerBannerItems}
+                                bannerItems={
+                                  composerBannerItems.length === 0
+                                    ? EMPTY_COMPOSER_BANNER_ITEMS
+                                    : composerBannerItems
+                                }
                                 resumeCompactionTokens={resumeCompactionTokens}
                                 keepFullHistory={keepFullHistory}
                                 onToggleKeepFullHistory={toggleKeepFullHistoryStable}
@@ -3877,7 +3883,9 @@ export default function ChatView(props: ChatViewProps) {
                                 }
                                 activeThreadModelSelection={activeThread?.modelSelection}
                                 activeProjectId={activeProject?.id ?? null}
-                                activeContextWindow={activeContextWindow}
+                                contextWindowEntries={serverVisibleTurnItems}
+                                contextWindowLiveUsage={activeThreadLiveTokenUsage}
+                                contextWindowProviderThread={activeProviderThread}
                                 activeTasksProgress={activeComposerTasksProgress}
                                 activeTaskSteps={activeComposerTaskSteps}
                                 compactThreadUnavailable={compactThreadUnavailable}
@@ -3944,7 +3952,7 @@ export default function ChatView(props: ChatViewProps) {
                                 handleInteractionModeChange={handleInteractionModeChangeStable}
                                 focusComposer={focusComposerStable}
                                 scheduleComposerFocus={scheduleComposerFocusStable}
-                                setThreadError={setThreadError}
+                                setThreadError={setThreadErrorStable}
                                 onExpandImage={onExpandTimelineImageStable}
                                 onFileOpen={openFileAttachmentStable}
                                 editingQueuedAttachments={queuedRunEdit.editingAttachments}

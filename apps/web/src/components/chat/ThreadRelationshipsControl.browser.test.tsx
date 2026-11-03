@@ -2,9 +2,13 @@ import { EnvironmentId, NodeId, ThreadId } from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 import { expect, it, vi } from "vite-plus/test";
-import { page } from "vite-plus/test/browser";
+import { page, userEvent } from "vite-plus/test/browser";
 
-const state = vi.hoisted(() => ({ projection: null as unknown, commandSucceeds: false }));
+const state = vi.hoisted(() => ({
+  projection: null as unknown,
+  commandSucceeds: false,
+  relatedShells: [] as unknown[],
+}));
 
 vi.mock(import("@effect/atom-react"), async (original) => ({
   ...(await original()),
@@ -17,7 +21,9 @@ vi.mock(import("../../state/entities"), () => ({
   useThreadProjection: ((ref: unknown) =>
     ref === null ? null : { projection: state.projection }) as never,
   useThreadRelationshipShells: (() =>
-    state.projection === null ? [] : [(state.projection as { thread: unknown }).thread]) as never,
+    state.projection === null
+      ? []
+      : [(state.projection as { thread: unknown }).thread, ...state.relatedShells]) as never,
   useProjects: (() => []) as never,
 }));
 vi.mock(import("../../state/environments"), () => ({
@@ -44,6 +50,7 @@ const threadId = ThreadId.make("fork");
 
 function setup() {
   state.commandSucceeds = false;
+  state.relatedShells = [];
   state.projection = {
     thread: {
       id: threadId,
@@ -167,5 +174,25 @@ it("opens an idle child from Lineage when its shell has not been loaded", async 
   await child.click();
   await vi.waitFor(() =>
     expect(screen.router?.state.location.pathname).toBe("/local/omitted-child"),
+  );
+});
+
+it("shows the full lineage title in its tooltip", async () => {
+  setup();
+  const title = "Compare the lineage tooltip against a title that the row truncates";
+  state.relatedShells = [
+    {
+      ...(state.projection as { thread: Record<string, unknown> }).thread,
+      id: ThreadId.make("source"),
+      title,
+      lineage: { parentThreadId: null, relationshipToParent: null },
+    },
+  ];
+  await using _screen = await render(
+    <ThreadRelationshipsPanel environmentId={environmentId} threadId={threadId} />,
+  );
+  await userEvent.hover(page.getByText(title, { exact: true }));
+  await vi.waitFor(() =>
+    expect(document.querySelector('[data-slot="tooltip-popup"]')?.textContent).toContain(title),
   );
 });
