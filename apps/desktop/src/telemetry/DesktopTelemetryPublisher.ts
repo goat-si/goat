@@ -35,6 +35,7 @@ import * as Stream from "effect/Stream";
 import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronPowerMonitor from "../electron/ElectronPowerMonitor.ts";
 import * as DesktopRendererHistory from "./DesktopRendererHistory.ts";
+import * as DesktopShellEnvironment from "../shell/DesktopShellEnvironment.ts";
 
 const LIVE_SAMPLE_INTERVAL = Duration.seconds(1);
 const BATTERY_SAMPLE_INTERVAL = Duration.seconds(5);
@@ -198,6 +199,7 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
   const electronApp = yield* ElectronApp.ElectronApp;
   const powerMonitor = yield* ElectronPowerMonitor.ElectronPowerMonitor;
   const rendererHistory = yield* DesktopRendererHistory.DesktopRendererHistory;
+  const shellEnvironment = yield* DesktopShellEnvironment.DesktopShellEnvironment;
   yield* electronApp.whenReady;
 
   const initialPowerState: PowerState = {
@@ -653,7 +655,10 @@ export const make = Effect.fn("desktop.telemetryPublisher.make")(function* () {
           Stream.filter(() => cuaSource === source),
           Stream.map((message) => textEncoder.encode(`${encodeMessage(message)}\n`)),
         );
-        return Stream.mergeAll([encoded, privateReports, readiness, safety, frames], {
+        const shellUpdates = shellEnvironment.updates.pipe(
+          Stream.map((message) => textEncoder.encode(`${encodeMessage(message)}\n`)),
+        );
+        return Stream.mergeAll([encoded, shellUpdates, privateReports, readiness, safety, frames], {
           concurrency: "unbounded",
         });
       }),

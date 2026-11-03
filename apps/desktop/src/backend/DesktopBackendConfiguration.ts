@@ -557,6 +557,7 @@ const resolvePrimaryStartConfig = Effect.fn("desktop.backendConfiguration.resolv
         GOAT_SSH_BUNDLED_RUNTIME_ARCHIVE_DIR: environment.isPackaged
           ? environment.path.join(environment.resourcesPath, "ssh-runtime", "archives")
           : undefined,
+        GOAT_DESKTOP_SHELL_DISCOVERY_PENDING: "1",
         GOAT_CLI_PATH: Option.getOrUndefined(input.cliPath),
       },
       extendEnv: true,

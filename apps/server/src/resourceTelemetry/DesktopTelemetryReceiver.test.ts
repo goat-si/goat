@@ -34,7 +34,7 @@ describe("DesktopTelemetryReceiver", () => {
         Layer.mergeAll(
           ServerSettings.layerTest(),
           ServerConfig.layerTest("/test", { prefix: "goat-cua-apps" }),
-        ).pipe(Layer.provide(NodeServices.layer)),
+        ).pipe(Layer.provideMerge(NodeServices.layer)),
       ),
       Effect.scoped,
     ),
@@ -207,7 +207,7 @@ it.effect("receiver request completes only after its held native control frame",
       Layer.mergeAll(
         ServerSettings.layerTest(),
         ServerConfig.layerTest("/test", { prefix: "goat-held-control" }),
-      ).pipe(Layer.provide(NodeServices.layer)),
+      ).pipe(Layer.provideMerge(NodeServices.layer)),
     ),
   ),
 );
