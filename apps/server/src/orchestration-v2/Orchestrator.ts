@@ -9141,7 +9141,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         queuedMessage.createdBy === "agent"
           ? (projection.runs.find((run) => run.id === command.targetRunId)?.modelSelection ??
             projection.thread.modelSelection)
-          : projection.thread.modelSelection,
+          : queuedRun.modelSelection,
       targetRunId: command.targetRunId,
       messageId: queuedMessage.id,
       text: queuedMessage.text,
