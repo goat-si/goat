@@ -555,6 +555,7 @@ export function layerWithRegistry<Error>(
         getThreadEventSequence: orchestrator.getThreadEventSequence,
         streamStoredEventsFrom: orchestrator.streamStoredEventsFrom,
         getThreadRecords: orchestrator.getThreadRecords,
+        listAppOwnedChildThreadIds: orchestrator.listAppOwnedChildThreadIds,
         getProjectThreadRecords: (target, fields, options) =>
           orchestrator.getThreadRecords(target.threadId, fields, options).pipe(
             Effect.mapError(
