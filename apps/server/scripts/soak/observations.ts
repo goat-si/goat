@@ -243,6 +243,37 @@ type Lifecycle = {
 };
 type Release = { thread: string; at: string; status: "stopped" | "error"; requested?: boolean };
 type Death = { thread: string; instance: string; at: string };
+export function providerCoverageGaps(
+  lines: Lifecycle[],
+  joins: Map<string, string>,
+  replayThreads: readonly string[],
+  codexInstances: readonly string[],
+): string[] {
+  const starts = new Set(
+    lines.filter((line) => line.event === "start").map((line) => `${line.instance}:${line.pid}`),
+  );
+  const joined = lines.filter(
+    (line) =>
+      line.event === "session" &&
+      line.thread &&
+      joins.has(line.thread) &&
+      starts.has(`${line.instance}:${line.pid}`),
+  );
+  return [
+    ...replayThreads
+      .filter(
+        (thread) =>
+          !joined.some(
+            (line) =>
+              line.instance === "devReplay" && line.thread && joins.get(line.thread) === thread,
+          ),
+      )
+      .map((thread) => `Replay thread ${thread} has no joined session-bearing pid`),
+    ...codexInstances
+      .filter((instance) => !joined.some((line) => line.instance === instance))
+      .map((instance) => `Codex instance ${instance} has no joined session-bearing pid`),
+  ];
+}
 export function providerRestarts(
   lines: Lifecycle[],
   joins: Map<string, string>,
@@ -272,6 +303,7 @@ export function providerRestarts(
   let processExitRunEpisodes = 0;
   const matchedPids = new Set<number>();
   const matchedDeaths = new Set<number>();
+  const usedReleases = new Set<number>();
   const matchProcessDeaths = (pid: number, end: string) => {
     for (const [affectedThread, sessionsForThread] of groups) {
       const session = sessionsForThread.find((item) => item.pid === pid);
@@ -293,18 +325,16 @@ export function providerRestarts(
       const next = group[i];
       if (!previous || !next) continue;
       if (!window || next.at < window.start || next.at > window.end) continue;
-      const release = releases.find(
-        (release) =>
+      const releaseIndex = releases.findIndex(
+        (release, index) =>
+          !usedReleases.has(index) &&
           release.thread === thread &&
           release.status === "stopped" &&
           release.at >= previous.at &&
           release.at <= next.at,
       );
-      if (release) {
-        deaths.forEach((death, index) => {
-          if (death.thread === thread && death.at >= release.at && death.at <= next.at)
-            matchedDeaths.add(index);
-        });
+      if (releaseIndex >= 0) {
+        usedReleases.add(releaseIndex);
         continue;
       }
       if (!matchedPids.has(previous.pid)) extraSessions++;
@@ -340,22 +370,6 @@ export function providerRestarts(
         .filter(([, group]) => group.some((session) => session.pid === pid))
         .map(([thread]) => thread);
       if (!pidThreads.length) continue;
-      const stops = pidThreads.map((thread) =>
-        releases.find(
-          (release) =>
-            release.thread === thread &&
-            release.status === "stopped" &&
-            release.at >= window.start &&
-            release.at <= (exit?.at ?? window.end),
-        ),
-      );
-      if (stops.every(Boolean)) {
-        deaths.forEach((death, index) => {
-          const stop = stops.find((release) => release?.thread === death.thread);
-          if (stop && death.at >= stop.at && death.at <= window.end) matchedDeaths.add(index);
-        });
-        continue;
-      }
       if (
         disappeared &&
         sessions.some((session) => session.pid === pid && session.at < window.start)
@@ -401,6 +415,8 @@ export function providerRestarts(
 
 export class Observations {
   readonly lifecycle: Lifecycle[] = [];
+  readonly replayThreads = new Set<string>();
+  readonly codexInstances = new Set<string>();
   readonly joins = new Map<string, string>();
   readonly releases: Release[] = [];
   readonly deaths: Death[] = [];
@@ -423,6 +439,11 @@ export class Observations {
     droppedRecords: 0,
   };
   readonly trace = { retired: 0 };
+  registerProviderCohort(thread: string, instance: string): void {
+    const target = instance === "devReplay" ? this.replayThreads : this.codexInstances;
+    if (target.size >= LIMIT) this.lifecycleGaps.push("provider cohort limit reached");
+    else target.add(instance === "devReplay" ? thread : instance);
+  }
   consumeLifecycle(value: unknown): void {
     if (typeof value !== "object" || value === null) throw new Error("invalid lifecycle record");
     const line = value as Record<string, unknown>;

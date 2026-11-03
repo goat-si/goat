@@ -12,6 +12,7 @@ import {
   cpuBusy,
   saturation,
   providerRestarts,
+  providerCoverageGaps,
   codexEvidence,
   linuxMemoryPressure,
 } from "./observations.ts";
@@ -623,6 +624,13 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
           !startedAt ||
           line.at >= startedAt),
     );
+    const joinedPids = new Set(
+      observations.lifecycle
+        .filter(
+          (line) => line.event === "session" && line.thread && observations.joins.has(line.thread),
+        )
+        .map((line) => line.pid),
+    );
     const excludedPids = new Set(
       observations.lifecycle
         .filter(
@@ -630,6 +638,7 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
             line.event === "session" &&
             line.thread &&
             !observations.joins.has(line.thread) &&
+            !joinedPids.has(line.pid) &&
             startedAt &&
             line.at < startedAt,
         )
@@ -659,6 +668,12 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
           : ["no Codex lifecycle start observed"]),
         ...providerGaps,
         ...observations.lifecycleGaps,
+        ...providerCoverageGaps(
+          acceptanceLines.filter((line) => !excludedPids.has(line.pid)),
+          observations.joins,
+          [...observations.replayThreads],
+          [...observations.codexInstances],
+        ),
         ...observations.streamGaps,
         ...(errors.length ? ["workload error"] : []),
       ],
@@ -691,6 +706,7 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
       ...(memoryAbort ? { result: "aborted", abortReason: memoryAbort } : {}),
       home: options.home,
       mode: options.acceptance ? "acceptance" : "smoke",
+      clientCoverageDescription: "session-level client coverage",
       serverPid: server?.child.pid ?? null,
       ownedPids: owned.map(({ child }) => child.pid),
       cleanupSurvivors,

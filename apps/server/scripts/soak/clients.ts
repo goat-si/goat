@@ -595,6 +595,7 @@ export async function runWorkload(input: WorkloadInput): Promise<{
       const terminal = new Set<string>();
       let lastSequence: number | undefined;
       input.observations.requestRun();
+      input.observations.registerProviderCohort(threadId, modelSelection.instanceId);
       yield* client["orchestration.launchThread"]({
         commandId: CommandId.make(id()),
         threadId,

@@ -235,6 +235,7 @@ import {
   saturation,
   codexEvidence,
   linuxMemoryPressure,
+  providerCoverageGaps,
 } from "./observations.ts";
 
 describe("soak observations", () => {
@@ -270,6 +271,61 @@ describe("soak observations", () => {
       codexEvidence(data, [], { start: window.start, end: "2026-01-01T00:01:00.000Z" })
         .longCompletedTurns,
     ).toBe(0);
+  });
+  it("does not let a stopped release erase a later provider exit or excuse multiple replacements", () => {
+    const lines = [
+      { event: "start" as const, pid: 1, instance: "devReplay", at: "1" },
+      { event: "session" as const, pid: 1, instance: "devReplay", at: "1", thread: "native" },
+      { event: "start" as const, pid: 2, instance: "devReplay", at: "4" },
+      { event: "session" as const, pid: 2, instance: "devReplay", at: "4", thread: "native" },
+      { event: "start" as const, pid: 3, instance: "devReplay", at: "5" },
+      { event: "session" as const, pid: 3, instance: "devReplay", at: "5", thread: "native" },
+    ];
+    const joined = new Map([["native", "thread"]]);
+    const release = [{ thread: "thread", at: "2", status: "stopped" as const }];
+    const death = [{ thread: "thread", instance: "devReplay", at: "3" }];
+    const window = { start: "1", end: "6", disappeared: [] };
+    expect(
+      providerRestarts(lines.slice(0, 4), joined, release, death, [], window).counter.value,
+    ).toBe(1);
+    expect(providerRestarts(lines, joined, release, [], [], window).counter.value).toBe(1);
+  });
+  it("requires a joined session-bearing process for every Replay thread and Codex instance", () => {
+    const lines = [
+      { event: "start" as const, pid: 1, instance: "devReplay", at: "1" },
+      { event: "session" as const, pid: 1, instance: "devReplay", at: "1", thread: "native-a" },
+      { event: "start" as const, pid: 2, instance: "codex", at: "1" },
+      { event: "session" as const, pid: 2, instance: "codex", at: "1", thread: "native-c" },
+    ];
+    const joins = new Map([
+      ["native-a", "A"],
+      ["native-c", "C"],
+    ]);
+    expect(providerCoverageGaps(lines, joins, ["A", "B"], ["codex"])).toContain(
+      "Replay thread B has no joined session-bearing pid",
+    );
+    expect(providerCoverageGaps(lines, joins, ["A"], ["other"])).toContain(
+      "Codex instance other has no joined session-bearing pid",
+    );
+    expect(providerCoverageGaps(lines, new Map([["native-a", "A"]]), ["A"], ["codex"])).toContain(
+      "Codex instance codex has no joined session-bearing pid",
+    );
+    expect(providerCoverageGaps(lines, joins, ["A"], ["codex"])).toEqual([]);
+    expect(providerCoverageGaps(lines.slice(1), joins, ["A"], ["codex"])).toContain(
+      "Replay thread A has no joined session-bearing pid",
+    );
+    const observations = new Observations();
+    observations.registerProviderCohort("A", "devReplay");
+    observations.registerProviderCohort("B", "devReplay");
+    observations.registerProviderCohort("C", "codex");
+    expect(
+      providerCoverageGaps(
+        lines,
+        joins,
+        [...observations.replayThreads],
+        [...observations.codexInstances],
+      ),
+    ).toEqual(["Replay thread B has no joined session-bearing pid"]);
   });
   it("measures CPU deltas and refuses unsaturated or incomplete samples", () => {
     const before = [{ user: 0, nice: 0, sys: 0, idle: 0, irq: 0 }];
@@ -416,7 +472,7 @@ describe("soak observations", () => {
         [],
         window,
       ).counter.value,
-    ).toBe(0);
+    ).toBe(1);
   });
   it("counts a shared Codex process death only once across affected threads", () => {
     const lines = [
@@ -510,7 +566,7 @@ describe("soak observations", () => {
         [],
         { start: "1", end: "6", disappeared: [] },
       ).counter.value,
-    ).toBe(0);
+    ).toBe(1);
   });
   it("caps detail at a complete line and flags truncation", () => {
     const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-detail-limit-"));
