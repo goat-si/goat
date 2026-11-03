@@ -1,3 +1,4 @@
+import * as Fiber from "effect/Fiber";
 import { AgentWorkspaceTerminalPolicyThreadLookup } from "./AgentWorkspaceTerminalPolicy.ts";
 import * as HubRpcSocket from "./auth/HubRpcSocket.ts";
 import * as SettingsRpc from "./auth/SettingsRpc.ts";
@@ -1782,6 +1783,7 @@ export const layerWsRpc = (
       const loadServerConfig = Effect.fn("ws.loadServerConfig")(function* (options: {
         readonly usageLimitsCommand: boolean;
         readonly workspaceSnapshotsOnDemand: boolean;
+        readonly deferDirectEndpoints?: boolean;
       }) {
         const keybindingsConfig = yield* keybindings.loadConfigState;
         const currentProviders = yield* providerRegistry.getProviders.pipe(
@@ -1806,7 +1808,9 @@ export const layerWsRpc = (
           editors: externalLauncher.resolveAvailableEditors(),
           fileManagerRevealKind: externalLauncher.resolveFileManagerRevealKind(),
           remoteOpenTargets: remoteOpenTargets.resolveTargets(),
-          directEndpoints: directEndpoints.resolve(),
+          directEndpoints: options.deferDirectEndpoints
+            ? directEndpoints.resolveAvailable()
+            : directEndpoints.resolve(),
         });
 
         return {
@@ -3443,9 +3447,16 @@ export const layerWsRpc = (
               const keybindingsChanges = yield* keybindings.subscribeChanges;
               const settingsChanges = yield* serverSettings.subscribeChanges;
               const checkoutHealthChanges = yield* worktreeCheckoutHealth.subscribeChanges;
+              const directResult = yield* Effect.forkScoped(
+                directEndpoints
+                  .resolve()
+                  .pipe(Effect.catchCause(() => directEndpoints.resolveAvailable())),
+                { startImmediately: true },
+              );
               const config = yield* loadServerConfig({
                 usageLimitsCommand,
                 workspaceSnapshotsOnDemand,
+                deferDirectEndpoints: true,
               });
               const keybindingsUpdates = keybindingsChanges.pipe(
                 Stream.map((event) => ({
@@ -3537,6 +3548,7 @@ export const layerWsRpc = (
                   externalLauncher,
                   checkoutHealthChanges,
                   automationHold.changes,
+                  Fiber.join(directResult),
                 ),
               );
               return input.providerStatusChanges === true

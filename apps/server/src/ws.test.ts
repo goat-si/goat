@@ -954,6 +954,12 @@ it.effect(
         Effect.tap(() => Deferred.succeed(settingsSubscribed, undefined)),
       );
       const initialKeybindings = (yield* keybindings.getSnapshot).keybindings;
+      const endpointStarted = yield* Deferred.make<void>();
+      const finishEndpoint = yield* Deferred.make<void>();
+      const endpoint = {
+        kind: "tailnet" as const,
+        httpBaseUrl: "https://fixture.tail1234.ts.net/",
+      };
       const discoveryStarted = yield* Deferred.make<void>();
       const finishDiscovery = yield* Deferred.make<void>();
       const responses = yield* Queue.unbounded<ServerConfigStreamEvent>();
@@ -979,7 +985,14 @@ it.effect(
         Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({
           resolveTargets: () => Effect.succeed([]),
         }),
-        Layer.mock(DirectEndpoints.DirectEndpoints)({ resolve: () => Effect.succeed([]) }),
+        Layer.mock(DirectEndpoints.DirectEndpoints)({
+          resolve: () =>
+            Deferred.succeed(endpointStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(finishEndpoint)),
+              Effect.as([endpoint]),
+            ),
+          resolveAvailable: () => Effect.succeed([]),
+        }),
         Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
           scratchRoot: Effect.succeedNone,
           namedProjectsRoot: process.cwd(),
@@ -1053,6 +1066,7 @@ it.effect(
         headers: Headers.empty,
       });
       yield* Deferred.await(discoveryStarted);
+      yield* Deferred.await(endpointStarted);
 
       const duringDiscovery = yield* settings.updateSettings({ defaultAutoPull: true });
       yield* Deferred.succeed(finishDiscovery, undefined);
@@ -1060,6 +1074,7 @@ it.effect(
       assert.equal(snapshot.type, "snapshot");
       if (snapshot.type !== "snapshot") return yield* Effect.die("Missing initial snapshot");
       assert.isFalse(snapshot.config.settings.defaultAutoPull);
+      assert.deepEqual(snapshot.config.directEndpoints, []);
       assert.deepEqual(snapshot.config.keybindings, initialKeybindings);
       const duringAck = yield* keybindings.upsertKeybindingRule({
         key: "mod+alt+y",
@@ -1095,6 +1110,17 @@ it.effect(
       }
       assert.isEmpty(expectedSettings);
       assert.isEmpty(expectedKeybindings);
+      yield* Deferred.succeed(finishEndpoint, undefined);
+      const endpointSnapshot = yield* Queue.take(responses);
+      assert.equal(endpointSnapshot.type, "snapshot");
+      if (endpointSnapshot.type !== "snapshot")
+        return yield* Effect.die("Missing late endpoint snapshot");
+      assert.deepEqual(endpointSnapshot.config.directEndpoints, [endpoint]);
+      assert.deepEqual(endpointSnapshot.config.keybindings, latestKeybindings.keybindings);
+      assert.deepEqual(
+        endpointSnapshot.config.settings,
+        ServerSettings.redactServerSettingsForClient(latestSettings),
+      );
       yield* server.write(0, { _tag: "Interrupt", requestId, interruptors: [] });
     }).pipe(
       Effect.provide(
@@ -1159,7 +1185,10 @@ it.effect("on-demand clients get provider config without workspace snapshots", (
       Layer.mock(RemoteOpenTargets.RemoteOpenTargets)({
         resolveTargets: () => Effect.succeed([]),
       }),
-      Layer.mock(DirectEndpoints.DirectEndpoints)({ resolve: () => Effect.succeed([]) }),
+      Layer.mock(DirectEndpoints.DirectEndpoints)({
+        resolve: () => Effect.succeed([]),
+        resolveAvailable: () => Effect.succeed([]),
+      }),
       Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
         scratchRoot: Effect.succeedNone,
         namedProjectsRoot: process.cwd(),

@@ -17,7 +17,9 @@ import * as ConnectionWakeups from "./wakeups.ts";
 type QueuedSignal = SupervisorSignal & { readonly attemptSequence: number };
 const BETTER_ROUTE_CHECK_INTERVAL = "60 seconds";
 
-export function makeConnectedLeaseMonitor(input: {
+export function makeConnectedLeaseMonitor<
+  Lease extends ConnectionDriver.EnvironmentConnectionLease,
+>(input: {
   readonly target: ConnectionTarget;
   readonly loopback: boolean;
   readonly currentRoutes: Effect.Effect<ReadonlyArray<ConnectionRoute>>;
@@ -30,9 +32,7 @@ export function makeConnectedLeaseMonitor(input: {
     signal: SupervisorSignal,
     lease: ConnectionDriver.EnvironmentConnectionLease,
   ) => Effect.Effect<"end" | "reset" | undefined>;
-  readonly requestBetterRouteCheck: (
-    lease: ConnectionDriver.EnvironmentConnectionLease,
-  ) => Effect.Effect<void>;
+  readonly requestBetterRouteCheck: (lease: Lease) => Effect.Effect<void>;
 }) {
   const {
     loopback,
@@ -87,7 +87,7 @@ export function makeConnectedLeaseMonitor(input: {
       }),
     );
   });
-  return Effect.fnUntraced(function* (lease: ConnectionDriver.EnvironmentConnectionLease) {
+  return Effect.fnUntraced(function* (lease: Lease) {
     const takeSignal = Queue.take(signals).pipe(
       Effect.tap((next) =>
         next._tag === "RetryRequested" ? Ref.set(resetRetryState, false) : Effect.void,

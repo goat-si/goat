@@ -4,6 +4,7 @@ import type {
   FileManagerRevealKind,
   ServerConfig as ClientServerConfig,
   ServerConfigStreamEvent,
+  ServerDirectEndpoint,
   ServerProvider,
   ServerWorktreeCheckoutHealth,
 } from "@goat/contracts";
@@ -88,6 +89,9 @@ export const withLateEditorConfig = <E, R>(
   checkoutHealthChanges: Stream.Stream<ServerWorktreeCheckoutHealth> = Stream.empty,
   /** The automation hold's current state first, then each change; see AutomationHold. */
   automationHoldChanges: Stream.Stream<AutomationHoldState | null> = Stream.empty,
+  lateEndpoints: Effect.Effect<ReadonlyArray<ServerDirectEndpoint>> = Effect.succeed(
+    config.directEndpoints ?? [],
+  ),
 ) => {
   const lateEditorConfig = Stream.fromEffect(launcher.resolveAvailableEditors()).pipe(
     Stream.filter(
@@ -115,12 +119,24 @@ export const withLateEditorConfig = <E, R>(
 
   return Stream.merge(
     liveUpdates,
-    Stream.merge(lateEditorConfig, Stream.merge(lateCheckoutHealth, lateAutomationHold)),
+    Stream.merge(
+      Stream.fromEffect(lateEndpoints).pipe(
+        Stream.catchCause(() => Stream.empty),
+        Stream.map((endpoints) => ({ type: "directEndpointsResolved" as const, endpoints })),
+      ),
+      Stream.merge(lateEditorConfig, Stream.merge(lateCheckoutHealth, lateAutomationHold)),
+    ),
   ).pipe(
     Stream.mapAccum(
       (): ClientServerConfig => config,
       (current, event): readonly [ClientServerConfig, ReadonlyArray<ServerConfigStreamEvent>] => {
         switch (event.type) {
+          case "directEndpointsResolved": {
+            if (JSON.stringify(current.directEndpoints ?? []) === JSON.stringify(event.endpoints))
+              return [current, []];
+            const next = { ...current, directEndpoints: event.endpoints };
+            return [next, [{ version: 1, type: "snapshot", config: next }]];
+          }
           case "automationHoldResolved": {
             // A snapshot, so clients built before the field still apply it without a new event.
             if ((current.automationHold ?? null) === event.hold) return [current, []];

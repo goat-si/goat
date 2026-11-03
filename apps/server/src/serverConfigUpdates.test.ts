@@ -11,7 +11,11 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 
-import { resolveOpenDiscoveryForConfig, withProviderStatusChanges } from "./serverConfigUpdates.ts";
+import {
+  resolveOpenDiscoveryForConfig,
+  withLateEditorConfig,
+  withProviderStatusChanges,
+} from "./serverConfigUpdates.ts";
 
 const provider = (instanceId: string, checkedAt: string): ServerProvider => ({
   instanceId: ProviderInstanceId.make(instanceId),
@@ -112,5 +116,31 @@ it.effect("runs editor, remote target and direct endpoint discovery concurrently
       remoteOpenTargets: [],
       directEndpoints: [],
     });
+  }),
+);
+
+it.effect("late endpoint discovery emits a compatible config snapshot", () =>
+  Effect.gen(function* () {
+    const initial = {
+      availableEditors: [],
+      directEndpoints: [],
+      providers: [],
+    } as unknown as ServerConfig;
+    const endpoint = { kind: "tailnet" as const, httpBaseUrl: "https://fixture.tail1234.ts.net/" };
+    const events = yield* withLateEditorConfig(
+      initial,
+      Stream.empty,
+      {
+        resolveAvailableEditors: () => Effect.succeed([]),
+        resolveFileManagerRevealKind: () => Effect.sync(() => undefined),
+      },
+      Stream.empty,
+      Stream.empty,
+      Effect.succeed([endpoint]),
+    ).pipe(Stream.runCollect);
+    assert.equal(events.length, 1);
+    const event = events[0];
+    assert.equal(event?.type, "snapshot");
+    if (event?.type === "snapshot") assert.deepEqual(event.config.directEndpoints, [endpoint]);
   }),
 );
