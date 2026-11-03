@@ -4181,9 +4181,16 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     if (hostPlatform === "win32" && existing !== "reused") {
       yield* applyWindowsCheckoutSettings(input.cwd);
     }
-    const checkoutWorkers =
-      (yield* readConfigValue(input.cwd, "checkout.workers")) ??
-      defaultCheckoutWorkers(hostPlatform);
+    const [configuredCheckoutWorkers, base] = yield* Effect.all(
+      [
+        readConfigValue(input.cwd, "checkout.workers"),
+        input.newRefName && input.baseRefName
+          ? resolveBranchBase(input.cwd, input.baseRefName)
+          : Effect.succeed(null),
+      ],
+      { concurrency: "unbounded" },
+    );
+    const checkoutWorkers = configuredCheckoutWorkers ?? defaultCheckoutWorkers(hostPlatform);
     // Writes files for the new worktree. Every output line, a hook's included, counts as
     // progress. Git runs post-checkout only after the worktree is complete and unlocked, so
     // a post-checkout hook that goes silent costs the hook, not the checkout. Earlier hooks,
@@ -4436,34 +4443,29 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     }
 
     const newRefName = input.newRefName;
-    if (newRefName && input.baseRefName) {
-      const base = yield* resolveBranchBase(input.cwd, input.baseRefName);
-      if (base) {
-        yield* Effect.gen(function* () {
+    if (newRefName && base) {
+      yield* Effect.gen(function* () {
+        yield* runGit(
+          "GitVcsDriver.createWorktree.configureBaseRef",
+          input.cwd,
+          ["config", branchBaseConfigKey(newRefName), base.branchName],
+          { writesSharedConfig: true, retryConfigLock: true, env: { LC_ALL: "C" } },
+        );
+        if (base.baseRef.startsWith("refs/remotes/")) {
+          // The base key names a branch on the host; this one keeps the remote it came from.
           yield* runGit(
-            "GitVcsDriver.createWorktree.configureBaseRef",
+            "GitVcsDriver.createWorktree.configureComparisonRef",
             input.cwd,
-            ["config", branchBaseConfigKey(newRefName), base.branchName],
+            ["config", `branch.${input.newRefName}.t3-merge-base-ref`, base.baseRef],
             { writesSharedConfig: true, retryConfigLock: true, env: { LC_ALL: "C" } },
           );
-          if (base.baseRef.startsWith("refs/remotes/")) {
-            // The base key names a branch on the host; this one keeps the remote it came from.
-            yield* runGit(
-              "GitVcsDriver.createWorktree.configureComparisonRef",
-              input.cwd,
-              ["config", `branch.${input.newRefName}.t3-merge-base-ref`, base.baseRef],
-              { writesSharedConfig: true, retryConfigLock: true, env: { LC_ALL: "C" } },
-            );
-          }
-        }).pipe(
-          Effect.catchTags({
-            GitCommandError: () =>
-              Effect.logWarning(
-                "worktree base-ref configuration failed; using base-branch fallback",
-              ),
-          }),
-        );
-      }
+        }
+      }).pipe(
+        Effect.catchTags({
+          GitCommandError: () =>
+            Effect.logWarning("worktree base-ref configuration failed; using base-branch fallback"),
+        }),
+      );
     }
 
     return {
