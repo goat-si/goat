@@ -3,6 +3,27 @@ import * as Schema from "effect/Schema";
 import { ThreadId, TrimmedNonEmptyString, TurnItemId } from "./baseSchemas.ts";
 import { goatCallText } from "./agentSurface/callText.ts";
 
+export type CardDetails = {
+  readonly number: string;
+  readonly expiryMonth: string;
+  readonly expiryYear: string;
+  readonly cvc: string;
+  readonly name: string;
+};
+
+export function normalizeCardDetails(input: CardDetails): CardDetails | undefined {
+  const number = input.number.replace(/[ -]/g, "");
+  if (!/^\d{12,19}$/.test(number)) return undefined;
+  if (!/^(?:0?[1-9]|1[0-2])$/.test(input.expiryMonth)) return undefined;
+  if (!/^(?:\d{2}|\d{4})$/.test(input.expiryYear)) return undefined;
+  if (!/^\d{3,4}$/.test(input.cvc) || !/\S/.test(input.name)) return undefined;
+  return {
+    ...input,
+    number,
+    expiryYear: input.expiryYear.length === 2 ? `20${input.expiryYear}` : input.expiryYear,
+  };
+}
+
 /** Server stores the value under a one-use SecretRef; the thread learns only status. */
 export const SecretRequestAnswerInput = Schema.Struct({
   threadId: ThreadId,
