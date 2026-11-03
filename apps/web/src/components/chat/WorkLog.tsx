@@ -77,7 +77,7 @@ function WorkLogLine({ icon, label, trailing, wrapLabel }: RowContent) {
           {label}
         </div>
       </div>
-      {trailing ? <div className="select-none">{trailing}</div> : null}
+      {trailing ? <div className="contents select-none">{trailing}</div> : null}
     </div>
   );
 }
