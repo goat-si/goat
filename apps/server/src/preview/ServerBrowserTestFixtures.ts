@@ -71,11 +71,7 @@ export function makeSession(
       if (method === "Runtime.callFunctionOn")
         return {
           result: {
-            value: (input as { functionDeclaration: string }).functionDeclaration.includes(
-              "maxWidth",
-            )
-              ? null
-              : PNG_HEADER,
+            value: (input as { arguments?: unknown[] }).arguments?.length === 4 ? null : PNG_HEADER,
           },
         };
       if (method === "Page.getFrameTree") return { frameTree: { frame: { id: "main" } } };

@@ -1,5 +1,7 @@
 import type { CDPSession } from "playwright-core";
 
+// Runs in the page's own isolated world, as the server has no image library.
+// Namespaced, as an XML document's createElement makes a plain element with no getContext.
 const SHRINK_PNG = `async function (png, width, height) {
   const bytes = Uint8Array.from(atob(png), (char) => char.charCodeAt(0));
   const bitmap = await createImageBitmap(new Blob([bytes], { type: "image/png" }));
