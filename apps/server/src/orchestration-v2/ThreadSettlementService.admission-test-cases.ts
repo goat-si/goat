@@ -1,5 +1,10 @@
 import { assert, it } from "@effect/vitest";
 import {
+  backgroundReads,
+  failFastReaderAdmission,
+  makeReaderAdmission,
+} from "@goat/shared/readerAdmission";
+import {
   DEFAULT_SERVER_SETTINGS,
   EventId,
   ProjectId,
@@ -117,6 +122,67 @@ export function settlementAdmissionTests({
   startHarness,
 }: Pick<typeof Harness, "makeHarness" | "makeThread" | "makeSnapshot" | "startHarness">) {
   admissionWorkerTests();
+  it.effect(
+    "overflow reconciliation reads interactively while periodic full sweeps read in the background",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          yield* TestClock.setTime(Date.parse(NOW));
+          const gate = yield* makeReaderAdmission({
+            limit: 2,
+            backgroundLimit: 1,
+            timeout: null,
+            backgroundTimeout: null,
+            honorFailFast: true,
+            agingMs: 5000,
+          });
+          const held = yield* backgroundReads(gate.acquire());
+          const observations = yield* Queue.unbounded<string>();
+          const entered = yield* Queue.unbounded<void>();
+          const release = yield* Deferred.make<void>();
+          const blockers = Array.from({ length: 8 }, (_, index) =>
+            makeThread(`lane-blocker-${index}`, { branch: `lane-${index}` }),
+          );
+          const fixture = yield* makeHarness({
+            snapshot: makeSnapshot([]),
+            settings: {
+              ...DEFAULT_SERVER_SETTINGS,
+              sidebarAutoSettleAfterDays: null,
+              sidebarAutoSettleOnMerge: true,
+            },
+            onCandidateRead: Effect.fn("settlementAdmissionTest.observeLane")(function* (id) {
+              if (id !== undefined) return;
+              const result = yield* Effect.result(failFastReaderAdmission(gate.acquire()));
+              yield* Queue.offer(observations, result._tag === "Success" ? "admitted" : "refused");
+              if (result._tag === "Success") yield* gate.release(result.success);
+            }),
+            branchPullRequest: (input) =>
+              Queue.offer(entered, undefined).pipe(
+                Effect.andThen(Deferred.await(release)),
+                Effect.as(branchResult(input.branch)),
+              ),
+          });
+          yield* Effect.gen(function* () {
+            const service = yield* ThreadSettlementService.ThreadSettlementServiceV2;
+            yield* startHarness(service, fixture.activation, fixture.snapshotReads);
+            assert.strictEqual(yield* Queue.take(observations), "refused");
+            yield* service.drain;
+            yield* TestClock.adjust("1 minute");
+            assert.strictEqual(yield* Queue.take(observations), "refused");
+            yield* service.drain;
+            yield* Ref.set(fixture.snapshots, makeSnapshot(blockers));
+            for (const thread of blockers) yield* fixture.publishEvent(terminalEvent(thread.id));
+            for (let index = 0; index < 8; index++) yield* Queue.take(entered);
+            for (let index = 0; index < 249; index++)
+              yield* fixture.publishEvent(terminalEvent(ThreadId.make(`lane-queued-${index}`)));
+            assert.strictEqual(yield* Queue.take(observations), "admitted");
+            yield* Deferred.succeed(release, undefined);
+            yield* service.drain;
+          }).pipe(Effect.provide(fixture.layer));
+          yield* gate.release(held);
+        }),
+      ),
+  );
   it.effect("forced reconciliation bypasses a shared cache repopulated by targeted work", () =>
     Effect.scoped(
       Effect.gen(function* () {

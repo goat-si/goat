@@ -4,6 +4,7 @@ import {
   MessageId,
   type OrchestrationV2Command,
 } from "@goat/contracts";
+import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -151,6 +152,6 @@ export const layer = Layer.effectDiscard(
   Effect.gen(function* () {
     const sweep = yield* makeSweep;
     const scheduler = yield* Scheduler.Scheduler;
-    yield* scheduler.register("usage-limit-recovery", sweep());
+    yield* scheduler.register("usage-limit-recovery", NodeSqliteClient.backgroundReads(sweep()));
   }),
 );

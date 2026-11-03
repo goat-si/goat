@@ -531,6 +531,10 @@
       "types": "./src/nodeSqliteClient.ts",
       "import": "./src/nodeSqliteClient.ts"
     },
+    "./readerAdmission": {
+      "types": "./src/readerAdmission.ts",
+      "import": "./src/readerAdmission.ts"
+    },
     "./orchestrationV2BoundedSnapshot": {
       "types": "./src/orchestrationV2BoundedSnapshot.ts",
       "import": "./src/orchestrationV2BoundedSnapshot.ts"

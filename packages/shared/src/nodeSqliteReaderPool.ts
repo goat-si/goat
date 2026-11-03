@@ -1,7 +1,7 @@
 import * as Effect from "effect/Effect";
-import * as Semaphore from "effect/Semaphore";
 import type { Connection } from "effect/sql/SqlConnection";
 import type { SqlError } from "effect/sql/SqlError";
+import { admissionSqlError, makeReaderAdmission, READER_LANE_AGING_MS } from "./readerAdmission.ts";
 
 const DEFAULT_READER_POOL_SIZE = 4;
 
@@ -38,31 +38,43 @@ export const makeReaderPool = Effect.fn("SqliteReaderPool.make")(function* <R>(o
     return yield* Effect.die(new Error(`readerPoolSize must be a positive integer, got ${size}`));
   }
   const slots = yield* Effect.forEach(Array.from({ length: size }), () => options.makeSlot());
-  // Holding a permit guarantees a free slot, so choosing one never waits.
-  const permits = yield* Semaphore.make(size);
+  // Holding a token guarantees a free slot, so choosing one never waits. Background reads leave
+  // one slot to interactive reads; fail-fast belongs to client admission, so the pool always waits.
+  const gate = yield* makeReaderAdmission({
+    limit: size,
+    backgroundLimit: size > 1 ? size - 1 : size,
+    timeout: null,
+    backgroundTimeout: null,
+    honorFailFast: false,
+    agingMs: READER_LANE_AGING_MS,
+  });
   const leased = new Set<number>();
   const lease = () => {
     const index = choose(slots, leased);
     leased.add(index);
     return index;
   };
-  const release = (index: number) => {
-    leased.delete(index);
-  };
   const connection = (index: number) => {
     const acquire = slots[index]?.acquire ?? Effect.die(new Error("Unknown reader slot"));
     return options.available === undefined ? acquire : Effect.andThen(options.available, acquire);
   };
+  /** Takes a token and a free slot; run the returned release once to free the slot, then the token. */
+  const acquireLease = (restore: typeof Effect.interruptible) =>
+    Effect.map(Effect.mapError(gate.acquire(restore), admissionSqlError), (token) => {
+      const index = lease();
+      const release = Effect.sync(() => leased.delete(index)).pipe(
+        Effect.andThen(gate.release(token)),
+      );
+      return { index, release };
+    });
   // Cancelling a read retires its slot's worker; the slot returns only after that cancellation finishes.
   const use = <A, E, R2>(body: (connection: Connection) => Effect.Effect<A, E, R2>) =>
-    permits.withPermits(1)(
-      Effect.acquireUseRelease(
-        Effect.sync(lease),
-        (index) => Effect.flatMap(connection(index), body),
-        (index) => Effect.sync(() => release(index)),
+    Effect.uninterruptibleMask((restore) =>
+      Effect.flatMap(acquireLease(restore), (held) =>
+        Effect.ensuring(restore(Effect.flatMap(connection(held.index), body)), held.release),
       ),
     );
-  return { permits, lease, release, connection, use };
+  return { acquireLease, connection, use };
 });
 
 export type ReaderPool = Effect.Success<ReturnType<typeof makeReaderPool>>;

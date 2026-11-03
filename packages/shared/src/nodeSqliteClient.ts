@@ -64,12 +64,8 @@ export interface SqliteClientConfig {
 }
 
 export { isReaderAdmissionOverload } from "./readerAdmissionOverload.ts";
-import {
-  admissionSqlError,
-  makeReaderAdmission,
-  readerAdmissionTimeout,
-} from "./readerAdmission.ts";
-export { failFastReaderAdmission } from "./readerAdmission.ts";
+import { admissionSqlError, makeClientReaderAdmission } from "./readerAdmission.ts";
+export { backgroundReads, failFastReaderAdmission } from "./readerAdmission.ts";
 export { onWriter, readOnly } from "./sqliteReadRouting.ts";
 import { ReadOnly } from "./sqliteReadRouting.ts";
 
@@ -1122,11 +1118,7 @@ const make = Effect.fn("makeWithDatabase")(function* (
           size: options.readerPoolSize,
         })
       : undefined;
-  const admission = yield* makeReaderAdmission({
-    limit: 64,
-    timeout: readerAdmissionTimeout(options.readerAdmissionTimeout),
-    honorFailFast: true,
-  });
+  const admission = yield* makeClientReaderAdmission(options.readerAdmissionTimeout);
   const admit = (target: { readonly name: Acquired["connection"] }) =>
     target.name === "reader"
       ? Effect.withFiber((fiber) =>
@@ -1134,9 +1126,10 @@ const make = Effect.fn("makeWithDatabase")(function* (
             .acquire(fiber.getRef(TransactionAcquire)?.restore ?? fiber.getRef(ReadOnly))
             .pipe(Effect.mapError(admissionSqlError)),
         )
-      : Effect.void;
-  const releaseAdmission = (target: { readonly name: Acquired["connection"] }) =>
-    target.name === "reader" ? admission.release : Effect.void;
+      : // @effect-diagnostics-next-line effectSucceedWithVoid:off - Writers hold no token, which release reads as undefined.
+        Effect.succeed(undefined);
+  const releaseAdmission = (token: Effect.Success<ReturnType<typeof admit>>) =>
+    token === undefined ? Effect.void : admission.release(token);
 
   const writer = { name: "writer" as const, lock: semaphore, connection };
   let activeWriter: ConnectionOwner | undefined;
@@ -1228,12 +1221,12 @@ const make = Effect.fn("makeWithDatabase")(function* (
               );
             }),
           ),
-        () => releaseAdmission(candidate),
+        releaseAdmission,
       ),
     );
   const transactionAcquirer = Effect.flatMap(candidate, (candidate) =>
     Effect.andThen(
-      Effect.acquireRelease(admit(candidate), () => releaseAdmission(candidate)),
+      Effect.acquireRelease(admit(candidate), releaseAdmission),
       Effect.flatMap(lockTarget(candidate), (target) =>
         Effect.uninterruptibleMask((restore) => {
           const fiber = Fiber.getCurrent()!;
@@ -1243,12 +1236,19 @@ const make = Effect.fn("makeWithDatabase")(function* (
           const pending = fiber.getRef(TransactionAcquire);
           const ownerAtWaitStart = target.name === "writer" ? activeWriter : undefined;
           const owner = target.name === "writer" ? connectionOwner(fiber) : undefined;
-          const lock = "pool" in target ? target.pool.permits : target.lock;
+          const wait = pending?.restore ?? restore;
           let leased = -1;
-          const acquire = Effect.tap((pending?.restore ?? restore)(lock.take(1)), () => {
+          const lease =
+            "pool" in target
+              ? target.pool.acquireLease(wait)
+              : Effect.as(wait(target.lock.take(1)), {
+                  index: -1,
+                  release: target.lock.release(1),
+                });
+          const acquire = Effect.tap(lease, (held) => {
             if (target.name === "writer") activeWriter = owner;
             // The transaction keeps this slot until its scope closes; it never resumes on another worker.
-            if ("pool" in target) leased = target.pool.lease();
+            leased = held.index;
             if (pending !== undefined) {
               pending.acquired = acquired(target, clock, start);
               pending.ownerAtWaitStart = ownerAtWaitStart;
@@ -1257,8 +1257,7 @@ const make = Effect.fn("makeWithDatabase")(function* (
               scope,
               Effect.sync(() => {
                 if (target.name === "writer" && activeWriter === owner) activeWriter = undefined;
-                if ("pool" in target && leased >= 0) target.pool.release(leased);
-              }).pipe(Effect.andThen(lock.release(1))),
+              }).pipe(Effect.andThen(held.release)),
             );
           });
           return Effect.andThen(
