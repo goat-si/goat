@@ -15,11 +15,17 @@ import {
   openCodeChildPermissionRules,
   openCodeOwnsSubagentDeny,
   openCodePermissionRules,
+  openCodePermissionRequestKind,
   withOpenCodeSubagentDeny,
+  type OpenCodePermissionRequestKind,
 } from "./permissionRules.ts";
 import { recordString, recordValue } from "./records.ts";
 
-export { openCodeChildPermissionRules, openCodePermissionRules } from "./permissionRules.ts";
+export {
+  openCodeChildPermissionRules,
+  openCodePermissionRequestKind,
+  openCodePermissionRules,
+} from "./permissionRules.ts";
 import { getModelSelectionStringOptionValue } from "@goat/shared/model";
 import { causeErrorTag } from "@goat/shared/observability";
 import {
@@ -41,7 +47,6 @@ import {
   type PlanId,
   ProviderDriverKind,
   type ProviderInstanceId,
-  type ProviderRequestKind,
   type ProviderSessionId,
   type RuntimeRequestId,
   type ThreadId,
@@ -532,45 +537,6 @@ function sdkResponseForRawLog(value: unknown): unknown {
   if ("data" in value) return { data: (value as { readonly data?: unknown }).data ?? null };
   if ("stream" in value) return { subscribed: true };
   return value;
-}
-
-type OpenCodePermissionRequestKind = Extract<
-  ProviderRequestKind,
-  "command" | "file-read" | "file-change"
->;
-
-export function openCodePermissionRequestKind(
-  permission: string,
-  toolName?: string,
-): OpenCodePermissionRequestKind {
-  const normalized = permission.toLowerCase();
-  const normalizedTool = toolName?.toLowerCase() ?? "";
-  if (
-    normalized === "edit" ||
-    normalized === "write" ||
-    normalized === "patch" ||
-    normalized === "apply_patch" ||
-    normalizedTool === "edit" ||
-    normalizedTool === "write" ||
-    normalizedTool === "patch" ||
-    normalizedTool === "apply_patch"
-  ) {
-    return "file-change";
-  }
-  if (
-    normalized === "read" ||
-    normalized === "glob" ||
-    normalized === "grep" ||
-    normalized === "lsp" ||
-    normalized === "external_directory" ||
-    normalizedTool === "read" ||
-    normalizedTool.includes("glob") ||
-    normalizedTool.includes("grep") ||
-    normalizedTool.includes("search")
-  ) {
-    return "file-read";
-  }
-  return "command";
 }
 
 /** Boundaries are exclusive: use the next user message, or omit at head to retain the selected turn. */
@@ -3702,6 +3668,12 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                   }),
               );
               const nativeSession = unwrapData("session.fork", response);
+              const permission = openCodePermissionRules(
+                forkInput.runtimePolicy ?? input.runtimePolicy,
+              );
+              yield* sdkCall("session.update", { sessionID: nativeSession.id }, () =>
+                client.session.update({ sessionID: nativeSession.id, permission }),
+              );
               const forkedAt = yield* DateTime.now;
               const providerThread = makeProviderThread({
                 idAllocator,
@@ -3720,7 +3692,10 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
                 },
                 now: forkedAt,
               });
-              registerThread(nativeSession, providerThread, null);
+              Object.assign(registerThread(nativeSession, providerThread, null), {
+                permission,
+                subagentsDenied: false,
+              });
               return providerThread;
             },
             (effect, forkInput) =>
