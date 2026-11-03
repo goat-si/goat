@@ -169,6 +169,7 @@ const VERBS: Readonly<Record<ScreenMethod, Verb>> = {
   tab_upload: "upload",
   tab_evaluate: "evaluate",
   tab_fill_secret: "fill secret",
+  tab_fill_login: "fill secret",
   tab_logs: "observe",
 };
 

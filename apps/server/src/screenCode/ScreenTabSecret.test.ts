@@ -280,3 +280,129 @@ it.live("evaluation returns page objects without stripping their keys", () => {
     ),
   );
 });
+
+it.live("fillLogin sends the reference and returns confirmed delivery", () => {
+  const owned = { ...formTab, owner: "agent" as const, ownedByCaller: true };
+  const calls: unknown[] = [];
+  const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+    listBoundTabs: () => Effect.succeed([owned]),
+    invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) => {
+      if (request.operation === "fillLogin") {
+        calls.push(request.input);
+        return Effect.succeed({
+          usernameFilled: true,
+          passwordFilled: true,
+          verdict: "confirmed",
+        } as A);
+      }
+      return Effect.succeed({
+        tabId: formTab.tabId,
+        url: formTab.url,
+        control: { owner: "agent", ownedByCaller: true, generation: 0 },
+      } as A);
+    },
+  };
+  return runCells(broker, [
+    "const tab = await screen.tab('form'); return await tab.fillLogin('ref');",
+  ]).pipe(
+    Effect.map(([result]) => {
+      expect(
+        result,
+        JSON.stringify(result?._tag === "Success" ? { ...result.success, api: undefined } : result),
+      ).toMatchObject({
+        _tag: "Success",
+        success: {
+          status: "completed",
+          value: { usernameFilled: true, passwordFilled: true, verdict: "confirmed" },
+        },
+      });
+      expect(calls).toEqual([{ secretRef: "ref" }]);
+    }),
+  );
+});
+
+it.live.each([
+  { usernameFilled: true, passwordFilled: false, verdict: "unverifiable" as const },
+  {
+    usernameFilled: false,
+    passwordFilled: false,
+    verdict: "refused" as const,
+    code: "ambiguous_password",
+  },
+])("fillLogin preserves partial or refused delivery in the cell result", (delivery) => {
+  const owned = { ...formTab, owner: "agent" as const, ownedByCaller: true };
+  const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+    listBoundTabs: () => Effect.succeed([owned]),
+    invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) =>
+      Effect.succeed(
+        (request.operation === "fillLogin"
+          ? delivery
+          : {
+              tabId: formTab.tabId,
+              url: formTab.url,
+              control: { owner: "agent", ownedByCaller: true, generation: 0 },
+            }) as A,
+      ),
+  };
+  return runCells(broker, [
+    "const tab = await screen.tab('form'); return await tab.fillLogin('ref');",
+  ]).pipe(
+    Effect.map(([result]) => {
+      expect(result).toMatchObject({
+        _tag: "Success",
+        success: { status: "completed", value: delivery },
+      });
+      if (result?._tag === "Success") {
+        const receipt = result.success.journal.find(
+          (item) => item.receipt.method === "tab_fill_login",
+        )?.receipt;
+        expect(receipt?.outcome?.effect).toBe("unknown");
+      }
+    }),
+  );
+});
+
+it.live("fillLogin focuses an observed target before using the reference", () => {
+  const operations: string[] = [];
+  const owned = { ...formTab, owner: "agent" as const, ownedByCaller: true };
+  const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+    listBoundTabs: () => Effect.succeed([owned]),
+    invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) => {
+      operations.push(request.operation);
+      if (request.operation === "snapshot")
+        return Effect.succeed({
+          url: formTab.url,
+          title: "Form",
+          loading: false,
+          accessibilityTree: '- textbox "Password" [ref=e1]',
+          treeComplete: true,
+          refGeneration: "test",
+        } as A);
+      if (request.operation === "fillLogin")
+        return Effect.succeed({
+          usernameFilled: true,
+          passwordFilled: true,
+          verdict: "confirmed",
+        } as A);
+      return Effect.succeed({
+        tabId: formTab.tabId,
+        url: formTab.url,
+        control: { owner: "agent", ownedByCaller: true, generation: 0 },
+      } as A);
+    },
+  };
+  return runCells(broker, [
+    "const tab = await screen.tab('form'); await tab.observe(); return await tab.fillLogin('ref', 'Password');",
+  ]).pipe(
+    Effect.map(([result]) => {
+      expect(result).toMatchObject({
+        _tag: "Success",
+        success: { status: "completed", value: { verdict: "confirmed" } },
+      });
+      expect(operations.filter((op) => op === "click" || op === "fillLogin")).toEqual([
+        "click",
+        "fillLogin",
+      ]);
+    }),
+  );
+});

@@ -1,5 +1,14 @@
 export const screenTabExtrasPrelude = String.raw`
 const __tabExtras = (tab, call, aim, act, seen) => ({
+  fillLogin: async (secretRef, target) => {
+    if (!tab) throw new ScreenError('unsupported', 'Login fill is only available on tabs.', true);
+    if (target !== undefined) {
+      const named = typeof target === 'string' && seen.observation && seen.observation.elements.some((item) => item.name === target);
+      const aimed = named ? aim({ name: target }) : target && target.targetId && target.observationId ? { ref: target } : aim(target);
+      await act('click', 'click', aimed);
+    }
+    return call('tab_fill_login', { secretRef });
+  },
   fillSecret: async (target, secretRef) => {
     if (!tab) throw new ScreenError('unsupported', 'Secret fill is only available on tabs.', true);
     if (target && typeof target.selector === 'string')

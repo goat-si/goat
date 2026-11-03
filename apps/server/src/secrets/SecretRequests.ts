@@ -50,10 +50,19 @@ const StoredSecret = Schema.fromJsonString(
     value: Schema.String,
     savedAt: Schema.Number,
     origin: Schema.optional(Schema.String),
+    loginThreadId: Schema.optional(Schema.String),
+    loginInFlight: Schema.optional(Schema.Boolean),
   }),
 );
+const LoginItem = Schema.fromJsonString(
+  Schema.Struct({ username: Schema.String, password: Schema.String }),
+);
+const encodeLogin = Schema.encodeEffect(LoginItem);
+const decodeLogin = Schema.decodeUnknownOption(LoginItem);
 const encodeStored = Schema.encodeEffect(StoredSecret);
 const decodeStored = Schema.decodeUnknownOption(StoredSecret);
+
+export type LoginDelivery = "none" | "partial" | "complete" | "uncertain";
 
 export class SecretRequests extends Context.Service<
   SecretRequests,
@@ -81,6 +90,13 @@ export class SecretRequests extends Context.Service<
       readonly threadId: ThreadId;
       readonly origin: string;
     }) => Effect.Effect<string, SecretRequestError>;
+    readonly useLogin: <E, R>(
+      input: { readonly ref: SecretRef; readonly threadId: ThreadId; readonly origin: string },
+      use: (item: {
+        readonly username: string;
+        readonly password: string;
+      }) => Effect.Effect<LoginDelivery, E, R>,
+    ) => Effect.Effect<LoginDelivery, SecretRequestError | E, R>;
     /** Moves a saved `file` request's value to an owner-only file and returns its path. */
     readonly saveToFile: (input: {
       readonly threadId: ThreadId;
@@ -121,6 +137,18 @@ const make = Effect.gen(function* () {
         return yield* new SecretRequestError({ reason: "already_answered" });
       }
       if (
+        input.answer.type !== "decline" &&
+        (item.requestKind === "login") !== (input.answer.type === "save_login")
+      ) {
+        return yield* new SecretRequestError({ reason: "answer_mismatch" });
+      }
+      if (
+        input.answer.type === "save_login" &&
+        input.answer.password.length < SIGN_IN_SECRET_MIN_LENGTH
+      ) {
+        return yield* new SecretRequestError({ reason: "too_short_for_sign_in" });
+      }
+      if (
         input.answer.type === "save" &&
         item.siteOrigin !== undefined &&
         input.answer.secret.length < SIGN_IN_SECRET_MIN_LENGTH
@@ -133,10 +161,17 @@ const make = Effect.gen(function* () {
       }
       // Create before recording so racing answers cannot overwrite values or show saved before storage.
       // Existing values on pending cards finish earlier saves whose recording failed.
-      if (input.answer.type === "save") {
+      if (input.answer.type !== "decline") {
         const encoded = yield* encodeStored({
           projectId: records.thread.projectId,
-          value: input.answer.secret,
+          value:
+            input.answer.type === "save"
+              ? input.answer.secret
+              : yield* encodeLogin({
+                  username: input.answer.username,
+                  password: input.answer.password,
+                }).pipe(Effect.orDie),
+          ...(input.answer.type === "save_login" ? { loginThreadId: input.threadId } : {}),
           savedAt: yield* Clock.currentTimeMillis,
           ...(item.siteOrigin === undefined ? {} : { origin: item.siteOrigin }),
         }).pipe(Effect.orDie);
@@ -152,7 +187,7 @@ const make = Effect.gen(function* () {
             ),
           );
       }
-      const secretStatus = input.answer.type === "save" ? "saved" : "declined";
+      const secretStatus = input.answer.type === "decline" ? "declined" : "saved";
       yield* threadManagement
         .dispatch({
           type: "secret_request.record",
@@ -167,18 +202,19 @@ const make = Effect.gen(function* () {
           ...(item.placeholder === undefined ? {} : { placeholder: item.placeholder }),
           ...(item.delivery === undefined ? {} : { delivery: item.delivery }),
           ...(item.siteOrigin === undefined ? {} : { siteOrigin: item.siteOrigin }),
+          ...(item.requestKind === undefined ? {} : { requestKind: item.requestKind }),
           secretStatus,
         })
         .pipe(
           Effect.mapError((cause) => new SecretRequestError({ reason: "record_failed", cause })),
           // Clear failed saves so the pending card can be answered again.
           Effect.tapError(() =>
-            input.answer.type === "save"
+            input.answer.type !== "decline"
               ? removeLogged(storeName(refFor(salt, input.threadId, item.id)))
               : Effect.void,
           ),
         );
-      if (input.answer.type !== "save") return;
+      if (input.answer.type === "decline") return;
       // The wait may have closed the card; delete unrecorded answers because no one receives their refs.
       const recorded = yield* threadManagement
         .getThreadRecords(input.threadId, ["turnItems"], {
@@ -255,6 +291,8 @@ const make = Effect.gen(function* () {
     readonly origin?: string;
   }) {
     const stored = yield* readRef(input);
+    if (stored.loginThreadId !== undefined)
+      return yield* new SecretRequestError({ reason: "login_ref" });
     // Checked before removal, so a wrong destination leaves the ref usable on its own site.
     if (input.origin === undefined && stored.origin !== undefined) {
       return yield* new SecretRequestError({ reason: "origin_bound" });
@@ -291,6 +329,54 @@ const make = Effect.gen(function* () {
       ),
     );
   });
+
+  const writeLoginRef = Effect.fn("SecretRequests.writeLoginRef")(
+    (ref: SecretRef, entry: typeof StoredSecret.Type) =>
+      encodeStored(entry).pipe(
+        Effect.orDie,
+        Effect.flatMap((encoded) => store.set(storeName(ref), new TextEncoder().encode(encoded))),
+        Effect.mapError((cause) => new SecretRequestError({ reason: "store_failed", cause })),
+      ),
+  );
+
+  const useLogin: SecretRequests["Service"]["useLogin"] = (input, use) =>
+    Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const records = yield* threadManagement
+          .getThreadRecords(input.threadId, [])
+          .pipe(
+            Effect.mapError((cause) => new SecretRequestError({ reason: "load_failed", cause })),
+          );
+        const { stored, login } = yield* Effect.gen(function* () {
+          const stored = yield* readRef({ ref: input.ref, projectId: records.thread.projectId });
+          if (stored.loginThreadId !== input.threadId || stored.loginInFlight === true)
+            return yield* new SecretRequestError({ reason: "ref_unavailable" });
+          if (stored.origin !== input.origin)
+            return yield* new SecretRequestError({ reason: "origin_mismatch" });
+          const login = decodeLogin(stored.value);
+          if (Option.isNone(login)) return yield* new SecretRequestError({ reason: "read_failed" });
+          yield* writeLoginRef(input.ref, { ...stored, loginInFlight: true });
+          return { stored, login: login.value };
+        }).pipe(consumeLock.withPermits(1));
+        const delivery = yield* restore(use(login)).pipe(
+          Effect.catchCause((cause) =>
+            removeLogged(storeName(input.ref)).pipe(
+              consumeLock.withPermits(1),
+              Effect.andThen(Effect.failCause(cause)),
+            ),
+          ),
+        );
+        return yield* Effect.gen(function* () {
+          if (delivery === "none") {
+            yield* writeLoginRef(input.ref, stored);
+            return delivery;
+          }
+          if (!(yield* removeLogged(storeName(input.ref))))
+            return yield* new SecretRequestError({ reason: "consume_failed" });
+          return delivery;
+        }).pipe(consumeLock.withPermits(1));
+      }),
+    ).pipe(Effect.withSpan("SecretRequests.useLogin"));
 
   const saveToFile: SecretRequests["Service"]["saveToFile"] = Effect.fn(
     "SecretRequests.saveToFile",
@@ -393,7 +479,7 @@ const make = Effect.gen(function* () {
     Effect.forkScoped,
   );
 
-  return SecretRequests.of({ answer, savedRef, consume, consumeForOrigin, saveToFile });
+  return SecretRequests.of({ answer, savedRef, consume, consumeForOrigin, useLogin, saveToFile });
 });
 
 export const layer = Layer.effect(SecretRequests, make);

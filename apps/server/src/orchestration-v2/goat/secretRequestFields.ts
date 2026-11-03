@@ -11,7 +11,9 @@ export const secretRequestOptionalFields = (
   existing: Extract<OrchestrationV2TurnItem, { readonly type: "secret_request" }> | undefined,
 ) => {
   const siteOrigin = existing === undefined ? command.siteOrigin : existing.siteOrigin;
+  const requestKind = existing === undefined ? command.requestKind : existing.requestKind;
   return {
+    ...(requestKind === undefined ? {} : { requestKind }),
     ...(command.placeholder === undefined ? {} : { placeholder: command.placeholder }),
     ...(command.delivery === undefined ? {} : { delivery: command.delivery }),
     ...(siteOrigin === undefined ? {} : { siteOrigin }),

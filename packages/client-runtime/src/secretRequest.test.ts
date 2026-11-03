@@ -2,6 +2,7 @@ import { SecretRequestError } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  secretRequestAnswerInput,
   secretRequestDisplay,
   secretRequestFailureMessage,
   secretRequestPrivacyNote,
@@ -42,4 +43,31 @@ describe("secretRequestFailureMessage", () => {
     );
     expect(secretRequestFailureMessage(undefined)).toBe("Could not answer the request. Try again.");
   });
+});
+
+it("requires both login fields and builds a private login answer", () => {
+  const item = { id: "turn-item:login", threadId: "thread:login" } as never;
+  expect(
+    secretRequestAnswerInput(item, { type: "save_login", username: " ", password: "password" }),
+  ).toBeNull();
+  expect(
+    secretRequestAnswerInput(item, { type: "save_login", username: "user", password: " " }),
+  ).toBeNull();
+  expect(
+    secretRequestAnswerInput(item, {
+      type: "save_login",
+      username: " user ",
+      password: " password ",
+    }),
+  ).toEqual({
+    threadId: "thread:login",
+    turnItemId: "turn-item:login",
+    answer: { type: "save_login", username: "user", password: " password " },
+  });
+});
+
+it("explains that the agent receives only a reference to the site-bound login", () => {
+  expect(
+    secretRequestPrivacyNote({ requestKind: "login", siteOrigin: "https://example.com" }),
+  ).toBe("The agent gets only a reference. GOAT fills this login on https://example.com");
 });

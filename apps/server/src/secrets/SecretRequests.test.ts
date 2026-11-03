@@ -10,6 +10,8 @@ import {
   TurnItemId,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Metric from "effect/Metric";
@@ -37,6 +39,7 @@ const withService = <A, E>(
     readonly threadId?: ThreadId;
     readonly delivery?: "file";
     readonly siteOrigin?: string;
+    readonly requestKind?: "login";
     readonly directory?: string;
     readonly runStatus?: string;
     readonly removeFails?: boolean;
@@ -109,6 +112,7 @@ const withService = <A, E>(
                 reason: "Used as GH_TOKEN.",
                 ...(options.delivery === undefined ? {} : { delivery: options.delivery }),
                 ...(options.siteOrigin === undefined ? {} : { siteOrigin: options.siteOrigin }),
+                ...(options.requestKind === undefined ? {} : { requestKind: options.requestKind }),
                 secretStatus,
               },
             ],
@@ -556,4 +560,309 @@ it.effect(
         }),
       { siteOrigin: "https://example.com" },
     ),
+);
+
+it.effect("rejects a single-secret answer to a login request without storing it", () =>
+  withService(
+    ({ service, stored }) =>
+      Effect.gen(function* () {
+        const error = yield* service
+          .answer({
+            threadId,
+            turnItemId,
+            answer: { type: "save", secret: "test-password" },
+          })
+          .pipe(Effect.flip);
+        assert.equal(error.reason, "answer_mismatch");
+        assert.deepEqual(valuesOf(stored), []);
+      }),
+    { requestKind: "login", siteOrigin: "https://example.com" },
+  ),
+);
+
+it.effect("rejects a login answer to a single-secret request without storing it", () =>
+  withService(({ service, stored }) =>
+    Effect.gen(function* () {
+      const error = yield* service
+        .answer({
+          threadId,
+          turnItemId,
+          answer: { type: "save_login", username: "test-user", password: "test-password" },
+        })
+        .pipe(Effect.flip);
+      assert.equal(error.reason, "answer_mismatch");
+      assert.deepEqual(valuesOf(stored), []);
+    }),
+  ),
+);
+
+it.effect("stores a login answer privately and refuses the single-secret consumer", () =>
+  withService(
+    ({ service, stored, dispatched }) =>
+      Effect.gen(function* () {
+        yield* service.answer({
+          threadId,
+          turnItemId,
+          answer: { type: "save_login", username: "test-user", password: "test-password" },
+        });
+        const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
+        const result = yield* service
+          .consumeForOrigin({ ref, threadId, origin: "https://example.com" })
+          .pipe(Effect.flip);
+        assert.equal(result.reason, "login_ref");
+        assert.equal(valuesOf(stored).length, 1);
+        assert.isFalse(JSON.stringify(dispatched).includes("test-user"));
+        assert.isFalse(JSON.stringify(dispatched).includes("test-password"));
+      }),
+    { requestKind: "login", siteOrigin: "https://example.com" },
+  ),
+);
+
+it.effect("a login item is bound to its requesting thread and origin", () =>
+  withService(
+    ({ service }) =>
+      Effect.gen(function* () {
+        yield* service.answer({
+          threadId,
+          turnItemId,
+          answer: { type: "save_login", username: "test-user", password: "test-password" },
+        });
+        const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
+        const use = (owner: ThreadId, origin: string) =>
+          service.useLogin({ ref, threadId: owner, origin }, () =>
+            Effect.succeed("complete" as const),
+          );
+        assert.equal(
+          (yield* use(ThreadId.make("other-thread"), "https://example.com").pipe(Effect.flip))
+            .reason,
+          "ref_unavailable",
+        );
+        assert.equal(
+          (yield* use(threadId, "https://other.example").pipe(Effect.flip)).reason,
+          "origin_mismatch",
+        );
+        assert.equal(yield* use(threadId, "https://example.com"), "complete");
+      }),
+    { requestKind: "login", siteOrigin: "https://example.com" },
+  ),
+);
+
+it.effect(
+  "a login with no delivery stays available, and concurrent complete fills use it once",
+  () =>
+    withService(
+      ({ service }) =>
+        Effect.gen(function* () {
+          yield* service.answer({
+            threadId,
+            turnItemId,
+            answer: { type: "save_login", username: "test-user", password: "test-password" },
+          });
+          const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
+          const input = { ref, threadId, origin: "https://example.com" };
+          assert.equal(
+            yield* service.useLogin(input, () => Effect.succeed("none" as const)),
+            "none",
+          );
+          const results = yield* Effect.forEach(
+            [
+              service.useLogin(input, () => Effect.succeed("complete" as const)),
+              service.useLogin(input, () => Effect.succeed("complete" as const)),
+            ],
+            Effect.result,
+            { concurrency: "unbounded" },
+          );
+          assert.deepEqual(results.map((result) => result._tag).toSorted(), ["Failure", "Success"]);
+        }),
+      { requestKind: "login", siteOrigin: "https://example.com" },
+    ),
+);
+
+it.effect.each(["partial", "complete", "uncertain"] as const)(
+  "keeps a %s login unavailable if deleting its stored item fails",
+  (delivery) =>
+    withService(
+      ({ service }) =>
+        Effect.gen(function* () {
+          yield* service.answer({
+            threadId,
+            turnItemId,
+            answer: { type: "save_login", username: "test-user", password: "test-password" },
+          });
+          const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
+          const input = { ref, threadId, origin: "https://example.com" };
+          const error = yield* service
+            .useLogin(input, (item) => {
+              assert.deepEqual(item, { username: "test-user", password: "test-password" });
+              return Effect.succeed(delivery);
+            })
+            .pipe(Effect.flip);
+          assert.equal(error.reason, "consume_failed");
+          assert.equal(
+            (yield* service
+              .useLogin(input, () => Effect.succeed("complete" as const))
+              .pipe(Effect.flip)).reason,
+            "ref_unavailable",
+          );
+        }),
+      { requestKind: "login", siteOrigin: "https://example.com", removeFails: true },
+    ),
+);
+
+it.effect("an uncertain login delivery remains unavailable", () =>
+  withService(
+    ({ service }) =>
+      Effect.gen(function* () {
+        yield* service.answer({
+          threadId,
+          turnItemId,
+          answer: { type: "save_login", username: "test-user", password: "test-password" },
+        });
+        const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
+        const input = { ref, threadId, origin: "https://example.com" };
+        assert.equal(
+          yield* service.useLogin(input, () => Effect.fail("unknown delivery")).pipe(Effect.flip),
+          "unknown delivery",
+        );
+        assert.isTrue(Option.isNone(yield* service.savedRef({ threadId, turnItemId })));
+        assert.equal(
+          (yield* service
+            .useLogin(input, () => Effect.succeed("complete" as const))
+            .pipe(Effect.flip)).reason,
+          "ref_unavailable",
+        );
+      }),
+    { requestKind: "login", siteOrigin: "https://example.com" },
+  ),
+);
+
+it.effect("a held login fill does not block an unrelated secret and reserves its own ref", () =>
+  withService(
+    ({ service, stored }) =>
+      Effect.gen(function* () {
+        yield* service.answer({
+          threadId,
+          turnItemId,
+          answer: { type: "save_login", username: "test-user", password: "test-password" },
+        });
+        const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
+        const otherRef = SecretRef.make(`secret-ref:${"a".repeat(32)}`);
+        stored.set(
+          `secret-request-${"a".repeat(32)}`,
+          new TextEncoder().encode(
+            JSON.stringify({
+              projectId,
+              value: "other-secret",
+              savedAt: 0,
+              origin: "https://example.com",
+            }),
+          ),
+        );
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const input = { ref, threadId, origin: "https://example.com" };
+        const first = yield* service
+          .useLogin(input, () =>
+            Deferred.succeed(entered, undefined).pipe(
+              Effect.andThen(Deferred.await(release)),
+              Effect.as("complete" as const),
+            ),
+          )
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(entered);
+        const other = yield* service.consumeForOrigin({
+          ref: otherRef,
+          threadId,
+          origin: "https://example.com",
+        });
+        assert.equal(other, "other-secret");
+        const duplicate = yield* service
+          .useLogin(input, () => Effect.succeed("complete" as const))
+          .pipe(Effect.flip);
+        assert.equal(duplicate.reason, "ref_unavailable");
+        yield* Deferred.succeed(release, undefined);
+        assert.equal(yield* Fiber.join(first), "complete");
+      }),
+    { requestKind: "login", siteOrigin: "https://example.com" },
+  ),
+);
+
+it.effect("a partially delivered login is consumed and cannot be reused", () =>
+  withService(
+    ({ service }) =>
+      Effect.gen(function* () {
+        yield* service.answer({
+          threadId,
+          turnItemId,
+          answer: { type: "save_login", username: "test-user", password: "test-password" },
+        });
+        const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
+        const input = { ref, threadId, origin: "https://example.com" };
+        assert.equal(
+          yield* service.useLogin(input, () => Effect.succeed("partial" as const)),
+          "partial",
+        );
+        assert.isTrue(Option.isNone(yield* service.savedRef({ threadId, turnItemId })));
+        assert.equal(
+          (yield* service
+            .useLogin(input, () => Effect.succeed("complete" as const))
+            .pipe(Effect.flip)).reason,
+          "ref_unavailable",
+        );
+      }),
+    { requestKind: "login", siteOrigin: "https://example.com" },
+  ),
+);
+
+it.effect("an explicitly uncertain login is removed and cannot be reused", () =>
+  withService(
+    ({ service }) =>
+      Effect.gen(function* () {
+        yield* service.answer({
+          threadId,
+          turnItemId,
+          answer: { type: "save_login", username: "test-user", password: "test-password" },
+        });
+        const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
+        const input = { ref, threadId, origin: "https://example.com" };
+        assert.equal(
+          yield* service.useLogin(input, () => Effect.succeed("uncertain" as const)),
+          "uncertain",
+        );
+        assert.isTrue(Option.isNone(yield* service.savedRef({ threadId, turnItemId })));
+        assert.equal(
+          (yield* service
+            .useLogin(input, () => Effect.succeed("complete" as const))
+            .pipe(Effect.flip)).reason,
+          "ref_unavailable",
+        );
+      }),
+    { requestKind: "login", siteOrigin: "https://example.com" },
+  ),
+);
+
+it.effect("an unexpected login failure remains unusable if deletion fails", () =>
+  withService(
+    ({ service }) =>
+      Effect.gen(function* () {
+        yield* service.answer({
+          threadId,
+          turnItemId,
+          answer: { type: "save_login", username: "test-user", password: "test-password" },
+        });
+        const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
+        const input = { ref, threadId, origin: "https://example.com" };
+        assert.equal(
+          yield* service.useLogin(input, () => Effect.fail("unknown delivery")).pipe(Effect.flip),
+          "unknown delivery",
+        );
+        assert.equal(
+          (yield* service
+            .useLogin(input, () => Effect.succeed("complete" as const))
+            .pipe(Effect.flip)).reason,
+          "ref_unavailable",
+        );
+      }),
+    { requestKind: "login", siteOrigin: "https://example.com", removeFails: true },
+  ),
 );
