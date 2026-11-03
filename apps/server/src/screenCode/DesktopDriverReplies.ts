@@ -94,6 +94,7 @@ const classifyDriverError = (
   const nested = string(object(structured?.refusal)?.code);
   const outer = string(structured?.code);
   const evidence = driverReplyEvidence(tool, reply, args);
+  if (evidence.successfulRead) return undefined;
   const driverCode = evidence.terminal ?? nested ?? outer;
   const safety =
     evidence.effectStarted && evidence.terminal !== undefined

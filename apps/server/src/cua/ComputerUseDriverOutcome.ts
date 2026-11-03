@@ -116,8 +116,13 @@ export const driverReplyEvidence = (tool: string | undefined, message: unknown, 
   const result = isRecord(envelope.result) ? envelope.result : {};
   const error = isRecord(envelope.error) ? envelope.error : undefined;
   const fields = [result.structuredContent, error, error?.data].filter(isRecord);
+  const logs = fields.filter((value) => "calls" in value);
   const read =
-    isReadOnlyCall(tool, args) || (tool === "run_script" && fields.some(scriptSentNothing));
+    isReadOnlyCall(tool, args) ||
+    (tool === "run_script" &&
+      envelope.status !== "unknown_outcome" &&
+      logs.some((value) => Array.isArray(value.calls) && value.calls.length > 0) &&
+      logs.every(scriptSentNothing));
   const codes = fields.flatMap((value) => [
     value.code,
     isRecord(value.refusal) ? value.refusal.code : undefined,
@@ -127,19 +132,19 @@ export const driverReplyEvidence = (tool: string | undefined, message: unknown, 
     result.isError === true ||
     envelope.status === "unknown_outcome" ||
     envelope.status === "not_started";
+  const successfulRead = read && !failure;
   const started = fields.some((value) => value.effect !== undefined && value.effect !== "refused");
   const marked = fields.some(
     (value) => isRecord(value.safety) && value.safety.possibleCommit === true,
   );
   const refused = fields.some((value) => value.effect === "refused" || value.status === "refused");
-  const terminal: "stopped_by_person" | "screen_locked" | undefined =
-    read && !failure && (!refused || started)
-      ? undefined
-      : codes.includes("stopped_by_person")
-        ? "stopped_by_person"
-        : codes.includes("screen_locked")
-          ? "screen_locked"
-          : undefined;
+  const terminal: "stopped_by_person" | "screen_locked" | undefined = successfulRead
+    ? undefined
+    : codes.includes("stopped_by_person")
+      ? "stopped_by_person"
+      : codes.includes("screen_locked")
+        ? "screen_locked"
+        : undefined;
   const refusedBeforeDispatch =
     !started &&
     !marked &&
@@ -148,10 +153,16 @@ export const driverReplyEvidence = (tool: string | undefined, message: unknown, 
   return {
     terminal,
     read,
-    priorCommit: marked,
+    emptyScriptLog:
+      tool === "run_script" &&
+      logs.length > 0 &&
+      logs.every((value) => Array.isArray(value.calls) && value.calls.length === 0),
+    scriptMayHaveInput: tool === "run_script" && logs.some((value) => !scriptSentNothing(value)),
+    successfulRead,
+    priorCommit: marked && !successfulRead,
     refusedBeforeDispatch,
     effectStarted:
-      marked ||
+      (marked && !successfulRead) ||
       (!read &&
         (started ||
           envelope.status === "unknown_outcome" ||
@@ -179,7 +190,7 @@ export function driverOutcomeSafety(
   if (evidence.terminal !== undefined) return { ...safety, retryClass: "never" };
   const marked = markedSafety(message);
   return !safety.possibleCommit &&
-    !isReadOnlyCall(tool, args) &&
+    !evidence.read &&
     isRecord(marked) &&
     marked.possibleCommit === true
     ? classifyActionOutcome({ effect: "write", status: "indeterminate", dispatched: true })
@@ -216,9 +227,13 @@ function classifiedSafety(
       retryClass: "never",
     };
   const effect =
-    isReadOnlyCall(tool, args) || (tool === "run_script" && scriptSentNothing(structured))
+    evidence.read || (evidence.emptyScriptLog && envelope.status !== "unknown_outcome")
       ? "read"
       : "write";
+  if (envelope.status === "unknown_outcome" && effect === "write")
+    return classifyActionOutcome({ effect, status: "indeterminate", dispatched: true });
+  if (evidence.scriptMayHaveInput)
+    return classifyActionOutcome({ effect: "write", status: "indeterminate", dispatched: true });
   // GOAT's own refusal (ComputerUseLeaseResponses refusal) names its detail and sent nothing.
   if (
     isRefusalDetail(structured.detail) &&

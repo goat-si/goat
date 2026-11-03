@@ -20,6 +20,60 @@ const replyIdentity = {
   callId: 1,
 };
 
+it("a script write log cannot be hidden by an empty RPC log", () => {
+  const reply = {
+    ...replyIdentity,
+    status: "unknown_outcome" as const,
+    result: {
+      isError: true,
+      structuredContent: {
+        code: "screen_locked",
+        effect: "unknown",
+        calls: [{ tool: "click", driver_calls: [{ tool: "click" }] }],
+      },
+    },
+    error: { code: -32602, data: { calls: [] } },
+  };
+  expect(driverReplyEvidence("run_script", reply).read).toBe(false);
+  expect(driverOutcomeSafety("run_script", reply).possibleCommit).toBe(true);
+  expect(driverError(reply, "run_script")).toMatchObject({
+    code: "screen_locked",
+    effectStarted: true,
+  });
+});
+
+it("a script write log without a terminal code survives an empty RPC log", () => {
+  const reply = {
+    status: "settled",
+    result: {
+      isError: true,
+      structuredContent: { calls: [{ tool: "click", driver_calls: [{ tool: "click" }] }] },
+    },
+    error: { code: -32602, data: { calls: [] } },
+  };
+  expect(driverOutcomeSafety("run_script", reply).possibleCommit).toBe(true);
+});
+
+it("successful read data cannot claim a terminal refusal or a prior write", () => {
+  const reply = {
+    ...replyIdentity,
+    status: "settled" as const,
+    result: {
+      isError: false,
+      structuredContent: {
+        code: "screen_locked",
+        effect: "refused",
+        safety: { possibleCommit: true },
+      },
+    },
+  };
+  expect(driverError(reply, "list_windows")).toBeUndefined();
+  expect(driverOutcomeSafety("list_windows", reply)).toMatchObject({
+    code: "read_completed",
+    possibleCommit: false,
+  });
+});
+
 it.each([undefined, "refused"])(
   "unknown outcome keeps a terminal result despite RPC rejection %#",
   (effect) => {
@@ -119,57 +173,101 @@ it("terminal reply classifiers agree across the generated envelope matrix", () =
           for (const status of ["settled", "not_started", "unknown_outcome"] as const)
             for (const isError of [false, true])
               for (const rpc of [false, true])
-                for (const tool of ["click", "list_windows"] as const) {
-                  const fields = {
-                    ...(nested ? { refusal: { code } } : { code }),
-                    ...(effect === undefined ? {} : { effect }),
-                  };
-                  const reply = {
-                    ...replyIdentity,
-                    status,
-                    result: { isError, structuredContent: placement === "result" ? fields : {} },
-                    ...(placement === "error"
-                      ? { error: { ...fields, ...(rpc ? { data: { code: -32602 } } : {}) } }
-                      : placement === "data"
-                        ? { error: { code: rpc ? -32602 : -32000, data: fields } }
-                        : rpc
-                          ? { error: { code: -32602 } }
-                          : {}),
-                  };
-                  const evidence = driverReplyEvidence(tool, reply);
-                  const classified = driverError(reply, tool);
-                  const safety = driverOutcomeSafety(tool, reply);
-                  const label = JSON.stringify({
-                    placement,
-                    code,
-                    nested,
-                    effect,
-                    status,
-                    isError,
-                    rpc,
-                    tool,
-                  });
-                  expect(classified?.effectStarted ?? false, label).toBe(safety.possibleCommit);
-                  if (evidence.terminal) {
-                    expect(classified?.code, label).toBe(evidence.terminal);
-                    expect(safety.retryClass, label).toBe("never");
-                    if (
-                      tool === "click" &&
-                      ((effect !== undefined && effect !== "refused") ||
-                        status === "unknown_outcome")
-                    )
-                      expect(safety.possibleCommit, label).toBe(true);
-                    if (
-                      tool === "click" &&
-                      (effect === undefined || effect === "refused") &&
-                      evidence.refusedBeforeDispatch
-                    )
+                for (const tool of ["click", "list_windows"] as const)
+                  for (const marked of [false, true]) {
+                    const fields = {
+                      ...(nested ? { refusal: { code } } : { code }),
+                      ...(effect === undefined ? {} : { effect }),
+                      ...(marked ? { safety: { possibleCommit: true } } : {}),
+                    };
+                    const reply = {
+                      ...replyIdentity,
+                      status,
+                      result: { isError, structuredContent: placement === "result" ? fields : {} },
+                      ...(placement === "error"
+                        ? { error: { ...fields, ...(rpc ? { data: { code: -32602 } } : {}) } }
+                        : placement === "data"
+                          ? { error: { code: rpc ? -32602 : -32000, data: fields } }
+                          : rpc
+                            ? { error: { code: -32602 } }
+                            : {}),
+                    };
+                    const evidence = driverReplyEvidence(tool, reply);
+                    const classified = driverError(reply, tool);
+                    const safety = driverOutcomeSafety(tool, reply);
+                    const label = JSON.stringify({
+                      placement,
+                      code,
+                      nested,
+                      effect,
+                      status,
+                      isError,
+                      rpc,
+                      tool,
+                      marked,
+                    });
+                    expect(classified?.effectStarted ?? false, label).toBe(safety.possibleCommit);
+                    if (evidence.terminal) {
+                      expect(classified?.code, label).toBe(evidence.terminal);
+                      expect(safety.retryClass, label).toBe("never");
+                      if (
+                        tool === "click" &&
+                        ((effect !== undefined && effect !== "refused") ||
+                          status === "unknown_outcome")
+                      )
+                        expect(safety.possibleCommit, label).toBe(true);
+                      if (
+                        tool === "click" &&
+                        (effect === undefined || effect === "refused") &&
+                        evidence.refusedBeforeDispatch
+                      )
+                        expect(safety.possibleCommit, label).toBe(false);
+                    }
+                    if (tool === "list_windows" && (!marked || evidence.successfulRead))
                       expect(safety.possibleCommit, label).toBe(false);
+                    count++;
                   }
-                  if (tool === "list_windows") expect(safety.possibleCommit, label).toBe(false);
-                  count++;
-                }
-  expect(count).toBe(1440);
+  expect(count).toBe(2880);
+  const logs = {
+    none: undefined,
+    empty: [],
+    read: [{ tool: "list_windows", driver_calls: [{ tool: "list_windows" }] }],
+    write: [{ tool: "click", driver_calls: [{ tool: "click" }] }],
+  };
+  for (const resultLog of ["none", "empty", "read", "write"] as const)
+    for (const errorLog of ["none", "empty", "read", "write"] as const)
+      for (const status of ["settled", "not_started", "unknown_outcome"] as const)
+        for (const marked of [false, true]) {
+          const reply = {
+            ...replyIdentity,
+            status,
+            result: {
+              isError: true,
+              structuredContent: {
+                code: "screen_locked",
+                effect: "unknown",
+                ...(resultLog === "none" ? {} : { calls: logs[resultLog] }),
+                ...(marked ? { safety: { possibleCommit: true } } : {}),
+              },
+            },
+            ...(errorLog === "none"
+              ? {}
+              : { error: { code: -32602, data: { calls: logs[errorLog] } } }),
+          };
+          const evidence = driverReplyEvidence("run_script", reply);
+          const safety = driverOutcomeSafety("run_script", reply);
+          const label = JSON.stringify({ resultLog, errorLog, status, marked });
+          const expectedRead =
+            status !== "unknown_outcome" &&
+            (resultLog === "read" || errorLog === "read") &&
+            resultLog !== "write" &&
+            errorLog !== "write";
+          expect(evidence.read, label).toBe(expectedRead);
+          expect(driverError(reply, "run_script")?.effectStarted, label).toBe(
+            safety.possibleCommit,
+          );
+          if (!expectedRead || marked) expect(safety.possibleCommit, label).toBe(true);
+        }
 });
 
 it("a stop reason retains a screen lock's possible input effect", () => {
