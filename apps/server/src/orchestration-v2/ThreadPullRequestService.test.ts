@@ -303,15 +303,26 @@ describe("ThreadPullRequestServiceV2 reads", () => {
   );
 
   it.effect.each([
-    { repository: "fork/project", expected: "fork/project" },
-    { repository: "upstream/project", expected: "upstream/project" },
-    { repository: "other/project", expected: null },
+    { repository: "fork/project", expected: "fork/project", previous: false },
+    { repository: "upstream/project", expected: "upstream/project", previous: false },
+    { repository: "other/project", expected: null, previous: false },
+    { repository: "other/project", expected: null, previous: true },
   ])(
     "discovers only the project's fork or upstream PR (#2464): $repository",
-    ({ repository, expected }) =>
+    ({ repository, expected, previous }) =>
       Effect.scoped(
         Effect.gen(function* () {
-          const thread = { ...threadShell("fork-thread"), branch: "feature/fork" };
+          const previousReference = {
+            projectId: ProjectId.make("project-1"),
+            repository: "fork/project",
+            number: 42,
+            url: "https://github.com/fork/project/pull/42",
+          };
+          const thread = {
+            ...threadShell("fork-thread"),
+            branch: "feature/fork",
+            ...(previous ? { branchPullRequest: previousReference } : {}),
+          };
           const project: OrchestrationProjectShell = {
             id: thread.projectId,
             title: "Project",
@@ -397,7 +408,14 @@ describe("ThreadPullRequestServiceV2 reads", () => {
             yield* Deferred.await(sweepStarted);
             yield* service.drain;
           }).pipe(Effect.provide(dependencies));
-          if (expected === null) {
+          if (expected === null && previous) {
+            expect(commands).toHaveLength(1);
+            expect(commands[0]).toMatchObject({
+              type: "thread.pull-request.sync",
+              branchPullRequest: null,
+              expected: { branchPullRequest: previousReference },
+            });
+          } else if (expected === null) {
             expect(commands).toEqual([]);
           } else {
             expect(commands).toHaveLength(1);

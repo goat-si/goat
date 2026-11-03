@@ -5,7 +5,8 @@ import { expect, it, vi } from "vite-plus/test";
 const state = vi.hoisted(() => ({
   branch: null as { projectId: string; repository: string; number: number; url: string } | null,
   answer: null as { entries: never[]; errors: never[]; truncated: boolean } | null,
-  writes: [] as Array<{ repository: string; number: number }>,
+  writes: [] as Array<{ repository: string; number: number; url: string }>,
+  persistedState: "closed" as "open" | "closed",
 }));
 
 vi.mock(import("../../state/entities"), async (original) => ({
@@ -15,14 +16,16 @@ vi.mock(import("../../state/entities"), async (original) => ({
 vi.mock(import("../../state/use-orchestration-command"), async (original) => ({
   ...(await original()),
   useOrchestrationCommand: (() =>
-    async (command: { input: { linkedPullRequest: { repository: string; number: number } } }) => {
+    async (command: {
+      input: { linkedPullRequest: { repository: string; number: number; url: string } };
+    }) => {
       state.writes.push(command.input.linkedPullRequest);
       return { _tag: "Success" };
     }) as never,
 }));
 vi.mock(import("../ThreadStatusIndicators"), async (original) => ({
   ...(await original()),
-  useLinkedThreadPullRequest: (() => ({ pr: { state: "closed" } })) as never,
+  useLinkedThreadPullRequest: (() => ({ pr: { state: state.persistedState } })) as never,
 }));
 vi.mock(import("../../state/query"), async (original) => ({
   ...(await original()),
@@ -36,10 +39,19 @@ vi.mock(import("../../state/query"), async (original) => ({
 import { act, render } from "../../../test/render";
 import { useThreadLinkedPullRequest } from "./useThreadLinkedPullRequest";
 
-it("waits for the branch repository before relinking a fork PR (#2464)", async () => {
+it.each([
+  { name: "listing pending on an older server", answer: null },
+  { name: "empty listing", answer: { entries: [], errors: [], truncated: false } },
+  {
+    name: "listing error",
+    answer: { entries: [], errors: [{ message: "unavailable" } as never], truncated: false },
+  },
+  { name: "truncated listing", answer: { entries: [], errors: [], truncated: true } },
+])("relinks the fork URL regardless of $name (#2464)", async ({ answer }) => {
   state.branch = null;
-  state.answer = null;
+  state.answer = answer;
   state.writes = [];
+  state.persistedState = "closed";
   const environmentId = EnvironmentId.make("environment");
   const projectId = ProjectId.make("project");
   const serverThreadRef = scopeThreadRef(environmentId, ThreadId.make("thread"));
@@ -78,39 +90,48 @@ it("waits for the branch repository before relinking a fork PR (#2464)", async (
     return <div>{linked?.repository}</div>;
   }
   await using screen = await render(<Harness />);
-  await act(async () => {});
-  expect(state.writes).toEqual([]);
-  state.branch = fork;
-  await screen.rerender(<Harness />);
   await expect.element(screen.getByText("fork/project")).toBeVisible();
-  expect(state.writes).toEqual([
-    expect.objectContaining({ repository: "fork/project", number: 11 }),
-  ]);
+  await act(async () => {});
+  expect(state.writes).toEqual([fork]);
+});
+
+it("does not relink an unparseable detected URL (#2464)", async () => {
   state.branch = null;
-  state.answer = null;
-  state.writes = [];
-  await screen.rerender(<Harness />);
-  await act(async () => {});
-  expect(state.writes).toEqual([]);
-  state.answer = { entries: [fork as never], errors: [], truncated: false };
-  await screen.rerender(<Harness />);
-  await act(async () => {});
-  expect(state.writes).toEqual([
-    expect.objectContaining({ repository: "fork/project", number: 11 }),
-  ]);
-  state.answer = { entries: [], errors: [], truncated: true };
-  state.writes = [];
-  await screen.rerender(<Harness />);
-  await act(async () => {});
-  expect(state.writes).toEqual([]);
-  state.answer = { entries: [], errors: [{ message: "unavailable" } as never], truncated: false };
-  await screen.rerender(<Harness />);
-  await act(async () => {});
-  expect(state.writes).toEqual([]);
   state.answer = { entries: [], errors: [], truncated: false };
-  await screen.rerender(<Harness />);
+  state.writes = [];
+  state.persistedState = "closed";
+  const environmentId = EnvironmentId.make("environment");
+  const projectId = ProjectId.make("project");
+  const old = {
+    projectId,
+    repository: "upstream/project",
+    number: 10,
+    url: "https://github.com/upstream/project/pull/10",
+  };
+  function Harness() {
+    const { linked } = useThreadLinkedPullRequest({
+      serverThreadRef: scopeThreadRef(environmentId, ThreadId.make("thread")),
+      environmentId,
+      persisted: old,
+      projectId,
+      projectRepository: "upstream/project",
+      threadBranch: "feature",
+      gitStatus: {
+        refName: "feature",
+        pr: {
+          number: 11,
+          title: "Work",
+          url: "not-a-pr-url",
+          state: "open",
+          headRef: "feature",
+          baseRef: "main",
+        },
+      } as never,
+    });
+    return <div>{linked?.repository}</div>;
+  }
+  await using screen = await render(<Harness />);
+  await expect.element(screen.getByText("upstream/project")).toBeVisible();
   await act(async () => {});
-  expect(state.writes).toEqual([
-    expect.objectContaining({ repository: "upstream/project", number: 11 }),
-  ]);
+  expect(state.writes).toEqual([]);
 });
