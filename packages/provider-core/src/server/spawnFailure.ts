@@ -37,7 +37,13 @@ export function classifySpawnFailure(
     if ("reason" in current) pending.push(current.reason);
     if ("error" in current) pending.push(current.error);
   }
-  if (cwd === undefined) return "cwd_inaccessible";
+  if (cwd === undefined) {
+    if (code !== "ENOENT") return "unknown";
+    if (!command) return "missing";
+    return executableExists(command.binary, cwd, command.env ?? process.env) === false
+      ? "missing"
+      : "unknown";
+  }
   if (code !== "ENOENT" && code !== "EACCES" && code !== "EPERM" && code !== "ENOTDIR")
     return "unknown";
   try {
@@ -65,24 +71,33 @@ export function classifySpawnFailure(
   return "unknown";
 }
 
-function executableExists(binary: string, cwd: string, env: NodeJS.ProcessEnv): boolean {
+function executableExists(
+  binary: string,
+  cwd: string | undefined,
+  env: NodeJS.ProcessEnv,
+): boolean | undefined {
   const paths =
     binary.includes("/") || binary.includes("\\")
-      ? [NodePath.resolve(cwd, binary)]
+      ? [binary]
       : (env.PATH ?? "/usr/bin:/bin")
           .split(NodePath.delimiter)
-          .map((dir) => NodePath.resolve(cwd, dir || ".", binary));
+          .map((dir) => NodePath.join(dir || ".", binary));
   const extensions =
     env.PATHEXT && !NodePath.extname(binary) ? ["", ...env.PATHEXT.split(";")] : [""];
-  return paths.some((path) =>
+  const found = paths.some((path) =>
     extensions.some((extension) => {
       try {
-        return NodeFS.statSync(path + extension).isFile();
+        if (cwd === undefined && !NodePath.isAbsolute(path)) return false;
+        return NodeFS.statSync(
+          (cwd === undefined ? path : NodePath.resolve(cwd, path)) + extension,
+        ).isFile();
       } catch {
         return false;
       }
     }),
   );
+  if (found) return true;
+  return cwd === undefined && paths.some((path) => !NodePath.isAbsolute(path)) ? undefined : false;
 }
 
 export function spawnFailureMessage(
