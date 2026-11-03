@@ -58,7 +58,13 @@ export const makePrLookupGitState = Effect.fn("PrLookupGitState.make")(function*
     fingerprints.delete(key);
     if (fingerprints.size >= options.capacity) {
       const oldest = fingerprints.keys().next().value;
-      if (oldest !== undefined) fingerprints.delete(oldest);
+      if (oldest !== undefined) {
+        fingerprints.delete(oldest);
+        // Remembered reads live only as long as the fingerprints that can invalidate them.
+        const forgottenCwd = oldest.split("\u0000", 1)[0] ?? oldest;
+        restartReads(forgottenCwd);
+        clear(forgottenCwd);
+      }
     }
     fingerprints.set(key, value);
   };

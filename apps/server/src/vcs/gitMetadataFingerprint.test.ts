@@ -96,6 +96,7 @@ it.effect.each([
 
 it.effect.each([
   { label: "an include", text: "[include]\n\tpath = shared.inc\n" },
+  { label: "a conditional include", text: '[includeIf "onbranch:main"]\n\tpath = main.inc\n' },
   { label: "a legacy branch header", text: "[branch.other]\n\tremote = origin\n" },
   { label: "a header with an inline key", text: '[remote "up"] url = a\n' },
 ])("$label makes every config change visible to every branch", ({ text }) =>

@@ -164,3 +164,30 @@ it.effect("forgetting refreshed repositories beyond capacity never lets an older
     assert.equal(yield* state.remember(cwd, "remotes", false, read), "after refresh");
   }).pipe(Effect.scoped, Effect.provide(layerTest)),
 );
+
+it.effect(
+  "a branch whose fingerprint was forgotten does not keep reads from before its own change",
+  () =>
+    Effect.gen(function* () {
+      const cwd = yield* makeTmpDir();
+      yield* initRepoWithCommit(cwd);
+      yield* git(cwd, ["remote", "add", "origin", "https://github.com/example/project.git"]);
+      yield* git(cwd, ["config", "branch.main.remote", "origin"]);
+      const other = yield* makeTmpDir();
+      yield* initRepoWithCommit(other);
+      // Room for one repository's two fingerprints.
+      const state = yield* makePrLookupGitState({ normalizeCwd: Effect.succeed, capacity: 2 });
+      let reads = 0;
+      const read = Effect.sync(() => {
+        reads++;
+        return "origin";
+      });
+      yield* state.validate(cwd, "main", false);
+      yield* state.remember(cwd, "config\u0000branch.main.remote", false, read);
+      yield* state.validate(other, "main", false);
+      yield* git(cwd, ["config", "branch.main.remote", "upstream"]);
+      yield* state.validate(cwd, "main", false);
+      yield* state.remember(cwd, "config\u0000branch.main.remote", false, read);
+      assert.equal(reads, 2);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);

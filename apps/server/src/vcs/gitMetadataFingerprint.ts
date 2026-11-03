@@ -63,6 +63,24 @@ export const makeGitMetadataFingerprint = Effect.fn("GitMetadataFingerprint.make
       Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed("missing")),
     );
   });
+  // Reads at most the cap even if the file grows while it is read; null means stamp the whole file.
+  const readBounded = Effect.fnUntraced(
+    function* (file: string) {
+      const handle = yield* fs.open(file, { flag: "r" });
+      const decoder = new TextDecoder();
+      let text = "";
+      let bytes = 0;
+      while (bytes <= CONFIG_SECTION_MAX_BYTES) {
+        const chunk = yield* handle.readAlloc(64 * 1024);
+        if (Option.isNone(chunk)) return text + decoder.decode();
+        bytes += chunk.value.length;
+        text += decoder.decode(chunk.value, { stream: true });
+      }
+      return null;
+    },
+    Effect.scoped,
+    Effect.orElseSucceed(() => null),
+  );
   const sectionsByConfig = new Map<
     string,
     { readonly stamp: string; readonly sections: ReturnType<typeof splitBranchSections> }
@@ -71,17 +89,8 @@ export const makeGitMetadataFingerprint = Effect.fn("GitMetadataFingerprint.make
   const configSections = Effect.fnUntraced(function* (file: string, fileStamp: string) {
     const memo = sectionsByConfig.get(file);
     if (memo?.stamp === fileStamp) return memo.sections;
-    const size = yield* fs.stat(file).pipe(
-      Effect.map((info) => Number(info.size)),
-      Effect.orElseSucceed(() => Infinity),
-    );
-    const sections =
-      size > CONFIG_SECTION_MAX_BYTES
-        ? null
-        : yield* fs.readFileString(file).pipe(
-            Effect.map(splitBranchSections),
-            Effect.orElseSucceed(() => null),
-          );
+    const text = fileStamp === "missing" ? null : yield* readBounded(file);
+    const sections = text === null ? null : splitBranchSections(text);
     sectionsByConfig.delete(file);
     if (sectionsByConfig.size >= CONFIG_SECTION_MEMO_CAPACITY) {
       const oldest = sectionsByConfig.keys().next().value;
