@@ -19,6 +19,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 
 import * as EnvironmentRegistry from "../connection/registry.ts";
@@ -32,6 +33,7 @@ import { createEnvironmentQueryAtomFamily } from "./runtime.ts";
 const ASSET_URL_REFRESH_INTERVAL_MS = 30 * 60_000;
 const ASSET_URL_STALE_TIME_MS = 5 * 60_000;
 const ASSET_URL_IDLE_TTL_MS = 60 * 60_000;
+export const ASSET_URL_MAX_IN_FLIGHT = 6;
 
 export class InvalidAssetCollectionKeyError extends Schema.TaggedError<InvalidAssetCollectionKeyError>()(
   "InvalidAssetCollectionKeyError",
@@ -148,15 +150,34 @@ export function createAssetEnvironmentAtoms<R, E>(
     threadId: ThreadId,
   ) => Atom.Atom<string | null>,
 ) {
+  const mintLimits = new Map<EnvironmentId, { semaphore: Semaphore.Semaphore; users: number }>();
+  const mint = (environmentId: EnvironmentId, input: AssetCreateUrlInput) =>
+    Effect.acquireUseRelease(
+      Effect.sync(() => {
+        let entry = mintLimits.get(environmentId);
+        if (entry === undefined) {
+          entry = { semaphore: Semaphore.makeUnsafe(ASSET_URL_MAX_IN_FLIGHT), users: 0 };
+          mintLimits.set(environmentId, entry);
+        }
+        entry.users += 1;
+        return entry;
+      }),
+      (entry) => entry.semaphore.withPermit(request(WS_METHODS.assetsCreateUrl, input)),
+      (entry) =>
+        Effect.sync(() => {
+          entry.users -= 1;
+          if (entry.users === 0) mintLimits.delete(environmentId);
+        }),
+    );
   const execute = Effect.fn("assets.createUrl")(function* (input: AssetCreateUrlInput) {
-    const result = yield* request(WS_METHODS.assetsCreateUrl, input).pipe(Effect.result);
+    const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
+    const result = yield* mint(supervisor.target.environmentId, input).pipe(Effect.result);
     if (Result.isSuccess(result)) return result.success;
     const error = result.failure;
     const resource = input.resource;
     const local = localMediaEnvironment
       ? (yield* AtomRegistry.AtomRegistry).get(localMediaEnvironment)
       : null;
-    const supervisor = yield* EnvironmentSupervisor.EnvironmentSupervisor;
     const workspaceRoot =
       resource._tag === "media-file" && workspaceRootAtom
         ? (yield* AtomRegistry.AtomRegistry).get(
@@ -181,7 +202,7 @@ export function createAssetEnvironmentAtoms<R, E>(
     const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
     // Map the full cause so retry defects and interruption survive.
     const asset = yield* registry
-      .run(local.environmentId, request(WS_METHODS.assetsCreateUrl, input))
+      .run(local.environmentId, mint(local.environmentId, input))
       .pipe(Effect.catchCause((cause) => Effect.failCause(Cause.map(cause, () => error))));
     return { ...asset, relativeUrl: new URL(asset.relativeUrl, local.httpBaseUrl).href };
   });
