@@ -1,5 +1,6 @@
 import { assert, it } from "@effect/vitest";
 import {
+  ContextTransferId,
   MessageId,
   ProviderInstanceId,
   ProviderThreadId,
@@ -98,6 +99,29 @@ it.layer(layerTest)("ContextHandoffService legacy import", (it) => {
       });
       assert.include(providerMessage, handoff.summaryText);
       assert.include(providerMessage, "User message:\nContinue from there.");
+    }),
+  );
+
+  it.effect("does not split emoji when compacting merge-back context", () =>
+    Effect.gen(function* () {
+      const service = yield* ContextHandoffService.ContextHandoffServiceV2;
+      const handoff = yield* service.prepareForkDelta({
+        sourceThreadId: ThreadId.make("thread:source"),
+        targetThreadId: ThreadId.make("thread:target"),
+        targetRunId: RunId.make("run:target"),
+        transferId: ContextTransferId.make("transfer:emoji"),
+        fromProviderThreadIds: [],
+        toProviderThreadId: ProviderThreadId.make("provider-thread:target"),
+        fromProviderInstanceId: ProviderInstanceId.make("codex"),
+        toProviderInstanceId: ProviderInstanceId.make("codex"),
+        coveredRunOrdinals: { from: 1, to: 1 },
+        deltaItems: [
+          importedItem({ role: "user", id: "emoji", text: `${"x".repeat(236)}😀tail`, ordinal: 1 }),
+        ],
+        createdAt: DateTime.makeUnsafe("2026-01-02T00:00:00Z"),
+      });
+      assert.include(handoff.summaryText, `${"x".repeat(236)}...`);
+      assert.notMatch(handoff.summaryText, /[\uD800-\uDBFF]\.\.\./);
     }),
   );
 

@@ -889,7 +889,14 @@ function threadTitle(input: {
 }): string {
   const detail = input.title?.trim() || input.prompt?.trim();
   if (!detail) return `${input.parentTitle} thread ${input.index + 1}`;
-  return detail.length > 80 ? `${detail.slice(0, 77)}...` : detail;
+  if (detail.length <= 80) return detail;
+  let end = 77;
+  const previous = detail.charCodeAt(end - 1);
+  const next = detail.charCodeAt(end);
+  if (previous >= 0xd800 && previous <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) {
+    end -= 1;
+  }
+  return `${detail.slice(0, end)}...`;
 }
 
 function taskPrompt(input: OrchestratorMcpDelegateTaskInput): string {
@@ -1132,6 +1139,14 @@ const make = Effect.gen(function* () {
           ),
         ),
       );
+
+  const loadTasks = (threadId: ThreadId, taskId: NodeId) =>
+    threadManagement.getThreadRecords(threadId, ["subagents"], { subagentIds: [taskId] }).pipe(
+      Effect.map(({ subagents }) => subagents),
+      Effect.mapError((error) =>
+        failure("orchestration_error", `Unable to read thread ${threadId}: ${errorMessage(error)}`),
+      ),
+    );
 
   const loadProjectThread = (
     projectId: OrchestrationV2ThreadProjection["thread"]["projectId"],
@@ -1529,17 +1544,7 @@ const make = Effect.gen(function* () {
     observedRunId?: RunId | null,
   ): Effect.fn.Return<OrchestratorMcpDelegateTaskResult, OrchestratorMcpFailure> {
     yield* requireCapability(scope);
-    const initialParent = yield* loadProjection(scope.thread.threadId, false, [taskId]);
-    const selected = initialParent.subagents.find((candidate) => candidate.id === taskId);
-    const earlier =
-      selected?.continuedFrom === undefined
-        ? []
-        : (yield* loadProjection(scope.thread.threadId, false, [selected.continuedFrom])).subagents;
-    const parentProjection = {
-      ...initialParent,
-      subagents: [...initialParent.subagents, ...earlier],
-    };
-    const task = parentProjection.subagents.find(
+    const task = (yield* loadTasks(scope.thread.threadId, taskId)).find(
       (candidate) =>
         candidate.id === taskId &&
         candidate.origin === "app_owned" &&
@@ -1551,7 +1556,13 @@ const make = Effect.gen(function* () {
         `Delegated task ${taskId} does not belong to thread ${scope.thread.threadId}.`,
       );
     }
+    // Review rounds read the task this one continues; nothing else needs other tasks.
+    const taskProjectionIds =
+      task.continuedFrom === undefined ? [taskId] : [taskId, task.continuedFrom];
     if (task.remote !== undefined) {
+      const parentProjection = yield* Effect.cached(
+        loadProjection(scope.thread.threadId, false, taskProjectionIds),
+      );
       const status = isTerminalTaskStatus(task.status) ? task.status : "running";
       const terminal = isTerminalTaskStatus(status);
       // The coordinator records the remote run's open questions before announcing them.
@@ -1578,7 +1589,9 @@ const make = Effect.gen(function* () {
         ...(task.role === undefined ? {} : { role: task.role }),
         ...(task.reviewLedger === undefined ? {} : { reviewLedger: task.reviewLedger }),
         ...(task.role === "review"
-          ? { reviewRound: yield* reviewRoundFor(parentProjection, task) }
+          ? {
+              reviewRound: yield* reviewRoundFor(yield* parentProjection, task),
+            }
           : {}),
         ...(task.modelSelection === undefined ? {} : { modelSelection: task.modelSelection }),
         ...(task.parentModelSelection === undefined
@@ -1600,7 +1613,7 @@ const make = Effect.gen(function* () {
         yield* acknowledgeTaskResult(
           scope,
           task,
-          parentProjection,
+          yield* parentProjection,
           response.status,
           acknowledgementOperation,
         );
@@ -1609,6 +1622,7 @@ const make = Effect.gen(function* () {
 
     if (task.childThreadId === null)
       return yield* failure("task_not_found", "This task has no local child thread.");
+    const parentProjection = yield* loadProjection(scope.thread.threadId, false, taskProjectionIds);
     const childControls = yield* threadManagement
       .getThreadRecords(
         task.childThreadId,

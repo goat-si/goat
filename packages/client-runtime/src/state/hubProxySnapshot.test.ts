@@ -112,7 +112,7 @@ const makeHarness = Effect.fn("TestHubProxyShell.makeHarness")(function* (cached
     const session: RpcSession = {
       client,
       initialConfig: Effect.succeed({ shellResumeCompletionMarker: false } as never),
-      subscribeServerConfig: (input) => client.subscribeServerConfig(input),
+      subscribeServerConfig: (input) => client.subscribeServerConfig(input ?? {}),
       ready: Effect.void,
       probe: Effect.void,
       inboundFrames: Effect.succeed(0),
