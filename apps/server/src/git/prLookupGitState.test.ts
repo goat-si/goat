@@ -136,3 +136,31 @@ it.effect(
       assert.equal(reads, 6);
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
 );
+
+it.effect("forgetting refreshed repositories beyond capacity never lets an older read answer", () =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    yield* initRepoWithCommit(cwd);
+    const state = yield* makePrLookupGitState({ normalizeCwd: Effect.succeed, capacity: 2 });
+    const started = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    let reads = 0;
+    const read = Effect.gen(function* () {
+      reads++;
+      if (reads > 1) return "after refresh";
+      yield* Deferred.succeed(started, undefined);
+      yield* Deferred.await(release);
+      return "before refresh";
+    });
+    yield* state.validate(cwd, "main", false);
+    const before = yield* Effect.forkChild(state.remember(cwd, "remotes", false, read));
+    yield* Deferred.await(started);
+    yield* state.validate(cwd, "main", true);
+    // Refreshes of other repositories push this one out of the bounded generation table.
+    for (const other of ["/other-a", "/other-b", "/other-c"])
+      yield* state.validate(other, "main", true);
+    yield* Deferred.succeed(release, undefined);
+    assert.equal(yield* Fiber.join(before), "before refresh");
+    assert.equal(yield* state.remember(cwd, "remotes", false, read), "after refresh");
+  }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);

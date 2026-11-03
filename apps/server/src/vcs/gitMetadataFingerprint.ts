@@ -6,12 +6,17 @@ import * as Path from "effect/Path";
 import { detachStackFrame } from "../git/detachStackFrame.ts";
 
 const BRANCH_SECTION_HEADER = /^\s*\[branch\s+"((?:[^"\\]|\\.)*)"\]\s*$/i;
+const PLAIN_SECTION_HEADER = /^\s*\[[A-Za-z0-9.-]+(?:\s+"(?:[^"\\]|\\.)*")?\]\s*$/;
+// Includes and legacy [branch.x] headers can set a branch's values from outside its own section.
+const ORDER_SENSITIVE_SECTION = /^\s*\[\s*(?:include|includeif|branch\s*\.)/i;
 const CONFIG_SECTION_MEMO_CAPACITY = 256;
+const CONFIG_SECTION_MAX_BYTES = 256 * 1024;
 
 /**
- * Splits a git config into the text outside exact `[branch "<name>"]` sections and each such
- * section's text. Returns null when a line continues onto the next one, since a continued value
- * can look like a header; callers then fall back to stamping the whole file.
+ * Splits a git config into the text outside exact \`[branch "<name>"]\` sections and each such
+ * section's text. Returns null whenever a value or section outside the branch's own section could
+ * still change it (continued values, includes, legacy or inline headers); callers then stamp the
+ * whole file.
  */
 export function splitBranchSections(
   text: string,
@@ -30,6 +35,7 @@ export function splitBranchSections(
         branches.set(name, target);
         continue;
       }
+      if (ORDER_SENSITIVE_SECTION.test(line) || !PLAIN_SECTION_HEADER.test(line)) return null;
       target = shared;
     }
     target.push(line);
@@ -65,8 +71,12 @@ export const makeGitMetadataFingerprint = Effect.fn("GitMetadataFingerprint.make
   const configSections = Effect.fnUntraced(function* (file: string, fileStamp: string) {
     const memo = sectionsByConfig.get(file);
     if (memo?.stamp === fileStamp) return memo.sections;
+    const size = yield* fs.stat(file).pipe(
+      Effect.map((info) => Number(info.size)),
+      Effect.orElseSucceed(() => Infinity),
+    );
     const sections =
-      fileStamp === "missing"
+      size > CONFIG_SECTION_MAX_BYTES
         ? null
         : yield* fs.readFileString(file).pipe(
             Effect.map(splitBranchSections),

@@ -26,9 +26,21 @@ export const makePrLookupGitState = Effect.fn("PrLookupGitState.make")(function*
   const epoch = (cwd: string) => epochs.get(cwd) ?? 0;
   // Remembered reads also restart on an explicit refresh, which must not move the epoch that
   // keys GitManager's PR lookup cache and its failure backoff.
+  // Generations come from one counter; a forgotten repository gets a fresh one, so an older read
+  // can never match it.
   const readGenerations = new Map<string, number>();
-  const readGeneration = (cwd: string) => readGenerations.get(cwd) ?? 0;
-  const restartReads = (cwd: string) => readGenerations.set(cwd, readGeneration(cwd) + 1);
+  let lastGeneration = 0;
+  let forgottenGeneration = 0;
+  const readGeneration = (cwd: string) => readGenerations.get(cwd) ?? forgottenGeneration;
+  const restartReads = (cwd: string) => {
+    readGenerations.delete(cwd);
+    if (readGenerations.size >= options.capacity) {
+      const oldest = readGenerations.keys().next().value;
+      if (oldest !== undefined) readGenerations.delete(oldest);
+      forgottenGeneration = ++lastGeneration;
+    }
+    readGenerations.set(cwd, ++lastGeneration);
+  };
   const advanceEpoch = (cwd: string) => {
     epochs.set(cwd, epoch(cwd) + 1);
     restartReads(cwd);

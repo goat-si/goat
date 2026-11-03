@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import { git, initRepoWithCommit, layerTest, makeTmpDir } from "./testing/gitFixture.ts";
-import { makeGitMetadataFingerprint } from "./gitMetadataFingerprint.ts";
+import { makeGitMetadataFingerprint, splitBranchSections } from "./gitMetadataFingerprint.ts";
 
 const setup = Effect.gen(function* () {
   const cwd = yield* makeTmpDir();
@@ -93,3 +93,51 @@ it.effect.each([
     assert.notEqual((yield* fingerprint("main")).repository, before.repository);
   }).pipe(Effect.scoped, Effect.provide(layerTest)),
 );
+
+it.effect.each([
+  { label: "an include", text: "[include]\n\tpath = shared.inc\n" },
+  { label: "a legacy branch header", text: "[branch.other]\n\tremote = origin\n" },
+  { label: "a header with an inline key", text: '[remote "up"] url = a\n' },
+])("$label makes every config change visible to every branch", ({ text }) =>
+  Effect.gen(function* () {
+    const { cwd, append, fingerprint } = yield* setup;
+    // Each can change a branch's effective value from outside its own section.
+    yield* append(text);
+    const before = yield* fingerprint("main");
+    yield* git(cwd, ["config", "branch.other.merge", "refs/heads/other"]);
+    assert.notEqual((yield* fingerprint("main")).repository, before.repository);
+  }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);
+
+it.effect("a config too large to parse keeps the whole-file stamp", () =>
+  Effect.gen(function* () {
+    const { cwd, append, fingerprint } = yield* setup;
+    yield* append(`[core]\n\tnote = ${"x".repeat(300 * 1024)}\n`);
+    const before = yield* fingerprint("main");
+    yield* git(cwd, ["config", "branch.other.merge", "refs/heads/other"]);
+    assert.notEqual((yield* fingerprint("main")).repository, before.repository);
+  }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);
+
+it("reads escaped, repeated and CRLF branch sections as git names them", () => {
+  const sections = splitBranchSections(
+    [
+      "[core]",
+      "\tbare = false",
+      '[branch "feat/\\"quoted\\""]',
+      "\tremote = origin",
+      '[BRANCH "main"]',
+      "\tremote = origin",
+      '[branch "feat/\\"quoted\\""]',
+      "\tmerge = refs/heads/x",
+      "",
+    ].join("\r\n"),
+  );
+  assert.deepEqual(sections, {
+    shared: "[core]\n\tbare = false",
+    branches: new Map([
+      ['feat/"quoted"', "\tremote = origin\n\tmerge = refs/heads/x"],
+      ["main", "\tremote = origin"],
+    ]),
+  });
+});
