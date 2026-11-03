@@ -20,7 +20,9 @@ import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import { guardChild } from "../packages/shared/src/errorGuards.ts";
 import { decide, readWorkspace } from "../.github/scripts/ci-changes.cjs";
+import { vitePlusCommand } from "./check-changed-command.ts";
 import { testsForChanges } from "./lib/changed-tests.ts";
 
 const root = NodePath.resolve(import.meta.dirname, "..");
@@ -198,11 +200,12 @@ const checkPatches = (): boolean => {
     for (const extra of ["apps/mobile/deps", "patches", ".pnpmfile.cjs"]) {
       if (NodeFS.existsSync(NodePath.join(root, extra))) copy(extra);
     }
-    const { status, stdout, stderr, error } = NodeChildProcess.spawnSync(
-      "vp",
-      ["install", "--lockfile-only", "--ignore-scripts"],
-      { cwd: temp, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
-    );
+    const [command, args] = vitePlusCommand(["install", "--lockfile-only", "--ignore-scripts"]);
+    const { status, stdout, stderr, error } = NodeChildProcess.spawnSync(command, args, {
+      cwd: temp,
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+    });
     if (status === 0) return true;
     if (stdout) console.log(stdout);
     if (stderr) console.error(stderr);
@@ -278,12 +281,18 @@ const results = await Promise.all(
         // takes about a second, so the commands start right after it.
         if ("run" in step) return finish(step.run());
         const output: Array<Buffer> = [];
-        const child = NodeChildProcess.spawn("vp", step.args, { cwd: root, env });
+        const [command, args] = vitePlusCommand(step.args);
+        let childFailed = false;
+        const child = guardChild(
+          NodeChildProcess.spawn(command, args, { cwd: root, env }),
+          (error) => {
+            childFailed = true;
+            output.push(Buffer.from(`${error.message}\n`));
+          },
+        );
         child.stdout.on("data", (chunk: Buffer) => output.push(chunk));
         child.stderr.on("data", (chunk: Buffer) => output.push(chunk));
-        // A failed spawn emits "error", then "close" with a nonzero code.
-        child.on("error", (error) => output.push(Buffer.from(`${error.message}\n`)));
-        child.on("close", (status) => finish(status === 0, Buffer.concat(output)));
+        child.on("close", (status) => finish(status === 0 && !childFailed, Buffer.concat(output)));
       }),
   ),
 );
