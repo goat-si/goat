@@ -536,6 +536,80 @@ describe("soak observations", () => {
       ).counter.value,
     ).toBe(2);
   });
+  it("excludes only exits directly following stopped releases of the same sessions", () => {
+    const base = [
+      { event: "start" as const, pid: 1, instance: "devReplay", at: "1" },
+      { event: "session" as const, pid: 1, instance: "devReplay", at: "1", thread: "native" },
+      { event: "exit" as const, pid: 1, instance: "devReplay", at: "4" },
+    ];
+    const joins = new Map([["native", "thread"]]);
+    const window = { start: "1", end: "6", disappeared: [] };
+    const stopped = [{ thread: "thread", at: "2", status: "stopped" as const }];
+    expect(providerRestarts(base, joins, stopped, [], [], window).counter.value).toBe(0);
+    expect(providerRestarts(base, joins, [], [], [], window).counter.value).toBe(1);
+    expect(
+      providerRestarts(
+        base,
+        joins,
+        [{ thread: "thread", at: "5", status: "stopped" }],
+        [],
+        [],
+        window,
+      ).counter.value,
+    ).toBe(1);
+    expect(
+      providerRestarts(
+        base,
+        joins,
+        [{ thread: "thread", at: "2", status: "error" }],
+        [],
+        [],
+        window,
+      ).counter.value,
+    ).toBe(1);
+    const resumed = [
+      ...base,
+      { event: "session" as const, pid: 1, instance: "devReplay", at: "3", thread: "native" },
+    ];
+    expect(providerRestarts(resumed, joins, stopped, [], [], window).counter.value).toBe(1);
+    const replaced = [
+      ...base,
+      { event: "start" as const, pid: 2, instance: "devReplay", at: "3" },
+      { event: "session" as const, pid: 2, instance: "devReplay", at: "3", thread: "native" },
+    ];
+    expect(providerRestarts(replaced, joins, stopped, [], [], window).counter.value).toBe(1);
+    expect(
+      providerRestarts(base.slice(0, 2), joins, stopped, [], [], { ...window, disappeared: [1] })
+        .counter.value,
+    ).toBe(1);
+    expect(
+      providerRestarts(
+        base,
+        joins,
+        stopped,
+        [{ thread: "thread", instance: "devReplay", at: "3" }],
+        [],
+        window,
+      ).counter.value,
+    ).toBe(1);
+  });
+  it("requires all sessions on a shared process to be stopped before excusing its exit", () => {
+    const lines = [
+      { event: "start" as const, pid: 1, instance: "codex", at: "1" },
+      { event: "session" as const, pid: 1, instance: "codex", at: "1", thread: "a" },
+      { event: "session" as const, pid: 1, instance: "codex", at: "1", thread: "b" },
+      { event: "exit" as const, pid: 1, instance: "codex", at: "4" },
+    ];
+    const joins = new Map([
+      ["a", "A"],
+      ["b", "B"],
+    ]);
+    const window = { start: "1", end: "5", disappeared: [] };
+    const first = { thread: "A", at: "2", status: "stopped" as const };
+    const second = { thread: "B", at: "3", status: "stopped" as const };
+    expect(providerRestarts(lines, joins, [first], [], [], window).counter.value).toBe(1);
+    expect(providerRestarts(lines, joins, [first, second], [], [], window).counter.value).toBe(0);
+  });
   it("deduplicates sessions per PID and excludes events outside the window and requested releases", () => {
     const lines = [
       { event: "start" as const, pid: 1, instance: "devReplay", at: "1" },
@@ -561,12 +635,12 @@ describe("soak observations", () => {
       providerRestarts(
         lines,
         joined,
-        [{ thread: "thread", at: "3", status: "stopped", requested: true }],
+        [{ thread: "thread", at: "2.5", status: "stopped", requested: true }],
         [],
         [],
         { start: "1", end: "6", disappeared: [] },
       ).counter.value,
-    ).toBe(1);
+    ).toBe(0);
   });
   it("caps detail at a complete line and flags truncation", () => {
     const dir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-detail-limit-"));

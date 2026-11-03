@@ -367,9 +367,45 @@ export function providerRestarts(
       const disappeared = !anyExit && window.disappeared.includes(pid);
       if ((!exit && !disappeared) || matchedPids.has(pid)) continue;
       const pidThreads = [...groups]
-        .filter(([, group]) => group.some((session) => session.pid === pid))
+        .filter(([, group]) =>
+          group.some((session) => session.pid === pid && (!exit || session.at < exit.at)),
+        )
         .map(([thread]) => thread);
       if (!pidThreads.length) continue;
+      if (exit) {
+        const pidSessions = sessions.filter(
+          (session) =>
+            session.pid === pid && session.instance === exit.instance && session.at < exit.at,
+        );
+        const joinedThreads = pidSessions.map(
+          (session) => session.thread && joins.get(session.thread),
+        );
+        const requested =
+          pidSessions.length > 0 &&
+          joinedThreads.every(Boolean) &&
+          pidThreads.every((thread) =>
+            releases.some(
+              (release) =>
+                release.thread === thread &&
+                release.status === "stopped" &&
+                release.at < exit.at &&
+                pidSessions.some(
+                  (session) =>
+                    session.thread &&
+                    joins.get(session.thread) === thread &&
+                    session.at < release.at,
+                ) &&
+                !sessions.some(
+                  (session) =>
+                    session.at >= release.at &&
+                    session.at < exit.at &&
+                    (session.pid === pid ||
+                      (session.thread && joins.get(session.thread) === thread)),
+                ),
+            ),
+          );
+        if (requested) continue;
+      }
       if (
         disappeared &&
         sessions.some((session) => session.pid === pid && session.at < window.start)
