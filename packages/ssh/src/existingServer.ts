@@ -195,6 +195,20 @@ export function makeExistingServerRoutes(input: {
       : undefined;
   };
 
+  /** What the forward's own server reports, when it still serves `environmentId`. */
+  const answersFor = Effect.fn("ssh/tunnel.existingEnvironment.answersFor")(function* (
+    forward: SshTunnelEntry,
+    environmentId: EnvironmentId,
+  ) {
+    if (!(yield* forward.process.isRunning.pipe(Effect.orElseSucceed(() => false))))
+      return undefined;
+    const live = yield* readForwardEnvironment(
+      forward.httpBaseUrl,
+      forward.readiness.probeTimeoutMs,
+    );
+    return live?.environmentId === environmentId ? live : undefined;
+  });
+
   /**
    * A route verified over SSH within OWNER_RECHECK_MS whose forward still answers for the same
    * environment. It costs one HTTP request through that forward, never a new SSH connection.
@@ -207,16 +221,17 @@ export function makeExistingServerRoutes(input: {
     if (route === undefined) return undefined;
     if ((yield* Clock.currentTimeMillis) - route.verifiedAt >= OWNER_RECHECK_MS) return undefined;
     const forward = forwardFor(route, sideKey);
+    if (forward === undefined) return undefined;
+    const live = yield* answersFor(forward, environmentId);
+    // Teardown, replacement, or a strict recheck may have run while the forward answered.
     if (
-      forward === undefined ||
-      !(yield* forward.process.isRunning.pipe(Effect.orElseSucceed(() => false)))
+      live === undefined ||
+      input.isClosed() ||
+      routes.get(sideKey) !== route ||
+      forwardFor(route, sideKey) !== forward
     )
       return undefined;
-    const live = yield* readForwardEnvironment(
-      forward.httpBaseUrl,
-      forward.readiness.probeTimeoutMs,
-    );
-    return live?.environmentId === environmentId ? { ...route, version: live.version } : undefined;
+    return { ...route, version: live.version };
   });
 
   const resolveRoute = Effect.fn("ssh/tunnel.existingEnvironment.route")(function* (
@@ -268,7 +283,7 @@ export function makeExistingServerRoutes(input: {
           primary !== undefined &&
           primary.remotePort === owner.port &&
           primary.remoteServerKind === kind &&
-          (yield* primary.process.isRunning.pipe(Effect.orElseSucceed(() => false)))
+          (yield* answersFor(primary, environmentId)) !== undefined
         )
           return yield* verified(primary.httpBaseUrl);
         const previous = sidecars.get(sideKey);
@@ -276,7 +291,7 @@ export function makeExistingServerRoutes(input: {
           if (
             previous.kind === kind &&
             previous.entry.remotePort === owner.port &&
-            (yield* previous.entry.process.isRunning.pipe(Effect.orElseSucceed(() => false)))
+            (yield* answersFor(previous.entry, environmentId)) !== undefined
           )
             return yield* verified(previous.entry.httpBaseUrl);
           sidecars.delete(sideKey);

@@ -1,9 +1,10 @@
 import { assert, describe, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { EnvironmentId, ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
+import { AuthSessionId, EnvironmentId, ORCHESTRATION_PROTOCOL_VERSION } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as NetService from "@goat/shared/Net";
 import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -57,13 +58,27 @@ const advance = (total: Duration.Duration) =>
 
 /** A host whose managed GOAT server owns OWNER; the app server is absent. */
 const makeHost = () => {
-  const host = { connections: 0, served: OWNER as string, onDisk: OWNER as string };
+  const host = {
+    connections: 0,
+    // What the host's own curl sees (the strict probe) and what an open forward reaches.
+    served: OWNER as string,
+    forwardServed: undefined as string | undefined,
+    onDisk: OWNER as string,
+    forwardsKilled: 0,
+    // Holds the next identity read through a forward until released.
+    hold: undefined as
+      | { readonly entered: Deferred.Deferred<void>; readonly release: Deferred.Deferred<void> }
+      | undefined,
+  };
   const spawner = makeProtocolTestSpawner((command) =>
     Effect.gen(function* () {
       const args = commandArgs(command);
       if (args.includes("-G")) return makeSuccessfulProcess("hostname devbox.example.com\n");
       host.connections++;
-      if (args.includes("-N")) return makeRunningProcess(() => {});
+      if (args.includes("-N"))
+        return makeRunningProcess(() => {
+          host.forwardsKilled++;
+        });
       const stdin = command._tag === "StandardCommand" ? command.options.stdin : undefined;
       const bytes =
         typeof stdin === "object" && "stream" in stdin && Stream.isStream(stdin.stream)
@@ -81,21 +96,27 @@ const makeHost = () => {
         );
       if (args.includes("goat-app-server-credential"))
         return makeDelayedSuccessfulProcess(
-          '{"token":"owner-session","expiresAt":null}\nGOAT_HTTP_STATUS=200\n',
+          `${script.includes('"revoke"') ? '{"sessionId":"owner-session-id","revoked":true}' : '{"token":"owner-session","expiresAt":null}'}\nGOAT_HTTP_STATUS=200\n`,
           CONNECT_MS,
         );
       return makeSuccessfulProcess("");
     }),
   );
   const httpClient = HttpClient.make((request) =>
-    Effect.succeed(
-      HttpClientResponse.fromWeb(
+    Effect.gen(function* () {
+      if (!request.url.endsWith("/.well-known/goat/environment"))
+        return HttpClientResponse.fromWeb(request, new Response("", { status: 200 }));
+      const hold = host.hold;
+      host.hold = undefined;
+      if (hold !== undefined) {
+        yield* Deferred.succeed(hold.entered, undefined);
+        yield* Deferred.await(hold.release);
+      }
+      return HttpClientResponse.fromWeb(
         request,
-        request.url.endsWith("/.well-known/goat/environment")
-          ? new Response(descriptor(host.served))
-          : new Response("", { status: 200 }),
-      ),
-    ),
+        new Response(descriptor(host.forwardServed ?? host.served)),
+      );
+    }),
   );
   let localPort = 41_773;
   const layer = Layer.mergeAll(
@@ -163,6 +184,18 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
               assert.equal(session.result.success.token, "owner-session");
             // Only the credential request, which the host checks against OWNER itself.
             assert.equal(session.connections, 1);
+
+            const revoked = yield* call(
+              manager.revokeExistingMcpSession!(
+                uploadTarget,
+                OWNER,
+                AuthSessionId.make("owner-session-id"),
+              ),
+            );
+
+            assert.deepEqual(revoked.result, Result.succeed(true));
+
+            assert.equal(revoked.connections, 1);
           }).pipe(Effect.provide(layer), Effect.scoped);
         }),
     );
@@ -200,6 +233,51 @@ describe.skipIf(HostProcess.Platform.defaultValue() === "win32")(
           const after = yield* call(route());
           assert.isTrue(Result.isFailure(after.result));
           assert.equal(after.connections, 2);
+        }).pipe(Effect.provide(layer), Effect.scoped);
+      }),
+    );
+    it.effect("a forward that fails its identity check is replaced even when ownership holds", () =>
+      Effect.gen(function* () {
+        const { host, layer, call } = makeHost();
+        yield* Effect.gen(function* () {
+          const manager = yield* SshTunnel.SshEnvironmentManager;
+          const route = () => manager.existingEnvironment!(uploadTarget, OWNER);
+          const cold = yield* call(route());
+          // The open forward still reaches an old backend; a fresh SSH session sees the owner.
+          host.forwardServed = "old-backend";
+          const after = yield* call(route());
+          assert.isTrue(Result.isSuccess(after.result));
+          if (Result.isSuccess(after.result) && Result.isSuccess(cold.result))
+            assert.notEqual(after.result.success.httpBaseUrl, cold.result.success.httpBaseUrl);
+          // The managed probe and a new forward; the failed forward is closed.
+          assert.equal(after.connections, 2);
+          assert.equal(host.forwardsKilled, 1);
+        }).pipe(Effect.provide(layer), Effect.scoped);
+      }),
+    );
+
+    it.effect("a route torn down while its forward answers is not returned", () =>
+      Effect.gen(function* () {
+        const { host, layer, call } = makeHost();
+        yield* Effect.gen(function* () {
+          const manager = yield* SshTunnel.SshEnvironmentManager;
+          const route = () => manager.existingEnvironment!(uploadTarget, OWNER);
+          const cold = yield* call(route());
+          const hold = {
+            entered: yield* Deferred.make<void>(),
+            release: yield* Deferred.make<void>(),
+          };
+          host.hold = hold;
+          const pending = yield* Effect.forkChild(Effect.result(route()));
+          yield* Deferred.await(hold.entered);
+          yield* manager.disconnectEnvironment(uploadTarget);
+          assert.equal(host.forwardsKilled, 1);
+          yield* Deferred.succeed(hold.release, undefined);
+          yield* advance(Duration.seconds(60));
+          const after = yield* Fiber.join(pending);
+          assert.isTrue(Result.isSuccess(after));
+          if (Result.isSuccess(after) && Result.isSuccess(cold.result))
+            assert.notEqual(after.success.httpBaseUrl, cold.result.success.httpBaseUrl);
         }).pipe(Effect.provide(layer), Effect.scoped);
       }),
     );
