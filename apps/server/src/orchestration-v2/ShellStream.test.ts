@@ -305,6 +305,40 @@ describe("omitIdleSubagentShells", () => {
       ),
     ).toBe(false);
   });
+
+  it.effect("keeps shared snapshot subagent IDs isolated between subscribers (#2441)", () =>
+    Effect.sync(() => {
+      const threads = [row("root", null), row("child", "root")];
+      const snapshot = { ...emptyShellSnapshot, snapshotSequence: 5, threads };
+      const index = {
+        subagentThreadIds: [ThreadId.make("child")],
+        subagentParentIds: new Set(["root"]),
+      };
+      const options = {
+        omitIdleSubagents: true,
+        omitOlderSettled: false,
+        now: DateTime.makeUnsafe(0),
+      };
+      const first = shellSnapshotForSubscriber(snapshot, options, index);
+      const joined = shellSnapshotForSubscriber(snapshot, options, index);
+      const promotion = {
+        sequence: 6,
+        event: {
+          threadId: "child",
+          type: "thread.metadata-updated",
+          payload: { lineage: { relationshipToParent: null } },
+        },
+      } as ApplicationStoredEvent;
+      shouldPublishShellApplicationEvent(
+        promotion,
+        first.subagentThreadIds,
+        subagentLineageOrder(5),
+      );
+      expect(first.subagentThreadIds.has("child")).toBe(false);
+      expect(joined.subagentThreadIds.has("child")).toBe(true);
+      expect(index.subagentThreadIds).toEqual(["child"]);
+    }),
+  );
 });
 
 describe("omitOlderSettledShells", () => {
