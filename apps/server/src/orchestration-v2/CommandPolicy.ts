@@ -141,6 +141,9 @@ export function shouldClearActiveOrder(
     command.createdBy === "user" &&
     command.notification === undefined &&
     command.delegatedCompletion === undefined &&
+    command.usageLimitContinuationOfRunId === undefined &&
+    command.automatedContinuationOfRunId === undefined &&
+    command.restartContinuationOfRunId === undefined &&
     !isNativeMaintenanceCommand(command)
   );
 }
