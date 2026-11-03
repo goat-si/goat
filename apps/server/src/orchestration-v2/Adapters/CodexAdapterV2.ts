@@ -112,6 +112,14 @@ import * as CodexClient from "effect-codex-app-server/client";
 import { withCodexRequestDeadlines } from "./CodexRequestDeadline.ts";
 import { CUA_DEFERRED_NOTE, makeCodexThreadStatuses } from "./codexThreadStatuses.ts";
 import * as CodexSubagents from "./codexSubagents.ts";
+import {
+  awaitingNativeStart,
+  makeStoppedQueuedTurns,
+  queueBlockers,
+  settleEach,
+  stopLateQueuedTurn,
+  stopQueuedTurn,
+} from "./CodexQueuedTurnStop.ts";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import * as CodexSchema from "effect-codex-app-server/schema";
 import * as Cause from "effect/Cause";
@@ -2115,6 +2123,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         const stoppedNativeTurns = new Set<string>();
         // Turns a Stop ended itself; they count as running until Codex reports them ended (#1654).
         const forcedNativeTurns = new Set<string>();
+        const stoppedQueuedTurns = makeStoppedQueuedTurns();
         // Keep the run event stream open until descendant provider state is
         // terminal, otherwise the root terminal can strand child projections.
         const deferredRootTerminals = yield* Ref.make(new Map<string, DeferredCodexRootTerminal>());
@@ -4735,6 +4744,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         );
         yield* survivorHooks.handleNotification("turn/started", (payload) =>
           Effect.gen(function* () {
+            const turnId = payload.turn.id;
+            if (stoppedQueuedTurns.has(turnId))
+              return yield* stopLateQueuedTurn(
+                client.request("turn/interrupt", { threadId: payload.threadId, turnId }),
+                () => stoppedQueuedTurns.has(turnId),
+              ).pipe(Effect.forkIn(scope));
             const context = (yield* Ref.get(activeTurns)).get(payload.turn.id);
             if (context !== undefined) {
               if (context.nativeStartReady !== undefined) {
@@ -6728,6 +6743,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               return true;
             }),
           );
+        // The stopped-queued record clears after finalizing, so a Stop deciding meanwhile cannot keep it.
         yield* survivorHooks.handleNotification("turn/completed", (payload) =>
           Effect.gen(function* () {
             forcedNativeTurns.delete(payload.turn.id);
@@ -6757,7 +6773,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                       : { failureErrorInfo: payload.turn.error.codexErrorInfo }),
                   }),
             });
-          }),
+          }).pipe(Effect.ensuring(Effect.sync(() => stoppedQueuedTurns.end(payload.turn.id)))),
         );
 
         /** Settles a /goal turn that never reaches Codex. State changes reply through the goal row. */
@@ -7628,6 +7644,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               yield* client.request("thread/unsubscribe", { threadId: nativeThreadId });
               // Only now has Codex let the thread go; until then it is held with its old config.
               credentialsByThread.delete(nativeThreadId);
+              stoppedQueuedTurns.unloadThread(nativeThreadId);
               managedCuaByThread.delete(nativeThreadId);
               appliedSubagentsByThread.delete(nativeThreadId);
             },
@@ -7705,8 +7722,12 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                       (candidate) => candidate.providerThread.id === turnInput.providerThread.id,
                     )
                   : undefined);
+              const stoppedRoots = [
+                ...(activeTurn === undefined ? [] : [activeTurn]),
+                ...goalTurns,
+              ];
               const lineageRoots = Array.from(
-                new Set([...(activeTurn === undefined ? [] : [activeTurn]), ...goalTurns]),
+                new Set([...stoppedRoots, ...queueBlockers(stoppedRoots, activeTurnContexts)]),
               );
               const inLineage = (context: ActiveCodexTurnContext) =>
                 lineageRoots.some(
@@ -7917,27 +7938,45 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               });
 
               yield* Effect.gen(function* () {
-                for (const target of interruptTargets) {
-                  const context = target.context;
-                  // Null start timestamps ACK queued turns; interruption must wait for turn/started.
-                  if (context.nativeStartReady !== undefined) {
-                    const ready = yield* Deferred.await(context.nativeStartReady).pipe(
-                      Effect.timeoutOption("10 seconds"),
-                    );
-                    if (Option.isNone(ready)) {
-                      return yield* toProtocolError(
-                        "Codex did not start the queued turn within 10 seconds; Stop could not be delivered.",
-                      );
-                    }
-                  }
-                  if ((yield* Ref.get(activeTurns)).get(context.nativeTurnId) !== context) {
-                    continue;
-                  }
+                const sendInterrupt = Effect.fnUntraced(function* (
+                  context: ActiveCodexTurnContext,
+                ) {
+                  if ((yield* Ref.get(activeTurns)).get(context.nativeTurnId) !== context) return;
                   yield* client.request("turn/interrupt", {
                     threadId: yield* getNativeThreadId(context.providerThread),
                     turnId: context.nativeTurnId,
                   });
-                }
+                });
+                const queued = interruptTargets.filter(({ context }) =>
+                  awaitingNativeStart(context),
+                );
+                const started = settleEach(
+                  interruptTargets.filter((target) => !queued.includes(target)),
+                  (target) => sendInterrupt(target.context),
+                );
+                // A queued turn that never starts cannot be interrupted, so it ends here instead.
+                const queuedStops = settleEach(queued, ({ context }) =>
+                  stopQueuedTurn({
+                    context,
+                    stopped: stoppedQueuedTurns,
+                    withPermit: turnTerminalizationPermit.withPermits(1),
+                    activeTurns: Ref.get(activeTurns),
+                    interrupt: sendInterrupt,
+                    // Never started, so it has no subagents a failed Stop must keep running.
+                    settle: Effect.flatMap(DateTime.now, (completedAt) =>
+                      finalizeCodexTurn({
+                        context,
+                        nativeTurnId: context.nativeTurnId,
+                        status: "interrupted",
+                        completedAt,
+                      }),
+                    ),
+                    full: toProtocolError(
+                      "Too many queued Codex turns are still waiting to be stopped; Stop could not be delivered.",
+                    ),
+                  }),
+                );
+                yield* settleEach([started, queuedStops], (effect) => effect);
                 const containedTerminalKeys = new Set<string>();
                 const attemptedTerminalKeys = new Set<string>();
                 const collectTrackedTerminals = Effect.fn("CodexAdapterV2.collectTrackedTerminals")(
