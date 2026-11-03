@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off -- fixtures use an isolated temporary record directory.
 import * as NodeFSP from "node:fs/promises";
+import * as NodeChildProcess from "node:child_process";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import { assert, it } from "@effect/vitest";
@@ -11,6 +12,7 @@ import {
   classifyDetachedAppServer,
   CodexDetachedAppServerError,
   makeDetachedAppServers,
+  PID_HANDSHAKE_SCRIPT,
   privateSocketDirectory,
 } from "./CodexDetachedAppServer.ts";
 
@@ -678,6 +680,63 @@ it.effect("a command construction failure removes its spawning record", () =>
         yield* Effect.promise(() => NodeFSP.readdir(NodePath.join(directory, "codex-app-servers"))),
         [],
       );
+    }),
+  ),
+);
+
+it.live("detached stderr retains only the final 64 KiB", () =>
+  withRecordDirectory((directory) =>
+    Effect.gen(function* () {
+      const pid = NodePath.join(directory, "child.pid");
+      const log = NodePath.join(directory, "child.stderr.log");
+      const child = NodeChildProcess.spawn(
+        "/bin/sh",
+        [
+          "-c",
+          PID_HANDSHAKE_SCRIPT,
+          "goat-codex",
+          pid,
+          log,
+          "/bin/sh",
+          "-c",
+          "head -c 131072 /dev/zero >&2; printf 'final-error\\n' >&2; printf ready; read answer",
+          "fixture",
+          socketPath,
+        ],
+        { detached: true },
+      );
+      child.on("error", () => {});
+      child.stdin.on("error", () => {});
+      child.stdout.on("error", () => {});
+      child.stderr.on("error", () => {});
+      const finished = new Promise<number | null>((resolve) => child.once("close", resolve));
+      yield* Effect.addFinalizer(() => Effect.sync(() => child.stdin.end("go\n")));
+      yield* Effect.promise(
+        () => new Promise<void>((resolve) => child.stdout.once("data", () => resolve())),
+      );
+      const size = yield* Effect.promise(() => NodeFSP.stat(log).then((stat) => stat.size));
+      const members = NodeChildProcess.execFileSync("ps", ["-A", "-o", "pid=,pgid=,command="], {
+        encoding: "utf8",
+      })
+        .split("\n")
+        .map((line) => line.trim().match(/^(\d+)\s+(\d+)\s+(.*)$/))
+        .filter((match) => match !== null && Number(match[2]) === child.pid);
+      child.stdin.end("go\n");
+      assert.isAtMost(size, 65536);
+      assert.isTrue(
+        members.some(
+          (member) => Number(member?.[1]) === child.pid && member?.[3]?.includes(socketPath),
+        ),
+      );
+      assert.isTrue(
+        members.some(
+          (member) => member?.[3]?.includes("goat-codex-log") && !member?.[3]?.includes(socketPath),
+        ),
+      );
+      assert.equal(yield* Effect.promise(() => finished), 0);
+      const data = yield* Effect.promise(() => NodeFSP.readFile(log));
+      assert.equal(data.length, 65536);
+      assert.isTrue(data.toString().endsWith("final-error\n"));
     }),
   ),
 );

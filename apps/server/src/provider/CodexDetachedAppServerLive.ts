@@ -1,6 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off -- detached spawn, process-group signals and socket probes need Node primitives.
 import * as NodeChildProcess from "node:child_process";
-import * as NodeFS from "node:fs";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeNet from "node:net";
 import * as HostProcess from "@goat/shared/HostProcess";
@@ -8,6 +7,7 @@ import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schedule from "effect/Schedule";
 import * as ServerConfig from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import { connectCodexAppServerSocket } from "./CodexAppServerSocket.ts";
@@ -164,28 +164,24 @@ const layer = Layer.effect(
       const exited = yield* Deferred.make<number | null>();
       const child = yield* Effect.try({
         try: () => {
-          const stderr = NodeFS.openSync(input.stderrPath, "w", 0o600);
-          try {
-            return NodeChildProcess.spawn(
-              "/bin/sh",
-              [
-                "-c",
-                PID_HANDSHAKE_SCRIPT,
-                "goat-codex",
-                input.pidFile,
-                input.command,
-                ...input.args,
-              ],
-              {
-                cwd: input.cwd,
-                env: input.env,
-                detached: true,
-                stdio: ["ignore", "ignore", stderr],
-              },
-            );
-          } finally {
-            NodeFS.closeSync(stderr);
-          }
+          return NodeChildProcess.spawn(
+            "/bin/sh",
+            [
+              "-c",
+              PID_HANDSHAKE_SCRIPT,
+              "goat-codex",
+              input.pidFile,
+              input.stderrPath,
+              input.command,
+              ...input.args,
+            ],
+            {
+              cwd: input.cwd,
+              env: input.env,
+              detached: true,
+              stdio: ["ignore", "ignore", "ignore"],
+            },
+          );
         },
         catch: (cause) =>
           new CodexDetachedAppServerError({ detail: "Could not start Codex app-server.", cause }),
@@ -194,7 +190,19 @@ const layer = Layer.effect(
       child.once("error", () => Deferred.doneUnsafe(exited, Effect.succeed(null)));
       child.unref();
       if (child.pid === undefined) return yield* fail("Codex app-server did not start.");
-      return { pid: child.pid, exited: Deferred.await(exited) };
+      // Tail flushes its bounded buffer after EOF; the detached writer signals when it is done.
+      const writerFinished = Effect.tryPromise({
+        try: () => NodeFSP.access(input.stderrPath + ".done"),
+        catch: (cause) =>
+          new CodexDetachedAppServerError({
+            detail: "Codex stderr writer has not finished.",
+            cause,
+          }),
+      }).pipe(Effect.retry({ times: 50, schedule: Schedule.spaced("20 millis") }), Effect.ignore);
+      return {
+        pid: child.pid,
+        exited: Deferred.await(exited).pipe(Effect.tap(() => writerFinished)),
+      };
     });
 
     const service = yield* makeDetachedAppServers({

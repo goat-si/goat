@@ -84,8 +84,16 @@ const MAX_SOCKET_PATH_BYTES = 103;
 const ABANDONED = "abandoned";
 
 /** Runs as the detached group leader: publishes its pid with link(2), then execs Codex in place. */
-export const PID_HANDSHAKE_SCRIPT =
-  'printf %s "$$" > "$1.$$" && ln "$1.$$" "$1" || { rm -f "$1.$$"; exit 75; }; rm -f "$1.$$"; shift; exec "$@"';
+export const PID_HANDSHAKE_SCRIPT = `printf %s "$$" > "$1.$$" && ln "$1.$$" "$1" || { rm -f "$1.$$"; exit 75; }
+rm -f "$1.$$"
+fifo="$1.err"
+log="$2"
+command -v tail >/dev/null && mkfifo "$fifo" || { printf '%s\\n' 'Could not create Codex stderr FIFO.' > "$log"; exit 76; }
+/bin/sh -c 'tail -c 65536 <"$1" >"$2"; : >"$2.done"' goat-codex-log "$fifo" "$log" </dev/null &
+exec 3>"$fifo"
+rm -f "$fifo"
+shift 2
+exec "$@" 2>&3 3>&-`;
 
 /** Creates root/codex with mode 0700 and refuses a directory another user could write to. */
 export const privateSocketDirectory = (root: string, uid: number) =>
@@ -199,7 +207,7 @@ const tryIo = <A>(detail: string, run: () => Promise<A>) =>
 const isErrno = (cause: unknown, code: string) =>
   typeof cause === "object" && cause !== null && (cause as { code?: unknown }).code === code;
 
-/** Reads at most the last bytes of a log that Codex may have grown without bound. */
+/** Reads at most the last bytes of the detached stderr log. */
 const readTail = async (path: string, bytes: number) => {
   const handle = await NodeFSP.open(path, "r").catch(() => undefined);
   if (handle === undefined) return "";
@@ -260,6 +268,8 @@ export const makeDetachedAppServers = Effect.fn("CodexDetachedAppServers.make")(
       await NodeFSP.rm(files.record, { force: true });
       await NodeFSP.rm(files.pid, { force: true });
       await NodeFSP.rm(files.stderr, { force: true });
+      await NodeFSP.rm(files.stderr + ".done", { force: true });
+      await NodeFSP.rm(files.pid + ".err", { force: true });
     });
 
   const readPidFile = (name: string) =>
