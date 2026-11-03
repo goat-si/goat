@@ -191,3 +191,34 @@ it.effect(
       assert.equal(reads, 2);
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
 );
+
+it.effect("a merged answer confirmed while its fingerprint was forgotten is checked again", () =>
+  Effect.gen(function* () {
+    const cwd = yield* makeTmpDir();
+    yield* initRepoWithCommit(cwd);
+    const other = yield* makeTmpDir();
+    yield* initRepoWithCommit(other);
+    const state = yield* makePrLookupGitState({ normalizeCwd: Effect.succeed, capacity: 2 });
+    const started = yield* Deferred.make<void>();
+    const release = yield* Deferred.make<void>();
+    let rechecks = 0;
+    const recheck = Effect.gen(function* () {
+      rechecks++;
+      if (rechecks === 1) {
+        yield* Deferred.succeed(started, undefined);
+        yield* Deferred.await(release);
+      }
+      return merged;
+    });
+    yield* state.validate(cwd, "main", false);
+    const confirming = yield* Effect.forkChild(state.verifyTerminal(cwd, "main", merged, recheck));
+    yield* Deferred.await(started);
+    // Another repository's lookup pushes this one's fingerprints out mid-recheck.
+    yield* state.validate(other, "main", false);
+    yield* Deferred.succeed(release, undefined);
+    yield* Fiber.join(confirming);
+    yield* state.validate(cwd, "main", false);
+    yield* state.verifyTerminal(cwd, "main", merged, recheck);
+    assert.equal(rechecks, 2);
+  }).pipe(Effect.scoped, Effect.provide(layerTest)),
+);

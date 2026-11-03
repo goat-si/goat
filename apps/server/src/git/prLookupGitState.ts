@@ -169,8 +169,15 @@ export const makePrLookupGitState = Effect.fn("PrLookupGitState.make")(function*
     )
       return found;
     const generation = epoch(cwd);
+    const reads = readGeneration(cwd);
     const verified = yield* recheck;
-    if (verified === null || verified.state === "open" || epoch(cwd) !== generation)
+    // An eviction or refresh during the recheck restarts reads without moving the epoch.
+    if (
+      verified === null ||
+      verified.state === "open" ||
+      epoch(cwd) !== generation ||
+      readGeneration(cwd) !== reads
+    )
       return verified;
     verifiedTerminal.delete(key);
     if (verifiedTerminal.size >= options.capacity) {
