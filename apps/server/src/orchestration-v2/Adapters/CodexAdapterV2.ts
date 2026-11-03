@@ -4744,12 +4744,11 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         );
         yield* survivorHooks.handleNotification("turn/started", (payload) =>
           Effect.gen(function* () {
-            if (stoppedQueuedTurns.take(payload.turn.id))
+            const turnId = payload.turn.id;
+            if (stoppedQueuedTurns.has(turnId))
               return yield* stopLateQueuedTurn(
-                client.request("turn/interrupt", {
-                  threadId: payload.threadId,
-                  turnId: payload.turn.id,
-                }),
+                client.request("turn/interrupt", { threadId: payload.threadId, turnId }),
+                () => stoppedQueuedTurns.has(turnId),
               ).pipe(Effect.forkIn(scope));
             const context = (yield* Ref.get(activeTurns)).get(payload.turn.id);
             if (context !== undefined) {
@@ -6747,7 +6746,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
         yield* survivorHooks.handleNotification("turn/completed", (payload) =>
           Effect.gen(function* () {
             forcedNativeTurns.delete(payload.turn.id);
-            stoppedQueuedTurns.take(payload.turn.id);
+            stoppedQueuedTurns.end(payload.turn.id);
             const context = (yield* Ref.get(activeTurns)).get(payload.turn.id);
             if (context === undefined) {
               return;
@@ -7645,6 +7644,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               yield* client.request("thread/unsubscribe", { threadId: nativeThreadId });
               // Only now has Codex let the thread go; until then it is held with its old config.
               credentialsByThread.delete(nativeThreadId);
+              stoppedQueuedTurns.unloadThread(nativeThreadId);
               managedCuaByThread.delete(nativeThreadId);
               appliedSubagentsByThread.delete(nativeThreadId);
             },
@@ -7971,6 +7971,9 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                           status: "interrupted",
                           completedAt,
                         }),
+                      ),
+                      full: toProtocolError(
+                        "Too many queued Codex turns are still waiting to be stopped; Stop could not be delivered.",
                       ),
                     }),
                   "unbounded",
