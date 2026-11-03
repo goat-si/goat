@@ -4,6 +4,7 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeReadline from "node:readline";
+import * as NodeSqlite from "node:sqlite";
 import { guardChild } from "@goat/shared/errorGuards";
 import { describe, expect, it } from "@effect/vitest";
 import { isSoakExitPrompt } from "../dev-replay-agent.ts";
@@ -340,8 +341,30 @@ describe("soak input safety", () => {
     const home = NodePath.join(checkout, ".goat");
     try {
       NodeFS.mkdirSync(NodePath.join(home, "userdata"), { recursive: true });
-      NodeFS.writeFileSync(NodePath.join(home, "userdata", "statev2.sqlite"), "copy");
+      const database = NodePath.join(home, "userdata", "statev2.sqlite");
+      const db = new NodeSqlite.DatabaseSync(database);
+      db.exec(
+        "CREATE TABLE projection_projects(id TEXT); INSERT INTO projection_projects VALUES ('seed');",
+      );
+      db.close();
       expect(validateHome(home, checkout)).toBe(home);
+      NodeFS.symlinkSync(
+        NodePath.join(dir, "outside"),
+        NodePath.join(home, "userdata", "settings-link"),
+      );
+      expect(() => validateHome(home, checkout)).toThrow();
+      NodeFS.unlinkSync(NodePath.join(home, "userdata", "settings-link"));
+      NodeFS.writeFileSync(NodePath.join(dir, "outside"), "outside");
+      NodeFS.linkSync(
+        NodePath.join(dir, "outside"),
+        NodePath.join(home, "userdata", "settings-hardlink"),
+      );
+      expect(() => validateHome(home, checkout)).toThrow();
+      NodeFS.unlinkSync(NodePath.join(home, "userdata", "settings-hardlink"));
+      const empty = new NodeSqlite.DatabaseSync(database);
+      empty.exec("DELETE FROM projection_projects");
+      empty.close();
+      expect(() => validateHome(home, checkout)).toThrow("seeded project");
       expect(() => validateHome(dir, checkout)).toThrow();
       NodeFS.rmSync(NodePath.join(home, "userdata", "statev2.sqlite"));
       NodeFS.symlinkSync(

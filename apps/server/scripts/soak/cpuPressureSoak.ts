@@ -16,6 +16,7 @@ import {
 import { runWorkload } from "./clients.ts";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
+import * as NodeSqlite from "node:sqlite";
 
 export type SoakOptions = {
   home: string;
@@ -95,6 +96,16 @@ export function validateHome(home: string, checkout: string): string {
     throw new Error("home must be the checkout's isolated .goat or .t3");
   if (NodeFS.realpathSync(supplied) !== supplied)
     throw new Error("home is a symlink or escapes checkout");
+  const pending = [supplied];
+  while (pending.length) {
+    const path = pending.pop();
+    if (!path) continue;
+    const stat = NodeFS.lstatSync(path);
+    if (stat.isSymbolicLink() || (stat.isFile() && stat.nlink > 1))
+      throw new Error(`unsafe linked home entry: ${path}`);
+    if (stat.isDirectory())
+      for (const entry of NodeFS.readdirSync(path)) pending.push(NodePath.join(path, entry));
+  }
   const database = NodePath.join(supplied, "userdata", "statev2.sqlite");
   const realDatabase = NodeFS.realpathSync(database);
   if (
@@ -104,6 +115,14 @@ export function validateHome(home: string, checkout: string): string {
     NodeFS.statSync(realDatabase).size === 0
   )
     throw new Error("missing or unsafe copied database");
+  const db = new NodeSqlite.DatabaseSync(realDatabase, { readOnly: true });
+  try {
+    const row = db.prepare("SELECT COUNT(*) AS count FROM projection_projects").get();
+    if (!row || typeof row.count !== "number" || row.count < 1)
+      throw new Error("database has no seeded project evidence");
+  } finally {
+    db.close();
+  }
   return supplied;
 }
 
