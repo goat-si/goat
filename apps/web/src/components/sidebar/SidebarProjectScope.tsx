@@ -151,6 +151,7 @@ export function SidebarProjectScope(props: {
         )}
       </ComboboxTrigger>
       <ComboboxPopup
+        finalFocus={(closeType) => closeType === "keyboard"}
         align="start"
         // Anchored to the search field, not the 28px trigger: the
         // popup opens under the field, is at least as wide as it,
