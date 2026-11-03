@@ -321,6 +321,47 @@ it.live("fillLogin sends the reference and returns confirmed delivery", () => {
   );
 });
 
+it.live("fillCard sends the reference and returns the card delivery status", () => {
+  const owned = { ...formTab, owner: "agent" as const, ownedByCaller: true };
+  const calls: unknown[] = [];
+  const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+    listBoundTabs: () => Effect.succeed([owned]),
+    invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) => {
+      if (request.operation === "fillCard") {
+        calls.push(request.input);
+        return Effect.succeed({
+          numberFilled: true,
+          cvcFilled: true,
+          expiryFilled: false,
+          expiryMonthFilled: false,
+          expiryYearFilled: false,
+          nameFilled: false,
+          verdict: "confirmed",
+        } as A);
+      }
+      return Effect.succeed({
+        tabId: formTab.tabId,
+        url: formTab.url,
+        control: { owner: "agent", ownedByCaller: true, generation: 0 },
+      } as A);
+    },
+  };
+  return runCells(broker, [
+    "const tab = await screen.tab('form'); return await tab.fillCard('ref');",
+  ]).pipe(
+    Effect.map(([result]) => {
+      expect(result).toMatchObject({
+        _tag: "Success",
+        success: {
+          status: "completed",
+          value: { numberFilled: true, cvcFilled: true, verdict: "confirmed" },
+        },
+      });
+      expect(calls).toEqual([{ secretRef: "ref" }]);
+    }),
+  );
+});
+
 it.live.each([
   { usernameFilled: true, passwordFilled: false, verdict: "unverifiable" as const },
   {
@@ -402,6 +443,55 @@ it.live("fillLogin focuses an observed target before using the reference", () =>
       expect(operations.filter((op) => op === "click" || op === "fillLogin")).toEqual([
         "click",
         "fillLogin",
+      ]);
+    }),
+  );
+});
+
+it.live("fillCard focuses an observed target before using the reference", () => {
+  const operations: string[] = [];
+  const owned = { ...formTab, owner: "agent" as const, ownedByCaller: true };
+  const broker: Pick<PreviewAutomationBroker["Service"], "invoke" | "listBoundTabs"> = {
+    listBoundTabs: () => Effect.succeed([owned]),
+    invoke: <A>(request: Parameters<PreviewAutomationBroker["Service"]["invoke"]>[0]) => {
+      operations.push(request.operation);
+      if (request.operation === "snapshot")
+        return Effect.succeed({
+          url: formTab.url,
+          title: "Form",
+          loading: false,
+          accessibilityTree: '- textbox "Password" [ref=e1]',
+          treeComplete: true,
+          refGeneration: "test",
+        } as A);
+      if (request.operation === "fillCard")
+        return Effect.succeed({
+          numberFilled: true,
+          cvcFilled: true,
+          expiryFilled: false,
+          expiryMonthFilled: false,
+          expiryYearFilled: false,
+          nameFilled: false,
+          verdict: "confirmed",
+        } as A);
+      return Effect.succeed({
+        tabId: formTab.tabId,
+        url: formTab.url,
+        control: { owner: "agent", ownedByCaller: true, generation: 0 },
+      } as A);
+    },
+  };
+  return runCells(broker, [
+    "const tab = await screen.tab('form'); await tab.observe(); return await tab.fillCard('ref', 'Password');",
+  ]).pipe(
+    Effect.map(([result]) => {
+      expect(result).toMatchObject({
+        _tag: "Success",
+        success: { status: "completed", value: { verdict: "confirmed" } },
+      });
+      expect(operations.filter((op) => op === "click" || op === "fillCard")).toEqual([
+        "click",
+        "fillCard",
       ]);
     }),
   );

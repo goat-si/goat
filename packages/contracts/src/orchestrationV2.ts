@@ -1650,7 +1650,7 @@ const OrchestrationV2SecretRequestFields = {
   secretStatus: OrchestrationV2SecretRequestStatus,
   handoff: Schema.optional(Handoff),
   siteOrigin: Schema.optional(Schema.String),
-  requestKind: Schema.optional(Schema.Literal("login")),
+  requestKind: Schema.optional(Schema.Literals(["login", "card"])),
 } as const;
 
 export const OrchestrationV2TurnItem = Schema.Union([
@@ -3742,7 +3742,7 @@ const OrchestrationV2InternalCommand = Schema.Union([
     delivery: Schema.optional(OrchestrationV2SecretRequestDelivery),
     secretStatus: OrchestrationV2SecretRequestStatus,
     siteOrigin: Schema.optional(Schema.String),
-    requestKind: Schema.optional(Schema.Literal("login")),
+    requestKind: Schema.optional(Schema.Literals(["login", "card"])),
   }),
 ]);
 export type OrchestrationV2InternalCommand = typeof OrchestrationV2InternalCommand.Type;

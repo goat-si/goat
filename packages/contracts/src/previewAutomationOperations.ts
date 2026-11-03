@@ -38,6 +38,7 @@ export const PREVIEW_AUTOMATION_SERVER_OPERATIONS = [
   "scrollCollect",
   "fillSecret",
   "fillLogin",
+  "fillCard",
   "read",
   "signInState",
 ] as const;

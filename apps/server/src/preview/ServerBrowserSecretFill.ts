@@ -2,6 +2,7 @@ import { makeLoginOperation } from "./ServerBrowserLoginOperation.ts";
 import { FILL, IDENTIFIER, IDENTIFIER_NAME } from "./secretFillAccountScripts.ts";
 import { FOCUSED, SELECTED } from "./secretFillTargetScripts.ts";
 import { STILL_FILLED } from "./secretFillStillFilled.ts";
+import { makeCardOperationWithStore } from "./ServerBrowserCardOperation.ts";
 // @effect-diagnostics globalTimers:off -- The privacy settle wait runs inside a Promise-based browser operation.
 /**
  * goat_preview_fill_secret: types an origin-bound secret into a password field over CDP in an
@@ -103,6 +104,8 @@ const secretFailure = (reason: SecretRequestFailureReason): SecretFailure => {
       return "no_candidate";
     case "answer_mismatch":
     case "login_ref":
+    case "card_ref":
+    case "invalid_card":
     case "agent_stopped":
     case "not_a_file_request":
     case "origin_required":
@@ -753,7 +756,7 @@ export const make = Effect.gen(function* () {
     };
   };
 
-  const fillLogin = makeLoginOperation({
+  const multiFieldDeps = {
     debugLogging: playwrightDebugLogging,
     reserve: reserving,
     recording: (tab) => {
@@ -785,6 +788,10 @@ export const make = Effect.gen(function* () {
           (fences.get(tab.page) ?? []).filter((each) => each !== entry),
         );
     },
+  } satisfies Omit<Parameters<typeof makeLoginOperation>[0], "use">;
+
+  const fillLogin = makeLoginOperation({
+    ...multiFieldDeps,
     use: (input, run) =>
       runPromise(
         secretRequests.useLogin(input, (login) =>
@@ -796,6 +803,7 @@ export const make = Effect.gen(function* () {
       ),
   });
 
+  const fillCard = makeCardOperationWithStore(multiFieldDeps, secretRequests, runPromise);
   /** Whether a tab may show a password GOAT filled in pixels: its site, or a fill under way, says no. */
   const pixelsOff = (tab: SecretFillTab, threadId: ThreadId) => {
     if ((filling.get(tab.page.context()) ?? 0) > 0) return FILLING;
@@ -967,6 +975,7 @@ export const make = Effect.gen(function* () {
   return {
     fill,
     fillLogin,
+    fillCard,
     fillRequest: <T extends SecretFillTab>(
       tab: T,
       request: PreviewAutomationRequest,
@@ -975,9 +984,11 @@ export const make = Effect.gen(function* () {
       gate: Parameters<typeof fill>[4],
       around: Parameters<typeof fill>[5],
     ) =>
-      request.operation === "fillLogin"
-        ? fillLogin(tab, request, deadline, record, gate, around)
-        : fill(tab, request, deadline, record, gate, around),
+      request.operation === "fillCard"
+        ? fillCard(tab, request, deadline, record, gate, around)
+        : request.operation === "fillLogin"
+          ? fillLogin(tab, request, deadline, record, gate, around)
+          : fill(tab, request, deadline, record, gate, around),
     guard,
     assertPixels,
     historyField,

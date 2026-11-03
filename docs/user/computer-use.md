@@ -91,6 +91,10 @@ An agent can also request a login with a username and password. The agent never 
 GOAT fills them only on the site named in the request, and each login is used once. If a fill
 stops partway, the agent needs a new login request.
 
+An agent can request payment card details for a named site. The agent never sees the values, and
+GOAT fills them only on that site. Each card is used once; if a fill stops partway, the agent needs
+a new card request.
+
 The cursor mark shows where the agent is working; it does not prove an action
 succeeded. If an outcome is uncertain, ask the agent to inspect the target
 before it tries another action.

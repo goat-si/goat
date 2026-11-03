@@ -1,6 +1,8 @@
 import {
   PreviewAutomationEvaluateInput,
   PreviewAutomationFillSecretInput,
+  PreviewAutomationFillCardInput,
+  PreviewAutomationFillCardResult,
   PreviewAutomationFillLoginInput,
   PreviewAutomationFillLoginResult,
   PreviewAutomationLogsInput,
@@ -142,18 +144,60 @@ const fillTabLogin = Effect.fn("PreviewTargetHost.fillLogin")(function* (
   };
 });
 
+const isCard = Schema.is(PreviewAutomationFillCardInput);
+const isCardResult = Schema.is(PreviewAutomationFillCardResult);
+const fillTabCard = Effect.fn("PreviewTargetHost.fillCard")(function* (
+  arg: Record<string, unknown>,
+  invoke: (input: unknown) => Effect.Effect<unknown, ScreenRunError>,
+) {
+  const input = { secretRef: arg.secretRef };
+  if (!isCard(input))
+    return yield* Effect.fail({
+      code: "invalid_argument" as const,
+      effectStarted: false,
+      nextStep: "Provide a card reference.",
+    });
+  const value = yield* invoke(input);
+  if (!isCardResult(value))
+    return yield* Effect.fail({
+      code: "unknown_outcome" as const,
+      effectStarted: true,
+      nextStep: "Inspect the page before retrying.",
+    });
+  if (value.verdict === "confirmed" && (!value.numberFilled || !value.cvcFilled))
+    return yield* Effect.fail({
+      code: "unknown_outcome" as const,
+      effectStarted: true,
+      nextStep: "Inspect the page before retrying.",
+    });
+  const confirmed = value.verdict === "confirmed";
+  return {
+    value,
+    category: confirmed ? ("confirmed" as const) : ("unverifiable" as const),
+    evidence: ["Card fill completed"],
+    outcome: {
+      dispatch: value.verdict === "refused" ? ("refused" as const) : ("confirmed" as const),
+      effect: confirmed ? ("confirmed" as const) : ("unknown" as const),
+    },
+  };
+});
+
 export function dispatchTabExtra(
   method: string,
   arg: Record<string, unknown>,
   invalidatePoints: () => void,
   invalidateTarget: () => void,
   invoke: (
-    operation: "logs" | "fillSecret" | "fillLogin" | "dialog" | "evaluate" | "upload",
+    operation: "logs" | "fillSecret" | "fillLogin" | "fillCard" | "dialog" | "evaluate" | "upload",
     input: unknown,
     documentGeneration?: number,
   ) => Effect.Effect<unknown, ScreenRunError>,
   upload?: { locator: string | undefined; documentGeneration: number | undefined },
 ) {
+  if (method === "tab_fill_card") {
+    invalidatePoints();
+    return fillTabCard(arg, (input) => invoke("fillCard", input));
+  }
   if (method === "tab_fill_login") {
     invalidatePoints();
     return fillTabLogin(arg, (input) => invoke("fillLogin", input));
