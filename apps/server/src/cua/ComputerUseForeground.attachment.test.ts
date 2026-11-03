@@ -141,7 +141,9 @@ describe("foreground through real computer-use attachment", () => {
         const gate = yield* Deferred.make<void>();
         const { h, leases } = yield* attach(false, false, gate);
         const competitor = ThreadId.make("thread:report-competitor");
-        const competingControl = yield* leases.control(competitor, Option.none());
+        const competingControl = Option.getOrThrow(
+          yield* leases.control(competitor, Option.none()),
+        );
         const competingCall = {
           action: "reserve" as const,
           controlId: competingControl.controlId,

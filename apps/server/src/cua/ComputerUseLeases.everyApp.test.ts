@@ -5,6 +5,7 @@ import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import * as Statement from "effect/sql/Statement";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
@@ -14,6 +15,7 @@ import * as PubSub from "effect/PubSub";
 import * as TestClock from "effect/testing/TestClock";
 import { runMigrations } from "../persistence/Migrations.ts";
 import * as ServerSettings from "../serverSettings.ts";
+import { layerServerSettings } from "../serverSettingsLayers.testkit.ts";
 import * as ComputerUseLeases from "./ComputerUseLeases.ts";
 import { database, grant } from "./ComputerUseLeases.projection.testkit.ts";
 import { foregroundGrant } from "./ComputerUseForeground.testkit.ts";
@@ -38,9 +40,300 @@ const everyAppLayer = ComputerUseLeases.layer.pipe(
       database,
       NodeServices.layer,
       // Off, as on a fresh host: since D16 the setting decides nothing for full access threads.
-      ServerSettings.ServerSettingsService.layerTest({ cuaFullAccessAutoAdmit: false }),
+      ServerSettings.ServerSettingsService.layerTest({
+        enableCua: true,
+        cuaFullAccessAutoAdmit: false,
+      }),
     ),
   ),
+);
+
+it.effect("another thread's live full-access control makes taking the screen shared", () =>
+  Effect.gen(function* () {
+    yield* runMigrations();
+    const leases = yield* ComputerUseLeases.ComputerUseLeases;
+    const settings = yield* ServerSettings.ServerSettingsService;
+    const owner = ThreadId.make("thread:shared-owner");
+    const other = ThreadId.make("thread:shared-other");
+    yield* threadIn(other, "full-access");
+    yield* settings.updateSettings({ cuaStrictInputGuards: true });
+    const control = Option.getOrThrow(yield* leases.control(owner, Option.none()));
+    const focus = yield* foregroundGrant(owner, "handoff:shared-focus");
+    yield* leases.everyAppControl(other, false);
+    const request = {
+      action: "reserve" as const,
+      controlId: control.controlId,
+      connectionId: "c",
+      callId: "one",
+      interruptions: 0,
+      idleEpoch: 0,
+      name: "bring_to_front",
+      args: { pid: 42, window_id: 7 },
+      foregroundGrantId: focus.handoffId,
+    };
+    assert.deepInclude(yield* leases.callReservation(owner, request), {
+      status: "refused",
+      detail: "screen_shared",
+    });
+    yield* settings.updateSettings({ cuaStrictInputGuards: false });
+    assert.equal(
+      (yield* leases.callReservation(owner, { ...request, callId: "two" })).status,
+      "admitted",
+    );
+    yield* settings.updateSettings({ cuaStrictInputGuards: true });
+    yield* leases.stop(other);
+    assert.notProperty(yield* leases.controlState(owner, control.controlId), "shared");
+  }).pipe(Effect.provide(everyAppLayer)),
+);
+
+it.effect.each(["reserve", "validate"] as const)(
+  "a full-access control minted during the settings read refuses screen-taking %s",
+  (action) =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      const owner = ThreadId.make(`thread:shared-race-${action}`);
+      const other = ThreadId.make(`thread:shared-race-other-${action}`);
+      yield* threadIn(other, "full-access");
+      yield* settings.updateSettings({ cuaStrictInputGuards: true });
+      const control = Option.getOrThrow(yield* leases.control(owner, Option.none()));
+      const focus = yield* foregroundGrant(owner, `handoff:shared-race-${action}`);
+      const reserve = {
+        action: "reserve" as const,
+        controlId: control.controlId,
+        connectionId: "race",
+        callId: "one",
+        interruptions: 0,
+        idleEpoch: 0,
+        name: "bring_to_front",
+        args: { pid: 42, window_id: 7 },
+        foregroundGrantId: focus.handoffId,
+      };
+      const first =
+        action === "validate" ? yield* leases.callReservation(owner, reserve) : undefined;
+      if (first !== undefined && (first.status !== "admitted" || first.reservationId === null))
+        return assert.fail("expected ticket");
+      const request =
+        first?.status === "admitted" && first.reservationId !== null
+          ? {
+              action: "validate" as const,
+              controlId: control.controlId,
+              connectionId: "race",
+              reservationId: first.reservationId,
+            }
+          : reserve;
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const heldSettings = ServerSettings.ServerSettingsService.of({
+        ...settings,
+        getSettings: settings.getSettings.pipe(
+          Effect.tap(() =>
+            Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
+          ),
+        ),
+      });
+      const pending = yield* leases
+        .callReservation(owner, request)
+        .pipe(
+          Effect.provideService(ServerSettings.ServerSettingsService, heldSettings),
+          Effect.forkChild,
+        );
+      yield* Deferred.await(entered);
+      assert.isTrue(Option.isSome(yield* leases.everyAppControl(other, false)));
+      yield* Deferred.succeed(release, undefined);
+      assert.deepInclude(yield* Fiber.join(pending), {
+        status: "refused",
+        detail: "screen_shared",
+      });
+    }).pipe(Effect.provide(everyAppLayer)),
+);
+
+it.effect("a thread's own full-access control alone does not share the screen", () =>
+  Effect.gen(function* () {
+    yield* runMigrations();
+    const leases = yield* ComputerUseLeases.ComputerUseLeases;
+    const owner = ThreadId.make("thread:only-full-access");
+    yield* threadIn(owner, "full-access");
+    const control = Option.getOrThrow(yield* leases.everyAppControl(owner, false));
+    assert.notProperty(yield* leases.controlState(owner, control.controlId), "shared");
+  }).pipe(Effect.provide(everyAppLayer)),
+);
+
+it.effect("disabling computer use refuses new and reused controls before the observer runs", () =>
+  Effect.gen(function* () {
+    yield* runMigrations();
+    const leases = yield* ComputerUseLeases.ComputerUseLeases;
+    const settings = yield* ServerSettings.ServerSettingsService;
+    const owner = ThreadId.make("thread:disable-control");
+    const full = ThreadId.make("thread:disable-full");
+    const fresh = ThreadId.make("thread:disable-new");
+    yield* settings.updateSettings({ enableCua: true });
+    yield* threadIn(full, "full-access");
+    Option.getOrThrow(yield* leases.control(owner, Option.none()));
+    assert.isTrue(Option.isSome(yield* leases.everyAppControl(full, false)));
+    const block = {
+      reason: "permissionsNotGranted",
+      missing: ["screenRecording"],
+      holder: "helper",
+    } as const;
+    yield* leases.blocked(owner, block);
+    const notices = yield* leases.subscribe;
+    yield* settings.updateSettings({ enableCua: false });
+    assert.isTrue(Option.isNone(yield* leases.control(owner, Option.none())));
+    assert.isTrue(Option.isNone(yield* leases.control(fresh, Option.none())));
+    assert.isTrue(Option.isNone(yield* leases.everyAppControl(full, false)));
+    assert.isTrue(Option.isNone(yield* leases.everyAppControl(fresh, false)));
+    assert.deepEqual(yield* leases.blockedTurns, [{ threadId: owner, block }]);
+    assert.equal(yield* PubSub.remaining(notices), 0);
+  }).pipe(Effect.provide(everyAppLayer)),
+);
+
+it.effect(
+  "disabling computer use refuses reservation and validation before the observer runs",
+  () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      const owner = ThreadId.make("thread:disable-reservation");
+      yield* settings.updateSettings({ enableCua: true });
+      yield* threadIn(owner, "full-access");
+      const control = Option.getOrThrow(yield* leases.everyAppControl(owner, false));
+      const request = {
+        action: "reserve" as const,
+        controlId: control.controlId,
+        connectionId: "c",
+        callId: "one",
+        interruptions: 0,
+        idleEpoch: 0,
+        name: "click",
+        args: { pid: 42, window_id: 7 },
+      };
+      const ticket = yield* leases.callReservation(owner, request);
+      if (ticket.status !== "admitted" || ticket.reservationId === null)
+        return assert.fail("expected ticket");
+      yield* settings.updateSettings({ enableCua: false });
+      assert.deepInclude(yield* leases.callReservation(owner, { ...request, callId: "two" }), {
+        status: "refused",
+        detail: "disabled",
+      });
+      assert.deepInclude(
+        yield* leases.callReservation(owner, {
+          action: "validate",
+          controlId: control.controlId,
+          connectionId: "c",
+          reservationId: ticket.reservationId,
+        }),
+        { status: "refused", detail: "disabled" },
+      );
+    }).pipe(Effect.provide(everyAppLayer)),
+);
+
+it.effect("a mint before the settings rename succeeds and after the rename refuses", () =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const renameEntered = yield* Deferred.make<void>();
+    const releaseRename = yield* Deferred.make<void>();
+    const cleanupEntered = yield* Deferred.make<void>();
+    const releaseCleanup = yield* Deferred.make<void>();
+    let hold = false;
+    const controlledFs = FileSystem.FileSystem.of({
+      ...fs,
+      rename: (from, to) =>
+        Effect.gen(function* () {
+          if (hold && to.endsWith("settings.json")) {
+            yield* Deferred.succeed(renameEntered, undefined);
+            yield* Deferred.await(releaseRename);
+          }
+          yield* fs.rename(from, to);
+        }),
+      remove: (path, options) =>
+        Effect.gen(function* () {
+          if (hold && path.includes("settings.json.")) {
+            hold = false;
+            yield* Deferred.succeed(cleanupEntered, undefined);
+            yield* Deferred.await(releaseCleanup);
+          }
+          yield* fs.remove(path, options);
+        }),
+    });
+    yield* Effect.gen(function* () {
+      yield* runMigrations();
+      const settings = yield* ServerSettings.ServerSettingsService;
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      yield* settings.start;
+      yield* settings.updateSettings({ enableCua: true });
+      const owner = ThreadId.make("thread:rename-policy");
+      hold = true;
+      const writer = yield* settings.updateSettings({ enableCua: false }).pipe(Effect.forkChild);
+      yield* Deferred.await(renameEntered);
+      const before = yield* leases.control(owner, Option.none());
+      assert.isTrue(Option.isSome(before));
+      yield* Deferred.succeed(releaseRename, undefined);
+      yield* Deferred.await(cleanupEntered);
+      assert.isTrue(Option.isNone(yield* leases.control(owner, Option.none())));
+      yield* Deferred.succeed(releaseCleanup, undefined);
+      yield* Fiber.join(writer);
+    }).pipe(
+      Effect.provide(ComputerUseLeases.layer.pipe(Layer.provideMerge(layerServerSettings()))),
+      Effect.provideService(FileSystem.FileSystem, controlledFs),
+    );
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect(
+  "an unavailable policy refuses minting and admission while absent test policy preserves behavior",
+  () =>
+    Effect.gen(function* () {
+      yield* runMigrations();
+      const leases = yield* ComputerUseLeases.ComputerUseLeases;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      const owner = ThreadId.make("thread:unavailable-policy");
+      const control = Option.getOrThrow(yield* leases.control(owner, Option.none()));
+      const unavailable = ServerSettings.ServerSettingsService.of({
+        ...settings,
+        committedPolicy: Effect.succeed({ _tag: "unavailable" }),
+      });
+      assert.isTrue(
+        Option.isNone(
+          yield* leases
+            .control(owner, Option.none())
+            .pipe(Effect.provideService(ServerSettings.ServerSettingsService, unavailable)),
+        ),
+      );
+      const request = {
+        action: "reserve" as const,
+        controlId: control.controlId,
+        connectionId: "c",
+        callId: "one",
+        interruptions: 0,
+        idleEpoch: 0,
+        name: "click",
+        args: { pid: 42, window_id: 7 },
+      };
+      assert.deepInclude(
+        yield* leases
+          .callReservation(owner, request)
+          .pipe(Effect.provideService(ServerSettings.ServerSettingsService, unavailable)),
+        { status: "refused", detail: "disabled" },
+      );
+      const { committedPolicy: _omitted, ...withoutPolicy } = settings;
+      const testDouble = ServerSettings.ServerSettingsService.of(withoutPolicy);
+      assert.isTrue(
+        Option.isSome(
+          yield* leases
+            .control(owner, Option.none())
+            .pipe(Effect.provideService(ServerSettings.ServerSettingsService, testDouble)),
+        ),
+      );
+      assert.equal(
+        (yield* leases
+          .callReservation(owner, { ...request, callId: "two" })
+          .pipe(Effect.provideService(ServerSettings.ServerSettingsService, testDouble))).status,
+        "admitted",
+      );
+    }).pipe(Effect.provide(everyAppLayer)),
 );
 
 it.effect("updates the origin policy when a full access control is reused", () =>
@@ -211,7 +504,9 @@ it.effect.each(["replacement", "approval after Stop"] as const)(
       yield* threadIn(owner, "auto");
       yield* leases.stop(owner);
       const second =
-        transition === "replacement" ? yield* leases.control(owner, Option.none()) : undefined;
+        transition === "replacement"
+          ? Option.getOrThrow(yield* leases.control(owner, Option.none()))
+          : undefined;
       if (transition === "approval after Stop") yield* foregroundGrant(owner, "handoff:after-stop");
       yield* Deferred.succeed(release, undefined);
       assert.deepEqual(yield* Fiber.join(pending), { _tag: "ended", reason: "revoked" });
@@ -322,7 +617,7 @@ it.effect("gives a full access thread every app until it leaves full access", ()
     assert.equal(state._tag, "active");
     assert.isUndefined(state._tag === "active" ? state.apps : "not active");
     // A turn outside full access gets a control of its own, limited to its grants.
-    const scoped = yield* leases.control(auto, Option.none());
+    const scoped = Option.getOrThrow(yield* leases.control(auto, Option.none()));
     assert.notEqual(scoped.controlId, first.controlId);
 
     // Leaving full access ends it, with the provider session and its proxy still alive.
@@ -388,8 +683,10 @@ it.effect(
       yield* grant(kakao, "handoff:kakao", ["com.kakao.KakaoTalk"]);
       yield* grant(aside, "handoff:aside", ["at.studio.AsideBrowser"]);
       // One unattended control on its grant, one interactive control on its thread's grants.
-      const kakaoControl = yield* leases.control(kakao, yield* leases.active(kakao));
-      const asideControl = yield* leases.control(aside, Option.none());
+      const kakaoControl = Option.getOrThrow(
+        yield* leases.control(kakao, yield* leases.active(kakao)),
+      );
+      const asideControl = Option.getOrThrow(yield* leases.control(aside, Option.none()));
       assert.deepInclude(yield* leases.controlState(kakao, kakaoControl.controlId), {
         _tag: "active",
         apps: ["com.kakao.KakaoTalk"],

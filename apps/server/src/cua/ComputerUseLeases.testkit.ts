@@ -37,11 +37,13 @@ export const layerInteractive = (input: {
       channelOrigin: () => Effect.succeed(undefined),
       active: () => Effect.succeed(Option.none()),
       control: (threadId) =>
-        Effect.succeed({
-          controlId: "control:test",
-          threadId,
-          expiresAt: DateTime.makeUnsafe("2030-01-01T00:00:00.000Z"),
-        }),
+        Effect.succeed(
+          Option.some({
+            controlId: "control:test",
+            threadId,
+            expiresAt: DateTime.makeUnsafe("2030-01-01T00:00:00.000Z"),
+          }),
+        ),
       // A full access thread takes this one: every app, no grant (D16).
       everyAppControl: (threadId) =>
         Effect.succeed(

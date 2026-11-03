@@ -35,7 +35,7 @@ it.effect(
       assert.isTrue(yield* leases.turnEnded(thread));
       yield* h.killed;
 
-      const reused = yield* leases.control(thread, Option.some(admission));
+      const reused = Option.getOrThrow(yield* leases.control(thread, Option.some(admission)));
       assert.equal(reused.controlId, control.controlId);
       const next = yield* h.driverStarted;
       assert.equal(next.generation, first.generation + 1);
@@ -62,7 +62,7 @@ it.effect.each([
     const leases = yield* ComputerUseLeases.ComputerUseLeases;
     const sql = yield* SqlClient.SqlClient;
     const thread = ThreadId.make(`thread:waiting-${open}`);
-    const control = yield* leases.control(thread, Option.none());
+    const control = Option.getOrThrow(yield* leases.control(thread, Option.none()));
     yield* run(thread, `run:waiting-${open}`, 1, "waiting");
     if (open === "turn")
       yield* sql`

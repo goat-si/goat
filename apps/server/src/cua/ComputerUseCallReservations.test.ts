@@ -193,7 +193,7 @@ describe("server computer-use call reservations", () => {
         else {
           yield* grant(f.a, "grant:replacement", ["app.a"]);
           const lease = Option.getOrThrow(yield* f.leases.active(f.a));
-          const next = yield* f.leases.control(f.a, Option.some(lease));
+          const next = Option.getOrThrow(yield* f.leases.control(f.a, Option.some(lease)));
           assert.notEqual(next.controlId, f.first.controlId);
         }
         yield* TestClock.adjust(ORPHAN_CALL_GRACE_MS);
@@ -616,7 +616,7 @@ describe("server computer-use call reservations", () => {
         yield* h.send(call(1, "type_text", { pid: 42, window_id: 7, text: "old turn" }));
         yield* Deferred.await(entered);
         yield* f.leases.turnEnded(f.a);
-        const reused = yield* f.leases.control(f.a, Option.none());
+        const reused = Option.getOrThrow(yield* f.leases.control(f.a, Option.none()));
         assert.equal(reused.controlId, f.first.controlId);
         yield* Deferred.succeed(gate, undefined);
         // The proxy has not heard the idle epoch. Discovery proves the old input was never sent.
@@ -883,7 +883,7 @@ describe("server computer-use call reservations", () => {
         assert.deepEqual(yield* f.reserve(f.b), { status: "refused", detail: "replaced" });
         yield* f.leases.stop(f.b);
         assert.deepEqual(yield* f.reserve(f.b), { status: "refused", detail: "stopped" });
-        const fresh = yield* f.leases.control(f.a, Option.none());
+        const fresh = Option.getOrThrow(yield* f.leases.control(f.a, Option.none()));
         yield* TestClock.adjust("1 hour");
         const expired: ComputerUseCallReservation = {
           action: "reserve",
