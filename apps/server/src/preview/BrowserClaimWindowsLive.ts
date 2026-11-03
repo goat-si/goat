@@ -6,7 +6,7 @@ import { BrowserOriginGrants } from "./BrowserOriginGrantsLayer.ts";
 import { BrowserClaimWindowsUnavailable, listBrowserClaimWindows } from "./BrowserClaimWindows.ts";
 import { makeBrowserClaimsRpcHandlers } from "./BrowserClaimsRpcHandlers.ts";
 
-export const makeBrowserClaimWindows = Effect.fn("BrowserClaimWindows.make")(function* () {
+const makeBrowserClaimWindows = Effect.fn("BrowserClaimWindows.make")(function* () {
   const grants = yield* Effect.serviceOption(BrowserOriginGrants);
   const driver = yield* Effect.serviceOption(CuaDriver);
   const request = yield* makeBrowserDriverRequest();
