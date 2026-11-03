@@ -10,6 +10,26 @@ const keep = (id: string, paths: readonly string[], pattern: RegExp, reason: str
 });
 
 export const RESIDUE_KEEP_RULES: readonly KeepRule[] = [
+  {
+    id: "fork-upstream-test-identities",
+    scope: (path) =>
+      [
+        "apps/server/src/pullRequest/PullRequestForkListing.test.ts",
+        "apps/server/src/pullRequest/projectRepositories.test.ts",
+        "apps/web/src/components/pullRequest/pullRequestList.logic.test.ts",
+        "packages/shared/src/composerPullRequestMatches.test.ts",
+      ].includes(path),
+    pattern: /pingdotgg\/t3code/g,
+    holdsOnApply: true,
+    reason: "Fork tests distinguish the upstream repository from GOAT.",
+  },
+  {
+    id: "legacy-screen-tool-test-identity",
+    scope: (path) => path === "packages/client-runtime/src/work-log/computerUse.test.ts",
+    pattern: /t3code:goat_screen_run/g,
+    holdsOnApply: true,
+    reason: "The test covers legacy tool names found in historical work logs.",
+  },
   keep(
     "upstream-task-cache-credentials",
     ["scripts/mobile-native-client.ts"],
