@@ -802,7 +802,7 @@ export class ServerSettingsService extends Context.Service<
     readonly ready: Effect.Effect<void, ServerSettingsError>;
 
     readonly getSettings: Effect.Effect<ServerSettings, ServerSettingsError>;
-    readonly committedPolicy: Effect.Effect<CuaCommittedPolicy>;
+    readonly committedPolicy?: Effect.Effect<CuaCommittedPolicy>;
     readonly blockedBrowserHostsSnapshot?: Effect.Effect<
       ReadonlyArray<string>,
       ServerSettingsError
