@@ -47,14 +47,17 @@ const rawRoute = HttpRouter.add(
 );
 
 const openClient = (url: string) =>
-  Effect.callback<NodeWS.WebSocket, Error>((resume) => {
-    const socket = new NodeWS.WebSocket(url);
-    socket.on("error", (error) => {
-      socket.terminate();
-      resume(Effect.fail(error));
-    });
-    socket.once("open", () => resume(Effect.succeed(socket)));
-  });
+  Effect.acquireRelease(
+    Effect.callback<NodeWS.WebSocket, Error>((resume) => {
+      const socket = new NodeWS.WebSocket(url);
+      socket.on("error", (error) => {
+        socket.terminate();
+        resume(Effect.fail(error));
+      });
+      socket.once("open", () => resume(Effect.succeed(socket)));
+    }),
+    (socket) => Effect.sync(() => socket.terminate()),
+  );
 
 const nextPing = (client: NodeWS.WebSocket) =>
   Effect.callback<void>((resume) => {
