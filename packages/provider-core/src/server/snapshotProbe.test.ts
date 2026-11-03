@@ -25,6 +25,85 @@ import {
 } from "./snapshotProbe.ts";
 
 describe("spawn failure diagnosis", () => {
+  it.effect("a spawn failure with no cwd keeps its real cause (#2415)", () =>
+    Effect.sync(() => {
+      const missing = { binary: NodePath.join(NodeOS.tmpdir(), "goat-no-such-binary-2415") };
+      const existing = { binary: process.execPath };
+      expect([
+        classifySpawnFailure({ code: "ENOENT" }, undefined, undefined, missing),
+        classifySpawnFailure({ code: "ENOENT" }, undefined, undefined, existing),
+        classifySpawnFailure({ code: "EACCES" }, undefined, undefined, existing),
+        classifySpawnFailure({ code: "EPERM" }, undefined, undefined, existing),
+        classifySpawnFailure({ code: "EIO" }, undefined),
+      ]).toEqual(["missing", "unknown", "unknown", "unknown", "unknown"]);
+    }),
+  );
+
+  it.effect("does not report a missing binary when its path cannot be inspected (#2415)", () =>
+    Effect.sync(() => {
+      for (const code of ["EACCES", "EIO"]) {
+        expect(
+          classifySpawnFailure(
+            { code: "ENOENT" },
+            undefined,
+            undefined,
+            { binary: NodePath.join(NodeOS.tmpdir(), "provider-cli") },
+            () => {
+              throw Object.assign(new Error("stat failed"), { code });
+            },
+          ),
+        ).toBe("unknown");
+      }
+      for (const code of ["ENOENT", "ENOTDIR"]) {
+        expect(
+          classifySpawnFailure(
+            { code: "ENOENT" },
+            undefined,
+            undefined,
+            { binary: "provider-cli", env: { PATH: NodeOS.tmpdir() } },
+            () => {
+              throw Object.assign(new Error("stat failed"), { code });
+            },
+          ),
+        ).toBe("missing");
+      }
+      const cwd = process.cwd();
+      expect(
+        classifySpawnFailure(
+          { code: "ENOENT" },
+          cwd,
+          undefined,
+          {
+            binary: "provider-cli",
+            env: { PATH: [cwd, NodeOS.tmpdir()].join(NodePath.delimiter) },
+          },
+          (path) => {
+            if (path === NodePath.join(cwd, "provider-cli")) {
+              throw Object.assign(new Error("stat failed"), { code: "EIO" });
+            }
+            return true;
+          },
+        ),
+      ).toBe("exec_failed");
+    }),
+  );
+
+  it.effect("keeps an inaccessible executable unknown even when cwd is known (#2415)", () =>
+    Effect.sync(() => {
+      expect(
+        classifySpawnFailure(
+          { code: "ENOENT" },
+          process.cwd(),
+          undefined,
+          { binary: "provider-cli", env: { PATH: NodeOS.tmpdir() } },
+          () => {
+            throw Object.assign(new Error("stat failed"), { code: "EACCES" });
+          },
+        ),
+      ).toBe("unknown");
+    }),
+  );
+
   it("recognizes an existing executable with a missing interpreter, including PATH lookup", () => {
     const cwd = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-broken-shebang-"));
     try {
