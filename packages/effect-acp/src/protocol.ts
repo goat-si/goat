@@ -166,13 +166,27 @@ const parserFactory = RpcSerialization.ndJsonRpc();
 const makeStrictNdJsonRpcParser = () => {
   const codec = RpcSerialization.jsonRpc().makeUnsafe();
   const decoder = new TextDecoder();
-  let buffer = "";
+  const maxFrameCharacters = 16 * 1024 * 1024;
+  let fragments: Array<string> = [];
+  let pendingCharacters = 0;
   return {
     decode: (bytes: Uint8Array | string): ReadonlyArray<unknown> => {
-      buffer += typeof bytes === "string" ? bytes : decoder.decode(bytes, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
-      return lines.flatMap((line) => codec.decode(line));
+      const chunk = typeof bytes === "string" ? bytes : decoder.decode(bytes, { stream: true });
+      const lines = chunk.split("\n");
+      const decoded: Array<unknown> = [];
+      for (const [index, fragment] of lines.entries()) {
+        pendingCharacters += fragment.length;
+        if (pendingCharacters > maxFrameCharacters) {
+          throw new Error("ACP frame exceeds the maximum size");
+        }
+        if (fragment.length > 0) fragments.push(fragment);
+        if (index < lines.length - 1) {
+          decoded.push(...codec.decode(fragments.join("")));
+          fragments = [];
+          pendingCharacters = 0;
+        }
+      }
+      return decoded;
     },
     encode: (response: Parameters<typeof codec.encode>[0]) => {
       const encoded = codec.encode(response);

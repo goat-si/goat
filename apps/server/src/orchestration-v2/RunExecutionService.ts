@@ -743,9 +743,10 @@ export const layer: Layer.Layer<
         }
         const allocateEventId = () => idAllocator.allocate.event({ threadId: input.run.threadId });
         const reason =
-          (input.terminal.status === "interrupted" || input.terminal.status === "cancelled") &&
-          input.loadRunInterruptReason !== undefined
-            ? yield* input.loadRunInterruptReason()
+          input.terminal.status === "interrupted" || input.terminal.status === "cancelled"
+            ? ((input.loadRunInterruptReason === undefined
+                ? undefined
+                : yield* input.loadRunInterruptReason()) ?? input.terminal.reason)
             : undefined;
         const terminationCause: OrchestrationV2RunTerminationCause | undefined =
           terminalTerminationCause(
