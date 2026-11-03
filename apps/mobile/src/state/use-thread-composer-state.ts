@@ -1,3 +1,4 @@
+import { restoreAttachmentOnlyBootstrapPrompt } from "@goat/shared/composerContextReferences";
 import {
   cloudRetryAllowed,
   deriveCloudTaskState,
@@ -449,7 +450,11 @@ export function useThreadComposerState() {
     if (edit === null) return;
     const draft = getComposerDraftSnapshot(queuedEditDraftKey(threadKey, edit.runId));
     const text = draft.text.trim();
-    if (text.length === 0) {
+    if (
+      text.length === 0 &&
+      edit.existingAttachments.length === 0 &&
+      draft.attachments.length === 0
+    ) {
       Dialog.alert("Add a message", "A queued message cannot be left empty.");
       return;
     }
@@ -503,7 +508,7 @@ export function useThreadComposerState() {
       input: {
         threadId: thread.id,
         runId: edit.runId,
-        text,
+        text: restoreAttachmentOnlyBootstrapPrompt(text, payload.attachments.length > 0),
         edit: {
           messageId: edit.messageId,
           attachments: payload.attachments,

@@ -8,6 +8,7 @@ import type { RpcSession } from "@goat/client-runtime/rpc/session";
 import type { ThreadStructure } from "@goat/client-runtime/state/shell";
 import type { createEnvironmentThreadDetailAtoms } from "@goat/client-runtime/state/threads";
 import {
+  ChatAttachmentId,
   EnvironmentId,
   EventId,
   MessageId,
@@ -18,6 +19,7 @@ import {
   type OrchestrationV2ThreadStreamItem,
   type ScopedThreadRef,
 } from "@goat/contracts";
+import { ATTACHMENT_ONLY_BOOTSTRAP_PROMPT } from "@goat/shared/composerContextReferences";
 import type * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import { useImperativeHandle, type RefObject } from "react";
@@ -382,6 +384,39 @@ const promptOf = (ref: ScopedThreadRef) =>
   useComposerDraftStore.getState().getComposerDraft(ref)?.prompt ?? "";
 
 describe("useQueuedRunEdit", () => {
+  it("hides an attachment-only placeholder while editing and restores it when saving", async () => {
+    const { hook } = setup();
+    mocks.editQueuedRun.mockResolvedValue({ _tag: "Success" });
+    await using _screen = await render(view(THREAD_A, "queued", hook));
+    await act(() =>
+      requireHook(hook).beginEdit({
+        runId: RUN,
+        messageId: MessageId.make("message-1"),
+        text: `Ultrathink:\n${ATTACHMENT_ONLY_BOOTSTRAP_PROMPT}`,
+        attachments: [
+          {
+            type: "image",
+            id: ChatAttachmentId.make("kept"),
+            name: "kept.png",
+            mimeType: "image/png",
+            sizeBytes: 10,
+          },
+        ],
+      }),
+    );
+    const prompt = useComposerDraftStore
+      .getState()
+      .getComposerDraft(requireHook(hook).draftTarget)?.prompt;
+    expect(prompt).toBe("Ultrathink:");
+    await act(() => requireHook(hook).saveEdit(savedContent(prompt ?? ""), () => {}));
+    expect(mocks.editQueuedRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: expect.objectContaining({
+          text: `Ultrathink:\n${ATTACHMENT_ONLY_BOOTSTRAP_PROMPT}`,
+        }),
+      }),
+    );
+  });
   it("lets a thread started from a draft go live and show its first message and reply without a remount", async () => {
     const { hook } = setup();
     const draftRef: ScopedThreadRef = { environmentId: ENV, threadId: ThreadId.make("draft") };
