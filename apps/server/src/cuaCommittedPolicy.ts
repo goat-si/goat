@@ -21,13 +21,20 @@ export const makeCuaCommittedPolicy = Effect.gen(function* () {
     readonly sequence: number;
     readonly hosts: ReadonlyArray<string> | undefined;
   }> = [];
+  // Overflow means all claims must end because an intermediate restriction may be missing.
   let sequence = 0;
   const setPolicy = (policy: CuaCommittedPolicy) =>
     Ref.set(ref, policy).pipe(
       Effect.andThen(
         Effect.sync(() => {
-          const hosts =
+          const size =
             policy._tag === "committed" && policy.blockedBrowserHosts.length <= 4096
+              ? policy.blockedBrowserHosts.reduce((total, host) => total + host.length, 0)
+              : Infinity;
+          const hosts =
+            policy._tag === "committed" &&
+            policy.blockedBrowserHosts.length <= 4096 &&
+            size <= 262_144
               ? [...policy.blockedBrowserHosts]
               : undefined;
           history.push({ sequence: ++sequence, hosts });

@@ -7,6 +7,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as PubSub from "effect/PubSub";
@@ -18,6 +19,7 @@ import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as ServerConfig from "./config.ts";
 import * as SqlitePersistence from "./persistence/Sqlite.ts";
 import * as ServerSettingsModule from "./serverSettings.ts";
+import { makeCuaCommittedPolicy } from "./cuaCommittedPolicy.ts";
 
 const layerServerSettings = () =>
   ServerSettingsModule.layer.pipe(
@@ -27,6 +29,23 @@ const layerServerSettings = () =>
       Layer.fresh(ServerConfig.layerTest(process.cwd(), { prefix: "goat-settings-watch-" })),
     ),
   );
+
+it.effect(
+  "committed policy feeds fail closed when a host list exceeds the history size limit",
+  () =>
+    Effect.gen(function* () {
+      const settings = yield* (yield* ServerSettingsModule.ServerSettingsService).getSettings;
+      const policy = yield* makeCuaCommittedPolicy;
+      yield* policy.publish(settings, Option.none());
+      const feed = yield* policy.subscribeRestrictions;
+      yield* policy.publish(
+        { ...settings, blockedBrowserHosts: ["a".repeat(262_145)] },
+        Option.none(),
+      );
+      const changes = yield* feed.pipe(Stream.toQueue({ capacity: "unbounded" }));
+      assert.isUndefined(yield* Queue.take(changes));
+    }).pipe(Effect.scoped, Effect.provide(ServerSettingsModule.layerTest())),
+);
 
 it.effect("committed policy feeds retain transient blocks while a subscriber is held", () =>
   Effect.gen(function* () {
