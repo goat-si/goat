@@ -13,6 +13,7 @@ import * as Context from "effect/Context";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { HttpRouter, HttpServer, HttpServerRequest } from "effect/http";
@@ -142,6 +143,7 @@ const threadFixture = Effect.fn("LeaseRouteTest.threadFixture")(function* (
   options: {
     readonly livenessWindowMs?: number;
     readonly grants?: BrowserOriginGrants["Service"];
+    readonly reservation?: ComputerUseLeases.ComputerUseLeases["Service"]["callReservation"];
   } = {},
 ) {
   const registry = yield* McpSessionRegistry.__testing.make(options).pipe(
@@ -177,8 +179,9 @@ const threadFixture = Effect.fn("LeaseRouteTest.threadFixture")(function* (
     releaseApps: (owner, id) => Effect.sync(() => released.push([owner, id])),
     streamOpened: () => Effect.void,
     proxy: undefined,
-    callReservation: () =>
-      Effect.succeed({ status: "admitted", reservationId: "reservation:test" } as const),
+    callReservation:
+      options.reservation ??
+      (() => Effect.succeed({ status: "admitted", reservationId: "reservation:test" } as const)),
     currentControl: () =>
       Ref.get(current).pipe(
         Effect.map((value) =>
@@ -504,6 +507,65 @@ describe("computer use lease route", () => {
           reservationId: "reservation:test",
         });
       }).pipe(Effect.scoped, Effect.provide(ServerSettings.layerTest({ enableCua: true }))),
+  );
+
+  it.effect("a block during reservation prevents a claimed tab call from being sent", () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      let hosts: ReadonlyArray<string> = [];
+      let released = false;
+      const grants = yield* makeBrowserOriginGrants({
+        environmentId: EnvironmentId.make("environment:test"),
+        supported: () => true,
+        blockedHosts: Effect.sync(() => hosts),
+        publish: () => Effect.void,
+        bind: () =>
+          Effect.succeed({
+            targetId: "target-1",
+            tabId: "tab",
+            title: "Site",
+            url: "https://example.test",
+            driverGeneration: 1,
+          }),
+      });
+      const result = yield* grants.claim({
+        threadId,
+        pid: 42,
+        windowId: 7,
+        origin: "https://example.test",
+        windowTitle: "Browser",
+      });
+      if (result.agentResult.status !== "attached") return assert.fail("expected attached");
+      const claim = result.agentResult.claim;
+      const route = yield* threadFixture({
+        grants: { ...grants, setDriverCapability: () => Effect.void },
+        reservation: (_thread, request) =>
+          request.action === "release"
+            ? Effect.sync(() => {
+                released = true;
+                return { status: "released" as const };
+              })
+            : Deferred.succeed(entered, undefined).pipe(
+                Effect.andThen(Deferred.await(release)),
+                Effect.as({ status: "admitted" as const, reservationId: "reservation:test" }),
+              ),
+      });
+      const call = yield* route
+        .reserve("browser_click", {
+          tab_id: "tab",
+          target_id: "target-1",
+          session: "goat-claim:" + claim.claimId,
+          origin_scope: ["https://example.test"],
+        })
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(entered);
+      hosts = ["example.test"];
+      yield* grants.blockedHostsChanged(hosts);
+      yield* Deferred.succeed(release, undefined);
+      assert.deepEqual(yield* Fiber.join(call), { status: "refused", detail: "blocked_url" });
+      assert.isTrue(released);
+    }).pipe(Effect.scoped, Effect.provide(ServerSettings.layerTest({ enableCua: true }))),
   );
 
   it.effect("blocks navigation destinations and ends a claim when its origin becomes blocked", () =>

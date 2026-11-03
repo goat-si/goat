@@ -3,6 +3,7 @@ import { EnvironmentId, ThreadId } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import { makeTestBrowserOriginGrants } from "./BrowserOriginGrants.testkit.ts";
 
 it.effect("exposes binding authority only after approval and only to the owning thread", () =>
@@ -92,7 +93,7 @@ it.effect("returns the bind and revision in one snapshot", () =>
   }),
 );
 
-it.effect("blocking an origin interrupts an approved bind without waiting for the driver", () =>
+it.effect("a block during a bind cannot end its request before the answer is settled", () =>
   Effect.gen(function* () {
     const entered = yield* Deferred.make<void>();
     const release = yield* Deferred.make<void>();
@@ -128,10 +129,16 @@ it.effect("blocking an origin interrupts an approved bind without waiting for th
       .pipe(Effect.forkChild({ startImmediately: true }));
     yield* Deferred.await(entered);
     hosts = ["example.test"];
-    yield* service.blockedHostsChanged(hosts);
+    const blockedDone = yield* Deferred.make<void>();
+    const blocked = yield* service.blockedHostsChanged(hosts).pipe(
+      Effect.tap(() => Deferred.succeed(blockedDone, undefined)),
+      Effect.forkChild({ startImmediately: true }),
+    );
+    assert.isTrue(Option.isNone(yield* Deferred.poll(blockedDone)));
+    yield* Deferred.succeed(release, undefined);
     const answer = yield* Fiber.join(answering);
+    yield* Fiber.join(blocked);
     assert.equal(answer.agentResult.status === "refused" && answer.agentResult.code, "declined");
     assert.deepEqual(yield* service.list(threadId), { claims: [], grants: [] });
-    yield* Deferred.succeed(release, undefined);
   }),
 );
