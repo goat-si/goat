@@ -102,6 +102,7 @@ export const connectOverRoutes = Effect.fn("ConnectionDriver.connectOverRoutes")
   const attemptScope = yield* Scope.Scope;
   let transient: ConnectionTransientError | undefined;
   let blocked: ConnectionBlockedError | undefined;
+  let hubPermission: ConnectionBlockedError | undefined;
   // Each route gets its own scope so a half-open session closes before the next try.
   const attempt = Effect.fnUntraced(function* (route: ConnectionRoute) {
     const routeScope = yield* Scope.fork(attemptScope);
@@ -113,7 +114,14 @@ export const connectOverRoutes = Effect.fn("ConnectionDriver.connectOverRoutes")
     if (result._tag === "Failure") {
       if (result.failure._tag === "ConnectionAttemptSuperseded") return yield* result.failure;
       if (result.failure._tag === "ConnectionTransientError") transient ??= result.failure;
-      else blocked ??= result.failure;
+      else {
+        blocked ??= result.failure;
+        if (
+          route.target._tag === "HubProxyConnectionTarget" &&
+          result.failure.reason === "permission"
+        )
+          hubPermission ??= result.failure;
+      }
     }
     return result;
   });
@@ -150,7 +158,8 @@ export const connectOverRoutes = Effect.fn("ConnectionDriver.connectOverRoutes")
     if (result.failure.reason === "unsupported") return yield* result.failure;
   }
   return yield* (
-    transient ??
+    hubPermission ??
+      transient ??
       blocked ??
       new ConnectionTransientError({
         reason: "endpoint-unavailable",
