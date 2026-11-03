@@ -38,6 +38,28 @@ import { Observations, providerRestarts } from "./observations.ts";
 
 const id = () => NodeCrypto.randomUUID();
 const decodeTicket = Schema.decodeUnknownSync(Schema.toCodecJson(AuthWebSocketTicketResult));
+
+// The window opens only after the load runs and closes on the same clock, so the report never counts an unloaded ramp.
+export const holdSoakWindow = Effect.fn("soak.holdWindow")(function* (input: {
+  durationMs: number;
+  startLoad: Effect.Effect<void>;
+  onWindowStart: (startedAtMs: number) => Effect.Effect<void>;
+  onWindowEnd: (endedAtMs: number) => Effect.Effect<void>;
+}) {
+  yield* input.startLoad;
+  const startedAtMs = yield* Clock.currentTimeMillis;
+  yield* input.onWindowStart(startedAtMs);
+  // Timers can fire a few ms early; end on the clock reading that also bounds the reported window.
+  const waitWindow: Effect.Effect<number> = Clock.currentTimeMillis.pipe(
+    Effect.flatMap((now) => {
+      const remaining = startedAtMs + input.durationMs - now;
+      return remaining > 0
+        ? Effect.sleep(`${remaining + 1} millis`).pipe(Effect.andThen(waitWindow))
+        : Effect.succeed(now);
+    }),
+  );
+  yield* input.onWindowEnd(yield* waitWindow);
+});
 const decodeLifecycle = Schema.decodeEffect(Schema.fromJsonString(Schema.Unknown));
 
 async function authenticate(origin: string, credential: string): Promise<string> {
@@ -206,6 +228,7 @@ export interface WorkloadInput {
   observations: Observations;
   recordDetail: (value: unknown) => void;
   signal: AbortSignal;
+  startLoad: () => void;
   onWindowStart: (startedAtMs: number) => void;
   onWindowEnd: (endedAtMs: number) => Promise<void>;
 }
@@ -718,28 +741,18 @@ export async function runWorkload(input: WorkloadInput): Promise<{
       );
     }
     windowOpen = true;
-    const windowStartedAtMs = yield* Clock.currentTimeMillis;
-    input.onWindowStart(windowStartedAtMs);
-    yield* Deferred.succeed(windowStarted, undefined);
-    // Timers can fire a few ms early; end on the clock reading that also bounds the reported window.
-    const waitWindow: Effect.Effect<number> = Clock.currentTimeMillis.pipe(
-      Effect.flatMap((now) => {
-        const remaining = windowStartedAtMs + input.durationMs - now;
-        return remaining > 0
-          ? Effect.sleep(`${remaining + 1} millis`).pipe(Effect.andThen(waitWindow))
-          : Effect.succeed(now);
-      }),
-    );
-    yield* waitWindow.pipe(
-      Effect.tap(() =>
+    yield* holdSoakWindow({
+      durationMs: input.durationMs,
+      startLoad: Effect.sync(input.startLoad),
+      onWindowStart: (startedAtMs) =>
+        Effect.sync(() => input.onWindowStart(startedAtMs)).pipe(
+          Effect.andThen(Deferred.succeed(windowStarted, undefined)),
+        ),
+      onWindowEnd: (endedAtMs) =>
         Effect.sync(() => {
           windowOpen = false;
-        }),
-      ),
-      Effect.flatMap((endedAtMs) => Effect.promise(() => input.onWindowEnd(endedAtMs))),
-      Effect.andThen(Deferred.succeed(windowEnded, undefined)),
-      Effect.forkScoped,
-    );
+        }).pipe(Effect.andThen(Effect.promise(() => input.onWindowEnd(endedAtMs)))),
+    }).pipe(Effect.andThen(Deferred.succeed(windowEnded, undefined)), Effect.forkScoped);
     yield* Deferred.await(windowEnded);
     yield* Effect.forEach(drains, Deferred.await, { concurrency: "unbounded" });
     teardown = true;
