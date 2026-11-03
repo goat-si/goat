@@ -232,7 +232,9 @@ describe("computer use lease route", () => {
           tool === "get_browser_state",
         );
         if (tool === "browser_click")
-          assert.deepInclude(reply.result?.structuredContent, { effect: "unverifiable" });
+          assert.deepInclude((reply.result as { structuredContent: object }).structuredContent, {
+            effect: "unverifiable",
+          });
       }).pipe(Effect.scoped),
   );
   it.effect("browserClaimReply ends the claim when a URL is blocked and answers 409", () =>

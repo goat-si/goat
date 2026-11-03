@@ -324,7 +324,9 @@ effectIt.effect(
       );
       const reply = yield* h.nextToProvider;
       assert.isFalse(JSON.stringify(reply).includes("secret"));
-      assert.deepInclude(reply.result?.structuredContent, { effect: "unverifiable" });
+      assert.deepInclude((reply.result as { structuredContent: object }).structuredContent, {
+        effect: "unverifiable",
+      });
       assert.deepEqual(reports, [
         {
           browserClaimReply: {
@@ -413,7 +415,7 @@ effectIt.effect("a reply report transport failure withholds the claimed reply", 
       }),
     );
     const reply = yield* h.nextToProvider;
-    assert.isTrue(reply.result?.isError);
+    assert.isTrue((reply.result as { isError?: boolean }).isError);
     assert.notInclude(JSON.stringify(reply), "secret");
   }),
 );
@@ -515,7 +517,7 @@ effectIt.effect.each([
     yield* h.nextToDriver;
     yield* h.reply(JSON.stringify({ jsonrpc: "2.0", id: 3, result: { structuredContent: value } }));
     const reply = yield* h.nextToProvider;
-    assert.isTrue(reply.result?.isError);
+    assert.isTrue((reply.result as { isError?: boolean }).isError);
     assert.deepEqual(reports, [
       { browserClaimReply: { claimId: "claim-1", claimGeneration: 2, urls: [], outside: true } },
     ]);
