@@ -25,6 +25,10 @@ import * as Stream from "effect/Stream";
 import * as RpcClient from "effect/rpc/RpcClient";
 import * as RpcSerialization from "effect/rpc/RpcSerialization";
 import * as Socket from "effect/socket/Socket";
+import { PrimaryConnectionTarget } from "../../../../packages/client-runtime/src/connection/model.ts";
+import { make as makeRpcSession } from "../../../../packages/client-runtime/src/rpc/session.ts";
+// oxlint-disable-next-line goat/no-rpc-permission-bypass -- The soak measures the session transport itself.
+import { drainNodeIo } from "../../../../packages/client-runtime/src/rpc/protocol.ts";
 import type { Observations } from "./observations.ts";
 
 const id = () => NodeCrypto.randomUUID();
@@ -88,7 +92,12 @@ export interface WorkloadInput {
 
 export async function runWorkload(
   input: WorkloadInput,
-): Promise<{ replayStarted: number; codexStarted: number; headlessOpened: number }> {
+): Promise<{
+  replayStarted: number;
+  codexStarted: number;
+  headlessOpened: number;
+  sessionOpened: number;
+}> {
   const cookie = await authenticate(input.origin, input.credential);
   const tickets = await Promise.all(
     Array.from({ length: input.headlessClients + 1 }, () => getTicket(input.origin, cookie)),
@@ -101,11 +110,12 @@ export async function runWorkload(
   let teardown = false;
   let windowOpen = false;
   let headlessOpened = 0;
+  let sessionOpened = 0;
   let replayStarted = 0;
   let codexStarted = 0;
   const program = Effect.gen(function* () {
     const client = yield* RpcClient.make(WsRpcGroup);
-    yield* client["server.getConfig"]({});
+    const config = yield* client["server.getConfig"]({});
     const shell = yield* client["orchestration.subscribeShell"]({}).pipe(
       Stream.filter((item) => item.kind === "snapshot"),
       Stream.runHead,
@@ -171,9 +181,10 @@ export async function runWorkload(
       concurrency: "unbounded",
     });
     for (const [index, ticket] of tickets.slice(1).entries()) {
+      const realSession = index < Math.ceil(input.headlessClients / 2);
       let previousConnection: string | undefined;
       let connectionNumber = 0;
-      const layer = protocol(input.origin, ticket, (socket) => {
+      const observeSocket = (socket: WebSocket) => {
         if (previousConnection) {
           input.observations.recordSocket(previousConnection, teardown);
           input.recordDetail({
@@ -183,7 +194,7 @@ export async function runWorkload(
             requested: teardown,
           });
         }
-        const connectionId = `bare-${index}-${connectionNumber++}`;
+        const connectionId = `${realSession ? "session" : "bare"}-${index}-${connectionNumber++}`;
         previousConnection = connectionId;
         socket.addEventListener("error", () => {
           input.observations.recordSocket(connectionId, teardown);
@@ -204,17 +215,63 @@ export async function runWorkload(
             requested: teardown,
           });
         });
-      });
+      };
       const ready = opened[index];
       if (!ready) return yield* Effect.die(new Error("missing client readiness"));
       yield* Effect.gen(function* () {
-        const peer = yield* RpcClient.make(WsRpcGroup);
-        yield* peer["server.getConfig"]({});
+        if (realSession) {
+          const target = new PrimaryConnectionTarget({
+            environmentId: config.environment.environmentId,
+            label: `Soak session ${index}`,
+            httpBaseUrl: input.origin,
+            wsBaseUrl: input.origin.replace(/^http/, "ws"),
+          });
+          const factory = yield* makeRpcSession({ drainIo: drainNodeIo }).pipe(
+            Effect.provideService(Socket.WebSocketConstructor, (url) => {
+              const socket = new WebSocket(url);
+              observeSocket(socket);
+              return socket;
+            }),
+          );
+          const session = yield* factory.connect({
+            environmentId: target.environmentId,
+            label: target.label,
+            httpBaseUrl: target.httpBaseUrl,
+            socketUrl: `${target.wsBaseUrl}/ws?wsTicket=${encodeURIComponent(ticket)}&${ORCHESTRATION_PROTOCOL_QUERY_PARAM}=${ORCHESTRATION_PROTOCOL_VERSION}`,
+            httpAuthorization: null,
+            target,
+          });
+          yield* session.ready;
+          sessionOpened++;
+          yield* session.closed.pipe(
+            Effect.catchCause((cause) =>
+              Effect.sync(() => {
+                if (previousConnection)
+                  input.observations.recordSocket(previousConnection, teardown);
+                input.recordDetail({
+                  type: "session.closed",
+                  connectionId: previousConnection,
+                  at: new Date().toISOString(),
+                  cause: String(cause),
+                  requested: teardown,
+                });
+              }),
+            ),
+            Effect.forkScoped,
+          );
+        } else {
+          return yield* Effect.gen(function* () {
+            const peer = yield* RpcClient.make(WsRpcGroup);
+            yield* peer["server.getConfig"]({});
+            headlessOpened++;
+            yield* Deferred.succeed(ready, undefined);
+            return yield* Effect.never;
+          }).pipe(Effect.provide(protocol(input.origin, ticket, observeSocket)));
+        }
         headlessOpened++;
         yield* Deferred.succeed(ready, undefined);
         return yield* Effect.never;
       }).pipe(
-        Effect.provide(layer),
         Effect.catchCause((cause) =>
           Deferred.fail(ready, new Error(`headless client failed: ${String(cause)}`)).pipe(
             Effect.asVoid,
@@ -344,5 +401,5 @@ export async function runWorkload(
   } finally {
     teardown = true;
   }
-  return { replayStarted, codexStarted, headlessOpened };
+  return { replayStarted, codexStarted, headlessOpened, sessionOpened };
 }

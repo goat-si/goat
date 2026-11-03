@@ -228,7 +228,12 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
   let teardown = false;
   let stoppingBurners = false;
   let workload:
-    | Promise<{ replayStarted: number; codexStarted: number; headlessOpened: number }>
+    | Promise<{
+        replayStarted: number;
+        codexStarted: number;
+        headlessOpened: number;
+        sessionOpened: number;
+      }>
     | undefined;
   let workloadResult: Awaited<NonNullable<typeof workload>> | undefined;
   let startedAt: string | null = null;
@@ -395,7 +400,7 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
     const report = {
       ...observations.report(
         [
-          "real client-runtime cohort not exercised",
+          "client-runtime session coverage lacks a forced disconnect test",
           "provider lifecycle coverage unavailable",
           ...(!cpu.verified ? ["saturation unverified"] : []),
           ...(errors.length ? ["workload error"] : []),
@@ -413,6 +418,7 @@ async function runSoak(options: SoakOptions, checkout: string): Promise<void> {
       saturation: cpu,
       workload: {
         ...workloadResult,
+        clientRuntimeCoverage: "session",
         replayRequested: options.replayThreads,
         codexRequested: options.codexThreads,
         headlessRequested: options.headlessClients,
