@@ -19,8 +19,10 @@ const setup = Effect.gen(function* () {
     );
   const read = yield* makeGitMetadataFingerprint();
   const fingerprint = (branch?: string) =>
-    Effect.flatMap(read(cwd, branch), (value) =>
-      value === null ? Effect.die("expected a git fingerprint") : Effect.succeed(value),
+    Effect.filterOrElse(
+      read(cwd, branch),
+      (value) => value !== null,
+      () => Effect.die("expected a git fingerprint"),
     );
   return { cwd, append, fingerprint };
 });

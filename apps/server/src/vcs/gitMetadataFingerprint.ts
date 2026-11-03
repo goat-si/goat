@@ -1,4 +1,3 @@
-import * as NodeCrypto from "node:crypto";
 import * as Cache from "effect/Cache";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -8,8 +7,6 @@ import { detachStackFrame } from "../git/detachStackFrame.ts";
 
 const BRANCH_SECTION_HEADER = /^\s*\[branch\s+"((?:[^"\\]|\\.)*)"\]\s*$/i;
 const CONFIG_SECTION_MEMO_CAPACITY = 256;
-
-const digest = (text: string) => NodeCrypto.createHash("sha1").update(text).digest("hex");
 
 /**
  * Splits a git config into the text outside exact `[branch "<name>"]` sections and each such
@@ -38,8 +35,8 @@ export function splitBranchSections(
     target.push(line);
   }
   return {
-    shared: digest(shared.join("\n")),
-    branches: new Map([...branches].map(([name, lines]) => [name, digest(lines.join("\n"))])),
+    shared: shared.join("\n"),
+    branches: new Map([...branches].map(([name, lines]) => [name, lines.join("\n")])),
   };
 }
 
