@@ -38,7 +38,7 @@ const isBrowser = (app: Record<string, unknown>) => {
       : typeof app.launch_path === "string"
         ? app.launch_path.split(/[\\/]/).pop()
         : undefined;
-  return id !== undefined && browserIds.has(id.toLowerCase());
+  return id !== undefined && browserIds.has((id.split(/[\\/]/).pop() ?? id).toLowerCase());
 };
 type DriverRequest = (
   tool: "list_apps" | "list_windows",

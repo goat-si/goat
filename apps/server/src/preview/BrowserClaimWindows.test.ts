@@ -63,3 +63,29 @@ it.effect("reports unavailable when the driver fails", () =>
     assert.equal(result._tag, "Failure");
   }),
 );
+
+it.effect("recognizes a browser executable when the platform lists its full path", () =>
+  Effect.gen(function* () {
+    const result = yield* listBrowserClaimWindows((tool) =>
+      tool === "list_apps"
+        ? Effect.succeed({
+            structuredContent: {
+              apps: [
+                {
+                  pid: 10,
+                  name: "Microsoft Edge",
+                  bundle_id: "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+                  running: true,
+                },
+              ],
+            },
+          })
+        : Effect.succeed({
+            structuredContent: { windows: [{ pid: 10, window_id: 1, title: "Edge window" }] },
+          }),
+    );
+    assert.deepEqual(result.windows, [
+      { pid: 10, windowId: 1, title: "Edge window", app: "Microsoft Edge" },
+    ]);
+  }),
+);
