@@ -400,6 +400,7 @@ export const fakeDriver = {
         target: entry.target,
       },
       session,
+      openProbeSocket: Effect.never,
     }),
   checkRoute: () => Effect.succeed<RouteCheck>("answered"),
   checkHost: () => Effect.succeed<RouteCheck>("unchecked"),

@@ -6,6 +6,7 @@ import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Scope from "effect/Scope";
+import * as Redacted from "effect/Redacted";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
 
@@ -28,6 +29,7 @@ import {
   usableRoutes,
 } from "./routes.ts";
 import * as RpcSession from "../rpc/session.ts";
+import { issueRemoteWebSocketTicket } from "../authorization/remote.ts";
 import { fetchRemoteEnvironmentDescriptor } from "../environment/descriptor.ts";
 import { withSshConnectionTiming } from "./sshTiming.ts";
 
@@ -47,6 +49,14 @@ export type ConnectionDriverProgress =
 export interface EnvironmentConnectionLease {
   readonly prepared: PreparedConnection;
   readonly session: RpcSession.RpcSession;
+  readonly openProbeSocket: Effect.Effect<
+    {
+      readonly probe: Effect.Effect<void, ConnectionAttemptError>;
+      readonly drainIo: Effect.Effect<void>;
+    },
+    ConnectionAttemptError,
+    Scope.Scope
+  >;
 }
 
 export type RouteCheck = "answered" | "silent" | "unchecked";
@@ -264,7 +274,51 @@ export const make = Effect.gen(function* () {
               ? withSshConnectionTiming("ready")(effect)
               : effect,
           );
-          return { prepared, session } satisfies EnvironmentConnectionLease;
+          const openProbeSocket = Effect.gen(function* () {
+            const check = yield* checkDescriptor(prepared.httpBaseUrl, prepared.environmentId);
+            if (check !== "answered")
+              return yield* new ConnectionTransientError({
+                reason: "endpoint-unavailable",
+                detail: "Probe endpoint identity could not be verified.",
+              });
+            let fresh = prepared;
+            if (prepared.httpAuthorization?._tag === "Bearer") {
+              const issued = yield* issueRemoteWebSocketTicket({
+                httpBaseUrl: prepared.httpBaseUrl,
+                bearerToken: prepared.httpAuthorization.token,
+                use: "rpc",
+              }).pipe(
+                Effect.provideService(HttpClient.HttpClient, httpClient),
+                Effect.mapError(
+                  () =>
+                    new ConnectionTransientError({
+                      reason: "endpoint-unavailable",
+                      detail: "Probe ticket could not be issued.",
+                    }),
+                ),
+              );
+              const url = new URL(prepared.socketUrl);
+              url.searchParams.set("wsTicket", Redacted.value(issued.ticket));
+              fresh = { ...prepared, socketUrl: url.toString() };
+            } else if (
+              prepared.httpAuthorization !== null ||
+              route.target._tag === "RelayConnectionTarget" ||
+              route.target._tag === "HubProxyConnectionTarget"
+            ) {
+              fresh = yield* resolver.prepare(routeEntry(entry, route));
+              if (fresh.httpBaseUrl !== prepared.httpBaseUrl)
+                return yield* new ConnectionTransientError({
+                  reason: "endpoint-unavailable",
+                  detail: "Probe endpoint changed.",
+                });
+            }
+            const config = yield* session.initialConfig;
+            return yield* sessions.openProbe(
+              fresh,
+              config.environment.capabilities.connectionProbe === true,
+            );
+          });
+          return { prepared, session, openProbeSocket } satisfies EnvironmentConnectionLease;
         },
         (effect, route) =>
           route.target._tag === "SshConnectionTarget"

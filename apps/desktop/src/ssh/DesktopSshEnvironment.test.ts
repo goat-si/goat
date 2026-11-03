@@ -15,7 +15,6 @@ import {
   connectionRouteId,
   type SupervisorConnectionState,
 } from "@goat/client-runtime/connection";
-import type { WsRpcProtocolClient } from "@goat/client-runtime/rpc";
 import { SshHostAnswered } from "@goat/ssh/command";
 import * as NetService from "@goat/shared/Net";
 import * as SshTunnel from "@goat/ssh/tunnel";
@@ -47,11 +46,7 @@ import * as TestClock from "effect/testing/TestClock";
 import { HttpClient, HttpClientResponse } from "effect/http";
 import { ChildProcessSpawner } from "effect/process";
 import * as DesktopSshEnvironment from "./DesktopSshEnvironment.ts";
-import {
-  probeCapableConfig,
-  successfulProcess,
-  unusedManager,
-} from "./DesktopSshEnvironment.fixture.ts";
+import { probeSession, successfulProcess, unusedManager } from "./DesktopSshEnvironment.fixture.ts";
 import * as DesktopSshPasswordPrompts from "./DesktopSshPasswordPrompts.ts";
 import { makeEnsureFlightFixture } from "../../../../packages/ssh/src/tunnel.ensure-flight.fixture.ts";
 import { uploadTarget } from "../../../../packages/ssh/src/tunnel.fixture.ts";
@@ -563,15 +558,8 @@ describe("sshEnvironment", () => {
                         yield* report({ stage: "synchronizing", prepared });
                         return {
                           prepared,
-                          session: {
-                            client: {} as WsRpcProtocolClient,
-                            initialConfig: Effect.succeed(probeCapableConfig),
-                            subscribeServerConfig: () => Stream.never,
-                            ready: Effect.void,
-                            probe: Deferred.await(probeAnswered),
-                            inboundFrames: Effect.succeed(0),
-                            closed: Effect.never,
-                          },
+                          openProbeSocket: Effect.never,
+                          session: probeSession(Deferred.await(probeAnswered)),
                         };
                       }).pipe(
                         Effect.ensuring(
@@ -969,15 +957,8 @@ describe("sshEnvironment", () => {
               yield* progress({ stage: "synchronizing", prepared });
               return {
                 prepared,
-                session: {
-                  client: {} as WsRpcProtocolClient,
-                  initialConfig: Effect.succeed(probeCapableConfig),
-                  subscribeServerConfig: () => Stream.never,
-                  ready: Effect.void,
-                  probe: Deferred.await(probeAnswered),
-                  inboundFrames: Effect.succeed(0),
-                  closed: Effect.never,
-                },
+                openProbeSocket: Effect.never,
+                session: probeSession(Deferred.await(probeAnswered)),
               };
             }),
         }),

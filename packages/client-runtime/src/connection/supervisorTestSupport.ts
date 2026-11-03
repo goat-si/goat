@@ -74,6 +74,7 @@ export const makeHarness = Effect.fn("TestConnectionHarness.make")(function* (op
   readonly probe?: (attempt: number) => Effect.Effect<void, ConnectionAttemptError>;
   readonly initialConfig?: (attempt: number) => Effect.Effect<ServerConfig, ConnectionAttemptError>;
   readonly inboundFrames?: Effect.Effect<number>;
+  readonly openProbeSocket?: ConnectionDriver.EnvironmentConnectionLease["openProbeSocket"];
   readonly checkHost?: (prepared: PreparedConnection) => Effect.Effect<ConnectionDriver.RouteCheck>;
   readonly checkRoute?: (route: ConnectionRoute) => Effect.Effect<ConnectionDriver.RouteCheck>;
 }) {
@@ -144,7 +145,11 @@ export const makeHarness = Effect.fn("TestConnectionHarness.make")(function* (op
       yield* reportProgress({ stage: "synchronizing", prepared });
     }
     yield* session.ready;
-    return { prepared, session } satisfies ConnectionDriver.EnvironmentConnectionLease;
+    return {
+      prepared,
+      session,
+      openProbeSocket: options?.openProbeSocket ?? Effect.fail(transient()),
+    } satisfies ConnectionDriver.EnvironmentConnectionLease;
   });
 
   const connect = Effect.fn("TestConnectionDriver.connect")(function* (
@@ -208,3 +213,13 @@ export const makeHarness = Effect.fn("TestConnectionHarness.make")(function* (op
     }),
   };
 });
+
+export const reportLearnedSetupProgress = (
+  setupMs: number,
+  progress: (progress: ConnectionDriver.ConnectionDriverProgress) => Effect.Effect<void>,
+) =>
+  setupMs >= 30_000
+    ? Effect.sleep("14 seconds").pipe(
+        Effect.andThen(progress({ stage: "preparing", hostAnswered: true })),
+      )
+    : Effect.void;

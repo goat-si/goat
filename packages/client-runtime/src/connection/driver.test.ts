@@ -2,6 +2,7 @@ import {
   ORCHESTRATION_PROTOCOL_VERSION,
   EnvironmentId,
   type DesktopSshPreparationProgress,
+  type ServerConfig,
 } from "@goat/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -226,3 +227,96 @@ describe("live host checks", () => {
       }),
   );
 });
+
+it.effect("identity mismatch -> no Authorization header sent, kept", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const requests: RequestInit[] = [];
+      const bearer = {
+        ...prepared,
+        httpAuthorization: { _tag: "Bearer" as const, token: "fixture-token" },
+      };
+      const driver = yield* Driver.make.pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            Layer.mock(Resolver.ConnectionResolver)({ prepare: () => Effect.succeed(bearer) }),
+            Layer.mock(RpcSession.RpcSessionFactory)({ connect: () => Effect.succeed(session) }),
+            RpcHttp.layerRemoteHttpClient((_url, init) => {
+              requests.push(init ?? {});
+              return Promise.resolve(
+                Response.json({
+                  environmentId: "another-environment",
+                  label: "Other",
+                  platform: { os: "linux", arch: "x64" },
+                  serverVersion: "0.0.0-test",
+                  orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
+                  capabilities: {},
+                }),
+              );
+            }),
+          ),
+        ),
+      );
+      const lease = yield* driver.connect(entry, () => Effect.void);
+      expect((yield* Effect.exit(lease.openProbeSocket))._tag).toBe("Failure");
+      expect(requests).toHaveLength(1);
+      expect(new Headers(requests[0]?.headers).has("authorization")).toBe(false);
+    }),
+  ),
+);
+
+it.effect("SSH lease opens a probe socket without re-preparing", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      let preparations = 0;
+      const urls: string[] = [];
+      const bearer = {
+        ...prepared,
+        socketUrl: `${prepared.socketUrl}?wsTicket=old`,
+        httpAuthorization: { _tag: "Bearer" as const, token: "fixture-token" },
+      };
+      const config = { environment: { capabilities: { connectionProbe: true } } } as ServerConfig;
+      const driver = yield* Driver.make.pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            Layer.mock(Resolver.ConnectionResolver)({
+              prepare: () =>
+                Effect.sync(() => {
+                  preparations++;
+                  return bearer;
+                }),
+            }),
+            Layer.mock(RpcSession.RpcSessionFactory)({
+              connect: () => Effect.succeed({ ...session, initialConfig: Effect.succeed(config) }),
+              openProbe: (fresh) =>
+                Effect.sync(() => {
+                  urls.push(fresh.socketUrl);
+                  return { probe: Effect.void, drainIo: Effect.void };
+                }),
+            }),
+            RpcHttp.layerRemoteHttpClient((url) => {
+              const address = String(url);
+              return Promise.resolve(
+                address.includes("websocket-ticket")
+                  ? Response.json({ ticket: "fresh-ticket", expiresAt: "2026-10-19T01:00:00.000Z" })
+                  : Response.json({
+                      environmentId: target.environmentId,
+                      label: "Fixture",
+                      platform: { os: "linux", arch: "x64" },
+                      serverVersion: "0.0.0-test",
+                      orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
+                      capabilities: {},
+                    }),
+              );
+            }),
+          ),
+        ),
+      );
+      const lease = yield* driver.connect(entry, () => Effect.void);
+      const probe = yield* lease.openProbeSocket;
+      yield* probe.probe;
+      expect(preparations).toBe(1);
+      expect(urls).toEqual([`${prepared.socketUrl}?wsTicket=fresh-ticket`]);
+    }),
+  ),
+);

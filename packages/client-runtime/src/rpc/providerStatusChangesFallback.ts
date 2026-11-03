@@ -7,8 +7,8 @@ import {
   applyProviderStatusChanges,
   canApplyProviderStatusChanges,
 } from "@goat/shared/providerStatusChanges";
+import * as Data from "effect/Data";
 import * as Deferred from "effect/Deferred";
-import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
@@ -19,7 +19,8 @@ import { SYNCHRONIZATION_TIMEOUT } from "../connection/synchronization.ts";
 
 type ServerConfigSubscriptionPayload = Rpc.Payload<typeof WsSubscribeServerConfigRpc>;
 
-/** Fails a subscription whose first event does not arrive in time, so the session reconnects. */
+class FallbackFirstEventTimeout extends Data.TaggedError("FallbackFirstEventTimeout") {}
+
 const answeredInTime = <E, R>(stream: Stream.Stream<ServerConfigStreamEvent, E, R>) =>
   Stream.unwrap(
     Effect.gen(function* () {
@@ -28,15 +29,7 @@ const answeredInTime = <E, R>(stream: Stream.Stream<ServerConfigStreamEvent, E, 
         Deferred.await(answered).pipe(
           Effect.timeoutOrElse({
             duration: SYNCHRONIZATION_TIMEOUT,
-            orElse: () =>
-              Effect.fail(
-                new RpcClientError.RpcClientError({
-                  reason: new RpcClientError.RpcClientDefect({
-                    message: `The config subscription did not answer within ${Duration.toSeconds(SYNCHRONIZATION_TIMEOUT)}s after switching to full provider lists.`,
-                    cause: undefined,
-                  }),
-                }),
-              ),
+            orElse: () => Effect.fail(new FallbackFirstEventTimeout()),
           }),
         ),
       ).pipe(Stream.drain);
@@ -93,10 +86,19 @@ export const withProviderStatusChangesOrFullLists = <E, R>(
         Stream.takeUntil((judged) => !judged.usable, { excludeLast: true }),
         Stream.map((judged) => judged.event),
       );
+      const retryFullLists = (): Stream.Stream<ServerConfigStreamEvent, E, R> =>
+        Stream.suspend(() => answeredInTime(open(fullListInput))).pipe(
+          Stream.catchIf(
+            (error): error is FallbackFirstEventTimeout =>
+              error instanceof FallbackFirstEventTimeout,
+            () =>
+              Stream.unwrap(
+                Effect.sleep("1 second").pipe(Effect.as(Stream.suspend(retryFullLists))),
+              ),
+          ),
+        );
       const fullLists = Stream.unwrap(
-        Ref.get(switched).pipe(
-          Effect.map((done) => (done ? answeredInTime(open(fullListInput)) : Stream.empty)),
-        ),
+        Ref.get(switched).pipe(Effect.map((done) => (done ? retryFullLists() : Stream.empty))),
       );
       return Stream.concat(changes, fullLists);
     }),
