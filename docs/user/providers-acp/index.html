@@ -6,6 +6,8 @@ own models, tools, and sign-in, while GOAT provides projects, threads, checkpoin
 delegation.</p>
 <p>Google Antigravity is available through its official <code>antigravity-acp</code> Registry entry. Add it like
 any other Registry agent; it does not need an Antigravity-specific GOAT provider.</p>
+<p>GOAT also supports <a href="https://fx.sh">fx</a> through ACP. Install and sign in to fx on the machine
+running the GOAT server, then enable it in <strong>Settings → Providers</strong>.</p>
 <p>GOAT prefers the current ACP v2 preview protocol and uses its richer messages, usage, plans,
 configuration, compaction, and agent-terminal updates when the agent supports them. It also
 negotiates ACP v1 for Registry agents that have not migrated yet, so agents such as Pi continue to
@@ -75,7 +77,8 @@ backed by that native session. Importing the same agent session again returns th
 including when another client performs the import.</p>
 <p>The thread keeps the native session’s title and last-update value as provider metadata without
 overwriting a title you set in GOAT. Agents that report ACP context usage drive the composer’s
-context meter and cumulative cost metadata. Text resources and links render as assistant output;
+context meter and cumulative cost metadata. To enable the meter if hidden, see
+<a href="/goat/docs/user/composer/#commands-and-skills">commands and skills</a>. Text resources and links render as assistant output;
 binary resources, images, and audio that GOAT cannot render yet appear as explicit placeholders
 instead of disappearing.</p>
 <h2 id="permissions-and-terminals">Permissions and terminals</h2>

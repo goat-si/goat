@@ -44,6 +44,18 @@ the environment’s shared actions from running there, and <strong>Use inherited
 Settings that are environment-wide stay read-only while a project is selected. When selected
 targets disagree, a control shows <strong>Mixed</strong> until you choose one value. Appearance, keyboard,
 and other phone-only settings ignore the filter.</p>
+<h2 id="pin-and-archive-projects">Pin and archive projects</h2>
+<p>Pinned projects come first in the project pickers: the project picker on a new thread, the
+new-thread list, the command palette, the sidebar project filter, and mobile. In the boring sidebar, pinned projects get the top
+folders, even with no active threads. Pin or unpin a project from its row in any of those lists,
+or press the thread pin shortcut (<code>mod+shift+p</code> by default) on the highlighted row. <strong>Pin
+project</strong> in the command palette and <strong>Settings → Projects</strong> work too. A list keeps its order
+while it is open, so a new pin moves up the next time you open it.</p>
+<p>Archive a project you are done with in <strong>Settings → Projects</strong>. It leaves the project pickers.
+Its threads, settings, and files stay as they are, and archived projects still show in the
+Settings project list, marked <strong>Archived</strong>. Choose one there and select <strong>Unarchive</strong> to bring it
+back. On mobile, both are in <strong>Settings → Projects → Organize</strong>.</p>
+<p>A project on several machines must have every machine connected to pin or archive it.</p>
 <h2 id="worktree-branch-names">Worktree branch names</h2>
 <p>In <strong>Settings → Source control → Worktree branch naming</strong>, choose a static prefix,
 a model-selected semantic prefix such as <code>feat/</code> or <code>fix/</code>, or custom instructions
@@ -125,7 +137,7 @@ when every filter matches; other requests are answered normally, logged as
 compare as text, and a value that is an object or a list only passes
 <strong>exists</strong>. Separate <strong>is one of</strong> values with commas; a value can’t contain
 a comma or start or end with a space.</p>
-<p>To suppress repeated deliveries, set a <strong>Replay key</strong> template, such as
+<p>To suppress repeated deliveries, set a <strong>Duplicate request key</strong> template, such as
 <code>{{headers.delivery-id}}</code>. The same key is ignored for seven days per task.
 To combine a burst, set a <strong>Coalesce key</strong>, such as <code>{{body.id}}</code>, and a window
 of 10–3600 seconds (120 by default). One run uses the latest body, headers,
@@ -221,7 +233,9 @@ manually. Custom applies separate worktree rules to the selected project or chec
 captures and log retention remain machine-wide.</p>
 <p>Worktrees can be removed after a chosen number of inactive days, after a thread settles, after
 merging, or when they have no commits beyond the default branch. Set settled retention to 0 days
-to remove a worktree at the next cleanup after settlement. Only GOAT-managed worktrees are eligible.
+to remove a worktree at the next cleanup after settlement. In repositories without remotes,
+unchanged-worktree cleanup compares against the branch checked out in the project workspace;
+if that checkout has a detached HEAD, the worktree is kept. Only GOAT-managed worktrees are eligible.
 Active sessions and shared worktrees prevent removal. <strong>Keep worktrees with local changes</strong> defaults
 to <strong>Uncommitted changes</strong>, which protects tracked edits and untracked files but deletes ignored
 files such as <code>.env</code> and build output. <strong>Any local files</strong> also protects ignored files other than
@@ -291,4 +305,4 @@ On mobile, use <strong>Settings → Source control</strong> to change selected e
 <p>GOAT only pulls when it can fast-forward and the checkout has no changed files, untracked files,
 or local commits. It skips checkouts on another branch or without an upstream. If a checkout has
 local work, resolve it yourself before automatic pulls can resume.</p>
-</article><nav class="guide-toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#worktree-branch-names">Worktree branch names</a></li><li><a href="#standing-instructions-for-launched-threads">Standing instructions for launched threads</a></li><li><a href="#scheduled-tasks">Scheduled tasks</a></li><li><a href="#webhook-automations">Webhook automations</a></li><li><a href="#goat-tools-agents-see">GOAT tools agents see</a></li><li><a href="#defaults-and-inheritance">Defaults and inheritance</a></li><li><a href="#check-an-agents-work-when-its-run-completes">Check an agent’s work when its run completes</a></li><li><a href="#worktree-location">Worktree location</a></li><li><a href="#storage-cleanup">Storage cleanup</a></li><li><a href="#disk-usage">Disk usage</a></li><li><a href="#project-icons">Project icons</a></li><li><a href="#keep-the-default-branch-current">Keep the default branch current</a></li></ul></nav></div></div></main><footer class="site-footer"><div class="container footer-inner"><p class="footer-brand"><svg width="20" height="20" viewBox="0 0 128 128" aria-hidden="true" focusable="false"><rect width="128" height="128" rx="28" fill="#18181b"></rect><g transform="translate(17.24 17.31) scale(3.897)"><path d="M2.809 13.261 A4.65 4.65 0 0 1 11.1 9.054 L9.397 11.233 A3.45 3.45 0 0 0 2.809 13.261 Z M 21.191 13.261 A 4.65 4.65 0 0 0 12.9 9.054 L 14.603 11.233 A 3.45 3.45 0 0 1 21.191 13.261 Z" fill="#fff" stroke="#fff" stroke-width="0.6" stroke-linejoin="round"></path><path d="M7.814 16.508 L12 11.15 L16.186 16.508" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"></path></g></svg><span>MIT licensed. GOAT began as a fork of T3 Code.</span></p><nav aria-label="Footer"><ul class="footer-links"><li><a href="/goat/download/">Download</a></li><li><a href="/goat/docs/user/">Guides</a></li><li><a href="https://github.com/goat-si/goat">GitHub</a></li><li><a href="https://github.com/goat-si/goat-releases/releases">Releases</a></li><li><a href="/goat/legal/">Legal</a></li><li><a href="/goat/privacy-policy/">Privacy</a></li><li><a href="/goat/terms-of-service/">Terms</a></li><li><a href="/goat/security-policy/">Security</a></li></ul></nav></div></footer></body></html>
+</article><nav class="guide-toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#pin-and-archive-projects">Pin and archive projects</a></li><li><a href="#worktree-branch-names">Worktree branch names</a></li><li><a href="#standing-instructions-for-launched-threads">Standing instructions for launched threads</a></li><li><a href="#scheduled-tasks">Scheduled tasks</a></li><li><a href="#webhook-automations">Webhook automations</a></li><li><a href="#goat-tools-agents-see">GOAT tools agents see</a></li><li><a href="#defaults-and-inheritance">Defaults and inheritance</a></li><li><a href="#check-an-agents-work-when-its-run-completes">Check an agent’s work when its run completes</a></li><li><a href="#worktree-location">Worktree location</a></li><li><a href="#storage-cleanup">Storage cleanup</a></li><li><a href="#disk-usage">Disk usage</a></li><li><a href="#project-icons">Project icons</a></li><li><a href="#keep-the-default-branch-current">Keep the default branch current</a></li></ul></nav></div></div></main><footer class="site-footer"><div class="container footer-inner"><p class="footer-brand"><svg width="20" height="20" viewBox="0 0 128 128" aria-hidden="true" focusable="false"><rect width="128" height="128" rx="28" fill="#18181b"></rect><g transform="translate(17.24 17.31) scale(3.897)"><path d="M2.809 13.261 A4.65 4.65 0 0 1 11.1 9.054 L9.397 11.233 A3.45 3.45 0 0 0 2.809 13.261 Z M 21.191 13.261 A 4.65 4.65 0 0 0 12.9 9.054 L 14.603 11.233 A 3.45 3.45 0 0 1 21.191 13.261 Z" fill="#fff" stroke="#fff" stroke-width="0.6" stroke-linejoin="round"></path><path d="M7.814 16.508 L12 11.15 L16.186 16.508" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"></path></g></svg><span>MIT licensed. GOAT began as a fork of T3 Code.</span></p><nav aria-label="Footer"><ul class="footer-links"><li><a href="/goat/download/">Download</a></li><li><a href="/goat/docs/user/">Guides</a></li><li><a href="https://github.com/goat-si/goat">GitHub</a></li><li><a href="https://github.com/goat-si/goat-releases/releases">Releases</a></li><li><a href="/goat/legal/">Legal</a></li><li><a href="/goat/privacy-policy/">Privacy</a></li><li><a href="/goat/terms-of-service/">Terms</a></li><li><a href="/goat/security-policy/">Security</a></li></ul></nav></div></footer></body></html>

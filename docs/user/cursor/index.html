@@ -12,6 +12,11 @@ TypeScript package. It does not use Cursor’s ACP transport for V2 execution.</
 </ul>
 <p>The Cursor provider runs in the selected GOAT workspace. Cursor Cloud is a separate provider
 that runs against the published repository in Cursor’s cloud.</p>
+<p>Cursor also loads MCP servers and plugins from the environment machine’s Cursor configuration,
+including the project <code>.cursor/mcp.json</code>, user <code>~/.cursor/mcp.json</code>, and installed plugins.
+For an OAuth MCP server, run <code>agent mcp login &lt;server&gt;</code> from the project root on that machine;
+Cursor desktop Connections credentials are separate. After changing skills, plugins, or MCP
+servers, or completing a CLI login, restart the agent session.</p>
 <h2 id="sign-in">Sign in</h2>
 <p>Choose <strong>Sign in</strong>, then open the sign-in page and complete it in your browser. GOAT
 updates automatically when sign-in finishes. This works when connected to a remote environment too.
@@ -54,7 +59,7 @@ environment running the task. Cursor Cloud uses that provider’s account.</p>
 <li>creating and resuming local Cursor agent threads;</li>
 <li>changing the model and model parameters between turns;</li>
 <li>assistant text, reasoning, tool activity, plans, and todo streaming;</li>
-<li>thread-scoped GOAT MCP tools;</li>
+<li>thread-scoped GOAT MCP tools alongside Cursor MCP servers and plugins;</li>
 <li>image attachments;</li>
 <li>interruption, queued app messages, and orchestrator-owned interrupt/restart steering;</li>
 <li>provider conversation snapshots through <code>Agent.messages.list()</code>;</li>

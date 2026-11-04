@@ -95,7 +95,7 @@ Tailscale address. See
 <a href="/goat/docs/user/remote-access/#reach-one-machine-several-ways">Reach one machine several ways</a>.</li>
 </ol>
 <h2 id="sign-in-account-or-link-problems">Sign-in, account, or link problems</h2>
-<p>GOAT Connect does not have an active link between your account and the host.</p>
+<p>This device’s GOAT Connect sign-in is not ready yet, or GOAT Connect does not have an active link between your account and the host.</p>
 <ul>
 <li><strong>The host is linked to a different account.</strong> Sign in to the same GOAT Connect
 account on this device and on the host. On the host, run <code>goat connect logout</code>,
@@ -103,8 +103,10 @@ then <code>goat connect</code>.</li>
 <li><strong>GOAT Connect is off on the host, or the host only publishes agent activity.</strong>
 On the host, open <strong>Settings &gt; Connections</strong> and turn <strong>GOAT Connect</strong> on, or
 run <code>goat connect</code>.</li>
-<li><strong>The host was linked, but the server did not apply the link yet.</strong> Run
-<code>goat service restart</code> on the host, or restart <code>goat serve</code>.</li>
+<li><strong>The host was linked, but the server did not apply the link yet.</strong> Restart
+the server on the host: quit and reopen the GOAT desktop app, run
+<code>goat service restart</code>, or stop <code>goat serve</code> and run it again.</li>
+<li><strong>This device is still loading its GOAT Connect sign-in.</strong> Wait a moment; GOAT retries on its own. If it keeps waiting, reload or restart GOAT on this device.</li>
 <li><strong>This device’s sign-in expired, or the host no longer accepts this
 device.</strong> Sign out of GOAT Connect and sign in again.</li>
 <li><strong>Your account reached its tunnel limit.</strong> Remove an environment you do not
@@ -166,5 +168,7 @@ Report vulnerabilities privately through the
 <li>The text from <strong>Copy diagnostics</strong> in the environment’s <strong>Details</strong>.</li>
 <li>The output of <code>goat connect status</code> on the host.</li>
 <li>The trace ID, if one is shown.</li>
+<li>If the tunnel dropped earlier, the host’s <code>relay-client.ndjson</code> tunnel log in the logs folder
+(<code>~/.goat/userdata/logs</code> by default) records connections, warnings and restarts with the tunnel token removed.</li>
 </ul>
 </article><nav class="guide-toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#the-hosts-tunnel-is-offline">The host’s tunnel is offline</a></li><li><a href="#port-7844-is-blocked-on-the-host">Port 7844 is blocked on the host</a></li><li><a href="#the-tunnel-works-but-goat-does-not-answer">The tunnel works, but GOAT does not answer</a></li><li><a href="#the-goat-connect-address-does-not-resolve-or-answer">The GOAT Connect address does not resolve or answer</a></li><li><a href="#this-device-cant-reach-goat-connect">This device can’t reach GOAT Connect</a></li><li><a href="#sign-in-account-or-link-problems">Sign-in, account, or link problems</a></li><li><a href="#the-clock-is-off">The clock is off</a></li><li><a href="#the-host-runs-an-older-goat">The host runs an older GOAT</a></li><li><a href="#goat-connect-returned-an-error">GOAT Connect returned an error</a></li><li><a href="#report-a-problem">Report a problem</a></li></ul></nav></div></div></main><footer class="site-footer"><div class="container footer-inner"><p class="footer-brand"><svg width="20" height="20" viewBox="0 0 128 128" aria-hidden="true" focusable="false"><rect width="128" height="128" rx="28" fill="#18181b"></rect><g transform="translate(17.24 17.31) scale(3.897)"><path d="M2.809 13.261 A4.65 4.65 0 0 1 11.1 9.054 L9.397 11.233 A3.45 3.45 0 0 0 2.809 13.261 Z M 21.191 13.261 A 4.65 4.65 0 0 0 12.9 9.054 L 14.603 11.233 A 3.45 3.45 0 0 1 21.191 13.261 Z" fill="#fff" stroke="#fff" stroke-width="0.6" stroke-linejoin="round"></path><path d="M7.814 16.508 L12 11.15 L16.186 16.508" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"></path></g></svg><span>MIT licensed. GOAT began as a fork of T3 Code.</span></p><nav aria-label="Footer"><ul class="footer-links"><li><a href="/goat/download/">Download</a></li><li><a href="/goat/docs/user/">Guides</a></li><li><a href="https://github.com/goat-si/goat">GitHub</a></li><li><a href="https://github.com/goat-si/goat-releases/releases">Releases</a></li><li><a href="/goat/legal/">Legal</a></li><li><a href="/goat/privacy-policy/">Privacy</a></li><li><a href="/goat/terms-of-service/">Terms</a></li><li><a href="/goat/security-policy/">Security</a></li></ul></nav></div></footer></body></html>

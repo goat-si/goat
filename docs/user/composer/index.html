@@ -30,14 +30,16 @@ it. Very large code blocks are shown without syntax highlighting.</p>
 50 MiB each, subject to the environment’s upload support and limit. The agent
 receives them on the environment’s machine. Provider and model limits still
 apply, including images already in the conversation. A video attachment gives
-the agent a file path; it does not enable native video input.</p>
+the agent a file path; only <a href="/goat/docs/user/providers-antigravity/#skills-and-attachments">Antigravity</a>
+sends supported videos to Gemini models as video.</p>
 <p>Uploads begin when you add an attachment. All uploads must finish before the
 message can send. Retry or remove a failed upload. On web and desktop, reloading
 before an upload finishes requires you to attach that file again.</p>
 <p>You can drag or paste images into the web or desktop composer. HEIC and HEIF
 photos are converted to JPEG there and when selected from the mobile photo
 library; photos over the image limit are also resized to fit. On mobile, you can
-also send files to GOAT through another app’s system share sheet.</p>
+also send files to GOAT through another app’s system share sheet. On Android, you
+can also drag images from another app into the message input in split screen.</p>
 <p>See <a href="#images-and-videos-in-messages">images and videos</a> for previewing and saving media.</p>
 <h2 id="send-while-the-agent-is-working">Send while the agent is working</h2>
 <p>On web and desktop, choose <strong>Settings → General → Follow-up behavior</strong> to queue
@@ -157,6 +159,9 @@ and use <strong>Attach again</strong> or remove the missing file before sending.
 <p>On supported iPhones with iOS 26 or later, use the composer’s microphone to record,
 then confirm to transcribe. Text is inserted where your selection was when
 recording started, ready for you to review and edit before sending.</p>
+<p>Voice input depends on Apple’s on-device speech transcription. On a device without
+it, the composer has no microphone button and <strong>Settings → Microphone</strong> says voice
+input isn’t available.</p>
 <p>The first use may download Apple’s speech model and needs a network connection.
 Later transcription works offline for that language. Recordings can be up to five
 minutes long. Canceling, leaving the screen, or an audio interruption discards the
@@ -204,9 +209,10 @@ shortcut described above.</p>
 the text. Drag a row by its handle to reorder it, use the handle’s arrow keys, promote the message
 to a steer, or remove it.</p>
 <p>If you stop the agent or the server restarts, queued messages keep their order and are held.
-Press <strong>Resume</strong> in an empty composer on web and desktop, or <strong>Resume queue</strong> on mobile, to
-continue. Sending a new message also resumes the queue, unless it steers a turn that is already
-running. You can edit, reorder, or remove held messages without starting them.</p>
+Press <strong>Resume</strong> in an empty composer to continue. Resume also continues a stopped run or one
+that hit a usage limit, even with nothing queued. Sending a new message also resumes the queue,
+unless it steers a turn that is already running. You can edit, reorder, or remove held messages
+without starting them.</p>
 <p>The pencil on a queued row opens that message in the composer for editing. The original message
 stays in the queue until you save, and its row is highlighted while you edit. The message’s
 attachments appear above the text with a remove control, and new images can be added the usual way.
@@ -235,7 +241,10 @@ load it, and neither does a skill name inside an attachment. Agents can name it 
 tasks they delegate. Turn it off for every project, or for one project, in <strong>Settings →
 Integrations → Agent tools</strong>; on mobile, under <strong>Agent behavior</strong>.</p>
 <p>Send <code>/compact</code> in an existing conversation to reduce context usage when the
-provider supports it. Web and desktop also offer compaction from the context meter.</p>
+provider supports it. On web and desktop, the context meter is enabled by default and appears
+when the provider reports usage. To enable it if hidden, open <strong>Settings → General → Legacy features →
+Context window indicator (legacy)</strong>. Open the meter for usage details and <strong>Compact context</strong>
+when the provider supports compaction.</p>
 <p>Claude instances can also compact idle threads for you. See
 <a href="/goat/docs/user/providers-claude/#compact-long-conversations">compact long conversations</a>.</p>
 <h2 id="side-chat">Side chat</h2>

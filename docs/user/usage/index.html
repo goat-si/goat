@@ -13,15 +13,18 @@ cost, split by token type and by speed. These estimates are not your subscriptio
 split, such as a provider-reported cost for a model without public rates, shows as <strong>Other</strong>.
 Select a model under <strong>Breakdown</strong> to see its trend, cache hit rate, and cost per million tokens.</p>
 <p>Totals depend on the history available on each server. Grok turns without a saved completed-turn
-record are missing from the totals.</p>
+record are missing from the totals.
+Text generation (thread titles, commit messages, PR text, branch names and review guides) is not in
+the totals for Codex or Claude Code 2.0.63 and newer, because those runs save no session history.</p>
 <p>OpenCode reads its SQLite database and older JSON history. Antigravity reads local conversation
 databases, including GOAT-managed profiles. Set <code>OPENCODE_DATA_DIR</code> or <code>ANTIGRAVITY_DATA_DIR</code> on the
 server to read a different data directory; comma-separated paths read multiple directories.</p>
-<p>Cursor reads account usage from Cursor’s dashboard API using the CLI login saved on the server.
+<p>Cursor reads account usage from Cursor’s API using the GOAT sign-in or <code>CURSOR_API_KEY</code>,
+or otherwise the CLI login saved on the server.
 This includes headless GOAT sessions and desktop usage across machines; the same account counts
-once across connected environments. Without an accessible CLI login, GOAT shows a
+once across connected environments. Without any of these credentials, GOAT shows a
 notice instead of incomplete local totals. GOAT does not estimate missing tokens from conversation text.
-On macOS, choose <strong>Enable Cursor usage</strong> on Usage to allow GOAT to read your existing CLI login
+On macOS without a GOAT sign-in, choose <strong>Enable Cursor usage</strong> on Usage to allow GOAT to read your existing CLI login
 from Keychain. You can turn it off in <strong>Settings → Providers → Usage providers</strong>. macOS may ask
 you to allow access on the server Mac.</p>
 <p>Usage includes each configured account’s history, including disabled accounts. Custom homes follow
@@ -69,6 +72,23 @@ the model on its own again.</p>
 marked <strong>Not saved</strong>. Reconnect them and choose <strong>Retry failed saves</strong> to finish the same change
 without writing again to environments that already saved. Changes are not queued after you close
 the dialog.</p>
+<h2 id="show-only-some-models">Show only some models</h2>
+<p>To count only some models, or to leave some out, add <code>usageModelFilter</code> to the server’s
+<code>settings.json</code> in its <code>userdata</code> directory, such as <code>~/.goat/userdata/settings.json</code>:</p>
+<pre class="astro-code github-dark" style="background-color:#24292e;color:#e1e4e8; overflow-x: auto;" tabindex="0" data-language="json"><code><span class="line"><span style="color:#E1E4E8">{</span></span>
+<span class="line"><span style="color:#79B8FF">  "usageModelFilter"</span><span style="color:#E1E4E8">: {</span></span>
+<span class="line"><span style="color:#79B8FF">    "include"</span><span style="color:#E1E4E8">: [{ </span><span style="color:#79B8FF">"provider"</span><span style="color:#E1E4E8">: </span><span style="color:#9ECBFF">"claude"</span><span style="color:#E1E4E8">, </span><span style="color:#79B8FF">"model"</span><span style="color:#E1E4E8">: </span><span style="color:#9ECBFF">"orbit-1"</span><span style="color:#E1E4E8"> }, { </span><span style="color:#79B8FF">"model"</span><span style="color:#E1E4E8">: </span><span style="color:#9ECBFF">"orbit-2"</span><span style="color:#E1E4E8"> }],</span></span>
+<span class="line"><span style="color:#79B8FF">    "exclude"</span><span style="color:#E1E4E8">: [{ </span><span style="color:#79B8FF">"model"</span><span style="color:#E1E4E8">: </span><span style="color:#9ECBFF">"drift-9"</span><span style="color:#E1E4E8"> }]</span></span>
+<span class="line"><span style="color:#E1E4E8">  }</span></span>
+<span class="line"><span style="color:#E1E4E8">}</span></span></code></pre>
+<p><code>include</code> keeps only the listed models and <code>exclude</code> leaves the listed models out. <code>provider</code> is
+one of <code>claude</code>, <code>codex</code>, <code>cursor</code>, <code>grok</code>, <code>opencode</code>, <code>antigravity</code>, <code>pi</code>, or <code>muse</code>; omit it
+to match a model ID from any provider. Use the model ID that Usage shows without <strong>Map to</strong>, such
+as a provider-prefixed ID for Pi. Filters apply before <strong>Map to</strong>, so a model you leave out is not
+counted under its mapped name. Usage applies each environment’s own filter. Remove the setting to
+show every model again.</p>
+<p>If the setting is invalid, Usage ignores it and shows every model, and the next save of any other
+setting removes it from <code>settings.json</code>.</p>
 <h2 id="track-subscription-limits">Track subscription limits</h2>
 <p><strong>Usage → Limits</strong> shows each provider’s subscription accounts and how much quota each has left.
 The line beside the provider name tells you whether you can work right now, such as “3 of 4 ready”
@@ -110,10 +130,10 @@ belong to the remote server. Limits need an OpenCode Go API key, or an OpenCode 
 in OpenCode with an API key. A Console browser sign-in alone does not report them. You can also add
 your Go API key as <code>OPENCODE_API_KEY</code> in the OpenCode instance’s <strong>Environment variables</strong>, then
 refresh provider status. Cursor reports
-its monthly allowance, including separate Auto and API usage, using the CLI login or
-<code>CURSOR_AUTH_TOKEN</code>. On macOS, this includes the default Keychain login after you enable Cursor
-usage. Keychain login is used for limits only with Cursor’s default API endpoint. If you configure
-a custom Cursor endpoint, use an explicit token or file-based CLI login for limits.</p>
+its monthly allowance, including separate Auto and API usage, for <code>CURSOR_AUTH_TOKEN</code> when set,
+then the GOAT sign-in or <code>CURSOR_API_KEY</code>, then the CLI login. On macOS, the default Keychain
+login requires enabling Cursor usage. Sign-in, API keys, and Keychain login report limits only
+with Cursor’s default API endpoint. For a custom endpoint, use an explicit token or file-based CLI login.</p>
 <p>Grok reports the remaining subscription allowance and reset time for its current billing period
 after signing in with <code>grok login</code>. Explicit <code>XAI_API_KEY</code> connections and custom authentication
 or endpoint configurations do not report subscription limits.</p>
@@ -236,4 +256,4 @@ Use <code>Ctrl+Shift+1/2/3/4</code> (<code>Cmd+Shift+1/2/3/4</code> on macOS) fo
 24 hours, 7 days, 30 days, or 90 days. Period shortcuts do nothing on Limits.
 Press <code>Escape</code> to return to the previous page. Customize these shortcuts in
 <strong>Settings → Keybindings</strong>.</p>
-</article><nav class="guide-toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#understand-your-usage">Understand your usage</a></li><li><a href="#set-custom-model-prices">Set custom model prices</a></li><li><a href="#track-subscription-limits">Track subscription limits</a></li><li><a href="#fall-back-to-another-model-at-a-limit">Fall back to another model at a limit</a></li><li><a href="#set-fleet-limits">Set fleet limits</a></li><li><a href="#machines-under-heavy-load">Machines under heavy load</a></li><li><a href="#memory-limit-for-agents-macos">Memory limit for agents (macOS)</a></li><li><a href="#connect-a-cliproxyapi-hub">Connect a CLIProxyAPI hub</a></li><li><a href="#subscription-usage-widget">Subscription usage widget</a></li><li><a href="#keyboard-shortcuts">Keyboard shortcuts</a></li></ul></nav></div></div></main><footer class="site-footer"><div class="container footer-inner"><p class="footer-brand"><svg width="20" height="20" viewBox="0 0 128 128" aria-hidden="true" focusable="false"><rect width="128" height="128" rx="28" fill="#18181b"></rect><g transform="translate(17.24 17.31) scale(3.897)"><path d="M2.809 13.261 A4.65 4.65 0 0 1 11.1 9.054 L9.397 11.233 A3.45 3.45 0 0 0 2.809 13.261 Z M 21.191 13.261 A 4.65 4.65 0 0 0 12.9 9.054 L 14.603 11.233 A 3.45 3.45 0 0 1 21.191 13.261 Z" fill="#fff" stroke="#fff" stroke-width="0.6" stroke-linejoin="round"></path><path d="M7.814 16.508 L12 11.15 L16.186 16.508" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"></path></g></svg><span>MIT licensed. GOAT began as a fork of T3 Code.</span></p><nav aria-label="Footer"><ul class="footer-links"><li><a href="/goat/download/">Download</a></li><li><a href="/goat/docs/user/">Guides</a></li><li><a href="https://github.com/goat-si/goat">GitHub</a></li><li><a href="https://github.com/goat-si/goat-releases/releases">Releases</a></li><li><a href="/goat/legal/">Legal</a></li><li><a href="/goat/privacy-policy/">Privacy</a></li><li><a href="/goat/terms-of-service/">Terms</a></li><li><a href="/goat/security-policy/">Security</a></li></ul></nav></div></footer></body></html>
+</article><nav class="guide-toc" aria-label="On this page"><p>On this page</p><ul><li><a href="#understand-your-usage">Understand your usage</a></li><li><a href="#set-custom-model-prices">Set custom model prices</a></li><li><a href="#show-only-some-models">Show only some models</a></li><li><a href="#track-subscription-limits">Track subscription limits</a></li><li><a href="#fall-back-to-another-model-at-a-limit">Fall back to another model at a limit</a></li><li><a href="#set-fleet-limits">Set fleet limits</a></li><li><a href="#machines-under-heavy-load">Machines under heavy load</a></li><li><a href="#memory-limit-for-agents-macos">Memory limit for agents (macOS)</a></li><li><a href="#connect-a-cliproxyapi-hub">Connect a CLIProxyAPI hub</a></li><li><a href="#subscription-usage-widget">Subscription usage widget</a></li><li><a href="#keyboard-shortcuts">Keyboard shortcuts</a></li></ul></nav></div></div></main><footer class="site-footer"><div class="container footer-inner"><p class="footer-brand"><svg width="20" height="20" viewBox="0 0 128 128" aria-hidden="true" focusable="false"><rect width="128" height="128" rx="28" fill="#18181b"></rect><g transform="translate(17.24 17.31) scale(3.897)"><path d="M2.809 13.261 A4.65 4.65 0 0 1 11.1 9.054 L9.397 11.233 A3.45 3.45 0 0 0 2.809 13.261 Z M 21.191 13.261 A 4.65 4.65 0 0 0 12.9 9.054 L 14.603 11.233 A 3.45 3.45 0 0 1 21.191 13.261 Z" fill="#fff" stroke="#fff" stroke-width="0.6" stroke-linejoin="round"></path><path d="M7.814 16.508 L12 11.15 L16.186 16.508" fill="none" stroke="#fff" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"></path></g></svg><span>MIT licensed. GOAT began as a fork of T3 Code.</span></p><nav aria-label="Footer"><ul class="footer-links"><li><a href="/goat/download/">Download</a></li><li><a href="/goat/docs/user/">Guides</a></li><li><a href="https://github.com/goat-si/goat">GitHub</a></li><li><a href="https://github.com/goat-si/goat-releases/releases">Releases</a></li><li><a href="/goat/legal/">Legal</a></li><li><a href="/goat/privacy-policy/">Privacy</a></li><li><a href="/goat/terms-of-service/">Terms</a></li><li><a href="/goat/security-policy/">Security</a></li></ul></nav></div></footer></body></html>

@@ -86,17 +86,18 @@ window. Leave it empty for Claude Code’s default.</p>
 <strong>Compact context</strong> from the context meter. When you return to a large thread
 after Claude’s prompt cache expires, a <strong>Compact</strong> chip with the thread’s token count shows
 next to the send button. While it is on, Enter summarizes the history first, then
-sends your message. Click the chip to switch it to <strong>Full</strong> and keep the full
-history for that message. The cache lasts about an hour on a Claude
+sends your message. Click the chip to keep the full history for that message; it shows <strong>Full</strong> or
+<strong>Keep full</strong>, depending on the interface. The cache lasts about an hour on a Claude
 subscription and 5 minutes with an API key, Bedrock, or Vertex. See <a href="/goat/docs/user/composer/#commands-and-skills">commands and skills</a> for using
 composer commands.</p>
 <p><strong>Compact idle threads</strong> in <strong>Settings &gt; General</strong> controls this for threads
 over 200,000 tokens. Each Claude provider’s settings can override it:</p>
 <ul>
 <li><strong>When you return</strong> shows the <strong>Compact</strong> chip described above. This is the default.</li>
-<li><strong>Before the cache expires (beta)</strong> compacts an idle thread shortly before its
-prompt cache expires, so coming back does not reprocess the whole conversation.
-The compaction appears in the thread as a <code>/compact</code> turn sent by GOAT.</li>
+<li><strong>Before the cache expires (beta)</strong> tries to compact an idle thread shortly before its
+prompt cache expires, while the history is still cached. The compaction appears in
+the thread as a <code>/compact</code> turn sent by GOAT. If the window is missed, such as
+after a server restart, the <strong>Compact</strong> chip appears when you return instead.</li>
 <li><strong>Never</strong> skips idle compaction and Claude’s resume prompt. <strong>Auto-compact after</strong>
 still applies, and you can still compact by hand.</li>
 </ul>
