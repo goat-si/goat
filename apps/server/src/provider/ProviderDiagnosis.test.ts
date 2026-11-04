@@ -220,7 +220,12 @@ it.effect.each([false, true])(
         ["--help"],
       ]);
       for (const command of spawned) {
-        expect(command.options.env).toEqual({ HOME: "/home/user", GIT_PAGER: "", PAGER: "less" });
+        expect(command.options.env).toEqual({
+          HOME: "/home/user",
+          GIT_PAGER: "",
+          PAGER: "less",
+          CLAUDE_CODE_ENTRYPOINT: "t3-code",
+        });
       }
       expect(env.GIT_PAGER).toBe("less -FRX");
     }),

@@ -256,6 +256,35 @@ function setup() {
 }
 
 describe("PreviewView", () => {
+  it("focuses the address on a forwarded desktop action while visible (#22328)", async () => {
+    setup();
+    using stack = new DisposableStack();
+    const previous = window.desktopBridge;
+    stack.defer(() => {
+      if (previous) window.desktopBridge = previous;
+      else delete window.desktopBridge;
+    });
+    const listeners = new Set<(action: string) => void>();
+    window.desktopBridge = {
+      getWindowZoomFactor: () => 1,
+      onMenuAction: (listener: (action: string) => void) => {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
+      },
+    } as NonNullable<typeof window.desktopBridge>;
+    await using screen = await render(view());
+    const address = page.getByRole("combobox", { name: "Search or enter URL" });
+    await act(() => {
+      listeners.forEach((listener) => listener("preview.focusUrl"));
+    });
+    await expect.element(address).toHaveFocus();
+    await screen.rerender(
+      <PreviewView threadRef={TEST_THREAD_REF} tabId="tab-1" visible={false} />,
+    );
+    expect(listeners.size).toBe(0);
+  });
   it.each([
     { url: "https://example.com/", pdfUrl: null },
     {

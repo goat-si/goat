@@ -3,6 +3,7 @@ import { useNewTaskEnvironmentLoading } from "./use-new-task-environment-loading
 import { useEffect, useRef } from "react";
 import { CommonActions, useIsFocused, useNavigation } from "@react-navigation/native";
 import type { EnvironmentProject } from "@goat/client-runtime/state/shell";
+import { pickableProjectGroups } from "@goat/client-runtime/state/project-grouping";
 import { useWorkspaceEnvironments } from "../../state/workspace";
 import { updateComposerDraftSettings } from "../../state/use-composer-drafts";
 import { useWorkspaceBackNavigation } from "../workspace/useAndroidWorkspaceNavigation";
@@ -107,15 +108,20 @@ export function useInitialNewTaskProject(props: {
     }
 
     if (initialPickerRef.current === "opening" && !isFocused) initialPickerRef.current = "open";
-    const selection = resolveDraftProjectSelection(selectedProjectKey, projects, projectScopes, {
-      incomingShareId,
-      pickerClosed: initialPickerRef.current === "open" && isFocused,
-      connectedEnvironmentIds: new Set(
-        environments
-          .filter((environment) => environment.connectionState === "connected")
-          .map((environment) => environment.environmentId),
-      ),
-    });
+    const selection = resolveDraftProjectSelection(
+      selectedProjectKey,
+      projects,
+      pickableProjectGroups(projectScopes),
+      {
+        incomingShareId,
+        pickerClosed: initialPickerRef.current === "open" && isFocused,
+        connectedEnvironmentIds: new Set(
+          environments
+            .filter((environment) => environment.connectionState === "connected")
+            .map((environment) => environment.environmentId),
+        ),
+      },
+    );
     if (selection.kind === "preserve") {
       initialPickerRef.current = null;
       return;

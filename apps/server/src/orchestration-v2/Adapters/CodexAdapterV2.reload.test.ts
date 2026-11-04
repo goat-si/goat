@@ -682,7 +682,12 @@ describe("Codex GOAT authority reload (#1569)", () => {
         yield* replay.startTurn(5);
         yield* replay.terminal;
         assert.deepEqual(
-          replay.threadConfigs.map((config) => goatServer(config).disabled_tools.length),
+          // goat_thread_wait is always disabled here; Codex calls it through goat-direct.
+          replay.threadConfigs.map(
+            (config) =>
+              goatServer(config).disabled_tools.filter((tool) => tool !== "goat_thread_wait")
+                .length,
+          ),
           [GOAT_MEMORY_TOOLS.length, 0, GOAT_MEMORY_TOOLS.length],
         );
       }),

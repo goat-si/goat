@@ -8,6 +8,8 @@ import {
   deleteSelectedThreadEntries,
   getFallbackThreadIdAfterDelete,
   hasUnseenCompletion,
+  belongsInSidebarWorkingShelf,
+  isSidebarEnvironmentDisconnected,
   resolveSidebarRowThreadId,
   orderItemsByPreferredIds,
   pinOrderKeyBetween,
@@ -58,6 +60,7 @@ import {
   resolveSidebarThreadDragMode,
   shouldCancelSidebarThreadDrag,
 } from "./Sidebar.logic";
+import { selectMostRecentOpenProject } from "../globalAgentProject";
 import { threadSearchMatchKey } from "@goat/client-runtime/state/thread-search";
 import {
   EnvironmentId,
@@ -731,6 +734,20 @@ describe("sortProjectsForSidebar", () => {
 });
 
 describe("sortScopedProjectsForSidebar", () => {
+  it("selects an open project even when an archived project has newer activity", () => {
+    const archived = makeProject({
+      id: ProjectId.make("archived"),
+      title: "Archived",
+      archivedAt: "2026-10-12T00:00:00.000Z",
+    });
+    const open = makeProject({ id: ProjectId.make("open"), title: "Open" });
+    const threads = [
+      makeThread({ projectId: archived.id, updatedAt: "2026-10-12T00:00:00.000Z" }),
+      makeThread({ projectId: open.id, updatedAt: "2026-10-11T00:00:00.000Z" }),
+    ];
+    expect(selectMostRecentOpenProject([archived, open], threads)?.id).toBe(open.id);
+    expect(selectMostRecentOpenProject([archived], threads)).toBeNull();
+  });
   it("keeps identical project ids in different environments separate", () => {
     const remoteEnvironmentId = EnvironmentId.make("environment-remote");
     const sharedProjectId = ProjectId.make("shared-project");
@@ -1047,6 +1064,27 @@ describe("Working shelf (beta)", () => {
     runtime: { ...runtime, status: "idle" as const },
     pendingBackgroundTasks: [backgroundTask],
   };
+
+  it("moves running threads out of Working when their environment disconnects (#26195)", () => {
+    const thread = { ...idle, runtime, environmentId: localEnvironmentId };
+    expect(
+      belongsInSidebarWorkingShelf(thread, {
+        enabled: true,
+        disconnectedEnvironmentIds: new Set(),
+        isWorking: isSidebarThreadWorking,
+      }),
+    ).toBe(true);
+    expect(
+      belongsInSidebarWorkingShelf(thread, {
+        enabled: true,
+        disconnectedEnvironmentIds: new Set([localEnvironmentId]),
+        isWorking: isSidebarThreadWorking,
+      }),
+    ).toBe(false);
+    expect(isSidebarEnvironmentDisconnected("connecting", false)).toBe(false);
+    expect(isSidebarEnvironmentDisconnected("connected", false)).toBe(true);
+    expect(isSidebarEnvironmentDisconnected("reconnecting", false)).toBe(true);
+  });
 
   it("folds away running threads and threads waiting on background work only", () => {
     expect(isSidebarThreadWorking({ ...idle, runtime })).toBe(true);

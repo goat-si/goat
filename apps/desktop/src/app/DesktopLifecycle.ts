@@ -1,3 +1,4 @@
+import * as HostProcess from "@goat/shared/HostProcess";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -13,6 +14,7 @@ import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import { makeComponentLogger } from "./DesktopObservability.ts";
 import * as DesktopShutdown from "./DesktopShutdown.ts";
 import * as ElectronApp from "../electron/ElectronApp.ts";
+import * as ElectronProtocol from "../electron/ElectronProtocol.ts";
 import * as ElectronTheme from "../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopState from "./DesktopState.ts";
@@ -266,9 +268,15 @@ export const make = DesktopLifecycle.of({
         yield* electronApp.exit(75);
         return;
       }
+      const prefixes = ElectronProtocol.getDesktopLinkSchemes(environment.isDevelopment).map(
+        (scheme) => `${scheme.toLowerCase()}:`,
+      );
+      const args = yield* HostProcess.Arguments;
       yield* electronApp.relaunch({
-        execPath: process.execPath,
-        args: process.argv.slice(1),
+        execPath: yield* HostProcess.ExecutablePath,
+        args: args
+          .slice(1)
+          .filter((arg) => !prefixes.some((prefix) => arg.toLowerCase().startsWith(prefix))),
       });
       yield* electronApp.exit(0);
     }).pipe(

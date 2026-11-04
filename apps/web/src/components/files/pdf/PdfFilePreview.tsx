@@ -20,7 +20,7 @@ import { usePdfDocument } from "./usePdfDocument";
 import { PdfPage } from "./PdfPage";
 import { PdfIconButton, PdfToolbar } from "./PdfToolbar";
 import { isPdfFindShortcut } from "./pdfShortcuts";
-import { initialPdfView, type PdfViewState, type PdfReadingPosition } from "./usePdfViewState";
+import { usePdfViewState, type PdfViewState, type PdfReadingPosition } from "./usePdfViewState";
 import "./pdfViewer.css";
 
 interface PdfFilePreviewProps {
@@ -29,12 +29,13 @@ interface PdfFilePreviewProps {
   onRetry?: (() => Promise<string | null>) | undefined;
   threadRef?: ScopedThreadRef | undefined;
   revision?: string | undefined;
+  documentId?: string | undefined;
   viewState?: PdfReadingPosition | undefined;
 }
 
 export default function PdfFilePreview(props: PdfFilePreviewProps) {
-  const [view, setView] = useState(initialPdfView);
-  const position = props.viewState ?? { view, onViewChange: setView };
+  const saved = usePdfViewState(props.viewState ? undefined : props.documentId);
+  const position = props.viewState ?? saved;
   return (
     <PdfResource
       key={props.revision ?? props.src}

@@ -227,6 +227,23 @@ it.effect("registers the device tools and returns the screenshot as image conten
       expect(foreign.isError).toBe(true);
       expect(foreign.content.map((entry) => entry.type)).toEqual(["text"]);
 
+      for (const name of [
+        "goat_device_list",
+        "goat_device_open",
+        "goat_device_screenshot",
+        "goat_device_close",
+      ]) {
+        const byLabel = yield* server
+          .callTool({ name, arguments: { hostId: "THIS MACHINE" } })
+          .pipe(callWith(["device"]), Effect.provideService(McpSchema.McpServerClient, client));
+        expect(byLabel.isError, name).toBe(false);
+        const unknown = yield* server
+          .callTool({ name, arguments: { hostId: "unknown" } })
+          .pipe(callWith(["device"]), Effect.provideService(McpSchema.McpServerClient, client));
+        expect(unknown.isError, name).toBe(true);
+        expect(JSON.stringify(unknown.content)).toContain("No device host unknown");
+      }
+
       const denied = yield* server
         .callTool({ name: "goat_device_list", arguments: {} })
         .pipe(callWith(["preview"]), Effect.provideService(McpSchema.McpServerClient, client));

@@ -174,7 +174,7 @@ describe("EnvironmentSupervisor", () => {
   it.effect("waits while offline and connects immediately when the network returns", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({ networkStatus: "offline" });
-      const supervisor = yield* EnvironmentSupervisor.make(TARGET_ENTRY, {
+      const supervisor = yield* EnvironmentSupervisor.make(RELAY_ENTRY, {
         initiallyDesired: true,
       }).pipe(Effect.provide(harness.dependencies));
 
@@ -304,6 +304,54 @@ describe("EnvironmentSupervisor", () => {
       expect(yield* Ref.get(harness.prepareCount)).toBe(2);
       expect((yield* SubscriptionRef.get(supervisor.state)).attempt).toBe(1);
     }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("connects to the primary environment while the device reports offline", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ networkStatus: "offline" });
+      const supervisor = yield* EnvironmentSupervisor.make(TARGET_ENTRY, {
+        initiallyDesired: true,
+      }).pipe(Effect.provide(harness.dependencies));
+
+      const settled = yield* awaitState(
+        supervisor.state,
+        (state) => state.phase === "connected" || state.phase === "offline",
+      );
+
+      expect(settled).toMatchObject({
+        phase: "connected",
+        network: "unknown",
+        attempt: 1,
+        lastFailure: null,
+      });
+      expect(yield* Ref.get(harness.prepareCount)).toBe(1);
+    }),
+  );
+
+  it.effect(
+    "keeps a primary attempt through an offline report and restarts it when the network returns",
+    () =>
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>();
+        const harness = yield* makeHarness({
+          prepare: (attempt) =>
+            attempt === 1
+              ? Deferred.succeed(started, undefined).pipe(Effect.andThen(Effect.never))
+              : Effect.succeed(PREPARED_CONNECTION),
+        });
+        const supervisor = yield* EnvironmentSupervisor.make(TARGET_ENTRY, {
+          initiallyDesired: true,
+        }).pipe(Effect.provide(harness.dependencies));
+
+        yield* Deferred.await(started);
+        yield* harness.setNetworkStatus("offline");
+        yield* TestClock.adjust("1 second");
+        expect(yield* Ref.get(harness.prepareCount)).toBe(1);
+
+        yield* harness.setNetworkStatus("online");
+        yield* awaitState(supervisor.state, (state) => state.phase === "connected");
+        expect(yield* Ref.get(harness.prepareCount)).toBe(2);
+      }).pipe(Effect.provide(TestClock.layer())),
   );
 
   it.effect("keeps the latest failure visible throughout the next connection attempt", () =>
@@ -1736,6 +1784,122 @@ describe("EnvironmentSupervisor routes", () => {
     }),
   );
 
+  it.effect("learns late endpoints using the original active route after it is withdrawn", () =>
+    Effect.gen(function* () {
+      const initialProcessed = yield* Deferred.make<void>();
+      const deliverLate = yield* Deferred.make<void>();
+      const lateProcessed = yield* Deferred.make<void>();
+      const seen = yield* Ref.make<ReadonlyArray<string>>([]);
+      const configEvents = Stream.concat(
+        Stream.make({
+          version: 1 as const,
+          type: "snapshot" as const,
+          config: { directEndpoints: [] } as unknown as ServerConfig,
+        }),
+        Stream.fromEffect(
+          Deferred.await(deliverLate).pipe(
+            Effect.as({
+              version: 1 as const,
+              type: "snapshot" as const,
+              config: {
+                directEndpoints: [
+                  { kind: "tailnet", httpBaseUrl: "https://fixture.tail1234.ts.net/" },
+                ],
+              } as unknown as ServerConfig,
+            }),
+          ),
+        ),
+      );
+      const harness = yield* makeHarness({
+        prepare: (_attempt, target) => Effect.succeed(preparedFor(target)),
+        configEvents,
+      });
+      yield* EnvironmentSupervisor.make(RELAY_ENTRY, {
+        initiallyDesired: true,
+        learnRoutes: ({ activeRoute, reported }) =>
+          Effect.gen(function* () {
+            yield* Ref.update(seen, (entries) => [
+              ...entries,
+              connectionRouteId(activeRoute.target),
+            ]);
+            if (reported.length === 0) {
+              yield* Deferred.succeed(initialProcessed, undefined);
+              return Option.some({
+                target: LAN_ROUTE.target,
+                profile: LAN_ROUTE.profile,
+                enabled: true,
+              });
+            }
+            yield* Deferred.succeed(lateProcessed, undefined);
+            return Option.none();
+          }),
+      }).pipe(Effect.provide(harness.dependencies));
+      yield* Deferred.await(initialProcessed);
+      yield* Deferred.succeed(deliverLate, undefined);
+      yield* Deferred.await(lateProcessed);
+      expect(yield* Ref.get(seen)).toEqual(["relay", "relay"]);
+      expect(yield* Ref.get(harness.sessionCount)).toBe(1);
+    }),
+  );
+
+  it.effect("moves to an endpoint discovered after the first config snapshot", () =>
+    Effect.gen(function* () {
+      const initialProcessed = yield* Deferred.make<void>();
+      const discover = yield* Deferred.make<void>();
+      const current = yield* Ref.make(RELAY_ENTRY);
+      const harness = yield* makeHarness({
+        checkRoute: (route) =>
+          Effect.succeed(route.target._tag === "BearerConnectionTarget" ? "answered" : "unchecked"),
+        prepare: (_attempt, target) => Effect.succeed(preparedFor(target)),
+        configEvents: Stream.concat(
+          Stream.make({
+            version: 1 as const,
+            type: "snapshot" as const,
+            config: { directEndpoints: [] } as unknown as ServerConfig,
+          }),
+          Stream.fromEffect(
+            Deferred.await(discover).pipe(
+              Effect.as({
+                version: 1 as const,
+                type: "snapshot" as const,
+                config: {
+                  directEndpoints: [{ kind: "lan", httpBaseUrl: "http://192.168.1.10:3773/" }],
+                } as unknown as ServerConfig,
+              }),
+            ),
+          ),
+        ),
+      });
+      const supervisor = yield* EnvironmentSupervisor.make(RELAY_ENTRY, {
+        initiallyDesired: true,
+        learnRoutes: ({ activeRoute, reported }) =>
+          Effect.gen(function* () {
+            const entry = yield* Ref.get(current);
+            const routes = mergeLearnedRoutes({
+              entry,
+              activeRoute,
+              reported,
+              allowInsecure: true,
+            });
+            if (reported.length === 0) yield* Deferred.succeed(initialProcessed, undefined);
+            if (routes === null) return Option.none();
+            const next = entryWithRoutes(entry, routes);
+            yield* Ref.set(current, next);
+            return Option.some(next);
+          }),
+      }).pipe(Effect.provide(harness.dependencies));
+      yield* Deferred.await(initialProcessed);
+      yield* Deferred.succeed(discover, undefined);
+      yield* awaitState(
+        supervisor.state,
+        (state) => state.phase === "connected" && state.generation === 2,
+      );
+      expect(Option.getOrThrow(yield* SubscriptionRef.get(supervisor.prepared)).target._tag).toBe(
+        "BearerConnectionTarget",
+      );
+    }),
+  );
+
   it.effect("learns the LAN address over GOAT Connect and moves to it", () =>
     Effect.gen(function* () {
       const relayEntry: ConnectionCatalogEntry = {
@@ -2281,7 +2445,7 @@ describe("suspend recovery review regressions", () => {
       const harness = yield* makeHarness({
         ready: (attempt) => (attempt === 1 ? Effect.never : Effect.void),
       });
-      const supervisor = yield* EnvironmentSupervisor.make(TARGET_ENTRY, {
+      const supervisor = yield* EnvironmentSupervisor.make(RELAY_ENTRY, {
         initiallyDesired: true,
       }).pipe(Effect.provide(harness.dependencies));
       yield* awaitState(supervisor.state, (state) => state.stage === "synchronizing");

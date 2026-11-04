@@ -633,7 +633,7 @@ const capture = async (
     input.page,
     {
       ...page,
-      url: mask(page.url),
+      url: mask(withoutDataPayload(page.url)),
       title: mask(page.title),
       // Mask text before truncating so a value crossing the cut cannot leak its prefix.
       visibleText: mask(page.visibleText, MAX_VISIBLE_TEXT_LENGTH),
@@ -659,7 +659,7 @@ export const snapshot = (input: SnapshotInput): Promise<PreviewAutomationSnapsho
   });
 
 /** Return when a dialog opens; waiting for the action to finish would block until dialog resolution. */
-export const click = async (
+const clickTarget = async (
   page: Page,
   input: PreviewAutomationClickInput,
   pointer: PointerReporter = noPointer,
@@ -757,6 +757,38 @@ export const click = async (
   // A dialog that stopped a multi-press click leaves it short of what was asked.
   const short = (input.clickCount ?? 1) > presses && (input.clickCount ?? 1) > 1;
   return { ...point, ...outcome, ...(short ? { pressesCompleted: presses } : {}) };
+};
+export const click = async (
+  page: Page,
+  input: PreviewAutomationClickInput,
+  pointer: PointerReporter = noPointer,
+  gate: DispatchGate = open,
+): ReturnType<typeof clickTarget> => {
+  try {
+    return await clickTarget(page, input, pointer, gate);
+  } catch (cause) {
+    const timedOut =
+      (cause instanceof ServerBrowserOperationError &&
+        cause.tag === "PreviewAutomationTimeoutError") ||
+      (cause instanceof Error && cause.name === "TimeoutError");
+    const target = input.locator ?? input.selector;
+    if (!timedOut || target === undefined) throw cause;
+    const detail =
+      cause instanceof ServerBrowserOperationError &&
+      typeof cause.detail === "object" &&
+      cause.detail !== null
+        ? cause.detail
+        : {};
+    const beforeInput = "beforeInput" in detail && detail.beforeInput === true;
+    const label = JSON.stringify(target.length > 200 ? `${target.slice(0, 200)}...` : target);
+    const reason = beforeInput
+      ? `No input was sent. The click target ${label} was not ready before the deadline.`
+      : `The click may have been sent; check the page before retrying. The target was ${label}.`;
+    throw new ServerBrowserOperationError("PreviewAutomationTimeoutError", reason, {
+      ...detail,
+      reason,
+    });
+  }
 };
 export const type = async (
   page: Page,

@@ -648,6 +648,18 @@ failure in the thread. Only a run whose preparation failed qualifies
 and a new `goat_thread_send` is the way forward there. The launch watch reports
 the retried run like the original.
 
+### Scheduled tasks
+
+`goat_schedule_create`, `goat_schedule_list`, `goat_schedule_update`, and
+`goat_schedule_delete` manage recurring work. Schedules run on intervals, at
+fixed local times, or from qualifying webhook requests, without an active turn.
+Runs bind to the caller's thread by default when it belongs to the task's project;
+otherwise they start fresh threads. Set `bindToCurrentThread: false` for a fresh
+thread per run. `goat_schedule_update` with `enabled: false` pauses future runs;
+deletion is permanent and does not stop work already dispatched. Unsigned webhook
+URLs can be triggered by anyone holding the URL; signatures, filters, and dedupe
+can reject or suppress requests.
+
 ## Delegated Task Lifecycle
 
 The MCP server is a command ingress into V2. It does not call provider adapters
@@ -682,7 +694,9 @@ idempotent.
 Users rarely watch child threads, so a child question would otherwise go
 unanswered. When a child opens a pending `user_input` request, the parent gets
 a notification message telling it to answer with the pending request tools or
-ask the user. The message says whether the child is blocked or, for a Codex
+ask the user. A pending question can steer a running parent turn when the provider
+supports safe steering; otherwise it queues. In a GOAT Bot session it can steer only
+the run that launched the child. Resolution notices queue. The message says whether the child is blocked or, for a Codex
 async question, still working. If the question is answered or dismissed before
 the notification starts a turn, that queued turn is cancelled. Approvals are not
 routed, because those tools cannot answer them.

@@ -61,6 +61,17 @@ const MermaidFilePreview = lazy(() =>
 const SourcePreview = lazy(() => import("./ReadOnlySourcePreview"));
 
 const STALE_URL_MS = 5 * 60_000;
+const blobKeys = new WeakMap<Blob, string>();
+let nextBlobKey = 0;
+
+function blobKey(blob: Blob) {
+  let key = blobKeys.get(blob);
+  if (key === undefined) {
+    key = `blob:${nextBlobKey++}`;
+    blobKeys.set(blob, key);
+  }
+  return key;
+}
 
 export function ReadOnlySourcePreview(props: { name: string; text: string; wordWrap?: boolean }) {
   return (
@@ -337,6 +348,15 @@ export function AttachmentFilePreview(props: {
       src={url}
       title={props.name}
       pdf={kind === "pdf"}
+      documentId={
+        kind !== "pdf"
+          ? undefined
+          : props.file
+            ? blobKey(props.file)
+            : props.asset
+              ? JSON.stringify(props.asset)
+              : undefined
+      }
       onRetry={props.file ? undefined : refresh}
       htmlRender={props.htmlRender === true}
       threadRef={props.threadRef}

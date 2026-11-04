@@ -7,6 +7,23 @@ function completed(input: unknown, output?: unknown): GoatToolSummaryCall {
 }
 
 describe("summarizeGoatToolCalls", () => {
+  it("counts the pull requests batch link and unlink calls changed", () => {
+    const urls = ["https://github.com/o/r/pull/1", "https://github.com/o/r/pull/1", "not-a-pr"];
+    const links = completed({ urls }, { linkedCount: 1 });
+    expect(summarizeGoatToolCalls("link-pr", [links, completed({ number: 3 })]).label).toBe(
+      "Linked 2 pull requests",
+    );
+    expect(summarizeGoatToolCalls("link-pr", [completed({ urls }, {})]).label).toBe(
+      "Linked pull requests",
+    );
+    const batch = completed({ states: ["merged"] }, { unlinkedCount: 2 });
+    expect(summarizeGoatToolCalls("unlink-pr", [batch, completed({ number: 3 })]).label).toBe(
+      "Unlinked 3 pull requests",
+    );
+    const uncounted = completed({ states: ["merged"] }, { isError: false });
+    expect(summarizeGoatToolCalls("unlink-pr", [uncounted]).label).toBe("Unlinked pull requests");
+  });
+
   it("describes an accepted merge request without claiming it merged", () => {
     expect(
       summarizeGoatToolCalls("write-pr", [completed({ auto: true }, { status: "accepted" })]),

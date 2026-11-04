@@ -47,6 +47,7 @@ export class PullRequestProviderError extends Schema.TaggedError<PullRequestProv
     reason: Schema.Literals([
       "missing-tool",
       "unauthenticated",
+      "forbidden",
       "rate-limited",
       "not-found",
       // This refusal must happen before any host write; MCP releases its retry key.

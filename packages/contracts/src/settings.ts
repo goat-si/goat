@@ -62,6 +62,7 @@ import {
 } from "./baseSchemas.ts";
 import { CodexHomeSettingsFields, CodexModelRoute, ProviderHomeRouteFields } from "./codexRoute.ts";
 import { UsageLimitSourceId } from "./usageLimitSourceId.ts";
+import { UsageModelFilter } from "./usage.ts";
 import { EnvironmentMachineKind, ThreadEnvMode, WorktreeSubmodules } from "./environment.ts";
 import { KeybindingShortcut } from "./keybindings.ts";
 import {
@@ -109,6 +110,8 @@ import { CuaSettingsFields, CuaSettingsPatchFields } from "./computerUseSettings
 import { SnoozeSettingsFields, SnoozeSettingsPatchFields } from "./snoozePresets.ts";
 import { BuiltInSkillProjectOverrideFields } from "./builtinSkills.ts";
 import * as BlockedBrowser from "./blockedBrowserHosts.ts";
+import { SecretProviderId, SecretProviderSlug } from "./secretReference.ts";
+export { SecretProviderId } from "./secretReference.ts";
 import * as Restart from "./codexTurnSurvival.ts";
 
 export * from "./settingsFontSizes.ts";
@@ -843,6 +846,33 @@ export const UsageLimitSourceConfig = Schema.Struct({
 });
 export type UsageLimitSourceConfig = typeof UsageLimitSourceConfig.Type;
 
+export const SecretProviderKind = SecretProviderSlug.pipe(Schema.brand("SecretProviderKind"));
+export type SecretProviderKind = typeof SecretProviderKind.Type;
+export const OnePasswordAccount = Schema.String.check(
+  Schema.isMaxLength(253),
+  Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._-]*$/),
+).pipe(Schema.brand("OnePasswordAccount"));
+export type OnePasswordAccount = typeof OnePasswordAccount.Type;
+export const SecretProviderLabel = TrimmedNonEmptyString.check(Schema.isMaxLength(64));
+export const OnePasswordSecretProviderConfig = Schema.Struct({ account: OnePasswordAccount });
+const isOnePasswordSecretProviderConfig = Schema.is(OnePasswordSecretProviderConfig);
+export const SecretProviderConfig = Schema.Struct({
+  kind: SecretProviderKind,
+  label: TrimmedNonEmptyString,
+  config: Schema.optionalKey(Schema.Unknown),
+});
+export type SecretProviderConfig = typeof SecretProviderConfig.Type;
+export const SecretProviderConfigWrite = Schema.Struct({
+  ...SecretProviderConfig.fields,
+  label: SecretProviderLabel,
+}).check(
+  Schema.makeFilter((entry) =>
+    entry.kind === "one_password" && isOnePasswordSecretProviderConfig(entry.config)
+      ? true
+      : "Unsupported secret provider or invalid configuration.",
+  ),
+);
+
 export const SourceControlHostSettings = Schema.Record(Schema.String, Schema.Unknown);
 export type SourceControlHostSettings = typeof SourceControlHostSettings.Type;
 
@@ -1552,6 +1582,9 @@ export const ServerSettings = Schema.Struct({
   usageLimitSources: Schema.Record(UsageLimitSourceId, UsageLimitSourceConfig).pipe(
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
+  secretProviders: Schema.Record(SecretProviderId, SecretProviderConfig).pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
   cursorKeychainUsageEnabled: Schema.Boolean.pipe(
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
@@ -1567,6 +1600,9 @@ export const ServerSettings = Schema.Struct({
   goatBotHome: Schema.NullOr(GoatBotHomeClaim).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
+
+  /** Sent by the Usage tab with each summary request to this environment; edit in settings.json. Invalid values are ignored. */
+  usageModelFilter: ForwardCompatibleOptional(UsageModelFilter),
 });
 export type ServerSettings = typeof ServerSettings.Type;
 
@@ -2017,6 +2053,9 @@ const ServerSettingsPatchFields = Schema.Struct({
   usageLimitSources: Schema.optionalKey(
     Schema.Record(UsageLimitSourceId, Schema.NullOr(UsageLimitSourceConfig)),
   ),
+  secretProviders: Schema.optionalKey(
+    Schema.Record(SecretProviderId, Schema.NullOr(SecretProviderConfigWrite)),
+  ),
   cursorKeychainUsageEnabled: Schema.optionalKey(Schema.Boolean),
 
   usagePriceOverrides: Schema.optionalKey(
@@ -2026,6 +2065,7 @@ const ServerSettingsPatchFields = Schema.Struct({
   usageModelAliases: Schema.optionalKey(
     Schema.Record(TrimmedNonEmptyString, Schema.NullOr(TrimmedNonEmptyString)),
   ),
+  usageModelFilter: Schema.optional(UsageModelFilter),
   /** Kept only when it supersedes the stored claim (`goatBotHomeClaimSupersedes`). */
   goatBotHome: Schema.optionalKey(GoatBotHomeClaim),
 });

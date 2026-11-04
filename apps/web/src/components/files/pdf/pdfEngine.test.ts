@@ -1,8 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { loadPdfDocument } from "./pdfEngine";
 
-const { getDocument } = vi.hoisted(() => ({ getDocument: vi.fn() }));
-vi.mock("pdfjs-dist/legacy/build/pdf.mjs", () => ({ getDocument, GlobalWorkerOptions: {} }));
+const { getDocument, PDFWorker } = vi.hoisted(() => ({
+  getDocument: vi.fn(),
+  PDFWorker: vi.fn(
+    class PDFWorker {
+      readonly destroyed = false;
+    },
+  ),
+}));
+vi.mock("pdfjs-dist/legacy/build/pdf.mjs", () => ({
+  getDocument,
+  PDFWorker,
+  GlobalWorkerOptions: {},
+}));
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (cause: unknown) => void;
@@ -17,6 +28,18 @@ beforeEach(() => {
 });
 
 describe("PDF loading task ownership", () => {
+  it("reuses a worker while each document keeps its own loading task", async () => {
+    const destroyA = vi.fn(async () => {});
+    const destroyB = vi.fn(async () => {});
+    getDocument.mockReturnValueOnce({ promise: Promise.resolve({ id: "a" }), destroy: destroyA });
+    getDocument.mockReturnValueOnce({ promise: Promise.resolve({ id: "b" }), destroy: destroyB });
+    await loadPdfDocument(new ArrayBuffer(1), new AbortController().signal);
+    await loadPdfDocument(new ArrayBuffer(1), new AbortController().signal);
+    expect(getDocument.mock.calls[0]?.[0].worker).toBeDefined();
+    expect(getDocument.mock.calls[0]?.[0].worker).toBe(getDocument.mock.calls[1]?.[0].worker);
+    expect(destroyA).not.toHaveBeenCalled();
+    expect(destroyB).not.toHaveBeenCalled();
+  });
   it("destroys a worker-backed loading task when parsing fails", async () => {
     const destroy = vi.fn(async () => {});
     getDocument.mockImplementation(() => ({

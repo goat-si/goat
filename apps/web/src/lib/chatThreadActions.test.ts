@@ -39,6 +39,20 @@ function lastWorkThread(overrides: Partial<LastWorkThread> = {}): LastWorkThread
 }
 
 describe("chatThreadActions", () => {
+  it("does not select the latest work from an archived project", () => {
+    expect(
+      resolveLastWorkTarget(
+        [
+          lastWorkThread({ latestUserAuthoredMessageAt: "2026-10-12T00:00:00.000Z" }),
+          lastWorkThread({ projectId: FALLBACK_PROJECT_ID }),
+        ],
+        [{ ...loadedProjects[0]!, archivedAt: "2026-10-13T00:00:00.000Z" }, loadedProjects[1]!],
+      ),
+    ).toEqual({
+      projectRef: scopeProjectRef(ENVIRONMENT_ID, FALLBACK_PROJECT_ID),
+      envMode: "local",
+    });
+  });
   it("selects the newest authored message over newer wake-only activity", () => {
     expect(
       resolveLastWorkTarget(

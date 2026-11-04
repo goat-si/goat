@@ -57,6 +57,8 @@ it.effect("diagnoses project-disabled instances before automatic placement can s
     autoPull: false,
     faviconPath: null,
     projectIcon: null,
+    pinnedAt: null,
+    archivedAt: null,
     scripts: [],
     createdAt: "2026-10-21T00:00:00.000Z",
     updatedAt: "2026-10-21T00:00:00.000Z",

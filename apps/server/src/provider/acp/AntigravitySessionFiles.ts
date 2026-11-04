@@ -1,3 +1,5 @@
+// @effect-diagnostics nodeBuiltinImport:off - FileSystem.readDirectory buffers the entire directory; opendir bounds the sweep.
+import * as NodeFSP from "node:fs/promises";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -42,13 +44,51 @@ export const removeAntigravitySessionFiles = Effect.fn("removeAntigravitySession
   Effect.catch(() => Effect.logWarning("Could not remove temporary Antigravity session files.")),
 );
 
-/** Sweep only private runtimes before launch; Windows does not protect live extracted data files from deletion. */
-export const removeAntigravityRuntimeTempDirs = Effect.fn("removeAntigravityRuntimeTempDirs")(
+const warnRuntimeTempLeftovers = Effect.logWarning(
+  "Could not remove leftover Antigravity runtime temp files.",
+);
+
+/**
+ * Sweep only private runtimes before launch; Windows does not protect live extracted data files from deletion.
+ * Moves leftovers aside and returns their slow deletion (seconds on Windows) to run off the startup path.
+ */
+export const retireAntigravityRuntimeTempDirs = Effect.fn("retireAntigravityRuntimeTempDirs")(
   function* (tempDirectory: string) {
     const fs = yield* FileSystem.FileSystem;
-    yield* fs.remove(tempDirectory, { recursive: true, force: true });
+    const path = yield* Path.Path;
+    const parent = path.dirname(tempDirectory);
+    const prefix = `${path.basename(tempDirectory)}.old-`;
+    if (yield* fs.exists(tempDirectory)) {
+      yield* fs.makeTempDirectory({ directory: parent, prefix }).pipe(
+        Effect.flatMap((retired) => fs.rename(tempDirectory, path.join(retired, "runtime"))),
+        Effect.catch(() => fs.remove(tempDirectory, { recursive: true, force: true })),
+      );
+    }
+    return Effect.gen(function* () {
+      const entries = yield* Effect.tryPromise(() => listRetiredDirectories(parent, prefix)).pipe(
+        Effect.orElseSucceed(() => [] as string[]),
+      );
+      yield* Effect.forEach(
+        entries,
+        (entry) =>
+          fs
+            .remove(path.join(parent, entry), { recursive: true, force: true })
+            .pipe(Effect.catch(() => warnRuntimeTempLeftovers)),
+        { discard: true },
+      );
+    });
   },
-  Effect.catch(() =>
-    Effect.logWarning("Could not remove leftover Antigravity runtime temp files."),
-  ),
+  Effect.catch(() => warnRuntimeTempLeftovers.pipe(Effect.as(Effect.void))),
 );
+
+async function listRetiredDirectories(parent: string, prefix: string): Promise<string[]> {
+  const directory = await NodeFSP.opendir(parent);
+  const entries: string[] = [];
+  let scanned = 0;
+  for await (const entry of directory) {
+    if (++scanned > 1_024) break;
+    if (entry.name.startsWith(prefix)) entries.push(entry.name);
+    if (entries.length === 32) break;
+  }
+  return entries;
+}

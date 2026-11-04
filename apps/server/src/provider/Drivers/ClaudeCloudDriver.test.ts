@@ -40,7 +40,10 @@ const settings: ServerSettings = {
   },
 };
 
-const harness = Effect.fnUntraced(function* (currentSettings = settings) {
+const harness = Effect.fnUntraced(function* (
+  currentSettings = settings,
+  hostEnvironment: NodeJS.ProcessEnv = { HOME: "/fixture/home" },
+) {
   const commands: ChildProcess.StandardCommand[] = [];
   let ptySpawns = 0;
   const directories: string[] = [];
@@ -116,7 +119,7 @@ const harness = Effect.fnUntraced(function* (currentSettings = settings) {
     ),
     Effect.provideService(HostProcess.Platform, "linux"),
     Effect.provideService(HostProcess.HomeDirectory, "/fixture/home"),
-    Effect.provideService(HostProcess.Environment, { HOME: "/fixture/home" }),
+    Effect.provideService(HostProcess.Environment, hostEnvironment),
     Effect.provide(
       Layer.mergeAll(
         NodeServices.layer,
@@ -179,4 +182,24 @@ it.effect.each([undefined, { driver: ProviderDriverKind.make("codex"), config: {
         expect(h.ptySpawns()).toBe(0);
       }),
     ),
+);
+
+it.effect("a login started inside a Claude Code session does not join that session", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const h = yield* harness(settings, {
+        HOME: "/fixture/home",
+        CLAUDECODE: "1",
+        CLAUDE_CODE_SESSION_ID: "outer-session",
+        CLAUDE_CODE_MESSAGING_TOKEN: "outer-token",
+      });
+      const snapshot = yield* h.instance.snapshot.refresh;
+      expect(snapshot.status).toBe("ready");
+      const auth = h.commands.find((command) => command.args[0] === "auth");
+      expect(auth?.options.env?.CLAUDECODE).toBeUndefined();
+      expect(auth?.options.env?.CLAUDE_CODE_SESSION_ID).toBeUndefined();
+      expect(auth?.options.env?.CLAUDE_CODE_MESSAGING_TOKEN).toBeUndefined();
+      expect(auth?.options.env?.PROFILE_MARKER).toBe("work-profile");
+    }),
+  ),
 );

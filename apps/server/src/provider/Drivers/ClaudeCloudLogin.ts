@@ -6,7 +6,6 @@
 import { ClaudeSettings, ProviderDriverKind, ProviderInstanceId } from "@goat/contracts";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
-import { mergeProviderInstanceEnvironment } from "@goat/provider-core/server/instanceEnvironment";
 import { expandHomePath } from "@goat/provider-core/server/pathExpansion";
 import {
   ClaudeCloudError,
@@ -16,7 +15,11 @@ import {
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 
-import { makeClaudeEnvironment, resolveClaudeHomePath } from "./ClaudeHome.ts";
+import {
+  makeClaudeEnvironment,
+  mergeClaudeProcessEnvironment,
+  resolveClaudeHomePath,
+} from "./ClaudeHome.ts";
 import {
   isWindowsClaudeLauncherShimPath,
   resolveClaudeSdkExecutablePath,
@@ -93,7 +96,11 @@ export const resolveClaudeCloudSibling = Effect.fn("resolveClaudeCloudSibling")(
       reason: "sibling_invalid",
     });
   const sibling = yield* decodeSiblingSettings(entry?.config ?? {});
-  const merged = yield* mergeProviderInstanceEnvironment(entry?.environment, processEnvironment);
+  const merged = yield* mergeClaudeProcessEnvironment(
+    sibling,
+    entry?.environment,
+    processEnvironment,
+  );
   const environment = prepareClaudeCloudEnvironment(yield* makeClaudeEnvironment(sibling, merged));
   const binary = yield* resolveClaudeSdkExecutablePath(
     expandHomePath(sibling.binaryPath, homeDirectory),

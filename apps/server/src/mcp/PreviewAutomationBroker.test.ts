@@ -334,6 +334,53 @@ it.effect.each([
   ),
 );
 
+it.effect("names the click target that matched nothing when the server browser times out", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const broker = yield* makeBroker;
+      const clientId = SERVER_BROWSER_AUTOMATION_CLIENT_ID;
+      const connected = yield* Deferred.make<void>();
+      const events = yield* broker.connect(makeHost({ clientId }));
+      const requests = requestsFrom(
+        events.pipe(
+          Stream.tap((event) =>
+            event.type === "connected"
+              ? Deferred.succeed(connected, undefined).pipe(Effect.asVoid)
+              : Effect.void,
+          ),
+        ),
+      );
+      yield* Stream.runForEach(requests, (request) =>
+        broker.respond({
+          clientId,
+          connectionId: request.connectionId,
+          requestId: request.requestId,
+          ok: false,
+          error: {
+            _tag: "PreviewAutomationTimeoutError",
+            message: "No element matches the target.",
+            detail: { reason: 'No element matches ".definitely-no-such-goat-target".' },
+          },
+        }),
+      ).pipe(Effect.forkScoped);
+      yield* Deferred.await(connected);
+
+      const error = yield* broker
+        .invoke<void>({
+          scope,
+          operation: "click",
+          input: { selector: ".definitely-no-such-goat-target", timeoutMs: 15_000 },
+        })
+        .pipe(Effect.flip);
+
+      expect(error._tag).toBe("PreviewAutomationTimeoutError");
+      expect(error.message).toBe(
+        'Preview automation click timed out after 15000ms. No element matches ".definitely-no-such-goat-target".',
+      );
+    }),
+  ),
+);
+
 it.effect("distinguishes malformed remote failures", () =>
   Effect.scoped(
     Effect.gen(function* () {

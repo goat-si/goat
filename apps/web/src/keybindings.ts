@@ -16,16 +16,21 @@ import {
   matchesKeybindingShortcutModifiers,
   normalizeEventKey,
   resolveEventKeys,
-  type ShortcutEventLike,
+  type ShortcutEventLike as SharedShortcutEventLike,
   type ShortcutModifierStateLike,
 } from "@goat/shared/keybindings";
 import { isElectron } from "./env";
 import { isFileTreeFocused, isFileViewFocused } from "./lib/fileViewFocus";
 import { isNotesPageOpen } from "./notes/notesPageVisibility";
+import { isEditableFocused } from "./lib/editableFocus";
 import { projectScriptIdFromCommand } from "./projectScripts";
 
-export type { ShortcutEventLike, ShortcutModifierStateLike } from "@goat/shared/keybindings";
+export type { ShortcutModifierStateLike } from "@goat/shared/keybindings";
 export { shortcutKeyFromEvent } from "@goat/shared/keybindings";
+
+export interface ShortcutEventLike extends SharedShortcutEventLike {
+  target?: EventTarget | null;
+}
 
 export interface ShortcutMatchContext {
   terminalFocus: boolean;
@@ -185,6 +190,9 @@ export function resolveShortcutCommand(
 ): KeybindingCommand | null {
   const platform = resolvePlatform(options);
   const context = resolveContext(options);
+  if (options?.context?.editableFocus === undefined && typeof document !== "undefined") {
+    context.editableFocus = isEditableFocused(event.target ?? document.activeElement);
+  }
 
   for (let index = keybindings.length - 1; index >= 0; index -= 1) {
     const binding = keybindings[index];

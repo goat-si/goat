@@ -81,6 +81,7 @@ export function useComposerMenuItems({
   showSkillsInSlashMenu,
   interactionMode,
   capabilityTargetDrivers,
+  workspaceSkillsScanning,
 }: {
   readonly composerTrigger: ComposerTrigger | null;
   readonly environmentId: EnvironmentId;
@@ -99,6 +100,7 @@ export function useComposerMenuItems({
   readonly interactionMode: ProviderInteractionMode;
   /** The drivers of every provider this send goes to, so @computer judges the real targets. */
   readonly capabilityTargetDrivers: ReadonlyArray<string>;
+  readonly workspaceSkillsScanning: boolean;
 }) {
   // Thread mentions rank by recency as of when the composer mounted.
   const [now] = useState(() => Date.now());
@@ -403,6 +405,8 @@ export function useComposerMenuItems({
   })();
   const isLoading =
     (composerTriggerKind === "path" && pathTriggerQuery.length > 0 && workspaceEntries.isPending) ||
+    ((composerTriggerKind === "skill" || composerTriggerKind === "slash-command") &&
+      workspaceSkillsScanning) ||
     (composerTriggerKind === "pull-request" &&
       pullRequestProjectId !== null &&
       pullRequestRepository !== null &&

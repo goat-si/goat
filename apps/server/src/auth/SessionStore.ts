@@ -1009,7 +1009,7 @@ export const make = Effect.gen(function* () {
       ...(row.value.connectAccessGeneration != null
         ? { connectAccessGeneration: row.value.connectAccessGeneration }
         : {}),
-      scopes: claims.scopes,
+      scopes: row.value.scopes,
       ...(claims.jkt ? { proofKeyThumbprint: claims.jkt } : {}),
       ...(claims.rtc ? { runtimeModeCeiling: claims.rtc } : {}),
       ...(claims.csp === undefined ? {} : { childSetupPurpose: claims.csp }),

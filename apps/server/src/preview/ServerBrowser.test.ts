@@ -65,7 +65,7 @@ vi.mock("./ServerBrowserContexts.ts", () => ({
       return makeEncoderPage() as unknown as Page;
     }
     async connectDesktopPage(endpoint: string) {
-      const context = makeContext();
+      const context = makeContext(undefined, desktopPageUrl);
       context.page.viewportSize.mockReturnValue(null);
       desktopConnections.push({ endpoint, context });
       return { browser: { close: async () => {} }, page: context.page as unknown as Page };
@@ -88,12 +88,12 @@ function fileChooserElement(accept: string) {
   };
 }
 
-function makeContext(onClose?: (context: BrowserContext) => void) {
+function makeContext(onClose?: (context: BrowserContext) => void, initialUrl = "about:blank") {
   const events = new NodeEvents.EventEmitter();
   const nativeFileChooser = vi.fn();
   const setChooserFiles = vi.fn(async (_files: unknown) => {});
   const sessions: ReturnType<typeof makeSession>[] = [];
-  let url = "about:blank";
+  let url = initialUrl;
   let viewport: ReturnType<Page["viewportSize"]> = { width: 1280, height: 800 };
   const cssViewport = { width: 1920, height: 1080 };
   let closed = false;
@@ -238,6 +238,7 @@ let contextGate: PromiseWithResolvers<void> | null = null;
 let contextFailure: Error | null = null;
 let initialNavigation: (() => Promise<void>) | null = null;
 let desktopRendersNext = false;
+let desktopPageUrl = "about:blank";
 /** Replaces the answer to the desktop page's size reads. */
 let desktopSizeAnswer: (() => Promise<Record<string, unknown>>) | null = null;
 const desktopDetaches = new NodeEvents.EventEmitter();
@@ -386,6 +387,7 @@ beforeEach(() => {
   mockCopy.focusedFrame = null;
   desktopTabs.clear();
   desktopRendersNext = false;
+  desktopPageUrl = "about:blank";
   desktopSizeAnswer = null;
   desktopDetachReady = Promise.withResolvers<void>();
   desktopReleased = Promise.withResolvers<void>();
@@ -641,6 +643,33 @@ it.live.each(["desktop" as const, undefined])(
         expect(reused.tabId).toBe(tabId);
       }),
     ).pipe(Effect.provide(layer)),
+);
+
+it.effect("a desktop page that loaded before the server attached reports its loaded title", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { broker } = yield* ready;
+      const manager = yield* Manager.PreviewManager;
+      const events = yield* manager.subscribeEvents;
+      desktopRendersNext = true;
+      desktopPageUrl = "https://example.com/loaded";
+      const opened = yield* broker.invoke<PreviewAutomationStatus>({
+        scope,
+        operation: "open",
+        input: { url: desktopPageUrl, reuseExistingTab: false, show: false, session: "profile" },
+      });
+      let event = yield* PubSub.take(events);
+      while (event.type !== "navigated" || event.tabId !== opened.tabId) {
+        event = yield* PubSub.take(events);
+      }
+
+      expect(event.snapshot.navStatus).toEqual({
+        _tag: "Success",
+        url: "https://example.com/loaded",
+        title: "test page",
+      });
+    }),
+  ).pipe(Effect.provide(layer)),
 );
 
 it.live.each([
@@ -1392,6 +1421,43 @@ it.live("a tab opened to a file the browser cannot show reports the file to down
   ).pipe(Effect.provide(layer)),
 );
 
+it.effect("redacts data page payloads from current and sibling tab status", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { broker, tabId } = yield* ready;
+      const sibling = yield* broker.invoke<PreviewAutomationStatus>({
+        scope: asSession("agent-b"),
+        operation: "open",
+        input: { reuseExistingTab: false, show: false },
+      });
+      yield* Effect.promise(() => contexts[1]!.page.goto("data:text/html,SIBLING-SECRET"));
+      const manager = yield* Manager.PreviewManager;
+      const events = yield* manager.subscribeEvents;
+      yield* Effect.promise(() => contexts[0]!.page.goto("data:text/html,SECRET-KEY"));
+      let event = yield* PubSub.take(events);
+      while (
+        event.type !== "navigated" ||
+        event.tabId !== tabId ||
+        event.snapshot.navStatus._tag !== "Success"
+      ) {
+        event = yield* PubSub.take(events);
+      }
+      expect(event.snapshot.navStatus).toMatchObject({ url: "data:text/html,…" });
+      const status = yield* broker.invoke<PreviewAutomationStatus>({
+        scope,
+        tabId,
+        operation: "status",
+        input: {},
+      });
+      expect(status.url).toBe("data:text/html,…");
+      expect(status.tabs?.find((entry) => entry.tabId === sibling.tabId)?.url).toBe(
+        "data:text/html,…",
+      );
+      expect(JSON.stringify(status)).not.toContain("SECRET");
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
 it.live(
   "a late failure from a request that predates tracking leaves a newer navigation loading",
   () =>
@@ -1421,6 +1487,50 @@ it.live(
     ).pipe(Effect.provide(layer)),
 );
 
+it.effect("a navigation that fails while a load reads its title keeps its failure", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const { tabId } = yield* ready;
+      const manager = yield* Manager.PreviewManager;
+      const events = yield* manager.subscribeEvents;
+      const page = contexts[0]!.page;
+      const heldTitle = Promise.withResolvers<string>();
+      page.title.mockImplementationOnce(() => heldTitle.promise);
+      yield* Effect.promise(() => page.goto("https://example.com/first"));
+      const failing = {
+        redirectedFrom: () => null,
+        url: () => "https://example.com/missing",
+        method: () => "GET",
+        isNavigationRequest: () => true,
+        frame: () => page,
+        failure: () => ({ errorText: "net::ERR_NAME_NOT_RESOLVED" }),
+      };
+      page.emit("request", failing);
+      page.emit("requestfailed", failing);
+      heldTitle.resolve("Held");
+      // A load at the same await depth reports after the held one, so its Success marks the end.
+      page.emit("load");
+
+      const statuses: Array<string> = [];
+      while (!statuses.at(-1)?.startsWith("Success")) {
+        const event = yield* PubSub.take(events);
+        if (event.type === "failed" && event.tabId === tabId) {
+          statuses.push(`LoadFailed ${event.url}`);
+        } else if (event.type === "navigated" && event.tabId === tabId) {
+          const status = event.snapshot.navStatus;
+          if (status._tag === "Success") statuses.push(`Success ${status.title}`);
+          else if (status._tag === "Loading") statuses.push(`Loading ${status.url}`);
+        }
+      }
+      expect(statuses).toEqual([
+        "Loading https://example.com/missing",
+        "LoadFailed https://example.com/missing",
+        "Success test page",
+      ]);
+    }),
+  ).pipe(Effect.provide(layer)),
+);
+
 it.effect.each([
   {
     name: "hover burst before a click",
@@ -1440,6 +1550,26 @@ it.effect.each([
       { type: "mouseMoved", x: 119 },
       { type: "mousePressed", x: 119 },
       { type: "mouseReleased", x: 119 },
+    ],
+  },
+  {
+    name: "wheel burst before a click",
+    inputs: [
+      ...Array.from({ length: 120 }, () => ({
+        type: "wheel",
+        x: 100,
+        y: 200,
+        deltaX: 0,
+        deltaY: 12,
+      })),
+      { type: "mouse", action: "down", x: 100, buttons: 1, button: "left" },
+      { type: "mouse", action: "up", x: 100, buttons: 0, button: "left" },
+    ],
+    expected: [
+      { type: "mouseMoved", x: -1 },
+      { type: "mouseWheel", x: 100, y: 200, deltaX: 0, deltaY: 1440 },
+      { type: "mousePressed", x: 100 },
+      { type: "mouseReleased", x: 100 },
     ],
   },
   {
@@ -1476,11 +1606,28 @@ it.effect.each([
     expected: [
       { type: "mouseMoved", x: -1 },
       { type: "mouseMoved", x: 1 },
-      { type: "mouseWheel", deltaY: 20 },
-      { type: "mouseWheel", deltaY: 30 },
+      { type: "mouseWheel", deltaY: 50 },
       { type: "mouseMoved", x: 2 },
       { type: "keyDown", key: "a" },
       { type: "mouseMoved", x: 3 },
+    ],
+  },
+  {
+    name: "wheel position, modifier and direction boundaries",
+    inputs: [
+      { type: "wheel", x: 1, deltaX: 5, deltaY: 10 },
+      { type: "wheel", x: 1, deltaX: 5, deltaY: 10 },
+      { type: "wheel", x: 2, deltaY: 10 },
+      { type: "wheel", x: 2, deltaY: 10, modifiers: 2 },
+      { type: "wheel", x: 2, deltaY: -10, modifiers: 2 },
+      { type: "wheel", x: 2, deltaY: -10, modifiers: 2 },
+    ],
+    expected: [
+      { type: "mouseMoved", x: -1 },
+      { type: "mouseWheel", x: 1, deltaX: 10, deltaY: 20, modifiers: 0 },
+      { type: "mouseWheel", x: 2, deltaX: 0, deltaY: 10, modifiers: 0 },
+      { type: "mouseWheel", x: 2, deltaY: 10, modifiers: 2 },
+      { type: "mouseWheel", x: 2, deltaY: -20, modifiers: 2 },
     ],
   },
   {

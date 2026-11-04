@@ -13,6 +13,7 @@ import { ScheduledTaskWebhookDeliveryId } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -801,6 +802,40 @@ it.effect.each([1, 3])(
   },
 );
 
+it.effect("a coalesced window dispatches the prompt saved after it opened", () => {
+  const workers = new Map<string, Effect.Effect<void>>();
+  return withService(
+    ({ service, launches }) =>
+      Effect.gen(function* () {
+        const schedule = {
+          type: "webhook",
+          dedupe: { coalesceKey: "{{body.id}}", coalesceWindowSeconds: 10 },
+        };
+        const { task } = yield* service.upsert(
+          yield* webhookTaskInput({ prompt: "Use the original instructions.", schedule }),
+        );
+        const bodyText = JSON.stringify({ id: "review" });
+        yield* service.triggerWebhook(
+          requestFor(task, { bodyText, body: new TextEncoder().encode(bodyText) }),
+        );
+        yield* service.upsert(
+          yield* webhookTaskInput({ prompt: "Use the updated instructions.", schedule }),
+        );
+        yield* TestClock.adjust("10 seconds");
+        yield* workers.get("webhook-coalescing")!;
+        const launched = yield* Queue.take(launches);
+        assert.equal(launched.initialMessage?.text, "Use the updated instructions.");
+        const owner = (yield* service.listWebhookDeliveries({ id: task.id })).deliveries[0]!;
+        const { delivery } = yield* service.getWebhookDelivery({
+          id: task.id,
+          deliveryId: owner.id,
+        });
+        assert.equal(delivery.renderedPrompt, "Use the updated instructions.");
+      }),
+    { workers },
+  );
+});
+
 it.effect("recovers a persisted coalescing window after restarting the service", () => {
   const workers = new Map<string, Effect.Effect<void>>();
   return withService(
@@ -833,6 +868,57 @@ it.effect("recovers a persisted coalescing window after restarting the service",
         );
       }),
     { workers },
+  );
+});
+
+it.effect("a pending dispatch interrupted at its permit does not block later polls", () => {
+  const workers = new Map<string, Effect.Effect<void>>();
+  // One shared dispatcher lets the test run the retry's forked worker to completion.
+  const mixed = new EffectScheduler.MixedScheduler("sync");
+  const dispatcher = mixed.makeDispatcher();
+  return withService(
+    ({ service, sql, launches }) =>
+      Effect.gen(function* () {
+        const { task } = yield* service.upsert(
+          yield* webhookTaskInput({
+            schedule: {
+              type: "webhook",
+              dedupe: { coalesceKey: "{{headers.content-type}}", coalesceWindowSeconds: 10 },
+            },
+          }),
+        );
+        yield* service.triggerWebhook(requestFor(task));
+        yield* TestClock.adjust("10 seconds");
+        const poll = workers.get("webhook-coalescing")!;
+
+        const entered = yield* Deferred.make<Fiber.Fiber<unknown, unknown>>();
+        const interruptAtPermit = Tracer.make({
+          span: (options) => {
+            if (options.name === "ScheduledTaskService.webhookPermit") {
+              const fiber = Fiber.getCurrent()!;
+              Deferred.doneUnsafe(entered, Effect.succeed(fiber));
+              fiber.interruptUnsafe();
+            }
+            return new Tracer.NativeSpan(options);
+          },
+        });
+        const firstPoll = yield* poll.pipe(Effect.withTracer(interruptAtPermit), Effect.forkChild);
+        assert.isTrue(Exit.hasInterrupts(yield* Fiber.await(yield* Deferred.await(entered))));
+        yield* Fiber.await(firstPoll);
+
+        yield* poll;
+        dispatcher.flush();
+
+        assert.equal(yield* Queue.size(launches), 1);
+        assert.lengthOf(yield* sql`SELECT 1 FROM scheduled_task_webhook_pending`, 0);
+      }),
+    { workers },
+  ).pipe(
+    Effect.provideService(EffectScheduler.Scheduler, {
+      executionMode: mixed.executionMode,
+      makeDispatcher: () => dispatcher,
+      shouldYield: (fiber) => mixed.shouldYield(fiber),
+    }),
   );
 });
 
@@ -948,10 +1034,33 @@ it.effect(
             }),
           );
           const accepted = yield* service.triggerWebhook(requestFor(task));
+          yield* service.upsert(
+            yield* webhookTaskInput({
+              prompt: "Prompt at dispatch",
+              schedule: {
+                type: "webhook",
+                dedupe: { coalesceKey: "{{body}}", coalesceWindowSeconds: 10 },
+              },
+            }),
+          );
           yield* sql`CREATE TRIGGER fail_pending_delete BEFORE DELETE ON scheduled_task_webhook_pending BEGIN SELECT RAISE(FAIL,'crash after launch'); END`;
           yield* TestClock.adjust("10 seconds");
           yield* drainPendingDispatch(workers);
           const launch = yield* Queue.take(launches);
+          assert.equal(launch.initialMessage?.text, "Prompt at dispatch");
+          const [pending] = yield* sql<{
+            task_json: string;
+          }>`SELECT task_json FROM scheduled_task_webhook_pending`;
+          assert.equal(JSON.parse(pending!.task_json).prompt, "Prompt at dispatch");
+          yield* service.upsert(
+            yield* webhookTaskInput({
+              prompt: "Prompt after dispatch",
+              schedule: {
+                type: "webhook",
+                dedupe: { coalesceKey: "{{body}}", coalesceWindowSeconds: 10 },
+              },
+            }),
+          );
           assert.equal(
             launch.commandId,
             `scheduled-task:${task.id}:webhook:${accepted._tag === "accepted" && accepted.deliveryId}`,

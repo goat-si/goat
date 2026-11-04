@@ -8,6 +8,7 @@
 import { adoptLegacyEnv } from "@goat/contracts/legacyT3Names";
 
 import { isEntrypoint } from "./entrypoint.ts";
+import { enableCliCompileCache } from "./cliCompileCache.ts";
 
 // Effect CLI built-ins describe the whole command tree, so they need the full CLI.
 const FULL_CLI_BUILTINS = new Set(["--completions", "--wizard", "--no-wizard", "--help", "-h"]);
@@ -75,11 +76,16 @@ if (
       const { runAgentSurfaceCliMain } = await import("./cli/agentSurfaceCli.ts");
       process.exitCode = await runAgentSurfaceCliMain(invocation);
     } else {
+      enableCliCompileCache();
       // Before anything reads stdin: the desktop app's Windows launcher starts
       // the CLI without one. Never for the fast paths, whose stdin is a pipe.
       const { attachConsoleStdin } = await import("./cli/consoleStdin.ts");
       attachConsoleStdin();
+      const importStart = performance.now();
       const { runCli } = await import("./binCli.ts");
+      if (process.env.GOAT_STARTUP_PROFILE_DIR) {
+        performance.measure("server.import.binCli", { start: importStart });
+      }
       runCli();
     }
   }

@@ -45,6 +45,7 @@ describe("acpProviderOptionDescriptors", () => {
         id: "reasoning_effort",
         label: "Reasoning effort",
         type: "select",
+        role: "reasoning",
         options: [
           { id: "low", label: "Low" },
           { id: "medium", label: "Medium", description: "Balanced" },

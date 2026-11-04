@@ -32,8 +32,31 @@ export function structuredFileChanges(toolCall: AcpToolCallState) {
 // Bound diff search to protect the event loop; empty-sided diffs need no search.
 const ACP_V1_DIFF_MAX_EDITS = 1_000;
 
-export function acpToolCallDiffPatch(content: unknown): string | undefined {
+export function acpToolCallSnippetEdit(content: unknown) {
   if (!Array.isArray(content)) return undefined;
+  const diffs = content.flatMap((entry) => {
+    const diff = unknownRecord(entry);
+    return diff?.type === "diff" ? [diff] : [];
+  });
+  const diff = diffs.length === 1 ? diffs[0] : undefined;
+  if (diff === undefined || unknownRecord(diff.patch)?.format !== "snippet") return undefined;
+  return typeof diff.oldText === "string" && typeof diff.newText === "string"
+    ? { oldStr: diff.oldText, newStr: diff.newText }
+    : undefined;
+}
+
+export function acpToolCallDiffUnpreviewable(content: unknown): boolean {
+  return (
+    Array.isArray(content) &&
+    content.some((entry) => {
+      const format = unknownRecord(unknownRecord(entry)?.patch)?.format;
+      return format === "omitted" || format === "snippet";
+    })
+  );
+}
+
+export function acpToolCallDiffPatch(content: unknown): string | undefined {
+  if (!Array.isArray(content) || acpToolCallDiffUnpreviewable(content)) return undefined;
   const diffs = content.flatMap((entry) => {
     const diff = unknownRecord(entry);
     return diff?.type === "diff" ? [diff] : [];

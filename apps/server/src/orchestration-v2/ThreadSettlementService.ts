@@ -19,6 +19,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 import * as Schedule from "effect/Schedule";
 import * as Semaphore from "effect/Semaphore";
 import type * as Scope from "effect/Scope";
@@ -304,6 +305,7 @@ export const make = Effect.gen(function* () {
   const pullRequests = yield* PullRequestService.PullRequestService;
   const crypto = yield* Crypto.Crypto;
   const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
   const shellClosedThreads = new Set<ThreadId>();
   const terminals = yield* TerminalManager.TerminalManager;
   const projectScripts = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
@@ -349,6 +351,7 @@ export const make = Effect.gen(function* () {
     // sweep on a possibly stale cached answer.
     const settingsKey = autoSettlementSettingsKey(settings);
     const keys = new Map<ThreadId, string>();
+    const dueThreads = new Set<ThreadId>();
     const candidates = threads.filter((thread) => {
       if (!isAutoSettlementCandidate(thread, nowMs)) {
         evaluated.delete(thread.id);
@@ -365,6 +368,7 @@ export const make = Effect.gen(function* () {
         autoSettleOnMerge: projectSettings.sidebarAutoSettleOnMerge,
         autoSettleKeepPullRequests: projectSettings.sidebarAutoSettleKeepPullRequests,
       });
+      if (due !== null) dueThreads.add(thread.id);
       const key = JSON.stringify([
         thread,
         projects.get(thread.projectId)?.workspaceRoot,
@@ -442,12 +446,18 @@ export const make = Effect.gen(function* () {
 
     const lookupCandidates = (yield* Effect.forEach(
       candidates,
-      (thread) => settleThread(thread, null),
+      (thread) => (dueThreads.has(thread.id) ? settleThread(thread, null) : Effect.succeed(thread)),
       { concurrency: 8 },
     ))
       .filter((thread) => thread !== null)
       .filter((thread) => {
-        if (visibleThreadPullRequests(thread.pullRequests ?? []).length === 0) return true;
+        if (
+          visibleThreadPullRequests(thread.pullRequests ?? []).length === 0 &&
+          (thread.branch !== null ||
+            thread.linkedPullRequest != null ||
+            thread.branchPullRequest != null)
+        )
+          return true;
         rememberEvaluation(thread);
         return false;
       });
@@ -460,7 +470,9 @@ export const make = Effect.gen(function* () {
           if (project === undefined || thread.branch === null) return;
           const worktreeExists =
             thread.worktreePath !== null &&
-            (yield* fileSystem.exists(thread.worktreePath).pipe(Effect.orElseSucceed(() => false)));
+            (yield* fileSystem
+              .exists(path.join(thread.worktreePath, ".git"))
+              .pipe(Effect.orElseSucceed(() => true)));
           lookupCwdByThreadId.set(
             thread.id,
             worktreeExists && thread.worktreePath !== null

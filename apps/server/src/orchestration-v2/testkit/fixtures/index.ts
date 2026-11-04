@@ -75,6 +75,7 @@ import { assertMultiTurnClaudeOutput } from "./multi_turn/claude_output.ts";
 import { assertMultiTurnOutput } from "./multi_turn/codex_output.ts";
 import { assertPiMultiTurnOutput } from "./multi_turn/pi_output.ts";
 import { multiTurnInput } from "./multi_turn/input.ts";
+import { assertCodexModelRerouteOutput } from "./codex_model_reroute/output.ts";
 import { openCodeChildApprovalInput } from "./opencode_child_approval/input.ts";
 import { assertOpenCodeChildApprovalOutput } from "./opencode_child_approval/output.ts";
 import { openCodeRunningChildApprovalInput } from "./opencode_running_child_approval/input.ts";
@@ -1218,6 +1219,18 @@ export const ORCHESTRATOR_REPLAY_FIXTURES: ReadonlyArray<OrchestratorReplayFixtu
         ),
         modelSelection: OPENCODE_MODEL_SELECTION,
         assertOutput: assertOpenCodeRunningChildApprovalOutput,
+      },
+    ],
+  },
+  {
+    name: "codex_model_reroute",
+    buildInput: multiTurnInput,
+    providers: [
+      {
+        driver: ProviderDriverKind.make("codex"),
+        transcriptFile: new URL("./codex_model_reroute/codex_transcript.ndjson", import.meta.url),
+        modelSelection: CODEX_MODEL_SELECTION,
+        assertOutput: assertCodexModelRerouteOutput,
       },
     ],
   },

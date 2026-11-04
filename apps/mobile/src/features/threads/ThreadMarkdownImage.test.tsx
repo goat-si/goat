@@ -9,6 +9,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
   url: "https://host/api/assets/expired/image.png",
+  load: (_event: { source: { width: number; height: number } }) => {},
   refresh: vi.fn<() => Promise<string | null>>(),
 }));
 vi.mock("../../state/assets", () => ({
@@ -16,14 +17,17 @@ vi.mock("../../state/assets", () => ({
   useRefreshAssetUrl: () => state.refresh,
 }));
 vi.mock("expo-image", () => ({
-  Image: (props: { source: { uri: string }; onError: () => void }) => (
-    <img src={props.source.uri} onError={props.onError} />
-  ),
+  Image: (props: { source: { uri: string }; onError: () => void; onLoad: typeof state.load }) => {
+    state.load = props.onLoad;
+    return <img src={props.source.uri} onError={props.onError} />;
+  },
 }));
 vi.mock("expo/fetch", () => ({ fetch: vi.fn() }));
 vi.mock("react-native-svg", () => ({ parse: vi.fn(), SvgAst: () => null }));
 vi.mock("react-native", () => ({
-  View: ({ children }: { children: ReactNode }) => <div>{children}</div>,
+  View: ({ children, style }: { children: ReactNode; style?: unknown }) => (
+    <div data-style={JSON.stringify(style)}>{children}</div>
+  ),
   Pressable: (props: {
     children: ReactNode;
     onPress?: () => void;
@@ -51,7 +55,11 @@ vi.mock("../../components/ui/NativePresentation", () => ({
 }));
 vi.mock("../../state/mediaActions", () => ({ useMediaActions: () => ({ actions: [] }) }));
 
-import { ThreadMarkdownImage, ThreadMarkdownImageView } from "./ThreadMarkdownImage";
+import {
+  MarkdownImageAvailableWidthContext,
+  ThreadMarkdownImage,
+  ThreadMarkdownImageView,
+} from "./ThreadMarkdownImage";
 
 let container: HTMLDivElement;
 let root: Root;
@@ -75,6 +83,33 @@ beforeEach(() => {
   act(renderImage);
 });
 afterEach(() => act(() => root.unmount()));
+
+it("keeps the first decoded image dimensions until the resource revision changes", () => {
+  const view = (sourceKey: string) => (
+    <MarkdownImageAvailableWidthContext value={345}>
+      <ThreadMarkdownImageView
+        uri="https://example.test/image.png"
+        sourceKey={sourceKey}
+        unavailable={false}
+        alt={null}
+        onPressPreview={() => {}}
+      />
+    </MarkdownImageAvailableWidthContext>
+  );
+  const frame = () =>
+    [...container.querySelectorAll<HTMLElement>("div[data-style]")]
+      .map((el) => JSON.parse(el.dataset.style ?? "null") as { width?: number } | null)
+      .find((style) => typeof style?.width === "number");
+  act(() => root.render(view("image@1")));
+  act(() => state.load({ source: { width: 970, height: 567 } }));
+  const first = frame();
+  expect(first).toBeDefined();
+  act(() => state.load({ source: { width: 969, height: 567 } }));
+  expect(frame()).toEqual(first);
+  act(() => root.render(view("image@2")));
+  act(() => state.load({ source: { width: 500, height: 500 } }));
+  expect(frame()).not.toEqual(first);
+});
 
 it("re-signs a failed chat image before remounting it, including an unchanged URL", async () => {
   const first = container.querySelector("img")!;

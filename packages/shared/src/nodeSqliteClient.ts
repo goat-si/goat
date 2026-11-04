@@ -505,6 +505,7 @@ const startCheckpointWorker = Effect.fn("SqliteCheckpoint.start")(function* (
       "open",
     );
   }
+  writer.exec("PRAGMA busy_timeout = 5000;");
   const version = String(writer.prepare("SELECT sqlite_version() AS version").get()?.version);
   const [major = 0, minor = 0] = version.split(".").map(Number);
   // Older SQLite treats NOOP as PASSIVE, which would checkpoint on the writer.

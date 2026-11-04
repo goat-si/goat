@@ -10,7 +10,11 @@ import * as Cause from "effect/Cause";
 import { AsyncResult, Atom, AtomRegistry } from "effect/reactivity";
 
 import type { AtomCommand } from "./runtime.ts";
-import { runAttachmentUploadCycle, verifyPersistedAttachmentUpload } from "./attachments.ts";
+import {
+  formatAttachmentSize,
+  runAttachmentUploadCycle,
+  verifyPersistedAttachmentUpload,
+} from "./attachments.ts";
 
 const environmentId = EnvironmentId.make("environment-1");
 const registry = {} as AtomRegistry.AtomRegistry;
@@ -203,5 +207,16 @@ describe("verifyPersistedAttachmentUpload", () => {
     const second = await verify();
     expect(second).toEqual({ status: "verified" });
     expect(lookups).toBe(2);
+  });
+});
+
+describe("formatAttachmentSize", () => {
+  it.each([
+    [1_047_552, "1023 KB"],
+    [1_047_553, "1.0 MB"],
+    [1_048_575, "1.0 MB"],
+    [1_048_576, "1.0 MB"],
+  ])("formats %d bytes as %s", (sizeBytes, label) => {
+    expect(formatAttachmentSize(sizeBytes)).toBe(label);
   });
 });

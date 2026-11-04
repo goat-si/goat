@@ -141,9 +141,11 @@ const cursorSdkMock = vi.hoisted(() => ({
 }));
 
 vi.mock("./sdk.ts", () => ({
-  Agent: { create: cursorSdkMock.create, resume: cursorSdkMock.resume },
-  createAgentPlatform: vi.fn(),
-  SqliteLocalAgentStore: { open: cursorSdkMock.storeOpen },
+  loadCursorSdk: () => ({
+    Agent: { create: cursorSdkMock.create, resume: cursorSdkMock.resume },
+    createAgentPlatform: vi.fn(),
+  }),
+  loadCursorSqlite: () => ({ SqliteLocalAgentStore: { open: cursorSdkMock.storeOpen } }),
 }));
 
 let hasCustomPolicy = false;

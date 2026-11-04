@@ -259,6 +259,7 @@ describe("ACP Registry probe", () => {
       {
         id: "reasoning",
         label: "Reasoning",
+        role: "reasoning",
         type: "select",
         currentValue: "high",
         options: [

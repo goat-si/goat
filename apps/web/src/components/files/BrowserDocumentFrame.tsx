@@ -105,6 +105,7 @@ export function BrowserDocumentFrame(props: {
       <PdfFilePreview
         key={props.documentId ?? key}
         revision={key}
+        documentId={props.documentId}
         viewState={props.pdfViewState}
         src={props.src}
         title={props.title}

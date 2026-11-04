@@ -37,7 +37,8 @@ Attach up to 100 files per message. Each image can be up to 10 MiB, with at most
 50 MiB each, subject to the environment's upload support and limit. The agent
 receives them on the environment's machine. Provider and model limits still
 apply, including images already in the conversation. A video attachment gives
-the agent a file path; it does not enable native video input.
+the agent a file path; only [Antigravity](./providers-antigravity.md#skills-and-attachments)
+sends supported videos to Gemini models as video.
 
 Uploads begin when you add an attachment. All uploads must finish before the
 message can send. Retry or remove a failed upload. On web and desktop, reloading
@@ -46,7 +47,8 @@ before an upload finishes requires you to attach that file again.
 You can drag or paste images into the web or desktop composer. HEIC and HEIF
 photos are converted to JPEG there and when selected from the mobile photo
 library; photos over the image limit are also resized to fit. On mobile, you can
-also send files to GOAT through another app's system share sheet.
+also send files to GOAT through another app's system share sheet. On Android, you
+can also drag images from another app into the message input in split screen.
 
 See [images and videos](#images-and-videos-in-messages) for previewing and saving media.
 
@@ -206,6 +208,10 @@ On supported iPhones with iOS 26 or later, use the composer's microphone to reco
 then confirm to transcribe. Text is inserted where your selection was when
 recording started, ready for you to review and edit before sending.
 
+Voice input depends on Apple's on-device speech transcription. On a device without
+it, the composer has no microphone button and **Settings → Microphone** says voice
+input isn't available.
+
 The first use may download Apple's speech model and needs a network connection.
 Later transcription works offline for that language. Recordings can be up to five
 minutes long. Canceling, leaving the screen, or an audio interruption discards the
@@ -265,9 +271,10 @@ the text. Drag a row by its handle to reorder it, use the handle's arrow keys, p
 to a steer, or remove it.
 
 If you stop the agent or the server restarts, queued messages keep their order and are held.
-Press **Resume** in an empty composer on web and desktop, or **Resume queue** on mobile, to
-continue. Sending a new message also resumes the queue, unless it steers a turn that is already
-running. You can edit, reorder, or remove held messages without starting them.
+Press **Resume** in an empty composer to continue. Resume also continues a stopped run or one
+that hit a usage limit, even with nothing queued. Sending a new message also resumes the queue,
+unless it steers a turn that is already running. You can edit, reorder, or remove held messages
+without starting them.
 
 The pencil on a queued row opens that message in the composer for editing. The original message
 stays in the queue until you save, and its row is highlighted while you edit. The message's
@@ -304,7 +311,10 @@ tasks they delegate. Turn it off for every project, or for one project, in **Set
 Integrations → Agent tools**; on mobile, under **Agent behavior**.
 
 Send `/compact` in an existing conversation to reduce context usage when the
-provider supports it. Web and desktop also offer compaction from the context meter.
+provider supports it. On web and desktop, the context meter is enabled by default and appears
+when the provider reports usage. To enable it if hidden, open **Settings → General → Legacy features →
+Context window indicator (legacy)**. Open the meter for usage details and **Compact context**
+when the provider supports compaction.
 
 Claude instances can also compact idle threads for you. See
 [compact long conversations](./providers-claude.md#compact-long-conversations).

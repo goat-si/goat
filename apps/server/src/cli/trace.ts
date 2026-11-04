@@ -100,9 +100,9 @@ export function makeTraceSpanSummary(sinceMs = -Infinity) {
 }
 
 const formatMs = (ms: number) =>
-  ms < 1_000 ? `${Math.round(ms)}ms` : `${(ms / 1_000).toFixed(1)}s`;
+  Math.round(ms) < 1_000 ? `${Math.round(ms)}ms` : `${(ms / 1_000).toFixed(1)}s`;
 
-function formatTraceSummary(
+export function formatTraceSummary(
   summary: ReturnType<ReturnType<typeof makeTraceSpanSummary>["finish"]>,
   limit: number,
 ) {

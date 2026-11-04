@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vite-plus/test";
 import { clientRpcRequiredScopes, CLIENT_GUARDED_RPC_SCOPES } from "./clientRpcPermissions.ts";
 import { WS_METHODS } from "./rpc.ts";
+import { ORCHESTRATION_V2_WS_METHODS } from "./orchestrationV2.ts";
+
+it("requires orchestration read for native child work", () => {
+  expect(clientRpcRequiredScopes(ORCHESTRATION_V2_WS_METHODS.getNativeChildWork, {})).toEqual([
+    "orchestration:read",
+  ]);
+});
 
 it("requires environment maintenance authority for storage item deletion", () => {
   expect(clientRpcRequiredScopes(WS_METHODS.serverGetStorageUsage, {})).not.toContain(

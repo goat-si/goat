@@ -12,7 +12,7 @@ import {
   type ProviderInstanceId,
   type ServerProviderModel,
 } from "@goat/contracts";
-import { REASONING_SELECT_DESCRIPTOR_IDS } from "@goat/client-runtime/model-traits";
+import { isReasoningControl } from "@goat/client-runtime/model-traits";
 import { type CustomModelDefinition, normalizeCustomModelSlug } from "@goat/shared/model";
 
 import { useStableCallback } from "../../hooks/useStableCallback";
@@ -39,7 +39,7 @@ const PROVIDER_ALIAS_SLUGS = new Set(["default", "auto"]);
 
 function hasReasoningControl(model: ServerProviderModel): boolean {
   return (model.capabilities?.optionDescriptors ?? []).some((descriptor) =>
-    REASONING_SELECT_DESCRIPTOR_IDS.has(descriptor.id),
+    isReasoningControl(descriptor),
   );
 }
 

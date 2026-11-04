@@ -1,3 +1,4 @@
+import { isAttachmentOnlyBootstrapPrompt } from "@goat/shared/composerContextReferences";
 import type { ChatAttachment } from "@goat/contracts";
 import { assistantCitationsToPlainText } from "@goat/shared/assistantCitations";
 
@@ -22,7 +23,8 @@ export function limitTitleMessage(text: string, budget: number): string {
 }
 
 export function formatThreadTitleContext(messages: ReadonlyArray<ThreadTitleMessage>) {
-  const sections = messages.flatMap((message, index) => {
+  const sections = messages.flatMap((source, index) => {
+    const message = isAttachmentOnlyBootstrapPrompt(source.text) ? { ...source, text: "" } : source;
     // Thinking traces dwarf answers without identifying the thread subject.
     if (
       message.role === "system" ||

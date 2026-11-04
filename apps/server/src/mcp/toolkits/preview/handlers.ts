@@ -352,9 +352,29 @@ const handlers = {
         Effect.gen(function* () {
           yield* McpInvocationContext.requireThreadMcpCapability("preview");
           yield* McpToolAccess.admit(input);
-          return yield* invokeTargeted<PreviewAutomationStatus>(
+          const { target, url, ...openInput } = input;
+          const opened = yield* invokeTargeted<PreviewAutomationStatus>(
             "open",
-            normalizePreviewOpenInput(input),
+            normalizePreviewOpenInput(
+              target === undefined && url !== undefined ? { ...openInput, url } : openInput,
+            ),
+          );
+          if (target === undefined || opened.tabId === null) return opened;
+          return yield* invokeTargeted<PreviewAutomationStatus>("navigate", {
+            target,
+            tabId: opened.tabId,
+          }).pipe(
+            Effect.mapError((error) =>
+              Object.assign(error, {
+                safety: {
+                  possibleCommit: true,
+                  retryClass: "same_key" as const,
+                  writeStatus: "may_have_applied" as const,
+                  code: "write_partial" as const,
+                },
+                next: "The tab opened but navigation failed; inspect it before retrying.",
+              }),
+            ),
           );
         }),
       { admission: "handler" },

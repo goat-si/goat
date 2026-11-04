@@ -81,6 +81,7 @@ export function SettingsScopeNotice({
         ? groups.map((group) => ({
             label: group.displayName,
             secondary: [
+              ...(group.archived ? ["Archived"] : []),
               ...(groups.some(
                 (other) =>
                   other.projectKey !== group.projectKey && other.displayName === group.displayName,
@@ -125,7 +126,16 @@ export function SettingsScopeNotice({
         )}
         onClick={() => {
           if (targetId)
-            void navigate({ to: pathname, search: () => choice.search, hash: targetId });
+            void navigate({
+              to: pathname,
+              search: () => ({
+                project: undefined,
+                machine: undefined,
+                checkout: undefined,
+                ...choice.search,
+              }),
+              hash: targetId,
+            });
           else selectScope(choice.search);
         }}
       >

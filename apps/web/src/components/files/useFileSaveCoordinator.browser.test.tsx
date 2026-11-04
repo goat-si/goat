@@ -1,6 +1,6 @@
 import { act, render as renderScreen, fakeTimers } from "../../../test/render";
 import { LEGACY_PROJECT_FILE_NAME } from "@goat/contracts/legacyT3Names";
-import { EnvironmentId, ProjectWriteFileError } from "@goat/contracts";
+import { type AuthSessionState, EnvironmentId, ProjectWriteFileError } from "@goat/contracts";
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/reactivity";
 import { StrictMode, useEffect } from "react";
@@ -16,11 +16,17 @@ const { writeFile, confirmFile, readScope, getUnsavedFile, getFile, reloadFile, 
     reloadFile: vi.fn(),
     getSaveSession: vi.fn(),
   }));
-vi.mock(import("~/state/session"), async (original) => ({
-  ...(await original()),
-  readEnvironmentScope: readScope,
-  useEnvironmentScope: readScope,
-}));
+vi.mock(import("~/state/session"), async (original) => {
+  const actual = await original();
+  const { Atom, AsyncResult } = await import("effect/reactivity");
+  const signedOut = Atom.make(AsyncResult.initial<AuthSessionState>());
+  return {
+    ...actual,
+    environmentSession: { ...actual.environmentSession, sessionStateAtom: () => signedOut },
+    readEnvironmentScope: readScope,
+    useEnvironmentScope: readScope,
+  };
+});
 vi.mock(import("~/state/use-atom-command"), async (original) => ({
   ...(await original()),
   useAtomCommand: (() => writeFile) as never,

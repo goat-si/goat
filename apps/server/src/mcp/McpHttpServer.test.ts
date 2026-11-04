@@ -1022,7 +1022,10 @@ it.effect("admits provider and OAuth client credentials and points only clients 
           Layer.succeed(McpHttpServer.McpClientAuthenticator, {
             authenticate: (request) =>
               Effect.succeed(
-                request.headers.authorization === `Bearer ${clientToken}` ? clientScope : undefined,
+                request.headers.authorization?.toLowerCase().startsWith("bearer ") === true &&
+                  request.headers.authorization.slice(7) === clientToken
+                  ? clientScope
+                  : undefined,
               ),
           }),
         ),
@@ -1031,11 +1034,11 @@ it.effect("admits provider and OAuth client credentials and points only clients 
         Layer.build,
       );
       const httpClient = yield* HttpClient.HttpClient;
-      const call = (token: string | undefined) =>
+      const call = (token: string | undefined, scheme = "Bearer") =>
         Effect.gen(function* () {
           const headers = {
             accept: "application/json, text/event-stream",
-            ...(token === undefined ? {} : { authorization: `Bearer ${token}` }),
+            ...(token === undefined ? {} : { authorization: `${scheme} ${token}` }),
           };
           const initialize = yield* httpClient.post("/mcp", {
             headers,
@@ -1064,6 +1067,10 @@ it.effect("admits provider and OAuth client credentials and points only clients 
         "provider-session",
         "client:session-1",
       ]);
+
+      expect((yield* call(providerToken, "bEaReR")).status).toBe(200);
+      expect((yield* call(clientToken, "bearer")).status).toBe(200);
+      expect((yield* call(providerToken, "Basic")).status).toBe(401);
 
       const missing = yield* call(undefined);
       expect(missing.status).toBe(401);

@@ -33,6 +33,8 @@ export const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(fu
   name: string,
   canRestart = false,
   beforeCompaction: Effect.Effect<void> = Effect.void,
+  selectionNeedsRestart = false,
+  threadOverride?: ThreadId,
 ) {
   const cwd = yield* checkpointWorkspace(name);
   const events = yield* Queue.unbounded<ProviderAdapter.ProviderAdapterV2Event>();
@@ -50,7 +52,8 @@ export const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(fu
     instanceId,
     driver,
     getCapabilities: () => Effect.succeed(capabilities),
-    planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" }),
+    planSelectionTransition: () =>
+      Effect.succeed({ type: selectionNeedsRestart ? "restart_session" : "apply_on_next_turn" }),
     openSession: Effect.fn("SteeringHarness.openSession")(function* (input) {
       const now = yield* DateTime.now;
       const startTurn = Effect.fn("SteeringHarness.startTurn")(function* (
@@ -131,7 +134,7 @@ export const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(fu
   const startFirstTurn = Effect.gen(function* () {
     const orchestrator = yield* Orchestrator.OrchestratorV2;
     const worker = yield* EffectWorker.OrchestrationEffectWorkerV2;
-    const threadId = ThreadId.make(`thread:${name}`);
+    const threadId = threadOverride ?? ThreadId.make(`thread:${name}`);
     yield* orchestrator.dispatch({
       type: "thread.create",
       commandId: CommandId.make("create"),

@@ -7,10 +7,15 @@ import {
 } from "@goat/contracts";
 import { assert, it } from "@effect/vitest";
 import { applyProviderStatusChanges } from "@goat/shared/providerStatusChanges";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 
-import { withProviderStatusChanges } from "./serverConfigUpdates.ts";
+import {
+  resolveOpenDiscoveryForConfig,
+  withLateEditorConfig,
+  withProviderStatusChanges,
+} from "./serverConfigUpdates.ts";
 
 const provider = (instanceId: string, checkedAt: string): ServerProvider => ({
   instanceId: ProviderInstanceId.make(instanceId),
@@ -84,4 +89,58 @@ it.effect(
       );
       assert.deepEqual(applyProviderStatusChanges(refreshed, next.payload), later);
     }),
+);
+
+it.effect("runs editor, remote target and direct endpoint discovery concurrently", () =>
+  Effect.gen(function* () {
+    const editorsStarted = yield* Deferred.make<void>();
+    const targetsStarted = yield* Deferred.make<void>();
+    const endpointsStarted = yield* Deferred.make<void>();
+    const startThenAwait = <A>(started: Deferred.Deferred<void>, value: A) =>
+      Deferred.succeed(started, undefined).pipe(
+        Effect.andThen(
+          Effect.forEach([editorsStarted, targetsStarted, endpointsStarted], Deferred.await),
+        ),
+        Effect.as(value),
+      );
+    const discovery = yield* resolveOpenDiscoveryForConfig({
+      editors: startThenAwait(editorsStarted, ["file-manager" as const]),
+      fileManagerRevealKind: Effect.succeed("finder" as const),
+      remoteOpenTargets: startThenAwait(targetsStarted, []),
+      directEndpoints: startThenAwait(endpointsStarted, []),
+    });
+    assert.deepEqual(discovery, {
+      availableEditors: ["file-manager"],
+      shellRevealInFileManager: true,
+      shellRevealInFileManagerKind: "finder",
+      remoteOpenTargets: [],
+      directEndpoints: [],
+    });
+  }),
+);
+
+it.effect("late endpoint discovery emits a compatible config snapshot", () =>
+  Effect.gen(function* () {
+    const initial = {
+      availableEditors: [],
+      directEndpoints: [],
+      providers: [],
+    } as unknown as ServerConfig;
+    const endpoint = { kind: "tailnet" as const, httpBaseUrl: "https://fixture.tail1234.ts.net/" };
+    const events = yield* withLateEditorConfig(
+      initial,
+      Stream.empty,
+      {
+        resolveAvailableEditors: () => Effect.succeed([]),
+        resolveFileManagerRevealKind: () => Effect.sync(() => undefined),
+      },
+      Stream.empty,
+      Stream.empty,
+      Effect.succeed([endpoint]),
+    ).pipe(Stream.runCollect);
+    assert.equal(events.length, 1);
+    const event = events[0];
+    assert.equal(event?.type, "snapshot");
+    if (event?.type === "snapshot") assert.deepEqual(event.config.directEndpoints, [endpoint]);
+  }),
 );

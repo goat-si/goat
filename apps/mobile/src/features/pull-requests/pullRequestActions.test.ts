@@ -7,6 +7,8 @@ import {
   mergeUnavailableReason,
   pullRequestActionLabel,
   ALL_PR_ACTIONS,
+  mergeControlStatus,
+  canExecuteImmediateMerge,
 } from "./pullRequestActions";
 
 const GITHUB = sourceControlClients.get("github").changeRequest;
@@ -32,6 +34,31 @@ function detail(overrides: Partial<Detail> = {}): Detail {
 }
 
 describe("mobile pull request actions", () => {
+  it("blocks immediate merge while auto-merge is pending", () => {
+    const pr = detail({ autoMergeEnabled: true });
+    expect(canExecuteImmediateMerge(pr, true)).toBe(false);
+    expect(mergeControlStatus(pr, false, false, false, GITHUB)?.label).toBe("Auto-merge pending");
+    expect(canPerformPullRequestAction(pr, "disable-auto-merge")).toBe(true);
+  });
+
+  it("offers permitted ready and reopen actions and names terminal or conflicting states", () => {
+    expect(mergeControlStatus(detail({ isDraft: true }), true, false, false, GITHUB)?.action).toBe(
+      "ready",
+    );
+    expect(
+      mergeControlStatus(detail({ state: "closed" }), true, false, false, GITHUB)?.action,
+    ).toBe("reopen");
+    expect(
+      mergeControlStatus(detail({ state: "closed" }), false, false, false, GITHUB)?.label,
+    ).toBe("Closed");
+    expect(
+      mergeControlStatus(detail({ state: "merged" }), false, false, false, GITHUB)?.label,
+    ).toBe("Merged");
+    expect(
+      mergeControlStatus(detail({ mergeability: "conflicting" }), false, false, false, GITHUB)
+        ?.label,
+    ).toBe("Resolve conflicts to merge");
+  });
   it("requires both provider support and account permission", () => {
     expect(
       canPerformPullRequestAction(detail({ viewerPermissions: { actions: [] } }), "merge"),

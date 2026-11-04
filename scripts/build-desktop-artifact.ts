@@ -3083,6 +3083,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   computerUseHelperPath?: string,
 ) {
   const buildConfig: Record<string, unknown> = {
+    afterPack: NodeURL.fileURLToPath(new URL("./desktop-after-pack.ts", import.meta.url)),
     appId: resolveDesktopAppId(version),
     productName: resolveDesktopProductName(version),
     artifactName: "GOAT-${version}-${arch}.${ext}",
@@ -3218,11 +3219,6 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     buildConfig.toolsets = { appimage: "1.0.3" };
     const path = yield* Path.Path;
     const repoRoot = yield* RepoRoot;
-    // withComputerUseHelper sets its own afterPack for signed mac builds; a Linux helper would
-    // have to run both hooks.
-    buildConfig.afterPack = NodeURL.fileURLToPath(
-      new URL("./link-legacy-linux-executable.ts", import.meta.url),
-    );
     buildConfig.linux = {
       target: target === "AppImage" ? [target, "deb"] : [target],
       executableName: LINUX_EXECUTABLE_NAME,

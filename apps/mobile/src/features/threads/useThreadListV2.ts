@@ -90,6 +90,17 @@ function usePriorityHolds() {
 }
 
 /**
+ * The React Compiler memoizes on the values a callback reads and drops unread entries from a
+ * dependency list, so the version that marks an expired grace must be read to rebuild the list.
+ */
+function observeInbox(
+  threads: Parameters<typeof threadListInboxReturns.observe>[0],
+  _expiredGraceVersion: number,
+) {
+  return threadListInboxReturns.observe(threads);
+}
+
+/**
  * Home's and the thread sidebar's thread list. Its result is one value a screen only reads:
  * built inline, the list's inputs stayed open to mutation across the screen's other hooks, so
  * the React Compiler cached none of it and every render of the screen re-rendered every row.
@@ -142,128 +153,206 @@ export function useThreadListV2(input: {
     threadListInboxReturns.getSnapshot,
   );
   const inbox = useMemo(
-    () => threadListInboxReturns.observe(workingShelfEnabled ? threads : null),
-    // oxlint-disable-next-line react/memo-dependencies -- the version signals an expired grace
+    () => observeInbox(workingShelfEnabled ? threads : null, inboxVersion),
     [threads, workingShelfEnabled, inboxVersion],
   );
   // Older settled threads load in pages; the shelf lists them only as far as they are loaded.
-  const scopes = olderSettledScopes(input);
+  const scopes = useMemo(
+    () =>
+      olderSettledScopes({
+        environmentId: input.environmentId,
+        projectRefs: input.projectRefs,
+        settlementEnvironmentIds: input.settlementEnvironmentIds,
+      }),
+    [input.environmentId, input.projectRefs, input.settlementEnvironmentIds],
+  );
   const olderSettledShelf = useOlderSettledShelf({
     scopes,
     expanded: input.settledShelfExpanded,
     // A search lists only matches, so the shelf would page forever; loaded pages stay.
     visibleCount: input.searchQuery.trim().length === 0 ? input.settledLimit : 0,
   });
-  const layout = buildThreadListV2Items({
-    pendingOrder: input.pendingOrder,
-    threads: threads.filter((thread) => thread.archivedAt === null),
-    environmentId: input.environmentId,
-    projectRefs: input.projectRefs,
-    searchQuery: input.searchQuery,
-    matchedThreadKeys: new Set(input.searchMatches.keys()),
-    settlementEnvironmentIds: input.settlementEnvironmentIds,
-    snoozeEnvironmentIds: input.snoozeEnvironmentIds,
-    queuedThreadKeys: input.queuedThreadKeys,
-    settledLimit: input.settledLimit,
-    now: input.now,
-    workingShelfEnabled,
-    workingShelfExpanded: input.workingShelfExpanded,
-    inboxReturnAt: inbox.returnedAt,
-    isWorking: inbox.isWorking,
-    snoozedShelfExpanded: input.snoozedShelfExpanded,
-    settledShelfExpanded: input.settledShelfExpanded,
-    selectedThreadKey: input.selectedThreadKey,
-    hiddenBotThreadKeys,
-    launchOwners,
-    launchGroups: launchGroups.state,
-    reorderExcludedKeys,
-    priorityHolds: priority.holds,
-    priorityReleases: priority.releases,
-    isListedSettled: olderSettledShelf.isListed,
-    unloadedSettledCount: olderSettledShelf.unloadedCount(
-      threads.filter(
-        (thread) =>
-          thread.archivedAt === null &&
-          scopes.some(
-            (scope) =>
-              scope.environmentId === thread.environmentId &&
-              (scope.projectIds === null || scope.projectIds.includes(thread.projectId)),
-          ),
-      ),
-    ),
-  });
-  priority.observe(layout.priorityThreads);
-  useOlderSettledShelfGrowth(olderSettledShelf, layout.listedSettledThreads);
-  // The shared excluded keys miss rows held in Priority; ordering leaves out every Priority row.
-  const orderExcludedKeys = new Set([
-    ...reorderExcludedKeys,
-    ...(layout.priorityThreads ?? []).map((thread) => `${thread.environmentId}:${thread.id}`),
-  ]);
-  // Up/down menu availability for every card, computed once per section per
-  // rebuild (see computeThreadMoveAvailability): per-thread planner calls made
-  // list construction quadratic, and this list rebuilds on every minute tick.
-  const sectionAvailability = (section: "pinned" | "active") =>
-    computeThreadMoveAvailability({
-      allThreads: threads,
-      section,
-      pendingOrder: input.pendingOrder,
-      reorderableEnvironmentIds:
-        section === "pinned" ? input.pinReorderEnvironmentIds : input.activeReorderEnvironmentIds,
-      ordered: getThreadListV2OrderedSection({
-        threads,
-        section,
+  const { isListed, unloadedCount } = olderSettledShelf;
+  const layout = useMemo(
+    () =>
+      buildThreadListV2Items({
         pendingOrder: input.pendingOrder,
-        now: input.now,
+        threads: threads.filter((thread) => thread.archivedAt === null),
+        environmentId: input.environmentId,
+        projectRefs: input.projectRefs,
+        searchQuery: input.searchQuery,
+        matchedThreadKeys: new Set(input.searchMatches.keys()),
         settlementEnvironmentIds: input.settlementEnvironmentIds,
         snoozeEnvironmentIds: input.snoozeEnvironmentIds,
         queuedThreadKeys: input.queuedThreadKeys,
+        settledLimit: input.settledLimit,
+        now: input.now,
+        workingShelfEnabled,
+        workingShelfExpanded: input.workingShelfExpanded,
+        inboxReturnAt: inbox.returnedAt,
+        isWorking: inbox.isWorking,
+        snoozedShelfExpanded: input.snoozedShelfExpanded,
+        settledShelfExpanded: input.settledShelfExpanded,
+        selectedThreadKey: input.selectedThreadKey,
         hiddenBotThreadKeys,
-        excludedThreadKeys: orderExcludedKeys,
+        launchOwners,
+        launchGroups: launchGroups.state,
+        reorderExcludedKeys,
+        priorityHolds: priority.holds,
+        priorityReleases: priority.releases,
+        isListedSettled: isListed,
+        unloadedSettledCount: unloadedCount(
+          threads.filter(
+            (thread) =>
+              thread.archivedAt === null &&
+              scopes.some(
+                (scope) =>
+                  scope.environmentId === thread.environmentId &&
+                  (scope.projectIds === null || scope.projectIds.includes(thread.projectId)),
+              ),
+          ),
+        ),
       }),
-    });
-  const moveAvailability = new Map([
-    ...sectionAvailability("pinned"),
-    ...(workingShelfEnabled ? [] : sectionAvailability("active")),
+    [
+      input.pendingOrder,
+      threads,
+      input.environmentId,
+      input.projectRefs,
+      input.searchQuery,
+      input.searchMatches,
+      input.settlementEnvironmentIds,
+      input.snoozeEnvironmentIds,
+      input.queuedThreadKeys,
+      input.settledLimit,
+      input.now,
+      workingShelfEnabled,
+      input.workingShelfExpanded,
+      inbox.returnedAt,
+      inbox.isWorking,
+      input.snoozedShelfExpanded,
+      input.settledShelfExpanded,
+      input.selectedThreadKey,
+      hiddenBotThreadKeys,
+      launchOwners,
+      launchGroups.state,
+      reorderExcludedKeys,
+      priority.holds,
+      priority.releases,
+      isListed,
+      unloadedCount,
+      scopes,
+    ],
+  );
+  priority.observe(layout.priorityThreads);
+  useOlderSettledShelfGrowth(olderSettledShelf, layout.listedSettledThreads);
+  // The shared excluded keys miss rows held in Priority; ordering leaves out every Priority row.
+  const orderExcludedKeys = useMemo(
+    () =>
+      new Set([
+        ...reorderExcludedKeys,
+        ...(layout.priorityThreads ?? []).map((thread) => `${thread.environmentId}:${thread.id}`),
+      ]),
+    [reorderExcludedKeys, layout.priorityThreads],
+  );
+  // Up/down menu availability for every card, computed once per section per
+  // rebuild (see computeThreadMoveAvailability): per-thread planner calls made
+  // list construction quadratic, and this list rebuilds on every minute tick.
+  const moveAvailability = useMemo(() => {
+    const sectionAvailability = (section: "pinned" | "active") =>
+      computeThreadMoveAvailability({
+        allThreads: threads,
+        section,
+        pendingOrder: input.pendingOrder,
+        reorderableEnvironmentIds:
+          section === "pinned" ? input.pinReorderEnvironmentIds : input.activeReorderEnvironmentIds,
+        ordered: getThreadListV2OrderedSection({
+          threads,
+          section,
+          pendingOrder: input.pendingOrder,
+          now: input.now,
+          settlementEnvironmentIds: input.settlementEnvironmentIds,
+          snoozeEnvironmentIds: input.snoozeEnvironmentIds,
+          queuedThreadKeys: input.queuedThreadKeys,
+          hiddenBotThreadKeys,
+          excludedThreadKeys: orderExcludedKeys,
+        }),
+      });
+    return new Map([
+      ...sectionAvailability("pinned"),
+      ...(workingShelfEnabled ? [] : sectionAvailability("active")),
+    ]);
+  }, [
+    threads,
+    input.pendingOrder,
+    input.pinReorderEnvironmentIds,
+    input.activeReorderEnvironmentIds,
+    input.now,
+    input.settlementEnvironmentIds,
+    input.snoozeEnvironmentIds,
+    input.queuedThreadKeys,
+    hiddenBotThreadKeys,
+    orderExcludedKeys,
+    workingShelfEnabled,
   ]);
 
   useRevealLaunchGroups(launchGroups, layout.launchRevealKeys);
   const contentOnlyThreadKeys = useKeySet([...layout.contentOnlyThreadKeys].sort().join("\n"));
-  const scopedProjectKeys =
-    input.projectRefs == null
-      ? null
-      : new Set(input.projectRefs.map((ref) => scopedProjectKey(ref.environmentId, ref.projectId)));
-  const searchQuery = input.searchQuery.trim().toLocaleLowerCase();
-  const pendingTasks = input.pendingTasks.filter(
-    (pendingTask) =>
-      (input.environmentId === null || pendingTask.environmentId === input.environmentId) &&
-      (scopedProjectKeys === null ||
-        scopedProjectKeys.has(
-          scopedProjectKey(pendingTask.environmentId, pendingTask.projectId),
-        )) &&
-      (searchQuery.length === 0 || pendingTask.title.toLocaleLowerCase().includes(searchQuery)),
+  const pendingTasks = useMemo(() => {
+    const scopedProjectKeys =
+      input.projectRefs == null
+        ? null
+        : new Set(
+            input.projectRefs.map((ref) => scopedProjectKey(ref.environmentId, ref.projectId)),
+          );
+    const searchQuery = input.searchQuery.trim().toLocaleLowerCase();
+    return input.pendingTasks.filter(
+      (pendingTask) =>
+        (input.environmentId === null || pendingTask.environmentId === input.environmentId) &&
+        (scopedProjectKeys === null ||
+          scopedProjectKeys.has(
+            scopedProjectKey(pendingTask.environmentId, pendingTask.projectId),
+          )) &&
+        (searchQuery.length === 0 || pendingTask.title.toLocaleLowerCase().includes(searchQuery)),
+    );
+  }, [input.projectRefs, input.environmentId, input.searchQuery, input.pendingTasks]);
+  const items = useMemo(
+    () =>
+      buildThreadListV2ListItems({
+        items: layout.items,
+        launchMarkers: layout.launchMarkers,
+        pendingTasks,
+        priorityCount: layout.priorityCount,
+        priorityFoldedUnseen: layout.priorityFoldedUnseen,
+        workingCount: layout.workingCount,
+        workingShelfExpanded: input.workingShelfExpanded,
+        workingShelfHeaderIndex: layout.workingShelfHeaderIndex,
+        snoozedCount: layout.snoozedCount,
+        snoozedShelfExpanded: input.snoozedShelfExpanded,
+        snoozedShelfHeaderIndex: layout.snoozedShelfHeaderIndex,
+        settledCount: layout.settledCount,
+        settledShelfExpanded: input.settledShelfExpanded,
+        settledShelfHeaderIndex: layout.settledShelfHeaderIndex,
+        snoozeLabelNow: `${input.now.slice(0, 16)}:00.000Z`,
+        snoozeEnvironmentIds: input.snoozeEnvironmentIds,
+        queuedThreadKeys: input.queuedThreadKeys,
+        moveAvailability,
+        shelfPreferencesLoading: !input.shelfPreferencesLoaded,
+        launchGroupsLoading: !launchGroups.loaded,
+      }),
+    [
+      layout,
+      pendingTasks,
+      input.workingShelfExpanded,
+      input.snoozedShelfExpanded,
+      input.settledShelfExpanded,
+      input.now,
+      input.snoozeEnvironmentIds,
+      input.queuedThreadKeys,
+      moveAvailability,
+      input.shelfPreferencesLoaded,
+      launchGroups.loaded,
+    ],
   );
-  const items = buildThreadListV2ListItems({
-    items: layout.items,
-    launchMarkers: layout.launchMarkers,
-    pendingTasks,
-    priorityCount: layout.priorityCount,
-    priorityFoldedUnseen: layout.priorityFoldedUnseen,
-    workingCount: layout.workingCount,
-    workingShelfExpanded: input.workingShelfExpanded,
-    workingShelfHeaderIndex: layout.workingShelfHeaderIndex,
-    snoozedCount: layout.snoozedCount,
-    snoozedShelfExpanded: input.snoozedShelfExpanded,
-    snoozedShelfHeaderIndex: layout.snoozedShelfHeaderIndex,
-    settledCount: layout.settledCount,
-    settledShelfExpanded: input.settledShelfExpanded,
-    settledShelfHeaderIndex: layout.settledShelfHeaderIndex,
-    snoozeLabelNow: `${input.now.slice(0, 16)}:00.000Z`,
-    snoozeEnvironmentIds: input.snoozeEnvironmentIds,
-    queuedThreadKeys: input.queuedThreadKeys,
-    moveAvailability,
-    shelfPreferencesLoading: !input.shelfPreferencesLoaded,
-    launchGroupsLoading: !launchGroups.loaded,
-  });
   const routeAncestorKeys = layout.launchRouteAncestorKeys;
   return {
     layout,

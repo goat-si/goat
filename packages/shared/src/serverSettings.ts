@@ -444,9 +444,11 @@ export function applyServerSettingsPatch(
     worktreeCleanup: worktreeCleanupPatch,
     // Merged per entry below; its `null` removals must not reach deepMerge.
     usageLimitSources: usageLimitSourcesPatch,
+    secretProviders: secretProvidersPatch,
     sourceControlHosts: sourceControlHostsPatch,
     usagePriceOverrides: usagePriceOverridesPatch,
     usageModelAliases: usageModelAliasesPatch,
+    usageModelFilter: usageModelFilterPatch,
     // Entry replacement: deepMerge would keep keys the client meant to clear.
     projectSettingsOverrides: projectSettingsOverridesPatch,
     projectAgentBrowserAccessOverrides: _legacyBrowserAccess,
@@ -649,6 +651,9 @@ export function applyServerSettingsPatch(
           ),
         }
       : {}),
+    ...(secretProvidersPatch !== undefined
+      ? { secretProviders: mergeSettingsEntries(current.secretProviders, secretProvidersPatch) }
+      : {}),
     ...(completionWebhookPatch !== undefined
       ? {
           completionWebhook: mergeCompletionWebhook(
@@ -673,6 +678,7 @@ export function applyServerSettingsPatch(
           ),
         }
       : {}),
+    ...(usageModelFilterPatch !== undefined ? { usageModelFilter: usageModelFilterPatch } : {}),
     ...(patch.sourceControlWriterModelSelection !== undefined
       ? { sourceControlWriterModelSelection: patch.sourceControlWriterModelSelection }
       : {}),

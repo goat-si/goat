@@ -153,6 +153,28 @@ afterEach(async () => {
 });
 
 describe("integrated PDF surface", () => {
+  it("restores the reading position when a document remounts with a renewed URL", async () => {
+    const show = async (url: string) => {
+      await act(async () =>
+        root.render(
+          <BrowserDocumentFrame src={url} documentId="remount-fixture" title="Fixture" pdf />,
+        ),
+      );
+      await act(() => vi.dynamicImportSettled());
+    };
+    await show("/first.pdf");
+    const input = host.querySelector<HTMLInputElement>('input[aria-label="PDF page number"]')!;
+    await type(input, "15");
+    await act(() =>
+      input.form!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })),
+    );
+    await act(() => root.render(null));
+    await show("/renewed.pdf");
+    expect(host.querySelector<HTMLInputElement>('input[aria-label="PDF page number"]')?.value).toBe(
+      "15",
+    );
+  });
+
   it("preserves reading position and zoom across revisions but resets for another PDF", async () => {
     const showRevision = async (revision: number, documentId = "fixture") => {
       await act(async () => {

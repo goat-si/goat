@@ -6,6 +6,7 @@ import {
   isChangeRequestOnProjectHost,
   parseChangeRequestPath,
   projectChangeRequestHost,
+  remoteWebOrigin,
 } from "@goat/source-control-core/shared/definition";
 import { icon } from "./icon.ts";
 
@@ -35,10 +36,10 @@ export const definition = defineSourceControl({
   publishHost: () => "gitlab.com",
   newRepositoryOwner: (account) => ({ owner: account }),
   defaultCloneTransport: "ssh",
-  changeRequestUrl: ({ host, repository, number, webUrl }) =>
+  changeRequestUrl: ({ host, repository, number, remoteUrl, webUrl }) =>
     webUrl
       ? changeRequestUrlBelow(webUrl, `-/merge_requests/${number}`)
-      : `https://${host}/${repository}/-/merge_requests/${number}`,
+      : `${remoteWebOrigin(host, remoteUrl)}/${repository}/-/merge_requests/${number}`,
   parseChangeRequestUrl: (url) => parseChangeRequestPath(url, CHANGE_REQUEST_PATH),
   changeRequestUrlFromReferenceAutolink: () => null,
   changeRequestActions: new Set([

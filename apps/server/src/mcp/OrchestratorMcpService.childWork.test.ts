@@ -658,10 +658,10 @@ describe("OrchestratorMcpService delegate child work", () => {
                   getThreadShell: () =>
                     Effect.succeed(liveThreadShell(callerThreadId, { activeRunId: parentRunId })),
                   getThreadEventSequence: () => Effect.succeed(10),
-                  getThreadRecords: (threadId) =>
+                  getThreadRecords: (threadId, fields) =>
                     Effect.sync(() => {
                       if (threadId === callerThreadId) {
-                        parentReads += 1;
+                        if (!(fields?.length === 1 && fields[0] === "subagents")) parentReads += 1;
                         return parentWithSubagent;
                       }
                       return runningChild;

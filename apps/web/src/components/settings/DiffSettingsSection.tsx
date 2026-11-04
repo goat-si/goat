@@ -139,7 +139,7 @@ export function DiffSettingsSection() {
             onCheckedChange={(checked) =>
               updateSettings({ proactivePanelsEnabled: Boolean(checked) })
             }
-            aria-label="Proactive panels"
+            aria-label="Open pull requests and changes panels proactively"
           />
         }
       />

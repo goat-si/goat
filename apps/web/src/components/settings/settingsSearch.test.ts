@@ -253,6 +253,38 @@ describe("searchSettings", () => {
     expect(searchSettings("sidebar.toggle")[0]?.targetId).toBeUndefined();
   });
 
+  it("finds settings rows by their visible titles", () => {
+    for (const [title, id] of [
+      ["Automatic worktree cleanup", "storage-worktrees"],
+      ["Delete settled worktrees", "storage-worktrees"],
+      ["Delete old browser artifacts", "storage-artifacts"],
+      ["Delete old rotated logs", "storage-artifacts"],
+      ["Native sessions", "providers"],
+      ["CODEX_HOME path", "providers"],
+      ["Shadow home path", "providers"],
+    ] as const) {
+      expect(searchSettings(title)[0]?.id, title).toBe(id);
+    }
+  });
+
+  it("finds WSL only while retaining the Connections destination", () => {
+    const row = SETTINGS_SEARCH_ITEMS.find((item) => item.id === "wsl-backend");
+    expect(row).toMatchObject({
+      to: "/settings/connections",
+      desktopOnly: true,
+      windowsOnly: true,
+    });
+    if (!row) throw new Error("WSL backend setting missing");
+    try {
+      vi.stubGlobal("navigator", { platform: "Win32" });
+      expect(searchSettings("wsl only", [{ ...row, desktopOnly: false }])[0]?.id).toBe(
+        "wsl-backend",
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("keeps catalog result ids unique", () => {
     const ids = SETTINGS_SEARCH_ITEMS.map((item) => item.id);
     expect(new Set(ids).size).toBe(ids.length);

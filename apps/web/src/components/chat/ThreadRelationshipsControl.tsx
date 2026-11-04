@@ -70,6 +70,11 @@ import { threadEnvironment } from "../../state/threads";
 import { orchestrationEnvironment } from "../../state/orchestration";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { AgentElapsed } from "./AgentElapsed";
+import { serverEnvironment } from "../../state/server";
+import {
+  applyProviderInstanceSettings,
+  deriveProviderInstanceEntries,
+} from "../../providerInstances";
 import { ThreadRelationshipIcon, threadRelationshipStatusLabel } from "./ThreadRelationshipIcon";
 import {
   isLaunchedFromThread,
@@ -297,6 +302,7 @@ export function ThreadRelationshipsPanel(props: {
   const ref = scopeThreadRef(props.environmentId, props.threadId);
   const projection = useThreadProjection(ref)?.projection ?? null;
   const providersByEnvironment = useEnvironmentProviders();
+  const settings = useAtomValue(serverEnvironment.settingsValueAtom(props.environmentId));
   const relationshipShells = useThreadRelationshipShells(ref);
   // Launch lineage can cross environments and is not a relationship edge, so it
   // reads the full shell list.
@@ -337,6 +343,14 @@ export function ThreadRelationshipsPanel(props: {
   const [stoppingId, setStoppingId] = useState<string | null>(null);
   // Derive graphs after hooks to preserve their compiler cache.
   const providers = providersByEnvironment.get(props.environmentId);
+  const derivedProviderEntries = deriveProviderInstanceEntries(providers ?? []);
+  const providerEntries = settings
+    ? applyProviderInstanceSettings(
+        derivedProviderEntries,
+        settings,
+        currentThread?.projectId ?? null,
+      )
+    : derivedProviderEntries;
   const projects = allProjects.filter((project) => project.environmentId === props.environmentId);
   const parentNativeStatus = parentProjection
     ? deriveProviderSubagentStatus(parentProjection)?.status
@@ -617,9 +631,12 @@ export function ThreadRelationshipsPanel(props: {
                 <ArrowRightIcon className="size-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100" />
               </TooltipTrigger>
               <TooltipPopup side="left">
-                {launcherShell === undefined
-                  ? "This related thread is unavailable"
-                  : `Open ${launchedBy.kind === "promotion" ? "original parent" : "launching"} thread in this chat`}
+                <span className="block font-medium">{launcherTitle}</span>
+                <span className="block text-muted-foreground">
+                  {launcherShell === undefined
+                    ? "This related thread is unavailable"
+                    : `Open ${launchedBy.kind === "promotion" ? "original parent" : "launching"} thread in this chat`}
+                </span>
               </TooltipPopup>
             </Tooltip>
           </li>
@@ -709,13 +726,17 @@ export function ThreadRelationshipsPanel(props: {
                   childProject={project}
                 />
               ) : (
-                relationshipHint
+                <>
+                  <span className="block font-medium">{threadTitle}</span>
+                  <span className="block text-muted-foreground">{relationshipHint}</span>
+                </>
               );
               const relationshipContent = (
                 <>
                   <ThreadRelationshipIcon
                     driver={isSubagent && !isParent ? providerDriver : undefined}
                     provider={provider}
+                    providerEntries={providerEntries}
                     fallbackIcon={RelationshipIcon}
                     status={rowStatus}
                   />
@@ -774,6 +795,7 @@ export function ThreadRelationshipsPanel(props: {
                     providerInstanceId={agent.providerInstanceId}
                     provider={provider}
                     providers={providers}
+                    providerEntries={providerEntries}
                     driver={providerDriver}
                     onOpenThread={(memberThreadId) => openThread(memberThreadId as ThreadId)}
                     onStop={canStopWorkflow ? () => void stopWorkflow(agent.id) : undefined}

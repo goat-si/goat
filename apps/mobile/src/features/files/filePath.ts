@@ -1,3 +1,5 @@
+import type { FilesystemEntryMetadata } from "@goat/contracts";
+import { filePreviewDelimiter } from "@goat/shared/delimitedPreview";
 import { resolvePathLinkTarget } from "@goat/shared/fileLinks";
 import { isWorkspaceAudioPreviewPath, isWorkspaceVideoPreviewPath } from "@goat/shared/filePreview";
 
@@ -130,6 +132,23 @@ export function fileBreadcrumbs(projectName: string, relativePath: string): File
       kind: index === parts.length - 1 ? ("file" as const) : ("directory" as const),
     })),
   ];
+}
+
+export function needsWorkspaceFileContents(input: {
+  readonly relativePath: string | null;
+  readonly metadataKind: FilesystemEntryMetadata["kind"] | undefined;
+  readonly activeMode: "preview" | "source";
+}): boolean {
+  const path = input.relativePath;
+  return (
+    input.metadataKind !== "directory" &&
+    path !== null &&
+    !isVideoPreviewFile(path) &&
+    !isAudioPreviewFile(path) &&
+    (input.activeMode === "source" ||
+      isMarkdownPreviewFile(path) ||
+      filePreviewDelimiter({ name: path }) !== null)
+  );
 }
 
 export function fileHeaderSubtitle(projectName: string, relativePath: string): string {

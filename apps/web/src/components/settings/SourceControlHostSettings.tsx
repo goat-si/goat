@@ -1,12 +1,14 @@
-import type { EnvironmentId } from "@goat/contracts";
+import { isSecretReference, secretSettingsFields, type EnvironmentId } from "@goat/contracts";
 import type { SourceControlDefinition } from "@goat/client-runtime/source-control-clients";
 import { useState } from "react";
+import { isSecretsFeatureEnabled } from "../../env";
 
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { Button } from "../ui/button";
 import { ProviderSettingsForm } from "./ProviderSettingsForm";
+import { SecretReferencePicker } from "./SecretReferencePicker";
 
 export function SourceControlHostSettings({
   environmentId,
@@ -51,12 +53,29 @@ export function SourceControlHostSettings({
         onChange={(next) => {
           const fields = next ?? {};
           const changed = Object.fromEntries(
-            Object.entries(fields).filter(([key, value]) => saved?.[key] !== value),
+            Object.entries(fields).filter(
+              ([key, value]) =>
+                !(isSecretReference(saved?.[key]) && value === "") && saved?.[key] !== value,
+            ),
           );
-          const cleared = Object.keys(saved ?? {}).filter((key) => !(key in fields));
+          const cleared = Object.keys(saved ?? {}).filter(
+            (key) => !(key in fields) && !isSecretReference(saved?.[key]),
+          );
           void save({ ...changed, ...Object.fromEntries(cleared.map((key) => [key, ""])) });
         }}
       />
+      {isSecretsFeatureEnabled && (definition.kind === "bitbucket" || definition.kind === "gitcafe")
+        ? secretSettingsFields(definition.settings).map((field) => (
+            <div key={field} className="flex flex-wrap items-center gap-2 px-4 pb-2 text-xs">
+              <span>{field} source</span>
+              <SecretReferencePicker
+                environmentId={environmentId}
+                value={isSecretReference(saved?.[field]) ? saved[field] : undefined}
+                onChange={(reference) => void save({ [field]: reference ?? "" })}
+              />
+            </div>
+          ))
+        : null}
       {hasSaved ? (
         <div className="flex justify-end pt-2">
           <Button

@@ -663,9 +663,9 @@ const mapSessionVerificationErrors = <A, R>(
     ),
   );
 
-function parseBearerToken(request: HttpServerRequest.HttpServerRequest): string | null {
+export function parseBearerToken(request: HttpServerRequest.HttpServerRequest): string | null {
   const header = request.headers["authorization"];
-  if (typeof header !== "string" || !header.startsWith(AUTHORIZATION_PREFIX)) {
+  if (typeof header !== "string" || !/^Bearer /i.test(header)) {
     return null;
   }
   const token = header.slice(AUTHORIZATION_PREFIX.length).trim();
@@ -686,14 +686,10 @@ export function selectRequestCredential(
   cookieName: string,
   legacyCookieName: string | undefined,
 ) {
-  const cookieToken =
-    request.cookies[cookieName] ?? request.cookies[legacyScopedSessionCookieName(cookieName)];
-  if (cookieToken !== undefined) {
-    return {
-      token: cookieToken,
-      source: request.cookies[cookieName] !== undefined ? "cookie" : "legacy-cookie",
-    } as const;
-  }
+  const primaryCookie = request.cookies[cookieName];
+  if (primaryCookie) return { token: primaryCookie, source: "cookie" } as const;
+  const scopedLegacyCookie = request.cookies[legacyScopedSessionCookieName(cookieName)];
+  if (scopedLegacyCookie) return { token: scopedLegacyCookie, source: "legacy-cookie" } as const;
 
   const bearerToken = parseBearerToken(request);
   if (bearerToken !== null) {

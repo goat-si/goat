@@ -6,8 +6,18 @@ export const pullRequestToolDefinitions = {
     "link-pr",
     "pull-request",
   ),
+  goat_pull_request_link_many: tool(
+    ["Link", "Linking", "Linked", "pull requests"],
+    "link-pr",
+    "pull-request",
+  ),
   unlink_pull_request: tool(
     ["Unlink", "Unlinking", "Unlinked", "a pull request"],
+    "unlink-pr",
+    "pull-request",
+  ),
+  goat_pull_request_unlink_many: tool(
+    ["Unlink", "Unlinking", "Unlinked", "pull requests"],
     "unlink-pr",
     "pull-request",
   ),

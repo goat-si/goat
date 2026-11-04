@@ -53,14 +53,20 @@ export async function loadPdfEngine() {
   return engine;
 }
 
+let sharedWorker:
+  | InstanceType<(typeof import("pdfjs-dist/legacy/build/pdf.mjs"))["PDFWorker"]>
+  | undefined;
+
 export async function loadPdfDocument(
   data: ArrayBuffer,
   signal: AbortSignal,
 ): Promise<PDFDocumentProxy> {
   const engine = await loadPdfEngine();
   signal.throwIfAborted();
+  sharedWorker ??= new engine.PDFWorker();
   const task = engine.getDocument({
     data,
+    worker: sharedWorker,
     useWorkerFetch: false,
     BinaryDataFactory,
     // PDF.js imports JavaScript decoders directly, bypassing BinaryDataFactory.

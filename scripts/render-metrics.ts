@@ -37,8 +37,10 @@ export type RenderMetrics = Readonly<Record<string, ScenarioReport>>;
 
 const root = NodePath.resolve(import.meta.dirname, "..");
 
-function runOnce(): RenderMetrics {
-  const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.homedir(), ".cache", "goat-renders-"));
+export function runOnce(): RenderMetrics {
+  const cacheDirectory = NodePath.join(NodeOS.homedir(), ".cache");
+  NodeFS.mkdirSync(cacheDirectory, { recursive: true });
+  const directory = NodeFS.mkdtempSync(NodePath.join(cacheDirectory, "goat-renders-"));
   try {
     const result = NodeChildProcess.spawnSync("vp", ["test", "run", "--project", "renders"], {
       cwd: NodePath.join(root, "apps/web"),

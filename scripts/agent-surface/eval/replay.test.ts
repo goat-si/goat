@@ -26,6 +26,21 @@ const threadId = "11111111-1111-4111-8111-111111111111";
 const continuations: Readonly<
   Record<string, { readonly good: ReplayRun; readonly bad: ReplayRun }>
 > = {
+  "separate-thread-not-task": {
+    good: run(
+      [call("goat_thread_launch", { message: "Fix CSV export" })],
+      `[thread](goat-thread://v1/${threadId})`,
+    ),
+    bad: run([call("goat_task_create", { task: "Fix CSV export" })]),
+  },
+  "background-research-is-task": {
+    good: run([call("goat_task_create", { task: "Investigate cache export" })]),
+    bad: run([call("goat_thread_launch", { message: "Investigate cache" })]),
+  },
+  "application-task-is-not-delegation": {
+    good: run([], "The limit is 10."),
+    bad: run([call("goat_task_create", { task: "Inspect task queue" })]),
+  },
   "review-round-creates-new-task": {
     good: run([
       call("goat_task_create", {
@@ -275,4 +290,25 @@ it("refuses malformed traces instead of reporting a pass", () => {
   expect(decodeReplayRun(run([dispatch("thread.read", { threadId })]))).toEqual(
     run([dispatch("thread.read", { threadId })]),
   );
+});
+
+it("requires distinct successful thread requests and rejects extra threads", () => {
+  const expected = { newThreads: ["~cache", "~export"] };
+  const launch = (message: string) => dispatch("thread.launch", { message });
+  expect(failed(expected, run([launch("cache"), launch("export")]))).toEqual([]);
+  expect(failed(expected, run([launch("cache export"), launch("other")]))).toContain("newThreads");
+  expect(failed(expected, run([launch("cache"), launch("export"), launch("extra")]))).toContain(
+    "newThreads",
+  );
+  expect(
+    failed(expected, run([launch("cache"), { ...launch("export"), isError: true }])),
+  ).toContain("newThreads");
+  expect(
+    failed(
+      expected,
+      run([
+        dispatch("thread.create_many", { threads: [{ prompt: "cache" }, { prompt: "export" }] }),
+      ]),
+    ),
+  ).toEqual([]);
 });

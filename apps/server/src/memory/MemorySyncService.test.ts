@@ -62,8 +62,8 @@ import * as Settings from "../serverSettings.ts";
 import * as Secrets from "../auth/ServerSecretStore.ts";
 import * as Events from "../orchestration-v2/EventSink.ts";
 import * as RuntimeIdentity from "../runtimeIdentity.ts";
-import searchMigration from "../persistence/Migrations/080_MemorySearchCounters.ts";
-import revisionSizeMigration from "../persistence/Migrations/095_MemoryRevisionCheckpointSize.ts";
+import searchMigration from "../persistence/Migrations/089_MemorySearchCounters.ts";
+import revisionSizeMigration from "../persistence/Migrations/104_MemoryRevisionCheckpointSize.ts";
 import { migrationManifest, runMigrations } from "../persistence/Migrations.ts";
 import * as Store from "./MemoryStore.ts";
 import * as Service from "./MemoryService.ts";
@@ -1707,12 +1707,12 @@ it.effect.each([
   "memory-activity",
   "tied-memory-activity",
 ] as const)(
-  "081 upgrade recovers a retained ready space with sharing already disabled: %s",
+  "090 upgrade recovers a retained ready space with sharing already disabled: %s",
   (candidates) =>
     Effect.scoped(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "memory-081-upgrade-" });
+        const directory = yield* fs.makeTempDirectoryScoped({ prefix: "memory-090-upgrade-" });
         const filename = `${directory}/state.sqlite`;
         const database = (through: number) =>
           Quota.layer.pipe(
@@ -1769,10 +1769,10 @@ it.effect.each([
             assert.isEmpty(
               yield* sql`SELECT name FROM sqlite_master WHERE name='memory_last_ready_space'`,
             );
-            // Every migration from 086 on runs once against the earlier schema.
+            // Every migration from 095 on runs once against the earlier schema.
             assert.deepStrictEqual(
               yield* runMigrations(),
-              migrationManifest.filter(([id]) => id >= 86),
+              migrationManifest.filter(([id]) => id >= 95),
             );
             const adapter = yield* statusRuntime;
             const result = yield* Effect.scoped(
@@ -1789,7 +1789,7 @@ it.effect.each([
             );
             assert.strictEqual(result.state, "disabled");
             assert.strictEqual(result.retainedLocalSpaceId, space);
-          }).pipe(Effect.provide(fixture(peer(), undefined, true, false, local, database(85)))),
+          }).pipe(Effect.provide(fixture(peer(), undefined, true, false, local, database(94)))),
         );
         // Close the SQLite connection and rebuild the service, preserving only the upgraded file.
         yield* Effect.scoped(

@@ -2,6 +2,7 @@ import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import { agentSurfaceAnnotations } from "../../agentSurface.ts";
 import {
   ActionOutcomeSafety,
+  BrowserNavigationTarget,
   OrchestratorMcpFailure,
   ToolActivityIcon,
   PreviewAutomationClickInput,
@@ -56,7 +57,7 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
 import * as ServerConfig from "../../../config.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
-import { withClientRequestId } from "../keyedParameters.ts";
+import { KeyedClientRequestId } from "../keyedParameters.ts";
 
 const dependencies = [
   McpInvocationContext.McpInvocationContext,
@@ -125,7 +126,14 @@ const PreviewStatusTool = Tool.make(agentSurfaceRegistry["preview.status"].name,
 
 const PreviewOpenTool = Tool.make(agentSurfaceRegistry["preview.open"].name, {
   description: agentSurfaceRegistry["preview.open"].description,
-  parameters: withClientRequestId(PreviewAutomationOpenInput),
+  parameters: PreviewAutomationOpenInput.mapFields(
+    (fields) => ({
+      ...fields,
+      target: Schema.optional(BrowserNavigationTarget.members[1]),
+      clientRequestId: Schema.optional(KeyedClientRequestId),
+    }),
+    { unsafePreserveChecks: true },
+  ),
   success: Schema.Struct({
     ...PreviewAutomationStatus.fields,
     next: Schema.optional(Schema.String),
