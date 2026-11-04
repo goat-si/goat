@@ -17,7 +17,6 @@ import * as NodeOS from "node:os";
 
 import {
   CHANNEL_HOST_WORKSPACE_LABEL,
-  type ChannelInboundMessage,
   type ChannelInputId,
   type ChannelConversationId,
   type ChannelReceptionHostFact,
@@ -75,6 +74,7 @@ import * as SlackChannelSettings from "./SlackChannelSettings.ts";
 import { currentChannelIdentity } from "./channelCurrentIdentity.ts";
 import { makeChannelProjectChoices } from "./channelProjectChoices.ts";
 import * as ChannelWake from "./ChannelWake.ts";
+import * as tt from "./channelTaskThreadRefusal.ts";
 import {
   appendChannelBotNote,
   channelBotFilesFor,
@@ -99,22 +99,14 @@ import {
 import { CHANNEL_COPY, inboundTextWithFiles } from "./channelCopy.ts";
 import {
   approvalCard,
-  approvalChoiceLabels,
   type ApprovalReply,
   type OpenApprovalCard,
   openApprovalCards,
   parseApprovalReply,
   whichApproval,
 } from "./channelApprovalCards.ts";
-import {
-  approvalCodeOrder,
-  choiceAt,
-  latestDeliveredChoices,
-  numberedChoiceLines,
-  parseNumberedReply,
-  singleQuestionChoice,
-  type DeliveredChoices,
-} from "./channelDecisionChoices.ts";
+import { numberedChoiceLines } from "./channelDecisionChoices.ts";
+import { makeInboundChoices } from "./channelInboundChoice.ts";
 import { openQuestionTask } from "./channelQuestionAnswers.ts";
 import { isOpenItem, pendingDigest, workItemState } from "./channelWorkQueue.ts";
 import { WORKERS_PER_REQUESTER } from "./ChannelDispatcher.ts";
@@ -179,6 +171,9 @@ export class ChannelReceptionService extends Context.Service<
       owner: string,
     ) => Effect.Effect<void, ChannelLedger.ChannelLedgerError>;
     readonly acknowledgeSession: (i: ChannelReceptionInput) => Effect.Effect<string | undefined>;
+    readonly isDeterministicReply: (
+      stored: ChannelLedger.ChannelStoredInput,
+    ) => Effect.Effect<boolean, ChannelLedger.ChannelLedgerError>;
   }
 >()("goat/channels/ChannelReceptionService") {}
 
@@ -220,10 +215,6 @@ const replyDelivery = (input: {
     },
   };
 };
-
-/** Slack replies tag the person; the GOAT bot and MCP do not. */
-const mentionFor = (address: ChannelReplyAddress, externalActorId: string | undefined) =>
-  address.kind === "slack" ? externalActorId : undefined;
 
 /** Keeps the newest tail entries that fit the byte budget. */
 const boundTail = (
@@ -857,7 +848,7 @@ const make = Effect.gen(function* () {
             kind: "question",
             text: words.text,
             task,
-            mentionActorId: mentionFor(task.originAddress, task.requester.externalActorId),
+            mentionActorId: tt.mentionFor(task.originAddress, task.requester.externalActorId),
             options: words.options,
           }),
         );
@@ -928,99 +919,7 @@ const make = Effect.gen(function* () {
         : yield* answer(card);
     });
 
-  /**
-   * The numbered list a Slack or iMessage reply of "2" refers to: the latest open approval
-   * card or question in this conversation. Cards that were never sent have no code and are
-   * skipped. Questions come from the recent tasks plus any older task still needing a person.
-   */
-  const deliveredChoices = (
-    conversationId: ChannelConversationId,
-    tasks: ReadonlyArray<ChannelTask>,
-  ) =>
-    Effect.gen(function* () {
-      const needing = yield* ledger.listConversationNeedsYou(conversationId);
-      const seen = new Set(tasks.map((task) => task.taskId));
-      const questions = [...tasks, ...needing.filter((task) => !seen.has(task.taskId))].flatMap(
-        (task) =>
-          task.openQuestions.flatMap((question): ReadonlyArray<DeliveredChoices> =>
-            question.options === undefined || question.options.length === 0
-              ? []
-              : [
-                  {
-                    at: question.askedAt,
-                    tie: 0,
-                    options: question.options,
-                    target: {
-                      type: "question",
-                      taskId: task.taskId,
-                      questionId: question.questionId,
-                    },
-                  },
-                ],
-          ),
-      );
-      const coded = yield* Effect.forEach(openApprovalCards(needing), (card) =>
-        ledger.approvalCodeForRequest(card.approval.requestId).pipe(
-          Effect.map((found): DeliveredChoices | undefined =>
-            found === undefined
-              ? undefined
-              : {
-                  at: found.issuedAt,
-                  tie: approvalCodeOrder(found.code),
-                  options: approvalChoiceLabels(found.code),
-                  target: { type: "approval" },
-                },
-          ),
-        ),
-      );
-      return latestDeliveredChoices([
-        ...questions,
-        ...coded.flatMap((entry) => (entry === undefined ? [] : [entry])),
-      ]);
-    });
-
-  /**
-   * A choice answered before the model runs. A number on Slack or iMessage selects the latest
-   * open list. A label equal to the only open question's option answers that question. An
-   * approval word is left for the approval parser, which already checks who may answer.
-   */
-  const inboundChoice = (
-    message: ChannelInboundMessage,
-    conversationId: ChannelConversationId,
-    tasks: ReadonlyArray<ChannelTask>,
-  ) =>
-    Effect.gen(function* () {
-      if (message.intent !== "message" || message.kind === "mcp") return undefined;
-      if (message.kind === "slack" || message.kind === "imessage") {
-        const number = parseNumberedReply(message.text);
-        if (number !== undefined) {
-          const choices = yield* deliveredChoices(conversationId, tasks);
-          const label = choices === undefined ? undefined : choiceAt(choices, number);
-          if (choices !== undefined && label !== undefined) {
-            return choices.target.type === "approval"
-              ? { type: "approval-label" as const, text: label }
-              : {
-                  type: "question" as const,
-                  taskId: choices.target.taskId,
-                  questionId: choices.target.questionId,
-                  answer: label,
-                };
-          }
-        }
-      }
-      if (parseApprovalReply(message.text) !== undefined) return undefined;
-      // The tasks already read for this pass. A label is not worth a second scan of older work;
-      // a number still looks those up, because an old approval card stays answerable.
-      const questions = tasks.flatMap((task) =>
-        task.openQuestions.map((question) => ({
-          taskId: task.taskId,
-          questionId: question.questionId,
-          options: question.options,
-        })),
-      );
-      const matched = singleQuestionChoice(message.text, questions);
-      return matched === undefined ? undefined : { type: "question" as const, ...matched };
-    });
+  const { inboundChoice, isDeterministicReply } = makeInboundChoices(ledger);
 
   const receive: ChannelReceptionService["Service"]["receive"] = (inputId, owner) =>
     Effect.gen(function* () {
@@ -1042,11 +941,16 @@ const make = Effect.gen(function* () {
       const readAt = DateTime.formatIso(yield* DateTime.now);
       const stored = yield* ledger.beginReception({ owner, inputId, receptionId, readAt });
       if (stored === undefined || stored.requester === undefined) return;
-      const message = stored.message;
+      if (yield* tt.shouldRefuseTaskThread(ledger, stored)) {
+        yield* tt.refuseTaskThread(ledger, stored, owner);
+        yield* wake.wake;
+        return;
+      }
+      const message = tt.mainThreadInput(stored).message;
       const requester = stored.requester;
       const conversationId = stored.snapshot.conversationId;
       const origin = message.replyAddress;
-      const mention = mentionFor(origin, message.actor.externalActorId);
+      const mention = tt.mentionFor(origin, message.actor.externalActorId);
 
       if (!isHome) {
         yield* ledger.failReception({
@@ -1070,7 +974,6 @@ const make = Effect.gen(function* () {
         return;
       }
 
-      // The bot's copy of the message shows when reception started reading it.
       if (origin.kind === "goat") {
         yield* timeline
           .record({
@@ -1106,7 +1009,6 @@ const make = Effect.gen(function* () {
                 connectionId: message.connectionId,
                 externalActorId: requester.externalActorId,
               });
-        // A link removed or handed to someone else since intake is no longer this sender.
         if (
           linked === undefined ||
           linked.ownerId !== requester.ownerId ||
@@ -1815,7 +1717,7 @@ const make = Effect.gen(function* () {
           kind: base.kind,
           text: evidence === null ? worded : worded + "\n\n" + evidence,
           task,
-          mentionActorId: mentionFor(origin, task.requester.externalActorId),
+          mentionActorId: tt.mentionFor(origin, task.requester.externalActorId),
           options: "options" in base ? base.options : undefined,
         }),
       ];
@@ -1845,7 +1747,7 @@ const make = Effect.gen(function* () {
     (input: ChannelReceptionInput) =>
       Effect.map(generate(input), (r) => Option.getOrUndefined(r)?.replyText.trim() || undefined),
   );
-  return ChannelReceptionService.of({ receive, narrate, acknowledgeSession });
+  return ChannelReceptionService.of({ receive, narrate, acknowledgeSession, isDeterministicReply });
 });
 
 export const layer = Layer.effect(ChannelReceptionService, make);

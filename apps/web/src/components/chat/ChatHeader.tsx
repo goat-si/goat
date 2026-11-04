@@ -32,7 +32,6 @@ import { useAtomValue } from "@effect/atom-react";
 import { useOrchestrationCommand } from "../../state/use-orchestration-command";
 import { readEnvironmentScope, useEnvironmentScope } from "../../state/session";
 import { ProjectFavicon } from "../ProjectFavicon";
-import { GoatBotModeButton } from "../goatBot/GoatBotModeButton";
 import { ThreadNotesButton } from "../../notes/ThreadNotesButton";
 import { AgentScreenCardsToggle } from "../preview/sessions/AgentScreenCardsToggle";
 import {
@@ -517,11 +516,7 @@ export const ChatHeader = memo(function ChatHeader({
           </TooltipPopup>
         </Tooltip>
       ) : null}
-      {globalAgent ? (
-        <div className="flex shrink-0 items-center">
-          <GoatBotModeButton to="bot" />
-        </div>
-      ) : null}
+      {globalAgent ? <div className="flex shrink-0 items-center"></div> : null}
       {isServerThread ? <GuestShareIndicator threadRef={activeThreadRef} /> : null}
     </div>
   );

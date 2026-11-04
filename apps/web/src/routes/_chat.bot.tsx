@@ -1,6 +1,7 @@
 import { useContext, useEffect } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 
+import { validateBotTaskSearch } from "../components/goatBot/botTaskSearch";
 import { GoatBotChatView } from "../components/goatBot/GoatBotChatView";
 import { GoatBotChannelContext } from "../components/goatBot/goatBotChannelPort";
 import { useLegacyGlobalAgentRoute } from "../components/goatBot/goatBotHooks";
@@ -18,6 +19,7 @@ function GoatBotRouteView() {
 }
 
 function GoatBotRouteSession() {
+  const { task } = Route.useSearch();
   const session = useGoatBotSession();
   const homeSettings = useGoatBotHomeSettings();
   const moveTarget = homeSettings.moveTarget;
@@ -25,13 +27,13 @@ function GoatBotRouteSession() {
   const navigate = useNavigate();
   const bot = session.availability.kind === "ready" ? session.availability.bot : null;
   useEffect(() => {
-    if (bot)
+    if (bot && task === undefined)
       void navigate({
         to: "/$environmentId/$threadId",
         params: { environmentId: bot.environmentId, threadId: bot.threadId },
         replace: true,
       });
-  }, [bot, navigate]);
+  }, [bot, navigate, task]);
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
       <GoatBotChatView
@@ -54,5 +56,6 @@ function GoatBotRouteSession() {
 }
 
 export const Route = createFileRoute("/_chat/bot")({
+  validateSearch: validateBotTaskSearch,
   component: GoatBotRouteView,
 });

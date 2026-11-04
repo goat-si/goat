@@ -386,6 +386,22 @@ export const writes = <P, A, E, R>(
     ),
   );
 
+/** Performs a service-specific refusal before the ordinary write admission. */
+export const writesAfter = <P, A, E, R, A2, E2, R2>(
+  preflight: (params: P) => Effect.Effect<A2, E2, R2>,
+  handle: (params: P, preflightResult: A2) => Effect.Effect<A, E, R>,
+) =>
+  declare("write", (params: P) =>
+    refuseReadOnlyClient.pipe(
+      Effect.andThen(preflight(params)),
+      Effect.flatMap((result) =>
+        orchestratingCaller.pipe(
+          Effect.flatMap((caller) => admitted(params, caller.limits, handle(params, result))),
+        ),
+      ),
+    ),
+  );
+
 /**
  * `writes` for a tool whose service acts for the calling thread, so an outside
  * client is refused here, where goat_describe can see it, instead of in the service.

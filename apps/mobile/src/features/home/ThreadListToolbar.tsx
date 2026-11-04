@@ -6,7 +6,6 @@ import {
   Keyboard,
   type TextInputInstance,
   View,
-  Text,
   type LayoutChangeEvent,
 } from "react-native";
 import type { MenuAction } from "@react-native-menu/menu";
@@ -16,10 +15,7 @@ import { AndroidAnchoredMenu } from "../../components/ui/AndroidAnchoredMenu";
 import { Menu } from "../../components/ui/Menu";
 import { SearchField } from "../../components/ui/SearchField";
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
-import { WorkspaceConnectionTitle } from "./WorkspaceConnectionTitle";
-import { useMobileGoatBotModeButton } from "../goat-bot/useMobileGoatBotHomeMode";
-import { useMobileGoatBotModelMenu } from "../goat-bot/useMobileGoatBotModel";
-import { GoatBotModelAndroidMenu } from "../goat-bot/GoatBotModelAndroidMenu";
+import { MobileHomeModeSegments } from "../goat-bot/MobileBotList";
 import { WorkspaceListToolbarRow } from "../workspace/WorkspaceListToolbarRow";
 import { useWorkspaceConnectionState } from "../../state/workspace";
 import { useToolbarLayout } from "../../components/ui/useToolbarLayout";
@@ -38,19 +34,13 @@ export function ThreadListToolbar(props: {
   readonly onLayout?: (event: LayoutChangeEvent) => void;
   readonly onRequestVisibility?: () => void;
 }) {
-  const botMode = useMobileGoatBotModeButton();
-  const mode = props.homeMode ?? botMode.mode;
-  const botKnown = props.botKnown ?? botMode.known;
-  const toggleMode = props.onToggleHomeMode ?? botMode.toggle;
-  const compactBot = mode === "bot" && !props.sidebar;
-  const botModel = useMobileGoatBotModelMenu();
   const navigation = useNavigation();
   const workspace = useWorkspaceTabs();
   const isTabActive = workspace?.isTabActive;
   const homeFocused = useNavigationState((state) => state.routes[state.index]?.name === "Home");
   const listFocused =
     homeFocused && (workspace === null || workspace.state.selectedTab === "threads");
-  const { height, paddingTop, paddingBottom } = useToolbarLayout();
+  const { paddingTop, paddingBottom } = useToolbarLayout();
   const connectionState = useWorkspaceConnectionState();
   const { onRequestVisibility, onSearchQueryChange } = props;
   const searchRef = useRef<TextInputInstance>(null);
@@ -115,16 +105,6 @@ export function ThreadListToolbar(props: {
 
   const goatControls = (
     <>
-      {compactBot && botModel ? <GoatBotModelAndroidMenu menu={botModel} /> : null}
-      {botKnown ? (
-        <AndroidHeaderIconButton
-          accessibilityLabel={
-            mode === "bot" && !botMode.threadOpen ? "Show threads" : "Show GOAT Bot"
-          }
-          icon={mode === "bot" && !botMode.threadOpen ? "text.alignleft" : "text.bubble"}
-          onPress={toggleMode}
-        />
-      ) : null}
       <AndroidHeaderIconButton
         accessibilityLabel="Open notes"
         icon="doc.text"
@@ -139,34 +119,22 @@ export function ThreadListToolbar(props: {
       className={props.sidebar ? "absolute inset-x-0 top-0 z-[4] bg-header px-2" : "bg-header px-2"}
       style={{ paddingTop, paddingBottom }}
     >
-      {compactBot ? (
-        <View className="flex-row items-center gap-1" style={{ minHeight: height }}>
-          <View className="min-w-0 flex-1 pl-4">
-            <WorkspaceConnectionTitle
-              grow
-              onPress={props.onOpenEnvironments}
-              brand={<Text className="text-xl font-semibold text-foreground">GOAT Bot</Text>}
-            />
-          </View>
-          {goatControls}
-        </View>
-      ) : (
-        <WorkspaceListToolbarRow
-          searching={searching}
-          searchField={searchField}
-          onCloseSearch={closeSearch}
-          onOpenSearch={openSearch}
-          searchAccessibilityLabel="Search threads"
-          titleAccessibilityLabel="GOAT, Threads"
-          onOpenEnvironments={props.onOpenEnvironments}
-          filter={
-            <>
-              {filterButton}
-              {!searching ? goatControls : null}
-            </>
-          }
-        />
-      )}
+      <WorkspaceListToolbarRow
+        searching={searching}
+        searchField={searchField}
+        onCloseSearch={closeSearch}
+        onOpenSearch={openSearch}
+        searchAccessibilityLabel="Search threads"
+        titleAccessibilityLabel="GOAT, Threads"
+        onOpenEnvironments={props.onOpenEnvironments}
+        filter={
+          <>
+            {filterButton}
+            {!searching ? goatControls : null}
+          </>
+        }
+      />
+      <MobileHomeModeSegments />
     </View>
   );
 }

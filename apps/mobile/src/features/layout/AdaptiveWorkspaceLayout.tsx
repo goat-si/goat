@@ -21,7 +21,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { Keyboard, Platform, Pressable, Text, useWindowDimensions, View } from "react-native";
+import { Keyboard, Platform, useWindowDimensions, View } from "react-native";
 import { KeyboardController, useKeyboardState } from "react-native-keyboard-controller";
 import Animated, {
   runOnJS,
@@ -89,7 +89,8 @@ import {
 } from "../../native/v5-workspace-context";
 
 import { useNativeLayoutMetrics } from "../../native/native-layout-metrics";
-import { useMobileGoatBotModeButton } from "../goat-bot/useMobileGoatBotHomeMode";
+import { useMobileGoatBotHomeMode } from "../goat-bot/useMobileGoatBotHomeMode";
+import { MobileBotList, MobileHomeModeSegments } from "../goat-bot/MobileBotList";
 import { AndroidHingeObserver } from "../../native/AndroidHingeObserver";
 import { WindowHingeContext } from "../../native/window-hinge-context";
 import { useAndroidWorkspaceRoot } from "../workspace/AndroidWorkspaceTabsProvider";
@@ -201,7 +202,7 @@ function AdaptiveWorkspaceLayoutContent(
     readonly savedThreadListFilters?: ThreadListFilters | undefined;
   },
 ) {
-  const botHome = useMobileGoatBotModeButton();
+  const botHome = useMobileGoatBotHomeMode();
   const projectGroupingMode = props.projectGroupingMode;
   const nativeWorkspace = use(NativeWorkspaceModeContext);
   const usesPresentationHost = use(WorkspacePresentationHostContext);
@@ -507,7 +508,7 @@ function AdaptiveWorkspaceLayoutContent(
       if (layout.primarySidebarOverlaysContent) setPrimarySidebarVisible(false);
       workspace?.dispatch({
         type: "select",
-        tab: detail.name === "Thread" ? "threads" : "pullRequests",
+        tab: detail.name === "PullRequest" ? "pullRequests" : "threads",
       });
       startOpeningDetail(detail);
       navigation.dispatch(selectWorkspaceDetail(detail, sheet));
@@ -867,38 +868,30 @@ function AdaptiveWorkspaceLayoutContent(
                 onRequestVisibility={revealPrimarySidebar}
                 selectedPullRequestKey={props.selectedPullRequestKey ?? null}
               >
-                <AndroidHomeFabLayout sidebar onStartNewTask={handleStartNewTask}>
-                  <ThreadNavigationSidebar
-                    width={layout.listPaneWidth}
-                    visible={panes.primarySidebarVisible}
-                    onRequestVisibility={revealPrimarySidebar}
-                    selectedThreadKey={selectedThreadKey}
-                    onOpenDecisions={handleOpenDecisions}
-                    onOpenSettings={handleOpenSettings}
-                    onOpenEnvironmentSettings={handleOpenEnvironmentSettings}
-                    onNewThreadInProject={handleNewThreadInProject}
-                    onNewThreadOnBranch={handleNewThreadOnBranch}
-                    onOpenPendingTask={handleOpenPendingTask}
-                    onSelectThread={handleSelectThread}
-                    onOpenThreadPullRequests={handleOpenThreadPullRequests}
-                    onSearchQueryChange={setPrimarySidebarSearchQuery}
-                    searchQuery={primarySidebarSearchQuery}
-                  />
-                </AndroidHomeFabLayout>
+                {botHome.mode === "bot" ? (
+                  <MobileBotList />
+                ) : (
+                  <AndroidHomeFabLayout sidebar onStartNewTask={handleStartNewTask}>
+                    {Platform.OS === "ios" ? <MobileHomeModeSegments /> : null}
+                    <ThreadNavigationSidebar
+                      width={layout.listPaneWidth}
+                      visible={panes.primarySidebarVisible}
+                      onRequestVisibility={revealPrimarySidebar}
+                      selectedThreadKey={selectedThreadKey}
+                      onOpenDecisions={handleOpenDecisions}
+                      onOpenSettings={handleOpenSettings}
+                      onOpenEnvironmentSettings={handleOpenEnvironmentSettings}
+                      onNewThreadInProject={handleNewThreadInProject}
+                      onNewThreadOnBranch={handleNewThreadOnBranch}
+                      onOpenPendingTask={handleOpenPendingTask}
+                      onSelectThread={handleSelectThread}
+                      onOpenThreadPullRequests={handleOpenThreadPullRequests}
+                      onSearchQueryChange={setPrimarySidebarSearchQuery}
+                      searchQuery={primarySidebarSearchQuery}
+                    />
+                  </AndroidHomeFabLayout>
+                )}
               </AndroidWorkspaceSidebar>
-              {Platform.OS === "ios" && botHome.known ? (
-                <Pressable
-                  accessibilityRole="button"
-                  onPress={botHome.toggle}
-                  className="border-t border-border bg-drawer px-4 py-3"
-                >
-                  <Text className="text-sm font-semibold text-foreground">
-                    {botHome.mode === "bot" && !botHome.threadOpen
-                      ? "Show threads"
-                      : "Show GOAT Bot"}
-                  </Text>
-                </Pressable>
-              ) : null}
             </RenderErrorBoundary>
           </Animated.View>
         </Animated.View>

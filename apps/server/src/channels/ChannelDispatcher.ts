@@ -1,3 +1,4 @@
+import { sameRequester } from "./channelRequesterIdentity.ts";
 /**
  * ChannelDispatcher - the ledger's central decision maker.
  *
@@ -68,6 +69,7 @@ import {
 } from "./channelIds.ts";
 import { choosePlacement, type PlacementCandidate, usageWindows } from "./channelPlacement.ts";
 import { requesterForDispatch } from "./channelDispatchAuthority.ts";
+import { sessionExemptsCapacity } from "./channelSessionReceipt.ts";
 import { currentChannelIdentity } from "./channelCurrentIdentity.ts";
 import { channelNotesRevision, freezeChannelBrief } from "./channelBriefs.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
@@ -96,9 +98,6 @@ const MEMORY_CEILING_RANK = { none: 0, read: 1, read_write: 2 } as const;
 
 /** How many pieces of one person's work run at once before more wait in the queue. */
 export const WORKERS_PER_REQUESTER = 4;
-
-const sameRequester = (left: ChannelRequester, right: ChannelRequester) =>
-  left.ownerId === right.ownerId && left.principalId === right.principalId;
 
 const withoutKey = <V>(map: ReadonlyMap<string, V>, key: string) => {
   const next = new Map(map);
@@ -890,7 +889,8 @@ const make = Effect.gen(function* () {
           ownerId: requester.ownerId,
           principalId: requester.principalId,
         })) + inFlight;
-      if (busy >= WORKERS_PER_REQUESTER) return;
+      if (busy >= WORKERS_PER_REQUESTER && !(yield* sessionExemptsCapacity(ledger, stored.task)))
+        return;
       if (
         stored.task.kind !== "turn" &&
         stored.task.host === undefined &&

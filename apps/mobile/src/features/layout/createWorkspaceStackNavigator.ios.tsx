@@ -46,9 +46,7 @@ import { useDeviceType, useNativeLayoutMetrics } from "../../native/native-layou
 import { useAdaptiveWorkspaceLayout } from "./AdaptiveWorkspaceLayout";
 import { WorkspacePaneDivider } from "./workspace-pane-divider";
 import { WorkspaceEmptyDetail } from "./WorkspaceEmptyDetail";
-import { GoatBotScreen } from "../goat-bot/GoatBotScreen";
 import { mobileGoatBotWorkspaceVisible } from "../goat-bot/goatBotHomeMode";
-import { useMobileGoatBotHomeMode } from "../goat-bot/useMobileGoatBotHomeMode";
 import { NativeColumnContent as ColumnContent } from "../../native/NativeColumnContent.ios";
 import {
   modalEnvelopeOptions,
@@ -73,7 +71,6 @@ import {
   NativePrimaryColumnContext,
   NativeWorkspaceInspectorContext,
   NativeWorkspaceModeContext,
-  NativeWorkspaceTabActivityContext,
   WorkspaceSlotOptionsContext,
   slotScreenOptions,
 } from "../../native/v5-workspace-context";
@@ -185,10 +182,6 @@ function WorkspaceColumns(
     readonly presentationVisible: boolean;
   },
 ) {
-  const botHome = useMobileGoatBotHomeMode();
-  const workspace = useWorkspaceTabs();
-  const showsBot = botHome.mode === "bot" && workspace?.state.selectedTab !== "pullRequests";
-  const tabActive = use(NativeWorkspaceTabActivityContext)?.active ?? true;
   const {
     layout,
     panes,
@@ -413,7 +406,7 @@ function WorkspaceColumns(
             <V5StackHeader
               options={{
                 headerShown: true,
-                title: showsBot ? "GOAT Bot" : "",
+                title: "",
                 unstable_headerLeftItems: () => [
                   {
                     type: "button",
@@ -428,25 +421,10 @@ function WorkspaceColumns(
               onCompose={detailCompose}
             />
             <ColumnContent>
-              {showsBot && !settingsOpen ? (
-                <NavigationContext value={primary.navigation}>
-                  <NavigationRouteContext value={props.primary}>
-                    <GoatBotScreen
-                      visible={
-                        tabActive &&
-                        layout.usesSplitView &&
-                        !activeDetailKey &&
-                        props.presentationVisible
-                      }
-                    />
-                  </NavigationRouteContext>
-                </NavigationContext>
-              ) : (
-                <WorkspaceEmptyDetail
-                  tab={settingsOpen ? "settings" : selectedTab}
-                  onStartNewTask={detailCompose ? undefined : openNewTask}
-                />
-              )}
+              <WorkspaceEmptyDetail
+                tab={settingsOpen ? "settings" : selectedTab}
+                onStartNewTask={detailCompose ? undefined : openNewTask}
+              />
             </ColumnContent>
           </Split.Screen>
           {screens.routes.map((route) => {

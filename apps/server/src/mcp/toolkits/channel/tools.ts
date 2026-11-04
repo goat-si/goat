@@ -13,6 +13,8 @@ import {
   ChannelTaskExportInput,
   ChannelTaskExportResult,
   ChannelTaskId,
+  ChannelTaskEvent,
+  ChannelQuestionId,
   ChannelTaskReportInput,
   ChannelTaskMoveInput,
   ChannelTaskMoveResult,
@@ -27,6 +29,7 @@ import * as ChannelGateway from "../../../channels/ChannelGateway.ts";
 import * as ChannelLedger from "../../../channels/ChannelLedger.ts";
 import * as ChannelRemoteWorkers from "../../../channels/ChannelRemoteWorkers.ts";
 import * as ChannelRuntime from "../../../channels/ChannelRuntime.ts";
+import * as ChannelSessionTaskActions from "../../../channels/channelSessionTaskActions.ts";
 import * as ChannelWorkerReports from "../../../channels/ChannelWorkerReports.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
@@ -117,7 +120,43 @@ const ChannelBotHomeClaimTool = Tool.make(agentSurfaceRegistry["channel.bot_home
   success: ChannelBotHomeClaimResult,
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["channel.bot_home_claim"]));
 
+const task_follow_upTool = Tool.make(agentSurfaceRegistry["channel.task_follow_up"].name, {
+  ...shared,
+  dependencies: [...shared.dependencies, ChannelSessionTaskActions.ChannelSessionTaskActions],
+  description: agentSurfaceRegistry["channel.task_follow_up"].description,
+  parameters: Schema.Struct({
+    taskId: ChannelTaskId,
+    text: Schema.String,
+    clientRequestId: TrimmedNonEmptyString,
+  }),
+  success: Schema.NullOr(ChannelTaskEvent),
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["channel.task_follow_up"]));
+
+const task_stopTool = Tool.make(agentSurfaceRegistry["channel.task_stop"].name, {
+  ...shared,
+  dependencies: [...shared.dependencies, ChannelSessionTaskActions.ChannelSessionTaskActions],
+  description: agentSurfaceRegistry["channel.task_stop"].description,
+  parameters: Schema.Struct({ taskId: ChannelTaskId, clientRequestId: TrimmedNonEmptyString }),
+  success: Schema.NullOr(ChannelTaskEvent),
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["channel.task_stop"]));
+
+const task_answerTool = Tool.make(agentSurfaceRegistry["channel.task_answer"].name, {
+  ...shared,
+  dependencies: [...shared.dependencies, ChannelSessionTaskActions.ChannelSessionTaskActions],
+  description: agentSurfaceRegistry["channel.task_answer"].description,
+  parameters: Schema.Struct({
+    taskId: ChannelTaskId,
+    questionId: ChannelQuestionId,
+    answer: Schema.String,
+    clientRequestId: TrimmedNonEmptyString,
+  }),
+  success: Schema.NullOr(ChannelTaskEvent),
+}).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["channel.task_answer"]));
+
 export const ChannelToolkit = Toolkit.make(
+  task_follow_upTool,
+  task_stopTool,
+  task_answerTool,
   ChannelIngestTool,
   ChannelInputGetTool,
   ChannelTaskGetTool,

@@ -231,6 +231,10 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   goatBotHome: Schema.optionalKey(Schema.Boolean),
   /** Server answers `channel.getBotStatus`. Older servers leave clients paging `listTasks`. */
   goatBotStatus: Schema.optionalKey(Schema.Boolean),
+  /** Server answers `channel.listBots`. */
+  goatBotProfiles: Schema.optionalKey(Schema.Boolean),
+  /** Server answers task thread queries and mutations. */
+  goatBotTaskThreads: Schema.optionalKey(Schema.Boolean),
   /** `channel.getBotStatus` leaves out tasks that were waiting when the bot thread was last visited. */
   goatBotWaitingRead: Schema.optionalKey(Schema.Boolean),
   /** Server runs a live Slack channel connection. False while only the settings contract exists. */

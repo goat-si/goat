@@ -4,17 +4,13 @@ import type { ChannelTask, ChannelDispatchTarget, ChannelRequester } from "@goat
 import { resolveGoatBotModelSelection } from "@goat/shared/serverSettings";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
-import * as SqlClient from "effect/sql/SqlClient";
-import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as ProviderInstanceRegistry from "../provider/ProviderInstanceRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { captureMemoryGrantCeiling } from "../memory/MemoryAccess.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
 import { requesterForDispatch } from "./channelDispatchAuthority.ts";
 import { goatBotSessionSharingFor } from "./channelIds.ts";
-import { isTerminalRun, sessionStore } from "./channelBotSessionRuns.ts";
 const isLedgerError = Schema.is(ChannelLedger.ChannelLedgerError);
 
 export const bindingKeyFor = (
@@ -41,14 +37,11 @@ export const bindingKeyFor = (
 };
 
 export const makeSessionEligibility = Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient;
   const ledger = yield* ChannelLedger.ChannelLedger;
-  const threads = yield* ThreadManagement.ThreadManagementService;
   const projects = yield* ProjectStore.ProjectStoreV2;
   const providers = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const slackSettings = yield* SlackChannelSettings.SlackChannelSettings;
-  const { currentRow } = sessionStore(sql);
   const eligible = Effect.fn("ChannelBotSession.eligible")(
     function* (task: ChannelTask) {
       const requester = yield* requesterForDispatch(task).pipe(
@@ -69,28 +62,9 @@ export const makeSessionEligibility = Effect.gen(function* () {
       }
       const bound = yield* providers.getInstance(selection.instanceId);
       if (goatBotSessionSharingFor(bound?.driverKind) !== "per_run") return false;
-      const memory = captureMemoryGrantCeiling(requester.grantedScopes, false);
       const bot = yield* ledger.getBot(requester.ownerId);
       if (bot === undefined) return false;
-      if (!(yield* projects.listShells()).some((project) => project.id === bot.bot.projectId))
-        return false;
-      const key = bindingKeyFor(
-        task,
-        {
-          modelSelection: selection,
-          memoryGrantCeiling: memory,
-        },
-        "per_run",
-        requester,
-      );
-      const row = yield* currentRow(key);
-      if (row === undefined) return true;
-      if (row.state === "starting") return false;
-      const records = yield* threads.getThreadRecords(row.thread_id, ["runs", "runtimeRequests"]);
-      return (
-        !records.runs.some((run) => !isTerminalRun(run)) &&
-        !records.runtimeRequests.some((request) => request.status === "pending")
-      );
+      return (yield* projects.listShells()).some((project) => project.id === bot.bot.projectId);
     },
     Effect.mapError((cause) =>
       isLedgerError(cause)

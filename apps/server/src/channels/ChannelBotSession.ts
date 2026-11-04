@@ -1,3 +1,4 @@
+import { readRecords, rejected } from "./channelBotSessionRecords.ts";
 import { bindingKeyFor, makeSessionEligibility } from "./channelSessionEligibility.ts";
 /**
  * ChannelBotSession - GOAT Bot's warm session per conversation and requester: each task is its own
@@ -58,6 +59,8 @@ import { channelBotFilesFor, readChannelBotNotes } from "./channelBotNotes.ts";
 import { canSeeTask, journalFor, RECALL_TASK_SCAN } from "./channelBotRecall.ts";
 import {
   frozenSessionPrefix,
+  visibleOpenWork,
+  formatOpenWork,
   GOAT_BOT_SESSION_RULES,
   sessionContextRevision,
   sessionRotationDue,
@@ -71,6 +74,7 @@ import {
   sessionSendIdsFor,
   stopIdsFor,
   turnSteerIdsFor,
+  toolSteerIdsFor,
 } from "./channelIds.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 import { refuseForward } from "./channelForwardRefusal.ts";
@@ -99,27 +103,6 @@ const requireTarget = (task: ChannelTask) =>
         }),
       )
     : Effect.succeed(task.target);
-
-const readRecords = (
-  threads: ThreadManagement.ThreadManagementService["Service"],
-  threadId: ThreadId,
-) =>
-  threads.getThreadRecords(threadId, [
-    "runs",
-    "messages",
-    "providerTurns",
-    "runtimeRequests",
-    "subagents",
-  ]);
-
-const rejected = (failure: unknown) => {
-  const tag = (failure as { readonly _tag?: string } | undefined)?._tag;
-  return (
-    tag === "OrchestratorCommandRejectedError" ||
-    tag === "OrchestratorCommandPreviouslyRejectedError" ||
-    tag === "ThreadManagementNoSteerableRunError"
-  );
-};
 
 export class ChannelBotSession extends Context.Service<
   ChannelBotSession,
@@ -289,13 +272,10 @@ const make = Effect.gen(function* () {
       task.conversationId,
       CHANNEL_RECEPTION_TAIL_LIMITS.messages,
     );
-    const open = (yield* ledger.listConversationTasks(task.conversationId)).filter(
-      (other) =>
-        other.taskId !== task.taskId &&
-        (other.status === "received" ||
-          other.status === "dispatching" ||
-          other.status === "running" ||
-          other.status === "waiting_input"),
+    const open = visibleOpenWork(
+      yield* ledger.listConversationTasks(task.conversationId),
+      task,
+      requester,
     );
     return frozenSessionPrefix({
       standing: prependStandingInstructions(standing, GOAT_BOT_SESSION_RULES).text,
@@ -311,7 +291,11 @@ const make = Effect.gen(function* () {
                 : [{ role: "assistant" as const, text: entry.replyText }]),
             ],
       ),
-      openWork: open.map((other) => ({ title: other.title, status: other.status })),
+      openWork: open.map((other) => ({
+        taskId: other.taskId,
+        title: other.title,
+        status: other.status,
+      })),
       message,
     });
   });
@@ -555,7 +539,15 @@ const make = Effect.gen(function* () {
       row = yield* currentRow(key);
     }
     const settings = yield* serverSettings.getSettings.pipe(Effect.orDie);
-    const message = turnInstruction(initial.task, botFiles, settings.goatclaw.enabled);
+    const openWork = visibleOpenWork(
+      yield* ledger.listConversationTasks(initial.task.conversationId),
+      initial.task,
+      requester,
+    );
+    const message =
+      turnInstruction(initial.task, botFiles, settings.goatclaw.enabled) +
+      "\n\n" +
+      formatOpenWork(openWork);
     const attachments = yield* inputAttachments(initial.task.originInputId);
     const notesRevision =
       initial.task.briefVersion === undefined
@@ -748,16 +740,17 @@ const make = Effect.gen(function* () {
       yield* ledger.hasEarlierPendingForward({ taskId: event.taskId, sequence: pending.sequence })
     )
       return;
-    const ids = {
-      first: turnSteerIdsFor(event.payload.inputId, "first"),
-      queued: turnSteerIdsFor(event.payload.inputId, "queued"),
-    };
+    const idsFor = (attempt: "first" | "queued") =>
+      event.payload.forwardKey === undefined
+        ? turnSteerIdsFor(event.payload.inputId, attempt)
+        : toolSteerIdsFor(event.payload.forwardKey, attempt);
+    const ids = { first: idsFor("first"), queued: idsFor("queued") };
     const result = yield* sendForTask(
       stored,
       worker.threadId,
       "Follow-up from " + event.payload.from + ": " + event.payload.text,
       ids,
-      yield* inputAttachments(event.payload.inputId),
+      event.payload.forwardKey === undefined ? yield* inputAttachments(event.payload.inputId) : [],
     );
     const own = [ids.first.messageId, ids.queued.messageId];
     if (result._tag === "failed" || result._tag === "permission_changed") {

@@ -391,3 +391,5 @@ changed: the worker files `goat_origin_report` there, and
   then the oldest, and records how many were dropped as task progress.
 - **Refused answers.** If the remote refuses an answer because the worker thread now runs above
   the requester's ceiling, the question is asked again with the answer quoted, as on this machine.
+
+Task views are scoped to the owner and kept separately from task lifecycle. `channel.listBotThreads` excludes session turn tasks; tasks stored before kinds existed count as work.

@@ -27,6 +27,20 @@ export function createChannelEnvironmentAtoms<R, E>(
       label: "environment-data:channel:ensure-bot",
       tag: CHANNEL_GATEWAY_WS_METHODS.ensureBot,
     }),
+    listBots: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:channel:list-bots",
+      tag: CHANNEL_GATEWAY_WS_METHODS.listBots,
+      staleTimeMs: 2_000,
+    }),
+    listBotThreads: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:channel:list-bot-threads",
+      tag: CHANNEL_GATEWAY_WS_METHODS.listBotThreads,
+      staleTimeMs: 2_000,
+    }),
+    updateTaskView: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:channel:update-task-view",
+      tag: CHANNEL_GATEWAY_WS_METHODS.updateTaskView,
+    }),
     ingest: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:channel:ingest",
       tag: CHANNEL_GATEWAY_WS_METHODS.ingest,

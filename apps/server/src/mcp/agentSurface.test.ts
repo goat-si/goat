@@ -74,11 +74,11 @@ const registered = catalog.pipe(
 
 it("gives every entry a unique path, listed name and resolvable schema reference", () => {
   // Includes upload/report receipts, origin binding, OpenCodex sync, Child setup, storage tools, fill_secret, sign_in_state, site notes, browser claims and memory recall.
-  expect(entries).toHaveLength(291);
+  expect(entries).toHaveLength(294);
   expect(new Set(entries.map((entry) => entry.name)).size).toBe(entries.length);
   expect(new Set(entries.map(listedToolName)).size).toBe(entries.length);
   // 75 shipped names off the path grammar plus five whose verb D11 normalized.
-  expect(entries.flatMap((entry) => entry.legacyNames)).toHaveLength(80);
+  expect(entries.flatMap((entry) => entry.legacyNames)).toHaveLength(83);
   for (const [path, entry] of Object.entries(agentSurfaceRegistry)) {
     expect(path).toBe(entry.path);
     expect(path).toMatch(/^[a-z][a-z_]*\.[a-z][a-z_]*$/);
@@ -432,6 +432,9 @@ const ACCESS_EXCEPTIONS: Readonly<
   "storage.clean": { reason: "dryRunDefault", readOnlyClient: "reached" },
   "permission_profile.sync": { reason: "clientOnly", thread: "denied", fullClient: "denied" },
   "computer_use.update": { reason: "clientOnly", thread: "denied", fullClient: "denied" },
+  "channel.task_follow_up": { reason: "grantChecked", thread: "denied", fullClient: "denied" },
+  "channel.task_stop": { reason: "grantChecked", thread: "denied", fullClient: "denied" },
+  "channel.task_answer": { reason: "grantChecked", thread: "denied", fullClient: "denied" },
   "channel.task_move": { reason: "grantChecked", thread: "denied", fullClient: "denied" },
   "cloud_machine.create": { reason: "grantChecked", thread: "denied", fullClient: "denied" },
   "cloud_machine.stop": { reason: "grantChecked", thread: "denied", fullClient: "denied" },

@@ -54,7 +54,6 @@ import {
   type ThreadId,
 } from "@goat/contracts";
 import type { OlderSettledScope } from "@goat/client-runtime/state/threads";
-
 import { ChevronDownIcon, PlusIcon } from "~/components/solar";
 import {
   Fragment,
@@ -239,7 +238,7 @@ import {
 } from "./sidebar/routeReveal";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { SidebarContent, SidebarGroup, useSidebar } from "./ui/sidebar";
-import { GoatBotSidebarRow } from "./goatBot/GoatBotSidebarRow";
+import { GoatBotSidebarTabs, useBotSidebarSelected } from "./goatBot/GoatBotSidebarTabs";
 import { DecisionInboxSidebarRow } from "./decisions/DecisionInboxSidebarRow";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { SidebarThreadHeader } from "./sidebar/SidebarThreadHeader";
@@ -755,6 +754,7 @@ function readRouteThreadKey(router: AnyRouter): string | null {
 }
 
 export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReveal }) {
+  const botSelected = useBotSidebarSelected();
   const {
     projects,
     serverConfigs,
@@ -2847,7 +2847,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   };
 
   // The button mirrors chat.new. With no last work, multi-project setups
-  // open the project picker; single-project setups create in context.
   // chat.newLocal remains the shortcut for the contextual action, even with
   // one project, where its workspace mode can differ from last work.
   const newThreadShortcutLabel = shortcutLabelForCommand(keybindings, "chat.new");
@@ -2857,13 +2856,15 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       <ThreadContextDragGhost />
       <SidebarChromeHeader isElectron={isElectron} />
       <SidebarContent
+        hidden={botSelected}
         ref={sidebarContentRef}
         className="min-h-full"
         fixedHeader={
           <>
             {/* Lifted above the stage backdrop, whose fade bleeds below the
                 header and would otherwise paint across the search row's outline. */}
-            <SidebarGroup className="z-[1]">
+            <GoatBotSidebarTabs />
+            <SidebarGroup hidden={botSelected} className="z-[1]">
               <SidebarThreadHeader
                 searchFieldRef={headerSearchRef}
                 hasProjects={projectGroups.length > 0}
@@ -2899,7 +2900,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 onClearSearch={clearThreadSearch}
               />
             </SidebarGroup>
-            <GoatBotSidebarRow />
           </>
         }
       >

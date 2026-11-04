@@ -8,3 +8,5 @@ export * from "./sendQueue.ts";
 export * from "./availability.ts";
 export * from "./homeSync.ts";
 export * from "./model.ts";
+export * from "./taskVisibility.ts";
+export * from "./botRoster.ts";

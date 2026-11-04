@@ -1,3 +1,4 @@
+import { GOAT_BOT_ROUTING_SEARCH_ITEMS } from "./settingsSearchGoatBotItems";
 import { UPDATES_SETTINGS_SEARCH_ITEMS } from "./settingsSearchUpdatesItems";
 import { GOAT_CONNECT_COMING_SOON, isGoatConnectEnabled } from "@goat/shared/goatConnect";
 import { isElectron } from "~/env";
@@ -876,13 +877,7 @@ export const SETTINGS_SEARCH_ITEMS = [
     targetId: "goat-bot",
     searchTerms: ["goat bot home computer environment cluster"],
   },
-  {
-    id: "channel-auto-placement",
-    title: "Automatically choose a worker computer",
-    to: "/settings/goat-bot",
-    targetId: "goat-bot",
-    searchTerms: ["channel placement quota ssh host worker automatic"],
-  },
+  ...GOAT_BOT_ROUTING_SEARCH_ITEMS,
   {
     id: "goat-bot-model",
     title: "GOAT Bot model",

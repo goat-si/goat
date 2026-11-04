@@ -1,3 +1,4 @@
+import * as ChannelBotThreads from "./channels/ChannelBotThreads.ts";
 import * as Fiber from "effect/Fiber";
 import { AgentWorkspaceTerminalPolicyThreadLookup } from "./AgentWorkspaceTerminalPolicy.ts";
 import * as HubRpcSocket from "./auth/HubRpcSocket.ts";
@@ -26,7 +27,6 @@ import * as HubProxySessions from "./hubProxy/HubProxySessions.ts";
 import { memoryError } from "./mcp/toolkits/memory/handlers.ts";
 import * as MemoryService from "./memory/MemoryService.ts";
 import * as SiteNotes from "./preview/SiteNotes.ts";
-
 import * as MemorySyncService from "./memory/MemorySyncService.ts";
 import { ProviderMemoryImportRuntime } from "./memory/imports/MemoryImportTypes.ts";
 import * as NoteWorkService from "./notes/NoteWorkService.ts";
@@ -40,7 +40,6 @@ import * as ProviderHostSync from "./provider/ProviderHostSync.ts";
 import * as RemoteLaunchCatalog from "./remoteReports/RemoteLaunchCatalog.ts";
 import * as SshHostSetup from "./sshRemote/SshHostSetup.ts";
 import * as SshWorkspaceSync from "./sshRemote/SshWorkspaceSync.ts";
-
 import {
   AcpRegistryOperationError,
   AssetWorkspaceContextNotFoundError,
@@ -140,7 +139,6 @@ import { subscribeCodexAuthCallback } from "./provider/CodexAuthCallback.ts";
 import { subscribeChatGptHandoff } from "./provider/CodexChatGptHandoff.ts";
 import { rpcInitialItems } from "./rpcInitialItems.ts";
 import { withWebSocketIdleTimeout } from "./wsIdleTimeout.ts";
-
 import * as AcpRegistryRuntimeCoordinator from "@goat/provider-acp-registry/server/AcpRegistryRuntimeCoordinator";
 import * as AcpRegistrySupport from "@goat/provider-acp-registry/server/AcpRegistrySupport";
 import * as RelayClient from "@goat/shared/relayClient";
@@ -162,6 +160,7 @@ import { requiredScopeForDeviceList, rpcAuthorizationError } from "./auth/RpcAut
 import * as SessionStore from "./auth/SessionStore.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as ChannelBotDirectory from "./channels/ChannelBotDirectory.ts";
+import * as ChannelBotProfiles from "./channels/ChannelBotProfiles.ts";
 import * as ChannelBotRegistry from "./channels/ChannelBotRegistry.ts";
 import * as ChannelGateway from "./channels/ChannelGateway.ts";
 import * as ChannelIdentityService from "./channels/ChannelIdentityService.ts";
@@ -329,9 +328,7 @@ import {
   withProviderStatusChanges,
 } from "./serverConfigUpdates.ts";
 import { isNetworkPath } from "@goat/shared/path";
-
 const isProviderUploadFeedbackError = Schema.is(ProviderUploadFeedbackError);
-
 function withoutWorkspaceSnapshots(providers: ReadonlyArray<ServerProvider>): ServerProvider[] {
   return providers.map(({ workspaceSnapshots: _workspaceSnapshots, ...provider }) => provider);
 }
@@ -1307,6 +1304,7 @@ export const layerWsRpc = (
       const channelGateway = yield* ChannelGateway.ChannelGateway;
       const channelLedger = yield* ChannelLedger.ChannelLedger;
       const channelBots = yield* ChannelBotRegistry.ChannelBotRegistry;
+      const channelBotProfiles = yield* ChannelBotProfiles.ChannelBotProfiles;
       const channelIdentities = yield* ChannelIdentityService.ChannelIdentityService;
       const slackChannelSettings = yield* SlackChannelSettings.SlackChannelSettings;
       const channelEnvironmentId = yield* (yield* ServerEnvironment.ServerEnvironment)
@@ -1954,7 +1952,6 @@ export const layerWsRpc = (
       const mutateProject = Effect.fn("ws.projects.mutate")(function* (mutation: ProjectMutation) {
         return yield* mutateProjectWithClone(projectService, projectCloneTracker, mutation);
       });
-
       const noteHandlers = makeNoteRpcHandlers(
         yield* NotesService.NotesService,
         yield* NoteWorkService.NoteWorkService,
@@ -1963,6 +1960,9 @@ export const layerWsRpc = (
       const channelHandlers = ServerWsChannelRpcGroup.of({
         [CHANNEL_GATEWAY_WS_METHODS.ensureBot]: (input) => channelBots.ensure(input, channelOwner),
         [CHANNEL_GATEWAY_WS_METHODS.getBotStatus]: () => channelBots.status(channelOwner),
+        [CHANNEL_GATEWAY_WS_METHODS.listBots]: () =>
+          channelBotProfiles.list(channelOwner).pipe(Effect.map((bots) => ({ bots }))),
+        ...ChannelBotThreads.rpcHandlers(yield* ChannelBotThreads.ChannelBotThreads, channelOwner),
         // Waits only for durable storage; the reply arrives later on the bot thread.
         [CHANNEL_GATEWAY_WS_METHODS.ingest]: (input) =>
           channelGateway.ingest(input, {

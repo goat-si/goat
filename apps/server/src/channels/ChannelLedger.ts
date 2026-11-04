@@ -1,3 +1,4 @@
+import { countBusyTasks } from "./channelBusyTasks.ts";
 import { forwardQueries } from "./channelForwardQueries.ts";
 import { deliveryLedger } from "./channelDeliveryLedger.ts";
 import * as SessionReceiptGate from "../orchestration-v2/goat/SessionReceiptGate.ts";
@@ -1552,23 +1553,7 @@ const make = Effect.gen(function* () {
         Effect.mapError(toLedgerError("listOpenWorkerRuns")),
       ),
 
-    countBusyTasks: (input) =>
-      sql<{ readonly busy: number }>`
-        SELECT COUNT(*) AS busy FROM channel_tasks
-        WHERE owner_id = ${input.ownerId}
-          AND json_extract(task_json, '$.requester.principalId') = ${input.principalId}
-          AND (status IN ('dispatching', 'running')
-            OR (status = 'waiting_input' AND json_extract(task_json, '$.worker') IS NOT NULL)
-            -- Stopped, but its worker may still run until the stop goes through.
-            OR (status = 'cancelled' AND EXISTS (
-              SELECT 1 FROM channel_task_events AS stop
-              WHERE stop.task_id = channel_tasks.task_id AND stop.type = 'task.cancelled'
-                AND stop.forward_state = 'pending'
-            )))
-      `.pipe(
-        Effect.map((rows) => rows[0]?.busy ?? 0),
-        Effect.mapError(toLedgerError("countBusyTasks")),
-      ),
+    countBusyTasks: (input) => countBusyTasks(sql, input),
 
     outcomeDeliveries: (taskIds) =>
       taskIds.length === 0

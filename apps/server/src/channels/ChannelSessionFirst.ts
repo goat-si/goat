@@ -14,6 +14,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as ChannelBotHome from "./ChannelBotHome.ts";
 import * as ChannelBotSession from "./ChannelBotSession.ts";
 import * as ChannelBotTimeline from "./ChannelBotTimeline.ts";
@@ -21,12 +22,13 @@ import * as ChannelDeliveryWorker from "./ChannelDeliveryWorker.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelWake from "./ChannelWake.ts";
+import { mayAnswerFor } from "./ChannelGateway.ts";
 import { resolveSessionRun } from "./channelBotSessionRuns.ts";
 import { CHANNEL_COPY, inboundTextWithFiles } from "./channelCopy.ts";
-import { deliveryIdFor, taskIdFor } from "./channelIds.ts";
+import { deliveryIdFor, taskIdFor, toolSteerIdsFor } from "./channelIds.ts";
 import { isSessionClaim, sealedSessionLine, sessionClaim } from "./channelSessionReceipt.ts";
-import { makeCreatedTasks } from "./channelTaskWrites.ts";
-import { WORKERS_PER_REQUESTER } from "./ChannelDispatcher.ts";
+import { isTerminalThread, mainThreadInput } from "./channelTerminalThread.ts";
+import { makeCreatedTasks, prepareTransition } from "./channelTaskWrites.ts";
 
 export class ChannelSessionFirst extends Context.Service<
   ChannelSessionFirst,
@@ -61,6 +63,7 @@ const make = Effect.gen(function* () {
   const reception = yield* ChannelReceptionService.ChannelReceptionService;
   const delivery = yield* ChannelDeliveryWorker.ChannelDeliveryWorker;
   const threads = yield* ThreadManagement.ThreadManagementService;
+  const settings = yield* ServerSettings.ServerSettingsService;
   const home = yield* ChannelBotHome.ChannelBotHome;
   const wake = yield* ChannelWake.ChannelWake;
   const timeline = yield* ChannelBotTimeline.ChannelBotTimeline;
@@ -91,6 +94,9 @@ const make = Effect.gen(function* () {
               originKind: "goat",
               kind: "inbound",
               inputId: stored.snapshot.inputId,
+              ...(stored.message.intent === "message" && stored.message.taskId !== undefined
+                ? { taskId: stored.message.taskId }
+                : {}),
               readAt,
             },
           },
@@ -108,6 +114,11 @@ const make = Effect.gen(function* () {
     runId?: string,
     turnItemId?: string,
   ) {
+    if (yield* isTerminalThread(ledger, stored)) {
+      const sessionTask = yield* ledger.getTask(taskIdFor(stored.snapshot.inputId, 0));
+      if (sessionTask?.task.instruction === inboundTextWithFiles(stored.message))
+        stored = mainThreadInput(stored);
+    }
     const inputId = stored.snapshot.inputId;
     const expected = stored.snapshot.receptionId;
     if (!isSessionClaim(expected) || expected === undefined) return false;
@@ -140,7 +151,8 @@ const make = Effect.gen(function* () {
             kind: "receipt",
             text,
             inReplyToInputId: inputId,
-            taskId,
+            taskId:
+              stored.message.intent === "message" ? (stored.message.taskId ?? taskId) : taskId,
             ...(destination.kind === "slack" && actor !== undefined
               ? { mentionActorId: actor }
               : {}),
@@ -159,7 +171,7 @@ const make = Effect.gen(function* () {
     inputId: ChannelInputId,
     owner: string,
   ) {
-    const stored = yield* ledger.getInput(inputId);
+    let stored = yield* ledger.getInput(inputId);
     if (
       stored === undefined ||
       stored.snapshot.state !== "accepted" ||
@@ -169,6 +181,106 @@ const make = Effect.gen(function* () {
     )
       return false;
     const requester = stored.requester;
+    const requestedTaskId = stored.message.taskId;
+    let threadTask: ChannelLedger.ChannelStoredTask | undefined;
+    if (requestedTaskId !== undefined) {
+      const target = yield* ledger.getTask(requestedTaskId);
+      if (
+        target !== undefined &&
+        target.ownerId === requester.ownerId &&
+        target.task.conversationId === stored.snapshot.conversationId &&
+        mayAnswerFor(requester, target.task.requester)
+      )
+        threadTask = target;
+      const terminal =
+        threadTask !== undefined &&
+        ["completed", "failed", "cancelled"].includes(threadTask.task.status);
+      if (!terminal) {
+        const now = DateTime.formatIso(yield* DateTime.now);
+        const receptionId = ChannelReceptionId.make("channel-task-thread:" + inputId);
+        const claimed = yield* ledger.beginReception({ owner, inputId, receptionId, readAt: now });
+        if (claimed === undefined) return true;
+        const key = "channel-task-thread:" + inputId;
+        const isHome = yield* home.requireHome.pipe(
+          Effect.as(true),
+          Effect.orElseSucceed(() => false),
+        );
+        const validWorker =
+          isHome &&
+          threadTask !== undefined &&
+          (threadTask.task.status === "running" || threadTask.task.status === "waiting_input") &&
+          threadTask.task.worker !== undefined &&
+          threadTask.task.worker.host === undefined;
+        const bot =
+          validWorker && threadTask !== undefined
+            ? yield* ledger.getBot(threadTask.ownerId)
+            : undefined;
+        const prepared =
+          validWorker && threadTask !== undefined
+            ? prepareTransition(
+                threadTask,
+                {
+                  type: "task.followup.received",
+                  payload: {
+                    inputId,
+                    forwardKey: key,
+                    text: stored.message.text,
+                    from: requester.displayName,
+                    generation: threadTask.task.generation,
+                  },
+                },
+                now,
+                bot?.bot,
+                {
+                  actor: "user",
+                  forward: true,
+                  pendingAnswerMessageId: toolSteerIdsFor(key).messageId,
+                },
+              )
+            : undefined;
+        const accepted = prepared?.ok === true;
+        const text = accepted
+          ? "I'll send that to the task." +
+            (stored.message.attachments.length > 0
+              ? " Attachments stay in the conversation and are not sent to the task."
+              : "")
+          : threadTask !== undefined &&
+              (threadTask.task.status === "received" || threadTask.task.status === "dispatching")
+            ? "That task is still starting. Try again in a moment."
+            : "That task isn't available here. Send it in the main chat.";
+        if (threadTask !== undefined) yield* markRead(claimed);
+        const causeKey = "reply:" + inputId;
+        const deliveryId = deliveryIdFor(causeKey);
+        yield* ledger.completeReception({
+          owner,
+          inputId,
+          receptionId,
+          replyText: text,
+          decision: { replyText: text, action: { type: "report_only" } },
+          ...(prepared?.ok === true ? { taskEvents: [prepared.write] } : {}),
+          deliveries: [
+            {
+              causeKey,
+              deliveryId,
+              inputId,
+              message: {
+                deliveryId,
+                destination: stored.message.replyAddress,
+                kind: "receipt",
+                text,
+                inReplyToInputId: inputId,
+                ...(threadTask === undefined ? {} : { taskId: threadTask.task.taskId }),
+              },
+            },
+            ...(prepared?.ok === true ? prepared.deliveries : []),
+          ],
+          now,
+        });
+        yield* delivery.deliverReceipts(owner);
+        yield* wake.wake;
+        return true;
+      }
+    }
     if (
       requester.originKind === "mcp" ||
       !requester.grantedScopes.includes("orchestration:operate")
@@ -181,21 +293,12 @@ const make = Effect.gen(function* () {
       ))
     )
       return false;
-    const open =
-      yield* sql`SELECT 1 FROM channel_tasks t WHERE t.conversation_id = ${stored.snapshot.conversationId}
-      AND (t.status IN ('received', 'dispatching', 'running', 'waiting_input') OR EXISTS (
-        SELECT 1 FROM channel_outbox o WHERE o.task_id = t.task_id AND o.kind IN ('result', 'failure')
-          AND o.state IN ('pending', 'delivering')) OR EXISTS (
-        SELECT 1 FROM channel_task_events e WHERE e.task_id = t.task_id
-          AND e.type IN ('task.completed', 'task.failed', 'task.cancelled') AND e.narration_state = 'pending')) LIMIT 1`;
-    if (
-      open.length > 0 ||
-      (yield* ledger.countBusyTasks({
-        ownerId: requester.ownerId,
-        principalId: requester.principalId,
-      })) >= WORKERS_PER_REQUESTER
-    )
-      return false;
+    if ((yield* settings.getSettings).goatBotSessionRouting === "reception") return false;
+    if (yield* reception.isDeterministicReply(stored)) {
+      if (threadTask === undefined) return false;
+      stored = mainThreadInput(stored);
+      threadTask = undefined;
+    }
     const now = DateTime.formatIso(yield* DateTime.now);
     const [createdTask] = makeCreatedTasks({
       action: {
@@ -203,7 +306,11 @@ const make = Effect.gen(function* () {
         title:
           stored.message.text.trim().split(/\s+/u).slice(0, 12).join(" ").slice(0, 120) ||
           "Request",
-        instruction: inboundTextWithFiles(stored.message),
+        instruction:
+          (threadTask === undefined
+            ? ""
+            : `Task context: ${threadTask.task.taskId}; ${threadTask.task.title}; ${threadTask.task.status}; last summary: ${threadTask.task.resultSummary ?? "none"}.\n\n`) +
+          inboundTextWithFiles(stored.message),
       },
       inputId,
       conversationId: stored.snapshot.conversationId,
@@ -220,7 +327,10 @@ const make = Effect.gen(function* () {
       createdTask,
       receptionId: ChannelReceptionId.make(sessionClaim(inputId)),
     });
-    if (claimed) yield* schedule((yield* ledger.getInput(inputId)) ?? stored, owner);
+    if (claimed) {
+      const claimedInput = (yield* ledger.getInput(inputId)) ?? stored;
+      yield* schedule({ ...claimedInput, message: stored.message }, owner);
+    }
     return claimed;
   }, Effect.mapError(mapError));
 

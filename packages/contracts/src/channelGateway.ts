@@ -1,5 +1,6 @@
 import * as Schema from "effect/Schema";
 
+import { BotProfile } from "./botProfile.ts";
 import { AuthEnvironmentScopes } from "./auth.ts";
 import {
   EnvironmentId,
@@ -9,6 +10,7 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
+import { ChannelChildWorkState } from "./channelChildWork.ts";
 import { ChatAttachment } from "./chatAttachment.ts";
 import {
   ChannelActorRef,
@@ -226,6 +228,7 @@ const CHANNEL_GATEWAY_FAILURE_MESSAGES = {
   persistence_failed: "Could not store the channel message.",
   delivery_failed: "Could not deliver the channel message.",
   not_found: "The requested channel record does not exist.",
+  task_not_found: "The requested channel task does not exist.",
   not_home: "GOAT Bot runs on another machine in this cluster.",
 } as const;
 
@@ -287,6 +290,62 @@ export const ChannelGetBotStatusResult = Schema.Struct({
 });
 export type ChannelGetBotStatusResult = typeof ChannelGetBotStatusResult.Type;
 
+/** Main first; never creates a bot. Empty until the canonical bot exists. */
+export const ChannelListBotsInput = Schema.Struct({});
+export const ChannelListBotsResult = Schema.Struct({ bots: Schema.Array(BotProfile) });
+export type ChannelListBotsInput = typeof ChannelListBotsInput.Type;
+export type ChannelListBotsResult = typeof ChannelListBotsResult.Type;
+
+export const ChannelTaskView = Schema.Struct({
+  taskId: ChannelTaskId,
+  pinnedAt: Schema.NullOr(IsoDateTime),
+  doneAt: Schema.NullOr(IsoDateTime),
+  readThrough: Schema.NullOr(IsoDateTime),
+});
+export type ChannelTaskView = typeof ChannelTaskView.Type;
+
+export const ChannelUpdateTaskViewInput = Schema.Struct({
+  taskId: ChannelTaskId,
+  pinned: Schema.optional(Schema.Boolean),
+  done: Schema.optional(Schema.Boolean),
+  readThrough: Schema.optional(IsoDateTime),
+});
+export type ChannelUpdateTaskViewInput = typeof ChannelUpdateTaskViewInput.Type;
+
+export const BotThreadRow = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("task"),
+    task: Schema.Struct({
+      taskId: ChannelTaskId,
+      title: TrimmedNonEmptyString,
+      status: ChannelTaskStatus,
+      updatedAt: IsoDateTime,
+      completedAt: Schema.optional(IsoDateTime),
+    }),
+    view: ChannelTaskView,
+    lastActivityAt: IsoDateTime,
+    unread: Schema.Boolean,
+    mainMessagesSinceQuiet: NonNegativeInt,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("coding"),
+    taskId: ChannelTaskId,
+    environmentId: EnvironmentId,
+    threadId: ThreadId,
+    title: Schema.optional(Schema.String),
+    state: ChannelChildWorkState,
+    lastActivityAt: IsoDateTime,
+  }),
+]);
+export type BotThreadRow = typeof BotThreadRow.Type;
+export const ChannelListBotThreadsInput = Schema.Struct({});
+export type ChannelListBotThreadsInput = typeof ChannelListBotThreadsInput.Type;
+export const ChannelListBotThreadsResult = Schema.Struct({
+  rows: Schema.Array(BotThreadRow),
+  mainMessageCount: NonNegativeInt,
+});
+export type ChannelListBotThreadsResult = typeof ChannelListBotThreadsResult.Type;
+
 export const ChannelGetTaskInput = Schema.Struct({ taskId: ChannelTaskId });
 export type ChannelGetTaskInput = typeof ChannelGetTaskInput.Type;
 
@@ -347,6 +406,9 @@ export type ChannelBotHomeClaimResult = typeof ChannelBotHomeClaimResult.Type;
 export const CHANNEL_GATEWAY_WS_METHODS = {
   ensureBot: "channel.ensureBot",
   getBotStatus: "channel.getBotStatus",
+  listBots: "channel.listBots",
+  listBotThreads: "channel.listBotThreads",
+  updateTaskView: "channel.updateTaskView",
   ingest: "channel.ingest",
   getTask: "channel.getTask",
   listTasks: "channel.listTasks",
@@ -363,6 +425,9 @@ export const CHANNEL_MCP_TOOL_NAMES = {
   taskList: "channel_task_list",
   taskReport: "channel_task_report",
   taskMove: "channel_task_move",
+  taskFollowUp: "channel_task_follow_up",
+  taskStop: "channel_task_stop",
+  taskAnswer: "channel_task_answer",
   botHome: "channel_bot_home",
   botHomeClaim: "channel_bot_home_claim",
 } as const;
