@@ -260,6 +260,8 @@ are, and cleanup covers both the default folder and the custom one.
 If the custom folder can't be used when a thread starts, for example because its drive is
 unmounted, the worktree goes in the default folder instead. The thread's setup steps say so, and
 **Settings → Storage** shows a warning under **Worktree location** until the folder is back.
+A folder inside the system's temporary directory, such as /tmp, is never used, because the
+operating system can delete it on its own; new worktrees go in the default folder instead.
 
 ### Slow worktrees on Windows
 
