@@ -96,6 +96,8 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.browserClaimsSubscribe]: AuthOrchestrationReadScope,
   [WS_METHODS.previewClose]: AuthPreviewOperateScope,
   [WS_METHODS.serverRunStorageCleanup]: AuthSettingsWriteScope,
+  [WS_METHODS.threadRestoreWorkspace]: AuthOrchestrationOperateScope,
+  [WS_METHODS.serverRespondWorktreeCleanupPreview]: AuthSettingsWriteScope,
   // Lets a copied state's automation act; settings:write already governs channels and links.
   [WS_METHODS.serverResumeAutomation]: AuthSettingsWriteScope,
   [WS_METHODS.serverCompactStorage]: AuthEnvironmentMaintainScope,

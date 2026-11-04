@@ -22,5 +22,12 @@ export const storageRpcHandlers = Effect.fn("storageRpcHandlers")(function* (ses
     [WS_METHODS.serverCleanUpStorageItems]: (input: StorageCleanInput) =>
       reclaim.clean({ items: input.items, actor: "client:" + sessionId }),
     [WS_METHODS.serverSubscribeDiskPressure]: () => pressure.disk,
+    // WIP(contracts commit): the worktree retention lanes replace these three.
+    [WS_METHODS.serverRespondWorktreeCleanupPreview]: () =>
+      Effect.die("server.respondWorktreeCleanupPreview is not wired yet"),
+    [WS_METHODS.threadGetWorkspaceStatus]: () =>
+      Effect.die("thread.getWorkspaceStatus is not wired yet"),
+    [WS_METHODS.threadRestoreWorkspace]: () =>
+      Effect.die("thread.restoreWorkspace is not wired yet"),
   } as const;
 });

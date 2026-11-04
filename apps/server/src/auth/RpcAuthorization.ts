@@ -134,6 +134,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.serverRemoveKeybinding]: AuthSettingsWriteScope,
   [WS_METHODS.serverGetStorageCleanupReport]: AuthOrchestrationReadScope,
   [WS_METHODS.serverGetWorktreesDirectoryStatus]: AuthOrchestrationReadScope,
+  [WS_METHODS.threadGetWorkspaceStatus]: AuthOrchestrationReadScope,
   [WS_METHODS.serverGetDatabaseStorage]: AuthOrchestrationReadScope,
   [WS_METHODS.serverGetStorageUsage]: AuthOrchestrationReadScope,
   [WS_METHODS.serverSubscribeDiskPressure]: AuthOrchestrationReadScope,

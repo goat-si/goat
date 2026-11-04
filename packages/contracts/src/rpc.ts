@@ -1,4 +1,5 @@
 import { WsComputerUseHistoryRpc, WsComputerUseStatusChangesRpc } from "./computerUseHistoryRpc.ts";
+import * as StorageCleanupRpcs from "./storageCleanupRpcs.ts";
 import {
   HandoffReadInput,
   HandoffRespondInput,
@@ -428,7 +429,6 @@ import {
 } from "./storageUsage.ts";
 import { HostDiskPressure } from "./hostPressure.ts";
 import {
-  StorageCleanupReport,
   DatabaseStorageStatus,
   ServerSettings,
   ServerSettingsError,
@@ -519,6 +519,7 @@ import {
 } from "./hubProxy.ts";
 
 export const WS_METHODS = {
+  ...StorageCleanupRpcs.STORAGE_CLEANUP_WS_METHODS,
   ...MEMORY_WS_METHODS,
   ...BROWSER_CLAIMS_WS_METHODS,
 
@@ -648,9 +649,7 @@ export const WS_METHODS = {
   serverCommitDesktopUpdate: "server.commitDesktopUpdate",
   serverUpsertKeybinding: "server.upsertKeybinding",
   serverRemoveKeybinding: "server.removeKeybinding",
-  serverRunStorageCleanup: "server.runStorageCleanup",
   serverResumeAutomation: "server.resumeAutomation",
-  serverGetStorageCleanupReport: "server.getStorageCleanupReport",
   serverGetWorktreesDirectoryStatus: "server.getWorktreesDirectoryStatus",
   serverGetDatabaseStorage: "server.getDatabaseStorage",
   serverCompactStorage: "server.compactStorage",
@@ -1048,20 +1047,9 @@ const WsServerCommitDesktopUpdateRpc = Rpc.make(WS_METHODS.serverCommitDesktopUp
   error: Schema.Union([ServerSelfUpdateError, EnvironmentAuthorizationError]),
 });
 
-const WsServerRunStorageCleanupRpc = Rpc.make(WS_METHODS.serverRunStorageCleanup, {
-  payload: Schema.Struct({}),
-  success: StorageCleanupReport,
-  error: Schema.Union([ServerSettingsError, EnvironmentAuthorizationError]),
-});
 const WsServerResumeAutomationRpc = Rpc.make(WS_METHODS.serverResumeAutomation, {
   payload: Schema.Struct({}),
   error: Schema.Union([AutomationResumeError, EnvironmentAuthorizationError]),
-});
-const WsServerGetStorageCleanupReportRpc = Rpc.make(WS_METHODS.serverGetStorageCleanupReport, {
-  payload: Schema.Struct({}),
-  success: Schema.NullOr(StorageCleanupReport),
-  stream: true,
-  error: EnvironmentAuthorizationError,
 });
 const WsServerGetWorktreesDirectoryStatusRpc = Rpc.make(
   WS_METHODS.serverGetWorktreesDirectoryStatus,
@@ -2542,9 +2530,12 @@ export const WsCoreServerRpcGroup = RpcGroup.make(
   WsServerCommitDesktopUpdateRpc,
   WsServerUpsertKeybindingRpc,
   WsServerRemoveKeybindingRpc,
-  WsServerRunStorageCleanupRpc,
+  StorageCleanupRpcs.WsServerRunStorageCleanupRpc,
+  StorageCleanupRpcs.WsServerRespondWorktreeCleanupPreviewRpc,
+  StorageCleanupRpcs.WsThreadGetWorkspaceStatusRpc,
+  StorageCleanupRpcs.WsThreadRestoreWorkspaceRpc,
   WsServerResumeAutomationRpc,
-  WsServerGetStorageCleanupReportRpc,
+  StorageCleanupRpcs.WsServerGetStorageCleanupReportRpc,
   WsServerGetWorktreesDirectoryStatusRpc,
   WsServerGetDatabaseStorageRpc,
   WsServerCompactStorageRpc,
