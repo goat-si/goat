@@ -55,6 +55,8 @@ import { useFleetSummary } from "../../state/fleet";
 import { providerReadyAtom } from "../../state/server";
 import { useEnvironmentScope } from "../../state/session";
 import { resolveThreadRouteTarget } from "../../threadRoutes";
+import { GoatBotAvatar } from "../goatBot/GoatBotAvatar";
+import { useBotRoster } from "../goatBot/useBotRoster";
 import { useGoatBotWaitingCount } from "../goatBot/useGoatBotWaitingCount";
 import { useGoatBotReadMenu } from "../goatBot/useGoatBotReadMenu";
 import {
@@ -230,6 +232,8 @@ const FleetRailItem = memo(function FleetRailItem({ active }: { active: boolean 
 
 const BotRailItem = memo(function BotRailItem({ active }: { active: boolean }) {
   const botWaiting = useGoatBotWaitingCount();
+  const { roster } = useBotRoster();
+  const setMode = useGlobalAgentStore((state) => state.setMode);
   const botReadMenu = useGoatBotReadMenu(botWaiting);
   return (
     <RailTooltip label="GOAT Bot">
@@ -240,8 +244,11 @@ const BotRailItem = memo(function BotRailItem({ active }: { active: boolean }) {
         aria-current={active ? "page" : undefined}
         className={railItemClassName(active)}
         {...botReadMenu}
+        onClick={() => setMode("bot")}
       >
-        <BotIcon aria-hidden />
+        {roster.map((entry) => (
+          <GoatBotAvatar key={entry.profile?.botId ?? "main"} size="sm" />
+        ))}
         <RailCount count={botWaiting} />
       </Link>
     </RailTooltip>
