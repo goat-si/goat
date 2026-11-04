@@ -248,10 +248,10 @@ import { composerDraftHasUserContent, DraftId, useComposerDraftStore } from "../
 import { useThreadRouteTarget } from "../hooks/useThreadRouteTarget";
 import {
   SidebarSearchResultRow,
-  SortableThreadRow,
   type SidebarProviderEntry,
   type SidebarSweepAction,
 } from "./sidebar/SidebarThreadRow";
+import { LazySortableThreadRow } from "./sidebar/SidebarLazyThreadRow";
 import { SidebarDraftBlock } from "./sidebar/SidebarDraftBlock";
 import { sameSidebarProviderEntries } from "./sidebar/sidebarProviderEquality";
 import {
@@ -3041,7 +3041,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         });
                         const rowVariant = resolveNestedRowVariant(section, parentVariant);
                         const launched = launchFold.childrenByParentKey.get(threadKey);
-                        const Row = nested ? SidebarNestedThreadRow : SortableThreadRow;
+                        const Row = nested ? SidebarNestedThreadRow : LazySortableThreadRow;
                         return (
                           <Row
                             key={threadKey}
