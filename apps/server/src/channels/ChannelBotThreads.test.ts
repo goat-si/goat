@@ -59,6 +59,8 @@ describe("ChannelBotThreads", () => {
         const sql = yield* SqlClient.SqlClient;
         yield* sql`INSERT INTO channel_conversations (conversation_id, owner_id, kind, connection_id, conversation_key, last_activity_at) VALUES ('conv:bot', ${ownerId}, 'goat', 'goat', ${botThreadId}, ${time})`;
         yield* insertTask("task:active", ownerId, "running", time);
+        yield* insertTask("task:turn", ownerId, "running", time);
+        yield* sql`UPDATE channel_tasks SET task_json = json_set(task_json, '$.kind', 'turn') WHERE task_id = 'task:turn'`;
         yield* insertTask("task:old", ownerId, "completed", old);
         yield* insertTask("task:pinned", ownerId, "completed", old);
         yield* insertTask("task:foreign", "foreign", "running", time);

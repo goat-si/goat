@@ -3,10 +3,9 @@ import {
   ChannelChildWork,
   ChannelGatewayError,
   ChannelTask,
-  isChannelTaskTerminal,
   type BotThreadRow,
   type ChannelListBotThreadsResult,
-  type ChannelTaskView,
+  ChannelTaskView,
   type ChannelUpdateTaskViewInput,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
@@ -20,7 +19,9 @@ import * as ChannelLedger from "./ChannelLedger.ts";
 import * as TaskViews from "./channelTaskViews.ts";
 
 const decodeTask = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelTask));
+const decodeView = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelTaskView));
 const decodeChild = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelChildWork));
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const failed = () => new ChannelGatewayError({ reason: "persistence_failed" });
 
 export class ChannelBotThreads extends Context.Service<
@@ -56,106 +57,118 @@ const make = Effect.gen(function* () {
         AND json_extract(i.message_json, '$.actor.senderThreadId') IS NULL`.pipe(
       Effect.mapError(failed),
     );
+    const viewPrefix = "task-view:" + encodeURIComponent(owner.ownerId) + ":";
+    const viewRows = yield* sql<{
+      readonly key: string;
+      readonly value_json: string;
+    }>`SELECT key, value_json
+      FROM channel_runtime_state WHERE key >= ${viewPrefix} AND key < ${viewPrefix.slice(0, -1) + ";"}`.pipe(
+      Effect.mapError(failed),
+    );
+    const decodedViews = yield* Effect.try(() =>
+      viewRows.map((row) => {
+        const view = decodeView(row.value_json);
+        if (row.key !== viewPrefix + encodeURIComponent(view.taskId))
+          throw new Error("Invalid task view key");
+        return view;
+      }),
+    ).pipe(Effect.mapError(failed));
+    const viewsByTask = new Map(decodedViews.map((view) => [view.taskId, view]));
+    const pinned = encodeJson(
+      decodedViews.filter((view) => view.pinnedAt !== null).map((view) => view.taskId),
+    );
+    const cutoffIso = DateTime.formatIso(DateTime.makeUnsafe(cutoff));
+    const source = yield* sql<{
+      readonly task_json: string;
+    }>`SELECT t.task_json FROM channel_tasks t
+      JOIN channel_conversations c ON c.conversation_id = t.conversation_id
+      WHERE t.owner_id = ${owner.ownerId} AND c.owner_id = ${owner.ownerId}
+        AND c.kind = 'goat' AND c.conversation_key = ${bot.bot.threadId}
+        AND COALESCE(json_extract(t.task_json, '$.kind'), 'work') != 'turn'
+        AND (t.status NOT IN ('completed', 'failed', 'cancelled')
+          OR COALESCE(json_extract(t.task_json, '$.completedAt'), t.updated_at) >= ${cutoffIso}
+          OR t.task_id IN (SELECT value FROM json_each(${pinned})))
+      ORDER BY t.updated_at DESC, t.task_id DESC LIMIT 100`.pipe(Effect.mapError(failed));
+    const tasks = yield* Effect.try(() => source.map((item) => decodeTask(item.task_json))).pipe(
+      Effect.mapError(failed),
+    );
+    const countInputs = encodeJson(
+      tasks.map((task) => ({
+        taskId: task.taskId,
+        conversationId: task.conversationId,
+        quiet: [task.completedAt ?? task.updatedAt, viewsByTask.get(task.taskId)?.doneAt ?? ""]
+          .sort()
+          .at(-1),
+      })),
+    );
+    const countsByTask = yield* sql<{ readonly task_id: string; readonly count: number }>`SELECT
+      json_extract(target.value, '$.taskId') AS task_id, count(i.input_id) AS count
+      FROM json_each(${countInputs}) target LEFT JOIN channel_inbox i
+        ON i.owner_id = ${owner.ownerId}
+        AND i.conversation_id = json_extract(target.value, '$.conversationId')
+        AND i.state != 'rejected' AND i.accepted_at > json_extract(target.value, '$.quiet')
+        AND json_extract(i.message_json, '$.intent') = 'message'
+        AND json_extract(i.message_json, '$.taskId') IS NULL
+        AND json_extract(i.message_json, '$.actor.senderThreadId') IS NULL
+      GROUP BY json_extract(target.value, '$.taskId')`.pipe(Effect.mapError(failed));
+    const countMap = new Map(countsByTask.map((item) => [item.task_id, item.count]));
+    const childRows = yield* sql<{
+      readonly value_json: string;
+      readonly title: string | null;
+    }>`SELECT s.value_json, p.title FROM channel_runtime_state s
+      JOIN json_each(${encodeJson(tasks.map((task) => task.taskId))}) ids
+        ON s.key >= ('child-work:' || ids.value || ':') AND s.key < ('child-work:' || ids.value || ';')
+      LEFT JOIN orchestration_v2_projection_threads p ON p.thread_id = json_extract(s.value_json, '$.destination.threadId')
+      ORDER BY s.key`.pipe(Effect.mapError(failed));
+    const children = yield* Effect.try(() =>
+      childRows.map((item) => ({ child: decodeChild(item.value_json), title: item.title })),
+    ).pipe(Effect.mapError(failed));
     const rows: Array<BotThreadRow> = [];
     const seen = new Set<string>();
-    let taskCount = 0;
-    let cursorAt: string | undefined;
-    let cursorId: string | undefined;
-    while (taskCount < 100) {
-      const cursor =
-        cursorAt === undefined || cursorId === undefined
-          ? sql``
-          : sql`AND (t.updated_at < ${cursorAt} OR (t.updated_at = ${cursorAt} AND t.task_id < ${cursorId}))`;
-      const source = yield* sql<{
-        readonly task_json: string;
-        readonly updated_at: string;
-        readonly task_id: string;
-      }>`SELECT t.task_json, t.updated_at, t.task_id FROM channel_tasks t
-        JOIN channel_conversations c ON c.conversation_id = t.conversation_id
-        WHERE t.owner_id = ${owner.ownerId} AND c.owner_id = ${owner.ownerId}
-          AND c.kind = 'goat' AND c.conversation_key = ${bot.bot.threadId} ${cursor}
-        ORDER BY t.updated_at DESC, t.task_id DESC LIMIT 100`.pipe(Effect.mapError(failed));
-      if (source.length === 0) break;
-      for (const item of source) {
-        const task = yield* Effect.try(() => decodeTask(item.task_json)).pipe(
-          Effect.mapError(failed),
-        );
-        const view = yield* views.get(task.taskId, owner);
+    for (const task of tasks) {
+      const view = viewsByTask.get(task.taskId) ?? {
+        taskId: task.taskId,
+        pinnedAt: null,
+        doneAt: null,
+        readThrough: null,
+      };
+      rows.push({
+        kind: "task",
+        task: {
+          taskId: task.taskId,
+          title: task.title,
+          status: task.status,
+          updatedAt: task.updatedAt,
+          ...(task.completedAt === undefined ? {} : { completedAt: task.completedAt }),
+        },
+        view,
+        lastActivityAt: task.updatedAt,
+        unread:
+          view.readThrough === null || Date.parse(task.updatedAt) > Date.parse(view.readThrough),
+        mainMessagesSinceQuiet: countMap.get(task.taskId) ?? 0,
+      });
+      for (const { child, title } of children) {
+        const threadId = child.destination?.threadId;
         if (
-          isChannelTaskTerminal(task.status) &&
-          Date.parse(task.completedAt ?? task.updatedAt) < cutoff &&
-          view.pinnedAt === null
+          child.ownerId !== owner.ownerId ||
+          child.taskId !== task.taskId ||
+          child.surface !== "thread_launch" ||
+          threadId === undefined
         )
           continue;
-        if (taskCount >= 100) break;
-        taskCount++;
-        const quiet = view.doneAt ?? task.completedAt ?? task.updatedAt;
-        const since = yield* sql<{
-          readonly count: number;
-        }>`SELECT count(*) AS count FROM channel_inbox
-        WHERE owner_id = ${owner.ownerId} AND conversation_id = ${task.conversationId}
-          AND state != 'rejected' AND accepted_at > ${quiet}
-          AND json_extract(message_json, '$.intent') = 'message'
-          AND json_extract(message_json, '$.taskId') IS NULL
-          AND json_extract(message_json, '$.actor.senderThreadId') IS NULL`.pipe(
-          Effect.mapError(failed),
-        );
+        const key = bot.bot.environmentId + ":" + threadId;
+        if (seen.has(key)) continue;
+        seen.add(key);
         rows.push({
-          kind: "task",
-          task: {
-            taskId: task.taskId,
-            title: task.title,
-            status: task.status,
-            updatedAt: task.updatedAt,
-            ...(task.completedAt === undefined ? {} : { completedAt: task.completedAt }),
-          },
-          view,
-          lastActivityAt: task.updatedAt,
-          unread:
-            view.readThrough === null || Date.parse(task.updatedAt) > Date.parse(view.readThrough),
-          mainMessagesSinceQuiet: since[0]?.count ?? 0,
+          kind: "coding",
+          taskId: task.taskId,
+          environmentId: bot.bot.environmentId,
+          threadId,
+          ...(title === null ? {} : { title }),
+          state: child.state,
+          lastActivityAt: child.updatedAt,
         });
-        const prefix = "child-work:" + task.taskId + ":";
-        const children = yield* sql<{
-          readonly value_json: string;
-        }>`SELECT value_json FROM channel_runtime_state WHERE key >= ${prefix} AND key < ${prefix.slice(0, -1) + ";"} ORDER BY key`.pipe(
-          Effect.mapError(failed),
-        );
-        for (const item of children) {
-          const child = yield* Effect.try(() => decodeChild(item.value_json)).pipe(
-            Effect.mapError(failed),
-          );
-          const threadId = child.destination?.threadId;
-          if (
-            child.ownerId !== owner.ownerId ||
-            child.taskId !== task.taskId ||
-            child.surface !== "thread_launch" ||
-            threadId === undefined
-          )
-            continue;
-          const key = bot.bot.environmentId + ":" + threadId;
-          if (seen.has(key)) continue;
-          seen.add(key);
-          const shell = yield* sql<{
-            readonly title: string;
-          }>`SELECT title FROM orchestration_v2_projection_threads WHERE thread_id = ${threadId} LIMIT 1`.pipe(
-            Effect.mapError(failed),
-          );
-          rows.push({
-            kind: "coding",
-            taskId: task.taskId,
-            environmentId: bot.bot.environmentId,
-            threadId,
-            ...(shell[0] === undefined ? {} : { title: shell[0].title }),
-            state: child.state,
-            lastActivityAt: child.updatedAt,
-          });
-        }
       }
-      const last = source.at(-1);
-      cursorAt = last?.updated_at;
-      cursorId = last?.task_id;
-      if (source.length < 100) break;
     }
     return { rows, mainMessageCount: counts[0]?.count ?? 0 };
   });
