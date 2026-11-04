@@ -28,14 +28,15 @@ const make = Effect.gen(function* () {
       requiresConfirmation,
     }) {
       const id = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
+      // A larger planned set gets a new id, so an answer to the smaller one cannot approve it.
       yield* sql`INSERT OR IGNORE INTO worktree_cleanup_preview (preview_id, started_at, planned_count) VALUES (${id}, ${nowMs}, ${plannedCount})`;
       const rows = yield* sql<Row>`UPDATE worktree_cleanup_preview SET
-        preview_id = CASE WHEN activated_at IS NULL AND (confirmed_at IS NOT NULL OR (${requiresConfirmation ? 0 : 1} = 1 AND seen_at IS NOT NULL AND ${nowMs} >= seen_at + ${DAY})) AND ${plannedCount} > acknowledged_count THEN ${id} ELSE preview_id END,
-        started_at = CASE WHEN activated_at IS NULL AND (confirmed_at IS NOT NULL OR (${requiresConfirmation ? 0 : 1} = 1 AND seen_at IS NOT NULL AND ${nowMs} >= seen_at + ${DAY})) AND ${plannedCount} > acknowledged_count THEN ${nowMs} ELSE started_at END,
-        seen_at = CASE WHEN activated_at IS NULL AND (confirmed_at IS NOT NULL OR (${requiresConfirmation ? 0 : 1} = 1 AND seen_at IS NOT NULL AND ${nowMs} >= seen_at + ${DAY})) AND ${plannedCount} > acknowledged_count THEN NULL ELSE seen_at END,
-        confirmed_at = CASE WHEN activated_at IS NULL AND (confirmed_at IS NOT NULL OR (${requiresConfirmation ? 0 : 1} = 1 AND seen_at IS NOT NULL AND ${nowMs} >= seen_at + ${DAY})) AND ${plannedCount} > acknowledged_count THEN NULL ELSE confirmed_at END,
-        acknowledged_count = CASE WHEN activated_at IS NULL AND (confirmed_at IS NOT NULL OR (${requiresConfirmation ? 0 : 1} = 1 AND seen_at IS NOT NULL AND ${nowMs} >= seen_at + ${DAY})) AND ${plannedCount} > acknowledged_count THEN NULL ELSE acknowledged_count END,
-        activated_at = CASE WHEN activated_at IS NULL AND (confirmed_at IS NOT NULL OR (${requiresConfirmation ? 0 : 1} = 1 AND seen_at IS NOT NULL AND ${nowMs} >= seen_at + ${DAY})) AND ${plannedCount} <= acknowledged_count THEN ${nowMs} ELSE activated_at END,
+        preview_id = CASE WHEN activated_at IS NULL AND (${plannedCount} > planned_count OR ((confirmed_at IS NOT NULL OR (${requiresConfirmation ? 0 : 1} = 1 AND seen_at IS NOT NULL AND ${nowMs} >= seen_at + ${DAY})) AND ${plannedCount} > acknowledged_count)) THEN ${id} ELSE preview_id END,
+        started_at = CASE WHEN activated_at IS NULL AND (${plannedCount} > planned_count OR ((confirmed_at IS NOT NULL OR (${requiresConfirmation ? 0 : 1} = 1 AND seen_at IS NOT NULL AND ${nowMs} >= seen_at + ${DAY})) AND ${plannedCount} > acknowledged_count)) THEN ${nowMs} ELSE started_at END,
+        seen_at = CASE WHEN activated_at IS NULL AND (${plannedCount} > planned_count OR ((confirmed_at IS NOT NULL OR (${requiresConfirmation ? 0 : 1} = 1 AND seen_at IS NOT NULL AND ${nowMs} >= seen_at + ${DAY})) AND ${plannedCount} > acknowledged_count)) THEN NULL ELSE seen_at END,
+        confirmed_at = CASE WHEN activated_at IS NULL AND (${plannedCount} > planned_count OR ((confirmed_at IS NOT NULL OR (${requiresConfirmation ? 0 : 1} = 1 AND seen_at IS NOT NULL AND ${nowMs} >= seen_at + ${DAY})) AND ${plannedCount} > acknowledged_count)) THEN NULL ELSE confirmed_at END,
+        acknowledged_count = CASE WHEN activated_at IS NULL AND (${plannedCount} > planned_count OR ((confirmed_at IS NOT NULL OR (${requiresConfirmation ? 0 : 1} = 1 AND seen_at IS NOT NULL AND ${nowMs} >= seen_at + ${DAY})) AND ${plannedCount} > acknowledged_count)) THEN NULL ELSE acknowledged_count END,
+        activated_at = CASE WHEN activated_at IS NULL AND (confirmed_at IS NOT NULL OR (${requiresConfirmation ? 0 : 1} = 1 AND seen_at IS NOT NULL AND ${nowMs} >= seen_at + ${DAY})) AND ${plannedCount} <= acknowledged_count AND ${plannedCount} <= planned_count THEN ${nowMs} ELSE activated_at END,
         planned_count = ${plannedCount} WHERE singleton = 1 RETURNING *`;
       const row = rows[0];
       if (row === undefined) return yield* Effect.die("missing cleanup preview row");

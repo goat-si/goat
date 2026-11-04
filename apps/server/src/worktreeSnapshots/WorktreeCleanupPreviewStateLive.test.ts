@@ -58,3 +58,23 @@ it.effect(
       ),
     ),
 );
+
+it.effect("an answer to a preview cannot approve a larger set found after it was shown", () =>
+  Effect.gen(function* () {
+    yield* migration;
+    const state = yield* Effect.provide(WorktreeCleanupPreviewState, Live.layer);
+    const input = { nowMs: 0, plannedCount: 1, requiresConfirmation: false };
+    const shown = (yield* state.evaluate(input)).preview?.id ?? "";
+    const expanded = yield* state.evaluate({ ...input, plannedCount: 4 });
+    assert.notEqual(expanded.preview?.id, shown);
+    const stale = yield* Effect.exit(
+      state.respond({ previewId: shown, response: "confirm", nowMs: 1 }),
+    );
+    assert.equal(stale._tag, "Failure");
+    assert.isFalse((yield* state.evaluate({ ...input, nowMs: 2, plannedCount: 4 })).apply);
+  }).pipe(
+    Effect.provide(
+      Layer.merge(NodeSqliteClient.layer({ filename: ":memory:" }), NodeServices.layer),
+    ),
+  ),
+);

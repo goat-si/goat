@@ -51,6 +51,24 @@ it.layer(layer)("worktree snapshots", (it) => {
       assert.strictEqual(error.detail, "changed while cleaning up");
     }),
   );
+  it.effect("refuses an untracked nested repository, whose files a snapshot cannot hold", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "snapshot-repo-" });
+      yield* git(cwd, ["init", "-q"]);
+      yield* git(cwd, ["commit", "--allow-empty", "-qm", "base"]);
+      const nested = path.join(cwd, "nested");
+      yield* fs.makeDirectory(nested);
+      yield* git(nested, ["init", "-q"]);
+      yield* fs.writeFileString(path.join(nested, "work"), "unpushed");
+      yield* git(nested, ["add", "work"]);
+      yield* git(nested, ["commit", "-qm", "nested work"]);
+      yield* fs.writeFileString(path.join(nested, "draft"), "uncommitted");
+      const error = yield* Effect.flip(captureWorktreeSnapshot({ cwd, threadId: "test", now: 0 }));
+      assert.include(error.detail, "nested Git repository");
+    }),
+  );
   it.effect("refuses intent-to-add entries", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

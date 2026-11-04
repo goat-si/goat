@@ -115,6 +115,17 @@ const program = Effect.fn("WorktreeSnapshot.capture")(function* (cwd: string) {
   yield* fs.copyFile(path.resolve(cwd, indexPath), tempIndex);
   const env = { ...identity, GIT_INDEX_FILE: tempIndex };
   yield* run(["add", "-A", "--"], env);
+  // An untracked nested repository becomes a bare gitlink: its files and history would be lost.
+  const gitlinks = (output: string) =>
+    new Set(
+      output
+        .split("\0")
+        .filter((entry) => entry.startsWith("160000 "))
+        .map((entry) => entry.slice(entry.indexOf("\t") + 1)),
+    );
+  const committed = gitlinks(yield* run(["ls-tree", "-r", "-z", "HEAD"]));
+  for (const link of gitlinks(yield* run(["ls-files", "-s", "-z"], env)))
+    if (!committed.has(link)) return yield* fail(`contains a nested Git repository (${link})`);
   const treeSha = (yield* run(["write-tree"], env)).trim();
   const snapshotSha = (yield* run(
     ["commit-tree", treeSha, "-p", headSha, "-p", indexSha, "-m", "goat worktree snapshot"],
