@@ -6,7 +6,7 @@ import {
   type ChatAttachment,
   SLACK_CHANNEL_WS_METHODS,
 } from "@goat/contracts";
-import { Atom } from "effect/reactivity";
+import { AsyncResult, Atom } from "effect/reactivity";
 
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import {
@@ -14,6 +14,7 @@ import {
   createEnvironmentRpcQueryAtomFamily,
   createEnvironmentRpcSubscriptionAtomFamily,
 } from "./runtime.ts";
+import { createEnvironmentSessionAtoms } from "./session.ts";
 
 /**
  * Commands and queries for the GOAT bot, the channel ledger, and Slack settings. Bot messages
@@ -23,6 +24,21 @@ import {
 export function createChannelEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,
 ) {
+  const sessions = createEnvironmentSessionAtoms(runtime);
+  const childWorkQuery = createEnvironmentRpcQueryAtomFamily(runtime, {
+    label: "environment-data:channel:list-child-work",
+    tag: CHANNEL_GATEWAY_WS_METHODS.listChildWork,
+    staleTimeMs: 2_000,
+  });
+  const childWorkFamily = Atom.family((key: string) => {
+    const target = JSON.parse(key) as Parameters<typeof childWorkQuery>[0];
+    return Atom.make((get) =>
+      get(sessions.initialConfigValueAtom(target.environmentId))?.environment.capabilities
+        .goatBotChildWork === true
+        ? get(childWorkQuery(target))
+        : AsyncResult.success({ groups: [] }),
+    );
+  });
   return {
     ensureBot: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:channel:ensure-bot",
@@ -38,11 +54,8 @@ export function createChannelEnvironmentAtoms<R, E>(
       tag: CHANNEL_GATEWAY_WS_METHODS.listBotThreads,
       staleTimeMs: 2_000,
     }),
-    listChildWork: createEnvironmentRpcQueryAtomFamily(runtime, {
-      label: "environment-data:channel:list-child-work",
-      tag: CHANNEL_GATEWAY_WS_METHODS.listChildWork,
-      staleTimeMs: 2_000,
-    }),
+    listChildWork: (target: Parameters<typeof childWorkQuery>[0]) =>
+      childWorkFamily(JSON.stringify(target)),
     updateTaskView: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:channel:update-task-view",
       tag: CHANNEL_GATEWAY_WS_METHODS.updateTaskView,
