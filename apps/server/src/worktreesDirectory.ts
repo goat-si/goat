@@ -2,6 +2,7 @@ import type {
   WorktreesDirectoryStatus,
   WorktreesDirectoryUnavailableReason,
 } from "@goat/contracts";
+import * as NodeOS from "node:os";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -109,6 +110,30 @@ export const resolveAvailableWorktreesDirectory = Effect.fn("resolveAvailableWor
       yield* HostProcess.Platform,
     );
     if (configured === null) return status(input.defaultDir, { reason: "invalid", path: null });
+    const location = yield* fileSystem
+      .realPath(configured)
+      .pipe(Effect.orElseSucceed(() => configured));
+    const tempRoots = [
+      NodeOS.tmpdir(),
+      "/tmp",
+      "/private/tmp",
+      "/var/tmp",
+      "/private/var/tmp",
+      "/var/folders",
+    ];
+    const resolvedRoots = yield* Effect.forEach(tempRoots, (root) =>
+      fileSystem.realPath(root).pipe(Effect.orElseSucceed(() => path.resolve(root))),
+    );
+    if (
+      resolvedRoots.some((root) => {
+        const relative = path.relative(root, location);
+        return (
+          relative === "" ||
+          (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`))
+        );
+      })
+    )
+      return status(input.defaultDir, { reason: "invalid", path: configured });
     const reason = yield* checkWorktreesDirectory(configured, fileSystem, path);
     return reason === null
       ? status(configured, null)
