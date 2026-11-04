@@ -179,6 +179,7 @@ import type {
 } from "../../lib/threadActivity";
 import { PendingApprovalCard } from "./PendingApprovalCard";
 import { ComposerErrorNotice } from "./ComposerErrorNotice";
+import { ThreadWorkspaceBanner } from "./ThreadWorkspaceBanner";
 import { ComposerFeedback } from "./ComposerFeedback";
 import { ComposerUsageLimits } from "./ComposerUsageLimits";
 import { PendingUserInputCard } from "./PendingUserInputCard";
@@ -360,7 +361,6 @@ const NO_RUN_STOP_ATOM = Atom.make<RunStopPresentation | null>(null).pipe(
 );
 // Connection failures survive retries and app suspension.
 const RECONNECT_ERROR_DELAY_MS = 5_000;
-
 // Anchors, the submitted message, follow state and pending scrolls belong to
 // one thread, so the body remounts when the thread changes.
 export function ThreadDetailScreen(props: ThreadDetailScreenProps) {
@@ -376,7 +376,6 @@ export function ThreadDetailScreen(props: ThreadDetailScreenProps) {
     />
   );
 }
-
 function ThreadDetailBody(
   props: ThreadDetailScreenProps & {
     statusRequests: Record<string, BackgroundWorkStopRequest | undefined>;
@@ -1212,7 +1211,6 @@ function ThreadDetailBody(
     props.threadCwd ?? props.projectWorkspaceRoot,
     props.selectedThread.projectId,
   );
-
   const currentPendingApprovals = () =>
     props.selectedThreadDetailRef === null
       ? []
@@ -1280,9 +1278,7 @@ function ThreadDetailBody(
     if (messageId === null || scope.aborted) {
       return messageId;
     }
-
     clearUsageLimitsFor(targetThreadKey);
-
     const nextAnchorMessageId = resolveThreadFeedSubmissionAnchor({
       currentAnchorMessageId: anchorMessageId,
       submittedMessageId: messageId,
@@ -1334,11 +1330,9 @@ function ThreadDetailBody(
       composerEditorRef.current?.focus();
     }
   };
-
   const collapseComposer = () => {
     composerEditorRef.current?.blur();
   };
-
   const handleUseArtifactTemplate = (template: CodexArtifactTemplate) => {
     const draftMessage =
       props.composerDraftKey === null ? "" : getComposerDraftSnapshot(props.composerDraftKey).text;
@@ -1349,7 +1343,6 @@ function ThreadDetailBody(
       composerEditorRef.current?.setSelection({ start: nextDraft.length, end: nextDraft.length });
     });
   };
-
   const handleScrollToEnd = () => {
     void Haptics.selectionAsync();
     void scrollMessageToEnd({ animated: !reduceMotion, closeKeyboard: false }).catch(() => {
@@ -1593,6 +1586,13 @@ function ThreadDetailBody(
                   </Text>
                 ) : null}
                 <ComposerCards maxWidth={contentMaxWidth} onHeight={handleCardsHeight}>
+                  {!props.draftMode &&
+                  props.serverConfig?.environment.capabilities.worktreeRestore === true ? (
+                    <ThreadWorkspaceBanner
+                      environmentId={props.environmentId}
+                      threadId={props.selectedThread.id}
+                    />
+                  ) : null}
                   <ChildThreadApprovals
                     threadRef={props.selectedThreadDetailRef}
                     maxHeight={pendingUserInputMaxHeight}

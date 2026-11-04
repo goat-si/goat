@@ -273,7 +273,7 @@ const superviseReplacement = async (
       "--base-dir",
       input.baseDir,
     ];
-    const env = { GOAT_NO_BROWSER: "1", ...extraEnv };
+    const env = { GOAT_NO_BROWSER: "1", GOAT_RUNTIME_ORIGIN: "ssh", ...extraEnv };
     let pid: number | undefined;
     try {
       if (input.platform === "win32") {

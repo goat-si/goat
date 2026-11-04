@@ -1,6 +1,7 @@
 import { GOAT_CONNECT_COMING_SOON, isGoatConnectEnabled } from "@goat/shared/goatConnect";
 import { environmentCatalog } from "../../connection/catalog";
 import { isGoatConnectOnlyEnvironment } from "../connection/environmentSections";
+import { WorktreeCleanupSection } from "./WorktreeCleanupSection";
 import { MemoryEnvironmentEntry } from "./SettingsMemoryRouteScreen";
 import * as Dialog from "../../components/ui/Dialog";
 import { useAtomValue } from "@effect/atom-react";
@@ -261,6 +262,12 @@ function EnvironmentDetail({ environmentId }: { readonly environmentId: Environm
             {config && !outdated ? (
               <>
                 <MemoryEnvironmentEntry environmentId={environmentId} />
+                {config.environment.capabilities.storageCleanup === true ? (
+                  <WorktreeCleanupSection
+                    environmentId={environmentId}
+                    settings={config.settings.storageCleanup}
+                  />
+                ) : null}
                 <SettingsSection title="GOAT">
                   <View className="gap-1 p-4">
                     <Text className="text-base text-foreground">Version {version}</Text>

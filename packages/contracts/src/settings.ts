@@ -18,6 +18,13 @@ import {
   DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE,
 } from "./settingsAppearance.ts";
 export * from "./settingsAppearance.ts";
+export * from "./storageCleanupSettings.ts";
+import {
+  WorktreeCleanup,
+  StorageCleanupSettings,
+  WorktreeCleanupPatch,
+  StorageCleanupSettingsPatch,
+} from "./storageCleanupSettings.ts";
 import {
   AgentMemoryLimitSettingsFields,
   AgentMemoryLimitSettingsPatchFields,
@@ -26,8 +33,6 @@ import {
   MemoryHubSettings,
   MemoryOwnerSourceReadPolicy,
   DEFAULT_MEMORY_OWNER_SOURCE_READ_POLICY,
-  ORCHESTRATION_HISTORY_BUDGET_BYTES,
-  ORCHESTRATION_HISTORY_ARCHIVE_AFTER_DAYS,
 } from "./memory.ts";
 import * as Predicate from "effect/Predicate";
 import { EasDeviceHostConfigs, SshDeviceHostConfigs } from "./device.ts";
@@ -57,7 +62,6 @@ import {
   NonNegativeInt,
   OmittedWhenNull,
   ProjectId,
-  ThreadId,
   TrimmedNonEmptyString,
   TrimmedString,
 } from "./baseSchemas.ts";
@@ -1054,45 +1058,6 @@ export type BackgroundActivitySettings = typeof BackgroundActivitySettings.Type;
 export const ResponseStreamingMode = Schema.Literals(["turn", "paragraph"]);
 export type ResponseStreamingMode = typeof ResponseStreamingMode.Type;
 
-const StorageRetentionDays = Schema.NullOr(
-  Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 3650 })),
-);
-const SettledWorktreeRetentionDays = Schema.NullOr(
-  Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 3650 })),
-);
-const HistoryBudgetBytes = Schema.Int.check(
-  Schema.isBetween({ minimum: 268435456, maximum: 1099511627776 }),
-);
-
-export const WorktreeKeepWhen = Schema.Literals([
-  "any-local-files",
-  "uncommitted-changes",
-  "tracked-changes",
-]);
-export type WorktreeKeepWhen = typeof WorktreeKeepWhen.Type;
-
-export const WorktreeCleanupRules = Schema.Struct({
-  worktreeKeepWhen: WorktreeKeepWhen.pipe(
-    Schema.withDecodingDefault(Effect.succeed("uncommitted-changes")),
-  ),
-  worktreeAfterDays: StorageRetentionDays,
-  worktreeSettledAfterDays: SettledWorktreeRetentionDays.pipe(
-    Schema.withDecodingDefault(Effect.succeed(null)),
-  ),
-  worktreeOnMerge: Schema.Boolean,
-  worktreeOnDelete: Schema.Boolean,
-  worktreeUnchanged: Schema.Boolean,
-});
-export type WorktreeCleanupRules = typeof WorktreeCleanupRules.Type;
-
-export const WorktreeCleanup = Schema.NullOr(
-  Schema.Union([
-    Schema.Struct({ mode: Schema.Literal("off") }),
-    Schema.Struct({ mode: Schema.Literal("custom"), rules: WorktreeCleanupRules }),
-  ]),
-);
-export type WorktreeCleanup = typeof WorktreeCleanup.Type;
-
 export const PROJECT_SCOPED_SERVER_SETTING_KEYS = [
   "agentWorkspaceAccess",
   "agentTerminalAccess",
@@ -1224,29 +1189,6 @@ export function shouldRecommendDatabaseCompaction(status: DatabaseStorageStatus)
   );
 }
 
-export const StorageCleanupReportEntry = Schema.Struct({
-  kind: Schema.Literals(["worktree", "browser-artifacts", "logs"]),
-  outcome: Schema.Literals(["removed", "kept", "failed"]),
-  reason: Schema.String,
-  path: Schema.NullOr(Schema.String),
-  projectPath: Schema.NullOr(Schema.String).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
-  threadId: Schema.NullOr(ThreadId),
-  threadTitle: Schema.NullOr(Schema.String),
-  bytes: Schema.NullOr(Schema.Number).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
-  files: Schema.NullOr(Schema.Number).pipe(Schema.withDecodingDefault(Effect.succeed(null))),
-});
-export type StorageCleanupReportEntry = typeof StorageCleanupReportEntry.Type;
-export const StorageCleanupReport = Schema.Struct({
-  trigger: Schema.Literals(["automatic", "manual"]),
-  startedAt: Schema.String,
-  finishedAt: Schema.String,
-  entries: Schema.Array(StorageCleanupReportEntry),
-  counts: Schema.Struct({ removed: Schema.Number, kept: Schema.Number, failed: Schema.Number }),
-  omittedCount: Schema.Number,
-  bytesFreed: Schema.Number.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
-});
-export type StorageCleanupReport = typeof StorageCleanupReport.Type;
-
 /** Why the configured `worktreesDirectory` cannot hold new worktrees right now. */
 export const WorktreesDirectoryUnavailableReason = Schema.Literals([
   "invalid",
@@ -1291,40 +1233,6 @@ export function describeWorktreesDirectoryUnavailable(
       return "is not writable";
   }
 }
-
-export const StorageCleanupSettings = Schema.Struct({
-  worktreeKeepWhen: WorktreeKeepWhen.pipe(
-    Schema.withDecodingDefault(Effect.succeed("uncommitted-changes")),
-  ),
-  worktreeAfterDays: StorageRetentionDays.pipe(Schema.withDecodingDefault(Effect.succeed(null))),
-  worktreeSettledAfterDays: SettledWorktreeRetentionDays.pipe(
-    Schema.withDecodingDefault(Effect.succeed(null)),
-  ),
-  worktreeOnMerge: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
-  worktreeOnDelete: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
-  worktreeUnchanged: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
-  browserArtifactsAfterDays: StorageRetentionDays.pipe(
-    Schema.withDecodingDefault(Effect.succeed(null)),
-  ),
-  logsAfterDays: StorageRetentionDays.pipe(Schema.withDecodingDefault(Effect.succeed(null))),
-  /** Above this, compaction trims bulky tool output in threads idle for a week, oldest first. */
-  historyBudgetBytes: HistoryBudgetBytes.pipe(
-    Schema.withDecodingDefault(Effect.succeed(ORCHESTRATION_HISTORY_BUDGET_BYTES)),
-  ),
-  /**
-   * Threads idle this many days keep their messages in the database and move tool calls,
-   * output and reasoning to a compressed archive that is restored when the thread is opened.
-   * Null keeps every thread in the database.
-   */
-  historyArchiveAfterDays: StorageRetentionDays.pipe(
-    Schema.withDecodingDefault(Effect.succeed(ORCHESTRATION_HISTORY_ARCHIVE_AFTER_DAYS)),
-  ),
-  /** Archives older than this many days are deleted for good. Null, the default, keeps them. */
-  historyArchiveDeleteAfterDays: StorageRetentionDays.pipe(
-    Schema.withDecodingDefault(Effect.succeed(null)),
-  ),
-});
-export type StorageCleanupSettings = typeof StorageCleanupSettings.Type;
 
 /**
  * Which machine GOAT Bot runs on in a cluster of connected environments. Clients write the same
@@ -1872,39 +1780,8 @@ const ServerSettingsPatchFields = Schema.Struct({
       providerModelPreferences: Schema.optionalKey(ProviderModelPreferences),
     }),
   ),
-  worktreeCleanup: Schema.optionalKey(
-    Schema.NullOr(
-      Schema.Union([
-        Schema.Struct({ mode: Schema.Literal("off") }),
-        Schema.Struct({
-          mode: Schema.Literal("custom"),
-          rules: Schema.Struct({
-            worktreeKeepWhen: Schema.optionalKey(WorktreeKeepWhen),
-            worktreeAfterDays: Schema.optionalKey(StorageRetentionDays),
-            worktreeSettledAfterDays: Schema.optionalKey(SettledWorktreeRetentionDays),
-            worktreeOnMerge: Schema.optionalKey(Schema.Boolean),
-            worktreeOnDelete: Schema.optionalKey(Schema.Boolean),
-            worktreeUnchanged: Schema.optionalKey(Schema.Boolean),
-          }),
-        }),
-      ]),
-    ),
-  ),
-  storageCleanup: Schema.optionalKey(
-    Schema.Struct({
-      worktreeKeepWhen: Schema.optionalKey(WorktreeKeepWhen),
-      worktreeAfterDays: Schema.optionalKey(StorageRetentionDays),
-      worktreeSettledAfterDays: Schema.optionalKey(SettledWorktreeRetentionDays),
-      worktreeOnMerge: Schema.optionalKey(Schema.Boolean),
-      worktreeOnDelete: Schema.optionalKey(Schema.Boolean),
-      worktreeUnchanged: Schema.optionalKey(Schema.Boolean),
-      browserArtifactsAfterDays: Schema.optionalKey(StorageRetentionDays),
-      logsAfterDays: Schema.optionalKey(StorageRetentionDays),
-      historyBudgetBytes: Schema.optionalKey(HistoryBudgetBytes),
-      historyArchiveAfterDays: Schema.optionalKey(StorageRetentionDays),
-      historyArchiveDeleteAfterDays: Schema.optionalKey(StorageRetentionDays),
-    }),
-  ),
+  worktreeCleanup: Schema.optionalKey(WorktreeCleanupPatch),
+  storageCleanup: Schema.optionalKey(StorageCleanupSettingsPatch),
   worktreesDirectory: Schema.optionalKey(TrimmedString),
   enableAgentMemoryAccess: Schema.optionalKey(Schema.Boolean),
   memoryEnabled: Schema.optionalKey(Schema.Boolean),

@@ -311,6 +311,7 @@ it("passes a usable Windows working directory to replacement and rollback", asyn
       for (const call of spawn.mock.calls) {
         const options = call[2] as { env: NodeJS.ProcessEnv };
         assert.equal(options.env.GOAT_SPAWN_CWD, expected);
+        assert.include(options.env.GOAT_SPAWN_ENV, "GOAT_RUNTIME_ORIGIN=ssh");
         const args = call[1] as string[];
         assert.include(
           Buffer.from(args[3]!, "base64").toString("utf16le"),

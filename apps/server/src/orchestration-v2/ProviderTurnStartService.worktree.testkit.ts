@@ -1,3 +1,5 @@
+// @effect-diagnostics nodeBuiltinImport:off -- the restorable checkout is a real Git fixture.
+import * as NodeChildProcess from "node:child_process";
 import { vi } from "vite-plus/test";
 import {
   CheckpointScopeId,
@@ -128,6 +130,7 @@ export function makeWorktreeStartHarness(
             Effect.succeedSome({ workspaceRoot: "/tmp/provider-turn-start-project" } as never),
         }),
         Layer.mock(ProjectionStore.ProjectionStoreV2)({
+          getThreadShell: () => Effect.succeed(projection.thread as never),
           getThreadRecords: () => {
             projectionReadCount += 1;
             return Effect.succeed(projection);
@@ -190,7 +193,7 @@ export function startWithMissingWorktree(worktreePath: string, realPaths?: Recor
   const start = Effect.gen(function* () {
     return yield* (yield* ProviderTurnStart.ProviderTurnStartServiceV2)
       .start({ threadId, runId })
-      .pipe(Effect.flip);
+      .pipe(Effect.exit);
   }).pipe(Effect.provide(layer), Effect.runPromise);
   return {
     start,
@@ -201,3 +204,36 @@ export function startWithMissingWorktree(worktreePath: string, realPaths?: Recor
     projectionReads: projectionReadCount,
   };
 }
+
+/** A real repository whose `feature/restore` worktree a test can remove and add back. */
+export const makeRestorableCheckout = Effect.gen(function* () {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-start-" });
+  const location = { workspaceRoot: `${root}/repo`, worktreesDir: `${root}/worktrees` };
+  const worktreePath = `${location.worktreesDir}/project/worktree`;
+  const git = (...args: Array<string>) =>
+    Effect.sync(() => {
+      NodeChildProcess.execFileSync("git", ["-C", location.workspaceRoot, ...args], {
+        stdio: "ignore",
+      });
+    });
+  yield* fileSystem.makeDirectory(location.workspaceRoot);
+  yield* git("init", "-q", "-b", "main");
+  yield* git(
+    "-c",
+    "user.name=Test",
+    "-c",
+    "user.email=test@example.com",
+    "commit",
+    "-q",
+    "--allow-empty",
+    "-m",
+    "base",
+  );
+  yield* git("branch", "feature/restore");
+  const addWorktree = git("worktree", "prune").pipe(
+    Effect.andThen(git("worktree", "add", "-q", worktreePath, "feature/restore")),
+  );
+  yield* addWorktree;
+  return { worktreePath, addWorktree, location };
+});

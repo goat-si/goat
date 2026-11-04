@@ -26,18 +26,14 @@ import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import {
-  NumberField,
-  NumberFieldDecrement,
-  NumberFieldGroup,
-  NumberFieldIncrement,
-  NumberFieldInput,
-} from "../ui/number-field";
-import {
   SettingResetButton,
   SettingsPageContainer,
   SettingsRow,
   SettingsSection,
 } from "./settingsLayout";
+import { RetentionControl } from "./RetentionControl";
+import { WorktreeRetentionRows } from "./WorktreeRetentionRows";
+import { WorktreeCleanupPreviewPanel } from "./WorktreeCleanupPreviewPanel";
 import { DatabaseStorageNotice } from "./DatabaseStorageNotice";
 import { DiskUsageSection } from "./DiskUsageSettings";
 import { SettingsScopeNotice } from "./SettingsScopeNotice";
@@ -164,69 +160,6 @@ function WorktreesDirectoryRow() {
   );
 }
 
-function RetentionControl({
-  label,
-  value,
-  onChange,
-  minimum = 1,
-}: {
-  label: string;
-  value: number | null;
-  onChange: (value: number | null) => void;
-  minimum?: number;
-}) {
-  const [draft, setDraft] = useState(value);
-  const [savedValue, setSavedValue] = useState(value);
-  if (savedValue !== value) {
-    setSavedValue(value);
-    setDraft(value);
-  }
-
-  return (
-    <div className="flex items-center gap-3">
-      {value !== null ? (
-        <NumberField
-          value={draft}
-          min={minimum}
-          max={3650}
-          step={1}
-          size="sm"
-          className="w-auto"
-          onValueChange={setDraft}
-          onValueCommitted={(next) => {
-            if (next === null) setDraft(value);
-            else {
-              const days = Math.min(3650, Math.max(minimum, Math.round(next)));
-              setDraft(days);
-              onChange(days);
-            }
-          }}
-        >
-          <NumberFieldGroup>
-            <NumberFieldDecrement aria-label={`Decrease ${label}`} />
-            <NumberFieldInput
-              aria-label={`${label} in days`}
-              size={new Intl.NumberFormat().format(draft ?? value).length}
-              className="field-sizing-content w-auto min-w-[1ch] grow-0 text-right"
-            />
-            <span aria-hidden="true" className="self-center pr-2 text-xs">
-              days
-            </span>
-            <NumberFieldIncrement aria-label={`Increase ${label}`} />
-          </NumberFieldGroup>
-        </NumberField>
-      ) : (
-        <span className="text-xs text-muted-foreground">Off</span>
-      )}
-      <Switch
-        aria-label={label}
-        checked={value !== null}
-        onCheckedChange={(enabled) => onChange(enabled ? 8 : null)}
-      />
-    </div>
-  );
-}
-
 const KEEP_WHEN_LABELS = {
   "any-local-files": "Any local files",
   "uncommitted-changes": "Uncommitted changes",
@@ -271,7 +204,8 @@ function CleanupResults({
             description={
               <span className="block space-y-2 wrap-anywhere select-text">
                 <span className={`block ${entry.outcome === "failed" ? "text-destructive" : ""}`}>
-                  {entry.reason}
+                  {entry.planned ? "Will be cleaned up" : entry.reason}
+                  {entry.outcome === "removed" && entry.snapshotRef ? " · Snapshot saved" : ""}
                 </span>
                 <span className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 border-l border-border/60 pl-3">
                   <span>Machine</span>
@@ -365,6 +299,8 @@ function CleanupSection() {
     if (!settings) return false;
     const enabled = (rules: WorktreeCleanupRules) =>
       rules.worktreeAfterDays !== null ||
+      rules.worktreeKeepRecent !== null ||
+      rules.worktreeOnArchive ||
       rules.worktreeSettledAfterDays !== null ||
       rules.worktreeOnMerge ||
       rules.worktreeOnDelete ||
@@ -429,6 +365,16 @@ function CleanupSection() {
   };
   return (
     <SettingsSection id="storage-cleanup" title="Cleanup" variant="plain">
+      {state.map(
+        ({ environmentId, report }) =>
+          report?.worktreePreview && (
+            <WorktreeCleanupPreviewPanel
+              key={environmentId}
+              environmentId={environmentId}
+              preview={report.worktreePreview}
+            />
+          ),
+      )}
       <SettingsGroup>
         <SettingsRow
           {...searchableSetting("storage-delete-now")}
@@ -607,10 +553,17 @@ export function StorageSettingsPanel() {
         )}
         {(!isProjectScope || (!mixedModes && mode === "custom")) && (
           <>
+            <WorktreeRetentionRows
+              settings={settings}
+              isProjectScope={isProjectScope}
+              status={ruleStatus}
+              updateWorktree={updateWorktree}
+              update={update}
+            />
             <SettingsRow
               title="Delete worktrees with deleted threads"
               status={ruleStatus("worktreeOnDelete")}
-              description="Remove unused worktrees when active or archived threads are deleted. Worktrees with local changes are kept."
+              description="Remove unused worktrees when active or archived threads are deleted."
               serverScoped={!isProjectScope}
               control={
                 <Switch
@@ -621,13 +574,13 @@ export function StorageSettingsPanel() {
               }
             />
             <SettingsRow
-              title="Delete inactive worktrees"
+              title="Clean up worktrees unused for"
               status={ruleStatus("worktreeAfterDays")}
               description="Remove worktrees after their threads have been inactive for this many days. Branches and thread history are kept."
               serverScoped={!isProjectScope}
               control={
                 <RetentionControl
-                  label="Delete inactive worktrees"
+                  label="Clean up worktrees unused for"
                   value={settings.worktreeAfterDays}
                   onChange={(worktreeAfterDays) => updateWorktree({ worktreeAfterDays })}
                 />
@@ -701,7 +654,7 @@ export function StorageSettingsPanel() {
                     ? "Includes ignored files, except node_modules."
                     : settings.worktreeKeepWhen === "tracked-changes"
                       ? "Deletes untracked and ignored files, including .env."
-                      : "Keeps edits and untracked files. Deletes ignored files, including .env."
+                      : "Keeps edits and untracked files unless snapshots are enabled. Deletes ignored files, including .env."
                 }
                 serverScoped={!isProjectScope}
                 control={

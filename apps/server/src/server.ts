@@ -54,7 +54,7 @@ import * as SshHostSetup from "./sshRemote/SshHostSetup.ts";
 import * as SshRemoteDispatchLive from "./sshRemote/SshRemoteDispatchLive.ts";
 import * as GoatclawFleetSync from "./goatclaw/FleetSync.ts";
 import * as SshWorkspaceSync from "./sshRemote/SshWorkspaceSync.ts";
-import * as StorageCleanup from "./storageCleanup.ts";
+import * as StorageCleanupLayer from "./storageCleanupLayer.ts";
 import * as WorktreeCheckoutHealth from "./vcs/WorktreeCheckoutHealth.ts";
 import * as ObservedCheckService from "./threadResults/ObservedCheckService.ts";
 import * as ThreadResultService from "./threadResults/ThreadResultService.ts";
@@ -754,7 +754,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   layerObservedCheckWorker,
   layerIdleCompactionWorker,
   ComputerUseTurnEnd.layer,
-  StorageCleanup.layer.pipe(Layer.provide(ProjectionStoreV2.layer)),
+  StorageCleanupLayer.layer,
   WorktreeCheckoutHealth.layer.pipe(Layer.provide(ProcessRunner.layer)),
   DatabaseStorage.layer.pipe(
     Layer.provide(ProjectionMaintenance.layer),

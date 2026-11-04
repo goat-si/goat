@@ -102,6 +102,7 @@ import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
 import * as SshWorkspaceSync from "./sshRemote/SshWorkspaceSync.ts";
 import * as StorageCleanup from "./storageCleanup.ts";
+import { ThreadWorkspaceService } from "./orchestration-v2/goat/ThreadWorkspaceService.ts";
 import * as WorktreeCheckoutHealth from "./vcs/WorktreeCheckoutHealth.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
@@ -239,6 +240,7 @@ const layerUnusedLifecycleRpcServices = Layer.mergeAll(
   Layer.mock(SourceControlDiscovery.SourceControlDiscovery)({}),
   Layer.mock(SourceControlRepositoryService.SourceControlRepositoryService)({}),
   Layer.mock(StorageCleanup.StorageCleanup)({}),
+  Layer.mock(ThreadWorkspaceService)({}),
   Layer.mock(DecisionService.DecisionService)({}),
   Layer.mock(DatabaseStorage.DatabaseStorage)({}),
   Layer.mock(AttachmentFileLeases.AttachmentFileLeases)({}),

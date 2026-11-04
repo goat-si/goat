@@ -260,6 +260,8 @@ are, and cleanup covers both the default folder and the custom one.
 If the custom folder can't be used when a thread starts, for example because its drive is
 unmounted, the worktree goes in the default folder instead. The thread's setup steps say so, and
 **Settings → Storage** shows a warning under **Worktree location** until the folder is back.
+A folder inside the system's temporary directory, such as /tmp, is never used, because the
+operating system can delete it on its own; new worktrees go in the default folder instead.
 
 ### Slow worktrees on Windows
 
@@ -279,33 +281,61 @@ because Git Bash detaches it from Git.
 
 ## Storage cleanup
 
-Open **Settings → Storage** to enable automatic cleanup on one machine or all connected
-environments. Policies are off by default and run on the server at startup, when changed, and
-hourly. Offline machines keep their existing policies.
+Open **Settings → Storage** to manage cleanup on one machine or all connected environments.
+Policies run on the server at startup, when changed, and hourly. Offline machines keep their
+existing policies.
 
 Select a project to set **Automatic worktree cleanup** to **Inherit**, **Off**, or **Custom**.
 Inherit follows each machine's rules; Off keeps that project's worktrees until you remove them
 manually. Custom applies separate worktree rules to the selected project or checkout. Browser
 captures and log retention remain machine-wide.
 
-Worktrees can be removed after a chosen number of inactive days, after a thread settles, after
+By default, cleanup considers worktrees unused for seven days, those beyond the 15 most recently
+used, and those whose threads were archived or deleted. These rules are alternatives: meeting
+any one can make a worktree eligible. You can turn them off or change them. Worktrees can also
+be removed after a chosen number of inactive days, after a thread settles, after
 merging, or when they have no commits beyond the default branch. Set settled retention to 0 days
 to remove a worktree at the next cleanup after settlement. In repositories without remotes,
 unchanged-worktree cleanup compares against the branch checked out in the project workspace;
 if that checkout has a detached HEAD, the worktree is kept. Only GOAT-managed worktrees are eligible.
-Active sessions and shared worktrees prevent removal. **Keep worktrees with local changes** defaults
-to **Uncommitted changes**, which protects tracked edits and untracked files but deletes ignored
-files such as `.env` and build output. **Any local files** also protects ignored files other than
-`node_modules`. **Edited tracked files** protects only tracked edits and allows untracked and
-ignored files to be deleted. Branches and thread history stay; starting another turn recreates the checkout.
+Active sessions, open terminals and worktrees shared by independent threads prevent removal.
+Pinned threads are kept except when deleted. Before removing a worktree, GOAT saves a snapshot
+of tracked and non-ignored untracked changes. Turn off **Clean up worktrees with uncommitted
+changes** to keep worktrees with those changes instead. **Keep worktrees with local changes**
+offers further exclusions; **Any local files** also protects ignored files other than
+`node_modules`. Ignored files such as `.env` and build output are not included in snapshots.
+Branches and thread history stay.
 Merge cleanup requires a merged pull request whose commits are included in the remote default
 branch. A squash or rebase merge on GitHub also counts when the pull request targeted the default
 branch and the worktree is still at the pull request's last commit.
 
-Enable **Delete worktrees with deleted threads** to remove safe worktrees after their last
-thread is deleted, including archived threads and worktrees left by earlier deletions. The
-server waits for sessions and terminals to stop and retries skipped worktrees after restart.
-Existing prompts for deleting a worktree manually remain available when this policy is off.
+Before automatic worktree cleanup starts for the first time, GOAT shows a preview. After you
+see it, cleanup can start 24 hours later; some remote environments require confirmation instead.
+The preview approves the rules and a count, not specific paths. If more worktrees become eligible,
+GOAT shows a new preview before starting. **Clean up now** confirms the preview; **Delete now**
+alone does not. Review or turn off the default rules in **Settings → Storage**.
+
+When you open a cleaned thread, choose **Restore** in its banner. Sending a message also restores
+the worktree automatically. If restoration fails, the banner offers **Start in a new worktree**;
+the saved snapshot remains available for manual recovery.
+
+Snapshots live in the project repository under `refs/goat/snapshots/<thread>/<time>` and are kept
+for 30 days by default; change the retention period in **Settings → Storage**. Snapshots of
+deleted threads are kept for at least 24 hours after they are created, subject to the configured
+retention period. To inspect a snapshot and recover its files into a new worktree, run from the
+project repository, replacing the ref and path with your own:
+
+```sh
+git for-each-ref refs/goat/snapshots/ --format='%(refname) %(creatordate:iso8601)'
+git worktree add --detach /path/to/recovery 'refs/goat/snapshots/THREAD/TIME^1'
+git -C /path/to/recovery restore --source='refs/goat/snapshots/THREAD/TIME' --worktree -- .
+git -C /path/to/recovery read-tree 'refs/goat/snapshots/THREAD/TIME^2'
+```
+
+Review the recovered files and staged changes before continuing. Cleanup checks processes owned by
+the current user, but cannot fence other users' processes or a write in the final milliseconds
+before removal. Where that check cannot see every file (common in containers), worktrees with
+local changes are kept. Keep separate backups of anything you cannot afford to lose.
 
 Choose **Delete now** to run the enabled rules immediately. The latest results show which
 worktrees were removed or kept and why, plus any failures.
