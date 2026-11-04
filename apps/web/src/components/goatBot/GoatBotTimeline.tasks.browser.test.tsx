@@ -3,12 +3,6 @@ import type { GoatBotRow } from "@goat/client-runtime/goatBot";
 import { expect, it, vi } from "vite-plus/test";
 import { render } from "../../../test/render";
 
-const state = vi.hoisted(() => ({ supported: false }));
-vi.mock("~/state/entities", async (original) => ({
-  ...(await original<typeof import("~/state/entities")>()),
-  useServerConfigs: () =>
-    new Map([["env", { environment: { capabilities: { goatBotTaskThreads: state.supported } } }]]),
-}));
 vi.mock("../settings/MemorySettings", () => ({ MemorySettingsEntry: () => null }));
 import { GoatBotTimeline } from "./GoatBotTimeline";
 
@@ -33,16 +27,19 @@ const row: GoatBotRow = {
   },
 };
 it("offers task threads only when the server supports them", async () => {
-  state.supported = false;
   await using screen = await render(
     <GoatBotTimeline environmentId={EnvironmentId.make("env")} rows={[row]} onRetry={() => {}} />,
   );
   await expect.element(screen.getByText("Check disks")).toBeVisible();
   await expect.element(screen.getByText("Running")).toBeVisible();
   expect(screen.getByText("Task thread · Check disks").query()).toBeNull();
-  state.supported = true;
   await screen.rerender(
-    <GoatBotTimeline environmentId={EnvironmentId.make("env")} rows={[row]} onRetry={() => {}} />,
+    <GoatBotTimeline
+      environmentId={EnvironmentId.make("env")}
+      rows={[row]}
+      taskThreads
+      onRetry={() => {}}
+    />,
   );
   await expect.element(screen.getByText("Task thread · Check disks")).toBeVisible();
 });
