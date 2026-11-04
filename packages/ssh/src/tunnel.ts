@@ -1047,14 +1047,14 @@ while [ -z "$REMOTE_PORT" ]; do
     # Windows OpenSSH ends every process left in the session, so the server starts outside it.
     if [ "$GOAT_ARCHIVE_MODE" = 1 ]; then set -- "$(cygpath -w "$SPAWN_IDENTITY")"
     else set -- "$(cygpath -w "$(command -v node)")" "$(cygpath -w "$SPAWN_IDENTITY")"; fi
-    REMOTE_PID="$(windows_spawn_detached "$LOG_FILE" "$@" serve --host 127.0.0.1 --port "$REMOTE_PORT" --base-dir "$(cygpath -w "$DEFAULT_SERVER_HOME")")" || REMOTE_PID=
+    export GOAT_RUNTIME_ORIGIN=ssh; REMOTE_PID="$(windows_spawn_detached "$LOG_FILE" "$@" serve --host 127.0.0.1 --port "$REMOTE_PORT" --base-dir "$(cygpath -w "$DEFAULT_SERVER_HOME")")" || REMOTE_PID=
     if ! valid_positive "$REMOTE_PID"; then
       printf 'Could not start the GOAT server outside the SSH session on this Windows host.\\n' >&2
       tail -n 80 "$LOG_FILE" >&2 2>/dev/null || true
       exit 1
     fi
   else
-    nohup env T3CODE_NO_BROWSER=1 "$RUNNER_FILE" serve --host 127.0.0.1 --port "$REMOTE_PORT" --base-dir "$DEFAULT_SERVER_HOME" >>"$LOG_FILE" 2>&1 < /dev/null &
+    nohup env GOAT_RUNTIME_ORIGIN=ssh T3CODE_NO_BROWSER=1 "$RUNNER_FILE" serve --host 127.0.0.1 --port "$REMOTE_PORT" --base-dir "$DEFAULT_SERVER_HOME" >>"$LOG_FILE" 2>&1 < /dev/null &
     REMOTE_PID="$!"
   fi
   printf '%s\\n' "$SPAWN_IDENTITY serve --host 127.0.0.1 --port $REMOTE_PORT --base-dir $DEFAULT_SERVER_HOME" >"$IDENTITY_NEXT"
