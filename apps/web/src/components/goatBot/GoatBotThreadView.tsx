@@ -65,7 +65,7 @@ function GoatBotThreadSession({
   const visibleTurnItems = useThreadVisibleTurnItems(
     resolveThreadDetailRef(threadRef, { shellExists: shell !== null, waitForShell: true }),
   );
-  const session = useGoatBotSession(visibleTurnItems);
+  const session = useGoatBotSession(visibleTurnItems, null);
   const homeSettings = useGoatBotHomeSettings();
   const moveTarget = homeSettings.moveTarget;
   const chipRevision = visibleTurnItems

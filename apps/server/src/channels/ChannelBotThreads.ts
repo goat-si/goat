@@ -6,6 +6,8 @@ import {
   type BotThreadRow,
   type ChannelListBotThreadsResult,
   ChannelTaskView,
+  type ChannelListChildWorkInput,
+  type ChannelListChildWorkResult,
   type ChannelUpdateTaskViewInput,
 } from "@goat/contracts";
 import * as Context from "effect/Context";
@@ -16,6 +18,8 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import type { ChannelConnectionOwner } from "./ChannelIngressContext.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
+import * as ChannelChildWorkStore from "./channelChildWorkStore.ts";
+import { listChildWork } from "./listChildWork.ts";
 import * as TaskViews from "./channelTaskViews.ts";
 
 const decodeTask = Schema.decodeUnknownSync(Schema.fromJsonString(ChannelTask));
@@ -34,6 +38,10 @@ export class ChannelBotThreads extends Context.Service<
     readonly list: (
       owner: ChannelConnectionOwner,
     ) => Effect.Effect<ChannelListBotThreadsResult, ChannelGatewayError>;
+    readonly listChildWork: (
+      input: ChannelListChildWorkInput,
+      owner: ChannelConnectionOwner,
+    ) => Effect.Effect<ChannelListChildWorkResult, ChannelGatewayError>;
   }
 >()("goat/channels/ChannelBotThreads") {}
 
@@ -41,6 +49,7 @@ const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const ledger = yield* ChannelLedger.ChannelLedger;
   const views = yield* TaskViews.ChannelTaskViews;
+  const childWork = yield* ChannelChildWorkStore.ChannelChildWorkStore;
   const list = Effect.fn("ChannelBotThreads.list")(function* (owner: ChannelConnectionOwner) {
     const bot = yield* ledger.getBot(owner.ownerId).pipe(Effect.mapError(failed));
     if (bot === undefined) return { rows: [], mainMessageCount: 0 };
@@ -172,7 +181,17 @@ const make = Effect.gen(function* () {
     }
     return { rows, mainMessageCount: counts[0]?.count ?? 0 };
   });
-  return ChannelBotThreads.of({ list, update: views.update });
+  const listChildWorkFor = Effect.fn("ChannelBotThreads.listChildWork")(function* (
+    input: ChannelListChildWorkInput,
+    owner: ChannelConnectionOwner,
+  ) {
+    return yield* listChildWork(ledger, childWork, owner.ownerId, input);
+  });
+  return ChannelBotThreads.of({
+    list,
+    update: views.update,
+    listChildWork: listChildWorkFor,
+  });
 });
 export const layer = Layer.effect(ChannelBotThreads, make);
 
@@ -183,4 +202,6 @@ export const rpcHandlers = (
   [CHANNEL_GATEWAY_WS_METHODS.listBotThreads]: () => service.list(owner),
   [CHANNEL_GATEWAY_WS_METHODS.updateTaskView]: (input: ChannelUpdateTaskViewInput) =>
     service.update(input, owner),
+  [CHANNEL_GATEWAY_WS_METHODS.listChildWork]: (input: ChannelListChildWorkInput) =>
+    service.listChildWork(input, owner),
 });

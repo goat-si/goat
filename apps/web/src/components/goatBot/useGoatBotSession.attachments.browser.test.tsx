@@ -2,6 +2,7 @@ import {
   ChannelBindingId,
   ChannelConversationId,
   ChannelInputId,
+  ChannelTaskId,
   type ChatAttachment,
   EnvironmentId,
   OrchestrationV2TurnItemJson,
@@ -31,6 +32,23 @@ const mocks = vi.hoisted(() => ({
   session: null as ReturnType<typeof import("./useGoatBotSession").useGoatBotSession> | null,
 }));
 
+vi.mock("@effect/atom-react", async (original) => ({
+  ...(await original<typeof import("@effect/atom-react")>()),
+  useAtomValue: () => true,
+}));
+vi.mock("~/state/channels", async (original) => ({
+  ...(await original<typeof import("~/state/channels")>()),
+  channelEnvironment: { updateTaskView: { permissionAtom: () => null } },
+}));
+vi.mock("~/state/use-atom-command", () => ({
+  useAtomCommand: () => async () => ({ _tag: "Success" }),
+}));
+vi.mock("./useBotRoster", () => ({ useBotRoster: () => ({ rows: [], refresh: () => {} }) }));
+vi.mock("./GoatBotWorkDetails", () => ({ GoatBotWorkDetails: () => null }));
+vi.mock("~/hooks/useResizableWidth", () => ({
+  RESIZABLE_WIDTH_PROPERTY: "--resizable-width",
+  useResizableWidth: () => ({ width: 480, handlers: {} }),
+}));
 vi.mock("~/hooks/useSettings", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/hooks/useSettings")>()),
   usePrimarySettings: () => "system",
@@ -59,6 +77,8 @@ vi.mock("./goatBotHooks", () => ({
 vi.mock("~/state/entities", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/state/entities")>()),
   useEnvironmentShellsBootstrapped: () => true,
+  resolveThreadDetailRef: () => null,
+  useThreadVisibleTurnItems: () => [],
   useThreadShell: () => null,
   useServerConfigs: () =>
     new Map([
@@ -117,6 +137,7 @@ vi.mock("./goatBotAttachments", async (importOriginal) => {
 import { useGlobalAgentStore } from "~/globalAgentStore";
 import { readAttachmentUpload, useAttachmentUploadStore } from "~/lib/attachmentUploadQueue";
 import { GoatBotChatView } from "./GoatBotChatView";
+import { GoatBotTaskPane } from "./GoatBotTaskPane";
 import { GoatBotChannelContext, type GoatBotChannelPort } from "./goatBotChannelPort";
 import * as attachments from "./goatBotAttachments";
 import { disposeGoatBotEnvironment } from "./goatBotEnvironmentLifecycle";
@@ -587,4 +608,35 @@ it("offers no attach button or drop target when GOAT Bot's server cannot take fi
   await act(() => conversation.dispatchEvent(over));
   expect(over.defaultPrevented).toBe(false);
   expect(screen.container.querySelector("[data-chat-workspace-drop-overlay]")).toBeNull();
+});
+
+function TaskPaneWithSession() {
+  const session = useGoatBotSession(undefined, null);
+  return (
+    <GoatBotTaskPane
+      environmentId={environmentId}
+      session={session}
+      taskId={ChannelTaskId.make("task-1")}
+      narrow
+      onClose={() => {}}
+    />
+  );
+}
+
+it("sends task composer messages through the session queue with the task id", async () => {
+  const port = setup(true);
+  await using screen = await render(
+    <GoatBotChannelContext value={port}>
+      <TaskPaneWithSession />
+    </GoatBotChannelContext>,
+    { router: false }, // The composer has no links.
+  );
+  await expect.element(screen.getByRole("textbox", { name: "Message GOAT Bot" })).toBeEnabled();
+  await userEvent.type(screen.getByRole("textbox", { name: "Message GOAT Bot" }), "hello{Enter}");
+  await vi.waitFor(() => expect(port.ingest).toHaveBeenCalledTimes(1));
+  expect(vi.mocked(port.ingest).mock.calls[0]?.[1]).toMatchObject({
+    text: "hello",
+    intent: "message",
+    taskId: "task-1",
+  });
 });

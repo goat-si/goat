@@ -24,7 +24,7 @@ import {
 import { goatBotIngestInput } from "@goat/client-runtime/state/channels";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import { runAtomCommand, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
-import type { ChannelBotRef, EnvironmentId, ScopedThreadRef } from "@goat/contracts";
+import type { ChannelBotRef, ChannelTaskId, EnvironmentId, ScopedThreadRef } from "@goat/contracts";
 import { AsyncResult, Atom } from "effect/reactivity";
 import {
   useCallback,
@@ -45,6 +45,7 @@ import {
 import { uuidv4 } from "../../lib/uuid";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { channelEnvironment } from "../../state/channels";
+import { useEnvironmentQuery } from "../../state/query";
 import { updateMobilePreferencesAtom } from "../../state/preferences";
 import { environmentThreadDetails } from "../../state/threads";
 import { useThreadVisibleTurnItems } from "../../state/use-thread-detail";
@@ -211,7 +212,7 @@ function newSession(environmentId: EnvironmentId): Session {
         current.bot.threadId === bot.threadId
       );
     },
-    send: async ({ clientKey, text, attachments, receivedAt, bot }) => {
+    send: async ({ clientKey, text, attachments, receivedAt, bot, taskId }) => {
       const fullBot = sessions.get(environmentId)?.bot;
       if (
         !fullBot ||
@@ -277,6 +278,7 @@ function newSession(environmentId: EnvironmentId): Session {
           attachments: files,
           clientMessageId: clientKey,
           receivedAt,
+          ...(taskId === undefined ? {} : { taskId }),
         }),
       });
       if (result._tag === "Failure") throw squashAtomCommandFailure(result);
@@ -339,12 +341,27 @@ function useResidentThreadProjection(ref: ScopedThreadRef | null) {
   return thread?.projection ?? null;
 }
 
-export function useMobileGoatBotSession(visible: boolean) {
+export function useMobileGoatBotSession(visible: boolean, requestedTaskId?: ChannelTaskId | null) {
   const home = useMobileGoatBotHomeMode();
   const environment = home.home.supported
     ? pickGoatBotEnvironment(home.environments, home.botRef)
     : pickMobileGoatBotEnvironment(home.environments, home.botRef);
   const environmentId = environment?.environmentId ?? null;
+  const configs = useServerConfigs();
+  const capabilities =
+    environmentId === null ? undefined : configs.get(environmentId)?.environment.capabilities;
+  const supportsTaskThreads = capabilities?.goatBotTaskThreads === true;
+  const taskId = supportsTaskThreads ? requestedTaskId : null;
+  const threads = useEnvironmentQuery(
+    environmentId !== null && environment?.connected && supportsTaskThreads
+      ? channelEnvironment.listBotThreads({ environmentId, input: {} })
+      : null,
+  );
+  const knownTaskIds = useMemo(
+    () =>
+      (threads.data?.rows ?? []).flatMap((row) => (row.kind === "task" ? [row.task.taskId] : [])),
+    [threads.data],
+  );
   const connection = useAtomValue(
     environmentId === null ? NO_CONNECTION : environmentCatalog.stateAtom(environmentId),
   );
@@ -577,8 +594,15 @@ export function useMobileGoatBotSession(visible: boolean) {
   }, [visible, queue, visibleTurnItems]);
   const pendingInputs = session?.pending ?? EMPTY_PENDING;
   const rows = useMemo(
-    () => buildGoatBotTimeline({ visibleTurnItems, pendingInputs, readers: goatBotItemReaders }),
-    [visibleTurnItems, pendingInputs],
+    () =>
+      buildGoatBotTimeline({
+        visibleTurnItems,
+        pendingInputs,
+        readers: goatBotItemReaders,
+        knownTaskIds,
+        ...(taskId === undefined ? {} : { taskId }),
+      }),
+    [visibleTurnItems, pendingInputs, taskId, knownTaskIds],
   );
   const replyingSince = useMemo(
     () => goatBotReplyingSince({ visibleTurnItems, readers: goatBotItemReaders }),
@@ -626,9 +650,6 @@ export function useMobileGoatBotSession(visible: boolean) {
       : resolved.kind;
   const canSend =
     visible && homeReady && canSendToGoatBot(resolved, canOperate) && confirmedBot !== null;
-  const configs = useServerConfigs();
-  const capabilities =
-    environmentId === null ? undefined : configs.get(environmentId)?.environment.capabilities;
   const attachmentSupport =
     capabilities?.goatBotAttachments === true && capabilities.attachmentUploads === true
       ? { maxUploadBytes: capabilities.fileAttachments?.maxUploadBytes ?? null }
@@ -637,11 +658,11 @@ export function useMobileGoatBotSession(visible: boolean) {
     (text: string, attachments: ReadonlyArray<DraftComposerAttachment> = []) => {
       if (!canSend || !confirmedBot || (!text.trim() && attachments.length === 0)) return false;
       if (!queue || !session) return false;
-      const key = queue.submit(text.trim(), confirmedBot, attachments);
+      const key = queue.submit(text.trim(), confirmedBot, attachments, taskId ?? undefined);
       session.retain(key, attachments);
       return true;
     },
-    [canSend, confirmedBot, queue, session],
+    [canSend, confirmedBot, queue, session, taskId],
   );
   const onRetryInput = useCallback(
     (key: string) => {
@@ -662,6 +683,7 @@ export function useMobileGoatBotSession(visible: boolean) {
   }, [environmentId, homeKey, settingsSnapshot]);
   return {
     rows,
+    supportsTaskThreads,
     /** The environment of the bot whose history is shown; before a move confirms, the old one. */
     historyEnvironmentId: bot?.environmentId ?? null,
     replyingSince,

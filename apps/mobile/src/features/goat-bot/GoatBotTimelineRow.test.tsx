@@ -9,6 +9,7 @@ import {
 const appearance = vi.hoisted(() => ({ mode: "light" as "light" | "dark", baseFontSize: 16 }));
 
 vi.mock("@legendapp/list/react-native", () => ({ LegendList: () => null }));
+vi.mock("./MobileBotWork", () => ({ MobileBotWork: () => null }));
 // The native Markdown renderer cannot load under Vitest.
 vi.mock("./GoatBotMarkdown", () => ({ GoatBotMarkdown: () => null }));
 vi.mock("./GoatBotComposerAttachments", () => ({
@@ -150,4 +151,39 @@ it("labels only the first proactive bubble in a group", async () => {
     />,
   );
   expect(view.container.textContent).not.toContain("GOAT Bot · Update");
+});
+
+it("opens the task represented by a task thread pill", async () => {
+  h = createNativeMemoryHarness();
+  const onSelectTask = vi.fn();
+  view = renderNative(
+    h,
+    <GoatBotTimelineRow
+      {...props}
+      onSelectTask={onSelectTask}
+      row={{
+        kind: "task",
+        id: "card",
+        createdAt: "2026-10-12T09:40:00Z",
+        firstInGroup: true,
+        groupPosition: "single",
+        card: {
+          key: "task-1",
+          revision: 1,
+          updatedAt: "2026-10-12T09:40:00Z",
+          title: "Check disks",
+          statusLabel: "Running",
+          tone: "active",
+          sourceLabel: null,
+          summary: null,
+          attentionLabel: null,
+          pullRequests: [],
+          target: { kind: "none", label: "Unavailable" },
+        },
+      }}
+    />,
+  );
+  await view.render();
+  await view.click("Task thread · Check disks");
+  expect(onSelectTask).toHaveBeenCalledWith("task-1");
 });

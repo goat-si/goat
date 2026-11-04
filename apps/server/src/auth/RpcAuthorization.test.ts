@@ -67,6 +67,7 @@ describe("RPC authorization scopes", () => {
     Effect.gen(function* () {
       for (const [method, scope] of [
         [CHANNEL_GATEWAY_WS_METHODS.listBotThreads, AuthOrchestrationReadScope],
+        [CHANNEL_GATEWAY_WS_METHODS.listChildWork, AuthOrchestrationReadScope],
         [CHANNEL_GATEWAY_WS_METHODS.updateTaskView, AuthOrchestrationOperateScope],
       ] as const) {
         const denied = yield* Effect.flip(RpcAuthorization.authorizeRpcCall([], method, {}));

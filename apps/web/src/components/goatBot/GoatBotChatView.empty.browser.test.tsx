@@ -6,7 +6,6 @@ import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 vi.mock("../WorkspacePageHeader", () => ({
   WorkspacePageHeader: ({ children }: { children: ReactNode }) => <header>{children}</header>,
 }));
-vi.mock("./GoatBotModeButton", () => ({ GoatBotModeButton: () => null }));
 vi.mock("./GoatBotModelPicker", () => ({ GoatBotModelPicker: () => null }));
 vi.mock("./GoatBotAvatar", () => ({ GoatBotAvatar: () => null }));
 

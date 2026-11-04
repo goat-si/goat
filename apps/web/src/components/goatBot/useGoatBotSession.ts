@@ -19,6 +19,7 @@ import { scopeThreadRef } from "@goat/client-runtime/environment";
 import type {
   ChannelBotRef,
   ChannelGatewayError,
+  ChannelTaskId,
   EnvironmentId,
   OrchestrationV2ProjectedTurnItem,
   ScopedThreadRef,
@@ -35,6 +36,8 @@ import {
   useThreadShell,
 } from "~/state/entities";
 import { environmentThreadDetails } from "~/state/threads";
+import { channelEnvironment } from "~/state/channels";
+import { useEnvironmentQuery } from "~/state/query";
 import {
   goatBotHomeReadBack,
   goatBotSupportUnknown,
@@ -121,7 +124,7 @@ function newQueue(environmentId: EnvironmentId) {
         session.machine.ensure.bot.threadId === bot.threadId
       );
     },
-    send: async ({ clientKey, text, attachments, receivedAt, bot }) => {
+    send: async ({ clientKey, text, attachments, receivedAt, bot, taskId }) => {
       const port = useSessions.getState().sessions.get(environmentId)?.port;
       if (!port) throw new Error("GOAT Bot isn't available");
       const files = await uploadGoatBotAttachments(bot.environmentId, attachments);
@@ -138,6 +141,7 @@ function newQueue(environmentId: EnvironmentId) {
         attachments: files,
         receivedAt,
         intent: "message",
+        ...(taskId === undefined ? {} : { taskId }),
       });
       // The server keeps its own copy of each file once it has the message, and a rejected
       // message is never sent again.
@@ -287,7 +291,7 @@ function useGoatBotWorking(visibleTurnItems: ReadonlyArray<OrchestrationV2Projec
 }
 
 /** One ensure and send queue per environment, shared by the entry route and thread view. */
-export function useGoatBotSession(visibleTurnItems = EMPTY_ITEMS) {
+export function useGoatBotSession(visibleTurnItems = EMPTY_ITEMS, taskId?: ChannelTaskId | null) {
   const { enabled, environment, environments, home, port } = useGoatBotEnabled();
   const environmentId = environment?.environmentId ?? null;
   const bootstrapped = useEnvironmentShellsBootstrapped(environmentId);
@@ -438,19 +442,30 @@ export function useGoatBotSession(visibleTurnItems = EMPTY_ITEMS) {
     // An entry-route consumer has no projection and must not clear a thread consumer's keys.
     if (visibleTurnItems !== EMPTY_ITEMS) queue?.acknowledge(keys);
   }, [queue, visibleTurnItems]);
-  const rows = buildGoatBotTimeline({
-    visibleTurnItems,
-    pendingInputs: pendingInputsAt(queue, revision),
-    readers: goatBotItemReaders,
-  });
   const activity = useGoatBotWorking(visibleTurnItems);
   const serverConfigs = useServerConfigs();
   const readyBot = availability.kind === "ready" ? availability.bot : null;
-  // Files go to the bot's own server, which says whether GOAT Bot takes them.
   const capabilities =
     readyBot === null
       ? undefined
       : serverConfigs.get(readyBot.environmentId)?.environment.capabilities;
+  const threads = useEnvironmentQuery(
+    readyBot !== null && capabilities?.goatBotTaskThreads === true
+      ? channelEnvironment.listBotThreads({ environmentId: readyBot.environmentId, input: {} })
+      : null,
+  );
+  const knownTaskIds = (threads.data?.rows ?? []).flatMap((row) =>
+    row.kind === "task" ? [row.task.taskId] : [],
+  );
+  const rowsForTask = (selectedTask: ChannelTaskId | null | undefined) =>
+    buildGoatBotTimeline({
+      visibleTurnItems,
+      pendingInputs: pendingInputsAt(queue, revision),
+      readers: goatBotItemReaders,
+      knownTaskIds,
+      ...(selectedTask === undefined ? {} : { taskId: selectedTask }),
+    });
+  const rows = rowsForTask(taskId);
   const attachmentSupport: GoatBotAttachmentSupport | null =
     capabilities?.goatBotAttachments === true && capabilities.attachmentUploads === true
       ? { maxUploadBytes: capabilities.fileAttachments?.maxUploadBytes ?? null }
@@ -463,10 +478,22 @@ export function useGoatBotSession(visibleTurnItems = EMPTY_ITEMS) {
     replyingSince: goatBotReplyingSince({ visibleTurnItems, readers: goatBotItemReaders }),
     activity,
     attachmentSupport,
+    supportsTaskThreads: capabilities?.goatBotTaskThreads === true,
+    rowsForTask,
+    onSendToTask: (
+      selectedTask: ChannelTaskId,
+      text: string,
+      attachments: ReadonlyArray<GoatBotDraftAttachment> = [],
+    ) => {
+      if (availability.kind !== "ready" || !canOperate || queue === undefined) return false;
+      if (attachments.length > 0 && attachmentSupport === null) return false;
+      queue.submit(text, availability.bot, attachments, selectedTask);
+      return true;
+    },
     onSend: (text: string, attachments: ReadonlyArray<GoatBotDraftAttachment> = []) => {
       if (availability.kind !== "ready" || !canOperate || queue === undefined) return false;
       if (attachments.length > 0 && attachmentSupport === null) return false;
-      queue.submit(text, availability.bot, attachments);
+      queue.submit(text, availability.bot, attachments, taskId ?? undefined);
       return true;
     },
     onRetryInput: (key: string) => {

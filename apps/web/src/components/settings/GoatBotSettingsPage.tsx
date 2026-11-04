@@ -1,3 +1,5 @@
+import { persistClientSettingsPatch, useClientSettings } from "../../hooks/useSettings";
+import { Switch } from "../ui/switch";
 import { GoatBotSettings } from "./GoatBotSettings";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
@@ -5,9 +7,25 @@ import { SlackChannelSettings } from "./SlackChannelSettings";
 
 /** Every GOAT Bot control in one place: where it runs, then the channels that reach it. */
 export function GoatBotSettingsPanel() {
+  const besideChat = useClientSettings((settings) => settings.goatBotTaskThreadsBesideChat);
   return (
     <SettingsPageContainer>
       <GoatBotSettings />
+      <SettingsSection title="Task threads">
+        <SettingsRow
+          title="Open task threads beside the main chat"
+          description="Show task conversations beside the main chat when there is enough space."
+          control={
+            <Switch
+              aria-label="Open task threads beside the main chat"
+              checked={besideChat}
+              onCheckedChange={(checked) =>
+                void persistClientSettingsPatch({ goatBotTaskThreadsBesideChat: Boolean(checked) })
+              }
+            />
+          }
+        />
+      </SettingsSection>
       <SlackChannelSettings />
       <SettingsSection id="imessage" title="iMessage">
         <SettingsRow
