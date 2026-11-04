@@ -4,6 +4,7 @@ import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { useEnvironmentQuery } from "~/state/query";
 import { serverEnvironment } from "~/state/server";
+import { Tabs, TabsList, TabsPanel, TabsTab } from "../ui/tabs";
 import { GoatBotWorkDetails } from "./GoatBotWorkDetails";
 import { useBotRoster } from "./useBotRoster";
 
@@ -28,24 +29,17 @@ export function GoatBotWorkPanel({
     (routine) => routine.threadId === threadId,
   );
   return (
-    <div className="flex min-h-0 flex-1 flex-col p-4">
-      <div role="tablist" aria-label="GOAT Bot work" className="flex flex-wrap gap-2">
-        {tabs.map((name) => (
-          <button
-            key={name}
-            type="button"
-            role="tab"
-            aria-selected={tab === name}
-            className="rounded-md px-2 py-1 text-sm aria-selected:bg-accent"
-            onClick={() => setTab(name)}
-          >
-            {name}
-          </button>
-        ))}
-      </div>
-      <div role="tabpanel" className="min-h-0 overflow-y-auto py-4 text-sm">
-        {tab === "Tasks" &&
-          (tasks.length === 0 ? (
+    <div className="flex min-h-0 flex-1 flex-col p-4 text-sm">
+      <Tabs value={tab} onValueChange={(value: Tab) => setTab(value)} className="min-h-0 flex-1">
+        <TabsList aria-label="GOAT Bot work">
+          {tabs.map((name) => (
+            <TabsTab key={name} value={name}>
+              {name}
+            </TabsTab>
+          ))}
+        </TabsList>
+        <TabsPanel value="Tasks" className="mt-4 min-h-0 overflow-y-auto">
+          {tasks.length === 0 ? (
             <p>No task threads yet.</p>
           ) : (
             <div className="space-y-4">
@@ -63,9 +57,10 @@ export function GoatBotWorkPanel({
                 </section>
               ))}
             </div>
-          ))}
-        {tab === "Routines" &&
-          (boundRoutines.length ? (
+          )}
+        </TabsPanel>
+        <TabsPanel value="Routines" className="mt-4 min-h-0 overflow-y-auto">
+          {boundRoutines.length ? (
             boundRoutines.map((routine) => (
               <p key={routine.id} className="py-1">
                 {routine.title}
@@ -73,10 +68,15 @@ export function GoatBotWorkPanel({
             ))
           ) : (
             <p>Ask GOAT Bot in chat to set up a routine.</p>
-          ))}
-        {tab === "Library" && <p>Files GOAT Bot saves will appear here.</p>}
-        {tab === "Computer" && <p>Machines GOAT Bot works on will appear here.</p>}
-      </div>
+          )}
+        </TabsPanel>
+        <TabsPanel value="Library" className="mt-4">
+          <p>Files GOAT Bot saves will appear here.</p>
+        </TabsPanel>
+        <TabsPanel value="Computer" className="mt-4">
+          <p>Machines GOAT Bot works on will appear here.</p>
+        </TabsPanel>
+      </Tabs>
     </div>
   );
 }

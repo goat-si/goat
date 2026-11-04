@@ -10,6 +10,7 @@ export function GoatBotSettingsPanel() {
   const besideChat = useClientSettings((settings) => settings.goatBotTaskThreadsBesideChat);
   return (
     <SettingsPageContainer>
+      <GoatBotSettings />
       <SettingsSection title="Task threads">
         <SettingsRow
           title="Open task threads beside the main chat"
@@ -25,7 +26,6 @@ export function GoatBotSettingsPanel() {
           }
         />
       </SettingsSection>
-      <GoatBotSettings />
       <SlackChannelSettings />
       <SettingsSection id="imessage" title="iMessage">
         <SettingsRow
