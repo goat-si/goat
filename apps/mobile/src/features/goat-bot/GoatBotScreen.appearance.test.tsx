@@ -8,8 +8,18 @@ import {
 import { expect, it, vi } from "vite-plus/test";
 
 const appearance = vi.hoisted(() => ({ mode: "dark" as "light" | "dark", baseFontSize: 16 }));
-vi.mock("./MobileBotWork", () => ({ MobileBotWork: () => null }));
-const screenSession = vi.hoisted(() => ({ activity: null as GoatBotActivity | null }));
+const screenSession = vi.hoisted(() => ({
+  activity: null as GoatBotActivity | null,
+  supportsTaskThreads: false,
+  requestedTaskId: undefined as string | null | undefined,
+  workTaskId: undefined as string | undefined,
+}));
+vi.mock("./MobileBotWork", () => ({
+  MobileBotWork: (props: { taskId?: string }) => {
+    screenSession.workTaskId = props.taskId;
+    return null;
+  },
+}));
 const list = vi.hoisted(() => ({ props: null as Record<string, unknown> | null }));
 const picker = vi.hoisted(() => ({
   onPicked: null as
@@ -119,16 +129,20 @@ vi.mock("./useMobileGoatBotHomeSettings", () => ({
   useMobileGoatBotHomeSettings: () => ({ moveTarget: null, error: null }),
 }));
 vi.mock("./useMobileGoatBotSession", () => ({
-  useMobileGoatBotSession: () => ({
-    availability: "ready",
-    rows: [],
-    canSend: true,
-    attachmentSupport: { maxUploadBytes: null },
-    onSend: () => true,
-    onRetryInput: () => {},
-    replyingSince: null,
-    activity: screenSession.activity,
-  }),
+  useMobileGoatBotSession: (_visible: boolean, taskId?: string | null) => {
+    screenSession.requestedTaskId = taskId;
+    return {
+      availability: "ready",
+      rows: [],
+      canSend: true,
+      attachmentSupport: { maxUploadBytes: null },
+      onSend: () => true,
+      onRetryInput: () => {},
+      replyingSince: null,
+      activity: screenSession.activity,
+      supportsTaskThreads: screenSession.supportsTaskThreads,
+    };
+  },
 }));
 
 import { GoatBotScreen, GoatBotTimelineRow } from "./GoatBotScreen";
@@ -287,4 +301,15 @@ it("opens the conversation at its newest message and keeps following it", async 
     alignItemsAtEnd: true,
   });
   await view.unmount();
+});
+
+it("ignores an unsupported task screen and uses main-chat filtering", async () => {
+  screenSession.supportsTaskThreads = false;
+  const task = (await import("@goat/contracts")).ChannelTaskId.make("task-1");
+  const view = await render(<GoatBotScreen visible taskId={task} />);
+  expect(screenSession.workTaskId).toBeUndefined();
+  await view.unmount();
+  const main = await render(<GoatBotScreen visible />);
+  expect(screenSession.requestedTaskId).toBeNull();
+  await main.unmount();
 });
