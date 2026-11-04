@@ -68,6 +68,7 @@ vi.mock("../ui/sidebar", () => ({
   }) => cloneElement(link, props, children),
 }));
 const at = "2026-11-04T10:00:00.000Z";
+const decodeRow = Schema.decodeSync(BotThreadRow);
 const rows = [
   Schema.decodeSync(BotThreadRow)({
     kind: "task",
@@ -129,4 +130,34 @@ it("updates a task view and refreshes the roster after the server accepts it", a
     }),
   );
   expect(actions.refresh).toHaveBeenCalled();
+});
+
+it("expands and collapses older task rows", async () => {
+  const extra = Array.from({ length: 6 }, (_, i) =>
+    decodeRow({
+      kind: "task",
+      task: { taskId: `old-${i}`, title: `Older task ${i}`, status: "completed", updatedAt: at },
+      view: { taskId: `old-${i}`, pinnedAt: null, doneAt: null, readThrough: at },
+      lastActivityAt: at,
+      unread: false,
+      mainMessagesSinceQuiet: 0,
+    }),
+  );
+  rows.push(...extra);
+  try {
+    useGlobalAgentStore.getState().setMode("bot");
+    // The router is mocked to exercise roster disclosure without the application route tree.
+    await using screen = await render(<GoatBotSidebarTabs />, { router: false });
+    const more = screen.getByRole("button", { name: "Show more" });
+    await expect.element(more).toHaveAttribute("aria-expanded", "false");
+    await userEvent.click(more);
+    await expect.element(screen.getByText("Older task 5")).toBeVisible();
+    const less = screen.getByRole("button", { name: "Show less" });
+    await expect.element(less).toHaveAttribute("aria-expanded", "true");
+    await userEvent.click(less);
+    await expect.element(screen.getByRole("button", { name: "Show more" })).toBeVisible();
+    await expect.element(screen.getByText("Older task 5")).not.toBeInTheDocument();
+  } finally {
+    rows.splice(2);
+  }
 });

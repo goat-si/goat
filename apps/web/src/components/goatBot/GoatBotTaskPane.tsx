@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import { canSendToGoatBot } from "@goat/client-runtime/goatBot";
+import { canSendToGoatBot, presentTaskStatus } from "@goat/client-runtime/goatBot";
 import type { ChannelTaskId, EnvironmentId } from "@goat/contracts";
 import { useEffect, type CSSProperties } from "react";
 import { channelEnvironment } from "~/state/channels";
@@ -64,7 +64,13 @@ export function GoatBotTaskPane({
       }
     >
       {!narrow && <RightPanelResizeHandle handlers={handlers} />}
-      <header className="flex flex-wrap items-center gap-2 border-b border-border p-3">
+      <header
+        className={
+          narrow
+            ? "flex flex-wrap items-center gap-2 border-b border-border p-3 pl-14"
+            : "flex flex-wrap items-center gap-2 border-b border-border p-3"
+        }
+      >
         <Button variant="ghost" size="sm" onClick={onClose}>
           {narrow ? "Back to Tasks" : "Close"}
         </Button>
@@ -74,7 +80,7 @@ export function GoatBotTaskPane({
           </h2>
           {task?.kind === "task" && (
             <p className="text-xs text-muted-foreground">
-              {task.view.doneAt ? "Done" : task.task.status}
+              {presentTaskStatus(task.view.doneAt ? "completed" : task.task.status).label}
             </p>
           )}
         </div>

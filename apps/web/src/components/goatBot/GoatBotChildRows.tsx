@@ -1,7 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
-import { botThreadKey, selectBotChildren } from "@goat/client-runtime/goatBot";
+import { botThreadKey, presentTaskStatus, selectBotChildren } from "@goat/client-runtime/goatBot";
 import {
-  isChannelTaskTerminal,
   type BotThreadRow,
   type ChannelUpdateTaskViewInput,
   type EnvironmentId,
@@ -11,6 +10,7 @@ import { useState } from "react";
 import { readLocalApi } from "~/localApi";
 import { channelEnvironment } from "~/state/channels";
 import { useAtomCommand } from "~/state/use-atom-command";
+import { Badge } from "../ui/badge";
 import { SidebarGroup, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
 
 export function GoatBotChildRows({
@@ -77,16 +77,13 @@ export function GoatBotChildRows({
               ? row.title || "GOAT thread"
               : "";
           const status = task
-            ? task.view.doneAt || isChannelTaskTerminal(task.task.status)
-              ? "done"
-              : task.task.status === "waiting_input"
-                ? "blocked"
-                : "working"
+            ? presentTaskStatus(task.view.doneAt ? "completed" : task.task.status)
             : null;
           return (
             <SidebarMenuItem key={botThreadKey(row)}>
               <SidebarMenuButton
                 isActive={active}
+                tooltip={{ children: title, hidden: false }}
                 aria-current={active ? "page" : undefined}
                 onContextMenu={
                   task
@@ -108,22 +105,16 @@ export function GoatBotChildRows({
                 }
               >
                 <span className="w-4" />
-                {status && (
-                  <span
-                    role="img"
-                    aria-label={status}
-                    className={
-                      status === "blocked"
-                        ? "size-2 rounded-full bg-warning"
-                        : status === "done"
-                          ? "size-2 rounded-full bg-muted-foreground"
-                          : "size-2 rounded-full bg-success"
-                    }
-                  />
-                )}
                 <span className="min-w-0 flex-1 truncate">{title}</span>
+                {status && (
+                  <Badge size="sm" variant="secondary">
+                    {status.label}
+                  </Badge>
+                )}
                 {row.kind === "coding" && (
-                  <span className="text-xs text-muted-foreground">GOAT thread</span>
+                  <span className="min-w-0 truncate text-xs text-muted-foreground">
+                    GOAT thread
+                  </span>
                 )}
                 {task?.unread && (
                   <span role="img" aria-label="Unread" className="size-2 rounded-full bg-info" />
@@ -145,10 +136,17 @@ export function GoatBotChildRows({
             </SidebarMenuItem>
           );
         })}
-        {visible.hasMore && (
-          <button type="button" onClick={() => setShowMore(true)}>
-            Show more
-          </button>
+        {(visible.hasMore || showMore) && (
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              render={<button type="button" />}
+              aria-expanded={showMore}
+              onClick={() => setShowMore((value) => !value)}
+            >
+              <span className="w-4" />
+              {showMore ? "Show less" : "Show more"}
+            </SidebarMenuButton>
+          </SidebarMenuItem>
         )}
       </SidebarMenu>
     </SidebarGroup>

@@ -218,7 +218,7 @@ function GoatBotConversationRow({
             </span>
           ) : null}
           {count !== undefined && count > 0 ? (
-            <Badge size="sm" variant="secondary">
+            <Badge size="sm" variant="secondary" aria-label={`${count} waiting for you`}>
               {count}
             </Badge>
           ) : null}

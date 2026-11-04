@@ -365,7 +365,7 @@ export function GoatBotTimeline({
                         <Link
                           to="/bot"
                           search={{ task: ChannelTaskId.make(row.card.key) }}
-                          className="rounded-full border border-border px-3 py-1.5 text-sm hover:bg-accent"
+                          className="inline-flex max-w-full rounded-full border border-border px-3 py-1.5 text-sm whitespace-normal break-words hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring"
                         >
                           Task thread · {row.card.title}
                         </Link>

@@ -73,12 +73,14 @@ export function GoatBotSidebarTabs() {
           <SidebarGroup>
             <Tooltip>
               <TooltipTrigger render={<span className="block" tabIndex={0} />}>
-                <Button variant="outline" size="sm" disabled className="w-full justify-start">
-                  <PlusIcon />
-                  New bot
-                  <Badge variant="secondary" size="sm" className="ml-auto">
-                    Coming soon
-                  </Badge>
+                <Button variant="outline" size="sm-multiline" disabled className="w-full">
+                  <span className="flex min-w-0 flex-wrap items-center justify-center gap-1">
+                    <PlusIcon />
+                    New bot
+                    <Badge variant="secondary" size="sm">
+                      Coming soon
+                    </Badge>
+                  </span>
                 </Button>
               </TooltipTrigger>
               <TooltipPopup>Creating more bots is coming soon.</TooltipPopup>
