@@ -1,4 +1,4 @@
-import { DEFAULT_SERVER_SETTINGS, EnvironmentId } from "@goat/contracts";
+import { DEFAULT_SERVER_SETTINGS, EnvironmentId, WORKTREE_CLEANUP_OFF } from "@goat/contracts";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vite-plus/test";
@@ -66,11 +66,7 @@ it("turns off the three automatic cleanup rules", async () => {
     environmentId: "local",
     input: {
       patch: {
-        storageCleanup: {
-          worktreeKeepRecent: null,
-          worktreeAfterDays: null,
-          worktreeOnArchive: false,
-        },
+        storageCleanup: WORKTREE_CLEANUP_OFF,
       },
     },
   });

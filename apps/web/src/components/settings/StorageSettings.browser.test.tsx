@@ -1,6 +1,10 @@
 import { act, render } from "../../../test/render";
 import { RegistryProvider } from "@effect/atom-react";
-import { DEFAULT_SERVER_SETTINGS, type StorageCleanupReport } from "@goat/contracts";
+import {
+  DEFAULT_SERVER_SETTINGS,
+  type StorageCleanupReport,
+  WORKTREE_CLEANUP_OFF,
+} from "@goat/contracts";
 import { type ReactNode } from "react";
 import { expect, it, vi } from "vite-plus/test";
 
@@ -171,11 +175,7 @@ it("confirms a cleanup preview and turns off its rules", async () => {
     environmentId: "env",
     input: {
       patch: {
-        storageCleanup: {
-          worktreeKeepRecent: null,
-          worktreeAfterDays: null,
-          worktreeOnArchive: false,
-        },
+        storageCleanup: WORKTREE_CLEANUP_OFF,
       },
     },
   });

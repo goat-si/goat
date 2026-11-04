@@ -1,3 +1,4 @@
+import { WORKTREE_CLEANUP_OFF } from "@goat/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId, WorktreeCleanupPreview } from "@goat/contracts";
 import { serverEnvironment } from "../../state/server";
@@ -58,11 +59,7 @@ export function WorktreeCleanupPreviewPanel({
                   environmentId,
                   input: {
                     patch: {
-                      storageCleanup: {
-                        worktreeKeepRecent: null,
-                        worktreeAfterDays: null,
-                        worktreeOnArchive: false,
-                      },
+                      storageCleanup: WORKTREE_CLEANUP_OFF,
                     },
                   },
                 })

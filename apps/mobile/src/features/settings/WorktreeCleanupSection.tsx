@@ -1,3 +1,4 @@
+import { WORKTREE_CLEANUP_OFF } from "@goat/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId, StorageCleanupSettings } from "@goat/contracts";
 import { useEffect, useState } from "react";
@@ -124,9 +125,7 @@ export function WorktreeCleanupSection({
           <SettingsActionRow
             label="Turn off"
             disabled={!allowed}
-            onPress={() =>
-              write({ worktreeKeepRecent: null, worktreeAfterDays: null, worktreeOnArchive: false })
-            }
+            onPress={() => write(WORKTREE_CLEANUP_OFF)}
           />
         </>
       ) : null}

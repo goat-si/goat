@@ -101,6 +101,17 @@ export const StorageCleanupReport = Schema.Struct({
 });
 export type StorageCleanupReport = typeof StorageCleanupReport.Type;
 
+/** Turns off every worktree removal rule at once; snapshots and file cleanup are untouched. */
+export const WORKTREE_CLEANUP_OFF = {
+  worktreeKeepRecent: null,
+  worktreeAfterDays: null,
+  worktreeOnArchive: false,
+  worktreeOnDelete: false,
+  worktreeSettledAfterDays: null,
+  worktreeOnMerge: false,
+  worktreeUnchanged: false,
+} as const;
+
 export const StorageCleanupSettings = Schema.Struct({
   worktreeKeepWhen: WorktreeKeepWhen.pipe(
     Schema.withDecodingDefault(Effect.succeed("uncommitted-changes")),
