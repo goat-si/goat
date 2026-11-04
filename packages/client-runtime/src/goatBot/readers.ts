@@ -39,12 +39,18 @@ const TASK_STATUS = {
   cancelled: { label: "Cancelled", tone: "neutral" },
 } as const satisfies Record<ChannelTaskStatus, { label: string; tone: GoatBotCardTone }>;
 
-/** One name and tone per task status, so the sidebar, task pane, Work panel and cards agree. */
-export function presentTaskStatus(status: ChannelTaskStatus): {
+/**
+ * One name and tone per task status, so the sidebar, task pane, Work panel and cards agree.
+ * A task the person marked done reads as done whatever its run status is.
+ */
+export function presentTaskStatus(
+  status: ChannelTaskStatus,
+  doneAt?: string | null,
+): {
   readonly label: string;
   readonly tone: GoatBotCardTone;
 } {
-  return TASK_STATUS[status];
+  return TASK_STATUS[doneAt ? "completed" : status];
 }
 
 const SOURCE_PREFIX = {

@@ -11,7 +11,17 @@ import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
 import { buildGoatBotTimeline } from "./rows.ts";
-import { goatBotItemReaders, presentTaskChip } from "./readers.ts";
+import { goatBotItemReaders, presentTaskChip, presentTaskStatus } from "./readers.ts";
+
+describe("presentTaskStatus", () => {
+  it("names a task the person marked done as done while its run is still going", () => {
+    expect(presentTaskStatus("running", "2026-11-04T10:00:00.000Z")).toEqual({
+      label: "Done",
+      tone: "success",
+    });
+    expect(presentTaskStatus("waiting_input", null).label).toBe("Needs your input");
+  });
+});
 
 const chip = (overrides: Partial<ChannelTaskChip> = {}): ChannelTaskChip => ({
   taskId: ChannelTaskId.make("task-1"),
