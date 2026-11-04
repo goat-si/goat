@@ -3,7 +3,9 @@ import {
   type ClipboardEvent,
   type FormEvent,
   type KeyboardEvent,
+  type Ref,
   useEffect,
+  useImperativeHandle,
   useRef,
   useState,
 } from "react";
@@ -20,17 +22,23 @@ import {
   type GoatBotDraftAttachment,
 } from "./goatBotAttachments";
 
+export interface GoatBotComposerHandle {
+  addFiles(files: File[]): void;
+}
+
 /**
  * GOAT Bot's message box. It clears as soon as a message is handed off, so a double Enter
  * cannot send it twice, and running work never blocks it. It grows with its text up to a cap.
  */
 export function GoatBotComposer({
+  ref,
   disabled,
   placeholder,
   initialText = "",
   attachmentSupport = null,
   onSend,
 }: {
+  readonly ref?: Ref<GoatBotComposerHandle>;
   readonly disabled: boolean;
   readonly placeholder: string;
   readonly initialText?: string;
@@ -95,6 +103,11 @@ export function GoatBotComposer({
     if (error !== null) toastManager.add({ type: "error", title: error });
     return false;
   };
+  useImperativeHandle(ref, () => ({
+    addFiles(files) {
+      void addFiles(files).then(() => textareaRef.current?.focus());
+    },
+  }));
   const remove = (id: string) => {
     releaseGoatBotAttachments(attachments.filter((attachment) => attachment.id === id));
     setAttachments((current) => current.filter((attachment) => attachment.id !== id));

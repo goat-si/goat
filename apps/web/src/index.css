@@ -270,10 +270,10 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(goat-mob
   --color-heat-hot: var(--heat-hot);
   --color-heat-burning: var(--heat-burning);
   --color-heat-ember: var(--heat-ember);
-  /* GOAT Bot's face follows the theme's text and canvas without an accent hue. */
-  --color-goat-avatar: color-mix(in oklab, var(--foreground) 6%, var(--background));
-  --color-goat-avatar-border: color-mix(in oklab, var(--foreground) 12%, var(--background));
-  --color-goat-avatar-foreground: color-mix(in oklab, var(--foreground) 82%, var(--background));
+  /* The face tints its surface (canvas, selected row, glass) without an opaque disc. */
+  --color-goat-avatar: color-mix(in oklab, var(--foreground) 6%, transparent);
+  --color-goat-avatar-border: color-mix(in oklab, var(--foreground) 12%, transparent);
+  --color-goat-avatar-foreground: color-mix(in oklab, var(--foreground) 82%, transparent);
   /* GOAT Bot's Messages colors stay local to its conversation. */
   --color-goat-bubble-out-top: var(--goat-bubble-out-top);
   --color-goat-bubble-out: var(--goat-bubble-out);
