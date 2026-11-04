@@ -62,15 +62,13 @@ and worktree while you stay in the new thread composer. This requires a Git proj
 
 Pin a thread from its menu to keep it above your active work.
 
-The **Bots** tab groups GOAT Bot with its task and coding threads when the server supports them. Use a task's menu to pin it or mark it done.
+When GOAT Bot is enabled, **Bots** lists the main bot and, on supported servers,
+its task and coding threads. Use a task's menu to pin it, mark it done, or mark it read.
 
-A task opens its own conversation beside the main GOAT Bot chat on a wide screen,
-or in place of the chat on a narrow screen. Messages you send there stay with that
-task. Use **Back to Tasks** or **Close** to return to the main conversation.
-Turn off **Open task threads beside the main chat** in **Settings → GOAT Bot** to open tasks in place even on wide screens.
-
-Open **Work** in the GOAT Bot header to find task threads and routines. The panel
-also has Library and Computer tabs for the files and machines GOAT Bot works with.
+A task opens its own conversation beside the main chat on a wide screen, or in place
+of the chat on a narrow one; messages you send there stay with that task. To always
+open tasks in place, turn off **Open task threads beside the main chat** in
+**Settings → GOAT Bot**. **Work** in the GOAT Bot header lists tasks and routines.
 
 The GOAT Bot row shows its latest message or task update. A blue dot means the bot has
 sent something since you last opened it; the number badge counts tasks awaiting your

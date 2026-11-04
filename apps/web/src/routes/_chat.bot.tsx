@@ -38,14 +38,14 @@ function GoatBotRouteSession() {
   const navigate = useNavigate();
   const bot = session.availability.kind === "ready" ? session.availability.bot : null;
   useEffect(() => {
-    if (bot && task === undefined)
+    if (bot && (task === undefined || !session.supportsTaskThreads))
       void navigate({
         to: "/$environmentId/$threadId",
         params: { environmentId: bot.environmentId, threadId: bot.threadId },
         replace: true,
       });
-  }, [bot, navigate, task]);
-  if (bot && task)
+  }, [bot, navigate, task, session.supportsTaskThreads]);
+  if (bot && task && session.supportsTaskThreads)
     return (
       <GoatBotTaskRoute environmentId={bot.environmentId} threadId={bot.threadId} taskId={task} />
     );
@@ -103,7 +103,7 @@ export function GoatBotTaskRoute({
         <GoatBotTaskPane
           narrow={narrow}
           environmentId={environmentId}
-          threadId={threadId}
+          session={session}
           taskId={taskId}
           onClose={() => void navigate({ to: "/bot", search: {} })}
         />

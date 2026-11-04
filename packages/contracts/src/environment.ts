@@ -233,7 +233,7 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
   goatBotStatus: Schema.optionalKey(Schema.Boolean),
   /** Server answers `channel.listBots`. */
   goatBotProfiles: Schema.optionalKey(Schema.Boolean),
-  /** Server answers task thread queries and mutations. */
+  /** Server answers `channel.listChildWork`. */
   goatBotChildWork: Schema.optionalKey(Schema.Boolean),
   goatBotTaskThreads: Schema.optionalKey(Schema.Boolean),
   /** `channel.getBotStatus` leaves out tasks that were waiting when the bot thread was last visited. */

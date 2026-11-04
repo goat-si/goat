@@ -249,6 +249,22 @@ describe("buildGoatBotTimeline", () => {
     ).toEqual(["task-reply", "chip"]);
   });
 
+  it("hides a task reply known only from the task roster", () => {
+    const at = "2026-10-12T12:00:00Z";
+    const input = {
+      visibleTurnItems: rowsOf([bot("reply", at, "Working")]),
+      pendingInputs: [],
+      readers: readers({
+        reply: { tone: "reply", readAt: null, requestKey: null, taskId: "task" },
+      }),
+      knownTaskIds: ["task"],
+    };
+    expect(content(buildGoatBotTimeline({ ...input, taskId: null }))).toEqual([]);
+    expect(
+      content(buildGoatBotTimeline({ ...input, taskId: "task" })).map((row) => row.id),
+    ).toEqual(["reply"]);
+  });
+
   it("clears task pending input when its committed rejection has no task tag", () => {
     const at = "2026-10-12T12:00:00Z";
     const rows = buildGoatBotTimeline({

@@ -610,17 +610,24 @@ it("offers no attach button or drop target when GOAT Bot's server cannot take fi
   expect(screen.container.querySelector("[data-chat-workspace-drop-overlay]")).toBeNull();
 });
 
+function TaskPaneWithSession() {
+  const session = useGoatBotSession(undefined, null);
+  return (
+    <GoatBotTaskPane
+      environmentId={environmentId}
+      session={session}
+      taskId={ChannelTaskId.make("task-1")}
+      narrow
+      onClose={() => {}}
+    />
+  );
+}
+
 it("sends task composer messages through the session queue with the task id", async () => {
   const port = setup(true);
   await using screen = await render(
     <GoatBotChannelContext value={port}>
-      <GoatBotTaskPane
-        environmentId={environmentId}
-        threadId={ThreadId.make("bot")}
-        taskId={ChannelTaskId.make("task-1")}
-        narrow
-        onClose={() => {}}
-      />
+      <TaskPaneWithSession />
     </GoatBotChannelContext>,
     { router: false }, // The composer has no links.
   );

@@ -26,6 +26,7 @@ import {
   useSyncExternalStore,
 } from "react";
 
+import { useServerConfigs } from "~/state/entities";
 import { usePrimarySettings } from "~/hooks/useSettings";
 import { useStableCallback } from "~/hooks/useStableCallback";
 import { cn } from "~/lib/utils";
@@ -61,6 +62,10 @@ export function GoatBotTimeline({
   /** Sends a question's choice as the user's answer; absent while the bot can't take messages. */
   readonly onPick?: ((answer: string) => void) | undefined;
 }) {
+  const configs = useServerConfigs();
+  const supportsTaskThreads =
+    environmentId !== null &&
+    configs.get(environmentId)?.environment.capabilities?.goatBotTaskThreads === true;
   const timestampFormat = usePrimarySettings((settings) => settings.timestampFormat);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Messages sent while this view is mounted, by send key, and the server id each one received.
@@ -348,7 +353,7 @@ export function GoatBotTimeline({
                       index > 1 && (row.firstInGroup ? "mt-3" : "mt-1"),
                     )}
                   >
-                    {taskDetails ? (
+                    {taskDetails || !supportsTaskThreads ? (
                       <GoatBotTaskChip
                         card={row.card}
                         tail={row.groupPosition === "last" || row.groupPosition === "single"}

@@ -376,7 +376,8 @@ export function GoatBotScreen(props: {
   /** Floating tabs cover the bottom of the screen; the composer rests above them. */
   readonly floatingTabs?: { readonly bottomSafeArea: number };
 }) {
-  const session = useMobileGoatBotSession(props.visible, props.taskId);
+  const session = useMobileGoatBotSession(props.visible, props.taskId ?? null);
+  const taskId = session.supportsTaskThreads ? props.taskId : undefined;
   const homeSettings = useMobileGoatBotHomeSettings();
   const moveTarget = homeSettings.moveTarget;
   const { themeAppearance } = useAppearancePreferences();
@@ -447,7 +448,7 @@ export function GoatBotScreen(props: {
         onRetry={session.onRetryInput}
         onDiscard={session.onDiscardInput}
         onSelectThread={onSelectThread}
-        onSelectTask={props.taskId ? undefined : onSelectTask}
+        onSelectTask={!taskId && session.supportsTaskThreads ? onSelectTask : undefined}
         environmentId={session.historyEnvironmentId}
       />
     ),
@@ -458,7 +459,8 @@ export function GoatBotScreen(props: {
       session.onDiscardInput,
       onSelectThread,
       onSelectTask,
-      props.taskId,
+      taskId,
+      session.supportsTaskThreads,
       session.historyEnvironmentId,
     ],
   );
@@ -482,7 +484,7 @@ export function GoatBotScreen(props: {
   return (
     <KeyboardAvoidingView className="flex-1 bg-screen" automaticOffset behavior="height">
       <View style={{ paddingTop: topInset }}>
-        <MobileBotWork taskId={props.taskId} visible={props.visible} onOpenTask={onSelectTask} />
+        <MobileBotWork taskId={taskId} visible={props.visible} onOpenTask={onSelectTask} />
       </View>
       {hasBanner ? (
         <View
@@ -551,7 +553,7 @@ export function GoatBotScreen(props: {
           </Text>
         }
         ListFooterComponent={
-          !props.taskId && session.activity ? (
+          !taskId && session.activity ? (
             <GoatBotActivityBubble text={session.activity.text} />
           ) : null
         }

@@ -1,4 +1,4 @@
-import { BotThreadRow, ChannelTaskId, EnvironmentId, ThreadId } from "@goat/contracts";
+import { BotThreadRow, ChannelTaskId, EnvironmentId } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 import { expect, it, vi } from "vite-plus/test";
 import { userEvent } from "vite-plus/test/browser";
@@ -56,30 +56,39 @@ vi.mock("./useGoatBotSession", () => ({
     return {
       availability: { kind: "ready" },
       canOperate: true,
-      rows: [],
+      rowsForTask: (id: string) => {
+        state.session(id);
+        return [];
+      },
       attachmentSupport: null,
-      onSend: state.send,
+      onSendToTask: state.send,
       onRetryInput: () => {},
       onDiscardInput: () => {},
     };
   },
 }));
 import { GoatBotTaskPane } from "./GoatBotTaskPane";
+import { useGoatBotSession } from "./useGoatBotSession";
+
+function Pane({ onClose }: { onClose: () => void }) {
+  const session = useGoatBotSession();
+  return (
+    <GoatBotTaskPane
+      environmentId={EnvironmentId.make("env")}
+      session={session}
+      taskId={ChannelTaskId.make("task-1")}
+      narrow
+      onClose={onClose}
+    />
+  );
+}
 
 it("opens the scoped task and acknowledges it, then sends and closes", async () => {
   state.send.mockClear();
   state.update.mockClear();
   state.session.mockClear();
   const close = vi.fn();
-  await using screen = await render(
-    <GoatBotTaskPane
-      environmentId={EnvironmentId.make("env")}
-      threadId={ThreadId.make("bot")}
-      taskId={ChannelTaskId.make("task-1")}
-      narrow
-      onClose={close}
-    />,
-  );
+  await using screen = await render(<Pane onClose={close} />);
   await expect.element(screen.getByText("Review work")).toBeVisible();
   expect(state.session).toHaveBeenCalledWith("task-1");
   expect(state.update).toHaveBeenCalledWith({
@@ -87,7 +96,7 @@ it("opens the scoped task and acknowledges it, then sends and closes", async () 
     input: { taskId: "task-1", readThrough: "2026-11-04T10:00:00.000Z" },
   });
   await userEvent.type(screen.getByPlaceholder("Message GOAT Bot"), "hello{Enter}");
-  expect(state.send).toHaveBeenCalledWith("hello", []);
+  expect(state.send).toHaveBeenCalledWith("task-1", "hello", []);
   await userEvent.click(screen.getByRole("button", { name: "Back to Tasks" }));
   expect(close).toHaveBeenCalledOnce();
 });

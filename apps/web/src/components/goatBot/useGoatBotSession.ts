@@ -36,6 +36,8 @@ import {
   useThreadShell,
 } from "~/state/entities";
 import { environmentThreadDetails } from "~/state/threads";
+import { channelEnvironment } from "~/state/channels";
+import { useEnvironmentQuery } from "~/state/query";
 import {
   goatBotHomeReadBack,
   goatBotSupportUnknown,
@@ -440,20 +442,30 @@ export function useGoatBotSession(visibleTurnItems = EMPTY_ITEMS, taskId?: Chann
     // An entry-route consumer has no projection and must not clear a thread consumer's keys.
     if (visibleTurnItems !== EMPTY_ITEMS) queue?.acknowledge(keys);
   }, [queue, visibleTurnItems]);
-  const rows = buildGoatBotTimeline({
-    visibleTurnItems,
-    pendingInputs: pendingInputsAt(queue, revision),
-    readers: goatBotItemReaders,
-    ...(taskId === undefined ? {} : { taskId }),
-  });
   const activity = useGoatBotWorking(visibleTurnItems);
   const serverConfigs = useServerConfigs();
   const readyBot = availability.kind === "ready" ? availability.bot : null;
-  // Files go to the bot's own server, which says whether GOAT Bot takes them.
   const capabilities =
     readyBot === null
       ? undefined
       : serverConfigs.get(readyBot.environmentId)?.environment.capabilities;
+  const threads = useEnvironmentQuery(
+    readyBot !== null && capabilities?.goatBotTaskThreads === true
+      ? channelEnvironment.listBotThreads({ environmentId: readyBot.environmentId, input: {} })
+      : null,
+  );
+  const knownTaskIds = (threads.data?.rows ?? []).flatMap((row) =>
+    row.kind === "task" ? [row.task.taskId] : [],
+  );
+  const rowsForTask = (selectedTask: ChannelTaskId | null | undefined) =>
+    buildGoatBotTimeline({
+      visibleTurnItems,
+      pendingInputs: pendingInputsAt(queue, revision),
+      readers: goatBotItemReaders,
+      knownTaskIds,
+      ...(selectedTask === undefined ? {} : { taskId: selectedTask }),
+    });
+  const rows = rowsForTask(taskId);
   const attachmentSupport: GoatBotAttachmentSupport | null =
     capabilities?.goatBotAttachments === true && capabilities.attachmentUploads === true
       ? { maxUploadBytes: capabilities.fileAttachments?.maxUploadBytes ?? null }
@@ -466,6 +478,18 @@ export function useGoatBotSession(visibleTurnItems = EMPTY_ITEMS, taskId?: Chann
     replyingSince: goatBotReplyingSince({ visibleTurnItems, readers: goatBotItemReaders }),
     activity,
     attachmentSupport,
+    supportsTaskThreads: capabilities?.goatBotTaskThreads === true,
+    rowsForTask,
+    onSendToTask: (
+      selectedTask: ChannelTaskId,
+      text: string,
+      attachments: ReadonlyArray<GoatBotDraftAttachment> = [],
+    ) => {
+      if (availability.kind !== "ready" || !canOperate || queue === undefined) return false;
+      if (attachments.length > 0 && attachmentSupport === null) return false;
+      queue.submit(text, availability.bot, attachments, selectedTask);
+      return true;
+    },
     onSend: (text: string, attachments: ReadonlyArray<GoatBotDraftAttachment> = []) => {
       if (availability.kind !== "ready" || !canOperate || queue === undefined) return false;
       if (attachments.length > 0 && attachmentSupport === null) return false;

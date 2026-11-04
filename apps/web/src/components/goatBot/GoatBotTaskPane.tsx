@@ -1,13 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
-import { scopeThreadRef } from "@goat/client-runtime/environment";
 import { canSendToGoatBot } from "@goat/client-runtime/goatBot";
-import type { ChannelTaskId, EnvironmentId, ThreadId } from "@goat/contracts";
+import type { ChannelTaskId, EnvironmentId } from "@goat/contracts";
 import { useEffect, type CSSProperties } from "react";
-import {
-  resolveThreadDetailRef,
-  useThreadShell,
-  useThreadVisibleTurnItems,
-} from "~/state/entities";
 import { channelEnvironment } from "~/state/channels";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { useResizableWidth, RESIZABLE_WIDTH_PROPERTY } from "~/hooks/useResizableWidth";
@@ -21,13 +15,13 @@ import { useGoatBotSession } from "./useGoatBotSession";
 
 export function GoatBotTaskPane({
   environmentId,
-  threadId,
+  session,
   taskId,
   onClose,
   narrow,
 }: {
   readonly environmentId: EnvironmentId;
-  readonly threadId: ThreadId;
+  readonly session: ReturnType<typeof useGoatBotSession>;
   readonly taskId: ChannelTaskId;
   readonly onClose: () => void;
   readonly narrow: boolean;
@@ -39,12 +33,6 @@ export function GoatBotTaskPane({
     maxWidth: 900,
     edge: "left",
   });
-  const ref = scopeThreadRef(environmentId, threadId);
-  const shell = useThreadShell(ref);
-  const items = useThreadVisibleTurnItems(
-    resolveThreadDetailRef(ref, { shellExists: shell !== null, waitForShell: true }),
-  );
-  const session = useGoatBotSession(items, taskId);
   const { rows, refresh } = useBotRoster();
   const task = rows.find((row) => row.kind === "task" && row.task.taskId === taskId);
   const update = useAtomCommand(channelEnvironment.updateTaskView);
@@ -128,17 +116,17 @@ export function GoatBotTaskPane({
       <GoatBotWorkDetails environmentId={environmentId} taskId={taskId} rows={rows} />
       <GoatBotTimeline
         taskDetails
-        rows={session.rows}
+        rows={session.rowsForTask(taskId)}
         environmentId={environmentId}
         onRetry={session.onRetryInput}
         onDiscard={session.onDiscardInput}
-        onPick={canSend ? session.onSend : undefined}
+        onPick={canSend ? (text) => session.onSendToTask(taskId, text) : undefined}
       />
       <GoatBotComposer
         disabled={!canSend}
         placeholder={canSend ? "Message GOAT Bot" : "GOAT Bot isn't available"}
         attachmentSupport={session.attachmentSupport}
-        onSend={session.onSend}
+        onSend={(text, attachments) => session.onSendToTask(taskId, text, attachments)}
       />
     </section>
   );
