@@ -76,37 +76,42 @@ const open = (scenario: string) =>
 const starts = (replay: Replay) => replay.requests.filter((method) => method === "turn/start");
 
 describe("Codex turn start on a busy native thread", () => {
-  // Was: steer into the earlier run's turn. The maintainer chose to stop a turn left from a run GOAT
-  // already ended, so the new message starts on its own turn and the run says why.
+  // Was: steer into the earlier run's turn. The maintainer chose to stop such a turn instead. The
+  // likely incident path: a Stop Codex never confirmed ends the run in GOAT while Codex keeps the turn
+  // running, and the next message used to send turn/start onto it.
   it.effect(
-    "regression: a run started while an ended run's turn still runs stops that turn first instead of queueing one (H2)",
+    "regression: after a Stop Codex never confirmed, the next run stops that turn before starting instead of queueing one (H2)",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const scenario = "guard-ended-run-turn";
+          const scenario = "guard-unconfirmed-stop";
           const f = yield* open(scenario);
           yield* f.turnStart(3, 1, false);
-          interrupt(f, 4, "turn-1");
+          expect(f, 4, "turn/interrupt", { threadId: f.nativeThreadId, turnId: "turn-1" });
+          f.entries.push({ type: "emit_inbound", afterMs: 1_000, frame: { id: 4, result: {} } });
+          interrupt(f, 5, "turn-1");
           turnEnded(f, "turn-1", "interrupted");
-          yield* f.turnStart(5, 2, false);
+          yield* f.turnStart(6, 2, false);
           f.turnCompleted(2);
           const replay = yield* f.open;
           yield* replay.startTurn(1);
+          const stopped = yield* replay.runtime
+            .interruptTurn({
+              providerThread: replay.providerThread,
+              providerTurnId: ProviderTurnId.make((yield* runTurn(replay, scenario, 1)).id),
+            })
+            .pipe(Effect.forkScoped);
+          yield* TestClock.adjust("12 seconds");
+          yield* Fiber.join(stopped);
+          assert.equal((yield* replay.terminal).status, "interrupted");
           yield* replay.startTurn(2);
-          const terminals = [yield* replay.terminal, yield* replay.terminal];
-          const started = yield* runTurn(replay, scenario, 2);
+          assert.equal((yield* replay.terminal).status, "completed");
           assert.deepStrictEqual(
-            terminals.map((terminal) => terminal.status),
-            ["interrupted", "completed"],
+            replay.requests.filter(
+              (method) => method === "turn/interrupt" || method === "turn/start",
+            ),
+            ["turn/start", "turn/interrupt", "turn/interrupt", "turn/start"],
           );
-          assert.equal(terminals[1]?.providerTurnId, started.id);
-          assert.deepStrictEqual(replay.notices, [
-            {
-              providerTurnId: started.id,
-              message:
-                "A turn from an earlier run was still running in Codex, so GOAT stopped it and started this message.",
-            },
-          ]);
         }),
       ).pipe(Effect.provide(layerAdapterTest)),
   );
@@ -151,7 +156,6 @@ describe("Codex turn start on a busy native thread", () => {
             status: "interrupted",
           });
           assert.deepStrictEqual(starts(replay), ["turn/start"]);
-          assert.deepStrictEqual(replay.notices, []);
         }),
       ).pipe(Effect.provide(layerAdapterTest)),
   );
@@ -184,37 +188,59 @@ describe("Codex turn start on a busy native thread", () => {
   );
 
   // Was: Stop of a held run. With no hold, the case that remains is a turn GOAT already stopped
-  // that Codex keeps running: it is stopped again, never steered, and needs no notice.
-  it.effect(
-    "stops a turn GOAT already stopped again before the next run starts, without a notice",
-    () =>
-      Effect.scoped(
-        Effect.gen(function* () {
-          const scenario = "guard-stopped-orphan";
-          const f = yield* open(scenario);
-          yield* f.turnStart(3, 1, false);
-          f.turnCompleted(1);
-          notify(f, "thread/goal/updated", { threadId: f.nativeThreadId, goal: goal(f, "active") });
-          codexStartsTurn(f, "orphan-turn");
-          // GOAT pauses the goal and stops the turn no run owns; Codex keeps running it.
-          expect(f, 4, "thread/goal/set", { threadId: f.nativeThreadId, status: "paused" });
-          answer(f, 4, { goal: goal(f, "paused") });
-          notify(f, "thread/goal/updated", { threadId: f.nativeThreadId, goal: goal(f, "paused") });
-          interrupt(f, 5, "orphan-turn");
-          interrupt(f, 6, "orphan-turn");
-          turnEnded(f, "orphan-turn", "interrupted");
-          yield* f.turnStart(7, 2, false);
-          f.turnCompleted(2);
-          const replay = yield* f.open;
-          yield* replay.startTurn(1);
-          yield* replay.terminal;
-          assert.equal(yield* replay.interrupted, "orphan-turn");
-          yield* replay.startTurn(2);
-          assert.equal(yield* replay.interrupted, "orphan-turn");
-          assert.equal((yield* replay.terminal).status, "completed");
-          assert.deepStrictEqual(replay.notices, []);
-        }),
-      ).pipe(Effect.provide(layerAdapterTest)),
+  // that Codex keeps running: it is stopped again before the next start, never steered.
+  it.effect("stops a turn GOAT already stopped again before the next run starts", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const scenario = "guard-stopped-orphan";
+        const f = yield* open(scenario);
+        yield* f.turnStart(3, 1, false);
+        f.turnCompleted(1);
+        notify(f, "thread/goal/updated", { threadId: f.nativeThreadId, goal: goal(f, "active") });
+        codexStartsTurn(f, "orphan-turn");
+        // GOAT pauses the goal and stops the turn no run owns; Codex keeps running it.
+        expect(f, 4, "thread/goal/set", { threadId: f.nativeThreadId, status: "paused" });
+        answer(f, 4, { goal: goal(f, "paused") });
+        notify(f, "thread/goal/updated", { threadId: f.nativeThreadId, goal: goal(f, "paused") });
+        interrupt(f, 5, "orphan-turn");
+        interrupt(f, 6, "orphan-turn");
+        turnEnded(f, "orphan-turn", "interrupted");
+        yield* f.turnStart(7, 2, false);
+        f.turnCompleted(2);
+        const replay = yield* f.open;
+        yield* replay.startTurn(1);
+        yield* replay.terminal;
+        assert.equal(yield* replay.interrupted, "orphan-turn");
+        yield* replay.startTurn(2);
+        assert.equal(yield* replay.interrupted, "orphan-turn");
+        assert.equal((yield* replay.terminal).status, "completed");
+      }),
+    ).pipe(Effect.provide(layerAdapterTest)),
+  );
+
+  it.effect("a run that adopted a turn Codex ends right after the steer still settles", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const scenario = "guard-adopt-ends";
+        const f = yield* open(scenario);
+        yield* f.turnStart(3, 1, false);
+        f.turnCompleted(1);
+        codexStartsTurn(f, "native-turn");
+        fence(f);
+        steer(f, 4, "native-turn", "turn-2");
+        answer(f, 4, { turnId: "native-turn" });
+        turnEnded(f, "native-turn", "completed");
+        const replay = yield* f.open;
+        yield* replay.startTurn(1);
+        yield* replay.terminal;
+        yield* replay.goalTokens;
+        yield* replay.startTurn(2);
+        assert.deepStrictEqual(yield* replay.terminal, {
+          providerTurnId: (yield* runTurn(replay, scenario, 2)).id,
+          status: "completed",
+        });
+      }),
+    ).pipe(Effect.provide(layerAdapterTest)),
   );
 
   it.effect(

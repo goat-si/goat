@@ -81,7 +81,8 @@ export function makeLocalCommandHarness(input: {
     readonly currentRun?: () => RunId | undefined;
   };
   readonly previousTurn?: {
-    readonly runStatus: "failed" | "completed";
+    readonly runStatus: "failed" | "completed" | "interrupted";
+    readonly terminationCause?: "person_stop" | "agent_stop";
     readonly turnStatus: "running" | "completed" | "interrupted";
     readonly differentThread?: boolean;
     readonly liveSession?: boolean;
@@ -289,6 +290,9 @@ export function makeLocalCommandHarness(input: {
           id: previousRunId,
           ordinal: 1,
           status: input.previousTurn.runStatus,
+          ...(input.previousTurn.terminationCause === undefined
+            ? {}
+            : { terminationCause: { kind: input.previousTurn.terminationCause } }),
           rootNodeId: NodeId.make("previous-root"),
           activeAttemptId: previousAttemptId,
           providerThreadId: previousProviderThreadId,
@@ -322,7 +326,7 @@ export function makeLocalCommandHarness(input: {
     };
   }
   let providerBusy =
-    input.previousTurn?.runStatus === "failed" &&
+    input.previousTurn !== undefined &&
     input.previousTurn.turnStatus === "running" &&
     !input.previousTurn.differentThread &&
     input.previousTurn.liveSession !== false;
