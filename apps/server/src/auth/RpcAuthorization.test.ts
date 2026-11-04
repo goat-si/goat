@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import {
+  CHANNEL_GATEWAY_WS_METHODS,
   AuthDiagnosticsReadScope,
   AuthEnvironmentMaintainScope,
   AuthFilesystemReadScope,
@@ -54,6 +55,14 @@ describe("RPC authorization scopes", () => {
       RpcAuthorization.requiredScopesForRpcCall(WS_METHODS.serverRefreshProviders, {}),
     ).toEqual([AuthOrchestrationReadScope]);
   });
+  it.effect("requires orchestration read to list bot profiles", () =>
+    Effect.gen(function* () {
+      const method = CHANNEL_GATEWAY_WS_METHODS.listBots;
+      const denied = yield* Effect.flip(RpcAuthorization.authorizeRpcCall([], method, {}));
+      expect(denied.requiredPermission).toBe(AuthOrchestrationReadScope);
+      yield* RpcAuthorization.authorizeRpcCall([AuthOrchestrationReadScope], method, {});
+    }),
+  );
   it.effect("requires orchestration read before returning native child work", () =>
     Effect.gen(function* () {
       const method = ORCHESTRATION_V2_WS_METHODS.getNativeChildWork;

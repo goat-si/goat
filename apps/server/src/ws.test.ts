@@ -1,6 +1,7 @@
 import * as ShellSnapshotLoads from "./orchestration-v2/ShellSnapshotLoads.ts";
 import * as DecisionService from "./goatclaw/DecisionService.ts";
 import * as ChannelBotDirectory from "./channels/ChannelBotDirectory.ts";
+import * as ChannelBotProfiles from "./channels/ChannelBotProfiles.ts";
 import * as ChannelBotRegistry from "./channels/ChannelBotRegistry.ts";
 import * as ChannelGateway from "./channels/ChannelGateway.ts";
 import * as ChannelIdentityService from "./channels/ChannelIdentityService.ts";
@@ -172,7 +173,6 @@ const settingsUpdated = (settings: object): ServerConfigStreamEvent => ({
   type: "settingsUpdated",
   payload: { settings: settings as ServerConfig["settings"] },
 });
-
 it.effect("resends late editors without rolling back updates already sent", () =>
   Effect.gen(function* () {
     const settingsSent = yield* Deferred.make<void>();
@@ -190,7 +190,6 @@ it.effect("resends late editors without rolling back updates already sent", () =
       ),
       Stream.runCollect,
     );
-
     const [first, second] = Array.from(events);
     assert.equal(events.length, 2);
     assert.equal(first?.type, "settingsUpdated");
@@ -202,7 +201,6 @@ it.effect("resends late editors without rolling back updates already sent", () =
     }
   }),
 );
-
 it.effect("resends a file manager reveal kind that missed the snapshot", () =>
   Effect.gen(function* () {
     const events = yield* withLateEditorConfig(
@@ -827,6 +825,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(SshWorkspaceSync.SshWorkspaceSync)({}),
   Layer.mock(ChannelBotDirectory.ChannelBotDirectory)({}),
   Layer.mock(ChannelBotRegistry.ChannelBotRegistry)({}),
+  Layer.mock(ChannelBotProfiles.ChannelBotProfiles)({}),
   Layer.mock(ChannelGateway.ChannelGateway)({}),
   Layer.mock(ChannelIdentityService.ChannelIdentityService)({}),
   Layer.mock(ChannelLedger.ChannelLedger)({}),

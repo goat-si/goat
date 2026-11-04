@@ -1,5 +1,6 @@
 import * as Schema from "effect/Schema";
 
+import { BotProfile } from "./botProfile.ts";
 import { AuthEnvironmentScopes } from "./auth.ts";
 import {
   EnvironmentId,
@@ -287,6 +288,12 @@ export const ChannelGetBotStatusResult = Schema.Struct({
 });
 export type ChannelGetBotStatusResult = typeof ChannelGetBotStatusResult.Type;
 
+/** Main first; never creates a bot. Empty until the canonical bot exists. */
+export const ChannelListBotsInput = Schema.Struct({});
+export const ChannelListBotsResult = Schema.Struct({ bots: Schema.Array(BotProfile) });
+export type ChannelListBotsInput = typeof ChannelListBotsInput.Type;
+export type ChannelListBotsResult = typeof ChannelListBotsResult.Type;
+
 export const ChannelGetTaskInput = Schema.Struct({ taskId: ChannelTaskId });
 export type ChannelGetTaskInput = typeof ChannelGetTaskInput.Type;
 
@@ -347,6 +354,7 @@ export type ChannelBotHomeClaimResult = typeof ChannelBotHomeClaimResult.Type;
 export const CHANNEL_GATEWAY_WS_METHODS = {
   ensureBot: "channel.ensureBot",
   getBotStatus: "channel.getBotStatus",
+  listBots: "channel.listBots",
   ingest: "channel.ingest",
   getTask: "channel.getTask",
   listTasks: "channel.listTasks",
