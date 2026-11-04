@@ -12,7 +12,7 @@ interface QueuedTurnLike {
 }
 
 /** Codex answers a queued turn without a start time and accepts turn/interrupt only once it starts. */
-const awaitingNativeStart = (context: QueuedTurnLike): boolean =>
+export const awaitingNativeStart = (context: QueuedTurnLike): boolean =>
   context.nativeStartReady !== undefined && !Deferred.isDoneUnsafe(context.nativeStartReady);
 
 /**

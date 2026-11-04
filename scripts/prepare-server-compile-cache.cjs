@@ -1,5 +1,5 @@
 /* oxlint-disable goat/no-global-process-runtime -- Packaging must compare the build host with the executable target. */
-const { spawn } = require("node:child_process");
+const { spawn, spawnSync } = require("node:child_process");
 const { guardChild } = require("../packages/shared/src/errorGuards.ts");
 const path = require("node:path");
 const fs = require("node:fs");
@@ -24,6 +24,14 @@ module.exports = async ({ appOutDir, electronPlatformName, arch, packager }) => 
     console.log(
       `[server-compile-cache] Skipping unexecutable target ${electronPlatformName}/${targetArch}`,
     );
+    return;
+  }
+  // GOAT's Mac Studio release runner has no Rosetta; its x64 builds ship without prepared bytecode.
+  if (
+    runsWithRosetta &&
+    spawnSync("/usr/bin/arch", ["-x86_64", "/usr/bin/true"], { stdio: "ignore" }).status !== 0
+  ) {
+    console.log("[server-compile-cache] Skipping macOS x64 target: Rosetta is not installed");
     return;
   }
   const product = packager.appInfo.productFilename;
