@@ -14,7 +14,7 @@ import {
   collectUint8StreamText,
   decodeUtf8,
   type CollectedUint8StreamText,
-} from "@goat/provider-core/server/collectStreamText";
+} from "@goat/shared/collectStreamText";
 
 export interface ProcessRunInput {
   readonly command: string;

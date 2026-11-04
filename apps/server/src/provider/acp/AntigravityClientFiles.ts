@@ -10,7 +10,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/compat";
-import { randomUuidV4 } from "@goat/provider-core/server/randomUuid";
+import { randomUuidV4 } from "@goat/shared/randomUuid";
 
 const CLIENT_FILE_MAX_BYTES = 8 * 1024 * 1024;
 

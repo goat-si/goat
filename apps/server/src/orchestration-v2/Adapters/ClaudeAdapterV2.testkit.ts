@@ -39,7 +39,7 @@ import {
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import { ProviderAdapterDriverCreateError } from "@goat/provider-core/server/adapterDriver";
 import * as ProviderAdapterRegistry from "../ProviderAdapterRegistry.ts";
-import { randomUuidV4 } from "@goat/provider-core/server/randomUuid";
+import { randomUuidV4 } from "@goat/shared/randomUuid";
 import {
   makeReplayServerConfig,
   type OrchestratorV2ProviderReplayHarness,

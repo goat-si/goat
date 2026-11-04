@@ -38,7 +38,7 @@ import {
 } from "@goat/provider-core/server/maintenanceResolver";
 import * as ProviderLatestVersions from "@goat/provider-core/server/ProviderLatestVersions";
 import type { ProviderMaintenanceCapabilities } from "@goat/provider-core/server/maintenanceResolver";
-import { collectUint8StreamText } from "@goat/provider-core/server/collectStreamText";
+import { collectUint8StreamText } from "@goat/shared/collectStreamText";
 const isServerProviderUpdateError = Schema.is(ServerProviderUpdateError);
 
 // Native updaters (`claude update`) download a ~300 MB binary without printing

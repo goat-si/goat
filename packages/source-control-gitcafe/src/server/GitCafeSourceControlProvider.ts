@@ -17,7 +17,7 @@ import {
   type SourceControlCliDiscoverySpec,
   type SourceControlManagedCliDiscoverySpec,
 } from "@goat/source-control-core/server/discovery";
-import { randomUuidV4 } from "@goat/provider-core/server/randomUuid";
+import { randomUuidV4 } from "@goat/shared/randomUuid";
 import * as SourceControlHost from "@goat/source-control-core/server/SourceControlHost";
 import * as SourceControlProvider from "@goat/source-control-core/server/SourceControlProvider";
 import { parsePullRequestUrl } from "../shared/definition.ts";

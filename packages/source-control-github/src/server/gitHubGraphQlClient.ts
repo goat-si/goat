@@ -8,7 +8,7 @@ import { HttpClient, HttpClientError, HttpClientResponse } from "effect/http";
 import * as Headers from "effect/http/Headers";
 import { GraphQLClientError, GraphQLMiddleware, GraphQLProtocol } from "effect/graphql";
 import * as SourceControlRateLimit from "@goat/source-control-core/server/SourceControlRateLimit";
-import { collectUint8StreamText } from "@goat/provider-core/server/collectStreamText";
+import { collectUint8StreamText } from "@goat/shared/collectStreamText";
 
 import * as GitHubRequestPolicy from "./GitHubRequestPolicy.ts";
 

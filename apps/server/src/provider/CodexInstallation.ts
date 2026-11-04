@@ -6,7 +6,7 @@ import {
 } from "@goat/contracts";
 import { cliArchiveTarCommand } from "@goat/shared/cliRelease";
 import { satisfiesSemverRange } from "@goat/shared/semver";
-import { collectUint8StreamText } from "@goat/provider-core/server/collectStreamText";
+import { collectUint8StreamText } from "@goat/shared/collectStreamText";
 import * as HostProcess from "@goat/shared/HostProcess";
 import { resolveCommandPath, resolveSpawnCommand } from "@goat/shared/shell";
 import * as Clock from "effect/Clock";
