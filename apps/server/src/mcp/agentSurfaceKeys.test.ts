@@ -58,6 +58,9 @@ it("declares the writes whose own store deduplicates clientRequestId, with the a
   const domain = entries.filter((entry) => idempotencyOf(entry) === "domain");
   expect(domain.map((entry) => entry.path).sort()).toEqual([
     "channel.ingest",
+    "channel.task_answer",
+    "channel.task_follow_up",
+    "channel.task_stop",
     "goal.apply",
     "handoff.create",
     "origin.report",

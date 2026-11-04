@@ -11,7 +11,7 @@ import * as ChannelLedger from "./ChannelLedger.ts";
 import * as SlackChannelSettings from "./SlackChannelSettings.ts";
 import { requesterForDispatch } from "./channelDispatchAuthority.ts";
 import { refuseForward } from "./channelForwardRefusal.ts";
-import { turnSteerIdsFor } from "./channelIds.ts";
+import { toolSteerIdsFor, turnSteerIdsFor } from "./channelIds.ts";
 import { commitTransition } from "./channelTaskWrites.ts";
 
 export const makeForwardFollowUp = Effect.fn("channel.makeForwardFollowUp")(function* () {
@@ -47,10 +47,11 @@ export const makeForwardFollowUp = Effect.fn("channel.makeForwardFollowUp")(func
     ) {
       return;
     }
-    const own: ReadonlyArray<string> = [
-      turnSteerIdsFor(event.payload.inputId, "first").messageId,
-      turnSteerIdsFor(event.payload.inputId, "queued").messageId,
-    ];
+    const idsFor = (attempt: "first" | "queued") =>
+      event.payload.forwardKey === undefined
+        ? turnSteerIdsFor(event.payload.inputId, attempt)
+        : toolSteerIdsFor(event.payload.forwardKey, attempt);
+    const own: ReadonlyArray<string> = [idsFor("first").messageId, idsFor("queued").messageId];
     // A person stopped the worker's run in GOAT after this follow-up was recorded. Sending it
     // would start the worker again; instead the follow-up is dropped and the fence lifted, so
     // reconciliation records the stop as it does for any stopped run.
@@ -116,7 +117,7 @@ export const makeForwardFollowUp = Effect.fn("channel.makeForwardFollowUp")(func
     const refused = yield* Ref.make<DispatchModeRefusal | undefined>(undefined);
     const send = (attempt: "first" | "queued") => {
       if (requester === undefined) return Effect.die("Cannot send without current authority");
-      const ids = turnSteerIdsFor(event.payload.inputId, attempt);
+      const ids = idsFor(attempt);
       return threads
         .sendToThread({
           projectId: ProjectId.make(target.projectId),

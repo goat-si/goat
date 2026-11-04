@@ -1,3 +1,4 @@
+import { GoatBotSettingsFields, GoatBotSettingsPatchFields } from "./goatBotSessionRouting.ts";
 import {
   SidebarProjectSortOrder,
   DEFAULT_SIDEBAR_PROJECT_SORT_ORDER,
@@ -1405,13 +1406,7 @@ export const ServerSettings = Schema.Struct({
   memoryModelSelection: Schema.NullOr(ModelSelection).pipe(
     Schema.withDecodingDefault(Effect.succeed(null)),
   ),
-  /**
-   * The model GOAT Bot's own turns run on. Null follows the new-thread default, then the text
-   * generation model, the way a main thread would.
-   */
-  goatBotModelSelection: Schema.NullOr(ModelSelection).pipe(
-    Schema.withDecodingDefault(Effect.succeed(null)),
-  ),
+  ...GoatBotSettingsFields,
   /** Allow channel work to use already-connected machines with the same repository. */
   channelAutoPlacement: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   memoryHubVersion: NonNegativeInt.pipe(Schema.withDecodingDefault(Effect.succeed(0))),
@@ -1915,7 +1910,7 @@ const ServerSettingsPatchFields = Schema.Struct({
   enableAgentMemoryAccess: Schema.optionalKey(Schema.Boolean),
   memoryEnabled: Schema.optionalKey(Schema.Boolean),
   memoryModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
-  goatBotModelSelection: Schema.optionalKey(Schema.NullOr(ModelSelection)),
+  ...GoatBotSettingsPatchFields,
   channelAutoPlacement: Schema.optionalKey(Schema.Boolean),
   responseStreamingMode: Schema.optionalKey(ResponseStreamingMode),
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),

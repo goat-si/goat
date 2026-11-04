@@ -14,6 +14,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as ChannelBotHome from "./ChannelBotHome.ts";
 import * as ChannelBotSession from "./ChannelBotSession.ts";
 import * as ChannelBotTimeline from "./ChannelBotTimeline.ts";
@@ -26,7 +27,6 @@ import { CHANNEL_COPY, inboundTextWithFiles } from "./channelCopy.ts";
 import { deliveryIdFor, taskIdFor } from "./channelIds.ts";
 import { isSessionClaim, sealedSessionLine, sessionClaim } from "./channelSessionReceipt.ts";
 import { makeCreatedTasks } from "./channelTaskWrites.ts";
-import { WORKERS_PER_REQUESTER } from "./ChannelDispatcher.ts";
 
 export class ChannelSessionFirst extends Context.Service<
   ChannelSessionFirst,
@@ -61,6 +61,7 @@ const make = Effect.gen(function* () {
   const reception = yield* ChannelReceptionService.ChannelReceptionService;
   const delivery = yield* ChannelDeliveryWorker.ChannelDeliveryWorker;
   const threads = yield* ThreadManagement.ThreadManagementService;
+  const settings = yield* ServerSettings.ServerSettingsService;
   const home = yield* ChannelBotHome.ChannelBotHome;
   const wake = yield* ChannelWake.ChannelWake;
   const timeline = yield* ChannelBotTimeline.ChannelBotTimeline;
@@ -181,21 +182,8 @@ const make = Effect.gen(function* () {
       ))
     )
       return false;
-    const open =
-      yield* sql`SELECT 1 FROM channel_tasks t WHERE t.conversation_id = ${stored.snapshot.conversationId}
-      AND (t.status IN ('received', 'dispatching', 'running', 'waiting_input') OR EXISTS (
-        SELECT 1 FROM channel_outbox o WHERE o.task_id = t.task_id AND o.kind IN ('result', 'failure')
-          AND o.state IN ('pending', 'delivering')) OR EXISTS (
-        SELECT 1 FROM channel_task_events e WHERE e.task_id = t.task_id
-          AND e.type IN ('task.completed', 'task.failed', 'task.cancelled') AND e.narration_state = 'pending')) LIMIT 1`;
-    if (
-      open.length > 0 ||
-      (yield* ledger.countBusyTasks({
-        ownerId: requester.ownerId,
-        principalId: requester.principalId,
-      })) >= WORKERS_PER_REQUESTER
-    )
-      return false;
+    if ((yield* settings.getSettings).goatBotSessionRouting === "reception") return false;
+    if (yield* reception.isDeterministicReply(stored)) return false;
     const now = DateTime.formatIso(yield* DateTime.now);
     const [createdTask] = makeCreatedTasks({
       action: {

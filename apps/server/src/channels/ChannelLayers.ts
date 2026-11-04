@@ -31,6 +31,7 @@ import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelRemoteWorkers from "./ChannelRemoteWorkers.ts";
 import * as ChannelTaskExport from "./ChannelTaskExport.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
+import * as ChannelSessionTaskActions from "./channelSessionTaskActions.ts";
 import * as ChannelSessionFirst from "./ChannelSessionFirst.ts";
 import * as ChannelTransport from "./ChannelTransport.ts";
 import * as ChannelWake from "./ChannelWake.ts";
@@ -91,6 +92,7 @@ export const makeLayerServices = <E, R>(
       Layer.provide(ChannelChildWork.layer),
     ),
     ChannelWorkerReports.layer,
+    ChannelSessionTaskActions.layer,
     ChannelDeliveryWorker.layer,
   ).pipe(
     // Workers on other machines; needs SshRemoteDispatch from the server.

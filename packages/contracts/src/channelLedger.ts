@@ -355,6 +355,7 @@ export const ChannelTaskEvent = Schema.Union([
    */
   taskEvent("task.followup.received", {
     inputId: ChannelInputId,
+    forwardKey: Schema.optional(TrimmedNonEmptyString),
     text: Schema.String,
     from: TrimmedNonEmptyString,
     /** The generation it was written to; a later generation's worker never receives it. */

@@ -1,6 +1,7 @@
-import type { ChannelInputId, ChannelTaskId } from "@goat/contracts";
+import type { ChannelInputId, ChannelTaskId, ChannelTask } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import type * as SqlClient from "effect/sql/SqlClient";
+import type { ChannelLedger } from "./ChannelLedger.ts";
 
 export const sessionClaim = (inputId: string) => "channel-session:" + inputId;
 export const isSessionClaim = (id: string | undefined) =>
@@ -45,3 +46,12 @@ export const sessionReceiptPending = Effect.fn("channel.sessionReceiptPending")(
   },
   Effect.orElseSucceed(() => true),
 );
+
+export const sessionExemptsCapacity = Effect.fn("channel.sessionExemptsCapacity")(function* (
+  ledger: ChannelLedger["Service"],
+  task: ChannelTask,
+) {
+  if (task.kind !== "turn") return false;
+  const input = yield* ledger.getInput(task.originInputId);
+  return isSessionClaim(input?.snapshot.receptionId);
+});

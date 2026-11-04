@@ -23,7 +23,7 @@ describe("GOAT Bot session brief", () => {
         { role: "user", text: "how is the disk" },
         { role: "assistant", text: "Checking it now." },
       ],
-      openWork: [{ title: "Rotate logs", status: "running" }],
+      openWork: [{ taskId: "task:rotate", title: "Rotate logs", status: "running" }],
       message: "why is the disk full?",
     });
     const positions = SESSION_PREFIX_HEADINGS.map((heading) => text.indexOf("## " + heading));
@@ -34,7 +34,7 @@ describe("GOAT Bot session brief", () => {
     assert.isTrue(positions.every((position) => position >= 0));
     assert.include(text, "## Standing notes\n(none)");
     assert.include(text, "Person: how is the disk\nGOAT Bot: Checking it now.");
-    assert.include(text, "- Rotate logs (running)");
+    assert.include(text, "- task:rotate: Rotate logs (running)");
     assert.isTrue(text.endsWith("why is the disk full?"));
   });
 

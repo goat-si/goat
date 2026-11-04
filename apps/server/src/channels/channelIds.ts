@@ -153,6 +153,17 @@ export const turnSteerIdsFor = (inputId: ChannelInputId, attempt: "first" | "que
   };
 };
 
+export const toolForwardKeyFor = (runId: RunId, taskId: ChannelTaskId, clientRequestId: string) =>
+  stableId("channel-tool-forward", [runId, taskId, clientRequestId]);
+
+export const toolSteerIdsFor = (forwardKey: string, attempt: "first" | "queued" = "first") => {
+  const key = attempt === "first" ? [forwardKey] : [forwardKey, "queued"];
+  return {
+    commandId: CommandId.make(stableId("channel-tool-steer", key)),
+    messageId: MessageId.make(stableId("channel-tool-steer-message", key)),
+  };
+};
+
 /**
  * The report binding of one task generation on another machine. The remote stores it before it
  * creates the thread and refuses a second binding with the same id, so relaunching a generation
