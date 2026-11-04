@@ -68,6 +68,22 @@ describe("CodexTurnStartGuard admission", () => {
       assert.include(error, "GOAT did not start");
     }),
   );
+
+  it.effect("refuses while Codex is busy again with a turn it has not reported starting", () =>
+    Effect.gen(function* () {
+      const statuses = makeCodexThreadStatuses();
+      const guard = guardFor(new Map(), statuses);
+      statuses.record("thread", "active");
+      statuses.turnStarted("thread", "turn-a");
+      statuses.turnCompleted("thread", "turn-a");
+      statuses.record("thread", "idle");
+      statuses.record("thread", "active");
+      assert.include(yield* guard.prepare("thread", true).pipe(Effect.flip), "GOAT did not start");
+      // Once Codex names the turn, an ordinary start may steer into it.
+      statuses.turnStarted("thread", "turn-b");
+      yield* guard.prepare("thread", true);
+    }),
+  );
 });
 
 describe("CodexTurnStartGuard steer target", () => {
