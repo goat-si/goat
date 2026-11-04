@@ -4,6 +4,7 @@ import { MessageId, ProviderTurnId, RunId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import { TestClock } from "effect/testing";
 
 import { fixture, layerAdapterTest } from "./CodexAdapterV2.attachment.testkit.ts";
@@ -127,7 +128,7 @@ describe("Codex turn start on a busy native thread", () => {
           f.turnCompleted(1);
           codexStartsTurn(f, "native-turn");
           fence(f);
-          steer(f, 4, "native-turn", "turn-2");
+          yield* f.turnSteer(4, "native-turn", "turn-2");
           answer(f, 4, { turnId: "native-turn" });
           steer(f, 5, "native-turn", "follow-up");
           answer(f, 5, { turnId: "native-turn" });
@@ -171,7 +172,7 @@ describe("Codex turn start on a busy native thread", () => {
         f.turnCompleted(1);
         codexStartsTurn(f, "review-turn");
         fence(f);
-        steer(f, 4, "review-turn", "turn-2");
+        yield* f.turnSteer(4, "review-turn", "turn-2");
         f.entries.push({
           type: "emit_inbound",
           frame: { id: 4, error: { code: -32600, message: "cannot steer a review turn" } },
@@ -218,29 +219,42 @@ describe("Codex turn start on a busy native thread", () => {
     ).pipe(Effect.provide(layerAdapterTest)),
   );
 
-  it.effect("a run that adopted a turn Codex ends right after the steer still settles", () =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const scenario = "guard-adopt-ends";
-        const f = yield* open(scenario);
-        yield* f.turnStart(3, 1, false);
-        f.turnCompleted(1);
-        codexStartsTurn(f, "native-turn");
-        fence(f);
-        steer(f, 4, "native-turn", "turn-2");
-        answer(f, 4, { turnId: "native-turn" });
-        turnEnded(f, "native-turn", "completed");
-        const replay = yield* f.open;
-        yield* replay.startTurn(1);
-        yield* replay.terminal;
-        yield* replay.goalTokens;
-        yield* replay.startTurn(2);
-        assert.deepStrictEqual(yield* replay.terminal, {
-          providerTurnId: (yield* runTurn(replay, scenario, 2)).id,
-          status: "completed",
-        });
-      }),
-    ).pipe(Effect.provide(layerAdapterTest)),
+  // Before: Codex ends the turn while the steer is in flight, before the run registers on it.
+  it.effect.each([
+    { when: "before", endsBeforeAnswer: true },
+    { when: "after", endsBeforeAnswer: false },
+  ])(
+    "a run that adopted a turn Codex ends $when the steer answer still settles",
+    ({ when, endsBeforeAnswer }) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const scenario = `guard-adopt-ends-${when}`;
+          const f = yield* open(scenario);
+          yield* f.turnStart(3, 1, false);
+          f.turnCompleted(1);
+          codexStartsTurn(f, "native-turn");
+          fence(f);
+          yield* f.turnSteer(4, "native-turn", "turn-2");
+          if (endsBeforeAnswer) turnEnded(f, "native-turn", "completed");
+          answer(f, 4, { turnId: "native-turn" });
+          if (!endsBeforeAnswer) turnEnded(f, "native-turn", "completed");
+          const replay = yield* f.open;
+          yield* replay.startTurn(1);
+          yield* replay.terminal;
+          yield* replay.goalTokens;
+          yield* replay.startTurn(2);
+          // A run that missed the completion would never end: bound the wait so it fails instead.
+          const settled = yield* replay.terminal.pipe(
+            Effect.timeoutOption("1 second"),
+            Effect.forkScoped,
+          );
+          yield* TestClock.adjust("1 second");
+          assert.deepStrictEqual(Option.getOrUndefined(yield* Fiber.join(settled)), {
+            providerTurnId: (yield* runTurn(replay, scenario, 2)).id,
+            status: "completed",
+          });
+        }),
+      ).pipe(Effect.provide(layerAdapterTest)),
   );
 
   it.effect(

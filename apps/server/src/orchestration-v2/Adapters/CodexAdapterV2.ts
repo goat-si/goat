@@ -7118,6 +7118,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             const dispatched = yield* turnStartGuard.dispatch({
               threadId,
               codexInput,
+              additionalContext: turnStartParams.additionalContext,
               steer,
               reserve: () => threadStatuses.starting(threadId),
               adopt: (nativeTurnId) =>
@@ -7640,6 +7641,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
                             emitProviderEvent,
                             makeRootTerminalEvent,
                             emitRootTerminal,
+                            turnEnded: threadStatuses.turnCompleted,
                           }),
                         },
                       })
@@ -7727,6 +7729,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               yield* client.request("thread/unsubscribe", { threadId: nativeThreadId });
               // Only now has Codex let the thread go; until then it is held with its old config.
               credentialsByThread.delete(nativeThreadId);
+              threadStatuses.forget(nativeThreadId);
               stoppedQueuedTurns.unloadThread(nativeThreadId);
               managedCuaByThread.delete(nativeThreadId);
               appliedSubagentsByThread.delete(nativeThreadId);

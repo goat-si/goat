@@ -30,6 +30,8 @@ export const makeSurvivorSettlement = <A extends SurvivorContext>(input: {
     failureMessage?: string;
   }) => Effect.Effect<RootTerminal>;
   readonly emitRootTerminal: (context: A, event: RootTerminal) => Effect.Effect<void>;
+  /** Tells the thread's status that the survivor turn ended, which Codex may never report. */
+  readonly turnEnded: (nativeThreadId: string, nativeTurnId: string) => void;
 }) =>
   Effect.fn("CodexSurvivorContinuation.settle")(function* (
     context: A,
@@ -67,5 +69,7 @@ export const makeSurvivorSettlement = <A extends SurvivorContext>(input: {
       return next;
     });
     const waiter = (yield* Ref.get(input.turnWaiters)).get(context.nativeTurnId);
+    const nativeThreadId = context.providerThread.nativeThreadRef?.nativeId;
+    if (nativeThreadId != null) input.turnEnded(nativeThreadId, context.nativeTurnId);
     if (waiter !== undefined) yield* Deferred.succeed(waiter, undefined);
   });

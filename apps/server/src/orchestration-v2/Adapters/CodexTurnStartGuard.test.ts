@@ -15,16 +15,60 @@ interface Turn {
   readonly providerThread: { readonly nativeThreadRef: { readonly nativeId: string } };
 }
 
-const guardFor = (active: Map<string, Turn>) =>
+const guardFor = (active: Map<string, Turn>, statuses = makeCodexThreadStatuses()) =>
   makeCodexTurnStartGuard<Turn, string>({
+    // Any request to Codex fails the test: these starts must be refused before sending.
     client: {} as never,
-    statuses: makeCodexThreadStatuses(),
+    statuses,
     activeTurns: Effect.sync(() => active),
     stopped: () => false,
     abandoned: () => false,
     settle: () => Effect.void,
     fail: (detail) => Effect.fail(detail),
   });
+const root = (nativeTurnId: string) =>
+  Effect.map(Deferred.make<void>(), (nativeStartReady) => ({
+    nativeTurnId,
+    nativeStartReady,
+    subagent: null,
+    input: { attemptId: "earlier" },
+    providerThread: { nativeThreadRef: { nativeId: "thread" } },
+  }));
+
+describe("CodexTurnStartGuard admission", () => {
+  it.effect("a tracked root does not hide a turn Codex runs that no run owns", () =>
+    Effect.gen(function* () {
+      const statuses = makeCodexThreadStatuses();
+      // A failed turn waits for its retry while Codex starts a turn of its own.
+      statuses.turnStarted("thread", "failed-turn");
+      statuses.turnCompleted("thread", "failed-turn");
+      statuses.record("thread", "active");
+      statuses.turnStarted("thread", "codex-turn");
+      const failed = yield* root("failed-turn");
+      const guard = guardFor(new Map([[failed.nativeTurnId, failed]]), statuses);
+      const error = yield* guard.prepare("thread", false).pipe(Effect.flip);
+      assert.include(error, "GOAT did not start");
+    }),
+  );
+
+  it.effect.each([
+    { case: "no turn seen before", seen: false },
+    { case: "GOAT saw a turn end before it unloaded the thread", seen: true },
+  ])("refuses a thread a resume reports active when GOAT saw no turn start ($case)", ({ seen }) =>
+    Effect.gen(function* () {
+      const statuses = makeCodexThreadStatuses();
+      if (seen) {
+        statuses.turnStarted("thread", "old-turn");
+        statuses.turnCompleted("thread", "old-turn");
+        statuses.record("thread", "idle");
+        statuses.forget("thread");
+      }
+      statuses.record("thread", "active");
+      const error = yield* guardFor(new Map(), statuses).prepare("thread", true).pipe(Effect.flip);
+      assert.include(error, "GOAT did not start");
+    }),
+  );
+});
 
 describe("CodexTurnStartGuard steer target", () => {
   it.effect(

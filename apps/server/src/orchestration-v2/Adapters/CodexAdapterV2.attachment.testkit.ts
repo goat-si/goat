@@ -376,6 +376,34 @@ export const fixture = (scenario: string) => {
   };
   // Each helper below drives the fixture's thread unless given another native thread. A turn on a
   // prepared attachment session also carries the screen-code guide that session lists.
+  // A run's message steered into a turn it adopts carries the context its turn/start would.
+  const turnSteer = (id: number, expectedTurnId: string, text: string, thread = nativeThreadId) =>
+    Effect.gen(function* () {
+      const { additionalContext } = yield* CodexAdapterV2.buildCodexTurnStartParams({
+        nativeThreadId: thread,
+        codexInput: [{ type: "text", text }],
+        runtimePolicy: CODEX_TEST_RUNTIME_POLICY,
+        modelSelection: CODEX_TEST_MODEL_SELECTION,
+        hasGoatMcp: true,
+        browserToolsAvailable: false,
+        computerUse: false,
+        computerUseDeferred: false,
+        screenCode: false,
+      });
+      entries.push({
+        type: "expect_outbound",
+        frame: {
+          id,
+          method: "turn/steer",
+          params: {
+            threadId: thread,
+            expectedTurnId,
+            input: [{ type: "text", text }],
+            ...(additionalContext === undefined ? {} : { additionalContext }),
+          },
+        },
+      });
+    });
   const turnStart = (
     id: number,
     ordinal: number,
@@ -466,6 +494,7 @@ export const fixture = (scenario: string) => {
     resume,
     reload,
     turnStart,
+    turnSteer,
     turnCompleted,
     status,
     open,

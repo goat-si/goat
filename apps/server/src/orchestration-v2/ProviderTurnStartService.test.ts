@@ -363,7 +363,9 @@ effectIt.effect(
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
-// A completed run whose turn Codex kept running is the H2 case: its start used to send a second turn.
+const notices = (harness: ReturnType<typeof makeLocalCommandHarness>) =>
+  harness.projection().turnItems.filter((item) => item.type === "system_notice");
+
 effectIt.effect.each([
   { runStatus: "failed", notice: true },
   { runStatus: "completed", notice: true },
@@ -381,9 +383,7 @@ effectIt.effect.each([
 
     expect(harness.interruptTurn).toHaveBeenCalledOnce();
     expect(harness.projection().runs.at(-1)?.status).toBe("running");
-    expect(
-      harness.projection().turnItems.filter((item) => item.type === "system_notice"),
-    ).toMatchObject(
+    expect(notices(harness)).toMatchObject(
       notice ? [{ runId: harness.runId, message: STOPPED_EARLIER_TURN_MESSAGE }] : [],
     );
     expect(harness.projection().providerTurns[0]).toMatchObject({
@@ -439,6 +439,7 @@ effectIt.effect.each([
 
     expect(harness.interruptTurn).not.toHaveBeenCalled();
     expect(harness.projection().runs.at(-1)?.status).toBe("running");
+    expect(notices(harness)).toEqual([]);
   }),
 );
 

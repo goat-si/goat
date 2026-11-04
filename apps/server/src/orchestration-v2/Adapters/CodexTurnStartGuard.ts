@@ -37,7 +37,7 @@ const isRequestError = Schema.is(CodexErrors.CodexAppServerRequestError);
  * Keeps GOAT from sending turn/start while Codex reports a turn in progress on the native thread.
  * A turn a Stop already ended is stopped again first; a turn GOAT never owned takes an ordinary
  * run's message as a steer and the run adopts it; anything else fails without sending the message.
- * Turns GOAT still tracks are left to their runs and the start service.
+ * A turn a tracked root owns is left to its run.
  */
 export const makeCodexTurnStartGuard = <C extends RootTurnLike, E>(deps: {
   readonly client: CodexClient.CodexAppServerClient["Service"];
@@ -55,20 +55,21 @@ export const makeCodexTurnStartGuard = <C extends RootTurnLike, E>(deps: {
   // Goal turns no run owned that GOAT paused and stopped; Codex may keep running them.
   const orphans = new Set<string>();
 
-  // Only work no GOAT context tracks is this guard's: a turn a run still owns is the run's, and
-  // the start service stops a turn left by a run GOAT ended before it starts the next one.
+  // A turn a tracked root owns, or one a tracked root's start still waits for, is that run's: the
+  // start service stops one a run GOAT ended left behind, and Codex's answer to turn/start is
+  // checked against its owner. Any other running turn is judged on its own, tracked roots or not.
   const classify = Effect.fnUntraced(function* (threadId: string) {
     if (!deps.statuses.working(threadId, deps.abandoned)) return undefined;
-    const turns = Array.from((yield* deps.activeTurns).values());
+    const running = deps.statuses.runningTurn(threadId);
+    const roots = Array.from((yield* deps.activeTurns).values()).filter(
+      (context) =>
+        context.subagent === null && context.providerThread.nativeThreadRef?.nativeId === threadId,
+    );
     if (
-      turns.some(
-        (context) =>
-          context.subagent === null &&
-          context.providerThread.nativeThreadRef?.nativeId === threadId,
-      )
+      roots.length > 0 &&
+      (running === undefined || roots.some((context) => context.nativeTurnId === running))
     )
       return undefined;
-    const running = deps.statuses.runningTurn(threadId);
     const busy: Busy =
       running === undefined
         ? { type: "unknown" }
@@ -108,6 +109,10 @@ export const makeCodexTurnStartGuard = <C extends RootTurnLike, E>(deps: {
     dispatch: Effect.fn("CodexTurnStartGuard.dispatch")(function* (input: {
       readonly threadId: string;
       readonly codexInput: ReadonlyArray<CodexSchema.V2TurnStartParams__UserInput>;
+      /** The context turn/start would carry; a steer delivers it too. */
+      readonly additionalContext:
+        | Record<string, CodexSchema.V2TurnSteerParams__AdditionalContextEntry>
+        | undefined;
       readonly steer: boolean;
       readonly reserve: () => {
         readonly failed: () => void;
@@ -120,15 +125,21 @@ export const makeCodexTurnStartGuard = <C extends RootTurnLike, E>(deps: {
       if (busy === undefined) return { type: "start", reservation: input.reserve() } as const;
       if (busy.type !== "unowned" || !input.steer) return yield* deps.fail(UNOWNED_TURN);
       adoptions.set(busy.turnId, undefined);
-      const steered = yield* deps.client
-        .request("turn/steer", {
-          threadId: input.threadId,
-          expectedTurnId: busy.turnId,
-          input: [...input.codexInput],
-        })
-        .pipe(Effect.exit);
+      // Model, effort and permission settings have no steer field: the adopted turn keeps its own.
+      const params = {
+        threadId: input.threadId,
+        expectedTurnId: busy.turnId,
+        input: [...input.codexInput],
+        ...(input.additionalContext === undefined
+          ? {}
+          : { additionalContext: input.additionalContext }),
+      };
+      const steered = yield* deps.client.request("turn/steer", params).pipe(Effect.exit);
       if (Exit.isFailure(steered)) {
         adoptions.delete(busy.turnId);
+        yield* Effect.logWarning("orchestration-v2.codex-adopting-steer-failed", {
+          cause: steered.cause,
+        });
         const refused = steered.cause.reasons.some(
           (reason) => reason._tag === "Fail" && isRequestError(reason.error),
         );
@@ -139,11 +150,11 @@ export const makeCodexTurnStartGuard = <C extends RootTurnLike, E>(deps: {
         );
       }
       // Kept until the run owns the turn, so a completion arriving meanwhile is not lost.
-      const context = yield* input
-        .adopt(steered.value.turnId)
-        .pipe(Effect.ensuring(Effect.sync(() => void adoptions.delete(busy.turnId))));
-      const ended = adoptions.get(busy.turnId);
-      if (ended !== undefined) yield* deps.settle(context, ended);
+      const adopted = yield* input.adopt(steered.value.turnId).pipe(
+        Effect.map((context) => ({ context, ended: adoptions.get(busy.turnId) })),
+        Effect.ensuring(Effect.sync(() => void adoptions.delete(busy.turnId))),
+      );
+      if (adopted.ended !== undefined) yield* deps.settle(adopted.context, adopted.ended);
       return { type: "adopted" } as const;
     }),
     /** Records how Codex ended a turn; a steer may still be delivering into it. */

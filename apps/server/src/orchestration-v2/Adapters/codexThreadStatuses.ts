@@ -35,24 +35,29 @@ export function makeCodexThreadStatuses() {
     for (const wake of quietWaiters.get(threadId) ?? []) wake();
   };
   /**
-   * Whether a turn is in progress on this thread: the turn Codex last started has not ended while
-   * Codex reports the thread busy (an idle report can arrive after the turn ends), or a start of
-   * ours has not started its turn, unless that start is one GOAT already gave up on.
+   * Whether a turn is in progress on this thread: the turn Codex last started has not ended, or none
+   * was seen to start but Codex reports the thread busy (as a resume can), while the status is not
+   * quiet; or a start of ours has not started its turn, unless GOAT already gave up on that start.
    */
   const working = (threadId: string, abandoned: (turnId: string) => boolean) => {
     const status = statuses.get(threadId);
     const running = lastStarted.get(threadId);
     const start = pending.get(threadId);
+    const open =
+      running === undefined ? status !== undefined : lastCompleted.get(threadId) !== running;
     return (
-      (running !== undefined &&
-        lastCompleted.get(threadId) !== running &&
-        (status === undefined || !QUIET.has(status))) ||
+      (open && (status === undefined || !QUIET.has(status))) ||
       (pending.has(threadId) && (start == null || !abandoned(start)))
     );
   };
   const quiet = (threadId: string) => {
     const status = statuses.get(threadId);
     return !pending.has(threadId) && status !== undefined && QUIET.has(status);
+  };
+  const record = (threadId: string, status: string) => {
+    if (statuses.get(threadId) !== status) bump(threadId);
+    statuses.set(threadId, status);
+    wakeIfQuiet(threadId);
   };
   return {
     working,
@@ -131,12 +136,16 @@ export function makeCodexThreadStatuses() {
     /** Whether a failed reload left this thread dropped, so only a resume can serve its next turn. */
     dropped: (threadId: string) => unloaded.has(threadId),
     resumed: (threadId: string) => void unloaded.delete(threadId),
-    record: (threadId: string, status: string) => {
-      if (statuses.get(threadId) !== status) bump(threadId);
-      statuses.set(threadId, status);
-      wakeIfQuiet(threadId);
+    record,
+    /** GOAT stopped listening to this thread: what it saw says nothing about what runs from now. */
+    forget: (threadId: string) => {
+      statuses.delete(threadId);
+      lastStarted.delete(threadId);
+      lastCompleted.delete(threadId);
     },
     turnCompleted: (threadId: string, turnId: string) => {
+      // A turn that ran since a resume, unseen until it ended, is the last one Codex started.
+      if (!lastStarted.has(threadId)) lastStarted.set(threadId, turnId);
       lastCompleted.set(threadId, turnId);
       wakeIfQuiet(threadId);
     },

@@ -763,9 +763,12 @@ export const layer: Layer.Layer<
           }
         }
         const completedAt = yield* DateTime.now;
-        const unexpected = abandonedTurns.some(
-          ({ run: endedRun }) => !isPersonRunEnd(endedRun.terminationCause?.kind),
-        );
+        // Without a session nothing was stopped here; the adapter refuses a thread Codex reports busy.
+        const unexpected =
+          Option.isSome(liveSession) &&
+          abandonedTurns.some(
+            ({ run: endedRun }) => !isPersonRunEnd(endedRun.terminationCause?.kind),
+          );
         const repaired = yield* eventSink.writeIfRunCurrent({
           threadId: projection.thread.id,
           runId: run.id,
