@@ -15,6 +15,7 @@ const {
   SOURCE_SCANNING_TESTS,
   readWorkspace,
   readServerWeights,
+  packageSuites,
   planServerTests,
   reachesMemoryGrowth,
   selectTasks,
@@ -211,6 +212,39 @@ describe("selectTasks", () => {
     assert.ok(!tasksFor("packages/shared/src/format.ts").includes("test-ingest"));
   });
 
+  it("runs every package suite that no other task owns, and their dependents' with provider-core", () => {
+    const suites = packageSuites(root);
+    for (const name of [
+      "@goat/provider-core",
+      "@goat/provider-pi",
+      "@goat/provider-muse",
+      "@goat/provider-fx",
+      "@goat/provider-devin-cloud",
+      "@goat/provider-claude-cloud",
+      "@goat/provider-acp-registry",
+      "@goat/source-control-github",
+      "@goat/source-control-gitcafe",
+      "effect-acp",
+      "effect-codex-app-server",
+      "@goat/tailscale",
+      "@t3tools/task-cache",
+    ]) {
+      assert.ok(suites.includes(name), name);
+    }
+    for (const owned of ["@goat/web", "goat", "@goat/shared", "@goat/ssh", "goat-relay"]) {
+      assert.ok(!suites.includes(owned), owned);
+    }
+    assert.ok(
+      tasksFor("packages/provider-core/src/server/randomUuid.ts").includes("test-packages"),
+    );
+    assert.ok(!tasksFor("apps/web/src/components/ChatView.tsx").includes("test-packages"));
+    const workflow = fs.readFileSync(path.join(root, ".github/workflows/goat-ci.yml"), "utf8");
+    const step = workflow.match(/- name: Test packages\n([\s\S]*?)(?=\n\s*- name:)/)?.[1];
+    assert.ok(step);
+    assert.match(step, /if: matrix\.task == 'test-packages'/);
+    assert.match(step, /packageSuites\("\."\)/);
+  });
+
   it("always includes check", () => {
     assert.deepEqual(tasksFor(), ["check"]);
   });
@@ -396,8 +430,8 @@ describe("matrixFor", () => {
     ]);
   });
 
-  it("lists nineteen jobs for a full run including relay, Windows, the Linux smoke and four server shards", () => {
-    assert.equal(matrixFor(TASKS).include.length, 19);
+  it("lists twenty jobs for a full run including package suites, relay, Windows, the Linux smoke and four server shards", () => {
+    assert.equal(matrixFor(TASKS).include.length, 20);
   });
 
   it("runs the changed tests as one job after typecheck", () => {
@@ -414,6 +448,7 @@ describe("matrixFor", () => {
       Object.keys(pools).filter((task) => pools[task] === "epyc"),
       [
         "test",
+        "test-packages",
         "test-ssh",
         "test-desktop",
         "test-relay",

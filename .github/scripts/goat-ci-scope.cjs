@@ -65,6 +65,8 @@ const WINDOWS_SUITES = [
   "scripts/build-computer-use-helper",
 ];
 const WINDOWS_TASK = "test-windows";
+/** Every workspace package suite no other task owns, listed by packageSuites. */
+const PACKAGES_TASK = "test-packages";
 /** Paths whose change selects the Linux computer use smoke. */
 const LINUX_COMPUTER_USE_PATHS = [
   "apps/server/src/cua/linuxHelper/",
@@ -125,6 +127,7 @@ const TASKS = [
   "check",
   "typecheck",
   "test",
+  PACKAGES_TASK,
   "test-ssh",
   "test-desktop",
   "test-contracts",
@@ -158,14 +161,7 @@ const HOSTED_TASKS = new Set([
 
 /** Workspace packages each task tests or builds. A change in their dependency closure selects the task. */
 const TASK_ROOTS = {
-  test: [
-    "apps/web",
-    "packages/provider-core",
-    "packages/provider-opencode",
-    "packages/provider-cursor",
-    "packages/provider-grok",
-    "packages/provider-acp",
-  ],
+  test: ["apps/web"],
   "test-ssh": ["packages/ssh"],
   "test-desktop": ["apps/desktop"],
   "test-contracts": ["packages/contracts"],
@@ -176,6 +172,39 @@ const TASK_ROOTS = {
   "test-relay": ["infra/relay"],
   build: ["apps/desktop", "apps/server"],
 };
+
+/** Package directories whose suites a task of their own runs, so test-packages leaves them out. */
+const OWNED_SUITES = new Set([...Object.values(TASK_ROOTS).flat(), "infra/ingest"]);
+
+/** packages/* directories test-packages covers; a change in their dependency closure selects it. */
+const packageSuiteDirs = (workspace) =>
+  [...workspace.keys()].filter((dir) => dir.startsWith("packages/") && !OWNED_SUITES.has(dir));
+
+/**
+ * Names of the workspace packages test-packages runs: every one with a test script that no other
+ * task owns, so a new package is tested without editing goat-ci.yml. scripts keeps its own list.
+ */
+function packageSuites(root) {
+  const dirs = ["oxlint-plugin-goat"];
+  for (const parent of ["apps", "packages", "infra"]) {
+    let entries = [];
+    try {
+      entries = fs.readdirSync(path.join(root, parent), { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) if (entry.isDirectory()) dirs.push(parent + "/" + entry.name);
+  }
+  const names = [];
+  for (const dir of dirs.sort()) {
+    if (OWNED_SUITES.has(dir)) continue;
+    const file = path.join(root, dir, "package.json");
+    if (!fs.existsSync(file)) continue;
+    const manifest = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (typeof manifest.scripts?.test === "string") names.push(manifest.name);
+  }
+  return names;
+}
 
 /**
  * apps/server lists @goat/web only so its build runs after the web build. Server
@@ -405,7 +434,8 @@ function selectTasks(files, workspace, { graph, weights = {} } = {}) {
     choose("typecheck", file);
     if (!changed.has(dir)) changed.set(dir, file);
   }
-  for (const [task, roots] of Object.entries(TASK_ROOTS)) {
+  const taskRoots = { ...TASK_ROOTS, [PACKAGES_TASK]: packageSuiteDirs(workspace) };
+  for (const [task, roots] of Object.entries(taskRoots)) {
     const reach = closure(workspace, roots, task === "build" ? [] : BUILD_ONLY_EDGES);
     for (const [dir, file] of changed) {
       if (reach.has(dir)) {
@@ -800,6 +830,7 @@ module.exports = {
   MEMORY_LABEL,
   WINDOWS_LABEL,
   WINDOWS_SUITES,
+  PACKAGES_TASK,
   LANES,
   TASKS,
   CHANGED_TESTS_TASK,
@@ -810,6 +841,7 @@ module.exports = {
   isDocument,
   readWorkspace,
   readServerWeights,
+  packageSuites,
   closure,
   planServerTests,
   reachesMemoryGrowth,
