@@ -191,6 +191,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.handoffsRespond]: "handoffs",
   [CHANNEL_GATEWAY_WS_METHODS.ensureBot]: "channel",
   [CHANNEL_GATEWAY_WS_METHODS.getBotStatus]: "channel",
+  [CHANNEL_GATEWAY_WS_METHODS.listBots]: "channel",
   [CHANNEL_GATEWAY_WS_METHODS.ingest]: "channel",
   [CHANNEL_GATEWAY_WS_METHODS.getTask]: "channel",
   [CHANNEL_GATEWAY_WS_METHODS.listTasks]: "channel",

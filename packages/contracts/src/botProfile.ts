@@ -1,0 +1,28 @@
+import * as Schema from "effect/Schema";
+import {
+  EnvironmentId,
+  IsoDateTime,
+  ProjectId,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
+import { ModelSelection } from "./modelSelection.ts";
+
+export const BotId = TrimmedNonEmptyString.pipe(Schema.brand("BotId"));
+export type BotId = typeof BotId.Type;
+export const MAIN_BOT_ID = "main";
+export const BotRole = Schema.Literals(["main", "member"]);
+export const BotProfile = Schema.Struct({
+  botId: BotId,
+  role: BotRole,
+  name: TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
+  avatar: Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(16))),
+  purpose: Schema.String.check(Schema.isMaxLength(4000)),
+  defaultModelSelection: Schema.NullOr(ModelSelection),
+  defaultProjectId: Schema.NullOr(ProjectId),
+  environmentId: EnvironmentId,
+  sessionThreadId: ThreadId,
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+export type BotProfile = typeof BotProfile.Type;

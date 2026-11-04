@@ -17,6 +17,7 @@ import * as MemoryStore from "../memory/MemoryStore.ts";
 import * as ServerConfig from "../config.ts";
 import * as ChannelBotHome from "./ChannelBotHome.ts";
 import * as ChannelBotDirectory from "./ChannelBotDirectory.ts";
+import * as ChannelBotProfiles from "./ChannelBotProfiles.ts";
 import * as ChannelBotRegistry from "./ChannelBotRegistry.ts";
 import * as ChannelBotSession from "./ChannelBotSession.ts";
 import * as ChannelBotTimeline from "./ChannelBotTimeline.ts";
@@ -48,6 +49,7 @@ const layerFoundation = Layer.mergeAll(
   MemoryStore.layer,
   ChannelBotHome.layer,
   ChannelBotDirectory.layer,
+  ChannelBotProfiles.layer,
   ChannelTransport.layer,
 );
 
