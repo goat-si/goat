@@ -16,7 +16,7 @@ export const ENDED_RUN_STATUSES: ReadonlySet<OrchestrationV2Run["status"]> = new
 ]);
 
 export const STOPPED_EARLIER_TURN_MESSAGE =
-  "A turn from an earlier run was still running, so GOAT stopped it before this message.";
+  "A turn from an earlier run was still marked as running, so GOAT ended it before this message.";
 
 /** The notice a run shows when GOAT stopped a turn the person had not stopped before it started. */
 export function stoppedEarlierTurnNotice(input: {

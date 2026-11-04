@@ -7102,11 +7102,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               omitServiceTier: adapterOptions.resolveRuntime !== undefined,
               ...(turnInput.appContext === undefined ? {} : { appContext: turnInput.appContext }),
             });
-            yield* Ref.update(pendingRootTurns, (current) => {
-              const updated = new Map(current);
-              updated.set(threadId, withoutMemoryBody(turnInput));
-              return updated;
-            });
             yield* Ref.update(additionalContextByThread, (current) => {
               const next = new Map(current);
               if (turnStartParams.additionalContext)
@@ -7133,6 +7128,10 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             });
             if (dispatched.type === "adopted") return;
             const start = dispatched.reservation;
+            // Claimed only after admission: a turn Codex starts while this one prepares is not its own.
+            yield* Ref.update(pendingRootTurns, (current) =>
+              new Map(current).set(threadId, withoutMemoryBody(turnInput)),
+            );
             // Completion can remove the old context while turn/start is in flight.
             const previousTurns = new Map([
               ...(yield* Ref.get(settledTurns)),

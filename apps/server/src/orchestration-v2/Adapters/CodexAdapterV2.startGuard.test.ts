@@ -163,6 +163,38 @@ describe("Codex turn start on a busy native thread", () => {
 
   // Was: hold the run until the turn ends. Fail-closed by the maintainer's choice: Codex took
   // nothing, so the person sends it again.
+  it.effect(
+    "a turn Codex starts while a run checks the thread takes its message as a steer (H2)",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const scenario = "guard-start-during-prepare";
+          const f = yield* open(scenario);
+          yield* f.turnStart(3, 1, false);
+          f.turnCompleted(1);
+          // A rotated credential makes the start check the thread is quiet; Codex starts a turn then.
+          expect(f, 4, "thread/goal/get", { threadId: f.nativeThreadId });
+          codexStartsTurn(f, "native-turn");
+          answer(f, 4, { goal: null });
+          expect(f, 5, "thread/backgroundTerminals/list", { threadId: f.nativeThreadId });
+          answer(f, 5, { data: [], nextCursor: null });
+          yield* f.turnSteer(6, "native-turn", "turn-2");
+          answer(f, 6, { turnId: "native-turn" });
+          const replay = yield* f.open;
+          yield* replay.startTurn(1);
+          yield* replay.terminal;
+          yield* (yield* McpProviderSessions.McpProviderSessions).set({
+            ...f.config,
+            providerSessionId: "credential-2",
+            authorizationHeader: "Bearer rotated",
+          });
+          yield* replay.startTurn(2);
+          assert.equal((yield* runTurn(replay, scenario, 2)).nativeId, "native-turn");
+          assert.deepStrictEqual(starts(replay), ["turn/start"]);
+        }),
+      ).pipe(Effect.provide(layerAdapterTest)),
+  );
+
   it.effect("fails clearly when a turn GOAT never owned refuses the steer, sending no turn", () =>
     Effect.scoped(
       Effect.gen(function* () {
