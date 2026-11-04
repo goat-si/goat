@@ -63,7 +63,7 @@ const SUMMARY_LINES = 4;
 const SUMMARY_CHARS = 160;
 
 /** A piece of work GOAT Bot started; remote work names its machine and waits for it to connect. */
-function GoatBotTaskCard(props: {
+export function GoatBotTaskCard(props: {
   readonly card: GoatBotTaskRow["card"];
   readonly onSelectThread: (thread: ThreadSelection) => void;
   readonly tail: boolean;
@@ -219,9 +219,11 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
         <Pressable
           accessibilityRole="button"
           onPress={() => props.onSelectTask?.(ChannelTaskId.make(row.card.key))}
-          className="self-start rounded-full border border-border px-3 py-2"
+          className="min-h-[44px] self-start justify-center rounded-full border border-border px-3 py-2"
         >
-          <Text className="text-foreground">Task thread · {row.card.title}</Text>
+          <Text className="text-foreground">
+            Task thread · {row.card.title} · {row.card.statusLabel}
+          </Text>
         </Pressable>
       );
     }
@@ -480,11 +482,25 @@ export function GoatBotScreen(props: {
     releaseGoatBotAttachments(attachments.filter((attachment) => attachment.id === id));
     setAttachments((current) => current.filter((attachment) => attachment.id !== id));
   };
+  const taskCard = taskId
+    ? session.rows.find(
+        (row): row is GoatBotTaskRow => row.kind === "task" && row.card.key === taskId,
+      )
+    : undefined;
   const canSubmit = session.canSend && (text.trim().length > 0 || attachments.length > 0);
   return (
     <KeyboardAvoidingView className="flex-1 bg-screen" automaticOffset behavior="height">
       <View style={{ paddingTop: topInset }}>
-        <MobileBotWork taskId={taskId} visible={props.visible} onOpenTask={onSelectTask} />
+        <MobileBotWork
+          taskId={taskId}
+          visible={props.visible}
+          onOpenTask={onSelectTask}
+          taskCard={
+            taskCard ? (
+              <GoatBotTaskCard card={taskCard.card} onSelectThread={onSelectThread} tail={false} />
+            ) : null
+          }
+        />
       </View>
       {hasBanner ? (
         <View
@@ -536,7 +552,7 @@ export function GoatBotScreen(props: {
       <LegendList
         renderScrollComponent={NativeScrollView}
         style={{ flex: 1 }}
-        data={session.rows}
+        data={taskId ? session.rows.filter((row) => row.kind !== "task") : session.rows}
         keyExtractor={rowKey}
         renderItem={renderItem}
         initialScrollAtEnd
@@ -549,7 +565,9 @@ export function GoatBotScreen(props: {
         contentContainerStyle={{ padding: 16 }}
         ListEmptyComponent={
           <Text className="py-6 text-center text-foreground-muted">
-            Ask GOAT Bot for anything. It answers here and starts work in its own threads.
+            {taskId
+              ? "Messages for this task will appear here."
+              : "Ask GOAT Bot for anything. It answers here and starts work in its own threads."}
           </Text>
         }
         ListFooterComponent={
