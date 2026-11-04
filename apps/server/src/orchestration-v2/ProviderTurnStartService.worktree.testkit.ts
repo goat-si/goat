@@ -130,6 +130,7 @@ export function makeWorktreeStartHarness(
             Effect.succeedSome({ workspaceRoot: "/tmp/provider-turn-start-project" } as never),
         }),
         Layer.mock(ProjectionStore.ProjectionStoreV2)({
+          getThreadShell: () => Effect.succeed(projection.thread as never),
           getThreadRecords: () => {
             projectionReadCount += 1;
             return Effect.succeed(projection);

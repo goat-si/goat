@@ -59,6 +59,8 @@ export function makeLocalCommandHarness(input: {
   readonly text: string;
   readonly ensureCodexAdmission?: CodexSurvivors.CodexSurvivors["Service"]["ensureAdmission"];
   readonly worktreePath?: string;
+  /** Where the thread points by the time the start takes its workspace lease. */
+  readonly reboundWorktreePath?: string;
   readonly worktreesDir?: string;
   readonly workspaceRoot?: string;
   readonly gitWorkflow?: GitWorkflow.GitWorkflowService["Service"];
@@ -549,6 +551,9 @@ export function makeLocalCommandHarness(input: {
           getThreadShell: () =>
             Effect.succeed({
               ...projection.thread,
+              ...(input.reboundWorktreePath === undefined
+                ? {}
+                : { worktreePath: input.reboundWorktreePath }),
               activityRunStatus: "running" as const,
               activeRunId:
                 input.memory?.currentRun === undefined

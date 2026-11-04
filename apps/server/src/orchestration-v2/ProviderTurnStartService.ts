@@ -30,6 +30,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 
 import * as ServerConfig from "../config.ts";
@@ -642,6 +643,9 @@ export const layer: Layer.Layer<
         const prepared = yield* tryWithWorkspaceLease(
           path.resolve(worktreePath),
           Effect.gen(function* () {
+            // A rebinding that committed after this start loaded the thread sends it to retry.
+            const bound = yield* projectionStore.getThreadShell(input.threadId).pipe(Effect.option);
+            if (Option.getOrNull(bound)?.worktreePath !== worktreePath) return "rebound" as const;
             if (branch === null) return;
             const ready = yield* restorePending.ready(worktreePath);
             if (!ready && (yield* isManagedWorktreePath(worktreePath))) {
@@ -665,7 +669,7 @@ export const layer: Layer.Layer<
             }
           }).pipe(Effect.result),
         );
-        if (Option.isNone(prepared)) {
+        if (Option.isNone(prepared) || Result.getOrUndefined(prepared.value) === "rebound") {
           return yield* new ProviderTurnStartError({
             runId,
             cause: new WorkspaceLeaseBusyError({}),
