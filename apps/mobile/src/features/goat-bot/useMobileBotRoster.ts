@@ -3,6 +3,7 @@ import type { ChannelUpdateTaskViewInput } from "@goat/contracts";
 import { useEffect, useState } from "react";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { channelEnvironment } from "../../state/channels";
+import { useThreadVisibleTurnItems } from "../../state/use-thread-detail";
 import { useEnvironments } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
 import { pickMobileGoatBotEnvironment } from "./goatBotHomeMode";
@@ -31,6 +32,26 @@ export function useMobileBotRoster(selectedKey: string | null) {
       ? channelEnvironment.listBotThreads({ environmentId, input: {} })
       : null,
   );
+  const items = useThreadVisibleTurnItems({
+    environmentId: home.botRef?.environmentId === environmentId ? environmentId : null,
+    threadId: home.botRef?.environmentId === environmentId ? (home.botRef?.threadId ?? null) : null,
+  });
+  const revision = items
+    .filter(
+      ({ item }) =>
+        (item.type === "notification" && item.ledgerTask !== undefined) ||
+        ((item.type === "user_message" || item.type === "assistant_message") &&
+          item.channel !== undefined),
+    )
+    .map(({ sourceItemId, item }) => `${sourceItemId}:${item.updatedAt}`)
+    .join("|");
+  const refreshThreads = threads.refresh;
+  const botThreadId = home.botRef?.threadId;
+  const shouldRefresh = supportsTaskThreads && home.botRef?.environmentId === environmentId;
+  // oxlint-disable-next-line goat/react-effect-budget -- Refresh the roster when channel timeline records change.
+  useEffect(() => {
+    if (shouldRefresh && botThreadId && revision !== undefined) refreshThreads();
+  }, [shouldRefresh, botThreadId, revision, refreshThreads]);
   const slack = useEnvironmentQuery(
     environmentId !== null && connected && capabilities?.slackChannel === true
       ? channelEnvironment.slackSettings({ environmentId, input: {} })

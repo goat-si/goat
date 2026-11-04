@@ -13,6 +13,7 @@ vi.mock("./useMobileGoatBotHomeMode", () => ({
     botRef: null,
   }),
 }));
+vi.mock("../../state/use-thread-detail", () => ({ useThreadVisibleTurnItems: () => [] }));
 vi.mock("../../state/environments", () => ({
   useEnvironments: () => ({
     presentationById: new Map([
