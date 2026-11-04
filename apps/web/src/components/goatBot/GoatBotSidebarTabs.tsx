@@ -2,7 +2,6 @@ import { Link } from "@tanstack/react-router";
 import { PlusIcon } from "~/components/solar";
 import { selectGlobalAgentMode, useGlobalAgentStore } from "~/globalAgentStore";
 import { Badge } from "../ui/badge";
-import { Button } from "../ui/button";
 import { SidebarGroup, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
 import { Tabs, TabsList, TabsTab } from "../ui/tabs";
 import { GoatBotAvatar } from "./GoatBotAvatar";
@@ -52,6 +51,7 @@ export function GoatBotSidebarTabs() {
                   <SidebarMenu>
                     <SidebarMenuItem>
                       <SidebarMenuButton
+                        size="lg"
                         render={
                           <Link
                             to="/$environmentId/$threadId"
@@ -71,18 +71,22 @@ export function GoatBotSidebarTabs() {
               ),
           )}
           <SidebarGroup>
-            <Tooltip>
-              <TooltipTrigger render={<span className="block" tabIndex={0} />}>
-                <Button variant="outline" size="sm" disabled className="w-full justify-start">
-                  <PlusIcon />
-                  New bot
-                  <Badge variant="secondary" size="sm" className="ml-auto">
-                    Coming soon
-                  </Badge>
-                </Button>
-              </TooltipTrigger>
-              <TooltipPopup>Creating more bots is coming soon.</TooltipPopup>
-            </Tooltip>
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <Tooltip>
+                  <TooltipTrigger render={<span className="block" tabIndex={0} />}>
+                    <SidebarMenuButton disabled>
+                      <PlusIcon />
+                      New bot
+                      <Badge variant="secondary" size="sm" className="ml-auto">
+                        Coming soon
+                      </Badge>
+                    </SidebarMenuButton>
+                  </TooltipTrigger>
+                  <TooltipPopup>Creating more bots is coming soon.</TooltipPopup>
+                </Tooltip>
+              </SidebarMenuItem>
+            </SidebarMenu>
           </SidebarGroup>
         </div>
       )}

@@ -61,11 +61,15 @@ vi.mock("../ui/sidebar", () => ({
   SidebarMenuButton: ({
     render: link,
     children,
+    isActive: _isActive,
+    size: _size,
     ...props
-  }: {
-    render: ReactElement;
+  }: Omit<ComponentProps<"button">, "size"> & {
+    render?: ReactElement;
+    isActive?: boolean;
+    size?: "default" | "icon" | "lg" | "sm";
     children: ReactNode;
-  }) => cloneElement(link, props, children),
+  }) => (link ? cloneElement(link, props, children) : <button {...props}>{children}</button>),
 }));
 const at = "2026-11-04T10:00:00.000Z";
 const rows = [

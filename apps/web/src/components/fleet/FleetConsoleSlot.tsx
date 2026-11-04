@@ -5,7 +5,7 @@ import { lazy, Suspense, useEffect, useState } from "react";
 import { useUiStateStore } from "~/uiStateStore";
 
 import type { FleetConnection } from "./fleetConnection";
-import { fleetConsoleFrameClassName } from "./fleetConsoleFrame";
+import { fleetConsoleBodyClassName, fleetConsoleFrameClassName } from "./fleetConsoleFrame";
 
 let fleetConsoleModule: Promise<typeof import("./FleetConsole")> | undefined;
 /** The console chunk's single import, shared by `lazy` and anything that needs to await the chunk. */
@@ -42,11 +42,10 @@ export function FleetConsoleSlot(props: {
   const collapsed = useUiStateStore((state) => state.fleetConsoleCollapsed);
   const ready = useAfterFirstPaint();
   const placeholder = (
-    <div
-      aria-hidden
-      data-fleet-console-placeholder
-      className={fleetConsoleFrameClassName(collapsed)}
-    />
+    <div aria-hidden data-fleet-console-placeholder className={fleetConsoleFrameClassName()}>
+      <div className="h-9.5" />
+      {collapsed ? null : <div className={fleetConsoleBodyClassName("border-t")} />}
+    </div>
   );
   if (!ready) return placeholder;
   return (

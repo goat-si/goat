@@ -341,8 +341,8 @@ const GITHUB_ALERT_PRESENTATIONS: Record<
   tip: {
     label: "Tip",
     Icon: LightbulbIcon,
-    borderClassName: "border-emerald-500/70",
-    titleClassName: "text-emerald-600 dark:text-emerald-400",
+    borderClassName: "border-success/70",
+    titleClassName: "text-success-foreground",
   },
   important: {
     label: "Important",
@@ -353,14 +353,14 @@ const GITHUB_ALERT_PRESENTATIONS: Record<
   warning: {
     label: "Warning",
     Icon: TriangleAlertIcon,
-    borderClassName: "border-amber-500/70",
-    titleClassName: "text-amber-600 dark:text-amber-500",
+    borderClassName: "border-warning/70",
+    titleClassName: "text-warning-foreground",
   },
   caution: {
     label: "Caution",
     Icon: OctagonAlertIcon,
-    borderClassName: "border-red-500/70",
-    titleClassName: "text-red-600 dark:text-red-400",
+    borderClassName: "border-destructive/70",
+    titleClassName: "text-destructive-foreground",
   },
 };
 

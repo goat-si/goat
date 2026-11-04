@@ -29,6 +29,8 @@ import {
   OrchestrationV2WorkflowAgentTranscriptFields,
 } from "./orchestrationV2ThreadFields.ts";
 export * from "./orchestrationV2ThreadFields.ts";
+import { OrchestrationV2SubscribeThreadInput } from "./orchestrationV2ThreadSubscription.ts";
+export * from "./orchestrationV2ThreadSubscription.ts";
 import {
   OrchestrationV2ReviewContinueCommand,
   ReviewLedgerEntry,
@@ -3978,19 +3980,6 @@ export const OrchestrationV2WorktreeThreadIds = Schema.Struct({
 });
 export type OrchestrationV2WorktreeThreadIds = typeof OrchestrationV2WorktreeThreadIds.Type;
 
-export const OrchestrationV2SubscribeThreadInput = Schema.Struct({
-  threadId: ThreadId,
-  afterSequence: Schema.optionalKey(NonNegativeInt),
-  requestCompletionMarker: Schema.optionalKey(Schema.Boolean),
-  acceptBoundedSnapshot: Schema.optionalKey(Schema.Boolean),
-  acceptDeferredWork: Schema.optionalKey(Schema.Boolean),
-  acceptCompactTurnItems: Schema.optionalKey(Schema.Boolean),
-  /** The client restores `*Omitted` bodies from records it already holds. */
-  acceptDedupedBodies: Schema.optionalKey(Schema.Boolean),
-  acceptCompactIds: Schema.optionalKey(Schema.Boolean),
-});
-export type OrchestrationV2SubscribeThreadInput = typeof OrchestrationV2SubscribeThreadInput.Type;
-
 /**
  * Server-side only: set it on a response for a client that opted in, and the
  * `withRecordIdTable` codec sends that response with an ID table.
@@ -4109,11 +4098,22 @@ export const OrchestrationV2ThreadStreamItem = withRecordIdTable(
       sequence: NonNegativeInt,
       event: OrchestrationV2DomainEvent,
     }),
+    /** Live only, for `acceptTextAppends`: `event.payload.text` is what follows `offset`. */
+    Schema.Struct({
+      kind: Schema.Literal("text-append"),
+      sequence: NonNegativeInt,
+      offset: NonNegativeInt,
+      event: OrchestrationV2DomainEvent,
+    }),
     OrchestrationV2UnknownThreadStreamEvent,
   ]),
   (item) => (item.kind === "snapshot" ? "projection" : undefined),
 );
 export type OrchestrationV2ThreadStreamItem = typeof OrchestrationV2ThreadStreamItem.Type;
+export type OrchestrationV2ResolvedThreadStreamItem = Exclude<
+  OrchestrationV2ThreadStreamItem,
+  { readonly kind: "text-append" }
+>;
 
 export class OrchestrationV2DispatchCommandError extends Schema.TaggedError<OrchestrationV2DispatchCommandError>()(
   "OrchestrationV2DispatchCommandError",

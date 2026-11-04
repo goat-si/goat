@@ -161,7 +161,7 @@ function SwipeIndicator({ direction, progress, y, bounds, tracking }: SwipeIndic
   return (
     <div
       aria-hidden="true"
-      className="pointer-events-none fixed z-100 overflow-hidden"
+      className="pointer-events-none fixed z-overlay overflow-hidden"
       style={bounds}
     >
       <div

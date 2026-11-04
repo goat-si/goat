@@ -255,7 +255,7 @@ function BrowserMiniPlayer({ threadRef, tabId, miniPlayer }: Props & { readonly 
               className="absolute inset-0"
             />
             {!desktopOverlay?.hasWebContents ? (
-              <div className="pointer-events-none absolute inset-0 z-[49] flex items-center justify-center rounded-[inherit] bg-muted text-xs text-muted-foreground">
+              <div className="pointer-events-none absolute inset-0 z-player-chrome flex items-center justify-center rounded-[inherit] bg-muted text-xs text-muted-foreground">
                 Reconnecting preview…
               </div>
             ) : null}
@@ -475,7 +475,7 @@ function MiniPlayerShell({
           <div
             ref={handleRef}
             data-pill-open={pillOpen ? "" : undefined}
-            className="group pointer-events-auto absolute z-[49] size-3 touch-none cursor-grab active:cursor-grabbing pointer-coarse:-m-2.5 pointer-coarse:size-8"
+            className="group pointer-events-auto absolute z-player-chrome size-3 touch-none cursor-grab active:cursor-grabbing pointer-coarse:-m-2.5 pointer-coarse:size-8"
             style={{ right: pillInset, top: pillInset }}
             onPointerDown={(event) => beginGesture(event, null)}
             onPointerMove={handlePointerMove}
@@ -544,15 +544,15 @@ function MiniPlayerShell({
             </div>
           </div>
 
-          <div className="absolute inset-0 z-[47] rounded-[inherit] bg-muted shadow-2xl/35" />
+          <div className="absolute inset-0 z-player rounded-[inherit] bg-muted shadow-2xl/35" />
           {children(frame)}
-          <div className="pointer-events-none absolute inset-0 z-[49] rounded-[inherit] ring-1 ring-inset ring-border/80" />
+          <div className="pointer-events-none absolute inset-0 z-player-chrome rounded-[inherit] ring-1 ring-inset ring-border/80" />
           {RESIZE_HANDLES.map(({ direction, className }) => (
             <div
               key={direction}
               role="presentation"
               data-preview-mini-player-resize={direction}
-              className={cn("pointer-events-auto absolute z-[49] touch-none", className)}
+              className={cn("pointer-events-auto absolute z-player-chrome touch-none", className)}
               onPointerDown={(event) => beginGesture(event, direction)}
               onPointerMove={handlePointerMove}
               onPointerUp={endGesture}

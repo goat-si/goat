@@ -92,7 +92,7 @@ const messageActionPillClassName =
  * visual size stays small on touch screens.
  */
 export const composerRoundActionClassName =
-  "relative flex size-6 shrink-0 items-center justify-center rounded-full pointer-coarse:after:absolute pointer-coarse:after:size-full pointer-coarse:after:min-h-11 pointer-coarse:after:min-w-11 [&_svg]:pointer-events-none";
+  "relative flex size-7 shrink-0 items-center justify-center rounded-full pointer-coarse:after:absolute pointer-coarse:after:size-full pointer-coarse:after:min-h-11 pointer-coarse:after:min-w-11 [&_svg]:pointer-events-none";
 
 const preventPointerFocus: PointerEventHandler<HTMLElement> = (event) => {
   event.preventDefault();
@@ -163,7 +163,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
           />
         }
       >
-        <SquareIcon className="size-3 fill-current" aria-hidden="true" />
+        <SquareIcon className="size-3.5 fill-current" aria-hidden="true" />
       </TooltipTrigger>
       <TooltipPopup>Interrupt</TooltipPopup>
     </Tooltip>
@@ -279,7 +279,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
 
   if (canInterrupt && !hasSendableContent && !isEditingQueuedMessage) {
     return (
-      <span className="inline-flex items-center gap-2">
+      <span className="inline-flex items-center gap-2.5">
         {voiceControl ? (
           <ComposerVoiceButton
             {...voiceControl}
@@ -358,19 +358,19 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
       {isConnecting || isSendBusy ? (
         <Spinner size="sm" aria-hidden="true" />
       ) : showResume ? (
-        <PlayIcon className="size-3 fill-current" aria-hidden="true" />
+        <PlayIcon className="size-3.5 fill-current" aria-hidden="true" />
       ) : isEditingQueuedMessage ? (
-        <CheckIcon className="size-3" aria-hidden="true" />
+        <CheckIcon className="size-3.5" aria-hidden="true" />
       ) : isRunning ? (
-        <MorphIcon className="size-3" icon={isQueuing ? ListPlus : CornerUpRight} />
+        <MorphIcon className="size-3.5" icon={isQueuing ? ListPlus : CornerUpRight} />
       ) : (
-        <ArrowUpIcon className="size-3.5" aria-hidden="true" />
+        <ArrowUpIcon className="size-4" aria-hidden="true" />
       )}
     </button>
   );
 
   const submit = (
-    <span className="inline-flex items-center gap-2">
+    <span className="inline-flex items-center gap-2.5">
       {voiceControl ? (
         <ComposerVoiceButton
           {...voiceControl}

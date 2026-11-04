@@ -17,7 +17,7 @@ import {
   makeClaudeUserMessage,
   type ClaudeAgentSdkQueryOptions,
 } from "../src/orchestration-v2/Adapters/ClaudeAdapterV2.ts";
-import { randomUuidV4 } from "@goat/provider-core/server/randomUuid";
+import { randomUuidV4 } from "@goat/shared/randomUuid";
 import { makeCheckpointWorkspace } from "@goat/provider-testing/replayWorkspace";
 import { removeInheritedGitEnv } from "@goat/shared/testing/gitEnv";
 

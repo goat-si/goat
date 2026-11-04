@@ -4,7 +4,7 @@ import {
   type EnvironmentId as EnvironmentIdType,
   type OrchestrationV2ThreadDetailSnapshot,
   type OrchestrationV2ThreadProjection,
-  type OrchestrationV2ThreadStreamItem,
+  type OrchestrationV2ResolvedThreadStreamItem,
   type ThreadId as ThreadIdType,
 } from "@goat/contracts";
 import { boundedSnapshotProjection } from "@goat/shared/orchestrationV2BoundedSnapshot";
@@ -31,7 +31,7 @@ import * as ConnectionWakeups from "../connection/wakeups.ts";
 import * as Persistence from "../platform/persistence.ts";
 import { runCachePersistence } from "./cachePersistence.ts";
 import * as ManagedRelay from "../relay/managedRelay.ts";
-import { request, subscribeDynamic } from "../rpc/client.ts";
+import { request, subscribeThreadItems } from "../rpc/client.ts";
 import { parseThreadKey, threadKey } from "./entities.ts";
 import { applyOrchestrationV2ProjectionEvent } from "./orchestrationV2Projection.ts";
 import { THREAD_SNAPSHOT_IDLE_TTL_MS } from "./threadRetention.ts";
@@ -421,9 +421,9 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     );
   });
 
-  type EventItem = Extract<OrchestrationV2ThreadStreamItem, { kind: "event" }>;
+  type EventItem = Extract<OrchestrationV2ResolvedThreadStreamItem, { kind: "event" }>;
   type SequencedItem = Extract<
-    OrchestrationV2ThreadStreamItem,
+    OrchestrationV2ResolvedThreadStreamItem,
     { kind: "event" | "unknown-event" }
   >;
   const noteEvents = (fresh: ReadonlyArray<EventItem>, unknown: number, sequence: number) =>
@@ -565,7 +565,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   });
 
   const applyItemLocked = Effect.fn("EnvironmentThreadState.applyItemLocked")(function* (
-    item: OrchestrationV2ThreadStreamItem,
+    item: OrchestrationV2ResolvedThreadStreamItem,
   ) {
     if (item.kind === "synchronized") {
       yield* Ref.set(awaitingCompletion, false);
@@ -614,7 +614,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   });
 
   const applyItems = Effect.fn("EnvironmentThreadState.applyItems")(function* (
-    items: ReadonlyArray<OrchestrationV2ThreadStreamItem>,
+    items: ReadonlyArray<OrchestrationV2ResolvedThreadStreamItem>,
   ) {
     yield* applyLock.withPermits(1)(
       Effect.gen(function* () {
@@ -911,8 +911,8 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
 
   yield* markSynchronizing;
   yield* Effect.forkScoped(
-    subscribeDynamic(
-      ORCHESTRATION_V2_WS_METHODS.subscribeThread,
+    subscribeThreadItems(
+      threadId,
       Effect.fn("EnvironmentThreadState.makeSubscribeInput")(function* (session) {
         let current = yield* SubscriptionRef.get(state);
         // A prior definitive miss (or delete event) already cleared this thread.

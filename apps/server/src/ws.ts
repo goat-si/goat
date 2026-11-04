@@ -71,7 +71,6 @@ import {
   OrchestrationV2SearchThreadError,
   OrchestrationV2ThreadLaunchError,
   PersistChatAttachmentsError,
-  type OrchestrationV2ThreadStreamItem,
   ProjectListEntriesError,
   ProjectMutationError,
   ProjectReadFileError,
@@ -251,8 +250,8 @@ import {
   threadReplayEncodedBytes,
 } from "./orchestration-v2/ThreadStream.ts";
 import { userFacingDispatchErrorMessage } from "./orchestration-v2/UserFacingErrors.ts";
+import { withLiveWireTransforms } from "./orchestration-v2/ThreadLiveTextAppend.ts";
 import {
-  makeLiveBodyDeduper,
   projectDomainEventForWire,
   projectThreadProjectionForWire,
 } from "./orchestration-v2/WireProjection.ts";
@@ -816,12 +815,11 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
     readonly acceptCompactTurnItems?: boolean;
     readonly acceptDedupedBodies?: boolean;
     readonly acceptCompactIds?: boolean;
+    readonly acceptTextAppends?: boolean;
   }) {
     const threadManagement = yield* ThreadManagementService.ThreadManagementService;
     const dedupeBodies = input.acceptDedupedBodies === true;
-    // Replay, snapshot, and live tail share one deduper: it must see every delivered record.
-    const withLiveDedupe = <E, R>(stream: Stream.Stream<OrchestrationV2ThreadStreamItem, E, R>) =>
-      dedupeBodies ? Stream.suspend(() => Stream.map(stream, makeLiveBodyDeduper())) : stream;
+    const withLiveDedupe = withLiveWireTransforms(input);
     const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
 
     yield* Effect.annotateCurrentSpan({
