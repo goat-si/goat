@@ -27,7 +27,7 @@ import { useLegacyGlobalAgentRoute } from "./goatBotHooks";
 import { useGoatBotHomeSettings } from "./useGoatBotHome";
 import { useGoatBotSession } from "./useGoatBotSession";
 import { refreshGoatBotWaitingCount } from "./useGoatBotWaitingCount";
-import { restoreTaskOpener, useTaskPaneFocus } from "./taskPaneFocus";
+import { restoreTaskOpener, getTaskPaneFocus } from "./taskPaneFocus";
 
 const NO_PENDING = [] as const;
 
@@ -60,7 +60,7 @@ function GoatBotThreadSession({
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
 }) {
-  const taskFocus = useTaskPaneFocus();
+  const taskFocus = getTaskPaneFocus();
   // oxlint-disable-next-line goat/react-effect-budget -- Restore focus after the bot thread remounts.
   useLayoutEffect(() => {
     restoreTaskOpener(taskFocus);

@@ -61,6 +61,7 @@ export function useBotRoster() {
       bots: profiles.data?.bots,
     }),
     rows: threads.data?.rows ?? [],
+    rowsLoaded: threads.isSuccess,
     refresh: threads.refresh,
     slackEnabled: slack.data?.some((connection) => connection.enabled) === true,
   };

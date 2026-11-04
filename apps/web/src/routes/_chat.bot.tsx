@@ -20,7 +20,7 @@ import { useLegacyGlobalAgentRoute } from "../components/goatBot/goatBotHooks";
 import { useGoatBotHomeSettings } from "../components/goatBot/useGoatBotHome";
 import { useGoatBotSession } from "../components/goatBot/useGoatBotSession";
 import { SidebarInset } from "../components/ui/sidebar";
-import { requestTaskFocusReturn, useTaskPaneFocus } from "../components/goatBot/taskPaneFocus";
+import { requestTaskFocusReturn, getTaskPaneFocus } from "../components/goatBot/taskPaneFocus";
 
 /**
  * GOAT Bot's entry point. Until a server offers channels, it explains that
@@ -86,7 +86,7 @@ export function GoatBotTaskRoute({
   taskId: ChannelTaskId;
 }) {
   const narrowViewport = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
-  const taskFocus = useTaskPaneFocus();
+  const taskFocus = getTaskPaneFocus();
   const besideChat = useClientSettings((settings) => settings.goatBotTaskThreadsBesideChat);
   const narrow = narrowViewport || !besideChat;
   const navigate = useNavigate();

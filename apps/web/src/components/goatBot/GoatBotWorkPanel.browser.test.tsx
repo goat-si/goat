@@ -18,17 +18,9 @@ it("shows the empty state for each work tab", async () => {
   await userEvent.click(screen.getByRole("tab", { name: "Routines" }));
   await expect.element(screen.getByText("Ask GOAT Bot in chat to set up a routine.")).toBeVisible();
   await userEvent.click(screen.getByRole("tab", { name: "Library" }));
-  await expect
-    .element(
-      screen.getByText("Files GOAT Bot saves will appear here. Library is not available yet."),
-    )
-    .toBeVisible();
+  await expect.element(screen.getByText("Files GOAT Bot saves will appear here.")).toBeVisible();
   await userEvent.click(screen.getByRole("tab", { name: "Computer" }));
   await expect
-    .element(
-      screen.getByText(
-        "Machines GOAT Bot works on will appear here. Computer is not available yet.",
-      ),
-    )
+    .element(screen.getByText("Machines GOAT Bot works on will appear here."))
     .toBeVisible();
 });

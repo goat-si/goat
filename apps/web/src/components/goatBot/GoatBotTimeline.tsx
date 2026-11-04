@@ -35,7 +35,7 @@ import { formatShortTimestamp } from "~/timestampFormat";
 import { MemorySettingsEntry } from "../settings/MemorySettings";
 import { GoatBotLinkedText } from "./GoatBotLinkedText";
 import { GoatBotTaskChip } from "./GoatBotTaskChip";
-import { recordTaskOpener, useTaskPaneFocus } from "./taskPaneFocus";
+import { recordTaskOpener, getTaskPaneFocus } from "./taskPaneFocus";
 
 /** How close to the bottom still counts as "following" new messages. */
 const FOLLOW_THRESHOLD_PX = 48;
@@ -66,7 +66,7 @@ export function GoatBotTimeline({
   readonly onPick?: ((answer: string) => void) | undefined;
 }) {
   const timestampFormat = usePrimarySettings((settings) => settings.timestampFormat);
-  const taskFocus = useTaskPaneFocus();
+  const taskFocus = getTaskPaneFocus();
   const scrollRef = useRef<HTMLDivElement>(null);
   // Messages sent while this view is mounted, by send key, and the server id each one received.
   // A committed row reuses its pending row's element, so the send motion plays once and never

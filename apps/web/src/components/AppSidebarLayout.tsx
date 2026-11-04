@@ -8,7 +8,6 @@ import {
   type ReactNode,
 } from "react";
 import { useLocation, useRouter, type AnyRouter } from "@tanstack/react-router";
-import { TaskPaneFocusProvider } from "./goatBot/taskPaneFocus";
 import { moveWorkspaceFocus, workspaceAreaProps } from "../lib/workspaceFocus";
 
 import { isCommandPaletteOpen } from "../commandPaletteBus";
@@ -488,72 +487,70 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
   } as CSSProperties;
 
   return (
-    <TaskPaneFocusProvider>
-      <PanelAnimationSuppressionProvider value={panelAnimationsSuppressed}>
-        <SidebarProvider
-          className="h-dvh! min-h-0!"
-          data-panel-animations={routePanelAnimationsActive ? "true" : "false"}
-          defaultOpen
-          style={sidebarProviderStyle}
-        >
-          <DestinationRailVisibleContext value={railVisible}>
-            <SidebarBrandWidthProbe isElectron={isElectron} onWidthChange={setBrandWidth} />
-            <ProjectProjectionRetention />
-            {railVisible ? <DestinationRail /> : null}
-            <Sidebar
-              side="left"
-              variant={railVisible ? "framed" : "sidebar"}
-              collapsible="offcanvas"
-              data-app-sidebar=""
-              {...sidebarArea}
-              role="navigation"
-              aria-label={isOnSettings ? "Settings" : "Threads"}
-              resizable={{
-                maxWidth: sidebarMaximumWidth,
-                minWidth: sidebarMinimumWidth,
-                shouldAcceptWidth: ({ currentWidth, nextWidth, wrapper }) =>
-                  nextWidth <= currentWidth ||
-                  wrapper.clientWidth - railWidth - nextWidth >= THREAD_MAIN_CONTENT_MIN_WIDTH,
-                storageKey: THREAD_SIDEBAR_WIDTH_STORAGE_KEY,
-                onResize: setSidebarWidth,
-              }}
-              // The narrow-window sidebar is a sheet, portaled outside the provider's styles.
-              style={windowControlsInsetStyle}
-            >
-              {isOnSettings ? (
-                <>
-                  <SidebarChromeHeader isElectron={isElectron} />
-                  <SettingsSidebarNav pathname={pathname} placement="app-sidebar" />
-                </>
-              ) : legacySidebarEnabled === null ? null : legacySidebarEnabled ? (
-                <LegacyThreadSidebar routeReveal={sidebarRouteReveal} />
-              ) : (
-                <ThreadSidebar routeReveal={sidebarRouteReveal} />
-              )}
-              <SidebarRail onDoubleClick={resetSidebarWidth} />
-            </Sidebar>
-            {children}
-          </DestinationRailVisibleContext>
-          {/* Both sit on the headers' own bottom border pixel, so pages that already draw one still
+    <PanelAnimationSuppressionProvider value={panelAnimationsSuppressed}>
+      <SidebarProvider
+        className="h-dvh! min-h-0!"
+        data-panel-animations={routePanelAnimationsActive ? "true" : "false"}
+        defaultOpen
+        style={sidebarProviderStyle}
+      >
+        <DestinationRailVisibleContext value={railVisible}>
+          <SidebarBrandWidthProbe isElectron={isElectron} onWidthChange={setBrandWidth} />
+          <ProjectProjectionRetention />
+          {railVisible ? <DestinationRail /> : null}
+          <Sidebar
+            side="left"
+            variant={railVisible ? "framed" : "sidebar"}
+            collapsible="offcanvas"
+            data-app-sidebar=""
+            {...sidebarArea}
+            role="navigation"
+            aria-label={isOnSettings ? "Settings" : "Threads"}
+            resizable={{
+              maxWidth: sidebarMaximumWidth,
+              minWidth: sidebarMinimumWidth,
+              shouldAcceptWidth: ({ currentWidth, nextWidth, wrapper }) =>
+                nextWidth <= currentWidth ||
+                wrapper.clientWidth - railWidth - nextWidth >= THREAD_MAIN_CONTENT_MIN_WIDTH,
+              storageKey: THREAD_SIDEBAR_WIDTH_STORAGE_KEY,
+              onResize: setSidebarWidth,
+            }}
+            // The narrow-window sidebar is a sheet, portaled outside the provider's styles.
+            style={windowControlsInsetStyle}
+          >
+            {isOnSettings ? (
+              <>
+                <SidebarChromeHeader isElectron={isElectron} />
+                <SettingsSidebarNav pathname={pathname} placement="app-sidebar" />
+              </>
+            ) : legacySidebarEnabled === null ? null : legacySidebarEnabled ? (
+              <LegacyThreadSidebar routeReveal={sidebarRouteReveal} />
+            ) : (
+              <ThreadSidebar routeReveal={sidebarRouteReveal} />
+            )}
+            <SidebarRail onDoubleClick={resetSidebarWidth} />
+          </Sidebar>
+          {children}
+        </DestinationRailVisibleContext>
+        {/* Both sit on the headers' own bottom border pixel, so pages that already draw one still
             show a single line. Beside the rail, the line becomes the content frame's top edge and
             curves into its left edge, leaving the titlebar strip and the rail as one surface. */}
-          {dividerVisible && railVisible ? (
-            <div
-              aria-hidden
-              className="workspace-content-frame pointer-events-none fixed top-[calc(var(--workspace-topbar-height)-1px)] right-0 bottom-0 left-(--destination-rail-width) z-30"
-            />
-          ) : dividerVisible ? (
-            <div
-              aria-hidden
-              className="pointer-events-none fixed inset-x-0 top-[calc(var(--workspace-topbar-height)-1px)] z-30 h-px bg-chrome-divider"
-            />
-          ) : null}
-          <SidebarControl onCollapsedBrandWidthChange={setCollapsedBrandWidth} />
-          {isOnSettings ? <SettingsSearchShortcut /> : null}
-          <BackgroundThreadAnnouncer />
-          {isElectron ? <HistorySwipeNavigation /> : null}
-        </SidebarProvider>
-      </PanelAnimationSuppressionProvider>
-    </TaskPaneFocusProvider>
+        {dividerVisible && railVisible ? (
+          <div
+            aria-hidden
+            className="workspace-content-frame pointer-events-none fixed top-[calc(var(--workspace-topbar-height)-1px)] right-0 bottom-0 left-(--destination-rail-width) z-30"
+          />
+        ) : dividerVisible ? (
+          <div
+            aria-hidden
+            className="pointer-events-none fixed inset-x-0 top-[calc(var(--workspace-topbar-height)-1px)] z-30 h-px bg-chrome-divider"
+          />
+        ) : null}
+        <SidebarControl onCollapsedBrandWidthChange={setCollapsedBrandWidth} />
+        {isOnSettings ? <SettingsSearchShortcut /> : null}
+        <BackgroundThreadAnnouncer />
+        {isElectron ? <HistorySwipeNavigation /> : null}
+      </SidebarProvider>
+    </PanelAnimationSuppressionProvider>
   );
 }

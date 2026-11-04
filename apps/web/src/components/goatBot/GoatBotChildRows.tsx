@@ -14,7 +14,7 @@ import { ThreadStatusLabel } from "../ThreadStatusIndicators";
 import { Button } from "../ui/button";
 import { EllipsisIcon } from "../solar";
 import { SidebarGroup, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
-import { recordTaskOpener, useTaskPaneFocus } from "./taskPaneFocus";
+import { recordTaskOpener, getTaskPaneFocus } from "./taskPaneFocus";
 
 export function GoatBotChildRows({
   environmentId,
@@ -26,7 +26,7 @@ export function GoatBotChildRows({
   refresh: () => void;
 }) {
   const [showMore, setShowMore] = useState(false);
-  const taskFocus = useTaskPaneFocus();
+  const taskFocus = getTaskPaneFocus();
   // oxlint-disable-next-line react/purity -- Visibility ages are evaluated when the roster changes.
   const now = Date.now();
   const location = useLocation();
@@ -80,9 +80,7 @@ export function GoatBotChildRows({
             : row.kind === "coding"
               ? row.title || "GOAT thread"
               : "";
-          const status = task
-            ? presentTaskStatus(task.view.doneAt ? "completed" : task.task.status)
-            : null;
+          const status = task ? presentTaskStatus(task.task.status, task.view.doneAt) : null;
           const statusPill = status && {
             label: status.label,
             ...(status.tone === "danger"
@@ -100,17 +98,17 @@ export function GoatBotChildRows({
                       colorClass: "text-sidebar-muted-foreground",
                       dotClass: "bg-sidebar-muted-foreground",
                     }
-                  : { colorClass: "text-info-foreground", dotClass: "bg-info" }),
+                  : status.tone === "attention"
+                    ? { colorClass: "text-warning-foreground", dotClass: "bg-warning" }
+                    : { colorClass: "text-info-foreground", dotClass: "bg-info" }),
             pulse: status.tone === "active",
           };
           return (
-            <SidebarMenuItem key={botThreadKey(row)}>
+            <SidebarMenuItem key={botThreadKey(row)} className="flex items-center">
               <SidebarMenuButton
                 isActive={active}
-                tooltip={{
-                  children: row.kind === "coding" ? `GOAT thread: ${title}` : title,
-                  hidden: false,
-                }}
+                className="min-w-0 flex-1"
+                tooltip={row.kind === "coding" ? `GOAT thread: ${title}` : title}
                 aria-label={row.kind === "coding" ? `GOAT thread: ${title}` : undefined}
                 aria-current={active ? "page" : undefined}
                 onContextMenu={
@@ -151,27 +149,29 @@ export function GoatBotChildRows({
                   )
                 }
               >
-                <span className="w-4" />
+                <span aria-hidden="true" className="w-4 shrink-0" />
                 {statusPill && <ThreadStatusLabel status={statusPill} compact />}
                 <span className="min-w-0 flex-1 truncate">{title}</span>
                 {task?.unread && (
-                  <span role="img" aria-label="Unread" className="size-2 rounded-full bg-info" />
+                  <span
+                    role="img"
+                    aria-label="Unread"
+                    className="size-2 rounded-full bg-info forced-colors:bg-current"
+                  />
                 )}
               </SidebarMenuButton>
               {task && (
-                <div className="pointer-events-none absolute top-1 right-1 opacity-0 group-hover/menu-item:pointer-events-auto group-hover/menu-item:opacity-100 group-focus-within/menu-item:pointer-events-auto group-focus-within/menu-item:opacity-100">
-                  <Button
-                    variant="ghost-muted"
-                    size="icon-xs"
-                    aria-label={`Actions for ${title}`}
-                    onClick={(event) => {
-                      const rect = event.currentTarget.getBoundingClientRect();
-                      void menu(task, { x: rect.left, y: rect.bottom });
-                    }}
-                  >
-                    <EllipsisIcon />
-                  </Button>
-                </div>
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label={`Actions for ${title}`}
+                  onClick={(event) => {
+                    const rect = event.currentTarget.getBoundingClientRect();
+                    void menu(task, { x: rect.left, y: rect.bottom });
+                  }}
+                >
+                  <EllipsisIcon />
+                </Button>
               )}
             </SidebarMenuItem>
           );
@@ -183,7 +183,7 @@ export function GoatBotChildRows({
               aria-expanded={showMore}
               onClick={() => setShowMore((value) => !value)}
             >
-              <span className="w-4" />
+              <span aria-hidden="true" className="w-4 shrink-0" />
               {showMore ? "Show less" : "Show more"}
             </SidebarMenuButton>
           </SidebarMenuItem>

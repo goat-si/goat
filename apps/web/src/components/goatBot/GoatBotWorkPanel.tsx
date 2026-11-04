@@ -73,10 +73,10 @@ export function GoatBotWorkPanel({
           )}
         </TabsPanel>
         <TabsPanel value="Library" className="mt-4">
-          <p>Files GOAT Bot saves will appear here. Library is not available yet.</p>
+          <p>Files GOAT Bot saves will appear here.</p>
         </TabsPanel>
         <TabsPanel value="Computer" className="mt-4">
-          <p>Machines GOAT Bot works on will appear here. Computer is not available yet.</p>
+          <p>Machines GOAT Bot works on will appear here.</p>
         </TabsPanel>
       </Tabs>
     </div>
@@ -102,7 +102,7 @@ function TaskWorkRow({
       >
         {row.task.title}
         <span className="block text-xs text-muted-foreground">
-          {presentTaskStatus(row.view.doneAt ? "completed" : row.task.status).label}
+          {presentTaskStatus(row.task.status, row.view.doneAt).label}
         </span>
       </Link>
       <button

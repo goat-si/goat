@@ -171,6 +171,7 @@ export function GoatBotComposer({
           <textarea
             ref={textareaRef}
             rows={1}
+            data-goat-bot-composer=""
             aria-label="Message GOAT Bot"
             placeholder={placeholder}
             value={text}

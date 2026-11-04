@@ -1,3 +1,4 @@
+import "~/index.css";
 import {
   EnvironmentId,
   MessageId,
@@ -188,4 +189,14 @@ it("skips detail on old servers and unmounts the row when bot mode is off", asyn
     notify();
   });
   expect(container.textContent).toBe("");
+});
+
+it("keeps the bot name visible with badges in a 220px container", async () => {
+  container.style.width = "220px";
+  await act(() => root.render(<GoatBotSidebarRow name="GOAT Bot" slackEnabled />));
+  const name = Array.from(container.querySelectorAll("span")).find(
+    (element) => element.textContent === "GOAT Bot",
+  );
+  expect(name).toBeDefined();
+  expect(name!.getBoundingClientRect().width).toBeGreaterThan(0);
 });
