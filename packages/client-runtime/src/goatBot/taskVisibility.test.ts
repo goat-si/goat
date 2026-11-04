@@ -9,7 +9,7 @@ const now = Date.parse("2026-11-04T12:00:00.000Z");
 const row = (
   id: string,
   hours: number,
-  options: { done?: boolean; messages?: number; pinned?: boolean } = {},
+  options: { done?: boolean; messages?: number; pinned?: boolean; terminal?: boolean } = {},
 ) => {
   const at = DateTime.formatIso(DateTime.makeUnsafe(now - hours * 3_600_000));
   return decodeRow({
@@ -17,7 +17,7 @@ const row = (
     task: {
       taskId: id,
       title: id,
-      status: options.done ? "completed" : "waiting_input",
+      status: options.done || options.terminal ? "completed" : "waiting_input",
       updatedAt: at,
     },
     view: {
@@ -43,6 +43,13 @@ describe("bot task visibility", () => {
     const at = row("at", 2, { done: true, messages: 10 });
     const nine = row("nine", 2, { done: true, messages: 9 });
     expect(select([before, at, nine]).rows).toEqual([before, nine]);
+  });
+  it("hides terminal tasks without a done flag at six hours and ten messages", () => {
+    const before = row("before", 5.999, { terminal: true, messages: 10 });
+    const at = row("at", 6, { terminal: true, messages: 10 });
+    const nine = row("nine", 6, { terminal: true, messages: 9 });
+    const old = row("old", 73, { terminal: true, messages: 9 });
+    expect(select([before, at, nine, old]).rows).toEqual([before, nine, old]);
   });
   it("keeps selected and pinned tasks after three days", () => {
     const before = row("before", 71.999, { done: true });
