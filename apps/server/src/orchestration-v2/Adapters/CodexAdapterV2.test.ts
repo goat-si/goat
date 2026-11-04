@@ -2357,7 +2357,6 @@ describe("CodexAdapterV2 post-settle continuation", () => {
           reload(9, config);
           yield* turn(13, 3);
         } else if (mode === "status-during-check") {
-          // A turn Codex starts while the terminals are read makes the reload wait.
           yield* turn(3, 1);
           entries.push(
             {
@@ -2373,7 +2372,8 @@ describe("CodexAdapterV2 post-settle continuation", () => {
                 params: { threadId: nativeThreadId },
               },
             },
-            status("active"),
+            status("active"), // Codex works while the terminals are read, so the reload waits,
+            status("idle"), // and stops before the start: a turn still running is refused.
             { type: "emit_inbound", frame: { id: 5, result: { data: [], nextCursor: null } } },
           );
           yield* turn(6, 2);
