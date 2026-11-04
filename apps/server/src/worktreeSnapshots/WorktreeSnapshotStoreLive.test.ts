@@ -68,6 +68,13 @@ it.layer(layer)("snapshot ledger", (it) => {
         assert.equal(yield* store.purgeDeletedThreads(now + 86_400_000, [threadId]), 2);
         assert.equal((yield* sql`SELECT * FROM worktree_snapshots`).length, 0);
         assert.equal(yield* store.deleteForThread(threadId), 0);
+        const third = yield* store.capture(input);
+        const created = Date.parse(third.createdAt);
+        assert.equal(yield* store.expire(created + 86_400_000 - 1, 1), 0);
+        assert.equal(yield* store.expire(created + 86_400_000, 1), 1);
+        const fourth = yield* store.capture(input);
+        assert.equal((yield* store.latestForThread(threadId))?.snapshotRef, fourth.snapshotRef);
+        assert.equal(yield* store.deleteForThread(threadId), 1);
       }),
   );
 });

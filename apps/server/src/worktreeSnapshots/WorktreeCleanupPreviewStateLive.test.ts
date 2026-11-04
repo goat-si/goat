@@ -2,6 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import migration from "../persistence/Migrations/133_WorktreeSnapshots.ts";
 import { WorktreeCleanupPreviewState } from "./WorktreeCleanupPreviewState.ts";
 import * as Live from "./WorktreeCleanupPreviewStateLive.ts";
@@ -52,7 +53,8 @@ it.effect(
         })).apply,
       );
     }).pipe(
-      Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" })),
-      Effect.provide(NodeServices.layer),
+      Effect.provide(
+        Layer.merge(NodeSqliteClient.layer({ filename: ":memory:" }), NodeServices.layer),
+      ),
     ),
 );

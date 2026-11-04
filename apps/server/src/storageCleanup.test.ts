@@ -1,8 +1,8 @@
 import * as AuxiliarySqlite from "./storage/AuxiliarySqlite.ts";
 // @effect-diagnostics nodeBuiltinImport:off - seeds another GOAT app's database the way its server writes it.
 import * as NodeSqlite from "node:sqlite";
-
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as Effect from "effect/Effect";
 import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
@@ -35,6 +35,8 @@ import {
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as ServerConfig from "./config.ts";
 import * as StorageCleanup from "./storageCleanup.ts";
+import * as WorktreeSnapshotStoreLive from "./worktreeSnapshots/WorktreeSnapshotStoreLive.ts";
+import * as WorktreeCleanupPreviewStateLive from "./worktreeSnapshots/WorktreeCleanupPreviewStateLive.ts";
 import * as AutomationHold from "./automationHold.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import * as GitManager from "./git/GitManager.ts";
@@ -51,15 +53,12 @@ import * as DateTime from "effect/DateTime";
 import { storageCleanupActivityAt, storageCleanupThreadIdle } from "./storageCleanup.ts";
 import { storageCleanupPullRequestMerged } from "./storageCleanupPullRequest.ts";
 import { NOW_MS, DAY_MS, at, shell, allocatedBytes } from "./storageCleanup.testFixtures.ts";
-
 describe("V2 storage cleanup eligibility", () => {
   const candidate = () => shell({ branch: "feature", worktreePath: "/worktrees/feature" });
-
   it("allows an idle worktree and rejects the project checkout", () => {
     expect(storageCleanupThreadIdle(candidate(), NOW_MS, DEFAULT_SERVER_SETTINGS)).toBe(true);
     expect(storageCleanupThreadIdle(shell(), NOW_MS, DEFAULT_SERVER_SETTINGS)).toBe(false);
   });
-
   it.each(["running", "starting", "preparing", "waiting", "queued"] as const)(
     "retains a worktree while its thread is %s",
     (status) => {
@@ -68,7 +67,6 @@ describe("V2 storage cleanup eligibility", () => {
       ).toBe(false);
     },
   );
-
   it.each(["completed", "interrupted", "cancelled", "rolled_back"] as const)(
     "retains %s while background work is pending",
     (status) => {
@@ -84,7 +82,6 @@ describe("V2 storage cleanup eligibility", () => {
       ).toBe(false);
     },
   );
-
   it.each(["completed", "interrupted", "cancelled", "rolled_back"] as const)(
     "retains %s while a runtime request is pending",
     (status) => {
@@ -104,7 +101,6 @@ describe("V2 storage cleanup eligibility", () => {
       ).toBe(false);
     },
   );
-
   it("retains an active run even if the shell status is idle", () => {
     expect(
       storageCleanupThreadIdle(
@@ -114,7 +110,6 @@ describe("V2 storage cleanup eligibility", () => {
       ),
     ).toBe(false);
   });
-
   it("retains a queued prompt before the new run has been projected", () => {
     expect(
       storageCleanupThreadIdle(
@@ -124,7 +119,6 @@ describe("V2 storage cleanup eligibility", () => {
       ),
     ).toBe(false);
   });
-
   it.each([
     { name: "snoozed until a future reset", snooze: true, resetIn: DAY_MS, idle: false },
     { name: "set to auto-resume", autoResume: true, resetIn: DAY_MS, idle: false },
@@ -286,7 +280,13 @@ const cleanupFixture = (
     let terminalListener: ((event: TerminalMetadataStreamEvent) => Effect.Effect<void>) | undefined;
     let events: Stream.Stream<OrchestrationV2DomainEvent> = Stream.empty;
     const activated = yield* Deferred.make<void>();
-    const cleanupLayer = StorageCleanup.layer.pipe(Layer.provide(AuxiliarySqlite.layer));
+    const cleanupLayer = StorageCleanup.layer.pipe(
+      Layer.provide(AuxiliarySqlite.layer),
+      Layer.provide(
+        Layer.merge(WorktreeSnapshotStoreLive.layer, WorktreeCleanupPreviewStateLive.layer),
+      ),
+      Layer.provide(NodeCrypto.layer),
+    );
     const context = yield* Layer.build(cleanupLayer).pipe(
       Effect.provideService(GitVcsDriver.GitVcsDriver, {
         ...git,
