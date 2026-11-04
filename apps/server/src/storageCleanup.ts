@@ -1214,6 +1214,8 @@ const make = Effect.gen(function* () {
         Effect.catchTags({ StaleCleanupPreviewError: () => Effect.succeed(false) }),
       );
     if (answered && input.response === "confirm") return yield* runNow;
+    // A dry sweep republishes the preview with its new start time.
+    if (answered) yield* requestSweep;
     return yield* SubscriptionRef.get(reportRef);
   });
   const start = Effect.fn("StorageCleanup.start")(function* () {
