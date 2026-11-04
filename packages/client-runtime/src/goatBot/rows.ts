@@ -263,7 +263,17 @@ export function buildGoatBotTimeline(input: {
   readonly pendingInputs: ReadonlyArray<GoatBotPendingInput>;
   readonly readers: GoatBotItemReaders;
   readonly taskId?: string | null;
+  readonly knownTaskIds?: ReadonlyArray<string>;
 }): GoatBotRow[] {
+  const knownTasks = new Set(input.knownTaskIds ?? []);
+  for (const { item } of input.visibleTurnItems) {
+    if (item.type !== "notification") continue;
+    const card = input.readers.taskCard(item);
+    if (card !== null) knownTasks.add(card.key);
+  }
+  const includesMessage = (taskId: string | null | undefined) =>
+    input.taskId === undefined ||
+    (input.taskId === null ? taskId == null || !knownTasks.has(taskId) : taskId === input.taskId);
   const committed: UngroupedRow[] = [];
   const committedRequestKeys = new Set<string>();
   const inputTexts = new Map<string, string>();
@@ -275,12 +285,12 @@ export function buildGoatBotTimeline(input: {
     if (item.type === "user_message") {
       if (item.text.trim().length === 0 && item.attachments.length === 0) continue;
       const presentation = input.readers.message(item);
-      if (input.taskId !== undefined && (presentation?.taskId ?? null) !== input.taskId) continue;
       if (presentation?.requestKey) {
         committedRequestKeys.add(presentation.requestKey);
         inputTexts.set(presentation.requestKey, item.text);
       }
       if (presentation?.clientKey) committedRequestKeys.add(presentation.clientKey);
+      if (!includesMessage(presentation?.taskId)) continue;
       previousInputKey = presentation?.requestKey ?? null;
       committed.push({
         kind: "user",
@@ -299,7 +309,7 @@ export function buildGoatBotTimeline(input: {
     if (item.type === "assistant_message") {
       if (item.text.trim().length === 0) continue;
       const presentation = input.readers.message(item);
-      if (input.taskId !== undefined && (presentation?.taskId ?? null) !== input.taskId) continue;
+      if (!includesMessage(presentation?.taskId)) continue;
       const tone = presentation?.tone ?? "reply";
       committed.push({
         kind: "bot",

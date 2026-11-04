@@ -218,6 +218,56 @@ describe("goatBotConversationPreview", () => {
 });
 
 describe("buildGoatBotTimeline", () => {
+  it("keeps turn receipts in main and isolates replies to known tasks", () => {
+    const at = "2026-10-12T12:00:00Z";
+    const meta = (taskId: string): GoatBotMessagePresentation => ({
+      tone: "reply",
+      readAt: null,
+      requestKey: null,
+      taskId,
+    });
+    const input = {
+      visibleTurnItems: rowsOf([
+        user("hello", at, "hello"),
+        bot("receipt", at, "Hello"),
+        bot("task-reply", at, "Working"),
+        notice("chip", at),
+      ]),
+      pendingInputs: [],
+      readers: readers(
+        { receipt: meta("channel-task:in1:0"), "task-reply": meta("real-task") },
+        { chip: card("real-task", 1) },
+      ),
+    };
+    expect(content(buildGoatBotTimeline({ ...input, taskId: null })).map((row) => row.id)).toEqual([
+      "hello",
+      "receipt",
+      "chip",
+    ]);
+    expect(
+      content(buildGoatBotTimeline({ ...input, taskId: "real-task" })).map((row) => row.id),
+    ).toEqual(["task-reply", "chip"]);
+  });
+
+  it("clears task pending input when its committed rejection has no task tag", () => {
+    const at = "2026-10-12T12:00:00Z";
+    const rows = buildGoatBotTimeline({
+      visibleTurnItems: rowsOf([user("rejected", at, "hello")]),
+      pendingInputs: [
+        {
+          clientKey: "client",
+          taskId: "task",
+          text: "hello",
+          createdAt: at,
+          state: "accepted",
+          requestKey: "request",
+        },
+      ],
+      readers: readers({ rejected: { tone: "reply", readAt: null, requestKey: "request" } }),
+      taskId: "task",
+    });
+    expect(content(rows)).toEqual([]);
+  });
   it("isolates task messages and pending sends while keeping task references in main", () => {
     const at = "2026-10-12T12:00:00Z";
     const metadata = (taskId: string): GoatBotMessagePresentation => ({
