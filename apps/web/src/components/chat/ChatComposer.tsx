@@ -3594,9 +3594,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   }}
                 >
                   {showResumeAction ? (
-                    <PlayIcon className="size-3 fill-current" aria-hidden="true" />
+                    <PlayIcon className="size-3.5 fill-current" aria-hidden="true" />
                   ) : (
-                    <ArrowUpIcon className="size-3.5" aria-hidden="true" />
+                    <ArrowUpIcon className="size-4" aria-hidden="true" />
                   )}
                 </button>
               </div>
@@ -3810,9 +3810,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 data-chat-composer-footer="true"
                 data-chat-composer-footer-compact={isComposerFooterCompact ? "true" : "false"}
                 className={cn(
-                  "flex min-w-0 flex-nowrap items-center justify-between gap-2 overflow-visible px-3 pb-2 [--composer-control-text-scale:0.8] sm:px-4",
+                  // No row gap (each group spaces itself); the start inset drops the first control's 6px padding.
+                  "flex min-w-0 flex-nowrap items-center justify-between gap-0 overflow-visible ps-1.25 pe-3 pb-2 [--composer-control-text-scale:0.8] sm:ps-2.5 sm:pe-4",
                   pendingUserInputs.length > 0 && "pt-2",
-                  isComposerFooterCompact ? "gap-1.5" : "gap-2 sm:gap-0",
                   showMobilePendingAnswerActions && "hidden sm:flex",
                   isComposerResting &&
                     "absolute right-px z-10 h-12 w-auto gap-0 py-0 sm:gap-0 sm:py-0",
@@ -3841,7 +3841,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   data-chat-composer-primary-actions-compact={
                     isComposerPrimaryActionsCompact ? "true" : "false"
                   }
-                  className="flex shrink-0 flex-nowrap items-center justify-end gap-2"
+                  className="ms-1 flex shrink-0 flex-nowrap items-center justify-end gap-2"
                 >
                   <ComposerFooterPrimaryActions
                     voiceControl={voice.voiceControl}

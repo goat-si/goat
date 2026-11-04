@@ -126,7 +126,10 @@ export function FleetPage() {
                 : null}
               {loading ? " Checking SSH hosts and cloud machines…" : null}
             </p>
-            <section aria-label="Fleet graph" className="overflow-hidden rounded-xl border bg-card">
+            <section
+              aria-label="Fleet graph"
+              className="@container/fleet-graph overflow-hidden rounded-xl border bg-card"
+            >
               <FleetGraph
                 snapshot={snapshot}
                 connections={connections}
@@ -136,7 +139,7 @@ export function FleetPage() {
                 heat={heat}
                 slowMachineIds={slowMachineIds}
               />
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t px-4 py-2 text-xs text-muted-foreground">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t bg-background/40 px-4 py-2.5 text-xs text-muted-foreground">
                 {(["running", "attention", "reported"] as const).map((state) => (
                   <span key={state} className="inline-flex items-center gap-1.5">
                     <span aria-hidden className={cn("size-2 rounded-full", STATE_DOT[state])} />
@@ -161,7 +164,9 @@ export function FleetPage() {
                     {FLEET_HEAT_LABEL[tier]}
                   </span>
                 ))}
-                <span className="sm:ml-auto">Select a machine to show only its threads.</span>
+                <span className="ml-auto hidden text-muted-foreground/80 @min-[40rem]/fleet-graph:inline">
+                  Select a machine to show only its threads.
+                </span>
               </div>
             </section>
 

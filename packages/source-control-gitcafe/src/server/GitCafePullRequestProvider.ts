@@ -2,7 +2,7 @@ import { SourceControlProviderKind } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import { randomUuidV4 } from "@goat/provider-core/server/randomUuid";
+import { randomUuidV4 } from "@goat/shared/randomUuid";
 import {
   NonNegativeInt,
   resolvePullRequestAuthorFilter,

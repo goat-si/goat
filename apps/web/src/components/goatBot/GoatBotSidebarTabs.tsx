@@ -57,6 +57,7 @@ export function GoatBotSidebarTabs() {
                   <SidebarMenu>
                     <SidebarMenuItem>
                       <SidebarMenuButton
+                        size="lg"
                         render={
                           <Link
                             to="/$environmentId/$threadId"

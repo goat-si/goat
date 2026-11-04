@@ -7,6 +7,18 @@
       "types": "./src/timedShutdownPhase.ts",
       "import": "./src/timedShutdownPhase.ts"
     },
+    "./collectStreamText": {
+      "types": "./src/collectStreamText.ts",
+      "import": "./src/collectStreamText.ts"
+    },
+    "./randomUuid": {
+      "types": "./src/randomUuid.ts",
+      "import": "./src/randomUuid.ts"
+    },
+    "./motionTokens": {
+      "types": "./src/motionTokens.ts",
+      "import": "./src/motionTokens.ts"
+    },
     "./toolPriority": {
       "types": "./src/toolPriority.ts",
       "import": "./src/toolPriority.ts"
@@ -554,6 +566,10 @@
     "./orchestrationV2DedupedBodies": {
       "types": "./src/orchestrationV2DedupedBodies.ts",
       "import": "./src/orchestrationV2DedupedBodies.ts"
+    },
+    "./threadTextAppend": {
+      "types": "./src/threadTextAppend.ts",
+      "import": "./src/threadTextAppend.ts"
     },
     "./orchestrationV2Timeline": {
       "types": "./src/orchestrationV2Timeline.ts",

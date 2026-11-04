@@ -235,6 +235,7 @@ const subscribe = Effect.fn("transfer.subscribe")(function* (
           acceptCompactTurnItems: true,
           acceptCompactIds: true,
           acceptDedupedBodies: true,
+          acceptTextAppends: true,
         })
       : client.client[ORCHESTRATION_V2_WS_METHODS.subscribeShell]({
           afterSequence,

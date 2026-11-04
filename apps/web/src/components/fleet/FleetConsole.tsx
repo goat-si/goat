@@ -35,7 +35,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { fleetHostCount } from "./fleetCount";
 import { FleetAlertAction } from "./FleetAlertAction";
 import { isFleetConnectionWait, type FleetConnection } from "./fleetConnection";
-import { fleetConsoleFrameClassName } from "./fleetConsoleFrame";
+import { fleetConsoleBodyClassName, fleetConsoleFrameClassName } from "./fleetConsoleFrame";
 import { fleetConsoleTelemetryAtom } from "./fleetConsoleTelemetry";
 import { FleetHubSummary } from "./FleetHubSummary";
 import { FleetUncountedHosts } from "./FleetUncountedHosts";
@@ -79,7 +79,7 @@ const fleetThroughputAtom = Atom.make((get): FleetThroughput => {
 
 const Label = ({ children, className }: { children: React.ReactNode; className?: string }) => (
   <span
-    className={cn("font-mono text-3xs uppercase tracking-widest text-muted-foreground", className)}
+    className={cn("text-3xs font-medium uppercase tracking-wider text-muted-foreground", className)}
   >
     {children}
   </span>
@@ -168,6 +168,10 @@ const Sparkline = memo(function Sparkline(props: {
 });
 
 const NO_SAMPLES: ReadonlyArray<HostSample> = [];
+
+/** Header and rows share one track list, so each column label sits over its readings. */
+const HOST_GRID =
+  "grid grid-cols-[minmax(6.5rem,10rem)_repeat(3,minmax(0,1fr))] items-center gap-4";
 
 function formatPercent(value: number | null) {
   return value === null ? "–" : Math.round(value) + "%";
@@ -276,7 +280,7 @@ function HostRow({
   const loadMax = Math.max(cores, ...samples.map((sample) => sample.load ?? 0));
   const loadTone = tone("load", load === null ? null : load / cores);
   return (
-    <li className="grid h-7 grid-cols-[minmax(0,7.5rem)_repeat(3,minmax(0,1fr))] items-center gap-3">
+    <li className={cn("h-8", HOST_GRID)}>
       <span className="flex min-w-0 items-center gap-1.5 text-xs">
         <span
           aria-hidden
@@ -308,7 +312,7 @@ function HostRow({
             </span>
             {/* Markers never shrink; the Hub name truncates first, and the tooltip has the full text. */}
             {hub === null && omitted === null ? null : (
-              <span className="flex min-w-0 gap-1 overflow-hidden font-mono text-3xs text-muted-foreground">
+              <span className="flex min-w-0 gap-1 overflow-hidden text-3xs text-muted-foreground">
                 {inferred ? <span className="shrink-0 text-warning">inferred</span> : null}
                 {omitted === null ? null : (
                   <span className="shrink-0 text-warning">{omitted.count} omitted</span>
@@ -341,9 +345,7 @@ function HostRow({
         </Tooltip>
       </span>
       {statusText !== null ? (
-        <span className="col-span-3 truncate font-mono text-2xs text-muted-foreground">
-          {statusText}
-        </span>
+        <span className="col-span-3 truncate text-2xs text-muted-foreground">{statusText}</span>
       ) : (
         <>
           <MetricCell
@@ -389,7 +391,7 @@ function MetricCell(props: {
       <Sparkline samples={props.samples} field={props.field} max={props.max} tone={props.tone} />
       <span
         className={cn(
-          "w-9 shrink-0 text-right font-mono text-xs tabular-nums",
+          "w-9 shrink-0 text-right text-xs tabular-nums",
           TONE_TEXT[props.tone === "muted" ? "muted" : props.tone],
         )}
       >
@@ -451,7 +453,7 @@ function Stat(props: { readonly label: string; readonly value: number; readonly 
       <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", props.dot)} />
       <Label>{props.label}</Label>
       <span aria-hidden className="fleet-console-leader" />
-      <span className="font-mono text-lg leading-none tabular-nums">{props.value}</span>
+      <span className="text-lg font-semibold leading-none tabular-nums">{props.value}</span>
     </div>
   );
 }
@@ -553,7 +555,7 @@ function FleetConsoleExpanded(props: {
           <span className="hidden min-w-0 items-baseline gap-1.5 sm:flex">
             <Label>Hottest</Label>
             <span className="truncate text-xs font-medium">{hottest.row.label}</span>
-            <span className={cn("font-mono text-xs tabular-nums", TONE_TEXT[hottest.tier])}>
+            <span className={cn("text-xs tabular-nums", TONE_TEXT[hottest.tier])}>
               {hottestReading(hottest)}
             </span>
           </span>
@@ -561,13 +563,18 @@ function FleetConsoleExpanded(props: {
         {status.sampledAt > 0 ? (
           <span className="hidden items-baseline gap-1.5 md:flex">
             <Label>Sampled</Label>
-            <span className="font-mono text-xs text-muted-foreground tabular-nums">
+            <span className="text-xs text-muted-foreground tabular-nums">
               {clock.format(status.sampledAt)}
             </span>
           </span>
         ) : null}
       </ConsoleHeader>
-      <div className="grid h-[calc(100%-2.5rem)] auto-rows-max grid-cols-1 overflow-y-auto md:auto-rows-[minmax(0,1fr)] md:grid-cols-[12.5rem_minmax(0,1fr)_16rem] md:overflow-hidden">
+      {/* Stacked when narrow; threads and status over hosts; three columns once hosts get room. */}
+      <div
+        className={fleetConsoleBodyClassName(
+          "grid auto-rows-max grid-cols-1 overflow-y-auto @min-[32rem]/fleet-console:grid-cols-2 @min-[56rem]/fleet-console:auto-rows-[minmax(0,1fr)] @min-[56rem]/fleet-console:grid-cols-[12rem_minmax(0,1fr)_15rem] @min-[56rem]/fleet-console:overflow-hidden",
+        )}
+      >
         {reduced || status.sampledAt === 0 ? null : (
           // Restarts once per new sample; nothing runs between samples.
           <span key={status.sampledAt} aria-hidden className="fleet-console-sweep" />
@@ -575,7 +582,7 @@ function FleetConsoleExpanded(props: {
 
         <section
           aria-label="Threads"
-          className="flex flex-col gap-3 border-b p-3 md:border-r md:border-b-0"
+          className="flex flex-col gap-3 border-b p-3 @min-[32rem]/fleet-console:border-r @min-[56rem]/fleet-console:border-b-0"
         >
           <div className="flex flex-col gap-2">
             <Stat label="Running" value={totals.running} dot="bg-info" />
@@ -585,7 +592,7 @@ function FleetConsoleExpanded(props: {
           <div className="mt-auto flex flex-col gap-1">
             <div className="flex items-baseline justify-between gap-2 whitespace-nowrap">
               <Label>1h</Label>
-              <span className="font-mono text-2xs text-muted-foreground tabular-nums">
+              <span className="text-2xs text-muted-foreground tabular-nums">
                 <span className="text-info">{throughput.started}</span> started ·{" "}
                 <span className="text-success">{throughput.finished}</span> done
               </span>
@@ -596,9 +603,9 @@ function FleetConsoleExpanded(props: {
 
         <section
           aria-label="Hosts"
-          className="flex min-h-0 flex-col border-b p-3 md:border-r md:border-b-0"
+          className="flex min-h-0 flex-col border-b p-3 @min-[32rem]/fleet-console:order-last @min-[32rem]/fleet-console:col-span-2 @min-[32rem]/fleet-console:border-b-0 @min-[56rem]/fleet-console:order-none @min-[56rem]/fleet-console:col-span-1 @min-[56rem]/fleet-console:border-r"
         >
-          <div className="mb-1 grid grid-cols-[minmax(0,7.5rem)_repeat(3,minmax(0,1fr))] items-center gap-3">
+          <div className={cn("mb-1", HOST_GRID)}>
             <span className="flex min-w-0 items-center gap-1">
               <Label>
                 Hosts {hostCount.reporting}/{totals.machines}
@@ -610,9 +617,9 @@ function FleetConsoleExpanded(props: {
             <Label>Load 1m</Label>
           </div>
           {rows.length === 0 && status.loading ? (
-            <p className="font-mono text-2xs text-muted-foreground">Reading hosts…</p>
+            <p className="text-2xs text-muted-foreground">Reading hosts…</p>
           ) : (
-            <ul className="flex min-h-0 flex-col md:overflow-y-auto">
+            <ul className="flex min-h-0 flex-col @min-[56rem]/fleet-console:overflow-y-auto">
               {rows.map((row) => (
                 <HostRow
                   key={row.key}
@@ -639,7 +646,10 @@ function FleetConsoleExpanded(props: {
           )}
         </section>
 
-        <section aria-label="Status" className="flex min-h-0 flex-col gap-3 p-3 md:overflow-y-auto">
+        <section
+          aria-label="Status"
+          className="flex min-h-0 flex-col gap-3 p-3 @min-[32rem]/fleet-console:border-b @min-[56rem]/fleet-console:overflow-y-auto @min-[56rem]/fleet-console:border-b-0"
+        >
           {hub === null ? null : (
             <FleetHubSummary hub={hub} homeEnvironmentId={environmentOf.get(hub.homeKey) ?? null} />
           )}
@@ -648,7 +658,7 @@ function FleetConsoleExpanded(props: {
               <span className="flex items-baseline justify-between gap-2">
                 <Label>Quota</Label>
                 {quota.quotas.some((row) => row.detail !== undefined) && hiddenQuotas.length > 0 ? (
-                  <span className="font-mono text-2xs text-muted-foreground">
+                  <span className="text-2xs text-muted-foreground">
                     <QuotaDetails
                       label={`Show ${hiddenQuotas.length} more quota entries`}
                       detail={hiddenQuotas
@@ -682,7 +692,7 @@ function FleetConsoleExpanded(props: {
                     </span>
                     <span
                       className={cn(
-                        "ml-auto font-mono text-2xs text-muted-foreground tabular-nums",
+                        "ml-auto text-2xs text-muted-foreground tabular-nums",
                         quota.detail === undefined ? "shrink-0" : "min-w-0 text-right",
                       )}
                     >
@@ -719,7 +729,7 @@ function FleetConsoleExpanded(props: {
                     </span>
                   )}
                   {quota.inferred === undefined ? null : (
-                    <span className="truncate font-mono text-2xs text-muted-foreground">
+                    <span className="truncate text-2xs text-muted-foreground">
                       Routing inferred for {quota.inferred.join(", ")}
                     </span>
                   )}
@@ -730,7 +740,7 @@ function FleetConsoleExpanded(props: {
           <div className="flex flex-col gap-1">
             <Label>Alerts {alerts.length > 0 ? alerts.length : null}</Label>
             {alerts.length === 0 ? (
-              <span className="font-mono text-2xs text-muted-foreground">All clear</span>
+              <span className="text-2xs text-muted-foreground">All clear</span>
             ) : (
               <ul className="flex flex-col gap-0.5">
                 {alerts.slice(0, 3).map((alert) => (
@@ -743,7 +753,7 @@ function FleetConsoleExpanded(props: {
                         render={
                           <button
                             type="button"
-                            className="rounded-sm font-mono text-2xs text-muted-foreground outline-hidden hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+                            className="rounded-sm text-2xs text-muted-foreground outline-hidden hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
                           />
                         }
                       >
@@ -796,7 +806,7 @@ function AlertRow({ alert }: { readonly alert: FleetAlert }) {
           <span className="flex max-w-sm flex-col gap-0.5">
             <span>{alert.detail}</span>
             {alert.lines?.map((line) => (
-              <span key={line} className="font-mono text-2xs opacity-80">
+              <span key={line} className="text-2xs opacity-80">
                 {line}
               </span>
             ))}
@@ -822,10 +832,10 @@ function ConsoleHeader(props: {
   readonly children?: React.ReactNode;
 }) {
   return (
-    <header className={cn("flex h-10 items-center gap-4 px-3", !props.collapsed && "border-b")}>
+    <header className={cn("flex h-9.5 items-center gap-4 px-3", !props.collapsed && "border-b")}>
       <span className="flex shrink-0 items-center gap-2">
         <span aria-hidden className="fleet-console-mark" />
-        <h2 className="font-mono text-2xs uppercase tracking-widest text-muted-foreground">
+        <h2 className="text-2xs font-semibold uppercase tracking-wider text-muted-foreground">
           Fleet telemetry
         </h2>
       </span>
@@ -866,12 +876,11 @@ export default function FleetConsole(props: {
       ref={frameRef}
       aria-label="Fleet telemetry"
       data-collapsed={collapsed || undefined}
-      className={fleetConsoleFrameClassName(collapsed)}
+      className={fleetConsoleFrameClassName()}
     >
-      <span aria-hidden className="fleet-console-corners" />
       {collapsed ? (
         <ConsoleHeader collapsed onToggle={() => setCollapsed(false)}>
-          <span className="truncate font-mono text-xs text-muted-foreground tabular-nums">
+          <span className="truncate text-xs text-muted-foreground tabular-nums">
             <span className="text-foreground">{totals.running}</span> running ·{" "}
             <span className="text-foreground">{totals.attention}</span> need you ·{" "}
             <span className="text-foreground">{totals.reported}</span> reported

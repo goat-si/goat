@@ -776,6 +776,16 @@ export default defineConfig({
         rules: { "goat/no-outset-state-indicators": "error" },
       },
       {
+        // Rows of side-by-side controls. Elsewhere a negative margin often aligns an edge
+        // control's icon with the text above it, which overlaps nothing.
+        files: [
+          "apps/web/src/components/chat/{ChatComposer,Composer*,ProviderModelPicker,TraitsPicker}.tsx",
+          "apps/web/src/components/goatBot/**",
+          "apps/web/src/components/fleet/**",
+        ],
+        rules: { "goat/no-negative-control-margin": "error" },
+      },
+      {
         files: ["apps/*/src/**", "packages/*/src/**"],
         excludeFiles: [
           "**/*.{test,spec}.{ts,tsx,js,jsx,mts,cts,mjs,cjs}",

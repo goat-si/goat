@@ -21,7 +21,7 @@ steps that install packages or unlock the runner account for the test sshd run o
 only.
 
 Each `ci` matrix entry carries a `runner` pool from `.github/scripts/goat-ci-scope.cjs`. The
-heavy tasks (`test`, `test-changed`, `test-ssh`, `test-desktop`, `test-memory-growth`, `build`
+heavy tasks (`test`, `test-packages`, `test-changed`, `test-ssh`, `test-desktop`, `test-memory-growth`, `build`
 and the server shards) take runners labelled `epyc`, for the cores, native headers, browsers and
 persistent caches. The short Node-only tasks in `HOSTED_TASKS` (`check`, `typecheck` and the
 small package suites) take `ubuntu-24.04` in every run: on EPYC a one-minute suite waited up to two

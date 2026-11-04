@@ -31,7 +31,7 @@ import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
 
-import { collectUint8StreamText } from "./collectStreamText.ts";
+import { collectUint8StreamText } from "@goat/shared/collectStreamText";
 import {
   CHOCOLATEY_CLAUDE_PACKAGE_ID,
   isBunGlobalCommandPath,

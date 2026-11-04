@@ -13,7 +13,7 @@ import { ChildProcessSpawner } from "effect/process";
 import { decodeJsonResult } from "@goat/shared/schemaJson";
 import * as HostProcess from "@goat/shared/HostProcess";
 import * as SourceControlHost from "@goat/source-control-core/server/SourceControlHost";
-import { collectUint8StreamText } from "@goat/provider-core/server/collectStreamText";
+import { collectUint8StreamText } from "@goat/shared/collectStreamText";
 import type { SourceControlProviderContext } from "@goat/source-control-core/server/SourceControlProvider";
 
 const encodeApiBody = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));

@@ -785,13 +785,15 @@ function ComposerTraitsPicker({
             data-chat-composer-traits-trigger="true"
             size={size}
             className={cn(
-              "min-w-0 max-w-40 shrink-0 font-normal text-muted-foreground sm:max-w-48",
+              "min-w-0 max-w-40 shrink-0 text-muted-foreground sm:max-w-48",
               triggerClassName,
             )}
           />
         }
       >
-        <span className="min-w-0 truncate">{triggerLabel}</span>
+        <span className="min-w-0 truncate [text-box:trim-both_cap_alphabetic] supports-[text-box:trim-both_cap_alphabetic]:py-1.5">
+          {triggerLabel}
+        </span>
       </PopoverTrigger>
       <PopoverPopup
         {...composerFloatingLayerProps}

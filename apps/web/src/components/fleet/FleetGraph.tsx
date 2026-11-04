@@ -504,17 +504,9 @@ export const FleetGraph = memo(function FleetGraph(props: {
               rx={layout.inner.rx}
               ry={layout.inner.ry}
               fill="none"
-              className={cn("stroke-border", !reduced && "fleet-orbit")}
-              strokeDasharray="2 6"
-            />
-            <ellipse
-              cx={layout.center.x}
-              cy={layout.center.y}
-              rx={layout.outer.rx}
-              ry={layout.outer.ry}
-              fill="none"
-              className={cn("stroke-border/60", !reduced && "fleet-orbit fleet-orbit-reverse")}
-              strokeDasharray="1 9"
+              className={cn("pointer-events-none stroke-foreground/15", !reduced && "fleet-orbit")}
+              strokeDasharray="6 8"
+              strokeLinecap="round"
             />
 
             {placed.map((entry) => {

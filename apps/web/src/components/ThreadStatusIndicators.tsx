@@ -1020,11 +1020,11 @@ function settledPrHoverColorClass(state: ThreadPullRequestBadge["state"]): strin
     case "draft":
       return "group-hover/sidebar-row:text-zinc-500 dark:group-hover/sidebar-row:text-zinc-400/80";
     case "open":
-      return "group-hover/sidebar-row:text-emerald-600 dark:group-hover/sidebar-row:text-emerald-300/90";
+      return "group-hover/sidebar-row:text-success-foreground";
     case "merged":
       return "group-hover/sidebar-row:text-violet-600 dark:group-hover/sidebar-row:text-violet-300/90";
     case "closed":
-      return "group-hover/sidebar-row:text-red-600 dark:group-hover/sidebar-row:text-red-300/90";
+      return "group-hover/sidebar-row:text-destructive-foreground";
   }
 }
 

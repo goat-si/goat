@@ -28,11 +28,11 @@ const ChatView = lazy(() => import("../ChatView"));
 const PARENT_TONE_CLASSES: Record<SideChatParentTone, { text: string; dot: string }> = {
   active: { text: "text-info-foreground", dot: "bg-info" },
   attention: {
-    text: "text-amber-600 dark:text-amber-300/90",
-    dot: "bg-amber-500 dark:bg-amber-300/90",
+    text: "text-warning-foreground",
+    dot: "bg-warning",
   },
   idle: { text: "text-muted-foreground", dot: "bg-muted-foreground/60" },
-  error: { text: "text-red-600 dark:text-red-300/90", dot: "bg-red-500 dark:bg-red-300/90" },
+  error: { text: "text-destructive-foreground", dot: "bg-destructive" },
 };
 
 function failureMessage(result: Parameters<typeof squashAtomCommandFailure>[0], fallback: string) {

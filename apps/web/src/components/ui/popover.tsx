@@ -65,7 +65,7 @@ function PopoverPopup({
       {touchBackdrop ? (
         // On touch, the backdrop consumes outside taps so closing cannot also activate the control beneath.
         <PopoverPrimitive.Backdrop
-          className="fixed inset-0 z-[130] hidden pointer-coarse:block"
+          className="fixed inset-0 z-popover hidden pointer-coarse:block"
           data-slot="popover-backdrop"
         />
       ) : null}
@@ -78,8 +78,8 @@ function PopoverPopup({
         className={cn(
           "h-(--positioner-height) w-(--positioner-width) max-w-(--available-width) transition-transform data-instant:transition-none",
           variant === "panel"
-            ? "z-(--z-sheet) w-[min(calc(var(--thread-details-panel-width)+--spacing(4)),calc(var(--anchor-width)---spacing(2)))] transition-[top] duration-150 ease-out data-instant:transition-[top] motion-reduce:transition-none motion-reduce:data-instant:transition-none"
-            : "z-[130]",
+            ? "z-sheet w-[min(calc(var(--thread-details-panel-width)+--spacing(4)),calc(var(--anchor-width)---spacing(2)))] transition-[top] duration-150 ease-out data-instant:transition-[top] motion-reduce:transition-none motion-reduce:data-instant:transition-none"
+            : "z-popover",
         )}
         data-slot="popover-positioner"
         side={side}
