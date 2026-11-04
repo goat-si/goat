@@ -73,6 +73,10 @@ export const countWindowsPayloadFiles = Effect.fn("desktopArtifact.countWindowsP
           `contains ${String(actual.length)} files; expected at most ${String(PREPARED_SERVER_CACHE_FILE_LIMIT)}`,
         );
       }
+      for (const file of actual) {
+        const stat = yield* fs.stat(path.join(cacheDir, file));
+        if (stat.type !== "File") return yield* fail(`holds ${file}, which is not a regular file`);
+      }
     }
     return yield* countFiles(packagedAppDir, cacheDir);
   },

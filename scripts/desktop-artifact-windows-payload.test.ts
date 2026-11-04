@@ -15,6 +15,7 @@ const cacheKeys = (count: number) =>
 const makePayload = Effect.fn("test.makeWindowsPayload")(function* (input: {
   readonly entries: ReadonlyArray<string>;
   readonly files: ReadonlyArray<string>;
+  readonly directories?: ReadonlyArray<string>;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -32,6 +33,10 @@ const makePayload = Effect.fn("test.makeWindowsPayload")(function* (input: {
     JSON.stringify({ format: 1, runtime: "fixture", entries }),
   );
   for (const file of input.files) yield* fs.writeFileString(path.join(cacheDir, file), "bytecode");
+  for (const directory of input.directories ?? []) {
+    yield* fs.makeDirectory(path.join(cacheDir, directory, "nested"), { recursive: true });
+    yield* fs.writeFileString(path.join(cacheDir, directory, "nested", "loose.node"), "native");
+  }
   return packagedAppDir;
 });
 
@@ -54,6 +59,12 @@ it.layer(NodeServices.layer, { excludeTestServices: true })("Windows payload fil
         const cases = [
           { entries: keys, files: [...keys, "stray.node"], detail: "unexpected: stray.node" },
           { entries: keys, files: keys.slice(1), detail: `missing: ${keys[0]}` },
+          {
+            entries: keys,
+            files: keys.slice(1),
+            directories: keys.slice(0, 1),
+            detail: `holds ${keys[0]}, which is not a regular file`,
+          },
           { entries: overBudget, files: overBudget, detail: "contains 65 files" },
         ];
         for (const testCase of cases) {
