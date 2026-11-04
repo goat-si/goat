@@ -68,6 +68,13 @@ export class ChannelChildWorkStore extends Context.Service<
     readonly listForTask: (
       taskId: ChannelTaskId,
     ) => Effect.Effect<ReadonlyArray<ChannelChildWork>, ChannelChildWorkStoreError>;
+    readonly listRecentForTask: (
+      taskId: ChannelTaskId,
+      limit: number,
+    ) => Effect.Effect<
+      { readonly children: ReadonlyArray<ChannelChildWork>; readonly truncated: boolean },
+      ChannelChildWorkStoreError
+    >;
     /** Every record still holding capacity, across owners; the reconcile pass reads these. */
     readonly listActive: () => Effect.Effect<
       ReadonlyArray<ChannelChildWork>,
@@ -123,6 +130,18 @@ const make = Effect.gen(function* () {
       WHERE key >= ${prefixFor(taskId)} AND key < ${afterFor(taskId)}
       ORDER BY key
     `.pipe(Effect.map(readRows), Effect.mapError(toStoreError("listForTask")));
+
+  const listRecentForTask = Effect.fn("ChannelChildWorkStore.listRecentForTask")(function* (
+    taskId: ChannelTaskId,
+    limit: number,
+  ) {
+    const rows = yield* sql<{ readonly value_json: string }>`
+      SELECT value_json FROM channel_runtime_state
+      WHERE key >= ${prefixFor(taskId)} AND key < ${afterFor(taskId)}
+      ORDER BY json_extract(value_json, '$.createdAt') DESC, key DESC LIMIT ${limit + 1}
+    `.pipe(Effect.mapError(toStoreError("listRecentForTask")));
+    return { children: readRows(rows.slice(0, limit)), truncated: rows.length > limit };
+  });
 
   const listActive = () =>
     sql<{ readonly value_json: string }>`
@@ -220,6 +239,7 @@ const make = Effect.gen(function* () {
   return ChannelChildWorkStore.of({
     get,
     listForTask,
+    listRecentForTask,
     listActive,
     findByDestinationThread,
     admitReserved,

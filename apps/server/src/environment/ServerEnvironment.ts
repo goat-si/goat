@@ -335,6 +335,7 @@ export const make = Effect.gen(function* () {
       channelLedger: true,
       goatBotHome: true,
       goatBotStatus: true,
+      goatBotChildWork: true,
       goatBotProfiles: true,
       goatBotTaskThreads: true,
       goatBotWaitingRead: true,

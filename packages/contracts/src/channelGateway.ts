@@ -10,7 +10,7 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
-import { ChannelChildWorkState } from "./channelChildWork.ts";
+import { ChannelChildWork, ChannelChildWorkState } from "./channelChildWork.ts";
 import { ChatAttachment } from "./chatAttachment.ts";
 import {
   ChannelActorRef,
@@ -346,6 +346,25 @@ export const ChannelListBotThreadsResult = Schema.Struct({
 });
 export type ChannelListBotThreadsResult = typeof ChannelListBotThreadsResult.Type;
 
+export const CHANNEL_LIST_CHILD_WORK_MAX_TASKS = 50;
+export const ChannelListChildWorkInput = Schema.Struct({
+  taskIds: Schema.Array(ChannelTaskId).check(
+    Schema.isMinLength(1),
+    Schema.isMaxLength(CHANNEL_LIST_CHILD_WORK_MAX_TASKS),
+  ),
+});
+export type ChannelListChildWorkInput = typeof ChannelListChildWorkInput.Type;
+export const ChannelChildWorkGroup = Schema.Struct({
+  taskId: ChannelTaskId,
+  children: Schema.Array(ChannelChildWork),
+  truncated: Schema.Boolean,
+});
+export type ChannelChildWorkGroup = typeof ChannelChildWorkGroup.Type;
+export const ChannelListChildWorkResult = Schema.Struct({
+  groups: Schema.Array(ChannelChildWorkGroup),
+});
+export type ChannelListChildWorkResult = typeof ChannelListChildWorkResult.Type;
+
 export const ChannelGetTaskInput = Schema.Struct({ taskId: ChannelTaskId });
 export type ChannelGetTaskInput = typeof ChannelGetTaskInput.Type;
 
@@ -408,6 +427,7 @@ export const CHANNEL_GATEWAY_WS_METHODS = {
   getBotStatus: "channel.getBotStatus",
   listBots: "channel.listBots",
   listBotThreads: "channel.listBotThreads",
+  listChildWork: "channel.listChildWork",
   updateTaskView: "channel.updateTaskView",
   ingest: "channel.ingest",
   getTask: "channel.getTask",
