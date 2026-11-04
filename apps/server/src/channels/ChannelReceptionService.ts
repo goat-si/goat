@@ -74,7 +74,7 @@ import * as SlackChannelSettings from "./SlackChannelSettings.ts";
 import { currentChannelIdentity } from "./channelCurrentIdentity.ts";
 import { makeChannelProjectChoices } from "./channelProjectChoices.ts";
 import * as ChannelWake from "./ChannelWake.ts";
-import { mentionFor, refuseTaskThread } from "./channelTaskThreadRefusal.ts";
+import * as tt from "./channelTaskThreadRefusal.ts";
 import {
   appendChannelBotNote,
   channelBotFilesFor,
@@ -848,7 +848,7 @@ const make = Effect.gen(function* () {
             kind: "question",
             text: words.text,
             task,
-            mentionActorId: mentionFor(task.originAddress, task.requester.externalActorId),
+            mentionActorId: tt.mentionFor(task.originAddress, task.requester.externalActorId),
             options: words.options,
           }),
         );
@@ -941,16 +941,16 @@ const make = Effect.gen(function* () {
       const readAt = DateTime.formatIso(yield* DateTime.now);
       const stored = yield* ledger.beginReception({ owner, inputId, receptionId, readAt });
       if (stored === undefined || stored.requester === undefined) return;
-      if (stored.message.intent === "message" && stored.message.taskId !== undefined) {
-        yield* refuseTaskThread(ledger, stored, owner);
+      if (yield* tt.shouldRefuseTaskThread(ledger, stored)) {
+        yield* tt.refuseTaskThread(ledger, stored, owner);
         yield* wake.wake;
         return;
       }
-      const message = stored.message;
+      const message = tt.mainThreadInput(stored).message;
       const requester = stored.requester;
       const conversationId = stored.snapshot.conversationId;
       const origin = message.replyAddress;
-      const mention = mentionFor(origin, message.actor.externalActorId);
+      const mention = tt.mentionFor(origin, message.actor.externalActorId);
 
       if (!isHome) {
         yield* ledger.failReception({
@@ -1717,7 +1717,7 @@ const make = Effect.gen(function* () {
           kind: base.kind,
           text: evidence === null ? worded : worded + "\n\n" + evidence,
           task,
-          mentionActorId: mentionFor(origin, task.requester.externalActorId),
+          mentionActorId: tt.mentionFor(origin, task.requester.externalActorId),
           options: "options" in base ? base.options : undefined,
         }),
       ];

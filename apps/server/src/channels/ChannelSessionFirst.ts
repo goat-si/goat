@@ -27,6 +27,7 @@ import { resolveSessionRun } from "./channelBotSessionRuns.ts";
 import { CHANNEL_COPY, inboundTextWithFiles } from "./channelCopy.ts";
 import { deliveryIdFor, taskIdFor, toolSteerIdsFor } from "./channelIds.ts";
 import { isSessionClaim, sealedSessionLine, sessionClaim } from "./channelSessionReceipt.ts";
+import { isTerminalThread, mainThreadInput } from "./channelTerminalThread.ts";
 import { makeCreatedTasks, prepareTransition } from "./channelTaskWrites.ts";
 
 export class ChannelSessionFirst extends Context.Service<
@@ -113,6 +114,11 @@ const make = Effect.gen(function* () {
     runId?: string,
     turnItemId?: string,
   ) {
+    if (yield* isTerminalThread(ledger, stored)) {
+      const sessionTask = yield* ledger.getTask(taskIdFor(stored.snapshot.inputId, 0));
+      if (sessionTask?.task.instruction === inboundTextWithFiles(stored.message))
+        stored = mainThreadInput(stored);
+    }
     const inputId = stored.snapshot.inputId;
     const expected = stored.snapshot.receptionId;
     if (!isSessionClaim(expected) || expected === undefined) return false;
@@ -165,7 +171,7 @@ const make = Effect.gen(function* () {
     inputId: ChannelInputId,
     owner: string,
   ) {
-    const stored = yield* ledger.getInput(inputId);
+    let stored = yield* ledger.getInput(inputId);
     if (
       stored === undefined ||
       stored.snapshot.state !== "accepted" ||
@@ -238,7 +244,10 @@ const make = Effect.gen(function* () {
             (stored.message.attachments.length > 0
               ? " Attachments stay in the conversation and are not sent to the task."
               : "")
-          : "That task isn't available here. Send it in the main chat.";
+          : threadTask !== undefined &&
+              (threadTask.task.status === "received" || threadTask.task.status === "dispatching")
+            ? "That task is still starting. Try again in a moment."
+            : "That task isn't available here. Send it in the main chat.";
         if (threadTask !== undefined) yield* markRead(claimed);
         const causeKey = "reply:" + inputId;
         const deliveryId = deliveryIdFor(causeKey);
@@ -285,7 +294,11 @@ const make = Effect.gen(function* () {
     )
       return false;
     if ((yield* settings.getSettings).goatBotSessionRouting === "reception") return false;
-    if (yield* reception.isDeterministicReply(stored)) return false;
+    if (yield* reception.isDeterministicReply(stored)) {
+      if (threadTask === undefined) return false;
+      stored = mainThreadInput(stored);
+      threadTask = undefined;
+    }
     const now = DateTime.formatIso(yield* DateTime.now);
     const [createdTask] = makeCreatedTasks({
       action: {
@@ -314,7 +327,10 @@ const make = Effect.gen(function* () {
       createdTask,
       receptionId: ChannelReceptionId.make(sessionClaim(inputId)),
     });
-    if (claimed) yield* schedule((yield* ledger.getInput(inputId)) ?? stored, owner);
+    if (claimed) {
+      const claimedInput = (yield* ledger.getInput(inputId)) ?? stored;
+      yield* schedule({ ...claimedInput, message: stored.message }, owner);
+    }
     return claimed;
   }, Effect.mapError(mapError));
 

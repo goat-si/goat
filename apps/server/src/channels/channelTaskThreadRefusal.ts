@@ -1,3 +1,4 @@
+export { mainThreadInput, shouldRefuseTaskThread } from "./channelTerminalThread.ts";
 import { ChannelReceptionId, type ChannelReplyAddress } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";

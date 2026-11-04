@@ -2,6 +2,10 @@ import { assert, it } from "@effect/vitest";
 import { ChannelQuestionId, ChannelTaskId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
+import * as ServerSettings from "../serverSettings.ts";
+import * as ChannelSessionFirst from "./ChannelSessionFirst.ts";
+import { makeCreatedTasks } from "./channelTaskWrites.ts";
+import { prepareDeliveryTask } from "./testkit/channelLedgerFixtures.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as ChannelLedger from "./ChannelLedger.ts";
@@ -222,3 +226,124 @@ it.effect("reception directly refuses a task-thread message without calling its 
     assert.strictEqual(calls, 0);
   }).pipe(Effect.provide(harness.layer));
 });
+
+it.effect.each(["received", "dispatching"] as const)(
+  "says a %s task is still starting",
+  (status) => {
+    const harness = makeSessionHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const session = yield* ChannelSessionFirst.ChannelSessionFirst;
+      const now = DateTime.formatIso(yield* DateTime.now);
+      yield* ledger.claimOwnership({ token: "test", now, staleBefore: now });
+      const original = yield* gateway.ingest(goatInput("Inspect", "starting-original"), rpcContext);
+      const stored = (yield* ledger.getInput(original.inputId))!;
+      const [created] = makeCreatedTasks({
+        action: { type: "create_task", title: "Inspect", instruction: "Inspect" },
+        inputId: original.inputId,
+        conversationId: stored.snapshot.conversationId,
+        originBindingId: stored.snapshot.bindingId,
+        originAddress: stored.message.replyAddress,
+        requester: stored.requester!,
+        now,
+      });
+      yield* prepareDeliveryTask(original, created!, "test", now);
+      if (status === "dispatching") {
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`UPDATE channel_tasks SET status = 'dispatching', task_json = json_set(task_json, '$.status', 'dispatching') WHERE task_id = ${created!.task.taskId}`;
+      }
+      const next = yield* gateway.ingest(
+        { ...goatInput("Hello", "starting-next"), taskId: created!.task.taskId },
+        rpcContext,
+      );
+      yield* session.offer(next.inputId, "test");
+      assert.strictEqual(
+        (yield* ledger.getInput(next.inputId))?.snapshot.reply?.text,
+        "That task is still starting. Try again in a moment.",
+      );
+    }).pipe(Effect.provide(harness.layer));
+  },
+);
+
+it.effect.each(["reception", "choice", "label"] as const)(
+  "routes a terminal task %s message as main chat",
+  (mode) => {
+    const harness = makeSessionHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      const first = yield* gateway.ingest(
+        goatInput("Inspect disks", `route-original-${mode}`),
+        rpcContext,
+      );
+      yield* runtime.drain;
+      const task = (yield* ledger.getTask(taskIdFor(first.inputId, 0)))!.task;
+      harness.assistant(task, "Working.");
+      yield* runtime.drain;
+      yield* commitTransition(
+        ledger,
+        (yield* ledger.getTask(task.taskId))!,
+        { type: "task.completed", payload: { generation: task.generation, summary: "Done" } },
+        { owner: runtime.ownerToken },
+      );
+      if (mode === "label") {
+        const other = yield* gateway.ingest(goatInput("Other work", "other-work"), rpcContext);
+        yield* runtime.drain;
+        const otherTask = (yield* ledger.getTask(taskIdFor(other.inputId, 0)))!.task;
+        harness.assistant(otherTask, "Waiting.");
+        yield* runtime.drain;
+        yield* commitTransition(
+          ledger,
+          (yield* ledger.getTask(otherTask.taskId))!,
+          {
+            type: "task.question.opened",
+            payload: {
+              question: {
+                questionId: ChannelQuestionId.make("other-question"),
+                text: "Which?",
+                options: ["Blue", "Red"],
+                askedAt: otherTask.updatedAt,
+              },
+            },
+          },
+          { owner: runtime.ownerToken },
+        );
+      }
+      if (mode === "reception")
+        yield* settings.updateSettings({ goatBotSessionRouting: "reception" });
+      const next = yield* gateway.ingest(
+        {
+          ...goatInput(
+            mode === "choice" ? "approve" : mode === "label" ? "Blue" : "Explain",
+            `route-next-${mode}`,
+          ),
+          taskId: task.taskId,
+        },
+        rpcContext,
+      );
+      yield* runtime.drain;
+      const received = yield* ledger.getInput(next.inputId);
+      assert.match(
+        received?.snapshot.receptionId ?? "",
+        mode === "reception" ? /^channel-reception:/u : /^channel-session:/u,
+      );
+      assert.notStrictEqual(
+        received?.snapshot.reply?.text,
+        "That task isn't available here. Send it in the main chat.",
+      );
+      const { messages } = yield* botMessages;
+      assert.isUndefined(
+        messages.find((message) => message.channel?.inputId === next.inputId)?.channel?.taskId,
+      );
+      if (mode !== "reception") {
+        const turn = (yield* ledger.getTask(taskIdFor(next.inputId, 0)))!.task;
+        assert.notInclude(turn.instruction, task.taskId);
+      }
+    }).pipe(Effect.provide(harness.layer));
+  },
+);
