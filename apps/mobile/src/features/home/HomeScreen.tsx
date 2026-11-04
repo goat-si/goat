@@ -769,6 +769,7 @@ export function HomeScreen(props: HomeScreenProps) {
             paddingRight: 32 + (contentSideInsets?.right ?? 0),
           }}
         >
+          {Platform.OS === "ios" ? <MobileHomeModeSegments /> : null}
           <DecisionInboxRow onPress={props.onOpenDecisions} />
           <View className="flex-1 items-center justify-center">
             <View className="w-full max-w-[430px]">

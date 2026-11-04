@@ -1,3 +1,4 @@
+import { navigationCases, registerEmptyHomeModeTest } from "../home/emptyHomeModeTestSupport";
 import "../../testing/decisionNativeHarness";
 import { RegistryContext } from "@effect/atom-react";
 import type { DecisionItem } from "@goat/client-runtime/state/decision-inbox";
@@ -912,8 +913,6 @@ it.each(["ios", "android"])(
   },
 );
 
-// Keep actual Home/sidebar branch selection and shared list derivation. Only
-// device chrome and runtime owners are adapted for the DOM harness.
 vi.mock("@legendapp/list/react-native", () => ({
   LegendList: <A,>(props: {
     data: readonly A[];
@@ -1162,28 +1161,18 @@ function NavigationHarness(props: { surface: "home" | "sidebar" | "direct" }) {
   );
 }
 
-it.each([
-  ["home", "ios", "populated"],
-  ["home", "android", "populated"],
-  ["home", "ios", "empty"],
-  ["home", "android", "empty"],
-  ["home", "ios", "filtered"],
-  ["home", "android", "filtered"],
-  ["sidebar", "ios", "populated"],
-  ["sidebar", "android", "populated"],
-  ["sidebar", "ios", "empty"],
-  ["sidebar", "android", "empty"],
-  ["sidebar", "ios", "filtered"],
-  ["sidebar", "android", "filtered"],
-  ["home", "ios", "project"],
-  ["home", "android", "project"],
-  ["sidebar", "ios", "project"],
-  ["sidebar", "android", "project"],
-  ["home", "ios", "environment"],
-  ["home", "android", "environment"],
-  ["sidebar", "ios", "environment"],
-  ["sidebar", "android", "environment"],
-])(
+registerEmptyHomeModeTest(
+  () => {
+    fixture.os = "ios";
+    fixture.threads = [];
+    return <HomeScreen {...homeProps(noop)} />;
+  },
+  render,
+  click,
+  button,
+);
+
+it.each(navigationCases)(
   "keeps %s %s %s Decisions above the roster and navigates to the scoped thread",
   async (surface, os, roster) => {
     if (surface !== "home" && surface !== "sidebar") throw new Error("Invalid test surface");

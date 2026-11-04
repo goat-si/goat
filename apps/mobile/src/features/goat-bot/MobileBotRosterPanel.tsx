@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import type { BotRosterEntry } from "@goat/client-runtime/goatBot";
 import type { BotThreadRow, ChannelUpdateTaskViewInput } from "@goat/contracts";
 import { Alert, Text, View } from "react-native";
@@ -17,14 +17,18 @@ export function MobileBotRoster(props: {
   const roster = useMobileBotRoster(props.selectedKey);
   const preview = useMobileBotPreview();
   const shells = useNavigationThreadShells();
-  const codingStatuses = new Map(
-    shells.map((shell) => {
-      const status = resolveThreadListV2Status(shell);
-      return [
-        `coding:${shell.environmentId}:${shell.id}`,
-        status === "ready" && threadHasUnseenCompletion(shell) ? ("done" as const) : status,
-      ] as const;
-    }),
+  const codingStatuses = useMemo(
+    () =>
+      new Map(
+        shells.map((shell) => {
+          const status = resolveThreadListV2Status(shell);
+          return [
+            `coding:${shell.environmentId}:${shell.id}`,
+            status === "ready" && threadHasUnseenCompletion(shell) ? ("done" as const) : status,
+          ] as const;
+        }),
+      ),
+    [shells],
   );
   const update = (input: ChannelUpdateTaskViewInput) => {
     void roster.update(input).catch((error: unknown) => {

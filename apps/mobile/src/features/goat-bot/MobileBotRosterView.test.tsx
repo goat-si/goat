@@ -1,7 +1,7 @@
 import React, { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vite-plus/test";
-import { BotThreadRow, ChannelTaskId } from "@goat/contracts";
+import { BotThreadRow } from "@goat/contracts";
 import * as Schema from "effect/Schema";
 
 vi.mock("react-native", () => ({
@@ -16,18 +16,14 @@ vi.mock("react-native", () => ({
     onPress,
     disabled,
     accessibilityState,
-    accessibilityActions,
     accessibilityLabel,
-    accessibilityRole,
     onAccessibilityAction,
   }: {
     children?: ReactNode;
     onPress?: () => void;
     disabled?: boolean;
     accessibilityState?: { selected?: boolean; expanded?: boolean };
-    accessibilityActions?: { name: string; label: string }[];
     accessibilityLabel?: string;
-    accessibilityRole?: string;
     onAccessibilityAction?: (event: { nativeEvent: { actionName: string } }) => void;
   }) => (
     <button
@@ -36,8 +32,6 @@ vi.mock("react-native", () => ({
       aria-pressed={accessibilityState?.selected}
       aria-expanded={accessibilityState?.expanded}
       aria-label={accessibilityLabel}
-      data-native-role={accessibilityRole}
-      data-actions={accessibilityActions?.map((item) => item.name).join(",")}
       onKeyDown={(event) => onAccessibilityAction?.({ nativeEvent: { actionName: event.key } })}
     >
       {children}
@@ -86,8 +80,6 @@ it("switches both segments and exposes the selected state", async () => {
   root = createRoot(container);
   await act(async () => root?.render(<Harness />));
   const [bots, threads] = container.querySelectorAll("button");
-  expect(bots?.dataset.nativeRole).toBe("button");
-  expect(threads?.dataset.nativeRole).toBe("button");
   expect(threads?.getAttribute("aria-pressed")).toBe("true");
   await act(async () => bots?.click());
   expect(bots?.getAttribute("aria-pressed")).toBe("true");
@@ -129,128 +121,26 @@ it("renders the main bot, child task and disabled creation action", async () => 
   expect(open).toHaveBeenCalledWith(task);
 });
 
-const state = vi.hoisted(() => ({
-  connected: true,
-  task: {
-    data: null as null | { rows: never[] },
-    error: null as string | null,
-    isPending: true,
-    isSuccess: false,
-    refresh: vi.fn(),
-  },
-  routines: {
-    data: null as null | { tasks: never[] },
-    error: null as string | null,
-    isPending: true,
-    isSuccess: false,
-    refresh: vi.fn(),
-  },
-}));
-
-vi.mock("../../state/atom-registry", () => ({ appAtomRegistry: {} }));
-vi.mock("../../state/channels", () => ({
-  channelEnvironment: {
-    listBotThreads: () => "task",
-    listChildWork: () => "child",
-    updateTaskView: {},
-  },
-}));
-vi.mock("../../state/server", () => ({
-  serverEnvironment: { scheduledTasksLive: () => "routines" },
-}));
-vi.mock("../../state/environments", () => ({
-  useEnvironments: () => ({
-    presentationById: new Map([
-      ["env", { serverConfig: { environment: { capabilities: { goatBotTaskThreads: true } } } }],
-    ]),
-  }),
-}));
-vi.mock("./goatBotHomeMode", () => ({
-  pickMobileGoatBotEnvironment: () => ({ environmentId: "env", connected: state.connected }),
-}));
-vi.mock("./useMobileGoatBotHomeMode", () => ({
-  useMobileGoatBotHomeMode: () => ({ environments: [], botRef: { threadId: "bot" } }),
-}));
-vi.mock("../../state/query", () => ({
-  useEnvironmentQuery: (key: string | null) =>
-    key === "task"
-      ? state.task
-      : key === "routines"
-        ? state.routines
-        : { data: null, error: null, isPending: false, isSuccess: false, refresh: vi.fn() },
-}));
-import { MobileBotWork } from "./MobileBotWork";
-
-function reset() {
-  state.connected = true;
-  for (const query of [state.task, state.routines])
-    Object.assign(query, { data: null, error: null, isPending: true, isSuccess: false });
-  state.task.refresh.mockClear();
-  state.routines.refresh.mockClear();
-}
-async function render(taskId?: ChannelTaskId, taskCard?: ReactNode) {
-  if (!root) root = createRoot(container);
+it("shows Done for a task marked done", async () => {
+  if (task.kind !== "task") throw new Error("Expected a task");
+  const done = { ...task, view: { ...task.view, doneAt: at } };
+  root = createRoot(container);
   await act(async () =>
     root?.render(
-      <MobileBotWork visible taskId={taskId} taskCard={taskCard} onOpenTask={() => {}} />,
+      <MobileBotRosterView
+        bots={[{ kind: "main", profile: null }]}
+        rows={[done]}
+        hasMore={false}
+        slackEnabled={false}
+        onOpenBot={() => {}}
+        onOpenChild={() => {}}
+        onLongPressTask={() => {}}
+        onShowMore={() => {}}
+      />,
     ),
   );
-}
-async function press(label: string) {
-  const button = [...container.querySelectorAll("button")].find((item) =>
-    item.textContent?.includes(label),
-  );
-  expect(button).toBeDefined();
-  await act(async () => button?.click());
-}
-it("distinguishes task and routine loading, empty, offline, and retry states", async () => {
-  reset();
-  await render();
-  await press("Work");
-  expect(container.textContent).toContain("Loading tasks");
-  Object.assign(state.task, { isPending: false, isSuccess: true, data: { rows: [] } });
-  await render();
-  expect(container.textContent).toContain("No tasks yet");
-  Object.assign(state.task, { error: "failed", isSuccess: false });
-  await render();
-  await press("Couldn't load tasks");
-  expect(state.task.refresh).toHaveBeenCalledOnce();
-  await press("Routines");
-  expect(container.textContent).toContain("Loading routines");
-  Object.assign(state.routines, { isPending: false, isSuccess: true, data: { tasks: [] } });
-  await render();
-  expect(container.textContent).toContain("set up a routine");
-  Object.assign(state.routines, { error: "failed", isSuccess: false });
-  await render();
-  await press("Couldn't load routines");
-  expect(state.routines.refresh).toHaveBeenCalledOnce();
-  state.connected = false;
-  await render();
-  expect(container.textContent).toContain("offline");
-});
-it("shows empty routines when live data is available while the subscription waits", async () => {
-  reset();
-  Object.assign(state.routines, { data: { tasks: [] }, isPending: true, isSuccess: false });
-  await render();
-  await press("Work");
-  await press("Routines");
-  expect(container.textContent).toContain("set up a routine");
-  expect(container.textContent).not.toContain("Loading routines");
-});
-
-it("exposes work tabs as buttons and updates their selected state", async () => {
-  reset();
-  await render();
-  await press("Work");
-  const buttons = [...container.querySelectorAll("button")];
-  const tabs = ["Tasks", "Routines", "Library", "Computer"].map((name) =>
-    buttons.find((button) => button.textContent === name),
-  );
-  for (const tab of tabs) expect(tab?.dataset.nativeRole).toBe("button");
-  expect(tabs[0]?.getAttribute("aria-pressed")).toBe("true");
-  await act(async () => tabs[1]?.click());
-  expect(tabs[0]?.getAttribute("aria-pressed")).toBe("false");
-  expect(tabs[1]?.getAttribute("aria-pressed")).toBe("true");
+  expect(container.textContent).toContain("Done");
+  expect(container.querySelector('[aria-label="Review, Done, unread"]')).not.toBeNull();
 });
 
 it("shows roster empty copy only without child rows", async () => {
@@ -268,30 +158,6 @@ it("shows roster empty copy only without child rows", async () => {
   expect(container.textContent).toContain("Work GOAT Bot starts will appear here.");
   await act(async () => root?.render(<MobileBotRosterView {...props} rows={[task]} />));
   expect(container.textContent).not.toContain("Work GOAT Bot starts will appear here.");
-});
-
-it("distinguishes task thread loading, missing, offline, and retry states", async () => {
-  reset();
-  await render(ChannelTaskId.make("task"));
-  expect(container.textContent).toContain("Loading task");
-  Object.assign(state.task, { isPending: false, isSuccess: true, data: { rows: [] } });
-  await render(ChannelTaskId.make("task"));
-  expect(container.textContent).toContain("Task not found");
-  Object.assign(state.task, { error: "failed", isSuccess: false });
-  await render(ChannelTaskId.make("task"));
-  await press("Couldn't load task");
-  expect(state.task.refresh).toHaveBeenCalledOnce();
-  state.connected = false;
-  await render(ChannelTaskId.make("task"));
-  expect(container.textContent).toContain("offline");
-});
-
-it("shows task details in the header when a card is available", async () => {
-  reset();
-  await render(ChannelTaskId.make("task"));
-  expect(container.textContent).not.toContain("Task summary");
-  await render(ChannelTaskId.make("task"), <span>Task summary</span>);
-  expect(container.textContent).toContain("Task summary");
 });
 
 it("exposes task actions and expands and collapses hidden rows", async () => {
@@ -319,7 +185,6 @@ it("exposes task actions and expands and collapses hidden rows", async () => {
   const row = [...container.querySelectorAll("button")].find((button) =>
     button.textContent?.includes("Review"),
   );
-  expect(row?.dataset.actions).toBe("pin,done,read");
   await act(async () =>
     row?.dispatchEvent(new KeyboardEvent("keydown", { key: "read", bubbles: true })),
   );

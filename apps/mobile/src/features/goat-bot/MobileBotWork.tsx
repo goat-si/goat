@@ -92,7 +92,7 @@ export function MobileBotWork(props: {
             {task?.row.task.title ?? "Task thread"}
           </Text>
           <Text className="text-foreground-muted">
-            {task ? presentTaskStatus(task.row.task.status).label : null}
+            {task ? presentTaskStatus(task.row.task.status, task.row.view.doneAt).label : null}
           </Text>
           {!enabled ? (
             <Text className="text-foreground-muted">
@@ -169,7 +169,7 @@ export function MobileBotWork(props: {
           >
             <Text className="text-foreground">Close</Text>
           </Pressable>
-          <View accessibilityRole="tablist" className="flex-row flex-wrap gap-4 py-4">
+          <View className="flex-row flex-wrap gap-4 py-4">
             {tabs.map((name) => (
               <Pressable
                 key={name}

@@ -141,7 +141,7 @@ export function MobileBotRosterView(props: {
                     accessibilityState={{ selected: props.selectedKey === botThreadKey(row) }}
                     accessibilityLabel={
                       row.kind === "task"
-                        ? `${row.task.title}, ${presentTaskStatus(row.task.status).label}${row.unread ? ", unread" : ""}${row.view.pinnedAt ? ", pinned" : ""}`
+                        ? `${row.task.title}, ${presentTaskStatus(row.task.status, row.view.doneAt).label}${row.unread ? ", unread" : ""}${row.view.pinnedAt ? ", pinned" : ""}`
                         : `${row.title || "GOAT thread"}${marker ? `, ${marker.label}` : ""}`
                     }
                     accessibilityActions={
@@ -194,7 +194,7 @@ export function MobileBotRosterView(props: {
                       ) : null}
                       <Text className={marker?.className ?? "text-xs text-foreground-muted"}>
                         {row.kind === "task"
-                          ? `${presentTaskStatus(row.task.status).label}${row.unread ? " · Unread" : ""}`
+                          ? `${presentTaskStatus(row.task.status, row.view.doneAt).label}${row.unread ? " · Unread" : ""}`
                           : (marker?.label ?? "GOAT thread")}
                       </Text>
                     </View>

@@ -9,7 +9,7 @@ import {
 import { ChannelTaskId, type EnvironmentId } from "@goat/contracts";
 import { HeaderHeightContext } from "@react-navigation/elements";
 import { StackActions, useNavigation } from "@react-navigation/native";
-import { memo, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Platform, Pressable, Text, TextInput, View, useWindowDimensions } from "react-native";
 import {
   KeyboardAvoidingView,
@@ -488,6 +488,10 @@ export function GoatBotScreen(props: {
       )
     : undefined;
   const canSubmit = session.canSend && (text.trim().length > 0 || attachments.length > 0);
+  const visibleRows = useMemo(
+    () => (taskId ? session.rows.filter((row) => row.kind !== "task") : session.rows),
+    [taskId, session.rows],
+  );
   return (
     <KeyboardAvoidingView className="flex-1 bg-screen" automaticOffset behavior="height">
       <View style={{ paddingTop: topInset }}>
@@ -552,7 +556,7 @@ export function GoatBotScreen(props: {
       <LegendList
         renderScrollComponent={NativeScrollView}
         style={{ flex: 1 }}
-        data={taskId ? session.rows.filter((row) => row.kind !== "task") : session.rows}
+        data={visibleRows}
         keyExtractor={rowKey}
         renderItem={renderItem}
         initialScrollAtEnd

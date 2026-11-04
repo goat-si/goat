@@ -1,3 +1,4 @@
+import { selectBotChildren } from "@goat/client-runtime/goatBot";
 import { runAtomCommand, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import type { ChannelUpdateTaskViewInput } from "@goat/contracts";
 import { useEffect, useState } from "react";
@@ -73,27 +74,15 @@ export function useMobileBotRoster(selectedKey: string | null) {
     showMore,
     selectedKey,
   });
-  const expandedRoster = mobileBotRoster({
-    supportsProfiles,
-    supportsTaskThreads,
-    bots: profiles.data?.bots,
-    children: threads.data?.rows,
+  const alternateChildren = selectBotChildren({
+    rows: supportsTaskThreads ? (threads.data?.rows ?? []) : [],
     now,
-    showMore: true,
+    showMore: !showMore,
     selectedKey,
   });
-  const collapsedRoster = showMore
-    ? mobileBotRoster({
-        supportsProfiles,
-        supportsTaskThreads,
-        bots: profiles.data?.bots,
-        children: threads.data?.rows,
-        now,
-        showMore: false,
-        selectedKey,
-      })
-    : roster;
-  const hiddenCount = expandedRoster.children.rows.length - collapsedRoster.children.rows.length;
+  const hiddenCount = showMore
+    ? roster.children.rows.length - alternateChildren.rows.length
+    : alternateChildren.rows.length - roster.children.rows.length;
   const update = async (input: ChannelUpdateTaskViewInput) => {
     if (environmentId === null || !supportsTaskThreads)
       throw new Error("Bot task threads are unavailable.");
