@@ -15,12 +15,14 @@ function NumberRow({
   value,
   maximum,
   disabled,
+  emptyLabel = "Off",
   onSave,
 }: {
   readonly label: string;
   readonly value: number | null;
   readonly maximum: number;
   readonly disabled: boolean;
+  readonly emptyLabel?: string;
   readonly onSave: (value: number | null) => void;
 }) {
   const [draft, setDraft] = useState(value === null ? "" : String(value));
@@ -32,7 +34,7 @@ function NumberRow({
         keyboardType="number-pad"
         editable={!disabled}
         value={draft}
-        placeholder="Off"
+        placeholder={emptyLabel}
         onChangeText={setDraft}
         onEndEditing={() => {
           const number = Number(draft);
@@ -100,6 +102,7 @@ export function WorktreeCleanupSection({
         value={settings.worktreeSnapshotDays}
         maximum={3650}
         disabled={!allowed}
+        emptyLabel="Until the thread is deleted"
         onSave={(value) => write({ worktreeSnapshotDays: value })}
       />
       {preview ? (
