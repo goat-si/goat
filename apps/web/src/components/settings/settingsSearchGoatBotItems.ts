@@ -14,4 +14,4 @@ export const GOAT_BOT_ROUTING_SEARCH_ITEMS = [
     targetId: "goat-bot",
     searchTerms: ["goat bot session reception routing"],
   },
-] satisfies ReadonlyArray<SettingsSearchItem>;
+] as const satisfies ReadonlyArray<SettingsSearchItem>;
