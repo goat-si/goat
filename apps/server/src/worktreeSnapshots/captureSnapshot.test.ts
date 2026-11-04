@@ -69,6 +69,26 @@ it.layer(layer)("worktree snapshots", (it) => {
       assert.include(error.detail, "nested Git repository");
     }),
   );
+  it.effect("refuses a committed nested repository that is not a registered submodule", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "snapshot-repo-" });
+      yield* git(cwd, ["init", "-q"]);
+      const nested = path.join(cwd, "nested");
+      yield* fs.makeDirectory(nested);
+      yield* git(nested, ["init", "-q"]);
+      yield* git(nested, ["commit", "--allow-empty", "-qm", "nested base"]);
+      yield* git(cwd, ["add", "nested"]);
+      yield* git(cwd, ["commit", "-qm", "embed"]);
+      yield* fs.writeFileString(path.join(nested, "work"), "unpushed");
+      yield* git(nested, ["add", "work"]);
+      yield* git(nested, ["commit", "-qm", "nested work"]);
+      yield* fs.writeFileString(path.join(nested, "draft"), "uncommitted");
+      const error = yield* Effect.flip(captureWorktreeSnapshot({ cwd, threadId: "test", now: 0 }));
+      assert.include(error.detail, "nested Git repository");
+    }),
+  );
   it.effect("refuses intent-to-add entries", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

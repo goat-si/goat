@@ -2,7 +2,7 @@ import { isRegisteredAttach } from "./providerTurnStartHelpers.ts";
 import { withAgentOom } from "./agentOomFailure.ts";
 import { AgentScope } from "@goat/shared/AgentScope";
 import { makeDeliverySession } from "./goat/ProviderTurnDeliverySession.ts";
-import { makeRestoreThreadWorkspace } from "./goat/restoreThreadWorkspace.ts";
+import { makeRestorePending, makeRestoreThreadWorkspace } from "./goat/restoreThreadWorkspace.ts";
 import { makeProviderTurnHandoffRecovery } from "./goat/ProviderTurnHandoffRecovery.ts";
 import { refuseCodexAdmission } from "./goat/CodexTurnAdmission.ts";
 import * as MemorySnapshot from "../memory/MemorySnapshot.ts";
@@ -135,10 +135,10 @@ export const layer: Layer.Layer<
     const eventSink = yield* EventSink.EventSinkV2;
     const prepareHandoffRecovery = yield* makeProviderTurnHandoffRecovery;
     const idAllocator = yield* IdAllocator.IdAllocatorV2;
-    const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const serverSettings = yield* ServerSettings.ServerSettingsService;
     const recreateMissingWorktree = yield* makeRestoreThreadWorkspace;
+    const restorePending = yield* makeRestorePending;
     const projects = yield* ProjectService.ProjectService;
     const providerAuth = yield* ProviderAuthService.ProviderAuthService;
     const codexSurvivors = yield* Effect.serviceOption(CodexSurvivors.CodexSurvivors);
@@ -643,10 +643,8 @@ export const layer: Layer.Layer<
           path.resolve(worktreePath),
           Effect.gen(function* () {
             if (branch === null) return;
-            const exists = yield* fileSystem
-              .exists(worktreePath)
-              .pipe(Effect.orElseSucceed(() => true));
-            if (!exists && (yield* isManagedWorktreePath(worktreePath))) {
+            const ready = yield* restorePending.ready(worktreePath);
+            if (!ready && (yield* isManagedWorktreePath(worktreePath))) {
               const project = yield* projects.getById(projection.thread.projectId).pipe(
                 Effect.map(Option.getOrUndefined),
                 Effect.orElseSucceed(() => undefined),
@@ -679,7 +677,7 @@ export const layer: Layer.Layer<
             signal: "worktree-recreate-failure",
             title: "Couldn't recreate thread workspace",
             error: prepared.value.failure,
-            message: prepared.value.failure.message,
+            message: prepared.value.failure.detail,
           });
           return;
         }

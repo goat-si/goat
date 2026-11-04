@@ -1,6 +1,7 @@
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import {
   managedWorktreesDir,
+  makeRestorableCheckout,
   makeWorktreeStartHarness,
   startWithMissingWorktree,
 } from "./ProviderTurnStartService.worktree.testkit.ts";
@@ -58,7 +59,7 @@ it.each([
   { label: "with a branch", branch: "feature/restore" },
   { label: "without a branch", branch: null },
 ])(
-  "recreates the checkout when possible and fails safely on a broken projection, $label",
+  "recreates the checkout when possible and never starts the provider unverified, $label",
   async ({ branch }) => {
     const harness = makeWorktreeStartHarness(branch);
     const {
@@ -72,9 +73,10 @@ it.each([
     } = harness;
     await Effect.gen(function* () {
       const service = yield* ProviderTurnStart.ProviderTurnStartServiceV2;
-      const error = yield* service.start({ threadId, runId }).pipe(Effect.flip);
-      expect(error._tag).toBe("ProviderTurnStartError");
-      expect(harness.projectionReadCount()).toBe(2);
+      // A fake checkout cannot pass verification, so the start settles failed before reading on.
+      const exit = yield* service.start({ threadId, runId }).pipe(Effect.exit);
+      expect(exit._tag).toBe(branch === null ? "Failure" : "Success");
+      expect(harness.projectionReadCount()).toBe(branch === null ? 2 : 1);
       if (branch === null) {
         expect(createWorktree).not.toHaveBeenCalled();
       } else {
@@ -85,7 +87,7 @@ it.each([
           path: `${managedWorktreesDir}/project/feature-restore`,
         });
       }
-      expect(writeIfRunCurrent).not.toHaveBeenCalled();
+      expect(writeIfRunCurrent).toHaveBeenCalledTimes(branch === null ? 0 : 1);
       expect(startRootRun).not.toHaveBeenCalled();
     }).pipe(Effect.provide(layer), Effect.runPromise);
   },
@@ -701,21 +703,16 @@ effectIt.effect(
 effectIt.effect("defers provider startup to a running cleanup and recreates its checkout", () =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    const workspaceRoot = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-start-" });
-    const worktreePath = path.join(workspaceRoot, "project", "worktree");
-    yield* fileSystem.makeDirectory(worktreePath, { recursive: true });
+    const { worktreePath, addWorktree, location } = yield* makeRestorableCheckout;
     const release = yield* Deferred.make<void>();
     const harness = makeLocalCommandHarness({
       text: "Continue",
       worktreePath,
-      worktreesDir: workspaceRoot,
+      ...location,
       fileSystem,
       failReadsAfterRunning: true,
     });
-    harness.createWorktree.mockImplementation(() =>
-      fileSystem.makeDirectory(worktreePath).pipe(Effect.as({} as never), Effect.orDie),
-    );
+    harness.createWorktree.mockImplementation(() => addWorktree.pipe(Effect.as({} as never)));
     const open = harness.open.getMockImplementation()!;
     harness.open.mockImplementation(() =>
       Effect.gen(function* () {
@@ -737,7 +734,7 @@ effectIt.effect("defers provider startup to a running cleanup and recreates its 
     yield* Fiber.join(cleanup);
     yield* harness.startWithRetry;
     expect(harness.createWorktree).toHaveBeenCalledWith({
-      cwd: "/tmp/native-account-project",
+      cwd: location.workspaceRoot,
       refName: "feature/restore",
       path: worktreePath,
     });

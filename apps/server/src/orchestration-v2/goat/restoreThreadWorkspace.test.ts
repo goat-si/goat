@@ -11,7 +11,7 @@ import * as Layer from "effect/Layer";
 import * as ProjectSetupScriptRunner from "../../project/ProjectSetupScriptRunner.ts";
 import { WorktreeSnapshotStore } from "../../worktreeSnapshots/WorktreeSnapshotStore.ts";
 import { layerRealGit } from "../ProviderTurnStartService.testkit.ts";
-import { makeRestoreThreadWorkspace } from "./restoreThreadWorkspace.ts";
+import { makeRestorePending, makeRestoreThreadWorkspace } from "./restoreThreadWorkspace.ts";
 
 const threadId = ThreadId.make("thread-restore");
 
@@ -81,7 +81,12 @@ const fixture = Effect.gen(function* () {
   return { repo, worktreePath, git, snapshot };
 });
 
-const services = (snapshot: WorktreeSnapshot, restored: string[], setupExitCode: number | null) =>
+const services = (
+  snapshot: WorktreeSnapshot,
+  restored: string[],
+  setupExitCode: number | null,
+  onSetup: (worktreePath: string) => void = () => {},
+) =>
   Layer.mergeAll(
     Layer.succeed(WorktreeSnapshotStore, {
       capture: () => Effect.die("unused"),
@@ -93,8 +98,9 @@ const services = (snapshot: WorktreeSnapshot, restored: string[], setupExitCode:
     }),
     Layer.succeed(ProjectSetupScriptRunner.ProjectSetupScriptRunner, {
       runForThread: (input) =>
-        Effect.succeed(
-          setupExitCode === null
+        Effect.sync(() => {
+          onSetup(input.worktreePath);
+          return setupExitCode === null
             ? { status: "no-script" as const }
             : {
                 status: "started" as const,
@@ -105,8 +111,8 @@ const services = (snapshot: WorktreeSnapshot, restored: string[], setupExitCode:
                 cwd: input.worktreePath,
                 async: false,
                 completion: Effect.succeed({ exitCode: setupExitCode, durationMs: 1 }),
-              },
-        ),
+              };
+        }),
     }),
   );
 
@@ -150,6 +156,38 @@ it.effect(
         Effect.provide(services(snapshot, restored, 0)),
       );
       yield* retry({ threadId, cwd: repo, worktreePath, branch: "feature" });
+      assert.equal(NodeFS.readFileSync(NodePath.join(worktreePath, "untracked"), "utf8"), "new");
+      assert.deepEqual(restored, [snapshot.snapshotRef]);
+    }).pipe(Effect.provide(layerRealGit), Effect.scoped),
+);
+
+it.effect(
+  "a rollback that cannot remove the worktree leaves it unready, so the next attempt prepares it again",
+  () =>
+    Effect.gen(function* () {
+      const { repo, worktreePath, git, snapshot } = yield* fixture;
+      const restored: string[] = [];
+      // A locked worktree refuses a single --force, as an open handle can on Windows.
+      const lock = (path: string) => void git(repo, ["worktree", "lock", path]);
+      const failing = yield* makeRestoreThreadWorkspace.pipe(
+        Effect.provide(services(snapshot, restored, 1, lock)),
+      );
+      const error = yield* Effect.flip(
+        failing({ threadId, cwd: repo, worktreePath, branch: "feature" }),
+      );
+      assert.equal(error.reason, "setup-failed");
+      assert.isTrue(NodeFS.existsSync(worktreePath));
+      const pending = yield* makeRestorePending;
+      assert.isFalse(yield* pending.ready(worktreePath));
+      git(repo, ["worktree", "unlock", worktreePath]);
+      const setups: string[] = [];
+      const retry = yield* makeRestoreThreadWorkspace.pipe(
+        Effect.provide(services(snapshot, restored, 0, (path) => void setups.push(path))),
+      );
+      const result = yield* retry({ threadId, cwd: repo, worktreePath, branch: "feature" });
+      assert.equal(result.restoredFrom, "snapshot");
+      assert.deepEqual(setups, [worktreePath]);
+      assert.isTrue(yield* pending.ready(worktreePath));
       assert.equal(NodeFS.readFileSync(NodePath.join(worktreePath, "untracked"), "utf8"), "new");
       assert.deepEqual(restored, [snapshot.snapshotRef]);
     }).pipe(Effect.provide(layerRealGit), Effect.scoped),

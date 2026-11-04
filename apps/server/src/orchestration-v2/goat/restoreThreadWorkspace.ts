@@ -8,16 +8,22 @@ import * as Option from "effect/Option";
 
 import * as ProjectSetupScriptRunner from "../../project/ProjectSetupScriptRunner.ts";
 import { WorktreeSnapshotStore } from "../../worktreeSnapshots/WorktreeSnapshotStore.ts";
-import { makeRecreateMissingWorktree } from "./RecreateWorktree.ts";
-import { git, verifyRestoredWorktree } from "./restoreSnapshot.ts";
+import { makeDiscardWorktree, makeRecreateMissingWorktree } from "./RecreateWorktree.ts";
+import { makeRestorePending, type RestorePendingState } from "./restorePending.ts";
+import { verifyRestoredWorktree } from "./restoreSnapshot.ts";
+
+export { makeRestorePending } from "./restorePending.ts";
 
 /**
  * Brings back a thread's missing worktree: from its newest snapshot when cleanup saved one,
  * otherwise from its branch. Setup runs again, and the result is verified before any provider
- * may use the folder. The caller holds the workspace lease.
+ * may use the folder. A worktree whose earlier restore did not finish resumes at setup. The
+ * caller holds the workspace lease.
  */
 export const makeRestoreThreadWorkspace = Effect.gen(function* () {
   const recreate = yield* makeRecreateMissingWorktree;
+  const discardWorktree = yield* makeDiscardWorktree;
+  const pending = yield* makeRestorePending;
   // Optional so turn-start harnesses without the ledger or setup runner keep plain recreation.
   const snapshots = yield* Effect.serviceOption(WorktreeSnapshotStore);
   const setupScripts = yield* Effect.serviceOption(
@@ -31,31 +37,46 @@ export const makeRestoreThreadWorkspace = Effect.gen(function* () {
   }) {
     const fail = (reason: ThreadWorkspaceRestoreFailure, detail: string) =>
       new ThreadWorkspaceRestoreError({ threadId: input.threadId, reason, detail });
-    const snapshot = Option.isSome(snapshots)
-      ? yield* snapshots.value.latestForThread(input.threadId)
-      : null;
-    const restored = yield* recreate({
-      cwd: input.cwd,
-      worktreePath: input.worktreePath,
-      branch: input.branch,
-      ...(snapshot === null
-        ? {}
-        : { snapshot: { snapshotSha: snapshot.snapshotSha, headSha: snapshot.headSha } }),
-    }).pipe(
-      Effect.mapError((error) =>
-        error._tag === "WorktreeSnapshotConflictError"
-          ? fail(
-              "snapshot-conflict",
-              `Branch ${input.branch} moved since the worktree was cleaned up; restoring the snapshot there could overwrite work.`,
-            )
-          : fail("git-failed", error.message),
-      ),
-    );
-    // A worktree left after a failed setup or check would look present and skip restoration next time.
-    const discard = Effect.promise(() =>
-      git(input.cwd, ["worktree", "remove", "--force", input.worktreePath]).catch(() => undefined),
-    );
-    const prepared = yield* Effect.gen(function* () {
+    // A rollback that could not delete the folder keeps the marker, so this repeats until it passes.
+    const discard = discardWorktree({ cwd: input.cwd, worktreePath: input.worktreePath });
+    const state: RestorePendingState = (yield* pending.marked(input.worktreePath))
+      ? yield* pending.read(input.worktreePath).pipe(
+          Effect.filterOrFail(
+            (resumed): resumed is RestorePendingState => resumed !== null,
+            () => fail("verify-failed", "GOAT couldn't read where the earlier restore stopped."),
+          ),
+        )
+      : yield* Effect.gen(function* () {
+          const snapshot = Option.isSome(snapshots)
+            ? yield* snapshots.value.latestForThread(input.threadId)
+            : null;
+          const marker = (created: Pick<RestorePendingState, "restoredFrom" | "headSha">) => ({
+            ...created,
+            snapshotSha: snapshot?.snapshotSha ?? null,
+            snapshotRef: snapshot?.snapshotRef ?? null,
+          });
+          // Marked before the snapshot is applied, so a rollback that fails cannot pass for done.
+          const restored = yield* recreate({
+            cwd: input.cwd,
+            worktreePath: input.worktreePath,
+            branch: input.branch,
+            onCreated: (created) => pending.write(input.worktreePath, marker(created)),
+            ...(snapshot === null
+              ? {}
+              : { snapshot: { snapshotSha: snapshot.snapshotSha, headSha: snapshot.headSha } }),
+          }).pipe(
+            Effect.mapError((error) =>
+              error._tag === "WorktreeSnapshotConflictError"
+                ? fail(
+                    "snapshot-conflict",
+                    `Branch ${input.branch} moved since the worktree was cleaned up; restoring the snapshot there could overwrite work.`,
+                  )
+                : fail("git-failed", error.message),
+            ),
+          );
+          return marker(restored);
+        });
+    const setup = yield* Effect.gen(function* () {
       const setup = Option.isNone(setupScripts)
         ? ({ status: "no-script" } as const)
         : yield* setupScripts.value
@@ -78,17 +99,19 @@ export const makeRestoreThreadWorkspace = Effect.gen(function* () {
         cwd: input.worktreePath,
         expectedPath: input.worktreePath,
         branch: input.branch,
-        expectedHead: restored.headSha,
-        ...(snapshot === null ? {} : { snapshot: snapshot.snapshotSha }),
+        expectedHead: state.headSha,
+        ...(state.snapshotSha === null ? {} : { snapshot: state.snapshotSha }),
       }).pipe(Effect.mapError((error) => fail("verify-failed", error.detail)));
+      yield* pending
+        .clear(input.worktreePath)
+        .pipe(Effect.mapError((error) => fail("verify-failed", error.message)));
       return setup;
     }).pipe(Effect.tapError(() => discard));
-    const setup = prepared;
-    if (snapshot !== null && Option.isSome(snapshots))
-      yield* snapshots.value.markRestored(snapshot.snapshotRef);
+    if (state.snapshotRef !== null && Option.isSome(snapshots))
+      yield* snapshots.value.markRestored(state.snapshotRef);
     return {
-      restoredFrom: restored.restoredFrom,
-      headSha: restored.headSha,
+      restoredFrom: state.restoredFrom,
+      headSha: state.headSha,
       setupScript: setup.status === "started" ? ("started" as const) : ("none" as const),
     };
   });

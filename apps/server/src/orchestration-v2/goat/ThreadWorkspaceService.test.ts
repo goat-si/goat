@@ -8,6 +8,7 @@ import {
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 
 import * as ServerConfig from "../../config.ts";
 import * as GitWorkflowService from "../../git/GitWorkflowService.ts";
@@ -16,6 +17,7 @@ import * as ProjectService from "../../project/ProjectService.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import { shell as storageShell } from "../../storageCleanup.testFixtures.ts";
 import * as GitVcsDriver from "../../vcs/GitVcsDriver.ts";
+import { tryWithWorkspaceLease } from "../../workspace/workspaceLease.ts";
 import { WorktreeSnapshotStore } from "../../worktreeSnapshots/WorktreeSnapshotStore.ts";
 import * as ProjectionStore from "../ProjectionStore.ts";
 import * as ThreadManagement from "../ThreadManagementService.ts";
@@ -23,8 +25,17 @@ import * as ThreadWorkspace from "./ThreadWorkspaceService.ts";
 
 const threadId = ThreadId.make("thread-1");
 
-const harness = (thread: OrchestrationV2ThreadShell, dispatchFails = false) => {
-  const calls = { created: [] as string[], removed: [] as string[], dispatched: [] as unknown[] };
+const harness = (
+  thread: OrchestrationV2ThreadShell,
+  dispatchFails = false,
+  setupExitCode: number | null = null,
+) => {
+  const calls = {
+    created: [] as string[],
+    removed: [] as string[],
+    dispatched: [] as unknown[],
+    newWorktreeFreeDuringSetup: [] as boolean[],
+  };
   const fakes = Layer.mergeAll(
     Layer.succeed(ProjectionStore.ProjectionStoreV2, {
       getThreadShell: () => Effect.succeed(thread),
@@ -65,7 +76,25 @@ const harness = (thread: OrchestrationV2ThreadShell, dispatchFails = false) => {
       expire: () => Effect.succeed(0),
     }),
     Layer.succeed(ProjectSetupScriptRunner.ProjectSetupScriptRunner, {
-      runForThread: () => Effect.succeed({ status: "no-script" as const }),
+      runForThread: (input) =>
+        tryWithWorkspaceLease(input.worktreePath, Effect.void).pipe(
+          Effect.orElseSucceed(() => Option.none()),
+          Effect.map((held) => {
+            calls.newWorktreeFreeDuringSetup.push(Option.isSome(held));
+            return setupExitCode === null
+              ? { status: "no-script" as const }
+              : {
+                  status: "started" as const,
+                  scriptId: "setup",
+                  scriptName: "setup",
+                  scriptCommand: "true",
+                  terminalId: "terminal-1",
+                  cwd: input.worktreePath,
+                  async: false,
+                  completion: Effect.succeed({ exitCode: setupExitCode, durationMs: 1 }),
+                };
+          }),
+        ),
     }),
     ServerSettings.ServerSettingsService.layerTest(),
     ServerConfig.layerTest(process.cwd(), { prefix: "thread-workspace-test-" }),
@@ -111,6 +140,19 @@ it.effect("removes the new worktree when another change won the rebinding", () =
     const service = yield* ThreadWorkspace.ThreadWorkspaceService;
     const error = yield* Effect.flip(service.restore({ threadId, mode: "fresh" }));
     assert.equal(error.reason, "git-failed");
+    assert.deepEqual(calls.removed, ["/worktrees/fresh"]);
+  }).pipe(Effect.provide(layer), Effect.scoped);
+});
+
+it.effect("keeps the new worktree leased through setup, and a failed setup never rebinds", () => {
+  const { calls, layer } = harness(idle, false, 1);
+  return Effect.gen(function* () {
+    const service = yield* ThreadWorkspace.ThreadWorkspaceService;
+    const error = yield* Effect.flip(service.restore({ threadId, mode: "fresh" }));
+    assert.equal(error.reason, "setup-failed");
+    // A turn trying the new folder during setup is turned away instead of starting there.
+    assert.deepEqual(calls.newWorktreeFreeDuringSetup, [false]);
+    assert.deepEqual(calls.dispatched, []);
     assert.deepEqual(calls.removed, ["/worktrees/fresh"]);
   }).pipe(Effect.provide(layer), Effect.scoped);
 });

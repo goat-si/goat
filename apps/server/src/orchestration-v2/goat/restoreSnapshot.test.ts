@@ -5,7 +5,7 @@ import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as Effect from "effect/Effect";
-import { applySnapshotToWorktree, verifyRestoredWorktree } from "./restoreSnapshot.ts";
+import { applySnapshotToWorktree, git, verifyRestoredWorktree } from "./restoreSnapshot.ts";
 
 it.effect("restores worktree and index trees including file type changes", () =>
   Effect.gen(function* () {
@@ -88,5 +88,21 @@ it.effect("restores worktree and index trees including file type changes", () =>
       verifyRestoredWorktree({ cwd: worktree, branch: "feature", expectedHead: head, snapshot }),
     );
     assert.equal(wrongTree.detail, "worktree-tree");
+  }).pipe(Effect.scoped),
+);
+
+it.live("a Git deadline settles even while a process Git started keeps its output open", () =>
+  Effect.gen(function* () {
+    const root = yield* Effect.acquireRelease(
+      Effect.sync(() => NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-restore-test-"))),
+      (dir) => Effect.sync(() => NodeFS.rmSync(dir, { recursive: true, force: true })),
+    );
+    // The backgrounded sleep inherits stderr, as a hung checkout filter's helper would.
+    const error = yield* Effect.flip(
+      Effect.tryPromise(() =>
+        git(root, ["-c", "alias.hang=!sleep 600 & sleep 600", "hang"], { timeoutMs: 200 }),
+      ),
+    );
+    assert.include(String(error.cause), "timed out");
   }).pipe(Effect.scoped),
 );

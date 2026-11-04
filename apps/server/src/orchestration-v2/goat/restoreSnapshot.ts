@@ -16,26 +16,48 @@ export class RestoreSnapshotError extends Schema.TaggedError<RestoreSnapshotErro
 const GIT_TIMEOUT_MS = 5 * 60_000;
 const GIT_OUTPUT_LIMIT = 64 * 1024 * 1024;
 
-export const git = (cwd: string, args: string[], options?: { index?: string; input?: Buffer }) =>
+export const git = (
+  cwd: string,
+  args: string[],
+  options?: { index?: string; input?: Buffer; timeoutMs?: number },
+) =>
   new Promise<Buffer>((resolvePromise, reject) => {
+    // Its own process group, so a deadline also stops filters and hooks Git started. Windows has
+    // no groups to signal and falls back to killing Git alone.
     const child = guardChild(
       NodeChildProcess.spawn("git", args, {
         cwd,
         env: { ...process.env, ...(options?.index ? { GIT_INDEX_FILE: options.index } : {}) },
         stdio: ["pipe", "pipe", "pipe"],
+        detached: true,
+        windowsHide: true,
       }),
-      reject,
+      (error) => settle(() => reject(error)),
     );
     const output: Buffer[] = [];
     const errors: Buffer[] = [];
     let bytes = 0;
-    let stopped: string | null = null;
+    let settled = false;
+    function settle(done: () => void) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(deadline);
+      done();
+    }
+    // A descendant can keep the pipes open after Git dies, so this settles without waiting for close.
     const stop = (reason: string) => {
-      stopped ??= reason;
-      child.kill("SIGKILL");
+      try {
+        if (child.pid !== undefined) process.kill(-child.pid, "SIGKILL");
+        else child.kill("SIGKILL");
+      } catch {
+        child.kill("SIGKILL");
+      }
+      child.stdout.destroy();
+      child.stderr.destroy();
+      settle(() => reject(new Error(`git ${args[0]} ${reason}`)));
     };
     // Checkout filters and hooks can print or wait without end; one restore must not hold the server.
-    const deadline = setTimeout(() => stop("timed out"), GIT_TIMEOUT_MS);
+    const deadline = setTimeout(() => stop("timed out"), options?.timeoutMs ?? GIT_TIMEOUT_MS);
     const collect = (into: Buffer[]) => (chunk: Buffer) => {
       bytes += chunk.length;
       if (bytes > GIT_OUTPUT_LIMIT) stop("printed too much output");
@@ -43,13 +65,15 @@ export const git = (cwd: string, args: string[], options?: { index?: string; inp
     };
     child.stdout.on("data", collect(output));
     child.stderr.on("data", collect(errors));
-    child.on("close", (code) => {
-      clearTimeout(deadline);
-      if (stopped !== null) reject(new Error(`git ${args[0]} ${stopped}`));
-      else if (code === 0) resolvePromise(Buffer.concat(output));
-      else
-        reject(new Error(`git ${args[0]} failed (${code}): ${Buffer.concat(errors).toString()}`));
-    });
+    child.on("close", (code) =>
+      settle(() =>
+        code === 0
+          ? resolvePromise(Buffer.concat(output))
+          : reject(
+              new Error(`git ${args[0]} failed (${code}): ${Buffer.concat(errors).toString()}`),
+            ),
+      ),
+    );
     child.stdin.end(options?.input);
   });
 

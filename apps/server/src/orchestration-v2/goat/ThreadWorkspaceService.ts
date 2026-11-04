@@ -24,7 +24,7 @@ import { makeIsManagedWorktreePath } from "../../worktreesDirectory.ts";
 import { WorktreeSnapshotStore } from "../../worktreeSnapshots/WorktreeSnapshotStore.ts";
 import * as ProjectionStore from "../ProjectionStore.ts";
 import * as ThreadManagement from "../ThreadManagementService.ts";
-import { makeRestoreThreadWorkspace } from "./restoreThreadWorkspace.ts";
+import { makeRestorePending, makeRestoreThreadWorkspace } from "./restoreThreadWorkspace.ts";
 
 /** What a client shows for a thread whose worktree cleanup removed, and the ways back. */
 export class ThreadWorkspaceService extends Context.Service<
@@ -49,6 +49,7 @@ const make = Effect.gen(function* () {
   const setupScripts = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
   const isManagedWorktreePath = yield* makeIsManagedWorktreePath;
   const restoreMissing = yield* makeRestoreThreadWorkspace;
+  const restorePending = yield* makeRestorePending;
 
   const load = Effect.fn("ThreadWorkspace.load")(function* (threadId: ThreadId) {
     const fail = (reason: ThreadWorkspaceRestoreFailure, detail: string) =>
@@ -72,8 +73,16 @@ const make = Effect.gen(function* () {
     };
   });
 
+  // A folder left by a restore whose setup or check failed is not ready, though it exists.
   const present = (worktreePath: string) =>
-    fs.exists(path.join(worktreePath, ".git")).pipe(Effect.orElseSucceed(() => false));
+    fs.exists(path.join(worktreePath, ".git")).pipe(
+      Effect.orElseSucceed(() => false),
+      Effect.flatMap((exists) =>
+        exists
+          ? Effect.map(restorePending.marked(worktreePath), (marked) => !marked)
+          : Effect.succeed(false),
+      ),
+    );
 
   const status = Effect.fn("ThreadWorkspace.status")(function* (threadId: ThreadId) {
     const loaded = yield* load(threadId).pipe(Effect.option);
@@ -184,27 +193,66 @@ const make = Effect.gen(function* () {
       .pipe(Effect.mapError((error) => fail("git-failed", error.message)));
     const worktreePath = created.worktree.path;
     const newBranch = created.worktree.refName;
-    // The expected binding makes a concurrent replacement lose instead of overwriting this one.
-    const rebind = threads.dispatch({
-      type: "thread.metadata.update",
-      commandId: CommandId.make(`workspace-fresh:${threadId}:${stamp}`),
-      threadId,
-      branch: newBranch,
-      worktreePath,
-      expectedWorktreePath: shell.worktreePath,
-      expectedBranch: branch,
+    // Setup finishes under the new folder's lease before the thread points there, so no turn
+    // can start in a half-prepared worktree.
+    const prepareAndRebind = Effect.gen(function* () {
+      const setup = yield* setupScripts
+        .runForThread({
+          threadId,
+          projectCwd: project.workspaceRoot,
+          worktreePath,
+          trigger: "setup",
+        })
+        .pipe(Effect.mapError((error) => fail("setup-failed", error.message)));
+      if (setup.status === "started" && !setup.async && setup.completion !== undefined) {
+        const completion = yield* setup.completion;
+        if (completion.exitCode !== 0)
+          return yield* fail(
+            "setup-failed",
+            `Setup script "${setup.scriptName}" exited with ${completion.exitCode ?? "no exit code"}.`,
+          );
+      }
+      const current = yield* projections
+        .getThreadShell(threadId)
+        .pipe(Effect.orElseSucceed(() => null));
+      if (
+        current === null ||
+        current.activeRunId !== null ||
+        current.pendingRuntimeRequest !== null
+      )
+        return yield* fail("busy", "The thread started running. Try again when it is idle.");
+      // The expected binding makes a concurrent replacement lose instead of overwriting this one.
+      yield* threads
+        .dispatch({
+          type: "thread.metadata.update",
+          commandId: CommandId.make(`workspace-fresh:${threadId}:${stamp}`),
+          threadId,
+          branch: newBranch,
+          worktreePath,
+          expectedWorktreePath: shell.worktreePath,
+          expectedBranch: branch,
+        })
+        .pipe(
+          Effect.mapError(() =>
+            fail("git-failed", "Couldn't switch the thread to the new worktree."),
+          ),
+        );
+      return setup;
     });
-    yield* rebind.pipe(
+    const setup = yield* tryWithWorkspaceLease(worktreePath, prepareAndRebind).pipe(
+      Effect.flatMap(
+        Option.match({
+          onNone: () => Effect.fail(fail("busy", "The new worktree is in use. Try again.")),
+          onSome: Effect.succeed,
+        }),
+      ),
+      // Removed after the new folder's lease is released; removal holds the folder whole.
       Effect.catchCause((cause) =>
         git
           .removeWorktree({ cwd: project.workspaceRoot, path: worktreePath, force: true })
           .pipe(Effect.ignore, Effect.andThen(Effect.failCause(cause))),
       ),
-      Effect.mapError(() => fail("git-failed", "Couldn't switch the thread to the new worktree.")),
     );
-    const setup = yield* setupScripts
-      .runForThread({ threadId, projectCwd: project.workspaceRoot, worktreePath, trigger: "setup" })
-      .pipe(Effect.mapError((error) => fail("setup-failed", error.message)));
     return {
       threadId,
       worktreePath,
