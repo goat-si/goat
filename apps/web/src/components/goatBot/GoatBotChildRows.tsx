@@ -23,7 +23,8 @@ export function GoatBotChildRows({
   refresh: () => void;
 }) {
   const [showMore, setShowMore] = useState(false);
-  const [now] = useState(Date.now);
+  // oxlint-disable-next-line react/purity -- Visibility ages are evaluated when the roster changes.
+  const now = Date.now();
   const location = useLocation();
   const params = useParams({ strict: false });
   const search = location.search as { task?: string };
