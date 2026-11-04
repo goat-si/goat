@@ -2,6 +2,8 @@ import type { ReactNode } from "react";
 import type { BotRosterEntry } from "@goat/client-runtime/goatBot";
 import type { BotThreadRow, ChannelUpdateTaskViewInput } from "@goat/contracts";
 import { Alert, Text, View } from "react-native";
+import { useNavigationThreadShells } from "../../state/entities";
+import { resolveThreadListV2Status, threadHasUnseenCompletion } from "../threads/threadListV2";
 import { MobileBotRosterView } from "./MobileBotRosterView";
 import { useMobileBotRoster } from "./useMobileBotRoster";
 import { useMobileBotPreview } from "./useMobileBotPreview";
@@ -14,6 +16,16 @@ export function MobileBotRoster(props: {
 }) {
   const roster = useMobileBotRoster(props.selectedKey);
   const preview = useMobileBotPreview();
+  const shells = useNavigationThreadShells();
+  const codingStatuses = new Map(
+    shells.map((shell) => {
+      const status = resolveThreadListV2Status(shell);
+      return [
+        `coding:${shell.environmentId}:${shell.id}`,
+        status === "ready" && threadHasUnseenCompletion(shell) ? ("done" as const) : status,
+      ] as const;
+    }),
+  );
   const update = (input: ChannelUpdateTaskViewInput) => {
     void roster.update(input).catch((error: unknown) => {
       Alert.alert(
@@ -24,9 +36,19 @@ export function MobileBotRoster(props: {
   };
   return (
     <View className="flex-1">
-      {roster.error ? <Text className="px-4 text-danger-foreground">{roster.error}</Text> : null}
       <MobileBotRosterView
-        header={props.header}
+        header={
+          <>
+            {props.header}
+            {roster.error ? (
+              <Text className="px-4 text-danger-foreground">{roster.error}</Text>
+            ) : null}
+          </>
+        }
+        selectedKey={props.selectedKey}
+        codingStatuses={codingStatuses}
+        expanded={roster.expanded}
+        hiddenCount={roster.hiddenCount}
         bots={roster.bots}
         rows={roster.children.rows}
         hasMore={roster.children.hasMore}
@@ -36,6 +58,12 @@ export function MobileBotRoster(props: {
         onOpenBot={props.onOpenBot}
         onOpenChild={props.onOpenChild}
         onShowMore={roster.showMore}
+        onTaskAction={(row, action) => {
+          if (action === "pin") update({ taskId: row.task.taskId, pinned: !row.view.pinnedAt });
+          if (action === "done") update({ taskId: row.task.taskId, done: !row.view.doneAt });
+          if (action === "read")
+            update({ taskId: row.task.taskId, readThrough: row.lastActivityAt });
+        }}
         onLongPressTask={(row) =>
           Alert.alert(row.task.title, undefined, [
             {

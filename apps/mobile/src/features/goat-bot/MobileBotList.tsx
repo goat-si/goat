@@ -14,9 +14,13 @@ export function MobileBotList({ showSegments = true }: { readonly showSegments?:
   const selectDetail = useSelectWorkspaceDetail();
   const selectedKey = useNavigationState((state) => {
     const route = state.routes[state.index];
-    if (route?.name !== "GoatBot") return null;
-    const params = route.params as { taskId?: string } | undefined;
-    return params?.taskId ? `task:${params.taskId}` : null;
+    const params = route?.params as
+      | { taskId?: string; environmentId?: string; threadId?: string }
+      | undefined;
+    if (route?.name === "GoatBot") return params?.taskId ? `task:${params.taskId}` : "main";
+    if (route?.name === "Thread" && params?.environmentId && params.threadId)
+      return `coding:${params.environmentId}:${params.threadId}`;
+    return null;
   });
   return (
     <View className="flex-1 bg-screen">

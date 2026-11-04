@@ -73,6 +73,27 @@ export function useMobileBotRoster(selectedKey: string | null) {
     showMore,
     selectedKey,
   });
+  const expandedRoster = mobileBotRoster({
+    supportsProfiles,
+    supportsTaskThreads,
+    bots: profiles.data?.bots,
+    children: threads.data?.rows,
+    now,
+    showMore: true,
+    selectedKey,
+  });
+  const collapsedRoster = showMore
+    ? mobileBotRoster({
+        supportsProfiles,
+        supportsTaskThreads,
+        bots: profiles.data?.bots,
+        children: threads.data?.rows,
+        now,
+        showMore: false,
+        selectedKey,
+      })
+    : roster;
+  const hiddenCount = expandedRoster.children.rows.length - collapsedRoster.children.rows.length;
   const update = async (input: ChannelUpdateTaskViewInput) => {
     if (environmentId === null || !supportsTaskThreads)
       throw new Error("Bot task threads are unavailable.");
@@ -87,7 +108,9 @@ export function useMobileBotRoster(selectedKey: string | null) {
     ...roster,
     environmentId,
     slackEnabled: slack.data?.some((connection) => connection.enabled) === true,
-    showMore: () => setShowMore(true),
+    expanded: showMore,
+    hiddenCount,
+    showMore: () => setShowMore((current) => !current),
     update,
     error: profiles.error ?? threads.error,
   };

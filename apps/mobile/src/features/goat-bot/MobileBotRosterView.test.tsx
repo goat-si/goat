@@ -16,17 +16,36 @@ vi.mock("react-native", () => ({
     onPress,
     disabled,
     accessibilityState,
+    accessibilityActions,
+    accessibilityLabel,
+    onAccessibilityAction,
   }: {
     children?: ReactNode;
     onPress?: () => void;
     disabled?: boolean;
-    accessibilityState?: { selected?: boolean };
+    accessibilityState?: { selected?: boolean; expanded?: boolean };
+    accessibilityActions?: { name: string; label: string }[];
+    accessibilityLabel?: string;
+    onAccessibilityAction?: (event: { nativeEvent: { actionName: string } }) => void;
   }) => (
-    <button onClick={onPress} disabled={disabled} aria-pressed={accessibilityState?.selected}>
+    <button
+      onClick={onPress}
+      disabled={disabled}
+      aria-pressed={accessibilityState?.selected}
+      aria-expanded={accessibilityState?.expanded}
+      aria-label={accessibilityLabel}
+      data-actions={accessibilityActions?.map((item) => item.name).join(",")}
+      onKeyDown={(event) => onAccessibilityAction?.({ nativeEvent: { actionName: event.key } })}
+    >
       {children}
     </button>
   ),
 }));
+vi.mock("../../components/ui/AppActivityIndicator", () => ({ AppActivityIndicator: () => null }));
+vi.mock("../../components/ui/AppText", () => ({
+  AppText: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
+}));
+vi.mock("../../components/ui/AppSymbol", () => ({ SymbolView: () => <span /> }));
 vi.mock("../../components/ui/Button", () => ({
   Button: ({ label, disabled }: { label: string; disabled?: boolean }) => (
     <button disabled={disabled}>{label}</button>
@@ -35,7 +54,8 @@ vi.mock("../../components/ui/Button", () => ({
 import { MobileBotRosterView, MobileHomeSegments } from "./MobileBotRosterView";
 
 const at = "2026-11-04T10:00:00.000Z";
-const task = Schema.decodeUnknownSync(BotThreadRow)({
+const decodeRow = Schema.decodeUnknownSync(BotThreadRow);
+const task = decodeRow({
   kind: "task",
   task: { taskId: "task", title: "Review", status: "waiting_input", updatedAt: at },
   view: { taskId: "task", pinnedAt: null, doneAt: null, readThrough: null },
@@ -77,6 +97,7 @@ it("renders the main bot, child task and disabled creation action", async () => 
         bots={[{ kind: "main", profile: null }]}
         rows={[task]}
         hasMore
+        hiddenCount={2}
         slackEnabled
         preview="Latest reply"
         unread
@@ -89,7 +110,7 @@ it("renders the main bot, child task and disabled creation action", async () => 
   );
   expect(container.textContent).toContain("GOAT Bot  ·  Main  ·  Slack");
   expect(container.textContent).toContain("Review");
-  expect(container.textContent).toContain("waiting input");
+  expect(container.textContent).toContain("Needs your input");
   expect(container.textContent).toContain("Show more");
   expect(container.querySelector("button:disabled")?.textContent).toContain("Coming soon");
   const taskButton = [...container.querySelectorAll("button")].find((button) =>
@@ -220,4 +241,79 @@ it("shows task details in the header when a card is available", async () => {
   expect(container.textContent).not.toContain("Task summary");
   await render(ChannelTaskId.make("task"), <span>Task summary</span>);
   expect(container.textContent).toContain("Task summary");
+});
+
+it("exposes task actions and expands and collapses hidden rows", async () => {
+  const action = vi.fn();
+  function Harness() {
+    const [expanded, setExpanded] = React.useState(false);
+    return (
+      <MobileBotRosterView
+        bots={[{ kind: "main", profile: null }]}
+        rows={[task]}
+        hasMore={!expanded}
+        expanded={expanded}
+        hiddenCount={2}
+        slackEnabled={false}
+        onOpenBot={() => {}}
+        onOpenChild={() => {}}
+        onLongPressTask={() => {}}
+        onTaskAction={action}
+        onShowMore={() => setExpanded(!expanded)}
+      />
+    );
+  }
+  root = createRoot(container);
+  await act(async () => root?.render(<Harness />));
+  const row = [...container.querySelectorAll("button")].find((button) =>
+    button.textContent?.includes("Review"),
+  );
+  expect(row?.dataset.actions).toBe("pin,done,read");
+  await act(async () =>
+    row?.dispatchEvent(new KeyboardEvent("keydown", { key: "read", bubbles: true })),
+  );
+  expect(action).toHaveBeenCalledWith(task, "read");
+  const more = [...container.querySelectorAll("button")].find((button) =>
+    button.textContent?.includes("Show more"),
+  );
+  expect(more?.getAttribute("aria-expanded")).toBe("false");
+  await act(async () => more?.click());
+  expect(more?.textContent).toContain("Show less");
+  expect(more?.getAttribute("aria-expanded")).toBe("true");
+  await act(async () => more?.click());
+  expect(more?.textContent).toContain("Show more (2)");
+});
+
+it("marks the selected coding thread with its own status", async () => {
+  const coding = decodeRow({
+    kind: "coding",
+    taskId: "task",
+    environmentId: "env",
+    threadId: "thread",
+    title: "Code",
+    state: "bound",
+    lastActivityAt: at,
+  });
+  root = createRoot(container);
+  await act(async () =>
+    root?.render(
+      <MobileBotRosterView
+        bots={[{ kind: "main", profile: null }]}
+        rows={[coding]}
+        hasMore={false}
+        slackEnabled={false}
+        selectedKey="coding:env:thread"
+        codingStatuses={new Map([["coding:env:thread", "working"]])}
+        onOpenBot={() => {}}
+        onOpenChild={() => {}}
+        onLongPressTask={() => {}}
+        onShowMore={() => {}}
+      />,
+    ),
+  );
+  const row = [...container.querySelectorAll("button")].find((button) =>
+    button.textContent?.includes("Code"),
+  );
+  expect(row?.getAttribute("aria-label")).toBe("Code, Working");
+  expect(row?.getAttribute("aria-pressed")).toBe("true");
 });

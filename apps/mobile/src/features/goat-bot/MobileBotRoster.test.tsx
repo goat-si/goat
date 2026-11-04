@@ -10,6 +10,7 @@ vi.mock("react-native", () => ({
   Text: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,
   Alert: { alert: state.alert },
 }));
+vi.mock("../../state/entities", () => ({ useNavigationThreadShells: () => [] }));
 vi.mock("./useMobileBotPreview", () => ({ useMobileBotPreview: () => null }));
 vi.mock("./useMobileBotRoster", () => ({
   useMobileBotRoster: () => ({
