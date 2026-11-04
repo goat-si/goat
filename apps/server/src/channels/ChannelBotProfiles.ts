@@ -86,6 +86,12 @@ const make = Effect.gen(function* () {
             };
             yield* sql`INSERT INTO channel_runtime_state (key, value_json, updated_at)
           VALUES (${mainKey}, ${encodeMain(main)}, ${now}) ON CONFLICT (key) DO NOTHING`;
+            // A concurrent list may have adopted first; report the stored row, not this attempt.
+            const stored = yield* sql<{ readonly value_json: string }>`
+          SELECT value_json FROM channel_runtime_state WHERE key = ${mainKey}`;
+            const adopted =
+              stored[0] === undefined ? undefined : decodeProfile(stored[0].value_json);
+            if (adopted?.role === "main") main = adopted;
           }
           const members = decoded.profiles
             .filter((profile) => profile.role === "member")
