@@ -136,7 +136,7 @@ const task_stopTool = Tool.make(agentSurfaceRegistry["channel.task_stop"].name, 
   ...shared,
   dependencies: [...shared.dependencies, ChannelSessionTaskActions.ChannelSessionTaskActions],
   description: agentSurfaceRegistry["channel.task_stop"].description,
-  parameters: Schema.Struct({ taskId: ChannelTaskId }),
+  parameters: Schema.Struct({ taskId: ChannelTaskId, clientRequestId: TrimmedNonEmptyString }),
   success: Schema.NullOr(ChannelTaskEvent),
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["channel.task_stop"]));
 
@@ -148,6 +148,7 @@ const task_answerTool = Tool.make(agentSurfaceRegistry["channel.task_answer"].na
     taskId: ChannelTaskId,
     questionId: ChannelQuestionId,
     answer: Schema.String,
+    clientRequestId: TrimmedNonEmptyString,
   }),
   success: Schema.NullOr(ChannelTaskEvent),
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["channel.task_answer"]));
