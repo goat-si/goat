@@ -101,3 +101,19 @@ export function codexRetryFailureClass(
     ? "transport_error"
     : "provider_error";
 }
+
+export function codexFailureClassification(code: string | null | undefined) {
+  const transport =
+    code?.startsWith("http") === true || code?.startsWith("responseStream") === true;
+  return {
+    class:
+      code === "usageLimitExceeded" || code === "rateLimitExceeded"
+        ? ("usage_limit" as const)
+        : transport
+          ? ("transport_error" as const)
+          : ("provider_error" as const),
+    ...(transport || code === "serverOverloaded" || code === "internalServerError"
+      ? { retryable: true }
+      : {}),
+  };
+}
