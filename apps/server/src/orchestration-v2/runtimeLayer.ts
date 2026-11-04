@@ -23,6 +23,7 @@ import * as AgentSessionImporter from "../project/AgentSessionImporter.ts";
 import * as AgentSessionScanner from "../project/AgentSessionScanner.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
+import * as WorktreeSnapshotStoreLive from "../worktreeSnapshots/WorktreeSnapshotStoreLive.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
 import * as ScratchThreadPromotion from "../project/ScratchThreadPromotion.ts";
 import * as CheckpointCaptureService from "./CheckpointCaptureService.ts";
@@ -204,6 +205,7 @@ const layerProviderTurnStartServiceProvided = ProviderTurnStartService.layer.pip
       layerProviderAuthServiceProvided,
       layerRunExecutionServiceProvided,
       layerRuntimePolicyProvided,
+      WorktreeSnapshotStoreLive.layer.pipe(Layer.provide(GitVcsDriver.layer)),
     ),
   ),
 );

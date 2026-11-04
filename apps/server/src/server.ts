@@ -54,14 +54,13 @@ import * as SshHostSetup from "./sshRemote/SshHostSetup.ts";
 import * as SshRemoteDispatchLive from "./sshRemote/SshRemoteDispatchLive.ts";
 import * as GoatclawFleetSync from "./goatclaw/FleetSync.ts";
 import * as SshWorkspaceSync from "./sshRemote/SshWorkspaceSync.ts";
-import * as StorageCleanup from "./storageCleanup.ts";
-import * as WorktreeSnapshotStoreLive from "./worktreeSnapshots/WorktreeSnapshotStoreLive.ts";
-import * as WorktreeCleanupPreviewStateLive from "./worktreeSnapshots/WorktreeCleanupPreviewStateLive.ts";
+import * as StorageCleanupLayer from "./storageCleanupLayer.ts";
 import * as WorktreeCheckoutHealth from "./vcs/WorktreeCheckoutHealth.ts";
 import * as ObservedCheckService from "./threadResults/ObservedCheckService.ts";
 import * as ThreadResultService from "./threadResults/ThreadResultService.ts";
 import * as ScreenCodeLayers from "./screenCode/ScreenCodeLayers.ts";
 import * as SiteNotes from "./preview/SiteNotes.ts";
+
 import { heartbeat, HeartbeatWebSocket } from "./wsHeartbeat.ts";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -73,6 +72,7 @@ import * as HttpApiBuilder from "effect/http-api/HttpApiBuilder";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
+
 import * as AcpRegistrySupport from "@goat/provider-acp-registry/server/AcpRegistrySupport";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
 import * as ProviderLatestVersions from "@goat/provider-core/server/ProviderLatestVersions";
@@ -264,6 +264,7 @@ import * as AutomationHold from "./automationHold.ts";
 import * as ServerActivation from "./serverActivation.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import { makeMemoryApplicationLayers } from "./memory/MemoryApplicationLayers.ts";
+
 export { MemorySourceReadBinding, provideScreenPrimitives } from "./ServerPublicApi.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
@@ -272,10 +273,12 @@ import * as NodePtyAdapter from "./terminal/NodePtyAdapter.ts";
 import * as CodexUsageHistory from "./usage/CodexUsageHistory.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as Ws from "./ws.ts";
+
 // Escaped MCP handoff provenance can exceed find-my-way's 100-character segment default.
 const HTTP_ROUTER_CONFIG = {
   maxParamLength: 512,
 } as const;
+
 // Skip Effect's default 20 s grace; WebSocket scope finalizers already close connections gracefully.
 const HTTP_PREEMPTIVE_SHUTDOWN_GRACE_MS = 0;
 const layerResourceAttribution = ResourceAttribution.layer;
@@ -283,6 +286,7 @@ const layerApplicationObservability = EventLoopMonitor.layer.pipe(
   Layer.provideMerge(Observability.layer),
   Layer.provideMerge(layerResourceAttribution),
 );
+
 // Share rotation state so driver loggers cannot race.
 const layerProviderEventLoggers = Layer.effect(
   ProviderEventLoggers.ProviderEventLoggers,
@@ -305,6 +309,7 @@ const layerProviderEventLoggers = Layer.effect(
   }),
 );
 const layerPtyAdapter = NodePtyAdapter.layer;
+
 export const layerServerSettings = ServerSettings.layer.pipe(
   Layer.provide(ServerSecretStore.layer),
   Layer.provide(ServerEnvironment.layerIdentity),
@@ -749,12 +754,7 @@ const layerRuntimeCoreDependenciesBase = Layer.mergeAll(
   layerObservedCheckWorker,
   layerIdleCompactionWorker,
   ComputerUseTurnEnd.layer,
-  StorageCleanup.layer.pipe(
-    Layer.provide(ProjectionStoreV2.layer),
-    Layer.provide(
-      Layer.merge(WorktreeSnapshotStoreLive.layer, WorktreeCleanupPreviewStateLive.layer),
-    ),
-  ),
+  StorageCleanupLayer.layer,
   WorktreeCheckoutHealth.layer.pipe(Layer.provide(ProcessRunner.layer)),
   DatabaseStorage.layer.pipe(
     Layer.provide(ProjectionMaintenance.layer),

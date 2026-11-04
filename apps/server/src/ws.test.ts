@@ -149,6 +149,7 @@ import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
 import * as SshWorkspaceSync from "./sshRemote/SshWorkspaceSync.ts";
 import * as StorageCleanup from "./storageCleanup.ts";
+import { ThreadWorkspaceService } from "./orchestration-v2/goat/ThreadWorkspaceService.ts";
 import * as WorktreeCheckoutHealth from "./vcs/WorktreeCheckoutHealth.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
@@ -212,7 +213,6 @@ it.effect("resends a file manager reveal kind that missed the snapshot", () =>
         resolveFileManagerRevealKind: () => Effect.succeed("file-explorer"),
       },
     ).pipe(Stream.runCollect);
-
     const [late] = Array.from(events);
     assert.equal(events.length, 1);
     assert.equal(late?.type, "snapshot");
@@ -246,7 +246,6 @@ it.effect("sends a Defender result that missed the snapshot, once", () =>
     }
   }),
 );
-
 it.effect("tells config subscribers when a held copy's automation is resumed, once", () =>
   Effect.gen(function* () {
     const hold = { reason: "channel-copy" as const, heldAt: "2026-10-25T00:00:00.000Z" };
@@ -906,6 +905,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(SourceControlDiscovery.SourceControlDiscovery)({}),
   Layer.mock(SourceControlRepositoryService.SourceControlRepositoryService)({}),
   Layer.mock(StorageCleanup.StorageCleanup)({}),
+  Layer.mock(ThreadWorkspaceService)({}),
   Layer.mock(DecisionService.DecisionService)({}),
   Layer.mock(DatabaseStorage.DatabaseStorage)({}),
   Layer.mock(StrayProcesses.StrayProcesses)({}),

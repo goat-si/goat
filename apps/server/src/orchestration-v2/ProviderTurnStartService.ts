@@ -2,7 +2,7 @@ import { isRegisteredAttach } from "./providerTurnStartHelpers.ts";
 import { withAgentOom } from "./agentOomFailure.ts";
 import { AgentScope } from "@goat/shared/AgentScope";
 import { makeDeliverySession } from "./goat/ProviderTurnDeliverySession.ts";
-import { makeRecreateMissingWorktree } from "./goat/RecreateWorktree.ts";
+import { makeRestoreThreadWorkspace } from "./goat/restoreThreadWorkspace.ts";
 import { makeProviderTurnHandoffRecovery } from "./goat/ProviderTurnHandoffRecovery.ts";
 import { refuseCodexAdmission } from "./goat/CodexTurnAdmission.ts";
 import * as MemorySnapshot from "../memory/MemorySnapshot.ts";
@@ -138,7 +138,7 @@ export const layer: Layer.Layer<
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const serverSettings = yield* ServerSettings.ServerSettingsService;
-    const recreateMissingWorktree = yield* makeRecreateMissingWorktree;
+    const recreateMissingWorktree = yield* makeRestoreThreadWorkspace;
     const projects = yield* ProjectService.ProjectService;
     const providerAuth = yield* ProviderAuthService.ProviderAuthService;
     const codexSurvivors = yield* Effect.serviceOption(CodexSurvivors.CodexSurvivors);
@@ -658,6 +658,7 @@ export const layer: Layer.Layer<
                   branch,
                 });
                 yield* recreateMissingWorktree({
+                  threadId: projection.thread.id,
                   cwd: project.workspaceRoot,
                   worktreePath,
                   branch,
