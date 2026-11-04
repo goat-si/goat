@@ -1,4 +1,4 @@
-import { unsupportedBotTaskThreadHandlers } from "./channels/unsupportedBotTaskThreadHandlers.ts";
+import * as ChannelBotThreads from "./channels/ChannelBotThreads.ts";
 import * as Fiber from "effect/Fiber";
 import { AgentWorkspaceTerminalPolicyThreadLookup } from "./AgentWorkspaceTerminalPolicy.ts";
 import * as HubRpcSocket from "./auth/HubRpcSocket.ts";
@@ -1964,7 +1964,7 @@ export const layerWsRpc = (
         [CHANNEL_GATEWAY_WS_METHODS.getBotStatus]: () => channelBots.status(channelOwner),
         [CHANNEL_GATEWAY_WS_METHODS.listBots]: () =>
           channelBotProfiles.list(channelOwner).pipe(Effect.map((bots) => ({ bots }))),
-        ...unsupportedBotTaskThreadHandlers,
+        ...ChannelBotThreads.rpcHandlers(yield* ChannelBotThreads.ChannelBotThreads, channelOwner),
         // Waits only for durable storage; the reply arrives later on the bot thread.
         [CHANNEL_GATEWAY_WS_METHODS.ingest]: (input) =>
           channelGateway.ingest(input, {

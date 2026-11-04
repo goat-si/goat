@@ -18,6 +18,8 @@ import * as ServerConfig from "../config.ts";
 import * as ChannelBotHome from "./ChannelBotHome.ts";
 import * as ChannelBotDirectory from "./ChannelBotDirectory.ts";
 import * as ChannelBotProfiles from "./ChannelBotProfiles.ts";
+import * as ChannelBotThreads from "./ChannelBotThreads.ts";
+import * as ChannelTaskViews from "./channelTaskViews.ts";
 import * as ChannelBotRegistry from "./ChannelBotRegistry.ts";
 import * as ChannelBotSession from "./ChannelBotSession.ts";
 import * as ChannelBotTimeline from "./ChannelBotTimeline.ts";
@@ -51,10 +53,13 @@ const layerFoundation = Layer.mergeAll(
   ChannelBotHome.layer,
   ChannelBotDirectory.layer,
   ChannelBotProfiles.layer,
+  ChannelTaskViews.layer,
   ChannelTransport.layer,
 );
 
-const layerTimeline = ChannelBotTimeline.layer.pipe(Layer.provideMerge(layerFoundation));
+const layerTimeline = Layer.mergeAll(ChannelBotTimeline.layer, ChannelBotThreads.layer).pipe(
+  Layer.provideMerge(layerFoundation),
+);
 
 const layerGateway = Layer.mergeAll(
   ChannelGateway.layer,

@@ -35,10 +35,28 @@ describe("channel task views", () => {
         assert.strictEqual(second.pinnedAt, first.pinnedAt);
         assert.isNotNull(second.doneAt);
         assert.strictEqual(second.readThrough, first.readThrough);
+        yield* views.update({ taskId, pinned: false, done: false }, owner);
+        yield* Effect.all(
+          [
+            views.update({ taskId, pinned: true }, owner),
+            views.update({ taskId, done: true }, owner),
+          ],
+          { concurrency: "unbounded" },
+        );
+        const merged = yield* views.get(taskId, owner);
+        assert.isNotNull(merged.pinnedAt);
+        assert.isNotNull(merged.doneAt);
         const denied = yield* Effect.flip(
           views.update({ taskId, pinned: false }, { ...owner, ownerId: "other" }),
         );
         assert.strictEqual(denied.reason, "task_not_found");
+        const missing = yield* Effect.flip(
+          views.update({ taskId: ChannelTaskId.make("task:missing"), done: true }, owner),
+        );
+        assert.strictEqual(missing.reason, "task_not_found");
+        const reopened = yield* views.update({ taskId, pinned: false, done: false }, owner);
+        assert.isNull(reopened.pinnedAt);
+        assert.isNull(reopened.doneAt);
       }).pipe(Effect.provide(TaskViews.layer.pipe(Layer.provideMerge(harness.layer))));
     },
   );

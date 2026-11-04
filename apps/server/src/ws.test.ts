@@ -2,6 +2,7 @@ import * as ShellSnapshotLoads from "./orchestration-v2/ShellSnapshotLoads.ts";
 import * as DecisionService from "./goatclaw/DecisionService.ts";
 import * as ChannelBotDirectory from "./channels/ChannelBotDirectory.ts";
 import * as ChannelBotProfiles from "./channels/ChannelBotProfiles.ts";
+import * as ChannelBotThreads from "./channels/ChannelBotThreads.ts";
 import * as ChannelBotRegistry from "./channels/ChannelBotRegistry.ts";
 import * as ChannelGateway from "./channels/ChannelGateway.ts";
 import * as ChannelIdentityService from "./channels/ChannelIdentityService.ts";
@@ -816,7 +817,6 @@ const layerConfigEnvironment = Layer.mock(ServerEnvironment.ServerEnvironment)({
   }),
 });
 
-// Build the production RPC layer; unrelated capabilities fail if this test calls them.
 const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(ShellSnapshotLoads.ShellSnapshotLoads)({}),
   Layer.mock(MemoryService.MemoryService)({
@@ -826,6 +826,7 @@ const layerUnusedConfigRpcServices = Layer.mergeAll(
   Layer.mock(ChannelBotDirectory.ChannelBotDirectory)({}),
   Layer.mock(ChannelBotRegistry.ChannelBotRegistry)({}),
   Layer.mock(ChannelBotProfiles.ChannelBotProfiles)({}),
+  Layer.mock(ChannelBotThreads.ChannelBotThreads)({}),
   Layer.mock(ChannelGateway.ChannelGateway)({}),
   Layer.mock(ChannelIdentityService.ChannelIdentityService)({}),
   Layer.mock(ChannelLedger.ChannelLedger)({}),
