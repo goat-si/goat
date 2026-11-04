@@ -348,7 +348,9 @@ then reuses it for later launches of the same update.
 Windows keeps JavaScript and package metadata inside `app.asar` and unpacks only
 native libraries and helper executables. Avoid enabling whole-package smart
 unpacking: each loose file adds work to NSIS installation and counts against
-the payload limit.
+the payload limit. Prepared server bytecode in `resources/server-compile-cache`
+is the one exception: one file per loaded server chunk, checked against its
+manifest and a separate budget, because the backend reads it on every start.
 
 The artifact builder rejects a Windows package when any of these invariants
 break:
