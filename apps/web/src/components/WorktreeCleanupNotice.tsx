@@ -52,7 +52,7 @@ function PreviewNotice({
     if (seen.current.has(key)) return;
     seen.current.add(key);
     toastManager.add({
-      title: `GOAT will clean up ${preview.plannedCount} unused worktrees`,
+      title: `GOAT will clean up ${preview.plannedCount === 1 ? "1 worktree" : `${preview.plannedCount} worktrees`}`,
       actionProps: {
         children: "Review",
         onClick: () =>

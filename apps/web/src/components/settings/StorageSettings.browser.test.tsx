@@ -160,7 +160,7 @@ it("confirms a cleanup preview and turns off its rules", async () => {
     },
   };
   await using screen = await render(panel());
-  expect(screen.container.textContent).toContain("GOAT will clean up 4 worktrees");
+  expect(screen.container.textContent).toContain("4 worktrees match the cleanup rules below.");
   await screen.getByRole("button", { name: "Clean up now" }).click();
   expect(state.respond).toHaveBeenCalledWith({
     environmentId: "env",

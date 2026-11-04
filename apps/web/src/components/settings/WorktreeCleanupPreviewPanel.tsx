@@ -25,9 +25,11 @@ export function WorktreeCleanupPreviewPanel({
         title="Worktree cleanup preview"
         description={
           <span>
-            GOAT will clean up {preview.plannedCount} worktrees that haven&apos;t been used
-            recently. A snapshot of any uncommitted changes is saved first, and you can restore a
-            worktree from its thread.{" "}
+            {preview.plannedCount === 1
+              ? "1 worktree matches the cleanup rules below."
+              : `${preview.plannedCount} worktrees match the cleanup rules below.`}{" "}
+            A snapshot of any uncommitted changes is saved first, and you can restore a worktree
+            from its thread.{" "}
             {preview.activatesAt
               ? `Cleanup starts ${relativeStart(preview.activatesAt)}.`
               : "Cleanup starts when you confirm."}
@@ -80,5 +82,7 @@ function relativeStart(isoDate: string) {
   if (hours <= 0) return "now";
   return hours < 24
     ? `in ${hours} ${hours === 1 ? "hour" : "hours"}`
-    : `in ${Math.ceil(hours / 24)} days`;
+    : Math.ceil(hours / 24) === 1
+      ? "in 1 day"
+      : `in ${Math.ceil(hours / 24)} days`;
 }

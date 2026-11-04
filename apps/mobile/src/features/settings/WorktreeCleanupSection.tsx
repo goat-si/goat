@@ -108,7 +108,11 @@ export function WorktreeCleanupSection({
       {preview ? (
         <>
           <View className="p-4">
-            <Text>{preview.plannedCount} worktrees are ready to clean up.</Text>
+            <Text>
+              {preview.plannedCount === 1
+                ? "1 worktree is ready to clean up."
+                : `${preview.plannedCount} worktrees are ready to clean up.`}
+            </Text>
           </View>
           <SettingsActionRow
             label="Clean up now"
