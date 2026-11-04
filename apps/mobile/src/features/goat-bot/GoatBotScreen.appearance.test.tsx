@@ -10,6 +10,7 @@ import { expect, it, vi } from "vite-plus/test";
 const appearance = vi.hoisted(() => ({ mode: "dark" as "light" | "dark", baseFontSize: 16 }));
 const screenSession = vi.hoisted(() => ({
   activity: null as GoatBotActivity | null,
+  rows: [] as GoatBotRow[],
   supportsTaskThreads: false,
   requestedTaskId: undefined as string | null | undefined,
   workTaskId: undefined as string | undefined,
@@ -94,9 +95,20 @@ vi.mock("./GoatBotComposerAttachments", () => ({
   releaseGoatBotAttachments: picker.release,
 }));
 vi.mock("@legendapp/list/react-native", () => ({
-  LegendList: (props: { ListFooterComponent?: ReactNode }) => {
+  LegendList: (props: {
+    data?: GoatBotRow[];
+    renderItem?: (item: { item: GoatBotRow }) => ReactNode;
+    ListFooterComponent?: ReactNode;
+  }) => {
     list.props = props;
-    return <>{props.ListFooterComponent}</>;
+    return (
+      <>
+        {props.data?.map((item) => (
+          <div key={item.id}>{props.renderItem?.({ item })}</div>
+        ))}
+        {props.ListFooterComponent}
+      </>
+    );
   },
 }));
 vi.mock("@react-navigation/elements", async () => ({
@@ -133,7 +145,7 @@ vi.mock("./useMobileGoatBotSession", () => ({
     screenSession.requestedTaskId = taskId;
     return {
       availability: "ready",
-      rows: [],
+      rows: screenSession.rows,
       canSend: true,
       attachmentSupport: { maxUploadBytes: null },
       onSend: () => true,
@@ -312,4 +324,36 @@ it("ignores an unsupported task screen and uses main-chat filtering", async () =
   const main = await render(<GoatBotScreen visible />);
   expect(screenSession.requestedTaskId).toBeNull();
   await main.unmount();
+});
+
+it("renders legacy task cards without task navigation when the capability is absent", async () => {
+  screenSession.supportsTaskThreads = false;
+  screenSession.rows = [
+    {
+      kind: "task",
+      id: "card",
+      createdAt: "2026-10-12T09:40:00Z",
+      firstInGroup: true,
+      groupPosition: "single",
+      card: {
+        key: "task-1",
+        revision: 1,
+        updatedAt: "2026-10-12T09:40:00Z",
+        title: "Check disks",
+        statusLabel: "Running",
+        tone: "active",
+        sourceLabel: null,
+        summary: null,
+        attentionLabel: null,
+        pullRequests: [],
+        target: { kind: "none", label: "Unavailable" },
+      },
+    },
+  ];
+  const view = await render(<GoatBotScreen visible />);
+  expect(view.container.textContent).toContain("Check disks");
+  expect(view.container.textContent).toContain("Running");
+  expect(view.container.textContent).not.toContain("Task thread ·");
+  await view.unmount();
+  screenSession.rows = [];
 });

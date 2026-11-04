@@ -9,7 +9,6 @@ vi.mock("~/state/entities", async (original) => ({
   useServerConfigs: () =>
     new Map([["env", { environment: { capabilities: { goatBotTaskThreads: state.supported } } }]]),
 }));
-vi.mock("./GoatBotTaskChip", () => ({ GoatBotTaskChip: () => <div>Legacy task card</div> }));
 vi.mock("../settings/MemorySettings", () => ({ MemorySettingsEntry: () => null }));
 import { GoatBotTimeline } from "./GoatBotTimeline";
 
@@ -38,7 +37,8 @@ it("offers task threads only when the server supports them", async () => {
   await using screen = await render(
     <GoatBotTimeline environmentId={EnvironmentId.make("env")} rows={[row]} onRetry={() => {}} />,
   );
-  await expect.element(screen.getByText("Legacy task card")).toBeVisible();
+  await expect.element(screen.getByText("Check disks")).toBeVisible();
+  await expect.element(screen.getByText("Running")).toBeVisible();
   expect(screen.getByText("Task thread · Check disks").query()).toBeNull();
   state.supported = true;
   await screen.rerender(
