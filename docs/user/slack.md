@@ -86,6 +86,7 @@ GOAT Bot screen shows only a chip for the work and its final report.
   starts a Boat cloud machine unless you ask.
 - GOAT Bot runs up to four pieces of your work at once. More wait in order and
   start as earlier ones finish; the reply says when something is queued.
+- In **Settings → GOAT Bot**, turn off **Answer with the bot session** to use reception for new messages.
 - **Settings → GOAT Bot → Automatically choose a worker computer** lets work
   use an already-connected SSH computer with the same repository and requested
   model. It is off by default. Turning it on allows the worker's instructions,
