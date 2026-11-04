@@ -2,6 +2,10 @@ import type { BotRosterEntry } from "@goat/client-runtime/goatBot";
 import { botThreadKey } from "@goat/client-runtime/goatBot";
 import type { BotThreadRow } from "@goat/contracts";
 import { Pressable, ScrollView, Text, View } from "react-native";
+import { Button } from "../../components/ui/Button";
+
+/** New bot is disabled until bots can be created. */
+const ignorePress = () => undefined;
 import type { MobileHomeMode } from "./goatBotHomeMode";
 
 export function MobileHomeSegments(props: {
@@ -104,14 +108,16 @@ export function MobileBotRosterView(props: {
           ) : null}
         </View>
       ))}
-      <Pressable
-        accessibilityRole="button"
-        accessibilityState={{ disabled: true }}
-        disabled
-        className="px-4 py-3"
-      >
-        <Text className="text-muted-foreground">New bot · Coming soon</Text>
-      </Pressable>
+      <View className="px-4 py-3">
+        <Button
+          label="New bot · Coming soon"
+          icon="plus"
+          disabled
+          fullWidth
+          accessibilityHint="Creating more bots is coming soon."
+          onPress={ignorePress}
+        />
+      </View>
     </ScrollView>
   );
 }

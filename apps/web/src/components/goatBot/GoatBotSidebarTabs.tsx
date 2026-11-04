@@ -1,6 +1,10 @@
 import { Link } from "@tanstack/react-router";
+import { PlusIcon } from "~/components/solar";
 import { selectGlobalAgentMode, useGlobalAgentStore } from "~/globalAgentStore";
+import { Badge } from "../ui/badge";
+import { Button } from "../ui/button";
 import { SidebarGroup, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
+import { Tabs, TabsList, TabsTab } from "../ui/tabs";
 import { GoatBotAvatar } from "./GoatBotAvatar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { GoatBotSidebarRow } from "./GoatBotSidebarRow";
@@ -25,20 +29,12 @@ export function GoatBotSidebarTabs() {
   return (
     <>
       <SidebarGroup>
-        <div role="tablist" aria-label="Sidebar" className="flex gap-1">
-          {(["bot", "thread"] as const).map((tab) => (
-            <button
-              key={tab}
-              type="button"
-              role="tab"
-              aria-selected={mode === tab}
-              onClick={() => setMode(tab)}
-              className="flex-1 rounded-md px-2 py-1 text-sm aria-selected:bg-accent aria-selected:font-medium"
-            >
-              {tab === "bot" ? "Bots" : "Threads"}
-            </button>
-          ))}
-        </div>
+        <Tabs value={mode} onValueChange={(value: typeof mode) => setMode(value)}>
+          <TabsList aria-label="Sidebar">
+            <TabsTab value="bot">Bots</TabsTab>
+            <TabsTab value="thread">Threads</TabsTab>
+          </TabsList>
+        </Tabs>
       </SidebarGroup>
       {mode === "bot" && (
         <div className="max-h-[70dvh] overflow-y-auto">
@@ -76,12 +72,16 @@ export function GoatBotSidebarTabs() {
           )}
           <SidebarGroup>
             <Tooltip>
-              <TooltipTrigger render={<span tabIndex={0} />}>
-                <button type="button" disabled>
+              <TooltipTrigger render={<span className="block" tabIndex={0} />}>
+                <Button variant="outline" size="sm" disabled className="w-full justify-start">
+                  <PlusIcon />
                   New bot
-                </button>
+                  <Badge variant="secondary" size="sm" className="ml-auto">
+                    Coming soon
+                  </Badge>
+                </Button>
               </TooltipTrigger>
-              <TooltipPopup>Coming soon</TooltipPopup>
+              <TooltipPopup>Creating more bots is coming soon.</TooltipPopup>
             </Tooltip>
           </SidebarGroup>
         </div>
