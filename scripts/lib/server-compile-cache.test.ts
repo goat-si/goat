@@ -127,19 +127,30 @@ it.each(["app", "server"])(
   },
 );
 
-it("generates macOS x64 bytecode on an ARM64 host under Rosetta", async () => {
-  const { spawnSync } = await import("node:child_process");
-  const hook = NodeURL.fileURLToPath(
-    new URL("../prepare-server-compile-cache.cjs", import.meta.url),
-  );
-  const result = spawnSync(
-    process.execPath,
-    [
-      "-e",
-      `
+it.each([
+  { rosetta: true, output: "Prepared server bytecode" },
+  { rosetta: false, output: "Skipping macOS x64 target: Rosetta is not installed" },
+])(
+  "macOS x64 bytecode on an ARM64 host is generated only with Rosetta ($rosetta)",
+  async ({ rosetta, output }) => {
+    const { spawnSync } = await import("node:child_process");
+    const hook = NodeURL.fileURLToPath(
+      new URL("../prepare-server-compile-cache.cjs", import.meta.url),
+    );
+    const result = spawnSync(
+      process.execPath,
+      [
+        "-e",
+        `
     const cp = require('node:child_process');
     const { EventEmitter } = require('node:events');
+    cp.spawnSync = (executable, args) => {
+      require('node:assert/strict').equal(executable, '/usr/bin/arch');
+      require('node:assert/strict').deepEqual(args, ['-x86_64', '/usr/bin/true']);
+      return { status: ${rosetta ? 0 : 1} };
+    };
     cp.spawn = (executable, args, options) => {
+      if (!${rosetta}) throw new Error('spawned the x64 engine without Rosetta');
       require('node:assert/strict').match(executable, /Fixture\\.app\\/Contents\\/MacOS\\/Fixture$/);
       require('node:assert/strict').equal(options.env.ELECTRON_RUN_AS_NODE, '1');
       require('node:assert/strict').match(args[0], /prepare-server-compile-cache-runner\\.cjs$/);
@@ -151,9 +162,10 @@ it("generates macOS x64 bytecode on an ARM64 host under Rosetta", async () => {
     Object.defineProperty(process, 'arch', { value: 'arm64' });
     require(${JSON.stringify(hook)})({appOutDir: '/tmp/fixture', electronPlatformName: 'darwin', arch: 1, packager: {appInfo: {productFilename: 'Fixture'}}}).catch(e => {console.error(e); process.exitCode = 1;});
   `,
-    ],
-    { encoding: "utf8" },
-  );
-  expect(result.status, result.stderr).toBe(0);
-  expect(result.stdout).toContain("Prepared server bytecode");
-});
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain(output);
+  },
+);

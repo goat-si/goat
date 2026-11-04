@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // @effect-diagnostics nodeBuiltinImport:off - Node's typed junction API avoids Windows symlink privileges while keeping the probe isolated.
 import { makeMacPackagedPayloadValidator } from "./desktop-artifact-mac.ts";
+import { countWindowsPayloadFiles } from "./desktop-artifact-windows-payload.ts";
 
 // Adopts legacy T3 env names before anything reads the environment.
 import "@goat/contracts/adoptLegacyEnv";
@@ -3681,30 +3682,6 @@ function collectUnpackedAsarFiles(
   return output;
 }
 
-const countPayloadFiles = Effect.fn("desktopArtifact.countPayloadFiles")(function* (root: string) {
-  const fs = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
-  const pendingDirectories = [root];
-  let count = 0;
-
-  while (pendingDirectories.length > 0) {
-    const directory = pendingDirectories.pop();
-    if (directory === undefined) break;
-    const entries = yield* fs.readDirectory(directory);
-    for (const entry of entries) {
-      const entryPath = path.join(directory, entry);
-      const stat = yield* fs.stat(entryPath);
-      if (stat.type === "Directory") {
-        pendingDirectories.push(entryPath);
-      } else if (stat.type === "File") {
-        count += 1;
-      }
-    }
-  }
-
-  return count;
-});
-
 export const verifyWindowsPrimaryFffNativeLoad = Effect.fn(
   "desktopArtifact.verifyWindowsPrimaryFffNativeLoad",
 )(function* (input: {
@@ -4069,7 +4046,7 @@ export const validateWindowsPackagedPayload = Effect.fn(
     }
   }
 
-  const fileCount = yield* countPayloadFiles(packagedAppDir);
+  const fileCount = yield* countWindowsPayloadFiles(packagedAppDir);
   if (fileCount > fileLimit) {
     return yield* new WindowsPackagedPayloadValidationError({
       reason: "file-limit-exceeded",
