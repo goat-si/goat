@@ -10,3 +10,4 @@ export * from "./homeSync.ts";
 export * from "./model.ts";
 export * from "./taskVisibility.ts";
 export * from "./botRoster.ts";
+export * from "./botWork.ts";

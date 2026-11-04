@@ -38,6 +38,11 @@ export function createChannelEnvironmentAtoms<R, E>(
       tag: CHANNEL_GATEWAY_WS_METHODS.listBotThreads,
       staleTimeMs: 2_000,
     }),
+    listChildWork: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:channel:list-child-work",
+      tag: CHANNEL_GATEWAY_WS_METHODS.listChildWork,
+      staleTimeMs: 2_000,
+    }),
     updateTaskView: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:channel:update-task-view",
       tag: CHANNEL_GATEWAY_WS_METHODS.updateTaskView,
