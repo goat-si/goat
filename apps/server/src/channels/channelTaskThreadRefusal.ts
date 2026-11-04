@@ -36,7 +36,6 @@ export const refuseTaskThread = Effect.fn("ChannelTaskThread.refuse")(function* 
           kind: "receipt",
           text,
           inReplyToInputId: inputId,
-          taskId,
         },
       },
     ],

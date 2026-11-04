@@ -39,7 +39,7 @@ it.effect("refuses an unknown task thread without invoking reception or a sessio
     const { messages } = yield* botMessages;
     const reply = messages.find((message) => message.channel?.inReplyToInputId === input.inputId);
     assert.strictEqual(reply?.text, "That task isn't available here. Send it in the main chat.");
-    assert.strictEqual(reply?.channel?.taskId, taskId);
+    assert.isUndefined(reply?.channel?.taskId);
     assert.strictEqual(calls, 0);
     assert.lengthOf(harness.world.launches, 0);
   }).pipe(Effect.provide(harness.layer));
@@ -181,7 +181,10 @@ it.effect.each(["owner", "conversation", "authority", "remote-worker"] as const)
       const { messages } = yield* botMessages;
       const reply = messages.find((m) => m.channel?.inReplyToInputId === input.inputId);
       assert.strictEqual(reply?.text, "That task isn't available here. Send it in the main chat.");
-      assert.strictEqual(reply?.channel?.taskId, task.taskId);
+      assert.strictEqual(
+        reply?.channel?.taskId,
+        field === "remote-worker" ? task.taskId : undefined,
+      );
       assert.strictEqual(
         messages.find((m) => m.channel?.inputId === input.inputId)?.channel?.taskId,
         field === "remote-worker" ? task.taskId : undefined,

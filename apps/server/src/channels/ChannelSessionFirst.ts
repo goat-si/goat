@@ -260,7 +260,7 @@ const make = Effect.gen(function* () {
                 kind: "receipt",
                 text,
                 inReplyToInputId: inputId,
-                taskId: requestedTaskId,
+                ...(threadTask === undefined ? {} : { taskId: threadTask.task.taskId }),
               },
             },
             ...(prepared?.ok === true ? prepared.deliveries : []),
