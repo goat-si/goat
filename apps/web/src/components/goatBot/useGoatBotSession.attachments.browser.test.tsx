@@ -2,6 +2,7 @@ import {
   ChannelBindingId,
   ChannelConversationId,
   ChannelInputId,
+  ChannelTaskId,
   type ChatAttachment,
   EnvironmentId,
   OrchestrationV2TurnItemJson,
@@ -117,6 +118,7 @@ vi.mock("./goatBotAttachments", async (importOriginal) => {
 import { useGlobalAgentStore } from "~/globalAgentStore";
 import { readAttachmentUpload, useAttachmentUploadStore } from "~/lib/attachmentUploadQueue";
 import { GoatBotChatView } from "./GoatBotChatView";
+import { GoatBotComposer } from "./GoatBotComposer";
 import { GoatBotChannelContext, type GoatBotChannelPort } from "./goatBotChannelPort";
 import * as attachments from "./goatBotAttachments";
 import { disposeGoatBotEnvironment } from "./goatBotEnvironmentLifecycle";
@@ -587,4 +589,33 @@ it("offers no attach button or drop target when GOAT Bot's server cannot take fi
   await act(() => conversation.dispatchEvent(over));
   expect(over.defaultPrevented).toBe(false);
   expect(screen.container.querySelector("[data-chat-workspace-drop-overlay]")).toBeNull();
+});
+
+function TaskComposer() {
+  const session = useGoatBotSession([], ChannelTaskId.make("task-1"));
+  return (
+    <GoatBotComposer
+      disabled={!session.canOperate}
+      placeholder="Message GOAT Bot"
+      onSend={session.onSend}
+    />
+  );
+}
+
+it("sends task composer messages through the session queue with the task id", async () => {
+  const port = setup(true);
+  await using screen = await render(
+    <GoatBotChannelContext value={port}>
+      <TaskComposer />
+    </GoatBotChannelContext>,
+    { router: false }, // The composer has no links.
+  );
+  await expect.element(screen.getByRole("textbox", { name: "Message GOAT Bot" })).toBeEnabled();
+  await userEvent.type(screen.getByRole("textbox", { name: "Message GOAT Bot" }), "hello{Enter}");
+  await vi.waitFor(() => expect(port.ingest).toHaveBeenCalledTimes(1));
+  expect(vi.mocked(port.ingest).mock.calls[0]?.[1]).toMatchObject({
+    text: "hello",
+    intent: "message",
+    taskId: "task-1",
+  });
 });

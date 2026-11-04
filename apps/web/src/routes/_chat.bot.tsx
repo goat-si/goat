@@ -1,6 +1,7 @@
 import { useContext, useEffect } from "react";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import type { ChannelTaskId, EnvironmentId, ThreadId } from "@goat/contracts";
+import { useClientSettings } from "../hooks/useSettings";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../rightPanelLayout";
 import {
@@ -69,7 +70,7 @@ function GoatBotRouteSession() {
   );
 }
 
-function GoatBotTaskRoute({
+export function GoatBotTaskRoute({
   environmentId,
   threadId,
   taskId,
@@ -78,7 +79,9 @@ function GoatBotTaskRoute({
   threadId: ThreadId;
   taskId: ChannelTaskId;
 }) {
-  const narrow = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
+  const narrowViewport = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
+  const besideChat = useClientSettings((settings) => settings.goatBotTaskThreadsBesideChat);
+  const narrow = narrowViewport || !besideChat;
   const navigate = useNavigate();
   const ref = scopeThreadRef(environmentId, threadId);
   const shell = useThreadShell(ref);
