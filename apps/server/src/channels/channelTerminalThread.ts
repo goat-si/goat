@@ -22,10 +22,10 @@ export const isTerminalThread = Effect.fn("ChannelTaskThread.isTerminal")(functi
   );
 });
 
-export const mainThreadInput = (stored: ChannelLedger.ChannelStoredInput) => ({
-  ...stored,
-  message: { ...stored.message, taskId: undefined },
-});
+export const mainThreadInput = (stored: ChannelLedger.ChannelStoredInput) =>
+  stored.message.intent === "message"
+    ? { ...stored, message: { ...stored.message, taskId: undefined } }
+    : stored;
 
 export const shouldRefuseTaskThread = Effect.fn("ChannelTaskThread.shouldRefuse")(function* (
   ledger: ChannelLedger.ChannelLedger["Service"],
