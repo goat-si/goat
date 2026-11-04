@@ -3,7 +3,7 @@ import type { BotThreadRow, ChannelUpdateTaskViewInput } from "@goat/contracts";
 import { Alert, Text, View } from "react-native";
 import { MobileBotRosterView } from "./MobileBotRosterView";
 import { useMobileBotRoster } from "./useMobileBotRoster";
-import { useMobileGoatBotSession } from "./useMobileGoatBotSession";
+import { useMobileBotPreview } from "./useMobileBotPreview";
 
 export function MobileBotRoster(props: {
   selectedKey: string | null;
@@ -11,8 +11,7 @@ export function MobileBotRoster(props: {
   onOpenChild: (row: BotThreadRow) => void;
 }) {
   const roster = useMobileBotRoster(props.selectedKey);
-  const session = useMobileGoatBotSession(false);
-  const lastMessage = session.rows.findLast((row) => row.kind === "bot" || row.kind === "user");
+  const preview = useMobileBotPreview();
   const update = (input: ChannelUpdateTaskViewInput) => {
     void roster.update(input).catch((error: unknown) => {
       Alert.alert(
@@ -29,7 +28,8 @@ export function MobileBotRoster(props: {
         rows={roster.children.rows}
         hasMore={roster.children.hasMore}
         slackEnabled={roster.slackEnabled}
-        preview={lastMessage?.text}
+        preview={preview?.text}
+        unread={preview?.unread}
         onOpenBot={props.onOpenBot}
         onOpenChild={props.onOpenChild}
         onShowMore={roster.showMore}

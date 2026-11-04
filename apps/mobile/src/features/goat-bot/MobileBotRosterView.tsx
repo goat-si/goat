@@ -21,7 +21,11 @@ export function MobileHomeSegments(props: {
           accessibilityRole="tab"
           accessibilityState={{ selected: props.mode === mode }}
           onPress={() => props.onSelect(mode)}
-          className="flex-1 items-center rounded-md px-3 py-2"
+          className={
+            mode === props.mode
+              ? "flex-1 items-center rounded-md bg-background px-3 py-2"
+              : "flex-1 items-center rounded-md px-3 py-2"
+          }
         >
           <Text className="text-sm font-semibold text-foreground">{label}</Text>
         </Pressable>

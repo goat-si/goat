@@ -25,6 +25,7 @@ const router = { ...base, ...workspaceDetailRouter(base) };
 const options = {
   routeNames: [
     "Home",
+    "GoatBot",
     "Thread",
     "ThreadFiles",
     "PullRequest",
@@ -72,6 +73,15 @@ const page = (state: State) => ({
 });
 
 describe("selectWorkspaceDetail", () => {
+  it("selects a bot task and can replace it with a coding thread", () => {
+    const bot = select(home(), { name: "GoatBot", params: { taskId: "task-1" } });
+    expect(page(bot)).toEqual({ names: ["Home", "GoatBot"], index: 1 });
+    expect(bot.routes[1]?.params).toEqual({ taskId: "task-1" });
+    const coding = select(bot, threadA);
+    expect(page(coding)).toEqual({ names: ["Home", "Thread"], index: 1 });
+    expect(coding.routes[1]?.params).toEqual(threadA.params);
+  });
+
   it("swaps the open thread in place instead of pushing another", () => {
     const first = select(home(), threadA);
     const second = select(first, threadB);
