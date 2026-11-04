@@ -39,6 +39,14 @@ const TASK_STATUS = {
   cancelled: { label: "Cancelled", tone: "neutral" },
 } as const satisfies Record<ChannelTaskStatus, { label: string; tone: GoatBotCardTone }>;
 
+/** One name and tone per task status, so the sidebar, task pane, Work panel and cards agree. */
+export function presentTaskStatus(status: ChannelTaskStatus): {
+  readonly label: string;
+  readonly tone: GoatBotCardTone;
+} {
+  return TASK_STATUS[status];
+}
+
 const SOURCE_PREFIX = {
   goat: null,
   slack: "Slack",
