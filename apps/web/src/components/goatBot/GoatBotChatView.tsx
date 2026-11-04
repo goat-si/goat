@@ -18,7 +18,6 @@ import { WorkspacePageHeader } from "../WorkspacePageHeader";
 import { GoatBotAvatar } from "./GoatBotAvatar";
 import type { GoatBotAttachmentSupport, GoatBotDraftAttachment } from "./goatBotAttachments";
 import { GoatBotComposer, type GoatBotComposerHandle } from "./GoatBotComposer";
-import { GoatBotModeButton } from "./GoatBotModeButton";
 import { GoatBotModelPicker } from "./GoatBotModelPicker";
 import { GoatBotTimeline } from "./GoatBotTimeline";
 import {
@@ -136,7 +135,6 @@ export function GoatBotChatView({
         </div>
         <div className="flex min-w-max flex-1 basis-0 items-center justify-end gap-1">
           <GoatBotModelPicker />
-          <GoatBotModeButton to="thread" />
         </div>
       </WorkspacePageHeader>
       {availability.kind === "offline" ||
