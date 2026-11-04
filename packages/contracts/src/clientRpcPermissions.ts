@@ -154,6 +154,7 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.notesStartWork]: AuthOrchestrationOperateScope,
 
   [CHANNEL_GATEWAY_WS_METHODS.ensureBot]: AuthOrchestrationOperateScope,
+  [CHANNEL_GATEWAY_WS_METHODS.updateTaskView]: AuthOrchestrationOperateScope,
   [CHANNEL_GATEWAY_WS_METHODS.ingest]: AuthOrchestrationOperateScope,
   [CHANNEL_GATEWAY_WS_METHODS.createIdentityLink]: AuthSettingsWriteScope,
   [CHANNEL_GATEWAY_WS_METHODS.unlinkIdentity]: AuthSettingsWriteScope,

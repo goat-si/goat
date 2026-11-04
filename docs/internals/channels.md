@@ -392,4 +392,4 @@ changed: the worker files `goat_origin_report` there, and
 - **Refused answers.** If the remote refuses an answer because the worker thread now runs above
   the requester's ceiling, the question is asked again with the answer quoted, as on this machine.
 
-Bot profiles represent long-lived bots. The main profile adopts the canonical GOAT Bot thread; profile rows live in `channel_runtime_state`.
+Task views are scoped to the owner and kept separately from task lifecycle. `channel.listBotThreads` excludes session turn tasks; tasks stored before kinds existed count as work.

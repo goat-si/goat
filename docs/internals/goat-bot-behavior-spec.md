@@ -70,6 +70,7 @@ Acceptance:
 - An eligible session-first message creates a queued turn item atomically with its claim. Its
   session receives the message and writes the receipt afterwards. Other new work is created in
   the same commit as reception's first reply, before dispatch.
+- A task-thread message reaches its running or waiting local task as a text follow-up; attachments stay on the timeline and are not forwarded. A message for a terminal task starts a session turn with that task as context, while an unavailable or unauthorized task is refused.
 - A follow-up to an open item extends that item: no new item, and the item stays in progress until
   the reply covering the follow-up is delivered. Linking a new item to finished work and reusing
   its worker remains a gap: reception currently refuses follow-ups naming finished work and asks

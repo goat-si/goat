@@ -47,7 +47,11 @@ vi.mock("~/globalAgentRoute", () => ({
 }));
 vi.mock("~/threadRoutes", () => ({ resolveThreadRouteTarget: () => null }));
 vi.mock("@tanstack/react-router", () => ({
-  useLocation: () => "/goat",
+  useLocation: ({
+    select,
+  }: {
+    select: (location: { pathname: string; search: object }) => unknown;
+  }) => select({ pathname: "/goat", search: {} }),
   useParams: () => ({}),
   Link: ({ children }: { children: ReactNode }) => <a href="/goat">{children}</a>,
 }));

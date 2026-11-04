@@ -33,7 +33,7 @@ const allowedFrom: Record<ChannelTaskEvent["type"], ReadonlyArray<ChannelTaskSta
   // A question can open while another waits: a follow-up the worker refused asks its own.
   "task.question.opened": ["received", "dispatching", "running", "waiting_input"],
   "task.question.answered": ["waiting_input"],
-  "task.followup.received": ["running"],
+  "task.followup.received": ["running", "waiting_input"],
   "task.completion.proposed": ["running"],
   "task.completed": ["running"],
   "task.failed": ["received", "dispatching", "running", "waiting_input"],

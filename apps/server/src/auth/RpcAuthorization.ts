@@ -70,6 +70,8 @@ export const RPC_REQUIRED_SCOPES = {
   [CHANNEL_GATEWAY_WS_METHODS.listTasks]: AuthOrchestrationReadScope,
   [CHANNEL_GATEWAY_WS_METHODS.getBotStatus]: AuthOrchestrationReadScope,
   [CHANNEL_GATEWAY_WS_METHODS.listBots]: AuthOrchestrationReadScope,
+  [CHANNEL_GATEWAY_WS_METHODS.listBotThreads]: AuthOrchestrationReadScope,
+  [CHANNEL_GATEWAY_WS_METHODS.updateTaskView]: AuthOrchestrationOperateScope,
   [CHANNEL_GATEWAY_WS_METHODS.getInput]: AuthOrchestrationReadScope,
   [SLACK_CHANNEL_WS_METHODS.getSettings]: AuthOrchestrationReadScope,
   [SLACK_CHANNEL_WS_METHODS.subscribeStatus]: AuthOrchestrationReadScope,

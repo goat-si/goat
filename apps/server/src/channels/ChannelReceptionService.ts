@@ -74,6 +74,7 @@ import * as SlackChannelSettings from "./SlackChannelSettings.ts";
 import { currentChannelIdentity } from "./channelCurrentIdentity.ts";
 import { makeChannelProjectChoices } from "./channelProjectChoices.ts";
 import * as ChannelWake from "./ChannelWake.ts";
+import * as tt from "./channelTaskThreadRefusal.ts";
 import {
   appendChannelBotNote,
   channelBotFilesFor,
@@ -214,10 +215,6 @@ const replyDelivery = (input: {
     },
   };
 };
-
-/** Slack replies tag the person; the GOAT bot and MCP do not. */
-const mentionFor = (address: ChannelReplyAddress, externalActorId: string | undefined) =>
-  address.kind === "slack" ? externalActorId : undefined;
 
 /** Keeps the newest tail entries that fit the byte budget. */
 const boundTail = (
@@ -851,7 +848,7 @@ const make = Effect.gen(function* () {
             kind: "question",
             text: words.text,
             task,
-            mentionActorId: mentionFor(task.originAddress, task.requester.externalActorId),
+            mentionActorId: tt.mentionFor(task.originAddress, task.requester.externalActorId),
             options: words.options,
           }),
         );
@@ -944,11 +941,16 @@ const make = Effect.gen(function* () {
       const readAt = DateTime.formatIso(yield* DateTime.now);
       const stored = yield* ledger.beginReception({ owner, inputId, receptionId, readAt });
       if (stored === undefined || stored.requester === undefined) return;
-      const message = stored.message;
+      if (yield* tt.shouldRefuseTaskThread(ledger, stored)) {
+        yield* tt.refuseTaskThread(ledger, stored, owner);
+        yield* wake.wake;
+        return;
+      }
+      const message = tt.mainThreadInput(stored).message;
       const requester = stored.requester;
       const conversationId = stored.snapshot.conversationId;
       const origin = message.replyAddress;
-      const mention = mentionFor(origin, message.actor.externalActorId);
+      const mention = tt.mentionFor(origin, message.actor.externalActorId);
 
       if (!isHome) {
         yield* ledger.failReception({
@@ -972,7 +974,6 @@ const make = Effect.gen(function* () {
         return;
       }
 
-      // The bot's copy of the message shows when reception started reading it.
       if (origin.kind === "goat") {
         yield* timeline
           .record({
@@ -1008,7 +1009,6 @@ const make = Effect.gen(function* () {
                 connectionId: message.connectionId,
                 externalActorId: requester.externalActorId,
               });
-        // A link removed or handed to someone else since intake is no longer this sender.
         if (
           linked === undefined ||
           linked.ownerId !== requester.ownerId ||
@@ -1717,7 +1717,7 @@ const make = Effect.gen(function* () {
           kind: base.kind,
           text: evidence === null ? worded : worded + "\n\n" + evidence,
           task,
-          mentionActorId: mentionFor(origin, task.requester.externalActorId),
+          mentionActorId: tt.mentionFor(origin, task.requester.externalActorId),
           options: "options" in base ? base.options : undefined,
         }),
       ];
