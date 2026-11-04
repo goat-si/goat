@@ -136,7 +136,43 @@ const make = Effect.gen(function* () {
   });
 
   const startFresh = Effect.fn("ThreadWorkspace.startFresh")(function* (threadId: ThreadId) {
-    const { fail, project, branch } = yield* load(threadId);
+    const { fail, project, branch, worktreePath: previousPath } = yield* load(threadId);
+    const held = yield* tryWithWorkspaceLease(
+      previousPath,
+      replace(threadId, fail, project, branch, previousPath),
+    ).pipe(
+      Effect.mapError((error) =>
+        "_tag" in error && error._tag === "ThreadWorkspaceRestoreError"
+          ? error
+          : fail("busy", error.message),
+      ),
+    );
+    if (Option.isNone(held))
+      return yield* fail("busy", "Another task is using this worktree. Try again in a moment.");
+    return held.value;
+  });
+
+  const replace = Effect.fn("ThreadWorkspace.replace")(function* (
+    threadId: ThreadId,
+    fail: (reason: ThreadWorkspaceRestoreFailure, detail: string) => ThreadWorkspaceRestoreError,
+    project: { readonly workspaceRoot: string },
+    branch: string,
+    previousPath: string,
+  ) {
+    const shell = yield* projections
+      .getThreadShell(threadId)
+      .pipe(Effect.orElseSucceed(() => null));
+    if (
+      shell === null ||
+      shell.activeRunId !== null ||
+      shell.pendingRuntimeRequest !== null ||
+      shell.worktreePath === null ||
+      path.resolve(shell.worktreePath) !== previousPath
+    )
+      return yield* fail(
+        "busy",
+        "The thread is running or its worktree changed. Try again when it is idle.",
+      );
     const stamp = (yield* Clock.currentTimeMillis).toString(36);
     const created = yield* git
       .createWorktree({
@@ -148,12 +184,15 @@ const make = Effect.gen(function* () {
       .pipe(Effect.mapError((error) => fail("git-failed", error.message)));
     const worktreePath = created.worktree.path;
     const newBranch = created.worktree.refName;
+    // The expected binding makes a concurrent replacement lose instead of overwriting this one.
     const rebind = threads.dispatch({
       type: "thread.metadata.update",
       commandId: CommandId.make(`workspace-fresh:${threadId}:${stamp}`),
       threadId,
       branch: newBranch,
       worktreePath,
+      expectedWorktreePath: shell.worktreePath,
+      expectedBranch: branch,
     });
     yield* rebind.pipe(
       Effect.catchCause((cause) =>

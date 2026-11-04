@@ -9,7 +9,7 @@ import * as Option from "effect/Option";
 import * as ProjectSetupScriptRunner from "../../project/ProjectSetupScriptRunner.ts";
 import { WorktreeSnapshotStore } from "../../worktreeSnapshots/WorktreeSnapshotStore.ts";
 import { makeRecreateMissingWorktree } from "./RecreateWorktree.ts";
-import { verifyRestoredWorktree } from "./restoreSnapshot.ts";
+import { git, verifyRestoredWorktree } from "./restoreSnapshot.ts";
 
 /**
  * Brings back a thread's missing worktree: from its newest snapshot when cleanup saved one,
@@ -51,31 +51,39 @@ export const makeRestoreThreadWorkspace = Effect.gen(function* () {
           : fail("git-failed", error.message),
       ),
     );
-    const setup = Option.isNone(setupScripts)
-      ? ({ status: "no-script" } as const)
-      : yield* setupScripts.value
-          .runForThread({
-            threadId: input.threadId,
-            projectCwd: input.cwd,
-            worktreePath: input.worktreePath,
-            trigger: "setup",
-          })
-          .pipe(Effect.mapError((error) => fail("setup-failed", error.message)));
-    if (setup.status === "started" && !setup.async && setup.completion !== undefined) {
-      const completion = yield* setup.completion;
-      if (completion.exitCode !== 0)
-        return yield* fail(
-          "setup-failed",
-          `Setup script "${setup.scriptName}" exited with ${completion.exitCode ?? "no exit code"}.`,
-        );
-    }
-    yield* verifyRestoredWorktree({
-      cwd: input.worktreePath,
-      expectedPath: input.worktreePath,
-      branch: input.branch,
-      expectedHead: restored.headSha,
-      ...(snapshot === null ? {} : { snapshot: snapshot.snapshotSha }),
-    }).pipe(Effect.mapError((error) => fail("verify-failed", error.detail)));
+    // A worktree left after a failed setup or check would look present and skip restoration next time.
+    const discard = Effect.promise(() =>
+      git(input.cwd, ["worktree", "remove", "--force", input.worktreePath]).catch(() => undefined),
+    );
+    const prepared = yield* Effect.gen(function* () {
+      const setup = Option.isNone(setupScripts)
+        ? ({ status: "no-script" } as const)
+        : yield* setupScripts.value
+            .runForThread({
+              threadId: input.threadId,
+              projectCwd: input.cwd,
+              worktreePath: input.worktreePath,
+              trigger: "setup",
+            })
+            .pipe(Effect.mapError((error) => fail("setup-failed", error.message)));
+      if (setup.status === "started" && !setup.async && setup.completion !== undefined) {
+        const completion = yield* setup.completion;
+        if (completion.exitCode !== 0)
+          return yield* fail(
+            "setup-failed",
+            `Setup script "${setup.scriptName}" exited with ${completion.exitCode ?? "no exit code"}.`,
+          );
+      }
+      yield* verifyRestoredWorktree({
+        cwd: input.worktreePath,
+        expectedPath: input.worktreePath,
+        branch: input.branch,
+        expectedHead: restored.headSha,
+        ...(snapshot === null ? {} : { snapshot: snapshot.snapshotSha }),
+      }).pipe(Effect.mapError((error) => fail("verify-failed", error.detail)));
+      return setup;
+    }).pipe(Effect.tapError(() => discard));
+    const setup = prepared;
     if (snapshot !== null && Option.isSome(snapshots))
       yield* snapshots.value.markRestored(snapshot.snapshotRef);
     return {

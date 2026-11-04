@@ -1,3 +1,4 @@
+// @effect-diagnostics globalTimers:off -- the Promise-based git child needs a plain kill deadline.
 // @effect-diagnostics nodeBuiltinImport:off -- Git index plumbing and NUL-delimited paths require native process and filesystem IO.
 import * as NodeChildProcess from "node:child_process";
 import { guardChild } from "@goat/shared/errorGuards";
@@ -12,6 +13,9 @@ export class RestoreSnapshotError extends Schema.TaggedError<RestoreSnapshotErro
   { detail: Schema.String, cause: Schema.optional(Schema.Defect()) },
 ) {}
 
+const GIT_TIMEOUT_MS = 5 * 60_000;
+const GIT_OUTPUT_LIMIT = 64 * 1024 * 1024;
+
 export const git = (cwd: string, args: string[], options?: { index?: string; input?: Buffer }) =>
   new Promise<Buffer>((resolvePromise, reject) => {
     const child = guardChild(
@@ -24,13 +28,28 @@ export const git = (cwd: string, args: string[], options?: { index?: string; inp
     );
     const output: Buffer[] = [];
     const errors: Buffer[] = [];
-    child.stdout.on("data", (chunk: Buffer) => output.push(chunk));
-    child.stderr.on("data", (chunk: Buffer) => errors.push(chunk));
-    child.on("close", (code) =>
-      code === 0
-        ? resolvePromise(Buffer.concat(output))
-        : reject(new Error(`git ${args[0]} failed (${code}): ${Buffer.concat(errors).toString()}`)),
-    );
+    let bytes = 0;
+    let stopped: string | null = null;
+    const stop = (reason: string) => {
+      stopped ??= reason;
+      child.kill("SIGKILL");
+    };
+    // Checkout filters and hooks can print or wait without end; one restore must not hold the server.
+    const deadline = setTimeout(() => stop("timed out"), GIT_TIMEOUT_MS);
+    const collect = (into: Buffer[]) => (chunk: Buffer) => {
+      bytes += chunk.length;
+      if (bytes > GIT_OUTPUT_LIMIT) stop("printed too much output");
+      else into.push(chunk);
+    };
+    child.stdout.on("data", collect(output));
+    child.stderr.on("data", collect(errors));
+    child.on("close", (code) => {
+      clearTimeout(deadline);
+      if (stopped !== null) reject(new Error(`git ${args[0]} ${stopped}`));
+      else if (code === 0) resolvePromise(Buffer.concat(output));
+      else
+        reject(new Error(`git ${args[0]} failed (${code}): ${Buffer.concat(errors).toString()}`));
+    });
     child.stdin.end(options?.input);
   });
 

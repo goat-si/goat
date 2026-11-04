@@ -130,19 +130,29 @@ it.effect("brings back the snapshot's changes, reruns setup and records the rest
   }).pipe(Effect.provide(layerRealGit), Effect.scoped),
 );
 
-it.effect("reports a failed setup script and never records the restore", () =>
-  Effect.gen(function* () {
-    const { repo, worktreePath, snapshot } = yield* fixture;
-    const restored: string[] = [];
-    const restore = yield* makeRestoreThreadWorkspace.pipe(
-      Effect.provide(services(snapshot, restored, 1)),
-    );
-    const error = yield* Effect.flip(
-      restore({ threadId, cwd: repo, worktreePath, branch: "feature" }),
-    );
-    assert.equal(error.reason, "setup-failed");
-    assert.deepEqual(restored, []);
-  }).pipe(Effect.provide(layerRealGit), Effect.scoped),
+it.effect(
+  "a failed setup script leaves no worktree behind, so the next attempt restores again",
+  () =>
+    Effect.gen(function* () {
+      const { repo, worktreePath, snapshot } = yield* fixture;
+      const restored: string[] = [];
+      const restore = yield* makeRestoreThreadWorkspace.pipe(
+        Effect.provide(services(snapshot, restored, 1)),
+      );
+      const error = yield* Effect.flip(
+        restore({ threadId, cwd: repo, worktreePath, branch: "feature" }),
+      );
+      assert.equal(error.reason, "setup-failed");
+      assert.deepEqual(restored, []);
+      // Nothing is left that would look present and let the next attempt skip restoring.
+      assert.isFalse(NodeFS.existsSync(worktreePath));
+      const retry = yield* makeRestoreThreadWorkspace.pipe(
+        Effect.provide(services(snapshot, restored, 0)),
+      );
+      yield* retry({ threadId, cwd: repo, worktreePath, branch: "feature" });
+      assert.equal(NodeFS.readFileSync(NodePath.join(worktreePath, "untracked"), "utf8"), "new");
+      assert.deepEqual(restored, [snapshot.snapshotRef]);
+    }).pipe(Effect.provide(layerRealGit), Effect.scoped),
 );
 
 it.effect("refuses to restore onto a branch that moved since the snapshot", () =>
