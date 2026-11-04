@@ -22,6 +22,11 @@ vi.mock("react-native", () => ({
     </button>
   ),
 }));
+vi.mock("../../components/ui/Button", () => ({
+  Button: ({ label, disabled }: { label: string; disabled?: boolean }) => (
+    <button disabled={disabled}>{label}</button>
+  ),
+}));
 import { MobileBotRosterView, MobileHomeSegments } from "./MobileBotRosterView";
 
 const at = "2026-11-04T10:00:00.000Z";
