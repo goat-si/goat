@@ -24,6 +24,7 @@ const harness = vi.hoisted(() => ({
   environments: [] as ReadonlyArray<GoatBotEnvironmentInput>,
   botRef: null as ChannelBotRef | null,
   loaded: true,
+  supportsTaskThreads: false,
   run: vi.fn(),
   save: vi.fn(),
   items: [] as ReadonlyArray<unknown>,
@@ -34,6 +35,7 @@ const harness = vi.hoisted(() => ({
   verify: vi.fn(),
   release: vi.fn(async (_attachments: ReadonlyArray<unknown>) => {}),
   key: vi.fn(() => "request"),
+  refresh: vi.fn(),
 }));
 vi.mock("expo-file-system", () => ({
   File: class {
@@ -65,8 +67,9 @@ vi.mock("../../state/use-composer-drafts", () => ({
 const connection = AsyncResult.success({ phase: "connected", generation: 1 });
 vi.mock("@effect/atom-react", () => ({
   useAtomValue: (atom: Atom.Atom<unknown>) =>
-    atom === permissionAtom ? true : atom === connectionAtom ? connection : null,
+    atom === permissionAtom ? true : atom === connectionAtom ? connection : AsyncResult.initial(),
   useAtomSet: () => harness.save,
+  useAtomRefresh: () => harness.refresh,
 }));
 vi.mock("@goat/client-runtime/state/runtime", () => ({
   runAtomCommand: harness.run,
@@ -88,6 +91,7 @@ vi.mock("../../state/channels", () => ({
   channelEnvironment: {
     ensureBot: { permissionAtom: () => permissionAtom },
     ingest: { permissionAtom: () => permissionAtom },
+    listBotThreads: () => threadsAtom,
   },
 }));
 vi.mock("../../state/preferences", () => ({ updateMobilePreferencesAtom: {} }));
@@ -101,7 +105,13 @@ vi.mock("../../state/entities", () => ({
       ? { source: harness.workerShell }
       : null;
   },
-  useServerConfigs: () => new Map(),
+  useServerConfigs: () =>
+    new Map(
+      harness.environments.map(({ environmentId }) => [
+        environmentId,
+        { environment: { capabilities: { goatBotTaskThreads: harness.supportsTaskThreads } } },
+      ]),
+    ),
 }));
 vi.mock("../../state/shell", () => ({
   useEnvironmentShellReadiness: () => ({ status: "loading" }),
@@ -120,6 +130,7 @@ import * as fileOwnership from "../../lib/composerAttachmentFiles";
 const permissionAtom = Atom.make(true);
 const connectionAtom = Atom.make(connection);
 const detailAtom = Atom.make<unknown>(null);
+const threadsAtom = Atom.make(AsyncResult.initial());
 const registry = Object.assign(AtomRegistry.make(), {
   get: (atom: unknown) =>
     atom === preparedConnection ? Option.some({ httpBaseUrl: "https://example.test" }) : connection,
@@ -158,6 +169,7 @@ beforeEach(() => {
   harness.environments = [];
   harness.botRef = null;
   harness.loaded = true;
+  harness.supportsTaskThreads = false;
   harness.save.mockReset();
   harness.release.mockReset().mockResolvedValue(undefined);
   harness.key.mockReset().mockReturnValue("request");
@@ -866,6 +878,7 @@ it("filters the task conversation and sends messages with its task id", async ()
   harness.environments = [environment(env)];
   harness.botRef = bot(env);
   harness.items = conversation({ environmentId: "env", threadId: "worker-1" });
+  harness.supportsTaskThreads = true;
   taskId = ChannelTaskId.make("task-1");
   const sent = Promise.withResolvers<unknown>();
   harness.run.mockImplementation(async (_registry, _command, args) => {
