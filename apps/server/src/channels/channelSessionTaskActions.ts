@@ -139,8 +139,21 @@ const make = Effect.gen(function* () {
         },
       );
       if (!prepared.ok) return yield* fail("invalid_input");
-      yield* ledger.applyTaskEvent({ write: prepared.write, deliveries: prepared.deliveries });
-      return prepared.event;
+      return yield* ledger
+        .applyTaskEvent({ write: prepared.write, deliveries: prepared.deliveries })
+        .pipe(
+          Effect.as(prepared.event),
+          Effect.catchIf(
+            (error) => error.reason === "version_conflict",
+            (error) =>
+              findEvent(input.taskId, "task.followup.received", "forwardKey", key).pipe(
+                Effect.filterOrFail(
+                  (event) => event !== undefined,
+                  () => error,
+                ),
+              ),
+          ),
+        );
     }),
     stop: Effect.fn("ChannelSessionTaskActions.stop")(function* (input) {
       const { target, requester } = yield* authorize(input);

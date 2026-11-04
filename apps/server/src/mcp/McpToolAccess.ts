@@ -387,15 +387,18 @@ export const writes = <P, A, E, R>(
   );
 
 /** Performs a service-specific refusal before the ordinary write admission. */
-export const writesAfter = <P, A, E, R, E2, R2>(
-  preflight: (params: P) => Effect.Effect<void, E2, R2>,
-  handle: (params: P) => Effect.Effect<A, E, R>,
+export const writesAfter = <P, A, E, R, A2, E2, R2>(
+  preflight: (params: P) => Effect.Effect<A2, E2, R2>,
+  handle: (params: P, preflightResult: A2) => Effect.Effect<A, E, R>,
 ) =>
   declare("write", (params: P) =>
     refuseReadOnlyClient.pipe(
       Effect.andThen(preflight(params)),
-      Effect.andThen(orchestratingCaller),
-      Effect.flatMap((caller) => admitted(params, caller.limits, handle(params))),
+      Effect.flatMap((result) =>
+        orchestratingCaller.pipe(
+          Effect.flatMap((caller) => admitted(params, caller.limits, handle(params, result))),
+        ),
+      ),
     ),
   );
 

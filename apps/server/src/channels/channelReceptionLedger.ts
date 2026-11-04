@@ -130,7 +130,6 @@ export const receptionLedger = (
       reception_id = ${input.receptionId}, read_at = COALESCE(read_at, ${input.now}),
       task_ids_json = ${encodeStrings([input.createdTask.task.taskId])}
       WHERE input_id = ${input.inputId} AND state = 'accepted'
-
       RETURNING owner_id`;
             if (rows[0] === undefined) return false;
             yield* insertTask(input.createdTask.task, rows[0].owner_id, input.createdTask.event);

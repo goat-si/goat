@@ -80,11 +80,9 @@ const sessionPreflight = Effect.fn("channel.sessionPreflight")(function* () {
       message: "A GOAT Bot session run is required.",
     });
   const actions = yield* ChannelSessionTaskActions.ChannelSessionTaskActions;
-  const caller =
-    scope.thread?.runId === undefined
-      ? undefined
-      : { threadId: scope.thread.threadId, runId: scope.thread.runId };
+  const caller = { threadId: scope.thread.threadId, runId: scope.thread.runId };
   yield* actions.checkCaller(caller).pipe(Effect.mapError(failureFor));
+  return caller;
 });
 
 export const layer = McpToolAccess.toLayer(
@@ -92,55 +90,22 @@ export const layer = McpToolAccess.toLayer(
   Effect.gen(function* () {
     const exporter = yield* ChannelTaskExport.ChannelTaskExport;
     return {
-      channel_task_follow_up: McpToolAccess.writesAfter(sessionPreflight, (input) =>
+      channel_task_follow_up: McpToolAccess.writesAfter(sessionPreflight, (input, caller) =>
         Effect.gen(function* () {
-          const scope = yield* McpInvocationContext.McpInvocationContext;
-          if (scope.thread?.runId === undefined)
-            return yield* new OrchestratorMcpFailure({
-              code: "capability_denied",
-              message: "A GOAT Bot session run is required.",
-            });
           const actions = yield* ChannelSessionTaskActions.ChannelSessionTaskActions;
-          return yield* actions
-            .followUp({
-              ...input,
-              caller: { threadId: scope.thread.threadId, runId: scope.thread.runId },
-            })
-            .pipe(Effect.mapError(failureFor));
+          return yield* actions.followUp({ ...input, caller }).pipe(Effect.mapError(failureFor));
         }),
       ),
-      channel_task_stop: McpToolAccess.writesAfter(sessionPreflight, (input) =>
+      channel_task_stop: McpToolAccess.writesAfter(sessionPreflight, (input, caller) =>
         Effect.gen(function* () {
-          const scope = yield* McpInvocationContext.McpInvocationContext;
-          if (scope.thread?.runId === undefined)
-            return yield* new OrchestratorMcpFailure({
-              code: "capability_denied",
-              message: "A GOAT Bot session run is required.",
-            });
           const actions = yield* ChannelSessionTaskActions.ChannelSessionTaskActions;
-          return yield* actions
-            .stop({
-              ...input,
-              caller: { threadId: scope.thread.threadId, runId: scope.thread.runId },
-            })
-            .pipe(Effect.mapError(failureFor));
+          return yield* actions.stop({ ...input, caller }).pipe(Effect.mapError(failureFor));
         }),
       ),
-      channel_task_answer: McpToolAccess.writesAfter(sessionPreflight, (input) =>
+      channel_task_answer: McpToolAccess.writesAfter(sessionPreflight, (input, caller) =>
         Effect.gen(function* () {
-          const scope = yield* McpInvocationContext.McpInvocationContext;
-          if (scope.thread?.runId === undefined)
-            return yield* new OrchestratorMcpFailure({
-              code: "capability_denied",
-              message: "A GOAT Bot session run is required.",
-            });
           const actions = yield* ChannelSessionTaskActions.ChannelSessionTaskActions;
-          return yield* actions
-            .answer({
-              ...input,
-              caller: { threadId: scope.thread.threadId, runId: scope.thread.runId },
-            })
-            .pipe(Effect.mapError(failureFor));
+          return yield* actions.answer({ ...input, caller }).pipe(Effect.mapError(failureFor));
         }),
       ),
       channel_ingest: McpToolAccess.writes((input) =>

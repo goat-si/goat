@@ -1,6 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import { ProviderInstanceId, RunId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Context from "effect/Context";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/sql/SqlClient";
@@ -113,6 +114,83 @@ it.effect(
       assert.strictEqual(
         (yield* Effect.flip(actions.stop({ caller, taskId: target.taskId }))).reason,
         "forbidden",
+      );
+    }).pipe(Effect.provide(harness.layer));
+  },
+);
+
+it.effect(
+  "concurrent identical follow-ups return the committed event after a version conflict",
+  () => {
+    const harness = sessionHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const source = yield* ask("look: source", "conflict-source");
+      const target = yield* ask("look: target", "conflict-target");
+      const threadId = source.worker!.threadId;
+      const caller = { threadId, runId: runsOf(harness, threadId)[0]!.id };
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      let intercepted = false;
+      const actions = Context.get(
+        yield* Layer.build(
+          Layer.fresh(ChannelSessionTaskActions.layer).pipe(
+            Layer.provide(
+              Layer.succeed(ChannelLedger.ChannelLedger, {
+                ...ledger,
+                applyTaskEvent: (input) => {
+                  intercepted = true;
+                  return ledger
+                    .applyTaskEvent(input)
+                    .pipe(Effect.andThen(ledger.applyTaskEvent(input)));
+                },
+              }),
+            ),
+          ),
+        ),
+        ChannelSessionTaskActions.ChannelSessionTaskActions,
+      );
+      const event = yield* actions.followUp({
+        caller,
+        taskId: target.taskId,
+        text: "continue",
+        clientRequestId: "conflict",
+      });
+      assert.isTrue(intercepted);
+      assert.strictEqual(event?.type, "task.followup.received");
+      const sql = yield* SqlClient.SqlClient;
+      const rows = yield* sql<{
+        readonly event_json: string;
+      }>`SELECT event_json FROM channel_task_events
+        WHERE task_id = ${target.taskId} AND type = 'task.followup.received'`;
+      assert.lengthOf(rows, 1);
+      assert.deepStrictEqual(JSON.parse(rows[0]!.event_json), event);
+      const conflict = new ChannelLedger.ChannelLedgerError({
+        reason: "version_conflict",
+        detail: "unrelated change",
+      });
+      const staleActions = Context.get(
+        yield* Layer.build(
+          Layer.fresh(ChannelSessionTaskActions.layer).pipe(
+            Layer.provide(
+              Layer.succeed(ChannelLedger.ChannelLedger, {
+                ...ledger,
+                applyTaskEvent: () => Effect.fail(conflict),
+              }),
+            ),
+          ),
+        ),
+        ChannelSessionTaskActions.ChannelSessionTaskActions,
+      );
+      assert.strictEqual(
+        yield* Effect.flip(
+          staleActions.followUp({
+            caller,
+            taskId: target.taskId,
+            text: "other",
+            clientRequestId: "other",
+          }),
+        ),
+        conflict,
       );
     }).pipe(Effect.provide(harness.layer));
   },
