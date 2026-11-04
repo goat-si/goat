@@ -107,7 +107,7 @@ it("Bots tab lists the main bot and its task threads and keeps its selection whe
   await userEvent.click(screen.getByRole("tab", { name: "Bots" }));
   await expect.element(screen.getByText("Helper Main")).toBeVisible();
   await expect.element(screen.getByText("Review work")).toBeVisible();
-  await expect.element(screen.getByText("GOAT thread")).toBeVisible();
+  await expect.element(screen.getByRole("link", { name: "GOAT thread: Fix code" })).toBeVisible();
   await userEvent.click(screen.getByText("Fix code"));
   await screen.rerender(<GoatBotSidebarTabs />);
   expect(navigation.pathname).toBe("/env-1/thread-1");
@@ -167,7 +167,7 @@ it("labels task status and explains an empty bot roster", async () => {
   useGlobalAgentStore.getState().setMode("bot");
   // The router is mocked to exercise the roster independently.
   await using screen = await render(<GoatBotSidebarTabs />, { router: false });
-  await expect.element(screen.getByRole("img", { name: "Needs your input" })).toBeVisible();
+  await expect.element(screen.getByRole("img", { name: "Needs your input" })).toBeInTheDocument();
   const saved = rows.splice(0);
   await screen.rerender(<GoatBotSidebarTabs />);
   await expect.element(screen.getByText("Work GOAT Bot starts appears here.")).toBeVisible();

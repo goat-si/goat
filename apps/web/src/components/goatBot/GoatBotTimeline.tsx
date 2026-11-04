@@ -35,6 +35,7 @@ import { formatShortTimestamp } from "~/timestampFormat";
 import { MemorySettingsEntry } from "../settings/MemorySettings";
 import { GoatBotLinkedText } from "./GoatBotLinkedText";
 import { GoatBotTaskChip } from "./GoatBotTaskChip";
+import { recordTaskOpener, useTaskPaneFocus } from "./taskPaneFocus";
 
 /** How close to the bottom still counts as "following" new messages. */
 const FOLLOW_THRESHOLD_PX = 48;
@@ -65,6 +66,7 @@ export function GoatBotTimeline({
   readonly onPick?: ((answer: string) => void) | undefined;
 }) {
   const timestampFormat = usePrimarySettings((settings) => settings.timestampFormat);
+  const taskFocus = useTaskPaneFocus();
   const scrollRef = useRef<HTMLDivElement>(null);
   // Messages sent while this view is mounted, by send key, and the server id each one received.
   // A committed row reuses its pending row's element, so the send motion plays once and never
@@ -365,6 +367,22 @@ export function GoatBotTimeline({
                         <Link
                           to="/bot"
                           search={{ task: ChannelTaskId.make(row.card.key) }}
+                          data-task-opener={`pill:${row.id}`}
+                          onClick={(event) => {
+                            if (
+                              !event.metaKey &&
+                              !event.ctrlKey &&
+                              !event.shiftKey &&
+                              !event.altKey &&
+                              event.button === 0
+                            )
+                              recordTaskOpener(
+                                taskFocus,
+                                event.currentTarget,
+                                row.card.key,
+                                `pill:${row.id}`,
+                              );
+                          }}
                           className="inline-flex max-w-full rounded-full border border-border px-3 py-1.5 text-sm whitespace-normal break-words hover:bg-accent focus-visible:outline-2 focus-visible:outline-ring"
                         >
                           Task thread · {row.card.title}

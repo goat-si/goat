@@ -7,11 +7,13 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { useResizableWidth, RESIZABLE_WIDTH_PROPERTY } from "~/hooks/useResizableWidth";
 import { RightPanelResizeHandle } from "../preview/RightPanelResizeHandle";
 import { Button } from "../ui/button";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { GoatBotComposer } from "./GoatBotComposer";
 import { GoatBotWorkDetails } from "./GoatBotWorkDetails";
 import { GoatBotTimeline } from "./GoatBotTimeline";
 import { useBotRoster } from "./useBotRoster";
 import { useGoatBotSession } from "./useGoatBotSession";
+import { focusTaskHeading, useTaskPaneFocus } from "./taskPaneFocus";
 
 export function GoatBotTaskPane({
   environmentId,
@@ -33,6 +35,7 @@ export function GoatBotTaskPane({
     maxWidth: 900,
     edge: "left",
   });
+  const taskFocus = useTaskPaneFocus();
   const { rows, refresh } = useBotRoster();
   const task = rows.find((row) => row.kind === "task" && row.task.taskId === taskId);
   const update = useAtomCommand(channelEnvironment.updateTaskView);
@@ -74,12 +77,27 @@ export function GoatBotTaskPane({
         <Button variant="ghost" size="sm" onClick={onClose}>
           {narrow ? "Back to Tasks" : "Close"}
         </Button>
-        <div className="min-w-0 flex-1">
-          <h2 className="truncate font-semibold">
-            {task?.kind === "task" ? task.task.title : "Task thread"}
-          </h2>
+        <div
+          className={
+            narrow ? "order-last flex min-w-0 w-full items-baseline gap-2" : "min-w-0 flex-1"
+          }
+        >
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <h2
+                  className="min-w-0 flex-1 truncate font-semibold"
+                  tabIndex={-1}
+                  ref={(element) => focusTaskHeading(taskFocus, taskId, element)}
+                />
+              }
+            >
+              {task?.kind === "task" ? task.task.title : "Task thread"}
+            </TooltipTrigger>
+            <TooltipPopup>{task?.kind === "task" ? task.task.title : "Task thread"}</TooltipPopup>
+          </Tooltip>
           {task?.kind === "task" && (
-            <p className="text-xs text-muted-foreground">
+            <p className="shrink-0 text-xs text-muted-foreground">
               {presentTaskStatus(task.view.doneAt ? "completed" : task.task.status).label}
             </p>
           )}
@@ -119,7 +137,9 @@ export function GoatBotTaskPane({
           </>
         )}
       </header>
-      <GoatBotWorkDetails environmentId={environmentId} taskId={taskId} rows={rows} />
+      <div className="px-3">
+        <GoatBotWorkDetails environmentId={environmentId} taskId={taskId} rows={rows} />
+      </div>
       <GoatBotTimeline
         taskDetails
         rows={session.rowsForTask(taskId)}

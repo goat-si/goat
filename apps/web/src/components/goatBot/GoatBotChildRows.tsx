@@ -14,6 +14,7 @@ import { ThreadStatusLabel } from "../ThreadStatusIndicators";
 import { Button } from "../ui/button";
 import { EllipsisIcon } from "../solar";
 import { SidebarGroup, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
+import { recordTaskOpener, useTaskPaneFocus } from "./taskPaneFocus";
 
 export function GoatBotChildRows({
   environmentId,
@@ -25,6 +26,7 @@ export function GoatBotChildRows({
   refresh: () => void;
 }) {
   const [showMore, setShowMore] = useState(false);
+  const taskFocus = useTaskPaneFocus();
   // oxlint-disable-next-line react/purity -- Visibility ages are evaluated when the roster changes.
   const now = Date.now();
   const location = useLocation();
@@ -105,7 +107,11 @@ export function GoatBotChildRows({
             <SidebarMenuItem key={botThreadKey(row)}>
               <SidebarMenuButton
                 isActive={active}
-                tooltip={{ children: title, hidden: false }}
+                tooltip={{
+                  children: row.kind === "coding" ? `GOAT thread: ${title}` : title,
+                  hidden: false,
+                }}
+                aria-label={row.kind === "coding" ? `GOAT thread: ${title}` : undefined}
                 aria-current={active ? "page" : undefined}
                 onContextMenu={
                   task
@@ -117,7 +123,26 @@ export function GoatBotChildRows({
                 }
                 render={
                   row.kind === "task" ? (
-                    <Link to="/bot" search={{ task: row.task.taskId }} />
+                    <Link
+                      to="/bot"
+                      search={{ task: row.task.taskId }}
+                      data-task-opener={`sidebar:${row.task.taskId}`}
+                      onClick={(event) => {
+                        if (
+                          !event.metaKey &&
+                          !event.ctrlKey &&
+                          !event.shiftKey &&
+                          !event.altKey &&
+                          event.button === 0
+                        )
+                          recordTaskOpener(
+                            taskFocus,
+                            event.currentTarget,
+                            row.task.taskId,
+                            `sidebar:${row.task.taskId}`,
+                          );
+                      }}
+                    />
                   ) : (
                     <Link
                       to="/$environmentId/$threadId"
@@ -127,13 +152,8 @@ export function GoatBotChildRows({
                 }
               >
                 <span className="w-4" />
-                {statusPill && <ThreadStatusLabel status={statusPill} />}
+                {statusPill && <ThreadStatusLabel status={statusPill} compact />}
                 <span className="min-w-0 flex-1 truncate">{title}</span>
-                {row.kind === "coding" && (
-                  <span className="min-w-0 truncate text-xs text-muted-foreground">
-                    GOAT thread
-                  </span>
-                )}
                 {task?.unread && (
                   <span role="img" aria-label="Unread" className="size-2 rounded-full bg-info" />
                 )}
