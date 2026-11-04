@@ -153,6 +153,8 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
     readonly status: string;
   };
   const providerTurns: Array<ReportedTurn> = [];
+  // Each system notice the adapter showed in a run.
+  const notices: Array<{ readonly providerTurnId: string | null; readonly message: string }> = [];
   const turnListeners = new Set<() => void>();
   // Waits until the adapter has reported a provider turn that matches.
   const providerTurn = (matches: (turn: ReportedTurn) => boolean) =>
@@ -181,19 +183,27 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
               });
               for (const listener of turnListeners) listener();
             })
-          : event.type === "subagent.updated"
-            ? Effect.sync(() => void subagentStatuses.push(event.subagent.status))
-            : event.type === "node.updated"
-              ? Effect.sync(
-                  () =>
-                    void nodeStatuses.set(event.node.id, [
-                      ...(nodeStatuses.get(event.node.id) ?? []),
-                      event.node.status,
-                    ]),
-                )
-              : event.type === "provider_thread.updated" && event.providerThread.goal
-                ? Queue.offer(goalTokens, event.providerThread.goal.tokensUsed ?? 0)
-                : Effect.void,
+          : event.type === "turn_item.updated" && event.turnItem.type === "system_notice"
+            ? Effect.sync(
+                () =>
+                  void notices.push({
+                    providerTurnId: event.turnItem.providerTurnId,
+                    message: event.turnItem.type === "system_notice" ? event.turnItem.message : "",
+                  }),
+              )
+            : event.type === "subagent.updated"
+              ? Effect.sync(() => void subagentStatuses.push(event.subagent.status))
+              : event.type === "node.updated"
+                ? Effect.sync(
+                    () =>
+                      void nodeStatuses.set(event.node.id, [
+                        ...(nodeStatuses.get(event.node.id) ?? []),
+                        event.node.status,
+                      ]),
+                  )
+                : event.type === "provider_thread.updated" && event.providerThread.goal
+                  ? Queue.offer(goalTokens, event.providerThread.goal.tokensUsed ?? 0)
+                  : Effect.void,
     ),
     Effect.forkScoped,
   );
@@ -227,6 +237,8 @@ const openReplay = Effect.fn("CodexComputerUseTest.openReplay")(function* (
     nodeStatuses,
     providerTurns,
     providerTurn,
+    notices,
+    threadId,
     runtime,
     providerThread,
   };
