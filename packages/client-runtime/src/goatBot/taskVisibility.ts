@@ -1,4 +1,8 @@
-import { isChannelChildWorkTerminal, type BotThreadRow } from "@goat/contracts";
+import {
+  isChannelChildWorkTerminal,
+  isChannelTaskTerminal,
+  type BotThreadRow,
+} from "@goat/contracts";
 
 const HOUR = 60 * 60 * 1_000;
 const THREE_DAYS = 72 * HOUR;
@@ -36,9 +40,15 @@ export function selectBotChildren({
     }
     if (row.kind === "task") {
       const doneAt = row.view.doneAt;
-      const age = now - Date.parse(doneAt ?? row.lastActivityAt);
+      const terminal = isChannelTaskTerminal(row.task.status);
+      const quietAt = Math.max(
+        Date.parse(row.task.completedAt ?? row.lastActivityAt),
+        doneAt === null ? -Infinity : Date.parse(doneAt),
+      );
+      const age = now - quietAt;
       if (doneAt !== null && age >= THREE_DAYS) continue;
-      if (age >= (doneAt !== null ? 2 : 6) * HOUR && row.mainMessagesSinceQuiet >= 10) continue;
+      if (age >= (doneAt !== null || terminal ? 2 : 6) * HOUR && row.mainMessagesSinceQuiet >= 10)
+        continue;
     }
     other.push(row);
   }

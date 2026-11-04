@@ -44,10 +44,10 @@ describe("bot task visibility", () => {
     const nine = row("nine", 2, { done: true, messages: 9 });
     expect(select([before, at, nine]).rows).toEqual([before, nine]);
   });
-  it("hides terminal tasks without a done flag at six hours and ten messages", () => {
-    const before = row("before", 5.999, { terminal: true, messages: 10 });
-    const at = row("at", 6, { terminal: true, messages: 10 });
-    const nine = row("nine", 6, { terminal: true, messages: 9 });
+  it("hides terminal tasks without a done flag at two hours and ten messages", () => {
+    const before = row("before", 1.999, { terminal: true, messages: 10 });
+    const at = row("at", 2, { terminal: true, messages: 10 });
+    const nine = row("nine", 2, { terminal: true, messages: 9 });
     const old = row("old", 73, { terminal: true, messages: 9 });
     expect(select([before, at, nine, old]).rows).toEqual([before, nine, old]);
   });
