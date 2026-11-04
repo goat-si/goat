@@ -11,6 +11,7 @@ import {
   hasQueuedTurnStart,
   QUEUED_TURN_START_GRACE_MS,
 } from "@goat/client-runtime/state/thread-settled";
+
 import { resolveSettledThreadTimestamp } from "@goat/client-runtime/state/thread-sort";
 import { type EnvironmentThreadSearchMatch } from "@goat/client-runtime/state/thread-search";
 import { scopeThreadRef, scopedThreadKey } from "@goat/client-runtime/environment";
@@ -19,6 +20,7 @@ import {
   type EnvironmentMachineKind,
   type ScopedThreadRef,
 } from "@goat/contracts";
+
 import type { TimestampFormat } from "@goat/contracts/settings";
 import {
   AlarmClockIcon,
@@ -51,6 +53,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
+
 import { useRightPanelStore } from "../../rightPanelStore";
 import { useOpenPrLink } from "../../lib/openPullRequestLink";
 import { useUiStateStore } from "../../uiStateStore";
@@ -1349,10 +1352,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
                           ) : topStatus.icon === "failed" ? (
                             <CircleAlertIcon aria-hidden className="size-3.5 shrink-0" />
                           ) : topStatus.icon === "done" ? (
-                            <span
-                              aria-hidden
-                              className="size-2 shrink-0 rounded-full bg-info forced-colors:bg-current"
-                            />
+                            <span aria-hidden className="size-2 shrink-0 rounded-full bg-info" />
                           ) : (
                             <CircleDashedIcon aria-hidden className="size-3.5 shrink-0" />
                           )}

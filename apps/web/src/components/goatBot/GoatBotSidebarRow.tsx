@@ -183,7 +183,7 @@ function GoatBotConversationRow({
       >
         {preview?.unread ? (
           <span
-            className="size-2.5 rounded-full bg-info forced-colors:bg-current"
+            className="size-2.5 rounded-full bg-info"
             role="img"
             aria-label="Unread GOAT Bot messages"
           />

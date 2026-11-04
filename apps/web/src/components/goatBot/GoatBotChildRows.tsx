@@ -153,11 +153,7 @@ export function GoatBotChildRows({
                 {statusPill && <ThreadStatusLabel status={statusPill} compact />}
                 <span className="min-w-0 flex-1 truncate">{title}</span>
                 {task?.unread && (
-                  <span
-                    role="img"
-                    aria-label="Unread"
-                    className="size-2 rounded-full bg-info forced-colors:bg-current"
-                  />
+                  <span role="img" aria-label="Unread" className="size-2 rounded-full bg-info" />
                 )}
               </SidebarMenuButton>
               {task && (
