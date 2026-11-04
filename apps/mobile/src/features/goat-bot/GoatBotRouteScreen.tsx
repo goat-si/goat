@@ -1,3 +1,4 @@
+import { ChannelTaskId } from "@goat/contracts";
 import { useIsFocused, type StaticScreenProps } from "@react-navigation/native";
 import { useEffect } from "react";
 import { threadEnvironment } from "../../state/threads";
@@ -12,7 +13,7 @@ export function GoatBotRouteScreen({ route }: StaticScreenProps<{ taskId?: strin
   const preview = useMobileBotPreview();
   const environmentId = botRef?.environmentId;
   const threadId = botRef?.threadId;
-  const taskId = route.params.taskId;
+  const taskId = route.params?.taskId;
   const unreadAt = preview?.unread ? preview.at : null;
   const visit = useAtomCommand(threadEnvironment.visit, { reportFailure: false });
   // oxlint-disable-next-line goat/react-effect-budget -- Persist the visit while the main conversation is visible.
@@ -21,5 +22,7 @@ export function GoatBotRouteScreen({ route }: StaticScreenProps<{ taskId?: strin
       void visit({ environmentId, input: { threadId, visitedAt: unreadAt } });
     }
   }, [focused, taskId, environmentId, threadId, unreadAt, visit]);
-  return <GoatBotScreen visible={focused} />;
+  return (
+    <GoatBotScreen visible={focused} taskId={taskId ? ChannelTaskId.make(taskId) : undefined} />
+  );
 }

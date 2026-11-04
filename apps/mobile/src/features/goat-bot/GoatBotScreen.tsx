@@ -6,8 +6,9 @@ import {
   hasGoatBotMarkdown,
   type GoatBotRow,
 } from "@goat/client-runtime/goatBot";
-import type { EnvironmentId } from "@goat/contracts";
+import { ChannelTaskId, type EnvironmentId } from "@goat/contracts";
 import { HeaderHeightContext } from "@react-navigation/elements";
+import { StackActions, useNavigation } from "@react-navigation/native";
 import { memo, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { Platform, Pressable, Text, TextInput, View, useWindowDimensions } from "react-native";
 import {
@@ -39,6 +40,7 @@ import { GOAT_BOT_BUBBLE_COLORS, goatBotBubbleLayout } from "./goatBotBubbleStyl
 import { goatBotComposerBottomPadding, goatBotInputMaxHeight } from "./goatBotComposerInsets";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
+import { MobileBotWork } from "./MobileBotWork";
 
 type ThreadSelection = Pick<EnvironmentThreadShell, "environmentId" | "id">;
 const rowKey = (row: GoatBotRow) => row.id;
@@ -197,6 +199,7 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
   readonly onRetry: (key: string) => void;
   readonly onDiscard?: (key: string) => void;
   readonly onSelectThread: (thread: ThreadSelection) => void;
+  readonly onSelectTask?: (taskId: ChannelTaskId) => void;
   /** The environment whose bot history is shown; thread links in bot text open there. */
   readonly environmentId?: EnvironmentId | null;
 }) {
@@ -211,6 +214,17 @@ export const GoatBotTimelineRow = memo(function GoatBotTimelineRow(props: {
   }
   const layout = goatBotBubbleLayout(row.groupPosition);
   if (row.kind === "task") {
+    if (props.onSelectTask) {
+      return (
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => props.onSelectTask?.(ChannelTaskId.make(row.card.key))}
+          className="self-start rounded-full border border-border px-3 py-2"
+        >
+          <Text className="text-foreground">Task thread · {row.card.title}</Text>
+        </Pressable>
+      );
+    }
     return (
       <View style={{ marginTop: layout.marginTop, alignItems: "flex-start" }}>
         <GoatBotTaskCard card={row.card} onSelectThread={props.onSelectThread} tail={layout.tail} />
@@ -357,17 +371,19 @@ function GoatBotActivityBubble({ text }: { readonly text: string }) {
 
 export function GoatBotScreen(props: {
   readonly visible: boolean;
+  readonly taskId?: ChannelTaskId;
   readonly onSelectThread?: (thread: ThreadSelection) => void;
   /** Floating tabs cover the bottom of the screen; the composer rests above them. */
   readonly floatingTabs?: { readonly bottomSafeArea: number };
 }) {
-  const session = useMobileGoatBotSession(props.visible);
+  const session = useMobileGoatBotSession(props.visible, props.taskId);
   const homeSettings = useMobileGoatBotHomeSettings();
   const moveTarget = homeSettings.moveTarget;
   const { themeAppearance } = useAppearancePreferences();
   const bodyText = useScaledTextRole("body");
   const outgoingColor = GOAT_BOT_BUBBLE_COLORS[themeAppearance].out;
   const selectDetail = useSelectWorkspaceDetail();
+  const navigation = useNavigation();
   const selectThread = useCallback(
     (thread: ThreadSelection) =>
       selectDetail({
@@ -377,6 +393,10 @@ export function GoatBotScreen(props: {
     [selectDetail],
   );
   const onSelectThread = props.onSelectThread ?? selectThread;
+  const onSelectTask = useCallback(
+    (taskId: ChannelTaskId) => navigation.dispatch(StackActions.push("GoatBot", { taskId })),
+    [navigation],
+  );
   const insets = useSafeAreaInsets();
   const composerPadding = goatBotComposerBottomPadding(
     props.floatingTabs
@@ -400,7 +420,7 @@ export function GoatBotScreen(props: {
   const topInset = Platform.OS === "ios" && NATIVE_LIQUID_GLASS_SUPPORTED ? headerHeight : 0;
   // LegendList cannot see UIKit's adjusted inset; without it, end alignment pads a short
   // conversation by the header height and its last message starts below the composer's top.
-  const listTopInset = hasBanner || homeError ? 0 : topInset;
+  const listTopInset = 0;
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<ReadonlyArray<DraftComposerAttachment>>([]);
   const draftFiles = useRef(new Map<string, () => void>());
@@ -427,6 +447,7 @@ export function GoatBotScreen(props: {
         onRetry={session.onRetryInput}
         onDiscard={session.onDiscardInput}
         onSelectThread={onSelectThread}
+        onSelectTask={props.taskId ? undefined : onSelectTask}
         environmentId={session.historyEnvironmentId}
       />
     ),
@@ -436,6 +457,8 @@ export function GoatBotScreen(props: {
       session.onRetryInput,
       session.onDiscardInput,
       onSelectThread,
+      onSelectTask,
+      props.taskId,
       session.historyEnvironmentId,
     ],
   );
@@ -458,11 +481,14 @@ export function GoatBotScreen(props: {
   const canSubmit = session.canSend && (text.trim().length > 0 || attachments.length > 0);
   return (
     <KeyboardAvoidingView className="flex-1 bg-screen" automaticOffset behavior="height">
+      <View style={{ paddingTop: topInset }}>
+        <MobileBotWork taskId={props.taskId} visible={props.visible} onOpenTask={onSelectTask} />
+      </View>
       {hasBanner ? (
         <View
           accessibilityRole="alert"
           className="gap-2 border-b border-border px-4 py-3"
-          style={{ paddingTop: topInset + 12 }}
+          style={{ paddingTop: 12 }}
         >
           <Text className="text-sm text-foreground-muted">
             {session.availability === "home_offline"
@@ -500,7 +526,7 @@ export function GoatBotScreen(props: {
         <Text
           accessibilityRole="alert"
           className="px-4 py-2 text-sm text-danger-foreground"
-          style={hasBanner ? undefined : { paddingTop: topInset + 8 }}
+          style={hasBanner ? undefined : { paddingTop: 8 }}
         >
           {homeError}
         </Text>
@@ -525,7 +551,9 @@ export function GoatBotScreen(props: {
           </Text>
         }
         ListFooterComponent={
-          session.activity ? <GoatBotActivityBubble text={session.activity.text} /> : null
+          !props.taskId && session.activity ? (
+            <GoatBotActivityBubble text={session.activity.text} />
+          ) : null
         }
       />
       <Animated.View

@@ -8,6 +8,7 @@ import {
 import { expect, it, vi } from "vite-plus/test";
 
 const appearance = vi.hoisted(() => ({ mode: "dark" as "light" | "dark", baseFontSize: 16 }));
+vi.mock("./MobileBotWork", () => ({ MobileBotWork: () => null }));
 const screenSession = vi.hoisted(() => ({ activity: null as GoatBotActivity | null }));
 const list = vi.hoisted(() => ({ props: null as Record<string, unknown> | null }));
 const picker = vi.hoisted(() => ({
@@ -90,6 +91,10 @@ vi.mock("@legendapp/list/react-native", () => ({
 }));
 vi.mock("@react-navigation/elements", async () => ({
   HeaderHeightContext: (await import("react")).createContext<number | undefined>(undefined),
+}));
+vi.mock("@react-navigation/native", () => ({
+  useNavigation: () => ({ dispatch: () => {} }),
+  StackActions: { push: (name: string, params: object) => ({ name, params }) },
 }));
 vi.mock("react-native-reanimated", () => ({
   default: { View: (props: { children?: unknown }) => props.children },

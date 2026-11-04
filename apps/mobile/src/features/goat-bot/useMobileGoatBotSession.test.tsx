@@ -7,6 +7,7 @@ import {
 } from "@goat/client-runtime/goatBot";
 import {
   EnvironmentId,
+  ChannelTaskId,
   OrchestrationV2TurnItemJson,
   ProjectId,
   RunId,
@@ -125,8 +126,9 @@ const registry = Object.assign(AtomRegistry.make(), {
 });
 let root: Root | null = null;
 let session: ReturnType<typeof useMobileGoatBotSession>;
+let taskId: ChannelTaskId | undefined;
 function Consumer() {
-  const value = useMobileGoatBotSession(true);
+  const value = useMobileGoatBotSession(true, taskId);
   useLayoutEffect(() => {
     session = value;
   }, [value]);
@@ -151,6 +153,7 @@ function bot(environmentId: EnvironmentId): ChannelBotRef {
   return { environmentId, projectId: ProjectId.make("project"), threadId: ThreadId.make("bot") };
 }
 beforeEach(() => {
+  taskId = undefined;
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   harness.environments = [];
   harness.botRef = null;
@@ -856,4 +859,31 @@ describe("mobile GOAT Bot activity", () => {
       unmountOtherScreen();
     }
   });
+});
+
+it("filters the task conversation and sends messages with its task id", async () => {
+  const env = EnvironmentId.make("task-conversation");
+  harness.environments = [environment(env)];
+  harness.botRef = bot(env);
+  harness.items = conversation({ environmentId: "env", threadId: "worker-1" });
+  taskId = ChannelTaskId.make("task-1");
+  const sent = Promise.withResolvers<unknown>();
+  harness.run.mockImplementation(async (_registry, _command, args) => {
+    if (args.input?.intent === "message") sent.resolve(args.input);
+    return { _tag: "Success", value: bot(env) };
+  });
+  await render();
+  expect(session.rows.some((row) => row.kind === "bot" && row.text === "Checking now.")).toBe(true);
+  expect(session.rows.some((row) => row.kind === "user" && row.text === "Check the disks")).toBe(
+    false,
+  );
+  await act(async () => {
+    expect(session.onSend("Follow up")).toBe(true);
+  });
+  expect(await sent.promise).toMatchObject({
+    intent: "message",
+    taskId: "task-1",
+    text: "Follow up",
+  });
+  await botSessions.disposeMobileGoatBotEnvironment(env);
 });
