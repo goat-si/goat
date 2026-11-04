@@ -44,6 +44,7 @@ import { CodexProviderCapabilitiesV2 } from "./orchestration-v2/Adapters/CodexAd
 import { ServerActivation } from "./serverActivation.ts";
 
 import { shell } from "./storageCleanup.testFixtures.ts";
+import { OpenHandleRunnerRef } from "./worktreeSnapshots/openHandles.ts";
 
 // The rules this file's older cases were written for; new default-on rules have their own cases.
 export const LEGACY_WORKTREE_RULES = {
@@ -352,6 +353,12 @@ export const runCleanupTest = <A, E>(
   effect.pipe(
     // Never the developer's home: cleanup reads other local GOAT apps' databases from it.
     Effect.provideService(HostProcess.HomeDirectory, "/nonexistent/goat-cleanup-test-home"),
+    // A complete, empty listing unless a test asks for the host's lsof.
+    Effect.provideService(OpenHandleRunnerRef, async () => ({
+      stdout: "",
+      stderr: "",
+      exitCode: 1,
+    })),
     Effect.provide(cleanupTestLayer),
     Effect.scoped,
   );

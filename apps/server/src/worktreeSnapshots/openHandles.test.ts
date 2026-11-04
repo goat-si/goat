@@ -1,7 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off -- bounded lsof execution and its real-process fixture use native APIs.
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
-import * as HostProcess from "@goat/shared/HostProcess";
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
@@ -31,9 +30,21 @@ it.effect("parses holders and fails closed on warnings and unsuccessful commands
   }),
 );
 
-it.effect("reports a real child holding a file open", () =>
+// Container hosts make lsof warn about mounts it cannot stat, so its listing is never complete
+// there; the fail-closed answer for that case is covered above with an injected runner.
+const lsofListsCompletely =
+  process.getuid !== undefined &&
+  (() => {
+    const probe = NodeChildProcess.spawnSync(
+      "lsof",
+      ["-n", "-u", String(process.getuid?.()), "-F", "pn"],
+      { encoding: "utf8", maxBuffer: 16 * 1024 * 1024, timeout: 10_000 },
+    );
+    return probe.status === 0 && probe.stderr === "";
+  })();
+
+it.effect.skipIf(!lsofListsCompletely)("reports a real child holding a file open", () =>
   Effect.gen(function* () {
-    if ((yield* HostProcess.Platform) === "win32") return;
     const dir = yield* Effect.acquireRelease(
       Effect.promise(() => NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-open-handles-"))),
       (path) => Effect.promise(() => NodeFSP.rm(path, { recursive: true, force: true })),

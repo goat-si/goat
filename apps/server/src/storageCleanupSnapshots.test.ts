@@ -6,6 +6,7 @@ import * as Effect from "effect/Effect";
 
 import { LEGACY_WORKTREE_RULES, cleanupFixture, runCleanupTest } from "./storageCleanup.testkit.ts";
 import { DAY_MS, at, shell } from "./storageCleanup.testFixtures.ts";
+import { OpenHandleRunnerRef, runLsof } from "./worktreeSnapshots/openHandles.ts";
 
 const withSnapshots = {
   ...DEFAULT_SERVER_SETTINGS.storageCleanup,
@@ -89,11 +90,11 @@ describe("snapshot before removal", () => {
         expect(report.entries.find((entry) => entry.kind === "worktree")).toMatchObject({
           outcome: "kept",
           reason: expect.stringMatching(
-            /process is using this worktree|couldn't check which processes/,
+            /process is using this worktree|couldn't check which processes/i,
           ),
         });
         expect(yield* fs.exists(worktree)).toBe(true);
-      }),
+      }).pipe(Effect.provideService(OpenHandleRunnerRef, runLsof)),
     ),
   );
 });

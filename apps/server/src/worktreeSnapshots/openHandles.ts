@@ -2,6 +2,7 @@
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as HostProcess from "@goat/shared/HostProcess";
 
@@ -12,7 +13,7 @@ export type OpenHandleCommandResult = {
 };
 export type OpenHandleRunner = (uid: number) => Promise<OpenHandleCommandResult>;
 
-const runLsof: OpenHandleRunner = (uid) =>
+export const runLsof: OpenHandleRunner = (uid) =>
   new Promise((resolve) => {
     NodeChildProcess.execFile(
       "lsof",
@@ -32,10 +33,17 @@ const runLsof: OpenHandleRunner = (uid) =>
     );
   });
 
+/** How cleanup lists open files; tests replace it so results do not depend on the host's lsof. */
+export const OpenHandleRunnerRef = Context.Reference<OpenHandleRunner>(
+  "goat/worktreeSnapshots/OpenHandleRunner",
+  { defaultValue: () => runLsof },
+);
+
 export const findOpenHandles = Effect.fn("openHandles.findOpenHandles")(function* (
   root: string,
-  runner: OpenHandleRunner = runLsof,
+  explicitRunner?: OpenHandleRunner,
 ) {
+  const runner = explicitRunner ?? (yield* OpenHandleRunnerRef);
   if ((yield* HostProcess.Platform) === "win32" || process.getuid === undefined)
     return { complete: false, holders: [] };
   const uid = process.getuid();
