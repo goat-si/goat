@@ -218,6 +218,60 @@ describe("goatBotConversationPreview", () => {
 });
 
 describe("buildGoatBotTimeline", () => {
+  it("isolates task messages and pending sends while keeping task references in main", () => {
+    const at = "2026-10-12T12:00:00Z";
+    const metadata = (taskId: string): GoatBotMessagePresentation => ({
+      tone: "reply",
+      readAt: null,
+      requestKey: null,
+      taskId,
+    });
+    const input = {
+      visibleTurnItems: rowsOf([
+        user("main", at, "main"),
+        user("one", at, "one"),
+        bot("two", at, "two"),
+        notice("chip-one", at),
+        notice("chip-two", at),
+      ]),
+      pendingInputs: [
+        {
+          clientKey: "pending-main",
+          text: "main pending",
+          createdAt: at,
+          state: "queued" as const,
+          requestKey: null,
+        },
+        {
+          clientKey: "pending-one",
+          text: "one pending",
+          createdAt: at,
+          state: "queued" as const,
+          requestKey: null,
+          taskId: "one",
+        },
+      ],
+      readers: readers(
+        { one: metadata("one"), two: metadata("two") },
+        {
+          "chip-one": card("one", 1),
+          "chip-two": card("two", 1),
+        },
+      ),
+    };
+    expect(content(buildGoatBotTimeline({ ...input, taskId: null })).map((row) => row.id)).toEqual([
+      "main",
+      "chip-one",
+      "chip-two",
+      "pending:pending-main",
+    ]);
+    expect(content(buildGoatBotTimeline({ ...input, taskId: "one" })).map((row) => row.id)).toEqual(
+      ["one", "chip-one", "pending:pending-one"],
+    );
+    expect(content(buildGoatBotTimeline({ ...input, taskId: "two" })).map((row) => row.id)).toEqual(
+      ["two", "chip-two"],
+    );
+  });
   it("keeps only the conversation and work cards, hiding tool calls and reasoning", () => {
     const rows = buildGoatBotTimeline({
       visibleTurnItems: rowsOf([

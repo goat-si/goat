@@ -24,7 +24,7 @@ import {
 import { goatBotIngestInput } from "@goat/client-runtime/state/channels";
 import { scopeThreadRef } from "@goat/client-runtime/environment";
 import { runAtomCommand, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
-import type { ChannelBotRef, EnvironmentId, ScopedThreadRef } from "@goat/contracts";
+import type { ChannelBotRef, ChannelTaskId, EnvironmentId, ScopedThreadRef } from "@goat/contracts";
 import { AsyncResult, Atom } from "effect/reactivity";
 import {
   useCallback,
@@ -211,7 +211,7 @@ function newSession(environmentId: EnvironmentId): Session {
         current.bot.threadId === bot.threadId
       );
     },
-    send: async ({ clientKey, text, attachments, receivedAt, bot }) => {
+    send: async ({ clientKey, text, attachments, receivedAt, bot, taskId }) => {
       const fullBot = sessions.get(environmentId)?.bot;
       if (
         !fullBot ||
@@ -277,6 +277,7 @@ function newSession(environmentId: EnvironmentId): Session {
           attachments: files,
           clientMessageId: clientKey,
           receivedAt,
+          ...(taskId === undefined ? {} : { taskId }),
         }),
       });
       if (result._tag === "Failure") throw squashAtomCommandFailure(result);
@@ -339,7 +340,7 @@ function useResidentThreadProjection(ref: ScopedThreadRef | null) {
   return thread?.projection ?? null;
 }
 
-export function useMobileGoatBotSession(visible: boolean) {
+export function useMobileGoatBotSession(visible: boolean, taskId?: ChannelTaskId) {
   const home = useMobileGoatBotHomeMode();
   const environment = home.home.supported
     ? pickGoatBotEnvironment(home.environments, home.botRef)
@@ -577,8 +578,14 @@ export function useMobileGoatBotSession(visible: boolean) {
   }, [visible, queue, visibleTurnItems]);
   const pendingInputs = session?.pending ?? EMPTY_PENDING;
   const rows = useMemo(
-    () => buildGoatBotTimeline({ visibleTurnItems, pendingInputs, readers: goatBotItemReaders }),
-    [visibleTurnItems, pendingInputs],
+    () =>
+      buildGoatBotTimeline({
+        visibleTurnItems,
+        pendingInputs,
+        readers: goatBotItemReaders,
+        ...(taskId === undefined ? {} : { taskId }),
+      }),
+    [visibleTurnItems, pendingInputs, taskId],
   );
   const replyingSince = useMemo(
     () => goatBotReplyingSince({ visibleTurnItems, readers: goatBotItemReaders }),
@@ -637,11 +644,11 @@ export function useMobileGoatBotSession(visible: boolean) {
     (text: string, attachments: ReadonlyArray<DraftComposerAttachment> = []) => {
       if (!canSend || !confirmedBot || (!text.trim() && attachments.length === 0)) return false;
       if (!queue || !session) return false;
-      const key = queue.submit(text.trim(), confirmedBot, attachments);
+      const key = queue.submit(text.trim(), confirmedBot, attachments, taskId);
       session.retain(key, attachments);
       return true;
     },
-    [canSend, confirmedBot, queue, session],
+    [canSend, confirmedBot, queue, session, taskId],
   );
   const onRetryInput = useCallback(
     (key: string) => {

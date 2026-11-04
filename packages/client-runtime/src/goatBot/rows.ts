@@ -87,6 +87,7 @@ export interface GoatBotItemReaders {
 export interface GoatBotPendingInput {
   /** Made once per submission and reused by every retry of it. */
   readonly clientKey: string;
+  readonly taskId?: string;
   readonly text: string;
   readonly attachments?: ReadonlyArray<GoatBotAttachmentLabel>;
   readonly createdAt: string;
@@ -261,6 +262,7 @@ export function buildGoatBotTimeline(input: {
   readonly visibleTurnItems: ReadonlyArray<OrchestrationV2ProjectedTurnItem>;
   readonly pendingInputs: ReadonlyArray<GoatBotPendingInput>;
   readonly readers: GoatBotItemReaders;
+  readonly taskId?: string | null;
 }): GoatBotRow[] {
   const committed: UngroupedRow[] = [];
   const committedRequestKeys = new Set<string>();
@@ -273,6 +275,7 @@ export function buildGoatBotTimeline(input: {
     if (item.type === "user_message") {
       if (item.text.trim().length === 0 && item.attachments.length === 0) continue;
       const presentation = input.readers.message(item);
+      if (input.taskId !== undefined && (presentation?.taskId ?? null) !== input.taskId) continue;
       if (presentation?.requestKey) {
         committedRequestKeys.add(presentation.requestKey);
         inputTexts.set(presentation.requestKey, item.text);
@@ -296,6 +299,7 @@ export function buildGoatBotTimeline(input: {
     if (item.type === "assistant_message") {
       if (item.text.trim().length === 0) continue;
       const presentation = input.readers.message(item);
+      if (input.taskId !== undefined && (presentation?.taskId ?? null) !== input.taskId) continue;
       const tone = presentation?.tone ?? "reply";
       committed.push({
         kind: "bot",
@@ -319,6 +323,7 @@ export function buildGoatBotTimeline(input: {
     if (item.type === "notification") {
       const card = input.readers.taskCard(item);
       if (card === null) continue;
+      if (input.taskId != null && card.key !== input.taskId) continue;
       const existingIndex = cardIndexByKey.get(card.key);
       if (existingIndex === undefined) {
         previousInputKey = null;
@@ -337,6 +342,7 @@ export function buildGoatBotTimeline(input: {
   const pending: UngroupedRow[] = input.pendingInputs
     .filter(
       (entry) =>
+        (input.taskId === undefined || (entry.taskId ?? null) === input.taskId) &&
         !committedRequestKeys.has(entry.clientKey) &&
         (entry.requestKey === null || !committedRequestKeys.has(entry.requestKey)),
     )

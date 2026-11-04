@@ -19,6 +19,7 @@ import { scopeThreadRef } from "@goat/client-runtime/environment";
 import type {
   ChannelBotRef,
   ChannelGatewayError,
+  ChannelTaskId,
   EnvironmentId,
   OrchestrationV2ProjectedTurnItem,
   ScopedThreadRef,
@@ -121,7 +122,7 @@ function newQueue(environmentId: EnvironmentId) {
         session.machine.ensure.bot.threadId === bot.threadId
       );
     },
-    send: async ({ clientKey, text, attachments, receivedAt, bot }) => {
+    send: async ({ clientKey, text, attachments, receivedAt, bot, taskId }) => {
       const port = useSessions.getState().sessions.get(environmentId)?.port;
       if (!port) throw new Error("GOAT Bot isn't available");
       const files = await uploadGoatBotAttachments(bot.environmentId, attachments);
@@ -138,6 +139,7 @@ function newQueue(environmentId: EnvironmentId) {
         attachments: files,
         receivedAt,
         intent: "message",
+        ...(taskId === undefined ? {} : { taskId }),
       });
       // The server keeps its own copy of each file once it has the message, and a rejected
       // message is never sent again.
@@ -287,7 +289,7 @@ function useGoatBotWorking(visibleTurnItems: ReadonlyArray<OrchestrationV2Projec
 }
 
 /** One ensure and send queue per environment, shared by the entry route and thread view. */
-export function useGoatBotSession(visibleTurnItems = EMPTY_ITEMS) {
+export function useGoatBotSession(visibleTurnItems = EMPTY_ITEMS, taskId?: ChannelTaskId) {
   const { enabled, environment, environments, home, port } = useGoatBotEnabled();
   const environmentId = environment?.environmentId ?? null;
   const bootstrapped = useEnvironmentShellsBootstrapped(environmentId);
@@ -442,6 +444,7 @@ export function useGoatBotSession(visibleTurnItems = EMPTY_ITEMS) {
     visibleTurnItems,
     pendingInputs: pendingInputsAt(queue, revision),
     readers: goatBotItemReaders,
+    ...(taskId === undefined ? {} : { taskId }),
   });
   const activity = useGoatBotWorking(visibleTurnItems);
   const serverConfigs = useServerConfigs();
@@ -466,7 +469,7 @@ export function useGoatBotSession(visibleTurnItems = EMPTY_ITEMS) {
     onSend: (text: string, attachments: ReadonlyArray<GoatBotDraftAttachment> = []) => {
       if (availability.kind !== "ready" || !canOperate || queue === undefined) return false;
       if (attachments.length > 0 && attachmentSupport === null) return false;
-      queue.submit(text, availability.bot, attachments);
+      queue.submit(text, availability.bot, attachments, taskId);
       return true;
     },
     onRetryInput: (key: string) => {

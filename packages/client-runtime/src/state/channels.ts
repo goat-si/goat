@@ -2,6 +2,7 @@ import {
   CHANNEL_GATEWAY_WS_METHODS,
   type ChannelBotRef,
   type ChannelIngestInput,
+  type ChannelTaskId,
   type ChatAttachment,
   SLACK_CHANNEL_WS_METHODS,
 } from "@goat/contracts";
@@ -100,6 +101,7 @@ export function goatBotIngestInput(input: {
   readonly attachments?: ReadonlyArray<ChatAttachment>;
   readonly clientMessageId: string;
   readonly receivedAt: string;
+  readonly taskId?: ChannelTaskId;
 }): ChannelIngestInput {
   return {
     kind: "goat",
@@ -117,5 +119,6 @@ export function goatBotIngestInput(input: {
     attachments: input.attachments ?? [],
     receivedAt: input.receivedAt,
     intent: "message",
+    ...(input.taskId === undefined ? {} : { taskId: input.taskId }),
   };
 }
