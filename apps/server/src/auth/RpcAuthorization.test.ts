@@ -63,6 +63,18 @@ describe("RPC authorization scopes", () => {
       yield* RpcAuthorization.authorizeRpcCall([AuthOrchestrationReadScope], method, {});
     }),
   );
+  it.effect("protects bot task thread reads and view changes", () =>
+    Effect.gen(function* () {
+      for (const [method, scope] of [
+        [CHANNEL_GATEWAY_WS_METHODS.listBotThreads, AuthOrchestrationReadScope],
+        [CHANNEL_GATEWAY_WS_METHODS.updateTaskView, AuthOrchestrationOperateScope],
+      ] as const) {
+        const denied = yield* Effect.flip(RpcAuthorization.authorizeRpcCall([], method, {}));
+        expect(denied.requiredPermission).toBe(scope);
+        yield* RpcAuthorization.authorizeRpcCall([scope], method, {});
+      }
+    }),
+  );
   it.effect("requires orchestration read before returning native child work", () =>
     Effect.gen(function* () {
       const method = ORCHESTRATION_V2_WS_METHODS.getNativeChildWork;

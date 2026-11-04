@@ -11,6 +11,10 @@ import {
   ChannelGetBotStatusResult,
   ChannelListBotsInput,
   ChannelListBotsResult,
+  ChannelListBotThreadsInput,
+  ChannelListBotThreadsResult,
+  ChannelUpdateTaskViewInput,
+  ChannelTaskView,
   ChannelGatewayError,
   ChannelGetInputInput,
   ChannelGetTaskInput,
@@ -53,6 +57,18 @@ const ChannelGetBotStatusRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.getBotStatus,
 const ChannelListBotsRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.listBots, {
   payload: ChannelListBotsInput,
   success: ChannelListBotsResult,
+  error: ChannelRpcError,
+});
+
+const ChannelListBotThreadsRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.listBotThreads, {
+  payload: ChannelListBotThreadsInput,
+  success: ChannelListBotThreadsResult,
+  error: ChannelRpcError,
+});
+
+const ChannelUpdateTaskViewRpc = Rpc.make(CHANNEL_GATEWAY_WS_METHODS.updateTaskView, {
+  payload: ChannelUpdateTaskViewInput,
+  success: ChannelTaskView,
   error: ChannelRpcError,
 });
 
@@ -124,6 +140,8 @@ export const ChannelRpcs = RpcGroup.make(
   ChannelEnsureBotRpc,
   ChannelGetBotStatusRpc,
   ChannelListBotsRpc,
+  ChannelListBotThreadsRpc,
+  ChannelUpdateTaskViewRpc,
   ChannelIngestRpc,
   ChannelGetTaskRpc,
   ChannelListTasksRpc,
