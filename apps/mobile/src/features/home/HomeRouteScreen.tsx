@@ -288,13 +288,15 @@ export function HomeRouteScreen() {
   if (botHome.mode === "bot" && (!layout.usesSplitView || nativePrimaryColumn))
     return (
       <>
-        <NativeStackScreenOptions
-          options={{
-            headerShown: Platform.OS !== "android",
-            title: "GOAT Bot",
-            headerTitle: "GOAT Bot",
-          }}
-        />
+        {workspace !== null && Platform.OS === "ios" ? null : (
+          <NativeStackScreenOptions
+            options={{
+              headerShown: Platform.OS !== "android",
+              title: "GOAT Bot",
+              headerTitle: "GOAT Bot",
+            }}
+          />
+        )}
         {homeHeader}
         <MobileBotList showSegments={Platform.OS !== "android"} />
       </>
@@ -309,7 +311,7 @@ export function HomeRouteScreen() {
         {/* Screen options merge shallowly; restore the header after split view. */}
         {workspace !== null && Platform.OS === "ios" ? null : (
           <NativeStackScreenOptions
-            optionsVersion={[headerWidth, botHome.mode]}
+            optionsVersion={headerWidth}
             options={{
               ...getConnectionAwareBrandHeaderOptions({
                 headerWidth,
