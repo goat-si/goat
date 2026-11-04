@@ -51,7 +51,8 @@ vi.mock("~/state/channels", () => ({
 }));
 vi.mock("../ui/tooltip", () => ({
   Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
-  TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children, render }: { children: ReactNode; render?: ReactElement }) =>
+    render ? cloneElement(render, {}, children) : <>{children}</>,
   TooltipPopup: () => null,
 }));
 vi.mock("../ui/sidebar", () => ({
@@ -160,4 +161,32 @@ it("expands and collapses older task rows", async () => {
   } finally {
     rows.splice(2);
   }
+});
+
+it("labels task status and explains an empty bot roster", async () => {
+  useGlobalAgentStore.getState().setMode("bot");
+  // The router is mocked to exercise the roster independently.
+  await using screen = await render(<GoatBotSidebarTabs />, { router: false });
+  await expect.element(screen.getByRole("img", { name: "Needs your input" })).toBeVisible();
+  const saved = rows.splice(0);
+  await screen.rerender(<GoatBotSidebarTabs />);
+  await expect.element(screen.getByText("Work GOAT Bot starts appears here.")).toBeVisible();
+  rows.push(...saved);
+});
+
+it("opens the task actions with the keyboard and returns focus on Escape", async () => {
+  const { showContextMenuFallback } = await import("~/contextMenuFallback");
+  actions.show.mockImplementationOnce(showContextMenuFallback);
+  useGlobalAgentStore.getState().setMode("bot");
+  // The router is mocked while the real browser context menu handles keyboard input.
+  await using screen = await render(<GoatBotSidebarTabs />, { router: false });
+  const row = screen.getByRole("link", { name: /Review work/ });
+  await userEvent.click(row);
+  await userEvent.keyboard("{Tab}");
+  const action = screen.getByRole("button", { name: "Actions for Review work" });
+  await expect.element(action).toHaveFocus();
+  await userEvent.keyboard("{Enter}");
+  await expect.element(document.body.querySelector<HTMLElement>('[role="menu"]')!).toBeVisible();
+  await userEvent.keyboard("{ArrowDown}{Escape}");
+  await expect.element(action).toHaveFocus();
 });

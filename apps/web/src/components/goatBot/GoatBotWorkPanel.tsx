@@ -73,10 +73,10 @@ export function GoatBotWorkPanel({
           )}
         </TabsPanel>
         <TabsPanel value="Library" className="mt-4">
-          <p>Files GOAT Bot saves will appear here.</p>
+          <p>Files GOAT Bot saves will appear here. Library is not available yet.</p>
         </TabsPanel>
         <TabsPanel value="Computer" className="mt-4">
-          <p>Machines GOAT Bot works on will appear here.</p>
+          <p>Machines GOAT Bot works on will appear here. Computer is not available yet.</p>
         </TabsPanel>
       </Tabs>
     </div>

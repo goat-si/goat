@@ -803,7 +803,7 @@ export function ThreadStatusLabel({
   status,
   compact = false,
 }: {
-  status: ThreadStatusPill;
+  status: Omit<ThreadStatusPill, "label"> & { label: string };
   compact?: boolean;
 }) {
   if (compact) {

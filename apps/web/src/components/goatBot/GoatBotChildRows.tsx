@@ -10,7 +10,9 @@ import { useState } from "react";
 import { readLocalApi } from "~/localApi";
 import { channelEnvironment } from "~/state/channels";
 import { useAtomCommand } from "~/state/use-atom-command";
-import { Badge } from "../ui/badge";
+import { ThreadStatusLabel } from "../ThreadStatusIndicators";
+import { Button } from "../ui/button";
+import { EllipsisIcon } from "../solar";
 import { SidebarGroup, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
 
 export function GoatBotChildRows({
@@ -79,6 +81,26 @@ export function GoatBotChildRows({
           const status = task
             ? presentTaskStatus(task.view.doneAt ? "completed" : task.task.status)
             : null;
+          const statusPill = status && {
+            label: status.label,
+            ...(status.tone === "danger"
+              ? {
+                  colorClass: "text-red-600 dark:text-red-300/90",
+                  dotClass: "bg-red-500 dark:bg-red-300/90",
+                }
+              : status.tone === "success"
+                ? {
+                    colorClass: "text-emerald-600 dark:text-emerald-300/90",
+                    dotClass: "bg-emerald-500 dark:bg-emerald-300/90",
+                  }
+                : status.tone === "neutral"
+                  ? {
+                      colorClass: "text-sidebar-muted-foreground",
+                      dotClass: "bg-sidebar-muted-foreground",
+                    }
+                  : { colorClass: "text-info-foreground", dotClass: "bg-info" }),
+            pulse: status.tone === "active",
+          };
           return (
             <SidebarMenuItem key={botThreadKey(row)}>
               <SidebarMenuButton
@@ -105,12 +127,8 @@ export function GoatBotChildRows({
                 }
               >
                 <span className="w-4" />
+                {statusPill && <ThreadStatusLabel status={statusPill} />}
                 <span className="min-w-0 flex-1 truncate">{title}</span>
-                {status && (
-                  <Badge size="sm" variant="secondary">
-                    {status.label}
-                  </Badge>
-                )}
                 {row.kind === "coding" && (
                   <span className="min-w-0 truncate text-xs text-muted-foreground">
                     GOAT thread
@@ -121,17 +139,19 @@ export function GoatBotChildRows({
                 )}
               </SidebarMenuButton>
               {task && (
-                <button
-                  type="button"
-                  aria-label={`Actions for ${title}`}
-                  className="absolute right-1 top-1"
-                  onClick={(event) => {
-                    const rect = event.currentTarget.getBoundingClientRect();
-                    void menu(task, { x: rect.left, y: rect.bottom });
-                  }}
-                >
-                  ⋯
-                </button>
+                <div className="pointer-events-none absolute top-1 right-1 opacity-0 group-hover/menu-item:pointer-events-auto group-hover/menu-item:opacity-100 group-focus-within/menu-item:pointer-events-auto group-focus-within/menu-item:opacity-100">
+                  <Button
+                    variant="ghost-muted"
+                    size="icon-xs"
+                    aria-label={`Actions for ${title}`}
+                    onClick={(event) => {
+                      const rect = event.currentTarget.getBoundingClientRect();
+                      void menu(task, { x: rect.left, y: rect.bottom });
+                    }}
+                  >
+                    <EllipsisIcon />
+                  </Button>
+                </div>
               )}
             </SidebarMenuItem>
           );
