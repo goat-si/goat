@@ -26,12 +26,83 @@ export function makeCodexThreadStatuses() {
   // Counts what Codex reported about each thread's activity: a status change, a turn start or a
   // turn/start of ours. A thread can work and go idle between two reads of its status (#1658).
   const revisions = new Map<string, number>();
+  // The last turn Codex reported ended on each thread.
+  const lastCompleted = new Map<string, string>();
+  // Threads Codex reported busy again after the last turn GOAT saw ended (or with none seen, as on
+  // a resume), until that turn's start, its end or a quiet report arrives.
+  const unseen = new Set<string>();
+  // Waiters for a thread to stop working; each checks its own condition on every change.
+  const quietWaiters = new Map<string, Set<() => void>>();
   const bump = (threadId: string) => revisions.set(threadId, (revisions.get(threadId) ?? 0) + 1);
+  const wakeIfQuiet = (threadId: string) => {
+    for (const wake of quietWaiters.get(threadId) ?? []) wake();
+  };
+  /**
+   * Whether a turn is in progress on this thread: the turn Codex last started has not ended while
+   * Codex reports the thread busy (an idle report can arrive after the turn ends), Codex went busy
+   * again with a turn GOAT has not seen start, or a start of ours has not started its turn, unless
+   * GOAT already gave up on that start.
+   */
+  const working = (threadId: string, abandoned: (turnId: string) => boolean) => {
+    const status = statuses.get(threadId);
+    const running = lastStarted.get(threadId);
+    const start = pending.get(threadId);
+    return (
+      unseen.has(threadId) ||
+      (running !== undefined &&
+        lastCompleted.get(threadId) !== running &&
+        (status === undefined || !QUIET.has(status))) ||
+      (pending.has(threadId) && (start == null || !abandoned(start)))
+    );
+  };
   const quiet = (threadId: string) => {
     const status = statuses.get(threadId);
     return !pending.has(threadId) && status !== undefined && QUIET.has(status);
   };
+  const record = (threadId: string, status: string) => {
+    const previous = statuses.get(threadId);
+    if (previous !== status) bump(threadId);
+    const seen = lastStarted.get(threadId);
+    if (QUIET.has(status)) unseen.delete(threadId);
+    // Only a change from quiet tells a new turn apart from a busy report the last one left behind.
+    else if (
+      previous === undefined
+        ? seen === undefined
+        : QUIET.has(previous) && (seen === undefined || lastCompleted.get(threadId) === seen)
+    )
+      unseen.add(threadId);
+    statuses.set(threadId, status);
+    wakeIfQuiet(threadId);
+  };
   return {
+    working,
+    /** Whether a turn/start of ours has not yet seen its turn start. */
+    startPending: (threadId: string) => pending.has(threadId),
+    lastStarted: (threadId: string) => lastStarted.get(threadId),
+    /** The turn Codex last started on this thread, while it has not reported that turn ended. */
+    runningTurn: (threadId: string) => {
+      const running = lastStarted.get(threadId);
+      return unseen.has(threadId) || running === lastCompleted.get(threadId) ? undefined : running;
+    },
+    /** Resolves once no turn is in progress on the thread; at once when none is. */
+    whenQuiet: (threadId: string, abandoned: (turnId: string) => boolean) =>
+      Effect.callback<void>((resume) => {
+        if (!working(threadId, abandoned)) return resume(Effect.void);
+        const forget = () => {
+          waiters.delete(wake);
+          if (waiters.size === 0 && quietWaiters.get(threadId) === waiters)
+            quietWaiters.delete(threadId);
+        };
+        const wake = () => {
+          if (working(threadId, abandoned)) return;
+          forget();
+          resume(Effect.void);
+        };
+        const waiters = quietWaiters.get(threadId) ?? new Set<() => void>();
+        waiters.add(wake);
+        quietWaiters.set(threadId, waiters);
+        return Effect.sync(forget);
+      }),
     /**
      * Whether a reload now could drop work or be ignored: a thread is not reported quiet, a goal
      * is active, or (with terminals) a background terminal runs. Codex is asked one thread at a
@@ -82,25 +153,43 @@ export function makeCodexThreadStatuses() {
     /** Whether a failed reload left this thread dropped, so only a resume can serve its next turn. */
     dropped: (threadId: string) => unloaded.has(threadId),
     resumed: (threadId: string) => void unloaded.delete(threadId),
-    record: (threadId: string, status: string) => {
-      if (statuses.get(threadId) !== status) bump(threadId);
-      statuses.set(threadId, status);
+    record,
+    /** GOAT stopped listening to this thread: what it saw says nothing about what runs from now. */
+    forget: (threadId: string) => {
+      statuses.delete(threadId);
+      lastStarted.delete(threadId);
+      lastCompleted.delete(threadId);
+      unseen.delete(threadId);
+    },
+    turnCompleted: (threadId: string, turnId: string) => {
+      // A turn GOAT never saw start, such as one running across a restart, ended here.
+      const seen = lastStarted.get(threadId);
+      if (turnId !== seen && (unseen.delete(threadId) || seen === undefined))
+        lastStarted.set(threadId, turnId);
+      lastCompleted.set(threadId, turnId);
+      wakeIfQuiet(threadId);
     },
     turnStarted: (threadId: string, turnId: string) => {
       bump(threadId);
+      unseen.delete(threadId);
       lastStarted.set(threadId, turnId);
       if (pending.get(threadId) === turnId) pending.delete(threadId);
+      wakeIfQuiet(threadId);
     },
     starting: (threadId: string) => {
       bump(threadId);
       pending.set(threadId, null);
       return {
-        failed: () => void pending.delete(threadId),
+        failed: () => {
+          pending.delete(threadId);
+          wakeIfQuiet(threadId);
+        },
         // A folded input names the turn already running, whose start was seen.
-        answered: (turnId: string) =>
-          void (lastStarted.get(threadId) === turnId
-            ? pending.delete(threadId)
-            : pending.set(threadId, turnId)),
+        answered: (turnId: string) => {
+          if (lastStarted.get(threadId) === turnId) pending.delete(threadId);
+          else pending.set(threadId, turnId);
+          wakeIfQuiet(threadId);
+        },
       };
     },
   };
