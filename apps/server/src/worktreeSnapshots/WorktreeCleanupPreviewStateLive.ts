@@ -1,4 +1,6 @@
 import * as Effect from "effect/Effect";
+import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 import {
@@ -18,13 +20,14 @@ type Row = {
 };
 const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
+  const crypto = yield* Crypto.Crypto;
   return WorktreeCleanupPreviewState.of({
     evaluate: Effect.fn("WorktreeCleanupPreviewState.evaluate")(function* ({
       nowMs,
       plannedCount,
       requiresConfirmation,
     }) {
-      const id = crypto.randomUUID();
+      const id = yield* crypto.randomUUIDv4().pipe(Effect.orDie);
       yield* sql`INSERT OR IGNORE INTO worktree_cleanup_preview (preview_id, started_at, planned_count) VALUES (${id}, ${nowMs}, ${plannedCount})`;
       const rows = yield* sql<Row>`UPDATE worktree_cleanup_preview SET
         preview_id = CASE WHEN activated_at IS NULL AND (confirmed_at IS NOT NULL OR (${requiresConfirmation ? 0 : 1} = 1 AND seen_at IS NOT NULL AND ${nowMs} >= seen_at + ${DAY})) AND ${plannedCount} > acknowledged_count THEN ${id} ELSE preview_id END,
@@ -42,12 +45,13 @@ const make = Effect.gen(function* () {
         preview: {
           id: row.preview_id,
           plannedCount: row.planned_count,
-          startedAt: new Date(row.started_at).toISOString(),
-          seenAt: row.seen_at === null ? null : new Date(row.seen_at).toISOString(),
+          startedAt: DateTime.formatIso(DateTime.makeUnsafe(row.started_at)),
+          seenAt:
+            row.seen_at === null ? null : DateTime.formatIso(DateTime.makeUnsafe(row.seen_at)),
           activatesAt:
             requiresConfirmation || row.seen_at === null
               ? null
-              : new Date(row.seen_at + DAY).toISOString(),
+              : DateTime.formatIso(DateTime.makeUnsafe(row.seen_at + DAY)),
           requiresConfirmation,
         },
       };

@@ -40,6 +40,10 @@ export class WorktreeSnapshotStore extends Context.Service<
     readonly markRestored: (snapshotRef: string) => Effect.Effect<void>;
     /** Deletes the thread's refs and ledger rows; returns how many were removed. */
     readonly deleteForThread: (threadId: ThreadId) => Effect.Effect<number>;
+    readonly purgeDeletedThreads: (
+      nowMs: number,
+      threadIds: readonly ThreadId[],
+    ) => Effect.Effect<number>;
     /** Deletes snapshots older than days; returns how many were removed. */
     readonly expire: (nowMs: number, days: number) => Effect.Effect<number>;
   }

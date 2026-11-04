@@ -1,3 +1,4 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
@@ -20,7 +21,7 @@ it.effect(
       const restarted = yield* Effect.provide(WorktreeCleanupPreviewState, Live.layer);
       assert.equal(
         (yield* restarted.evaluate({ ...input, nowMs: day + 9 })).preview?.activatesAt,
-        new Date(day + 10).toISOString(),
+        "1970-01-02T00:00:00.010Z",
       );
       const expanded = yield* restarted.evaluate({ ...input, nowMs: day + 10, plannedCount: 3 });
       assert.notEqual(expanded.preview?.id, id);
@@ -50,5 +51,8 @@ it.effect(
           requiresConfirmation: true,
         })).apply,
       );
-    }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
+    }).pipe(
+      Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" })),
+      Effect.provide(NodeServices.layer),
+    ),
 );
