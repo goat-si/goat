@@ -2,10 +2,12 @@ import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
+import * as TestClock from "effect/testing/TestClock";
 import * as ChannelGateway from "./ChannelGateway.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelRuntime from "./ChannelRuntime.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import { deliveryIdFor, taskIdFor } from "./channelIds.ts";
 import { makeSessionHarness } from "./testkit/ChannelSessionHarness.ts";
 import {
@@ -19,7 +21,7 @@ import {
 } from "./testkit/ChannelHarness.ts";
 
 describe("session-first reception controls", () => {
-  it.effect("retains reception when the requester is at capacity in other conversations", () => {
+  it.effect("claims a session when the requester is at capacity in other conversations", () => {
     const harness = makeSessionHarness();
     return Effect.gen(function* () {
       yield* setupBot;
@@ -50,9 +52,9 @@ describe("session-first reception controls", () => {
       yield* runtime.drain;
       assert.match(
         (yield* ledger.getInput(input.inputId))!.snapshot.receptionId!,
-        /^channel-reception:/u,
+        /^channel-session:/u,
       );
-      assert.lengthOf(harness.world.launches, 0);
+      assert.lengthOf(harness.world.launches, 1);
     }).pipe(Effect.provide(harness.layer));
   });
   it.effect("a path-c driver retains ordinary reception", () => {
@@ -83,7 +85,7 @@ describe("session-first reception controls", () => {
     "running",
     "waiting_input",
     "awaiting delivery",
-  ] as const)("keeps reception when the conversation has work %s", (status) => {
+  ] as const)("claims a session when the conversation has work %s", (status) => {
     const harness = makeSessionHarness();
     return Effect.gen(function* () {
       yield* setupBot;
@@ -128,10 +130,10 @@ describe("session-first reception controls", () => {
       const second = yield* gateway.ingest(goatInput("What is pending?", "control"), rpcContext);
       yield* runtime.runPass;
       yield* runtime.settle([second.inputId]);
-      assert.strictEqual(calls, 1);
+      assert.strictEqual(calls, 0);
       assert.match(
         (yield* ledger.getInput(second.inputId))!.snapshot.receptionId!,
-        /^channel-reception:/u,
+        /^channel-session:/u,
       );
     }).pipe(Effect.provide(harness.layer));
   });
@@ -164,7 +166,7 @@ describe("session-first reception controls", () => {
     },
   );
 
-  it.effect("a busy bound session keeps reception even with no open task", () => {
+  it.effect("a busy bound session queues a distinct task even with no open task", () => {
     const harness = makeSessionHarness();
     return Effect.gen(function* () {
       yield* setupBot;
@@ -185,10 +187,44 @@ describe("session-first reception controls", () => {
         rpcContext,
       );
       yield* runtime.drain;
+      const queued = yield* ledger.getTask(taskIdFor(second.inputId, 0));
+      assert.isDefined(queued?.task.worker?.runId);
+      assert.strictEqual(queued?.task.worker?.threadId, task.worker?.threadId);
+      assert.notStrictEqual(queued?.task.worker?.runId, task.worker?.runId);
       assert.match(
-        (yield* ledger.getInput(second.inputId))!.snapshot.receptionId!,
-        /^channel-reception:/u,
+        (yield* ledger.getInput(second.inputId))?.snapshot.receptionId ?? "",
+        /^channel-session:/u,
       );
+      yield* TestClock.adjust("20 seconds");
+      yield* runtime.expireOverdue;
+      yield* runtime.settle([second.inputId]);
+      assert.isDefined((yield* ledger.getInput(second.inputId))?.snapshot.reply);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
+  it.effect("rollback sends new inputs to reception and keeps an existing session claim", () => {
+    const harness = makeSessionHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const gateway = yield* ChannelGateway.ChannelGateway;
+      const runtime = yield* ChannelRuntime.ChannelRuntime;
+      const ledger = yield* ChannelLedger.ChannelLedger;
+      const settings = yield* ServerSettings.ServerSettingsService;
+      const first = yield* gateway.ingest(goatInput("Inspect disk", "rollback-first"), rpcContext);
+      yield* runtime.drain;
+      const task = yield* ledger.getTask(taskIdFor(first.inputId, 0));
+      assert.isDefined(task);
+      yield* settings.updateSettings({ goatBotSessionRouting: "reception" });
+      if (task === undefined) return;
+      harness.assistant(task.task, "Checking disk.\n", true);
+      yield* runtime.runPass;
+      const second = yield* gateway.ingest(goatInput("hello", "rollback-second"), rpcContext);
+      yield* runtime.drain;
+      const firstInput = yield* ledger.getInput(first.inputId);
+      const secondInput = yield* ledger.getInput(second.inputId);
+      assert.match(firstInput?.snapshot.receptionId ?? "", /^channel-session:/u);
+      assert.strictEqual(firstInput?.snapshot.state, "replied");
+      assert.match(secondInput?.snapshot.receptionId ?? "", /^channel-reception:/u);
     }).pipe(Effect.provide(harness.layer));
   });
 

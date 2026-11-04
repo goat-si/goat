@@ -130,13 +130,7 @@ export const receptionLedger = (
       reception_id = ${input.receptionId}, read_at = COALESCE(read_at, ${input.now}),
       task_ids_json = ${encodeStrings([input.createdTask.task.taskId])}
       WHERE input_id = ${input.inputId} AND state = 'accepted'
-        AND NOT EXISTS (SELECT 1 FROM channel_tasks t
-          WHERE t.conversation_id = channel_inbox.conversation_id
-            AND (t.status IN ('received', 'dispatching', 'running', 'waiting_input') OR EXISTS (
-              SELECT 1 FROM channel_outbox o WHERE o.task_id = t.task_id AND o.kind IN ('result', 'failure')
-                AND o.state IN ('pending', 'delivering')) OR EXISTS (
-              SELECT 1 FROM channel_task_events e WHERE e.task_id = t.task_id
-                AND e.type IN ('task.completed', 'task.failed', 'task.cancelled') AND e.narration_state = 'pending')))
+
       RETURNING owner_id`;
             if (rows[0] === undefined) return false;
             yield* insertTask(input.createdTask.task, rows[0].owner_id, input.createdTask.event);

@@ -105,6 +105,17 @@ function GoatBotModelSection({
 
   return (
     <>
+      <SettingsSection title="Messages">
+        <SettingsSwitchRow
+          label="Answer with the bot session"
+          subtitle="Use the bot session to understand and answer messages. Turn off to use reception first."
+          value={settings.goatBotSessionRouting === "session"}
+          disabled={!allowed}
+          onValueChange={(value) =>
+            save({ goatBotSessionRouting: value ? "session" : "reception" })
+          }
+        />
+      </SettingsSection>
       <SettingsSection title="Workers">
         <SettingsSwitchRow
           label="Automatically choose a worker computer"

@@ -42,6 +42,7 @@ export const SETTINGS_ACCESS = {
   memoryEnabled: path("memory.settings_update"),
   memoryModelSelection: path("memory.settings_update"),
   goatBotModelSelection: agent,
+  goatBotSessionRouting: agent,
   channelAutoPlacement: agent,
   responseStreamingMode: agent,
   enableProviderUpdateChecks: agent,

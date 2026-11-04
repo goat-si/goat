@@ -688,6 +688,9 @@ export function applyServerSettingsPatch(
     ...(patch.memoryModelSelection !== undefined
       ? { memoryModelSelection: patch.memoryModelSelection }
       : {}),
+    ...(patch.goatBotSessionRouting !== undefined
+      ? { goatBotSessionRouting: patch.goatBotSessionRouting }
+      : {}),
     ...(patch.goatBotModelSelection !== undefined
       ? { goatBotModelSelection: patch.goatBotModelSelection }
       : {}),

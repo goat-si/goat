@@ -1,0 +1,17 @@
+import type { SettingsSearchItem } from "./settingsSearch";
+export const GOAT_BOT_ROUTING_SEARCH_ITEMS = [
+  {
+    id: "channel-auto-placement",
+    title: "Automatically choose a worker computer",
+    to: "/settings/goat-bot",
+    targetId: "goat-bot",
+    searchTerms: ["channel placement quota ssh host worker automatic"],
+  },
+  {
+    id: "goat-bot-session-routing",
+    title: "Answer with the bot session",
+    to: "/settings/goat-bot",
+    targetId: "goat-bot",
+    searchTerms: ["goat bot session reception routing"],
+  },
+] satisfies ReadonlyArray<SettingsSearchItem>;
