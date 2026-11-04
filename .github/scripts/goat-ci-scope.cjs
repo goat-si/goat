@@ -184,7 +184,7 @@ const packageSuiteDirs = (workspace) =>
  * Names of the workspace packages test-packages runs: every one with a test script that no other
  * task owns, so a new package is tested without editing goat-ci.yml. scripts keeps its own list.
  */
-function packageSuites(root) {
+function packageSuiteManifests(root) {
   const dirs = ["oxlint-plugin-goat"];
   for (const parent of ["apps", "packages", "infra"]) {
     let entries = [];
@@ -195,16 +195,18 @@ function packageSuites(root) {
     }
     for (const entry of entries) if (entry.isDirectory()) dirs.push(parent + "/" + entry.name);
   }
-  const names = [];
+  const manifests = [];
   for (const dir of dirs.sort()) {
     if (OWNED_SUITES.has(dir)) continue;
     const file = path.join(root, dir, "package.json");
     if (!fs.existsSync(file)) continue;
     const manifest = JSON.parse(fs.readFileSync(file, "utf8"));
-    if (typeof manifest.scripts?.test === "string") names.push(manifest.name);
+    if (typeof manifest.scripts?.test === "string") manifests.push([dir, manifest.name]);
   }
-  return names;
+  return manifests;
 }
+
+const packageSuites = (root) => packageSuiteManifests(root).map(([, name]) => name);
 
 /**
  * apps/server lists @goat/web only so its build runs after the web build. Server
@@ -412,12 +414,17 @@ function reachesMemoryGrowth(changed, graph) {
  * reasons maps each selected task (or "full") to the first file that chose it and server is the
  * plan for test-server. Without a graph the server suite runs in full when selected.
  */
-function selectTasks(files, workspace, { graph, weights = {} } = {}) {
+function selectTasks(
+  files,
+  workspace,
+  { graph, weights = {}, root = path.resolve(__dirname, "../..") } = {},
+) {
   const reasons = new Map();
   const choose = (task, file) => {
     if (!reasons.has(task)) reasons.set(task, file);
   };
   const changed = new Map();
+  const suiteDirs = packageSuiteManifests(root).map(([dir]) => dir + "/");
   for (const file of files) {
     if (file === "packages/shared/src/testing/providerEnv.ts") return everything(file);
     if (isDocument(file)) continue;
@@ -425,6 +432,7 @@ function selectTasks(files, workspace, { graph, weights = {} } = {}) {
     if (path.posix.basename(file) === "package.json") return everything(file);
     // The ingest Worker's suite covers its SQL and config and the shared allowlist.
     if (INGEST_SUITE_TRIGGER.test(file)) choose("test-ingest", file);
+    if (suiteDirs.some((dir) => file.startsWith(dir))) choose(PACKAGES_TASK, file);
     if (TYPECHECK_ONLY_RE.test(file)) {
       choose("typecheck", file);
       continue;
@@ -697,6 +705,7 @@ async function planTasks({ env, payload, root, fetchImpl, files }) {
         ...selectTasks(changed, readWorkspace(root), {
           graph: buildImportGraph(root),
           weights: readServerWeights(root),
+          root,
         }),
         quick: false,
         affected: true,

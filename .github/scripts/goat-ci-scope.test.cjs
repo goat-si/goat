@@ -194,9 +194,8 @@ describe("selectTasks", () => {
     );
   });
 
-  it("typechecks infra and the lint plugin without running suites", () => {
+  it("typechecks infra and apps without suites", () => {
     assert.deepEqual(tasksFor("infra/unrelated/src/index.ts"), ["check", "typecheck"]);
-    assert.deepEqual(tasksFor("oxlint-plugin-goat/rules/no-restyle.js"), ["check", "typecheck"]);
     assert.deepEqual(tasksFor("apps/marketing/src/pages/index.astro"), ["check", "typecheck"]);
   });
 
@@ -243,6 +242,15 @@ describe("selectTasks", () => {
     assert.ok(step);
     assert.match(step, /if: matrix\.task == 'test-packages'/);
     assert.match(step, /packageSuites\("\."\)/);
+  });
+
+  it("runs package suites for task-cache and the lint plugin", () => {
+    for (const file of [
+      "infra/task-cache/src/index.ts",
+      "oxlint-plugin-goat/rules/no-restyle.js",
+    ]) {
+      assert.deepEqual(tasksFor(file), ["check", "typecheck", "test-packages"], file);
+    }
   });
 
   it("always includes check", () => {
@@ -608,6 +616,18 @@ describe("planRun", () => {
     assert.equal(result.server.mode, "related");
     assert.ok(result.tasks.includes("test-server"));
     assert.ok(!result.tasks.includes("test-changed"));
+  });
+
+  it("includes package suites for task-cache and the lint plugin only in affected runs", async () => {
+    for (const file of [
+      "infra/task-cache/src/index.ts",
+      "oxlint-plugin-goat/rules/no-restyle.js",
+    ]) {
+      const affected = await plan(pr(), labels([AFFECTED_LABEL]), [file]);
+      assert.deepEqual(affected.tasks, ["check", "typecheck", "test-packages"], file);
+      const quick = await plan(pr(), labels([]), [file]);
+      assert.ok(!quick.tasks.includes("test-packages"), file);
+    }
   });
 
   it("widens a quick run with ci:server and ci:memory, drafts included", async () => {
