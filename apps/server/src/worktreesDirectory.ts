@@ -2,7 +2,6 @@ import type {
   WorktreesDirectoryStatus,
   WorktreesDirectoryUnavailableReason,
 } from "@goat/contracts";
-import * as NodeOS from "node:os";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -113,25 +112,34 @@ export const resolveAvailableWorktreesDirectory = Effect.fn("resolveAvailableWor
     const location = yield* fileSystem
       .realPath(configured)
       .pipe(Effect.orElseSucceed(() => configured));
-    const tempRoots = [
-      NodeOS.tmpdir(),
-      "/tmp",
-      "/private/tmp",
-      "/var/tmp",
-      "/private/var/tmp",
-      "/var/folders",
+    // System temporary folders that cleaners empty (macOS tmp_cleaner, systemd-tmpfiles). A GOAT
+    // home that itself lives there, as in tests and sandboxes, gains nothing from the refusal.
+    const tempRoots = ["/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp"];
+    const roots = [
+      ...tempRoots,
+      ...(yield* Effect.forEach(tempRoots, (root) =>
+        fileSystem.realPath(root).pipe(Effect.orElseSucceed(() => path.resolve(root))),
+      )),
     ];
-    const resolvedRoots = yield* Effect.forEach(tempRoots, (root) =>
-      fileSystem.realPath(root).pipe(Effect.orElseSucceed(() => path.resolve(root))),
+    const defaultLocations = [
+      path.resolve(input.defaultDir),
+      yield* fileSystem
+        .realPath(input.defaultDir)
+        .pipe(Effect.orElseSucceed(() => path.resolve(input.defaultDir))),
+    ];
+    const inside = (root: string, target: string) => {
+      const relative = path.relative(root, target);
+      return (
+        relative === "" ||
+        (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`))
+      );
+    };
+    const homeIsTemporary = roots.some((root) =>
+      defaultLocations.some((home) => inside(root, home)),
     );
     if (
-      resolvedRoots.some((root) => {
-        const relative = path.relative(root, location);
-        return (
-          relative === "" ||
-          (!path.isAbsolute(relative) && relative !== ".." && !relative.startsWith(`..${path.sep}`))
-        );
-      })
+      !homeIsTemporary &&
+      roots.some((root) => inside(root, location) || inside(root, configured))
     )
       return status(input.defaultDir, { reason: "invalid", path: configured });
     const reason = yield* checkWorktreesDirectory(configured, fileSystem, path);

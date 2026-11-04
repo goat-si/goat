@@ -96,17 +96,17 @@ it.layer(NodeServices.layer)("worktreesDirectory", (it) => {
     );
   });
 
-  it.effect("rejects existing and missing temporary directories", () =>
+  it.effect("rejects existing and missing folders under the system temporary directories", () =>
     Effect.gen(function* () {
-      const { fileSystem, path, root } = yield* setup;
+      const { fileSystem, path } = yield* setup;
       const result = yield* resolveAvailableWorktreesDirectory(
-        { setting: path.join(root, "missing"), defaultDir: "/default" },
+        { setting: "/private/tmp/goat-worktrees-never-created", defaultDir: "/default" },
         fileSystem,
         path,
       );
       assert.equal(result.unavailable?.reason, "invalid");
       const existing = yield* resolveAvailableWorktreesDirectory(
-        { setting: root, defaultDir: "/default" },
+        { setting: "/tmp", defaultDir: "/default" },
         fileSystem,
         path,
       );
@@ -130,14 +130,14 @@ it.layer(NodeServices.layer)("worktreesDirectory", (it) => {
         const custom = path.join(root, "custom");
         assert.deepStrictEqual(yield* resolve(custom), {
           configured: custom,
-          directory: defaultDir,
-          unavailable: { reason: "invalid", path: custom },
+          directory: custom,
+          unavailable: null,
         });
         const gone = path.join(root, "gone", "worktrees");
         assert.deepStrictEqual(yield* resolve(gone), {
           configured: gone,
           directory: defaultDir,
-          unavailable: { reason: "invalid", path: gone },
+          unavailable: { reason: "missing", path: gone },
         });
         assert.deepStrictEqual(yield* resolve("relative/worktrees"), {
           configured: "relative/worktrees",
