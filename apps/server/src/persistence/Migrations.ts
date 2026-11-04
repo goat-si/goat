@@ -135,6 +135,7 @@ import Migration0129 from "./Migrations/129_ComputerUseSessionApprovals.ts";
 import Migration0130 from "./Migrations/130_ComputerUseNamedApprovals.ts";
 import Migration0131 from "./Migrations/131_ComputerUseInputHistory.ts";
 import Migration0132 from "./Migrations/132_MemoryCheckpointBound.ts";
+import Migration0133 from "./Migrations/133_WorktreeSnapshots.ts";
 import Migration0120 from "./Migrations/120_NotificationCursorRepair.ts";
 import Migration0122 from "./Migrations/122_McpEvalJournal.ts";
 import Migration0123 from "./Migrations/123_DecisionRoutes.ts";
@@ -277,6 +278,7 @@ export const migrationEntries = [
   [130, "ComputerUseNamedApprovals", Migration0130],
   [131, "ComputerUseInputHistory", Migration0131],
   [132, "MemoryCheckpointBound", Migration0132],
+  [133, "WorktreeSnapshots", Migration0133],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
