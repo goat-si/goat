@@ -9,6 +9,7 @@ import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import {
+  CHANNEL_MCP_TOOL_NAMES,
   ChatImageAttachment,
   CommandId,
   DEFAULT_SERVER_SETTINGS,
@@ -152,18 +153,10 @@ it("publishes unique tool names with reference-free object-root inputs", () => {
   expect([...names].filter((name) => name.startsWith("goat_")).sort()).toEqual(
     CORE_GOAT_TOOL_NAMES,
   );
-  expect([...names].filter((name) => name.startsWith("channel_")).sort()).toEqual([
-    "channel_bot_home",
-    "channel_bot_home_claim",
-    "channel_ingest",
-    "channel_input_get",
-    "channel_task_export",
-    "channel_task_get",
-    "channel_task_list",
-    "channel_task_move",
-    "channel_task_report",
-  ]);
-  expect(names.size).toBe(242);
+  expect([...names].filter((name) => name.startsWith("channel_")).sort()).toEqual(
+    [...Object.values(CHANNEL_MCP_TOOL_NAMES), "channel_task_export"].sort(),
+  );
+  expect(names.size).toBe(245);
   expect([...names].some((name) => name.startsWith("t3_"))).toBe(false);
   for (const [tool, questionDelivery] of [
     [ProjectToolkit.tools.goat_thread_launch, "Only local user-input questions still arrive."],

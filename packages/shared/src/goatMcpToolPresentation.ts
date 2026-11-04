@@ -648,6 +648,15 @@ const GOAT_MCP_TOOLS: Readonly<Record<string, GoatMcpToolDefinition>> = {
     ["Export", "Exporting", "Exported", "GOAT ledger tasks"],
     "channel-task-read",
   ),
+  channel_task_follow_up: tool(
+    ["Follow up on", "Following up on", "Followed up on", "a GOAT task"],
+    "channel-task-report",
+  ),
+  channel_task_stop: tool(["Stop", "Stopping", "Stopped", "a GOAT task"], "channel-task-report"),
+  channel_task_answer: tool(
+    ["Answer", "Answering", "Answered", "a GOAT task question"],
+    "channel-task-report",
+  ),
   channel_task_move: tool(
     ["Continue", "Continuing", "Continued", "a GOAT task on another machine"],
     "channel-task-move",
@@ -731,6 +740,9 @@ export const GOAT_MCP_CANONICAL_TOOL_ALIASES: Readonly<Record<string, string>> =
   goat_channel_input_read: "channel_input_get",
   goat_channel_task_export: "channel_task_export",
   goat_channel_task_list: "channel_task_list",
+  goat_channel_task_follow_up: "channel_task_follow_up",
+  goat_channel_task_stop: "channel_task_stop",
+  goat_channel_task_answer: "channel_task_answer",
   goat_channel_task_move: "channel_task_move",
   goat_channel_task_read: "channel_task_get",
   goat_channel_task_report: "channel_task_report",

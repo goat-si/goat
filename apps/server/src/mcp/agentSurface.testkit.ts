@@ -37,6 +37,7 @@ import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as FileSystem from "effect/FileSystem";
 import * as ChannelGateway from "../channels/ChannelGateway.ts";
 import * as ChannelLedger from "../channels/ChannelLedger.ts";
+import * as ChannelSessionTaskActions from "../channels/channelSessionTaskActions.ts";
 import * as ChannelTaskExport from "../channels/ChannelTaskExport.ts";
 import * as ChannelBotHome from "../channels/ChannelBotHome.ts";
 import * as ChannelRemoteWorkers from "../channels/ChannelRemoteWorkers.ts";
@@ -222,6 +223,9 @@ const inertDependencies = Layer.mergeAll(
   Layer.mock(ChannelGateway.ChannelGateway)({}),
   Layer.mock(ChannelLedger.ChannelLedger)({}),
   Layer.mock(ChannelTaskExport.ChannelTaskExport)({}),
+  Layer.mock(ChannelSessionTaskActions.ChannelSessionTaskActions)({
+    checkCaller: () => Effect.void,
+  }),
   Layer.mock(ChannelWorkerReports.ChannelWorkerReports)({}),
   Layer.mock(ChannelRemoteWorkers.ChannelRemoteWorkers)({}),
   Layer.mock(ChannelBotHome.ChannelBotHome)({}),
