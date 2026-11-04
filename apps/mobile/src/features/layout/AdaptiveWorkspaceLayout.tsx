@@ -90,7 +90,7 @@ import {
 
 import { useNativeLayoutMetrics } from "../../native/native-layout-metrics";
 import { useMobileGoatBotHomeMode } from "../goat-bot/useMobileGoatBotHomeMode";
-import { MobileBotList, MobileHomeModeSegments } from "../goat-bot/MobileBotList";
+import { MobileBotList } from "../goat-bot/MobileBotList";
 import { AndroidHingeObserver } from "../../native/AndroidHingeObserver";
 import { WindowHingeContext } from "../../native/window-hinge-context";
 import { useAndroidWorkspaceRoot } from "../workspace/AndroidWorkspaceTabsProvider";
@@ -872,7 +872,6 @@ function AdaptiveWorkspaceLayoutContent(
                   <MobileBotList />
                 ) : (
                   <AndroidHomeFabLayout sidebar onStartNewTask={handleStartNewTask}>
-                    {Platform.OS === "ios" ? <MobileHomeModeSegments /> : null}
                     <ThreadNavigationSidebar
                       width={layout.listPaneWidth}
                       visible={panes.primarySidebarVisible}

@@ -1,3 +1,4 @@
+import { MobileHomeModeSegments } from "../goat-bot/MobileBotList";
 import { useEnvironmentHues } from "../threads/useEnvironmentHues";
 import { useActiveNewTask } from "../../state/active-new-task";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
@@ -814,6 +815,7 @@ export function HomeScreen(props: HomeScreenProps) {
   const v2ListHeader = (
     <>
       {listHeader}
+      {Platform.OS === "ios" ? <MobileHomeModeSegments /> : null}
       {Platform.OS === "ios" && workspace ? (
         <ThreadListFilters
           gutter={primaryColumn ? 8 : 0}

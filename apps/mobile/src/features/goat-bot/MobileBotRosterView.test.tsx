@@ -1,4 +1,4 @@
-import { act, type ReactNode } from "react";
+import React, { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vite-plus/test";
 import { BotThreadRow } from "@goat/contracts";
@@ -12,12 +12,14 @@ vi.mock("react-native", () => ({
     children,
     onPress,
     disabled,
+    accessibilityState,
   }: {
     children?: ReactNode;
     onPress?: () => void;
     disabled?: boolean;
+    accessibilityState?: { selected?: boolean };
   }) => (
-    <button onClick={onPress} disabled={disabled}>
+    <button onClick={onPress} disabled={disabled} aria-pressed={accessibilityState?.selected}>
       {children}
     </button>
   ),
@@ -46,16 +48,21 @@ afterEach(async () => {
   container.remove();
 });
 
-it("maps segment presses to the persisted home modes", async () => {
-  const select = vi.fn();
+it("switches both segments and exposes the selected state", async () => {
+  function Harness() {
+    const [mode, setMode] = React.useState<"bot" | "thread">("thread");
+    return <MobileHomeSegments mode={mode} onSelect={setMode} />;
+  }
   root = createRoot(container);
-  await act(async () => root?.render(<MobileHomeSegments mode="thread" onSelect={select} />));
-  const buttons = container.querySelectorAll("button");
-  await act(async () => {
-    buttons[0]?.click();
-    buttons[1]?.click();
-  });
-  expect(select.mock.calls).toEqual([["bot"], ["thread"]]);
+  await act(async () => root?.render(<Harness />));
+  const [bots, threads] = container.querySelectorAll("button");
+  expect(threads?.getAttribute("aria-pressed")).toBe("true");
+  await act(async () => bots?.click());
+  expect(bots?.getAttribute("aria-pressed")).toBe("true");
+  expect(threads?.getAttribute("aria-pressed")).toBe("false");
+  await act(async () => threads?.click());
+  expect(threads?.getAttribute("aria-pressed")).toBe("true");
+  expect(bots?.getAttribute("aria-pressed")).toBe("false");
 });
 
 it("renders the main bot, child task and disabled creation action", async () => {

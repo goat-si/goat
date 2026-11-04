@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { BotRosterEntry } from "@goat/client-runtime/goatBot";
 import { botThreadKey } from "@goat/client-runtime/goatBot";
 import type { BotThreadRow } from "@goat/contracts";
@@ -13,7 +14,7 @@ export function MobileHomeSegments(props: {
   onSelect: (mode: MobileHomeMode) => void;
 }) {
   return (
-    <View accessibilityRole="tablist" className="mx-4 my-2 flex-row rounded-lg bg-muted p-1">
+    <View className="mx-4 my-2 flex-row rounded-lg bg-grouped-card p-1">
       {(
         [
           ["bot", "Bots"],
@@ -22,13 +23,13 @@ export function MobileHomeSegments(props: {
       ).map(([mode, label]) => (
         <Pressable
           key={mode}
-          accessibilityRole="tab"
+          accessibilityRole="button"
           accessibilityState={{ selected: props.mode === mode }}
           onPress={() => props.onSelect(mode)}
           className={
             mode === props.mode
-              ? "flex-1 items-center rounded-md bg-background px-3 py-2"
-              : "flex-1 items-center rounded-md px-3 py-2"
+              ? "min-h-[44px] flex-1 items-center justify-center rounded-md bg-card px-3 py-2"
+              : "min-h-[44px] flex-1 items-center justify-center rounded-md px-3 py-2"
           }
         >
           <Text className="text-sm font-semibold text-foreground">{label}</Text>
@@ -39,6 +40,7 @@ export function MobileHomeSegments(props: {
 }
 
 export function MobileBotRosterView(props: {
+  header?: ReactNode;
   bots: ReadonlyArray<BotRosterEntry>;
   rows: ReadonlyArray<BotThreadRow>;
   hasMore: boolean;
@@ -51,7 +53,8 @@ export function MobileBotRosterView(props: {
   onShowMore: () => void;
 }) {
   return (
-    <ScrollView className="flex-1 bg-screen">
+    <ScrollView className="flex-1 bg-screen" contentInsetAdjustmentBehavior="automatic">
+      {props.header}
       {props.bots.map((bot) => (
         <View key={bot.profile?.botId ?? "main"}>
           <Pressable
@@ -59,7 +62,7 @@ export function MobileBotRosterView(props: {
             onPress={() => props.onOpenBot(bot)}
             className="flex-row items-center gap-3 px-4 py-3"
           >
-            <View className="h-10 w-10 items-center justify-center rounded-full bg-muted">
+            <View className="h-10 w-10 items-center justify-center rounded-full bg-grouped-card">
               <Text className="text-lg text-foreground">
                 {(bot.profile?.name ?? "GOAT Bot").slice(0, 1)}
               </Text>
@@ -72,7 +75,7 @@ export function MobileBotRosterView(props: {
                 {bot.kind === "main" && props.unread ? "  •" : ""}
               </Text>
               {bot.kind === "main" && props.preview ? (
-                <Text numberOfLines={1} className="text-muted-foreground">
+                <Text numberOfLines={1} className="text-foreground-muted">
                   {props.preview}
                 </Text>
               ) : null}
@@ -91,7 +94,7 @@ export function MobileBotRosterView(props: {
                     {row.kind === "task" ? row.task.title : row.title || "GOAT thread"}
                     {row.kind === "task" && row.unread ? "  •" : ""}
                   </Text>
-                  <Text className="text-xs text-muted-foreground">
+                  <Text className="text-xs text-foreground-muted">
                     {row.kind === "task" ? row.task.status.replaceAll("_", " ") : "GOAT thread"}
                   </Text>
                 </Pressable>

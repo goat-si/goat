@@ -38,7 +38,7 @@ import { buildHomeProjectScopes } from "./homeThreadList";
 import { usePendingTaskListActions } from "./usePendingTaskListActions";
 import { useThreadListActions } from "./useThreadListActions";
 import { getConnectionAwareBrandHeaderOptions } from "./WorkspaceConnectionTitle";
-import { MobileBotList, MobileHomeModeSegments } from "../goat-bot/MobileBotList";
+import { MobileBotList } from "../goat-bot/MobileBotList";
 import { useMobileGoatBotModeButton } from "../goat-bot/useMobileGoatBotHomeMode";
 import { useMobileGoatBotModelMenu } from "../goat-bot/useMobileGoatBotModel";
 import { GoatBotModelAndroidMenu } from "../goat-bot/GoatBotModelAndroidMenu";
@@ -323,7 +323,6 @@ export function HomeRouteScreen() {
         )}
         {homeHeader}
 
-        {Platform.OS === "ios" ? <MobileHomeModeSegments /> : null}
         <HomeScreen
           catalogState={catalogState}
           environments={environments}

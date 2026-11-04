@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import type { BotRosterEntry } from "@goat/client-runtime/goatBot";
 import type { BotThreadRow, ChannelUpdateTaskViewInput } from "@goat/contracts";
 import { Alert, Text, View } from "react-native";
@@ -6,6 +7,7 @@ import { useMobileBotRoster } from "./useMobileBotRoster";
 import { useMobileBotPreview } from "./useMobileBotPreview";
 
 export function MobileBotRoster(props: {
+  header?: ReactNode;
   selectedKey: string | null;
   onOpenBot: (bot: BotRosterEntry) => void;
   onOpenChild: (row: BotThreadRow) => void;
@@ -22,8 +24,9 @@ export function MobileBotRoster(props: {
   };
   return (
     <View className="flex-1">
-      {roster.error ? <Text className="px-4 text-destructive">{roster.error}</Text> : null}
+      {roster.error ? <Text className="px-4 text-danger-foreground">{roster.error}</Text> : null}
       <MobileBotRosterView
+        header={props.header}
         bots={roster.bots}
         rows={roster.children.rows}
         hasMore={roster.children.hasMore}

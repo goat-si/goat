@@ -20,8 +20,8 @@ export function MobileBotList({ showSegments = true }: { readonly showSegments?:
   });
   return (
     <View className="flex-1 bg-screen">
-      {showSegments ? <MobileHomeModeSegments /> : null}
       <MobileBotRoster
+        header={showSegments ? <MobileHomeModeSegments /> : null}
         selectedKey={selectedKey}
         onOpenBot={() => selectDetail({ name: "GoatBot", params: {} })}
         onOpenChild={(row) => {
