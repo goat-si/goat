@@ -62,6 +62,11 @@ and worktree while you stay in the new thread composer. This requires a Git proj
 
 Pin a thread from its menu to keep it above your active work.
 
+When GOAT Bot is enabled, choose **Bots** or **Threads** at the top of the sidebar.
+Under **Bots**, the main bot comes first, followed by its task and coding threads.
+Open a task to focus it, or use its menu to pin it, mark it done or reopen it,
+and mark it read. **Show more** reveals older rows. **New bot** is coming soon.
+
 The GOAT Bot row shows its latest message or task update. A blue dot means the bot has
 sent something since you last opened it; the number badge counts tasks awaiting your
 response. If the connected server does not track visits yet, the row shows its last

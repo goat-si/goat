@@ -1,5 +1,7 @@
+import { Link } from "@tanstack/react-router";
 import { selectGlobalAgentMode, useGlobalAgentStore } from "~/globalAgentStore";
-import { SidebarGroup } from "../ui/sidebar";
+import { SidebarGroup, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
+import { GoatBotAvatar } from "./GoatBotAvatar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { GoatBotSidebarRow } from "./GoatBotSidebarRow";
 import { GoatBotChildRows } from "./GoatBotChildRows";
@@ -46,6 +48,31 @@ export function GoatBotSidebarTabs() {
           />
           {environmentId && (
             <GoatBotChildRows environmentId={environmentId} rows={rows} refresh={refresh} />
+          )}
+          {roster.slice(1).map(
+            (entry) =>
+              entry.profile && (
+                <SidebarGroup key={entry.profile.botId}>
+                  <SidebarMenu>
+                    <SidebarMenuItem>
+                      <SidebarMenuButton
+                        render={
+                          <Link
+                            to="/$environmentId/$threadId"
+                            params={{
+                              environmentId: entry.profile.environmentId,
+                              threadId: entry.profile.sessionThreadId,
+                            }}
+                          />
+                        }
+                      >
+                        <GoatBotAvatar size="sm" />
+                        <span>{entry.profile.name}</span>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  </SidebarMenu>
+                </SidebarGroup>
+              ),
           )}
           <SidebarGroup>
             <Tooltip>

@@ -39,7 +39,10 @@ vi.mock("./useGoatBotSession", () => ({ useGoatBotEnabled: () => ({ enabled: tru
 vi.mock("./GoatBotSidebarRow", () => ({
   GoatBotSidebarRow: ({ name }: { name: string }) => <div>{name} Main</div>,
 }));
-vi.mock("@effect/atom-react", () => ({ useAtomValue: () => true }));
+vi.mock("@effect/atom-react", async (original) => ({
+  ...(await original<typeof import("@effect/atom-react")>()),
+  useAtomValue: () => true,
+}));
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));
 vi.mock("~/state/channels", () => ({
   channelEnvironment: { updateTaskView: { permissionAtom: () => null } },
