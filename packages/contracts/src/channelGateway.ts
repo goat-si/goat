@@ -228,6 +228,7 @@ const CHANNEL_GATEWAY_FAILURE_MESSAGES = {
   persistence_failed: "Could not store the channel message.",
   delivery_failed: "Could not deliver the channel message.",
   not_found: "The requested channel record does not exist.",
+  task_not_found: "The requested channel task does not exist.",
   not_home: "GOAT Bot runs on another machine in this cluster.",
 } as const;
 
