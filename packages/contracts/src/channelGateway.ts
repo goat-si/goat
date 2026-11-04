@@ -331,7 +331,7 @@ export const BotThreadRow = Schema.Union([
     taskId: ChannelTaskId,
     environmentId: EnvironmentId,
     threadId: ThreadId,
-    title: Schema.optional(TrimmedNonEmptyString),
+    title: Schema.optional(Schema.String),
     state: ChannelChildWorkState,
     lastActivityAt: IsoDateTime,
   }),

@@ -24,6 +24,7 @@ describe("bot thread contracts", () => {
           taskId: "task-1",
           environmentId: "env-1",
           threadId: "thread-1",
+          title: "",
           state: "bound",
           lastActivityAt: at,
         },
