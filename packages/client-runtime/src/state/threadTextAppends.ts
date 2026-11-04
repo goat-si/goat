@@ -15,6 +15,7 @@ import * as Stream from "effect/Stream";
 export const resolveThreadTextAppends = <E, R>(
   threadId: ThreadId,
   stream: Stream.Stream<OrchestrationV2ThreadStreamItem, E, R>,
+  onMismatch?: () => void,
 ): Stream.Stream<
   OrchestrationV2ResolvedThreadStreamItem,
   E | OrchestrationV2GetThreadProjectionError,
@@ -25,11 +26,15 @@ export const resolveThreadTextAppends = <E, R>(
     return Stream.mapEffect(stream, (item) => {
       const resolved = decode(item);
       return resolved === null
-        ? Effect.fail(
-            new OrchestrationV2GetThreadProjectionError({
-              threadId,
-              message: "Live thread text went out of step; resynchronizing.",
-            }),
+        ? Effect.sync(() => onMismatch?.()).pipe(
+            Effect.andThen(
+              Effect.fail(
+                new OrchestrationV2GetThreadProjectionError({
+                  threadId,
+                  message: "Live thread text went out of step; resynchronizing.",
+                }),
+              ),
+            ),
           )
         : Effect.succeed(resolved);
     });

@@ -576,11 +576,17 @@ export function subscribeThreadItems(
   ) => Effect.Effect<EnvironmentRpcInput<typeof ORCHESTRATION_V2_WS_METHODS.subscribeThread>>,
   options?: SubscriptionOptions<typeof ORCHESTRATION_V2_WS_METHODS.subscribeThread>,
 ) {
+  let acceptTextAppends = true;
   return subscribeDynamicMapped(
     ORCHESTRATION_V2_WS_METHODS.subscribeThread,
     (session) =>
-      Effect.map(makeInput(session), (input) => ({ ...input, acceptTextAppends: true as const })),
-    (_session, stream) => resolveThreadTextAppends(threadId, stream),
+      Effect.map(makeInput(session), ({ acceptTextAppends: _ignored, ...input }) =>
+        acceptTextAppends ? { ...input, acceptTextAppends: true as const } : input,
+      ),
+    (_session, stream) =>
+      resolveThreadTextAppends(threadId, stream, () => {
+        acceptTextAppends = false;
+      }),
     options,
   );
 }
