@@ -236,22 +236,41 @@ const BotRailItem = memo(function BotRailItem({ active }: { active: boolean }) {
   const setMode = useGlobalAgentStore((state) => state.setMode);
   const botReadMenu = useGoatBotReadMenu(botWaiting);
   return (
-    <RailTooltip label="GOAT Bot">
-      <Link
-        to="/bot"
-        aria-label={countLabel("GOAT Bot", botWaiting)}
-        activeOptions={EXACT_MATCH}
-        aria-current={active ? "page" : undefined}
-        className={railItemClassName(active)}
-        {...botReadMenu}
-        onClick={() => setMode("bot")}
-      >
-        {roster.map((entry) => (
-          <GoatBotAvatar key={entry.profile?.botId ?? "main"} size="sm" />
-        ))}
-        <RailCount count={botWaiting} />
-      </Link>
-    </RailTooltip>
+    <>
+      <RailTooltip label={roster[0]?.profile?.name ?? "GOAT Bot"}>
+        <Link
+          to="/bot"
+          aria-label={countLabel(roster[0]?.profile?.name ?? "GOAT Bot", botWaiting)}
+          activeOptions={EXACT_MATCH}
+          aria-current={active ? "page" : undefined}
+          className={railItemClassName(active)}
+          {...botReadMenu}
+          onClick={() => setMode("bot")}
+        >
+          <GoatBotAvatar size="sm" />
+          <RailCount count={botWaiting} />
+        </Link>
+      </RailTooltip>
+      {roster.slice(1).map(
+        (entry) =>
+          entry.profile && (
+            <RailTooltip key={entry.profile.botId} label={entry.profile.name}>
+              <Link
+                to="/$environmentId/$threadId"
+                params={{
+                  environmentId: entry.profile.environmentId,
+                  threadId: entry.profile.sessionThreadId,
+                }}
+                aria-label={entry.profile.name}
+                className={railItemClassName(false)}
+                onClick={() => setMode("bot")}
+              >
+                <GoatBotAvatar size="sm" />
+              </Link>
+            </RailTooltip>
+          ),
+      )}
+    </>
   );
 });
 

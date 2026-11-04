@@ -41,7 +41,7 @@ export function GoatBotSidebarTabs() {
         </div>
       </SidebarGroup>
       {mode === "bot" && (
-        <>
+        <div className="max-h-[70dvh] overflow-y-auto">
           <GoatBotSidebarRow
             name={roster[0]?.profile?.name ?? "GOAT Bot"}
             slackEnabled={slackEnabled}
@@ -84,7 +84,7 @@ export function GoatBotSidebarTabs() {
               <TooltipPopup>Coming soon</TooltipPopup>
             </Tooltip>
           </SidebarGroup>
-        </>
+        </div>
       )}
     </>
   );

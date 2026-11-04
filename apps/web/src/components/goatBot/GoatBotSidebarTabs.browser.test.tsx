@@ -6,6 +6,7 @@ import { userEvent } from "vite-plus/test/browser";
 import { render } from "../../../test/render";
 import { useGlobalAgentStore } from "~/globalAgentStore";
 
+const actions = vi.hoisted(() => ({ show: vi.fn(), update: vi.fn(), refresh: vi.fn() }));
 const navigation = vi.hoisted(() => ({ pathname: "/", environmentId: "", threadId: "" }));
 vi.mock("@tanstack/react-router", async (original) => ({
   ...(await original<typeof import("@tanstack/react-router")>()),
@@ -43,7 +44,8 @@ vi.mock("@effect/atom-react", async (original) => ({
   ...(await original<typeof import("@effect/atom-react")>()),
   useAtomValue: () => true,
 }));
-vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => vi.fn() }));
+vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => actions.update }));
+vi.mock("~/localApi", () => ({ readLocalApi: () => ({ contextMenu: { show: actions.show } }) }));
 vi.mock("~/state/channels", () => ({
   channelEnvironment: { updateTaskView: { permissionAtom: () => null } },
 }));
@@ -90,7 +92,7 @@ vi.mock("./useBotRoster", () => ({
     roster: [{ kind: "main", profile: { name: "Helper" } }],
     rows,
     environmentId: EnvironmentId.make("env-1"),
-    refresh: vi.fn(),
+    refresh: actions.refresh,
     slackEnabled: false,
   }),
 }));
@@ -111,4 +113,20 @@ it("Bots tab lists the main bot and its task threads and keeps its selection whe
     .element(screen.getByRole("tab", { name: "Bots" }))
     .toHaveAttribute("aria-selected", "true");
   await expect.element(screen.getByText("Fix code")).toBeVisible();
+});
+
+it("updates a task view and refreshes the roster after the server accepts it", async () => {
+  actions.show.mockResolvedValue("pin");
+  actions.update.mockResolvedValue({ _tag: "Success" });
+  useGlobalAgentStore.getState().setMode("bot");
+  // The router is mocked so the test can focus on the task command.
+  await using screen = await render(<GoatBotSidebarTabs />, { router: false });
+  await userEvent.click(screen.getByRole("button", { name: "Actions for Review work" }));
+  await vi.waitFor(() =>
+    expect(actions.update).toHaveBeenCalledWith({
+      environmentId: "env-1",
+      input: { taskId: "task-1", pinned: true },
+    }),
+  );
+  expect(actions.refresh).toHaveBeenCalled();
 });
