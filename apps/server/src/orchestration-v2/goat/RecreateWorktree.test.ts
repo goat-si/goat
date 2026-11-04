@@ -74,5 +74,26 @@ it.effect("restores a deleted branch from its snapshot and refuses a moved branc
     assert.equal(error._tag, "WorktreeSnapshotConflictError");
     assert.isFalse(NodeFS.existsSync(worktreePath));
     assert.notInclude(git(repo, ["worktree", "list", "--porcelain"]), worktreePath);
+    git(repo, ["branch", "-f", "feature", headSha]);
+    const malformed = git(repo, ["commit-tree", tree, "-p", headSha, "-m", "malformed"]);
+    yield* Effect.flip(recreate({ ...input, snapshot: { snapshotSha: malformed, headSha } }));
+    assert.isFalse(NodeFS.existsSync(worktreePath));
+    assert.notInclude(git(repo, ["worktree", "list", "--porcelain"]), worktreePath);
+
+    const local = yield* recreate({ cwd: repo, worktreePath, branch: "feature" });
+    assert.equal(local.restoredFrom, "branch");
+    git(repo, ["worktree", "remove", "--force", worktreePath]);
+    git(repo, ["branch", "-D", "feature"]);
+    git(repo, ["remote", "add", "origin", repo]);
+    git(repo, ["update-ref", "refs/remotes/origin/feature", headSha]);
+    const remote = yield* recreate({ cwd: repo, worktreePath, branch: "feature" });
+    assert.equal(remote.restoredFrom, "remote-branch");
+    assert.equal(remote.headSha, headSha);
+    git(repo, ["worktree", "remove", "--force", worktreePath]);
+    git(repo, ["branch", "-D", "feature"]);
+    git(repo, ["update-ref", "-d", "refs/remotes/origin/feature"]);
+    const base = yield* recreate({ cwd: repo, worktreePath, branch: "feature" });
+    assert.equal(base.restoredFrom, "base");
+    assert.equal(base.headSha, git(repo, ["rev-parse", "main"]));
   }).pipe(Effect.scoped, Effect.provide(layerRealGit)),
 );
