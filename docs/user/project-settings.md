@@ -334,7 +334,8 @@ git -C /path/to/recovery read-tree 'refs/goat/snapshots/THREAD/TIME^2'
 
 Review the recovered files and staged changes before continuing. Cleanup checks processes owned by
 the current user, but cannot fence other users' processes or a write in the final milliseconds
-before removal. Keep separate backups of anything you cannot afford to lose.
+before removal. Where that check cannot see every file (common in containers), worktrees with
+local changes are kept. Keep separate backups of anything you cannot afford to lose.
 
 Choose **Delete now** to run the enabled rules immediately. The latest results show which
 worktrees were removed or kept and why, plus any failures.
