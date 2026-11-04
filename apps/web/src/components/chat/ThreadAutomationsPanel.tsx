@@ -34,9 +34,9 @@ import {
 const STATUS_DOT_CLASS = {
   outline: "bg-muted-foreground/40",
   info: "bg-info",
-  success: "bg-emerald-500",
+  success: "bg-success",
   error: "bg-destructive",
-  warning: "bg-amber-500",
+  warning: "bg-warning",
 };
 
 function taskScheduleLine(task: ScheduledTask) {

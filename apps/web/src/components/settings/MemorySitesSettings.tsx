@@ -1,6 +1,9 @@
 import { RegistryContext, useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId, SiteNoteListEntry } from "@goat/contracts";
-import { useContext, useEffect, useRef, useState } from "react";
+import { useContext, useEffect, useRef, useState, type ReactNode } from "react";
+
+import { cn } from "~/lib/utils";
+
 import { memoryEnvironment } from "../../state/memory";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -122,22 +125,21 @@ export function MemorySitesSettings({ environmentId }: { environmentId: Environm
             value={text}
             onChange={(event) => setText(event.target.value)}
           />
-          <span>
-            {size(text)} / {NOTE_LIMIT_BYTES} bytes
-          </span>{" "}
-          <Button
-            size="sm"
-            disabled={!canWrite || busy || !origin || size(text) > NOTE_LIMIT_BYTES}
-            onClick={() =>
-              void save(origin, text).then((ok) => {
-                if (!ok) return;
-                setOrigin("");
-                setText("");
-              })
-            }
-          >
-            Save
-          </Button>
+          <NoteFormFooter bytes={size(text)}>
+            <Button
+              size="sm"
+              disabled={!canWrite || busy || !origin || size(text) > NOTE_LIMIT_BYTES}
+              onClick={() =>
+                void save(origin, text).then((ok) => {
+                  if (!ok) return;
+                  setOrigin("");
+                  setText("");
+                })
+              }
+            >
+              Save
+            </Button>
+          </NoteFormFooter>
         </div>
       </SettingsRow>
     </SettingsSection>
@@ -169,62 +171,96 @@ function SiteNoteRow({
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
           />
-          <span>
-            {size(draft)} / {NOTE_LIMIT_BYTES} bytes
-          </span>{" "}
-          <Button
-            size="sm"
-            disabled={disabled || size(draft) > NOTE_LIMIT_BYTES}
-            onClick={() =>
-              void save(note.origin, draft).then((ok) => {
-                if (ok) setEditing(false);
-              })
-            }
-          >
-            Save
-          </Button>{" "}
-          <Button size="sm" variant="outline" onClick={() => setEditing(false)}>
-            Cancel
-          </Button>
+          <NoteFormFooter bytes={size(draft)}>
+            <Button size="sm" variant="outline" onClick={() => setEditing(false)}>
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              disabled={disabled || size(draft) > NOTE_LIMIT_BYTES}
+              onClick={() =>
+                void save(note.origin, draft).then((ok) => {
+                  if (ok) setEditing(false);
+                })
+              }
+            >
+              Save
+            </Button>
+          </NoteFormFooter>
         </div>
       </SettingsRow>
     );
+  const restorable = note.seed && (note.hidden || note.author !== "seed");
   return (
-    <SettingsRow title={note.origin} description={description}>
+    <SettingsRow
+      title={note.origin}
+      description={description}
+      control={
+        <div className="flex items-center gap-2">
+          {note.hidden ? null : (
+            <>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={disabled}
+                onClick={() => {
+                  setDraft(note.text);
+                  setEditing(true);
+                }}
+              >
+                Edit
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={disabled}
+                onClick={() => void change("delete", note.origin)}
+              >
+                Delete
+              </Button>
+            </>
+          )}
+          {restorable ? (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={disabled}
+              onClick={() => void change("restore", note.origin)}
+            >
+              Restore default
+            </Button>
+          ) : null}
+        </div>
+      }
+    >
       {note.hidden ? null : (
-        <>
-          <p>{note.text}</p>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={disabled}
-            onClick={() => {
-              setDraft(note.text);
-              setEditing(true);
-            }}
-          >
-            Edit
-          </Button>{" "}
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={disabled}
-            onClick={() => void change("delete", note.origin)}
-          >
-            Delete
-          </Button>{" "}
-        </>
+        <p className="text-sm whitespace-pre-wrap text-muted-foreground wrap-break-word">
+          {note.text}
+        </p>
       )}
-      {note.seed && (note.hidden || note.author !== "seed") ? (
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={disabled}
-          onClick={() => void change("restore", note.origin)}
-        >
-          Restore default
-        </Button>
-      ) : null}
     </SettingsRow>
+  );
+}
+
+/** The byte count on the left and the form's buttons on the right, on one line. */
+function NoteFormFooter({
+  bytes,
+  children,
+}: {
+  readonly bytes: number;
+  readonly children: ReactNode;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <span
+        className={cn(
+          "text-xs tabular-nums",
+          bytes > NOTE_LIMIT_BYTES ? "text-destructive" : "text-muted-foreground",
+        )}
+      >
+        {bytes} / {NOTE_LIMIT_BYTES} bytes
+      </span>
+      <div className="flex items-center gap-2">{children}</div>
+    </div>
   );
 }

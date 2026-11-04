@@ -1485,8 +1485,8 @@ export function resolveThreadStatusPill(input: {
   if (thread.hasPendingApprovals || thread.pendingSubagentRequest === "approval") {
     return {
       label: "Pending Approval",
-      colorClass: "text-amber-600 dark:text-amber-300/90",
-      dotClass: "bg-amber-500 dark:bg-amber-300/90",
+      colorClass: "text-warning-foreground",
+      dotClass: "bg-warning",
       pulse: false,
     };
   }
@@ -1549,8 +1549,8 @@ export function resolveThreadStatusPill(input: {
   if (hasUnseenFailure(thread)) {
     return {
       label: "Failed",
-      colorClass: "text-red-600 dark:text-red-300/90",
-      dotClass: "bg-red-500 dark:bg-red-300/90",
+      colorClass: "text-destructive-foreground",
+      dotClass: "bg-destructive",
       pulse: false,
     };
   }
@@ -1572,8 +1572,8 @@ export function resolveThreadStatusPill(input: {
   if (hasUnseenCompletion(thread)) {
     return {
       label: "Completed",
-      colorClass: "text-emerald-600 dark:text-emerald-300/90",
-      dotClass: "bg-emerald-500 dark:bg-emerald-300/90",
+      colorClass: "text-success-foreground",
+      dotClass: "bg-success",
       pulse: false,
     };
   }

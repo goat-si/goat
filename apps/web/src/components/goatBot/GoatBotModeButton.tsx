@@ -8,7 +8,7 @@ import {
   useGlobalAgentStore,
 } from "~/globalAgentStore";
 
-import { Button } from "../ui/button";
+import { ComposerControl, ComposerControlIcon } from "../chat/ComposerControl";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { GoatBotAvatar } from "./GoatBotAvatar";
 import { useGoatBotEnabled } from "./useGoatBotSession";
@@ -40,9 +40,8 @@ export function GoatBotModeButton({ to }: { readonly to: GlobalAgentMode }) {
     <Tooltip>
       <TooltipTrigger
         render={
-          <Button
-            size="sm"
-            variant="ghost"
+          // A composer control, like the model picker it sits beside in GOAT Bot's header.
+          <ComposerControl
             aria-label={copy.hint}
             onClick={() => {
               setMode(to);
@@ -51,8 +50,14 @@ export function GoatBotModeButton({ to }: { readonly to: GlobalAgentMode }) {
           />
         }
       >
-        {to === "bot" ? <GoatBotAvatar size="sm" /> : <GlobeIcon />}
-        <span className="max-sm:hidden">{copy.label}</span>
+        {to === "bot" ? (
+          <GoatBotAvatar size="sm" />
+        ) : (
+          <ComposerControlIcon icon={GlobeIcon} className="text-current" />
+        )}
+        <span className="max-sm:hidden" data-composer-control-label>
+          {copy.label}
+        </span>
       </TooltipTrigger>
       <TooltipPopup side="bottom">{copy.hint}</TooltipPopup>
     </Tooltip>

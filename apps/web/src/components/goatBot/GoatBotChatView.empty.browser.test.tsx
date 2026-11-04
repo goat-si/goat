@@ -3,6 +3,8 @@ import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
+import "~/index.css";
+
 vi.mock("../WorkspacePageHeader", () => ({
   WorkspacePageHeader: ({ children }: { children: ReactNode }) => <header>{children}</header>,
 }));
@@ -79,4 +81,21 @@ it("does not offer example buttons without send permission", async () => {
   expect(
     [...container.querySelectorAll("button")].some((button) => button.textContent === example),
   ).toBe(false);
+});
+
+it("centers the example buttons under the title", async () => {
+  await render(true);
+  const title = container.querySelector("[data-slot='empty-title']")!;
+  const center = (element: Element) => {
+    const box = element.getBoundingClientRect();
+    return box.left + box.width / 2;
+  };
+  const examples = [...container.querySelectorAll("button")].filter((button) =>
+    ["Fix the flaky test in my project", example, "How is the work going?"].includes(
+      button.textContent ?? "",
+    ),
+  );
+  expect(examples).toHaveLength(3);
+  for (const button of examples)
+    expect(Math.abs(center(button) - center(title))).toBeLessThanOrEqual(1);
 });

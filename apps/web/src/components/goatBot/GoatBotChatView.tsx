@@ -411,7 +411,7 @@ function GoatBotNotice({
       </EmptyHeader>
       {availability.kind === "ready" && onSelectExample ? (
         <EmptyContent>
-          <div className="flex flex-col items-start gap-2 text-left">
+          <div className="flex flex-col items-center gap-2">
             {EXAMPLES.map((example) => (
               <button
                 key={example}

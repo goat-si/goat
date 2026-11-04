@@ -169,8 +169,8 @@ export function ComposerControlsBar(props: {
     ...providerTraitsPickerInput,
     size: composerControlsCollapsed ? "xs" : "sm",
     hidden: composerControlsHidden || restingHiddenBlockCount > 1,
-    // Effort reads as a dimmer suffix of the model name, one word space after it, like Codex.
-    triggerClassName: composerControlsCollapsed ? "ps-0.5 text-muted-foreground/60" : "ps-0.5",
+    // Effort reads as a dimmer suffix of the model name; its padding stays symmetric so hover is centered.
+    ...(composerControlsCollapsed ? { triggerClassName: "text-muted-foreground/60" } : {}),
     onOpenModelPicker: openComposerModelPicker,
   });
   // The footer and the collapsed composer's control row read alike, like Codex: attach and
@@ -241,7 +241,7 @@ export function ComposerControlsBar(props: {
               !showInlineRestingControls &&
                 "@max-[640px]/composer-surface:[&_[data-chat-provider-model-picker-label]]:w-0 @max-[640px]/composer-surface:[&_[data-chat-provider-model-picker-label]]:flex-none",
             )
-          : "-ms-2 min-w-13"
+          : "min-w-13"
       }
       terminalOpen={terminalOpen}
       open={modelPickerOpen}
@@ -312,8 +312,6 @@ export function ComposerControlsBar(props: {
               className={cn(
                 "flex w-max min-w-max shrink-0 items-center gap-1",
                 def.id === "mode" && "order-first",
-                // Cancels the row gap so effort sits right after the model name.
-                def.id === "traits" && "-ms-1",
                 hidden && "pointer-events-none invisible absolute",
                 index >= restingBlockDefs.length - iconOnlyBlockCount &&
                   "[&_[data-composer-control-label]]:pointer-events-none [&_[data-composer-control-label]]:invisible [&_[data-composer-control-label]]:absolute [&_[data-composer-control-label]]:w-max [&_[data-composer-control-label]]:max-w-none [&_[data-composer-control-compact-icon]]:[visibility:inherit] [&_[data-composer-control-compact-icon]]:relative",

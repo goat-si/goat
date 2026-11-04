@@ -61,7 +61,7 @@ function GoatBotSidebarObserver() {
     if (isMobile) setOpenMobile(false);
   };
   return (
-    <SidebarGroup className="z-[1]">
+    <SidebarGroup className="z-1">
       <SidebarMenu>
         <SidebarMenuItem>
           {botRef && shell?.lastVisitedAt !== undefined ? (

@@ -376,7 +376,7 @@ export function MemoryAdministration({
   ) {
     return (
       <Select value={value} onValueChange={onChange} disabled={busy || pending !== null}>
-        <SelectTrigger aria-label={label}>
+        <SelectTrigger size="sm" aria-label={label}>
           <SelectValue placeholder="Choose a device">{value ? name(value) : undefined}</SelectValue>
         </SelectTrigger>
         <SelectPopup>
