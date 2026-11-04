@@ -110,7 +110,10 @@ const services = (
                 terminalId: "terminal-1",
                 cwd: input.worktreePath,
                 async: false,
-                completion: Effect.succeed({ exitCode: setupExitCode, durationMs: 1 }),
+                // Like the real runner, the exit code is reported only to a caller that asks.
+                ...(input.observeCompletion === undefined
+                  ? {}
+                  : { completion: Effect.succeed({ exitCode: setupExitCode, durationMs: 1 }) }),
               };
         }),
     }),

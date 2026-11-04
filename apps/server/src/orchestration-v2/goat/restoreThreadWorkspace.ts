@@ -85,9 +85,13 @@ export const makeRestoreThreadWorkspace = Effect.gen(function* () {
               projectCwd: input.cwd,
               worktreePath: input.worktreePath,
               trigger: "setup",
+              // The runner reports the exit code only when asked to watch for it.
+              observeCompletion: {},
             })
             .pipe(Effect.mapError((error) => fail("setup-failed", error.message)));
-      if (setup.status === "started" && !setup.async && setup.completion !== undefined) {
+      if (setup.status === "started" && !setup.async) {
+        if (setup.completion === undefined)
+          return yield* fail("setup-failed", "GOAT couldn't follow the setup script to its end.");
         const completion = yield* setup.completion;
         if (completion.exitCode !== 0)
           return yield* fail(

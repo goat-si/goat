@@ -25,6 +25,7 @@ import { WorktreeSnapshotStore } from "../../worktreeSnapshots/WorktreeSnapshotS
 import * as ProjectionStore from "../ProjectionStore.ts";
 import * as ThreadManagement from "../ThreadManagementService.ts";
 import { makeRestorePending, makeRestoreThreadWorkspace } from "./restoreThreadWorkspace.ts";
+import { verifyRestoredWorktree } from "./restoreSnapshot.ts";
 
 /** What a client shows for a thread whose worktree cleanup removed, and the ways back. */
 export class ThreadWorkspaceService extends Context.Service<
@@ -194,17 +195,21 @@ const make = Effect.gen(function* () {
     const worktreePath = created.worktree.path;
     const newBranch = created.worktree.refName;
     // Setup finishes under the new folder's lease before the thread points there, so no turn
-    // can start in a half-prepared worktree.
+    // can start in a half-prepared worktree, and the folder is checked after setup ran in it.
     const prepareAndRebind = Effect.gen(function* () {
+      const createdHead = yield* headOf(worktreePath);
       const setup = yield* setupScripts
         .runForThread({
           threadId,
           projectCwd: project.workspaceRoot,
           worktreePath,
           trigger: "setup",
+          observeCompletion: {},
         })
         .pipe(Effect.mapError((error) => fail("setup-failed", error.message)));
-      if (setup.status === "started" && !setup.async && setup.completion !== undefined) {
+      if (setup.status === "started" && !setup.async) {
+        if (setup.completion === undefined)
+          return yield* fail("setup-failed", "GOAT couldn't follow the setup script to its end.");
         const completion = yield* setup.completion;
         if (completion.exitCode !== 0)
           return yield* fail(
@@ -212,6 +217,14 @@ const make = Effect.gen(function* () {
             `Setup script "${setup.scriptName}" exited with ${completion.exitCode ?? "no exit code"}.`,
           );
       }
+      yield* verifyRestoredWorktree({
+        cwd: worktreePath,
+        expectedPath: worktreePath,
+        branch: newBranch,
+        expectedHead: createdHead,
+      }).pipe(Effect.mapError((error) => fail("verify-failed", error.detail)));
+      // A send admitted after this check waits on the old folder's lease held here, then starts
+      // in the new folder once the binding moves.
       const current = yield* projections
         .getThreadShell(threadId)
         .pipe(Effect.orElseSucceed(() => null));
