@@ -73,9 +73,7 @@ const program = Effect.fn("WorktreeSnapshot.capture")(function* (cwd: string) {
     )
   )
     return yield* fail("intent-to-add entry exists");
-  // Refuse submodules until their recursive remote reachability can be established.
-  if ((yield* run(["submodule", "status", "--recursive"])).trim())
-    return yield* fail("submodules require remote reachability verification");
+  // Snapshots record submodule commits only; cleanup's submodule check keeps dirty or unpushed ones first.
   const names = new Set(
     [
       ...(yield* run(["diff", "--name-only", "-z", "HEAD", "--"])).split("\0"),
