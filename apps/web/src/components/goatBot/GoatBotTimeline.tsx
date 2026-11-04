@@ -6,7 +6,8 @@ import {
   type GoatBotActivity,
   type GoatBotRow,
 } from "@goat/client-runtime/goatBot";
-import type { EnvironmentId } from "@goat/contracts";
+import { ChannelTaskId, type EnvironmentId } from "@goat/contracts";
+import { Link } from "@tanstack/react-router";
 import {
   BellIcon,
   CircleAlertIcon,
@@ -48,8 +49,10 @@ export function GoatBotTimeline({
   onRetry,
   onDiscard,
   onPick,
+  taskDetails = false,
 }: {
   readonly rows: ReadonlyArray<GoatBotRow>;
+  readonly taskDetails?: boolean;
   /** The environment whose history these rows show; links in bot text resolve there. */
   readonly environmentId?: EnvironmentId | null;
   readonly replyingSince?: string | null;
@@ -345,10 +348,26 @@ export function GoatBotTimeline({
                       index > 1 && (row.firstInGroup ? "mt-3" : "mt-1"),
                     )}
                   >
-                    <GoatBotTaskChip
-                      card={row.card}
-                      tail={row.groupPosition === "last" || row.groupPosition === "single"}
-                    />
+                    {taskDetails ? (
+                      <GoatBotTaskChip
+                        card={row.card}
+                        tail={row.groupPosition === "last" || row.groupPosition === "single"}
+                      />
+                    ) : (
+                      <div>
+                        <details>
+                          <summary className="text-xs text-muted-foreground">Task details</summary>
+                          <GoatBotTaskChip card={row.card} tail={false} />
+                        </details>
+                        <Link
+                          to="/bot"
+                          search={{ task: ChannelTaskId.make(row.card.key) }}
+                          className="rounded-full border border-border px-3 py-1.5 text-sm hover:bg-accent"
+                        >
+                          Task thread · {row.card.title}
+                        </Link>
+                      </div>
+                    )}
                   </li>
                 );
             }

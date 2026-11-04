@@ -1,4 +1,14 @@
 import { useContext, useEffect } from "react";
+import { scopeThreadRef } from "@goat/client-runtime/environment";
+import type { ChannelTaskId, EnvironmentId, ThreadId } from "@goat/contracts";
+import { useMediaQuery } from "../hooks/useMediaQuery";
+import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../rightPanelLayout";
+import {
+  resolveThreadDetailRef,
+  useThreadShell,
+  useThreadVisibleTurnItems,
+} from "../state/entities";
+import { GoatBotTaskPane } from "../components/goatBot/GoatBotTaskPane";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 
 import { validateBotTaskSearch } from "../components/goatBot/botTaskSearch";
@@ -34,6 +44,10 @@ function GoatBotRouteSession() {
         replace: true,
       });
   }, [bot, navigate, task]);
+  if (bot && task)
+    return (
+      <GoatBotTaskRoute environmentId={bot.environmentId} threadId={bot.threadId} taskId={task} />
+    );
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
       <GoatBotChatView
@@ -51,6 +65,46 @@ function GoatBotRouteSession() {
         }
         homeMoveError={homeSettings.error}
       />
+    </SidebarInset>
+  );
+}
+
+function GoatBotTaskRoute({
+  environmentId,
+  threadId,
+  taskId,
+}: {
+  environmentId: EnvironmentId;
+  threadId: ThreadId;
+  taskId: ChannelTaskId;
+}) {
+  const narrow = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
+  const navigate = useNavigate();
+  const ref = scopeThreadRef(environmentId, threadId);
+  const shell = useThreadShell(ref);
+  const items = useThreadVisibleTurnItems(
+    resolveThreadDetailRef(ref, { shellExists: shell !== null, waitForShell: true }),
+  );
+  const session = useGoatBotSession(items, null);
+  const legacyAgentRoute = useLegacyGlobalAgentRoute();
+  return (
+    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none">
+      <div className="flex min-h-0 min-w-0 flex-1">
+        {!narrow && (
+          <GoatBotChatView
+            {...session}
+            environmentId={environmentId}
+            legacyAgentRoute={legacyAgentRoute}
+          />
+        )}
+        <GoatBotTaskPane
+          narrow={narrow}
+          environmentId={environmentId}
+          threadId={threadId}
+          taskId={taskId}
+          onClose={() => void navigate({ to: "/bot", search: {} })}
+        />
+      </div>
     </SidebarInset>
   );
 }

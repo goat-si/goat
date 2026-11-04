@@ -289,7 +289,7 @@ function useGoatBotWorking(visibleTurnItems: ReadonlyArray<OrchestrationV2Projec
 }
 
 /** One ensure and send queue per environment, shared by the entry route and thread view. */
-export function useGoatBotSession(visibleTurnItems = EMPTY_ITEMS, taskId?: ChannelTaskId) {
+export function useGoatBotSession(visibleTurnItems = EMPTY_ITEMS, taskId?: ChannelTaskId | null) {
   const { enabled, environment, environments, home, port } = useGoatBotEnabled();
   const environmentId = environment?.environmentId ?? null;
   const bootstrapped = useEnvironmentShellsBootstrapped(environmentId);
@@ -469,7 +469,7 @@ export function useGoatBotSession(visibleTurnItems = EMPTY_ITEMS, taskId?: Chann
     onSend: (text: string, attachments: ReadonlyArray<GoatBotDraftAttachment> = []) => {
       if (availability.kind !== "ready" || !canOperate || queue === undefined) return false;
       if (attachments.length > 0 && attachmentSupport === null) return false;
-      queue.submit(text, availability.bot, attachments, taskId);
+      queue.submit(text, availability.bot, attachments, taskId ?? undefined);
       return true;
     },
     onRetryInput: (key: string) => {
