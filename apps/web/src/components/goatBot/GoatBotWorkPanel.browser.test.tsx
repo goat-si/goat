@@ -12,7 +12,9 @@ it("shows the empty state for each work tab", async () => {
   await using screen = await render(
     <GoatBotWorkPanel environmentId={EnvironmentId.make("env")} threadId={ThreadId.make("bot")} />,
   );
-  await expect.element(screen.getByText("No task threads yet.")).toBeVisible();
+  await expect
+    .element(screen.getByText("No task threads yet. Ask GOAT Bot to start work."))
+    .toBeVisible();
   await userEvent.click(screen.getByRole("tab", { name: "Routines" }));
   await expect.element(screen.getByText("Ask GOAT Bot in chat to set up a routine.")).toBeVisible();
   await userEvent.click(screen.getByRole("tab", { name: "Library" }));

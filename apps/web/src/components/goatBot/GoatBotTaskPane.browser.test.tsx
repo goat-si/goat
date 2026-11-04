@@ -38,7 +38,7 @@ vi.mock("./useBotRoster", () => ({
         task: {
           taskId: "task-1",
           title: "Review work",
-          status: "running",
+          status: "waiting_input",
           updatedAt: "2026-11-04T10:00:00.000Z",
         },
         view: { taskId: "task-1", pinnedAt: null, doneAt: null, readThrough: null },
@@ -90,6 +90,7 @@ it("opens the scoped task and acknowledges it, then sends and closes", async () 
   const close = vi.fn();
   await using screen = await render(<Pane onClose={close} />);
   await expect.element(screen.getByText("Review work")).toBeVisible();
+  await expect.element(screen.getByText("Needs your input")).toBeVisible();
   expect(state.session).toHaveBeenCalledWith("task-1");
   expect(state.update).toHaveBeenCalledWith({
     environmentId: "env",

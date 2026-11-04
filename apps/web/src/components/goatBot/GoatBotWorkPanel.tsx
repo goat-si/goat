@@ -1,4 +1,4 @@
-import { groupBotWork } from "@goat/client-runtime/goatBot";
+import { groupBotWork, presentTaskStatus } from "@goat/client-runtime/goatBot";
 import type { BotThreadRow, EnvironmentId, ThreadId } from "@goat/contracts";
 import { Link } from "@tanstack/react-router";
 import { useState } from "react";
@@ -31,16 +31,18 @@ export function GoatBotWorkPanel({
   return (
     <div className="flex min-h-0 flex-1 flex-col p-4 text-sm">
       <Tabs value={tab} onValueChange={(value: Tab) => setTab(value)} className="min-h-0 flex-1">
-        <TabsList aria-label="GOAT Bot work">
-          {tabs.map((name) => (
-            <TabsTab key={name} value={name}>
-              {name}
-            </TabsTab>
-          ))}
-        </TabsList>
+        <div className="pr-10">
+          <TabsList aria-label="GOAT Bot work">
+            {tabs.map((name) => (
+              <TabsTab key={name} value={name}>
+                {name}
+              </TabsTab>
+            ))}
+          </TabsList>
+        </div>
         <TabsPanel value="Tasks" className="mt-4 min-h-0 overflow-y-auto">
           {tasks.length === 0 ? (
-            <p>No task threads yet.</p>
+            <p>No task threads yet. Ask GOAT Bot to start work.</p>
           ) : (
             <div className="space-y-4">
               {([false, true] as const).map((done) => (
@@ -99,6 +101,9 @@ function TaskWorkRow({
         className="block rounded-md p-2 hover:bg-accent"
       >
         {row.task.title}
+        <span className="block text-xs text-muted-foreground">
+          {presentTaskStatus(row.task.status, row.view.doneAt).label}
+        </span>
       </Link>
       <button
         type="button"

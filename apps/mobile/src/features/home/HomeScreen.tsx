@@ -1,3 +1,4 @@
+import { MobileHomeModeSegments } from "../goat-bot/MobileBotList";
 import { useEnvironmentHues } from "../threads/useEnvironmentHues";
 import { useActiveNewTask } from "../../state/active-new-task";
 import { AppActivityIndicator } from "../../components/ui/AppActivityIndicator";
@@ -768,6 +769,7 @@ export function HomeScreen(props: HomeScreenProps) {
             paddingRight: 32 + (contentSideInsets?.right ?? 0),
           }}
         >
+          {Platform.OS === "ios" ? <MobileHomeModeSegments /> : null}
           <DecisionInboxRow onPress={props.onOpenDecisions} />
           <View className="flex-1 items-center justify-center">
             <View className="w-full max-w-[430px]">
@@ -814,6 +816,7 @@ export function HomeScreen(props: HomeScreenProps) {
   const v2ListHeader = (
     <>
       {listHeader}
+      {Platform.OS === "ios" ? <MobileHomeModeSegments /> : null}
       {Platform.OS === "ios" && workspace ? (
         <ThreadListFilters
           gutter={primaryColumn ? 8 : 0}

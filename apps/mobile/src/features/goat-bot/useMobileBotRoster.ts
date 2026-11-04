@@ -1,3 +1,4 @@
+import { selectBotChildren } from "@goat/client-runtime/goatBot";
 import { runAtomCommand, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import type { ChannelUpdateTaskViewInput } from "@goat/contracts";
 import { useEffect, useState } from "react";
@@ -73,6 +74,15 @@ export function useMobileBotRoster(selectedKey: string | null) {
     showMore,
     selectedKey,
   });
+  const alternateChildren = selectBotChildren({
+    rows: supportsTaskThreads ? (threads.data?.rows ?? []) : [],
+    now,
+    showMore: !showMore,
+    selectedKey,
+  });
+  const hiddenCount = showMore
+    ? roster.children.rows.length - alternateChildren.rows.length
+    : alternateChildren.rows.length - roster.children.rows.length;
   const update = async (input: ChannelUpdateTaskViewInput) => {
     if (environmentId === null || !supportsTaskThreads)
       throw new Error("Bot task threads are unavailable.");
@@ -87,7 +97,9 @@ export function useMobileBotRoster(selectedKey: string | null) {
     ...roster,
     environmentId,
     slackEnabled: slack.data?.some((connection) => connection.enabled) === true,
-    showMore: () => setShowMore(true),
+    expanded: showMore,
+    hiddenCount,
+    showMore: () => setShowMore((current) => !current),
     update,
     error: profiles.error ?? threads.error,
   };

@@ -201,14 +201,6 @@ function GoatBotConversationRow({
           >
             {name}
           </span>
-          <Badge size="sm" variant="secondary">
-            Main
-          </Badge>
-          {slackEnabled && (
-            <Badge size="sm" variant="secondary">
-              Slack
-            </Badge>
-          )}
           {at ? (
             <span
               data-slot="goat-bot-relative-time"
@@ -218,22 +210,32 @@ function GoatBotConversationRow({
             </span>
           ) : null}
           {count !== undefined && count > 0 ? (
-            <Badge size="sm" variant="secondary">
+            <Badge size="sm" variant="secondary" aria-label={`${count} waiting for you`}>
               {count}
             </Badge>
           ) : null}
         </span>
-        {preview ? (
-          <span
-            className={
-              preview.unread
-                ? "truncate text-xs font-normal text-sidebar-foreground/75"
-                : "truncate text-xs font-normal text-sidebar-muted-foreground"
-            }
-          >
-            {preview.text}
-          </span>
-        ) : null}
+        <span className="flex min-w-0 items-center gap-1">
+          <Badge size="sm" variant="secondary">
+            Main
+          </Badge>
+          {slackEnabled && (
+            <Badge size="sm" variant="secondary">
+              Slack
+            </Badge>
+          )}
+          {preview ? (
+            <span
+              className={
+                preview.unread
+                  ? "min-w-0 flex-1 truncate text-xs font-normal text-sidebar-foreground/75"
+                  : "min-w-0 flex-1 truncate text-xs font-normal text-sidebar-muted-foreground"
+              }
+            >
+              {preview.text}
+            </span>
+          ) : null}
+        </span>
       </span>
     </SidebarMenuButton>
   );

@@ -240,7 +240,11 @@ const BotRailItem = memo(function BotRailItem({ active }: { active: boolean }) {
       <RailTooltip label={roster[0]?.profile?.name ?? "GOAT Bot"}>
         <Link
           to="/bot"
-          aria-label={countLabel(roster[0]?.profile?.name ?? "GOAT Bot", botWaiting)}
+          aria-label={
+            botWaiting
+              ? `${roster[0]?.profile?.name ?? "GOAT Bot"}, ${botWaiting} waiting for you`
+              : (roster[0]?.profile?.name ?? "GOAT Bot")
+          }
           activeOptions={EXACT_MATCH}
           aria-current={active ? "page" : undefined}
           className={railItemClassName(active)}

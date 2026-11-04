@@ -184,6 +184,6 @@ it("opens the task represented by a task thread pill", async () => {
     />,
   );
   await view.render();
-  await view.click("Task thread · Check disks");
+  await view.click("Task thread · Check disks · Running");
   expect(onSelectTask).toHaveBeenCalledWith("task-1");
 });

@@ -1,3 +1,4 @@
+import { MobileHomeModeSegments } from "../goat-bot/MobileBotList";
 import { useEnvironmentHues } from "./useEnvironmentHues";
 import { useActiveNewTask } from "../../state/active-new-task";
 import { ThreadUndoNotice } from "../home/ThreadUndoNotice";
@@ -20,7 +21,6 @@ import { GestureDetector, useNativeGesture } from "react-native-gesture-handler"
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { SearchBarCommands } from "react-native-screens";
-
 import { AppText as Text } from "../../components/ui/AppText";
 import { CompactBrandTitle } from "../../components/CompactBrandTitle";
 import { Menu } from "../../components/ui/Menu";
@@ -958,7 +958,7 @@ function ThreadNavigationSidebarPane(
               <SidebarHeaderActions onOpenSettings={props.onOpenSettings} />
             </View>
           </View>
-
+          <MobileHomeModeSegments />
           <View className="mx-4 mt-[9px] h-[38px] flex-row items-center gap-1.5 rounded-xl bg-sidebar-search pr-2.5 pl-[11px]">
             <SymbolView
               name="magnifyingglass"

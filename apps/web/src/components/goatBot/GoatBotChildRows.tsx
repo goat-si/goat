@@ -1,19 +1,20 @@
 import { useAtomValue } from "@effect/atom-react";
-import { botThreadKey, selectBotChildren } from "@goat/client-runtime/goatBot";
+import { botThreadKey, presentTaskStatus, selectBotChildren } from "@goat/client-runtime/goatBot";
 import {
-  isChannelTaskTerminal,
   type BotThreadRow,
   type ChannelUpdateTaskViewInput,
   type EnvironmentId,
 } from "@goat/contracts";
 import { Link, useLocation, useParams } from "@tanstack/react-router";
 import { useState } from "react";
-import { EllipsisIcon } from "~/components/solar";
 import { readLocalApi } from "~/localApi";
 import { channelEnvironment } from "~/state/channels";
 import { useAtomCommand } from "~/state/use-atom-command";
+import { ThreadStatusLabel } from "../ThreadStatusIndicators";
 import { Button } from "../ui/button";
+import { EllipsisIcon } from "../solar";
 import { SidebarGroup, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
+import { recordTaskOpener, getTaskPaneFocus } from "./taskPaneFocus";
 
 export function GoatBotChildRows({
   environmentId,
@@ -25,6 +26,7 @@ export function GoatBotChildRows({
   refresh: () => void;
 }) {
   const [showMore, setShowMore] = useState(false);
+  const taskFocus = getTaskPaneFocus();
   // oxlint-disable-next-line react/purity -- Visibility ages are evaluated when the roster changes.
   const now = Date.now();
   const location = useLocation();
@@ -78,18 +80,36 @@ export function GoatBotChildRows({
             : row.kind === "coding"
               ? row.title || "GOAT thread"
               : "";
-          const status = task
-            ? task.view.doneAt || isChannelTaskTerminal(task.task.status)
-              ? "done"
-              : task.task.status === "waiting_input"
-                ? "blocked"
-                : "working"
-            : null;
+          const status = task ? presentTaskStatus(task.task.status, task.view.doneAt) : null;
+          const statusPill = status && {
+            label: status.label,
+            ...(status.tone === "danger"
+              ? {
+                  colorClass: "text-red-600 dark:text-red-300/90",
+                  dotClass: "bg-red-500 dark:bg-red-300/90",
+                }
+              : status.tone === "success"
+                ? {
+                    colorClass: "text-emerald-600 dark:text-emerald-300/90",
+                    dotClass: "bg-emerald-500 dark:bg-emerald-300/90",
+                  }
+                : status.tone === "neutral"
+                  ? {
+                      colorClass: "text-sidebar-muted-foreground",
+                      dotClass: "bg-sidebar-muted-foreground",
+                    }
+                  : status.tone === "attention"
+                    ? { colorClass: "text-warning-foreground", dotClass: "bg-warning" }
+                    : { colorClass: "text-info-foreground", dotClass: "bg-info" }),
+            pulse: status.tone === "active",
+          };
           return (
             <SidebarMenuItem key={botThreadKey(row)} className="flex items-center">
               <SidebarMenuButton
-                className="min-w-0 flex-1"
                 isActive={active}
+                className="min-w-0 flex-1"
+                tooltip={row.kind === "coding" ? `GOAT thread: ${title}` : title}
+                aria-label={row.kind === "coding" ? `GOAT thread: ${title}` : undefined}
                 aria-current={active ? "page" : undefined}
                 onContextMenu={
                   task
@@ -101,7 +121,26 @@ export function GoatBotChildRows({
                 }
                 render={
                   row.kind === "task" ? (
-                    <Link to="/bot" search={{ task: row.task.taskId }} />
+                    <Link
+                      to="/bot"
+                      search={{ task: row.task.taskId }}
+                      data-task-opener={`sidebar:${row.task.taskId}`}
+                      onClick={(event) => {
+                        if (
+                          !event.metaKey &&
+                          !event.ctrlKey &&
+                          !event.shiftKey &&
+                          !event.altKey &&
+                          event.button === 0
+                        )
+                          recordTaskOpener(
+                            taskFocus,
+                            event.currentTarget,
+                            row.task.taskId,
+                            `sidebar:${row.task.taskId}`,
+                          );
+                      }}
+                    />
                   ) : (
                     <Link
                       to="/$environmentId/$threadId"
@@ -111,23 +150,8 @@ export function GoatBotChildRows({
                 }
               >
                 <span aria-hidden="true" className="w-4 shrink-0" />
-                {status && (
-                  <span
-                    role="img"
-                    aria-label={status}
-                    className={
-                      status === "blocked"
-                        ? "size-2 rounded-full bg-warning"
-                        : status === "done"
-                          ? "size-2 rounded-full bg-muted-foreground"
-                          : "size-2 rounded-full bg-success"
-                    }
-                  />
-                )}
+                {statusPill && <ThreadStatusLabel status={statusPill} compact />}
                 <span className="min-w-0 flex-1 truncate">{title}</span>
-                {row.kind === "coding" && (
-                  <span className="text-xs text-muted-foreground">GOAT thread</span>
-                )}
                 {task?.unread && (
                   <span role="img" aria-label="Unread" className="size-2 rounded-full bg-info" />
                 )}
@@ -148,9 +172,16 @@ export function GoatBotChildRows({
             </SidebarMenuItem>
           );
         })}
-        {visible.hasMore && (
+        {(visible.hasMore || showMore) && (
           <SidebarMenuItem>
-            <SidebarMenuButton onClick={() => setShowMore(true)}>Show more</SidebarMenuButton>
+            <SidebarMenuButton
+              render={<button type="button" />}
+              aria-expanded={showMore}
+              onClick={() => setShowMore((value) => !value)}
+            >
+              <span aria-hidden="true" className="w-4 shrink-0" />
+              {showMore ? "Show less" : "Show more"}
+            </SidebarMenuButton>
           </SidebarMenuItem>
         )}
       </SidebarMenu>

@@ -16,9 +16,9 @@ const screenSession = vi.hoisted(() => ({
   workTaskId: undefined as string | undefined,
 }));
 vi.mock("./MobileBotWork", () => ({
-  MobileBotWork: (props: { taskId?: string }) => {
+  MobileBotWork: (props: { taskId?: string; taskCard?: ReactNode }) => {
     screenSession.workTaskId = props.taskId;
-    return null;
+    return <section aria-label="Task header">{props.taskCard}</section>;
   },
 }));
 const list = vi.hoisted(() => ({ props: null as Record<string, unknown> | null }));
@@ -356,4 +356,44 @@ it("renders legacy task cards without task navigation when the capability is abs
   expect(view.container.textContent).not.toContain("Task thread ·");
   await view.unmount();
   screenSession.rows = [];
+});
+
+it("shows a task chip in the task header only when one exists", async () => {
+  const task = (await import("@goat/contracts")).ChannelTaskId.make("task-1");
+  screenSession.supportsTaskThreads = true;
+  screenSession.rows = [
+    {
+      kind: "task",
+      id: "card",
+      createdAt: "2026-10-12T09:40:00Z",
+      firstInGroup: true,
+      groupPosition: "single",
+      card: {
+        key: "task-1",
+        revision: 1,
+        updatedAt: "2026-10-12T09:40:00Z",
+        title: "Check disks",
+        statusLabel: "Running",
+        tone: "active",
+        sourceLabel: null,
+        summary: "Disk summary",
+        attentionLabel: null,
+        pullRequests: [],
+        target: { kind: "none", label: "Unavailable" },
+      },
+    },
+  ];
+  const view = await render(<GoatBotScreen visible taskId={task} />);
+  expect(view.container.querySelector('[aria-label="Task header"]')?.textContent).toContain(
+    "Disk summary",
+  );
+  expect(list.props?.data).toEqual([]);
+  await view.unmount();
+  screenSession.rows = [];
+  const empty = await render(<GoatBotScreen visible taskId={task} />);
+  expect(empty.container.querySelector('[aria-label="Task header"]')?.textContent).not.toContain(
+    "Disk summary",
+  );
+  await empty.unmount();
+  screenSession.supportsTaskThreads = false;
 });
