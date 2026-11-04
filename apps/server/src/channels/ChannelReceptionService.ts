@@ -74,6 +74,7 @@ import * as SlackChannelSettings from "./SlackChannelSettings.ts";
 import { currentChannelIdentity } from "./channelCurrentIdentity.ts";
 import { makeChannelProjectChoices } from "./channelProjectChoices.ts";
 import * as ChannelWake from "./ChannelWake.ts";
+import { mentionFor, refuseTaskThread } from "./channelTaskThreadRefusal.ts";
 import {
   appendChannelBotNote,
   channelBotFilesFor,
@@ -214,10 +215,6 @@ const replyDelivery = (input: {
     },
   };
 };
-
-/** Slack replies tag the person; the GOAT bot and MCP do not. */
-const mentionFor = (address: ChannelReplyAddress, externalActorId: string | undefined) =>
-  address.kind === "slack" ? externalActorId : undefined;
 
 /** Keeps the newest tail entries that fit the byte budget. */
 const boundTail = (
@@ -944,6 +941,11 @@ const make = Effect.gen(function* () {
       const readAt = DateTime.formatIso(yield* DateTime.now);
       const stored = yield* ledger.beginReception({ owner, inputId, receptionId, readAt });
       if (stored === undefined || stored.requester === undefined) return;
+      if (stored.message.intent === "message" && stored.message.taskId !== undefined) {
+        yield* refuseTaskThread(ledger, stored, owner);
+        yield* wake.wake;
+        return;
+      }
       const message = stored.message;
       const requester = stored.requester;
       const conversationId = stored.snapshot.conversationId;
@@ -972,7 +974,6 @@ const make = Effect.gen(function* () {
         return;
       }
 
-      // The bot's copy of the message shows when reception started reading it.
       if (origin.kind === "goat") {
         yield* timeline
           .record({
@@ -1008,7 +1009,6 @@ const make = Effect.gen(function* () {
                 connectionId: message.connectionId,
                 externalActorId: requester.externalActorId,
               });
-        // A link removed or handed to someone else since intake is no longer this sender.
         if (
           linked === undefined ||
           linked.ownerId !== requester.ownerId ||

@@ -22,11 +22,12 @@ import * as ChannelDeliveryWorker from "./ChannelDeliveryWorker.ts";
 import * as ChannelLedger from "./ChannelLedger.ts";
 import * as ChannelReceptionService from "./ChannelReceptionService.ts";
 import * as ChannelWake from "./ChannelWake.ts";
+import { mayAnswerFor } from "./ChannelGateway.ts";
 import { resolveSessionRun } from "./channelBotSessionRuns.ts";
 import { CHANNEL_COPY, inboundTextWithFiles } from "./channelCopy.ts";
-import { deliveryIdFor, taskIdFor } from "./channelIds.ts";
+import { deliveryIdFor, taskIdFor, toolSteerIdsFor } from "./channelIds.ts";
 import { isSessionClaim, sealedSessionLine, sessionClaim } from "./channelSessionReceipt.ts";
-import { makeCreatedTasks } from "./channelTaskWrites.ts";
+import { makeCreatedTasks, prepareTransition } from "./channelTaskWrites.ts";
 
 export class ChannelSessionFirst extends Context.Service<
   ChannelSessionFirst,
@@ -92,6 +93,9 @@ const make = Effect.gen(function* () {
               originKind: "goat",
               kind: "inbound",
               inputId: stored.snapshot.inputId,
+              ...(stored.message.intent === "message" && stored.message.taskId !== undefined
+                ? { taskId: stored.message.taskId }
+                : {}),
               readAt,
             },
           },
@@ -141,7 +145,8 @@ const make = Effect.gen(function* () {
             kind: "receipt",
             text,
             inReplyToInputId: inputId,
-            taskId,
+            taskId:
+              stored.message.intent === "message" ? (stored.message.taskId ?? taskId) : taskId,
             ...(destination.kind === "slack" && actor !== undefined
               ? { mentionActorId: actor }
               : {}),
@@ -170,6 +175,103 @@ const make = Effect.gen(function* () {
     )
       return false;
     const requester = stored.requester;
+    const requestedTaskId = stored.message.taskId;
+    let threadTask: ChannelLedger.ChannelStoredTask | undefined;
+    if (requestedTaskId !== undefined) {
+      const target = yield* ledger.getTask(requestedTaskId);
+      if (
+        target !== undefined &&
+        target.ownerId === requester.ownerId &&
+        target.task.conversationId === stored.snapshot.conversationId &&
+        mayAnswerFor(requester, target.task.requester)
+      )
+        threadTask = target;
+      const terminal =
+        threadTask !== undefined &&
+        ["completed", "failed", "cancelled"].includes(threadTask.task.status);
+      if (!terminal) {
+        const now = DateTime.formatIso(yield* DateTime.now);
+        const receptionId = ChannelReceptionId.make("channel-task-thread:" + inputId);
+        const claimed = yield* ledger.beginReception({ owner, inputId, receptionId, readAt: now });
+        if (claimed === undefined) return true;
+        const key = "channel-task-thread:" + inputId;
+        const isHome = yield* home.requireHome.pipe(
+          Effect.as(true),
+          Effect.orElseSucceed(() => false),
+        );
+        const validWorker =
+          isHome &&
+          threadTask !== undefined &&
+          (threadTask.task.status === "running" || threadTask.task.status === "waiting_input") &&
+          threadTask.task.worker !== undefined &&
+          threadTask.task.worker.host === undefined;
+        const bot =
+          validWorker && threadTask !== undefined
+            ? yield* ledger.getBot(threadTask.ownerId)
+            : undefined;
+        const prepared =
+          validWorker && threadTask !== undefined
+            ? prepareTransition(
+                threadTask,
+                {
+                  type: "task.followup.received",
+                  payload: {
+                    inputId,
+                    forwardKey: key,
+                    text: stored.message.text,
+                    from: requester.displayName,
+                    generation: threadTask.task.generation,
+                  },
+                },
+                now,
+                bot?.bot,
+                {
+                  actor: "user",
+                  forward: true,
+                  pendingAnswerMessageId: toolSteerIdsFor(key).messageId,
+                },
+              )
+            : undefined;
+        const accepted = prepared?.ok === true;
+        const text = accepted
+          ? "I'll send that to the task." +
+            (stored.message.attachments.length > 0
+              ? " Attachments stay in the conversation and are not sent to the task."
+              : "")
+          : "That task isn't available here. Send it in the main chat.";
+        if (threadTask !== undefined) yield* markRead(claimed);
+        const causeKey = "reply:" + inputId;
+        const deliveryId = deliveryIdFor(causeKey);
+        yield* ledger.completeReception({
+          owner,
+          inputId,
+          receptionId,
+          replyText: text,
+          decision: { replyText: text, action: { type: "report_only" } },
+          ...(prepared?.ok === true ? { taskEvents: [prepared.write] } : {}),
+          deliveries: [
+            {
+              causeKey,
+              deliveryId,
+              inputId,
+              message: {
+                deliveryId,
+                destination: stored.message.replyAddress,
+                kind: "receipt",
+                text,
+                inReplyToInputId: inputId,
+                taskId: requestedTaskId,
+              },
+            },
+            ...(prepared?.ok === true ? prepared.deliveries : []),
+          ],
+          now,
+        });
+        yield* delivery.deliverReceipts(owner);
+        yield* wake.wake;
+        return true;
+      }
+    }
     if (
       requester.originKind === "mcp" ||
       !requester.grantedScopes.includes("orchestration:operate")
@@ -191,7 +293,11 @@ const make = Effect.gen(function* () {
         title:
           stored.message.text.trim().split(/\s+/u).slice(0, 12).join(" ").slice(0, 120) ||
           "Request",
-        instruction: inboundTextWithFiles(stored.message),
+        instruction:
+          (threadTask === undefined
+            ? ""
+            : `Task context: ${threadTask.task.taskId}; ${threadTask.task.title}; ${threadTask.task.status}; last summary: ${threadTask.task.resultSummary ?? "none"}.\n\n`) +
+          inboundTextWithFiles(stored.message),
       },
       inputId,
       conversationId: stored.snapshot.conversationId,

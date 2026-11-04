@@ -382,9 +382,25 @@ const make = Effect.gen(function* () {
       return effectiveRequester(context, admitted, { originKind: input.kind, externalActorId });
     });
 
-  const recordBotInput = (input: ChannelIngestInput, result: ChannelIngestResult) =>
+  const recordBotInput = (
+    input: ChannelIngestInput,
+    result: ChannelIngestResult,
+    requester: ChannelRequester | undefined,
+  ) =>
     Effect.gen(function* () {
       if (input.replyAddress.kind !== "goat") return result;
+      const target =
+        input.intent === "message" && input.taskId !== undefined
+          ? yield* ledger.getTask(input.taskId).pipe(Effect.mapError(ledgerFailure))
+          : undefined;
+      const validatedTaskId =
+        target !== undefined &&
+        requester !== undefined &&
+        target.ownerId === requester.ownerId &&
+        target.task.conversationId === result.conversationId &&
+        mayAnswerFor(requester, target.task.requester)
+          ? target.task.taskId
+          : undefined;
       const sequence = yield* timeline.record({
         threadId: input.replyAddress.threadId,
         record: {
@@ -399,6 +415,7 @@ const make = Effect.gen(function* () {
               originKind: "goat",
               kind: "inbound",
               inputId: result.inputId,
+              ...(validatedTaskId === undefined ? {} : { taskId: validatedTaskId }),
             },
           },
         },
@@ -486,7 +503,7 @@ const make = Effect.gen(function* () {
       // the record's ids are fixed, so the bot shows the message once.
       const recorded =
         result.timelineSequence === undefined && result.state !== "rejected"
-          ? yield* recordBotInput(recordedMessage, result)
+          ? yield* recordBotInput(recordedMessage, result, requester)
           : result;
       yield* wake.wake;
       return recorded;
