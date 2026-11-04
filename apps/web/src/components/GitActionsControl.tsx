@@ -1007,7 +1007,7 @@ export default function GitActionsControl({
   const workspaceStatus = useThreadWorkspaceStatus(
     activeServerThread ? activeThreadRef : null,
     activeServerThread?.worktreePath ?? null,
-    serverConfig?.environment.capabilities.worktreeRestore === true,
+    serverConfig?.environment?.capabilities?.worktreeRestore === true,
     `${activeServerThreadShell?.latestRun?.runId ?? ""}:${activeServerThreadShell?.latestRun?.status ?? ""}`,
   );
   const isLocalDraftThread = activeDraftThread !== null && activeServerThread === null;

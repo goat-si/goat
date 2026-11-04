@@ -69,6 +69,28 @@ it.layer(layer)("worktree snapshots", (it) => {
       assert.include(error.detail, "nested Git repository");
     }),
   );
+  it.effect("refuses an untracked nested repository even when .gitmodules names its path", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "snapshot-repo-" });
+      yield* git(cwd, ["init", "-q"]);
+      yield* fs.writeFileString(
+        path.join(cwd, ".gitmodules"),
+        '[submodule "nested"]\n\tpath = nested\n\turl = https://example.com/nested.git\n',
+      );
+      yield* git(cwd, ["add", ".gitmodules"]);
+      yield* git(cwd, ["commit", "-qm", "base"]);
+      const nested = path.join(cwd, "nested");
+      yield* fs.makeDirectory(nested);
+      yield* git(nested, ["init", "-q"]);
+      yield* fs.writeFileString(path.join(nested, "work"), "unpushed");
+      yield* git(nested, ["add", "work"]);
+      yield* git(nested, ["commit", "-qm", "nested work"]);
+      const error = yield* Effect.flip(captureWorktreeSnapshot({ cwd, threadId: "test", now: 0 }));
+      assert.include(error.detail, "nested Git repository");
+    }),
+  );
   it.effect("refuses a committed nested repository that is not a registered submodule", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

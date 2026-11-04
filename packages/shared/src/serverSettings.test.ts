@@ -1,8 +1,6 @@
 import {
   DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
-  ORCHESTRATION_HISTORY_BUDGET_BYTES,
-  ORCHESTRATION_HISTORY_ARCHIVE_AFTER_DAYS,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -126,17 +124,10 @@ describe("serverSettings helpers", () => {
         storageCleanup: { worktreeAfterDays: null },
       }).storageCleanup,
     ).toEqual({
+      ...DEFAULT_SERVER_SETTINGS.storageCleanup,
       worktreeAfterDays: null,
-      worktreeSettledAfterDays: null,
       worktreeOnMerge: true,
-      worktreeOnDelete: false,
-      worktreeUnchanged: false,
-      worktreeKeepWhen: "uncommitted-changes",
-      browserArtifactsAfterDays: null,
       logsAfterDays: 30,
-      historyBudgetBytes: ORCHESTRATION_HISTORY_BUDGET_BYTES,
-      historyArchiveAfterDays: ORCHESTRATION_HISTORY_ARCHIVE_AFTER_DAYS,
-      historyArchiveDeleteAfterDays: null,
     });
   });
   it("replaces a source control host's patched field so a cleared account pin does not survive", () => {

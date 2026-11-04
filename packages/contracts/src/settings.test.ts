@@ -1,9 +1,4 @@
-import {
-  MemoryHubSettings,
-  MemoryHubSettingsUpdateInput,
-  ORCHESTRATION_HISTORY_BUDGET_BYTES,
-  ORCHESTRATION_HISTORY_ARCHIVE_AFTER_DAYS,
-} from "./memory.ts";
+import { MemoryHubSettings, MemoryHubSettingsUpdateInput } from "./memory.ts";
 import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 
@@ -108,20 +103,16 @@ describe("agent tool listing", () => {
 });
 
 describe("storage cleanup settings", () => {
-  it("keeps cleanup disabled for existing installations", () => {
+  it("turns worktree cleanup on by default, with snapshots before removal", () => {
     expect(decodeServerSettings({}).worktreeCleanup).toBeNull();
-    expect(decodeServerSettings({}).storageCleanup).toEqual({
-      worktreeAfterDays: null,
-      worktreeSettledAfterDays: null,
-      worktreeOnMerge: false,
-      worktreeOnDelete: false,
-      worktreeUnchanged: false,
+    expect(decodeServerSettings({}).storageCleanup).toMatchObject({
+      worktreeAfterDays: 7,
+      worktreeKeepRecent: 15,
+      worktreeOnArchive: true,
+      worktreeOnDelete: true,
+      worktreeSnapshotChanges: true,
+      worktreeSnapshotDays: 30,
       worktreeKeepWhen: "uncommitted-changes",
-      browserArtifactsAfterDays: null,
-      logsAfterDays: null,
-      historyBudgetBytes: ORCHESTRATION_HISTORY_BUDGET_BYTES,
-      historyArchiveAfterDays: ORCHESTRATION_HISTORY_ARCHIVE_AFTER_DAYS,
-      historyArchiveDeleteAfterDays: null,
     });
   });
 

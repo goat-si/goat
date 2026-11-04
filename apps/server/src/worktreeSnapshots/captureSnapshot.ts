@@ -115,8 +115,9 @@ const program = Effect.fn("WorktreeSnapshot.capture")(function* (cwd: string) {
   yield* fs.copyFile(path.resolve(cwd, indexPath), tempIndex);
   const env = { ...identity, GIT_INDEX_FILE: tempIndex };
   yield* run(["add", "-A", "--"], env);
-  // A nested repository is only a gitlink here: its files and history would be lost. Registered
-  // submodules pass, since cleanup's submodule check keeps dirty or unpushed ones first.
+  // A nested repository is only a gitlink here: its files and history would be lost. Submodules
+  // already in the index and registered in .gitmodules pass, since cleanup's submodule check
+  // (which walks exactly those) keeps dirty or unpushed ones first.
   const gitlinks = (output: string) =>
     output
       .split("\0")
@@ -124,6 +125,7 @@ const program = Effect.fn("WorktreeSnapshot.capture")(function* (cwd: string) {
       .map((entry) => entry.slice(entry.indexOf("\t") + 1));
   const links = gitlinks(yield* run(["ls-files", "-s", "-z"], env));
   if (links.length > 0) {
+    const indexed = new Set(gitlinks(yield* run(["ls-files", "-s", "-z"])));
     const registered = (yield* fs.exists(path.join(cwd, ".gitmodules")))
       ? new Set(
           (yield* run([
@@ -140,7 +142,10 @@ const program = Effect.fn("WorktreeSnapshot.capture")(function* (cwd: string) {
         )
       : new Set<string>();
     for (const link of links)
-      if (!registered.has(link) && (yield* fs.exists(path.join(cwd, link, ".git"))))
+      if (
+        !(indexed.has(link) && registered.has(link)) &&
+        (yield* fs.exists(path.join(cwd, link, ".git")))
+      )
         return yield* fail(`contains a nested Git repository (${link})`);
   }
   const treeSha = (yield* run(["write-tree"], env)).trim();

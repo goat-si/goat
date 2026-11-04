@@ -20,17 +20,25 @@ export function ThreadWorkspaceBanner({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   if (state !== "cleaned" && state !== "missing") return null;
-  const run = async (mode: "restore" | "fresh") => {
+  const failed = (detail: string) => {
+    setPending(false);
+    setError(detail);
+  };
+  const run = (mode: "restore" | "fresh") => {
     setPending(true);
     setError(null);
-    try {
-      const result = await restore({
-        environmentId: threadRef.environmentId,
-        input: { threadId: threadRef.threadId, mode },
-      });
-      if (result._tag === "Failure") {
+    restore({
+      environmentId: threadRef.environmentId,
+      input: { threadId: threadRef.threadId, mode },
+    }).then(
+      (result) => {
+        if (result._tag !== "Failure") {
+          setPending(false);
+          refresh();
+          return;
+        }
         const failure = squashAtomCommandFailure(result);
-        setError(
+        failed(
           typeof failure === "object" &&
             failure !== null &&
             "detail" in failure &&
@@ -40,10 +48,9 @@ export function ThreadWorkspaceBanner({
               ? failure.message
               : "Could not restore the worktree.",
         );
-      } else refresh();
-    } finally {
-      setPending(false);
-    }
+      },
+      () => failed("Could not restore the worktree."),
+    );
   };
   return (
     <div className="flex flex-wrap items-center gap-2 p-2">
@@ -56,11 +63,11 @@ export function ThreadWorkspaceBanner({
         <div>Sending a message also restores it.</div>
         {error && <div role="alert">{error}</div>}
       </div>
-      <Button size="xs" variant="ghost" disabled={pending} onClick={() => void run("restore")}>
+      <Button size="xs" variant="ghost" disabled={pending} onClick={() => run("restore")}>
         {pending ? "Restoring…" : state === "cleaned" ? "Restore" : "Recreate"}
       </Button>
       {error && (
-        <Button size="xs" variant="ghost" disabled={pending} onClick={() => void run("fresh")}>
+        <Button size="xs" variant="ghost" disabled={pending} onClick={() => run("fresh")}>
           Start in a new worktree
         </Button>
       )}
