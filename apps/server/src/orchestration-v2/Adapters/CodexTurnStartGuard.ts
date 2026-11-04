@@ -55,9 +55,9 @@ export const makeCodexTurnStartGuard = <C extends RootTurnLike, E>(deps: {
   // Goal turns no run owned that GOAT paused and stopped; Codex may keep running them.
   const orphans = new Set<string>();
 
-  // A turn a tracked root owns, or one a tracked root's start still waits for, is that run's: the
-  // start service stops one a run GOAT ended left behind, and Codex's answer to turn/start is
-  // checked against its owner. Any other running turn is judged on its own, tracked roots or not.
+  // A turn a tracked root owns, or one a start of ours still waits for, is that run's: the start
+  // service stops one a run GOAT ended left behind, and Codex's answer to turn/start is checked
+  // against its owner. Any other running turn is judged on its own, tracked roots or not.
   const classify = Effect.fnUntraced(function* (threadId: string) {
     if (!deps.statuses.working(threadId, deps.abandoned)) return undefined;
     const running = deps.statuses.runningTurn(threadId);
@@ -67,7 +67,9 @@ export const makeCodexTurnStartGuard = <C extends RootTurnLike, E>(deps: {
     );
     if (
       roots.length > 0 &&
-      (running === undefined || roots.some((context) => context.nativeTurnId === running))
+      (running === undefined
+        ? deps.statuses.startPending(threadId)
+        : roots.some((context) => context.nativeTurnId === running))
     )
       return undefined;
     const busy: Busy =

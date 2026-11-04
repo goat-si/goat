@@ -48,6 +48,14 @@ describe("CodexTurnStartGuard admission", () => {
       const guard = guardFor(new Map([[failed.nativeTurnId, failed]]), statuses);
       const error = yield* guard.prepare("thread", false).pipe(Effect.flip);
       assert.include(error, "GOAT did not start");
+      // The same holds before Codex names its turn.
+      const unnamed = makeCodexThreadStatuses();
+      unnamed.turnStarted("thread", "failed-turn");
+      unnamed.turnCompleted("thread", "failed-turn");
+      unnamed.record("thread", "idle");
+      unnamed.record("thread", "active");
+      const retry = guardFor(new Map([[failed.nativeTurnId, failed]]), unnamed);
+      assert.include(yield* retry.prepare("thread", false).pipe(Effect.flip), "GOAT did not start");
     }),
   );
 

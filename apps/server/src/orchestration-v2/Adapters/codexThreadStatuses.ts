@@ -76,6 +76,8 @@ export function makeCodexThreadStatuses() {
   };
   return {
     working,
+    /** Whether a turn/start of ours has not yet seen its turn start. */
+    startPending: (threadId: string) => pending.has(threadId),
     lastStarted: (threadId: string) => lastStarted.get(threadId),
     /** The turn Codex last started on this thread, while it has not reported that turn ended. */
     runningTurn: (threadId: string) => {
