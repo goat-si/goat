@@ -12,7 +12,7 @@ interface QueuedTurnLike {
 }
 
 /** Codex answers a queued turn without a start time and accepts turn/interrupt only once it starts. */
-export const awaitingNativeStart = (context: QueuedTurnLike): boolean =>
+const awaitingNativeStart = (context: QueuedTurnLike): boolean =>
   context.nativeStartReady !== undefined && !Deferred.isDoneUnsafe(context.nativeStartReady);
 
 /**
@@ -117,10 +117,52 @@ export const stopLateQueuedTurn = <E, R>(
   );
 
 /** Runs every item concurrently to its end, then fails with the first failure, so none waits on another. */
-export const settleEach = <A, E, R>(
+const settleEach = <A, E, R>(
   items: ReadonlyArray<A>,
   run: (item: A) => Effect.Effect<unknown, E, R>,
 ) =>
   Effect.forEach(items, (item) => Effect.exit(run(item)), { concurrency: "unbounded" }).pipe(
     Effect.flatMap((exits) => Effect.forEach(exits, (exit) => exit, { discard: true })),
   );
+
+/**
+ * Delivers Stop to every target at once: a started turn gets turn/interrupt now, a queued one goes
+ * through stopQueuedTurn. Fails with the first failure after every target has settled.
+ */
+export const interruptStopTargets = Effect.fn("CodexAdapterV2.interruptStopTargets")(function* <
+  T extends QueuedTurnLike & { readonly nativeTurnId: string },
+  E,
+  R,
+  EF,
+>(input: {
+  readonly targets: ReadonlyArray<T>;
+  readonly activeTurns: Effect.Effect<ReadonlyMap<string, unknown>>;
+  readonly request: (context: T) => Effect.Effect<unknown, E, R>;
+  readonly stopped: ReturnType<typeof makeStoppedQueuedTurns>;
+  readonly withPermit: <A, E2, R2>(effect: Effect.Effect<A, E2, R2>) => Effect.Effect<A, E2, R2>;
+  readonly settle: (context: T) => Effect.Effect<unknown, never, R>;
+  readonly full: Effect.Effect<never, EF>;
+}) {
+  const sendInterrupt = Effect.fnUntraced(function* (context: T) {
+    if ((yield* input.activeTurns).get(context.nativeTurnId) !== context) return;
+    yield* input.request(context);
+  });
+  const queued = input.targets.filter(awaitingNativeStart);
+  const started = settleEach(
+    input.targets.filter((context) => !queued.includes(context)),
+    sendInterrupt,
+  );
+  // A queued turn that never starts cannot be interrupted, so it ends here instead.
+  const queuedStops = settleEach(queued, (context) =>
+    stopQueuedTurn({
+      context,
+      stopped: input.stopped,
+      withPermit: input.withPermit,
+      activeTurns: input.activeTurns,
+      interrupt: sendInterrupt,
+      settle: input.settle(context),
+      full: input.full,
+    }),
+  );
+  yield* settleEach([started, queuedStops], (effect) => effect);
+});
