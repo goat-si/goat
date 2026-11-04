@@ -65,7 +65,11 @@ export default defineRule({
         for (const token of strings.join(" ").split(/\s+/u).filter(Boolean)) {
           const { variants, utility } = parseClass(token);
           // `[&_svg]:-mx-0.5` nudges a child inside the box; only the box's own margin overlaps.
-          if (variants.some((variant) => variant.startsWith("[&") || variant.startsWith("*")))
+          if (
+            variants.some(
+              (variant) => /^\[&(?:_|[>+~])/u.test(variant) || variant === "*" || variant === "**",
+            )
+          )
             continue;
           if (!NEGATIVE_INLINE_MARGIN.test(utility)) continue;
           context.report({

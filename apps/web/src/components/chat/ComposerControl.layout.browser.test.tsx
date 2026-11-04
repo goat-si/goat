@@ -3,13 +3,13 @@ import { page } from "vite-plus/test/browser";
 
 import "~/index.css";
 
-import { ArrowUpIcon, GlobeIcon, PlusIcon } from "~/components/solar";
+import { GlobeIcon, PlusIcon } from "~/components/solar";
 
 import { expectAlignedControlRow } from "../../../test/controlRowLayout";
 import { render } from "../../../test/render";
 import { Button } from "../ui/button";
 import { ComposerControl, ComposerControlChevron, ComposerControlIcon } from "./ComposerControl";
-import { composerRoundActionClassName } from "./ComposerPrimaryActions";
+import { ComposerPrimaryActions } from "./ComposerPrimaryActions";
 import { ComposerVoiceButton } from "./ComposerVoiceButton";
 
 /** Desktop width: below sm, controls take their larger touch sizes on purpose. */
@@ -40,6 +40,7 @@ describe("composer control rows", () => {
         </ComposerControl>
         <ComposerVoiceButton onClick={() => {}} />
       </div>,
+      // These isolated controls do not use navigation.
       { router: false },
     );
     expectAlignedControlRow(controls(screen.container), { evenGaps: true });
@@ -49,15 +50,41 @@ describe("composer control rows", () => {
     await desktop();
     await using screen = await render(
       <div data-row className="flex items-center gap-2.5">
-        <ComposerVoiceButton onClick={() => {}} />
-        <button type="button" aria-label="Send" className={composerRoundActionClassName}>
-          <ArrowUpIcon className="size-4" />
-        </button>
+        <ComposerPrimaryActions
+          voiceControl={{ onClick: () => {} }}
+          compact={false}
+          canOperateThread
+          pendingAction={null}
+          isRunning={false}
+          canInterrupt={false}
+          showPlanFollowUpPrompt={false}
+          promptHasText
+          isSendBusy={false}
+          sendDisabledReason={null}
+          isConnecting={false}
+          isEnvironmentUnavailable={false}
+          isPreparingWorktree={false}
+          hasSendableContent
+          onPreviousPendingQuestion={() => {}}
+          onInterrupt={() => {}}
+          onImplementPlanInNewThread={() => {}}
+        />
       </div>,
+      // These isolated controls do not use navigation.
       { router: false },
     );
-    const [voice, send] = controls(screen.container);
+    const voice = screen.container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Record voice input"]',
+    );
+    const send = screen.container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Submit message"]',
+    );
+    expect(voice).not.toBeNull();
+    expect(send).not.toBeNull();
     expectAlignedControlRow([voice!, send!], { filled: [send!] });
+    expect(send!.getBoundingClientRect().width).toBe(28);
+    expect(send!.getBoundingClientRect().height).toBe(28);
+    expect(screen.container.querySelector("[data-row]")!.getBoundingClientRect().height).toBe(28);
   });
 
   it("gives a control with a chevron the same padding on both sides", async () => {
@@ -75,6 +102,7 @@ describe("composer control rows", () => {
           <span data-composer-control-label>Thread mode</span>
         </ComposerControl>
       </div>,
+      // These isolated controls do not use navigation.
       { router: false },
     );
     const row = controls(screen.container);

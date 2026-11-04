@@ -13,6 +13,7 @@ describe("goat/no-negative-control-margin", () => {
       const a = <Button className="[&_svg]:-mx-0.5">Go</Button>;
       const b = <div className="-ms-2">x</div>;
       const c = <ComposerControl className="ms-1">x</ComposerControl>;
+      const d = <Button className="[&>*]:-mx-2 *:-mx-1">x</Button>;
     `,
   );
 
@@ -29,5 +30,18 @@ describe("goat/no-negative-control-margin", () => {
   rule.invalid(
     "reports a variant-scoped one on a native button",
     `const a = <button className="sm:-mx-1">x</button>;`,
+  );
+
+  rule.invalid(
+    "reports arbitrary variants targeting the control itself",
+    `const a = <Button className="[&:hover]:-mx-2">x</Button>;`,
+  );
+  rule.invalid(
+    "reports a class selector targeting the control itself",
+    `const a = <Button className="[&.active]:-mx-2">x</Button>;`,
+  );
+  rule.invalid(
+    "reports an attribute selector targeting the control itself",
+    `const a = <Button className="[&[data-x]]:-mx-2">x</Button>;`,
   );
 });
