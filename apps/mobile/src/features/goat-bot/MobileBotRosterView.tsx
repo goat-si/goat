@@ -3,6 +3,8 @@ import type { BotRosterEntry } from "@goat/client-runtime/goatBot";
 import { botThreadKey, presentTaskStatus } from "@goat/client-runtime/goatBot";
 import type { BotThreadRow } from "@goat/contracts";
 import { Pressable, ScrollView, Text, View } from "react-native";
+import { GoatWordmark } from "../../components/GoatWordmark";
+import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { Button } from "../../components/ui/Button";
 
@@ -16,8 +18,16 @@ export function MobileHomeSegments(props: {
   mode: MobileHomeMode;
   onSelect: (mode: MobileHomeMode) => void;
 }) {
+  const { themeAppearance } = useAppearancePreferences();
+  const dark = themeAppearance === "dark";
   return (
-    <View className="mx-4 my-2 flex-row rounded-lg bg-grouped-card p-1">
+    <View
+      className={
+        dark
+          ? "mx-4 my-2 flex-row rounded-lg bg-card p-1"
+          : "mx-4 my-2 flex-row rounded-lg bg-grouped-card p-1"
+      }
+    >
       {(
         [
           ["bot", "Bots"],
@@ -31,7 +41,9 @@ export function MobileHomeSegments(props: {
           onPress={() => props.onSelect(mode)}
           className={
             mode === props.mode
-              ? "min-h-[44px] flex-1 items-center justify-center rounded-md bg-card px-3 py-2"
+              ? dark
+                ? "min-h-[44px] flex-1 items-center justify-center rounded-md bg-grouped-card px-3 py-2"
+                : "min-h-[44px] flex-1 items-center justify-center rounded-md bg-card px-3 py-2"
               : "min-h-[44px] flex-1 items-center justify-center rounded-md px-3 py-2"
           }
         >
@@ -80,9 +92,13 @@ export function MobileBotRosterView(props: {
             }
           >
             <View className="h-10 w-10 items-center justify-center rounded-full bg-grouped-card">
-              <Text className="text-lg text-foreground">
-                {(bot.profile?.name ?? "GOAT Bot").slice(0, 1)}
-              </Text>
+              {bot.kind === "main" ? (
+                <GoatWordmark height={20} colorClassName="accent-icon" />
+              ) : (
+                <Text className="text-lg text-foreground">
+                  {(bot.profile?.name ?? "GOAT Bot").slice(0, 1)}
+                </Text>
+              )}
             </View>
             <View className="min-w-0 flex-1">
               <Text className="font-semibold text-foreground">
@@ -186,6 +202,11 @@ export function MobileBotRosterView(props: {
                 );
               })
             : null}
+          {bot.kind === "main" && props.rows.length === 0 ? (
+            <Text className="ml-10 px-4 py-3 text-foreground-muted">
+              Work GOAT Bot starts will appear here.
+            </Text>
+          ) : null}
           {bot.kind === "main" &&
           (props.hasMore || props.expanded) &&
           (props.hiddenCount ?? 0) > 0 ? (

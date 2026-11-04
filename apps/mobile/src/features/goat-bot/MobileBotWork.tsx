@@ -173,7 +173,7 @@ export function MobileBotWork(props: {
             {tabs.map((name) => (
               <Pressable
                 key={name}
-                accessibilityRole="tab"
+                accessibilityRole="button"
                 accessibilityState={{ selected: tab === name }}
                 onPress={() => setTab(name)}
                 className={
@@ -245,7 +245,7 @@ export function MobileBotWork(props: {
                 >
                   <Text className="text-danger-foreground">Couldn't load routines. Try again</Text>
                 </Pressable>
-              ) : routines.isPending || !routines.isSuccess ? (
+              ) : !routines.data ? (
                 <Text className="text-foreground-muted">Loading routines…</Text>
               ) : boundRoutines.length ? (
                 boundRoutines.map((routine) => (

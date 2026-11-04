@@ -44,6 +44,10 @@ vi.mock("react-native", () => ({
     </button>
   ),
 }));
+vi.mock("../../components/GoatWordmark", () => ({ GoatWordmark: () => <span /> }));
+vi.mock("../settings/appearance/AppearancePreferencesProvider", () => ({
+  useAppearancePreferences: () => ({ themeAppearance: "light" }),
+}));
 vi.mock("../../components/ui/AppActivityIndicator", () => ({ AppActivityIndicator: () => null }));
 vi.mock("../../components/ui/AppText", () => ({
   AppText: ({ children }: { children?: ReactNode }) => <span>{children}</span>,
@@ -224,6 +228,48 @@ it("distinguishes task and routine loading, empty, offline, and retry states", a
   await render();
   expect(container.textContent).toContain("offline");
 });
+it("shows empty routines when live data is available while the subscription waits", async () => {
+  reset();
+  Object.assign(state.routines, { data: { tasks: [] }, isPending: true, isSuccess: false });
+  await render();
+  await press("Work");
+  await press("Routines");
+  expect(container.textContent).toContain("set up a routine");
+  expect(container.textContent).not.toContain("Loading routines");
+});
+
+it("exposes work tabs as buttons and updates their selected state", async () => {
+  reset();
+  await render();
+  await press("Work");
+  const buttons = [...container.querySelectorAll("button")];
+  const tabs = ["Tasks", "Routines", "Library", "Computer"].map((name) =>
+    buttons.find((button) => button.textContent === name),
+  );
+  for (const tab of tabs) expect(tab?.dataset.nativeRole).toBe("button");
+  expect(tabs[0]?.getAttribute("aria-pressed")).toBe("true");
+  await act(async () => tabs[1]?.click());
+  expect(tabs[0]?.getAttribute("aria-pressed")).toBe("false");
+  expect(tabs[1]?.getAttribute("aria-pressed")).toBe("true");
+});
+
+it("shows roster empty copy only without child rows", async () => {
+  const props = {
+    bots: [{ kind: "main" as const, profile: null }],
+    hasMore: false,
+    slackEnabled: false,
+    onOpenBot: () => {},
+    onOpenChild: () => {},
+    onLongPressTask: () => {},
+    onShowMore: () => {},
+  };
+  root = createRoot(container);
+  await act(async () => root?.render(<MobileBotRosterView {...props} rows={[]} />));
+  expect(container.textContent).toContain("Work GOAT Bot starts will appear here.");
+  await act(async () => root?.render(<MobileBotRosterView {...props} rows={[task]} />));
+  expect(container.textContent).not.toContain("Work GOAT Bot starts will appear here.");
+});
+
 it("distinguishes task thread loading, missing, offline, and retry states", async () => {
   reset();
   await render(ChannelTaskId.make("task"));
