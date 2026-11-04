@@ -18,6 +18,7 @@ vi.mock("react-native", () => ({
     accessibilityState,
     accessibilityActions,
     accessibilityLabel,
+    accessibilityRole,
     onAccessibilityAction,
   }: {
     children?: ReactNode;
@@ -26,6 +27,7 @@ vi.mock("react-native", () => ({
     accessibilityState?: { selected?: boolean; expanded?: boolean };
     accessibilityActions?: { name: string; label: string }[];
     accessibilityLabel?: string;
+    accessibilityRole?: string;
     onAccessibilityAction?: (event: { nativeEvent: { actionName: string } }) => void;
   }) => (
     <button
@@ -34,6 +36,7 @@ vi.mock("react-native", () => ({
       aria-pressed={accessibilityState?.selected}
       aria-expanded={accessibilityState?.expanded}
       aria-label={accessibilityLabel}
+      data-native-role={accessibilityRole}
       data-actions={accessibilityActions?.map((item) => item.name).join(",")}
       onKeyDown={(event) => onAccessibilityAction?.({ nativeEvent: { actionName: event.key } })}
     >
@@ -79,6 +82,8 @@ it("switches both segments and exposes the selected state", async () => {
   root = createRoot(container);
   await act(async () => root?.render(<Harness />));
   const [bots, threads] = container.querySelectorAll("button");
+  expect(bots?.dataset.nativeRole).toBe("button");
+  expect(threads?.dataset.nativeRole).toBe("button");
   expect(threads?.getAttribute("aria-pressed")).toBe("true");
   await act(async () => bots?.click());
   expect(bots?.getAttribute("aria-pressed")).toBe("true");
