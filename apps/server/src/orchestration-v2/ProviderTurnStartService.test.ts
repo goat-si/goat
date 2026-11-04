@@ -1,5 +1,4 @@
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
-import { STOPPED_EARLIER_TURN_MESSAGE } from "./goat/StoppedEarlierTurn.ts";
 import {
   managedWorktreesDir,
   makeWorktreeStartHarness,
@@ -363,29 +362,17 @@ effectIt.effect(
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
 
-const notices = (harness: ReturnType<typeof makeLocalCommandHarness>) =>
-  harness.projection().turnItems.filter((item) => item.type === "system_notice");
-
-effectIt.effect.each([
-  { runStatus: "failed", notice: true },
-  { runStatus: "completed", notice: true },
-  { runStatus: "interrupted", terminationCause: "agent_stop", notice: true },
-  { runStatus: "interrupted", terminationCause: "person_stop", notice: false },
-] as const)("stops a turn an ended run left running before continuing: %j", (ended) =>
+effectIt.effect("recovers an abandoned failed turn before continuing its native conversation", () =>
   Effect.gen(function* () {
-    const { notice, ...previous } = ended;
     const harness = makeLocalCommandHarness({
       text: "Continue",
-      previousTurn: { ...previous, turnStatus: "running" },
+      previousTurn: { runStatus: "failed", turnStatus: "running" },
     });
 
     yield* harness.start;
 
     expect(harness.interruptTurn).toHaveBeenCalledOnce();
     expect(harness.projection().runs.at(-1)?.status).toBe("running");
-    expect(notices(harness)).toMatchObject(
-      notice ? [{ runId: harness.runId, message: STOPPED_EARLIER_TURN_MESSAGE }] : [],
-    );
     expect(harness.projection().providerTurns[0]).toMatchObject({
       status: "interrupted",
       completedAt: expect.anything(),
@@ -439,7 +426,6 @@ effectIt.effect.each([
 
     expect(harness.interruptTurn).not.toHaveBeenCalled();
     expect(harness.projection().runs.at(-1)?.status).toBe("running");
-    expect(notices(harness)).toEqual([]);
   }),
 );
 

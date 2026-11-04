@@ -1,6 +1,7 @@
 import { makeSurvivorSettlement } from "./CodexSurvivorSettlement.ts";
 import { buildCodexAssistantArtifacts } from "./CodexAssistantArtifacts.ts";
 import * as Survivor from "./CodexSurvivorContinuation.ts";
+import { makeCodexMemoryDelivery } from "./CodexMemoryDelivery.ts";
 import * as CodexSurvivors from "../../provider/CodexSurvivors.ts";
 import { makeCodexAssistantText } from "./CodexAssistantText.ts";
 import { sealAssistantTextEvent } from "./AssistantTextBoundary.ts";
@@ -12,8 +13,8 @@ import {
 } from "../../provider/CodexHomeRouteConfig.ts";
 import { codexNativeSubagentConfig } from "./CodexNativeSubagentConfig.ts";
 import * as MemoryDerivedCache from "../../memory/MemoryDerivedCache.ts";
-import { isGoatBotSessionThreadId, MemoryContextSnapshot } from "@goat/contracts";
-import type { CuaDriverMcpConfiguration, RunId } from "@goat/contracts";
+import { isGoatBotSessionThreadId } from "@goat/contracts";
+import type { CuaDriverMcpConfiguration } from "@goat/contracts";
 import * as MemoryContext from "@goat/provider-core/server/memoryContext";
 import * as MemorySnapshot from "../../memory/MemorySnapshot.ts";
 import * as McpSessionRegistry from "../../mcp/McpSessionRegistry.ts";
@@ -262,7 +263,6 @@ export function codexProviderTurnTokenUsage(
     updatedAt,
   };
 }
-const encodeMemorySnapshot = Schema.encodeSync(Schema.fromJsonString(MemoryContextSnapshot));
 const DEFAULT_CODEX_SETTINGS = Schema.decodeSync(CodexSettings)({});
 const CODEX_ASSISTANT_DELTA_FLUSH_INTERVAL_MS = 50;
 
@@ -1646,17 +1646,6 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             routeArgs,
           })
           .pipe(Effect.flatMap(withCodexRequestDeadlines));
-        const memoryByThread = new Map<
-          string,
-          {
-            snapshot: NonNullable<ProviderAdapter.ProviderAdapterV2TurnInput["memoryContext"]>;
-            threadId: ThreadId;
-            runId: RunId;
-            generation: number;
-            unregister?: Effect.Effect<void>;
-          }
-        >();
-        let memoryGeneration = 0;
         const restoredCompactions = new Set<string>();
         const restorePermit = yield* Semaphore.make(1);
         // Only successful native attachments enter this cache, including effective authority.
@@ -1706,49 +1695,14 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             NonNullable<CodexTurnStartParamsWithCollaborationMode["additionalContext"]>
           >(),
         );
-        const dropMemoryBody = (nativeId: string) =>
-          Effect.gen(function* () {
-            memoryByThread.delete(nativeId);
-            yield* Ref.update(additionalContextByThread, (current) => {
-              const context = current.get(nativeId);
-              if (!context?.goat_memory) return current;
-              return new Map(current).set(nativeId, {
-                ...context,
-                goat_memory: { kind: "untrusted", value: "" },
-              });
-            });
-          });
-        const clearMemoryDelivery = (nativeId: string, appThreadId?: ThreadId) =>
-          Effect.gen(function* () {
-            const selected = memoryByThread.get(nativeId);
-            if (selected?.unregister) yield* selected.unregister;
-            yield* dropMemoryBody(nativeId);
-            if (appThreadId && memorySnapshots) yield* memorySnapshots.invalidate(appThreadId);
-          });
-        const retainMemory = Effect.fnUntraced(function* (
-          nativeId: string,
-          snapshot: MemoryContextSnapshot,
-          turnInput: ProviderAdapter.ProviderAdapterV2TurnInput,
-        ) {
-          const selected: NonNullable<ReturnType<typeof memoryByThread.get>> = {
-            snapshot,
-            threadId: turnInput.threadId,
-            runId: turnInput.runId,
-            generation: ++memoryGeneration,
-          };
-          memoryByThread.set(nativeId, selected);
-          selected.unregister = yield* derivedCache
-            .retain({
-              // Snapshot encoding plus its rendered additionalContext copy.
-              bytes:
-                new TextEncoder().encode(encodeMemorySnapshot(snapshot)).length +
-                new TextEncoder().encode(snapshot.renderedText).length,
-              release: Effect.gen(function* () {
-                if (memoryByThread.get(nativeId) === selected) yield* dropMemoryBody(nativeId);
-              }),
-            })
-            .pipe(Effect.provideService(Scope.Scope, scope));
+        const memoryDelivery = makeCodexMemoryDelivery({
+          additionalContextByThread,
+          derivedCache,
+          memorySnapshots,
+          scope,
         });
+        const { byThread: memoryByThread, clear: clearMemoryDelivery } = memoryDelivery;
+        const retainMemory = memoryDelivery.retain;
         // Codex drops client developer messages during compaction but only
         // resends additionalContext when it changes.
         const restoreAdditionalContext = Effect.fn("CodexAdapterV2.restoreAdditionalContext")(
@@ -1757,7 +1711,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             if (!cachedContext) return;
             const context = { ...cachedContext };
             const selected = memoryByThread.get(threadId);
-            const restoreKey = `${threadId}:${compactionId}:${selected?.generation ?? memoryGeneration}`;
+            const restoreKey = `${threadId}:${compactionId}:${selected?.generation ?? memoryDelivery.generation()}`;
             if (restoredCompactions.has(restoreKey)) return;
             delete context.goat_memory;
             if (selected && memorySnapshots) {

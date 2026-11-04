@@ -61,8 +61,7 @@ import {
 } from "@goat/provider-core/server/failure";
 import * as RunExecutionService from "./RunExecutionService.ts";
 import { settledBeforeStartRun } from "./runTerminationCause.ts";
-import { isPersonRunEnd } from "@goat/contracts";
-import { ENDED_RUN_STATUSES, stoppedEarlierTurnNotice } from "./goat/StoppedEarlierTurn.ts";
+import { abandonedTurnRepairEvents, endedRunsByAttempt } from "./goat/StoppedEarlierTurn.ts";
 import * as RuntimePolicy from "./RuntimePolicy.ts";
 import { tryWithWorkspaceLease } from "../workspace/workspaceLease.ts";
 import {
@@ -716,20 +715,7 @@ export const layer: Layer.Layer<
       const existingSessionProjection = projection.providerSessions.find(
         (candidate) => candidate.id === providerSessionId,
       );
-      // A run GOAT ended can leave its provider turn running: a failed run, or a goal or restart
-      // path that settled the run while Codex kept working. Stop that turn before a new one starts.
-      const failedRuns = new Map(
-        projection.runs
-          .filter(
-            (previous) =>
-              previous.ordinal < run.ordinal &&
-              previous.providerThreadId === providerThread.id &&
-              ENDED_RUN_STATUSES.has(previous.status) &&
-              // A restart continuation adopts the turn its source run left running.
-              previous.id !== run.restartContinuationOfRunId,
-          )
-          .map((previous) => [previous.activeAttemptId, previous] as const),
-      );
+      const failedRuns = endedRunsByAttempt(projection.runs, run, providerThread.id);
       const abandonedTurns = projection.providerTurns.flatMap((turn) => {
         const previous = failedRuns.get(turn.runAttemptId);
         return turn.providerThreadId === providerThread.id &&
@@ -763,58 +749,26 @@ export const layer: Layer.Layer<
           }
         }
         const completedAt = yield* DateTime.now;
-        // Without a session nothing was stopped here; the adapter refuses a thread Codex reports busy.
-        const unexpected =
-          Option.isSome(liveSession) &&
-          abandonedTurns.some(
-            ({ run: endedRun }) => !isPersonRunEnd(endedRun.terminationCause?.kind),
-          );
         const repaired = yield* eventSink.writeIfRunCurrent({
           threadId: projection.thread.id,
           runId: run.id,
           activeAttemptId: attempt.id,
           expectedStatus: "starting",
-          events: [
-            ...(yield* Effect.forEach(abandonedTurns, ({ turn, run: failedRun }) =>
-              Effect.gen(function* () {
-                return {
-                  id: yield* idAllocator.allocate.event({ threadId: projection.thread.id }),
-                  type: "provider-turn.updated" as const,
-                  threadId: projection.thread.id,
-                  runId: failedRun.id,
-                  nodeId: turn.nodeId,
-                  providerInstanceId: failedRun.providerInstanceId,
-                  occurredAt: completedAt,
-                  payload: { ...turn, status: "interrupted" as const, completedAt },
-                };
-              }),
-            )),
-            // A turn the person had not stopped ends visibly, in the run that replaced it.
-            ...(unexpected
-              ? [
-                  {
-                    id: yield* idAllocator.allocate.event({ threadId: projection.thread.id }),
-                    type: "turn-item.updated" as const,
-                    threadId: projection.thread.id,
-                    runId: run.id,
-                    nodeId: rootNode.id,
-                    providerInstanceId: run.providerInstanceId,
-                    occurredAt: completedAt,
-                    payload: stoppedEarlierTurnNotice({
-                      id: idAllocator.derive.runSignalTurnItem({
-                        runId,
-                        signal: "stopped-earlier-turn",
-                      }),
-                      projection,
-                      run,
-                      rootNode,
-                      providerThreadId: providerThread.id,
-                      at: completedAt,
-                    }),
-                  },
-                ]
-              : []),
-          ],
+          // Without a session nothing was stopped; the adapter refuses a thread Codex reports busy.
+          events: yield* abandonedTurnRepairEvents({
+            abandoned: abandonedTurns,
+            stoppedLive: Option.isSome(liveSession),
+            projection,
+            run,
+            rootNode,
+            providerThreadId: providerThread.id,
+            noticeId: idAllocator.derive.runSignalTurnItem({
+              runId,
+              signal: "stopped-earlier-turn",
+            }),
+            allocateEventId: idAllocator.allocate.event({ threadId: projection.thread.id }),
+            at: completedAt,
+          }),
         });
         if (!repaired.committed) return;
       }
