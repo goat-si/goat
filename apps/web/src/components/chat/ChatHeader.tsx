@@ -516,7 +516,6 @@ export const ChatHeader = memo(function ChatHeader({
           </TooltipPopup>
         </Tooltip>
       ) : null}
-      {globalAgent ? <div className="flex shrink-0 items-center"></div> : null}
       {isServerThread ? <GuestShareIndicator threadRef={activeThreadRef} /> : null}
     </div>
   );

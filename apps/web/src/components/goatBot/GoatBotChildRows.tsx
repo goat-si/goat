@@ -8,9 +8,11 @@ import {
 } from "@goat/contracts";
 import { Link, useLocation, useParams } from "@tanstack/react-router";
 import { useState } from "react";
+import { EllipsisIcon } from "~/components/solar";
 import { readLocalApi } from "~/localApi";
 import { channelEnvironment } from "~/state/channels";
 import { useAtomCommand } from "~/state/use-atom-command";
+import { Button } from "../ui/button";
 import { SidebarGroup, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
 
 export function GoatBotChildRows({
@@ -84,8 +86,9 @@ export function GoatBotChildRows({
                 : "working"
             : null;
           return (
-            <SidebarMenuItem key={botThreadKey(row)}>
+            <SidebarMenuItem key={botThreadKey(row)} className="flex items-center">
               <SidebarMenuButton
+                className="min-w-0 flex-1"
                 isActive={active}
                 aria-current={active ? "page" : undefined}
                 onContextMenu={
@@ -107,7 +110,7 @@ export function GoatBotChildRows({
                   )
                 }
               >
-                <span className="w-4" />
+                <span aria-hidden="true" className="w-4 shrink-0" />
                 {status && (
                   <span
                     role="img"
@@ -130,25 +133,25 @@ export function GoatBotChildRows({
                 )}
               </SidebarMenuButton>
               {task && (
-                <button
-                  type="button"
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
                   aria-label={`Actions for ${title}`}
-                  className="absolute right-1 top-1"
                   onClick={(event) => {
                     const rect = event.currentTarget.getBoundingClientRect();
                     void menu(task, { x: rect.left, y: rect.bottom });
                   }}
                 >
-                  ⋯
-                </button>
+                  <EllipsisIcon />
+                </Button>
               )}
             </SidebarMenuItem>
           );
         })}
         {visible.hasMore && (
-          <button type="button" onClick={() => setShowMore(true)}>
-            Show more
-          </button>
+          <SidebarMenuItem>
+            <SidebarMenuButton onClick={() => setShowMore(true)}>Show more</SidebarMenuButton>
+          </SidebarMenuItem>
         )}
       </SidebarMenu>
     </SidebarGroup>
