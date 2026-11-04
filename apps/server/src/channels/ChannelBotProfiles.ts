@@ -102,7 +102,10 @@ const make = Effect.gen(function* () {
               ];
         }),
       )
-      .pipe(Effect.mapError(() => new ChannelGatewayError({ reason: "persistence_failed" })));
+      .pipe(
+        Effect.tapError((cause) => Effect.logWarning("GOAT Bot profiles read failed", { cause })),
+        Effect.mapError(() => new ChannelGatewayError({ reason: "persistence_failed" })),
+      );
   });
   return ChannelBotProfiles.of({ list });
 });
