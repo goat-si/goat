@@ -14,6 +14,7 @@ import { useResizableWidth, RESIZABLE_WIDTH_PROPERTY } from "~/hooks/useResizabl
 import { RightPanelResizeHandle } from "../preview/RightPanelResizeHandle";
 import { Button } from "../ui/button";
 import { GoatBotComposer } from "./GoatBotComposer";
+import { GoatBotWorkDetails } from "./GoatBotWorkDetails";
 import { GoatBotTimeline } from "./GoatBotTimeline";
 import { useBotRoster } from "./useBotRoster";
 import { useGoatBotSession } from "./useGoatBotSession";
@@ -124,6 +125,7 @@ export function GoatBotTaskPane({
           </>
         )}
       </header>
+      <GoatBotWorkDetails environmentId={environmentId} taskId={taskId} rows={rows} />
       <GoatBotTimeline
         taskDetails
         rows={session.rows}

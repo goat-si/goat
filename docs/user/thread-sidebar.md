@@ -64,6 +64,13 @@ Pin a thread from its menu to keep it above your active work.
 
 The **Bots** tab groups GOAT Bot with its task and coding threads when the server supports them. Use a task's menu to pin it or mark it done.
 
+A task opens its own conversation beside the main GOAT Bot chat on a wide screen,
+or in place of the chat on a narrow screen. Messages you send there stay with that
+task. Use **Back to Tasks** or **Close** to return to the main conversation.
+
+Open **Work** in the GOAT Bot header to find task threads and routines. The panel
+also has Library and Computer tabs for the files and machines GOAT Bot works with.
+
 The GOAT Bot row shows its latest message or task update. A blue dot means the bot has
 sent something since you last opened it; the number badge counts tasks awaiting your
 response. If the connected server does not track visits yet, the row shows its last
