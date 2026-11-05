@@ -563,7 +563,8 @@ controller.
 busiest quota window counts, an account with no windows counts as `UNKNOWN_QUOTA_PERCENT = 35`,
 each running task adds `LOAD_PENALTY = 40`, exhausted candidates are skipped while another can run,
 and ties keep the configured choice. Host status reports `threads{running,waiting,queued}` and quota
-windows refreshed every 60 s (`HOST_STATUS_QUOTA_REFRESH_INTERVAL_MS`). GOAT Bot caps a requester at
+windows from the provider snapshot; a read that finds one older than the provider health refresh
+interval refreshes it in the background, so status reads never wait on a provider probe. GOAT Bot caps a requester at
 four items (#483). Nothing caps threads per host.
 
 **Proposed (T3, `apps/server/src/fleet/resources/`).**

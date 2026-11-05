@@ -29,6 +29,7 @@ import {
   HOST_PRESSURE_KEY_PREFIX,
   launchAdvice,
   NOTHING_ANNOUNCED,
+  hasLocalWork,
   nudgeDecision,
   pressureHostKey,
   pressureNudgeText,
@@ -280,6 +281,14 @@ export const make = Effect.gen(function* () {
     let shells: ReadonlyArray<OrchestrationV2ThreadShell> | null = null;
     const descriptor = yield* environment.getDescriptor;
     for (const host of [null, ...remoteHosts]) {
+      if (host === null) {
+        // Reading this machine's pressure samples it; with nothing running and nothing announced, leave it idle.
+        const before = (yield* Ref.get(announced)).get(pressureHostKey(null)) ?? NOTHING_ANNOUNCED;
+        shells ??= yield* threads
+          .listProjectThreads({ projectId: undefined, includeSubagents: true })
+          .pipe(Effect.orElseSucceed(() => []));
+        if (before.level === "ok" && before.row === null && !hasLocalWork(shells)) continue;
+      }
       const pressure = yield* pressureOf(host);
       if (pressure === undefined) continue;
       const key = pressureHostKey(host);

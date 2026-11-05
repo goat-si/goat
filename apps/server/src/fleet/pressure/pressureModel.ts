@@ -353,6 +353,13 @@ export const initialPressureState = (now: number): PressureState => ({
   stalls: [],
 });
 
+/** After a gap in readings: the level stands, but rising or falling has to be seen again. */
+export const restartEvidence = (state: PressureState): PressureState => ({
+  ...state,
+  atLeastSince: { elevated: null, critical: null },
+  atMostSince: { ok: null, elevated: null },
+});
+
 /**
  * Feeds one sample. A level rises once machine readings have held it for sustainMs, or once
  * stalls repeat inside their window. It falls once every reading stays under the loosened
@@ -539,6 +546,10 @@ const RUNNING = new Set(["preparing", "starting", "running"]);
 const isRunning = (shell: ShellLike) =>
   RUNNING.has(shell.activityRunStatus ?? "") || RUNNING.has(shell.status);
 const isLive = (shell: ShellLike) => shell.archivedAt == null && shell.deletedAt == null;
+
+/** Whether any thread here is running work, the only time this machine's own pressure matters. */
+export const hasLocalWork = (shells: ReadonlyArray<ShellLike>) =>
+  shells.some((shell) => isLive(shell) && isRunning(shell));
 
 /** The local thread that started this one: its launcher here, or the parent of a subagent. */
 function localParent(shell: ShellLike, environmentId: string): string | null {
