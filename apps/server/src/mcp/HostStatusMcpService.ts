@@ -12,10 +12,9 @@ import * as HostProcess from "@goat/shared/HostProcess";
 import { servedRuntimeProtocolRanges } from "@goat/shared/sshRuntimeProtocol";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Fiber from "effect/Fiber";
-import * as FiberMap from "effect/FiberMap";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
@@ -68,6 +67,9 @@ export const HOST_STATUS_REMOTE_TIMEOUT_MS = 10_000;
 const REMOTE_STATUS_FRESH_MS = 30_000;
 
 const decodeStatus = Schema.decodeUnknownEffect(GoatHostStatusResult);
+
+/** One host read in flight; every caller sharing its key awaits the same answer. */
+type PendingRead = Deferred.Deferred<HostStatusEntry, OrchestratorMcpFailure>;
 
 const failure = (code: OrchestratorMcpFailure["code"], message: string) =>
   new OrchestratorMcpFailure({ code, message });
@@ -166,7 +168,7 @@ const make = Effect.gen(function* () {
     new Map<string, { readonly entry: HostStatusEntry; readonly at: number }>(),
   );
   /** Per caller and host, so a slow host's connection keeps going between polls instead of restarting. */
-  const remoteReads = yield* FiberMap.make<string, HostStatusEntry, OrchestratorMcpFailure>();
+  const remoteReads = yield* Ref.make(new Map<string, PendingRead>());
 
   const remember = (key: string | null, entry: HostStatusEntry) =>
     Ref.update(known, (current) => new Map(current).set(key, entry));
@@ -361,33 +363,52 @@ const make = Effect.gen(function* () {
       (failInvalid && !plainShared ? "\u0000named" : "") +
       (includeRepositories ? "\u0000repos" : "") +
       (requireReady ? "\u0000ready" : "");
-    const running = yield* FiberMap.get(remoteReads, key);
-    const started = Option.isSome(running)
-      ? running.value
-      : yield* FiberMap.run(
+    const fetch = plainShared
+      ? // Shared callers turn every failure into an unreachable entry, so none needs failInvalid.
+        readRemoteOnce(scope, host, false, false, false).pipe(
+          Effect.tap((entry) =>
+            entry.reachability === "ok"
+              ? clock.currentTimeMillis.pipe(
+                  Effect.flatMap((at) =>
+                    Ref.update(sharedAnswers, (current) =>
+                      new Map(current).set(host, { entry, at }),
+                    ),
+                  ),
+                )
+              : Effect.void,
+          ),
+        )
+      : readRemoteOnce(scope, host, failInvalid, includeRepositories, requireReady);
+    // Claimed in one atomic step, so every caller awaits the same read, even one arriving as it ends.
+    const pending = yield* Effect.uninterruptible(
+      Effect.gen(function* () {
+        const fresh = yield* Deferred.make<HostStatusEntry, OrchestratorMcpFailure>();
+        const [deferred, mine] = yield* Ref.modify(
           remoteReads,
-          key,
-          plainShared
-            ? // Shared callers turn every failure into an unreachable entry, so none needs failInvalid.
-              readRemoteOnce(scope, host, false, false, false).pipe(
-                Effect.tap((entry) =>
-                  entry.reachability === "ok"
-                    ? clock.currentTimeMillis.pipe(
-                        Effect.flatMap((at) =>
-                          Ref.update(sharedAnswers, (current) =>
-                            new Map(current).set(host, { entry, at }),
-                          ),
-                        ),
-                      )
-                    : Effect.void,
-                ),
-              )
-            : readRemoteOnce(scope, host, failInvalid, includeRepositories, requireReady),
-          { onlyIfMissing: true },
+          (current): readonly [readonly [PendingRead, boolean], Map<string, PendingRead>] => {
+            const existing = current.get(key);
+            return existing !== undefined
+              ? [[existing, false], current]
+              : [[fresh, true], new Map(current).set(key, fresh)];
+          },
         );
-    // A read that lost the race to start was interrupted; join the one that is kept.
-    const fiber = Option.getOrElse(yield* FiberMap.get(remoteReads, key), () => started);
-    const answer = yield* Fiber.join(fiber).pipe(
+        if (mine)
+          yield* fetch.pipe(
+            // Leave the map before answering, so a read after this one asks the host again.
+            Effect.onExit((exit) =>
+              Ref.update(remoteReads, (current) => {
+                if (current.get(key) !== fresh) return current;
+                const next = new Map(current);
+                next.delete(key);
+                return next;
+              }).pipe(Effect.andThen(Deferred.done(fresh, exit))),
+            ),
+            Effect.forkIn(layerScope),
+          );
+        return deferred;
+      }),
+    );
+    const answer = yield* Deferred.await(pending).pipe(
       Effect.timeoutOption(HOST_STATUS_REMOTE_TIMEOUT_MS),
     );
     if (Option.isSome(answer)) return answer.value;

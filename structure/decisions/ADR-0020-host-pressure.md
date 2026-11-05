@@ -40,7 +40,8 @@
   - Sampling follows demand, like an agent cache's background refresh: a read answers from the held
     level at once and keeps a 30 s sample going for two minutes after it; a raised level keeps it
     going until it recovers. An idle server that nobody asks reads no memory or disk. Readings more
-    than 90 s apart restart the evidence that a level held. The effect worker reads the held level
+    than 90 s apart restart the evidence that a level held, and only the latest stall survives
+    between readings, so stalls count as evidence only while someone is asking. The effect worker reads the held level
     only, so its polling never keeps sampling alive. Signed-in clients, placement, pressure notices
     and health share one read of each SSH host and reuse an answer under 30 s old; an agent's read
     always asks the host.
