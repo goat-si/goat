@@ -21,7 +21,7 @@
 //
 // test-windows runs WINDOWS_SUITES on hosted Windows: in lane=all, in the windows lane, with the
 // ci:windows label, and on a pull request that changes one of those paths. Its job has a 30-minute
-// timeout and never runs on EPYC.
+// timeout.
 //
 // smoke-linux-computer-use builds the Linux computer use helper and runs its live smoke on a
 // private Xvfb display, hosted only since it installs packages: in lane=all, and on a pull request
@@ -146,7 +146,8 @@ const TASKS = [
 const MATRIX_ORDER = ["check", "typecheck", CHANGED_TESTS_TASK, ...TASKS.slice(2)];
 /**
  * Minutes of plain Node work with no browsers, native headers or need for many cores. They run on
- * hosted ubuntu-24.04 even in trusted runs, so they never queue behind half-hour EPYC server shards.
+ * hosted ubuntu-24.04 even if a self-hosted pool returns, so they never queue behind half-hour
+ * server shards.
  */
 const HOSTED_TASKS = new Set([
   "check",
@@ -494,13 +495,14 @@ function selectTasks(
 
 /**
  * The ci job matrix; test-server expands into its shards. Each entry carries the job title and its
- * runner pool, hosted, epyc or windows; goat-ci.yml sends only trusted runs' epyc entries to EPYC.
+ * runner pool, hosted, linux or windows. goat-ci.yml runs hosted and linux entries on ubuntu-24.04
+ * since the EPYC pool was retired; linux marks the heavy work a self-hosted pool would take.
  */
 function matrixFor(tasks, server = { mode: "full", shards: SERVER_SHARDS }) {
   const include = [];
   for (const task of MATRIX_ORDER) {
     if (!tasks.includes(task)) continue;
-    const runner = task === WINDOWS_TASK ? "windows" : HOSTED_TASKS.has(task) ? "hosted" : "epyc";
+    const runner = task === WINDOWS_TASK ? "windows" : HOSTED_TASKS.has(task) ? "hosted" : "linux";
     if (task === "test-server") {
       const related = server.mode === "related";
       const count = related ? server.shards : SERVER_SHARDS;
