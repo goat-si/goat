@@ -282,6 +282,13 @@ jobs:
       - name: Align package versions
         run: node scripts/update-release-package-versions.ts "$VERSION"
 
+      # The desktop build compiles the native libsecret helper; the hosted runner lacks its headers.
+      - name: Install libsecret headers
+        run: |
+          if pkg-config --exists libsecret-1; then exit 0; fi
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libsecret-1-dev
+
       # No relay, Clerk or tracing configuration: the GOAT nightly bundle bakes in
       # no upstream service endpoints (PR-preview style).
       - name: Build JS bundle
