@@ -69,7 +69,7 @@ jobs:
       github.repository == 'goat-si/goat' &&
       (github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'schedule' && vars.GOAT_RELEASES_PUBLISH == 'true'))
-    # Hosted: the resolve step needs gh, which the EPYC runners do not carry.
+    # Hosted: the resolve step needs gh.
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     # Reading goat-ci runs needs actions: read and counting release-blocker issues
@@ -248,7 +248,7 @@ jobs:
     name: JS bundle
     needs: [prepare]
     if: needs.prepare.result == 'success' && needs.prepare.outputs.skip == 'false'
-    runs-on: [self-hosted, linux, x64, goat, epyc]
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: write
@@ -288,10 +288,8 @@ jobs:
         run: vp run build:desktop
 
       - name: Boot built web client
-        env:
-          PLAYWRIGHT_HOST_PLATFORM_OVERRIDE: ubuntu24.04-x64
         run: |
-          node apps/web/node_modules/playwright/cli.js install --only-shell chromium
+          node apps/web/node_modules/playwright/cli.js install --with-deps --only-shell chromium
           node apps/web/scripts/verify-built-boot.ts
 
       # The hand-off tool comes from this workflow's commit, so a run can build any
@@ -340,7 +338,7 @@ jobs:
             platform: linux
             arch: x64
             rust_target: x86_64-unknown-linux-gnu
-            runner: [self-hosted, linux, x64, goat, epyc]
+            runner: ubuntu-24.04
           - key: linux-arm64
             platform: linux
             arch: arm64
@@ -669,8 +667,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Hosted: the AppImage icon needs ImageMagick, which the EPYC runners do
-          # not carry and cannot install without sudo.
+          # Hosted: the AppImage icon needs ImageMagick, which needs sudo to install.
           - platform: linux
             arch: x64
             target: AppImage
@@ -859,7 +856,7 @@ jobs:
       needs.prepare.result == 'success' && needs.prepare.outputs.skip == 'false' &&
       (!cancelled() && needs.cli.result == 'success' &&
       needs.desktop_mac.result == 'success' && needs.desktop_other.result == 'success')
-    runs-on: [self-hosted, linux, x64, goat, epyc]
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: write

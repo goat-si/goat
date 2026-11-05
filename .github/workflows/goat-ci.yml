@@ -1,17 +1,11 @@
 name: goat-ci
 
-# goat fork CI; every upstream workflow is disabled. Trusted runs (a manual run, or a pull request
-# from a branch of this repository) run on the EPYC self-hosted runners, which hosted concurrency on
-# the free plan cannot match. A pull request from a fork runs on GitHub-hosted ubuntu-24.04, so fork
-# code never reaches EPYC (#426). goat-ci skips fork pull requests for now. Each ci
-# matrix entry names its pool: the heavy tasks take the epyc runners, and the short Node-only tasks
-# (HOSTED_TASKS in goat-ci-scope.cjs) take ubuntu-24.04 so they never queue behind server shards.
-# test-windows takes hosted windows-2025 for any run, so Windows-only failures show up (#1385).
-# goat-scope, goat-screenshot-gate and goat-ci-result take the two
-# runners labelled epyc-light instead, which carry no epyc label, so a busy matrix never makes a
-# short gate job wait for a runner. The pre-push guard pins these expressions. EPYC runners persist
-# between jobs, so no step may change the machine: a step that needs sudo or a throwaway VM runs on
-# hosted runners only.
+# goat fork CI; every upstream workflow is disabled. Every job runs on GitHub-hosted runners:
+# ubuntu-24.04, and windows-2025 for test-windows (#1385). The EPYC self-hosted pool (goat-epyc-01..24)
+# lived on a client's machine and was retired; the steps below still branch on RUNNER_ENVIRONMENT so
+# a self-hosted pool can return without rewriting them. goat-ci skips fork pull requests for now.
+# The pre-push guard pins the runs-on values. A step that needs sudo relies on the hosted VM being
+# discarded after the job.
 #
 # A pull request, draft or ready, gets a quick run: the goat-scope job reads the diff
 # (.github/scripts/goat-ci-scope.cjs) and hands ci check, typecheck, and test-changed, the test files
@@ -72,7 +66,7 @@ jobs:
     name: ${{ (github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != '') && 'goat-scope' || 'goat-ci (event ignored)' }}
     # Fork pull requests do not run goat-ci yet; a maintainer runs it on a copy of the branch.
     if: (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != '')
-    runs-on: ${{ (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","goat","epyc-light"]') || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
       matrix: ${{ steps.scope.outputs.matrix }}
@@ -115,7 +109,7 @@ jobs:
   ci:
     name: ${{ (github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != '') && format('goat-{0}', matrix.title) || 'goat-ci (event ignored)' }}
     needs: scope
-    runs-on: ${{ matrix.runner == 'windows' && 'windows-2025' || matrix.runner == 'epyc' && (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","goat","epyc"]') || 'ubuntu-24.04' }}
+    runs-on: ${{ matrix.runner == 'windows' && 'windows-2025' || 'ubuntu-24.04' }}
     timeout-minutes: ${{ matrix.task == 'test-memory-growth' && 90 || matrix.task == 'test-windows' && 30 || 60 }}
     strategy:
       fail-fast: false
@@ -136,8 +130,8 @@ jobs:
             !/.repos/
           sparse-checkout-cone-mode: false
 
-      # Hosted runners start empty, so the Actions cache keeps the pnpm store between runs. Each EPYC
-      # runner keeps its store in its own persistent HOME instead.
+      # Hosted runners start empty, so the Actions cache keeps the pnpm store between runs. A
+      # self-hosted runner would keep its store in its own persistent HOME instead.
       - name: Setup Vite+
         uses: voidzero-dev/setup-vp@v1
         with:
@@ -145,9 +139,10 @@ jobs:
           cache: ${{ runner.environment == 'github-hosted' }}
           run-install: true
 
-      # The EPYC runners' .env gives each runner its own HOME, so Vite+, Node, pnpm, Electron and
-      # Playwright caches persist without two concurrent jobs sharing them. The runners are Ubuntu
-      # 26.04, which Playwright 1.60 does not recognize, so they install and launch its 24.04 build.
+      # The retired EPYC runners' .env gave each runner its own HOME, so Vite+, Node, pnpm, Electron and
+      # Playwright caches persisted without two concurrent jobs sharing them. They ran Ubuntu 26.04,
+      # which Playwright 1.60 does not recognize, so they installed and launched its 24.04 build.
+      # The self-hosted branch is inert on hosted runners.
       # Steps the Windows job runs set shell: bash (Git Bash there), since its default is PowerShell.
       - name: Toolchain
         shell: bash
@@ -168,8 +163,8 @@ jobs:
         if: matrix.task == 'check' || matrix.task == 'typecheck' || matrix.task == 'test' || matrix.task == 'test-changed' || matrix.task == 'test-desktop' || matrix.task == 'build'
         run: vp run --filter @goat/desktop ensure:electron
 
-      # The desktop build and its tests compile the native libsecret helper. EPYC carries the headers;
-      # only a hosted runner installs them.
+      # The desktop build and its tests compile the native libsecret helper. A hosted runner installs
+      # the headers; a self-hosted runner must already carry them.
       - name: Install libsecret headers
         if: matrix.task == 'test-desktop' || matrix.task == 'test-changed' || matrix.task == 'build'
         run: |
@@ -202,7 +197,7 @@ jobs:
 
       # SshWorkspaceSync's real-sshd test runs sshd with UsePAM no, which refuses a locked account
       # even for a public key. The hosted runner user's password is locked, and that VM is discarded
-      # after the job. An EPYC runner's account persists, so it is never changed here.
+      # after the job. A self-hosted runner's account persists, so it is never changed here.
       - name: Unlock the runner account for the test sshd
         if: (matrix.task == 'test-server' || matrix.task == 'test-changed') && runner.environment == 'github-hosted'
         run: |
@@ -237,9 +232,10 @@ jobs:
         run: vpr typecheck
 
       # Web browser tests and the server's browser integration tests run in Playwright's headless
-      # Chromium. On a hosted runner --with-deps installs its system libraries through sudo. EPYC has
-      # no sudo for jobs and keeps the browser in its persistent HOME, so the install downloads only
-      # when this Playwright version's shell is missing, and a missing system library fails the step.
+      # Chromium. On a hosted runner --with-deps installs its system libraries through sudo. A
+      # self-hosted runner has no sudo for jobs and keeps the browser in its persistent HOME, so the
+      # install downloads only when this Playwright version's shell is missing, and a missing system
+      # library fails the step.
       - name: Install Chromium headless shell
         if: matrix.task == 'test' || matrix.task == 'test-server' || matrix.task == 'test-changed' || matrix.task == 'build'
         env:
@@ -326,8 +322,8 @@ jobs:
 
       # The ssh tests start real shells, servers and sshd, and several wait a fixed
       # 2 seconds for a process to stop. Two workers leave a 4-vCPU hosted runner room for them.
-      # The suite mostly waits, and with two workers the shared EPYC host ran it about twice as
-      # slowly as a hosted runner, near the job timeout; its 192 cores take eight.
+      # The suite mostly waits; on the retired 192-core EPYC host two workers ran it about twice as
+      # slowly as a hosted runner, so a self-hosted runner takes eight.
       - name: Test ssh
         if: matrix.task == 'test-ssh'
         env:
@@ -488,7 +484,7 @@ jobs:
     name: ${{ (github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != '') && 'goat-screenshot-gate' || 'goat-ci (event ignored)' }}
     # It reads the pull request, so a manual run has nothing to inspect.
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && (github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != '')
-    runs-on: ${{ (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","goat","epyc-light"]') || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read
@@ -556,7 +552,7 @@ jobs:
     needs: [scope, ci, screenshot-gate, connect-auth-postgres]
     # Runs when a task failed too, so the failure lands on this check; a superseded run stays cancelled.
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != '') }}
-    runs-on: ${{ (github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","goat","epyc-light"]') || 'ubuntu-24.04' }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Require every selected task
@@ -585,7 +581,7 @@ jobs:
   # event creates one (#1672). So that run reports goat-ci-result too: it waits for the newest real
   # run of the pull request on the same head and repeats its goat-ci-result, failing unless it
   # succeeded. Waiting can take as long as that run, queue time included, so it holds a hosted
-  # runner, never an EPYC one, for up to the hosted job limit.
+  # runner for up to the hosted job limit.
   republish:
     name: ${{ !((github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != '')) && 'goat-ci-result' || 'goat-ci-result (real run)' }}
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && !((github.event.action != 'labeled' || startsWith(github.event.label.name, 'ci:')) && (github.event.action != 'edited' || github.event.changes.base.ref.from != ''))

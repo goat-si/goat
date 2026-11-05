@@ -412,7 +412,7 @@ describe("matrixFor", () => {
         shard,
         shard_count: 4,
         related: false,
-        runner: "epyc",
+        runner: "linux",
       })),
     ]);
   });
@@ -425,7 +425,7 @@ describe("matrixFor", () => {
         shard: 1,
         shard_count: 2,
         related: true,
-        runner: "epyc",
+        runner: "linux",
       },
       {
         task: "test-server",
@@ -433,7 +433,7 @@ describe("matrixFor", () => {
         shard: 2,
         shard_count: 2,
         related: true,
-        runner: "epyc",
+        runner: "linux",
       },
     ]);
   });
@@ -446,14 +446,14 @@ describe("matrixFor", () => {
     assert.deepEqual(matrixFor(["test-changed", "typecheck", "check"]).include, [
       { task: "check", title: "check", runner: "hosted" },
       { task: "typecheck", title: "typecheck", runner: "hosted" },
-      { task: "test-changed", title: "test-changed", runner: "epyc" },
+      { task: "test-changed", title: "test-changed", runner: "linux" },
     ]);
   });
 
-  it("keeps the browser, native, ssh, relay and server work on EPYC and sends the rest to hosted runners", () => {
+  it("marks the browser, native, ssh, relay and server work linux and sends the rest to hosted runners", () => {
     const pools = Object.fromEntries(matrixFor(TASKS).include.map((e) => [e.task, e.runner]));
     assert.deepEqual(
-      Object.keys(pools).filter((task) => pools[task] === "epyc"),
+      Object.keys(pools).filter((task) => pools[task] === "linux"),
       [
         "test",
         "test-packages",
