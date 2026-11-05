@@ -162,7 +162,7 @@ it.effect.each(["startup", "shutdown"] as const)(
         layerTest.pipe(
           Layer.provide(
             Layer.mock(HostPressureMonitor.HostPressureMonitor)({
-              current: Effect.succeed({
+              held: Effect.succeed({
                 level: "critical",
                 since: "2026-01-01T00:00:00.000Z",
                 reasons: [],

@@ -46,7 +46,10 @@ describe("goat pre-push guard: per-entry matrix runner", () => {
     const f = fixture({ workflow: workflow({ ...baseJob, "runs-on": hosted }) });
     expect(f.hook(f.record(f.sha)).status).toBe(0);
     const moving = fixture({
-      workflow: workflow({ ...baseJob, "runs-on": hosted.replace("'ubuntu-24.04'", "'ubuntu-latest'") }),
+      workflow: workflow({
+        ...baseJob,
+        "runs-on": hosted.replace("'ubuntu-24.04'", "'ubuntu-latest'"),
+      }),
     });
     const refused = moving.hook(moving.record(moving.sha));
     expect(refused.status).toBe(1);

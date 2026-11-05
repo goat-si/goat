@@ -37,7 +37,7 @@ it.effect("start lane applies critical pressure to each serialized claim", () =>
   Effect.gen(function* () {
     const level = yield* Ref.make<"ok" | "critical">("ok");
     const pressure = Layer.mock(HostPressureMonitor.HostPressureMonitor)({
-      current: Ref.get(level).pipe(
+      held: Ref.get(level).pipe(
         Effect.map((value) => ({
           level: value,
           since: "2026-01-01T00:00:00.000Z",
@@ -153,7 +153,7 @@ it.effect("start lane serializes pressure samples with competing claims", () =>
   Effect.gen(function* () {
     const samples = yield* Ref.make(0);
     const monitor = Layer.mock(HostPressureMonitor.HostPressureMonitor)({
-      current: Ref.updateAndGet(samples, (n) => n + 1).pipe(
+      held: Ref.updateAndGet(samples, (n) => n + 1).pipe(
         Effect.map((n) => ({
           level: n === 1 ? ("ok" as const) : ("critical" as const),
           since: "2026-01-01T00:00:00.000Z",
@@ -197,7 +197,7 @@ it.effect("start lane serializes pressure samples with competing claims", () =>
 it.effect("start lane production stores composition applies critical capacity", () =>
   Effect.gen(function* () {
     const monitor = Layer.mock(HostPressureMonitor.HostPressureMonitor)({
-      current: Effect.succeed({
+      held: Effect.succeed({
         level: "critical",
         since: "2026-01-01T00:00:00.000Z",
         reasons: [],
@@ -242,7 +242,7 @@ it.effect("start lane production stores composition applies critical capacity", 
 it.effect("start lane preserves FIFO while a steer can claim when it is full", () =>
   Effect.gen(function* () {
     const monitor = Layer.mock(HostPressureMonitor.HostPressureMonitor)({
-      current: Effect.succeed({
+      held: Effect.succeed({
         level: "critical",
         since: "2026-01-01T00:00:00.000Z",
         reasons: [],
@@ -314,7 +314,7 @@ it.effect("start lane daemon wakes each pending start under sustained critical p
     const entered = yield* Queue.unbounded<string>();
     const releases = yield* Effect.forEach([1, 2, 3], () => Deferred.make<void>());
     const monitor = Layer.mock(HostPressureMonitor.HostPressureMonitor)({
-      current: Effect.succeed({
+      held: Effect.succeed({
         level: "critical",
         since: "2026-01-01T00:00:00.000Z",
         reasons: [],
@@ -387,7 +387,8 @@ it.effect("start lane server pressure boundary shares one monitor with the runti
       Ref.update(constructions, (n) => n + 1).pipe(
         Effect.as(
           HostPressureMonitor.HostPressureMonitor.of({
-            current: Ref.update(reads, (n) => n + 1).pipe(
+            current: Effect.die("the outbox reads the held level"),
+            held: Ref.update(reads, (n) => n + 1).pipe(
               Effect.as({
                 level: "critical" as const,
                 since: "2026-01-01T00:00:00.000Z",
@@ -414,7 +415,7 @@ it.effect("start lane server pressure boundary shares one monitor with the runti
     yield* Effect.gen(function* () {
       const outbox = yield* EffectOutbox.EffectOutboxV2;
       const supplied = yield* HostPressureMonitor.HostPressureMonitor;
-      yield* supplied.current;
+      yield* supplied.held;
       yield* outbox.enqueue(
         [1, 2].map((n) => ({
           id: `start-lane:boundary:${n}`,

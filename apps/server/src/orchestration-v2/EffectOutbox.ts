@@ -328,7 +328,7 @@ export const layer = Layer.effect(
     const claimLock = yield* Semaphore.make(1);
     const pressure = yield* Effect.serviceOption(HostPressureMonitor.HostPressureMonitor);
     const sampleStartCapacity = Option.isSome(pressure)
-      ? pressure.value.current.pipe(
+      ? pressure.value.held.pipe(
           Effect.map((sample) =>
             sample?.level === "critical"
               ? 1

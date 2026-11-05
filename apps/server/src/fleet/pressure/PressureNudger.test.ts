@@ -91,6 +91,8 @@ const shell = (
 
 interface World {
   local: HostPressure | undefined;
+  /** Reads that would sample this machine. */
+  localReads: number;
   remote: Array<HostStatusEntry>;
   shells: Array<OrchestrationV2ThreadShell>;
   watches: Array<LaunchWatch>;
@@ -99,6 +101,7 @@ interface World {
 
 const makeWorld = (): World => ({
   local: undefined,
+  localReads: 0,
   remote: [entry("macmini", "ok")],
   shells: [
     shell("person"),
@@ -116,7 +119,11 @@ const layer = (world: World, fleet: FleetSettings = {}) =>
       Layer.mergeAll(
         ServerSettings.ServerSettingsService.layerTest({ fleet }),
         Layer.succeed(HostPressureMonitor.HostPressureMonitor, {
-          current: Effect.sync(() => world.local),
+          current: Effect.sync(() => {
+            world.localReads += 1;
+            return world.local;
+          }),
+          held: Effect.sync(() => world.local),
           sample: Effect.sync(() => world.local),
           disk: Stream.empty,
         }),
@@ -302,6 +309,26 @@ describe("PressureNudger.tick", () => {
     }).pipe(Effect.provide(layer(world)));
   });
 
+  it.effect("leaves this machine unsampled while nothing runs here", () => {
+    const world = makeWorld();
+    world.shells = [shell("person"), shell("manager", { launchedBy: "person" })];
+    world.local = pressure("critical");
+    return Effect.gen(function* () {
+      yield* tick;
+      expect(world.localReads).toBe(0);
+      expect(sent(world)).toEqual([]);
+    }).pipe(Effect.provide(layer(world)));
+  });
+
+  it.effect("reads this machine while work runs here", () => {
+    const world = makeWorld();
+    world.local = pressure("ok");
+    return Effect.gen(function* () {
+      yield* tick;
+      expect(world.localReads).toBe(1);
+    }).pipe(Effect.provide(layer(world)));
+  });
+
   it.effect("stays quiet when pressure is turned off or delivery is off", () => {
     const world = makeWorld();
     world.local = pressure("critical");
@@ -342,6 +369,7 @@ it.effect("constructs admission without watch or host-status services", () =>
             ServerSettings.layerTest({ fleet: { pressure: { admission: "block" } } }),
             Layer.succeed(HostPressureMonitor.HostPressureMonitor, {
               current: Effect.succeed(pressure("critical")),
+              held: Effect.succeed(pressure("critical")),
               sample: Effect.succeed(pressure("critical")),
               disk: Stream.empty,
             }),

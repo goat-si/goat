@@ -170,9 +170,10 @@ export class HostMaintenanceError extends Schema.TaggedError<HostMaintenanceErro
 ) {}
 
 /**
- * One provider account's subscription quota. `fromCache` is true when this
- * call did not refresh that account. `limits.checkedAt` is when the provider
- * last reported the windows.
+ * One provider account's subscription quota. Reads answer from the last provider
+ * reading and refresh a stale one in the background, so current hosts report
+ * `fromCache: true`; older hosts may report false for a read that refreshed.
+ * `limits.checkedAt` is when the provider last reported the windows.
  */
 export const HostStatusQuota = Schema.Struct({
   instanceId: ProviderInstanceId,
