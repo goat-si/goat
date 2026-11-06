@@ -67,6 +67,18 @@ describe("project removal confirmation", () => {
     );
   });
 
+  it("does not invent a thread count for an older server", () => {
+    const plan = planProjectRemoval({
+      members: [local],
+      groupMemberCount: 1,
+      hasOtherMembers: false,
+      displayName: "Repo",
+      threads: [],
+      unloadedThreadCount: null,
+    });
+    expect(plan.confirmationMessage).toContain('Remove project "Repo" and delete its threads?');
+  });
+
   it("keeps an environment-filtered group scoped to its selected checkout", () => {
     const plan = planProjectRemoval({
       members: [remote],

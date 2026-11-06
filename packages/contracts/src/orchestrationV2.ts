@@ -2325,6 +2325,7 @@ export const OrchestrationV2OlderSettledThreads = Schema.Struct({
   before: IsoDateTime,
   asOfSequence: NonNegativeInt,
   counts: Schema.Array(OrchestrationV2OlderSettledCount),
+  sideChatCounts: Schema.optionalKey(Schema.Array(OrchestrationV2OlderSettledCount)),
 });
 export type OrchestrationV2OlderSettledThreads = typeof OrchestrationV2OlderSettledThreads.Type;
 
@@ -3967,6 +3968,7 @@ export const OrchestrationV2OlderSettledThreadsPage = Schema.Struct({
   snapshotSequence: NonNegativeInt,
   threads: Schema.Array(OrchestrationV2ThreadShell),
   counts: Schema.Array(OrchestrationV2OlderSettledCount),
+  sideChatCounts: Schema.optionalKey(Schema.Array(OrchestrationV2OlderSettledCount)),
 });
 export type OrchestrationV2OlderSettledThreadsPage =
   typeof OrchestrationV2OlderSettledThreadsPage.Type;
