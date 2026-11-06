@@ -158,82 +158,19 @@ const loaderEntry = `
   };
 `;
 
-const discoveryEntry = `
-  const { getAvailableBackends } = await loadSpeechModule(moduleUrl);
-  process.send(getAvailableBackends().filter((device) =>
-    device.deviceType === "gpu" || device.deviceType === "igpu").slice(0, 128).map((device) => ({
-      id: JSON.stringify([device.kind, device.deviceId ?? device.name]),
-      name: (device.description || device.name).slice(0, 1024),
-    })).filter((device) => device.id.length <= 1024));
-`;
-
-export async function runNativeSpeechWorker(mode: "discover" | "model", moduleUrl?: string) {
+export async function runNativeSpeechWorker() {
   if (!process.send) throw new Error("Speech workers require an IPC channel.");
-  const run = new Function(
-    "baseUrl",
-    "moduleUrl",
-    `return (async () => {${loaderEntry}${mode === "discover" ? discoveryEntry : entry}})();`,
-  ) as (baseUrl: string, moduleUrl?: string) => Promise<void>;
-  await run(import.meta.url, moduleUrl);
+  const run = new Function("baseUrl", `return (async () => {${loaderEntry}${entry}})();`) as (
+    baseUrl: string,
+  ) => Promise<void>;
+  await run(import.meta.url);
 }
 
-function speechWorkerArgs(mode: "discover" | "model", moduleUrl?: string) {
-  if (NodeSea.isSea()) return ["__speech-worker", mode, ...(moduleUrl ? [moduleUrl] : [])];
+function speechWorkerArgs() {
+  if (NodeSea.isSea()) return ["__speech-worker", "model"];
   // Normal Node and Electron hosts can evaluate the same entry without a sibling artifact.
-  const loader = `const baseUrl = ${JSON.stringify(import.meta.url)};
-    const moduleUrl = process.argv[1];${loaderEntry}`;
-  return [
-    "--input-type=module",
-    "-e",
-    loader + (mode === "discover" ? discoveryEntry : entry),
-    ...(moduleUrl ? [moduleUrl] : []),
-  ];
-}
-
-export async function listNativeSpeechGpuDevices(moduleUrl?: string) {
-  return await new Promise<{ id: string; name: string }[]>((resolve, reject) => {
-    const child = guardChild(
-      NodeChildProcess.spawn(process.execPath, speechWorkerArgs("discover", moduleUrl), {
-        stdio: ["ignore", "ignore", "inherit", "ipc"],
-        env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
-      }),
-      (error) => reject(error),
-    );
-    const timer = setTimeout(() => {
-      child.kill();
-      reject(new Error("Speech device discovery timed out."));
-    }, 10_000);
-    child.on("message", (devices: unknown) => {
-      if (
-        Array.isArray(devices) &&
-        devices.length <= 128 &&
-        devices.every(
-          (device: unknown) =>
-            typeof device === "object" &&
-            device !== null &&
-            "id" in device &&
-            typeof device.id === "string" &&
-            "name" in device &&
-            typeof device.name === "string" &&
-            device.id.length <= 1024 &&
-            device.name.length <= 1024,
-        )
-      ) {
-        clearTimeout(timer);
-        resolve(devices);
-        child.kill();
-      }
-    });
-    child.once("error", (error) => {
-      clearTimeout(timer);
-      child.kill();
-      reject(error);
-    });
-    child.once("exit", (code) => {
-      clearTimeout(timer);
-      reject(new Error(`Speech device discovery exited (${code}).`));
-    });
-  });
+  const loader = `const baseUrl = ${JSON.stringify(import.meta.url)};${loaderEntry}`;
+  return ["--input-type=module", "-e", loader + entry];
 }
 
 /** Loads a model in an isolated process. "auto" retries on the CPU when GPU setup fails. */
@@ -267,7 +204,7 @@ async function loadNativeSpeechModelOnce(
     pending = undefined;
   };
   const child = guardChild(
-    NodeChildProcess.spawn(process.execPath, speechWorkerArgs("model"), {
+    NodeChildProcess.spawn(process.execPath, speechWorkerArgs(), {
       stdio: ["ignore", "ignore", "inherit", "ipc"],
       serialization: "advanced",
       env: {

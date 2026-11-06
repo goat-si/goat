@@ -55,10 +55,9 @@ if (
     const { runManagedChatGptTokenCli } = await import("./cli/managedChatGptToken.ts");
     await runManagedChatGptTokenCli(process.argv.slice(3));
   } else if (command === "__speech-worker") {
-    const mode = process.argv[3];
-    if (mode !== "discover" && mode !== "model") throw new Error("Unknown speech worker mode.");
+    if (process.argv[3] !== "model") throw new Error("Unknown speech worker mode.");
     const { runNativeSpeechWorker } = await import("./speech/native.ts");
-    await runNativeSpeechWorker(mode, process.argv[4]);
+    await runNativeSpeechWorker();
   } else if (command === "__screen-run-child") {
     const { runScreenChild } = await import("./screenCode/ScreenRunChild.ts");
     await runScreenChild(process.stdin, process.stdout);
