@@ -1,3 +1,4 @@
+import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as NodeHttpPlatform from "@effect/platform-node/NodeHttpPlatform";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -53,7 +54,6 @@ import {
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
 import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
-
 describe("MCP app asset responses", () => {
   it.effect(
     "transforms existing snapshots only with explicit render intent and fresh metadata",
@@ -104,7 +104,6 @@ describe("MCP app asset responses", () => {
         }
       }).pipe(Effect.provide(layerFileResponse)),
   );
-
   it.effect("rejects oversized captures before transforming them", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -592,6 +591,7 @@ describe("signed media HTTP route", () => {
             Layer.mock(ProjectFaviconResolver.ProjectFaviconResolver)({}),
             Layer.mock(NativeAppIconResolver.NativeAppIconResolver)({}),
             Layer.succeed(BuiltInDrivers.SourceControlDrivers, []),
+            Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({}),
           ).pipe(Layer.provide(NodeServices.layer), Layer.provideMerge(layerFileResponse)),
         ),
       );

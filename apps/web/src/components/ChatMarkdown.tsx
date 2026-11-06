@@ -165,7 +165,6 @@ import { sourceControlClients } from "@goat/client-runtime/source-control-client
 import { useOpenChangeRequestLink } from "~/lib/openPullRequestLink";
 import { useOpenLink } from "../browser/useOpenLink";
 import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
-
 import { isPreviewAvailableFor } from "../browser/previewRuntime";
 import {
   isBrowserPreviewFile,
@@ -215,9 +214,7 @@ import {
   reportMarkdownExternalOpenFailure,
 } from "./chat/markdownSystemBrowserLink";
 import { ARTIFACT_TEMPLATE_ICON_BY_KIND } from "./chat/artifactTemplateIcons";
-
 const isAssetNotFoundError = Schema.is(AssetWorkspaceAssetNotFoundError);
-
 interface ChatMarkdownProps {
   /** Compact markdown transforms remove blocks before rendering inside a label. */
   inline?: boolean;
@@ -243,27 +240,25 @@ interface ChatMarkdownProps {
   /** Loads media a source control host keeps behind a credential through the server, which holds
       `cwd`'s; without it a private repository's uploads load unauthenticated and 404. */
   sourceControlMedia?: boolean | undefined;
+  /** The change request's repository, when it can differ from the checkout at `cwd`. */
+  sourceControlMediaRepository?: string | undefined;
   headingLevelOffset?: number | undefined;
   /** Off for text with no workspace behind it, so file links never open or reveal a host path. */
   fileActions?: boolean | undefined;
 }
-
 export interface ChatMarkdownContextReference {
   kind: string;
   contextId: string;
   label: string;
 }
-
 const EMPTY_MARKDOWN_SKILLS: ReadonlyArray<ServerProviderSkill> = [];
 const EMPTY_REMARK_PLUGINS: NonNullable<ReactMarkdownOptions["remarkPlugins"]> = [];
-
 function CodexArtifactTemplateCard(props: {
   readonly template: CodexArtifactTemplate;
   readonly onUse?: ((template: CodexArtifactTemplate) => void) | undefined;
 }) {
   const Icon = ARTIFACT_TEMPLATE_ICON_BY_KIND[props.template.artifactKind];
   const presentationLabel = codexArtifactTemplatePresentationLabel(props.template.artifactKind);
-
   return (
     <div
       role="group"
@@ -303,9 +298,7 @@ function CodexArtifactTemplateCard(props: {
     </div>
   );
 }
-
 const WINDOWS_DRIVE_PATH_REGEX = /^[A-Za-z]:[\\/]/;
-
 function orderedListGutterStyle(
   itemCount: number,
   start: unknown,
@@ -317,7 +310,6 @@ function orderedListGutterStyle(
   if (markerWidth <= 1) return undefined;
   return { "--list-gutter": `${markerWidth + 2}ch` };
 }
-
 const GITHUB_ALERT_PRESENTATIONS: Record<
   string,
   { label: string; Icon: typeof InfoIcon; borderClassName: string; titleClassName: string }
@@ -477,6 +469,7 @@ function useChatMarkdownState({
   headingLevelOffset = 0,
   sourceControlMedia = false,
   fileActions = true,
+  sourceControlMediaRepository,
 }: ChatMarkdownProps) {
   const resolvedTheme = useRenderedAppearance();
   const markdownRef = useRef<HTMLElement>(null);
@@ -879,6 +872,7 @@ function useChatMarkdownState({
     expandMedia,
     fileLinkChip,
     sourceControlMedia,
+    sourceControlMediaRepository,
     renderContextReference,
     headingLevelOffset,
     imageBaseDir,
@@ -1353,6 +1347,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
       cwd,
       environmentId,
       sourceControlMedia,
+      sourceControlMediaRepository,
       imageBaseDir,
       threadRef,
       workspaceMutationId,
@@ -1439,7 +1434,12 @@ const CHAT_MARKDOWN_COMPONENTS = {
       return (
         <ChatMarkdownAssetImage
           environmentId={environmentId}
-          resource={{ _tag: SOURCE_CONTROL_MEDIA_ASSET, cwd, url: hostMediaUrl }}
+          resource={{
+            _tag: SOURCE_CONTROL_MEDIA_ASSET,
+            cwd,
+            url: hostMediaUrl,
+            ...(sourceControlMediaRepository ? { repository: sourceControlMediaRepository } : {}),
+          }}
           alt={altText}
           kind={kind}
           copyMarkdown={copyMarkdown}

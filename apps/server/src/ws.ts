@@ -334,7 +334,6 @@ const isProviderUploadFeedbackError = Schema.is(ProviderUploadFeedbackError);
 function withoutWorkspaceSnapshots(providers: ReadonlyArray<ServerProvider>): ServerProvider[] {
   return providers.map(({ workspaceSnapshots: _workspaceSnapshots, ...provider }) => provider);
 }
-
 function unexpectedCompatibilityError(error: never): never {
   throw new Error(`Unhandled compatibility error: ${String(error)}`);
 }
@@ -1850,6 +1849,7 @@ export const layerWsRpc = (
           threadFindProgressive: true,
           secretProviderSettings: true,
           secretReferences: true,
+          secretRequestReferences: true,
           usageLimitSecretReferences: true,
           easSecretReferences: true,
           ...Option.match(scratchWorkspaceRoot, {

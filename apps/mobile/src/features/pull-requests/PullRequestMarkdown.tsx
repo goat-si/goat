@@ -61,8 +61,11 @@ export function PullRequestMarkdownRepository(props: {
   });
   const cwd = project?.workspaceRoot;
   const media = useMemo(
-    () => (cwd ? { environmentId: target.environmentId, cwd } : null),
-    [target.environmentId, cwd],
+    () =>
+      cwd
+        ? { environmentId: target.environmentId, cwd, repository: target.input.repository }
+        : null,
+    [target.environmentId, target.input.repository, cwd],
   );
   return (
     <AutolinksContext value={autolinks}>

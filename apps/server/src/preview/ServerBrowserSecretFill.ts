@@ -25,7 +25,6 @@ import { constVoid } from "effect/Function";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import type { BrowserContext, CDPSession, Frame, Page, Request } from "playwright-core";
-
 import * as SecretRequests from "../secrets/SecretRequests.ts";
 import { rememberSecret } from "./pageSecrets.ts";
 import { HISTORY_FIELD_SCRIPT } from "./historyFieldScript.ts";
@@ -116,6 +115,7 @@ const secretFailure = (reason: SecretRequestFailureReason): SecretFailure => {
       return "not_permitted";
     case "load_failed":
     case "store_failed":
+    case "reference_unreadable":
     case "record_failed":
     case "read_failed":
     case "consume_failed":

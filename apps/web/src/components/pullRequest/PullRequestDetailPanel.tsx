@@ -39,7 +39,6 @@ import {
   useRef,
   useState,
 } from "react";
-
 import { type DraftId, useComposerDraftStore } from "~/composerDraftStore";
 import { type PullRequestDetailTab, useRightPanelStore } from "~/rightPanelStore";
 import { useEnvironmentSettings } from "~/hooks/useSettings";
@@ -226,13 +225,14 @@ function resolvePullRequestReference(
 }
 
 function pullRequestMarkdownContext(
-  detail: Pick<PullRequestDetail, "provider" | "url"> | null,
+  detail: Pick<PullRequestDetail, "provider" | "url" | "repository"> | null,
   threadRef: ScopedThreadRef | null,
 ) {
   return {
     remarkPlugins: pullRequestAutolinkPlugins(detail),
     lineBreaks: sourceControlClients.find(detail?.provider ?? "")?.hardLineBreaks ?? false,
     threadRef,
+    repository: detail?.repository ?? null,
   };
 }
 

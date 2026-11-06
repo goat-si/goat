@@ -129,6 +129,13 @@ const instanceId = ProviderInstanceId.make("codex");
 const sessionId = AuthSessionId.make("session:card-sentinel");
 const number = "4242424242424242";
 const cvc = "731";
+const cvcLeak = /(^|[^0-9A-Za-z])731([^0-9A-Za-z]|$)/;
+
+it("detects CVC leaks as standalone values without matching identifiers", () => {
+  expect(cvcLeak.test("echo 731")).toBe(true);
+  expect(cvcLeak.test(JSON.stringify({ cvc: "731" }))).toBe(true);
+  expect(cvcLeak.test("a731b")).toBe(false);
+});
 const name = "CARD_NAME_SENTINEL_8394";
 const answer = {
   type: "save_card" as const,
@@ -222,7 +229,11 @@ it.live("card sentinels stay out of agent results, thread events and browser dia
           }),
         );
         const secrets = yield* SecretRequests.SecretRequests.pipe(
-          Effect.provide(SecretRequests.layer.pipe(Layer.provide(Layer.mergeAll(threads, store)))),
+          Effect.provide(
+            SecretRequests.layer.pipe(
+              Layer.provide(Layer.mergeAll(threads, store, ServerSettings.layerTest())),
+            ),
+          ),
         );
         const now = DateTime.makeUnsafe("2026-01-01T00:00:00Z");
         const sessions = Layer.mock(SessionStore.SessionStore)({
@@ -548,7 +559,8 @@ it.live("card sentinels stay out of agent results, thread events and browser dia
           browserEvidence,
           capturedLogs,
         });
-        for (const secret of [number, cvc, name]) expect(visible).not.toContain(secret);
+        for (const secret of [number, name]) expect(visible).not.toContain(secret);
+        expect(visible).not.toMatch(cvcLeak);
       }).pipe(
         Effect.provide(
           Harness.layerWithRegistry(

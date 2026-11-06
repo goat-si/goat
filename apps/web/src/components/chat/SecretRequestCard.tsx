@@ -5,6 +5,7 @@ import {
   secretRequestDisplay,
   secretRequestFailureMessage,
   secretRequestPrivacyNote,
+  secretRequestProviders,
   type SecretRequestItem,
 } from "@goat/client-runtime/secret-request";
 import {
@@ -93,6 +94,13 @@ function PendingSecretRequestForm(props: {
     reportFailure: false,
     reportDefect: false,
   });
+  const settings = useAtomValue(serverEnvironment.settingsValueAtom(props.environmentId));
+  const config = useAtomValue(serverEnvironment.configValueAtom(props.environmentId));
+  const providers = config?.secretRequestReferences
+    ? secretRequestProviders(settings?.secretProviders)
+    : [];
+  const [providerId, setProviderId] = useState("");
+  const selectedProvider = providers.find((provider) => provider.id === providerId);
   const [secret, setSecret] = useState("");
   const [username, setUsername] = useState("");
   const [setupKey, setSetupKey] = useState("");
@@ -134,7 +142,9 @@ function PendingSecretRequestForm(props: {
         ? cardReply
         : login
           ? { type: "save_login", username, password: secret, authenticatorSetupKey: setupKey }
-          : { type: "save", secret },
+          : selectedProvider
+            ? { type: "reference", reference: { provider: selectedProvider.id, reference: secret } }
+            : { type: "save", secret },
     );
   };
 
@@ -150,7 +160,7 @@ function PendingSecretRequestForm(props: {
       // leaves it alone so the reason can still be copied.
       onClick={(event) => {
         if (!(event.target instanceof Element)) return;
-        if (event.target.closest("input, button, a")) return;
+        if (event.target.closest("input, button, a, select, option")) return;
         if (window.getSelection()?.isCollapsed === false) return;
         document.getElementById(inputId)?.focus();
       }}
@@ -165,6 +175,27 @@ function PendingSecretRequestForm(props: {
         )}
         {item.reason.trim() ? <p className="text-sm text-muted-foreground">{item.reason}</p> : null}
       </div>
+      {!login && !card && providers.length > 0 ? (
+        <label>
+          Secret source
+          <select
+            aria-label="Secret source"
+            value={providerId}
+            onChange={(event) => {
+              setProviderId(event.currentTarget.value);
+              setSecret("");
+            }}
+            disabled={!canAnswer || submitting}
+          >
+            <option value="">Enter value</option>
+            {providers.map((provider) => (
+              <option key={provider.id} value={provider.id}>
+                {provider.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
       {card ? (
         <div className="flex min-w-0 flex-col gap-2">
           {CARD_FIELDS.map(([key, label]) => {
@@ -287,7 +318,11 @@ function PendingSecretRequestForm(props: {
               data-1p-ignore
               data-lpignore="true"
               data-bwignore
-              placeholder={item.placeholder ?? SECRET_REQUEST_DEFAULT_PLACEHOLDER}
+              placeholder={
+                selectedProvider
+                  ? "op://vault/item/field"
+                  : (item.placeholder ?? SECRET_REQUEST_DEFAULT_PLACEHOLDER)
+              }
               value={secret}
               disabled={!canAnswer || submitting}
               aria-invalid={error !== null || undefined}
@@ -295,7 +330,19 @@ function PendingSecretRequestForm(props: {
               onChange={(event) => setSecret(event.currentTarget.value)}
             />
           </div>
-          <Button type="submit" disabled={!canAnswer || submitting || secret.trim().length === 0}>
+          <Button
+            type="submit"
+            disabled={
+              !canAnswer ||
+              submitting ||
+              (selectedProvider
+                ? secretRequestAnswerInput(item, {
+                    type: "reference",
+                    reference: { provider: selectedProvider.id, reference: secret },
+                  }) === null
+                : secret.trim().length === 0)
+            }
+          >
             Save securely
           </Button>
         </div>
