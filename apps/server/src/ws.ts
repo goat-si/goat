@@ -1,3 +1,4 @@
+import { makeOmittableShellReaders } from "./orchestration-v2/ThreadFamilyLookup.ts";
 import * as ChannelBotThreads from "./channels/ChannelBotThreads.ts";
 import * as Fiber from "effect/Fiber";
 import { AgentWorkspaceTerminalPolicyThreadLookup } from "./AgentWorkspaceTerminalPolicy.ts";
@@ -1894,25 +1895,11 @@ export const layerWsRpc = (
         ),
       );
 
-      // Rows the shell can omit, read with the same snapshot sequence the shell uses.
-      const readOmittableShellRows = Effect.fn("ws.orchestrationV2.readOmittableShellRows")(
-        function* (
-          options: { readonly familyOf: ThreadId } | { readonly worktreePath: string },
-          message: string,
-        ) {
-          const { threads, snapshotSequence } = yield* loadShellSnapshotParts({
-            sql,
-            readThreads: threadManagement.readShellSnapshot({ location: "active", ...options }),
-            listProjects: Effect.succeed([]),
-            latestSequence: applicationEvents.latestApplicationSequence,
-          }).pipe(
-            Effect.mapError(
-              (cause) => new OrchestrationV2GetShellSnapshotError({ message, cause }),
-            ),
-          );
-          return { snapshotSequence, threads: threads.threads };
-        },
-      );
+      const { readOmittableShellRows, readThreadFamily } = makeOmittableShellReaders({
+        sql,
+        threadManagement,
+        latestSequence: applicationEvents.latestApplicationSequence,
+      });
 
       const subscribeOrchestrationV2ArchivedShell = Effect.fn(
         "ws.orchestrationV2.subscribeArchivedShell",
@@ -2142,8 +2129,7 @@ export const layerWsRpc = (
           ),
         [ORCHESTRATION_V2_WS_METHODS.getArchivedShellSnapshot]: (_input) =>
           getOrchestrationV2ArchivedShellSnapshot,
-        [ORCHESTRATION_V2_WS_METHODS.getThreadFamily]: (input) =>
-          readOmittableShellRows({ familyOf: input.threadId }, "Failed to load the thread family"),
+        [ORCHESTRATION_V2_WS_METHODS.getThreadFamily]: readThreadFamily,
         [ORCHESTRATION_V2_WS_METHODS.getOlderSettledThreads]: (input) =>
           loadOlderSettledThreadsPage({
             sql,

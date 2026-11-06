@@ -1,3 +1,5 @@
+import { OrchestrationV2GetThreadFamilyInput } from "./threadFamilyLookup.ts";
+export { OrchestrationV2GetThreadFamilyInput } from "./threadFamilyLookup.ts";
 import { OrchestrationV2RunStatus } from "./orchestrationV2RunStatus.ts";
 import * as Restart from "./codexTurnSurvival.ts";
 export { OrchestrationV2RunStatus } from "./orchestrationV2RunStatus.ts";
@@ -3896,11 +3898,6 @@ export const OrchestrationV2SubscribeShellInput = Schema.Struct({
 });
 export type OrchestrationV2SubscribeShellInput = typeof OrchestrationV2SubscribeShellInput.Type;
 
-export const OrchestrationV2GetThreadFamilyInput = Schema.Struct({
-  threadId: ThreadId,
-});
-export type OrchestrationV2GetThreadFamilyInput = typeof OrchestrationV2GetThreadFamilyInput.Type;
-
 /**
  * The active threads that share the requested thread's `lineage.rootThreadId`: the root, its
  * forks, and their whole subagent trees, in any run state. An unknown thread has an empty family;
@@ -3909,6 +3906,7 @@ export type OrchestrationV2GetThreadFamilyInput = typeof OrchestrationV2GetThrea
 export const OrchestrationV2ThreadFamily = Schema.Struct({
   snapshotSequence: NonNegativeInt,
   threads: Schema.Array(OrchestrationV2ThreadShell),
+  lookupTitles: Schema.optionalKey(Schema.Record(ThreadId, Schema.String)),
 });
 export type OrchestrationV2ThreadFamily = typeof OrchestrationV2ThreadFamily.Type;
 
