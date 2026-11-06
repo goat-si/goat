@@ -622,18 +622,23 @@
                     "label": "Max"
                   },
                   {
+                    "id": "ultracode",
+                    "label": "Ultracode",
+                    "description": "xhigh effort plus multi-agent workflow orchestration"
+                  },
+                  {
                     "id": "ultrathink",
                     "label": "Ultrathink"
                   }
                 ],
                 "promptInjectedValues": ["ultrathink"]
-              },
-              { "id": "ultracode", "label": "Ultracode", "type": "boolean" }
+              }
             ]
           },
           "adapter": {
             "claudeCode": {
               "effortMap": {
+                "ultracode": "xhigh",
                 "ultrathink": null
               },
               "fixedContextWindowTokens": 1000000
@@ -721,16 +726,20 @@
                   { "id": "high", "label": "High" },
                   { "id": "xhigh", "label": "Extra High" },
                   { "id": "max", "label": "Max" },
+                  {
+                    "id": "ultracode",
+                    "label": "Ultracode",
+                    "description": "xhigh effort plus multi-agent workflow orchestration"
+                  },
                   { "id": "ultrathink", "label": "Ultrathink" }
                 ],
                 "promptInjectedValues": ["ultrathink"]
-              },
-              { "id": "ultracode", "label": "Ultracode", "type": "boolean" }
+              }
             ]
           },
           "adapter": {
             "claudeCode": {
-              "effortMap": { "ultrathink": null },
+              "effortMap": { "ultracode": "xhigh", "ultrathink": null },
               "fixedContextWindowTokens": 1000000
             }
           }
