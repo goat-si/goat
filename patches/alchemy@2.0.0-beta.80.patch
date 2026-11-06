@@ -123,3 +123,29 @@ index 648209c089f984dc45bd5eba0788130c9813a1d6..c66b5433427498ced6c91ee7c371ad82
      yield* artifacts.set(id, result);
      return result;
  });
+diff --git a/lib/Drizzle/Schema.js b/lib/Drizzle/Schema.js
+--- a/lib/Drizzle/Schema.js
++++ b/lib/Drizzle/Schema.js
+@@ -233,7 +233,8 @@ export const SchemaProvider = () => Provider.effect(Schema, Effect.gen(function*
+         const out = resolveOut(props);
+         const dialect = props.dialect ?? "postgres";
+         const kit = yield* loadKit(dialect);
+-        if (!kit.generateDrizzleJson || !kit.generateMigration) {
++        // Released rc.5 stores differential snapshots; the CLI reconstructs the full chain.
++        if ("reconstruct" in kit || !kit.generateDrizzleJson || !kit.generateMigration) {
+             return yield* detectDriftWithCli(props);
+         }
+         const generateDrizzleJson = kit.generateDrizzleJson;
+diff --git a/src/Drizzle/Schema.ts b/src/Drizzle/Schema.ts
+--- a/src/Drizzle/Schema.ts
++++ b/src/Drizzle/Schema.ts
+@@ -372,7 +372,8 @@ export const SchemaProvider = () =>
+           const dialect = props.dialect ?? "postgres";
+ 
+           const kit = yield* loadKit(dialect);
+-          if (!kit.generateDrizzleJson || !kit.generateMigration) {
++          // Released rc.5 stores differential snapshots; the CLI reconstructs the full chain.
++          if ("reconstruct" in kit || !kit.generateDrizzleJson || !kit.generateMigration) {
+             return yield* detectDriftWithCli(props);
+           }
+ 
