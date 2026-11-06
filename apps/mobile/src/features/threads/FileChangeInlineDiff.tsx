@@ -189,10 +189,10 @@ function InlineFileDiff(props: {
           accessibilityRole="button"
           accessibilityLabel={`Review changes to ${displayPath}`}
           onPress={openReview}
-          className="min-w-0 flex-1 flex-row items-center gap-2 py-2 active:opacity-60"
+          className="min-h-11 min-w-0 flex-1 flex-row items-center gap-2 py-2 active:opacity-60"
         >
           <Text
-            className="min-w-0 shrink font-mono text-2xs text-foreground-muted"
+            className="min-w-0 shrink font-mono text-xs text-foreground-secondary"
             numberOfLines={1}
             ellipsizeMode="middle"
           >

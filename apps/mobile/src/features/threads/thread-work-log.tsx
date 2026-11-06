@@ -1,7 +1,7 @@
 import { workRowSymbolName } from "./thread-work-log-icons";
 import { Button } from "../../components/ui/Button";
-import { SubagentStatusDot } from "./SubagentStatusDot";
 import { ThreadSubagentGroup } from "./thread-subagent-group";
+import { useWorkShimmerTurn } from "./work-shimmer-arbiter";
 import { ProposedPlanCard } from "./ProposedPlanCard";
 import {
   WorkLogLabel,
@@ -76,7 +76,6 @@ import { useAppActive, useReduceMotionEnabled } from "../../lib/appState";
 import { cn } from "../../lib/cn";
 import { THREAD_WORK_ROW_MIN_HEIGHT, type deriveThreadWorkLogSizing } from "../../lib/layout";
 import {
-  type AgentSpawnSummary,
   formatItemFullDetail,
   relativizeWorkLabelPaths,
   type ThreadFeedActivity,
@@ -295,14 +294,16 @@ export function ShimmeringWorkContent(props: {
     availableWidth,
     (props.showIcon ? SHIMMER_ICON_AND_GAP_WIDTH : 0) + Math.ceil(textWidth),
   );
+  const animates = useWorkShimmerTurn(
+    contentWidth > 0 && !reducedMotion && appIsActive && screenIsFocused,
+  );
 
   // Runs on React Native's native driver instead of Reanimated, whose
   // per-frame commits starve React's while commit pausing is disabled
   // (package.json). See docs/internals/performance-regressions.md.
   useEffect(() => {
     progress.setValue(0);
-    if (contentWidth <= 0 || reducedMotion || !appIsActive || !screenIsFocused) return;
-
+    if (!animates) return;
     const loop = NativeAnimated.loop(
       NativeAnimated.timing(progress, {
         toValue: 1,
@@ -313,7 +314,7 @@ export function ShimmeringWorkContent(props: {
     );
     loop.start();
     return () => loop.stop();
-  }, [appIsActive, contentWidth, progress, reducedMotion, screenIsFocused]);
+  }, [animates, progress]);
 
   // One timing covers the sweep and the pause, so the native driver can loop it.
   // The React Compiler memoizes these, so re-renders don't rebuild the native
@@ -346,7 +347,7 @@ export function ShimmeringWorkContent(props: {
         toolIcon={props.toolIcon}
         onTextLayout={(event) => setTextWidth(event.nativeEvent.lines[0]?.width ?? 0)}
       />
-      {!reducedMotion && appIsActive && screenIsFocused && contentWidth > 0 ? (
+      {animates ? (
         <NativeAnimated.View
           pointerEvents="none"
           accessible={false}
@@ -1398,117 +1399,6 @@ export function ThreadWorkGroupToggle(props: {
 function lineCountsAccessibilityText(counts: WorkLogLineCounts): string {
   return `${counts.additions} ${counts.additions === 1 ? "line" : "lines"} added, ${counts.deletions} removed`;
 }
-
-export const ThreadAgentSpawnCard = function ThreadAgentSpawnCard(props: {
-  readonly summary: AgentSpawnSummary;
-  readonly expanded: boolean;
-  readonly iconSubtleColor: ColorValue;
-  readonly rowSizing: ReturnType<typeof deriveThreadWorkLogSizing>;
-  readonly onToggle: () => void;
-  readonly onCopy: () => void;
-}) {
-  const { summary, expanded } = props;
-  const working = summary.tone === "working";
-  const memberCount = summary.members.length;
-  const canExpand = memberCount > 0;
-  return (
-    <Animated.View layout={WORK_LOG_LAYOUT_TRANSITION} className="-mx-1 mb-1 px-1">
-      <Pressable
-        accessibilityRole={canExpand ? "button" : undefined}
-        accessibilityState={canExpand ? { expanded } : undefined}
-        accessibilityLabel={`${summary.title}, ${summary.status}`}
-        accessibilityHint={
-          canExpand
-            ? `Double tap to ${expanded ? "hide" : "show"} ${memberCount} ${memberCount === 1 ? "subagent" : "subagents"}. Long press to copy.`
-            : "Long press to copy."
-        }
-        hitSlop={4}
-        onPress={() => {
-          if (!canExpand) return;
-          void Haptics.selectionAsync();
-          props.onToggle();
-        }}
-        onLongPress={props.onCopy}
-        className="rounded-xl border border-border-subtle bg-card px-2.5 py-2 active:bg-subtle"
-      >
-        <View className="flex-row items-center gap-2">
-          <View className="h-6 w-6 shrink-0 items-center justify-center">
-            <SymbolView
-              name={{ ios: "sparkles", android: "auto_awesome" }}
-              size={14}
-              weight="medium"
-              tintColor={props.iconSubtleColor}
-              type="monochrome"
-            />
-          </View>
-          <View className="min-w-0 flex-1 gap-0.5">
-            <Text
-              key={props.rowSizing.textSizeKey}
-              className="font-goat-medium text-sm text-foreground"
-              numberOfLines={1}
-            >
-              {summary.title}
-            </Text>
-            <View className="flex-row items-center gap-1.5">
-              <SubagentStatusDot tone={summary.tone} />
-              {working ? (
-                <ShimmeringWorkContent
-                  key={props.rowSizing.textSizeKey}
-                  compact
-                  icon="brain"
-                  iconSubtleColor={props.iconSubtleColor}
-                  label={summary.status}
-                  showIcon={false}
-                />
-              ) : (
-                <Text className="min-w-0 flex-1 text-xs text-foreground-muted" numberOfLines={1}>
-                  {summary.status}
-                </Text>
-              )}
-            </View>
-          </View>
-          {canExpand ? (
-            <ThreadDisclosureChevron
-              expanded={expanded}
-              collapsedDirection="down"
-              size={11}
-              tintColor={props.iconSubtleColor}
-            />
-          ) : null}
-        </View>
-        {expanded && canExpand ? (
-          <Animated.View
-            entering={WORK_LOG_DETAIL_ENTER_TRANSITION}
-            exiting={WORK_LOG_DETAIL_EXIT_TRANSITION}
-            layout={WORK_LOG_LAYOUT_TRANSITION}
-            className="ml-8 mt-1.5 gap-1.5 border-l border-border pl-3"
-          >
-            {summary.members.map((member) => (
-              <View key={member.title} className="gap-px">
-                <View className="flex-row items-center gap-1.5">
-                  <SubagentStatusDot tone={member.tone} />
-                  <Text className="min-w-0 flex-1 text-xs text-foreground" numberOfLines={1}>
-                    {member.title}
-                  </Text>
-                  <Text className="shrink-0 text-2xs text-foreground-muted">{member.status}</Text>
-                </View>
-                {member.detail ? (
-                  <Text
-                    selectable
-                    className="pl-3 font-mono text-2xs leading-normal text-foreground-muted"
-                    numberOfLines={expanded ? 6 : 1}
-                  >
-                    {member.detail}
-                  </Text>
-                ) : null}
-              </View>
-            ))}
-          </Animated.View>
-        ) : null}
-      </Pressable>
-    </Animated.View>
-  );
-};
 
 export function ThreadThinkingRow(props: {
   readonly rowSizing: ReturnType<typeof deriveThreadWorkLogSizing>;
