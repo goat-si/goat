@@ -5,11 +5,7 @@ import { restorePullRequestTabScroll } from "./pullRequestTabScroll";
 import { guideFocusedRows, type GuideDiffFocus } from "./guide/guideDiffFocus";
 import { PullRequestGuideContent } from "./guide/PullRequestGuideScreen";
 import { useReviewGuidesEnabled } from "./guide/useReviewGuide";
-import {
-  filterPullRequestActivity,
-  DEFAULT_ACTIVITY_FILTER,
-  type ActivityFilter,
-} from "./pullRequestActivityFilter";
+import { DEFAULT_ACTIVITY_FILTER, type ActivityFilter } from "./pullRequestActivityFilter";
 import { PullRequestActivityFilters } from "./PullRequestActivityFilters";
 import type { LegendListRef } from "@legendapp/list/react-native";
 import { AnimatedLegendList } from "@legendapp/list/reanimated";
@@ -95,7 +91,7 @@ import {
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { useAppearanceCodeSurface } from "../settings/appearance/useAppearanceCodeSurface";
 import { useNativeReviewDiffBridge } from "../review/useNativeReviewDiffBridge";
-import { pullRequestTimelineRows } from "./PullRequestTimeline";
+import { usePullRequestActivityRows } from "./usePullRequestActivityRows";
 import { PullRequestActionToolbar, PullRequestCardGroup } from "./PullRequestControls";
 import {
   pullRequestTarget as requestTarget,
@@ -134,43 +130,6 @@ function PullRequestTabScrollView(props: ScrollViewProps) {
       <ScrollView {...props} />
     </ScrollViewMarker>
   );
-}
-
-function usePullRequestActivityRows(params: PullRequestParams, filter: ActivityFilter) {
-  const navigation = useNavigation();
-  const result = useEnvironmentQuery(composerPullRequests.activity(requestTarget(params)));
-  const detail = useEnvironmentQuery(composerPullRequests.detail(requestTarget(params)));
-  const permissions = usePullRequestPermissions(params, detail.data);
-  const filtered = result.data ? filterPullRequestActivity(result.data, filter) : null;
-  const rows = (() => {
-    if (!filtered) return [];
-    const rows = pullRequestTimelineRows(filtered.activity, params, navigation, {
-      permissions,
-      onChanged: result.refresh,
-    });
-    if (filter.newestFirst) {
-      const notice = rows.at(-1)?.key === "truncated" ? rows.pop() : undefined;
-      rows.reverse();
-      if (notice) rows.push(notice);
-    }
-    if (!rows.length)
-      rows.push({
-        key: "empty",
-        date: "",
-        content: (
-          <Text className="py-6 text-sm text-foreground-muted">
-            No activity matches these filters.
-          </Text>
-        ),
-      });
-    return rows;
-  })();
-  return {
-    rows,
-    hiddenCount: filtered?.hiddenCount ?? 0,
-    pending: result.isPending && !result.data,
-    error: result.error,
-  };
 }
 
 function PullRequestIdentity(props: {
@@ -412,6 +371,19 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
     permissions.canEditMaintainerEdits,
   );
   const showsDeleteBranch = pr !== null && canPerformPullRequestAction(pr, "delete-branch");
+  const stateAction = action.available("close")
+    ? "close"
+    : action.available("reopen")
+      ? "reopen"
+      : null;
+  const runStateAction = () =>
+    stateAction === "close"
+      ? action.confirmClose()
+      : action.confirm(
+          "reopen",
+          pullRequestActionLabel("reopen", terminology),
+          `Reopen this ${terminology.singular}?`,
+        );
   const confirmDeleteBranch = () =>
     pr &&
     action.confirm(
@@ -546,6 +518,17 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
                     },
                   ]
                 : []),
+              ...(stateAction
+                ? [
+                    {
+                      accessibilityLabel: pullRequestActionLabel(stateAction, terminology),
+                      icon: PR_ACTION_ICONS[stateAction],
+                      destructive: stateAction === "close",
+                      overflowOnly: true,
+                      onPress: runStateAction,
+                    },
+                  ]
+                : []),
               ...(showsDeleteBranch
                 ? [
                     {
@@ -635,6 +618,15 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
                 onPress={() => sharePullRequestLink(identity)}
               >
                 <Toolbar.Label>Share…</Toolbar.Label>
+              </Toolbar.MenuAction>
+            ) : null}
+            {stateAction ? (
+              <Toolbar.MenuAction
+                icon={PR_ACTION_ICONS[stateAction]}
+                destructive={stateAction === "close"}
+                onPress={runStateAction}
+              >
+                <Toolbar.Label>{pullRequestActionLabel(stateAction, terminology)}</Toolbar.Label>
               </Toolbar.MenuAction>
             ) : null}
             {showsDeleteBranch ? (
