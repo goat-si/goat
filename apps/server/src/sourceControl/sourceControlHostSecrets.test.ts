@@ -93,3 +93,13 @@ it("reuses one resolved read across repeated GitHub, GitCafe and Bitbucket crede
   );
   expect(read).toHaveBeenCalledTimes(2);
 });
+
+it("rejects empty values returned for saved credential references", async () => {
+  const reference = { provider: "vault", reference: "op://work/item/token" };
+  const settings = decodeSettings({
+    sourceControlHosts: { github: { tokens: { "github.com": reference } } },
+  });
+  await expect(
+    resolveHostSecrets(settings, "github", "github.com", async () => "  "),
+  ).rejects.toThrow("Could not resolve source control credential");
+});
