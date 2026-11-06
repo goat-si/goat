@@ -316,6 +316,7 @@ const make = Effect.gen(function* () {
     readHubCheckpointPageTx,
     publishCheckpointAndFloorTx,
     compactEligibleHistoryTx,
+    pressureEligibilityTx,
   } = hubLedger;
   const hubAdmin = makeHubAdmin(kernel, coreReads, hubSnapshotReads, hubMembership, hubLedger);
   const {
@@ -378,6 +379,7 @@ const make = Effect.gen(function* () {
     readHubCheckpointPageTx,
     publishCheckpointAndFloorTx: (input) => withHubBudget(publishCheckpointAndFloorTx(input)),
     compactEligibleHistoryTx,
+    pressureEligibilityTx,
     purgeHubTransientTx,
     requestHubSourceReadTx: (authority, input) =>
       withHubBudget(requestHubSourceReadTx(authority, input)),

@@ -515,6 +515,97 @@ export const makeHubLedger = (
     });
     return yield* readHubRetentionTx(input.memorySpaceId);
   });
+  const coveredOperationsTx = Effect.fnUntraced(function* (
+    space: M.MemorySpaceId,
+    checkpointId: string,
+  ) {
+    const pages = yield* snapshotPages(space, checkpointId);
+    if (!M.validateMemoryCheckpointRecords(pages))
+      return yield* new MemoryStoreConflict({ code: "bootstrap_required" });
+    return new Set<string>(
+      pages.flatMap((p) => p.compactReceipts.map((r) => r.receipt.operationId)),
+    );
+  });
+  // Candidates are paged by key and filtered by the checkpoint's covered set afterwards, so a
+  // page of uncovered rows cannot hide covered rows behind it.
+  const coveredLogRowsTx = Effect.fnUntraced(function* (input: {
+    readonly space: M.MemorySpaceId;
+    readonly floor: number;
+    readonly cutoff: number;
+    readonly covered: ReadonlySet<string>;
+    readonly maxRows: number;
+  }) {
+    const operations: Array<{ operation_id: string; bytes: number }> = [];
+    const events: Array<{ operation_id: string; bytes: number }> = [];
+    const page = M.MEMORY_DEFERRED_SWEEP_MAX_ITEMS;
+    for (let cursor = 0; operations.length < input.maxRows;) {
+      const rows = yield* stored(
+        "hub-compact-tail",
+        sql<{
+          hub_sequence: number;
+          operation_id: string;
+          bytes: number;
+        }>`SELECT hub_sequence,operation_id,length(CAST(entry_json AS BLOB)) AS bytes FROM memory_hub_operations WHERE space=${input.space} AND hub_sequence>${cursor} AND hub_sequence<=${input.floor} AND committed_at<=${input.cutoff} AND NOT EXISTS (SELECT 1 FROM memory_outbox o WHERE o.space=memory_hub_operations.space AND json_extract(o.metadata_json,'$.operationId')=memory_hub_operations.operation_id AND o.status IN ('pending','running','retry')) ORDER BY hub_sequence LIMIT ${page}`,
+      );
+      for (const row of rows)
+        if (input.covered.has(row.operation_id) && operations.length < input.maxRows)
+          operations.push(row);
+      const last = rows.at(-1);
+      if (rows.length < page || last === undefined) break;
+      cursor = last.hub_sequence;
+    }
+    for (let cursor = 0; operations.length + events.length < input.maxRows;) {
+      const rows = yield* stored(
+        "hub-compact-events",
+        sql<{
+          sequence: number;
+          operation_id: string;
+          bytes: number;
+        }>`SELECT e.sequence,e.operation_id,length(CAST(e.metadata_json AS BLOB))+length(CAST(e.receipt_json AS BLOB)) AS bytes FROM memory_events e JOIN memory_compact_receipts c ON c.space=e.memory_space_id AND c.operation_id=e.operation_id WHERE e.memory_space_id=${input.space} AND e.sequence>${cursor} AND c.hub_sequence<=${input.floor} AND e.created_at<=${input.cutoff} AND NOT EXISTS (SELECT 1 FROM memory_outbox o WHERE o.space=e.memory_space_id AND json_extract(o.metadata_json,'$.operationId')=e.operation_id AND o.status IN ('pending','running','retry')) AND NOT EXISTS (SELECT 1 FROM memory_inbox_pending p WHERE p.space=e.memory_space_id AND p.operation_id=e.operation_id) AND NOT EXISTS (SELECT 1 FROM memory_report_outbox r WHERE r.space=e.memory_space_id AND r.operation_id=e.operation_id AND r.state='pending') ORDER BY e.sequence LIMIT ${page}`,
+      );
+      for (const row of rows)
+        if (
+          input.covered.has(row.operation_id) &&
+          operations.length + events.length < input.maxRows
+        )
+          events.push(row);
+      const last = rows.at(-1);
+      if (rows.length < page || last === undefined) break;
+      cursor = last.sequence;
+    }
+    return { operations, events };
+  });
+  const logCutoff = (now: number, pressure: boolean | undefined) =>
+    now - (pressure ? M.MEMORY_LOG_PRESSURE_RETENTION_MS : M.MEMORY_LOG_RETENTION_MS);
+  const pressureEligibilityTx: MemoryStoreShape["pressureEligibilityTx"] = Effect.fn(
+    "MemoryStore.pressureEligibilityTx",
+  )(function* (space, now) {
+    yield* Transaction;
+    const retention = yield* readHubRetentionTx(space);
+    if (!retention.checkpointId) return { eligibleLogicalBytes: 0, nextEligibleAtMs: null };
+    const eligible = yield* coveredLogRowsTx({
+      space,
+      floor: retention.retentionFloor,
+      cutoff: logCutoff(now, true),
+      covered: yield* coveredOperationsTx(space, retention.checkpointId),
+      maxRows: Number.POSITIVE_INFINITY,
+    });
+    const waiting = yield* stored(
+      "hub-compact-next-eligible",
+      sql<{
+        at: number | null;
+      }>`SELECT min(committed_at) AS at FROM memory_hub_operations WHERE space=${space} AND hub_sequence<=${retention.retentionFloor} AND committed_at>${logCutoff(now, true)}`,
+    );
+    const next = waiting[0]?.at;
+    return {
+      eligibleLogicalBytes: [...eligible.operations, ...eligible.events].reduce(
+        (sum, row) => sum + row.bytes,
+        0,
+      ),
+      nextEligibleAtMs:
+        next === null || next === undefined ? null : next + M.MEMORY_LOG_PRESSURE_RETENTION_MS,
+    };
+  });
   const compactEligibleHistoryTx: MemoryStoreShape["compactEligibleHistoryTx"] = Effect.fn(
     "MemoryStore.compactEligibleHistoryTx",
   )(function* (input) {
@@ -524,23 +615,18 @@ export const makeHubLedger = (
     const retention = yield* readHubRetentionTx(input.memorySpaceId);
     if (retention.retentionFloor !== input.expectedFloor || !retention.checkpointId)
       return yield* new MemoryStoreConflict({ code: "revision_changed" });
-    const pages = yield* snapshotPages(input.memorySpaceId, retention.checkpointId);
-    if (!M.validateMemoryCheckpointRecords(pages))
-      return yield* new MemoryStoreConflict({ code: "bootstrap_required" });
-    const covered = new Set(
-      pages.flatMap((p) => p.compactReceipts.map((r) => r.receipt.operationId)),
-    );
-    const rows = yield* stored(
-      "hub-compact-tail",
-      sql<{
-        operation_id: string;
-        bytes: number;
-      }>`SELECT operation_id,length(CAST(entry_json AS BLOB)) AS bytes FROM memory_hub_operations WHERE space=${input.memorySpaceId} AND hub_sequence<=${input.expectedFloor} AND committed_at<=${input.now - M.MEMORY_LOG_RETENTION_MS} AND NOT EXISTS (SELECT 1 FROM memory_outbox o WHERE o.space=memory_hub_operations.space AND json_extract(o.metadata_json,'$.operationId')=memory_hub_operations.operation_id AND o.status IN ('pending','running','retry')) ORDER BY hub_sequence LIMIT ${Math.max(0, Math.min(input.limit, M.MEMORY_DEFERRED_SWEEP_MAX_ITEMS))}`,
-    );
+    const covered = yield* coveredOperationsTx(input.memorySpaceId, retention.checkpointId);
+    const limit = Math.max(0, Math.min(input.limit, M.MEMORY_DEFERRED_SWEEP_MAX_ITEMS));
+    const log = yield* coveredLogRowsTx({
+      space: input.memorySpaceId,
+      floor: input.expectedFloor,
+      cutoff: logCutoff(input.now, input.pressure),
+      covered,
+      maxRows: limit,
+    });
     let removedRows = 0,
       reclaimedLogicalBytes = 0;
-    for (const row of rows) {
-      if (!covered.has(M.MemoryOperationId.make(row.operation_id))) continue;
+    for (const row of log.operations) {
       yield* stored(
         "hub-compact-delete",
         sql`DELETE FROM memory_hub_operations WHERE space=${input.memorySpaceId} AND operation_id=${row.operation_id}`,
@@ -548,16 +634,7 @@ export const makeHubLedger = (
       removedRows++;
       reclaimedLogicalBytes += row.bytes;
     }
-    const limit = Math.max(0, Math.min(input.limit, M.MEMORY_DEFERRED_SWEEP_MAX_ITEMS));
-    const events = yield* stored(
-      "hub-compact-events",
-      sql<{
-        operation_id: string;
-        bytes: number;
-      }>`SELECT e.operation_id,length(CAST(e.metadata_json AS BLOB))+length(CAST(e.receipt_json AS BLOB)) AS bytes FROM memory_events e JOIN memory_compact_receipts c ON c.space=e.memory_space_id AND c.operation_id=e.operation_id WHERE e.memory_space_id=${input.memorySpaceId} AND c.hub_sequence<=${input.expectedFloor} AND e.created_at<=${input.now - M.MEMORY_LOG_RETENTION_MS} AND NOT EXISTS (SELECT 1 FROM memory_outbox o WHERE o.space=e.memory_space_id AND json_extract(o.metadata_json,'$.operationId')=e.operation_id AND o.status IN ('pending','running','retry')) AND NOT EXISTS (SELECT 1 FROM memory_inbox_pending p WHERE p.space=e.memory_space_id AND p.operation_id=e.operation_id) ORDER BY e.sequence LIMIT ${Math.max(0, limit - removedRows)}`,
-    );
-    for (const event of events) {
-      if (!covered.has(M.MemoryOperationId.make(event.operation_id))) continue;
+    for (const event of log.events) {
       yield* stored(
         "hub-compact-event-delete",
         sql`DELETE FROM memory_events WHERE memory_space_id=${input.memorySpaceId} AND operation_id=${event.operation_id}`,
@@ -664,12 +741,30 @@ export const makeHubLedger = (
     });
     removedRows += purgedReports.removedRows;
     reclaimedLogicalBytes += purgedReports.reclaimedLogicalBytes;
+    const remaining = input.pressure
+      ? yield* coveredLogRowsTx({
+          space: input.memorySpaceId,
+          floor: input.expectedFloor,
+          cutoff: logCutoff(input.now, true),
+          covered,
+          maxRows: Number.POSITIVE_INFINITY,
+        })
+      : { operations: [], events: [] };
     const status: M.MemoryCompactionStatus = {
       lastRunAtUtc: M.MemoryUtcTimestamp.make(DateTime.formatIso(DateTime.makeUnsafe(input.now))),
       removedRows,
       reclaimedLogicalBytes,
-      reclaimableLogicalBytes: 0,
-      blockedReasons: [],
+      reclaimableLogicalBytes: [...remaining.operations, ...remaining.events].reduce(
+        (sum, row) => sum + row.bytes,
+        0,
+      ),
+      // A live bootstrap handle keeps the floor below the published checkpoint.
+      blockedReasons:
+        input.pressure &&
+        liveHandles.length > 0 &&
+        retention.retentionFloor < retention.checkpointSequence
+          ? ["checkpoint_pinned"]
+          : [],
     };
     yield* stored(
       "hub-compact-status",
@@ -685,6 +780,7 @@ export const makeHubLedger = (
     readHubCheckpointPageTx,
     publishCheckpointAndFloorTx,
     compactEligibleHistoryTx,
+    pressureEligibilityTx,
   };
 };
 
