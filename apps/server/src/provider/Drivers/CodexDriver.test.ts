@@ -666,7 +666,7 @@ it.layer(layerTest)("CodexDriver", (it) => {
   it.effect("uses each instance's environment CODEX_HOME for continuation", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-codex-driver-" });
+      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-codex-driver-" });
       for (const [index, account] of ["work", "personal", "work "].entries()) {
         const codexHome = NodePath.join(tempDir, account);
         const instance = yield* CodexDriver.create({
