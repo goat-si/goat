@@ -188,6 +188,18 @@ export const makeHumanHandoffs = (deps: HumanHandoffDeps) => {
     const handoff = itemHandoff(item);
     if (handoff === undefined) return yield* Effect.die(new Error("Handoff item has no handoff."));
     if (existing && itemHandoff(existing)?.state === handoff.state) return;
+    if (existing && handoff.state === "completed" && projection.thread.snoozedUntil != null) {
+      yield* emit(
+        events,
+        command,
+      )({
+        type: "thread.unsnoozed",
+        threadId: command.threadId,
+        providerInstanceId: projection.thread.providerInstanceId,
+        occurredAt: now,
+        payload: { ...projection.thread, snoozedUntil: null, snoozedAt: null, updatedAt: now },
+      });
+    }
     yield* emit(
       events,
       command,

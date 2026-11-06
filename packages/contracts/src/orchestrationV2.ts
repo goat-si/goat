@@ -1,3 +1,9 @@
+import {
+  OrchestrationV2Actor,
+  OrchestrationV2CreationSource,
+  OrchestrationV2ThreadHistoryOrigin,
+} from "./orchestrationV2Attribution.ts";
+export * from "./orchestrationV2Attribution.ts";
 import { OrchestrationV2RunStatus } from "./orchestrationV2RunStatus.ts";
 import * as Restart from "./codexTurnSurvival.ts";
 export { OrchestrationV2RunStatus } from "./orchestrationV2RunStatus.ts";
@@ -120,21 +126,6 @@ import {
 import { ThreadTokenUsageSnapshot } from "./providerRuntime.ts";
 
 export * from "./providerReplay.ts";
-export const OrchestrationV2Actor = Schema.Literals(["user", "agent", "system"]);
-export type OrchestrationV2Actor = typeof OrchestrationV2Actor.Type;
-
-export const OrchestrationV2CreationSource = Schema.Literals([
-  "web",
-  "mobile",
-  "mcp",
-  "provider",
-  "server",
-]);
-export type OrchestrationV2CreationSource = typeof OrchestrationV2CreationSource.Type;
-
-export const OrchestrationV2ThreadHistoryOrigin = Schema.Literals(["native", "v1_import"]);
-export type OrchestrationV2ThreadHistoryOrigin = typeof OrchestrationV2ThreadHistoryOrigin.Type;
-
 const OrchestrationV2CreationFields = {
   createdBy: OrchestrationV2Actor,
   creationSource: OrchestrationV2CreationSource,
@@ -757,6 +748,8 @@ export const OrchestrationV2Run = Schema.Struct({
   ),
   delegatedCompletion: Schema.optional(OrchestrationV2DelegatedCompletionCohort),
   workspacePreparation: Schema.optional(OrchestrationV2ThreadLaunchWorkspaceStrategy),
+  /** Starts a new provider conversation; earlier runs stay visible but never reach the provider. */
+  freshContext: Schema.optional(Schema.Boolean),
 });
 export type OrchestrationV2Run = typeof OrchestrationV2Run.Type;
 
@@ -1685,6 +1678,7 @@ export const OrchestrationV2TurnItem = Schema.Union([
     channel: ForwardCompatibleOptional(ChannelMessageMeta),
     idleCompaction: Schema.optional(OrchestrationV2IdleCompaction),
     workflowScript: OrchestrationV2ConversationMessage.fields.workflowScript,
+    freshContext: OrchestrationV2Run.fields.freshContext,
     inputIntent: OrchestrationV2UserMessageInputIntent,
     text: Schema.String,
     /** Same as the text of message `messageId`. */
@@ -2572,6 +2566,7 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     channel: ForwardCompatibleOptional(ChannelMessageMeta),
     idleCompaction: Schema.optional(OrchestrationV2IdleCompaction),
     workflowScript: OrchestrationV2ConversationMessage.fields.workflowScript,
+    freshContext: OrchestrationV2Run.fields.freshContext,
     inputIntent: OrchestrationV2UserMessageInputIntent,
     text: Schema.String,
     context: Schema.optional(OrchestrationMessageContext),
@@ -3314,6 +3309,7 @@ export const OrchestrationV2Command = Schema.Union([
     /** Kept so stored rows and older clients decode; the server no longer writes or reads it. */
     senderRunId: Schema.optional(RunId),
     idleCompaction: Schema.optional(OrchestrationV2IdleCompaction),
+    freshContext: Schema.optional(Schema.Boolean),
     commandId: CommandId,
     threadId: ThreadId,
     messageId: MessageId,

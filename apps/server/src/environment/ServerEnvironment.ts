@@ -250,6 +250,7 @@ export const make = Effect.gen(function* () {
     sshRuntimeProtocolVersion: SSH_RUNTIME_PROTOCOL_VERSION,
     orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
     capabilities: {
+      freshContext: true,
       // The core and owner memory RPC groups are always installed by ws.ts.
       memory: {
         protocolVersion: 1,

@@ -157,6 +157,32 @@ export const PENDING_QUESTION = {
   resolvedAt: null,
 };
 
+export const QUESTION_CARD: OrchestrationV2TurnItem = {
+  id: TurnItemId.make("question-card"),
+  threadId: THREAD_ID,
+  runId: null,
+  nodeId: PENDING_QUESTION.nodeId,
+  providerThreadId: null,
+  providerTurnId: null,
+  nativeItemRef: null,
+  parentItemId: null,
+  ordinal: 1,
+  status: "running",
+  title: null,
+  startedAt: v2Now,
+  completedAt: null,
+  updatedAt: v2Now,
+  type: "user_input_request",
+  requestId: PENDING_QUESTION.id,
+  questions: [{ id: "scope", header: "Scope", question: "Which scope?", options: [] }],
+};
+
+export const questionProjection = (projection: OrchestrationV2ThreadProjection) => ({
+  ...projection,
+  runtimeRequests: [PENDING_QUESTION],
+  turnItems: [QUESTION_CARD],
+});
+
 export const questionResolved = (sequence: number): OrchestrationV2ThreadStreamItem => ({
   kind: "event",
   sequence,
