@@ -109,11 +109,12 @@ import {
   useThreadActions,
 } from "../hooks/useThreadActions";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { useStartChatNew } from "../hooks/useStartChatNew";
 import { useSidebarProjectGroups } from "../hooks/useSidebarProjectGroups";
 import { useTerminalFocus } from "../hooks/useTerminalFocus";
 import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
 import { registerSettleAndAdvance } from "../settleAndAdvance";
-import { startNewThreadFromContext, startNewThreadFromLastWork } from "../lib/chatThreadActions";
+import { startNewThreadFromContext } from "../lib/chatThreadActions";
 import { useClientSettings } from "../hooks/useSettings";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useLocalStorage } from "../hooks/useLocalStorage";
@@ -127,7 +128,6 @@ import {
 } from "../state/environments";
 import {
   readThreadShell,
-  readThreadShells,
   useAllEnvironmentProjectSnapshotsReady,
   useProjects,
   useServerConfigs,
@@ -203,7 +203,6 @@ import {
   resolveSidebarDropTarget,
   resolveSidebarDropVerb,
   searchSidebarThreads,
-  shouldCreateNewThreadInCurrentProject,
   shouldNavigateAfterThreadPark,
   sidebarListItemId,
   sidebarThreadKeyAtY,
@@ -853,6 +852,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     },
   });
   const newThreadContext = useHandleNewThread();
+  const startChatNew = useStartChatNew();
   // Row callbacks capture only the handler; the rest of the context changes with the route.
   const { handleNewThread } = newThreadContext;
   const primaryEnvironmentId = usePrimaryEnvironmentId();
@@ -2801,8 +2801,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   );
   const showJumpHints = useThreadJumpHintsVisible(shouldShowJumpHintsNow);
 
-  // Plain compose opens a draft in the last project and workspace mode the
-  // user wrote in. Shift+click keeps the current-project action.
+  // Shift+click keeps the current-project action.
   const handleNewThreadClick = (event?: ReactMouseEvent) => {
     if (isMobile) setOpenMobile(false);
     if (event?.shiftKey) {
@@ -2816,39 +2815,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       });
       return;
     }
-    void (async () => {
-      if (
-        await startNewThreadFromLastWork({
-          threads: readThreadShells(),
-          projects,
-          handleNewThread: newThreadContext.handleNewThread,
-        })
-      ) {
-        return;
-      }
-      if (
-        shouldCreateNewThreadInCurrentProject(
-          false,
-          projectGroups.filter((group) => !group.archived).length,
-          projectGroups.length,
-        )
-      ) {
-        const started = await startNewThreadFromContext({
-          activeDraftThread: newThreadContext.activeDraftThread,
-          activeThread: newThreadContext.activeThread ?? undefined,
-          defaultProjectRef: newThreadContext.defaultProjectRef,
-          handleNewThread: newThreadContext.handleNewThread,
-        });
-        if (!started) openCommandPalette({ open: "new-thread-in" });
-      } else {
-        openCommandPalette({ open: "new-thread-in" });
-      }
-    })();
+    void startChatNew();
   };
 
-  // The button mirrors chat.new. With no last work, multi-project setups
-  // chat.newLocal remains the shortcut for the contextual action, even with
-  // one project, where its workspace mode can differ from last work.
+  // The button mirrors chat.new; chat.newLocal keeps the contextual action.
   const newThreadShortcutLabel = shortcutLabelForCommand(keybindings, "chat.new");
   const newThreadInProjectShortcutLabel = shortcutLabelForCommand(keybindings, "chat.newLocal");
   return (
