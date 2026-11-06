@@ -17,7 +17,7 @@ it("offers the picker for multiple projects even when last work exists", async (
   const projectId = ProjectId.make("one");
   using _projects = vi
     .spyOn(entities, "readProjects")
-    .mockReturnValue([{ environmentId, id: projectId, archivedAt: null }] as ReturnType<
+    .mockReturnValue([{ environmentId, id: projectId, archivedAt: null }] as unknown as ReturnType<
       typeof entities.readProjects
     >);
   using _threads = vi.spyOn(entities, "readThreadShells").mockReturnValue([

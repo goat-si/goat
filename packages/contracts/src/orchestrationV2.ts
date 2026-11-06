@@ -2300,7 +2300,7 @@ export function isLiveSubagentShell(
  */
 export function isOlderSettledThreadShell(
   thread: Pick<OrchestrationV2ThreadShell, "lineage" | "settledOverride" | "settledAt"> & {
-    readonly sideChatOf?: ThreadId | null;
+    readonly sideChatOf?: ThreadId | null | undefined;
   },
   beforeMs: number,
 ): boolean {
