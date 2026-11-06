@@ -8,10 +8,13 @@ import {
   type RuntimeSessionRequest,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
-import { SSH_RUNTIME_PROTOCOL_VERSION } from "@goat/shared/sshRuntimeProtocol";
+import {
+  servedRuntimeProtocolRanges,
+  SSH_RUNTIME_PROTOCOL_VERSION,
+} from "@goat/shared/sshRuntimeProtocol";
 import { vi } from "vite-plus/test";
 
-import { issueExistingServerCredential } from "./appServer.ts";
+import { issueExistingServerCredential, probeAppServer, probeExistingServer } from "./appServer.ts";
 import { SshCommandError } from "./errors.ts";
 import {
   detectNativeWindows,
@@ -273,5 +276,100 @@ it.effect.each([
     expect(launched.status).toBe("ready");
     if (detail) expect(launched.selectedRuntime.updateBlocked).toContain(detail);
     else expect(launched.selectedRuntime.updateBlocked).toBeUndefined();
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+const appId = EnvironmentId.make("33333333-3333-4333-8333-333333333333");
+const appDescriptor = {
+  environmentId: appId,
+  serverVersion: "0.1.0-nightly.20261106.1",
+  protocol: servedRuntimeProtocolRanges(),
+  orchestrationProtocolVersion: ORCHESTRATION_PROTOCOL_VERSION,
+  capabilities: { runtimeSessions: true },
+};
+/** What the native app-probe operation prints for the user's live desktop app server. */
+const appProbeAnswer = [
+  "GOAT_APP_SERVER=live 4242 51234 .goat/desktop/userdata",
+  JSON.stringify(appDescriptor),
+  "GOAT_APP_SERVER_OTHERS=",
+  `GOAT_APP_SERVER_ID=${appId}`,
+  "",
+].join("\r\n");
+const posixMissing = { exitCode: 1, stderr: "'sh' is not recognized" };
+const appAttach = {
+  kind: "attach",
+  port: 51234,
+  version: appDescriptor.serverVersion,
+  stateDir: ".goat/desktop/userdata",
+  otherLive: [],
+};
+
+it.effect.each([
+  { name: "a native Windows shell", before: [posixMissing, { stdout: native }] },
+  { name: "Git Bash", before: [{ stdout: "GOAT_APP_SERVER=windows\n" }] },
+])("on $name, SSH clients attach the desktop app server the SSH user runs", ({ before }) =>
+  Effect.gen(function* () {
+    const { calls } = setup([...before, { stdout: appProbeAnswer }]);
+    expect(yield* probeAppServer(target, {})).toEqual(appAttach);
+    expect(calls.at(-1)?.remoteCommandArgs?.[0]).toBe("powershell.exe");
+    expect(framed(calls.at(-1)?.stdin)).toEqual({ op: "app-probe" });
+
+    setup([...before, { stdout: "GOAT_APP_SERVER=port-owner\r\n" }]);
+    expect(yield* probeAppServer(target, {})).toEqual({ kind: "declined", reason: "port-owner" });
+    setup([...before, { stdout: "GOAT_APP_SERVER=none\r\n" }]);
+    expect(yield* probeAppServer(target, {})).toEqual({ kind: "none" });
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect.each([
+  { name: "a native Windows shell", before: [posixMissing, { stdout: native }] },
+  { name: "Git Bash", before: [{ stdout: "GOAT_EXISTING=windows\n" }] },
+])("on $name, the desktop app server is found by its environment", ({ before }) =>
+  Effect.gen(function* () {
+    setup([...before, { stdout: appProbeAnswer }]);
+    expect(yield* probeExistingServer(target, "app", {})).toEqual({
+      kind: "live",
+      environmentId: appId,
+      port: 51234,
+      version: appDescriptor.serverVersion,
+    });
+    setup([...before, { stdout: "GOAT_APP_SERVER=none\r\n" }]);
+    expect(yield* probeExistingServer(target, "app", {})).toEqual({ kind: "absent" });
+    setup([...before, { stdout: "GOAT_APP_SERVER=unreachable\r\n" }]);
+    expect(yield* probeExistingServer(target, "app", {})).toEqual({ kind: "unusable" });
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect.each([
+  { name: "a native Windows shell", before: [posixMissing, { stdout: native }] },
+  { name: "Git Bash", before: [{ stdout: "GOAT_APP_SERVER=windows\n" }] },
+])("on $name, the desktop app server issues the credential on the probed port", ({ before }) =>
+  Effect.gen(function* () {
+    const issued = { sessionId, token: "app-session-token" };
+    const { calls } = setup([
+      ...before,
+      { stdout: `${JSON.stringify(issued)}\r\nGOAT_HTTP_STATUS=200\r\n` },
+    ]);
+    const body = yield* issueExistingServerCredential(
+      target,
+      "app",
+      51234,
+      sessionRequest,
+      {},
+      appId,
+    );
+    expect(JSON.parse(body)).toEqual(issued);
+    expect(framed(calls.at(-1)?.stdin)).toEqual({
+      op: "app-session",
+      port: 51234,
+      environmentId: appId,
+      request: sessionRequest,
+    });
+
+    setup([...before, { stdout: '{"error":"unauthorized"}\r\nGOAT_HTTP_STATUS=403\r\n' }]);
+    const refused = yield* issueExistingServerCredential(target, "app", 51234, sessionRequest).pipe(
+      Effect.flip,
+    );
+    expect(refused.message).toContain("HTTP 403");
   }).pipe(Effect.provide(NodeServices.layer)),
 );

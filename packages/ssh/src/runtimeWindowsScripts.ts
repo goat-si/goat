@@ -1,7 +1,12 @@
 import * as NodeBuffer from "node:buffer";
 
-import { GOAT_RUNTIME_CONTROL_HEADER, GOAT_RUNTIME_DRAIN_PATH } from "@goat/contracts";
+import {
+  GOAT_RUNTIME_CONTROL_HEADER,
+  GOAT_RUNTIME_DRAIN_PATH,
+  GOAT_RUNTIME_SESSION_PATH,
+} from "@goat/contracts";
 import { GOAT_ACTIVITY_PATH, GOAT_ENVIRONMENT_PATH } from "@goat/contracts/legacyT3Names";
+import { desktopAppServerStateDirs } from "@goat/shared/desktopAppServer";
 
 import { applyScriptPlaceholders } from "./remoteRuntime.ts";
 
@@ -379,6 +384,148 @@ try {
 } finally { if ($null -ne $gate) { $gate.Dispose() } }
 `;
 
+/**
+ * The SSH user's GOAT desktop app server, for native Windows and Git Bash hosts alike. The
+ * boundary is the Windows user: the record must sit in this user's own profile, and the control
+ * token is written only on a loopback connection whose server end the record's process owns,
+ * running as this user's SID in a desktop session. Each refusal is one bounded reason.
+ */
+const APP_OPERATIONS = String.raw`param($r,[byte[]]$archive)
+@@COMMON@@
+$appRoot=@@APP_PROFILE@@
+$appDirs=@(@@APP_DIRS@@)
+$ProgressPreference='SilentlyContinue'
+$me=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$crlf=[string][char]13+[char]10
+function Prop($o,[string]$name) { $p=$o.PSObject.Properties[$name]; if ($null -eq $p) { return $null }; return $p.Value }
+function Read-Small([string]$p,[string]$reason) {
+  Assert-Tree $p
+  if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { throw $reason }
+  if ((Get-Item -LiteralPath $p).Length -gt 65536) { throw $reason }
+  return [IO.File]::ReadAllText($p,$utf8).Trim()
+}
+function Connect([int]$port) {
+  $client=New-Object Net.Sockets.TcpClient
+  try { if (-not $client.ConnectAsync('127.0.0.1',$port).Wait(3000)) { throw 'x' } } catch { $client.Dispose(); throw 'unreachable' }
+  return $client
+}
+# The server end of this very connection must belong to the recorded process, run as this user.
+function Assert-Peer($client,[int]$serverPid,[int]$port,[bool]$desktop) {
+  if ($null -eq (Get-Command Get-NetTCPConnection -ErrorAction SilentlyContinue)) { throw 'unverifiable' }
+  $local=$client.Client.LocalEndPoint.Port
+  $rows=@(Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort $port -RemotePort $local -ErrorAction SilentlyContinue)
+  if ($rows.Count -ne 1 -or [int]$rows[0].OwningProcess -ne $serverPid) { throw 'port-owner' }
+  $proc=@(Get-CimInstance Win32_Process -Filter ('ProcessId='+$serverPid))
+  if ($proc.Count -ne 1) { throw 'port-owner' }
+  if ([string](Invoke-CimMethod -InputObject $proc[0] -MethodName GetOwnerSid).Sid -ne $me) { throw 'other-user' }
+  if ($desktop -and [int]$proc[0].SessionId -eq 0) { throw 'no-desktop' }
+}
+# HTTP/1.1 on the verified socket: no proxy, no redirect, bounded.
+function Http-On($client,[int]$port,[string]$method,[string]$path,[string]$secret,[string]$body) {
+  $stream=$client.GetStream(); $stream.ReadTimeout=20000; $stream.WriteTimeout=20000
+  $payload=$utf8.GetBytes($body)
+  $head=$method+' '+$path+' HTTP/1.1'+$crlf+'Host: 127.0.0.1:'+$port+$crlf+'Connection: close'+$crlf+'Accept: application/json'+$crlf
+  if ($secret) { $head+='@@CONTROL_HEADER@@: '+$secret+$crlf }
+  if ($method -eq 'POST') { $head+='Content-Type: application/json'+$crlf+'Content-Length: '+$payload.Length+$crlf }
+  $bytes=$utf8.GetBytes($head+$crlf)
+  $stream.Write($bytes,0,$bytes.Length); if ($payload.Length -gt 0) { $stream.Write($payload,0,$payload.Length) }
+  $stream.Flush()
+  $memory=New-Object IO.MemoryStream; $buffer=New-Object byte[] 16384
+  while (($got=$stream.Read($buffer,0,$buffer.Length)) -gt 0) {
+    $memory.Write($buffer,0,$got); if ($memory.Length -gt 131072) { throw 'response-size' }
+  }
+  $text=$utf8.GetString($memory.ToArray())
+  $split=$text.IndexOf($crlf+$crlf)
+  if ($split -lt 0 -or $text -notmatch '^HTTP/1\.[01] (\d{3}) ') { throw 'unreadable' }
+  $status=[int]$Matches[1]; $headers=$text.Substring(0,$split); $rest=$text.Substring($split+4)
+  if ($headers -match '(?im)^transfer-encoding:\s*chunked\s*$') {
+    $out=''; $at=0
+    while ($true) {
+      $eol=$rest.IndexOf($crlf,$at); if ($eol -lt 0) { throw 'unreadable' }
+      $size=[Convert]::ToInt32($rest.Substring($at,$eol-$at).Split(';')[0].Trim(),16)
+      if ($size -eq 0) { break }
+      $out+=$rest.Substring($eol+2,$size); $at=$eol+2+$size+2
+    }
+    $rest=$out
+  }
+  return @{ status=$status; body=$rest }
+}
+# One app state directory: its verified server, $null when nothing runs there, or a reason.
+function Check-App([string]$rel,[bool]$desktop) {
+  $dir=Join-Path $appRoot $rel.Replace('/','\')
+  Assert-Tree $dir
+  $recordPath=Join-Path $dir 'server-runtime.json'
+  if (-not (Test-Path -LiteralPath $recordPath -PathType Leaf)) { return $null }
+  try { $record=(Read-Small $recordPath 'bad-record') | ConvertFrom-Json } catch { throw 'bad-record' }
+  $appPid=Prop $record 'pid'; $port=Prop $record 'port'; $instance=Prop $record 'instanceId'
+  if (-not ($appPid -is [int] -or $appPid -is [long]) -or $appPid -le 0 -or -not ($port -is [int] -or $port -is [long]) -or $port -lt 1 -or $port -gt 65535) { throw 'bad-record' }
+  if ((Prop $record 'origin') -ne ('http://127.0.0.1:'+$port) -or -not ($instance -is [string]) -or $instance.Length -eq 0) { throw 'bad-record' }
+  if ($null -eq (Get-Process -Id ([int]$appPid) -ErrorAction SilentlyContinue)) { return $null }
+  $secret=Read-Small (Join-Path $dir 'runtime-control.token') 'no-token'
+  if ($secret -cnotmatch '^[0-9a-f]{64}$') { throw 'no-token' }
+  $identity=Read-Small (Join-Path $dir 'environment-id') 'no-identity'
+  $client=Connect $port
+  try {
+    Assert-Peer $client $appPid $port $false
+    $reply=Http-On $client $port 'GET' '@@ENVIRONMENT_PATH@@' '' ''
+  } finally { $client.Dispose() }
+  if ($reply.status -ne 200) { throw 'unreachable' }
+  try { $descriptor=$reply.body | ConvertFrom-Json } catch { throw 'unreadable' }
+  if ((Prop $descriptor 'environmentId') -ne $identity -or (Prop $descriptor 'instanceId') -ne $instance) { throw 'identity' }
+  if ($desktop) {
+    $proc=@(Get-CimInstance Win32_Process -Filter ('ProcessId='+$appPid))
+    if ($proc.Count -ne 1 -or [int]$proc[0].SessionId -eq 0) { throw 'no-desktop' }
+  }
+  return @{ rel=$rel; pid=[int]$appPid; port=[int]$port; identity=$identity; secret=$secret; descriptor=$reply.body.Replace([string][char]13,'').Replace([string][char]10,' ') }
+}
+# The first app server that passes, else the first reason a live one gave, else none.
+function Select-App {
+  $declined=$null
+  foreach ($rel in $appDirs) {
+    try { $app=Check-App $rel $true; if ($null -ne $app) { return @{ app=$app; declined=$null } } }
+    catch {
+      $reason=[string]$_.Exception.Message
+      if ($reason -notmatch '^[a-z][a-z-]{0,63}$') { $reason='unexpected' }
+      if ($null -eq $declined) { $declined=$reason }
+    }
+  }
+  return @{ app=$null; declined=$declined }
+}
+$picked=Select-App
+if ($r.op -eq 'app-probe') {
+  if ($null -eq $picked.app) { if ($picked.declined) { 'GOAT_APP_SERVER='+$picked.declined } else { 'GOAT_APP_SERVER=none' }; return }
+  $app=$picked.app; $others=@()
+  foreach ($rel in $appDirs) {
+    if ($rel -eq $app.rel) { continue }
+    try {
+      $other=(Read-Small (Join-Path (Join-Path $appRoot $rel.Replace('/','\')) 'server-runtime.json') 'none') | ConvertFrom-Json
+      if (Get-Process -Id ([int](Prop $other 'pid')) -ErrorAction SilentlyContinue) { $others+=$rel }
+    } catch { }
+  }
+  'GOAT_APP_SERVER=live '+$app.pid+' '+$app.port+' '+$app.rel
+  $app.descriptor
+  'GOAT_APP_SERVER_OTHERS='+($others -join ' ')
+  'GOAT_APP_SERVER_ID='+$app.identity
+  return
+}
+if ($r.op -eq 'app-session') {
+  if ($null -eq $picked.app) { if ($picked.declined) { throw $picked.declined }; throw 'none' }
+  $app=$picked.app
+  if ($app.port -ne [int](Prop $r 'port')) { throw 'restarted' }
+  $expected=Prop $r 'environmentId'
+  if ($expected -and $app.identity -ne [string]$expected) { throw 'identity' }
+  $client=Connect $app.port
+  try {
+    Assert-Peer $client $app.pid $app.port $true
+    $reply=Http-On $client $app.port 'POST' '@@SESSION_PATH@@' $app.secret ([string](Prop $r 'body'))
+  } finally { $client.Dispose() }
+  $reply.body.Trim()
+  'GOAT_HTTP_STATUS='+$reply.status
+  return
+}
+throw 'operation'
+`;
+
 const fill = (script: string) =>
   applyScriptPlaceholders(applyScriptPlaceholders(script, { COMMON }), {
     ENVIRONMENT_PATH: GOAT_ENVIRONMENT_PATH,
@@ -388,3 +535,12 @@ const fill = (script: string) =>
   });
 export const WINDOWS_SUPERVISOR = fill(SUPERVISOR);
 export const WINDOWS_OPERATIONS = fill(OPERATIONS);
+
+/** Production reads the profile Windows assigns the SSH user; tests name a fixture root. */
+export const windowsAppOperations = (profileRoot = "[Environment]::GetFolderPath('UserProfile')") =>
+  applyScriptPlaceholders(fill(APP_OPERATIONS), {
+    APP_PROFILE: profileRoot,
+    APP_DIRS: desktopAppServerStateDirs.map((dir) => `'${dir}'`).join(","),
+    SESSION_PATH: GOAT_RUNTIME_SESSION_PATH,
+  });
+export const WINDOWS_APP_OPERATIONS = windowsAppOperations();

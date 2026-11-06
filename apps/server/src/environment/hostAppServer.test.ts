@@ -14,6 +14,7 @@ const appServerLive = Effect.fn("test.appServerLive")(function* (input: {
   readonly baseDir: string;
   readonly pid?: number;
   readonly stateDir?: string;
+  readonly platform?: NodeJS.Platform;
 }) {
   const fs = yield* FileSystem.FileSystem;
   if (input.pid !== undefined) {
@@ -33,7 +34,7 @@ const appServerLive = Effect.fn("test.appServerLive")(function* (input: {
   const live = yield* makeAppServerLive().pipe(
     Effect.provide(ServerConfig.layerTest(process.cwd(), input.baseDir)),
     Effect.provideService(HostProcess.HomeDirectory, input.home),
-    Effect.provideService(HostProcess.Platform, "darwin"),
+    Effect.provideService(HostProcess.Platform, input.platform ?? "darwin"),
   );
   return yield* live;
 });
@@ -79,5 +80,20 @@ it.layer(NodeServices.layer)("app server presence", (it) => {
           }),
         ).toBe(true);
       }).pipe(Effect.scoped),
+  );
+
+  it.effect("a Windows SSH host server reports the desktop app server beside it", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const home = yield* fs.makeTempDirectoryScoped({ prefix: "goat-host-app-server-win-" });
+      const sshHome = `${home}/.goat`;
+      expect(yield* appServerLive({ home, baseDir: sshHome, platform: "win32" })).toBe(false);
+      expect(
+        yield* appServerLive({ home, baseDir: sshHome, pid: process.ppid, platform: "win32" }),
+      ).toBe(true);
+      expect(yield* appServerLive({ home, baseDir: `${sshHome}/desktop`, platform: "win32" })).toBe(
+        false,
+      );
+    }).pipe(Effect.scoped),
   );
 });
