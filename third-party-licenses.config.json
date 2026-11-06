@@ -22,6 +22,21 @@
       "noticeFiles": ["apps/web/src/components/files/pdf/SYNARA-LICENSE"]
     },
     {
+      "bundles": ["desktop", "mobile", "web"],
+      "license": "MIT",
+      "name": "threebot",
+      "sourceUrl": "https://github.com/RokaSwK/threebot",
+      "generatedNotices": [
+        {
+          "licenseId": "MIT",
+          "copyrights": ["Copyright (c) 2026 Threebot contributors"],
+          "preamble": [
+            "GOAT Bot's face states adapt the activity precedence and hold timing from threebot's web/src/lib/avatarActivity.ts. No threebot artwork is included."
+          ]
+        }
+      ]
+    },
+    {
       "bundles": ["desktop", "web"],
       "license": "OFL-1.1",
       "name": "Pretendard",

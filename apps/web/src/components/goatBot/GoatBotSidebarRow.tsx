@@ -29,7 +29,7 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "../ui/sidebar";
-import { GoatBotAvatar } from "./GoatBotAvatar";
+import { GoatBotMainAvatar } from "./GoatBotAvatar";
 import { useGoatBotPreferred } from "./GoatBotModeButton";
 import { GoatBotChannelContext } from "./goatBotChannelPort";
 import { useGoatBotWaitingCount } from "./useGoatBotWaitingCount";
@@ -189,7 +189,7 @@ function GoatBotConversationRow({
           />
         ) : null}
       </span>
-      <GoatBotAvatar size="sm" />
+      <GoatBotMainAvatar size="sm" />
       <span className="flex min-w-0 flex-1 flex-col gap-0.5 group-data-[collapsible=icon]:hidden">
         <span className="flex min-w-0 items-center gap-2">
           <span

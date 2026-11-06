@@ -1,3 +1,4 @@
+import { scopeThreadRef } from "@goat/client-runtime/environment";
 import { Link } from "@tanstack/react-router";
 import { PlusIcon } from "~/components/solar";
 import { selectGlobalAgentMode, useGlobalAgentStore } from "~/globalAgentStore";
@@ -5,7 +6,7 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { SidebarGroup, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar";
 import { Tabs, TabsList, TabsTab } from "../ui/tabs";
-import { GoatBotAvatar } from "./GoatBotAvatar";
+import { GoatBotSessionAvatar } from "./GoatBotAvatar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { GoatBotSidebarRow } from "./GoatBotSidebarRow";
 import { GoatBotChildRows } from "./GoatBotChildRows";
@@ -68,7 +69,13 @@ export function GoatBotSidebarTabs() {
                           />
                         }
                       >
-                        <GoatBotAvatar size="sm" />
+                        <GoatBotSessionAvatar
+                          size="sm"
+                          threadRef={scopeThreadRef(
+                            entry.profile.environmentId,
+                            entry.profile.sessionThreadId,
+                          )}
+                        />
                         <span>{entry.profile.name}</span>
                       </SidebarMenuButton>
                     </SidebarMenuItem>

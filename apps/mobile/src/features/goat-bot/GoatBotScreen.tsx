@@ -34,6 +34,7 @@ import { useMobileGoatBotHomeSettings } from "./useMobileGoatBotHomeSettings";
 import { useMobileGoatBotSession } from "./useMobileGoatBotSession";
 import { GoatBotBubble } from "./GoatBotBubble";
 import { GoatBotDayStamp } from "./GoatBotDayStamp";
+import { GoatBotHeaderFace } from "./GoatBotFace";
 import { GoatBotLinkedText } from "./GoatBotLinkedText";
 import { GoatBotMarkdown } from "./GoatBotMarkdown";
 import { GOAT_BOT_BUBBLE_COLORS, goatBotBubbleLayout } from "./goatBotBubbleStyle";
@@ -494,6 +495,9 @@ export function GoatBotScreen(props: {
   );
   return (
     <KeyboardAvoidingView className="flex-1 bg-screen" automaticOffset behavior="height">
+      {Platform.OS === "ios" ? (
+        <GoatBotHeaderFace activity={session.activity ?? null} title="GOAT Bot" />
+      ) : null}
       <View style={{ paddingTop: topInset }}>
         <MobileBotWork
           taskId={taskId}

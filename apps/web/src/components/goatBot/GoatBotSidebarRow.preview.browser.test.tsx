@@ -67,7 +67,6 @@ vi.mock("./useGoatBotWaitingCount", () => ({
   useGoatBotWaitingCount: () => 2,
   useMarkGoatBotRead: () => null,
 }));
-vi.mock("./GoatBotAvatar", () => ({ GoatBotAvatar: () => <span>avatar</span> }));
 vi.mock("./goatBotChannelPort", async () => {
   const React = await import("react");
   return { GoatBotChannelContext: React.createContext(null) };
@@ -199,4 +198,10 @@ it("keeps the bot name visible with badges in a 220px container", async () => {
   );
   expect(name).toBeDefined();
   expect(name!.getBoundingClientRect().width).toBeGreaterThan(0);
+});
+
+it("shows the waiting face on the row while tasks wait for the person", async () => {
+  state.botRef = { environmentId: EnvironmentId.make("env"), threadId: ThreadId.make("bot") };
+  await act(() => root.render(<GoatBotSidebarRow />));
+  expect(container.querySelector('[role="img"][aria-label="Waiting for you"]')).not.toBeNull();
 });
