@@ -1,4 +1,4 @@
-import type { SpeechConfiguration } from "@goat/contracts";
+import type { SpeechConfiguration, ValidatedVoiceWav } from "@goat/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -7,6 +7,7 @@ import * as Semaphore from "effect/Semaphore";
 import { ServerSettingsService } from "../serverSettings.ts";
 import { getSpeechModel, SPEECH_MODELS } from "./model.ts";
 import * as SpeechModelStore from "./SpeechModelStore.ts";
+import * as SpeechInference from "./SpeechInference.ts";
 
 export class SpeechManagementError extends Schema.TaggedError<SpeechManagementError>()(
   "SpeechManagementError",
@@ -17,6 +18,7 @@ const isManagementError = Schema.is(SpeechManagementError);
 export class SpeechManagement extends Context.Service<
   SpeechManagement,
   {
+    readonly configuration: Effect.Effect<SpeechConfiguration, SpeechManagementError>;
     readonly list: Effect.Effect<
       ReadonlyArray<{
         id: string;
@@ -31,12 +33,17 @@ export class SpeechManagement extends Context.Service<
     readonly download: (id: string) => Effect.Effect<void, SpeechManagementError>;
     readonly remove: (id: string) => Effect.Effect<void, SpeechManagementError>;
     readonly configure: (config: SpeechConfiguration) => Effect.Effect<void, SpeechManagementError>;
+    readonly transcribe: (
+      audio: ValidatedVoiceWav,
+      language?: string,
+    ) => Effect.Effect<string, SpeechManagementError>;
   }
 >()("goat/speech/SpeechManagement") {}
 
 const make = Effect.gen(function* () {
   const store = yield* SpeechModelStore.SpeechModelStore;
   const settings = yield* ServerSettingsService;
+  const inference = yield* SpeechInference.SpeechInference;
   const gate = yield* Semaphore.make(1);
   const failure = (operation: string, cause: unknown) =>
     new SpeechManagementError({ operation, cause });
@@ -55,6 +62,10 @@ const make = Effect.gen(function* () {
       Effect.mapError((error) => (isManagementError(error) ? error : failure(operation, error))),
     );
   return SpeechManagement.of({
+    configuration: settings.getSettings.pipe(
+      Effect.map((current) => current.speech),
+      Effect.mapError((error) => failure("configuration", error)),
+    ),
     list: Effect.gen(function* () {
       const current = yield* settings.getSettings;
       return yield* Effect.forEach(
@@ -97,6 +108,24 @@ const make = Effect.gen(function* () {
         Effect.gen(function* () {
           yield* definition(config.modelId);
           yield* settings.updateSettings({ speech: config });
+        }),
+      ),
+    ),
+    transcribe: Effect.fn("SpeechManagement.transcribe")((audio, language) =>
+      exclusive(
+        "transcribe",
+        Effect.gen(function* () {
+          const config = (yield* settings.getSettings).speech;
+          const model = yield* definition(config.modelId);
+          const path = yield* store.installedPath(model);
+          if (path === undefined)
+            return yield* failure("transcribe", "The selected speech model is not installed.");
+          return yield* inference.transcribe(
+            path,
+            audio.bytes.subarray(audio.dataOffset, audio.dataOffset + audio.dataBytes),
+            config,
+            language,
+          );
         }),
       ),
     ),

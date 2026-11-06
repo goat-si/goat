@@ -46,6 +46,22 @@ it("returns transcription from an isolated process and disposes it", async () =>
   }
 });
 
+it("converts 24 kHz WAV PCM to 16 kHz inside the worker", async () => {
+  const model = await loadNativeSpeechModel(
+    "unused.gguf",
+    new AbortController().signal,
+    fixture("async (pcm) => ({ text: JSON.stringify([...pcm]) })"),
+  );
+  try {
+    const samples = new Int16Array([0, 8192, 16384]);
+    expect(JSON.parse(await model.transcribeWav(new Uint8Array(samples.buffer)))).toEqual([
+      0, 0.375,
+    ]);
+  } finally {
+    await model.dispose();
+  }
+});
+
 it("rejects oversized audio and worker responses", async () => {
   const model = await loadNativeSpeechModel(
     "unused.gguf",

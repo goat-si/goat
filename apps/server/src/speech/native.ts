@@ -54,11 +54,24 @@ process.on("message", async (message) => {
       session.dispose();
       stream = session = undefined;
       sendReply({ type: "goat-speech-reply", ok: true });
-    } else if (message.kind === "transcribe") {
+    } else if (message.kind === "transcribe" || message.kind === "transcribeWav") {
+      let pcm = message.pcm;
+      if (message.kind === "transcribeWav") {
+        const input = new DataView(message.pcm.buffer, message.pcm.byteOffset, message.pcm.byteLength);
+        const count = input.byteLength / 2;
+        pcm = new Float32Array(Math.max(1, Math.floor(count * 2 / 3)));
+        for (let i = 0; i < pcm.length; i++) {
+          const index = i * 3 / 2;
+          const left = Math.floor(index);
+          const a = input.getInt16(left * 2, true) / 32768;
+          const b = input.getInt16(Math.min(left + 1, count - 1) * 2, true) / 32768;
+          pcm[i] = a + (b - a) * (index - left);
+        }
+      }
       // Leave unbounded models alone. Use headroom for output-bound models:
       // maxAudioMs is an estimate, so dense speech may still need smaller pieces.
       const limit = model.capabilities.maxAudioMs;
-      const chunkSamples = limit > 0 ? Math.max(4000, Math.floor(limit * 16 / 2)) : message.pcm.length;
+      const chunkSamples = limit > 0 ? Math.max(4000, Math.floor(limit * 16 / 2)) : pcm.length;
       const texts = [];
       let textLength = 0;
       const transcribe = async (pcm) => {
@@ -76,22 +89,22 @@ process.on("message", async (message) => {
         }
       };
       let offset = 0;
-      while (offset < message.pcm.length) {
-        let end = Math.min(offset + chunkSamples, message.pcm.length);
-        if (end < message.pcm.length) {
+      while (offset < pcm.length) {
+        let end = Math.min(offset + chunkSamples, pcm.length);
+        if (end < pcm.length) {
           // Prefer the quietest 20 ms frame in the final quarter of the window.
           let quietest = Infinity;
           const windowEnd = end;
           for (let start = offset + Math.floor(chunkSamples * 0.75); start + 320 <= windowEnd; start += 320) {
             let energy = 0;
-            for (let i = start; i < start + 320; i++) energy += message.pcm[i] ** 2;
+            for (let i = start; i < start + 320; i++) energy += pcm[i] ** 2;
             if (energy < quietest) {
               quietest = energy;
               end = start + 160;
             }
           }
         }
-        await transcribe(message.pcm.subarray(offset, end));
+        await transcribe(pcm.subarray(offset, end));
         offset = end;
       }
       sendReply({ type: "goat-speech-reply", ok: true, text: texts.join(" ").trim() });
@@ -374,6 +387,17 @@ async function loadNativeSpeechModelOnce(
       const result = await send({ kind: "transcribe", pcm, options });
       if (typeof result.text !== "string") throw new Error("Invalid speech process response.");
       return { text: result.text };
+    },
+    transcribeWav: async (pcm: Uint8Array, language?: string) => {
+      if (pcm.byteLength === 0 || pcm.byteLength > 24_000 * 2 * 300 || pcm.byteLength % 2 !== 0)
+        throw new Error("Invalid speech audio length.");
+      const result = await send({
+        kind: "transcribeWav",
+        pcm,
+        options: { timestamps: "none", language },
+      });
+      if (typeof result.text !== "string") throw new Error("Invalid speech process response.");
+      return result.text;
     },
     dispose,
   };

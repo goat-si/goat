@@ -1,5 +1,5 @@
 import * as AuxiliarySqlite from "./storage/AuxiliarySqlite.ts";
-import * as VoiceTranscription from "./voiceTranscription.ts";
+import * as VoiceRoutes from "./speech/layers.ts";
 import * as HostPressureMonitor from "./fleet/pressure/HostPressureMonitor.ts";
 import * as DecisionLayers from "./goatclaw/DecisionLayers.ts";
 import * as PermissionProfiles from "./goatclaw/PermissionProfiles.ts";
@@ -997,7 +997,7 @@ const layerMakeRoutes = Layer.mergeAll(
       Layer.provide(OrchestrationHttp.layer),
       Layer.provide(PullRequestHttp.layer),
       Layer.provide(ProjectHttp.layer),
-      Layer.provide(VoiceTranscription.layer),
+      Layer.provide(VoiceRoutes.layer),
       Layer.provide(ServerHttp.layerServerEnvironmentHttpApi),
       Layer.provide(WebhookRoute.layer.pipe(Layer.provide(RelayDeliveryProof.layer))),
       Layer.provide(AuthHttp.layerAuthenticatedAuth),

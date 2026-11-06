@@ -21,3 +21,20 @@ export const SpeechSettingsFields = {
   ),
 };
 export const SpeechSettingsPatchFields = { speech: Schema.optionalKey(SpeechConfiguration) };
+
+export const SpeechModelRequest = Schema.Struct({
+  modelId: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(160)),
+});
+export const SpeechModelList = Schema.Struct({
+  models: Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      name: Schema.String,
+      description: Schema.String,
+      size: Schema.Number,
+      installed: Schema.Boolean,
+      selected: Schema.Boolean,
+    }),
+  ),
+});
+export const SpeechMutationResult = Schema.Struct({ ok: Schema.Literal(true) });
