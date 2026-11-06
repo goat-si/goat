@@ -33,7 +33,6 @@ import {
   RELAY_LINK_PROOF_TYP,
   RELAY_MINT_REQUEST_TYP,
   RELAY_MINT_RESPONSE_TYP,
-  signRelayJwt,
   verifyRelayJwt,
 } from "@goat/shared/relayJwt";
 import { isSecureRelayUrl } from "@goat/shared/relayUrl";
@@ -87,7 +86,7 @@ import {
   RELAY_ISSUER_SECRET,
   RELAY_URL_SECRET,
 } from "./config.ts";
-import { getOrCreateEnvironmentKeyPairFromSecretStore } from "./environmentKeys.ts";
+import * as EnvironmentSigningKey from "./EnvironmentSigningKey.ts";
 import * as ConnectReachability from "./ConnectReachability.ts";
 import * as ManagedEndpointRuntime from "./ManagedEndpointRuntime.ts";
 import {
@@ -530,6 +529,7 @@ const make = Effect.gen(function* () {
     });
   }
   const secrets = yield* ServerSecretStore.ServerSecretStore;
+  const signingKey = EnvironmentSigningKey.loader(secrets);
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const endpointRuntime = yield* ManagedEndpointRuntime.CloudManagedEndpointRuntime;
   const reachability = yield* ConnectReachability.ConnectReachability;
@@ -600,7 +600,7 @@ const make = Effect.gen(function* () {
     requestUrl: string,
     allowNonLoopbackRequestHost = false,
   ) {
-    const keyPair = yield* getOrCreateEnvironmentKeyPairFromSecretStore(secrets);
+    const keyPair = yield* signingKey;
     if (
       !isSupportedLinkProviderKind(request) ||
       !isAllowedEndpointOrigin({
@@ -630,18 +630,16 @@ const make = Effect.gen(function* () {
       origin: request.origin,
       scopes: linkProofScopes(request),
     } satisfies RelayEnvironmentLinkProofPayload;
-    return yield* signRelayJwt({
-      privateKey: keyPair.privateKey,
-      typ: RELAY_LINK_PROOF_TYP,
-      payload,
-    }).pipe(
-      Effect.mapError(
-        (cause) =>
-          new EnvironmentAuth.ServerAuthCloudLinkJwtSigningError({
-            cause,
-          }),
-      ),
-    );
+    return yield* keyPair
+      .sign({
+        typ: RELAY_LINK_PROOF_TYP,
+        payload,
+      })
+      .pipe(
+        Effect.mapError(
+          (cause) => new EnvironmentAuth.ServerAuthCloudLinkJwtSigningError({ cause }),
+        ),
+      );
   });
 
   const linkProof = Effect.fn("environment.cloud.linkProof")(
@@ -1135,7 +1133,7 @@ const make = Effect.gen(function* () {
         return yield* new CloudLinkProofReplayedError({ request: "health" });
       }
 
-      const keyPair = yield* getOrCreateEnvironmentKeyPairFromSecretStore(secrets);
+      const keyPair = yield* signingKey;
       const descriptor = yield* environment.getDescriptor;
       const responseExpiresAt = DateTime.add(now, { minutes: 5 });
       const responsePayload = {
@@ -1151,18 +1149,16 @@ const make = Effect.gen(function* () {
         descriptor,
         checkedAt: DateTime.formatIso(now),
       } satisfies RelayEnvironmentHealthResponseProofPayload;
-      const responseProof = yield* signRelayJwt({
-        privateKey: keyPair.privateKey,
-        typ: RELAY_HEALTH_RESPONSE_TYP,
-        payload: responsePayload,
-      }).pipe(
-        Effect.mapError(
-          (cause) =>
-            new EnvironmentAuth.ServerAuthCloudHealthJwtSigningError({
-              cause,
-            }),
-        ),
-      );
+      const responseProof = yield* keyPair
+        .sign({
+          typ: RELAY_HEALTH_RESPONSE_TYP,
+          payload: responsePayload,
+        })
+        .pipe(
+          Effect.mapError(
+            (cause) => new EnvironmentAuth.ServerAuthCloudHealthJwtSigningError({ cause }),
+          ),
+        );
       return {
         environmentId,
         status: "online",
@@ -1250,7 +1246,7 @@ const make = Effect.gen(function* () {
               return yield* new CloudLinkProofReplayedError({ request: "mint" });
             }
 
-            const keyPair = yield* getOrCreateEnvironmentKeyPairFromSecretStore(secrets);
+            const keyPair = yield* signingKey;
             const issued = yield* environmentAuth.createCloudConnectPairingLink({
               label: "GOAT Connect connect",
               proofKeyThumbprint: proof.clientProofKeyThumbprint,
@@ -1268,18 +1264,16 @@ const make = Effect.gen(function* () {
               requestNonce: proof.nonce,
               credential: issued.credential,
             } satisfies RelayEnvironmentMintResponseProofPayload;
-            const responseProof = yield* signRelayJwt({
-              privateKey: keyPair.privateKey,
-              typ: RELAY_MINT_RESPONSE_TYP,
-              payload: responsePayload,
-            }).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new EnvironmentAuth.ServerAuthCloudMintJwtSigningError({
-                    cause,
-                  }),
-              ),
-            );
+            const responseProof = yield* keyPair
+              .sign({
+                typ: RELAY_MINT_RESPONSE_TYP,
+                payload: responsePayload,
+              })
+              .pipe(
+                Effect.mapError(
+                  (cause) => new EnvironmentAuth.ServerAuthCloudMintJwtSigningError({ cause }),
+                ),
+              );
             return {
               credential: issued.credential,
               expiresAt: DateTime.formatIso(issued.expiresAt),

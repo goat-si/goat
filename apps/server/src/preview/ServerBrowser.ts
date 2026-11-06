@@ -116,6 +116,7 @@ import { collectWhileScrolling } from "./scrollCollector.ts";
 import { initialTabChannel, secretBlockedGate, tabActionGate } from "./tabActionGate.ts";
 import { makeOpenRunSignals } from "./openRunSignals.ts";
 import { BrowserControlInterrupted, SessionControl } from "./SessionControl.ts";
+import { makeCapacity } from "./ServerBrowserCapacity.ts";
 import {
   assertReusable,
   assertStoreUsed,
@@ -1090,7 +1091,7 @@ const make = Effect.gen(function* () {
       popup,
       blockedTabs,
       popupNavigation,
-      atTabLimit,
+      (id) => capacity.atLimit(id),
       () => Date.now(),
     );
     if (refused) return;
@@ -1175,18 +1176,16 @@ const make = Effect.gen(function* () {
     });
   });
 
-  const atTabLimit = (agentSessionId: string) => {
-    const opening = [...pendingTabs.entries()].filter(([key]) => !tabs.has(key));
-    return (
-      tabs.size + opening.length >= ServerBrowserLimits.SERVER_TAB_LIMIT ||
-      [...tabs.values()].filter((tab) => tab.control.agentId === agentSessionId).length +
-        opening.filter(([, pending]) => pending.agentId === agentSessionId).length >=
-        ServerBrowserLimits.AGENT_TAB_LIMIT
-    );
-  };
-
+  const capacity = makeCapacity({
+    tabs,
+    pending: pendingTabs,
+    isShown: (tab) => desktopChannel.isShown?.(tab) ?? true,
+    isActive: activity.active,
+    drop: (tab) => dropTab(tab, true),
+    now: () => Date.now(),
+  });
   const assertTabCapacity = (agentSessionId: string) => {
-    if (atTabLimit(agentSessionId))
+    if (capacity.atLimit(agentSessionId))
       throw new BrowserControlInterrupted(
         `Too many server browser tabs are open (${ServerBrowserLimits.AGENT_TAB_LIMIT} per agent session, ${ServerBrowserLimits.SERVER_TAB_LIMIT} per server). Close one with goat_call {path:"preview.close"} or reuse one from goat_call {path:"preview.status"} tabs.`,
         "tabLimit",
@@ -1196,16 +1195,21 @@ const make = Effect.gen(function* () {
   // A Playwright launch must settle before its capacity can be released.
   const openTab = Effect.fn("ServerBrowser.openTab")(function* (
     input: Parameters<typeof manager.open>[0],
+    options: { readonly reclaimIdleSlot?: boolean } = {},
   ) {
     let key: string = NodeCrypto.randomUUID();
     const reservation = { agentId: input.automationOwner ?? null };
     return yield* Effect.acquireUseRelease(
-      Effect.try({
-        try: () => {
-          if (input.automationOwner !== undefined) assertTabCapacity(input.automationOwner);
-          pendingTabs.set(key, reservation);
-        },
-        catch: ServerBrowserPage.toOperationError,
+      Effect.gen(function* () {
+        if (input.automationOwner !== undefined && options.reclaimIdleSlot)
+          yield* capacity.reclaim(input.automationOwner);
+        yield* Effect.try({
+          try: () => {
+            if (input.automationOwner !== undefined) assertTabCapacity(input.automationOwner);
+            pendingTabs.set(key, reservation);
+          },
+          catch: ServerBrowserPage.toOperationError,
+        });
       }),
       () =>
         manager
@@ -1239,22 +1243,6 @@ const make = Effect.gen(function* () {
         }),
     );
   }, Effect.uninterruptible);
-
-  // Desktop browsing bypasses streamed viewers and server input tracking,
-  // so these idle signals only apply to headless tabs.
-  const closeIdleAgentTabs = () => {
-    const cutoff = Date.now() - ServerBrowserLimits.AGENT_TAB_IDLE_MS;
-    for (const tab of tabs.values()) {
-      if (
-        tab.control.agentId !== null &&
-        tab.desktop === null &&
-        tab.viewers.size === 0 &&
-        tab.control.handoffReason === null &&
-        tab.usedAt < cutoff
-      )
-        dropTab(tab, true);
-    }
-  };
 
   const latestThreadTab = (threadId: string, agentSessionId?: string) => {
     const threadTabs = [...tabs.values()].filter((tab) => tab.threadId === threadId);
@@ -1301,23 +1289,26 @@ const make = Effect.gen(function* () {
     runSignal?: AbortSignal,
   ) => {
     runSignal?.throwIfAborted();
-    closeIdleAgentTabs();
-    return openRuns.track(request.threadId, request.agentSessionId, runSignal, () =>
-      openInSession(
+    return openRuns.track(request.threadId, request.agentSessionId, runSignal, async () => {
+      await runPromise(capacity.closeIdle);
+      return openInSession(
         {
           profiles,
           contexts,
           desktopAvailable: desktopChannel.available,
           open: (fields) =>
             runPromise(
-              openTab({
-                threadId: ThreadId.make(request.threadId),
-                ...(url ? { url } : {}),
-                runtime: "server",
-                reveal: false,
-                automationOwner: request.agentSessionId,
-                ...fields,
-              }),
+              openTab(
+                {
+                  threadId: ThreadId.make(request.threadId),
+                  ...(url ? { url } : {}),
+                  runtime: "server",
+                  reveal: false,
+                  automationOwner: request.agentSessionId,
+                  ...fields,
+                },
+                { reclaimIdleSlot: true },
+              ),
             ),
           ensureTab,
           hostedElsewhere: (snapshot) => runPromise(desktopChannel.isAttached(snapshot)),
@@ -1329,8 +1320,8 @@ const make = Effect.gen(function* () {
           },
         },
         session,
-      ),
-    );
+      );
+    });
   };
 
   const statusWithTitle = async (
@@ -2643,7 +2634,7 @@ const make = Effect.gen(function* () {
     ),
     Effect.forkScoped,
   );
-  yield* Effect.sync(closeIdleAgentTabs).pipe(
+  yield* capacity.closeIdle.pipe(
     Effect.repeat(Schedule.spaced(ServerBrowserLimits.IDLE_SWEEP_INTERVAL)),
     Effect.forkScoped,
   );

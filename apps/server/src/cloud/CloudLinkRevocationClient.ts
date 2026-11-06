@@ -1,5 +1,5 @@
 import { RelayHostRevocationReceipt } from "@goat/contracts/relay";
-import { signRelayJwt, normalizeRelayIssuer } from "@goat/shared/relayJwt";
+import { normalizeRelayIssuer } from "@goat/shared/relayJwt";
 import { normalizeSecureRelayUrl } from "@goat/shared/relayUrl";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -10,7 +10,7 @@ import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientRequest from "effect/http/HttpClientRequest";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
-import { getOrCreateEnvironmentKeyPairFromSecretStore } from "./environmentKeys.ts";
+import * as EnvironmentSigningKey from "./EnvironmentSigningKey.ts";
 import { ServerSecretStore } from "../auth/ServerSecretStore.ts";
 
 export class CloudLinkRevocationError extends Schema.TaggedError<CloudLinkRevocationError>()(
@@ -42,13 +42,12 @@ export const request = Effect.fn("CloudLinkRevocationClient.request")(
     if (!relay) return yield* new CloudLinkRevocationError({ phase: "transport" });
     const origin = normalizeRelayIssuer(relay);
     const path = `/v1/environments/${encodeURIComponent(target.environmentId)}/cloud-revocation${target.revocationId ? "/ack" : ""}`;
-    const key = yield* getOrCreateEnvironmentKeyPairFromSecretStore(secrets);
+    const key = yield* EnvironmentSigningKey.load(secrets);
     const now = Math.floor((yield* DateTime.now).epochMilliseconds / 1000);
     const credentialDigest = yield* crypto
       .digest("SHA-256", new TextEncoder().encode(target.credential))
       .pipe(Effect.map(Base64Url.encode));
-    const proof = yield* signRelayJwt({
-      privateKey: key.privateKey,
+    const proof = yield* key.sign({
       typ: "goat-host-revocation+jwt",
       payload: {
         iss: `goat-env:${target.environmentId}`,

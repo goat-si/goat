@@ -7,17 +7,17 @@ import {
   type ConnectLinkIntent,
 } from "@goat/contracts/connectAssurance";
 import { RelayInternalError } from "@goat/contracts/relay";
-import { normalizeRelayIssuer, signRelayJwt, verifyRelayJwt } from "@goat/shared/relayJwt";
+import { normalizeRelayIssuer } from "@goat/shared/relayJwt";
 import { stableStringify } from "@goat/shared/relaySigning";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Redacted from "effect/Redacted";
 import * as Schema from "effect/Schema";
 import * as Base64Url from "effect/encoding/Base64Url";
 import * as RelayConfiguration from "../Config.ts";
+import * as CloudMintSigner from "./CloudMintSigner.ts";
 import * as DpopProofs from "./DpopProofs.ts";
 import { strengthRequired } from "./ConnectAuthentication.ts";
 
@@ -64,6 +64,7 @@ export class CliLinkApprovals extends Context.Service<
 
 const make = Effect.gen(function* () {
   const config = yield* RelayConfiguration.RelayConfiguration;
+  const mintSigner = CloudMintSigner.make(config);
   const crypto = yield* Crypto.Crypto;
   const replay = yield* DpopProofs.DpopProofReplay;
   const accounts = yield* ConnectAccounts.ConnectAccounts;
@@ -82,8 +83,7 @@ const make = Effect.gen(function* () {
     if (!isConnectAssuranceFresh(assurance, now))
       return yield* strengthRequired("reauthentication_required");
     const expires = Math.min(now + 120, connectAssuranceFreshnessDeadline(assurance));
-    const approval = yield* signRelayJwt({
-      privateKey: Redacted.value(config.cloudMintPrivateKey),
+    const approval = yield* mintSigner.sign({
       typ: TYP,
       payload: {
         ...request,
@@ -103,14 +103,15 @@ const make = Effect.gen(function* () {
     input: Parameters<CliLinkApprovals["Service"]["consume"]>[0],
   ) {
     const now = Math.floor((yield* DateTime.now).epochMilliseconds / 1000);
-    const decoded = yield* verifyRelayJwt({
-      publicKey: config.cloudMintPublicKey,
-      token: input.approval,
-      typ: TYP,
-      issuer,
-      audience: issuer,
-      nowEpochSeconds: now,
-    }).pipe(Effect.flatMap(Schema.decodeUnknownEffect(Claims)), Effect.option);
+    const decoded = yield* mintSigner
+      .verify({
+        token: input.approval,
+        typ: TYP,
+        issuer,
+        audience: issuer,
+        nowEpochSeconds: now,
+      })
+      .pipe(Effect.flatMap(Schema.decodeUnknownEffect(Claims)), Effect.option);
     if (decoded._tag === "None") return yield* strengthRequired("unsupported_authentication_flow");
     const claims = decoded.value;
     if (!(yield* accounts.check(claims.sub, claims.assurance.authGeneration)))

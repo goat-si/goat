@@ -298,7 +298,7 @@ const assertHttpBudgetsDeny = (rates: RelayRateLimits["Service"]) =>
         { concurrency: "unbounded" },
       );
     }
-    using signing = vi.spyOn(RelayJwt, "signRelayJwt");
+    using signing = vi.spyOn(globalThis.crypto.subtle, "sign");
     yield* assertLimited(
       yield* post("/v1/client/environment-link-challenges", intent),
       "link_challenge",

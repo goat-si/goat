@@ -1,4 +1,3 @@
-import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
 import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
@@ -8,7 +7,8 @@ import * as Schema from "effect/Schema";
 import * as ExpoCrypto from "expo-crypto";
 import { secureStore } from "../../persistence/namespaced-secure-store";
 import { p256 } from "@noble/curves/nist";
-import { DpopPublicJwk, normalizeDpopHtu } from "@goat/shared/dpopCommon";
+import { DpopPublicJwk } from "@goat/shared/dpopCommon";
+import { DpopProof } from "@goat/client-runtime/relay";
 import * as Layer from "effect/Layer";
 
 export class CloudDpopError extends Data.TaggedError("CloudDpopError")<{
@@ -28,27 +28,6 @@ const DpopPrivateJwkSchema = Schema.Struct({
 const DpopPrivateJwkJson = Schema.fromJsonString(DpopPrivateJwkSchema);
 const decodeDpopPrivateJwkJson = Schema.decodeUnknownEffect(DpopPrivateJwkJson);
 const encodeDpopPrivateJwkJson = Schema.encodeEffect(DpopPrivateJwkJson);
-
-const DpopJwtHeaderJson = Schema.fromJsonString(
-  Schema.Struct({
-    typ: Schema.Literal("dpop+jwt"),
-    alg: Schema.Literal("ES256"),
-    jwk: DpopPublicJwk,
-  }),
-);
-
-const DpopJwtPayloadJson = Schema.fromJsonString(
-  Schema.Struct({
-    htm: Schema.String,
-    htu: Schema.String,
-    jti: Schema.String,
-    iat: Schema.Int,
-    ath: Schema.optionalKey(Schema.String),
-  }),
-);
-
-const encodeDpopJwtHeaderJson = Schema.encodeEffect(DpopJwtHeaderJson);
-const encodeDpopJwtPayloadJson = Schema.encodeEffect(DpopJwtPayloadJson);
 
 function toExpoDigestAlgorithm(
   algorithm: Crypto.DigestAlgorithm,
@@ -124,15 +103,6 @@ function computeDpopJwkThumbprintEffect(
   return base64UrlSha256(
     new TextEncoder().encode(dpopThumbprintInput(jwk)),
     "Could not hash the DPoP public key thumbprint.",
-  );
-}
-
-function computeDpopAccessTokenHashEffect(
-  accessToken: string,
-): Effect.Effect<string, CloudDpopError, Crypto.Crypto> {
-  return base64UrlSha256(
-    new TextEncoder().encode(accessToken),
-    "Could not hash the DPoP access token.",
   );
 }
 
@@ -228,13 +198,6 @@ export const loadOrCreateDpopProofKeyPair = Effect.fn("dpop.loadOrCreateDpopProo
   },
 );
 
-function normalizeHtu(url: string): Effect.Effect<string, CloudDpopError> {
-  const normalized = normalizeDpopHtu(url);
-  return normalized
-    ? Effect.succeed(normalized)
-    : Effect.fail(new CloudDpopError({ message: "DPoP URL is invalid." }));
-}
-
 export const createDpopProof = Effect.fn("dpop.createDpopProof")(function* (input: {
   readonly method: string;
   readonly url: string;
@@ -250,41 +213,22 @@ export const createDpopProof = Effect.fn("dpop.createDpopProof")(function* (inpu
     try: () => base64UrlToBytes(keyPair.privateJwk.d),
     catch: cloudDpopError("Could not import DPoP private key."),
   });
-  const nowMs = yield* Clock.currentTimeMillis;
-  const jti = yield* Crypto.Crypto.pipe(
-    Effect.flatMap((crypto) => crypto.randomUUIDv4()),
-    Effect.mapError(cloudDpopError("Could not generate DPoP proof identifier.")),
-  );
-  const htu = yield* normalizeHtu(input.url);
-  const header = yield* encodeDpopJwtHeaderJson({
-    typ: "dpop+jwt",
-    alg: "ES256",
-    jwk: keyPair.publicJwk,
-  }).pipe(
-    Effect.map(Base64Url.encode),
-    Effect.mapError(cloudDpopError("Could not encode DPoP proof header.")),
-  );
-  const ath = input.accessToken ? yield* computeDpopAccessTokenHashEffect(input.accessToken) : null;
-  const payload = yield* encodeDpopJwtPayloadJson({
-    htm: input.method.toUpperCase(),
-    htu,
-    jti,
-    iat: Math.floor(nowMs / 1_000),
-    ...(ath ? { ath } : {}),
-  }).pipe(
-    Effect.map(Base64Url.encode),
-    Effect.mapError(cloudDpopError("Could not encode DPoP proof payload.")),
-  );
-  const signatureInputHash = yield* sha256Digest(
-    new TextEncoder().encode(`${header}.${payload}`),
-    "Could not hash DPoP signing input.",
-  );
-  const signature = yield* Effect.try({
-    try: () => p256.sign(signatureInputHash, privateKey, { prehash: false }).toCompactRawBytes(),
-    catch: cloudDpopError("Could not sign DPoP proof."),
+  const proof = yield* DpopProof.createProof({
+    method: input.method,
+    url: input.url,
+    accessToken: input.accessToken,
+    publicJwk: keyPair.publicJwk,
+    error: (message, cause) =>
+      new CloudDpopError({ message, ...(cause === undefined ? {} : { cause }) }),
+    sign: (bytes) =>
+      sha256Digest(bytes, "Could not hash DPoP signing input.").pipe(
+        Effect.flatMap((hash) =>
+          Effect.try({
+            try: () => p256.sign(hash, privateKey, { prehash: false }).toCompactRawBytes(),
+            catch: cloudDpopError("Could not sign DPoP proof."),
+          }),
+        ),
+      ),
   });
-  return {
-    proof: `${header}.${payload}.${Base64Url.encode(signature)}`,
-    thumbprint: keyPair.thumbprint,
-  };
+  return { proof, thumbprint: keyPair.thumbprint };
 });

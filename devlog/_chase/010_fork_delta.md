@@ -155,7 +155,7 @@ G13 `goat-copy`, G14 `launch-watch`.
 
 - 커밋: #1587
 - 경로: `package.json`, `apps/server/package.json`, `packages/shared/src/nodeSqliteClient.ts`, `apps/server/vite.config.ts`, `scripts/dev-runtime-archive.ts`, `.github/workflows/{release-desktop,goat-nightly}.yml`
-- 정책: 루트 `engines.node`(정확한 `26.12.1`)가 개발·CI·SEA Node의 정본이다. upstream도 정확한 값을 쓰므로 버전 충돌은 GOAT가 정한 값을 둔다. 서버 `engines.node`와 `NODE_SQLITE_RUNTIME_RANGE`는 `^24.16.0 || >=26.1.0`으로 upstream `^22.16 || ^23.11 || >=24.10`과 다르다 (#1015, 데스크톱이 Electron 44의 Node 24.22.0에서 서버를 돌린다). upstream이 `nodeSqliteClient.ts`를 바꾸면 받고 이 범위 검사만 다시 얹는다. upstream의 네이티브 SEA 빌드 guard는 받지 않는다 (`dev-runtime-archive`가 다른 SEA Node를 고른다). 고정 이전 커밋을 빌드하는 실행 파일 단계의 workflow revision fallback은 유지한다 ([10.011](./_fin/10/10.011_t3_chase_node_pin.md)).
+- 정책: 루트 `engines.node`(정확한 `26.12.1`)가 개발·CI·SEA Node의 정본이다. upstream도 정확한 값을 쓰므로 버전 충돌은 GOAT가 정한 값을 둔다. 서버 `engines.node`와 `NODE_SQLITE_RUNTIME_RANGE`는 `^24.16.0 || >=26.1.0`으로 upstream `^22.16 || ^23.11 || >=24.10`과 다르다 (#1015, 데스크톱이 Electron 44의 Node 24.22.1에서 서버를 돌린다). upstream이 `nodeSqliteClient.ts`를 바꾸면 받고 이 범위 검사만 다시 얹는다. upstream의 네이티브 SEA 빌드 guard는 받지 않는다 (`dev-runtime-archive`가 다른 SEA Node를 고른다). 고정 이전 커밋을 빌드하는 실행 파일 단계의 workflow revision fallback은 유지한다 ([10.011](./_fin/10/10.011_t3_chase_node_pin.md)).
 
 ### `orchestrator-goat-modules` Orchestrator의 GOAT 명령 모듈
 

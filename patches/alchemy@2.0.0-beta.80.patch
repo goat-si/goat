@@ -108,3 +108,41 @@ index 7dd3576..0bcfc4d 100644
  
  import type { AlchemyContext } from "../AlchemyContext.ts";
  import type { CompiledStack } from "../Stack.ts";
+diff --git a/lib/Artifacts.js b/lib/Artifacts.js
+index 648209c089f984dc45bd5eba0788130c9813a1d6..c66b5433427498ced6c91ee7c371ad8295f6205a 100644
+--- a/lib/Artifacts.js
++++ b/lib/Artifacts.js
+@@ -81,8 +81,8 @@ export const cached = (id) => (eff) => Effect.gen(function* () {
+         return cached;
+     }
+     yield* artifacts.set(id, Deferred.await(deferred));
+-    const result = yield* eff;
+-    yield* Deferred.succeed(deferred, result);
++    // Settle waiters on failure too, or every later caller hangs.
++    const result = yield* eff.pipe(Effect.onExit((exit) => Deferred.done(deferred, exit)));
+     yield* artifacts.set(id, result);
+     return result;
+ });
+diff --git a/lib/Drizzle/Schema.js b/lib/Drizzle/Schema.js
+--- a/lib/Drizzle/Schema.js
++++ b/lib/Drizzle/Schema.js
+@@ -233,7 +233,8 @@ export const SchemaProvider = () => Provider.effect(Schema, Effect.gen(function*
+         const out = resolveOut(props);
+         const dialect = props.dialect ?? "postgres";
+         const kit = yield* loadKit(dialect);
+-        if (!kit.generateDrizzleJson || !kit.generateMigration) {
++        // Released rc.5 stores differential snapshots; the CLI reconstructs the full chain.
++        if ("reconstruct" in kit || !kit.generateDrizzleJson || !kit.generateMigration) {
+             return yield* detectDriftWithCli(props);
+         }
+         const generateDrizzleJson = kit.generateDrizzleJson;
+diff --git a/src/Drizzle/Schema.ts b/src/Drizzle/Schema.ts
+--- a/src/Drizzle/Schema.ts
++++ b/src/Drizzle/Schema.ts
+@@ -374,4 +374,5 @@ export const SchemaProvider = () =>
+           const kit = yield* loadKit(dialect);
+-          if (!kit.generateDrizzleJson || !kit.generateMigration) {
++          // Released rc.5 stores differential snapshots; the CLI reconstructs the full chain.
++          if ("reconstruct" in kit || !kit.generateDrizzleJson || !kit.generateMigration) {
+             return yield* detectDriftWithCli(props);
+           }

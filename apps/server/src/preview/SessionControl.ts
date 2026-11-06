@@ -79,6 +79,8 @@ export class SessionControl {
   private notice: HandBackNotice | null = null;
   private readonly handoffListeners = new Set<(end: HandoffChange, requestId: string) => void>();
   private activeAgentAction: AbortController | undefined;
+  private agentRequests = 0;
+  private trackedWork = 0;
   /** Stop and a secret answer the running action at once; a takeover still lets it drain. */
   private activeAgentCut: AbortController | undefined;
   private activeSecretAction: AbortController | undefined;
@@ -108,6 +110,10 @@ export class SessionControl {
 
   get isClosed() {
     return this.closed;
+  }
+
+  get hasAgentWork() {
+    return this.agentRequests > 0 || this.trackedWork > 0 || this.activeAgentWork !== undefined;
   }
 
   /** A secret field or passkey prompt has focus: agents neither act nor look, viewers see nothing. */
@@ -327,7 +333,11 @@ export class SessionControl {
 
   /** An action can respond before its navigation commits, while later actions still wait. */
   track(work: Promise<unknown>) {
-    this.pending = Promise.all([this.pending, settle(work)]).then(() => undefined);
+    this.trackedWork++;
+    const tracked = settle(work).finally(() => {
+      this.trackedWork--;
+    });
+    this.pending = Promise.all([this.pending, tracked]).then(() => undefined);
   }
 
   /** Viewer input stays responsive, but control handoffs still drain its navigations. */
@@ -391,6 +401,7 @@ export class SessionControl {
       return Promise.reject(refused("A human controls this tab.", "humanControl"));
     const blocked = this.agentBlocked();
     if (blocked) return Promise.reject(blocked);
+    this.agentRequests++;
     return this.action(
       () => this.agentMayAct(agentId) && this.owner === null && !this.agentBlocked(),
       async () => {
@@ -422,7 +433,9 @@ export class SessionControl {
         }
       },
       deadlineMs,
-    );
+    ).finally(() => {
+      this.agentRequests--;
+    });
   }
 
   agentCanActNow(agentId: string) {
