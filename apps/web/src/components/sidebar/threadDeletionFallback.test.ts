@@ -1,14 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
-import {
-  DEFAULT_INTERACTION_MODE,
-  DEFAULT_RUNTIME_MODE,
-  EnvironmentId,
-  ProjectId,
-  ProviderInstanceId,
-  ThreadId,
-} from "@goat/contracts";
+import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@goat/contracts";
 import { makeThreadFixture, type ThreadFixtureOverrides } from "../../test-fixtures";
-import type { Thread } from "../../types";
+import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "../../types";
 import { getFallbackThreadIdAfterDelete } from "./threadDeletionFallback";
 
 const localEnvironmentId = EnvironmentId.make("environment-local");
