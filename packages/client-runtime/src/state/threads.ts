@@ -1,4 +1,9 @@
 import {
+  cachedThreadState,
+  hasMissingPendingRequestCard,
+  statusWithoutLiveData,
+} from "./threadPendingRequestCache.ts";
+import {
   isOrchestrationV2WorkActive,
   ORCHESTRATION_V2_WS_METHODS,
   type EnvironmentId as EnvironmentIdType,
@@ -55,17 +60,7 @@ import {
 } from "./threadStateSnapshots.ts";
 import * as StreamDiagnostics from "./threadStreamDiagnostics.ts";
 import { makeThreadRequestsResolvedAnnouncer, pendingRuntimeRequestIds } from "./threadRequests.ts";
-import {
-  EMPTY_ENVIRONMENT_THREAD_STATE,
-  type EnvironmentThreadState,
-  type EnvironmentThreadStatus,
-} from "./threadState.ts";
-
-function statusWithoutLiveData(
-  data: Option.Option<OrchestrationV2ThreadProjection>,
-): EnvironmentThreadStatus {
-  return Option.isSome(data) ? "cached" : "empty";
-}
+import { EMPTY_ENVIRONMENT_THREAD_STATE, type EnvironmentThreadState } from "./threadState.ts";
 
 function formatThreadError(cause: Cause.Cause<unknown>): string {
   const error = Cause.squash(cause);
@@ -110,18 +105,6 @@ function matchesThreadSnapshot(
   );
 }
 
-function cachedThreadState(value: EnvironmentThreadState): EnvironmentThreadState {
-  return {
-    ...value,
-    status:
-      value.status === "deleted" || (value.status === "live" && Option.isSome(value.data))
-        ? value.status
-        : statusWithoutLiveData(value.data),
-    error: Option.none(),
-    history: { ...value.history, loading: false, error: null },
-  };
-}
-
 export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make")(function* (
   threadId: ThreadIdType,
   resumeCache?: ThreadResumeCache,
@@ -143,10 +126,16 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   yield* Effect.addFinalizer(() =>
     Effect.sync(() => StreamDiagnostics.noteThreadStreamClosed(environmentId, threadId)),
   );
-  const retained = resumeCache?.snapshot;
+  const candidate = resumeCache?.snapshot;
+  const retained =
+    candidate &&
+    Option.isSome(candidate.state.data) &&
+    hasMissingPendingRequestCard(candidate.state.data.value)
+      ? undefined
+      : candidate;
   const owner = {};
   if (resumeCache) resumeCache.owner = owner;
-  const cached =
+  const loaded =
     retained === undefined
       ? yield* cache.loadThread(environmentId, threadId).pipe(
           Effect.catch((error) =>
@@ -161,6 +150,10 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
           ),
         )
       : Option.none<OrchestrationV2ThreadDetailSnapshot>();
+  const cached = Option.filter(
+    loaded,
+    (snapshot) => !hasMissingPendingRequestCard(snapshot.projection),
+  );
   const cachedThread = Option.map(cached, (snapshot) => snapshot.projection);
   // Seed the resume cursor from the cached snapshot so a warm cache can catch up
   // via `afterSequence` instead of re-downloading the full thread body.
