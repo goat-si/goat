@@ -1,6 +1,15 @@
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
+import { ChevronDownIcon } from "~/components/solar";
+import {
+  Menu,
+  MenuItem,
+  MenuPopup,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuSeparator,
+  MenuTrigger,
+} from "../ui/menu";
 import { useState } from "react";
 import type { EnvironmentId } from "@goat/contracts";
 import type { EnvironmentVoiceRequestContext } from "@goat/client-runtime/voice-input";
@@ -66,27 +75,30 @@ export function ComposerVoiceButton({
               <Button type="button" variant="ghost" size="icon-sm" aria-label="Dictation options" />
             }
           >
-            <span aria-hidden="true">▾</span>
+            <ChevronDownIcon aria-hidden="true" />
           </MenuTrigger>
           <MenuPopup align="end" side="top">
-            {environmentSpeech.destinations.map((destination) => (
-              <MenuItem
-                key={destination.environmentId}
-                onClick={() => environmentSpeech.enable(destination.environmentId)}
-              >
-                {environmentSpeech.selected &&
-                environmentSpeech.environmentId === destination.environmentId
-                  ? "✓ "
-                  : ""}
-                Transcribe on {destination.label} (sends audio)
-              </MenuItem>
-            ))}
-            {environmentSpeech.destinations.length === 0 ? (
-              <MenuItem disabled>No permitted environment connected</MenuItem>
-            ) : null}
-            <MenuItem onClick={environmentSpeech.disable}>
-              {!environmentSpeech.selected ? "✓ " : ""}Use existing voice input
-            </MenuItem>
+            <MenuRadioGroup
+              value={environmentSpeech.selected ? environmentSpeech.environmentId : "existing"}
+            >
+              {environmentSpeech.destinations.map((destination) => (
+                <MenuRadioItem
+                  key={destination.environmentId}
+                  value={destination.environmentId}
+                  closeOnClick
+                  onClick={() => environmentSpeech.enable(destination.environmentId)}
+                >
+                  Transcribe on {destination.label} (sends audio)
+                </MenuRadioItem>
+              ))}
+              {environmentSpeech.destinations.length === 0 ? (
+                <MenuItem disabled>No permitted environment connected</MenuItem>
+              ) : null}
+              <MenuRadioItem value="existing" closeOnClick onClick={environmentSpeech.disable}>
+                Use existing voice input
+              </MenuRadioItem>
+            </MenuRadioGroup>
+            <MenuSeparator />
             <MenuItem disabled={!environmentSpeech.canManage} onClick={() => setModelsOpen(true)}>
               Manage voice models
             </MenuItem>
