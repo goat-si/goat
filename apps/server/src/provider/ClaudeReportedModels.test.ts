@@ -21,9 +21,16 @@ it("merges discovered models without duplicating aliases or custom models", () =
     ],
   );
   expect(models.map((model) => model.slug)).toEqual(["gateway/new[1m]"]);
-  expect(models[0]?.capabilities?.optionDescriptors[0]?.options).toEqual([
-    { id: "default", label: "Default", isDefault: true },
-    { id: "low", label: "Low" },
-    { id: "high", label: "High" },
+  expect(models[0]?.capabilities?.optionDescriptors).toEqual([
+    {
+      id: "effort",
+      label: "Reasoning",
+      type: "select",
+      options: [
+        { id: "default", label: "Default", isDefault: true },
+        { id: "low", label: "Low" },
+        { id: "high", label: "High" },
+      ],
+    },
   ]);
 });
