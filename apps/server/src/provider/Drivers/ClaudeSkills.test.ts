@@ -215,7 +215,7 @@ it.layer(NodeServices.layer)("discoverClaudeSkills", (it) => {
       const path = yield* Path.Path;
       // Real path: macOS temp dirs sit behind a /var -> /private/var symlink.
       const tempDir = yield* fs.realPath(
-        yield* fs.makeTempDirectoryScoped({ prefix: "t3-claude-skills-" }),
+        yield* fs.makeTempDirectoryScoped({ prefix: "goat-claude-skills-" }),
       );
       const configDir = path.join(tempDir, "claude-home");
       const workspace = path.join(tempDir, "workspace");

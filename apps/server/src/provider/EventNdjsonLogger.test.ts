@@ -163,7 +163,7 @@ it.layer(NodeServices.layer)("EventNdjsonLogger", (it) => {
 
   it.effect("keeps long thread ids that share a prefix in separate files", () =>
     Effect.gen(function* () {
-      const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-provider-log-"));
+      const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "goat-provider-log-"));
       const basePath = NodePath.join(tempDir, "events.log");
       const prefix =
         "thread:delegated-task:command%3Amcp%3A00000000-0000-4000-8000-000000000000%3Adelegate-task%3A";
