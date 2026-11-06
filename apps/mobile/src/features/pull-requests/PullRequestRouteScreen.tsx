@@ -21,6 +21,7 @@ import {
   openOnProviderLabel,
   PR_ACTION_ICONS,
   pullRequestActionLabel,
+  pullRequestStateAction,
 } from "./pullRequestActions";
 import * as Clipboard from "expo-clipboard";
 import { Menu } from "../../components/ui/Menu";
@@ -371,11 +372,7 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
     permissions.canEditMaintainerEdits,
   );
   const showsDeleteBranch = pr !== null && canPerformPullRequestAction(pr, "delete-branch");
-  const stateAction = action.available("close")
-    ? "close"
-    : action.available("reopen")
-      ? "reopen"
-      : null;
+  const stateAction = pullRequestStateAction(pr, permissions.canWrite, action.busy);
   const runStateAction = () =>
     stateAction === "close"
       ? action.confirmClose()
