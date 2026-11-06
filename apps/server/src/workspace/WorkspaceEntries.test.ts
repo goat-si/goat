@@ -794,7 +794,7 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceEntries", (it) => {
       Effect.gen(function* () {
         const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
         const path = yield* Path.Path;
-        const cwd = yield* makeTempDir({ prefix: "t3code-workspace-browse-missing-" });
+        const cwd = yield* makeTempDir({ prefix: "goat-workspace-browse-missing-" });
         yield* writeTextFile(cwd, "file.txt", "");
 
         const missing = yield* workspaceEntries
