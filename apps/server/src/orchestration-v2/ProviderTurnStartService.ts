@@ -1022,7 +1022,10 @@ export const layer: Layer.Layer<
         resumedRetryHandoff = [];
         if (!(yield* isCurrentAttemptInStatus(expectedStartStatus))) return undefined;
 
-        if (cloud && resumed._tag === "Failure")
+        if (
+          resumed._tag === "Failure" &&
+          (cloud || resumed.failure._tag === "ProviderAdapterThreadInUseError")
+        )
           return yield* loadFromProvider(Effect.fail(resumed.failure));
         yield* Effect.logWarning("Recovering provider context in a fresh native session", {
           driver: session.driver,
