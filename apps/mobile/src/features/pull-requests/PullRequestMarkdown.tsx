@@ -11,7 +11,10 @@ import {
 } from "./PullRequestMedia";
 import { videoMimeType } from "@goat/shared/video";
 import { createContext, useContext, useCallback, useMemo, useState } from "react";
-import { changeRequestReferenceAutolinker } from "@goat/client-runtime/pull-request-markdown";
+import {
+  changeRequestReferenceAutolinker,
+  resolveChangeRequestMediaUrl,
+} from "@goat/client-runtime/pull-request-markdown";
 import {
   sourceControlClients,
   type ReferenceAutolink,
@@ -37,6 +40,7 @@ const AutolinksContext = createContext<((text: string) => ReadonlyArray<Referenc
   null,
 );
 const LineBreaksContext = createContext(false);
+const ChangeRequestUrlContext = createContext<string | null>(null);
 
 export function PullRequestMarkdownRepository(props: {
   /** The change request the markdown belongs to, whose host decides what its text links. */
@@ -70,7 +74,9 @@ export function PullRequestMarkdownRepository(props: {
   return (
     <AutolinksContext value={autolinks}>
       <LineBreaksContext value={lineBreaks}>
-        <PullRequestMediaContext value={media}>{props.children}</PullRequestMediaContext>
+        <ChangeRequestUrlContext value={url ?? null}>
+          <PullRequestMediaContext value={media}>{props.children}</PullRequestMediaContext>
+        </ChangeRequestUrlContext>
       </LineBreaksContext>
     </AutolinksContext>
   );
@@ -166,6 +172,12 @@ function PullRequestMarkdownContent(props: {
   const hostLineBreaks = useContext(LineBreaksContext);
   const autolinks = useContext(AutolinksContext);
   const mediaContext = useContext(PullRequestMediaContext);
+  const changeRequestUrl = useContext(ChangeRequestUrlContext);
+  const resolveMediaUrl = useCallback(
+    (href: string) =>
+      changeRequestUrl ? resolveChangeRequestMediaUrl(href, changeRequestUrl) : href,
+    [changeRequestUrl],
+  );
   const markdown = useMemo(
     () => linkReferenceAutolinks(props.markdown, autolinks),
     [props.markdown, autolinks],
@@ -180,18 +192,21 @@ function PullRequestMarkdownContent(props: {
   const gallery = useMemo<FilePreviewItem[]>(
     () =>
       markdownImageSources(props.imageGroupMarkdown ?? props.markdown)
+        .map(resolveMediaUrl)
         .filter(
           (uri) =>
             /^https?:\/\//i.test(uri) &&
             videoMimeType({ name: uri.split(/[?#]/)[0] ?? uri, mimeType: "" }) === null,
         )
         .map((uri) => pullRequestImageSource(uri, mediaContext)),
-    [props.markdown, props.imageGroupMarkdown, mediaContext],
+    [props.markdown, props.imageGroupMarkdown, mediaContext, resolveMediaUrl],
   );
   const [preview, setPreview] = useState<FilePreviewSource | null>(null);
   const renderImage = useCallback<MarkdownImageRenderer>(
-    (image) => <MarkdownImage href={image.href} alt={image.alt} onPreview={setPreview} />,
-    [],
+    (image) => (
+      <MarkdownImage href={resolveMediaUrl(image.href)} alt={image.alt} onPreview={setPreview} />
+    ),
+    [resolveMediaUrl],
   );
   const styles = useMarkdownPreviewStyles();
   return (
@@ -202,7 +217,9 @@ function PullRequestMarkdownContent(props: {
         textStyle={styles.nativeTextStyle}
         onLinkPress={openLink}
         renderImage={renderImage}
-        onImagePress={(href) => setPreview(pullRequestImageSource(href, mediaContext))}
+        onImagePress={(href) =>
+          setPreview(pullRequestImageSource(resolveMediaUrl(href), mediaContext))
+        }
         onTaskListItemPress={props.onTaskListItemPress}
       />
       <FilePreviewModal source={preview} onRequestClose={() => setPreview(null)} />

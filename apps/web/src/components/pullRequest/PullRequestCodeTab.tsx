@@ -1,3 +1,4 @@
+import { reviewThreadsByPath } from "./pullRequestThreadsByPath";
 import { capitalizeTerm, sourceControlClients } from "@goat/client-runtime/source-control-clients";
 import type { CodeViewItem, DiffLineAnnotation, SelectedLineRange } from "@pierre/diffs";
 import type { CodeViewAnnotationArgs, CodeViewDiffItem } from "@pierre/diffs/react";
@@ -100,6 +101,7 @@ import {
   ReviewThreadCard,
   toViewerSide,
 } from "./PullRequestReviewAnnotation";
+import { pullRequestMentionScope } from "./PullRequestMarkdownTextarea";
 import {
   getFileViewedRange,
   isFileDiffCollapsed,
@@ -217,25 +219,6 @@ function diffModel(
   };
   models.set(keyPrefix, model);
   return model;
-}
-
-const threadsByPathCache = new WeakMap<
-  ReadonlyArray<PullRequestReviewThread>,
-  ReadonlyMap<string, ReadonlyArray<PullRequestReviewThread>>
->();
-
-function reviewThreadsByPath(threads: ReadonlyArray<PullRequestReviewThread>) {
-  let byPath = threadsByPathCache.get(threads);
-  if (byPath === undefined) {
-    const grouped = new Map<string, PullRequestReviewThread[]>();
-    for (const thread of threads) {
-      const list = grouped.get(thread.path);
-      if (list) list.push(thread);
-      else grouped.set(thread.path, [thread]);
-    }
-    threadsByPathCache.set(threads, (byPath = grouped));
-  }
-  return byPath;
 }
 
 interface MutableAnnotationGroup {
@@ -483,6 +466,7 @@ function PullRequestCodeTab({
     commit,
     cacheKey: `pull-request:${referenceKey}:${detail.updatedAt}:${commit ?? "all"}`,
   });
+  const mentionScope = pullRequestMentionScope(detail, environmentId, reference);
   const hostReview = detail.capabilities.review;
   const review = {
     inlineComment: hostReview.inlineComment && detail.viewerPermissions.comment,
@@ -881,6 +865,7 @@ function PullRequestCodeTab({
       canReact={detail.capabilities.reactions === true}
       environmentId={environmentId}
       reference={reference}
+      mentionScope={mentionScope}
       pending={threadPending}
       fixPending={pendingFinding === pullRequestFindingKey({ kind: "thread", thread })}
       fixLabel={fixFindingLabel}
@@ -949,6 +934,7 @@ function PullRequestCodeTab({
           kind="draft"
           rangeLabel={`${draft.path}:${getReviewPositionAnchor(draft.position).line}`}
           text=""
+          mentionScope={canCommentOnLines ? mentionScope : null}
           submitLabel={canCommentOnLines ? "Add to review" : "Add to agent"}
           {...(canCommentOnLines && onAddToAgentSelection
             ? {

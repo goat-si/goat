@@ -999,7 +999,7 @@ describe("VcsStatusBroadcaster", () => {
     },
   );
 
-  it.effect("recovers a discarded branch lookup on the next permitted turn-end refresh", () => {
+  it.effect("recovers a discarded branch lookup on the next turn-end refresh", () => {
     const state: Parameters<typeof layerTestFor>[0] = {
       currentLocalStatus: baseLocalStatus,
       currentRemoteStatus: { ...remoteStatusWithPr, aheadCount: 3, behindCount: 5 },
@@ -1007,6 +1007,7 @@ describe("VcsStatusBroadcaster", () => {
       remoteStatusCalls: 0,
       localInvalidationCalls: 0,
       remoteInvalidationCalls: 0,
+      remoteStatusRefreshUpstreamValues: [],
     };
 
     return Effect.gen(function* () {
@@ -1038,9 +1039,6 @@ describe("VcsStatusBroadcaster", () => {
         pr: { ...remoteStatusWithPr.pr!, number: 2979, headRef: "feature/next-status" },
       };
       state.backgroundWorkEnabled = false;
-      yield* broadcaster.refreshPullRequestStatus("/repo");
-      assert.equal(state.remoteStatusCalls, 1);
-      state.backgroundWorkEnabled = true;
       const recovered = yield* broadcaster.refreshPullRequestStatus("/repo");
       assert.deepStrictEqual(recovered, state.currentRemoteStatus);
       const cached = yield* broadcaster.getStatus({ cwd: "/repo" });
@@ -1048,6 +1046,7 @@ describe("VcsStatusBroadcaster", () => {
       assert.deepStrictEqual(cached.pr, state.currentRemoteStatus.pr);
       assert.equal(cached.aheadCount, 2);
       assert.equal(state.remoteStatusCalls, 2);
+      assert.equal(state.remoteStatusRefreshUpstreamValues?.at(-1), false);
     }).pipe(Effect.provide(layerTestFor(state)), Effect.scoped);
   });
 

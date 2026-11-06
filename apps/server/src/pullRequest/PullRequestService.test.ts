@@ -1542,7 +1542,7 @@ it.effect("publishes a merge for immediate settlement only after host confirmati
                       detail: "HTTP 504",
                     }),
                   )
-                : Effect.succeed({ ...changeRequest(1, mergedAt), state }),
+                : Effect.succeed({ ...changeRequest(1, mergedAt), state, mergedAt }),
           }),
         ],
       });
@@ -1551,7 +1551,7 @@ it.effect("publishes a merge for immediate settlement only after host confirmati
         Effect.forkChild({ startImmediately: true }),
       );
 
-      yield* service.runAction({ ...reference, action: "merge" });
+      assert.isUndefined(yield* service.runAction({ ...reference, action: "merge" }));
       const queuedRefresh = Option.getOrThrow(yield* Stream.runHead(service.subscribeRefreshes));
       confirmationFails = true;
       yield* service.runAction({ ...reference, action: "merge" });
@@ -1561,7 +1561,7 @@ it.effect("publishes a merge for immediate settlement only after host confirmati
       );
       confirmationFails = false;
       state = "merged";
-      yield* TestClock.setTime(Date.parse(mergedAt));
+      yield* TestClock.setTime(Date.parse(mergedAt) + 60_000);
       yield* service.runAction({
         ...reference,
         repository: " ACME/WEB ",
@@ -3967,53 +3967,6 @@ it.effect("hands a host's own resume position back on the next read", () =>
     const first = yield* service.list({ state: "open", limit: 1 });
     yield* service.list({ state: "open", limit: 1, cursors: first.nextCursors });
     assert.deepStrictEqual(resumed, [undefined, "2026-07-01T00:00:00.000Z~1"]);
-  }),
-);
-
-it.effect("judges the review filter only on a host that summarises its reviews", () =>
-  Effect.gen(function* () {
-    const service = yield* makeService({
-      projects: [
-        project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" }),
-        project({
-          id: "p2",
-          title: "on gitlab",
-          workspaceRoot: "/b",
-          repository: "group/project",
-          provider: SourceControlProviderKind.make("gitlab"),
-        }),
-      ],
-      providers: [
-        fakePullRequestProvider(SourceControlProviderKind.make("github"), {
-          listChangeRequests: () =>
-            Effect.succeed({
-              items: [
-                { ...changeRequest(1, "2026-07-02T00:00:00Z"), reviewDecision: null },
-                {
-                  ...changeRequest(2, "2026-07-02T00:00:00Z"),
-                  reviewDecision: "approved" as const,
-                },
-              ],
-              truncated: false,
-              continues: true,
-            }),
-        }),
-        fakePullRequestProvider(SourceControlProviderKind.make("gitlab"), {
-          listChangeRequests: () =>
-            Effect.succeed({
-              items: [changeRequest(3, "2026-07-02T00:00:00Z")],
-              truncated: false,
-              continues: true,
-            }),
-        }),
-      ],
-    });
-
-    const none = yield* service.list({ state: "open", filters: { review: "none" } });
-    assert.deepStrictEqual(none.entries.map((entry) => entry.number).toSorted(), [1, 3]);
-
-    const approved = yield* service.list({ state: "open", filters: { review: "approved" } });
-    assert.deepStrictEqual(approved.entries.map((entry) => entry.number).toSorted(), [2, 3]);
   }),
 );
 

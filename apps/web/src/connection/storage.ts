@@ -1,3 +1,5 @@
+import { withDatabase, type DatabaseHandle } from "./databaseHandle";
+import { makeQueryStore, QUERY_STORE_NAME, QUERY_UPDATED_INDEX_NAME } from "./queryStorage";
 import { goatStorageKey } from "@goat/contracts/legacyT3Names";
 import { createMigratingDatabaseOpener } from "../lib/indexedDbMigration";
 import { migratingStorage } from "@goat/client-runtime/storage-migration";
@@ -41,6 +43,7 @@ import {
   VcsListRefsResult,
   type DesktopBridge,
 } from "@goat/contracts";
+import { EnvironmentQueryStore } from "@goat/client-runtime/state/query-persistence";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -53,7 +56,7 @@ import * as Stream from "effect/Stream";
 import { projectFaviconCache } from "../assets/projectFaviconCache";
 
 const DATABASE_NAME = "goat:connection-runtime";
-const DATABASE_VERSION = 4;
+const DATABASE_VERSION = 5;
 const CATALOG_STORE_NAME = "catalog";
 const SHELL_STORE_NAME = "shell";
 const THREAD_STORE_NAME = "thread";
@@ -138,16 +141,16 @@ const openMigratedDatabase = createMigratingDatabaseOpener(
     ]) {
       if (!database.objectStoreNames.contains(name)) database.createObjectStore(name);
     }
+    if (!database.objectStoreNames.contains(QUERY_STORE_NAME)) {
+      database
+        .createObjectStore(QUERY_STORE_NAME)
+        .createIndex(QUERY_UPDATED_INDEX_NAME, ["environmentId", "updatedAt", "bytes"]);
+    }
   },
 );
 const openDatabase = Effect.fn("web.connectionStorage.openDatabase")(() =>
   Effect.tryPromise({ try: openMigratedDatabase, catch: (cause) => catalogError("open", cause) }),
 );
-
-interface DatabaseHandle {
-  readonly get: Effect.Effect<IDBDatabase, ConnectionTransientError>;
-  readonly invalidate: (database: IDBDatabase) => Effect.Effect<void>;
-}
 
 const makeDatabaseHandle = Effect.fn("web.connectionStorage.makeDatabaseHandle")(function* () {
   const lock = yield* Semaphore.make(1);
@@ -185,32 +188,6 @@ const makeDatabaseHandle = Effect.fn("web.connectionStorage.makeDatabaseHandle")
   };
   return { handle, close };
 });
-
-// Browsers can omit close events; retry InvalidStateError with a fresh connection.
-function withDatabase<A>(
-  database: DatabaseHandle,
-  use: (opened: IDBDatabase) => Effect.Effect<A, ConnectionTransientError>,
-) {
-  const closedConnection = Symbol("closedConnection");
-  const attempt = Effect.flatMap(database.get, (opened) =>
-    use(opened).pipe(
-      Effect.catchIf(
-        (error) => error.detail.includes("InvalidStateError"),
-        (error) =>
-          database
-            .invalidate(opened)
-            .pipe(Effect.andThen(Effect.fail({ [closedConnection]: error } as const))),
-      ),
-    ),
-  );
-  return attempt.pipe(
-    Effect.catchIf(
-      (error): error is { readonly [closedConnection]: ConnectionTransientError } =>
-        closedConnection in error,
-      () => Effect.flatMap(database.get, use),
-    ),
-  );
-}
 
 function readDatabaseValueOnConnection(database: IDBDatabase, storeName: string, key: IDBValidKey) {
   return Effect.callback<unknown, ConnectionTransientError>((resume) => {
@@ -1032,10 +1009,20 @@ export const layer = Layer.effectContext(
               VCS_REFS_STORE_NAME,
               IDBKeyRange.bound(`${environmentId}:`, `${environmentId}:\uffff`),
             ),
+            removeDatabaseValuesInRange(
+              database,
+              QUERY_STORE_NAME,
+              IDBKeyRange.bound(`${environmentId}:`, `${environmentId}:\uffff`),
+            ),
           ],
           { concurrency: "unbounded", discard: true },
         ).pipe(Effect.mapError((cause) => persistenceError("clear-environment", cause)));
       }),
+    });
+
+    const queryStore = makeQueryStore({
+      read: (environmentId, key) => readDatabaseValue(database, QUERY_STORE_NAME, key),
+      withDatabase: (use) => withDatabase(database, use),
     });
 
     return Context.make(Persistence.ConnectionTargetStore, targetStore).pipe(
@@ -1045,6 +1032,7 @@ export const layer = Layer.effectContext(
       Context.add(CredentialStore.ConnectionCredentialStore, credentialStore),
       Context.add(TokenStore.RemoteDpopAccessTokenStore, remoteTokenStore),
       Context.add(Persistence.EnvironmentCacheStore, cacheStore),
+      Context.add(EnvironmentQueryStore, queryStore),
     );
   }),
 );

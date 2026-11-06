@@ -18,7 +18,6 @@ import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 import { MorphIcon } from "~/components/MorphIcon";
 import { PullRequestEditButton } from "./PullRequestEditButton";
-import { Textarea } from "../ui/textarea";
 import { isCommentSubmitShortcut } from "../diffs/commentSubmitShortcut";
 import {
   editPullRequestThreadComment,
@@ -29,6 +28,10 @@ import { PullRequestMarkdown } from "./PullRequestMarkdown";
 import { PullRequestMarkdownEditor } from "./PullRequestMarkdownEditor";
 import { PullRequestReactionBar } from "./PullRequestReactions";
 import type { PendingReviewComment } from "./pullRequestReviewStore";
+import {
+  PullRequestMarkdownTextarea,
+  type PullRequestMentionScope,
+} from "./PullRequestMarkdownTextarea";
 
 const CARD_CLASS =
   "mx-3 my-2 rounded-xl border border-border/70 bg-background p-3 text-sm shadow-sm";
@@ -111,6 +114,7 @@ export function ReviewThreadCard({
   canReact,
   environmentId,
   reference,
+  mentionScope,
   pending,
   fixPending,
   fixLabel = "Fix in a thread",
@@ -129,6 +133,7 @@ export function ReviewThreadCard({
   canReact: boolean;
   environmentId: EnvironmentId;
   reference: PullRequestRef;
+  mentionScope: PullRequestMentionScope | null;
   pending: boolean;
   fixPending?: boolean;
   fixLabel?: string;
@@ -284,6 +289,7 @@ export function ReviewThreadCard({
                     value={comment.body}
                     cwd={workspaceRoot}
                     environmentId={environmentId}
+                    mentionScope={mentionScope}
                     label="Edit comment"
                     saving={savingEdit}
                     onSave={(body) => void saveEdit(comment.id, body)}
@@ -324,13 +330,14 @@ export function ReviewThreadCard({
           {canReply ? (
             replying ? (
               <div className="mt-2">
-                <Textarea
+                <PullRequestMarkdownTextarea
+                  mentionScope={mentionScope}
                   autoFocus
                   size="sm"
                   value={reply}
                   placeholder="Reply"
                   aria-label="Reply to this conversation"
-                  onChange={(event) => setReply(event.target.value)}
+                  onValueChange={setReply}
                   onKeyDown={(event) =>
                     submitKeys({
                       value: reply,
