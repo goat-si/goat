@@ -26,6 +26,9 @@ export function makeAnnotationVoiceRelay(input: {
       active = true;
       input.guest.ipc.on(ANNOTATION_VOICE_EVENT_CHANNEL, onEvent);
     },
+    deactivate() {
+      active = false;
+    },
     dispose() {
       active = false;
       input.guest.ipc.removeListener(ANNOTATION_VOICE_EVENT_CHANNEL, onEvent);

@@ -2118,11 +2118,17 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
             ),
           );
         };
-        const onDestroyed = () => settle(null);
+        const onDestroyed = () => {
+          relay?.deactivate();
+          settle(null);
+        };
         const onNavigated = (
           event: Electron.Event<Electron.WebContentsDidStartNavigationEventParams>,
         ) => {
-          if (event.isMainFrame) settle(null);
+          if (event.isMainFrame) {
+            relay?.deactivate();
+            settle(null);
+          }
         };
         const registerPickElement = Effect.fn("PreviewManager.registerPickElement")(function* () {
           // Atomically swap/cancel overlapping picks so another pick cannot claim a transient empty slot.

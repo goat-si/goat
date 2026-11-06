@@ -37,6 +37,9 @@ it("forwards only valid events and states from the active annotation session", (
   relay.update({ ...state, sessionId: "old" });
   relay.update(state);
   expect(send).toHaveBeenCalledExactlyOnceWith(ANNOTATION_VOICE_STATE_CHANNEL, state);
+  relay.deactivate();
+  ipc.emit(ANNOTATION_VOICE_EVENT_CHANNEL, {}, event);
+  expect(forward).toHaveBeenCalledOnce();
   relay.dispose();
   ipc.emit(ANNOTATION_VOICE_EVENT_CHANNEL, {}, event);
   relay.update(state);
