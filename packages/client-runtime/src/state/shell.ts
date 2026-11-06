@@ -437,18 +437,15 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
               const omitIdleSubagents = config.shellThreadFamilies === true;
               const omitOlderSettled = config.shellOlderSettled === true && omitIdleSubagents;
               const version = config.environment?.serverVersion;
+              const instanceId = config.environment?.instanceId;
               return {
                 supportsCompletionMarker: config.shellResumeCompletionMarker === true,
                 omitIdleSubagents,
                 omitOlderSettled,
-                omissionKey: version
-                  ? JSON.stringify([
-                      omitIdleSubagents,
-                      omitOlderSettled,
-                      version,
-                      config.environment.databaseMigration ?? null,
-                    ])
-                  : null,
+                omissionKey:
+                  version && instanceId
+                    ? JSON.stringify([omitIdleSubagents, omitOlderSettled, version, instanceId])
+                    : null,
               };
             }),
             Effect.orElseSucceed(() => ({
@@ -462,7 +459,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
         yield* Ref.set(awaitingCompletion, supportsCompletionMarker);
         yield* setSynchronizing;
 
-        // Resume only from an authoritative snapshot with the same omissions and server build.
+        // Server restarts can rewrite projections without events, so only resume across sessions on the same instance.
         const hasAuthoritativeSnapshot =
           (yield* Ref.get(lastAuthoritativeSession)) === session ||
           (omissionKey !== null && (yield* Ref.get(authoritativeOmission)) === omissionKey);

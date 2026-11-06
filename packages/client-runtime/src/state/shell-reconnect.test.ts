@@ -75,7 +75,7 @@ it.effect("opts in to shell omissions and counts authoritative snapshots and rem
         shellResumeCompletionMarker: true,
         shellThreadFamilies: true,
         shellOlderSettled: true,
-        environment: { serverVersion: "1.0.0", databaseMigration: 70 },
+        environment: { serverVersion: "1.0.0", instanceId: "server-1" },
       } as never),
     };
     const activeSession = yield* SubscriptionRef.make(Option.some(familySession));
@@ -165,7 +165,7 @@ it.effect("opts in to shell omissions and counts authoritative snapshots and rem
         initialConfig: familySession.initialConfig.pipe(
           Effect.map((config) => ({
             ...config,
-            environment: { ...config.environment, databaseMigration: 71 },
+            environment: { ...config.environment, instanceId: "server-2" },
           })),
         ),
       }),
