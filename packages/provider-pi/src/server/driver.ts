@@ -67,7 +67,7 @@ const withInstanceIdentity =
     continuation: { groupKey: input.continuationGroupKey },
   });
 
-export const makePiFamilyDriver = (
+const makePiFamilyDriver = (
   profile: PiRuntimeProfile,
   settingsSchema: Schema.Codec<PiSettings, unknown>,
 ): ProviderDriver<PiSettings, PiDriverEnv, Path.Path> => {
