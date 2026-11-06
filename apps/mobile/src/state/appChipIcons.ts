@@ -7,30 +7,30 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { AsyncResult, Atom } from "effect/reactivity";
 
+import { cachedAppChipIcon, storedAppChipIcon } from "../lib/appChipIconCache";
 import { assetEnvironment } from "./assets";
 import { environmentSession } from "./session";
 
 const ICON_IDLE_TTL_MS = 60 * 60_000;
 
-/**
- * Native chips draw an icon only from a file they can read at once; a URL they fetch themselves
- * draws nothing while it loads or when it fails. So the icon is fetched here, and a chip gets it
- * only once it sits in expo-image's disk cache.
- */
-async function cachedIconFile(url: string): Promise<string | null> {
-  const { Image } = await import("expo-image");
-  if (!(await Image.prefetch(url, { cachePolicy: "disk" }))) return null;
-  const path = await Image.getCachePathAsync(url);
-  if (!path) return null;
-  return path.startsWith("file:") ? path : `file://${path}`;
-}
-
-const iconFileAtom = Atom.family((url: string) =>
-  Atom.make(Effect.promise(() => cachedIconFile(url).catch(() => null))).pipe(
+// Native chips draw an icon only from a file they can read at once, so a chip gets one only
+// once it is on disk; until then it keeps its computer use icon.
+const storedIconAtom = Atom.family((key: string) =>
+  Atom.make(Effect.promise(() => storedAppChipIcon(key).catch(() => null))).pipe(
     Atom.setIdleTTL(ICON_IDLE_TTL_MS),
-    Atom.withLabel(`mobile-app-chip-icon-file:${url}`),
+    Atom.withLabel(`mobile-app-chip-icon-stored:${key}`),
   ),
 );
+
+const fetchedIconAtom = Atom.family((target: string) => {
+  const [key, url] = decodeFetchTarget(JSON.parse(target));
+  return Atom.make(Effect.promise(() => cachedAppChipIcon(key, url).catch(() => null))).pipe(
+    Atom.setIdleTTL(ICON_IDLE_TTL_MS),
+    Atom.withLabel(`mobile-app-chip-icon-fetched:${target}`),
+  );
+});
+
+const decodeFetchTarget = Schema.decodeUnknownSync(Schema.Tuple([Schema.String, Schema.String]));
 
 const decodeIconKey = Schema.decodeUnknownSync(Schema.Tuple([EnvironmentId, AssetResource]));
 
@@ -48,10 +48,13 @@ const appChipIconAtom = Atom.family((key: string) => {
   }).pipe(Atom.setIdleTTL(ICON_IDLE_TTL_MS));
   return Atom.make((get): string | null => {
     const current = get(url);
-    if (current === null) return null;
-    const file = get(iconFileAtom(current));
-    // A new URL keeps the last file until its own fetch settles; a failed fetch drops it.
-    return AsyncResult.isSuccess(file) ? file.value : Option.getOrNull(get.self<string | null>());
+    if (current !== null) {
+      const fetched = get(fetchedIconAtom(JSON.stringify([key, current])));
+      if (AsyncResult.isSuccess(fetched) && fetched.value !== null) return fetched.value;
+    }
+    const stored = get(storedIconAtom(key));
+    if (AsyncResult.isSuccess(stored) && stored.value !== null) return stored.value;
+    return Option.getOrNull(get.self<string | null>());
   }).pipe(Atom.setIdleTTL(ICON_IDLE_TTL_MS), Atom.withLabel(`mobile-app-chip-icon:${key}`));
 });
 
