@@ -24,3 +24,21 @@ it("retains file and image discussions without inventing line numbers", () => {
     { id: "image", path: "logo.png", line: null, side: "right" },
   ]);
 });
+
+it("marks merge request authors when GitLab identifies them as bots", async () => {
+  const { decodeMergeRequestDetailJson } = await import("./gitLabMergeRequestJson.ts");
+  const decoded = decodeMergeRequestDetailJson(
+    JSON.stringify({
+      iid: 1,
+      title: "Change",
+      web_url: "https://gitlab.com/acme/web/-/merge_requests/1",
+      source_branch: "topic",
+      target_branch: "main",
+      created_at: "2026-07-01T00:00:00Z",
+      updated_at: "2026-07-02T00:00:00Z",
+      author: { username: "release-bot", bot: true },
+    }),
+  );
+  expect(Result.isSuccess(decoded)).toBe(true);
+  if (Result.isSuccess(decoded)) expect(decoded.success.author?.isBot).toBe(true);
+});

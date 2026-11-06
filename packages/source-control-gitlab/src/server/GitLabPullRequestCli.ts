@@ -1,3 +1,4 @@
+import { diffCursorPage, isCommitSha } from "./gitLabInput.ts";
 import { gitLabActionSummary } from "./gitLabActionSummary.ts";
 import { actionArgs } from "./gitLabActionArgs.ts";
 import { decodeMergeMessagesJson, MERGE_MESSAGES_GRAPHQL_QUERY } from "./gitLabMergeMessages.ts";
@@ -457,6 +458,7 @@ export class GitLabPullRequestCli extends Context.Service<
       {
         readonly reactions: ReadonlyArray<PullRequestReaction>;
         readonly reactionsByNoteId: ReadonlyMap<string, ReadonlyArray<PullRequestReaction>>;
+        readonly botLogins: ReadonlySet<string>;
       },
       GitLabPullRequestCliError
     >;
@@ -544,14 +546,6 @@ function filterParams(input: {
       ? []
       : [["wip", filters.draft === "only" ? "yes" : "no"] as const]),
   ];
-}
-
-function diffCursorPage(cursor: string): number | null {
-  return /^[1-9][0-9]{0,6}$/.test(cursor) ? Number(cursor) : null;
-}
-
-function isCommitSha(value: string): boolean {
-  return /^[0-9a-f]{7,64}$/i.test(value);
 }
 
 function searchParams(search: string | undefined): ReadonlyArray<readonly [string, string]> {
@@ -1047,11 +1041,13 @@ export const make = Effect.gen(function* () {
     readonly collected: {
       readonly reactions: ReadonlyArray<PullRequestReaction>;
       readonly reactionsByNoteId: Map<string, ReadonlyArray<PullRequestReaction>>;
+      readonly botLogins: Set<string>;
     } | null;
   }): Effect.Effect<
     {
       readonly reactions: ReadonlyArray<PullRequestReaction>;
       readonly reactionsByNoteId: ReadonlyMap<string, ReadonlyArray<PullRequestReaction>>;
+      readonly botLogins: ReadonlySet<string>;
     },
     GitLabPullRequestCliError
   > =>
@@ -1084,9 +1080,11 @@ export const make = Effect.gen(function* () {
         const collected = input.collected ?? {
           reactions: decoded.success.reactions,
           reactionsByNoteId: new Map<string, ReadonlyArray<PullRequestReaction>>(),
+          botLogins: new Set<string>(),
         };
         for (const [id, reactions] of decoded.success.reactionsByNoteId)
           collected.reactionsByNoteId.set(id, reactions);
+        for (const login of decoded.success.botLogins) collected.botLogins.add(login);
         return decoded.success.nextCursor === null || input.page >= CONVERSATION_PAGES
           ? Effect.succeed(collected)
           : awardsPage({
