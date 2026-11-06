@@ -7,6 +7,7 @@ import {
   SLACK_CHANNEL_WS_METHODS,
 } from "@goat/contracts";
 import { AsyncResult, Atom } from "effect/reactivity";
+import * as Effect from "effect/Effect";
 
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import {
@@ -25,6 +26,11 @@ export function createChannelEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,
 ) {
   const sessions = createEnvironmentSessionAtoms(runtime);
+  const listBots = createEnvironmentRpcQueryAtomFamily(runtime, {
+    label: "environment-data:channel:list-bots",
+    tag: CHANNEL_GATEWAY_WS_METHODS.listBots,
+    staleTimeMs: 2_000,
+  });
   const childWorkQuery = createEnvironmentRpcQueryAtomFamily(runtime, {
     label: "environment-data:channel:list-child-work",
     tag: CHANNEL_GATEWAY_WS_METHODS.listChildWork,
@@ -44,10 +50,13 @@ export function createChannelEnvironmentAtoms<R, E>(
       label: "environment-data:channel:ensure-bot",
       tag: CHANNEL_GATEWAY_WS_METHODS.ensureBot,
     }),
-    listBots: createEnvironmentRpcQueryAtomFamily(runtime, {
-      label: "environment-data:channel:list-bots",
-      tag: CHANNEL_GATEWAY_WS_METHODS.listBots,
-      staleTimeMs: 2_000,
+    listBots,
+    /** Edits a bot's name, avatar or purpose; the roster and settings re-read the list after. */
+    updateBot: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:channel:update-bot",
+      tag: CHANNEL_GATEWAY_WS_METHODS.updateBot,
+      onSuccess: ({ environmentId }, registry) =>
+        Effect.sync(() => registry.refresh(listBots({ environmentId, input: {} }))),
     }),
     listBotThreads: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:channel:list-bot-threads",
