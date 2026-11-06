@@ -1773,7 +1773,9 @@ export function threadShellFromProjection(
         )
         .toSorted(
           (left, right) =>
-            DateTime.toEpochMillis(right.updatedAt) - DateTime.toEpochMillis(left.updatedAt),
+            DateTime.toEpochMillis(right.startedAt ?? right.updatedAt) -
+              DateTime.toEpochMillis(left.startedAt ?? left.updatedAt) ||
+            (left.id < right.id ? 1 : left.id > right.id ? -1 : 0),
         )[0] ?? null,
     );
     if (

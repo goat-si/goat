@@ -320,6 +320,26 @@ it.effect.each([
           secretStatus: "pending",
         },
       });
+      yield* assertSelected(handoffId);
+      const fallbackAt = DateTime.add(now, { minutes: 3 });
+      yield* store.apply({
+        id: EventId.make("event:waiting-secret-without-start"),
+        type: "turn-item.updated",
+        threadId,
+        runId,
+        occurredAt: fallbackAt,
+        payload: {
+          ...common,
+          id: TurnItemId.make("waiting-secret"),
+          ordinal: 1,
+          startedAt: null,
+          updatedAt: fallbackAt,
+          type: "secret_request",
+          label: "Credential",
+          reason: "Needed",
+          secretStatus: "pending",
+        },
+      });
       yield* assertSelected("waiting-secret");
     }).pipe(Effect.provide(testLayer)),
 );

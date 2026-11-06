@@ -222,7 +222,7 @@ export const makeShellThreadRows = (sql: SqlClient.SqlClient) => {
               (
                 SELECT candidate.payload_json FROM (
                   SELECT * FROM (
-                    SELECT secret.payload_json, secret.updated_at, secret.turn_item_id
+                    SELECT secret.payload_json, COALESCE(json_extract(secret.payload_json, '$.startedAt'), secret.updated_at) AS request_at, secret.turn_item_id
                     FROM orchestration_v2_projection_runs r
                     CROSS JOIN orchestration_v2_projection_turn_items secret
                       INDEXED BY orchestration_v2_projection_turn_items_thread_run_idx
@@ -230,21 +230,21 @@ export const makeShellThreadRows = (sql: SqlClient.SqlClient) => {
                       AND r.status IN ('preparing', 'starting', 'running', 'waiting')
                       AND secret.thread_id = t.thread_id AND secret.run_id = r.run_id
                       AND secret.type = 'secret_request' AND secret.status = 'waiting'
-                    ORDER BY secret.updated_at DESC, secret.turn_item_id DESC
+                    ORDER BY request_at DESC, secret.turn_item_id DESC
                     LIMIT 1
                   )
                   UNION ALL
                   SELECT * FROM (
-                    SELECT handoff.payload_json, handoff.updated_at, handoff.turn_item_id
+                    SELECT handoff.payload_json, COALESCE(json_extract(handoff.payload_json, '$.startedAt'), handoff.updated_at) AS request_at, handoff.turn_item_id
                     FROM orchestration_v2_projection_turn_items handoff
                     WHERE handoff.thread_id = t.thread_id
                       AND handoff.type IN ('human_handoff', 'secret_request')
                       AND handoff.type = 'human_handoff' AND handoff.status = 'waiting'
-                    ORDER BY handoff.updated_at DESC, handoff.turn_item_id DESC
+                    ORDER BY request_at DESC, handoff.turn_item_id DESC
                     LIMIT 1
                   )
                 ) candidate
-                ORDER BY candidate.updated_at DESC, candidate.turn_item_id DESC
+                ORDER BY candidate.request_at DESC, candidate.turn_item_id DESC
                 LIMIT 1
               ) AS pending_secret_request_payload_json,
               (
