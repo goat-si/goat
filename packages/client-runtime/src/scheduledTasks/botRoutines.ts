@@ -36,7 +36,7 @@ export function botRoutineRows(
 ): BotRoutineRow[] {
   return tasks
     .filter((task) => task.threadId === botThreadId)
-    .toSorted(compareRoutines)
+    .sort(compareRoutines)
     .map((task) => {
       const run = scheduledTaskRunPresentation(task);
       return {
@@ -65,7 +65,8 @@ function nextRunText(task: BotRoutineSource, nowMs: number): string {
   if (task.schedule.type === "webhook") return "Listening";
   if (task.nextRunAt === null) return "Not scheduled";
   const diffMs = Date.parse(task.nextRunAt) - nowMs;
-  return diffMs > 0 ? `Next run ${formatTimeUntil(diffMs)}` : "Next run due";
+  // Callers pass a minute-floored clock, so anything within a minute may already be past.
+  return diffMs > 60_000 ? `Next run ${formatTimeUntil(diffMs)}` : "Next run due";
 }
 
 function lastRunText(

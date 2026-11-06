@@ -20,7 +20,11 @@ const routine = (id: string, fields: Partial<BotRoutineSource> = {}): BotRoutine
 
 it("lists only the routines bound to the bot's thread", () => {
   const rows = botRoutineRows(
-    [routine("a"), routine("b", { threadId: ThreadId.make("other") }), routine("c", { threadId: null })],
+    [
+      routine("a"),
+      routine("b", { threadId: ThreadId.make("other") }),
+      routine("c", { threadId: null }),
+    ],
     bot,
     now,
   );
@@ -41,6 +45,23 @@ it("says a paused routine is paused instead of naming a next run", () => {
   const [row] = botRoutineRows([routine("a", { enabled: false })], bot, now);
   expect(row?.nextText).toBe("Paused");
   expect(row?.enabled).toBe(false);
+});
+
+it("calls a run due once it is within the minute clock's precision", () => {
+  const rows = botRoutineRows(
+    [
+      routine("past", { nextRunAt: "2026-11-07T11:59:00.000Z" }),
+      routine("in-seconds", { nextRunAt: "2026-11-07T12:00:50.000Z" }),
+      routine("in-two-minutes", { nextRunAt: "2026-11-07T12:02:00.000Z" }),
+    ],
+    bot,
+    now,
+  );
+  expect(rows.map((row) => row.nextText)).toEqual([
+    "Next run due",
+    "Next run due",
+    "Next run in 2m",
+  ]);
 });
 
 it("shows when a failed run happened and the first line of its error", () => {
