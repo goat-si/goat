@@ -15,6 +15,7 @@ import {
 } from "./PullRequestMarkdownTextarea";
 import { pullRequestReviewKey } from "./pullRequestReviewStore";
 import { useInlineActionConfirm } from "./useInlineActionConfirm";
+import { CommentSpeechControls, useCommentSpeech } from "../../speech/useCommentSpeech";
 
 export function PullRequestCommentForm({
   environmentId,
@@ -40,6 +41,13 @@ export function PullRequestCommentForm({
 }) {
   const [body, setBody] = useState("");
   const [submitting, setSubmitting] = useState<"comment" | "close" | "reopen" | null>(null);
+  const speech = useCommentSpeech({
+    environmentId,
+    textareaRef,
+    text: body,
+    onTextChange: setBody,
+    disabled: submitting !== null || actionPending,
+  });
   const postComment = useAtomCommand(pullRequestEnvironment.comment, {
     reportFailure: false,
   });
@@ -57,7 +65,13 @@ export function PullRequestCommentForm({
 
   const submit = async (action: "comment" | "close" | "reopen") => {
     const trimmed = body.trim();
-    if (trimmed.length === 0 || submitting !== null || actionPending) return;
+    if (
+      trimmed.length === 0 ||
+      submitting !== null ||
+      actionPending ||
+      speech.voice.blocksSubmission()
+    )
+      return;
     setSubmitting(action);
     if (action !== "comment") {
       const result = await onCommentAction(trimmed, action);
@@ -113,11 +127,17 @@ export function PullRequestCommentForm({
         }}
       />
       <div className="flex flex-wrap justify-end gap-2">
+        <CommentSpeechControls speech={speech} />
         {followUpAction === null ? null : (
           <Button
             size="xs"
             variant={followUpAction === "close" ? "destructive-outline" : "outline"}
-            disabled={body.trim().length === 0 || submitting !== null || actionPending}
+            disabled={
+              body.trim().length === 0 ||
+              submitting !== null ||
+              actionPending ||
+              speech.voice.blocksSubmission()
+            }
             {...(followUpAction === "close"
               ? inlineConfirm.props("close", () => void submit("close"))
               : { onClick: () => void submit("reopen") })}
@@ -151,7 +171,12 @@ export function PullRequestCommentForm({
         <Button
           size="xs"
           variant="outline"
-          disabled={body.trim().length === 0 || submitting !== null || actionPending}
+          disabled={
+            body.trim().length === 0 ||
+            submitting !== null ||
+            actionPending ||
+            speech.voice.blocksSubmission()
+          }
           onClick={() => void submit("comment")}
         >
           <SendIcon className="size-3.5" />

@@ -252,6 +252,8 @@ speech model installed there. The choice belongs to this device; select **Use
 existing voice input** to turn it off. Someone with voice management permission can
 download, select, or remove models from **Manage voice models** in the same menu.
 Connections through a hub do not currently support this option.
+After choosing an environment, you can also dictate into a pull request comment
+on that environment.
 
 The first time on a Mac, macOS asks whether GOAT may use the microphone. If you
 declined, or turned GOAT off later, the composer says so and offers **Open System

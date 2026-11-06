@@ -84,6 +84,17 @@ function setup(overrides: Partial<ComposerVoiceTarget> = {}) {
 }
 
 describe("composer voice controller", () => {
+  it("does not send preview chunks to a local speech model", async () => {
+    chooseEnvironmentSpeech(EnvironmentId.make("voice-env-a"));
+    const grant = readEnvironmentSpeechGrant();
+    if (!grant) throw new Error("Grant was not stored");
+    using session = setup({ localModelGrant: grant });
+    await session.controller.start();
+    session.chunk("preview");
+    expect(session.transcribe).not.toHaveBeenCalled();
+    chooseEnvironmentSpeech(null);
+  });
+
   it("discards a transcription after the device grant is revoked", async () => {
     chooseEnvironmentSpeech(EnvironmentId.make("voice-env-a"));
     const grant = readEnvironmentSpeechGrant();

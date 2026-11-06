@@ -57,7 +57,7 @@ import {
 export interface ComposerVoiceTarget {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId | null;
-  readonly providerInstanceId: ProviderInstanceId;
+  readonly providerInstanceId: ProviderInstanceId | null;
   readonly ownerKey: string;
   readonly cwd: string | null;
   readonly locale: string;
