@@ -17,6 +17,7 @@ import {
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import { usageLimitBlockedRun } from "@goat/shared/orchestrationV2ThreadError";
+import { createModelCapabilities, createModelSelection } from "@goat/shared/model";
 import { describe, expect, it } from "vite-plus/test";
 
 import { v2Projection } from "./orchestrationV2TestFixtures.ts";
@@ -29,6 +30,7 @@ import {
   deriveRunlessWorkStartedAt,
   deriveThreadActivityRun,
   deriveThreadRuntime,
+  formatModelSelectionEffort,
   isBackgroundWorkStopPending,
   presentPendingBackgroundWork,
   presentProviderGoal,
@@ -515,6 +517,39 @@ it("question notifications do not masquerade as child-thread navigation", () => 
   expect(notificationChildThreadId({ kind: "delegated_task", taskIds: [], childThreadId })).toBe(
     childThreadId,
   );
+});
+
+describe("formatModelSelectionEffort", () => {
+  it("labels an old Ultracode effort by the effort it runs at", () => {
+    const models = [
+      {
+        slug: "claude-opus-5-5",
+        name: "Claude Opus 5.5",
+        isCustom: false,
+        capabilities: createModelCapabilities({
+          optionDescriptors: [
+            {
+              id: "effort",
+              label: "Reasoning",
+              type: "select",
+              options: [
+                { id: "high", label: "High", isDefault: true },
+                { id: "xhigh", label: "Extra High" },
+              ],
+            },
+            { id: "ultracode", label: "Ultracode", type: "boolean" },
+          ],
+        }),
+      },
+    ];
+    const selection = createModelSelection(
+      ProviderInstanceId.make("claudeAgent"),
+      "claude-opus-5-5",
+      [{ id: "effort", value: "ultracode" }],
+    );
+
+    expect(formatModelSelectionEffort(selection, models)).toBe("Extra High");
+  });
 });
 
 describe("isBackgroundWorkStopPending", () => {

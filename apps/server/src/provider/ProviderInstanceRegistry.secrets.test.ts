@@ -268,7 +268,13 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
         configMap,
         resolveSecret: () => {
           reads++;
-          return Effect.fail(new Error("locked"));
+          return Effect.fail(
+            new ProviderDriverError({
+              driver: CodexDriver.driverKind,
+              instanceId: id,
+              detail: "locked",
+            }),
+          );
         },
       });
       expect(reads).toBe(1);
