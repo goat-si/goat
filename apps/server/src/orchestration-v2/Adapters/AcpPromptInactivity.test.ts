@@ -12,7 +12,11 @@ import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSess
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as AcpSessionRuntime from "@goat/provider-acp/server/AcpSessionRuntime";
-import { AcpProviderCapabilitiesV2, makeAcpAdapterV2 } from "@goat/provider-acp/server/adapter";
+import {
+  AcpProviderCapabilitiesV2,
+  makeAcpAdapterV2,
+  type AcpAdapterV2RuntimeInput,
+} from "@goat/provider-acp/server/adapter";
 import * as DocumentText from "../../provider/DocumentText.ts";
 import { makeTurnInput } from "./AcpAdapterV2.testkit.ts";
 import { makeMockRuntime } from "./AcpMockRuntime.testkit.ts";
@@ -46,24 +50,29 @@ const makePromptInactivityHarness = Effect.fnUntraced(function* (input: {
   const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const path = yield* Path.Path;
   const natives: Array<AcpSessionRuntime.AcpSessionRuntime["Service"]> = [];
+  const runtimeInputs: AcpAdapterV2RuntimeInput[] = [];
   const instanceId = ProviderInstanceId.make("acp-prompt-inactivity");
+  const mockRuntime = makeMockRuntime({
+    childProcessSpawner,
+    mockAgentPath: yield* path.fromFileUrl(
+      new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
+    ),
+    environment: input.environment,
+    wrapRuntime: (runtime) => {
+      natives.push(runtime);
+      return runtime;
+    },
+  });
   const adapter = yield* makeAcpAdapterV2({
     instanceId,
     flavor: {
       driver: ACP_TEST_DRIVER,
       capabilities: AcpProviderCapabilitiesV2,
       promptInactivityTimeout: "15 minutes",
-      makeRuntime: makeMockRuntime({
-        childProcessSpawner,
-        mockAgentPath: yield* path.fromFileUrl(
-          new URL("../../../scripts/acp-mock-agent.ts", import.meta.url),
-        ),
-        environment: input.environment,
-        wrapRuntime: (runtime) => {
-          natives.push(runtime);
-          return runtime;
-        },
-      }),
+      makeRuntime: (runtimeInput) => {
+        runtimeInputs.push(runtimeInput);
+        return mockRuntime(runtimeInput);
+      },
     },
     selfInvocation: yield* resolveSelfInvocation(),
   });
@@ -92,6 +101,7 @@ const makePromptInactivityHarness = Effect.fnUntraced(function* (input: {
   return {
     runtime,
     natives,
+    runtimeInputs,
     startTurn,
     /** A turn still running makes the next start fail, without waiting on time. */
     nextTurnRejected: (ordinal: number) =>
@@ -191,6 +201,37 @@ describe("ACP prompt inactivity", () => {
         yield* TestClock.adjust(Duration.millis(15 * 60_000 - 1));
         assert.isTrue(yield* harness.nextTurnRejected(2));
         yield* TestClock.adjust("1 millis");
+        yield* harness.startTurn(2);
+        const [silent, next] = yield* harness.terminals(2);
+        assert.equal(silent?.status, "failed");
+        assert.equal(next?.status, "completed");
+      }).pipe(Effect.provide(layerTest), Effect.scoped),
+  );
+
+  it.effect.each(["tracked-first", "overflow-first"] as const)(
+    "resumes the inactivity timeout after requests settle (%s)",
+    (order) =>
+      Effect.gen(function* () {
+        const harness = yield* makePromptInactivityHarness({
+          environment: (ordinal) => (ordinal === 1 ? { GOAT_ACP_HANG_PROMPT_FOREVER: "1" } : {}),
+        });
+        yield* harness.startTurn(1);
+        const input = harness.runtimeInputs[0];
+        if (!input?.onIncomingRequest || !input.onOutgoingResponse)
+          return yield* Effect.die("Missing request callbacks");
+        const incoming = input.onIncomingRequest;
+        const outgoing = input.onOutgoingResponse;
+        for (let index = 0; index < 1025; index++) yield* incoming(`request-${index}`, "test", {});
+        yield* TestClock.adjust("15 minutes");
+        assert.isTrue(yield* harness.nextTurnRejected(2));
+        if (order === "overflow-first") yield* outgoing("request-1024");
+        for (let index = 0; index < (order === "overflow-first" ? 1023 : 1024); index++) {
+          yield* outgoing(`request-${index}`);
+        }
+        yield* TestClock.adjust("15 minutes");
+        assert.isTrue(yield* harness.nextTurnRejected(2));
+        yield* outgoing(order === "overflow-first" ? "request-1023" : "request-1024");
+        yield* TestClock.adjust("15 minutes");
         yield* harness.startTurn(2);
         const [silent, next] = yield* harness.terminals(2);
         assert.equal(silent?.status, "failed");

@@ -1706,8 +1706,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             : Duration.toMillis(flavor.promptInactivityTimeout);
         // Each runtime owns its unanswered agent requests, so a dead process's leftovers
         // and late callbacks never reach its replacement.
-        const requestOverflow = Symbol("request overflow");
-        let openAgentRequests = new Set<string | symbol>();
+        const makeAgentRequests = () => ({ ids: new Set<string>(), overflow: 0 });
+        let openAgentRequests = makeAgentRequests();
         const notePromptProgress =
           /* Provider events include streaming deltas; avoid a span for each update. */
           Effect.fnUntraced(function* (notification?: EffectAcpSchema.SessionNotification) {
@@ -1729,12 +1729,18 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             }
             context.lastProgressAt = yield* Clock.currentTimeMillis;
           });
-        const closeAgentRequest = (agentRequests: Set<string | symbol>, requestId: string) =>
-          Effect.suspend(() =>
-            agentRequests.delete(requestId) && agentRequests === openAgentRequests
+        const closeAgentRequest = (
+          requests: ReturnType<typeof makeAgentRequests>,
+          requestId: string,
+        ) =>
+          Effect.suspend(() => {
+            const tracked = requests.ids.delete(requestId);
+            const overflowed = !tracked && requests.overflow > 0;
+            if (overflowed) requests.overflow--;
+            return (tracked || overflowed) && requests === openAgentRequests
               ? notePromptProgress()
-              : Effect.void,
-          );
+              : Effect.void;
+          });
         const handleRuntimeTerminationAtGeneration = (runtimeGeneration: number) =>
           runRuntimeCallbackAtGeneration(
             runtimeGeneration,
@@ -1771,7 +1777,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           ).pipe(Effect.asVoid);
         const makeRuntimeInput = (
           runtimeGeneration: number,
-          agentRequests: Set<string | symbol>,
+          agentRequests: ReturnType<typeof makeAgentRequests>,
           mcpContext: AcpMcpContext,
           resumeSessionId?: string,
           onTermination: AcpAdapterV2RuntimeInput["onTermination"] = () =>
@@ -1798,14 +1804,17 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             },
             clientInfo: { name: "t3-code", version: "0.0.0" },
             onTermination: (error) =>
-              Effect.sync(() => agentRequests.clear()).pipe(Effect.andThen(onTermination(error))),
+              Effect.sync(() => {
+                agentRequests.ids.clear();
+                agentRequests.overflow = 0;
+              }).pipe(Effect.andThen(onTermination(error))),
             ...(promptInactivityTimeoutMillis === undefined
               ? {}
               : {
                   onIncomingRequest: (requestId: string) =>
                     Effect.sync(() => {
-                      if (agentRequests.size < 1024) agentRequests.add(requestId);
-                      else agentRequests.add(requestOverflow);
+                      if (agentRequests.ids.size < 1024) agentRequests.ids.add(requestId);
+                      else agentRequests.overflow++;
                     }),
                 }),
             onOutgoingResponseFailure: (requestId, error) =>
@@ -6242,7 +6251,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           runtimeMcpContext = mcpContext;
           runtimeProcessMcpContext = mcpContext;
           const runtimeGeneration = yield* Ref.get(runtimeCallbackGeneration);
-          openAgentRequests = new Set();
+          openAgentRequests = makeAgentRequests();
           runtime = yield* flavor
             .makeRuntime(
               makeRuntimeInput(runtimeGeneration, openAgentRequests, mcpContext, resumeSessionId),
@@ -6287,7 +6296,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
           // Keep live callbacks active until replacement startup succeeds.
           const replacementGeneration = yield* allocateRuntimeCallbackGeneration;
           const replacementScope = yield* Scope.make();
-          const replacementAgentRequests = new Set<string | symbol>();
+          const replacementAgentRequests = makeAgentRequests();
           type CandidateLifecycle =
             | { readonly _tag: "Starting" }
             | { readonly _tag: "Terminated"; readonly error: EffectAcpErrors.AcpError }
@@ -7121,7 +7130,12 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
         const promptInactivityPaused = Effect.fn("AcpAdapterV2.promptInactivityPaused")(function* (
           context: ActiveAcpTurn,
         ) {
-          if (openAgentRequests.size > 0 || hasDeferredBackgroundWork(context)) return true;
+          if (
+            openAgentRequests.ids.size > 0 ||
+            openAgentRequests.overflow > 0 ||
+            hasDeferredBackgroundWork(context)
+          )
+            return true;
           if ((yield* Ref.get(pendingRuntimeRequests)).size > 0) return true;
           for (const tool of context.tools.values()) {
             const status = toolStatus(tool.status);
@@ -7155,7 +7169,8 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 return "rearm" as const;
               }
               context.inactivityWatchdog = undefined;
-              openAgentRequests.clear();
+              openAgentRequests.ids.clear();
+              openAgentRequests.overflow = 0;
               yield* quarantineNativeTransportAtGeneration(generation);
               yield* advanceRuntimeCallbackGeneration;
               yield* Ref.set(runtimeRestartRequired, true);
