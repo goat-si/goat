@@ -242,12 +242,16 @@ sent when you submit.
 
 Click the composer's microphone to record, then confirm to insert the text or send it.
 
-The desktop app transcribes on this computer, even when the thread runs on another
-machine: the recording goes to the transcription service through this computer's
-Codex sign-in or OpenCodex, and never to the other machine. If you
-turned off **Local environment** in **Settings › Connections**, desktop voice input
-is unavailable until you turn it back on. In a browser, the environment you are
-connected to transcribes. The recorder shows which device transcribes.
+By default, the desktop app uses this computer's Codex sign-in or OpenCodex to
+transcribe. In a browser, the thread's environment uses its transcription service.
+The recorder shows where transcription runs.
+
+You can instead choose **Transcribe on** the thread's environment from the
+composers' dictation options. This sends recordings to that environment and uses a
+speech model installed there. The choice belongs to this device; select **Use
+existing voice input** to turn it off. Someone with voice management permission can
+download, select, or remove models from **Manage voice models** in the same menu.
+Connections through a hub do not currently support this option.
 
 The first time on a Mac, macOS asks whether GOAT may use the microphone. If you
 declined, or turned GOAT off later, the composer says so and offers **Open System

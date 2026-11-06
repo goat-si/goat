@@ -1,39 +1,95 @@
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
+import { useState } from "react";
+import type { EnvironmentId } from "@goat/contracts";
+import type { EnvironmentVoiceRequestContext } from "@goat/client-runtime/voice-input";
+import { VoiceModelDialog } from "../../speech/VoiceModelDialog";
 
 export interface ComposerVoiceButtonProps {
   readonly disabled?: boolean;
   readonly onClick: () => void;
+  readonly environmentSpeech?: {
+    readonly label: string;
+    readonly selected: boolean;
+    readonly available: boolean;
+    readonly enable: () => void;
+    readonly disable: () => void;
+    readonly environmentId: EnvironmentId;
+    readonly canManage: boolean;
+    readonly resolveContext: (id: EnvironmentId) => Promise<EnvironmentVoiceRequestContext | null>;
+  };
 }
 
-export function ComposerVoiceButton({ disabled, onClick }: ComposerVoiceButtonProps) {
+export function ComposerVoiceButton({
+  disabled,
+  onClick,
+  environmentSpeech,
+}: ComposerVoiceButtonProps) {
+  const [modelsOpen, setModelsOpen] = useState(false);
   return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <Button
-            type="button"
-            variant="ghost"
-            size="icon-sm"
-            disabled={disabled}
-            aria-label="Record voice input"
-            onPointerDown={(event) => event.preventDefault()}
-            onClick={onClick}
-          />
-        }
-      >
-        <svg
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          aria-hidden="true"
+    <span className="inline-flex items-center">
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              disabled={disabled}
+              aria-label="Record voice input"
+              onPointerDown={(event) => event.preventDefault()}
+              onClick={onClick}
+            />
+          }
         >
-          <rect x="9" y="2" width="6" height="12" rx="3" />
-          <path strokeLinecap="round" d="M5 10v1a7 7 0 0 0 14 0v-1M12 18v4M9 22h6" />
-        </svg>
-      </TooltipTrigger>
-      <TooltipPopup>Record voice input</TooltipPopup>
-    </Tooltip>
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            aria-hidden="true"
+          >
+            <rect x="9" y="2" width="6" height="12" rx="3" />
+            <path strokeLinecap="round" d="M5 10v1a7 7 0 0 0 14 0v-1M12 18v4M9 22h6" />
+          </svg>
+        </TooltipTrigger>
+        <TooltipPopup>Record voice input</TooltipPopup>
+      </Tooltip>
+      {environmentSpeech ? (
+        <Menu>
+          <MenuTrigger
+            render={
+              <Button type="button" variant="ghost" size="icon-sm" aria-label="Dictation options" />
+            }
+          >
+            <span aria-hidden="true">▾</span>
+          </MenuTrigger>
+          <MenuPopup align="end" side="top">
+            <MenuItem disabled={!environmentSpeech.available} onClick={environmentSpeech.enable}>
+              {environmentSpeech.selected ? "✓ " : ""}Transcribe on {environmentSpeech.label} (sends
+              audio)
+            </MenuItem>
+            <MenuItem onClick={environmentSpeech.disable}>
+              {!environmentSpeech.selected ? "✓ " : ""}Use existing voice input
+            </MenuItem>
+            <MenuItem disabled={!environmentSpeech.canManage} onClick={() => setModelsOpen(true)}>
+              Manage voice models
+            </MenuItem>
+          </MenuPopup>
+        </Menu>
+      ) : null}
+      {modelsOpen && environmentSpeech ? (
+        <VoiceModelDialog
+          key={environmentSpeech.environmentId}
+          open
+          onOpenChange={setModelsOpen}
+          environmentId={environmentSpeech.environmentId}
+          label={environmentSpeech.label}
+          canManage={environmentSpeech.canManage}
+          resolveContext={environmentSpeech.resolveContext}
+        />
+      ) : null}
+    </span>
   );
 }

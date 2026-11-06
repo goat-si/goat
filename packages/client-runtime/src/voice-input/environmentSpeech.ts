@@ -114,3 +114,47 @@ export function transcribeLocalModel(
     { signal: options.signal },
   );
 }
+
+export const listEnvironmentSpeechModels = (
+  context: EnvironmentVoiceRequestContext,
+  signal?: AbortSignal,
+) =>
+  Effect.runPromise(
+    listEnvironmentSpeechModelsEffect(context).pipe(Effect.provide(http)),
+    signal ? { signal } : undefined,
+  );
+export const getEnvironmentSpeechConfiguration = (
+  context: EnvironmentVoiceRequestContext,
+  signal?: AbortSignal,
+) =>
+  Effect.runPromise(
+    getEnvironmentSpeechConfigurationEffect(context).pipe(Effect.provide(http)),
+    signal ? { signal } : undefined,
+  );
+export const downloadEnvironmentSpeechModel = (
+  context: EnvironmentVoiceRequestContext,
+  modelId: string,
+  signal?: AbortSignal,
+) =>
+  Effect.runPromise(
+    downloadEnvironmentSpeechModelEffect(context, modelId).pipe(Effect.provide(http)),
+    signal ? { signal } : undefined,
+  );
+export const removeEnvironmentSpeechModel = (
+  context: EnvironmentVoiceRequestContext,
+  modelId: string,
+  signal?: AbortSignal,
+) =>
+  Effect.runPromise(
+    removeEnvironmentSpeechModelEffect(context, modelId).pipe(Effect.provide(http)),
+    signal ? { signal } : undefined,
+  );
+export const configureEnvironmentSpeech = (
+  context: EnvironmentVoiceRequestContext,
+  config: SpeechConfiguration,
+  signal?: AbortSignal,
+) =>
+  Effect.runPromise(
+    configureEnvironmentSpeechEffect(context, config).pipe(Effect.provide(http)),
+    signal ? { signal } : undefined,
+  );

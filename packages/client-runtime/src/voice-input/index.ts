@@ -40,6 +40,11 @@ export {
   downloadEnvironmentSpeechModelEffect,
   removeEnvironmentSpeechModelEffect,
   configureEnvironmentSpeechEffect,
+  listEnvironmentSpeechModels,
+  getEnvironmentSpeechConfiguration,
+  downloadEnvironmentSpeechModel,
+  removeEnvironmentSpeechModel,
+  configureEnvironmentSpeech,
 } from "./environmentSpeech.ts";
 export {
   resolveVoiceTranscriptionRoute,
