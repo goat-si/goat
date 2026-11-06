@@ -565,7 +565,8 @@ function reportUnsavedVoiceChoice(saved: boolean) {
   toastManager.add({
     type: "error",
     title: "Could not save the dictation choice",
-    description: "Environment dictation is off in this tab.",
+    description:
+      "Environment dictation is off in open tabs. A reload may restore the previous choice.",
   });
 }
 

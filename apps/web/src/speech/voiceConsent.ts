@@ -13,9 +13,21 @@ const KEY = "goat:environment-voice-grant:v1";
 const Grant = Schema.NullOr(Schema.Struct({ id: Schema.String, environmentId: EnvironmentId }));
 export type EnvironmentSpeechGrant = NonNullable<typeof Grant.Type>;
 
-// A revocation applies in this tab before storage is touched, so a failed write cannot keep it alive.
+// A revocation applies in open tabs before storage is touched, so a failed write cannot keep it alive
+// while they run. Only a reload after a failed write can bring the stored grant back.
 const revoked = new Set<string>();
 const listeners = new Set<() => void>();
+const revocations =
+  typeof BroadcastChannel === "undefined" ? null : new BroadcastChannel(`${KEY}:revoked`);
+
+function revoke(id: string) {
+  revoked.add(id);
+  for (const listener of listeners) listener();
+}
+
+revocations?.addEventListener("message", (event: MessageEvent<unknown>) => {
+  if (typeof event.data === "string") revoke(event.data);
+});
 
 export function readEnvironmentSpeechGrant(): EnvironmentSpeechGrant | null {
   const stored = readLocalStorageValue(KEY, null, Grant);
@@ -43,10 +55,14 @@ function grantSnapshot() {
 export const useEnvironmentSpeechGrant = () =>
   useSyncExternalStore(subscribe, grantSnapshot, () => null);
 
-/** Returns false when the choice could not be saved; this tab still stops using the old grant. */
+/** Returns false when the choice could not be saved; open tabs still stop using the old grant. */
 export function chooseEnvironmentSpeech(environmentId: EnvironmentId | null): boolean {
   const previous = readEnvironmentSpeechGrant();
-  if (previous) revoked.add(previous.id);
+  if (previous) {
+    revoked.add(previous.id);
+    // oxlint-disable-next-line unicorn/require-post-message-target-origin -- BroadcastChannel takes no origin
+    revocations?.postMessage(previous.id);
+  }
   let saved = true;
   try {
     if (environmentId) {
