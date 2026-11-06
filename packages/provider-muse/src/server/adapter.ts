@@ -36,7 +36,6 @@ import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
@@ -392,14 +391,8 @@ export const makeMuseAdapterV2 = Effect.fn("makeMuseAdapterV2")(function* (
         status: OrchestrationV2ProviderSession["status"],
         lastError: string | null = null,
       ) {
-        session = {
-          ...session,
-          status,
-          // lastError is the thread banner, so it gets the failure item's bounded, redacted text.
-          lastError:
-            lastError === null ? null : makeProviderFailure({ message: lastError }).message,
-          updatedAt: yield* DateTime.now,
-        };
+        lastError = lastError === null ? null : makeProviderFailure({ message: lastError }).message;
+        session = { ...session, status, lastError, updatedAt: yield* DateTime.now };
         yield* emit({
           type: "provider_session.updated",
           driver: MUSE_PROVIDER,
