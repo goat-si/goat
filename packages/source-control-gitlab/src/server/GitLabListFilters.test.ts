@@ -62,7 +62,7 @@ function graphqlListPage(
             sourceBranch: "feat/page",
             targetBranch: "main",
             approved: true,
-            approvedBy: { nodes: [{ username: "julius" }] },
+            approvedBy: { nodes: [{ username: "alex" }] },
           })),
         },
       },

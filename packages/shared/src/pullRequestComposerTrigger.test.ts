@@ -38,9 +38,9 @@ describe("insertPullRequestMention", () => {
     (suffix) => {
       const text = `thanks @ju${suffix}`;
       const trigger = detectPullRequestMention(text, "thanks @ju".length)!;
-      expect(insertPullRequestMention(text, trigger, "julius")).toEqual({
-        text: `thanks @julius ${suffix}`,
-        cursor: "thanks @julius ".length,
+      expect(insertPullRequestMention(text, trigger, "alex")).toEqual({
+        text: `thanks @alex ${suffix}`,
+        cursor: "thanks @alex ".length,
       });
     },
   );
@@ -48,8 +48,8 @@ describe("insertPullRequestMention", () => {
   it("reuses the space that already follows and moves past it", () => {
     const text = "@ju please look";
     const trigger = detectPullRequestMention(text, 3)!;
-    const inserted = insertPullRequestMention(text, trigger, "julius");
-    expect(inserted).toEqual({ text: "@julius please look", cursor: "@julius ".length });
+    const inserted = insertPullRequestMention(text, trigger, "alex");
+    expect(inserted).toEqual({ text: "@alex please look", cursor: "@alex ".length });
     expect(detectPullRequestMention(inserted.text, inserted.cursor)).toBeNull();
   });
 });
@@ -59,7 +59,7 @@ describe("narrowPullRequestMentions", () => {
     const users = [
       { login: "TonybynMp4", name: null },
       { login: "16g", name: "Tom" },
-      { login: "theo", name: "Theo" },
+      { login: "sam", name: "Sam" },
     ];
     expect(narrowPullRequestMentions(users, "to", 5).map((u) => u.login)).toEqual([
       "TonybynMp4",

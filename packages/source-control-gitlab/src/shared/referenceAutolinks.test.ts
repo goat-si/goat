@@ -10,14 +10,14 @@ describe("gitLabReferenceAutolinks", () => {
   it("links issues, merge requests, cross-project references, commits and mentions", () => {
     expect(
       linked(
-        "Closes #123 and !45, see api!9, other/group/lib#2; @julius.dev @team/mobile abc1234 api@abcdef1 GL-7 [issue:8] [issue:api/9] [issue:other/lib/3]",
+        "Closes #123 and !45, see api!9, other/group/lib#2; @alex.dev @team/mobile abc1234 api@abcdef1 GL-7 [issue:8] [issue:api/9] [issue:other/lib/3]",
       ),
     ).toEqual([
       ["#123", "https://gitlab.com/team/apps/web/-/issues/123", "reference"],
       ["!45", "https://gitlab.com/team/apps/web/-/merge_requests/45", "reference"],
       ["api!9", "https://gitlab.com/team/apps/api/-/merge_requests/9", "reference"],
       ["other/group/lib#2", "https://gitlab.com/other/group/lib/-/issues/2", "reference"],
-      ["@julius.dev", "https://gitlab.com/julius.dev", "mention"],
+      ["@alex.dev", "https://gitlab.com/alex.dev", "mention"],
       ["@team/mobile", "https://gitlab.com/team/mobile", "mention"],
       ["abc1234", "https://gitlab.com/team/apps/web/-/commit/abc1234", "commit"],
       ["api@abcdef1", "https://gitlab.com/team/apps/api/-/commit/abcdef1", "commit"],
@@ -50,9 +50,9 @@ describe("gitLabReferenceAutolinks", () => {
   });
 
   it("links references that follow punctuation and a mention's trailing period", () => {
-    expect(linked("(!5), thanks @julius.")).toEqual([
+    expect(linked("(!5), thanks @alex.")).toEqual([
       ["!5", "https://gitlab.com/team/apps/web/-/merge_requests/5", "reference"],
-      ["@julius", "https://gitlab.com/julius", "mention"],
+      ["@alex", "https://gitlab.com/alex", "mention"],
     ]);
   });
 

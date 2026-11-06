@@ -209,7 +209,7 @@ layer("GitLab labels", (it) => {
   ] as const)("searches GitLab users from three characters (%s)", ([search, path]) =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(
-        Effect.succeed(output(JSON.stringify([{ id: 1, username: "theo" }]))),
+        Effect.succeed(output(JSON.stringify([{ id: 1, username: "sam" }]))),
       );
       const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
       yield* cli.listProjectUsers({ cwd: "/w", repository: "acme/web", search });

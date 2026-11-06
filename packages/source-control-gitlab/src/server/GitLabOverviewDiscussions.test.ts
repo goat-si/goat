@@ -54,7 +54,7 @@ layer("GitLab overview discussions", (it) => {
                     {
                       id: 2,
                       body: "done",
-                      author: { username: "julius" },
+                      author: { username: "alex" },
                       created_at: "2026-07-01T01:00:00Z",
                     },
                   ],

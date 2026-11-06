@@ -573,7 +573,7 @@ describe("decodeAwardEmojiJson", () => {
                     {
                       id: "gid://gitlab/Note/1",
                       lastEditedAt: "2026-07-02T00:00:00Z",
-                      lastEditedBy: { username: "julius" },
+                      lastEditedBy: { username: "alex" },
                       resolved: false,
                     },
                     {
@@ -585,7 +585,7 @@ describe("decodeAwardEmojiJson", () => {
                     {
                       id: "gid://gitlab/DiscussionNote/3",
                       lastEditedAt: "2026-07-03T00:00:00Z",
-                      lastEditedBy: { username: "julius" },
+                      lastEditedBy: { username: "alex" },
                       resolved: true,
                     },
                   ],

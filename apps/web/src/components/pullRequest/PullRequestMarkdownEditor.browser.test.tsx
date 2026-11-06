@@ -37,8 +37,8 @@ vi.mock(import("~/state/pullRequests"), async (original) => ({
         targets.length === 0
           ? []
           : [
-              { login: "julius", name: "Julius", avatarUrl: null },
-              { login: "theo", name: "Theo", avatarUrl: null },
+              { login: "alex", name: "Alex", avatarUrl: null },
+              { login: "sam", name: "Sam", avatarUrl: null },
             ],
       error: null,
       isPending: false,
@@ -122,7 +122,7 @@ it("completes an @mention on Enter and closes the list on Escape until the next 
   await using screen = await openEditor({ value: "" });
   const textarea = screen.container.querySelector("textarea")!;
   await userEvent.type(textarea, "Thanks @ju");
-  await expect.element(page.getByRole("option", { name: /julius/ })).toBeVisible();
+  await expect.element(page.getByRole("option", { name: /alex/ })).toBeVisible();
   expect(permissions.mentionTargets).toContainEqual(
     expect.objectContaining({
       environmentId: secondary,
@@ -135,16 +135,16 @@ it("completes an @mention on Enter and closes the list on Escape until the next 
   );
 
   await userEvent.keyboard("{Enter}");
-  expect(textarea.value).toBe("Thanks @julius ");
+  expect(textarea.value).toBe("Thanks @alex ");
   await expect.element(page.getByRole("listbox")).not.toBeInTheDocument();
 
   await userEvent.type(textarea, "and @");
-  await expect.element(page.getByRole("option", { name: /theo/ })).toBeVisible();
+  await expect.element(page.getByRole("option", { name: /sam/ })).toBeVisible();
   await userEvent.keyboard("{Escape}");
   await expect.element(page.getByRole("listbox")).not.toBeInTheDocument();
   expect(onCancel).not.toHaveBeenCalled();
 
   await userEvent.type(textarea, "t");
-  await expect.element(page.getByRole("option", { name: /theo/ })).toBeVisible();
+  await expect.element(page.getByRole("option", { name: /sam/ })).toBeVisible();
   expect(onSave).not.toHaveBeenCalled();
 });

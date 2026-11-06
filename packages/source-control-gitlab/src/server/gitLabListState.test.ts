@@ -72,7 +72,7 @@ describe("decodeListStatesJson", () => {
       enterprise: true,
       approval: {
         approved: true,
-        approvedBy: approvedBy("julius"),
+        approvedBy: approvedBy("alex"),
         reviewers: reviewers("APPROVED", "REQUESTED_CHANGES"),
       },
       decision: "changes-requested",
@@ -92,7 +92,7 @@ describe("decodeListStatesJson", () => {
       enterprise: false,
       approval: {
         approved: true,
-        approvedBy: approvedBy("julius"),
+        approvedBy: approvedBy("alex"),
         reviewers: reviewers("UNREVIEWED", "REVIEWED"),
       },
       decision: "approved",
@@ -141,7 +141,7 @@ describe("decodeListStatesJson", () => {
         },
       ]),
       ...statesOf(true, [
-        { iid: "8", approved: null, approvedBy: approvedBy("julius") },
+        { iid: "8", approved: null, approvedBy: approvedBy("alex") },
         { iid: "9", approved: true, approvedBy: null },
       ]),
     ]).toEqual([
@@ -182,7 +182,7 @@ describe("decodeMergeRequestGraphqlListJson", () => {
                     reviewers: {
                       nodes: [
                         {
-                          username: "julius",
+                          username: "alex",
                           mergeRequestInteraction: { reviewState: "REQUESTED_CHANGES" },
                         },
                       ],
@@ -204,7 +204,7 @@ describe("decodeMergeRequestGraphqlListJson", () => {
         state: "open",
         isDraft: true,
         mergeability: "conflicting",
-        reviewRequestLogins: ["julius"],
+        reviewRequestLogins: ["alex"],
         labels: [expect.objectContaining({ name: "bug" })],
       }),
     ]);

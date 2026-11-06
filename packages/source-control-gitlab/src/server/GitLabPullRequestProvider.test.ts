@@ -559,7 +559,7 @@ describe("review decisions", () => {
     host: "gitlab.com",
     state: "open" as const,
     involvement: "all" as const,
-    viewer: "julius",
+    viewer: "alex",
     limit: 2,
   };
 
