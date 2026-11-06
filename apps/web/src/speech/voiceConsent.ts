@@ -57,8 +57,11 @@ function grantSnapshot() {
 export const useEnvironmentSpeechGrant = () =>
   useSyncExternalStore(subscribe, grantSnapshot, () => null);
 
-/** Returns false when the choice could not be saved; open tabs still stop using the old grant. */
-export function chooseEnvironmentSpeech(environmentId: EnvironmentId | null): boolean {
+/** "unsaved" still stops open tabs from using the old grant; "unsupported" changes nothing. */
+export function chooseEnvironmentSpeech(
+  environmentId: EnvironmentId | null,
+): "saved" | "unsaved" | "unsupported" {
+  if (environmentId && !revocations) return "unsupported";
   const previous = readEnvironmentSpeechGrant();
   if (previous) {
     revoked.add(previous.id);
@@ -77,7 +80,7 @@ export function chooseEnvironmentSpeech(environmentId: EnvironmentId | null): bo
     saved = false;
   }
   for (const listener of listeners) listener();
-  return saved;
+  return saved ? "saved" : "unsaved";
 }
 
 export function isEnvironmentSpeechGrantCurrent(grant: EnvironmentSpeechGrant) {

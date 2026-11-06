@@ -552,22 +552,31 @@ export function useChatComposerVoiceController(
             readEnvironmentScope(id, AuthOrchestrationOperateScope) &&
             !readEnvironmentProxiedByHub(id)
           )
-            reportUnsavedVoiceChoice(chooseEnvironmentSpeech(id));
+            reportVoiceChoice(chooseEnvironmentSpeech(id));
         },
-        disable: () => reportUnsavedVoiceChoice(chooseEnvironmentSpeech(null)),
+        disable: () => reportVoiceChoice(chooseEnvironmentSpeech(null)),
       },
     },
   };
 }
 
-function reportUnsavedVoiceChoice(saved: boolean) {
-  if (saved) return;
-  toastManager.add({
-    type: "error",
-    title: "Could not save the dictation choice",
-    description:
-      "Environment dictation is off in open tabs. A reload may restore the previous choice.",
-  });
+function reportVoiceChoice(result: ReturnType<typeof chooseEnvironmentSpeech>) {
+  if (result === "saved") return;
+  toastManager.add(
+    result === "unsupported"
+      ? {
+          type: "error",
+          title: "This browser can't use environment dictation",
+          description:
+            "It can't turn dictation off in your other tabs, so existing voice input stays on.",
+        }
+      : {
+          type: "error",
+          title: "Could not save the dictation choice",
+          description:
+            "Environment dictation is off in open tabs. A reload may restore the previous choice.",
+        },
+  );
 }
 
 const routeKey = (route: VoiceTranscriptionRoute) =>

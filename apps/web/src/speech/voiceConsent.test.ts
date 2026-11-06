@@ -39,14 +39,14 @@ it("stops using a revoked grant in this tab when storage cannot save the change"
   });
   using _log = vi.spyOn(console, "error").mockImplementation(() => {});
   try {
-    expect(chooseEnvironmentSpeech(EnvironmentId.make("first"))).toBe(true);
+    expect(chooseEnvironmentSpeech(EnvironmentId.make("first"))).toBe("saved");
     const grant = readEnvironmentSpeechGrant();
     if (!grant) throw new Error("Grant was not stored");
     failing = true;
-    expect(chooseEnvironmentSpeech(null)).toBe(false);
+    expect(chooseEnvironmentSpeech(null)).toBe("unsaved");
     expect(isEnvironmentSpeechGrantCurrent(grant)).toBe(false);
     expect(readEnvironmentSpeechGrant()).toBeNull();
-    expect(chooseEnvironmentSpeech(EnvironmentId.make("second"))).toBe(false);
+    expect(chooseEnvironmentSpeech(EnvironmentId.make("second"))).toBe("unsaved");
     expect(readEnvironmentSpeechGrant()).toBeNull();
   } finally {
     vi.unstubAllGlobals();
@@ -86,15 +86,18 @@ it("drops a grant that another tab revoked", async () => {
   }
 });
 
-it("keeps environment dictation off where a revocation cannot reach other tabs", async () => {
+it("refuses environment dictation where a revocation cannot reach other tabs", async () => {
   vi.stubGlobal("BroadcastChannel", undefined);
   vi.resetModules();
   try {
     const isolated = await import("./voiceConsent");
-    expect(isolated.chooseEnvironmentSpeech(EnvironmentId.make("first"))).toBe(true);
+    expect(isolated.chooseEnvironmentSpeech(EnvironmentId.make("first"))).toBe("unsupported");
     expect(isolated.readEnvironmentSpeechGrant()).toBeNull();
-    isolated.chooseEnvironmentSpeech(null);
+    expect(isolated.chooseEnvironmentSpeech(null)).toBe("saved");
   } finally {
     vi.unstubAllGlobals();
   }
+  vi.resetModules();
+  const reloaded = await import("./voiceConsent");
+  expect(reloaded.readEnvironmentSpeechGrant()).toBeNull();
 });
