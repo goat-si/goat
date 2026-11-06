@@ -11,6 +11,8 @@ const decodeSettings = Schema.decodeUnknownSync(PiSettings);
 
 it.effect("includes absolute Pi launch session directories without losing the default", () =>
   Effect.gen(function* () {
+    if (piUsageReader.kind !== "transcripts")
+      return yield* Effect.die("Expected transcript reader");
     const directories = yield* piUsageReader.directories({
       instanceId: ProviderInstanceId.make("pi"),
       configured: true,
