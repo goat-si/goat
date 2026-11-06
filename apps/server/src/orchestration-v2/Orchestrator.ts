@@ -1,3 +1,7 @@
+import {
+  orchestratorPullRequestSnapshot,
+  type PullRequestSnapshotReader,
+} from "./pullRequestSnapshot.ts";
 import { survivorQueuedRuns } from "./goat/CodexSurvivorQueuedRuns.ts";
 import { keptProviderSessionId, makeProviderSessionPlacement } from "./ProviderSessionPlacement.ts";
 import {
@@ -219,6 +223,7 @@ import {
   OrchestratorQuestionAlreadyAnsweredError,
   messageAnswerAttribution,
   questionAlreadyAnswered,
+  decodeUserInputAnswers,
 } from "./goat/QuestionAnswers.ts";
 
 export { OrchestratorQuestionAlreadyAnsweredError };
@@ -387,7 +392,7 @@ export interface OrchestratorV2DispatchResult {
   readonly replayed?: true;
 }
 
-export interface OrchestratorV2Shape {
+export interface OrchestratorV2Shape extends PullRequestSnapshotReader<OrchestratorV2Error> {
   readonly resumeQueuedRuns: Effect.Effect<number, OrchestratorV2Error>;
   readonly recoverDelegatedTasks: Effect.Effect<void>;
   readonly recoverDelegatedTask: (threadId: ThreadId, sourceRunId: RunId) => Effect.Effect<void>;
@@ -680,18 +685,6 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
       return command.targetThreadId;
   }
 }
-
-// Validate before resolving the request: adapters may otherwise coerce unusable answers.
-const decodeUserInputAnswers = Schema.decodeUnknownEffect(
-  Schema.Record(
-    Schema.String,
-    Schema.Union([
-      Schema.String,
-      Schema.Array(Schema.String),
-      Schema.Struct({ answers: Schema.Array(Schema.String) }),
-    ]),
-  ),
-);
 
 function pendingThreadTitleGenerationEffect(
   commandId: CommandId,
@@ -13873,6 +13866,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           .pipe(Effect.mapError((cause) => new OrchestratorProjectionError({ threadId, cause })));
       },
     ),
+    ...orchestratorPullRequestSnapshot(projectionStore, shellProjectionError),
     getShellSnapshot: Effect.fn("OrchestratorV2.getShellSnapshot")(function (options) {
       return projectionStore.getShellSnapshot(options).pipe(Effect.mapError(shellProjectionError));
     }),
