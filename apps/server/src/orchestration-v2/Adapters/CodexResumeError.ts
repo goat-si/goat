@@ -1,3 +1,4 @@
+export { forkCodexThread } from "../../provider/CodexFork.ts";
 import { ProviderDriverKind, type ProviderSessionId, type ProviderThreadId } from "@goat/contracts";
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import * as Schema from "effect/Schema";
