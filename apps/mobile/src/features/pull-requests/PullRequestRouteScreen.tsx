@@ -1069,6 +1069,9 @@ function PullRequestFileRouteContent({ route }: PullRequestFileRouteProps) {
     filter.toggle();
   };
   const title = commit ? "Commit changes" : "Changes";
+  const lineCommentLabel = route.params.replacingDraftId
+    ? "Move draft to this line"
+    : "Add review comment";
   const seekingFile = !targetFile && result.nextCursor !== null;
   const loadingDiff = (result.isPending && !data.rows.length) || (seekingFile && !result.error);
   return (
@@ -1107,7 +1110,7 @@ function PullRequestFileRouteContent({ route }: PullRequestFileRouteProps) {
                   : []),
                 ...(selectedRow && selectedFile
                   ? [
-                      ...(canCommentOnDiff ? [{ id: "comment", title: "Add review comment" }] : []),
+                      ...(canCommentOnDiff ? [{ id: "comment", title: lineCommentLabel }] : []),
                       { id: "copy", title: "Copy line" },
                     ]
                   : []),
@@ -1172,9 +1175,7 @@ function PullRequestFileRouteContent({ route }: PullRequestFileRouteProps) {
           </Toolbar.MenuAction>
           {selectedRow && selectedFile && canCommentOnDiff ? (
             <Toolbar.MenuAction icon="bubble.left" onPress={() => commentOnLine()}>
-              <Toolbar.Label>
-                {route.params.replacingDraftId ? "Move draft to this line" : "Add review comment"}
-              </Toolbar.Label>
+              <Toolbar.Label>{lineCommentLabel}</Toolbar.Label>
             </Toolbar.MenuAction>
           ) : null}
           {selectedRow && selectedFile ? (
