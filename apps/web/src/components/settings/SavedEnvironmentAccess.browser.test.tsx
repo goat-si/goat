@@ -8,6 +8,7 @@ const state = vi.hoisted(() => ({
   writable: { remote: true, other: true } as Record<string, boolean>,
   calls: [] as Array<{ kind: string; environmentId: string; input: unknown }>,
   createGate: null as Promise<void> | null,
+  newLinkInSnapshot: false,
 }));
 vi.mock(import("../../state/session"), async (original) => {
   const Option = await import("effect/Option");
@@ -59,6 +60,7 @@ vi.mock(import("../../state/use-atom-command"), async (original) => {
           command.kind === "create"
             ? {
                 id: "new-link",
+                label: "Created link",
                 credential: "test-pairing-code",
                 expiresAt: DateTime.makeUnsafe("2099-01-01T00:00:00Z"),
               }
@@ -89,6 +91,18 @@ vi.mock(import("../../state/query"), async (original) => {
                     createdAt: issuedAt,
                     expiresAt,
                   },
+                  ...(state.newLinkInSnapshot
+                    ? [
+                        {
+                          id: "new-link",
+                          label: "Created link",
+                          subject: "one-time-token",
+                          scopes: ["orchestration:read"],
+                          createdAt: issuedAt,
+                          expiresAt,
+                        },
+                      ]
+                    : []),
                 ],
                 clientSessions: [
                   {
@@ -129,6 +143,7 @@ function setup() {
   state.writable = { remote: true, other: true };
   state.calls = [];
   state.createGate = null;
+  state.newLinkInSnapshot = false;
 }
 const environments = ["remote", "other"].map((id) => ({
   environmentId: EnvironmentId.make(id),
@@ -270,4 +285,71 @@ it("keeps the selected environment fixed while a pairing request is pending", as
   } finally {
     release();
   }
+});
+
+it.each(["consumed", "revoked externally"])("removes a created link after it is %s", async () => {
+  setup();
+  const content = () => (
+    <SavedEnvironmentAccess environmentId={EnvironmentId.make("remote")} label="Remote" connected />
+  );
+  await using screen = await render(content());
+  await screen.getByRole("button", { name: "Create link" }).click();
+  page.getByRole("dialog").getByRole("button", { name: "Create link" }).element().focus();
+  await userEvent.keyboard("{Enter}");
+  await expect.element(screen.getByText("Created link", { exact: true })).toBeVisible();
+  state.newLinkInSnapshot = true;
+  await screen.rerender(content());
+  await expect.element(screen.getByText("Created link", { exact: true })).toBeVisible();
+  state.newLinkInSnapshot = false;
+  await screen.rerender(content());
+  await expect.element(screen.getByText("Created link", { exact: true })).not.toBeInTheDocument();
+});
+
+it("does not resurrect a link consumed while creation is still returning", async () => {
+  setup();
+  let release = () => {};
+  state.createGate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const content = () => (
+    <SavedEnvironmentAccess environmentId={EnvironmentId.make("remote")} label="Remote" connected />
+  );
+  await using screen = await render(content());
+  try {
+    await screen.getByRole("button", { name: "Create link" }).click();
+    page.getByRole("dialog").getByRole("button", { name: "Create link" }).element().focus();
+    await userEvent.keyboard("{Enter}");
+    await vi.waitFor(() => expect(state.calls.some((call) => call.kind === "create")).toBe(true));
+    state.newLinkInSnapshot = true;
+    await screen.rerender(content());
+    await expect.element(screen.getByText("Created link", { exact: true })).toBeVisible();
+    state.newLinkInSnapshot = false;
+    await screen.rerender(content());
+    release();
+    await expect
+      .element(screen.getByText("The pairing link was already used or revoked."))
+      .toBeVisible();
+    await expect.element(screen.getByText("Created link", { exact: true })).not.toBeInTheDocument();
+  } finally {
+    release();
+  }
+});
+
+it("keeps a confirmed code available when read permission is lost", async () => {
+  setup();
+  const content = () => (
+    <SavedEnvironmentAccess environmentId={EnvironmentId.make("remote")} label="Remote" connected />
+  );
+  await using screen = await render(content());
+  await screen.getByRole("button", { name: "Create link" }).click();
+  page.getByRole("dialog").getByRole("button", { name: "Create link" }).element().focus();
+  await userEvent.keyboard("{Enter}");
+  await expect.element(screen.getByText("Created link", { exact: true })).toBeVisible();
+  state.newLinkInSnapshot = true;
+  await screen.rerender(content());
+  await expect.element(screen.getByText("Created link", { exact: true })).toBeVisible();
+  state.allowed = false;
+  await screen.rerender(content());
+  await expect.element(screen.getByText(/does not have permission/)).toBeVisible();
+  await expect.element(screen.getByText("Created link", { exact: true })).toBeVisible();
 });

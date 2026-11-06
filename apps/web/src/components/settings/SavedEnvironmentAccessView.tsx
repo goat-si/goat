@@ -12,7 +12,7 @@ import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import * as Option from "effect/Option";
 import * as DateTime from "effect/DateTime";
 import type { ServerPairingLinkRecord } from "~/environments/primary";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { authEnvironment } from "../../state/auth";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { usePreparedConnection } from "../../state/session";
@@ -26,7 +26,14 @@ import {
   toDesktopPairingLinkRecord,
 } from "./ConnectionsSettings.logic";
 
+interface CreatedLink {
+  readonly record: ServerPairingLinkRecord;
+  readonly credential: string;
+  readonly observed: boolean;
+}
+
 const MAX_CREATED_LINKS = 100;
+const MAX_PENDING_OBSERVED_LINKS = 1_000;
 function rememberLink<T>(
   previous: ReadonlyMap<string, T>,
   id: string,
@@ -69,10 +76,46 @@ export function SavedEnvironmentAccessView(props: {
     Option.isSome(prepared) && prepared.value.target._tag === "BearerConnectionTarget"
       ? prepared.value.httpBaseUrl
       : null;
-  const [credentials, setCredentials] = useState<ReadonlyMap<string, string>>(() => new Map());
-  const [createdLinks, setCreatedLinks] = useState<ReadonlyMap<string, ServerPairingLinkRecord>>(
+  const [createdLinks, setCreatedLinks] = useState<ReadonlyMap<string, CreatedLink>>(
     () => new Map(),
   );
+  const pendingCreation = useRef<{ seen: Set<string>; latest: AuthAccessSnapshot | null } | null>(
+    null,
+  );
+  // oxlint-disable-next-line goat/react-effect-budget -- reconcile locally issued links with the server access stream
+  useEffect(() => {
+    if (snapshot === null) return;
+    const pending = pendingCreation.current;
+    if (pending !== null) {
+      pending.latest = snapshot;
+      for (const link of snapshot.pairingLinks.slice(-MAX_PENDING_OBSERVED_LINKS)) {
+        pending.seen.add(link.id);
+        if (pending.seen.size > MAX_PENDING_OBSERVED_LINKS) {
+          const oldest = pending.seen.values().next();
+          if (!oldest.done) pending.seen.delete(oldest.value);
+        }
+      }
+    }
+    if (createdLinks.size === 0) return;
+    // oxlint-disable-next-line react/set-state-in-effect -- the external stream confirms and retires locally issued credentials
+    setCreatedLinks((previous) => {
+      const present = new Set<string>();
+      for (const item of snapshot.pairingLinks) {
+        if (previous.has(item.id)) present.add(item.id);
+      }
+      let next: Map<string, CreatedLink> | undefined;
+      for (const [id, link] of previous) {
+        if (present.has(id) && !link.observed) {
+          next ??= new Map(previous);
+          next.set(id, { ...link, observed: true });
+        } else if (!present.has(id) && link.observed) {
+          next ??= new Map(previous);
+          next.delete(id);
+        }
+      }
+      return next ?? previous;
+    });
+  }, [snapshot, createdLinks]);
   const [newestId, setNewestId] = useState<string | null>(null);
   const [revokingPairingId, setRevokingPairingId] = useState<string | null>(null);
   const [revokingClientId, setRevokingClientId] = useState<string | null>(null);
@@ -90,15 +133,20 @@ export function SavedEnvironmentAccessView(props: {
   const listedIds = new Set(links.map((link) => link.id));
   const visibleLinks = sortDesktopPairingLinks([
     ...links,
-    ...[...createdLinks.values()].filter((link) => !listedIds.has(link.id)),
+    ...[...createdLinks.values()]
+      .filter((link) => (!link.observed || snapshot === null) && !listedIds.has(link.record.id))
+      .map((link) => link.record),
   ]);
+  const credentials = new Map([...createdLinks].map(([id, link]) => [id, link.credential]));
   const clients = snapshot
     ? sortDesktopClientSessions(snapshot.clientSessions.map(toDesktopClientSessionRecord))
     : [];
   const create = async (
     input: AuthCreatePairingCredentialInput,
   ): Promise<AuthPairingCredentialResult> => {
+    setError(null);
     props.onBusyChange?.(1);
+    pendingCreation.current = { seen: new Set(), latest: snapshot };
     try {
       const { label, ...rest } = input;
       const trimmedLabel = label?.trim();
@@ -108,20 +156,34 @@ export function SavedEnvironmentAccessView(props: {
       });
       if (result._tag === "Success") {
         const created = result.value;
+        const pending = pendingCreation.current;
+        if (
+          pending?.seen.has(created.id) &&
+          pending.latest !== null &&
+          !pending.latest.pairingLinks.some((link) => link.id === created.id)
+        ) {
+          setError("The pairing link was already used or revoked.");
+          return created;
+        }
         setCreatedLinks((previous) =>
           rememberLink(previous, created.id, {
-            id: created.id,
-            subject: "one-time-token",
-            scopes: input.scopes ?? [],
-            ...(created.label === undefined ? {} : { label: created.label }),
-            createdAt: new Date().toISOString(),
-            expiresAt: DateTime.formatIso(created.expiresAt),
+            record: {
+              id: created.id,
+              subject: "one-time-token",
+              scopes: input.scopes ?? [],
+              ...(created.label === undefined ? {} : { label: created.label }),
+              createdAt: new Date().toISOString(),
+              expiresAt: DateTime.formatIso(created.expiresAt),
+            },
+            credential: created.credential,
+            observed: false,
           }),
         );
         return created;
       }
       throw squashAtomCommandFailure(result);
     } finally {
+      pendingCreation.current = null;
       props.onBusyChange?.(-1);
     }
   };
@@ -137,11 +199,6 @@ export function SavedEnvironmentAccessView(props: {
       } else if (!result.value.revoked) setError("That pairing link is no longer available.");
       else {
         setCreatedLinks((previous) => {
-          const next = new Map(previous);
-          next.delete(id);
-          return next;
-        });
-        setCredentials((previous) => {
           const next = new Map(previous);
           next.delete(id);
           return next;
@@ -188,9 +245,6 @@ export function SavedEnvironmentAccessView(props: {
               onRevokeOtherClients={() => {}}
               onPairingLinkCreated={(created) => {
                 setNewestId(created.id);
-                setCredentials((previous) =>
-                  rememberLink(previous, created.id, created.credential),
-                );
               }}
             />
           ) : undefined
