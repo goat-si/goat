@@ -48,3 +48,17 @@ export const toPullRequestSummary = (
     ? {}
     : { autoMergeMethod: changeRequest.autoMergeMethod }),
 });
+
+export function matchesFilterRepository(
+  item: { readonly upstream: boolean; readonly repository: string },
+  input: {
+    readonly includeUpstream?: boolean | undefined;
+    readonly repository?: string | undefined;
+  },
+) {
+  return (
+    (input.includeUpstream || !item.upstream) &&
+    (input.repository === undefined ||
+      item.repository.toLowerCase() === input.repository.toLowerCase())
+  );
+}

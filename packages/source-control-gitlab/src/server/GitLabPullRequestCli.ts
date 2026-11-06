@@ -882,7 +882,7 @@ export const make = Effect.gen(function* () {
       host: input.host,
       path: `projects/${projectPath(input.repository)}/users?${query([
         ["per_page", String(MAX_PAGE_SIZE)],
-        ...searchParams(input.search),
+        ...searchParams(input.search, 3),
       ])}`,
     }).pipe(
       Effect.flatMap((result) => {

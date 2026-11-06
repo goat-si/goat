@@ -308,3 +308,38 @@ it.effect("judges review and checks filters only on a host that summarises them"
     assert.deepStrictEqual(passing.entries.map((entry) => entry.number).toSorted(), [3]);
   }),
 );
+
+it.effect("scopes author suggestions to the requested repository", () =>
+  Effect.gen(function* () {
+    const reads: string[] = [];
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakePullRequestProvider(SourceControlProviderKind.make("github"), {
+          searchRepositoryAuthors: (input) =>
+            Effect.sync(() => {
+              reads.push(input.repository);
+              return {
+                items: [{ login: "reviewer", name: null, avatarUrl: null }],
+                truncated: false,
+              };
+            }),
+        }),
+      ],
+    });
+    const scoped = {
+      kind: "authors" as const,
+      projectId: "p1" as ProjectId,
+      includeUpstream: true,
+    };
+    const unrelated = yield* service.filterOptions({ ...scoped, repository: "other/repo" });
+    assert.deepStrictEqual(unrelated.authors, []);
+    assert.deepStrictEqual(reads, []);
+    const matching = yield* service.filterOptions({ ...scoped, repository: "acme/web" });
+    assert.deepStrictEqual(
+      matching.authors.map((author) => author.login),
+      ["reviewer"],
+    );
+    assert.deepStrictEqual(reads, ["acme/web"]);
+  }),
+);

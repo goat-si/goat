@@ -140,9 +140,12 @@ export function graphqlListQuery(input: {
   };
 }
 
-export function searchParams(search: string | undefined): ReadonlyArray<readonly [string, string]> {
+export function searchParams(
+  search: string | undefined,
+  minimumLength = 1,
+): ReadonlyArray<readonly [string, string]> {
   const trimmed = search?.trim() ?? "";
-  return trimmed.length === 0 ? [] : [["search", trimmed]];
+  return trimmed.length < minimumLength ? [] : [["search", trimmed]];
 }
 
 export function query(params: ReadonlyArray<readonly [string, string]>): string {

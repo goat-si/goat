@@ -203,4 +203,17 @@ layer("GitLab labels", (it) => {
       expect(JSON.parse(callAt(0).stdin ?? "")).toEqual({ remove_labels: "bug" });
     }),
   );
+  it.effect.each([
+    ["th", "projects/acme%2Fweb/users?per_page=100"],
+    ["tho", "projects/acme%2Fweb/users?per_page=100&search=tho"],
+  ] as const)("searches GitLab users from three characters (%s)", ([search, path]) =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(output(JSON.stringify([{ id: 1, username: "theo" }]))),
+      );
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+      yield* cli.listProjectUsers({ cwd: "/w", repository: "acme/web", search });
+      expect(argsOfCall(0)[1]).toBe(path);
+    }),
+  );
 });

@@ -1,4 +1,4 @@
-import { toPullRequestSummary } from "./pullRequestSummary.ts";
+import { toPullRequestSummary, matchesFilterRepository } from "./pullRequestSummary.ts";
 import { ACTION_ACCESS_REFUSALS, pinnedAutoMergeRefusal } from "./pullRequestActionPolicy.ts";
 import { isSshRemoteUrl } from "@goat/shared/sourceControl";
 import { parseDiffFilePaths } from "@goat/source-control-core/server/diffFileRevisions";
@@ -2537,7 +2537,7 @@ export const make = Effect.gen(function* () {
     "PullRequestService.filterOptions",
   )(function* (input) {
     const { supported } = yield* listWorkspaceProjects(input);
-    const listed = supported.filter((item) => input.includeUpstream || !item.upstream);
+    const listed = supported.filter((item) => matchesFilterRepository(item, input));
     // Worktrees of one checkout are separate projects over the same repository.
     const repositories = [
       ...new Map(listed.map((project) => [project.cursorKey, project])).values(),

@@ -278,6 +278,8 @@ export const PullRequestCapabilities = Schema.Struct({
   stacks: Schema.optional(Schema.Boolean),
   stackActions: Schema.optional(Schema.Boolean),
   labels: Schema.optional(Schema.Boolean),
+  /** The host searches the repository's users, so composers can complete `@login`. */
+  mentions: Schema.optional(Schema.Boolean),
   /**
    * Every head gets at least one check, so a head that has gone a while without any means none
    * reported rather than that the repository runs none. Absent means an empty list says nothing.
@@ -535,6 +537,7 @@ export const PullRequestFilterOptionsInput = Schema.Struct({
   projectId: Schema.optional(ProjectId),
   projectIds: Schema.optional(Schema.Array(ProjectId).check(Schema.isMaxLength(100))),
   host: Schema.optional(TrimmedNonEmptyString),
+  repository: Schema.optional(TrimmedNonEmptyString),
   includeUpstream: PullRequestListInput.fields.includeUpstream,
   query: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(100))),
 });
