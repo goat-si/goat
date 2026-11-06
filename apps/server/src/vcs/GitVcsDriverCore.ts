@@ -74,6 +74,7 @@ import { unquoteGitPath } from "./gitQuotedPath.ts";
 import { tryWithForeignWorkspaceSubtree } from "../workspace/workspaceLease.ts";
 import {
   defaultCheckoutWorkers,
+  makeHookRunProbe,
   missingWindowsCheckoutSettings,
   pinWorktreeRoot,
   readWorktreeRoot,
@@ -3961,20 +3962,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
   // A sparse worktree replays post-checkout through `git hook run` (Git 2.36+); without it,
   // a new worktree's hook would see the wrong arguments, so older Git checks out fully.
-  let hookRunSupported: boolean | null = null;
-  const supportsHookRun = Effect.fn("GitVcsDriver.supportsHookRun")(function* (cwd: string) {
-    if (hookRunSupported !== null) return hookRunSupported;
-    const result = yield* executeGit(
-      "GitVcsDriver.supportsHookRun",
-      cwd,
-      // -h prints usage and exits 129 when the command exists; an older Git exits 1 with
-      // "not a git command". Newer Git rejects unknown hook names, so none can be probed.
-      ["hook", "run", "-h"],
-      { allowNonZeroExit: true, timeoutMs: 10_000 },
-    );
-    hookRunSupported = result.exitCode === 129;
-    return hookRunSupported;
-  });
+  const supportsHookRun = makeHookRunProbe(executeGit, hostPlatform);
 
   const readWorktreeSparseCheckout = Effect.fn("GitVcsDriver.readWorktreeSparseCheckout")(
     function* (cwd: string, ref: string) {
@@ -4296,7 +4284,9 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         input.cwd,
         existing === "added" ? newBranch! : input.refName,
       );
-      const root = yield* readWorktreeRoot(executeGit, path, input.cwd, supportsHookRun(input.cwd));
+      const root = yield* readWorktreeRoot(executeGit, path, input.cwd);
+      const canReplayHook =
+        sparse !== null || (root.checkoutApart && (yield* supportsHookRun(input.cwd)));
       yield* Effect.gen(function* () {
         if (sparse === null && !root.checkoutApart) {
           yield* runCheckoutCommand("GitVcsDriver.createWorktree", input.cwd, [...args]);
@@ -4325,13 +4315,15 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         // same-commit switch. Hooks are off for it, then post-checkout runs with the
         // all-zero previous HEAD a new worktree gets, which is how hooks tell one apart.
         yield* runCheckoutCommand("GitVcsDriver.createWorktree.checkout", targetPath, [
-          "-c",
-          `core.hooksPath=${path.join(targetPath, ".git-goat-no-hooks")}`,
+          ...(canReplayHook
+            ? ["-c", `core.hooksPath=${path.join(targetPath, ".git-goat-no-hooks")}`]
+            : yield* sourceHooksConfig(executeGit, path, input.cwd)),
           "checkout",
           "-f",
           "--progress",
         ]);
         if (sparse && progress?.onSparseCheckout) yield* progress.onSparseCheckout(sparse.excluded);
+        if (!canReplayHook) return;
         const head = (yield* runGitStdout("GitVcsDriver.createWorktree.head", targetPath, [
           "rev-parse",
           "HEAD",

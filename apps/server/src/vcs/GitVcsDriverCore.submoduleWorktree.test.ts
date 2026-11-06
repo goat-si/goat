@@ -1,7 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - realpathSync.native resolves Windows 8.3 short names, which the Effect realPath does not.
 import * as NodeFS from "node:fs";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { GOAT_PROJECT_FILE_NAME, type GitCommandError } from "@goat/contracts";
+import { GOAT_PROJECT_FILE_NAME } from "@goat/contracts";
 import { normalizeProjectPathForComparison } from "@goat/shared/path";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -253,16 +253,15 @@ it.layer(layerTest)("worktrees of a submodule checkout", (it) => {
         const path = yield* Path.Path;
         const driver = yield* GitVcsDriver.GitVcsDriver;
         const repo = yield* makeSubmoduleCheckout(false);
-        const decide = (cwd: string, hookRunSupported: boolean) =>
+        const decide = (cwd: string) =>
           readWorktreeRoot(
             (operation, gitCwd, args, options) =>
               driver.execute({ operation, cwd: gitCwd, args, ...options }),
             path,
             cwd,
-            Effect.succeed(hookRunSupported),
           );
         // Linked worktrees ignore the shared root while extensions.worktreeConfig is off.
-        assert.deepStrictEqual(yield* decide(repo.checkout, false), {
+        assert.deepStrictEqual(yield* decide(repo.checkout), {
           pin: true,
           checkoutApart: false,
         });
@@ -280,16 +279,14 @@ it.layer(layerTest)("worktrees of a submodule checkout", (it) => {
         yield* git(linked, ["sparse-checkout", "set", "--no-cone", "/*"]);
         assert.equal(yield* repo.sharedRoot().pipe(Effect.orElseSucceed(() => "")), "");
         for (const cwd of [repo.checkout, linked]) {
-          assert.deepStrictEqual(yield* decide(cwd, false), { pin: true, checkoutApart: false });
+          assert.deepStrictEqual(yield* decide(cwd), { pin: true, checkoutApart: false });
         }
         // git submodule update wrote it back, so a plain add would inherit it.
         yield* repo.updateSubmodule();
-        assert.deepStrictEqual(yield* decide(repo.checkout, true), {
+        assert.deepStrictEqual(yield* decide(repo.checkout), {
           pin: true,
           checkoutApart: true,
         });
-        const refused: GitCommandError = yield* Effect.flip(decide(repo.checkout, false));
-        assert.include(refused.detail, "Git 2.36");
       }),
   );
 });

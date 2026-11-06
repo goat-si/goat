@@ -76,8 +76,31 @@ type WorktreeGit = (
   operation: string,
   cwd: string,
   args: readonly string[],
-  options?: { readonly allowNonZeroExit?: boolean },
+  options?: { readonly allowNonZeroExit?: boolean; readonly timeoutMs?: number },
 ) => Effect.Effect<{ readonly exitCode: number; readonly stdout: string }, GitCommandError>;
+
+export function makeHookRunProbe(git: WorktreeGit, platform: NodeJS.Platform) {
+  let supported: boolean | null = null;
+  return Effect.fn("GitVcsDriver.supportsHookRun")(function* (cwd: string) {
+    if (supported !== null) return supported;
+    // A null hooks path makes the probe side-effect-free.
+    const result = yield* git(
+      "GitVcsDriver.supportsHookRun",
+      cwd,
+      [
+        "-c",
+        `core.hooksPath=${platform === "win32" ? "NUL" : "/dev/null"}`,
+        "hook",
+        "run",
+        "--ignore-missing",
+        "post-checkout",
+      ],
+      { allowNonZeroExit: true, timeoutMs: 10_000 },
+    );
+    supported = result.exitCode === 0;
+    return supported;
+  });
+}
 
 const lenient = { allowNonZeroExit: true };
 const output = (result: { readonly exitCode: number; readonly stdout: string }) =>
@@ -97,12 +120,7 @@ const output = (result: { readonly exitCode: number; readonly stdout: string }) 
  * checks out into, the git dir itself (#799).
  */
 export const readWorktreeRoot = Effect.fn("GitVcsDriver.createWorktree.readWorktreeRoot")(
-  function* (
-    git: WorktreeGit,
-    path: Path.Path,
-    cwd: string,
-    hookRunSupported: Effect.Effect<boolean, GitCommandError>,
-  ) {
+  function* (git: WorktreeGit, path: Path.Path, cwd: string) {
     const operation = "GitVcsDriver.createWorktree.readWorktreeRoot";
     const read = (args: readonly string[]) =>
       git(operation, cwd, args, lenient).pipe(Effect.map(output));
@@ -129,15 +147,6 @@ export const readWorktreeRoot = Effect.fn("GitVcsDriver.createWorktree.readWorkt
     const checkoutApart =
       (yield* rootIn("config")) &&
       (yield* read(["config", "--bool", "--get", "extensions.worktreeConfig"])) === "true";
-    if (checkoutApart && !(yield* hookRunSupported)) {
-      return yield* new GitCommandError({
-        operation,
-        command: "git hook run",
-        cwd,
-        detail:
-          "This checkout's worktrees would check out and run post-checkout in its git dir, and this Git lacks git hook run to check out first; install Git 2.36 or later.",
-      });
-    }
     return { pin: true, checkoutApart };
   },
 );
