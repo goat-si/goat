@@ -9,6 +9,7 @@ import {
   remoteWebOrigin,
 } from "@goat/source-control-core/shared/definition";
 import { icon } from "./icon.ts";
+import { gitLabReferenceAutolinks } from "./referenceAutolinks.ts";
 
 const CHECKOUT_COMMAND = /^glab\s+mr\s+checkout\s+(.+)$/i;
 const CHANGE_REQUEST_REFERENCE =
@@ -41,7 +42,8 @@ export const definition = defineSourceControl({
       ? changeRequestUrlBelow(webUrl, `-/merge_requests/${number}`)
       : `${remoteWebOrigin(host, remoteUrl)}/${repository}/-/merge_requests/${number}`,
   parseChangeRequestUrl: (url) => parseChangeRequestPath(url, CHANGE_REQUEST_PATH),
-  changeRequestUrlFromReferenceAutolink: () => null,
+  changeRequestUrlFromReferenceAutolink: (url) =>
+    CHANGE_REQUEST_PATH.test(url.pathname) ? url.toString() : null,
   changeRequestActions: new Set([
     "merge",
     "ready",
@@ -59,6 +61,7 @@ export const definition = defineSourceControl({
   // Bot users, unlike GitHub's, have real profile pages.
   authorProfileUrl: (login, repositoryUrl) =>
     new URL(`/${encodeURIComponent(login)}`, repositoryUrl).toString(),
+  referenceAutolinks: gitLabReferenceAutolinks,
   reviewSummaryRequired: () => false,
   checkoutCommandArgument: (input) => CHECKOUT_COMMAND.exec(input)?.[1]?.trim() ?? null,
   isChangeRequestReference: (url) => CHANGE_REQUEST_REFERENCE.test(url),
