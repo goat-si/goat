@@ -484,6 +484,8 @@ describe("Windows sessions", () => {
     const { reason } = classifyWindows({ name: "Services", id: 0 });
     expect(reason).toContain("opens the GOAT desktop app");
     expect(reason).toContain("connected directly to it");
-    expect(reason).toContain("over SSH stay on this background server");
+    expect(reason).toContain(
+      "move to the app's server once this background server has no running work",
+    );
   });
 });

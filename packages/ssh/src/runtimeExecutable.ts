@@ -198,7 +198,8 @@ export const makeRemoteScripts = (input: {
     const entry = input.tunnels.get(key);
     return input.isClosed() || entry?.attachmentInvalidated === true
       ? undefined
-      : entry?.selectedRuntime.nativeWindows?.environmentId;
+      : (entry?.selectedRuntime.nativeWindows?.environmentId ??
+          entry?.selectedRuntime.appServerEnvironmentId);
   });
 
   return { runRemoteScript, provisionedRuntimeExecutable, nativeId };

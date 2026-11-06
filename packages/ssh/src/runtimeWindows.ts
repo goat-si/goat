@@ -31,6 +31,7 @@ import { runtimePreparationError } from "./runtimePreparationErrors.ts";
 import { buildRemoteRuntimeProbeScript } from "./runtimeProbe.ts";
 import {
   powershellCommand,
+  WINDOWS_APP_OPERATIONS,
   WINDOWS_DETECT,
   WINDOWS_LOADER,
   WINDOWS_OPERATIONS,
@@ -382,6 +383,17 @@ export const launchWindowsRuntime = Effect.fn("ssh.windows.launch")(function* (
   };
 });
 
+/** Like a POSIX launch, one whose app server probe declined stays on the managed server. */
+export const keepDeclinedAppServer = <
+  A extends { readonly selectedRuntime: PreparedRemoteRuntime },
+>(
+  app: { readonly kind: string },
+  launched: A,
+): A =>
+  app.kind === "declined"
+    ? { ...launched, selectedRuntime: { ...launched.selectedRuntime, appServerDeclined: true } }
+    : launched;
+
 /**
  * Issues or revokes a credential through the selected goat.exe's own runtime endpoint. An issued
  * session must name its id; a revocation must acknowledge exactly the requested one.
@@ -412,6 +424,58 @@ export const issueWindowsCredential = Effect.fn("ssh.windows.credential")(functi
 });
 
 const pairingFailure = (message: string) => new SshPairingError({ message, stdout: "" });
+
+/** Runs one desktop app operation; its stdout answers in the POSIX app scripts' format. */
+const windowsAppCommand = Effect.fn("ssh.windows.appCommand")(function* (
+  target: DesktopSshEnvironmentTarget,
+  auth: Auth,
+  request: { readonly op: "app-probe" | "app-session" } & Readonly<Record<string, unknown>>,
+) {
+  const stdin = yield* Effect.try({
+    try: () => windowsFrame(WINDOWS_APP_OPERATIONS, request),
+    catch: () => pairingFailure("The native Windows request exceeds its size budget."),
+  });
+  const result = yield* runSshCommand(target, {
+    ...auth,
+    remoteCommandArgs: powershellCommand(WINDOWS_LOADER),
+    stdin,
+    timeoutStage: "pairing",
+    timeoutMs: 60_000,
+  }).pipe(
+    Effect.catchTags({
+      SshCommandError: (error) => {
+        const reason = /GOAT_NATIVE_ERROR=([a-z-]+)/u.exec(error.stderr)?.[1];
+        return reason === undefined
+          ? Effect.fail(error)
+          : Effect.fail(
+              pairingFailure(
+                `The GOAT app server on ${target.alias} did not issue a credential (${reason}).`,
+              ),
+            );
+      },
+    }),
+  );
+  return result.stdout;
+});
+
+/** Whether the SSH user's desktop app server on a Windows host can serve SSH clients. */
+export const windowsAppServerProbe = (target: DesktopSshEnvironmentTarget, auth: Auth) =>
+  windowsAppCommand(target, auth, { op: "app-probe" });
+
+/** A credential from the desktop app server still serving `port` and, if named, that environment. */
+export const windowsAppServerCredential = (
+  target: DesktopSshEnvironmentTarget,
+  auth: Auth,
+  port: number,
+  request: RuntimeSessionRequest,
+  expectedEnvironmentId?: EnvironmentId,
+) =>
+  windowsAppCommand(target, auth, {
+    op: "app-session",
+    port,
+    ...(expectedEnvironmentId === undefined ? {} : { environmentId: expectedEnvironmentId }),
+    body: JSON.stringify(request),
+  });
 
 /** The existing-server probe on native Windows: only GOAT's own managed runtime is reachable. */
 export const nativeExistingServer = Effect.fn("ssh.windows.existingServer")(function* (

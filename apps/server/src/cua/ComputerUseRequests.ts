@@ -128,7 +128,7 @@ export const requestComputerUse = Effect.fn("ComputerUse.request")(function* (in
       message:
         host?.capability === "unavailable"
           ? `Computer use cannot run on this host: ${host.reason} Turning it on in Settings is refused until that changes, so do not ask again in this turn; tell the person what is needed.`
-          : "Computer use is off on this host. A person turns it on in Settings → Computer for this host, from a GOAT app connected directly to it with permission to change its settings; they do not need to be at this machine. Then ask again.",
+          : "Computer use is off on this host. A person turns on the Computer use switch in this host's environment settings, from a GOAT app connected directly to it with permission to change its settings; they do not need to be at this machine. Then ask again.",
     } satisfies ComputerUseRequestResult;
   }
   // An approval would not help: the desktop will not start the driver until macOS allows it, or

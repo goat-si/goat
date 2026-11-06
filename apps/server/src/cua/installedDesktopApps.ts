@@ -122,5 +122,5 @@ export function standaloneMacRemedy(input: {
       : older.length === apps.length && apps.length > 0
         ? "updates GOAT, opens it"
         : "opens GOAT";
-  return `${installed}${signedIn} At this Mac or over Screen Sharing, a person ${step}, and starts new threads in that app's environment from a GOAT app connected directly to it; they turn computer use on there in Settings → Computer and approve its requests there.`;
+  return `${installed}${signedIn} At this Mac or over Screen Sharing, a person ${step}, and starts new threads in that app's environment from a GOAT app connected directly to it; they turn on the Computer use switch in that environment's settings and approve its requests there.`;
 }

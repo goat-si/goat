@@ -302,6 +302,7 @@ const appAttach = {
   version: appDescriptor.serverVersion,
   stateDir: ".goat/desktop/userdata",
   otherLive: [],
+  environmentId: appId,
 };
 
 it.effect.each([
@@ -363,7 +364,7 @@ it.effect.each([
       op: "app-session",
       port: 51234,
       environmentId: appId,
-      request: sessionRequest,
+      body: JSON.stringify(sessionRequest),
     });
 
     setup([...before, { stdout: '{"error":"unauthorized"}\r\nGOAT_HTTP_STATUS=403\r\n' }]);

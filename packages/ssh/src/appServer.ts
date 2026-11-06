@@ -39,7 +39,15 @@ import {
   nativeExistingCredential,
   nativeExistingServer,
   nativeWindowsAfter,
+  windowsAppServerCredential,
+  windowsAppServerProbe,
 } from "./runtimeWindows.ts";
+import {
+  powershellCommand,
+  WINDOWS_APP_OPERATIONS,
+  WINDOWS_LOADER,
+  windowsFrame,
+} from "./runtimeWindowsScripts.ts";
 
 const managedLiveness = String.raw`case "$(uname -s)" in
   MINGW* | MSYS* | CYGWIN*)
@@ -68,11 +76,12 @@ command -v curl >/dev/null 2>&1 || app_none no-curl
 [ -f "$app_token" ] && [ ! -L "$app_token" ] && [ -s "$app_token" ] || app_none no-token
 `;
 
-// Windows hosts do not have an SSH app server.
-// First live, reachable app server wins. A missing or dead record is skipped. A live one that
-// cannot be attached is remembered, and a later directory can still be used.
+// Git Bash cannot see Windows processes or listeners, so its hosts answer through the native
+// Windows lookup (runtimeWindowsScripts.ts APP_OPERATIONS). Elsewhere the first live, reachable
+// app server wins. A missing or dead record is skipped. A live one that cannot be attached is
+// remembered, and a later directory can still be used.
 const appServerSelect = String.raw`set -eu
-case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) printf 'GOAT_APP_SERVER=none\n'; exit 0 ;; esac
+case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) printf 'GOAT_APP_SERVER=windows\n'; exit 0 ;; esac
 app_declined=""
 app_found=0
 app_note() { if [ -z "$app_declined" ]; then app_declined="$1"; fi; }
@@ -151,7 +160,7 @@ printf 'GOAT_EXISTING=live %s %s\n%s\n' "$port" "$(cat "$identity")" "$descripto
 `;
 
 const appExistingServerProbeScript = String.raw`set -eu
-case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) printf 'GOAT_EXISTING=absent\n'; exit 0 ;; esac
+case "$(uname -s)" in MINGW* | MSYS* | CYGWIN*) printf 'GOAT_EXISTING=windows\n'; exit 0 ;; esac
 found_unusable=0
 try_app_home() {
   home="$1"
@@ -239,6 +248,8 @@ export type AppServerProbe =
       readonly stateDir: string;
       /** Other app-server state directories whose record names a live process. */
       readonly otherLive: ReadonlyArray<string>;
+      /** The environment a Windows host verified before answering; POSIX probes leave it out. */
+      readonly environmentId?: EnvironmentId;
     }
   | { readonly kind: "declined"; readonly reason: string }
   | { readonly kind: "none" };
@@ -309,6 +320,14 @@ export const probeExistingServer = Effect.fn("ssh/appServer.probeExisting")(func
     Effect.option,
   );
   if (Option.isNone(result)) return { kind: "unusable" };
+  if (
+    kind === "app" &&
+    (result.value === NATIVE_WINDOWS || answeredOnWindows("GOAT_EXISTING", result.value.stdout))
+  )
+    return yield* windowsAppServerProbe(target, input ?? {}).pipe(
+      Effect.map(existingFromWindowsApp),
+      Effect.orElseSucceed((): ExistingServerProbe => ({ kind: "unusable" })),
+    );
   if (result.value === NATIVE_WINDOWS)
     return yield* nativeExistingServer(target, kind, input ?? {}).pipe(
       Effect.orElseSucceed((): ExistingServerProbe => ({ kind: "unusable" })),
@@ -341,13 +360,38 @@ export const parseAppServerProbe = (stdout: string): AppServerProbe => {
   const others = lines
     .find((line) => line.startsWith("GOAT_APP_SERVER_OTHERS="))
     ?.slice("GOAT_APP_SERVER_OTHERS=".length);
+  const verified = lines
+    .find((line) => line.startsWith("GOAT_APP_SERVER_ID="))
+    ?.slice("GOAT_APP_SERVER_ID=".length);
+  if (
+    verified !== undefined &&
+    (!isEnvironmentId(verified) || descriptor.value.environmentId !== verified)
+  )
+    return { kind: "declined", reason: "identity" };
   return {
     kind: "attach",
     port: remotePort,
     version: descriptor.value.serverVersion,
     stateDir,
     otherLive: others?.split(" ").filter((dir) => dir.length > 0) ?? [],
+    ...(verified === undefined ? {} : { environmentId: EnvironmentId.make(verified) }),
   };
+};
+
+/** Whether a POSIX script stopped on Git Bash, leaving the answer to the native lookup. */
+const answeredOnWindows = (marker: "GOAT_APP_SERVER" | "GOAT_EXISTING", stdout: string) =>
+  stdout.split(/\r?\n/u).includes(marker + "=windows");
+
+/** The native app lookup's answer as an existing-server probe. */
+const existingFromWindowsApp = (stdout: string): ExistingServerProbe => {
+  const probe = parseAppServerProbe(stdout);
+  if (probe.kind === "none") return { kind: "absent" };
+  if (probe.kind !== "attach" || probe.environmentId === undefined) return { kind: "unusable" };
+  const lines = stdout.split(/\r?\n/u);
+  const descriptor = lines[lines.findIndex((line) => line.startsWith("GOAT_APP_SERVER=")) + 1];
+  return parseExistingServerProbe(
+    "GOAT_EXISTING=live " + probe.port + " " + probe.environmentId + "\n" + (descriptor ?? ""),
+  );
 };
 
 type AppServerContext = ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path;
@@ -374,7 +418,15 @@ export const probeAppServer = Effect.fn("ssh/appServer.probe")(function* (
     }),
     timeoutMs: 20_000,
     ...sshOptions(input),
-  }).pipe(Effect.option);
+  }).pipe(
+    Effect.catchTags({ SshCommandError: nativeWindowsAfter(target, input ?? {}) }),
+    Effect.flatMap((output) =>
+      output === NATIVE_WINDOWS || answeredOnWindows("GOAT_APP_SERVER", output.stdout)
+        ? windowsAppServerProbe(target, input ?? {}).pipe(Effect.map((stdout) => ({ stdout })))
+        : Effect.succeed(output),
+    ),
+    Effect.option,
+  );
   const probe = Option.match(result, {
     // Unknown is not absent: the managed server may still report the app, so stay put.
     onNone: (): AppServerProbe => ({ kind: "declined", reason: "probe-failed" }),
@@ -440,8 +492,12 @@ export const issueExistingServerCredential = Effect.fn("ssh/appServer.issueCrede
         : error,
     ),
   );
-  // Native Windows: its goat.exe issues or revokes through the same runtime endpoint.
-  if (result === NATIVE_WINDOWS)
+  // Windows: the desktop app server is reached through the native lookup, which writes the
+  // token only on a connection it verified; a managed goat.exe issues through its own endpoint.
+  const windowsApp =
+    kind === "app" &&
+    (result === NATIVE_WINDOWS || answeredOnWindows("GOAT_APP_SERVER", result.stdout));
+  if (result === NATIVE_WINDOWS && !windowsApp)
     return yield* nativeExistingCredential(
       target,
       kind,
@@ -456,8 +512,13 @@ export const issueExistingServerCredential = Effect.fn("ssh/appServer.issueCrede
           : error,
       ),
     );
-  const marker = /^GOAT_HTTP_STATUS=(\d{3})$/mu.exec(result.stdout);
-  const body = marker === null ? result.stdout : result.stdout.slice(0, marker.index).trim();
+  const stdout = windowsApp
+    ? yield* windowsAppServerCredential(target, input ?? {}, port, request, expectedEnvironmentId)
+    : result === NATIVE_WINDOWS
+      ? ""
+      : result.stdout;
+  const marker = /^GOAT_HTTP_STATUS=(\d{3})\r?$/mu.exec(stdout);
+  const body = marker === null ? stdout : stdout.slice(0, marker.index).trim();
   if (marker?.[1] !== "200")
     return yield* new SshPairingError({
       message: `The GOAT app server on ${target.alias} did not issue a credential (HTTP ${marker?.[1] ?? "no answer"}).`,
@@ -475,7 +536,9 @@ export const issueAppServerCredential = (
   port: number,
   request: RuntimeSessionRequest,
   input?: SshAuth.SshAuthOptions,
-) => issueExistingServerCredential(target, "app", port, request, input);
+  /** Set when a Windows host verified the app server's environment at launch. */
+  expectedEnvironmentId?: EnvironmentId,
+) => issueExistingServerCredential(target, "app", port, request, input, expectedEnvironmentId);
 
 /**
  * The session request matching what a remote session script would pass to `goat auth`, or none
@@ -630,6 +693,7 @@ export const appServerLaunch = Effect.fn("ssh/appServer.launch")(function* (
       version: app.version,
       source: "app" as const,
       appServerPort: app.port,
+      ...(app.environmentId === undefined ? {} : { appServerEnvironmentId: app.environmentId }),
       mayUpgradeOwnedServer: false,
     },
   };
@@ -661,12 +725,22 @@ export const appServerStatus = Effect.fn("ssh/appServer.status")(function* (
  * Prints the GOAT environment id of the server SSH clients use on this host, starting nothing.
  * `attached` is the kind of server a connection to it already uses. With none, the app server's
  * id is printed only while it could be attached (live, holding its control token, advertising
- * `runtimeSessions`), else the managed home's.
+ * `runtimeSessions`), else the managed home's. Git Bash asks the native Windows lookup.
  */
 export const hostEnvironmentIdScript = (attached: "app" | "external" | "managed" | null) =>
   `attached=${attached ?? "none"}` +
   String.raw`
 home="$HOME/.goat/userdata"
+case "$attached:$(uname -s)" in
+  app:MINGW* | app:MSYS* | app:CYGWIN* | none:MINGW* | none:MSYS* | none:CYGWIN*)
+    win_answer="$(printf '%s' '${windowsFrame(WINDOWS_APP_OPERATIONS, { op: "app-probe" }).toString("base64")}' | base64 -d |
+      ${powershellCommand(WINDOWS_LOADER).join(" ")} 2>/dev/null)" || win_answer=""
+    win_id="$(printf '%s\n' "$win_answer" | sed -n 's/^GOAT_APP_SERVER_ID=\([0-9A-Za-z-]*\).*$/\1/p')"
+    if [ -n "$win_id" ] && printf '%s\n' "$win_answer" | grep -q '"runtimeSessions":true'; then
+      printf '%s\n' "$win_id"
+      exit 0
+    fi ;;
+esac
 case "$attached" in
   app | none)
     app_home=""

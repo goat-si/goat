@@ -1,5 +1,6 @@
 import type {
   DesktopSshEnvironmentTarget,
+  EnvironmentId,
   SshHostFailure,
   SshHostStatus,
   SshRuntimePendingReplacement,
@@ -126,6 +127,8 @@ export interface PreparedRemoteRuntime {
   readonly requireFreshHost?: boolean;
   /** The attachment is the host's GOAT app server on this port; credentials come from it. */
   readonly appServerPort?: number;
+  /** The environment a Windows host verified for that app server; its credentials must match. */
+  readonly appServerEnvironmentId?: EnvironmentId;
   /** The app server ran at launch but could not serve this client, so it took the managed one. */
   readonly appServerDeclined?: boolean;
   /** The goat.exe a native Windows host runs without a POSIX shell, and its launch identity. */

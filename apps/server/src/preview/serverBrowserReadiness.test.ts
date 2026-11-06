@@ -207,7 +207,7 @@ describe("a standalone Mac's computer use reason", () => {
     expect(reason.startsWith(MAC_STANDALONE_REASON)).toBe(true);
     expect(reason).toContain("GOAT (Nightly) 0.0.1-nightly.20000101.1 is installed, older than");
     expect(reason).toContain("updates GOAT, opens it");
-    expect(reason).toContain("Settings → Computer");
+    expect(reason).toContain("Computer use switch");
   });
 
   it("tells none found apart from could not check, and says who is at the screen", () => {

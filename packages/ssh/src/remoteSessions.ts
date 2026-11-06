@@ -427,7 +427,14 @@ export function makeRemoteSessions({
       const appServerPort = prepared?.appServerPort;
       if (appServerPort !== undefined)
         return yield* fromServer(
-          (request) => issueAppServerCredential(target, appServerPort, request, input),
+          (request) =>
+            issueAppServerCredential(
+              target,
+              appServerPort,
+              request,
+              input,
+              prepared?.appServerEnvironmentId,
+            ),
           "The GOAT app server",
         );
       const selected =
@@ -536,6 +543,7 @@ export function makeRemoteSessions({
         prepared.appServerPort,
         request.value,
         input,
+        prepared.appServerEnvironmentId,
       );
       return yield* decodeRemoteClientSessionOutput(body, sessionOptions.scopes);
     }
@@ -625,6 +633,7 @@ export function makeRemoteSessions({
         prepared.appServerPort,
         { kind: "pairing" },
         input,
+        prepared.appServerEnvironmentId,
       );
       const pairing = yield* decodeRemotePairingOutput(body).pipe(
         Effect.mapError(

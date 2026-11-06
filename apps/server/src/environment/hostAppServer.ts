@@ -35,10 +35,9 @@ export const makeAppServerLive = Effect.fn("ServerEnvironment.makeAppServerLive"
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const home = yield* HostProcess.HomeDirectory;
-  const platform = yield* HostProcess.Platform;
   const sshHome = path.join(home, ".goat");
-  // SSH clients never probe Windows hosts for the app's server.
-  if (platform === "win32" || path.resolve(config.baseDir) !== path.resolve(sshHome)) {
+  // A hint only: the client verifies the app server over SSH before it moves.
+  if (path.resolve(config.baseDir) !== path.resolve(sshHome)) {
     return Effect.succeed(false);
   }
   // Read when the descriptor is built, not when this effect is constructed.

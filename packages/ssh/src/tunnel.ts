@@ -1676,7 +1676,7 @@ export const launchOrReuseRemoteServer = Effect.fn("ssh/tunnel.launchOrReuseRemo
           const native = NativeWindows.launchWindowsRuntime(target, input ?? {}, selected);
           const launched = yield* restore(native);
           if (onLaunched !== undefined) yield* onLaunched({ status: "ready" });
-          return launched;
+          return NativeWindows.keepDeclinedAppServer(app, launched);
         }
         const result = folded ?? (yield* launch(selected));
         if (!getLastNonEmptyOutputLine(result.stdout)) {

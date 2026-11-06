@@ -914,7 +914,7 @@ it.effect("a host that can run computer use but has it off names where a person 
         if (result.kind !== "refused")
           return assert.fail("a host with computer use off must refuse");
         assert.equal(result.reason, "disabled");
-        assert.include(result.message, "Settings → Computer");
+        assert.include(result.message, "Computer use switch");
         assert.include(result.message, "connected directly to it");
       }),
     ),

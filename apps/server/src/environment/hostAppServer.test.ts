@@ -55,7 +55,7 @@ it.layer(NodeServices.layer)("app server presence", (it) => {
 
         // An app that quit leaves its record behind; its PID no longer runs.
         const exited = yield* (yield* ChildProcessSpawner.ChildProcessSpawner).spawn(
-          ChildProcess.make("true", []),
+          ChildProcess.make(process.execPath, ["-e", ""]),
         );
         yield* exited.exitCode;
         expect(yield* appServerLive({ home, baseDir: sshHome, pid: Number(exited.pid) })).toBe(

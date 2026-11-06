@@ -38,7 +38,7 @@ const MESSAGES: Readonly<Record<ComputerUseDriverEndReason, string>> = {
   helper_unsupported:
     "GOAT Computer Use cannot start for agent connections on this host. Restarting the agent session will not fix it; reinstall or update GOAT.",
   helper_restarted:
-    "GOAT Computer Use keeps stopping before agent connections work on this host. Check Settings → Computer use, then try again.",
+    "GOAT Computer Use keeps stopping before agent connections work on this host. Check this environment's Computer use settings, then try again.",
 };
 
 /** The host's record after one more report: an ending counts, a working connection clears it. */
