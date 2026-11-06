@@ -60,6 +60,12 @@ interface RegistryState {
   readonly entries: Ref.Ref<ReadonlyMap<ProviderInstanceId, LiveEntry>>;
   readonly unavailable: Ref.Ref<ReadonlyMap<ProviderInstanceId, ServerProvider>>;
   readonly changes: PubSub.PubSub<void>;
+  readonly unreadable: Ref.Ref<
+    ReadonlyMap<
+      ProviderInstanceId,
+      { entry: ProviderInstanceConfig; providerConfigs: ReadonlyArray<unknown> }
+    >
+  >;
 }
 
 const entryEqual = (a: ProviderInstanceConfig, b: ProviderInstanceConfig): boolean =>
@@ -98,7 +104,11 @@ const buildEntry = Effect.fn("ProviderInstanceRegistry.buildEntry")(function* <R
   readonly deferSecrets: boolean;
 }): Effect.fn.Return<
   | { readonly kind: "live"; readonly live: LiveEntry }
-  | { readonly kind: "unavailable"; readonly snapshot: ServerProvider },
+  | {
+      readonly kind: "unavailable";
+      readonly snapshot: ServerProvider;
+      readonly secretsUnreadable?: true;
+    },
   never,
   R
 > {
@@ -193,6 +203,7 @@ const buildEntry = Effect.fn("ProviderInstanceRegistry.buildEntry")(function* <R
         : `Could not read ${result.value.name} from its secret provider.`;
     return {
       kind: "unavailable" as const,
+      secretsUnreadable: true as const,
       snapshot: yield* buildUnavailableProviderSnapshot({
         driverKind: entry.driver,
         instanceId,
@@ -266,6 +277,7 @@ const makeReconcile = <R>(input: {
     Effect.gen(function* () {
       const previousEntries = yield* Ref.get(state.entries);
       const previousUnavailable = yield* Ref.get(state.unavailable);
+      const previousUnreadable = yield* Ref.get(state.unreadable);
       const nextRaw = Object.entries(configMap);
       const nextKeys = new Set<ProviderInstanceId>(
         nextRaw.map(([raw]) => ProviderInstanceId.make(raw)),
@@ -307,6 +319,10 @@ const makeReconcile = <R>(input: {
 
       const builtEntries = new Map<ProviderInstanceId, LiveEntry>();
       const builtUnavailable = new Map<ProviderInstanceId, ServerProvider>();
+      const builtUnreadable = new Map<
+        ProviderInstanceId,
+        { entry: ProviderInstanceConfig; providerConfigs: ReadonlyArray<unknown> }
+      >();
       let orderChanged = false;
       const previousOrder = [...previousEntries.keys()];
       const nextOrder: Array<ProviderInstanceId> = [];
@@ -321,8 +337,24 @@ const makeReconcile = <R>(input: {
           continue;
         }
         const previousFailure = previousUnavailable.get(instanceId);
+        const parked = previousUnreadable.get(instanceId);
+        if (
+          previousFailure &&
+          parked &&
+          !rebuild?.has(instanceId) &&
+          entryEqual(parked.entry, entry) &&
+          NodeUtil.isDeepStrictEqual(
+            parked.providerConfigs,
+            providerConfigsFor(entry, secretProviders),
+          )
+        ) {
+          builtUnavailable.set(instanceId, previousFailure);
+          builtUnreadable.set(instanceId, parked);
+          continue;
+        }
         if (rebuild !== undefined && !rebuild.has(instanceId) && previousFailure !== undefined) {
           builtUnavailable.set(instanceId, previousFailure);
+          if (parked) builtUnreadable.set(instanceId, parked);
           continue;
         }
 
@@ -342,6 +374,11 @@ const makeReconcile = <R>(input: {
           builtEntries.set(instanceId, result.live);
         } else {
           builtUnavailable.set(instanceId, result.snapshot);
+          if (result.secretsUnreadable)
+            builtUnreadable.set(instanceId, {
+              entry,
+              providerConfigs: providerConfigsFor(entry, secretProviders),
+            });
         }
       }
 
@@ -371,6 +408,7 @@ const makeReconcile = <R>(input: {
 
       yield* Ref.set(state.entries, builtEntries);
       yield* Ref.set(state.unavailable, builtUnavailable);
+      yield* Ref.set(state.unreadable, builtUnreadable);
 
       if (entriesChanged || unavailableChanged) {
         yield* PubSub.publish(state.changes, undefined);
@@ -412,7 +450,13 @@ export const makeProviderInstanceRegistry = Effect.fn(
   const changes = yield* PubSub.unbounded<void>();
   yield* Effect.addFinalizer(() => PubSub.shutdown(changes));
 
-  const state: RegistryState = { entries, unavailable, changes };
+  const unreadable = yield* Ref.make<
+    ReadonlyMap<
+      ProviderInstanceId,
+      { entry: ProviderInstanceConfig; providerConfigs: ReadonlyArray<unknown> }
+    >
+  >(new Map());
+  const state: RegistryState = { entries, unavailable, unreadable, changes };
   const reconcileSemaphore = yield* Semaphore.make(1);
   const latest = yield* Ref.make({
     configMap: input.configMap,
@@ -427,10 +471,24 @@ export const makeProviderInstanceRegistry = Effect.fn(
   const reconcile: ProviderInstanceRegistryMutator.ProviderInstanceRegistryMutatorShape["reconcile"] =
     (configMap, secretProviders, deferSecrets) =>
       reconcileSemaphore.withPermits(1)(
-        Ref.set(latest, { configMap, secretProviders }).pipe(
-          Effect.andThen(reconcileWithR(configMap, secretProviders, undefined, deferSecrets)),
-          Effect.provideContext(driverContext),
-        ),
+        Effect.gen(function* () {
+          const previous = yield* Ref.get(latest);
+          const changed = Object.entries(configMap).some(([id, entry]) => {
+            if (!entry.environment?.some((variable) => variable.secret)) return false;
+            const old = previous.configMap[ProviderInstanceId.make(id)];
+            return (
+              old !== undefined &&
+              (!entryEqual(old, entry) ||
+                !NodeUtil.isDeepStrictEqual(
+                  providerConfigsFor(old, previous.secretProviders),
+                  providerConfigsFor(entry, secretProviders),
+                ))
+            );
+          });
+          if (changed) input.invalidateSecrets?.();
+          yield* Ref.set(latest, { configMap, secretProviders });
+          yield* reconcileWithR(configMap, secretProviders, undefined, deferSecrets);
+        }).pipe(Effect.provideContext(driverContext)),
       );
 
   yield* reconcile(input.configMap, input.secretProviders, input.deferSecrets);

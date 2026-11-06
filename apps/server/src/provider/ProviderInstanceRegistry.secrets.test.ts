@@ -247,6 +247,45 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 
+  it.effect("does not reread an unavailable secret on an unchanged settings save", () =>
+    Effect.gen(function* () {
+      let reads = 0;
+      const id = ProviderInstanceId.make("secret_test");
+      const configMap = decodeProviderInstanceConfigMap({
+        [id]: {
+          driver: "codex",
+          config: makeCodexConfig({ enabled: true }),
+          environment: [
+            {
+              name: "API_KEY",
+              secret: { provider: "vault", reference: "op://work/item/password" },
+            },
+          ],
+        },
+      });
+      const { mutator } = yield* makeProviderInstanceRegistry({
+        drivers: [CodexDriver],
+        configMap,
+        resolveSecret: () => {
+          reads++;
+          return Effect.fail(new Error("locked"));
+        },
+      });
+      expect(reads).toBe(1);
+      yield* mutator.reconcile(configMap);
+      expect(reads).toBe(1);
+      yield* mutator.reloadSecrets?.(id) ?? Effect.void;
+      expect(reads).toBe(2);
+      yield* mutator.reconcile(
+        decodeProviderInstanceConfigMap({
+          ...configMap,
+          [id]: { ...configMap[id], displayName: "Changed" },
+        }),
+      );
+      expect(reads).toBe(3);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
   it.effect("retries an unavailable secret-backed provider on explicit refresh", () =>
     Effect.gen(function* () {
       let available = false;
