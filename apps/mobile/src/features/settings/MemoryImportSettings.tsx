@@ -12,6 +12,7 @@ import {
   memoryImportFormatLabels,
   memoryImportFormats,
   memoryImportIssueReason,
+  memoryImportResultLines,
 } from "@goat/client-runtime/memory-import-workflow";
 import { useCallback, useContext, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { AppState } from "react-native";
@@ -28,7 +29,6 @@ import { AppText as Text } from "../../components/ui/AppText";
 import { SettingsSection } from "./components/SettingsSection";
 import { SettingsActionRow } from "./components/SettingsActionRow";
 import { SettingsSwitchRow } from "./components/SettingsSwitchRow";
-import { nativeMemoryImportOutcomes } from "./SettingsMemoryRouteScreen.logic";
 import type { MemoryScreenParams } from "./SettingsMemoryRouteScreen.logic";
 import type { EnvironmentId } from "@goat/contracts";
 
@@ -117,30 +117,33 @@ export function MemoryImportSettings({
       }
     };
   }, [workflow, params.environmentId, registry, connection]);
-  const run = useCallback(async (action: () => Promise<unknown>) => {
-    if (pending.current) return;
-    pending.current = true;
-    const token = generation.current;
-    setBusy(true);
-    setError(null);
-    try {
-      await transition.current;
-      if (!mounted.current || token !== generation.current) return;
-      const request = action();
-      await request;
-    } catch (error) {
-      if (mounted.current && token === generation.current)
-        setError(
-          memoryImportRequestFailureMessage(error) ??
-            "Import could not finish. Check the saved result before previewing again.",
-        );
-    } finally {
-      if (mounted.current && token === generation.current) {
-        setBusy(false);
-        pending.current = false;
+  const run = useCallback(
+    async (action: () => Promise<unknown>, source?: MemoryImportSourceFormat) => {
+      if (pending.current) return;
+      pending.current = true;
+      const token = generation.current;
+      setBusy(true);
+      setError(null);
+      try {
+        await transition.current;
+        if (!mounted.current || token !== generation.current) return;
+        const request = action();
+        await request;
+      } catch (error) {
+        if (mounted.current && token === generation.current)
+          setError(
+            memoryImportRequestFailureMessage(error, source) ??
+              "Import could not finish. Check the saved result before previewing again.",
+          );
+      } finally {
+        if (mounted.current && token === generation.current) {
+          setBusy(false);
+          pending.current = false;
+        }
       }
-    }
-  }, []);
+    },
+    [],
+  );
   useEffect(() => {
     const retire = async () => {
       generation.current++;
@@ -264,11 +267,13 @@ export function MemoryImportSettings({
             void run(async () => {
               const result = await workflow.discover(value);
               if (result) setSources(result);
-            });
+            }, value);
           }}
         />
       ))}
-      {sources?.sources.length === 0 ? <Copy>No supported profiles found.</Copy> : null}
+      {sources?.sources.length === 0 && format ? (
+        <Copy>{memoryImportIssueReason("source_missing", "request", format)}</Copy>
+      ) : null}
       {sources?.sources.map((source, index) => (
         <Action
           key={source.sourceId}
@@ -284,7 +289,7 @@ export function MemoryImportSettings({
             void run(async () => {
               const result = await workflow.preview(source.sourceId);
               if (result) setPreview(result);
-            });
+            }, source.format);
           }}
         />
       ))}
@@ -400,7 +405,7 @@ export function MemoryImportSettings({
       {state.receipt ? (
         <>
           <Copy>Totals across all import batches</Copy>
-          {nativeMemoryImportOutcomes(state.totals).map((label) => (
+          {memoryImportResultLines(state.totals).map((label) => (
             <Copy key={label}>{label}</Copy>
           ))}
         </>

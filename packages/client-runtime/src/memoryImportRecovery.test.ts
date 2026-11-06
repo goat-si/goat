@@ -15,6 +15,7 @@ import {
   memoryImportIssueReason,
   memoryImportFormats,
   memoryImportRequestFailureMessage,
+  memoryImportResultLines,
   sameMemoryImportFence,
   reduceMemoryImportProgress,
   initialMemoryImportWorkflowState,
@@ -908,13 +909,48 @@ describe("memoryImportIssueReason", () => {
     ).toEqual(["codex", "claude", "omo", "aside"]);
   });
   it("names the refusals a person can act on", () => {
-    expect(memoryImportIssueReason("limit_exceeded")).toBe("This folder has more than 128 items.");
+    expect(memoryImportIssueReason("limit_exceeded")).toBe(
+      "This source is over an import limit: up to 128 memories per preview, 256 KiB per file and 8 MiB in total. Two other previews running at once also hit this limit.",
+    );
     expect(memoryImportIssueReason("scope_unmapped")).toBe(
       "Items in projects/ need a project scope.",
     );
     expect(memoryImportIssueReason("source_missing")).toBe(
       "That memory store or profile is not on this device.",
     );
+    expect(memoryImportIssueReason("source_missing", "request", "claude")).toBe(
+      "No Claude memories were found on this device. GOAT looks in .claude/projects/<project>/memory in your home folder.",
+    );
+  });
+
+  it("a capacity refusal names what is full and how to free space", () => {
+    const capacity = {
+      code: "capacity_exceeded" as const,
+      dimension: "user_items" as const,
+      current: 500,
+      limit: 500,
+      reclaimable: 0,
+    };
+    expect(
+      memoryImportRequestFailureMessage(
+        new M.MemoryImportRpcError({ issue: "capacity_exceeded", capacity }),
+      ),
+    ).toBe(
+      "Memory storage is full: User memory count limit reached (500 of 500). Forget memories you no longer need in Settings → Memory to free space, then preview again.",
+    );
+    expect(
+      memoryImportResultLines({
+        outcomes: { created: 2, rejected: 1 },
+        issues: { capacity_exceeded: 1 },
+        capacity: { user_items: 1 },
+      }),
+    ).toEqual([
+      "Added: 2",
+      "Could not import: 1",
+      "Storage limit reached: 1",
+      "User memory count limit reached: 1",
+      "Forget memories you no longer need in Settings → Memory to free space, then preview again",
+    ]);
   });
 
   it("shows a typed refusal and leaves other failures unnamed", () => {
