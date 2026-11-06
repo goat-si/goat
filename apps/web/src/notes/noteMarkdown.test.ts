@@ -239,3 +239,131 @@ describe("note markdown codec", () => {
     expect(parse(markdown).firstChild?.textContent).toBe("hello\n```");
   });
 });
+
+describe("note embeds", () => {
+  const embedOf = (source: string) => noteMarkdownToDoc(source).content?.[0];
+  const write = (attrs: Record<string, unknown>) =>
+    noteDocToMarkdown({ type: "doc", content: [{ type: "noteEmbed", attrs }] });
+
+  it.each([
+    ["![Diagram](.attachments/0123456789abcdef.png)\n", "image"],
+    ['![a *b* \\[c\\]](<https://example.com/my file.png> "A \\"quoted\\" title")\n', "image"],
+    ["![x](https://example.com/a.png 'single')\n", "image"],
+    ["![x](https://example.com/a.png (paren))\n", "image"],
+    ["[Spec.pdf](../.attachments/0123456789abcdef.pdf)\n", "link"],
+    ["[Watch](https://youtu.be/dQw4w9WgXcQ)\n", "link"],
+    ["https://www.youtube.com/watch?v=dQw4w9WgXcQ\n", "url"],
+    ["www.example.com\n", "url"],
+    ["<https://example.com/a?b=1>\n", "autolink"],
+  ])("loads %j as an embed and keeps its bytes", (source, syntax) => {
+    const node = embedOf(source);
+    expect(node?.type).toBe("noteEmbed");
+    expect(node?.attrs?.syntax).toBe(syntax);
+    const doc = parse(source);
+    expect(noteDocToMarkdown(doc.toJSON())).toBe(source);
+  });
+
+  it.each([
+    "![ref][diagram]\n\n[diagram]: x.png\n",
+    "Before ![x](a.png) after\n",
+    "[other note](other.md)\n",
+    "[mail](mailto:a@example.com)\n",
+    "[**bold** label](https://example.com)\n",
+    "![diagram](images/diagram.png)\n",
+  ])("leaves %j as it was", (source) => {
+    expect(embedOf(source)?.type).not.toBe("noteEmbed");
+    expect(noteDocToMarkdown(parse(source).toJSON())).toBe(source);
+  });
+
+  it("keeps an embed's bytes when blocks around it move", () => {
+    const source = "First\n\n![a](<x y.png> 'q')\n\nLast\n";
+    const doc = parse(source);
+    const state = EditorState.create({ schema, doc });
+    const embed = doc.child(1);
+    const moved = state.tr
+      .delete(doc.child(0).nodeSize, doc.child(0).nodeSize + embed.nodeSize)
+      .insert(0, embed).doc;
+    expect(noteDocToMarkdown(moved.toJSON())).toContain("![a](<x y.png> 'q')");
+  });
+
+  it.each([
+    { syntax: "image", src: ".attachments/0123456789abcdef.png", text: "a &amp; b", title: null },
+    {
+      syntax: "image",
+      src: "https://example.com/my file (1).png",
+      text: "*bold* [x] `code`",
+      title: 'say "hi" \\ there',
+    },
+    {
+      syntax: "link",
+      src: "../.attachments/0123456789abcdef.zip",
+      text: "back\\slash <tag>",
+      title: null,
+    },
+    { syntax: "link", src: "https://example.com/a?b=1&c=2", text: "quote 'r' & co", title: "t" },
+    {
+      syntax: "url",
+      src: "https://example.com/docs",
+      text: "https://example.com/docs",
+      title: null,
+    },
+  ])("writes new embeds that read back the same: $text", (attrs) => {
+    const written = write(attrs);
+    const read = embedOf(written);
+    expect(read?.type).toBe("noteEmbed");
+    expect(read?.attrs).toMatchObject(attrs);
+  });
+
+  it("keeps embeds with control characters as markdown", () => {
+    expect(embedOf("![a\u0001b](x.png)\n")?.type).not.toBe("noteEmbed");
+  });
+
+  it("embeds an attachment only where it resolves from the note", () => {
+    const nested = "![d](images/.attachments/0123456789abcdef.png)\n";
+    expect(noteMarkdownToDoc(nested, "plan.md").content?.[0]?.type).not.toBe("noteEmbed");
+    const up = "![d](../.attachments/0123456789abcdef.png)\n";
+    expect(noteMarkdownToDoc(up, "plan.md").content?.[0]?.type).not.toBe("noteEmbed");
+    expect(noteMarkdownToDoc(up, "ideas/plan.md").content?.[0]?.type).toBe("noteEmbed");
+    const root = "![d](/.attachments/0123456789abcdef.png)\n";
+    expect(noteMarkdownToDoc(root, "ideas/plan.md").content?.[0]?.type).toBe("noteEmbed");
+  });
+});
+
+describe("note block separators", () => {
+  it("parts a block from one added after what was the last line", () => {
+    const doc = parse("Intro\n");
+    const added = schema.nodes.paragraph!.create(null, schema.text("More"));
+    const next = EditorState.create({ schema, doc }).tr.insert(doc.content.size, added).doc;
+    const markdown = noteDocToMarkdown(next.toJSON());
+    expect(markdown).toBe("Intro\n\nMore\n\n");
+    expect(parse(markdown).childCount).toBe(2);
+  });
+
+  it("keeps a tight separator between blocks that stay neighbors", () => {
+    const source = "# Title\nBody text\n";
+    expect(noteDocToMarkdown(parse(source).toJSON())).toBe(source);
+  });
+
+  it("parts blocks whose kind changed so they do not merge on reload", () => {
+    const doc = parse("# Title\nBody text\n");
+    const heading = doc.child(0);
+    const retyped = EditorState.create({ schema, doc }).tr.setNodeMarkup(
+      0,
+      schema.nodes.paragraph,
+      heading.attrs,
+    ).doc;
+    const markdown = noteDocToMarkdown(retyped.toJSON());
+    expect(markdown).toBe("Title\n\nBody text\n");
+    expect(parse(markdown).childCount).toBe(2);
+  });
+
+  it("parts a block moved after what was the last line", () => {
+    const doc = parse("First\n\nLast\n");
+    const first = doc.child(0);
+    const moved = EditorState.create({ schema, doc })
+      .tr.delete(0, first.nodeSize)
+      .insert(doc.content.size - first.nodeSize, first).doc;
+    const markdown = noteDocToMarkdown(moved.toJSON());
+    expect(parse(markdown).childCount).toBe(2);
+  });
+});

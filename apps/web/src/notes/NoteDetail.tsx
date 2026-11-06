@@ -33,6 +33,7 @@ import { NoteLinkedThread } from "./NoteLinkedThread";
 import { NoteStartWorkDialog } from "./NoteStartWorkDialog";
 import { isNoteDirty, noteErrorMessage, NoteSession, type NoteEditState } from "./noteState";
 import { useNoteCommand } from "./useNoteCommand";
+import { attachmentEnvironment } from "../state/attachments";
 
 interface NotePaneProps {
   environmentId: EnvironmentId;
@@ -98,6 +99,10 @@ function NoteDetail(props: NotePaneProps & { document: NoteDocument }) {
   const canMove = useAtomValue(notesRpc.move.permissionAtom(props.environmentId));
   const canDelete = useAtomValue(notesRpc.delete.permissionAtom(props.environmentId));
   const canStart = useAtomValue(notesRpc.startWork.permissionAtom(props.environmentId));
+  const canAttachNotes = useAtomValue(notesRpc.attach.permissionAtom(props.environmentId));
+  const canUpload = useAtomValue(
+    attachmentEnvironment.createUploadUrl.permissionAtom(props.environmentId),
+  );
   const canUpdate =
     useAtomValue(notesRpc.update.permissionAtom(props.environmentId)) && props.supportsUpdate;
   const [compare, setCompare] = useState(false);
@@ -300,6 +305,11 @@ function NoteDetail(props: NotePaneProps & { document: NoteDocument }) {
         autoFocus={focusOnMount && state.editorVersion === 0}
         onChange={(body) => session.edit(body)}
         onExit={props.onExitEditor}
+        embeds={{
+          environmentId: props.environmentId,
+          notePath: props.document.path,
+          canAttach: canAttachNotes && canUpload,
+        }}
       />
       {(latest.threads.length > 0 || related.length > 0) && (
         <section
