@@ -420,17 +420,17 @@ export const probeAppServer = Effect.fn("ssh/appServer.probe")(function* (
     ...sshOptions(input),
   }).pipe(
     Effect.catchTags({ SshCommandError: nativeWindowsAfter(target, input ?? {}) }),
-    Effect.flatMap((output) =>
-      output === NATIVE_WINDOWS || answeredOnWindows("GOAT_APP_SERVER", output.stdout)
-        ? windowsAppServerProbe(target, input ?? {}).pipe(Effect.map((stdout) => ({ stdout })))
-        : Effect.succeed(output),
-    ),
     Effect.option,
   );
-  const probe = Option.match(result, {
+  const answer =
+    Option.isSome(result) &&
+    (result.value === NATIVE_WINDOWS || answeredOnWindows("GOAT_APP_SERVER", result.value.stdout))
+      ? yield* windowsAppServerProbe(target, input ?? {}).pipe(Effect.option)
+      : Option.map(result, (output) => (output === NATIVE_WINDOWS ? "" : output.stdout));
+  const probe = Option.match(answer, {
     // Unknown is not absent: the managed server may still report the app, so stay put.
     onNone: (): AppServerProbe => ({ kind: "declined", reason: "probe-failed" }),
-    onSome: (output) => parseAppServerProbe(output.stdout),
+    onSome: parseAppServerProbe,
   });
   if (probe.kind !== "none")
     yield* Effect.logInfo("ssh.appServer.probed", {

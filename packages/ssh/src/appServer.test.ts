@@ -135,6 +135,8 @@ const makeHost = Effect.fn("test.appServer.host")(function* (record: {
   /** Home-relative state directory. Defaults to the packaged stable layout. */
   readonly stateDir?: string;
   readonly windows?: boolean;
+  /** What the native Windows app lookup answers on this host; none by default. */
+  readonly windowsApp?: string;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const real = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -158,12 +160,17 @@ const makeHost = Effect.fn("test.appServer.host")(function* (record: {
     );
   }
   const scripts: Array<string> = [];
+  const nativeCalls: Array<ReadonlyArray<string>> = [];
   const spawner = ChildProcessSpawner.make((command) =>
     Effect.gen(function* () {
       // The forward stays up: a real ssh -N to this fake host exits within milliseconds, and
       // whether a forward check saw it first decided these tests.
       if (command._tag === "StandardCommand" && command.args.includes("-N"))
         return makeRunningProcess(() => undefined);
+      if (command._tag === "StandardCommand" && command.args.includes("powershell.exe")) {
+        nativeCalls.push(command.args);
+        return makeSuccessfulProcess(record.windowsApp ?? "GOAT_APP_SERVER=none\r\n");
+      }
       if (command._tag !== "StandardCommand" || !command.command.endsWith("ssh"))
         return yield* real.spawn(command);
       const stdin = command.options.stdin;
@@ -190,6 +197,7 @@ const makeHost = Effect.fn("test.appServer.host")(function* (record: {
   return {
     home,
     scripts,
+    nativeCalls,
     spawner: Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner),
   };
 });
@@ -285,6 +293,54 @@ describe("Git Bash managed server", () => {
         failure: { message: expect.stringContaining("HTTP 403") },
       });
       expect(server.sessions).toEqual([{ header: TOKEN, body: null }]);
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+  it.live("hands the app server, its environment and its credentials to the native lookup", () =>
+    Effect.gen(function* () {
+      const id = EnvironmentId.make("33333333-3333-4333-8333-333333333333");
+      const descriptor = { ...attachableDescriptor, environmentId: id };
+      const server = yield* startAppServer(descriptor);
+      const live = [
+        `GOAT_APP_SERVER=live 4242 ${server.port} .goat/desktop/userdata`,
+        JSON.stringify(descriptor),
+        "GOAT_APP_SERVER_OTHERS=",
+        `GOAT_APP_SERVER_ID=${id}`,
+        "",
+      ].join("\r\n");
+      const host = yield* makeHost({
+        pid: 4242,
+        port: server.port,
+        windows: true,
+        windowsApp: live,
+      });
+      expect(yield* probeAppServer(uploadTarget).pipe(Effect.provide(host.spawner))).toMatchObject({
+        kind: "attach",
+        port: server.port,
+        environmentId: id,
+      });
+      expect(
+        yield* probeExistingServer(uploadTarget, "app").pipe(Effect.provide(host.spawner)),
+      ).toEqual({
+        kind: "live",
+        environmentId: id,
+        port: server.port,
+        version: descriptor.serverVersion,
+      });
+      expect(host.nativeCalls).toHaveLength(2);
+
+      const issuing = yield* makeHost({
+        pid: 4242,
+        port: server.port,
+        windows: true,
+        windowsApp: '{"token":"app-session-token"}\r\nGOAT_HTTP_STATUS=200\r\n',
+      });
+      const body = yield* issueExistingServerCredential(uploadTarget, "app", server.port, {
+        kind: "pairing",
+      }).pipe(Effect.provide(issuing.spawner));
+      expect(body).toContain("app-session-token");
+      // Git Bash's curl never carries the token; only the native lookup's verified connection does.
+      expect(server.sessions).toEqual([]);
+      expect(issuing.nativeCalls).toHaveLength(1);
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
   it("accepts only bounded known probe reasons", () => {
