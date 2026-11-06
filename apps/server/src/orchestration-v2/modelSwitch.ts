@@ -14,7 +14,8 @@ import { runRanAfter } from "@goat/shared/orchestrationV2ThreadError";
  * the handoff item already shows those.
  */
 export function modelSwitchSince(
-  projection: Pick<OrchestrationV2ThreadProjection, "runs" | "turnItems">,
+  projection: Pick<OrchestrationV2ThreadProjection, "runs" | "turnItems"> &
+    Partial<Pick<OrchestrationV2ThreadProjection, "thread">>,
   to: ModelSelection,
   baseline?: ModelSelection,
 ): Pick<Extract<OrchestrationV2TurnItem, { type: "user_message" }>, "modelSwitch"> {
@@ -37,6 +38,6 @@ export function modelSwitchSince(
     if (!shown.has(run.userMessageId) && run.contextHandoffId === null) continue;
     if (previous === undefined || runRanAfter(run, previous)) previous = run;
   }
-  const from = previous?.modelSelection ?? baseline;
+  const from = previous?.modelSelection ?? (projection.thread?.sideChatOf ? undefined : baseline);
   return from === undefined || modelSelectionsEqual(from, to) ? {} : { modelSwitch: { from, to } };
 }
