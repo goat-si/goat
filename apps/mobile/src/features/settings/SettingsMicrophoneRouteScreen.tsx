@@ -24,7 +24,7 @@ import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/
 import { SettingsActionRow } from "./components/SettingsActionRow";
 import { SettingsDragHandle } from "./components/SettingsDragHandle";
 import { SettingsSection } from "./components/SettingsSection";
-import { VoiceEnvironmentSettings } from "./VoiceEnvironmentSettings";
+import { VoiceEnvironmentSettings, VoiceModelManagementSettings } from "./VoiceEnvironmentSettings";
 
 const REMOVE_SIZE = 20;
 
@@ -113,11 +113,10 @@ function VoiceInputUnavailable() {
           <ListRowLayout icon="mic" label="Not available on this device" />
         </SettingsSection>
         <Text className="px-2 text-sm text-foreground-muted">
-          GOAT's voice input uses Apple's on-device speech transcription, which needs iOS 26 or
-          later on a device that supports it. Without it, the composer has no microphone button, and
-          allowing microphone access won't add one. Apple keyboard dictation is separate and isn't
-          affected.
+          GOAT's voice recording is not available on this device. You can still manage voice models
+          on a connected environment.
         </Text>
+        <VoiceModelManagementSettings />
       </ScrollView>
     </View>
   );

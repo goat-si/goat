@@ -110,6 +110,62 @@ function EnvironmentRow({
 }
 
 type Model = (typeof SpeechModelList.Type.models)[number];
+export function VoiceModelManagementSettings() {
+  const { environments } = useEnvironments();
+  const [selected, setSelected] = useState<EnvironmentId | null>(null);
+  return (
+    <>
+      <SettingsSection title="Environment voice models">
+        {environments.map((environment) => (
+          <ManagementEnvironmentRow
+            key={environment.environmentId}
+            environment={environment}
+            selected={selected === environment.environmentId}
+            onChoose={() => setSelected(environment.environmentId)}
+          />
+        ))}
+      </SettingsSection>
+      {selected ? <VoiceModels key={selected} environmentId={selected} /> : null}
+    </>
+  );
+}
+
+function ManagementEnvironmentRow({
+  environment,
+  selected,
+  onChoose,
+}: {
+  environment: EnvironmentPresentation;
+  selected: boolean;
+  onChoose: () => void;
+}) {
+  const canManage = useAtomValue(
+    serverEnvironment.updateSettings.permissionAtom(environment.environmentId, {
+      patch: { speech: DEFAULT_SPEECH_CONFIGURATION },
+    }),
+  );
+  const connection = usePreparedConnection(environment.environmentId);
+  const allowed =
+    canManage &&
+    Option.isSome(connection) &&
+    connection.value.target._tag !== "HubProxyConnectionTarget";
+  return (
+    <SettingsActionRow
+      icon="server.rack"
+      label={`Manage models on ${environment.label}`}
+      detail={selected ? "Selected" : undefined}
+      disabled={!allowed}
+      onPress={() => {
+        if (
+          readEnvironmentScope(environment.environmentId, AuthVoiceManageScope) &&
+          !readEnvironmentProxiedByHub(environment.environmentId)
+        )
+          onChoose();
+      }}
+    />
+  );
+}
+
 function VoiceModels({ environmentId }: { environmentId: EnvironmentId }) {
   const canManage = useAtomValue(
     serverEnvironment.updateSettings.permissionAtom(environmentId, {

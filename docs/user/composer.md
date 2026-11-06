@@ -240,6 +240,9 @@ temporary audio after transcription or cancellation; only the message text is
 sent when you submit.
 Model management needs the explicit permission described in [Voice input on desktop and web](#voice-input-on-desktop-and-web).
 
+On Android, GOAT cannot yet record for environment dictation. You can still manage
+models on a connected environment in **Settings → Microphone**.
+
 ## Voice input on desktop and web
 
 Click the composer's microphone to record, then confirm to insert the text or send it.
