@@ -1,3 +1,4 @@
+import { gitLabDiscussionPosition } from "./gitLabDiscussionPosition.ts";
 import * as Cause from "effect/Cause";
 import * as Exit from "effect/Exit";
 import * as Result from "effect/Result";
@@ -551,16 +552,12 @@ export function decodeDiscussionsJson(
     const notes = (discussion.value.notes ?? []).filter((note) => note.system !== true);
     const root = notes[0];
     const position = root?.position;
-    if (root === undefined || !position || position.position_type !== "text") continue;
-    const side = position.new_line === null || position.new_line === undefined ? "left" : "right";
-    const path = trimmed(side === "left" ? position.old_path : position.new_path);
-    const line = side === "left" ? position.old_line : position.new_line;
-    if (path === null) continue;
+    if (root === undefined || !position) continue;
+    const location = gitLabDiscussionPosition(position);
+    if (location === null) continue;
     threads.push({
       id: discussion.value.id,
-      path,
-      line: typeof line === "number" && line > 0 ? line : null,
-      side,
+      ...location,
       isResolved: root.resolved === true,
       isOutdated: false,
       comments: notes.map((note) => ({
