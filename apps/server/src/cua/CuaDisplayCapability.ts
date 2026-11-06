@@ -406,7 +406,7 @@ export function withMacGrants<T extends CuaDisplayCapability>(
 }
 
 const WINDOWS_SESSION0_REASON =
-  "GOAT runs in Windows Session 0 (a service or SSH session), which has no desktop. At this computer, a person signs in, opens the GOAT desktop app (installing it first if needed), and starts new threads in that app's environment from a GOAT app connected directly to it; they turn computer use on there in Settings → Computer. GOAT connections over SSH stay on this background server, and threads already here keep running without computer use.";
+  "GOAT runs in Windows Session 0 (a service or SSH session), which has no desktop. At this computer, a person signs in, opens the GOAT desktop app (installing it first if needed), and starts new threads in that app's environment from a GOAT app connected directly to it; they turn on the Computer use switch in that environment's settings. GOAT connections over SSH stay on this background server, and threads already here keep running without computer use.";
 
 /** Session name and id from `tasklist /FI "PID eq <pid>" /FO CSV /NH`. */
 export function tasklistSession(
