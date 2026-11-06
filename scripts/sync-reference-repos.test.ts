@@ -3,7 +3,8 @@ import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
-import * as NodeChildProcess from "node:child_process";
+import * as Stream from "effect/Stream";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import { referenceRepos } from "./lib/reference-repos.ts";
 import {
@@ -27,23 +28,41 @@ it.layer(NodeServices.layer)("sync-reference-repos", (it) => {
         const workspace = path.join(root, "workspace");
         yield* fs.makeDirectory(source);
         yield* fs.makeDirectory(path.join(workspace, ".repos", "fixture"), { recursive: true });
-        const git = (cwd: string, ...args: string[]) =>
-          NodeChildProcess.execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+        const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const git = Effect.fn("test.git")(function* (cwd: string, ...args: string[]) {
+          const child = yield* spawner.spawn(ChildProcess.make("git", args, { cwd }));
+          const [stdout, exit] = yield* Effect.all(
+            [
+              child.stdout.pipe(
+                Stream.decodeText(),
+                Stream.runFold(
+                  () => "",
+                  (a, b) => a + b,
+                ),
+              ),
+              child.exitCode,
+              Stream.runDrain(child.stderr),
+            ],
+            { concurrency: "unbounded" },
+          );
+          assert.equal(Number(exit), 0);
+          return stdout.trim();
+        }, Effect.scoped);
         for (const dir of [source, workspace]) {
-          git(dir, "init", "-q");
-          git(dir, "config", "user.email", "fixture@example.invalid");
-          git(dir, "config", "user.name", "Fixture");
+          yield* git(dir, "init", "-q");
+          yield* git(dir, "config", "user.email", "fixture@example.invalid");
+          yield* git(dir, "config", "user.name", "Fixture");
         }
         yield* fs.writeFileString(path.join(source, "reference.txt"), "new");
-        git(source, "add", ".");
-        git(source, "commit", "-qm", "reference");
-        git(source, "tag", "fixture-tag");
+        yield* git(source, "add", ".");
+        yield* git(source, "commit", "-qm", "reference");
+        yield* git(source, "tag", "fixture-tag");
         yield* fs.writeFileString(
           path.join(workspace, ".repos", "fixture", "reference.txt"),
           "old",
         );
-        git(workspace, "add", ".");
-        git(workspace, "commit", "-qm", "initial");
+        yield* git(workspace, "add", ".");
+        yield* git(workspace, "commit", "-qm", "initial");
         const repo = {
           ...effectSmol,
           id: "fixture",
@@ -68,8 +87,8 @@ it.layer(NodeServices.layer)("sync-reference-repos", (it) => {
           yield* fs.readFileString(path.join(workspace, repo.prefix, "reference.txt")),
           "new",
         );
-        assert.equal(git(workspace, "tag", "--list"), "");
-        assert.equal(git(workspace, "status", "--porcelain"), "");
+        assert.equal(yield* git(workspace, "tag", "--list"), "");
+        assert.equal(yield* git(workspace, "status", "--porcelain"), "");
         const failure = yield* Effect.result(
           applyReferenceRepoSync(workspace, {
             ...plan,
