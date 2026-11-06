@@ -62,3 +62,33 @@ it("refuses an environment that changed before upload", async () => {
   });
   expect(upload).not.toHaveBeenCalled();
 });
+
+it("discards a recording if consent is revoked while audio is being read", async () => {
+  const environmentId = EnvironmentId.make("environment-a");
+  const wav = encodeMonoPcm16Wav([new Float32Array(24_000)], 24_000);
+  if (!wav) throw new Error("Invalid fixture");
+  let allowed = true;
+  let complete: (bytes: Uint8Array) => void = () => {
+    throw new Error("Read was not started");
+  };
+  const upload = vi.fn(async () => "unexpected");
+  const transcriber = createEnvironmentWavTranscriber({
+    environmentId,
+    locale: "en-US",
+    canSend: () => allowed,
+    resolveContext: () =>
+      ({ prepared: { environmentId, label: "A" } }) as EnvironmentVoiceRequestContext,
+    readAudio: () =>
+      new Promise((resolve) => {
+        complete = resolve;
+      }),
+    upload,
+  });
+  const signal = new AbortController().signal;
+  const prepared = await transcriber.prepare({ signal });
+  const pending = prepared.transcribe("file://recording", { signal });
+  allowed = false;
+  complete(wav.bytes);
+  await expect(pending).rejects.toMatchObject({ code: "cancelled" });
+  expect(upload).not.toHaveBeenCalled();
+});
