@@ -188,6 +188,7 @@ import {
   browseInputEndPaddingClass,
   buildBrowseGroups,
   buildRootGroups,
+  isPaletteListedThread,
   buildLinkedThreadActionItems,
   buildCommandPaletteRows,
   enumerateCommandPaletteItems,
@@ -499,7 +500,6 @@ function CommandPaletteDialog(props: {
     </CommandDialogPopup>
   );
 }
-
 function OpenCommandPaletteDialog(props: {
   readonly openIntent: CommandPaletteOpenIntent | null;
   readonly setOpen: (open: boolean) => void;
@@ -612,7 +612,7 @@ function OpenCommandPaletteDialog(props: {
         : target,
     );
   };
-  const threads = useThreadShells();
+  const threads = useThreadShells().filter(isPaletteListedThread);
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const providersByEnvironment = useEnvironmentProviders();
   const { changeThemeItem, changeAppearanceItem, changeStyleItem, themeEditorItem } =

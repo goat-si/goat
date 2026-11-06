@@ -380,6 +380,7 @@ export type BuildThreadActionItemsThread = Pick<
   | "environmentId"
   | "id"
   | "lineage"
+  | "sideChatOf"
   | "modelSelection"
   | "projectId"
   | "runtime"
@@ -395,6 +396,12 @@ export type BuildThreadActionItemsThread = Pick<
     updatedAt: string;
   };
 
+export function isPaletteListedThread(
+  thread: Pick<SidebarThreadSummary, "lineage" | "sideChatOf">,
+): boolean {
+  return !isSidebarSubagentThread(thread) && thread.sideChatOf == null;
+}
+
 export function buildThreadActionItems<TThread extends BuildThreadActionItemsThread>(input: {
   threads: ReadonlyArray<TThread>;
   activeThread?: Pick<Thread, "environmentId" | "id">;
@@ -409,7 +416,7 @@ export function buildThreadActionItems<TThread extends BuildThreadActionItemsThr
 }): CommandPaletteActionItem[] {
   // Callers order these: recents by last use, search results by rank.
   const visibleThreads = input.threads.filter(
-    (thread) => thread.archivedAt === null && !isSidebarSubagentThread(thread),
+    (thread) => thread.archivedAt === null && isPaletteListedThread(thread),
   );
 
   return visibleThreads.map((thread) => {
