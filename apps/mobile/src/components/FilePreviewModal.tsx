@@ -9,7 +9,7 @@ import {
   useSyncExternalStore,
   useMemo,
 } from "react";
-import { Keyboard } from "react-native";
+import { Keyboard, Platform } from "react-native";
 
 import { loadLocalAttachmentPreview } from "../lib/localAttachmentPreview";
 import {
@@ -38,6 +38,7 @@ function PreviewItemResolver(props: {
   readonly onResolved: (source: ResolvedFilePreviewSource) => void;
   readonly onRequestClose: () => void;
   readonly onOpenError?: (error: unknown) => void;
+  readonly onFailure?: () => void;
 }) {
   const { source } = props;
   const environmentId = "environmentId" in source ? source.environmentId : null;
@@ -49,6 +50,7 @@ function PreviewItemResolver(props: {
   const [uri, setUri] = useState<string | null>("uri" in source ? source.uri : null);
   const onRequestClose = useEffectEvent(props.onRequestClose);
   const onResolutionError = useEffectEvent((error: unknown, fallbackMessage: string) => {
+    if (props.onFailure) return props.onFailure();
     if (props.onOpenError) props.onOpenError(error);
     else Dialog.alert("Could not open preview", fallbackMessage);
     onRequestClose();
@@ -114,6 +116,7 @@ function ResolvedFilePreview(props: {
   // Freeze the group at opening; streaming messages and URL refreshes must not reopen the viewer.
   const [items] = useState(() => filePreviewGallery(props.source, []));
   const [resolved, setResolved] = useState<Record<string, ResolvedFilePreviewSource>>({});
+  const [failed, setFailed] = useState<ReadonlySet<string>>(() => new Set());
   const onResolved = useCallback((item: ResolvedFilePreviewSource, key: string) => {
     setResolved((current) => ({ ...current, [key]: item }));
   }, []);
@@ -126,7 +129,23 @@ function ResolvedFilePreview(props: {
       }),
     [items, resolved],
   );
-  const ready = selected && gallery.length === items.length;
+  const progressive = Platform.OS === "ios" && props.source.kind === "image";
+  const selectedIndex = items.findIndex(
+    (item) => filePreviewKey(item) === filePreviewKey(props.source),
+  );
+  const gallerySlots = progressive
+    ? items.map((item) => {
+        const key = filePreviewKey(item);
+        const value = resolved[key];
+        return {
+          kind: item.kind,
+          name: filePreviewName(item),
+          sourceIdentifier: item.sourceIdentifier,
+          ...(value ? { uri: value.uri } : failed.has(key) ? { failed: true } : {}),
+        };
+      })
+    : undefined;
+  const ready = selected && (progressive || gallery.length === items.length);
   const onOpenError = (error: unknown) => {
     if (props.onOpenError) return props.onOpenError(error);
     Dialog.alert("Could not open preview", nativeViewerErrorMessage(error), [
@@ -162,11 +181,20 @@ function ResolvedFilePreview(props: {
           onResolved={(value) => onResolved(value, filePreviewKey(item))}
           onRequestClose={props.onRequestClose}
           onOpenError={props.onOpenError}
+          onFailure={
+            progressive && filePreviewKey(item) !== filePreviewKey(props.source)
+              ? () => setFailed((current) => new Set(current).add(filePreviewKey(item)))
+              : undefined
+          }
         />
       ))}
       {ready ? (
         <FilePreview
-          source={{ ...selected, gallery }}
+          source={{
+            ...selected,
+            gallery,
+            ...(gallerySlots ? { gallerySlots, selectedIndex } : {}),
+          }}
           onRequestClose={props.onRequestClose}
           onOpenError={onOpenError}
         />
