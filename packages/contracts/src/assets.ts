@@ -7,6 +7,7 @@ import {
   PROVIDER_SEND_TURN_SUPPORTED_IMAGE_MIME_TYPES,
 } from "./chatAttachment.ts";
 import { ProjectFaviconPath } from "./project.ts";
+import { NoteAttachmentPath } from "./notes.ts";
 import { ToolActivityNativeAppReference } from "./providerRuntime.ts";
 
 const ASSET_PATH_MAX_LENGTH = 1024;
@@ -60,6 +61,12 @@ export const AssetResource = Schema.Union([
     cwd: TrimmedNonEmptyString.check(Schema.isMaxLength(ASSET_PATH_MAX_LENGTH)),
     url: TrimmedNonEmptyString.check(Schema.isMaxLength(2048)),
     repository: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(512))),
+  }),
+  // A file embedded in a note. The path schema admits only the notes attachment folder, so this
+  // read-scoped resource cannot reach notes, .git, or anything else in the notes directory.
+  Schema.TaggedStruct("note-file", {
+    path: NoteAttachmentPath,
+    disposition: Schema.optionalKey(Schema.Literal("attachment")),
   }),
 ]);
 export type AssetResource = typeof AssetResource.Type;

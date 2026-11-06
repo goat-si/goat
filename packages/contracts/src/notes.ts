@@ -244,6 +244,27 @@ export const NotesWorkTargetProjectsResult = Schema.Struct({
 });
 export type NotesWorkTargetProjectsResult = typeof NotesWorkTargetProjectsResult.Type;
 
+/**
+ * Files embedded in notes live in one hidden folder of the notes directory: note scans skip dot
+ * entries and no note folder may start with a dot, so the folder never collides with notes.
+ * Names are content hashes, which also dedupes the same file pasted twice.
+ */
+export const NOTE_ATTACHMENTS_FOLDER = ".attachments";
+export const NoteAttachmentPath = Schema.String.check(
+  Schema.isPattern(/^\.attachments\/[0-9a-f]{16}\.[a-z0-9]{1,10}$/),
+);
+export type NoteAttachmentPath = typeof NoteAttachmentPath.Type;
+
+/** Moves a finished pending upload into the notes directory. */
+export const NotesAttachInput = Schema.Struct({
+  attachmentId: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
+});
+export type NotesAttachInput = typeof NotesAttachInput.Type;
+
+/** `path` is relative to the notes directory; notes reference it relative to their own folder. */
+export const NotesAttachResult = Schema.Struct({ path: NoteAttachmentPath });
+export type NotesAttachResult = typeof NotesAttachResult.Type;
+
 export const NoteErrorReason = Schema.Literals([
   "not_found",
   "exists",

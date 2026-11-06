@@ -1617,11 +1617,11 @@ describe("AssetAccess", () => {
     });
     return Effect.gen(function* () {
       const decodeAssetCreateUrlInput = Schema.decodeEffect(AssetCreateUrlInput);
-
       // Every client and server release spells the resource this way on the wire.
       const { resource } = yield* decodeAssetCreateUrlInput({
         resource: { _tag: "github-media", cwd: "/repo", url },
       });
+      if (resource._tag !== SOURCE_CONTROL_MEDIA_ASSET) throw new Error("Decoded another resource");
       const issued = yield* issueAssetUrl({ resource });
       const suffix = issued.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
       const separator = suffix.indexOf("/");

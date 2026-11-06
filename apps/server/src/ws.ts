@@ -148,6 +148,7 @@ import { isTelemetryIdHash } from "@goat/shared/telemetryId";
 import { withUsageLimitsCommands } from "@goat/shared/usageLimits";
 import * as SqlClient from "effect/sql/SqlClient";
 import { issueAssetUrl } from "./assets/AssetAccess.ts";
+import { issueNoteFileUrl } from "./assets/noteFileAsset.ts";
 import * as AttachmentFileLeases from "./assets/AttachmentFileLeases.ts";
 import { deletePendingAttachment, issueAttachmentUploadUrl } from "./assets/AttachmentUpload.ts";
 import {
@@ -3157,6 +3158,7 @@ export const layerWsRpc = (
           /* Request instrumentation already owns the span; keep this helper in that context. */
           Effect.fnUntraced(function* (input) {
             const path = yield* Path.Path;
+            if (input.resource._tag === "note-file") return yield* issueNoteFileUrl(input.resource);
             if (
               input.resource._tag === "attachment" ||
               input.resource._tag === "native-app-icon" ||

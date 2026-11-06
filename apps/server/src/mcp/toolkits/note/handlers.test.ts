@@ -25,6 +25,7 @@ const readGroup = WsNotesRpcGroup.omit(
   WS_METHODS.notesStartWork,
   WS_METHODS.notesWorkTargets,
   WS_METHODS.notesWorkTargetProjects,
+  WS_METHODS.notesAttach,
 );
 
 it.effect(
