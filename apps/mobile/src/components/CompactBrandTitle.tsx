@@ -11,6 +11,8 @@ import { IPAD_HOME_TITLE_OFFSET } from "../lib/layoutMetrics";
 import { resolveMobileBrandChannel } from "../lib/mobileBranding";
 import { useAndroidControlSizing } from "./ui/useAndroidControlSizing";
 
+const BRAND_MAX_FONT_SCALE = 1.4;
+
 export function brandTitleOffset(): number {
   if (Platform.OS !== "ios") return 0;
   return Platform.isPad && !NATIVE_WORKSPACE_COLUMNS_SUPPORTED ? IPAD_HOME_TITLE_OFFSET : 0;
@@ -49,16 +51,21 @@ export function CompactBrandTitle(
         props.fit && { flexShrink: 0 },
       ]}
     >
-      <GoatWordmark colorClassName="accent-icon" height={Math.round(15 * scale)} />
+      <GoatWordmark colorClassName="accent-foreground" height={Math.round(15 * scale)} />
       <Text
         allowFontScaling={props.allowFontScaling}
-        className="font-goat-bold text-foreground-muted"
-        style={{ fontSize: 21 * scale, letterSpacing: -0.5 * scale }}
+        maxFontSizeMultiplier={BRAND_MAX_FONT_SCALE}
+        className="font-goat-bold text-foreground"
+        style={{ fontSize: 18 * scale, letterSpacing: 0.04 * 18 * scale }}
       >
         GOAT
       </Text>
       {showStage ? (
-        <BrandChannelPill channel={channel} allowFontScaling={props.allowFontScaling} />
+        <BrandChannelPill
+          channel={channel}
+          allowFontScaling={props.allowFontScaling}
+          maxFontSizeMultiplier={BRAND_MAX_FONT_SCALE}
+        />
       ) : null}
     </View>
   );
