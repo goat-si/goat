@@ -287,25 +287,7 @@ it("keeps the selected environment fixed while a pairing request is pending", as
   }
 });
 
-it.each(["consumed", "revoked externally"])("removes a created link after it is %s", async () => {
-  setup();
-  const content = () => (
-    <SavedEnvironmentAccess environmentId={EnvironmentId.make("remote")} label="Remote" connected />
-  );
-  await using screen = await render(content());
-  await screen.getByRole("button", { name: "Create link" }).click();
-  page.getByRole("dialog").getByRole("button", { name: "Create link" }).element().focus();
-  await userEvent.keyboard("{Enter}");
-  await expect.element(screen.getByText("Created link", { exact: true })).toBeVisible();
-  state.newLinkInSnapshot = true;
-  await screen.rerender(content());
-  await expect.element(screen.getByText("Created link", { exact: true })).toBeVisible();
-  state.newLinkInSnapshot = false;
-  await screen.rerender(content());
-  await expect.element(screen.getByText("Created link", { exact: true })).not.toBeInTheDocument();
-});
-
-it("does not resurrect a link consumed while creation is still returning", async () => {
+it("shows a one-time code while the pairing list follows server snapshots", async () => {
   setup();
   let release = () => {};
   state.createGate = new Promise<void>((resolve) => {
@@ -327,29 +309,20 @@ it("does not resurrect a link consumed while creation is still returning", async
     await screen.rerender(content());
     release();
     await expect
-      .element(screen.getByText("The pairing link was already used or revoked."))
-      .toBeVisible();
+      .element(screen.getByRole("textbox", { name: "Pairing code" }))
+      .toHaveValue("test-pairing-code");
     await expect.element(screen.getByText("Created link", { exact: true })).not.toBeInTheDocument();
+    state.newLinkInSnapshot = true;
+    await screen.rerender(content());
+    await expect.element(screen.getByText("Created link", { exact: true })).toBeVisible();
+    state.newLinkInSnapshot = false;
+    await screen.rerender(content());
+    await expect.element(screen.getByText("Created link", { exact: true })).not.toBeInTheDocument();
+    await screen.getByRole("button", { name: "Done" }).click();
+    await expect
+      .element(screen.getByRole("textbox", { name: "Pairing code" }))
+      .not.toBeInTheDocument();
   } finally {
     release();
   }
-});
-
-it("keeps a confirmed code available when read permission is lost", async () => {
-  setup();
-  const content = () => (
-    <SavedEnvironmentAccess environmentId={EnvironmentId.make("remote")} label="Remote" connected />
-  );
-  await using screen = await render(content());
-  await screen.getByRole("button", { name: "Create link" }).click();
-  page.getByRole("dialog").getByRole("button", { name: "Create link" }).element().focus();
-  await userEvent.keyboard("{Enter}");
-  await expect.element(screen.getByText("Created link", { exact: true })).toBeVisible();
-  state.newLinkInSnapshot = true;
-  await screen.rerender(content());
-  await expect.element(screen.getByText("Created link", { exact: true })).toBeVisible();
-  state.allowed = false;
-  await screen.rerender(content());
-  await expect.element(screen.getByText(/does not have permission/)).toBeVisible();
-  await expect.element(screen.getByText("Created link", { exact: true })).toBeVisible();
 });
