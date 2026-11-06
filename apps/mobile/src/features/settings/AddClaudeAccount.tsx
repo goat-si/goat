@@ -51,23 +51,26 @@ export function AddClaudeAccount({ environment }: { readonly environment: Settin
     pendingRef.current = true;
     setPending(true);
     setError(null);
-    try {
-      const saved = await mutate({
-        environmentId,
-        input: { patch: {}, providerInstanceMutation: result.mutation },
+    await mutate({
+      environmentId,
+      input: { patch: {}, providerInstanceMutation: result.mutation },
+    })
+      .then((saved) => {
+        if (saved._tag === "Failure") {
+          const failure = squashAtomCommandFailure(saved);
+          setError(
+            failure instanceof Error ? failure.message : "Could not add the Claude account.",
+          );
+          return;
+        }
+        setAdding(false);
+        setName("");
+        setDirectory("");
+      })
+      .finally(() => {
+        pendingRef.current = false;
+        setPending(false);
       });
-      if (saved._tag === "Failure") {
-        const failure = squashAtomCommandFailure(saved);
-        setError(failure instanceof Error ? failure.message : "Could not add the Claude account.");
-        return;
-      }
-      setAdding(false);
-      setName("");
-      setDirectory("");
-    } finally {
-      pendingRef.current = false;
-      setPending(false);
-    }
   }
   if (!adding)
     return (

@@ -81,23 +81,24 @@ export function ClaudeAccountControls({
     pendingRef.current = true;
     setPending(true);
     setError(null);
-    try {
-      const result = await mutate({
-        environmentId,
-        input: { patch: {}, providerInstanceMutation: mutation },
+    await mutate({
+      environmentId,
+      input: { patch: {}, providerInstanceMutation: mutation },
+    })
+      .then((result) => {
+        if (result._tag === "Failure") {
+          const failure = squashAtomCommandFailure(result);
+          setError(
+            failure instanceof Error ? failure.message : "Could not update the Claude account.",
+          );
+          return;
+        }
+        setOpened(null);
+      })
+      .finally(() => {
+        pendingRef.current = false;
+        setPending(false);
       });
-      if (result._tag === "Failure") {
-        const failure = squashAtomCommandFailure(result);
-        setError(
-          failure instanceof Error ? failure.message : "Could not update the Claude account.",
-        );
-        return;
-      }
-      setOpened(null);
-    } finally {
-      pendingRef.current = false;
-      setPending(false);
-    }
   }
   return (
     <View className="gap-2 px-4 pb-3">
