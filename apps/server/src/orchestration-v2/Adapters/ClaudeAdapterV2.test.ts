@@ -55,7 +55,6 @@ import {
   type ProviderInstanceEnvironment,
   ProviderDriverKind,
   type ProviderReplayTranscript,
-  type ProviderApprovalDecision,
   ProviderSessionId,
   ProviderTurnId,
   RunAttemptId,
@@ -968,23 +967,6 @@ describe("ClaudeAdapterV2 Auto-accept edits", () => {
     ),
   );
 });
-describe("ClaudeAdapterV2 approval cancellation", () => {
-  it.effect("observes an approval signal that was already aborted", () =>
-    Effect.gen(function* () {
-      const decision = yield* Deferred.make<{
-        decision: ProviderApprovalDecision;
-        feedback?: string;
-      }>();
-      const result = yield* ClaudeAdapterV2.awaitClaudeApprovalDecision(
-        decision,
-        AbortSignal.abort(),
-      );
-
-      assert.deepEqual(result, { decision: "cancel" });
-    }),
-  );
-});
-
 describe("ClaudeAdapterV2 MCP elicitation acceptance", () => {
   const form = (
     properties: Record<string, unknown>,
@@ -6420,6 +6402,11 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           delta: { stop_reason: "end_turn", stop_sequence: null },
           usage: { input_tokens: null, output_tokens: 12 },
         }),
+        usageStreamFrame({
+          type: "message_delta",
+          delta: { stop_reason: "end_turn", stop_sequence: null },
+          usage: { input_tokens: 37_939, output_tokens: 12 },
+        }),
         claudeSdkFrame({
           ...makeResultFrame({ uuid: "00000000-0000-4000-8000-000000000673", result: "Done." }),
           modelUsage: { "gateway-model": { contextWindow: 1_048_576 } },
@@ -6428,7 +6415,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       for (const frame of frames) yield* Queue.offer(harness.sdkMessages, frame);
       const terminal = yield* Queue.take(harness.terminalReceipts);
       assert.equal(terminal.status, "completed");
-      assert.deepEqual(reportedContextTokens(harness.events), [38_123, 38_123]);
+      assert.deepEqual(reportedContextTokens(harness.events), [38_123, 37_951, 37_951]);
       assert.equal(
         harness.runtime.getModelContextWindow?.({
           ...CLAUDE_TEST_MODEL_SELECTION,
@@ -6441,7 +6428,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           ? [event.providerTurn.tokenUsage.maxTokens]
           : [],
       );
-      assert.deepEqual(updates, [null, 1_048_576]);
+      assert.deepEqual(updates, [null, null, 1_048_576]);
     }).pipe(Effect.provide(layerAdapterTest)),
   );
 

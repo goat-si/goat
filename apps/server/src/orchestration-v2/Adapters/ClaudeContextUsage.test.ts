@@ -1,3 +1,6 @@
+import type { ProviderApprovalDecision } from "@goat/contracts";
+import * as Deferred from "effect/Deferred";
+import * as Effect from "effect/Effect";
 import { assert, describe, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
 import { CLAUDE_TEST_MODEL_SELECTION } from "./ClaudeTestInput.testkit.ts";
@@ -18,4 +21,21 @@ describe("ClaudeAdapterV2 context usage", () => {
     );
     assert.strictEqual(usage.promptCacheExpiresAt, "2026-08-29T00:05:00.000Z");
   });
+});
+
+describe("ClaudeAdapterV2 approval cancellation", () => {
+  it.effect("observes an approval signal that was already aborted", () =>
+    Effect.gen(function* () {
+      const decision = yield* Deferred.make<{
+        decision: ProviderApprovalDecision;
+        feedback?: string;
+      }>();
+      const result = yield* ClaudeAdapterV2.awaitClaudeApprovalDecision(
+        decision,
+        AbortSignal.abort(),
+      );
+
+      assert.deepEqual(result, { decision: "cancel" });
+    }),
+  );
 });
