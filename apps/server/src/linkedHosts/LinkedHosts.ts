@@ -66,6 +66,7 @@ const StoredLink = Schema.Struct({
   baseUrl: Schema.String,
   environmentId: Schema.String,
   label: Schema.String,
+  labelOverride: Schema.optionalKey(Schema.Boolean),
   serverVersion: Schema.String,
   access: AuthMcpClientAccess,
   token: Schema.String,
@@ -81,14 +82,15 @@ const decodeCatalog = Schema.decodeUnknownEffect(Schema.fromJsonString(Catalog))
 const encodeCatalog = Schema.encodeEffect(Schema.fromJsonString(Catalog));
 
 /** A link as tools show it: never the token. */
-export type LinkedHost = Omit<StoredLink, "token">;
+export type LinkedHost = Omit<StoredLink, "token" | "labelOverride">;
 
 export interface LinkedHostCredential {
   readonly host: LinkedHost;
   readonly token: string;
 }
 
-const view = ({ token: _token, ...host }: StoredLink): LinkedHost => host;
+const view = ({ token: _token, labelOverride: _labelOverride, ...host }: StoredLink): LinkedHost =>
+  host;
 
 const ACCESS_RANK: Record<RuntimeMode, number> = {
   "approval-required": 0,
@@ -155,6 +157,12 @@ export class LinkedHosts extends Context.Service<
     ) => Effect.Effect<Option.Option<LinkedHostCredential>, LinkedHostError>;
     /** Names this machine has linked; a store it cannot read counts as none. */
     readonly names: Effect.Effect<ReadonlyArray<string>>;
+    readonly refreshLabel: (input: {
+      readonly name: string;
+      readonly baseUrl: string;
+      readonly environmentId: string;
+      readonly label: string;
+    }) => Effect.Effect<void, LinkedHostError>;
     /**
      * Spends the code on the host and saves the link, replacing one with the same name.
      * beforeSave re-checks the caller right before the link is written.
@@ -398,6 +406,7 @@ const make = Effect.gen(function* () {
         baseUrl: target.baseUrl,
         environmentId: descriptor.environmentId,
         label: input.label?.trim() || descriptor.label,
+        labelOverride: Boolean(input.label?.trim()),
         serverVersion: descriptor.serverVersion,
         access: input.access,
         token: token.access_token,
@@ -436,7 +445,38 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  return LinkedHosts.of({ changes: Stream.fromPubSub(signals), list, find, names, link, unlink });
+  const refreshLabel: LinkedHosts["Service"]["refreshLabel"] = (input) =>
+    lock.withPermits(1)(
+      Effect.gen(function* () {
+        const catalog = yield* read;
+        const host = catalog.links.find((candidate) => candidate.name === input.name);
+        if (
+          !host ||
+          host.baseUrl !== input.baseUrl ||
+          host.environmentId !== input.environmentId ||
+          host.labelOverride !== false ||
+          host.label === input.label
+        )
+          return;
+        yield* write({
+          ...catalog,
+          links: catalog.links.map((candidate) =>
+            candidate === host ? { ...host, label: input.label } : candidate,
+          ),
+        });
+        yield* PubSub.publish(signals, undefined);
+      }),
+    );
+
+  return LinkedHosts.of({
+    changes: Stream.fromPubSub(signals),
+    list,
+    find,
+    names,
+    link,
+    unlink,
+    refreshLabel,
+  });
 });
 
 export const layer = Layer.effect(LinkedHosts, make);
