@@ -1690,6 +1690,7 @@ const assertProjectScopedShells = Effect.fn("assertProjectScopedShells")(functio
       streaming: false,
     },
   });
+
   const unscoped = yield* projectionStore.getShellSnapshot();
   const inProject = (thread: { readonly projectId: ProjectId }) => thread.projectId === projectId;
   const active = yield* projectionStore.getShellSnapshot({ projectId, location: "active" });
@@ -1701,6 +1702,7 @@ const assertProjectScopedShells = Effect.fn("assertProjectScopedShells")(functio
   );
   const fork = active.threads.find((thread) => thread.id === forkThreadId);
   assert.isAbove(fork?.visibleItemCount ?? 0, 0);
+
   const all = yield* projectionStore.getShellSnapshot({ projectId });
   assert.deepEqual(all.threads, active.threads);
   assert.deepEqual(all.archivedThreads, unscoped.archivedThreads.filter(inProject));
@@ -1721,6 +1723,7 @@ const assertProjectScopedShells = Effect.fn("assertProjectScopedShells")(functio
   }
   return { projectId, activeThreadId, forkThreadId, otherThreadId };
 });
+
 it.effect.each([
   ["memory", ProjectionStore.layerMemory],
   ["SQL", layerTest],
@@ -1884,9 +1887,6 @@ it.effect.each([
         { projectId: ProjectId.make("project:b"), count: 1 },
       ],
     );
-    assert.deepEqual((yield* list(before, 0)).sideChatCounts, [
-      { projectId: ProjectId.make("project:a"), count: 1 },
-    ]);
     // A cursor without an id is strict, as the snapshot's cut is: the day-4 tie is not counted.
     assert.sameDeepMembers(
       [...(yield* list({ settledAt: DateTime.formatIso(at(4)) }, 0)).counts],

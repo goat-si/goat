@@ -1,4 +1,3 @@
-import { olderSettledMemoryCounts, olderSettledSqlCounts } from "./olderSettledCounts.ts";
 import * as RestartCandidates from "./RestartContinuationCandidates.ts";
 import * as LatestAnswer from "./ProjectionLatestAnswer.ts";
 import * as LaunchEdges from "./ProjectionLaunchEdges.ts";
@@ -520,7 +519,6 @@ export interface OlderSettledThreadsListing {
   readonly threadIds: ReadonlyArray<ThreadId>;
   /** Only for `limit: 0`. */
   readonly counts: ReadonlyArray<OrchestrationV2OlderSettledCount>;
-  readonly sideChatCounts?: ReadonlyArray<OrchestrationV2OlderSettledCount>;
 }
 
 export interface ProjectionStoreV2Shape {
@@ -7288,8 +7286,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       // ISO strings in one format, so string order is time order.
       const older = sql`
         SELECT t.thread_id, t.project_id,
-          json_extract(t.payload_json, '$.settledAt') AS settled_at,
-          json_extract(t.payload_json, '$.sideChatOf') AS side_chat_of
+          json_extract(t.payload_json, '$.settledAt') AS settled_at
         FROM orchestration_v2_projection_threads t
         WHERE t.deleted_at IS NULL
           AND json_extract(t.payload_json, '$.archivedAt') IS NULL
@@ -7317,19 +7314,18 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       const countRows =
         limit !== 0
           ? []
-          : yield* sql<{
-              readonly project_id: string;
-              readonly count: number;
-              readonly side_chat_count: number;
-            }>`
+          : yield* sql<{ readonly project_id: string; readonly count: number }>`
               WITH older AS (${older})
-              SELECT older.project_id, COUNT(*) AS count, COUNT(older.side_chat_of) AS side_chat_count FROM older
+              SELECT older.project_id, COUNT(*) AS count FROM older
               WHERE ${belowCursor}
               GROUP BY older.project_id
             `;
       return {
         threadIds: pageRows.map((row) => ThreadId.make(row.thread_id)),
-        ...olderSettledSqlCounts(countRows),
+        counts: countRows.map((row) => ({
+          projectId: ProjectId.make(row.project_id),
+          count: row.count,
+        })),
       };
     }, Effect.mapError(shellSnapshotReadError));
 
@@ -7824,6 +7820,10 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
             return below ? [{ thread, settledAt }] : [];
           },
         );
+        const counts = new Map<ProjectId, number>();
+        for (const { thread } of limit === 0 ? older : []) {
+          counts.set(thread.projectId, (counts.get(thread.projectId) ?? 0) + 1);
+        }
         return {
           threadIds: older
             .toSorted((left, right) =>
@@ -7837,7 +7837,7 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
             )
             .slice(0, limit)
             .map(({ thread }) => thread.id),
-          ...olderSettledMemoryCounts(limit === 0 ? older : []),
+          counts: Array.from(counts, ([projectId, count]) => ({ projectId, count })),
         };
       }),
       readShellSnapshot: (options) =>
