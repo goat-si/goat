@@ -1,3 +1,4 @@
+import { ThreadRowMenu } from "./thread-row-menu";
 import { usePendingDraftBranch } from "./use-pending-draft-branch";
 import { copyThreadShell } from "../../lib/copyThreadReference";
 import * as Dialog from "../../components/ui/Dialog";
@@ -26,7 +27,6 @@ import type { MenuAction } from "@react-native-menu/menu";
 import { memo, useCallback, useMemo, useState, type ComponentProps, type ReactNode } from "react";
 import { Pressable, useWindowDimensions, View } from "react-native";
 import type { SwipeableMethods } from "react-native-gesture-handler/ReanimatedSwipeable";
-
 import type { ThreadListProvider } from "../../state/thread-list-environments";
 import { SymbolView } from "../../components/ui/AppSymbol";
 import { AppText as Text } from "../../components/ui/AppText";
@@ -1369,7 +1369,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
         threadTitle={thread.title}
       >
         {(close) => (
-          <Menu
+          <ThreadRowMenu
             actions={[
               ...(thread.branch
                 ? [
@@ -1396,7 +1396,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
             shouldOpenOnLongPress
           >
             {rowContent(close)}
-          </Menu>
+          </ThreadRowMenu>
         )}
       </ThreadSwipeable>
     </View>
