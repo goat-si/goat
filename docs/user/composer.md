@@ -238,6 +238,7 @@ that device-only choice sends recordings to the selected environment. The compos
 names the destination while you record. GOAT deletes the
 temporary audio after transcription or cancellation; only the message text is
 sent when you submit.
+Model management needs the explicit permission described in [Voice input on desktop and web](#voice-input-on-desktop-and-web).
 
 ## Voice input on desktop and web
 
@@ -256,6 +257,16 @@ Connections through a hub do not currently support this option.
 After choosing an environment, you can also dictate into a pull request comment
 on that environment. In the desktop Browser, the same choice applies to annotation
 comments.
+
+Model management requires the explicit `voice:manage` permission; ordinary pairing
+does not grant it. On the environment's machine, create a pairing with:
+
+```sh
+goat pair --scope orchestration:read --scope orchestration:operate --scope voice:manage
+```
+
+Using `--scope` replaces the default grant, so add any other permissions that
+device needs.
 
 The first time on a Mac, macOS asks whether GOAT may use the microphone. If you
 declined, or turned GOAT off later, the composer says so and offers **Open System
