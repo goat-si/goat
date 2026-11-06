@@ -93,10 +93,11 @@ export class ReferenceRepoFileSystemError extends Schema.TaggedError<ReferenceRe
     repoId: Schema.String,
     prefix: Schema.String,
     cause: Schema.Defect(),
+    reason: Schema.optionalKey(Schema.String),
   },
 ) {
   override get message(): string {
-    return `Replacing ${this.prefix} for reference repo "${this.repoId}" failed.`;
+    return `Replacing ${this.prefix} for reference repo "${this.repoId}" failed.${this.reason ? ` ${this.reason}` : ""}`;
   }
 }
 
@@ -288,20 +289,42 @@ export const applyReferenceRepoSync = Effect.fn("applyReferenceRepoSync")(functi
       new ReferenceRepoFileSystemError({ repoId: repo.id, prefix: repo.prefix, cause }),
   );
 
-  const dirty = yield* runGit(plan, rootDir, [
-    "status",
-    "--porcelain",
-    "--untracked-files=all",
-    "--",
-    repo.prefix,
-  ]);
-  if (dirty.trim() !== "" || (yield* fs.exists(backup).pipe(mapFsError))) {
-    return yield* new ReferenceRepoFileSystemError({
-      repoId: repo.id,
-      prefix: repo.prefix,
-      cause: new Error("Reference directory has changes or a sync backup already exists"),
-    });
-  }
+  const assertClean = Effect.fn("referenceRepo.assertClean")(function* () {
+    const dirty = yield* runGit(plan, rootDir, [
+      "status",
+      "--porcelain",
+      "--untracked-files=all",
+      "--",
+      repo.prefix,
+    ]);
+    const ignored = yield* runGit(plan, rootDir, [
+      "ls-files",
+      "--others",
+      "--ignored",
+      "--exclude-standard",
+      "--directory",
+      "--",
+      repo.prefix,
+    ]);
+    if (dirty !== "" || ignored !== "") {
+      return yield* new ReferenceRepoFileSystemError({
+        repoId: repo.id,
+        prefix: repo.prefix,
+        reason:
+          "The reference directory contains changes, untracked files, or ignored files. Move or commit them before syncing.",
+        cause: new Error("Reference directory is not clean"),
+      });
+    }
+    if (yield* fs.exists(backup).pipe(mapFsError)) {
+      return yield* new ReferenceRepoFileSystemError({
+        repoId: repo.id,
+        prefix: repo.prefix,
+        reason: `A sync backup already exists at ${backup}; inspect it before syncing.`,
+        cause: new Error("Reference sync backup exists"),
+      });
+    }
+  });
+  yield* assertClean();
 
   // Clone next to the target so a rename moves it into place: same filesystem, and
   // relative symlinks stay relative (`fs.copy` rewrites them to absolute temp paths).
@@ -314,6 +337,7 @@ export const applyReferenceRepoSync = Effect.fn("applyReferenceRepoSync")(functi
   const commit = (yield* runGit(plan, checkout, ["rev-parse", "HEAD"])).trim();
 
   yield* fs.remove(path.join(checkout, ".git"), { recursive: true }).pipe(mapFsError);
+  yield* assertClean();
   const hadTarget = yield* fs.exists(target).pipe(mapFsError);
   if (hadTarget) yield* fs.rename(target, backup).pipe(mapFsError);
   yield* fs.rename(checkout, target).pipe(
@@ -325,7 +349,7 @@ export const applyReferenceRepoSync = Effect.fn("applyReferenceRepoSync")(functi
     mapFsError,
   );
 
-  yield* runGit(plan, rootDir, ["add", "--all", "--", repo.prefix]);
+  yield* runGit(plan, rootDir, ["add", "--force", "--all", "--", repo.prefix]);
   if (hadTarget) yield* fs.remove(backup, { recursive: true }).pipe(mapFsError);
   const status = yield* runGit(plan, rootDir, ["status", "--porcelain", "--", repo.prefix]);
   if (status.trim().length === 0) {
@@ -336,7 +360,9 @@ export const applyReferenceRepoSync = Effect.fn("applyReferenceRepoSync")(functi
     "commit",
     "--quiet",
     "--message",
-    `chore(repos): sync ${repo.id} to ${plan.ref}\n\nUpstream: ${repo.repository} ${commit}`,
+    `chore(repos): sync ${repo.id} to ${plan.ref}`,
+    "--message",
+    `Upstream: ${repo.repository} ${commit}`,
     "--",
     repo.prefix,
   ]);
