@@ -1,4 +1,5 @@
 import { CONTEXT_LINK_PROTOCOLS } from "@goat/contracts/legacyT3Names";
+import { normalizePersistedModelSelections } from "./lib/persistedModelSelections";
 import { stripInlineContextReferences } from "./lib/composerContextReferences";
 import { composerFileAttachmentMimeType } from "./components/chat/composerAttachmentFiles";
 import { elementContextToPreviewAnnotation } from "./lib/elementContext";
@@ -1952,9 +1953,9 @@ function normalizePersistedDraftsByThreadId(
       draftCandidate.modelSelectionByProvider &&
       typeof draftCandidate.modelSelectionByProvider === "object"
     ) {
-      modelSelectionByProvider = draftCandidate.modelSelectionByProvider as Partial<
-        Record<ProviderInstanceId, ModelSelection>
-      >;
+      modelSelectionByProvider = normalizePersistedModelSelections(
+        draftCandidate.modelSelectionByProvider,
+      );
       activeProvider = normalizeProviderInstanceId(draftCandidate.activeProvider);
       modelSelectionExplicit = draftCandidate.modelSelectionExplicit === true ? true : undefined;
     } else {
@@ -2252,10 +2253,9 @@ function normalizeCurrentPersistedComposerDraftStoreState(
     normalizedPersistedState.stickyModelSelectionByProvider &&
     typeof normalizedPersistedState.stickyModelSelectionByProvider === "object"
   ) {
-    stickyModelSelectionByProvider =
-      normalizedPersistedState.stickyModelSelectionByProvider as Partial<
-        Record<ProviderInstanceId, ModelSelection>
-      >;
+    stickyModelSelectionByProvider = normalizePersistedModelSelections(
+      normalizedPersistedState.stickyModelSelectionByProvider,
+    );
     stickyActiveProvider = normalizeProviderInstanceId(
       normalizedPersistedState.stickyActiveProvider,
     );
