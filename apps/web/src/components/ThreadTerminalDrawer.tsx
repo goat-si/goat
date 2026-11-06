@@ -1,3 +1,5 @@
+import { withLiveVisibility, runtimeEnvSignature } from "./terminal/terminalViewportUtils";
+import { useTerminalLinkValidation } from "./terminal/useTerminalLinkValidation";
 import {
   DRAG_HEIGHT_PROPERTY,
   resolveTerminalDrawerMaxHeight,
@@ -29,6 +31,7 @@ import {
 import {
   AuthPreviewOperateScope,
   AuthOrchestrationOperateScope,
+  AuthFilesystemReadScope,
   AuthTerminalOperateScope,
   type ContextMenuItem,
   type ProviderInstanceId,
@@ -59,10 +62,7 @@ import {
   resolveSelectionActionPosition,
   type SelectionActionPoint,
 } from "~/lib/selectionActions";
-import {
-  GhosttyTerminalSurface,
-  type GhosttyTerminalSurfaceOptions,
-} from "~/terminal/ghostty/surface";
+import { GhosttyTerminalSurface } from "~/terminal/ghostty/surface";
 import { type GhosttyColor, type GhosttyTheme } from "~/terminal/ghostty/core";
 import { useOpenInPreferredEditor } from "../editorPreferences";
 import { resolvePathLinkTarget } from "@goat/shared/fileLinks";
@@ -143,7 +143,7 @@ export function synchronizeTerminalOutput(
   const selection = cells > 0 && compared ? terminal.getSelection() : "";
   writeTerminalOutputUpdate(terminal, update);
   if (!compared || (cells > 0 && terminal.getSelection() !== selection)) {
-    terminal.clearSelection();
+    terminal.clearSelection({ source: "output" });
   }
   return update.cursor;
 }
@@ -233,27 +233,6 @@ const TERMINAL_PALETTES = {
 };
 
 // Read visibility when WASM finishes loading, not when setup starts.
-function withLiveVisibility(
-  visibleRef: { readonly current: boolean },
-  options: Omit<GhosttyTerminalSurfaceOptions, "visible">,
-): GhosttyTerminalSurfaceOptions {
-  return {
-    ...options,
-    get visible() {
-      return visibleRef.current;
-    },
-  };
-}
-
-function runtimeEnvSignature(runtimeEnv: Record<string, string> | undefined): string {
-  if (!runtimeEnv) return "";
-  return JSON.stringify(
-    Object.entries(runtimeEnv)
-      .filter(([key, value]) => key.length > 0 && typeof value === "string")
-      .sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey)),
-  );
-}
-
 function normalizeComputedColor(value: string | null | undefined, fallback: string): string {
   const normalizedValue = value?.trim().toLowerCase();
   if (
@@ -483,11 +462,14 @@ function TerminalSessionViewport({
   const hasTerminalWriteAccess = useEffectEvent(() =>
     readEnvironmentScope(environmentId, AuthTerminalOperateScope),
   );
-  const canOpenHostEditor = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
-  const canActivateTerminalLink = useEffectEvent(
-    (text: string) =>
-      isTerminalUrl(text) || readEnvironmentScope(environmentId, AuthOrchestrationOperateScope),
+  const linkValidation = useTerminalLinkValidation(environmentId, cwd, terminalRef);
+  const canActivateTerminalLink = useEffectEvent((text: string) =>
+    linkValidation.canActivateTerminalLink(text),
   );
+  const validateTerminalLink = useEffectEvent((text: string) =>
+    linkValidation.validateTerminalLink(text),
+  );
+  const setLinkPath = useEffectEvent((text: string | null) => linkValidation.setLinkPath(text));
   const serverConfig = useAtomValue(serverEnvironment.configValueAtom(environmentId));
   const openInPreferredEditor = useOpenInPreferredEditor(
     environmentId,
@@ -593,13 +575,7 @@ function TerminalSessionViewport({
     if (canOperateTerminal && visibleRef.current)
       consumePendingTerminalFocus(threadRef, terminalId);
   }, [canOperateTerminal, terminalId, threadRef]);
-  // Links re-read the grant on activation; only the hovered link's styling needs a nudge.
-  const linkActivationScopeRef = useRef(canOpenHostEditor);
-  useEffect(() => {
-    if (linkActivationScopeRef.current === canOpenHostEditor) return;
-    linkActivationScopeRef.current = canOpenHostEditor;
-    terminalRef.current?.refreshLinkActivation();
-  }, [canOpenHostEditor]);
+
   useLayoutEffect(() => {
     visibleRef.current = visible;
     terminalRef.current?.setVisible(visible);
@@ -635,6 +611,8 @@ function TerminalSessionViewport({
         beforeKey: (event) => handleBeforeKey(event),
         onLinkActivate: (text, event) => handleLinkActivate(text, event),
         canActivateLink: (text) => canActivateTerminalLink(text),
+        validateLink: (text) => validateTerminalLink(text),
+        onLinkHover: (text) => setLinkPath(text !== null && !isTerminalUrl(text) ? text : null),
         // Surface listeners start before WASM loading finishes and the terminal handler exists.
         onContextMenu: (event) => {
           if (terminalRef.current) void showTerminalContextMenu(event);
@@ -943,7 +921,12 @@ function TerminalSessionViewport({
       }
 
       function handleLinkActivate(text: string, event: MouseEvent): void {
-        if (!canActivateTerminalLink(text)) return;
+        if (
+          !isTerminalUrl(text) &&
+          (!readEnvironmentScope(environmentId, AuthOrchestrationOperateScope) ||
+            !readEnvironmentScope(environmentId, AuthFilesystemReadScope))
+        )
+          return;
         const latestTerminal = terminalRef.current;
         if (!latestTerminal) return;
         if (isTerminalUrl(text)) {

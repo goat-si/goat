@@ -1,3 +1,4 @@
+import { DiffFileHeaderSuffix } from "./diffs/DiffFileHeaderSuffix";
 import { GIT_REVIEW_SCOPES, type GitReviewScope } from "@goat/client-runtime/state/review";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { useAtomValue } from "@effect/atom-react";
@@ -61,7 +62,6 @@ import { LIVE_REFRESH_MIN_INTERVAL_MS, useLiveRefresh } from "../hooks/useLiveRe
 import { useProject, useThreadCheckpointSummaries, useQuietThreadShell } from "../state/entities";
 import { useClientSettings, updateClientSettings } from "../hooks/useSettings";
 import { formatShortTimestamp } from "../timestampFormat";
-import { DiffFilePathCopyButton } from "./DiffFilePathCopyButton";
 import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
 import { DiffStatLabel } from "./chat/DiffStatLabel";
 import { AnnotatableCodeView } from "./diffs/AnnotatableCodeView";
@@ -102,7 +102,6 @@ import { createGitDiffFileContentsLoader } from "../lib/diffFileContents";
 import { getCachedFileEntry } from "./diffs/cachedFileEntry";
 import { useReviewFilePatches } from "./diffs/useReviewFilePatches";
 import { DiffFileLoadingBoundary } from "./diffs/DiffFileLoadingBoundary";
-import { DiffFileStatus } from "./diffs/DiffFileStatus";
 import { useThreadRouteRef } from "../hooks/useThreadRouteTarget";
 
 type DiffThemeType = "light" | "dark";
@@ -150,31 +149,6 @@ function DiffFileCollapseToggle({
       </TooltipTrigger>
       <TooltipPopup side="top">{collapsed ? "Expand diff" : "Collapse diff"}</TooltipPopup>
     </Tooltip>
-  );
-}
-
-function DiffFileHeaderSuffix({
-  filePath,
-  hasStat,
-  error,
-  truncated,
-  onRetry,
-}: {
-  filePath: string;
-  hasStat: boolean;
-  error: boolean;
-  truncated: boolean;
-  onRetry: (path: string) => void;
-}) {
-  return (
-    <>
-      <span data-diff-copy-path className="inline-flex">
-        <DiffFilePathCopyButton filePath={filePath} />
-      </span>
-      {hasStat ? (
-        <DiffFileStatus error={error} truncated={truncated} retry={() => onRetry(filePath)} />
-      ) : null}
-    </>
   );
 }
 
@@ -333,6 +307,7 @@ export default function DiffPanel({
           scope: GIT_REVIEW_SCOPES[selectedGitScope].sourceKind,
           ...(selectedBaseRef ? { baseRef: selectedBaseRef } : {}),
           ignoreWhitespace: diffIgnoreWhitespace,
+          metadataOnly: true,
         }
       : undefined;
   const canRefreshGitDiff =
@@ -367,12 +342,20 @@ export default function DiffPanel({
   const selectedPatch = turnPatch ? turnPatch.data?.diff : gitDiff;
   const isSelectedPatchTruncated = isGitSelection && selectedGitSource?.truncated === true;
   const selectedPatchQuery = turnPatch ?? branchDiffPreview;
-  const isLoadingSelectedPatch = selectedPatchQuery.isPending && selectedPatchQuery.data === null;
+  const isLoadingSelectedPatch =
+    selectedPatchQuery.isPending &&
+    (selectedPatchQuery.data === null || (isGitSelection && preview?.incomplete === true));
   const selectedPatchError = selectedPatchQuery.error;
   const hasResolvedPatch = typeof selectedPatch === "string";
-  const hasNoNetChanges = hasResolvedPatch && selectedPatch.trim().length === 0;
+  const hasNoNetChanges =
+    hasResolvedPatch &&
+    (!isGitSelection || !preview?.incomplete) &&
+    selectedPatch.trim().length === 0 &&
+    (!selectedGitSource?.patchesDeferred || selectedGitSource.files?.length === 0);
   const lazySource =
-    isGitSelection && selectedGitSource?.truncated && selectedGitSource.files
+    isGitSelection &&
+    (selectedGitSource?.truncated || selectedGitSource?.patchesDeferred) &&
+    selectedGitSource.files?.length
       ? selectedGitSource
       : null;
   const renderablePatch = getRenderablePatch(
@@ -559,9 +542,7 @@ export default function DiffPanel({
       next.delete(file.fileKey);
       return next;
     });
-    if (lazySource && index >= settledFileCount) {
-      requestFile(index);
-    }
+    if (lazySource) requestFile(filePath);
     codeViewReveal.request(file.fileKey);
     return true;
   });
@@ -1057,6 +1038,13 @@ export default function DiffPanel({
             data-glass-layer
             className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background"
           >
+            {isGitSelection && preview?.incomplete && (
+              <p className="shrink-0 border-b border-border/70 bg-muted/40 px-3 py-1.5 text-2xs text-muted-foreground">
+                {selectedPatchError
+                  ? "Could not load untracked changes."
+                  : "Loading untracked changes…"}
+              </p>
+            )}
             {isSelectedPatchTruncated && !lazySource && (
               <p className="shrink-0 border-b border-border/70 bg-muted/40 px-3 py-1.5 text-2xs text-muted-foreground">
                 This preview exceeds the size limit. Changes shown are incomplete.

@@ -1,3 +1,7 @@
+import {
+  ADVANCED_CONNECTION_SETTING_IDS,
+  LocalVersionStatusLabel,
+} from "./ConnectionsSettingsParts";
 import { SessionPermissions } from "./SessionPermissions";
 import { ChevronRightIcon, EllipsisIcon } from "~/components/solar";
 import { useAtomValue } from "@effect/atom-react";
@@ -23,7 +27,6 @@ import { isLocalEnvironmentDisabled } from "../../localEnvironment";
 import {
   applyWslEnableSelection,
   isWslSettingsRowVisible,
-  resolveLocalVersionStatusLabel,
   resolveTailscaleServeBaseUrl,
 } from "./ConnectionsSettings.logic";
 import { SettingsPageContainer, SettingsRow, SettingsSection } from "./settingsLayout";
@@ -94,7 +97,6 @@ import {
 } from "~/state/desktopNetworkAccess";
 
 import { desktopWslStateAtom, refreshDesktopWslState } from "~/state/desktopWslState";
-import { useDesktopUpdateState } from "~/state/desktopUpdate";
 import { useEnvironments, usePrimaryEnvironment } from "~/state/environments";
 
 import { serverEnvironment } from "~/state/server";
@@ -140,26 +142,6 @@ const EMPTY_ADVERTISED_ENDPOINTS: ReadonlyArray<AdvertisedEndpoint> = [];
 const BACKEND_VALUE_DEFAULT_WSL = "backend:default-wsl";
 const BACKEND_VALUE_WSL_OFF = "backend:wsl-off";
 
-// Sections folded under "Advanced settings"; a search jump to one opens the group.
-const ADVANCED_CONNECTION_SETTING_IDS = [
-  "hosts",
-  "provider-host-matrix",
-  "cloud-machines",
-  "remote-launches",
-  "load-balancing",
-  "github-routing",
-] as const;
-
-// Subscribes on its own so desktop download progress does not re-render the page.
-function LocalVersionStatusLabel() {
-  const updateState = useDesktopUpdateState();
-  return (
-    <span className="text-xs text-muted-foreground">
-      {resolveLocalVersionStatusLabel(updateState)}
-    </span>
-  );
-}
-
 export function ConnectionsSettings() {
   const desktopBridge = window.desktopBridge;
   const { environments } = useEnvironments();
@@ -188,7 +170,9 @@ export function ConnectionsSettings() {
   const [createdPairingCredentials, setCreatedPairingCredentials] = useState<
     ReadonlyMap<string, string>
   >(() => new Map());
+  const [newestPairingLinkId, setNewestPairingLinkId] = useState<string | null>(null);
   const handlePairingLinkCreated = (created: AuthPairingCredentialResult) => {
+    setNewestPairingLinkId(created.id);
     pairingLinkConnectFlow.finish();
     setCreatedPairingCredentials((current) => new Map(current).set(created.id, created.credential));
   };
@@ -805,7 +789,14 @@ export function ConnectionsSettings() {
       onTurnOffTailscaleHttps: () => setDisableTailscaleServeDialogOpen(true),
     },
   };
-  const renderAuthorizedClients = (presentation: AccessSectionPresentation) => (
+  const newestPairingLink = visibleDesktopPairingLinks.find(
+    (pairingLink) => pairingLink.id === newestPairingLinkId,
+  );
+  const renderAuthorizedClients = (
+    presentation: AccessSectionPresentation,
+    pairingLinks = visibleDesktopPairingLinks,
+    clientSessions = desktopClientSessions,
+  ) => (
     <>
       {desktopAccessManagementError ? (
         <div className={accessRowClassName(presentation)}>
@@ -818,9 +809,10 @@ export function ConnectionsSettings() {
         defaultEndpointKey={defaultDesktopAdvertisedEndpointKey}
         presentation={presentation}
         isLoading={isLoadingDesktopAccessManagement}
-        pairingLinks={visibleDesktopPairingLinks}
+        pairingLinks={pairingLinks}
         createdPairingCredentials={createdPairingCredentials}
-        clientSessions={desktopClientSessions}
+        sharedPairingLinkId={newestPairingLinkId}
+        clientSessions={clientSessions}
         revokingPairingLinkId={revokingDesktopPairingLinkId}
         revokingClientSessionId={revokingDesktopClientSessionId}
         onRevokePairingLink={handleRevokeDesktopPairingLink}
@@ -1040,6 +1032,11 @@ export function ConnectionsSettings() {
             <FoldedSettingsSection
               id="authorized-clients"
               title="Authorized clients"
+              collapsedContent={
+                canReadAccess && newestPairingLink
+                  ? renderAuthorizedClients("current", [newestPairingLink], [])
+                  : undefined
+              }
               summary={summarizeAuthorizedClients(
                 desktopClientSessions,
                 visibleDesktopPairingLinks,
