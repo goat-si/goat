@@ -1,4 +1,5 @@
 import * as RestartCandidates from "./RestartContinuationCandidates.ts";
+import { latestIdleCompactionRun } from "./IdleCompaction.ts";
 import * as LatestAnswer from "./ProjectionLatestAnswer.ts";
 import * as LaunchEdges from "./ProjectionLaunchEdges.ts";
 import * as RunNotification from "./ProjectionRunNotification.ts";
@@ -3795,7 +3796,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   : sql`AND (status IN (SELECT value FROM json_each(${encodeIdList(filter.runStatuses)}))
                     OR (${filter.includeLatestRun === true ? 1 : 0} = 1 AND run_id = (
                       SELECT run_id FROM orchestration_v2_projection_runs
-                      WHERE thread_id = ${threadId}
+                      WHERE thread_id = ${threadId} AND (status <> 'cancelled' OR json_extract(payload_json, '$.startedAt') IS NOT NULL)
                       ORDER BY ordinal DESC
                       LIMIT 1
                     )))`
@@ -8254,10 +8255,7 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
           const projection = (yield* Ref.get(replayState)).projections.get(threadId);
           if (projection === undefined)
             return yield* new ProjectionStoreThreadNotFoundError({ threadId });
-          const latestRun = projection.runs.reduce<OrchestrationV2Run | undefined>(
-            (latest, run) => (latest === undefined || run.ordinal > latest.ordinal ? run : latest),
-            undefined,
-          );
+          const latestRun = latestIdleCompactionRun(projection.runs);
           const matchingTurns = projection.providerTurns.filter(
             (row) =>
               (filter?.providerTurnAttemptIds === undefined ||

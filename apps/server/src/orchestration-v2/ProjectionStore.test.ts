@@ -462,7 +462,6 @@ it.effect.each([
   ([, layer]) =>
     Effect.gen(function* () {
       const store = yield* ProjectionStore.ProjectionStoreV2;
-      // Its rolled-back run 1 still has a running item, which background work must ignore.
       const threadId = yield* addRolledBackRecoveryCandidate("idle-compaction");
       const now = yield* DateTime.now;
       const minutes = (count: number) => DateTime.add(now, { minutes: count });
@@ -472,6 +471,7 @@ it.effect.each([
         [2, "completed"],
         [3, "completed"],
         [4, "failed"],
+        [5, "cancelled"],
       ] as const) {
         const runId = RunId.make(`run:idle-compaction:${ordinal}`);
         yield* store.apply({
@@ -495,7 +495,7 @@ it.effect.each([
             activeAttemptId: null,
             status,
             requestedAt: now,
-            startedAt: now,
+            startedAt: status === "cancelled" ? null : now,
             completedAt: now,
             checkpointId: null,
             contextHandoffId: null,

@@ -23,6 +23,15 @@ export type IdleCompactionRecords = Pick<
   | "contextTransfers"
 >;
 
+export function latestIdleCompactionRun(runs: IdleCompactionRecords["runs"]) {
+  return runs
+    .filter((run) => run.status !== "cancelled" || run.startedAt !== null)
+    .reduce<(typeof runs)[number] | undefined>(
+      (latest, run) => (latest === undefined || run.ordinal > latest.ordinal ? run : latest),
+      undefined,
+    );
+}
+
 /**
  * When an idle Claude thread should compact, or null when it should not. The
  * window ends when the prompt cache of Claude's last request expires (1h on
@@ -51,10 +60,7 @@ export function idleCompactionWindow(
   if (thread.snoozedUntil != null && DateTime.toEpochMillis(thread.snoozedUntil) > nowMs)
     return null;
   if (thread.lineage.relationshipToParent === "subagent") return null;
-  const latestRun = runs.reduce<(typeof runs)[number] | null>(
-    (latest, run) => (latest === null || run.ordinal > latest.ordinal ? run : latest),
-    null,
-  );
+  const latestRun = latestIdleCompactionRun(runs);
   if (latestRun?.status !== "completed" || latestRun.completedAt === null) return null;
   const message = messages.find((candidate) => candidate.id === latestRun.userMessageId);
   // Never compact a compaction, so one idle spell compacts at most once.
