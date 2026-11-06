@@ -1,4 +1,5 @@
 import { survivorQueuedRuns } from "./goat/CodexSurvivorQueuedRuns.ts";
+import { pinSettlement } from "./goat/PinSettlement.ts";
 import { keptProviderSessionId, makeProviderSessionPlacement } from "./ProviderSessionPlacement.ts";
 import {
   completionDeliveryRun,
@@ -3617,9 +3618,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             ...(alreadyPinned || command.orderKey === undefined
               ? {}
               : { pinOrderKey: command.orderKey }),
-            settledOverride:
-              thread.settledOverride === "settled" ? "active" : thread.settledOverride,
-            settledAt: thread.settledOverride === "settled" ? null : thread.settledAt,
+            ...pinSettlement(thread, now),
             snoozedUntil: null,
             snoozedAt: null,
             lastSnoozeWakeAt: thread.snoozedUntil == null ? thread.lastSnoozeWakeAt : now,

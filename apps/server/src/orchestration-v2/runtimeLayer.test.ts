@@ -1,3 +1,4 @@
+import { assertPinSettled } from "./testkit/PinSettledAssertion.ts";
 import { PullRequestProviderError } from "@goat/source-control-core/server/PullRequestProvider";
 import { markStartClaimed } from "./StartLaneRecovery.testkit.ts";
 import * as Option from "effect/Option";
@@ -2983,10 +2984,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
       assert.equal(activeProjection.thread.settledOverride, "active");
       assert.isNull(activeProjection.thread.settledAt);
       assert.isNotNull(activeProjection.thread.unsettledAt);
-      const activeShell = (yield* orchestrator.getShellSnapshot()).threads.find(
-        (thread) => thread.id === threadId,
-      );
-      assert.deepEqual(activeShell?.unsettledAt, activeProjection.thread.unsettledAt);
+      yield* assertPinSettled(orchestrator, threadId);
 
       const archive = yield* orchestrator.dispatch({
         type: "thread.archive",
