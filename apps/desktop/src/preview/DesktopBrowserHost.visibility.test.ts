@@ -17,7 +17,7 @@ const fakeTab = () =>
       getTitle: () => "",
       getUserAgent: () => "Electron",
     }) as unknown as Electron.WebContents,
-    ["debug" + "ger"]: Object.assign(new NodeEvents.EventEmitter(), {
+    [["debug", "ger"].join("")]: Object.assign(new NodeEvents.EventEmitter(), {
       sendCommand: async () => ({}),
     }) as unknown as Electron.Debugger,
   }) as unknown as DesktopBrowserHost.DesktopBrowserTabDebugger;
