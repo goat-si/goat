@@ -2,23 +2,43 @@
 import * as Effect from "effect/Effect";
 import * as Stream from "effect/Stream";
 
+const MAX_SSE_EVENT_SIZE = 8 * 1024 * 1024;
+
 async function* sseDataLines(response: Response): AsyncGenerator<string> {
   if (response.body === null) return;
   const decoder = new TextDecoder();
-  let buffered = "";
+  let line = "";
+  let dataLines: string[] = [];
+  let eventSize = 0;
+  let afterCR = false;
   for await (const chunk of response.body) {
-    buffered += decoder.decode(chunk as Uint8Array, { stream: true });
-    let separatorIndex = buffered.search(/\n\n|\r\n\r\n/u);
-    while (separatorIndex !== -1) {
-      const rawEvent = buffered.slice(0, separatorIndex);
-      buffered = buffered.slice(separatorIndex).replace(/^(?:\r?\n){2}/u, "");
-      const data = rawEvent
-        .split(/\r?\n/u)
-        .filter((line) => line.startsWith("data:"))
-        .map((line) => line.slice("data:".length).trimStart())
-        .join("\n");
-      if (data.length > 0) yield data;
-      separatorIndex = buffered.search(/\n\n|\r\n\r\n/u);
+    const text = decoder.decode(chunk as Uint8Array, { stream: true });
+    let start = 0;
+    if (afterCR && text.length > 0) {
+      if (text[0] === "\n") start = 1;
+      afterCR = false;
+    }
+    while (start < text.length) {
+      const next = text.slice(start).search(/[\r\n]/u);
+      const end = next === -1 ? text.length : start + next;
+      const length = end - start;
+      eventSize += length;
+      if (eventSize > MAX_SSE_EVENT_SIZE) throw new Error("SSE event exceeds the maximum size");
+      line += text.slice(start, end);
+      if (next === -1) break;
+      if (line.length === 0) {
+        const data = dataLines.join("\n");
+        dataLines = [];
+        eventSize = 0;
+        if (data.length > 0) yield data;
+      } else if (line.startsWith("data:")) {
+        dataLines.push(line.slice("data:".length).trimStart());
+      }
+      line = "";
+      const isCR = text[end] === "\r";
+      start = end + 1;
+      if (isCR && start === text.length) afterCR = true;
+      else if (isCR && text[start] === "\n") start += 1;
     }
   }
 }
