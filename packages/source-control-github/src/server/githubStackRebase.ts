@@ -40,6 +40,7 @@ export const cascadeRebaseStack = Effect.fn("cascadeRebaseStack")(function* (inp
   readonly repository: string;
   readonly base: string;
   readonly layers: ReadonlyArray<CascadeLayer>;
+  readonly mergedHeadSha?: string;
   readonly remote?: string;
 }) {
   const api = yield* GitHubRest.GitHubRest;
@@ -104,13 +105,21 @@ export const cascadeRebaseStack = Effect.fn("cascadeRebaseStack")(function* (inp
 
   let parentOld = `origin/${input.base}`;
   let parentNew = `origin/${input.base}`;
+  const mergedParent =
+    input.mergedHeadSha !== undefined &&
+    (yield* git(["merge-base", "--is-ancestor", input.mergedHeadSha, first.headSha], true).pipe(
+      Effect.mapError(failed("reading the fork point", first.number, 0)),
+    )).exitCode === 0
+      ? input.mergedHeadSha
+      : undefined;
   for (const [index, layer] of input.layers.entries()) {
     // Exclude old parents: the base fork point for the bottom, the reviewed lower head above it.
     const upstream =
       index === 0
-        ? (yield* git(["merge-base", parentOld, layer.headSha]).pipe(
+        ? (mergedParent ??
+          (yield* git(["merge-base", parentOld, layer.headSha]).pipe(
             Effect.mapError(failed("reading the fork point", layer.number, index)),
-          )).stdout.trim()
+          )).stdout.trim())
         : parentOld;
     yield* git(["checkout", "--quiet", "--detach", layer.headSha]).pipe(
       Effect.mapError(failed("checking out", layer.number, index)),
