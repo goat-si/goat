@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it } from "vite-plus/test";
 import type { OrchestrationV2ThreadProjection } from "@goat/contracts";
 import { nativeForkTurns } from "./providerTurnStartHelpers.ts";
 
