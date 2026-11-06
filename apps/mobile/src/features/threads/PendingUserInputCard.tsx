@@ -137,6 +137,7 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
           accessibilityLabel="Stop"
           icon="stop.fill"
           variant="danger"
+          className="h-[44px] w-[44px]"
           disabled={!props.canOperateThread}
           onPress={props.onStopThread}
         />

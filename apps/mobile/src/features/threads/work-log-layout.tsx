@@ -4,14 +4,13 @@ import type { ComponentProps, ReactNode } from "react";
 import { Pressable, View } from "react-native";
 import { THREAD_WORK_ROW_MIN_HEIGHT, type deriveThreadWorkLogSizing } from "../../lib/layout";
 
-const MIN_TAP_TARGET = 44;
 const ROW_SIDE_SLOP = 4;
-
-/** Slop that lets an expandable row reach a 44pt target without growing; none once text scaling makes it that tall. */
-export function expandableRowHitSlop(rowHeight: number) {
-  const vertical = Math.max(0, Math.ceil((MIN_TAP_TARGET - rowHeight) / 2));
-  return { top: vertical, bottom: vertical, left: ROW_SIDE_SLOP, right: ROW_SIDE_SLOP };
-}
+/**
+ * Rows that open and close work stand next to other tappable rows, where vertical hit slop
+ * steals their taps, so they take a real 44pt height with the content centred.
+ */
+export const EXPANDABLE_ROW_MIN_HEIGHT = 44;
+const EXPANDABLE_ROW_HIT_SLOP = { left: ROW_SIDE_SLOP, right: ROW_SIDE_SLOP } as const;
 
 export function WorkLogBlock({
   children,
@@ -45,17 +44,24 @@ export function WorkLogPressable({
 }: Omit<ComponentProps<typeof Pressable>, "children" | "className" | "style" | "hitSlop"> & {
   children: ReactNode;
   rowSizing?: ReturnType<typeof deriveThreadWorkLogSizing>;
-  /** Rows that open and close a group get a 44pt target; plain rows keep a small slop so stacked rows do not steal taps. */
+  /** Rows that open and close a group are 44pt tall; plain rows keep their height and a small slop. */
   expandable?: boolean;
 }) {
-  const rowHeight = rowSizing?.estimatedRowHeight ?? THREAD_WORK_ROW_MIN_HEIGHT;
+  const contentHeight = rowSizing?.estimatedRowHeight ?? THREAD_WORK_ROW_MIN_HEIGHT;
   return (
     <Pressable
       {...props}
-      hitSlop={expandable ? expandableRowHitSlop(rowHeight) : ROW_SIDE_SLOP}
+      hitSlop={expandable ? EXPANDABLE_ROW_HIT_SLOP : ROW_SIDE_SLOP}
       className="rounded-md px-0.5 py-0 active:bg-subtle"
     >
-      <View className="flex-row items-center gap-1.5" style={{ minHeight: rowHeight }}>
+      <View
+        className="flex-row items-center gap-1.5"
+        style={{
+          minHeight: expandable
+            ? Math.max(EXPANDABLE_ROW_MIN_HEIGHT, contentHeight)
+            : contentHeight,
+        }}
+      >
         {children}
       </View>
     </Pressable>

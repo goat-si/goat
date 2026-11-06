@@ -4,6 +4,7 @@ import { ThreadSubagentGroup } from "./thread-subagent-group";
 import { useWorkShimmerTurn } from "./work-shimmer-arbiter";
 import { ProposedPlanCard } from "./ProposedPlanCard";
 import {
+  EXPANDABLE_ROW_MIN_HEIGHT,
   WorkLogLabel,
   WorkLogBlock,
   WorkLogRows,
@@ -419,7 +420,7 @@ const WORK_LOG_BOTTOM_MARGIN = 3.5;
 const WORK_GROUP_MAX_HEIGHT = 256;
 const WORK_GROUP_EDGE_FADE_HEIGHT = 12;
 
-export const WORK_GROUP_TOGGLE_HEIGHT = THREAD_WORK_ROW_MIN_HEIGHT;
+export const WORK_GROUP_TOGGLE_HEIGHT = EXPANDABLE_ROW_MIN_HEIGHT;
 
 function workLogRowsHeight(
   activities: ReadonlyArray<ThreadFeedActivity>,

@@ -23,7 +23,7 @@ import {
 import { GOAT_CONTEXT_LINK_PROTOCOL } from "@goat/contracts/legacyT3Names";
 import { ThreadContextDivider } from "./thread-context-divider";
 import { StandingInstructionsRow } from "./standing-instructions-row";
-import { expandableRowHitSlop } from "./work-log-layout";
+import { EXPANDABLE_ROW_MIN_HEIGHT } from "./work-log-layout";
 import { FeedEntryShimmerContext } from "./work-shimmer-arbiter";
 import {
   ThreadHandoffDivider,
@@ -184,6 +184,7 @@ import {
   deriveThreadFeedInitialContentInset,
   deriveThreadWorkLogSizing,
   type LayoutVariant,
+  THREAD_WORK_ROW_MIN_HEIGHT,
 } from "../../lib/layout";
 import { uuidv4 } from "../../lib/uuid";
 import { resolveNativeMarkdownTypography } from "../../lib/appearancePreferences";
@@ -299,7 +300,7 @@ function formatMessageTime(input: string): string {
   return MESSAGE_TIME_FORMATTER.format(timestamp);
 }
 
-const TURN_FOLD_HEIGHT = 42;
+const TURN_FOLD_HEIGHT = EXPANDABLE_ROW_MIN_HEIGHT + 3.5;
 const FEED_PADDING_TOP = 12;
 // Rows re-measure within a commit or two of a width change. LegendList also defers imperative
 // scrolls for 100ms after it compensates a size change, and a deferred restore could land
@@ -1142,7 +1143,7 @@ function RunFoldButton({
         accessibilityRole="button"
         accessibilityState={{ expanded: entry.expanded, busy: loading }}
         onPress={toggle}
-        hitSlop={expandableRowHitSlop(foldHeight)}
+        hitSlop={4}
         className="min-w-0 flex-1 flex-row items-center gap-2"
         style={{ minHeight: foldHeight }}
       >
@@ -3088,7 +3089,7 @@ export const ThreadFeed = memo(function ThreadFeed({
       case "work-toggle":
         return entry.thought ? undefined : WORK_GROUP_TOGGLE_HEIGHT;
       case "thinking":
-        return WORK_GROUP_TOGGLE_HEIGHT;
+        return THREAD_WORK_ROW_MIN_HEIGHT;
       case "activity-group":
         if (entry.activities[0]?.projectedItem.item.type === "subagent") {
           return undefined;
