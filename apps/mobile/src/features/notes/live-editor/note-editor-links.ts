@@ -4,6 +4,18 @@ import type { Tree } from "@lezer/common";
 export const normalizeLinkLabel = (label: string) =>
   label.trim().replace(/\s+/g, " ").toLowerCase();
 
+const PLAYABLE = /\.(?:mp4|webm|mov|m4v|mp3|wav|ogg|m4a)$/i;
+
+/**
+ * Video and audio embedded with image syntax, which phones cannot draw inline. They show as a
+ * label that opens the file instead; null for anything else.
+ */
+export function playableMediaLabel(href: string, alt: string): string | null {
+  const path = href.replace(/[?#].*$/, "");
+  if (!PLAYABLE.test(path)) return null;
+  return `▶ ${alt.trim() || path.slice(path.lastIndexOf("/") + 1)}`;
+}
+
 // Definitions sit at block level, possibly inside quotes and list items; nothing else holds one.
 const containers = new Set(["Document", "Blockquote", "BulletList", "OrderedList", "ListItem"]);
 

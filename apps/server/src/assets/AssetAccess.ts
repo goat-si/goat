@@ -542,7 +542,7 @@ const finalizeWorkspaceFileAsset = Effect.fn("AssetAccess.finalizeWorkspaceFileA
 );
 
 export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (input: {
-  readonly resource: AssetResource;
+  readonly resource: Exclude<AssetResource, { readonly _tag: "note-file" }>;
   readonly workspaceRoot?: string;
   readonly projectFaviconPath?: string;
   /** Where a cloned project's checkout stands, while the clone tracker still knows it. */

@@ -8,6 +8,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../components/ui/tooltip"
 import { cn } from "../lib/utils";
 import { formatRelativeTimeLabel } from "../timestampFormat";
 import { filterNotes, openablePath, orderNotes } from "./noteState";
+import { NOTES_LIST_ID } from "./notesListCollapse";
 
 const STATUS_LABEL = { doing: "Doing", done: "Done" } as const;
 
@@ -21,6 +22,8 @@ export function NoteList(props: {
   onCreate: (() => void) | null;
   createShortcut: string | null;
   className?: string;
+  /** Hidden by the person's preference on a wide screen. */
+  hidden?: boolean;
   children?: React.ReactNode;
 }) {
   const listRef = useRef<HTMLUListElement>(null);
@@ -105,7 +108,12 @@ export function NoteList(props: {
     </li>
   );
   return (
-    <nav aria-label="Notes" className={cn("flex min-h-0 flex-col", props.className)}>
+    <nav
+      id={NOTES_LIST_ID}
+      aria-label="Notes"
+      hidden={props.hidden}
+      className={cn("flex min-h-0 flex-col", props.className)}
+    >
       <div className="flex items-center gap-2 p-3">
         <InputGroup className="min-w-0 flex-1">
           <InputGroupAddon>

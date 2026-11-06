@@ -15,6 +15,8 @@ import {
   type NoteLineBreak,
 } from "./note-editor-protocol";
 import { NoteEditorBridge } from "./note-editor-bridge";
+import { useNoteImageResolver } from "../useNoteFiles";
+import type { EnvironmentId } from "@goat/contracts";
 
 const READY_TIMEOUT_MS = 10_000;
 // How often to ask again for the page's text while React Native's copy may be stale.
@@ -72,6 +74,9 @@ interface NoteLiveEditorProps {
   readonly lineBreak: NoteLineBreak;
   readonly config: NoteEditorConfig;
   readonly autoFocus?: boolean;
+  /** Where the note's attachment images get their signed URLs. */
+  readonly environmentId: EnvironmentId;
+  readonly notePath: string;
   readonly onChange: (value: string, checkbox: boolean) => void;
   readonly onFocusChange: (focused: boolean) => void;
   readonly onSourceChange: (source: boolean) => void;
@@ -200,6 +205,7 @@ function NoteEditorPage({
   );
   const send = (message: NoteEditorInbound) =>
     webView.current?.postMessage(JSON.stringify(message));
+  const resolveImages = useNoteImageResolver(props.environmentId, props.notePath, send);
   const fail = (detail: string) => {
     if (__DEV__) console.warn("[notes] live editor unavailable:", detail);
     props.onUnavailable("The live editor could not start, so this note opens as markdown source.");
@@ -289,6 +295,9 @@ function NoteEditorPage({
         return;
       case "link":
         props.onLink(message.href);
+        return;
+      case "resolveImages":
+        resolveImages(message.hrefs, message.renew);
         return;
       case "error":
         if (!ready) fail(message.message);

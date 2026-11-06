@@ -787,6 +787,7 @@ describe("notes permissions", () => {
       WS_METHODS.notesMove,
       WS_METHODS.notesDelete,
       WS_METHODS.notesStartWork,
+      WS_METHODS.notesAttach,
     ])
       expect(requiredScopeForRpcMethod(method)).toBe(AuthOrchestrationOperateScope);
   });
@@ -812,6 +813,7 @@ describe("notes permissions", () => {
               [WS_METHODS.notesMove]: () => invoked,
               [WS_METHODS.notesDelete]: () => invoked,
               [WS_METHODS.notesStartWork]: () => invoked,
+              [WS_METHODS.notesAttach]: () => invoked,
             }),
             RpcAuthorization.layer([AuthOrchestrationReadScope]),
           ),
@@ -836,6 +838,7 @@ describe("notes permissions", () => {
           requestId: "attempt",
           target: { type: "host", host: "host", projectPath: "/project" },
         }).pipe(Effect.asVoid),
+        client[WS_METHODS.notesAttach]({ attachmentId: "pending-attempt" }).pipe(Effect.asVoid),
       ];
       for (const request of denied)
         expect(yield* request.pipe(Effect.flip)).toMatchObject({

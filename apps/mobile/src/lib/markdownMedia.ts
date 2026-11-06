@@ -18,7 +18,7 @@ import type { FilePreviewSource } from "../components/FilePreviewModal";
 import type { MediaVideoPreviewSource } from "./videoPreviewSource";
 import type { MediaActionsSource } from "./mediaActionsSource";
 
-const DOCUMENT_MIME_TYPES: Readonly<Record<string, string>> = {
+export const DOCUMENT_MIME_TYPES: Readonly<Record<string, string>> = {
   ".pdf": "application/pdf",
   ".csv": "text/csv",
   ".tsv": "text/tab-separated-values",

@@ -1564,8 +1564,8 @@ describe("AssetAccess", () => {
         url: "https://github.com/user-attachments/assets/1a1842fb-6383-492f-873c-57aa0033fa6c",
         repository: "enterprise/private",
       };
-      const input = yield* decodeAssetCreateUrlInput({ resource });
-      const issued = yield* issueAssetUrl(input);
+      const { resource: res } = yield* decodeAssetCreateUrlInput({ resource });
+      const issued = yield* issueAssetUrl({ resource: res._tag === "note-file" ? resource : res });
       const suffix = issued.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
       const separator = suffix.indexOf("/");
       const resolved = yield* resolveAsset(suffix.slice(0, separator), suffix.slice(separator + 1));
@@ -1617,11 +1617,11 @@ describe("AssetAccess", () => {
     });
     return Effect.gen(function* () {
       const decodeAssetCreateUrlInput = Schema.decodeEffect(AssetCreateUrlInput);
-
       // Every client and server release spells the resource this way on the wire.
       const { resource } = yield* decodeAssetCreateUrlInput({
         resource: { _tag: "github-media", cwd: "/repo", url },
       });
+      if (resource._tag !== SOURCE_CONTROL_MEDIA_ASSET) throw new Error("Decoded another resource");
       const issued = yield* issueAssetUrl({ resource });
       const suffix = issued.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
       const separator = suffix.indexOf("/");

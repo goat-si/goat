@@ -23,4 +23,5 @@ export const makeNoteRpcHandlers = (
     [WS_METHODS.notesStartWork]: (input) => noteWork.startWork(input, surface),
     [WS_METHODS.notesWorkTargets]: () => noteWork.workTargets,
     [WS_METHODS.notesWorkTargetProjects]: (input) => noteWork.workTargetProjects(input),
+    [WS_METHODS.notesAttach]: (input) => notes.attach(input),
   });

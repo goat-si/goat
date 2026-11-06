@@ -11,6 +11,8 @@ const stripMarkers = (line: string) =>
     .trim()
     .replace(/^(?:(?:#{1,6}|[-*+>]|\d+\.)\s+|\[[ xX]\]\s*)+/u, "")
     .trim();
+// Embedded files and links read as their names in a preview, not as their markdown.
+const INLINE_LINK = /!?\[([^\]\n]*)\]\((?:<[^>\n]*>|[^)\s]*)(?:\s+(?:"[^"\n]*"|'[^'\n]*'))?\)/gu;
 export const bodySummary = (body: string, fallback: string) => {
   const lines = body.split(/\r?\n/u);
   const heading = /^#{1,6}\s+(.+?)\s*#*\s*$/mu.exec(body);
@@ -23,6 +25,7 @@ export const bodySummary = (body: string, fallback: string) => {
     .filter((line, index) => index !== titleIndex && !/^\s*(?:`{3,}|~{3,})/u.test(line))
     .map(stripMarkers)
     .join(" ")
+    .replace(INLINE_LINK, "$1")
     .replace(/\s+/gu, " ")
     .trim();
   return {

@@ -148,6 +148,7 @@ import { isTelemetryIdHash } from "@goat/shared/telemetryId";
 import { withUsageLimitsCommands } from "@goat/shared/usageLimits";
 import * as SqlClient from "effect/sql/SqlClient";
 import { issueAssetUrl } from "./assets/AssetAccess.ts";
+import { issueNoteFileUrl } from "./assets/noteFileAsset.ts";
 import * as AttachmentFileLeases from "./assets/AttachmentFileLeases.ts";
 import { deletePendingAttachment, issueAttachmentUploadUrl } from "./assets/AttachmentUpload.ts";
 import {
@@ -585,11 +586,9 @@ const ServerWsCoreRpcGroup = WsCoreRpcGroup.middleware(RpcInstrumentation);
 const ServerWsCoreServerRpcGroup = WsCoreServerRpcGroup.middleware(RpcInstrumentation);
 const ServerWsCoreWorkspaceRpcGroup = WsCoreWorkspaceRpcGroup.middleware(RpcInstrumentation);
 const ServerWsChannelRpcGroup = WsChannelRpcGroup.middleware(RpcInstrumentation);
-// When a resuming client's cursor is more than this many events behind the
-// current head, skip the per-event catch-up replay and send a fresh shell
-// snapshot instead. Replaying each intervening event costs a shell refetch;
-// past this gap a single O(active-threads) snapshot is cheaper and bounded.
-// Matches the event store's default page size (DEFAULT_READ_FROM_SEQUENCE_LIMIT).
+// A resuming client further behind than this gets a fresh shell snapshot instead of per-event
+// catch-up: each replayed event costs a shell refetch, while one O(active-threads) snapshot is
+// bounded. Matches the event store's default page size (DEFAULT_READ_FROM_SEQUENCE_LIMIT).
 const SHELL_RESUME_MAX_GAP = 1_000;
 // Row counts do not bound large tool payloads; sum stored JSON bytes in SQL and snapshot above budget.
 const ORCHESTRATION_REPLAY_PAYLOAD_BUDGET_BYTES = 8 * 1024 * 1024;
@@ -3157,6 +3156,7 @@ export const layerWsRpc = (
           /* Request instrumentation already owns the span; keep this helper in that context. */
           Effect.fnUntraced(function* (input) {
             const path = yield* Path.Path;
+            if (input.resource._tag === "note-file") return yield* issueNoteFileUrl(input.resource);
             if (
               input.resource._tag === "attachment" ||
               input.resource._tag === "native-app-icon" ||

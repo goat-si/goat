@@ -47,6 +47,10 @@ export const notesRpc = {
     label: "notes:work-target-projects",
     tag: WS_METHODS.notesWorkTargetProjects,
   }),
+  attach: createEnvironmentRpcCommand(connectionAtomRuntime, {
+    label: "notes:attach",
+    tag: WS_METHODS.notesAttach,
+  }),
 };
 
 // Notes reads are guarded RPCs, so keep the command's permission checks inside the

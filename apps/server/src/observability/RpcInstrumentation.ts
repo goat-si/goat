@@ -43,6 +43,7 @@ const RPC_AGGREGATES = {
   [WS_METHODS.notesStartWork]: "notes",
   [WS_METHODS.notesWorkTargets]: "notes",
   [WS_METHODS.notesWorkTargetProjects]: "notes",
+  [WS_METHODS.notesAttach]: "notes",
 
   [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: "orchestrationV2",
   [ORCHESTRATION_V2_WS_METHODS.getWorkflowScript]: "orchestration",
