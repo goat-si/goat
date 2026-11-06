@@ -12,15 +12,8 @@ interface ComposerEditorSelection {
 export function acknowledgeComposerNativeEvent(
   mostRecentEventCount: number,
   incomingEventCount: number,
-  resetGeneration = 0,
-  incomingResetGeneration = 0,
 ): number | null {
-  if (
-    !Number.isSafeInteger(incomingEventCount) ||
-    incomingEventCount < mostRecentEventCount ||
-    // Events from before the editor applied a parent reset describe text the parent replaced.
-    incomingResetGeneration < resetGeneration
-  ) {
+  if (!Number.isSafeInteger(incomingEventCount) || incomingEventCount < mostRecentEventCount) {
     return null;
   }
   return incomingEventCount;

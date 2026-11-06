@@ -7,7 +7,6 @@ import { useEffect, useState } from "react";
 import type { EnvironmentId } from "@goat/contracts";
 import { encodeComposerContextFragment } from "@goat/shared/composerContextClipboard";
 import { collectComposerContextReferences } from "@goat/shared/composerContextReferences";
-import { useComposerDraftResetGeneration } from "../state/composerDraftSelection";
 import { ComposerEditor as NativeComposerEditor } from "../native/GoatComposerEditor";
 import type { ComposerEditorProps as NativeComposerEditorProps } from "../native/GoatComposerEditor";
 import {
@@ -58,7 +57,6 @@ export function ComposerEditor({
   ...props
 }: ComposerEditorProps) {
   const draft = useComposerDraft(draftKey ?? null);
-  const readResetGeneration = useComposerDraftResetGeneration(draftKey ?? null);
   const verifiedHosts = useThreadContextHosts(environmentId ?? null);
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
   const preferredEnterBehavior = AsyncResult.isSuccess(preferencesResult)
@@ -176,11 +174,10 @@ export function ComposerEditor({
     <>
       {/* Reset revision history with the recreated iOS view without aborting context imports. */}
       <NativeComposerEditor
-        key={`${hidden ? "hidden" : "visible"}:${draftKey ?? "no-draft"}`}
+        key={hidden ? "hidden" : "visible"}
         {...props}
         enterBehavior={props.enterBehavior ?? preferredEnterBehavior}
         onChangeText={changeText}
-        readResetGeneration={readResetGeneration}
         readOnly={props.readOnly || importing}
         onSubmit={importing ? undefined : props.onSubmit}
         clipboardFragment={clipboardFragment ?? undefined}

@@ -56,7 +56,6 @@ import type { DraftComposerAttachment, FileBackedComposerAttachment } from "../l
 import { SerializedAsyncQueue } from "../lib/serialized-async-queue";
 import { appAtomRegistry } from "./atom-registry";
 import {
-  markComposerDraftReset,
   readComposerDraftSelection,
   rememberComposerDraftSelection,
 } from "./composerDraftSelection";
@@ -92,6 +91,7 @@ const PERSIST_DEBOUNCE_MS = 200;
 export const composerContextImportsAtom = Atom.make<Record<string, boolean>>({}).pipe(
   Atom.keepAlive,
 );
+
 export function setComposerContextImporting(draftKey: string, importing: boolean): void {
   const next = { ...appAtomRegistry.get(composerContextImportsAtom) };
   if (importing) next[draftKey] = true;
@@ -1782,18 +1782,17 @@ export function clearComposerDraftContent(
   },
 ): void {
   const previousAttachments = getComposerDraftSnapshot(draftKey).attachments;
-  markComposerDraftReset(draftKey);
   updateComposerDrafts((current) => clearComposerDraftContentState(current, draftKey, options));
   if (!options?.deferAttachmentCleanup) {
     scheduleUnusedComposerAttachmentCleanup(previousAttachments);
   }
 }
+
 export function clearComposerDraft(
   draftKey: string,
   options?: { readonly deferAttachmentCleanup?: boolean },
 ): void {
   abortComposerDraftOperations(draftKey);
-  markComposerDraftReset(draftKey);
   const previousAttachments = getComposerDraftSnapshot(draftKey).attachments;
   updateComposerDrafts((current) => {
     if (!current[draftKey]) {
@@ -1807,6 +1806,7 @@ export function clearComposerDraft(
     scheduleUnusedComposerAttachmentCleanup(previousAttachments);
   }
 }
+
 export function removeComposerDraftsForEnvironment(
   drafts: Record<string, ComposerDraft>,
   environmentId: EnvironmentId,

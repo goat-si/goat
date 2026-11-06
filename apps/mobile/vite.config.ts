@@ -6,7 +6,6 @@ import "vite-plus/test/config";
 const reactTests = [
   "src/components/FilePreviewModal.progressive.test.tsx",
   "src/features/threads/CustomAnswerInput.test.tsx",
-  "src/components/ComposerEditor.ios.test.tsx",
   "src/features/devices/device-stream.browser.test.ts",
   "src/features/settings/WorktreeCleanupSection.test.tsx",
   "src/features/threads/ThreadWorkspaceBanner.test.tsx",

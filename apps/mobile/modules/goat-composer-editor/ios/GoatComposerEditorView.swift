@@ -24,7 +24,6 @@ private struct ComposerControlledDocumentPayload: Decodable {
   let tokensJson: String
   let mostRecentEventCount: Int
   let isNativeEcho: Bool
-  let resetGeneration: Int
 }
 
 private struct ComposerThemePayload: Decodable {
@@ -442,7 +441,6 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
   private var isReadOnly = false
   private var isApplyingControlledValue = false
   private var nativeEventCount = 0
-  private var resetGeneration = 0
   private var lastContentSize = CGSize.zero
   private var iconImages: [String: UIImage] = [:]
   private var pendingIconUris = Set<String>()
@@ -489,7 +487,6 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
       var payload: [String: Any] = context
       payload["value"] = self.textView.serializedText()
       payload["eventCount"] = self.nativeEventCount
-      payload["resetGeneration"] = self.resetGeneration
       payload["selection"] = ["start": selection.start, "end": selection.end]
       self.onComposerPasteContext(payload)
     }
@@ -500,7 +497,6 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
       self.onComposerPasteText([
         "value": self.textView.serializedText(),
         "eventCount": self.nativeEventCount,
-        "resetGeneration": self.resetGeneration,
         "text": text,
         "selection": ["start": selection.start, "end": selection.end],
       ])
@@ -653,21 +649,11 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
   }
 
   func setControlledDocumentJson(_ documentJson: String) {
-    guard let document = decode(ComposerControlledDocumentPayload.self, from: documentJson) else {
+    guard let document = decode(ComposerControlledDocumentPayload.self, from: documentJson),
+          document.mostRecentEventCount >= nativeEventCount else {
       return
     }
-    // A parent reset (a send clear) wins over native edits it could not see; JS drops their events
-    // by generation, so the revision restarts where the parent last acknowledged.
-    let isReset = document.resetGeneration > resetGeneration
-    guard isReset || document.mostRecentEventCount >= nativeEventCount else {
-      return
-    }
-    if isReset {
-      resetGeneration = document.resetGeneration
-      nativeEventCount = document.mostRecentEventCount
-      endComposition()
-    }
-    if document.isNativeEcho && !isReset && textView.serializedText() != document.value {
+    if document.isNativeEcho && textView.serializedText() != document.value {
       return
     }
     if tokensJson != document.tokensJson {
@@ -941,13 +927,6 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
     applyControlledDocument(force: true)
   }
 
-  private func endComposition() {
-    guard textView.markedTextRange != nil else { return }
-    isApplyingControlledValue = true
-    textView.unmarkText()
-    isApplyingControlledValue = false
-  }
-
   private func makeAttributedDocument() -> NSAttributedString {
     let result = NSMutableAttributedString()
     let source = value as NSString
@@ -1173,7 +1152,6 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
       "value": value,
       "selection": ["start": selection.start, "end": selection.end],
       "eventCount": nativeEventCount,
-      "resetGeneration": resetGeneration,
     ])
     updatePlaceholderVisibility()
     emitContentSizeIfNeeded()
@@ -1190,7 +1168,6 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
       "value": currentValue,
       "selection": ["start": selection.start, "end": selection.end],
       "eventCount": nativeEventCount,
-      "resetGeneration": resetGeneration,
     ])
   }
 
