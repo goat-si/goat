@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./socketFrameParts": {
+      "types": "./src/socketFrameParts.ts",
+      "import": "./src/socketFrameParts.ts"
+    },
     "./timedShutdownPhase": {
       "types": "./src/timedShutdownPhase.ts",
       "import": "./src/timedShutdownPhase.ts"

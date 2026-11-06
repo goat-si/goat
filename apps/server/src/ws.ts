@@ -158,6 +158,8 @@ import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as RpcAuthorization from "./auth/RpcAuthorization.ts";
 import { requiredScopeForDeviceList, rpcAuthorizationError } from "./auth/RpcAuthorization.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
+import { withSocketFrameParts, WS_RPC_SERVER_OPTIONS } from "./rpc/socketFrameParts.ts";
+export { WS_RPC_SERVER_OPTIONS } from "./rpc/socketFrameParts.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
 import * as ChannelBotDirectory from "./channels/ChannelBotDirectory.ts";
 import * as ChannelBotProfiles from "./channels/ChannelBotProfiles.ts";
@@ -3601,12 +3603,6 @@ export const layerWsRpc = (
     }),
   ).pipe(Layer.provide(AcpSessionService.layer));
 
-// Default socket-level Defect frames end every pending client request.
-export const WS_RPC_SERVER_OPTIONS = {
-  disableTracing: true,
-  disableFatalDefects: true,
-} as const;
-
 export const layer = Layer.unwrap(
   Effect.gen(function* () {
     const connectionCatalogBroker = yield* ConnectionCatalogBroker.ConnectionCatalogBroker;
@@ -3745,7 +3741,7 @@ export const layer = Layer.unwrap(
             ),
           ),
         );
-        return yield* rpcWebSocketHttpEffect;
+        return yield* withSocketFrameParts(request, rpcWebSocketHttpEffect);
       }),
     );
   }),
