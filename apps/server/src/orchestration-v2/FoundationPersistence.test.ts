@@ -74,10 +74,8 @@ import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as ProviderRuntimeRecovery from "./ProviderRuntimeRecoveryService.ts";
 import * as TurnItemPositionStore from "./TurnItemPositionStore.ts";
-
 const isLiveStreamBufferError = Schema.is(LiveStreamBufferError);
 const encodeJson = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
-
 it.effect("rebuilds event history one bounded page at a time", () =>
   Effect.gen(function* () {
     const eventStore = yield* EventStore.EventStoreV2;
@@ -156,7 +154,6 @@ it.effect("rebuilds event history one bounded page at a time", () =>
     assert.isTrue((yield* maintenance.verify).valid);
   }).pipe(Effect.provide(layerTest)),
 );
-
 it.effect("discovers on the reader worker and deletes on the writer", () =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -218,7 +215,6 @@ it.effect("discovers on the reader worker and deletes on the writer", () =>
     );
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
 );
-
 it.effect("paces scheduled compaction while preserving retention state and fixed scan bounds", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -321,7 +317,6 @@ it.effect("paces scheduled compaction while preserving retention state and fixed
     ]);
   }).pipe(Effect.scoped, Effect.provide(layerTest)),
 );
-
 it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
   it.effect("projects oversized tool bodies before both replay and live RPC retention", () =>
     Effect.scoped(
@@ -418,7 +413,6 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
       }),
     ),
   );
-
   it.effect.each(["high-water", "replay"] as const)(
     "bounds live events while the V2 %s query is blocked",
     (phase) =>
@@ -474,7 +468,6 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
         }),
       ),
   );
-
   it.effect(
     "keeps internal streams subscribed while replay is blocked beyond the RPC buffer cap",
     () =>
@@ -526,7 +519,6 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
         }),
       ),
   );
-
   it.effect("filters worker replay and live queues without losing matching events", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -617,7 +609,6 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
       }),
     ),
   );
-
   it.effect("paginates catch-up beyond the event-store read limit", () =>
     Effect.gen(function* () {
       const eventSink = yield* EventSink.EventSinkV2;
@@ -639,14 +630,12 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
           },
         })),
       ];
-
       yield* eventSink.write({ events });
       const replayed = yield* eventSink.stream({ afterSequence: 0 }).pipe(
         Stream.take(eventCount),
         Stream.runCollect,
         Effect.map((events) => Array.from(events)),
       );
-
       assert.lengthOf(replayed, eventCount);
       assert.deepEqual(
         replayed.map((stored) => stored.sequence),
@@ -654,7 +643,6 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
       );
     }),
   );
-
   it.effect("does not lose or duplicate events while transitioning from catch-up to live", () =>
     Effect.gen(function* () {
       const eventSink = yield* EventSink.EventSinkV2;
@@ -664,7 +652,6 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
       const created = yield* eventSink.write({
         events: [threadCreatedEvent({ id: "event:foundation-stream-race:0", thread, now })],
       });
-
       let afterSequence = created[0]!.sequence;
       // oxlint-disable-next-line goat/no-polling-loop-in-tests -- Fixed-count writes exercise the catch-up/live handoff; each iteration awaits its event rather than polling.
       for (let index = 1; index <= 32; index += 1) {
@@ -691,7 +678,6 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
       }
     }),
   );
-
   it.effect("replays shared provider-session payloads across every bound thread", () =>
     Effect.gen(function* () {
       const eventSink = yield* EventSink.EventSinkV2;
@@ -714,7 +700,6 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
         lastError: null,
       };
       const secondSession = { ...firstSession, cwd: "/workspace/second" };
-
       yield* eventSink.write({
         events: [
           threadCreatedEvent({
@@ -747,7 +732,6 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
           },
         ],
       });
-
       assert.equal(
         (yield* projectionStore.getThreadProjection(firstThreadId)).providerSessions[0]?.cwd,
         secondSession.cwd,
@@ -756,7 +740,6 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
       assert.isTrue((yield* maintenance.rebuild).valid);
     }),
   );
-
   it.effect("compacts superseded state events, imported v1 events, and legacy receipts", () =>
     Effect.gen(function* () {
       const eventSink = yield* EventSink.EventSinkV2;
@@ -852,7 +835,6 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
           streaming: false,
         },
       });
-
       yield* eventSink.write({
         events: [
           threadCreatedEvent({ id: "event:foundation-compact:create", thread, now }),
@@ -872,7 +854,6 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
         ],
       });
       const beforeCompaction = yield* projections.getThreadProjection(threadId);
-
       const importedV1ThreadId = "thread:foundation-compact-v1-imported";
       const pendingV1ThreadId = "thread:foundation-compact-v1-pending";
       const insertV1Event = (threadIdValue: string, version: number) => sql`
@@ -907,11 +888,9 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
           ('command:foundation-compact:pending', 'thread', ${pendingV1ThreadId}, ${nowIso}, 1, 'accepted', 'legacy')
         ON CONFLICT(command_id) DO NOTHING
       `;
-
       const summary = yield* maintenance.compactEventStore();
       assert.isAtLeast(summary.deletedEventCount, 504);
       assert.isAtLeast(summary.deletedReceiptCount, 1);
-
       const remaining = yield* sql<{ readonly event_id: string }>`
         SELECT event_id
         FROM orchestration_events
@@ -933,7 +912,6 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
           "event:foundation-compact:item-2",
         ],
       );
-
       const remainingV1 = yield* sql<{ readonly stream_id: string }>`
         SELECT stream_id
         FROM orchestration_events
@@ -944,7 +922,6 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
         remainingV1.map((row) => row.stream_id),
         [pendingV1ThreadId],
       );
-
       const remainingReceipts = yield* sql<{ readonly command_id: string }>`
         SELECT command_id
         FROM orchestration_command_receipts
@@ -954,13 +931,11 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
         remainingReceipts.map((row) => row.command_id),
         ["command:foundation-compact:pending"],
       );
-
       assert.isTrue((yield* maintenance.verify).valid);
       assert.isTrue((yield* maintenance.rebuild).valid);
       assert.deepEqual(yield* projections.getThreadProjection(threadId), beforeCompaction);
     }),
   );
-
   it.effect("verifies and rebuilds projections with cross-thread subagent relations", () =>
     Effect.gen(function* () {
       const eventSink = yield* EventSink.EventSinkV2;
@@ -987,7 +962,6 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
           rootThreadId: parentThreadId,
         },
       };
-
       yield* eventSink.write({
         events: [
           threadCreatedEvent({
@@ -1106,7 +1080,6 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
           },
         ],
       });
-
       const assertCrossThreadProjection = Effect.gen(function* () {
         const parent = yield* projectionStore.getThreadProjection(parentThreadId);
         const child = yield* projectionStore.getThreadProjection(childThreadId);
@@ -1125,7 +1098,6 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
         );
         assert.equal(child.thread.activeProviderThreadId, childProviderThreadId);
       });
-
       yield* assertCrossThreadProjection;
       assert.isTrue((yield* maintenance.verify).valid);
       yield* sql`
@@ -1140,7 +1112,6 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
       yield* assertCrossThreadProjection;
     }),
   );
-
   it.effect(
     "rolls back events, projections, receipts, and effects after a projection failure",
     () =>
@@ -1178,7 +1149,6 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
               payload: checkpoint(index),
             }) satisfies OrchestrationV2DomainEvent,
         );
-
         const exit = yield* Effect.exit(
           eventSink.commitCommand({
             commandId,
@@ -1217,7 +1187,6 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
         assert.equal(checkpointRows[0]?.count, 0);
       }),
   );
-
   it.effect("replays every command event across bounded persistence pages", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
@@ -1229,7 +1198,6 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
       const exactPageCommandId = CommandId.make("command:paged-command-replay:exact");
       const emptyCommandId = CommandId.make("command:paged-command-replay:empty");
       const threadId = "thread:paged-command-replay";
-
       const eventRow = (
         ordinal: number,
         input: {
@@ -1256,7 +1224,6 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
         metadata_json: "{}",
         application_event_version: input.version ?? 2,
       });
-
       const matchingCount = 1_001;
       const rows: Array<ReturnType<typeof eventRow>> = [];
       let ordinal = 0;
@@ -1305,7 +1272,6 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
         )
         .map((row) => row.sequence);
       assert.lengthOf(expectedSequences, matchingCount);
-
       yield* sql`
         INSERT INTO orchestration_command_receipts (
           command_id, aggregate_kind, aggregate_id, accepted_at, result_sequence, status, command_type
@@ -1315,7 +1281,6 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
           ${expectedSequences.at(-1)!}, 'accepted', 'thread.create'
         )
       `;
-
       const pageLimits: Array<number> = [];
       const recordReads: Statement.Transformer = (statement) => {
         const [query, params] = statement.compile();
@@ -1333,24 +1298,20 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
           Stream.runCollect,
           Effect.map((events) => Array.from(events)),
         );
-
       const replayed = yield* collectByCommandId(commandId);
       assert.deepEqual(
         replayed.map((stored) => stored.sequence),
         expectedSequences,
       );
       assert.deepEqual(pageLimits, [500, 500, 500]);
-
       pageLimits.length = 0;
       const exactPage = yield* collectByCommandId(exactPageCommandId);
       assert.lengthOf(exactPage, 500);
       assert.deepEqual(pageLimits, [500, 500]);
-
       pageLimits.length = 0;
       const empty = yield* collectByCommandId(emptyCommandId);
       assert.lengthOf(empty, 0);
       assert.deepEqual(pageLimits, [500]);
-
       pageLimits.length = 0;
       const retried = yield* eventSink
         .commitCommand({
@@ -1377,7 +1338,6 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
       assert.deepEqual(pageLimits, [500, 500, 500]);
     }),
   );
-
   it.effect("keeps one durable effect across command retries and executes it after recovery", () =>
     Effect.gen(function* () {
       const eventSink = yield* EventSink.EventSinkV2;
@@ -1400,7 +1360,6 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
           runId: RunId.make("run:foundation-effect-recovery"),
         },
       };
-
       const first = yield* eventSink.commitCommand({
         commandId,
         threadId,
@@ -1417,13 +1376,11 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
         events: [event],
         effects: [effect],
       });
-
       assert.isTrue(first.committed);
       assert.isFalse(retry.committed);
       assert.equal(retry.receipt.resultSequence, first.receipt.resultSequence);
       assert.lengthOf(retry.storedEvents, 1);
       assert.lengthOf(yield* outbox.listByCommandId(commandId), 1);
-
       const executionCount = yield* Ref.make(0);
       const layerExecutor = Layer.succeed(
         EffectWorker.OrchestrationEffectExecutorV2,
@@ -1441,7 +1398,6 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
         assert.isTrue(yield* worker.runOnce);
         assert.isFalse(yield* worker.runOnce);
       }).pipe(Effect.provide(layerWorker));
-
       assert.equal(yield* Ref.get(executionCount), 1);
       const storedEffect = yield* outbox.get(effect.id);
       assert.isTrue(Option.isSome(storedEffect));
@@ -1450,7 +1406,6 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
       }
     }),
   );
-
   it.effect("does not publish a stale provider start after an interrupt wins", () =>
     Effect.gen(function* () {
       const eventSink = yield* EventSink.EventSinkV2;
@@ -1497,7 +1452,6 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
           },
         ],
       });
-
       const captureEffect = {
         id: "effect:foundation-current-capture",
         commandId: CommandId.make("command:foundation-current-capture"),
@@ -1521,7 +1475,6 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
       assert.isTrue(Option.isSome(yield* outbox.get(captureEffect.id)));
       yield* outbox.awaitAvailable;
       const staleCaptureEffect = { ...captureEffect, id: "effect:foundation-stale-capture" };
-
       const reachedPrecommitGap = yield* Deferred.make<void>();
       const releaseStaleStart = yield* Deferred.make<void>();
       const providerStartCount = yield* Ref.make(0);
@@ -1551,7 +1504,6 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
         }
         return result;
       }).pipe(Effect.forkChild);
-
       yield* Deferred.await(reachedPrecommitGap);
       const interruptedAt = yield* DateTime.now;
       yield* eventSink.write({
@@ -1572,7 +1524,6 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
         ],
       });
       yield* Deferred.succeed(releaseStaleStart, undefined);
-
       const staleResult = yield* Fiber.join(staleStartFiber);
       assert.isFalse(staleResult.committed);
       assert.isTrue(Option.isNone(yield* outbox.get(staleCaptureEffect.id)));
@@ -1582,7 +1533,6 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
       assert.equal(projection.runs[0]?.status, "cancelled");
     }).pipe(Effect.provide(Layer.fresh(layerTest))),
   );
-
   it.effect("guards post-terminal provider-thread writes by attempt and run ordinal", () =>
     Effect.gen(function* () {
       const eventSink = yield* EventSink.EventSinkV2;
@@ -1637,7 +1587,6 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
         createdAt: now,
         updatedAt: now,
       };
-
       yield* eventSink.write({
         events: [
           threadCreatedEvent({
@@ -1666,7 +1615,6 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
           },
         ],
       });
-
       const ownedClear = yield* eventSink.writeIfProviderThreadOwner({
         providerThreadId,
         runId,
@@ -1690,7 +1638,6 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
       });
       assert.isTrue(ownedClear.committed);
       assert.equal(ownedClear.storedEvents.length, 1);
-
       const afterReplacement = yield* DateTime.now;
       yield* eventSink.write({
         events: [
@@ -1710,7 +1657,6 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
           },
         ],
       });
-
       const supersededAttemptWrite = yield* eventSink.writeIfProviderThreadOwner({
         providerThreadId,
         runId,
@@ -1865,6 +1811,59 @@ it.layer(layerTest)("orchestration V2 foundation persistence", (it) => {
       assert.isTrue(Option.isSome(cancelled));
       if (Option.isSome(cancelled)) assert.equal(cancelled.value.status, "cancelled");
     }),
+  );
+
+  it.effect("does not resolve awaitSettled waiters until the cancel is signalled", () =>
+    Effect.gen(function* () {
+      const outbox = yield* EffectOutbox.EffectOutboxV2;
+      const commandId = CommandId.make("command:foundation-settle-on-cancel");
+      const threadId = ThreadId.make("thread:foundation-settle-on-cancel");
+      const effectId = "effect:foundation-settle-on-cancel";
+      yield* outbox.enqueue([
+        {
+          id: effectId,
+          commandId,
+          threadId,
+          request: {
+            type: "provider-turn.start",
+            runId: RunId.make("run:foundation-settle-on-cancel"),
+          },
+        },
+      ]);
+
+      const readFinished = yield* Deferred.make<void>();
+      const observeRead: Statement.Transformer = (statement, _sql, _fiber, span) => {
+        const [query] = statement.compile();
+        if (/SELECT \*\s+FROM orchestration_v2_effect_outbox/.test(query)) {
+          const end = span.end.bind(span);
+          span.end = (...args) => {
+            end(...args);
+            Deferred.doneUnsafe(readFinished, Effect.void);
+          };
+        }
+        return Effect.succeed(statement);
+      };
+      const waiterFiber = yield* outbox
+        .awaitSettled(effectId)
+        .pipe(
+          Effect.provideService(Statement.CurrentTransformer, observeRead),
+          Effect.provideService(Statement.SpanPropagationEnabled, true),
+          Effect.forkChild,
+        );
+      yield* Deferred.await(readFinished);
+
+      const cancelledEffectIds = yield* outbox.cancelUnsettled({
+        threadId,
+        effectTypes: ["provider-turn.start"],
+        reason: "Test settle on cancel.",
+      });
+      assert.deepEqual(cancelledEffectIds, [effectId]);
+      // The cancel runs inside the commit transaction; waiters resolve only via
+      // the post-commit signalCancellations, never from the cancel itself.
+      assert.isUndefined(waiterFiber.pollUnsafe());
+      yield* outbox.signalCancellations(cancelledEffectIds);
+      yield* Fiber.join(waiterFiber);
+    }).pipe(Effect.provide(Layer.fresh(layerEffectOutboxProvided))),
   );
 
   it.effect("does not start an effect that was cancelled during claim registration", () =>
