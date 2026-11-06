@@ -85,3 +85,16 @@ it("drops a grant that another tab revoked", async () => {
     chooseEnvironmentSpeech(null);
   }
 });
+
+it("keeps environment dictation off where a revocation cannot reach other tabs", async () => {
+  vi.stubGlobal("BroadcastChannel", undefined);
+  vi.resetModules();
+  try {
+    const isolated = await import("./voiceConsent");
+    expect(isolated.chooseEnvironmentSpeech(EnvironmentId.make("first"))).toBe(true);
+    expect(isolated.readEnvironmentSpeechGrant()).toBeNull();
+    isolated.chooseEnvironmentSpeech(null);
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});

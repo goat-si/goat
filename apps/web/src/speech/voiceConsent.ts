@@ -30,6 +30,8 @@ revocations?.addEventListener("message", (event: MessageEvent<unknown>) => {
 });
 
 export function readEnvironmentSpeechGrant(): EnvironmentSpeechGrant | null {
+  // Without a channel a revocation could not reach other tabs, so environment dictation stays off.
+  if (!revocations) return null;
   const stored = readLocalStorageValue(KEY, null, Grant);
   return stored && !revoked.has(stored.id) ? stored : null;
 }
