@@ -83,18 +83,7 @@ export function base64UrlDecodeUtf8(input: string): string {
   return Result.getOrThrow(Base64Url.decodeString(input));
 }
 
-export function signPayload(payload: string, secret: Uint8Array): string {
-  return NodeCrypto.createHmac("sha256", Buffer.from(secret)).update(payload).digest("base64url");
-}
-
-export function timingSafeEqualBase64Url(left: string, right: string): boolean {
-  const leftBuffer = Buffer.from(left, "base64url");
-  const rightBuffer = Buffer.from(right, "base64url");
-  if (leftBuffer.length !== rightBuffer.length) {
-    return false;
-  }
-  return NodeCrypto.timingSafeEqual(leftBuffer, rightBuffer);
-}
+export { signPayload, timingSafeEqualBase64Url } from "./PayloadSigner.ts";
 
 function normalizeNonEmptyString(value: string | null | undefined): string | undefined {
   if (typeof value !== "string") {

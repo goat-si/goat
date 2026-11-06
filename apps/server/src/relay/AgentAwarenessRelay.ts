@@ -1,9 +1,9 @@
+import type { AgentAwarenessThread } from "../orchestration-v2/ProjectionAwareness.ts";
 import { publishFailurePolicy, RelayPublishCooldown } from "./relayPublishPolicy.ts";
 import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
 import type {
   EnvironmentId,
   OrchestrationV2DomainEvent,
-  OrchestrationV2ThreadShell,
   OrchestrationV2TurnItem,
   Project,
   ThreadId,
@@ -284,7 +284,7 @@ const makePublishProof = Effect.fn("makePublishProof")(function* (input: {
 });
 
 function describeThreadShellForAwareness(
-  thread: Option.Option<OrchestrationV2ThreadShell>,
+  thread: Option.Option<AgentAwarenessThread>,
 ): Record<string, unknown> {
   if (Option.isNone(thread)) {
     return { found: false };
@@ -304,7 +304,7 @@ function describeThreadShellForAwareness(
 function resolveAgentAwarenessRelayPublishSnapshot(input: {
   readonly environmentId: EnvironmentId;
   readonly threadId: ThreadId;
-  readonly thread: Option.Option<OrchestrationV2ThreadShell>;
+  readonly thread: Option.Option<AgentAwarenessThread>;
   readonly project: Option.Option<Project>;
 }): {
   readonly projectId: string | null;
@@ -338,7 +338,7 @@ function resolveAgentAwarenessRelayPublishSnapshot(input: {
   };
 }
 
-function terminalWorkSinceStart(thread: OrchestrationV2ThreadShell, startedAt: number): boolean {
+function terminalWorkSinceStart(thread: AgentAwarenessThread, startedAt: number): boolean {
   return (
     thread.latestRunCompletedAt != null &&
     DateTime.toEpochMillis(thread.latestRunCompletedAt) > startedAt
@@ -349,7 +349,7 @@ export function resolveAgentAwarenessRelayActiveThreadIds(input: {
   readonly environmentId: EnvironmentId;
   readonly startedAt: number;
   readonly projects: ReadonlyArray<Pick<Project, "id" | "title">>;
-  readonly threads: ReadonlyArray<OrchestrationV2ThreadShell>;
+  readonly threads: ReadonlyArray<AgentAwarenessThread>;
 }): ReadonlyArray<ThreadId> {
   const projectById = new Map(input.projects.map((project) => [project.id, project]));
   return input.threads
@@ -557,7 +557,7 @@ export const make = Effect.gen(function* () {
     });
 
     // Read only this thread; full shell reads would make each activity event scale with all threads.
-    const threadShell = yield* threads.getThreadShell(threadId);
+    const threadShell = (yield* threads.getAgentAwarenessSnapshot(threadId)).threads[0] ?? null;
     if (
       threadShell?.lineage.relationshipToParent === "subagent" &&
       !hasLivePublishedState(yield* Ref.get(publishedStateByThreadRef), threadId)
@@ -567,7 +567,7 @@ export const make = Effect.gen(function* () {
     }
     const thread =
       threadShell === null || threadShell.archivedAt !== null
-        ? Option.none<OrchestrationV2ThreadShell>()
+        ? Option.none<AgentAwarenessThread>()
         : Option.some(threadShell);
     const project = Option.isSome(thread)
       ? yield* projects.getById(thread.value.projectId)
@@ -772,7 +772,7 @@ export const make = Effect.gen(function* () {
     const environmentId = yield* serverEnvironment.getEnvironmentId;
     const [projectSnapshot, shellSnapshot] = yield* Effect.all([
       projects.snapshot,
-      threads.getShellSnapshot(),
+      threads.getAgentAwarenessSnapshot(),
     ]);
     const activeThreadIds = resolveAgentAwarenessRelayActiveThreadIds({
       environmentId,

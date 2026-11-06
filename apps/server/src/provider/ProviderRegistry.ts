@@ -439,10 +439,6 @@ export const layer = Layer.effect(
     );
     const syncSemaphore = yield* Semaphore.make(1);
 
-    const getLiveSources: Effect.Effect<ReadonlyArray<ProviderSnapshotSource>> = Ref.get(
-      liveSubsRef,
-    ).pipe(Effect.map((map) => Array.from(map.values(), buildSnapshotSource)));
-
     const persistProvider = Effect.fn("ProviderRegistry.persistProvider")(function* (
       provider: ServerProvider,
     ) {
@@ -614,17 +610,17 @@ export const layer = Layer.effect(
       },
     );
 
-    const refreshOneSource = Effect.fn("refreshOneSource")(function* (
-      providerSource: ProviderSnapshotSource,
-    ) {
-      // Enrichment can publish a newer snapshot before refresh returns its pre-enrichment probe.
-      return yield* providerSource.refresh.pipe(
-        Effect.andThen(providerSource.getSnapshot),
-        Effect.flatMap((nextProvider) =>
-          correlateSnapshotWithSource(providerSource, nextProvider).pipe(
-            Effect.flatMap(syncProvider),
-          ),
-        ),
+    const isCurrentInstance = (instance: ProviderInstance) =>
+      instanceRegistry
+        .getInstance(instance.instanceId)
+        .pipe(Effect.map((current) => current === instance));
+    const refreshOneSource = Effect.fn("refreshOneSource")(function* (instance: ProviderInstance) {
+      const source = buildSnapshotSource(instance);
+      const probe = yield* source.refresh.pipe(Effect.andThen(source.getSnapshot), Effect.exit);
+      if (!(yield* isCurrentInstance(instance))) return yield* Ref.get(providersRef);
+      const snapshot = yield* probe;
+      return yield* correlateSnapshotWithSource(source, snapshot).pipe(
+        Effect.flatMap(syncProvider),
       );
     });
 
@@ -651,9 +647,10 @@ export const layer = Layer.effect(
       );
       if (claimed.owner) {
         // Detach shared passes so the first caller's interruption cannot cancel other callers' work.
-        yield* getLiveSources.pipe(
-          Effect.flatMap((sources) =>
-            Effect.forEach(sources, (source) => refreshOneSource(source), {
+        yield* syncLiveSourcesAndContinue.pipe(
+          Effect.andThen(Ref.get(liveSubsRef)),
+          Effect.flatMap((instances) =>
+            Effect.forEach(instances.values(), (instance) => refreshOneSource(instance), {
               concurrency: "unbounded",
               discard: true,
             }),
@@ -674,26 +671,17 @@ export const layer = Layer.effect(
       if (provider === undefined) {
         return yield* refreshAll();
       }
-      const defaultInstanceId = defaultInstanceIdForDriver(provider);
-      const sources = yield* getLiveSources;
-      const providerSource = sources.find(
-        (candidate) => candidate.instanceId === defaultInstanceId,
-      );
-      if (!providerSource) {
-        return yield* Ref.get(providersRef);
-      }
-      return yield* refreshOneSource(providerSource);
+      yield* syncLiveSourcesAndContinue;
+      const instance = (yield* Ref.get(liveSubsRef)).get(defaultInstanceIdForDriver(provider));
+      return instance ? yield* refreshOneSource(instance) : yield* Ref.get(providersRef);
     });
 
     const refreshInstance = Effect.fn("refreshInstance")(function* (
       instanceId: ProviderInstanceId,
     ) {
-      const sources = yield* getLiveSources;
-      const providerSource = sources.find((candidate) => candidate.instanceId === instanceId);
-      if (!providerSource) {
-        return yield* Ref.get(providersRef);
-      }
-      return yield* refreshOneSource(providerSource);
+      yield* syncLiveSourcesAndContinue;
+      const instance = (yield* Ref.get(liveSubsRef)).get(instanceId);
+      return instance ? yield* refreshOneSource(instance) : yield* Ref.get(providersRef);
     });
     refreshAuthDependents = (instanceIds) =>
       Effect.forEach(
@@ -761,15 +749,17 @@ export const layer = Layer.effect(
       yield* Effect.forEach(
         instances.filter((instance) => !failedInstances.has(instance.instanceId)),
         (instance) =>
-          refreshOneSource(buildSnapshotSource(instance)).pipe(
+          refreshOneSource(instance).pipe(
             Effect.catchCause((cause) => recoverInstanceFailure(instance.instanceId, cause)),
           ),
         { concurrency: "unbounded", discard: true },
       );
+      const refreshedInstances = yield* Effect.filter(
+        instances.filter((instance) => !failedInstances.has(instance.instanceId)),
+        isCurrentInstance,
+      );
       const refreshedInstanceIds = new Set(
-        instances
-          .filter((instance) => !failedInstances.has(instance.instanceId))
-          .map((instance) => instance.instanceId),
+        refreshedInstances.map((instance) => instance.instanceId),
       );
       return (yield* Ref.get(providersRef)).filter((candidate) =>
         refreshedInstanceIds.has(candidate.instanceId),
@@ -911,6 +901,7 @@ export const layer = Layer.effect(
           },
         );
       }),
+      Scope.provide(serviceScope),
     );
 
     yield* upsertProviders(fallbackProviders, { publish: false });

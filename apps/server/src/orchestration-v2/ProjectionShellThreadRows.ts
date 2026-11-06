@@ -101,7 +101,8 @@ export const makeShellThreadRows = (sql: SqlClient.SqlClient) => {
       familyOf,
       worktreePath,
       threadIds,
-    }: ShellSnapshotOptions = {},
+      listedOnly = false,
+    }: ShellSnapshotOptions & { readonly listedOnly?: boolean } = {},
   ) =>
     sql<ShellThreadRow>`
             SELECT
@@ -301,7 +302,7 @@ export const makeShellThreadRows = (sql: SqlClient.SqlClient) => {
                 candidate.ordinal DESC, candidate.run_id DESC
               LIMIT 1
             ) AND blocked.status = 'failed'
-            WHERE t.deleted_at IS NULL${threadId === undefined ? sql`` : sql` AND t.thread_id = ${threadId}`}${
+            WHERE t.deleted_at IS NULL${listedOnly ? sql` AND json_extract(t.payload_json, '$.lineage.relationshipToParent') IS NOT 'subagent' AND json_extract(t.payload_json, '$.sideChatOf') IS NULL` : sql``}${threadId === undefined ? sql`` : sql` AND t.thread_id = ${threadId}`}${
               projectId === undefined ? sql`` : sql` AND t.project_id = ${projectId}`
             }${
               location === "active"

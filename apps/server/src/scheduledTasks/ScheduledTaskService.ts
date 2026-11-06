@@ -1,5 +1,5 @@
 import type { ScheduledTaskRow } from "./ScheduledTaskRow.ts";
-import { taskError } from "./scheduledTaskError.ts";
+import { dispatchFailureDetails, taskError } from "./scheduledTaskError.ts";
 import { prepareScheduledTaskNotificationPrompt } from "./scheduledTaskNotificationPrompt.ts";
 import * as ScheduledTaskRuns from "./ScheduledTaskRuns.ts";
 import {
@@ -891,11 +891,7 @@ export const layer = Layer.effect(
           return yield* Effect.uninterruptible(
             Effect.gen(function* () {
               const at = iso(yield* localNow);
-              const dispatchEvidence =
-                result._tag === "Failure" &&
-                result.cause.reasons.every((reason) => reason._tag === "Fail")
-                  ? ("rejected" as const)
-                  : ("unresolved" as const);
+              const { dispatchEvidence, dispatchError } = dispatchFailureDetails(result);
               if (
                 webhook !== undefined &&
                 (yield* scheduledRuns.deliveryDispatch(webhook.deliveryId)) === "accepted"
@@ -907,6 +903,7 @@ export const layer = Layer.effect(
                   acceptedRun: result._tag === "Success" ? result.value.run : null,
                   at,
                   dispatchEvidence,
+                  dispatchError,
                 });
                 if (webhook !== undefined) {
                   yield* Ref.update(webhook.dispatched, (prior) =>

@@ -42,7 +42,14 @@ import * as PreviewAgentActivity from "./PreviewAgentActivity.ts";
 import * as ServerBrowser from "./ServerBrowser.ts";
 import * as PreviewBrowser from "./PreviewBrowser.ts";
 import { unusedPreviewBrowser } from "./PreviewBrowser.testkit.ts";
-import { makeFrame, makeSession, mockCopy, refClickTarget } from "./ServerBrowserTestFixtures.ts";
+import {
+  fileChooserElement,
+  makeFrame,
+  makeSession,
+  mockCopy,
+  refClickTarget,
+  stallViewer,
+} from "./ServerBrowserTestFixtures.ts";
 
 vi.mock("./ServerBrowserContexts.ts", () => ({
   presentAsChrome: async () => {},
@@ -76,18 +83,6 @@ vi.mock("./ServerBrowserContexts.ts", () => ({
     }
   },
 }));
-
-function fileChooserElement(accept: string) {
-  return {
-    getAttribute: async () => accept,
-    evaluate: (probe: (element: { ownerDocument: unknown }) => boolean) =>
-      Promise.resolve(
-        probe({
-          ownerDocument: (globalThis as typeof globalThis & { document?: unknown }).document,
-        }),
-      ),
-  };
-}
 
 function makeContext(onClose?: (context: BrowserContext) => void, initialUrl = "about:blank") {
   const events = new NodeEvents.EventEmitter();
@@ -174,6 +169,7 @@ function makeContext(onClose?: (context: BrowserContext) => void, initialUrl = "
     grantPermissions: vi.fn(async () => {}),
     cookies: async () => [],
     newCDPSession: async (target: unknown) => {
+      if (pageSetupFailure) throw pageSetupFailure;
       const session = makeSession(
         target === page ? undefined : (target as ReturnType<typeof makeFrame>),
         () => desktopSizeAnswer?.() ?? Promise.resolve({ result: { value: { ...cssViewport } } }),
@@ -237,6 +233,7 @@ const encoderStreams: Array<{ frameRate: number | undefined; bitsPerSecond: numb
 const contextRequests: Array<{ profileId: string; isolated: boolean }> = [];
 let contextGate: PromiseWithResolvers<void> | null = null;
 let contextFailure: Error | null = null;
+let pageSetupFailure: Error | null = null;
 let initialNavigation: (() => Promise<void>) | null = null;
 let desktopRendersNext = false;
 let desktopPageUrl = "about:blank";
@@ -348,17 +345,6 @@ const viewerInput = (tabId: string, canOperate: boolean) => ({
   maxHeight: 800,
   quality: 70,
 });
-/** Fills a viewer's output with frames; resolves once every one of them is acknowledged. */
-const stallViewer = (viewer: ServerBrowser.ServerBrowserViewer) => {
-  const output = viewer.output as unknown as Queue.Queue<ServerBrowser.ServerBrowserViewerOutput>;
-  const acked = Promise.withResolvers<void>();
-  let unacked = 0;
-  const ack = Effect.sync(() => {
-    if (--unacked === 0) acked.resolve();
-  });
-  while (Queue.offerUnsafe(output, { _tag: "frame", data: Buffer.alloc(0), ack })) unacked++;
-  return Effect.promise(() => acked.promise);
-};
 const viewportSizes = (items: ReadonlyArray<ServerBrowser.ServerBrowserViewerOutput>) =>
   items.flatMap((item) => (item._tag === "viewport" ? [`${item.width}x${item.height}`] : []));
 const openDesktopViewer = Effect.gen(function* () {
@@ -382,6 +368,7 @@ beforeEach(() => {
   contextRequests.length = 0;
   contextGate = null;
   contextFailure = null;
+  pageSetupFailure = null;
   initialNavigation = null;
   mockCopy.page = "";
   mockCopy.key = "";
@@ -2663,6 +2650,12 @@ it.live("failed session and browser launches release capacity, as does closing a
       // A failed launch must not leave a session a viewer can relaunch past the budget.
       expect((yield* manager.list({ threadId: scope.thread.threadId })).sessions).toHaveLength(7);
       contextFailure = null;
+      pageSetupFailure = new Error("CDP setup failed");
+      expect(yield* open.pipe(Effect.result)).toMatchObject({ _tag: "Failure" });
+      pageSetupFailure = null;
+      expect(contexts.at(-1)!.close).toHaveBeenCalled();
+      expect(contexts.at(-1)!.page.isClosed()).toBe(true);
+      expect((yield* manager.list({ threadId: scope.thread.threadId })).sessions).toHaveLength(7);
       expect((yield* open).available).toBe(true);
       expect(yield* open.pipe(Effect.flip)).toMatchObject({ reason: "tabLimit" });
       expect(

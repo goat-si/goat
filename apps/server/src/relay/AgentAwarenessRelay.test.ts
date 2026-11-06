@@ -185,6 +185,16 @@ const makeTestRelay = Effect.fnUntraced(function* (
       Effect.sync(() => shellReads.push(threadId)).pipe(
         Effect.andThen(options.readShell?.(threadId) ?? Ref.get(currentShell)),
       ),
+    getAgentAwarenessSnapshot: (threadId) =>
+      threadId === undefined
+        ? Effect.sync(() => {
+            catchUp.shellSnapshotReads += 1;
+            return { snapshotSequence: 1, threads: [] };
+          })
+        : Effect.sync(() => shellReads.push(threadId)).pipe(
+            Effect.andThen(options.readShell?.(threadId) ?? Ref.get(currentShell)),
+            Effect.map((thread) => ({ snapshotSequence: 1, threads: thread ? [thread] : [] })),
+          ),
     getShellSnapshot: () =>
       Effect.sync(() => {
         catchUp.shellSnapshotReads += 1;

@@ -64,6 +64,7 @@ const external = Layer.mergeAll(
         readinessChanged: Stream.empty,
         recoveryRequests: Stream.empty,
         requestRecovery: () => Effect.void,
+        restartConnector: () => Effect.succeed(false),
         tunnelConnected: Stream.empty,
         withLinkStateLock: lock.withPermits(1),
       });

@@ -1,3 +1,4 @@
+import { fromSecret } from "../auth/PayloadSigner.ts";
 import type { AssetResource } from "@goat/contracts";
 import {
   AssetAttachmentNotFoundError,
@@ -48,12 +49,7 @@ import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
-import {
-  base64UrlDecodeUtf8,
-  base64UrlEncode,
-  signPayload,
-  timingSafeEqualBase64Url,
-} from "../auth/utils.ts";
+import { base64UrlDecodeUtf8, base64UrlEncode } from "../auth/utils.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { makeIsServerInternalPath } from "../auth/serverInternalPaths.ts";
 import { parseAttachmentFileExtension, resolveAttachmentPathById } from "../attachmentStore.ts";
@@ -910,7 +906,7 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
     claims = { ...claims, expiresAt };
   }
   const encodedPayload = base64UrlEncode(encodeAssetClaims(claims));
-  const token = `${encodedPayload}.${signPayload(encodedPayload, signingSecret)}`;
+  const token = `${encodedPayload}.${fromSecret(signingSecret).sign(encodedPayload)}`;
   return {
     relativeUrl: `${ASSET_ROUTE_PREFIX}/${token}/${encodeURIComponent(fileName)}`,
     expiresAt,
@@ -933,7 +929,7 @@ export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
     Effect.orElseSucceed(() => null),
   );
   if (!signingSecret) return null;
-  if (!timingSafeEqualBase64Url(signature, signPayload(encodedPayload, signingSecret))) return null;
+  if (!fromSecret(signingSecret).verify(encodedPayload, signature)) return null;
 
   const claims = decodeClaims(encodedPayload);
   if (!claims || claims.expiresAt <= (yield* Clock.currentTimeMillis)) return null;
