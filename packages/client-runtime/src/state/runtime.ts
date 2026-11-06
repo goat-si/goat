@@ -90,6 +90,7 @@ interface EnvironmentQueryAtomOptions<Input, A, E, R> extends Omit<
     emit: (value: A) => Effect.Effect<void>,
     registry: AtomRegistry.AtomRegistry,
     environmentId: EnvironmentIdType,
+    previous: Option.Option<A>,
   ) => Effect.Effect<A, E, R>;
   readonly persistence?: QueryPersistence<A>;
   readonly staleTimeMs?: number;
@@ -624,7 +625,16 @@ export function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
                 ? runInEnvironment(
                     target.environmentId,
                     options
-                      .execute(target.input, emit, get.registry, target.environmentId)
+                      .execute(
+                        target.input,
+                        emit,
+                        get.registry,
+                        target.environmentId,
+                        Option.flatMap(
+                          get.self<AsyncResult.AsyncResult<A, unknown>>(),
+                          AsyncResult.value,
+                        ),
+                      )
                       .pipe(pendingOnceSessionReplaced(session.value)),
                   )
                 : Effect.never;
@@ -771,6 +781,7 @@ export function createEnvironmentRpcQueryAtomFamily<R, ER, TTag extends Environm
     readonly execute?: (
       input: EnvironmentRpcInput<TTag>,
       emit: (value: EnvironmentRpcSuccess<TTag>) => Effect.Effect<void>,
+      previous: Option.Option<EnvironmentRpcSuccess<TTag>>,
     ) => Effect.Effect<
       EnvironmentRpcSuccess<TTag>,
       EnvironmentRpcFailure<TTag> | EnvironmentRpcUnavailableError,
@@ -805,9 +816,12 @@ export function createEnvironmentRpcQueryAtomFamily<R, ER, TTag extends Environm
       emit: (value: EnvironmentRpcSuccess<TTag>) => Effect.Effect<void>,
       registry: AtomRegistry.AtomRegistry,
       environmentId: EnvironmentIdType,
+      previous: Option.Option<EnvironmentRpcSuccess<TTag>>,
     ) =>
       permissions.authorize(registry, environmentId, input).pipe(
-        Effect.andThen(() => options.execute?.(input, emit) ?? requestGuarded(options.tag, input)),
+        Effect.andThen(
+          () => options.execute?.(input, emit, previous) ?? requestGuarded(options.tag, input),
+        ),
         Effect.provideService(RpcPermissionGuard, {
           authorize: (id, method, payload) =>
             createCommandPermissions(runtime, method).authorize(registry, id, payload),

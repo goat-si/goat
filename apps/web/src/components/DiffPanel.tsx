@@ -349,6 +349,7 @@ export default function DiffPanel({
   const hasResolvedPatch = typeof selectedPatch === "string";
   const hasNoNetChanges =
     hasResolvedPatch &&
+    (!isGitSelection || !preview?.incomplete) &&
     selectedPatch.trim().length === 0 &&
     (!selectedGitSource?.patchesDeferred || selectedGitSource.files?.length === 0);
   const lazySource =

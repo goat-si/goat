@@ -44,8 +44,9 @@ export function createReviewEnvironmentAtoms<R, E>(
     label: "environment-data:review:diff-preview",
     tag: WS_METHODS.reviewGetDiffPreview,
     staleTimeMs: 5_000,
-    execute: Effect.fn("review.diffPreview")(function* (input, emit) {
+    execute: Effect.fn("review.diffPreview")(function* (input, emit, previous) {
       if (
+        !Option.exists(previous, (preview) => !preview.incomplete) &&
         input.metadataOnly &&
         input.scope &&
         input.scope !== "staged" &&
