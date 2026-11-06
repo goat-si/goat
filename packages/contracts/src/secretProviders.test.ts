@@ -54,6 +54,20 @@ it("keeps environment secret references beside an empty value for older clients"
   expect(encodeServerSettings(decoded).providerInstances).toEqual({ codex: instance });
 });
 
+it("keeps a usage source secret reference beside the legacy string key", () => {
+  const source = {
+    kind: "cliproxy",
+    url: "https://hub.example.test",
+    managementKey: "",
+    managementKeyReference: { provider: "personal", reference: "op://vault/item/field" },
+    enabled: true,
+  };
+  expect(
+    encodeServerSettings(decodeServerSettings({ usageLimitSources: { hub: source } }))
+      .usageLimitSources,
+  ).toEqual({ hub: source });
+});
+
 it("accepts only 1Password read references without control or template characters", () => {
   expect(isOnePasswordReference("op://vault/item/field")).toBe(true);
   for (const value of [

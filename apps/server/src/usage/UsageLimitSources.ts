@@ -4,6 +4,7 @@ import {
   type UsageLimitSourceConsumeResetCreditInput,
   type ProviderConsumeResetCreditResult,
   type ServerSettings,
+  type SecretReference,
   type UsageLimitSourceConfig,
   type UsageLimitSourceId,
   type UsageLimitSourceSnapshot,
@@ -26,6 +27,19 @@ import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as Settings from "../serverSettings.ts";
 import { makeCliproxyApi } from "./cliproxyApi.ts";
 import { makeOpenCodexQuotaPool, quotaPoolSource } from "./opencodexQuotaPool.ts";
+import { cachedResolveSecret } from "../secrets/secretResolver.ts";
+
+export async function resolveUsageManagementKey(
+  settings: ServerSettings,
+  config: UsageLimitSourceConfig,
+  resolve: (
+    providers: ServerSettings["secretProviders"],
+    reference: SecretReference,
+  ) => Promise<string> = cachedResolveSecret,
+) {
+  if (config.managementKeyReference == null) return config.managementKey;
+  return resolve(settings.secretProviders, config.managementKeyReference);
+}
 
 export class UsageLimitSources extends Context.Service<
   UsageLimitSources,
@@ -69,13 +83,25 @@ export const make = Effect.gen(function* () {
   const readSource = Effect.fn("UsageLimitSources.readSource")(function* (
     id: UsageLimitSourceId,
     config: UsageLimitSourceConfig,
+    settings: ServerSettings,
   ) {
     const checkedAt = DateTime.formatIso(yield* DateTime.now);
     const base = { id, kind: config.kind, label: sourceLabel(id, config), checkedAt } as const;
-    if (config.managementKey.length === 0) {
+    const resolved = yield* Effect.tryPromise(() =>
+      resolveUsageManagementKey(settings, config),
+    ).pipe(Effect.result);
+    if (resolved._tag === "Failure") {
+      return {
+        ...base,
+        accounts: [],
+        error: "Could not read the management key from its secret provider.",
+      };
+    }
+    const managementKey = resolved.success;
+    if (managementKey.length === 0) {
       return { ...base, accounts: [], error: "No management key configured." };
     }
-    const accounts = yield* api.readAccounts(config).pipe(Effect.result);
+    const accounts = yield* api.readAccounts({ ...config, managementKey }).pipe(Effect.result);
     if (accounts._tag === "Failure") {
       yield* Effect.logDebug("usage limit source read failed", { id, cause: accounts.failure });
       return { ...base, accounts: [], error: accounts.failure.detail };
@@ -102,11 +128,14 @@ export const make = Effect.gen(function* () {
     const entries = Object.entries(settings?.usageLimitSources ?? {}).filter(
       ([, config]) => config.enabled,
     );
-    const snapshots = yield* Effect.forEach(
-      entries,
-      ([id, config]) => readSource(id as UsageLimitSourceId, config),
-      { concurrency: 4 },
-    );
+    const snapshots =
+      settings === null
+        ? []
+        : yield* Effect.forEach(
+            entries,
+            ([id, config]) => readSource(id as UsageLimitSourceId, config, settings),
+            { concurrency: 4 },
+          );
     const pool = yield* opencodex.read();
     const previous = yield* Ref.getAndSet(poolRef, pool);
     yield* publish(
@@ -123,20 +152,40 @@ export const make = Effect.gen(function* () {
       Effect.mapError(() => new UsageLimitSourceError({ detail: "Could not read hub settings." })),
     );
     const config = settings.usageLimitSources[input.sourceId];
-    if (!config?.enabled || !config.managementKey) {
+    if (!config?.enabled) {
       return yield* new UsageLimitSourceError({
         detail: "The usage limit source is missing or disabled.",
       });
     }
-    const result = yield* api.consume(config, input.accountId, input.creditId);
-    const snapshot = yield* readSource(input.sourceId, config);
+    const managementKey = yield* Effect.tryPromise(() =>
+      resolveUsageManagementKey(settings, config),
+    ).pipe(
+      Effect.mapError(
+        () =>
+          new UsageLimitSourceError({
+            detail: "Could not read the management key from its secret provider.",
+          }),
+      ),
+    );
+    if (!managementKey)
+      return yield* new UsageLimitSourceError({ detail: "No management key configured." });
+    const result = yield* api.consume(
+      { ...config, managementKey },
+      input.accountId,
+      input.creditId,
+    );
+    const snapshot = yield* readSource(input.sourceId, config, settings);
     const previous = yield* Ref.get(stateRef);
     yield* publish(previous.map((source) => (source.id === input.sourceId ? snapshot : source)));
     return result;
   }, refreshLock.withPermits(1));
 
   yield* settingsService.streamChanges.pipe(
-    Stream.map((settings) => [settings.usageLimitSources, settings.providerInstances]),
+    Stream.map((settings) => [
+      settings.usageLimitSources,
+      settings.providerInstances,
+      settings.secretProviders,
+    ]),
     Stream.changes,
     Stream.runForEach(() => refresh),
     Effect.forkScoped,

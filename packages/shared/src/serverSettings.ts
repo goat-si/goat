@@ -21,6 +21,7 @@ import {
   type ServerProvider,
   ServerSettings,
   type ServerSettingsPatch,
+  UsageLimitSourceId,
   withIdleCompaction,
 } from "@goat/contracts";
 import * as Option from "effect/Option";
@@ -267,6 +268,29 @@ function mergeSettingsEntries<Value>(
     }
   }
   return Object.fromEntries(next);
+}
+
+function mergeUsageLimitSources(
+  current: ServerSettings["usageLimitSources"],
+  patch: NonNullable<ServerSettingsPatch["usageLimitSources"]>,
+) {
+  return mergeSettingsEntries(
+    current,
+    Object.fromEntries(
+      Object.entries(patch).map(([id, next]) => {
+        const previous = current[UsageLimitSourceId.make(id)];
+        return [
+          id,
+          next !== null &&
+          next.managementKeyReference === undefined &&
+          (next.managementKey === "" || next.managementKey === "••••••") &&
+          previous?.managementKeyReference != null
+            ? { ...next, managementKeyReference: previous.managementKeyReference }
+            : next,
+        ];
+      }),
+    ),
+  );
 }
 
 /** Top-level fields replace; each named target merges its patched fields, and `null` removes it. */
@@ -648,7 +672,7 @@ export function applyServerSettingsPatch(
       : {}),
     ...(usageLimitSourcesPatch !== undefined
       ? {
-          usageLimitSources: mergeSettingsEntries(
+          usageLimitSources: mergeUsageLimitSources(
             current.usageLimitSources,
             usageLimitSourcesPatch,
           ),
