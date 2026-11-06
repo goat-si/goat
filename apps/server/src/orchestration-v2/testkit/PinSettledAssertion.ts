@@ -27,7 +27,7 @@ export const assertPinSettled = Effect.fn("test.assertPinSettled")(function* (
   });
   const pinned = yield* orchestrator.getThreadProjection(threadId);
   assert.equal(pinned.thread.settledOverride, "active");
-  if (pinned.thread.unsettledAt === null || before.thread.unsettledAt === null)
+  if (pinned.thread.unsettledAt == null || before.thread.unsettledAt == null)
     return yield* Effect.die("missing unsettled timestamp");
   assert.isAbove(
     DateTime.toEpochMillis(pinned.thread.unsettledAt),
