@@ -77,7 +77,7 @@ vi.mock("../../state/atom-registry", () => ({
 }));
 import { ClaudeAccountControls } from "./ClaudeAccountControls";
 
-it("saves the edited folder with a guarded provider mutation", async () => {
+it("saves the edited name and folder without changing the instance id", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   state.allowed = true;
   state.mutate.mockReset().mockResolvedValue(AsyncResult.success({}));
@@ -99,11 +99,21 @@ it("saves the edited folder with a guarded provider mutation", async () => {
     );
     const button = (label: string) =>
       [...rootElement.querySelectorAll("button")].find((item) => item.textContent === label);
-    await act(() => button("Edit config folder")?.click());
-    const input = rootElement.querySelector("input");
+    await act(() => button("Edit account")?.click());
+    const nameInput = rootElement.querySelector<HTMLInputElement>(
+      'input[aria-label="Account name"]',
+    );
+    expect(nameInput?.value).toBe("Work");
+    const input = rootElement.querySelector<HTMLInputElement>(
+      'input[aria-label="Claude config folder"]',
+    );
     expect(input?.value).toBe("/old");
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
     await act(() => {
+      if (nameInput) {
+        setter?.call(nameInput, "Personal");
+        nameInput.dispatchEvent(new Event("input", { bubbles: true }));
+      }
       if (input) {
         setter?.call(input, "/new");
         input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -118,7 +128,11 @@ it("saves the edited folder with a guarded provider mutation", async () => {
           operation: "upsert",
           instanceId: "claudeAgent_work",
           expectedInstance: state.instance,
-          instance: { ...state.instance, config: { homePath: "/new", modelRoute: "opencodex" } },
+          instance: {
+            ...state.instance,
+            displayName: "Personal",
+            config: { homePath: "/new", modelRoute: "opencodex" },
+          },
         },
       },
     });

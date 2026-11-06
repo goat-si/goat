@@ -44,6 +44,7 @@ export function ClaudeAccountControls({
   });
   const [opened, setOpened] = useState<ProviderInstanceConfig | null>(null);
   const [directory, setDirectory] = useState("");
+  const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const pendingRef = useRef(false);
@@ -73,6 +74,7 @@ export function ClaudeAccountControls({
             current,
             directory,
             latest?.environment.capabilities.providerInstancePreconditions === true,
+            name,
           )
         : removal;
     if (!mutation) return;
@@ -102,6 +104,14 @@ export function ClaudeAccountControls({
       {opened ? (
         <>
           <TextInput
+            accessibilityLabel="Account name"
+            value={name}
+            onChangeText={setName}
+            editable={!pending}
+            autoCorrect={false}
+            className="rounded-lg border border-border-subtle px-3 py-2 text-base text-foreground"
+          />
+          <TextInput
             accessibilityLabel="Claude config folder"
             value={directory}
             onChangeText={setDirectory}
@@ -129,12 +139,13 @@ export function ClaudeAccountControls({
         <View className="flex-row gap-2">
           <ControlPill
             variant="pill"
-            label="Edit config folder"
+            label="Edit account"
             disabled={!enabled}
             onPress={() => {
               if (!instance) return;
               setError(null);
               setDirectory(claudeAccountDirectory(instance));
+              setName(instance.displayName ?? "");
               setOpened(instance);
             }}
           />

@@ -47,6 +47,7 @@ export function planClaudeAccountEdit(
   instance: ProviderInstanceConfig,
   directory: string,
   supportsPreconditions: boolean,
+  name?: string,
 ) {
   const config =
     instance.config && typeof instance.config === "object" && !Array.isArray(instance.config)
@@ -54,10 +55,14 @@ export function planClaudeAccountEdit(
       : {};
   const { homePath: _old, ...remaining } = config;
   const homePath = directory.trim();
+  const { displayName: _oldName, ...otherFields } = instance;
+  const label = name?.trim();
+  const identity =
+    name === undefined ? instance : { ...otherFields, ...(label ? { displayName: label } : {}) };
   return {
     operation: "upsert" as const,
     instanceId,
-    instance: { ...instance, config: homePath ? { ...remaining, homePath } : remaining },
+    instance: { ...identity, config: homePath ? { ...remaining, homePath } : remaining },
     ...(supportsPreconditions ? { expectedInstance: instance } : {}),
   };
 }

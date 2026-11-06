@@ -48,6 +48,22 @@ describe("editing and removing Claude accounts", () => {
       instance: { ...existing, config: { homePath: "/new", modelRoute: "opencodex" } },
     });
   });
+  it("clears the display name when the edited name is blank", () => {
+    const existing = {
+      driver: ProviderDriverKind.make("claudeAgent"),
+      displayName: "Work",
+      config: { homePath: "/work" },
+    };
+    const result = planClaudeAccountEdit(
+      ProviderInstanceId.make("claudeAgent_work"),
+      existing,
+      "/work",
+      true,
+      "   ",
+    );
+    expect(result.instance).not.toHaveProperty("displayName");
+    expect(result.instanceId).toBe("claudeAgent_work");
+  });
   it("allows removing an added instance but keeps the default instance", () => {
     expect(planClaudeAccountRemoval(ProviderInstanceId.make("claudeAgent_work"))).toEqual({
       operation: "remove",
