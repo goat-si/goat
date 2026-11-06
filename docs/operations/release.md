@@ -368,7 +368,9 @@ break:
   `node_modules/` with the Linux node-pty binary, and must not carry a loose
   server bundle (`bin.mjs`).
 - The external Windows resource monitor is absent.
-- The unpacked Windows application contains more than 80 files.
+- The unpacked Windows application contains more than 96 files. Speech
+  dictation alone unpacks koffi and transcribe-cpp's per-CPU ggml DLLs, which
+  ggml chooses between at runtime, so all of them ship.
 
 Cross-architecture Windows builds retain every structural and extracted-sidecar
 check, but skip executing the target Electron binary. A same-architecture build

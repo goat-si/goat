@@ -494,8 +494,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         targetArch: "x64",
         appVersion: WINDOWS_PAYLOAD_FIXTURE_VERSION,
       }).pipe(Effect.provideService(HostProcess.Platform, "linux"));
-      assert.equal(WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT, 80);
-      assert.isAtMost(result.fileCount, 80);
+      assert.isAtMost(result.fileCount, WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT);
       assert.includeMembers(result.unpackedFiles, natives);
       for (const file of javascript) {
         assert.equal(extractFile(asarPath, h.path.normalize(file)).toString(), "export {};");
@@ -1621,14 +1620,14 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
             expectWslRuntime: true,
           });
         const initial = yield* validate();
-        assert.equal(WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT, 80);
-        for (let count = initial.fileCount; count < 80; count++) {
+        const limit = WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT;
+        for (let count = initial.fileCount; count < limit; count++) {
           yield* fs.writeFileString(
             path.join(fixture.packagedAppDir, `padding-${count}`),
             "fixture",
           );
         }
-        assert.equal((yield* validate()).fileCount, 80);
+        assert.equal((yield* validate()).fileCount, limit);
         yield* fs.writeFileString(
           path.join(fixture.packagedAppDir, "one-file-over-budget"),
           "fixture",
@@ -1637,8 +1636,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
         assert.instanceOf(error, WindowsPackagedPayloadValidationError);
         assert.equal(error.reason, "file-limit-exceeded");
-        assert.equal(error.fileCount, 81);
-        assert.equal(error.fileLimit, 80);
+        assert.equal(error.fileCount, limit + 1);
+        assert.equal(error.fileLimit, limit);
       }),
     ).pipe(Effect.provideService(HostProcess.Platform, "linux")),
   );
