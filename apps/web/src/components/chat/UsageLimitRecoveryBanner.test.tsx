@@ -11,6 +11,8 @@ function bannerDescription(resetAt: Date, timestampFormat: TimestampFormat) {
     runId: RunId.make("run-1"),
     resetAt: resetAt.toISOString(),
     stoppedAt: stoppedAt.toISOString(),
+    settled: false,
+    requestPending: false,
     snoozedUntil: null,
     recovery: null,
     timestampFormat,
