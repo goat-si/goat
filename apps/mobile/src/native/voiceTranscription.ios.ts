@@ -39,8 +39,13 @@ export function getLocalVoiceTranscriber(): VoiceTranscriber | null {
   return { prepare: (options) => prepareVoiceTranscription(locale, options) };
 }
 
+export async function probeLocalVoiceTranscriber(): Promise<VoiceTranscriber | null> {
+  return getLocalVoiceTranscriber();
+}
+
 export function getVoiceTranscriber(
   remoteTranscriber?: VoiceTranscriber | null,
+  _localTranscriber?: VoiceTranscriber | null,
 ): VoiceTranscriber | null {
   const local = getLocalVoiceTranscriber();
   if (!local) return remoteTranscriber ?? null;
