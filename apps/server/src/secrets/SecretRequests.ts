@@ -29,6 +29,8 @@ import * as Semaphore from "effect/Semaphore";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as Metrics from "../observability/Metrics.ts";
+import * as ServerSettings from "../serverSettings.ts";
+import { resolveSecret } from "./secretResolver.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import { parseSetupKey, type AuthenticatorSetup } from "./Authenticator.ts";
 
@@ -139,11 +141,12 @@ export class SecretRequests extends Context.Service<
   }
 >()("goat/secrets/SecretRequests") {}
 
-const make = Effect.gen(function* () {
+const make = Effect.fn("SecretRequests.make")(function* (readReference: typeof resolveSecret) {
   const store = yield* ServerSecretStore.ServerSecretStore;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const threadManagement = yield* ThreadManagementService.ThreadManagementService;
+  const settings = yield* ServerSettings.ServerSettingsService;
   // Beside the store's own files so the same owner-only directory and cleanup rules apply.
   const filesDir = store.directory === undefined ? undefined : path.join(store.directory, "files");
 
@@ -176,7 +179,7 @@ const make = Effect.gen(function* () {
           ? input.answer.type !== "save_login"
           : item.requestKind === "card"
             ? input.answer.type !== "save_card"
-            : input.answer.type !== "save")
+            : input.answer.type !== "save" && input.answer.type !== "reference")
       ) {
         return yield* new SecretRequestError({ reason: "answer_mismatch" });
       }
@@ -215,11 +218,31 @@ const make = Effect.gen(function* () {
       if (run === undefined || ThreadManagementService.isTerminalRunStatus(run.status)) {
         return yield* new SecretRequestError({ reason: "agent_stopped" });
       }
+      const reference = input.answer.type === "reference" ? input.answer.reference : undefined;
+      const referenceValue =
+        reference !== undefined
+          ? yield* settings.getSettings.pipe(
+              Effect.flatMap((current) =>
+                Effect.tryPromise(() => readReference(current.secretProviders, reference)),
+              ),
+              Effect.mapError(() => new SecretRequestError({ reason: "reference_unreadable" })),
+            )
+          : undefined;
+      if (referenceValue !== undefined && referenceValue.trim() === "")
+        return yield* new SecretRequestError({ reason: "reference_unreadable" });
+      if (
+        referenceValue !== undefined &&
+        item.siteOrigin !== undefined &&
+        referenceValue.length < SIGN_IN_SECRET_MIN_LENGTH
+      )
+        return yield* new SecretRequestError({ reason: "too_short_for_sign_in" });
       // Create before recording so racing answers cannot overwrite values or show saved before storage.
       // Existing values on pending cards finish earlier saves whose recording failed.
       if (input.answer.type !== "decline") {
         let value: string;
-        if (input.answer.type === "save") value = input.answer.secret;
+        if (input.answer.type === "reference" && referenceValue !== undefined)
+          value = referenceValue;
+        else if (input.answer.type === "save") value = input.answer.secret;
         else if (input.answer.type === "save_login")
           value = yield* encodeLogin({
             username: input.answer.username,
@@ -476,7 +499,10 @@ const make = Effect.gen(function* () {
             return delivery;
           }
           if (kind === "code" && delivery === "complete" && (stored.codeFills ?? 0) < 2) {
-            yield* writeLoginRef(input.ref, { ...stored, codeFills: (stored.codeFills ?? 0) + 1 });
+            yield* writeLoginRef(input.ref, {
+              ...stored,
+              codeFills: (stored.codeFills ?? 0) + 1,
+            });
             return delivery;
           }
           if (kind === "code" && stored.loginConsumed !== true) {
@@ -628,4 +654,6 @@ const make = Effect.gen(function* () {
   });
 });
 
-export const layer = Layer.effect(SecretRequests, make);
+export const layerWithReader = (readReference: typeof resolveSecret) =>
+  Layer.effect(SecretRequests, make(readReference));
+export const layer = Layer.effect(SecretRequests, make(resolveSecret));

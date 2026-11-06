@@ -10,6 +10,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
+import * as ServerSettings from "../serverSettings.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import * as SecretRequests from "./SecretRequests.ts";
@@ -33,6 +34,7 @@ export const withService = <A, E>(
     readonly removeFails?: boolean;
     readonly closedFirst?: boolean;
     readonly failedRecords?: number;
+    readonly readReference?: typeof import("./secretResolver.ts").resolveSecret;
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -43,6 +45,7 @@ export const withService = <A, E>(
     const requestThreadId = options.threadId ?? threadId;
     const layerDependencies = Layer.mergeAll(
       NodeCrypto.layer,
+      ServerSettings.layerTest(),
       NodeServices.layer,
       Layer.succeed(
         ServerSecretStore.ServerSecretStore,
@@ -125,5 +128,12 @@ export const withService = <A, E>(
     return yield* Effect.gen(function* () {
       const service = yield* SecretRequests.SecretRequests;
       return yield* body({ service, stored, dispatched });
-    }).pipe(Effect.provide(SecretRequests.layer.pipe(Layer.provide(layerDependencies))));
+    }).pipe(
+      Effect.provide(
+        (options.readReference
+          ? SecretRequests.layerWithReader(options.readReference)
+          : SecretRequests.layer
+        ).pipe(Layer.provide(layerDependencies)),
+      ),
+    );
   });

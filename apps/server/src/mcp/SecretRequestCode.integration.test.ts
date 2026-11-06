@@ -215,7 +215,11 @@ it.live("authenticator sentinels stay private through MCP and screen cells", () 
           }),
         );
         const secrets = yield* SecretRequests.SecretRequests.pipe(
-          Effect.provide(SecretRequests.layer.pipe(Layer.provide(Layer.mergeAll(threads, store)))),
+          Effect.provide(
+            SecretRequests.layer.pipe(
+              Layer.provide(Layer.mergeAll(threads, store, ServerSettings.layerTest())),
+            ),
+          ),
         );
         const now = DateTime.makeUnsafe("2026-01-01T00:00:00Z");
         const sessions = Layer.mock(SessionStore.SessionStore)({

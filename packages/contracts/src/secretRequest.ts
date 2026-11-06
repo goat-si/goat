@@ -2,6 +2,7 @@ import * as Schema from "effect/Schema";
 import * as SchemaGetter from "effect/SchemaGetter";
 
 import { ThreadId, TrimmedNonEmptyString, TurnItemId } from "./baseSchemas.ts";
+import { SecretReference } from "./secretReference.ts";
 import { goatCallText } from "./agentSurface/callText.ts";
 
 export type CardDetails = {
@@ -54,6 +55,7 @@ export const SecretRequestAnswerInput = Schema.Struct({
     }),
     NormalizedCardAnswer,
     Schema.Struct({ type: Schema.Literal("decline") }),
+    Schema.Struct({ type: Schema.Literal("reference"), reference: SecretReference }),
   ]),
 });
 export type SecretRequestAnswerInput = typeof SecretRequestAnswerInput.Type;
@@ -69,6 +71,8 @@ const SECRET_REQUEST_FAILURE_MESSAGES = {
   already_answered: "This secret request was already answered.",
   agent_stopped: "The agent that asked has stopped, so this secret can't be used.",
   store_failed: "Could not store the secret.",
+  reference_unreadable:
+    "Could not read the secret from its provider. Unlock it and try again, or enter the value.",
   record_failed: "Saved the secret, but could not update the request.",
   invalid_ref: "That secretRef is not valid.",
   read_failed: "Could not read the secret.",

@@ -5,6 +5,7 @@ import {
   secretRequestDisplay,
   secretRequestFailureMessage,
   secretRequestPrivacyNote,
+  secretRequestProviders,
   type SecretRequestItem,
 } from "@goat/client-runtime/secret-request";
 import {
@@ -13,7 +14,7 @@ import {
 } from "@goat/client-runtime/state/runtime";
 import type { EnvironmentId, OrchestrationV2ProjectedTurnItem } from "@goat/contracts";
 import { useRef, useState } from "react";
-import { View, type ColorValue } from "react-native";
+import { Pressable, View, type ColorValue } from "react-native";
 
 import { SymbolView, type AppSymbolName } from "../../components/ui/AppSymbol";
 import { AppText as Text, AppTextInput as TextInput } from "../../components/ui/AppText";
@@ -95,6 +96,13 @@ function PendingSecretRequestForm(props: {
     reportFailure: false,
     reportDefect: false,
   });
+  const settings = useAtomValue(serverEnvironment.settingsValueAtom(props.environmentId));
+  const config = useAtomValue(serverEnvironment.configValueAtom(props.environmentId));
+  const providers = config?.secretRequestReferences
+    ? secretRequestProviders(settings?.secretProviders)
+    : [];
+  const [providerId, setProviderId] = useState("");
+  const selectedProvider = providers.find((provider) => provider.id === providerId);
   const [secret, setSecret] = useState("");
   const [username, setUsername] = useState("");
   const [setupKey, setSetupKey] = useState("");
@@ -139,6 +147,27 @@ function PendingSecretRequestForm(props: {
           </Text>
         ) : null}
       </View>
+      {!login && !card && providers.length > 0 ? (
+        <View accessibilityLabel="Secret source">
+          {[{ id: "", label: "Enter value" }, ...providers].map((provider) => (
+            <Pressable
+              key={provider.id}
+              accessibilityRole="radio"
+              accessibilityState={{
+                checked: providerId === provider.id,
+                disabled: !canAnswer || submitting,
+              }}
+              disabled={!canAnswer || submitting}
+              onPress={() => {
+                setProviderId(provider.id);
+                setSecret("");
+              }}
+            >
+              <Text>{provider.label}</Text>
+            </Pressable>
+          ))}
+        </View>
+      ) : null}
       {login ? (
         <TextInput
           accessibilityLabel="Username"
@@ -178,7 +207,11 @@ function PendingSecretRequestForm(props: {
         <TextInput
           accessibilityLabel={login ? "Password" : item.label}
           placeholder={
-            login ? "Password" : (item.placeholder ?? SECRET_REQUEST_DEFAULT_PLACEHOLDER)
+            login
+              ? "Password"
+              : selectedProvider
+                ? "op://vault/item/field"
+                : (item.placeholder ?? SECRET_REQUEST_DEFAULT_PLACEHOLDER)
           }
           value={secret}
           onChangeText={setSecret}
@@ -201,7 +234,12 @@ function PendingSecretRequestForm(props: {
                     password: secret,
                     authenticatorSetupKey: setupKey,
                   }
-                : { type: "save", secret },
+                : selectedProvider
+                  ? {
+                      type: "reference",
+                      reference: { provider: selectedProvider.id, reference: secret },
+                    }
+                  : { type: "save", secret },
             )
           }
         />
@@ -241,7 +279,12 @@ function PendingSecretRequestForm(props: {
           submitting ||
           (card
             ? secretRequestAnswerInput(item, cardReply) === null
-            : secret.trim().length === 0) ||
+            : selectedProvider
+              ? secretRequestAnswerInput(item, {
+                  type: "reference",
+                  reference: { provider: selectedProvider.id, reference: secret },
+                }) === null
+              : secret.trim().length === 0) ||
           (login && username.trim().length === 0)
         }
         onPress={() =>
@@ -255,7 +298,12 @@ function PendingSecretRequestForm(props: {
                     password: secret,
                     authenticatorSetupKey: setupKey,
                   }
-                : { type: "save", secret },
+                : selectedProvider
+                  ? {
+                      type: "reference",
+                      reference: { provider: selectedProvider.id, reference: secret },
+                    }
+                  : { type: "save", secret },
           )
         }
       />

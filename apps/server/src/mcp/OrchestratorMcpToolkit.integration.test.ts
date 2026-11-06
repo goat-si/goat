@@ -73,7 +73,6 @@ import * as LaunchWatchService from "./LaunchWatchService.ts";
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import { layerPermissionProfilesOff } from "./McpToolAccess.testkit.ts";
-
 interface CapturedTurn {
   readonly instanceId: ProviderInstanceId;
   readonly threadId: ThreadId;
@@ -525,6 +524,7 @@ describe("orchestrator MCP toolkit", () => {
           Layer.provide(Layer.mock(ProjectService.ProjectService)({})),
           Layer.provideMerge(
             SecretRequests.layer.pipe(
+              Layer.provide(ServerSettings.layerTest()),
               Layer.provide(layerMemorySecretStore),
               Layer.provide(layerOrchestration),
             ),

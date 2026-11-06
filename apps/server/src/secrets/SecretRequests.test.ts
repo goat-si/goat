@@ -1,7 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as HostProcess from "@goat/shared/HostProcess";
-import { ProjectId, SecretRef, ThreadId } from "@goat/contracts";
+import { ProjectId, SecretProviderId, SecretRef, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
 import * as Fiber from "effect/Fiber";
@@ -42,6 +42,78 @@ it.effect("a saved answer becomes a one-use ref, and the thread only learns it w
     }),
   ),
 );
+
+it.effect("a provider answer keeps one-use and origin restrictions", () =>
+  withService(
+    ({ service, dispatched }) =>
+      Effect.gen(function* () {
+        yield* service.answer({
+          threadId,
+          turnItemId,
+          answer: {
+            type: "reference",
+            reference: {
+              provider: SecretProviderId.make("vault"),
+              reference: "op://vault/item/password",
+            },
+          },
+        });
+        const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
+        assert.equal(
+          (yield* service
+            .consumeForOrigin({ ref, threadId, origin: "https://other.test" })
+            .pipe(Effect.flip)).reason,
+          "origin_mismatch",
+        );
+        assert.equal(
+          yield* service.consumeForOrigin({ ref, threadId, origin: "https://example.test" }),
+          "secret-value",
+        );
+        assert.equal(
+          (yield* service
+            .consumeForOrigin({ ref, threadId, origin: "https://example.test" })
+            .pipe(Effect.flip)).reason,
+          "ref_unavailable",
+        );
+        assert.notInclude(JSON.stringify(dispatched), "secret-value");
+      }),
+    { siteOrigin: "https://example.test", readReference: async () => "secret-value" },
+  ),
+);
+
+it.effect("an unreadable provider answer leaves the request pending for retry", () => {
+  let attempts = 0;
+  return withService(
+    ({ service, dispatched }) =>
+      Effect.gen(function* () {
+        const input = {
+          threadId,
+          turnItemId,
+          answer: {
+            type: "reference" as const,
+            reference: {
+              provider: SecretProviderId.make("vault"),
+              reference: "op://vault/item/password",
+            },
+          },
+        };
+        assert.equal(
+          (yield* service.answer(input).pipe(Effect.flip)).reason,
+          "reference_unreadable",
+        );
+        assert.equal(dispatched.length, 0);
+        yield* service.answer(input);
+        const ref = Option.getOrThrow(yield* service.savedRef({ threadId, turnItemId }));
+        assert.equal(yield* service.consume({ ref, projectId }), "retry-secret");
+      }),
+    {
+      readReference: async () => {
+        if (++attempts === 1) throw new Error("locked");
+        return "retry-secret";
+      },
+    },
+  );
+});
 
 it.effect("two concurrent uses of one ref hand the value out once", () =>
   withService(({ service }) =>
