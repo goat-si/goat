@@ -17,11 +17,7 @@ import { projectThreadAwarenessV2 } from "@goat/shared/agentAwareness";
 import { turnItemUpdateCanEndBackgroundWork } from "@goat/shared/orchestrationV2PendingBackgroundWork";
 import { makeDrainableWorker } from "@goat/shared/DrainableWorker";
 import { withRelayClientTracing } from "@goat/shared/relayTracing";
-import {
-  normalizeRelayIssuer,
-  RELAY_ACTIVITY_PUBLISH_TYP,
-  signRelayJwt,
-} from "@goat/shared/relayJwt";
+import { normalizeRelayIssuer, RELAY_ACTIVITY_PUBLISH_TYP } from "@goat/shared/relayJwt";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -48,7 +44,7 @@ import {
   RELAY_ISSUER_SECRET,
   RELAY_URL_SECRET,
 } from "../cloud/config.ts";
-import { getOrCreateEnvironmentKeyPairFromSecretStore } from "../cloud/environmentKeys.ts";
+import * as EnvironmentSigningKey from "../cloud/EnvironmentSigningKey.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ThreadManagement from "../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
@@ -248,19 +244,8 @@ function deliveryStats(
   };
 }
 
-function signRelayAgentActivityPublishProof(input: {
-  readonly privateKey: string;
-  readonly payload: RelayAgentActivityPublishProofPayload;
-}) {
-  return signRelayJwt({
-    privateKey: input.privateKey,
-    typ: RELAY_ACTIVITY_PUBLISH_TYP,
-    payload: input.payload,
-  });
-}
-
 const makePublishProof = Effect.fn("makePublishProof")(function* (input: {
-  readonly privateKey: string;
+  readonly signingKey: EnvironmentSigningKey.EnvironmentSigningKey;
   readonly relayIssuer: string;
   readonly environmentId: string;
   readonly threadId: ThreadId;
@@ -280,7 +265,7 @@ const makePublishProof = Effect.fn("makePublishProof")(function* (input: {
     threadId: input.threadId,
     state: input.state,
   } satisfies RelayAgentActivityPublishProofPayload;
-  return yield* signRelayAgentActivityPublishProof({ privateKey: input.privateKey, payload });
+  return yield* input.signingKey.sign({ typ: RELAY_ACTIVITY_PUBLISH_TYP, payload });
 });
 
 function describeThreadShellForAwareness(
@@ -390,7 +375,7 @@ export const make = Effect.gen(function* () {
   const projects = yield* ProjectService.ProjectService;
   const crypto = yield* Crypto.Crypto;
   const scope = yield* Effect.scope;
-  const cloudLinkKeyPair = yield* getOrCreateEnvironmentKeyPairFromSecretStore(secrets);
+  const cloudLinkKeyPair = yield* EnvironmentSigningKey.load(secrets);
   const startedAt = (yield* DateTime.now).epochMilliseconds;
   const catchUpRequests = yield* Queue.dropping<void>(1);
   const publishedStateByThreadRef = yield* Ref.make(new Map<ThreadId, string>());
@@ -507,7 +492,7 @@ export const make = Effect.gen(function* () {
       }
       const relayClient = cachedRelayClient;
       const proof = yield* makePublishProof({
-        privateKey: cloudLinkKeyPair.privateKey,
+        signingKey: cloudLinkKeyPair,
         relayIssuer: relayConfig.issuer,
         environmentId,
         threadId,

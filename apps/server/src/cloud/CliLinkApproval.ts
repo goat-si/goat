@@ -2,7 +2,7 @@ import * as ServerConfig from "../config.ts";
 import * as BootService from "./bootService.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
-import { getOrCreateEnvironmentKeyPairFromSecretStore } from "./environmentKeys.ts";
+import * as EnvironmentSigningKey from "./EnvironmentSigningKey.ts";
 import { readPersistedServerRuntimeState } from "../serverRuntimeState.ts";
 // @effect-diagnostics nodeBuiltinImport:off -- CLI approval keys never leave this Node process.
 import * as NodeCrypto from "node:crypto";
@@ -202,7 +202,7 @@ export const prepareCliLinkIntent = Effect.fn("CliLinkApproval.prepare")(functio
     return yield* new CliLinkApprovalHostUnavailableError({});
   const identity = yield* ServerEnvironment.ServerEnvironmentIdentity;
   const secrets = yield* ServerSecretStore.ServerSecretStore;
-  const key = yield* getOrCreateEnvironmentKeyPairFromSecretStore(secrets);
+  const key = yield* EnvironmentSigningKey.load(secrets);
   return {
     origin: origin.origin,
     intent: {

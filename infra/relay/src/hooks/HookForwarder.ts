@@ -6,7 +6,6 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Redacted from "effect/Redacted";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
@@ -20,10 +19,10 @@ import {
   normalizeRelayIssuer,
   RELAY_HOOK_DELIVERY_HEADER,
   RELAY_HOOK_DELIVERY_TYP,
-  signRelayJwt,
 } from "@goat/shared/relayJwt";
 
 import * as RelayConfiguration from "../Config.ts";
+import * as CloudMintSigner from "../auth/CloudMintSigner.ts";
 import { MANAGED_ENDPOINT_KEY_PATTERN } from "../deploymentConfig.ts";
 import * as HeldHooks from "./HeldHooks.ts";
 import * as HookInbox from "./HookInbox.ts";
@@ -218,6 +217,7 @@ const make = Effect.gen(function* () {
   const authorization = yield* HookDeliveryAuthorization.HookDeliveryAuthorization;
   const heldHooks = yield* HeldHooks.HeldHooks;
   const settings = yield* RelayConfiguration.RelayConfiguration;
+  const mintSigner = CloudMintSigner.make(settings);
   const httpClient = yield* HttpClient.HttpClient;
   const rateLimiter = yield* HookRateLimiter;
   const inbox = yield* HookInbox.HookInbox;
@@ -232,8 +232,7 @@ const make = Effect.gen(function* () {
       readonly jti: string;
     }) {
       const now = Math.floor((yield* Clock.currentTimeMillis) / 1_000);
-      return yield* signRelayJwt({
-        privateKey: Redacted.value(settings.cloudMintPrivateKey),
+      return yield* mintSigner.sign({
         typ: RELAY_HOOK_DELIVERY_TYP,
         payload: {
           iss: normalizeRelayIssuer(settings.relayIssuer),
