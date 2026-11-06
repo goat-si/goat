@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   AuthSourceControlWriteScope,
   type EnvironmentId,
@@ -15,6 +15,7 @@ import {
   PullRequestMarkdownTextarea,
   type PullRequestMentionScope,
 } from "./PullRequestMarkdownTextarea";
+import { CommentSpeechControls, useCommentSpeech } from "../../speech/useCommentSpeech";
 
 export function PullRequestMarkdownEditor({
   value,
@@ -46,13 +47,22 @@ export function PullRequestMarkdownEditor({
   const canWriteSourceControl = useEnvironmentScope(environmentId, AuthSourceControlWriteScope);
   const [draft, setDraft] = useState(value);
   const [preview, setPreview] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const speech = useCommentSpeech({
+    environmentId,
+    textareaRef,
+    text: draft,
+    onTextChange: setDraft,
+    disabled: saving || preview,
+  });
   const [seed, setSeed] = useState(value);
   if (seed !== value) {
     setSeed(value);
     setDraft(value);
   }
   const empty = draft.trim().length === 0;
-  const saveDisabled = !canWriteSourceControl || saving || (empty && !allowEmpty);
+  const saveDisabled =
+    !canWriteSourceControl || saving || speech.voice.blocksSubmission() || (empty && !allowEmpty);
 
   return (
     <div
@@ -108,6 +118,7 @@ export function PullRequestMarkdownEditor({
         </div>
       ) : (
         <PullRequestMarkdownTextarea
+          ref={textareaRef}
           autoFocus
           disabled={saving}
           mentionScope={mentionScope}
@@ -119,17 +130,19 @@ export function PullRequestMarkdownEditor({
         />
       )}
       <div className="flex justify-end gap-2">
+        {!preview ? <CommentSpeechControls speech={speech} /> : null}
         <Button size="xs" variant="ghost" disabled={saving} onClick={onCancel}>
           Cancel
         </Button>
         <Button
           size="xs"
           variant="outline"
-          disabled={!canWriteSourceControl || saving || (empty && !allowEmpty)}
+          disabled={saveDisabled}
           onClick={() => {
             if (
               !readEnvironmentScope(environmentId, AuthSourceControlWriteScope) ||
               saving ||
+              speech.voice.blocksSubmission() ||
               (empty && !allowEmpty)
             )
               return;
