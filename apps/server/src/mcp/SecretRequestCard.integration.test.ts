@@ -129,6 +129,13 @@ const instanceId = ProviderInstanceId.make("codex");
 const sessionId = AuthSessionId.make("session:card-sentinel");
 const number = "4242424242424242";
 const cvc = "731";
+const cvcLeak = /(^|[^0-9A-Za-z])731([^0-9A-Za-z]|$)/;
+
+it("detects CVC leaks as standalone values without matching identifiers", () => {
+  expect(cvcLeak.test("echo 731")).toBe(true);
+  expect(cvcLeak.test(JSON.stringify({ cvc: "731" }))).toBe(true);
+  expect(cvcLeak.test("a731b")).toBe(false);
+});
 const name = "CARD_NAME_SENTINEL_8394";
 const answer = {
   type: "save_card" as const,
@@ -553,8 +560,7 @@ it.live("card sentinels stay out of agent results, thread events and browser dia
           capturedLogs,
         });
         for (const secret of [number, name]) expect(visible).not.toContain(secret);
-        // CVC has only three digits, so match it as a serialized value rather than a substring.
-        expect(visible.replaceAll("\\", "")).not.toContain(JSON.stringify(cvc));
+        expect(visible).not.toMatch(cvcLeak);
       }).pipe(
         Effect.provide(
           Harness.layerWithRegistry(
