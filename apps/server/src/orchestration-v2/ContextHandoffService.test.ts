@@ -128,7 +128,6 @@ it.layer(layerTest)("ContextHandoffService legacy import", (it) => {
   it.effect("includes all changed paths in merge-back context", () =>
     Effect.gen(function* () {
       const service = yield* ContextHandoffService.ContextHandoffServiceV2;
-      const item = importedItem({ role: "user", id: "patch", text: "", ordinal: 1 });
       const handoff = yield* service.prepareForkDelta({
         sourceThreadId: ThreadId.make("thread:source"),
         targetThreadId: ThreadId.make("thread:target"),
@@ -141,7 +140,20 @@ it.layer(layerTest)("ContextHandoffService legacy import", (it) => {
         coveredRunOrdinals: { from: 1, to: 1 },
         deltaItems: [
           {
-            ...item,
+            id: TurnItemId.make("turn-item:patch"),
+            threadId: ThreadId.make("thread:source"),
+            runId: null,
+            nodeId: null,
+            providerThreadId: null,
+            providerTurnId: null,
+            nativeItemRef: null,
+            parentItemId: null,
+            ordinal: 1,
+            status: "completed",
+            title: null,
+            startedAt: null,
+            completedAt: null,
+            updatedAt: DateTime.makeUnsafe(0),
             type: "file_change",
             fileName: "src/a.ts",
             changes: [
