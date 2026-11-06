@@ -7,7 +7,7 @@ import { useNativePaste } from "../../lib/useNativePaste";
 import { convertPastedImagesToAttachments } from "../../lib/composerImages";
 import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS, type UserInputQuestion } from "@goat/contracts";
 import { useAtomValue } from "@effect/atom-react";
-import { View } from "react-native";
+import { View, type TextInputInstance } from "react-native";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { ComposerAttachmentButton } from "./ComposerAttachmentButton";
 import { ComposerAttachmentStrip } from "../../components/ComposerAttachmentStrip";
@@ -58,6 +58,16 @@ export function QuestionAttachments(props: {
     if (focusedRef.current) onInputFocusChange?.(false);
   });
   useEffect(() => () => releaseFocus(), []);
+  const inputRef = useRef<TextInputInstance>(null);
+  const [initialText] = useState(props.value);
+  const nativeText = useRef(props.value);
+  // Keep native autocorrection intact while applying external clears.
+  // oxlint-disable-next-line goat/react-effect-budget -- synchronize external clears with the native input
+  useEffect(() => {
+    if (props.value !== "" || nativeText.current === "") return;
+    nativeText.current = "";
+    inputRef.current?.clear();
+  }, [props.value]);
   const pickerScope = useRef<{ key: string; active: boolean } | null>(null);
   useEffect(() => {
     const scope = { key: scopeKey, active: true };
@@ -202,11 +212,15 @@ export function QuestionAttachments(props: {
       <VideoPreviewModal source={previewVideo} onRequestClose={() => setPreviewVideo(null)} />
       <TextInputWrapper onPaste={paste}>
         <TextInput
-          value={props.value}
+          ref={inputRef}
+          defaultValue={initialText}
           multiline={props.question.initialAnswer !== undefined}
           submitBehavior={props.question.initialAnswer !== undefined ? "newline" : undefined}
           editable={!props.disabled}
-          onChangeText={props.onChangeText}
+          onChangeText={(text) => {
+            nativeText.current = text;
+            props.onChangeText(text);
+          }}
           onFocus={() => {
             focusedRef.current = true;
             onInputFocusChange?.(true);
