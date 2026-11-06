@@ -1,3 +1,8 @@
+import {
+  makeMessageLookup,
+  sortMessagesByTurnItemOrder,
+  type ProjectionMessageLookup,
+} from "./ProjectionMessageLookup.ts";
 import { olderSettledMemoryCounts, olderSettledSqlCounts } from "./olderSettledCounts.ts";
 import * as PullRequestSnapshot from "./pullRequestSnapshot.ts";
 import * as RestartCandidates from "./RestartContinuationCandidates.ts";
@@ -531,7 +536,10 @@ export interface OlderSettledThreadsListing {
   readonly sideChatCounts?: ReadonlyArray<OrchestrationV2OlderSettledCount>;
 }
 
-export interface ProjectionStoreV2Shape extends PullRequestSnapshot.PullRequestSnapshotReader<ProjectionStoreV2Error> {
+export interface ProjectionStoreV2Shape
+  extends
+    PullRequestSnapshot.PullRequestSnapshotReader<ProjectionStoreV2Error>,
+    ProjectionMessageLookup<ProjectionStoreV2Error> {
   readonly searchThreadStream: (
     input: OrchestrationV2SearchThreadInput,
   ) => Stream.Stream<OrchestrationV2SearchThreadResult, ProjectionStoreV2Error>;
@@ -1500,49 +1508,6 @@ const decodeRows =
           }),
       ),
     );
-
-function messageIdForTurnItem(item: OrchestrationV2TurnItem): string | null {
-  switch (item.type) {
-    case "user_message":
-    case "assistant_message":
-      return item.messageId;
-    default:
-      return null;
-  }
-}
-
-function sortMessagesByTurnItemOrder(
-  messages: ReadonlyArray<OrchestrationV2ConversationMessage>,
-  turnItems: ReadonlyArray<OrchestrationV2TurnItem>,
-  messageOrdinals = new Map<string, number>(),
-): Array<OrchestrationV2ConversationMessage> {
-  for (const turnItem of turnItems) {
-    const messageId = messageIdForTurnItem(turnItem);
-    if (messageId === null) {
-      continue;
-    }
-    const existing = messageOrdinals.get(messageId);
-    if (existing === undefined || turnItem.ordinal < existing) {
-      messageOrdinals.set(messageId, turnItem.ordinal);
-    }
-  }
-
-  return messages.toSorted((left, right) => {
-    const leftOrdinal = messageOrdinals.get(left.id) ?? Number.MAX_SAFE_INTEGER;
-    const rightOrdinal = messageOrdinals.get(right.id) ?? Number.MAX_SAFE_INTEGER;
-    if (leftOrdinal !== rightOrdinal) {
-      return leftOrdinal - rightOrdinal;
-    }
-
-    const leftCreatedAt = DateTime.toEpochMillis(left.createdAt);
-    const rightCreatedAt = DateTime.toEpochMillis(right.createdAt);
-    if (leftCreatedAt !== rightCreatedAt) {
-      return leftCreatedAt - rightCreatedAt;
-    }
-
-    return left.id.localeCompare(right.id);
-  });
-}
 
 function activeLocalTurnItems(
   projection: OrchestrationV2ThreadProjection,
@@ -7517,6 +7482,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       listAppOwnedChildThreadIds: readOnReader(listAppOwnedChildThreadIds),
       getNextTurnItemOrdinal: readOnReader(getNextTurnItemOrdinal),
       getTurnItem: readOnReader(getTurnItem),
+      getMessagesById: readOnReader(makeMessageLookup(sql, decodeMessagePayload, controlReadError)),
       getThreadRecords: (threadId, fields, filter) =>
         readOnReader(() => getThreadRecords(threadId, fields, filter))(),
       getRuntimeRequest: readOnReader(getRuntimeRequest),
@@ -8258,6 +8224,17 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
               ),
             ]),
           ]),
+        ),
+      getMessagesById: (threadId, ids) =>
+        Ref.get(replayState).pipe(
+          Effect.map((state) => {
+            const messages = state.projections.get(threadId)?.messages ?? [];
+            return new Map(
+              messages
+                .filter((message) => ids.includes(message.id))
+                .map((message) => [message.id, message]),
+            );
+          }),
         ),
       getThreadRecords: Effect.fn("ProjectionStore.getThreadRecords")(
         function* (threadId, fields, filter) {

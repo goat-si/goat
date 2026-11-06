@@ -39,11 +39,14 @@ export const recoverUnstartedQueue = Effect.fn("ProviderRuntimeRecovery.recoverU
     const queuedMessages =
       pendingRuns.length === 0
         ? []
-        : (yield* projections
-            .getThreadRecords(projection.thread.id, ["messages"], {
-              messageIds: pendingRuns.map((run) => run.userMessageId),
-            })
-            .pipe(Effect.mapError((cause) => readError(cause)))).messages;
+        : [
+            ...(yield* projections
+              .getMessagesById(
+                projection.thread.id,
+                pendingRuns.map((run) => run.userMessageId),
+              )
+              .pipe(Effect.mapError(readError))).values(),
+          ];
     const bufferedMessageIds = new Set(
       queuedMessages.filter(isBufferedProviderNotification).map((message) => message.id),
     );
