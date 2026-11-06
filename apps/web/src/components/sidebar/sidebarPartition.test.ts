@@ -59,7 +59,6 @@ function partition(threads: readonly Thread[], hiddenBotThreadKeys: ReadonlySet<
     connectedEnvironmentIds: [local],
     optimisticDrop: null,
     workingShelfEnabled: false,
-    disconnectedEnvironmentIds: new Set(),
     clockKey: "",
     globalAgentRef: null,
     goatBotRef: null,

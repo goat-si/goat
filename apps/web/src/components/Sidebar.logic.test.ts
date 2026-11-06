@@ -8,7 +8,6 @@ import {
   deleteSelectedThreadEntries,
   hasUnseenCompletion,
   belongsInSidebarWorkingShelf,
-  isSidebarEnvironmentDisconnected,
   resolveSidebarRowThreadId,
   orderItemsByPreferredIds,
   pinOrderKeyBetween,
@@ -1032,25 +1031,20 @@ describe("Working shelf (beta)", () => {
     pendingBackgroundTasks: [backgroundTask],
   };
 
-  it("moves running threads out of Working when their environment disconnects (#26195)", () => {
+  it("keeps cached working threads in Working when their environment disconnects", () => {
     const thread = { ...idle, runtime, environmentId: localEnvironmentId };
     expect(
       belongsInSidebarWorkingShelf(thread, {
         enabled: true,
-        disconnectedEnvironmentIds: new Set(),
         isWorking: isSidebarThreadWorking,
       }),
     ).toBe(true);
     expect(
       belongsInSidebarWorkingShelf(thread, {
-        enabled: true,
-        disconnectedEnvironmentIds: new Set([localEnvironmentId]),
+        enabled: false,
         isWorking: isSidebarThreadWorking,
       }),
     ).toBe(false);
-    expect(isSidebarEnvironmentDisconnected("connecting", false)).toBe(false);
-    expect(isSidebarEnvironmentDisconnected("connected", false)).toBe(true);
-    expect(isSidebarEnvironmentDisconnected("reconnecting", false)).toBe(true);
   });
 
   it("folds away running threads and threads waiting on background work only", () => {
