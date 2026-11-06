@@ -4,12 +4,13 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as Sync from "./MemorySyncService.ts";
 import { fixture, id, local, space } from "./MemorySyncService.testkit.ts";
 
-const work = (key: string, thread: string, status: string, code: string, target: string = space) =>
+const work = (key: string, thread: string, status: string, code: string | null, target = space) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const metadata = JSON.stringify({
       kind: "summary",
       sourceThread: { environmentId: local, threadId: thread },
+      sourceWatermark: { throughSequence: key === "a-newer" ? 9 : 5 },
     });
     yield* sql`INSERT INTO memory_outbox(id,space,kind,status,metadata_json,next_attempt_at,failure_code)
       VALUES (${key},${target},'consolidate',${status},${metadata},0,${code})`;
@@ -35,5 +36,8 @@ it.effect("reports summaries that failed for good only to a request that opts in
       threads: 1,
       failureCode: "generation_failed",
     });
+    // Newer work of the thread supersedes its failure before maintenance prunes the row.
+    yield* work("a-newer", "a", "pending", null);
+    assert.notProperty(yield* status(), "generationFailure");
   }).pipe(Effect.provide(fixture())),
 );

@@ -499,7 +499,7 @@ export function presentMemoryGenerationFailure(failure: MemorySyncStatus["genera
   switch (failure.failureCode) {
     // Only this code is terminal after the attempt limit; others can end work on the first try.
     case "generation_failed":
-      return `${subject}: the memory model failed on every try. Choose another Memory model if this keeps happening`;
+      return `${subject}: the memory model failed. Choose another Memory model if this keeps happening`;
     case "generation_input_too_large":
       return `${subject}: too long to summarize`;
     case "secret_detected":

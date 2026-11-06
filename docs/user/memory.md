@@ -12,7 +12,7 @@ Summaries keep lasting preferences, decisions, constraints, and verified results
 
 If the provider keeps refusing a memory model, GOAT pauses generation, shows why under **Settings → Memory**, and retries later; generation resumes right away when the memory model or the provider's version changes.
 
-When GOAT gives up summarizing conversations, **Settings → Memory** shows how many under **Processing**, and why when they share a reason. If the memory model fails on every try, choose another **Memory model**. Saving a memory yourself does not depend on summaries.
+When GOAT gives up summarizing conversations, **Settings → Memory** shows how many under **Processing**, and why when they share a reason. If the memory model keeps failing, choose another **Memory model**. Saving a memory yourself does not depend on summaries.
 
 To share memory, use **Add device** in the hub’s Memory settings. Every device that shares memory can save and edit memories equally. If sharing is off, choose **Make this device the hub** to turn it back on, or add the device from another hub.
 

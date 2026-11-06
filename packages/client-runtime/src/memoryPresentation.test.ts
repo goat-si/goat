@@ -727,7 +727,7 @@ describe("shared memory progress presentation", () => {
   it.each([
     [
       "generation_failed",
-      "2 conversations were not summarized: the memory model failed on every try. Choose another Memory model if this keeps happening",
+      "2 conversations were not summarized: the memory model failed. Choose another Memory model if this keeps happening",
     ],
     ["generation_input_too_large", "2 conversations were not summarized: too long to summarize"],
     // No action is offered where none would help, or where the failures have different reasons.
