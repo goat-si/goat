@@ -1,3 +1,5 @@
+import { makeGitLabBranchDeletion } from "./gitLabBranchDeletion.ts";
+import { GitLabBranchDeletionRefusedError } from "./gitLabBranchDeletionError.ts";
 import { stateParam, involvementParams, filterParams, searchParams, query } from "./gitLabQuery.ts";
 import {
   GitLabMergeRequestReadError,
@@ -8,16 +10,13 @@ import {
   GitLabDiffFileContentsUnavailableError,
   GitLabUnknownLabelError,
 } from "./gitLabPullRequestErrors.ts";
-export {
-  GitLabMergeRequestReadError,
-  GitLabViewerUnavailableError,
-  GitLabDiffCursorError,
-  GitLabDiffCommitError,
-  GitLabDiffCommitParentUnavailableError,
-  GitLabDiffFileContentsUnavailableError,
-  GitLabUnknownLabelError,
-} from "./gitLabPullRequestErrors.ts";
-import { diffCursorPage, isCommitSha } from "./gitLabInput.ts";
+export * from "./gitLabPullRequestErrors.ts";
+import {
+  diffCursorPage,
+  isCommitSha,
+  projectPath,
+  gitLabReviewPositionLines,
+} from "./gitLabInput.ts";
 import { gitLabActionSummary } from "./gitLabActionSummary.ts";
 import { actionArgs } from "./gitLabActionArgs.ts";
 import { decodeMergeMessagesJson, MERGE_MESSAGES_GRAPHQL_QUERY } from "./gitLabMergeMessages.ts";
@@ -50,7 +49,6 @@ import type {
   PullRequestReactionContent,
   PullRequestReviewCommentDraft,
   PullRequestReviewDecision,
-  PullRequestReviewPosition,
   PullRequestReviewThread,
   PullRequestReviewVerdict,
   PullRequestReviewerCandidateList,
@@ -102,6 +100,7 @@ export type GitLabPullRequestCliError =
   | GitLabCli.GitLabCliError
   | GitLabPinnedRebaseError
   | GitLabPinnedAutoMergeError
+  | GitLabBranchDeletionRefusedError
   | GitLabMergeRequestReadError
   | GitLabUnknownLabelError
   | GitLabDiffCursorError
@@ -413,26 +412,6 @@ export class GitLabPullRequestCli extends Context.Service<
   }
 >()("@goat/source-control-gitlab/server/GitLabPullRequestCli") {}
 
-function projectPath(repository: string): string {
-  return encodeURIComponent(repository.trim());
-}
-
-function gitLabReviewPositionLines(
-  position: PullRequestReviewPosition,
-):
-  | { readonly new_line: number }
-  | { readonly old_line: number }
-  | { readonly old_line: number; readonly new_line: number } {
-  switch (position.kind) {
-    case "added":
-      return { new_line: position.newLine };
-    case "deleted":
-      return { old_line: position.oldLine };
-    case "context":
-      return { old_line: position.oldLine, new_line: position.newLine };
-  }
-}
-
 const encodeLabelWrite = Schema.encodeSync(
   Schema.fromJsonString(Schema.Record(Schema.String, Schema.String)),
 );
@@ -447,6 +426,7 @@ export const make = Effect.gen(function* () {
     readonly path: string;
     readonly method?: string;
     readonly stdin?: string;
+    readonly headers?: ReadonlyArray<string>;
     readonly maxOutputBytes?: number;
     readonly timeoutMs?: number;
   }) =>
@@ -461,6 +441,7 @@ export const make = Effect.gen(function* () {
         ...(input.stdin === undefined
           ? []
           : ["--input", "-", "--header", "Content-Type: application/json"]),
+        ...(input.headers ?? []).flatMap((header) => ["--header", header]),
       ],
       ...(input.stdin === undefined ? {} : { stdin: input.stdin }),
       ...(input.maxOutputBytes === undefined ? {} : { maxOutputBytes: input.maxOutputBytes }),
@@ -1071,6 +1052,8 @@ export const make = Effect.gen(function* () {
       ),
     );
 
+  const { sourceBranch, deleteSourceBranch } = makeGitLabBranchDeletion({ api, graphqlRead });
+
   const mergeRequestStats = (input: {
     readonly cwd: string;
     readonly host?: string | undefined;
@@ -1262,7 +1245,26 @@ export const make = Effect.gen(function* () {
           [mergeRequestDetail(input), labelPermission(input)],
           { concurrency: 2 },
         );
-        const detail = { ...read, viewerCanEditLabels };
+        // Only a closed or merged merge request offers its branch for deletion, so an open one,
+        // the page most often read, skips the extra query.
+        const detail =
+          read.state === "open"
+            ? { ...read, viewerCanEditLabels }
+            : {
+                ...read,
+                viewerCanEditLabels,
+                viewerCanDeleteBranch: yield* sourceBranch(input).pipe(
+                  Effect.map((source) => source?.canDelete === true),
+                  // The answer gates one optional action; an unusable CLI or account still surfaces.
+                  Effect.catchIf(
+                    (cause) =>
+                      cause._tag !== "GitLabCliUnavailableError" &&
+                      cause._tag !== "GitLabCliAuthenticationError" &&
+                      cause._tag !== "GitLabCliRateLimitError",
+                    () => Effect.succeed(false),
+                  ),
+                ),
+              };
         if (input.downstreamChecks === false || detail.headPipeline === undefined) return detail;
         const downstream = yield* triggerJobChecks({
           ...input,
@@ -1618,6 +1620,7 @@ export const make = Effect.gen(function* () {
         // `glab mr merge` arms auto-merge and never disarms it, so the one direction the CLI has
         // no flag for is asked of GitLab directly through the same `api` passthrough the rest of
         // this module writes with.
+        if (input.action === "delete-branch") return yield* deleteSourceBranch(input);
         if (input.action === "disable-auto-merge") {
           const result = yield* api({
             cwd: input.cwd,
