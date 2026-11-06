@@ -1,4 +1,4 @@
-import { isRegisteredAttach } from "./providerTurnStartHelpers.ts";
+import { isRegisteredAttach, nativeForkTurns } from "./providerTurnStartHelpers.ts";
 import { withAgentOom } from "./agentOomFailure.ts";
 import { AgentScope } from "@goat/shared/AgentScope";
 import { makeDeliverySession } from "./goat/ProviderTurnDeliverySession.ts";
@@ -913,7 +913,7 @@ export const layer: Layer.Layer<
           return yield* loadFromProvider(
             session.forkThread({
               sourceProviderThread,
-              sourceProviderTurns: sourceProjection.providerTurns,
+              sourceProviderTurns: nativeForkTurns(sourceProjection),
               targetThreadId: projection.thread.id,
               modelSelection: run.modelSelection,
               runtimePolicy: resolvedRuntimePolicy,
