@@ -361,6 +361,19 @@ describe("publish nightly release", () => {
     }),
   );
 
+  it.effect("regression: a re-run replaces a draft asset whose upload never finished", () =>
+    Effect.gen(function* () {
+      const state = yield* fixture({ draft: true });
+      const interrupted = state.assets[0]!;
+      state.assets[0] = { ...interrupted, digest: null, state: "starter" };
+      expect(yield* state.run()).toBe("published");
+      expect(
+        state.calls.filter((call) => call.method === "DELETE").map((call) => call.path),
+      ).toEqual([`/repos/owner/releases/releases/assets/${String(interrupted.id)}`]);
+      expect(state.calls.filter((call) => call.host === "uploads.github.com")).toHaveLength(1);
+    }),
+  );
+
   it.effect("published asset inventory must match names, sizes, and SHA256SUMS bytes", () =>
     Effect.gen(function* () {
       for (const mismatch of ["name", "size", "checksum-file"] as const) {
