@@ -1,3 +1,4 @@
+import { decodeMergeMessagesJson } from "./gitLabMergeMessages.ts";
 import * as Result from "effect/Result";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -789,5 +790,20 @@ describe("decodeMergeRequestStatsJson", () => {
       truncated: false,
     });
     expect(read(2).truncated).toBe(true);
+  });
+});
+
+describe("decodeMergeMessagesJson", () => {
+  it("fails a partial response instead of reading errored fields as absent templates", () => {
+    const decoded = decodeMergeMessagesJson(
+      JSON.stringify({
+        errors: [{ message: "Internal server error", path: ["project", "mergeRequest"] }],
+        data: {
+          project: { mergeRequest: { title: "Add thing", defaultMergeCommitMessage: null } },
+        },
+      }),
+    );
+
+    expect(Result.isFailure(decoded)).toBe(true);
   });
 });

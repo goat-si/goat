@@ -1,8 +1,11 @@
+import { actionArgs } from "./gitLabActionArgs.ts";
+import { decodeMergeMessagesJson, MERGE_MESSAGES_GRAPHQL_QUERY } from "./gitLabMergeMessages.ts";
 import {
   GitLabDiffRefsUnavailableError,
   GitLabPinnedRebaseError,
   GitLabPinnedAutoMergeError,
 } from "./gitLabPullRequestActionErrors.ts";
+import { removeAgentCredits } from "@goat/source-control-core/server/mergeMessage";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -376,6 +379,7 @@ export class GitLabPullRequestCli extends Context.Service<
       readonly action: PullRequestAction;
       readonly headSha?: string;
       readonly mergeMethod?: PullRequestMergeMethod;
+      readonly removeAgentCreditsOnMerge?: boolean;
     }) => Effect.Effect<void, GitLabPullRequestCliError>;
 
     readonly updateMergeRequest: (input: {
@@ -555,45 +559,6 @@ function searchParams(search: string | undefined): ReadonlyArray<readonly [strin
 
 function query(params: ReadonlyArray<readonly [string, string]>): string {
   return params.map(([key, value]) => `${key}=${encodeURIComponent(value)}`).join("&");
-}
-
-function actionArgs(
-  action: PullRequestAction,
-  mergeMethod: PullRequestMergeMethod | undefined,
-): ReadonlyArray<string> {
-  switch (action) {
-    case "merge":
-      return [
-        "merge",
-        // glab defaults to auto-merge during a running pipeline.
-        "--auto-merge=false",
-        "--yes",
-        ...(mergeMethod === "squash" ? ["--squash"] : []),
-      ];
-    case "enable-auto-merge":
-      return [
-        "merge",
-        "--auto-merge=true",
-        "--yes",
-        ...(mergeMethod === "squash" ? ["--squash"] : []),
-      ];
-    case "disable-auto-merge":
-      return [];
-    case "ready":
-      return ["update", "--ready"];
-    case "draft":
-      return ["update", "--draft"];
-    case "close":
-      return ["close"];
-    case "update-branch":
-      return ["rebase"];
-    case "reopen":
-      return ["reopen"];
-    case "revert":
-    case "approve-workflows":
-    case "delete-branch":
-      throw new Error(`GitLab merge request action ${action} is unsupported`);
-  }
 }
 
 /** @public */
@@ -1675,6 +1640,32 @@ export const make = Effect.gen(function* () {
           }
           const headSha = input.headSha ?? (yield* getDiffRefs(input)).headSha;
           flags.push("--sha", headSha);
+          if (input.removeAgentCreditsOnMerge === true) {
+            // Read after the SHA guard, so a push since then fails the merge instead of
+            // merging commits whose credits these messages don't cover.
+            const messages = yield* graphqlRead({
+              cwd: input.cwd,
+              host: input.host,
+              operation: "getMergeMessages",
+              query: MERGE_MESSAGES_GRAPHQL_QUERY,
+              variables: { fullPath: input.repository, iid: String(input.number) },
+              decode: decodeMergeMessagesJson,
+            });
+            // glab drops an empty message, which would bring the credits back.
+            const clean = (message: string) => {
+              const cleaned = removeAgentCredits(message);
+              return cleaned.trim() === "" ? (messages.title ?? message) : cleaned;
+            };
+            const merge = messages.merge === null ? null : clean(messages.merge);
+            if (merge !== null && merge !== messages.merge) flags.push("--message", merge);
+            const squashes = input.mergeMethod === "squash" || messages.squashOnMerge;
+            const squash = messages.squash === null || !squashes ? null : clean(messages.squash);
+            if (squash !== null && squash !== messages.squash) {
+              // glab takes a squash message only alongside --squash, which changes nothing here.
+              if (!flags.includes("--squash")) flags.push("--squash");
+              flags.push("--squash-message", squash);
+            }
+          }
         }
         yield* executeMr(subcommand!, ...flags);
       },
