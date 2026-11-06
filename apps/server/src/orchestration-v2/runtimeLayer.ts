@@ -1,3 +1,4 @@
+import * as WorktreeBranchSync from "./WorktreeBranchSync.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Handoffs from "../handoffs/Handoffs.ts";
 import * as HostPressureMonitor from "../fleet/pressure/HostPressureMonitor.ts";
@@ -421,6 +422,9 @@ export const layer = Layer.mergeAll(
 );
 
 export const layerProduction = Layer.mergeAll(
+  WorktreeBranchSync.layer.pipe(
+    Layer.provide(Layer.merge(layerThreadManagementProvided, ProjectionStore.layer)),
+  ),
   layer.pipe(Layer.provide(layerProjectService), Layer.provide(layerHandoffsProvided)),
   layerProjectService,
   Layer.effectDiscard(
