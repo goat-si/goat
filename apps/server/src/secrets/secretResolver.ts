@@ -8,6 +8,45 @@ import { readOnePassword } from "./onePassword.ts";
 
 const isOnePasswordConfig = Schema.is(OnePasswordSecretProviderConfig);
 
+const MAX_ACTIVE_READS = 8;
+const MAX_WAITING_READS = 128;
+let activeReads = 0;
+const waitingReads: Array<() => void> = [];
+
+export function withSecretReadAdmission<A>(
+  read: () => Promise<A>,
+  signal?: AbortSignal,
+): Promise<A> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(new Error("Secret read cancelled"));
+    const abort = () => {
+      const index = waitingReads.indexOf(start);
+      if (index < 0) return;
+      waitingReads.splice(index, 1);
+      reject(new Error("Secret read cancelled"));
+    };
+    const start = () => {
+      signal?.removeEventListener("abort", abort);
+      activeReads++;
+      let operation: Promise<A>;
+      try {
+        operation = read();
+      } catch (error) {
+        operation = Promise.reject(error);
+      }
+      operation.then(resolve, reject).finally(() => {
+        activeReads--;
+        waitingReads.shift()?.();
+      });
+    };
+    if (activeReads < MAX_ACTIVE_READS) return start();
+    if (waitingReads.length >= MAX_WAITING_READS)
+      return reject(new Error("Secret provider is busy"));
+    waitingReads.push(start);
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
 export async function resolveSecret(
   providers: ServerSettings["secretProviders"],
   reference: SecretReference,
@@ -44,9 +83,9 @@ export function makeSecretResolver(read: typeof readOnePassword = readOnePasswor
     }
     const existing = pending.get(key);
     if (existing) return existing;
-    if (pending.size >= 8) throw new Error("Secret provider is busy");
+    if (pending.size >= MAX_ACTIVE_READS) throw new Error("Secret provider is busy");
     if (cache.size + pending.size >= 128) throw new Error("Secret provider cache is full");
-    const operation = resolveSecret(providers, reference, read)
+    const operation = withSecretReadAdmission(() => resolveSecret(providers, reference, read))
       .then((value) => {
         if (currentGeneration !== generation) return value;
         cache.set(key, { ok: true, value });

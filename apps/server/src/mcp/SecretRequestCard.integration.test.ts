@@ -552,7 +552,9 @@ it.live("card sentinels stay out of agent results, thread events and browser dia
           browserEvidence,
           capturedLogs,
         });
-        for (const secret of [number, cvc, name]) expect(visible).not.toContain(secret);
+        for (const secret of [number, name]) expect(visible).not.toContain(secret);
+        // CVC has only three digits, so match it as a serialized value rather than a substring.
+        expect(visible.replaceAll("\\", "")).not.toContain(JSON.stringify(cvc));
       }).pipe(
         Effect.provide(
           Harness.layerWithRegistry(

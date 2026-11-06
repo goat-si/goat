@@ -115,6 +115,48 @@ it.effect("an unreadable provider answer leaves the request pending for retry", 
   );
 });
 
+it.effect("provider answers queue after eight concurrent reads", () =>
+  Effect.gen(function* () {
+    const eightStarted = yield* Deferred.make<void>();
+    const ninthStarted = yield* Deferred.make<void>();
+    const release = Promise.withResolvers<string>();
+    let started = 0;
+    yield* withService(
+      ({ service }) =>
+        Effect.gen(function* () {
+          const input = {
+            threadId,
+            turnItemId,
+            answer: {
+              type: "reference" as const,
+              reference: {
+                provider: SecretProviderId.make("vault"),
+                reference: "op://vault/item/password",
+              },
+            },
+          };
+          const fibers = yield* Effect.forEach(Array.from({ length: 9 }), () =>
+            service.answer(input).pipe(Effect.result, Effect.forkChild),
+          );
+          yield* Deferred.await(eightStarted);
+          assert.equal(started, 8);
+          release.resolve("fixture-value");
+          yield* Deferred.await(ninthStarted);
+          yield* Effect.forEach(fibers, Fiber.join, { discard: true });
+          assert.equal(started, 9);
+        }),
+      {
+        readReference: () => {
+          started++;
+          if (started === 8) Deferred.doneUnsafe(eightStarted, Effect.void);
+          if (started === 9) Deferred.doneUnsafe(ninthStarted, Effect.void);
+          return release.promise;
+        },
+      },
+    );
+  }),
+);
+
 it.effect("two concurrent uses of one ref hand the value out once", () =>
   withService(({ service }) =>
     Effect.gen(function* () {

@@ -30,7 +30,7 @@ import * as Semaphore from "effect/Semaphore";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as Metrics from "../observability/Metrics.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { resolveSecret } from "./secretResolver.ts";
+import { resolveSecret, withSecretReadAdmission } from "./secretResolver.ts";
 import * as ThreadManagementService from "../orchestration-v2/ThreadManagementService.ts";
 import { parseSetupKey, type AuthenticatorSetup } from "./Authenticator.ts";
 
@@ -223,7 +223,12 @@ const make = Effect.fn("SecretRequests.make")(function* (readReference: typeof r
         reference !== undefined
           ? yield* settings.getSettings.pipe(
               Effect.flatMap((current) =>
-                Effect.tryPromise(() => readReference(current.secretProviders, reference)),
+                Effect.tryPromise((signal) =>
+                  withSecretReadAdmission(
+                    () => readReference(current.secretProviders, reference),
+                    signal,
+                  ),
+                ),
               ),
               Effect.mapError(() => new SecretRequestError({ reason: "reference_unreadable" })),
             )
