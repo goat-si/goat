@@ -6399,12 +6399,13 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         const held = yield* orchestrator.getThreadProjection(threadId);
         assert.deepEqual(
           held.runs.map((run) => run.status),
-          ["cancelled", "queued", "queued"],
+          ["queued", "queued", "queued"],
         );
-        for (const run of queued) {
+        assert.deepInclude(held.runs[0], { status: "queued", queueHeld: true, queuePosition: 1 });
+        for (const [index, run] of queued.entries()) {
           assert.deepEqual(
             held.runs.find((row) => row.id === run.id),
-            { ...run, queueHeld: true },
+            { ...run, queueHeld: true, queuePosition: index + 2 },
           );
           assert.deepEqual(
             held.messages.find((row) => row.id === run.userMessageId),
@@ -6416,8 +6417,7 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
           );
           assert.equal(held.nodes.find((row) => row.id === run.rootNodeId)?.status, "pending");
         }
-        const first = queued[0]!;
-        const second = queued[1]!;
+        const [first, second] = [before.runs[0]!, queued[1]!];
         yield* orchestrator.dispatch({
           type: "queued-run.edit",
           commandId: CommandId.make(`${threadId}:edit`),
