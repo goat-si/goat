@@ -42,7 +42,8 @@ export const toStrictJsonSchemaObject = (
 
 export function limitSection(value: string, maxChars: number): string {
   if (value.length <= maxChars) return value;
-  const truncated = value.slice(0, maxChars);
+  const last = value.charCodeAt(maxChars - 1);
+  const truncated = value.slice(0, last >= 0xd800 && last <= 0xdbff ? maxChars - 1 : maxChars);
   return `${truncated}\n\n[truncated]`;
 }
 
