@@ -38,12 +38,10 @@ import { fakeSourceControlDriverInstance } from "@goat/source-control-testing/fa
 import * as BuiltInDrivers from "../sourceControl/builtInDrivers.ts";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
 import { sourceControlMediaResponse } from "./sourceControlMediaResponse.ts";
-
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof NodeFSP>();
   return { ...actual, open: vi.fn(actual.open), realpath: vi.fn(actual.realpath) };
 });
-
 const layerConfig = ServerConfig.ServerConfig.layerTest(process.cwd(), {
   prefix: "goat-asset-access-test-",
 });
@@ -84,7 +82,6 @@ const screenshotItem = {
   completedAt: DateTime.makeUnsafe("2026-10-05T00:00:01.000Z"),
   updatedAt: DateTime.makeUnsafe("2026-10-05T00:00:01.000Z"),
 };
-
 const oversizedScreenshotItem = {
   ...screenshotItem,
   id: TurnItemId.make("tool-screenshot-oversized"),
@@ -97,7 +94,6 @@ const oversizedScreenshotItem = {
     ],
   },
 };
-
 const layerTest = Layer.mergeAll(
   NodeHttpPlatform.layer,
   Layer.mock(Orchestrator.OrchestratorV2)({
@@ -119,7 +115,6 @@ const layerTest = Layer.mergeAll(
   NativeAppIconResolver.layer.pipe(Layer.provide(layerConfig)),
   ServerSecretStore.layer.pipe(Layer.provide(layerConfig)),
 ).pipe(Layer.provideMerge(NodeServices.layer));
-
 describe("AssetAccess", () => {
   describe("readMcpAppHtml", () => {
     it.effect("accepts snapshots at the stored HTML byte limit", () =>
@@ -130,13 +125,11 @@ describe("AssetAccess", () => {
         const file = path.join(directory, "app.html");
         const limit = MCP_APP_MAX_HTML_BYTES + 128 * 1024;
         yield* fileSystem.writeFile(file, new Uint8Array(limit).fill(120));
-
         const bytes = yield* readMcpAppHtml(file);
         expect(bytes?.byteLength).toBe(limit);
         expect(bytes?.every((byte) => byte === 120)).toBe(true);
       }).pipe(Effect.provide(NodeServices.layer)),
     );
-
     it.effect("rejects snapshots one byte past the limit and much larger files", () =>
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
@@ -150,7 +143,6 @@ describe("AssetAccess", () => {
         }
       }).pipe(Effect.provide(NodeServices.layer)),
     );
-
     it.effect("preserves UTF-8 bytes across stream chunks and accepts empty snapshots", () =>
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
@@ -166,7 +158,6 @@ describe("AssetAccess", () => {
         }
       }).pipe(Effect.provide(NodeServices.layer)),
     );
-
     // regression: #17026 apply host color scheme to saved MCP apps
     it.effect("preserves filesystem failures instead of reporting oversized HTML", () =>
       Effect.gen(function* () {
@@ -179,7 +170,6 @@ describe("AssetAccess", () => {
       }).pipe(Effect.provide(NodeServices.layer)),
     );
   });
-
   it.effect("serves an image a tool returned inline from the stored item", () =>
     Effect.gen(function* () {
       const resource = {
@@ -207,7 +197,6 @@ describe("AssetAccess", () => {
       expect(oversized._tag).toBe("AssetWorkspaceAssetNotFoundError");
     }).pipe(Effect.provide(layerTest)),
   );
-
   it.effect("issues exact URLs for media and browser documents outside the workspace", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -259,7 +248,6 @@ describe("AssetAccess", () => {
       }
     }).pipe(Effect.provide(layerTest)),
   );
-
   it.effect("downloads any linked file with the same exact-file identity checks as media", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -318,7 +306,6 @@ describe("AssetAccess", () => {
       expect(directoryError._tag).toBe("AssetWorkspaceAssetNotFoundError");
     }).pipe(Effect.provide(layerTest)),
   );
-
   it.effect("resolves relative media paths from the thread workspace, including outside it", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -344,7 +331,6 @@ describe("AssetAccess", () => {
       }
     }).pipe(Effect.provide(layerTest)),
   );
-
   it.effect("previews draft audio and video from relative workspace paths", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -390,7 +376,6 @@ describe("AssetAccess", () => {
       }
     }).pipe(Effect.provide(layerTest)),
   );
-
   it.effect(
     "rejects draft media escapes and disallowed types without enabling non-draft media",
     () =>
@@ -424,7 +409,6 @@ describe("AssetAccess", () => {
         }
       }).pipe(Effect.provide(layerTest)),
   );
-
   it.effect.skipIf(!symlinksSupported)(
     "rejects draft media symlinks escaping the workspace or targeting disallowed types",
     () =>
@@ -453,7 +437,6 @@ describe("AssetAccess", () => {
         }
       }).pipe(Effect.provide(layerTest)),
   );
-
   it.effect.skipIf(!symlinksSupported)(
     "preserves absolute draft previews through stable symlinks",
     () =>
@@ -478,7 +461,6 @@ describe("AssetAccess", () => {
         }
       }).pipe(Effect.provide(layerTest)),
   );
-
   it.effect.skipIf(!symlinksSupported)(
     "rejects a draft media path swapped after workspace containment validation",
     () =>
@@ -517,7 +499,6 @@ describe("AssetAccess", () => {
         });
       }).pipe(Effect.provide(layerTest)),
   );
-
   it.effect("resolves home-relative media paths independently of the workspace", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -563,7 +544,6 @@ describe("AssetAccess", () => {
       }).pipe(Effect.provideService(HostProcess.HomeDirectory, home));
     }).pipe(Effect.provide(layerTest)),
   );
-
   // Resolving `file://attacker.test/share/cat.jpg` from an agent's markdown sent the
   // Windows user's NTLM credentials to attacker.test.
   it.effect("never resolves a network media path outside the thread's project", () =>
@@ -604,7 +584,6 @@ describe("AssetAccess", () => {
       expect(resolved).toEqual([path.resolve(`${share}/a.png`)]);
     }).pipe(Effect.provide(layerTest)),
   );
-
   it.effect.skipIf(!symlinksSupported)(
     "rejects non-previewable files, disguised targets, and directories",
     () =>
@@ -642,7 +621,6 @@ describe("AssetAccess", () => {
         expect(directoryError._tag).toBe("AssetWorkspaceAssetNotFoundError");
       }).pipe(Effect.provide(layerTest)),
   );
-
   it.effect.skipIf(!symlinksSupported)("does not issue URLs for server state files", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -671,7 +649,6 @@ describe("AssetAccess", () => {
         const error = yield* issueAssetUrl({ resource }).pipe(Effect.flip);
         expect(error._tag).toBe("AssetWorkspaceAssetNotFoundError");
       }
-
       const icon = path.join(config.baseDir, "icon.png");
       yield* fs.symlink(stateFile, icon);
       yield* fs.writeFileString(path.join(config.baseDir, "page.html"), '<img src="icon.png">');
@@ -687,7 +664,6 @@ describe("AssetAccess", () => {
       expect(faviconError._tag).toBe("AssetProjectFaviconNotFoundError");
     }).pipe(Effect.provide(layerTest)),
   );
-
   it.effect.skipIf(!symlinksSupported)(
     "binds media URLs to the canonical target and rejects symlink substitution",
     () =>
@@ -719,7 +695,6 @@ describe("AssetAccess", () => {
         expect(yield* resolveAsset(token, name)).toBeNull();
       }).pipe(Effect.provide(layerTest)),
   );
-
   it.effect.skipIf(!symlinksSupported)(
     "keeps full and partial responses bound to the file opened during resolution",
     () =>
@@ -1601,6 +1576,31 @@ describe("AssetAccess", () => {
 
       expect(result.sourcePath).toBe(path.join("brand", "saved.svg"));
       expect(result.relativeUrl).toMatch(/\/v[0-9a-f]{64}-saved\.svg$/);
+    }).pipe(Effect.provide(layerTest)),
+  );
+
+  it.effect("preserves the change request repository through RPC decoding and signed media", () =>
+    Effect.gen(function* () {
+      const decodeAssetCreateUrlInput = Schema.decodeEffect(AssetCreateUrlInput);
+      const resource = {
+        _tag: SOURCE_CONTROL_MEDIA_ASSET,
+        cwd: "/personal-fork",
+        url: "https://github.com/user-attachments/assets/1a1842fb-6383-492f-873c-57aa0033fa6c",
+        repository: "enterprise/private",
+      };
+      const input = yield* decodeAssetCreateUrlInput({ resource });
+      const issued = yield* issueAssetUrl(input);
+      const suffix = issued.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
+      const separator = suffix.indexOf("/");
+      const resolved = yield* resolveAsset(suffix.slice(0, separator), suffix.slice(separator + 1));
+
+      expect(resolved).toEqual({
+        kind: "source-control-media",
+        url: resource.url,
+        cwd: resource.cwd,
+        repository: resource.repository,
+        expiresAt: issued.expiresAt,
+      });
     }).pipe(Effect.provide(layerTest)),
   );
 
