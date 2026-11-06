@@ -13,8 +13,6 @@ import {
 import { AsyncResult, Atom } from "effect/reactivity";
 import * as Dialog from "../../components/ui/Dialog";
 import { useAtomMount, useAtomValue } from "@effect/atom-react";
-import { parseThreadKey, threadKey } from "@goat/client-runtime/state/entities";
-import { createThreadVisitTracker } from "@goat/client-runtime/state/thread-visits";
 import { useChildThreadInputs, useThreadReportedModelSelection } from "../../state/entities";
 import { UsageLimitRecoveryCard } from "./UsageLimitRecoveryCard";
 import { ChatGptUsageLimitNotice } from "./ChatGptUsageLimitNotice";
@@ -159,11 +157,7 @@ import {
   clearThreadComposerError,
   threadComposerErrorsAtom,
 } from "../../state/thread-composer-error";
-import {
-  environmentThreadDetails,
-  environmentThreadShells,
-  threadEnvironment,
-} from "../../state/threads";
+import { environmentThreadDetails, threadEnvironment } from "../../state/threads";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { threadStreamHaptics } from "./threadStreamHaptics";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -213,6 +207,7 @@ import { resolveThreadFeedSubmissionAnchor } from "./thread-feed-live-follow";
 import { useOpenLinkedThread } from "./useOpenLinkedThread";
 import { useGlobalVoiceInput } from "../voice-input/VoiceInputProvider";
 import { useOfflineSnapshotAge } from "../connection/useOfflineSnapshotAge";
+import { threadVisitTracker } from "./threadVisitTracker";
 export interface ThreadDetailScreenProps {
   readonly cloudState: CloudTaskState;
   readonly cloudRun?: CloudRunCard | null;
@@ -331,31 +326,6 @@ const USER_INPUT_TOGGLE_TIMING = {
   duration: USER_INPUT_TOGGLE_DURATION_MS,
   easing: Easing.out(Easing.cubic),
 };
-// A scheduled wake can happen without a newer server update, so the tracker
-// is told when one takes effect. The shell's updatedAt ticks while a run
-// streams; the tracker follows it outside React.
-const wakeAwareVisitShell = Atom.family((key: string) => {
-  const ref = parseThreadKey(key);
-  return Atom.make((get) => {
-    const shell = get(environmentThreadShells.threadShellAtom(ref));
-    if (shell === null) return null;
-    const nowMs = Date.now();
-    const wokeAt = threadWokeAt(shell, { now: new Date(nowMs).toISOString() });
-    const wakeAtMs = shell.snoozedUntil == null ? NaN : Date.parse(shell.snoozedUntil);
-    if (wokeAt === null && wakeAtMs > nowMs) {
-      const timer = setTimeout(
-        () => get.refreshSelf(),
-        Math.min(wakeAtMs - nowMs + 50, 2_147_483_647),
-      );
-      get.addFinalizer(() => clearTimeout(timer));
-    }
-    return { ...shell, wokeAt };
-  }).pipe(Atom.withLabel(`mobile-thread-visit-shell:${key}`));
-});
-const threadVisitTracker = createThreadVisitTracker({
-  threadShellAtom: (ref) => wakeAwareVisitShell(threadKey(ref)),
-  visit: threadEnvironment.visit,
-});
 const NO_RUN_STOP_ATOM = Atom.make<RunStopPresentation | null>(null).pipe(
   Atom.withLabel("mobile-thread-run-stop:empty"),
 );
@@ -1003,6 +973,15 @@ function ThreadDetailBody(
       composerOverlapHeight: composerBottomInset,
     }),
   );
+  const approvalHeightStyle = useAnimatedStyle(() => ({
+    maxHeight: derivePendingUserInputMaxHeight({
+      windowHeight: screenAreaHeight,
+      keyboardHeight: keyboardStickyEnabled ? -keyboardTranslation.value : 0,
+      navigationHeaderHeight,
+      composerOverlapHeight,
+    }),
+    flexGrow: 0,
+  }));
   // The usage panel stacks with the composer and any approval card, so it gets
   // whatever room they leave below the header. Measured only while it is open
   // so typing in the composer does not re-render the screen.
@@ -1685,12 +1664,19 @@ function ThreadDetailBody(
                       exiting={FadeOut.duration(140)}
                     >
                       {props.activePendingApproval ? (
-                        <PendingApprovalCard
-                          canOperateThread={props.canOperateThread}
-                          approval={props.activePendingApproval}
-                          respondingApprovalId={props.respondingApprovalId}
-                          onRespond={props.onRespondToApproval}
-                        />
+                        <Animated.ScrollView
+                          key={props.activePendingApproval.requestId}
+                          style={approvalHeightStyle}
+                          keyboardShouldPersistTaps="handled"
+                          nestedScrollEnabled
+                        >
+                          <PendingApprovalCard
+                            canOperateThread={props.canOperateThread}
+                            approval={props.activePendingApproval}
+                            respondingApprovalId={props.respondingApprovalId}
+                            onRespond={props.onRespondToApproval}
+                          />
+                        </Animated.ScrollView>
                       ) : null}
                       {props.activePendingUserInput ? (
                         <PendingUserInputCard
