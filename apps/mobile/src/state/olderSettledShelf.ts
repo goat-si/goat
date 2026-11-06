@@ -5,6 +5,7 @@ import {
   settledShelfFrontier,
   sortOlderSettledScopes,
   unloadedOlderSettledCount,
+  unloadedListedOlderSettledCount,
   wantedOlderSettledPages,
   type OlderSettled,
   type OlderSettledScope,
@@ -103,12 +104,12 @@ export function useOlderSettledShelfGrowth(
  * Threads of these projects that this client does not hold (older settled threads), for counts
  * shown outside the shelf, such as a removal confirm.
  */
-export function readUnloadedThreadCount(
+function unloadedCountInput(
   members: ReadonlyArray<{ readonly environmentId: EnvironmentId; readonly id: ProjectId }>,
   threads: ReadonlyArray<EnvironmentThreadShell>,
-): number {
-  return unloadedOlderSettledCount({
-    olderSettled: (environmentId) =>
+) {
+  return {
+    olderSettled: (environmentId: EnvironmentId) =>
       appAtomRegistry.get(olderSettledThreads.olderSettledAtom(environmentId)),
     scopes: [...new Set(members.map((member) => member.environmentId))].map((environmentId) => ({
       environmentId,
@@ -121,7 +122,21 @@ export function readUnloadedThreadCount(
         (member) => member.environmentId === thread.environmentId && member.id === thread.projectId,
       ),
     ),
-  });
+  };
+}
+
+export function readUnloadedThreadCount(
+  members: Parameters<typeof unloadedCountInput>[0],
+  threads: ReadonlyArray<EnvironmentThreadShell>,
+): number {
+  return unloadedOlderSettledCount(unloadedCountInput(members, threads));
+}
+
+export function readUnloadedListedThreadCount(
+  members: Parameters<typeof unloadedCountInput>[0],
+  threads: ReadonlyArray<EnvironmentThreadShell>,
+): number | null {
+  return unloadedListedOlderSettledCount(unloadedCountInput(members, threads));
 }
 
 /** How many older settled threads one project has, loaded or not, kept current for render. */

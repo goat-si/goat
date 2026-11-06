@@ -1724,7 +1724,6 @@ export default function ChatView(props: ChatViewProps) {
     serverVisibleTurnItems,
     turnDiffSummaries.at(-1)?.completedAt ?? null,
   );
-
   const gitCwd = activeProject
     ? projectScriptCwd({
         project: { cwd: activeProject.workspaceRoot },
@@ -3521,6 +3520,7 @@ export default function ChatView(props: ChatViewProps) {
             <ThreadFind onClose={focusComposerStable} />
             {isWorkspaceFileDragActive ? <WorkspaceFileDropOverlay /> : null}
             <ChatBannerLane
+              environmentId={activeThread.environmentId}
               providerStatus={visibleProviderStatus}
               providerStatusBannerKey={providerStatusBannerKey}
               setDismissedProviderStatusBannerKey={setDismissedProviderStatusBannerKey}

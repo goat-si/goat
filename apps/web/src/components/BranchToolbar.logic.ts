@@ -1,3 +1,4 @@
+import { workspaceRelativeFilePath } from "@goat/shared/path";
 import type {
   EnvironmentId,
   EnvironmentMachineKind,
@@ -218,6 +219,7 @@ export function resolveLocalCheckoutBranchMismatch(input: {
 
 export function resolveBranchSelectionTarget(input: {
   activeProjectCwd: string;
+  activeProjectCheckoutRoot?: string | undefined;
   activeWorktreePath: string | null;
   refName: Pick<VcsRef, "isDefault" | "worktreePath">;
 }): {
@@ -228,9 +230,13 @@ export function resolveBranchSelectionTarget(input: {
   const { activeProjectCwd, activeWorktreePath, refName } = input;
 
   if (refName.worktreePath) {
+    const isProjectCheckout =
+      input.activeProjectCheckoutRoot === undefined
+        ? workspaceRelativeFilePath(activeProjectCwd, refName.worktreePath) !== null
+        : workspaceRelativeFilePath(input.activeProjectCheckoutRoot, refName.worktreePath) === ".";
     return {
       checkoutCwd: refName.worktreePath,
-      nextWorktreePath: refName.worktreePath === activeProjectCwd ? null : refName.worktreePath,
+      nextWorktreePath: isProjectCheckout ? null : refName.worktreePath,
       reuseExistingWorktree: true,
     };
   }

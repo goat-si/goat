@@ -621,7 +621,7 @@ describe("buildThreadActionItems", () => {
     ]);
   });
 
-  it("hides subagent threads but keeps forks", () => {
+  it("hides subagents and side chats but keeps promoted threads and forks", () => {
     const parentId = ThreadId.make("parent");
     const items = buildThreadActionItems({
       threads: [
@@ -635,6 +635,7 @@ describe("buildThreadActionItems", () => {
             relationshipToParent: "subagent",
           },
         }),
+        makeThread({ id: ThreadId.make("side"), title: "Side", sideChatOf: parentId }),
         makeThread({
           id: ThreadId.make("fork"),
           title: "Fork",

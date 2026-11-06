@@ -9,6 +9,7 @@ import {
   ALL_PR_ACTIONS,
   mergeControlStatus,
   canExecuteImmediateMerge,
+  pullRequestStateAction,
 } from "./pullRequestActions";
 
 const GITHUB = sourceControlClients.get("github").changeRequest;
@@ -34,6 +35,17 @@ function detail(overrides: Partial<Detail> = {}): Detail {
 }
 
 describe("mobile pull request actions", () => {
+  it("offers only permitted state actions for the current request", () => {
+    expect(pullRequestStateAction(detail(), true, false)).toBe("close");
+    expect(pullRequestStateAction(detail({ state: "closed" }), true, false)).toBe("reopen");
+    expect(pullRequestStateAction(detail({ state: "merged" }), true, false)).toBeNull();
+    expect(pullRequestStateAction(detail(), false, false)).toBeNull();
+    expect(pullRequestStateAction(detail(), true, true)).toBeNull();
+    expect(
+      pullRequestStateAction(detail({ viewerPermissions: { actions: [] } }), true, false),
+    ).toBeNull();
+  });
+
   it("blocks immediate merge while auto-merge is pending", () => {
     const pr = detail({ autoMergeEnabled: true });
     expect(canExecuteImmediateMerge(pr, true)).toBe(false);

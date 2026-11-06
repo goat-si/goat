@@ -57,7 +57,7 @@ import {
   SCRATCH_PROJECT_TITLE,
 } from "./ProjectSettingsPanel.logic";
 import { useSettingsProjectGroups } from "./useSettingsProjectGroups";
-import { readUnloadedThreadCount } from "../../state/olderSettledShelf";
+import { readUnloadedListedThreadCount } from "../../state/olderSettledShelf";
 import { settingsScopeEnvironmentLabels } from "./settingsScopeAxis";
 
 const ProjectIconPickerDialog = lazy(() =>
@@ -355,7 +355,7 @@ function ProjectDetail({
       hasOtherMembers,
       displayName: group.displayName,
       threads,
-      unloadedThreadCount: readUnloadedThreadCount(members, threads),
+      unloadedThreadCount: readUnloadedListedThreadCount(members, threads),
     });
     const confirmed = await settlePromise(() =>
       api.dialogs.confirm(confirmationMessage, { variant: "destructive" }),

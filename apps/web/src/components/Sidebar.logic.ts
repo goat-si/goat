@@ -48,11 +48,7 @@ import {
 import { foldSearchQuery, rankSearchItems, scoreThreadSearch } from "@goat/shared/paletteSearch";
 import type { ContextMenuItem, EnvironmentId, ThreadId } from "@goat/contracts";
 import { isSideChatThread } from "@goat/contracts";
-import {
-  DEFAULT_CLIENT_SETTINGS,
-  type SidebarProjectSortOrder,
-  type SidebarThreadSortOrder,
-} from "@goat/contracts/settings";
+import { DEFAULT_CLIENT_SETTINGS, type SidebarProjectSortOrder } from "@goat/contracts/settings";
 import type { AsyncResult } from "effect/reactivity";
 import { sortByRankThenPrompt } from "@goat/client-runtime/state/thread-sort";
 import { isInSidebarProjectScope, type SidebarProjectScopeInput } from "./sidebar/projectScope";
@@ -63,7 +59,6 @@ import {
 } from "@goat/client-runtime/state/thread-settled";
 import {
   getThreadSortTimestamp,
-  sortThreads,
   toSortableTimestamp,
   type ThreadSortInput,
 } from "../lib/threadSort";
@@ -1599,32 +1594,7 @@ export function resolveProjectStatusIndicator(
   return highestPriorityStatus;
 }
 
-export function getFallbackThreadIdAfterDelete<
-  T extends Pick<Thread, "id" | "projectId" | "createdAt" | "updatedAt"> & ThreadSortInput,
->(input: {
-  threads: readonly T[];
-  deletedThreadId: T["id"];
-  sortOrder: SidebarThreadSortOrder;
-  deletedThreadIds?: ReadonlySet<T["id"]>;
-}): T["id"] | null {
-  const { deletedThreadId, deletedThreadIds, sortOrder, threads } = input;
-  const deletedThread = threads.find((thread) => thread.id === deletedThreadId);
-  if (!deletedThread) {
-    return null;
-  }
-
-  return (
-    sortThreads(
-      threads.filter(
-        (thread) =>
-          thread.projectId === deletedThread.projectId &&
-          thread.id !== deletedThreadId &&
-          !deletedThreadIds?.has(thread.id),
-      ),
-      sortOrder,
-    )[0]?.id ?? null
-  );
-}
+export { getFallbackThreadIdAfterDelete } from "./sidebar/threadDeletionFallback";
 function getProjectSortTimestamp(
   project: SidebarProject,
   projectThreads: readonly ThreadSortInput[],

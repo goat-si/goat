@@ -15,6 +15,7 @@ import {
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthPreviewOperateScope,
+  AuthProvidersManageScope,
   AuthSettingsWriteScope,
   SSH_PREFLIGHT_STEP_ORDER,
   AuthSourceControlWriteScope,
@@ -70,6 +71,50 @@ const setup = Effect.gen(function* () {
 });
 
 describe("command permissions", () => {
+  it.effect("requires the destination read grant to refresh providers", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* setup;
+        const refresh = createCommandPermissions(runtime, WS_METHODS.serverRefreshProviders);
+        registry.set(sessions(env), AsyncResult.success(grant(true)));
+        expect(registry.get(refresh.permissionAtom(env))).toBe(false);
+        expect((yield* refresh.authorize(registry, env).pipe(Effect.flip))._tag).toBe(
+          "EnvironmentAuthorizationError",
+        );
+        registry.set(
+          sessions(env),
+          AsyncResult.success({
+            ...grant(false),
+            scopes: [AuthOrchestrationReadScope],
+            permissions: [AuthOrchestrationReadScope],
+          }),
+        );
+        expect(registry.get(refresh.permissionAtom(env))).toBe(true);
+        yield* refresh.authorize(registry, env);
+        expect(registry.get(refresh.permissionAtom(env, { reloadSecrets: true }))).toBe(false);
+        registry.set(
+          sessions(env),
+          AsyncResult.success({
+            ...grant(false),
+            scopes: [AuthOrchestrationReadScope, AuthProvidersManageScope],
+            permissions: [AuthOrchestrationReadScope, AuthProvidersManageScope],
+          }),
+        );
+        expect(registry.get(refresh.permissionAtom(env, { reloadSecrets: true }))).toBe(true);
+        registry.set(sessions(other), AsyncResult.success(grant(false)));
+        expect(registry.get(refresh.permissionAtom(other))).toBe(false);
+        expect((yield* refresh.authorize(registry, other).pipe(Effect.flip))._tag).toBe(
+          "EnvironmentAuthorizationError",
+        );
+        registry.set(sessions(env), AsyncResult.success(grant(false)));
+        expect(registry.get(refresh.permissionAtom(env))).toBe(false);
+        expect((yield* refresh.authorize(registry, env).pipe(Effect.flip))._tag).toBe(
+          "EnvironmentAuthorizationError",
+        );
+      }),
+    ),
+  );
+
   it.effect("requires settings authority to approve a browser claim on the destination", () =>
     Effect.scoped(
       Effect.gen(function* () {

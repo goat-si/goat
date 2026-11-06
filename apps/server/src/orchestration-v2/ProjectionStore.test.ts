@@ -1631,7 +1631,6 @@ const assertProjectScopedShells = Effect.fn("assertProjectScopedShells")(functio
         deletedAt: null,
       },
     });
-
   yield* createThread({ threadId: sourceThreadId, projectId: otherProjectId, archived: true });
   yield* createThread({ threadId: otherThreadId, projectId: otherProjectId });
   yield* createThread({ threadId: activeThreadId, projectId });
@@ -1690,7 +1689,6 @@ const assertProjectScopedShells = Effect.fn("assertProjectScopedShells")(functio
       streaming: false,
     },
   });
-
   const unscoped = yield* projectionStore.getShellSnapshot();
   const inProject = (thread: { readonly projectId: ProjectId }) => thread.projectId === projectId;
   const active = yield* projectionStore.getShellSnapshot({ projectId, location: "active" });
@@ -1702,7 +1700,6 @@ const assertProjectScopedShells = Effect.fn("assertProjectScopedShells")(functio
   );
   const fork = active.threads.find((thread) => thread.id === forkThreadId);
   assert.isAbove(fork?.visibleItemCount ?? 0, 0);
-
   const all = yield* projectionStore.getShellSnapshot({ projectId });
   assert.deepEqual(all.threads, active.threads);
   assert.deepEqual(all.archivedThreads, unscoped.archivedThreads.filter(inProject));
@@ -1723,7 +1720,6 @@ const assertProjectScopedShells = Effect.fn("assertProjectScopedShells")(functio
   }
   return { projectId, activeThreadId, forkThreadId, otherThreadId };
 });
-
 it.effect.each([
   ["memory", ProjectionStore.layerMemory],
   ["SQL", layerTest],
@@ -1782,7 +1778,6 @@ it.effect.each([
     yield* createThread({ name: "archived-child", parent: "root", root: "root", archived: true });
     yield* createThread({ name: "other", worktreePath: "/repo" });
     yield* createThread({ name: "other-child", parent: "other", root: "other", worktreePath });
-
     const family = (threadId: ThreadId) =>
       store
         .getShellSnapshot({ location: "active", familyOf: threadId })
@@ -1792,7 +1787,6 @@ it.effect.each([
     assert.sameMembers([...(yield* family(id("root")))], tree);
     assert.sameMembers([...(yield* family(id("grandchild")))], tree);
     assert.deepEqual([...(yield* family(id("missing")))], []);
-
     // Includes another root's idle child on the same path, which a shell may leave out.
     const onWorktree = yield* store.getShellSnapshot({ location: "active", worktreePath });
     assert.sameMembers(
@@ -1810,7 +1804,6 @@ it.effect.each([
     assert.sameMembers([...(yield* family(id("root")))], [id("child"), id("grandchild")]);
   }).pipe(Effect.provide(layer)),
 );
-
 it.effect.each([
   ["memory", ProjectionStore.layerMemory],
   ["SQL", layerTest],
@@ -1825,6 +1818,7 @@ it.effect.each([
       readonly settledDay: number | null;
       readonly project?: string;
       readonly subagent?: boolean;
+      readonly sideChat?: boolean;
       readonly archived?: boolean;
       readonly snoozedUntilDay?: number;
     }) =>
@@ -1852,6 +1846,7 @@ it.effect.each([
             rootThreadId: input.subagent === true ? id("b") : id(input.name),
           },
           forkedFrom: null,
+          ...(input.sideChat ? { sideChatOf: id("b") } : {}),
           createdAt: now,
           updatedAt: now,
           archivedAt: input.archived === true ? now : null,
@@ -1871,6 +1866,7 @@ it.effect.each([
     yield* createThread({ name: "unsettled", settledDay: null });
     yield* createThread({ name: "child", settledDay: 1, subagent: true });
     yield* createThread({ name: "archived", settledDay: 1, archived: true });
+    yield* createThread({ name: "side", settledDay: 1, sideChat: true });
 
     const list = (
       before: { readonly settledAt: string; readonly threadId?: ThreadId },
@@ -1883,26 +1879,30 @@ it.effect.each([
     assert.sameDeepMembers(
       [...(yield* list(before, 0)).counts],
       [
-        { projectId: ProjectId.make("project:a"), count: 4 },
+        { projectId: ProjectId.make("project:a"), count: 5 },
         { projectId: ProjectId.make("project:b"), count: 1 },
       ],
     );
+    assert.deepEqual((yield* list(before, 0)).sideChatCounts, [
+      { projectId: ProjectId.make("project:a"), count: 1 },
+    ]);
     // A cursor without an id is strict, as the snapshot's cut is: the day-4 tie is not counted.
     assert.sameDeepMembers(
       [...(yield* list({ settledAt: DateTime.formatIso(at(4)) }, 0)).counts],
       [
-        { projectId: ProjectId.make("project:a"), count: 1 },
+        { projectId: ProjectId.make("project:a"), count: 2 },
         { projectId: ProjectId.make("project:b"), count: 1 },
       ],
     );
     // The cursor is the last row: the tie on day 4 continues by id.
     const next = yield* list({ settledAt: DateTime.formatIso(at(4)), threadId: id("b") }, 10);
-    assert.deepEqual(next.threadIds, [id("c"), id("d"), id("snoozed")]);
+    assert.deepEqual(next.threadIds, [id("c"), id("d"), id("snoozed"), id("side")]);
     assert.deepEqual(yield* list(before, 25, []), { threadIds: [], counts: [] });
     const scoped = yield* list(before, 0, [ProjectId.make("project:b")]);
     assert.deepEqual(scoped, {
       threadIds: [],
       counts: [{ projectId: ProjectId.make("project:b"), count: 1 }],
+      sideChatCounts: [],
     });
   }).pipe(Effect.provide(layer)),
 );

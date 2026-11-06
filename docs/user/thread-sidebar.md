@@ -5,7 +5,8 @@ need a separate branch and working directory.
 
 ## Start a thread
 
-On web and desktop, a new thread keeps the current project and carries your model
+On web and desktop, **New thread** lets you choose a project when multiple projects
+are open. Shift-click to start in the current project. A new thread carries your model
 and mode selections, unless the destination project has its own model default.
 Its workspace starts from the project's configured default, which falls back to
 **Local**. Starting a new thread also resets an empty draft's workspace selection.
