@@ -421,6 +421,12 @@ function Assert-Peer($client,[int]$serverPid,[int]$port,[bool]$desktop) {
   if ($desktop -and [int]$proc[0].SessionId -eq 0) { throw 'no-desktop' }
 }
 # HTTP/1.1 on the verified socket: no proxy, no redirect, bounded.
+function Find-Crlf([byte[]]$bytes,[int]$from,[bool]$double) {
+  for ($i=$from; $i -lt $bytes.Length-1; $i++) {
+    if ($bytes[$i] -eq 13 -and $bytes[$i+1] -eq 10 -and (-not $double -or ($i+3 -lt $bytes.Length -and $bytes[$i+2] -eq 13 -and $bytes[$i+3] -eq 10))) { return $i }
+  }
+  return -1
+}
 function Http-On($client,[int]$port,[string]$method,[string]$path,[string]$secret,[string]$body) {
   $stream=$client.GetStream(); $stream.ReadTimeout=20000; $stream.WriteTimeout=20000
   $payload=$utf8.GetBytes($body)
@@ -434,33 +440,43 @@ function Http-On($client,[int]$port,[string]$method,[string]$path,[string]$secre
   while (($got=$stream.Read($buffer,0,$buffer.Length)) -gt 0) {
     $memory.Write($buffer,0,$got); if ($memory.Length -gt 131072) { throw 'response-size' }
   }
-  $text=$utf8.GetString($memory.ToArray())
-  $split=$text.IndexOf($crlf+$crlf)
-  if ($split -lt 0 -or $text -notmatch '^HTTP/1\.[01] (\d{3}) ') { throw 'unreadable' }
-  $status=[int]$Matches[1]; $headers=$text.Substring(0,$split); $rest=$text.Substring($split+4)
+  # Framing counts bytes; the body is decoded only once it is whole.
+  $all=$memory.ToArray(); $split=Find-Crlf $all 0 $true
+  if ($split -lt 0) { throw 'unreadable' }
+  $headers=[Text.Encoding]::ASCII.GetString($all,0,$split)
+  if ($headers -notmatch '^HTTP/1\.[01] (\d{3}) ') { throw 'unreadable' }
+  $status=[int]$Matches[1]; $at=$split+4; $content=New-Object IO.MemoryStream
   if ($headers -match '(?im)^transfer-encoding:\s*chunked\s*$') {
-    $out=''; $at=0
     while ($true) {
-      $eol=$rest.IndexOf($crlf,$at); if ($eol -lt 0) { throw 'unreadable' }
-      $size=[Convert]::ToInt32($rest.Substring($at,$eol-$at).Split(';')[0].Trim(),16)
+      $eol=Find-Crlf $all $at $false; if ($eol -lt 0) { throw 'unreadable' }
+      $sizeText=[Text.Encoding]::ASCII.GetString($all,$at,$eol-$at).Split(';')[0].Trim()
+      if ($sizeText -notmatch '^[0-9A-Fa-f]{1,6}$') { throw 'unreadable' }
+      $size=[Convert]::ToInt32($sizeText,16); $at=$eol+2
       if ($size -eq 0) { break }
-      $out+=$rest.Substring($eol+2,$size); $at=$eol+2+$size+2
+      if ($at+$size+2 -gt $all.Length -or $all[$at+$size] -ne 13 -or $all[$at+$size+1] -ne 10) { throw 'unreadable' }
+      $content.Write($all,$at,$size); $at+=$size+2
     }
-    $rest=$out
+  } else {
+    $length=$all.Length-$at
+    if ($headers -match '(?im)^content-length:\s*(\d+)\s*$') { $length=[int]$Matches[1] }
+    if ($at+$length -gt $all.Length) { throw 'unreadable' }
+    $content.Write($all,$at,$length)
   }
-  return @{ status=$status; body=$rest }
+  return @{ status=$status; body=$utf8.GetString($content.ToArray()) }
 }
-# One app state directory: its verified server, $null when nothing runs there, or a reason.
+# One app state directory: its verified server, a stopped environment, $null, or a reason.
 function Check-App([string]$rel,[bool]$desktop) {
   $dir=Join-Path $appRoot $rel.Replace('/','\')
   Assert-Tree $dir
+  $kept=(Test-Path -LiteralPath (Join-Path $dir 'environment-id')) -or (Test-Path -LiteralPath (Join-Path $dir 'statev2.sqlite'))
+  $stopped=if ($kept) { @{ stopped=$true } } else { $null }
   $recordPath=Join-Path $dir 'server-runtime.json'
-  if (-not (Test-Path -LiteralPath $recordPath -PathType Leaf)) { return $null }
+  if (-not (Test-Path -LiteralPath $recordPath -PathType Leaf)) { return $stopped }
   try { $record=(Read-Small $recordPath 'bad-record') | ConvertFrom-Json } catch { throw 'bad-record' }
   $appPid=Prop $record 'pid'; $port=Prop $record 'port'; $instance=Prop $record 'instanceId'
   if (-not ($appPid -is [int] -or $appPid -is [long]) -or $appPid -le 0 -or -not ($port -is [int] -or $port -is [long]) -or $port -lt 1 -or $port -gt 65535) { throw 'bad-record' }
   if ((Prop $record 'origin') -ne ('http://127.0.0.1:'+$port) -or -not ($instance -is [string]) -or $instance.Length -eq 0) { throw 'bad-record' }
-  if ($null -eq (Get-Process -Id ([int]$appPid) -ErrorAction SilentlyContinue)) { return $null }
+  if ($null -eq (Get-Process -Id ([int]$appPid) -ErrorAction SilentlyContinue)) { return $stopped }
   $secret=Read-Small (Join-Path $dir 'runtime-control.token') 'no-token'
   if ($secret -cnotmatch '^[0-9a-f]{64}$') { throw 'no-token' }
   $identity=Read-Small (Join-Path $dir 'environment-id') 'no-identity'
@@ -476,24 +492,33 @@ function Check-App([string]$rel,[bool]$desktop) {
     $proc=@(Get-CimInstance Win32_Process -Filter ('ProcessId='+$appPid))
     if ($proc.Count -ne 1 -or [int]$proc[0].SessionId -eq 0) { throw 'no-desktop' }
   }
-  return @{ rel=$rel; pid=[int]$appPid; port=[int]$port; identity=$identity; secret=$secret; descriptor=$reply.body.Replace([string][char]13,'').Replace([string][char]10,' ') }
+  return @{ stopped=$false; rel=$rel; pid=[int]$appPid; port=[int]$port; identity=$identity; secret=$secret; descriptor=$reply.body.Replace([string][char]13,'').Replace([string][char]10,' ') }
 }
-# The first app server that passes, else the first reason a live one gave, else none.
+# The first app server that passes, else the first reason a live one gave, else none, noting
+# whether an environment is left on disk (POSIX existing-server probes call that unusable).
 function Select-App {
-  $declined=$null
+  $declined=$null; $stopped=$false
   foreach ($rel in $appDirs) {
-    try { $app=Check-App $rel $true; if ($null -ne $app) { return @{ app=$app; declined=$null } } }
+    try {
+      $app=Check-App $rel $true
+      if ($null -ne $app -and -not $app.stopped) { return @{ app=$app; declined=$null; stopped=$false } }
+      if ($null -ne $app) { $stopped=$true }
+    }
     catch {
       $reason=[string]$_.Exception.Message
       if ($reason -notmatch '^[a-z][a-z-]{0,63}$') { $reason='unexpected' }
       if ($null -eq $declined) { $declined=$reason }
     }
   }
-  return @{ app=$null; declined=$declined }
+  return @{ app=$null; declined=$declined; stopped=$stopped }
 }
 $picked=Select-App
 if ($r.op -eq 'app-probe') {
-  if ($null -eq $picked.app) { if ($picked.declined) { 'GOAT_APP_SERVER='+$picked.declined } else { 'GOAT_APP_SERVER=none' }; return }
+  if ($null -eq $picked.app) {
+    if ($picked.declined) { 'GOAT_APP_SERVER='+$picked.declined } else { 'GOAT_APP_SERVER=none' }
+    if ($picked.stopped) { 'GOAT_APP_SERVER_STOPPED=1' }
+    return
+  }
   $app=$picked.app; $others=@()
   foreach ($rel in $appDirs) {
     if ($rel -eq $app.rel) { continue }

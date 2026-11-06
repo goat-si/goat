@@ -319,6 +319,10 @@ it.effect.each([
     expect(yield* probeAppServer(target, {})).toEqual({ kind: "declined", reason: "port-owner" });
     setup([...before, { stdout: "GOAT_APP_SERVER=none\r\n" }]);
     expect(yield* probeAppServer(target, {})).toEqual({ kind: "none" });
+    // A Windows answer must name the environment it verified.
+    const unnamed = appProbeAnswer.replace(/GOAT_APP_SERVER_ID=.*\r\n/u, "");
+    setup([...before, { stdout: unnamed }]);
+    expect(yield* probeAppServer(target, {})).toEqual({ kind: "declined", reason: "identity" });
   }).pipe(Effect.provide(NodeServices.layer)),
 );
 
@@ -336,6 +340,12 @@ it.effect.each([
     });
     setup([...before, { stdout: "GOAT_APP_SERVER=none\r\n" }]);
     expect(yield* probeExistingServer(target, "app", {})).toEqual({ kind: "absent" });
+    // A quit app's environment is still on disk: it may own the one being looked for.
+    setup([...before, { stdout: "GOAT_APP_SERVER=none\r\nGOAT_APP_SERVER_STOPPED=1\r\n" }]);
+    expect(yield* probeExistingServer(target, "app", {})).toEqual({ kind: "unusable" });
+    const unnamed = appProbeAnswer.replace(/GOAT_APP_SERVER_ID=.*\r\n/u, "");
+    setup([...before, { stdout: unnamed }]);
+    expect(yield* probeExistingServer(target, "app", {})).toEqual({ kind: "unusable" });
     setup([...before, { stdout: "GOAT_APP_SERVER=unreachable\r\n" }]);
     expect(yield* probeExistingServer(target, "app", {})).toEqual({ kind: "unusable" });
   }).pipe(Effect.provide(NodeServices.layer)),

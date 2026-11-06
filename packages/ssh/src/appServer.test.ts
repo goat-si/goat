@@ -923,4 +923,47 @@ describe("manager on a host running the app server", () => {
         expect(yield* identify("managed")).toBe("managed-env");
       }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
   );
+
+  it.live(
+    "on Git Bash the host's identity follows only an app server the native check verified",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+        const app = yield* startAppServer(attachableDescriptor);
+        // The POSIX checks would accept this record; on Git Bash only the native answer counts.
+        const host = yield* makeHost({ pid: process.pid, port: app.port, windows: true });
+        yield* fs.writeFileString(
+          `${host.home}/bin/powershell.exe`,
+          '#!/bin/sh\ncat >/dev/null\ncat "$HOME/native-answer"\n',
+          { mode: 0o755 },
+        );
+        yield* fs.makeDirectory(`${host.home}/.goat/userdata`, { recursive: true });
+        yield* fs.writeFileString(`${host.home}/.goat/userdata/environment-id`, "managed-env");
+        yield* fs.writeFileString(`${host.home}/.goat/desktop/userdata/environment-id`, "app-env");
+        const identify = (attached: "app" | "managed" | null) =>
+          Effect.gen(function* () {
+            const child = yield* spawner.spawn(
+              ChildProcess.make(remoteShell, ["-c", hostEnvironmentIdScript(attached)], {
+                env: {
+                  HOME: host.home,
+                  PATH: `${host.home}/bin:${process.env.PATH ?? "/usr/bin:/bin"}`,
+                },
+                extendEnv: false,
+              }),
+            );
+            return (yield* child.stdout.pipe(Stream.decodeText(), Stream.mkString)).trim();
+          });
+        yield* fs.writeFileString(`${host.home}/native-answer`, "GOAT_APP_SERVER=port-owner\r\n");
+        expect(yield* identify(null)).toBe("managed-env");
+        expect(yield* identify("app")).toBe("");
+        yield* fs.writeFileString(
+          `${host.home}/native-answer`,
+          `GOAT_APP_SERVER=live 1 2 .goat/desktop/userdata\r\n${JSON.stringify(attachableDescriptor)}\r\nGOAT_APP_SERVER_ID=verified-env\r\n`,
+        );
+        expect(yield* identify(null)).toBe("verified-env");
+        expect(yield* identify("app")).toBe("verified-env");
+        expect(yield* identify("managed")).toBe("managed-env");
+      }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
 });

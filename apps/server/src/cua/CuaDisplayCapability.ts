@@ -406,7 +406,7 @@ export function withMacGrants<T extends CuaDisplayCapability>(
 }
 
 const WINDOWS_SESSION0_REASON =
-  "GOAT runs in Windows Session 0 (a service or SSH session), which has no desktop. At this computer, a person signs in, opens the GOAT desktop app (installing it first if needed), and starts new threads in that app's environment from a GOAT app connected directly to it; they turn on the Computer use switch in that environment's settings. Other GOATs that connect over SSH move to the app's server once this background server has no running work, and threads already here keep running without computer use.";
+  "GOAT runs in Windows Session 0 (a service or SSH session), which has no desktop. At this computer, a person signs in, opens the GOAT desktop app (installing it first if needed), and starts new threads in that app's environment from a GOAT app connected directly to it; they turn on the Computer use switch in that environment's settings. While that app runs as the same Windows user, other GOATs that connect over SSH move to its server once this background server has no running work; threads already here keep running without computer use.";
 
 /** Session name and id from `tasklist /FI "PID eq <pid>" /FO CSV /NH`. */
 export function tasklistSession(
@@ -420,9 +420,8 @@ export function tasklistSession(
 }
 
 /**
- * OpenSSH and services run in Session 0, which has no desktop for the driver to use. Windows SSH
- * clients never move to the desktop app's server (packages/ssh appServer.ts), so the way out is
- * that app's environment, reached directly.
+ * OpenSSH and services run in Session 0, which has no desktop for the driver to use. The way out
+ * is the desktop app's environment, which SSH clients move to once it verifies as this user's.
  */
 export function classifyWindows(
   session: { readonly name: string; readonly id: number } | null,

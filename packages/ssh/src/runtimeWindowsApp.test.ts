@@ -42,13 +42,18 @@ const runOp = (root: string, request: object) =>
   );
 
 /** A loopback stand-in for the desktop app's server, run by this test's own process. */
-const startApp = (descriptor: Record<string, unknown>) =>
+const startApp = (descriptor: Record<string, unknown>, chunked = false) =>
   new Promise<{ port: number; sessions: Array<string | undefined>; server: NodeHttp.Server }>(
     (resolve, reject) => {
       const sessions: Array<string | undefined> = [];
       const server = NodeHttp.createServer((request, response) => {
         if (request.method === "GET" && request.url === "/.well-known/goat/environment") {
-          response.end(JSON.stringify(descriptor));
+          const bytes = Buffer.from(JSON.stringify(descriptor));
+          if (!chunked) return void response.end(bytes);
+          // Three-byte characters split across chunks: framing counts bytes, not characters.
+          const middle = bytes.indexOf(Buffer.from("맥")) + 1;
+          response.write(bytes.subarray(0, middle));
+          response.end(bytes.subarray(middle));
           return;
         }
         if (request.method === "POST" && request.url === "/.well-known/goat/runtime/session") {
@@ -94,15 +99,18 @@ const writeApp = async (
   else await NodeFSP.writeFile(NodePath.join(dir, "runtime-control.token"), token + "\n");
 };
 
-const fixture = async (descriptor: Record<string, unknown> = {}) => {
+const fixture = async (descriptor: Record<string, unknown> = {}, chunked = false) => {
   const root = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "goat-win-app-"));
-  const app = await startApp({
-    environmentId: ID,
-    instanceId: INSTANCE,
-    serverVersion: "0.1.0",
-    capabilities: { runtimeSessions: true },
-    ...descriptor,
-  });
+  const app = await startApp(
+    {
+      environmentId: ID,
+      instanceId: INSTANCE,
+      serverVersion: "0.1.0",
+      capabilities: { runtimeSessions: true },
+      ...descriptor,
+    },
+    chunked,
+  );
   return {
     root,
     app,
@@ -178,6 +186,16 @@ describe.runIf(HostProcess.Platform.defaultValue() === "win32")(
       expect(env.app.sessions).toHaveLength(desktop ? 1 : 0);
     });
 
+    it("reads a chunked descriptor whose multibyte label spans chunks", async () => {
+      await using env = await fixture({ label: "집 맥미니 데스크톱" }, true);
+      await writeApp(env.root, { pid: process.pid, port: env.app.port, instanceId: INSTANCE });
+      const lines = (await runOp(env.root, { op: "app-probe" })).stdout.trim().split(/\r?\n/u);
+      if (await inDesktopSession())
+        expect(JSON.parse(lines[1] ?? "").label).toBe("집 맥미니 데스크톱");
+      // Session 0 refuses only after the descriptor parsed and matched the record.
+      else expect(lines).toEqual(["GOAT_APP_SERVER=no-desktop"]);
+    });
+
     it("refuses records that do not prove which server they name", async () => {
       await using env = await fixture({ instanceId: "another-instance" });
       const probe = async () => (await runOp(env.root, { op: "app-probe" })).stdout.trim();
@@ -193,7 +211,8 @@ describe.runIf(HostProcess.Platform.defaultValue() === "win32")(
       expect(await probe()).toBe("GOAT_APP_SERVER=no-token");
       // A quit app's PID no longer runs: nothing to attach, nothing to refuse.
       await writeApp(env.root, { pid: 2_147_483_000, port: env.app.port, instanceId: INSTANCE });
-      expect(await probe()).toBe("GOAT_APP_SERVER=none");
+      // Its environment stays on disk, so it is stopped rather than absent.
+      expect(await probe()).toBe("GOAT_APP_SERVER=none\r\nGOAT_APP_SERVER_STOPPED=1");
       // A junction anywhere on the path is refused before any record is read.
       await NodeFSP.rm(NodePath.join(env.root, ".goat"), { recursive: true });
       const elsewhere = NodePath.join(env.root, "elsewhere");

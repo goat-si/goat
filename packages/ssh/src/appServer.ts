@@ -382,10 +382,21 @@ export const parseAppServerProbe = (stdout: string): AppServerProbe => {
 const answeredOnWindows = (marker: "GOAT_APP_SERVER" | "GOAT_EXISTING", stdout: string) =>
   stdout.split(/\r?\n/u).includes(marker + "=windows");
 
+/** The native lookup's answer; unlike a POSIX probe, it must name the environment it verified. */
+const parseWindowsAppProbe = (stdout: string): AppServerProbe => {
+  const probe = parseAppServerProbe(stdout);
+  return probe.kind === "attach" && probe.environmentId === undefined
+    ? { kind: "declined", reason: "identity" }
+    : probe;
+};
+
 /** The native app lookup's answer as an existing-server probe. */
 const existingFromWindowsApp = (stdout: string): ExistingServerProbe => {
-  const probe = parseAppServerProbe(stdout);
-  if (probe.kind === "none") return { kind: "absent" };
+  const probe = parseWindowsAppProbe(stdout);
+  if (probe.kind === "none")
+    return stdout.split(/\r?\n/u).includes("GOAT_APP_SERVER_STOPPED=1")
+      ? { kind: "unusable" }
+      : { kind: "absent" };
   if (probe.kind !== "attach" || probe.environmentId === undefined) return { kind: "unusable" };
   const lines = stdout.split(/\r?\n/u);
   const descriptor = lines[lines.findIndex((line) => line.startsWith("GOAT_APP_SERVER=")) + 1];
@@ -422,15 +433,16 @@ export const probeAppServer = Effect.fn("ssh/appServer.probe")(function* (
     Effect.catchTags({ SshCommandError: nativeWindowsAfter(target, input ?? {}) }),
     Effect.option,
   );
-  const answer =
+  const windows =
     Option.isSome(result) &&
-    (result.value === NATIVE_WINDOWS || answeredOnWindows("GOAT_APP_SERVER", result.value.stdout))
-      ? yield* windowsAppServerProbe(target, input ?? {}).pipe(Effect.option)
-      : Option.map(result, (output) => (output === NATIVE_WINDOWS ? "" : output.stdout));
+    (result.value === NATIVE_WINDOWS || answeredOnWindows("GOAT_APP_SERVER", result.value.stdout));
+  const answer = windows
+    ? yield* windowsAppServerProbe(target, input ?? {}).pipe(Effect.option)
+    : Option.map(result, (output) => (output === NATIVE_WINDOWS ? "" : output.stdout));
   const probe = Option.match(answer, {
     // Unknown is not absent: the managed server may still report the app, so stay put.
     onNone: (): AppServerProbe => ({ kind: "declined", reason: "probe-failed" }),
-    onSome: parseAppServerProbe,
+    onSome: windows ? parseWindowsAppProbe : parseAppServerProbe,
   });
   if (probe.kind !== "none")
     yield* Effect.logInfo("ssh.appServer.probed", {
@@ -739,7 +751,10 @@ case "$attached:$(uname -s)" in
     if [ -n "$win_id" ] && printf '%s\n' "$win_answer" | grep -q '"runtimeSessions":true'; then
       printf '%s\n' "$win_id"
       exit 0
-    fi ;;
+    fi
+    # Only the native check can vouch for an app server here; without it, never guess one.
+    if [ "$attached" = app ]; then exit 0; fi
+    attached=managed ;;
 esac
 case "$attached" in
   app | none)
