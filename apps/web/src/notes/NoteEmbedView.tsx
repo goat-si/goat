@@ -135,6 +135,20 @@ function NoteMedia(props: {
   );
 }
 
+async function downloadNoteFile(mint: () => Promise<string | null>, name: string) {
+  try {
+    const url = await mint();
+    if (url === null) throw new Error("The environment is not connected.");
+    await downloadMedia(url, name);
+  } catch (error) {
+    toastManager.add({
+      type: "error",
+      title: `Couldn’t download ${name}`,
+      description: error instanceof Error ? error.message : undefined,
+    });
+  }
+}
+
 function NoteFileChip(props: {
   environmentId: NoteEmbedOptions["environmentId"];
   file: string;
@@ -142,21 +156,9 @@ function NoteFileChip(props: {
 }) {
   const mint = useNoteFileDownload(props.environmentId, props.file);
   const [busy, setBusy] = useState(false);
-  const download = async () => {
+  const download = () => {
     setBusy(true);
-    try {
-      const url = await mint();
-      if (url === null) throw new Error("The environment is not connected.");
-      await downloadMedia(url, props.name);
-    } catch (error) {
-      toastManager.add({
-        type: "error",
-        title: `Couldn’t download ${props.name}`,
-        description: error instanceof Error ? error.message : undefined,
-      });
-    } finally {
-      setBusy(false);
-    }
+    void downloadNoteFile(mint, props.name).finally(() => setBusy(false));
   };
   return (
     <div className="flex items-center gap-3 rounded-lg border px-3 py-2 text-sm">
@@ -167,7 +169,7 @@ function NoteFileChip(props: {
         variant="ghost-muted"
         aria-label={`Download ${props.name}`}
         disabled={busy || props.environmentId === null}
-        onClick={() => void download()}
+        onClick={download}
       >
         <DownloadIcon aria-hidden />
       </Button>

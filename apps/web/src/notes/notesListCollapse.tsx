@@ -21,7 +21,7 @@ const WIDE_QUERY = "(min-width: 768px)";
 export const NOTES_LIST_ID = "notes-list";
 const TOGGLE_ID = "notes-list-toggle";
 
-export const useNotesListCollapsed = () => useLocalStorage(COLLAPSED_KEY, false, Schema.Boolean);
+const useNotesListCollapsed = () => useLocalStorage(COLLAPSED_KEY, false, Schema.Boolean);
 
 export function readNotesListCollapsed(): boolean {
   return readLocalStorageValue(COLLAPSED_KEY, false, Schema.Boolean);

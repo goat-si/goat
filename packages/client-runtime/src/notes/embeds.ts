@@ -3,7 +3,7 @@
  * shows as. Notes keep plain markdown; signed URLs exist only while rendering.
  */
 
-export const NOTE_ATTACHMENT_PATH_PATTERN = /^\.attachments\/[0-9a-f]{16}\.[a-z0-9]{1,10}$/;
+const NOTE_ATTACHMENT_PATH_PATTERN = /^\.attachments\/[0-9a-f]{16}\.[a-z0-9]{1,10}$/;
 const SCHEME = /^[a-z][a-z0-9+.-]*:/i;
 const HTTP = /^https?:\/\//i;
 const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "avif", "svg"]);
