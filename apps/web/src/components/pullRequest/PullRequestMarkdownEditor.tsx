@@ -129,7 +129,7 @@ export function PullRequestMarkdownEditor({
           onValueChange={setDraft}
         />
       )}
-      <div className="flex justify-end gap-2">
+      <div className="flex flex-wrap justify-end gap-2">
         {!preview ? <CommentSpeechControls speech={speech} /> : null}
         <Button size="xs" variant="ghost" disabled={saving} onClick={onCancel}>
           Cancel

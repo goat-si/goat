@@ -4,6 +4,7 @@ import { useId, type ReactNode, type RefObject } from "react";
 import { useComposerVoiceController } from "../components/chat/useComposerVoiceController";
 import { ComposerVoiceButton } from "../components/chat/ComposerVoiceButton";
 import { Button } from "../components/ui/button";
+import { cn } from "../lib/utils";
 import { useEnvironmentScope, usePreparedConnection } from "../state/session";
 import { useEnvironment } from "../state/environments";
 import { useEnvironmentSpeechGrant } from "./voiceConsent";
@@ -68,18 +69,13 @@ export function useCommentSpeech(input: {
 export function CommentSpeechControls({ speech }: { speech: ReturnType<typeof useCommentSpeech> }) {
   if (!speech.visible) return null;
   const { voice } = speech;
+  // Rows that hold these controls wrap, so a status or error gets its own full-width line.
+  const lineClassName = "order-last basis-full text-end text-xs";
   return (
-    <span className="inline-flex items-center gap-1">
+    <>
       <span className="sr-only">Transcribes on {speech.destinationLabel}</span>
       {voice.isVoiceActive ? (
         <>
-          <span role="status">
-            {voice.isVoiceTranscribing
-              ? "Transcribing…"
-              : voice.isVoiceStarting
-                ? "Preparing…"
-                : `Recording on ${speech.destinationLabel}…`}
-          </span>
           <Button type="button" size="xs" variant="outline" onClick={voice.cancel}>
             Cancel recording
           </Button>
@@ -92,8 +88,20 @@ export function CommentSpeechControls({ speech }: { speech: ReturnType<typeof us
       ) : (
         <ComposerVoiceButton {...voice.voiceControl} />
       )}
-      {voice.state.error ? <span role="alert">{voice.state.error}</span> : null}
-    </span>
+      {voice.state.error ? (
+        <p role="alert" className={cn(lineClassName, "text-destructive")}>
+          {voice.state.error}
+        </p>
+      ) : voice.isVoiceActive ? (
+        <p role="status" className={cn(lineClassName, "text-muted-foreground")}>
+          {voice.isVoiceTranscribing
+            ? "Transcribing…"
+            : voice.isVoiceStarting
+              ? "Preparing…"
+              : `Recording on ${speech.destinationLabel}…`}
+        </p>
+      ) : null}
+    </>
   );
 }
 

@@ -376,7 +376,7 @@ export function ReviewThreadCard({
                         })(event)
                       }
                     />
-                    <div className="mt-2 flex justify-end gap-2">
+                    <div className="mt-2 flex flex-wrap justify-end gap-2">
                       <CommentSpeechControls speech={speech} />
                       <Button size="xs" variant="ghost" onClick={() => setReplying(false)}>
                         Cancel

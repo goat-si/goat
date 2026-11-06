@@ -144,7 +144,7 @@ export function DiffCommentAnnotation({
           }
         }}
       />
-      <div className="mt-1.5 flex items-center gap-1">
+      <div className="mt-1.5 flex flex-wrap items-center gap-1">
         <span className="mr-auto text-3xs text-muted-foreground/70">⌘/Ctrl Enter to send</span>
         {speech ? <CommentSpeechControls speech={speech} /> : null}
         <Button variant="ghost-muted" size="xs" onClick={onCancel}>

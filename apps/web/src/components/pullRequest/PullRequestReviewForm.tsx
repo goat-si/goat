@@ -153,7 +153,7 @@ export function PullRequestReviewForm({
         aria-label="Review summary"
         onValueChange={(next) => setSummary(reviewKey, next)}
       />
-      <div className="mt-2 flex justify-end gap-2">
+      <div className="mt-2 flex flex-wrap justify-end gap-2">
         <CommentSpeechControls speech={speech} />
         {offered.length > 1 ? (
           <Select

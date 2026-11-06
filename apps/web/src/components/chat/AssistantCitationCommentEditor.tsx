@@ -102,7 +102,7 @@ export function AssistantCitationCommentEditor({
           characters.
         </p>
       ) : null}
-      <div className="mt-2 flex items-center justify-end gap-2">
+      <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
         {speech ? <CommentSpeechControls speech={speech} /> : null}
         <Button
           variant="outline"
