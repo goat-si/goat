@@ -31,12 +31,6 @@ describe("microphoneOrder", () => {
       "kind:bluetooth",
       "kind:carPlay",
     ]);
-    expect(keys(microphoneOrder([{ kind: "carPlay" }, ...saved], "android"))).toEqual([
-      "kind:wired",
-      "kind:builtIn",
-      "airpods",
-      "kind:bluetooth",
-    ]);
   });
 });
 
@@ -81,9 +75,5 @@ describe("preferredMicrophoneInput", () => {
     expect(preferredMicrophoneInput([airPods, usb], order)).toBe(usb);
     expect(preferredMicrophoneInput([airPods, carPlay], order)).toBe(airPods);
     expect(preferredMicrophoneInput([airPods, iPhone], order)).toBe(iPhone);
-    const headset = { uid: "android:7:headset", name: "Headset", type: "BluetoothSCO" };
-    expect(preferredMicrophoneInput([headset, iPhone], microphoneOrder([], "android"))).toBe(
-      headset,
-    );
   });
 });

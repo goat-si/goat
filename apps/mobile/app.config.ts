@@ -385,7 +385,7 @@ const config: ExpoConfig = {
       "expo-audio",
       {
         microphonePermission: "Allow GOAT to use your microphone for voice input.",
-        recordAudioAndroid: true,
+        recordAudioAndroid: false,
         enableBackgroundPlayback: false,
         enableBackgroundRecording: false,
       },
@@ -399,13 +399,7 @@ const config: ExpoConfig = {
         recordAudioAndroid: false,
       },
     ],
-    [
-      "expo-image-picker",
-      {
-        photosPermission: false,
-        microphonePermission: "Allow GOAT to use your microphone for voice input.",
-      },
-    ],
+    ["expo-image-picker", { photosPermission: false, microphonePermission: false }],
     [
       "expo-splash-screen",
       {

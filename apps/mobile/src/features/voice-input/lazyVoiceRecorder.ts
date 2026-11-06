@@ -1,7 +1,4 @@
-import {
-  throwIfVoiceTranscriptionAborted,
-  type VoiceRecorder,
-} from "@goat/client-runtime/voice-input";
+import type { VoiceRecorder } from "@goat/client-runtime/voice-input";
 
 type Subscription = { remove(): void };
 
@@ -22,8 +19,7 @@ export interface NativeVoiceRecorder<TStatus, TRecorderState> {
     listener: (status: TStatus) => void,
   ): Subscription;
   getAvailableInputs(): ReadonlyArray<VoiceRecordingInput>;
-  setInput(uid: string): void | Promise<void>;
-  cancelInputSelection?(): void;
+  setInput(uid: string): void;
   release(): void;
 }
 
@@ -43,7 +39,6 @@ export function createLazyVoiceRecorder<TStatus, TRecorderState>(input: {
   let retired: NativeVoiceRecorder<TStatus, TRecorderState> | null = null;
   let retiredUri: string | null = null;
   let pending: Promise<unknown> = Promise.resolve();
-  let abandonInputSelection: (() => void) | null = null;
 
   const track = <T>(promise: Promise<T>): Promise<T> => {
     pending = Promise.allSettled([pending, promise]).then(() => undefined);
@@ -55,42 +50,19 @@ export function createLazyVoiceRecorder<TStatus, TRecorderState>(input: {
       if (recorder) return recorder.uri;
       return retired ? retired.uri : retiredUri;
     },
-    prepareToRecordAsync(signal) {
+    prepareToRecordAsync() {
       if (!recorder) {
         recorder = input.create();
         subscription = recorder.addListener("recordingStatusUpdate", input.onStatus);
       }
       const prepared = recorder;
       return track(
-        prepared.prepareToRecordAsync().then(async () => {
-          if (signal) throwIfVoiceTranscriptionAborted(signal);
+        prepared.prepareToRecordAsync().then(() => {
           if (!input.selectInput) return;
-          let selected: VoiceRecordingInput | null;
           try {
-            selected = input.selectInput(prepared.getAvailableInputs());
-          } catch {
-            return;
-          }
-          if (!selected) return;
-          const uid = selected.uid;
-          // Expo never settles a canceled coroutine function's promise, so stop waiting on abort.
-          const abandoned = Promise.withResolvers<void>();
-          const abandon = () => {
-            prepared.cancelInputSelection?.();
-            abandoned.resolve();
-          };
-          signal?.addEventListener("abort", abandon, { once: true });
-          abandonInputSelection = abandon;
-          try {
-            await Promise.race([
-              new Promise<void>((resolve) => resolve(prepared.setInput(uid))).catch(() => {}),
-              abandoned.promise,
-            ]);
-            if (signal) throwIfVoiceTranscriptionAborted(signal);
-          } finally {
-            signal?.removeEventListener("abort", abandon);
-            if (abandonInputSelection === abandon) abandonInputSelection = null;
-          }
+            const selected = input.selectInput(prepared.getAvailableInputs());
+            if (selected) prepared.setInput(selected.uid);
+          } catch {}
         }),
       );
     },
@@ -107,7 +79,6 @@ export function createLazyVoiceRecorder<TStatus, TRecorderState>(input: {
     release() {
       const released = recorder;
       if (!released) return;
-      abandonInputSelection?.();
       recorder = null;
       subscription?.remove();
       subscription = null;

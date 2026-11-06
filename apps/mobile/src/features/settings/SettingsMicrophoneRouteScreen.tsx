@@ -4,7 +4,7 @@ import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
 import { getRecordingPermissionsAsync, requestRecordingPermissionsAsync } from "expo-audio";
 import { useCallback, useEffect, useState } from "react";
-import { AppState, Linking, Platform, Pressable, View } from "react-native";
+import { AppState, Linking, Pressable, View } from "react-native";
 import Reanimated, { ReduceMotion, useAnimatedStyle, withTiming } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -19,7 +19,7 @@ import {
   microphoneEntryKey,
   microphoneOrder,
 } from "../../lib/microphonePriority";
-import { useGlobalVoiceInput } from "../voice-input/VoiceInputProvider";
+import { getLocalVoiceTranscriber } from "../../native/voiceTranscription";
 import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/preferences";
 import { SettingsActionRow } from "./components/SettingsActionRow";
 import { SettingsDragHandle } from "./components/SettingsDragHandle";
@@ -90,7 +90,7 @@ const KINDS: Record<
 };
 
 export function SettingsMicrophoneRouteScreen() {
-  return useGlobalVoiceInput().isAvailable ? <MicrophoneSettings /> : <VoiceInputUnavailable />;
+  return getLocalVoiceTranscriber() === null ? <VoiceInputUnavailable /> : <MicrophoneSettings />;
 }
 
 function VoiceInputUnavailable() {
@@ -108,9 +108,10 @@ function VoiceInputUnavailable() {
           <ListRowLayout icon="mic" label="Not available on this device" />
         </SettingsSection>
         <Text className="px-2 text-sm text-foreground-muted">
-          {Platform.OS === "android"
-            ? "On-device voice input needs Android 12 or later and compatible Google speech services for this language."
-            : "Voice input requires a supported device or a connected environment with transcription available."}
+          GOAT's voice input uses Apple's on-device speech transcription, which needs iOS 26 or
+          later on a device that supports it. Without it, the composer has no microphone button, and
+          allowing microphone access won't add one. Apple keyboard dictation is separate and isn't
+          affected.
         </Text>
       </ScrollView>
     </View>
@@ -124,7 +125,6 @@ function MicrophoneSettings() {
   const ready = AsyncResult.isSuccess(preferencesResult) && !preferencesResult.waiting;
   const entries = microphoneOrder(
     AsyncResult.isSuccess(preferencesResult) ? preferencesResult.value.microphones : undefined,
-    Platform.OS === "android" ? "android" : "ios",
   );
   const hasDevices = entries.some(isMicrophoneDevice);
   const { permission, request: requestPermission } = useMicrophonePermission();
@@ -140,9 +140,7 @@ function MicrophoneSettings() {
   const move = (key: string, steps: number) =>
     savePreferences({
       transform: (current) => {
-        const next = [
-          ...microphoneOrder(current.microphones, Platform.OS === "android" ? "android" : "ios"),
-        ];
+        const next = [...microphoneOrder(current.microphones)];
         const from = next.findIndex((entry) => microphoneEntryKey(entry) === key);
         const to = Math.min(next.length - 1, Math.max(0, from + steps));
         if (from === -1 || from === to) return {};
@@ -154,10 +152,9 @@ function MicrophoneSettings() {
   const forget = (key: string) =>
     savePreferences({
       transform: (current) => ({
-        microphones: microphoneOrder(
-          current.microphones,
-          Platform.OS === "android" ? "android" : "ios",
-        ).filter((entry) => microphoneEntryKey(entry) !== key),
+        microphones: microphoneOrder(current.microphones).filter(
+          (entry) => microphoneEntryKey(entry) !== key,
+        ),
       }),
     });
   const dropSteps = (from: number, translation: number) =>

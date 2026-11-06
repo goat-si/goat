@@ -2,7 +2,13 @@ import { RegistryContext, useAtomMount, useAtomValue } from "@effect/atom-react"
 import { RemoteEnvironmentAuthorization } from "@goat/client-runtime/authorization/service";
 import { ManagedRelay } from "@goat/client-runtime/relay";
 import type { EnvironmentId } from "@goat/contracts";
-import { AudioModule, IOSOutputFormat, RecordingPresets, type RecordingStatus } from "expo-audio";
+import {
+  AudioModule,
+  IOSOutputFormat,
+  RecordingPresets,
+  requestRecordingPermissionsAsync,
+  type RecordingStatus,
+} from "expo-audio";
 import { File } from "expo-file-system";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import {
@@ -26,12 +32,7 @@ import {
   preferredMicrophoneInput,
   rememberMicrophones,
 } from "../../lib/microphonePriority";
-import {
-  getLocalVoiceTranscriber,
-  getVoiceTranscriber,
-  probeLocalVoiceTranscriber,
-} from "../../native/voiceTranscription";
-import { createVoiceRecordingPermission } from "./voiceRecordingPermission";
+import { getLocalVoiceTranscriber, getVoiceTranscriber } from "../../native/voiceTranscription";
 import { connectionAtomRuntime } from "../../connection/runtime";
 import { environmentSession } from "../../state/session";
 import { environmentPresentations } from "../../state/presentation";
@@ -44,7 +45,6 @@ import {
   voiceInputBlocksSubmission,
   type EnvironmentVoiceRequestContext,
   type VoiceInputState,
-  type VoiceTranscriber,
 } from "@goat/client-runtime/voice-input";
 import { createLazyVoiceRecorder } from "./lazyVoiceRecorder";
 import { normalizeVoiceInputDecibels, VOICE_WAVEFORM_SAMPLE_COUNT } from "./voiceInputMetering";
@@ -132,10 +132,6 @@ function useVoiceInputRuntime() {
       return next;
     });
   }, []);
-  const [localTranscriber, setLocalTranscriber] = useState<VoiceTranscriber | null>(() =>
-    getLocalVoiceTranscriber(),
-  );
-  const localTranscriberRef = useRef(localTranscriber);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const keepAwakeId = useId();
   const keepAwakeSessionRef = useRef(0);
@@ -146,11 +142,8 @@ function useVoiceInputRuntime() {
   const audioToken = useRef<ReturnType<typeof acquireAudioSession> | null>(null);
 
   /* oxlint-disable react/refs -- The initializer captures the audio-session ref for later recording callbacks; it does not read it. */
-  const [{ session, recorder, permission }] = useState(() => {
+  const [{ session, recorder }] = useState(() => {
     let session: VoiceInputSession | null = null;
-    const permission = createVoiceRecordingPermission(() =>
-      session?.controller.appMovedToBackground(),
-    );
     const recorder = createLazyVoiceRecorder({
       create: () => new AudioModule.AudioRecorder(VOICE_RECORDING_OPTIONS),
       onStatus: (status: RecordingStatus) => {
@@ -165,18 +158,12 @@ function useVoiceInputRuntime() {
       selectInput: (inputs) => {
         const preferences = registry.get(mobilePreferencesAtom);
         if (!AsyncResult.isSuccess(preferences)) return null;
-        const known = microphoneOrder(
-          preferences.value.microphones,
-          Platform.OS === "android" ? "android" : "ios",
-        );
+        const known = microphoneOrder(preferences.value.microphones);
         const order = rememberMicrophones(known, inputs);
         if (order !== known) {
           registry.set(updateMobilePreferencesAtom, {
             transform: (current) => ({
-              microphones: rememberMicrophones(
-                microphoneOrder(current.microphones, Platform.OS === "android" ? "android" : "ios"),
-                inputs,
-              ),
+              microphones: rememberMicrophones(microphoneOrder(current.microphones), inputs),
             }),
           });
         }
@@ -205,9 +192,12 @@ function useVoiceInputRuntime() {
                 },
               })
             : null;
-        return getVoiceTranscriber(remote, localTranscriberRef.current);
+        return getVoiceTranscriber(remote);
       },
-      requestPermission: permission.requestPermission,
+      requestPermission: async () => {
+        const permission = await requestRecordingPermissionsAsync();
+        return { granted: permission.granted, canAskAgain: permission.canAskAgain };
+      },
       configureRecording: async () => {
         const token = acquireAudioSession("recording");
         audioToken.current = token;
@@ -230,44 +220,26 @@ function useVoiceInputRuntime() {
           label: session?.label ?? null,
         }),
     });
-    return { session, recorder, permission };
+    return { session, recorder };
   });
   /* oxlint-enable react/refs */
 
   const controller = session.controller;
 
-  // oxlint-disable-next-line goat/react-effect-budget -- Native speech availability changes on foreground.
   useEffect(() => {
-    let active = true;
-    const refresh = () =>
-      void probeLocalVoiceTranscriber()
-        .then((value) => {
-          if (!active) return;
-          localTranscriberRef.current = value;
-          setLocalTranscriber(value);
-        })
-        .catch(() => {
-          if (!active) return;
-          localTranscriberRef.current = null;
-          setLocalTranscriber(null);
-        });
-    refresh();
-    const subscription = AppState.addEventListener("change", (next) => {
-      if (next === "active") refresh();
+    const subscription = AppState.addEventListener("change", (nextState) => {
+      // iOS permission dialogs report inactive; cancel preparation only on background. Recorder status handles capture interruptions.
+      if (nextState === "background") controller.appMovedToBackground();
     });
-    return () => {
-      active = false;
-      subscription.remove();
-    };
-  }, []);
+    return () => subscription.remove();
+  }, [controller]);
 
   useEffect(
     () => () => {
-      permission.dispose();
       controller.dispose();
       recorder.release();
     },
-    [controller, recorder, permission],
+    [controller, recorder],
   );
 
   useEffect(() => {
@@ -325,13 +297,12 @@ function useVoiceInputRuntime() {
 
   const stop = useCallback(() => controller.stop(), [controller]);
   const cancel = useCallback(() => controller.cancel(), [controller]);
-  const localAvailable = localTranscriber !== null || getNativeShowcaseScene() !== null;
+  const localAvailable = getLocalVoiceTranscriber() !== null || getNativeShowcaseScene() !== null;
   const isAvailableForEnvironment = (environmentId: EnvironmentId | null) =>
     localAvailable ||
     (Platform.OS === "ios" && environmentId !== null && remoteContexts.has(environmentId));
 
   return {
-    localAvailable,
     isAvailable: localAvailable || (Platform.OS === "ios" && remoteContexts.size > 0),
     isAvailableForEnvironment,
     state,
