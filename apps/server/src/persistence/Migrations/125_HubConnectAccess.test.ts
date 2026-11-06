@@ -9,7 +9,7 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 123 });
+      yield* runMigrations({ toMigrationInclusive: 124 });
       for (const [id, subject, scopes] of [
         ["privileged", "cloud-connect", '["hub:proxy"]'],
         ["ordinary", "paired", '["orchestration:read"]'],
@@ -17,8 +17,8 @@ it.effect(
         yield* sql`INSERT INTO auth_sessions (session_id, subject, scopes, method, issued_at, expires_at, client_device_type) VALUES (${id}, ${subject}, ${scopes}, 'bearer-access-token', '2026-10-28T00:00:00.000Z', '2027-10-28T00:00:00.000Z', 'unknown')`;
         yield* sql`INSERT INTO auth_pairing_links (id, credential, method, scopes, subject, created_at, expires_at) VALUES (${id}, ${id}, 'one-time-token', ${scopes}, ${subject}, '2026-10-28T00:00:00.000Z', '2027-10-28T00:00:00.000Z')`;
       }
-      expect(yield* runMigrations({ toMigrationInclusive: 124 })).toEqual([
-        [124, "HubConnectAccess"],
+      expect(yield* runMigrations({ toMigrationInclusive: 125 })).toEqual([
+        [125, "HubConnectAccess"],
       ]);
       expect(yield* sql`SELECT * FROM hub_connect_access`).toEqual([
         { id: 1, generation: 0, allowed: 0 },
@@ -32,6 +32,6 @@ it.effect(
           { subject: "paired", connect_access_generation: null },
         ]);
       }
-      expect(yield* runMigrations({ toMigrationInclusive: 124 })).toEqual([]);
+      expect(yield* runMigrations({ toMigrationInclusive: 125 })).toEqual([]);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );

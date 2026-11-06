@@ -54,7 +54,7 @@ export interface NewStep {
 
 const now = Effect.map(DateTime.now, DateTime.formatIso);
 
-/** goat_eval's runs and steps (Migrations/122_McpEvalJournal.ts). */
+/** goat_eval's runs and steps (Migrations/123_McpEvalJournal.ts). */
 export const makeEvalJournal = (sql: SqlClient.SqlClient, bootId: string) => {
   /** Only a run nobody can still be running is claimed again; another claim reads in progress. */
   const claimable = (run: RunRow) =>

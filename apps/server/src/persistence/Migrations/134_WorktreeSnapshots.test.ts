@@ -7,8 +7,8 @@ import { runMigrations } from "../Migrations.ts";
 it.effect("upgrades existing databases with snapshot and single-row preview tables", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    yield* runMigrations({ toMigrationInclusive: 132 });
-    assert.deepStrictEqual(yield* runMigrations(), [[133, "WorktreeSnapshots"]]);
+    yield* runMigrations({ toMigrationInclusive: 133 });
+    assert.deepStrictEqual(yield* runMigrations(), [[134, "WorktreeSnapshots"]]);
     const tables = yield* sql<{
       name: string;
     }>`SELECT name FROM sqlite_master WHERE name IN ('worktree_snapshots', 'worktree_cleanup_preview') ORDER BY name`;

@@ -9,14 +9,14 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 120 });
+      yield* runMigrations({ toMigrationInclusive: 121 });
       yield* sql`INSERT INTO auth_pairing_links
       (id, credential, method, scopes, subject, created_at, expires_at)
       VALUES ('legacy', 'synthetic-credential', 'link', '["memory:read"]', 'cloud-connect', '2026-10-15', '2026-10-16')`;
       const legacy = yield* sql`SELECT * FROM auth_pairing_links`;
 
-      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 121 }), [
-        [121, "ConnectLinkTrust"],
+      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 122 }), [
+        [122, "ConnectLinkTrust"],
       ]);
       assert.deepStrictEqual(yield* sql`SELECT * FROM connect_link_trust`, [
         { singleton: 1, generation: 0, policy_version: null, user_id: null },
@@ -32,7 +32,7 @@ it.effect(
       );
       yield* sql`UPDATE connect_link_trust SET generation = 1, policy_version = 1, user_id = 'account'`;
       const trust = yield* sql`SELECT * FROM connect_link_trust`;
-      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 121 }), []);
+      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 122 }), []);
       assert.deepStrictEqual(yield* sql`SELECT * FROM auth_pairing_links`, upgraded);
       assert.deepStrictEqual(yield* sql`SELECT * FROM connect_link_trust`, trust);
     }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),

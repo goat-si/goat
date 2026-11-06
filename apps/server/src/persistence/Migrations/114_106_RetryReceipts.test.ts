@@ -4,9 +4,9 @@ import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import { runMigrations } from "../Migrations.ts";
-import RemoteReportReceipts from "./113_RemoteReportReceipts.ts";
-import PendingAttachmentUploads from "./114_PendingAttachmentUploads.ts";
-import ScheduledTaskWebhookSecretRef from "./115_ScheduledTaskWebhookSecretRef.ts";
+import RemoteReportReceipts from "./114_RemoteReportReceipts.ts";
+import PendingAttachmentUploads from "./115_PendingAttachmentUploads.ts";
+import ScheduledTaskWebhookSecretRef from "./116_ScheduledTaskWebhookSecretRef.ts";
 
 const columns = (table: string) =>
   SqlClient.SqlClient.pipe(
@@ -18,7 +18,7 @@ const columns = (table: string) =>
 
 it.effect("a fresh database gets the receipt, pending upload and secretRef storage", () =>
   Effect.gen(function* () {
-    yield* runMigrations({ toMigrationInclusive: 115 });
+    yield* runMigrations({ toMigrationInclusive: 116 });
     assert.includeMembers(yield* columns("remote_report_receipts"), [
       "thread_id",
       "client_request_id",
@@ -36,15 +36,15 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 112 });
+      yield* runMigrations({ toMigrationInclusive: 113 });
       yield* sql`INSERT INTO remote_report_inbox (origin_thread_id, correlation_id, kind, text, run_id, created_at)
       VALUES ('launcher', 'local:lane', 'progress', 'Halfway.', NULL, '2026-10-25T00:00:00.000Z')`;
       const before = yield* columns("scheduled_tasks");
       assert.notInclude(before, "webhook_secret_ref");
       // The receipt, upload and secret reference migrations run together.
       assert.deepStrictEqual(
-        (yield* runMigrations({ toMigrationInclusive: 115 })).map(([id]) => id).slice(0, 3),
-        [113, 114, 115],
+        (yield* runMigrations({ toMigrationInclusive: 116 })).map(([id]) => id).slice(0, 3),
+        [114, 115, 116],
       );
       const inbox = yield* sql<{ readonly text: string }>`SELECT text FROM remote_report_inbox`;
       assert.deepStrictEqual(

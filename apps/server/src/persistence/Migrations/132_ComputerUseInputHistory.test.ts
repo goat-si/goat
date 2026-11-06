@@ -8,9 +8,9 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("122_ComputerUseInput
   it.effect("upgrades after approvals, stores an input and preserves prior migration records", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 130 });
-      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 131 }), [
-        [131, "ComputerUseInputHistory"],
+      yield* runMigrations({ toMigrationInclusive: 131 });
+      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 132 }), [
+        [132, "ComputerUseInputHistory"],
       ]);
       const columns = yield* sql<{
         readonly name: string;
@@ -22,7 +22,7 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("122_ComputerUseInput
       assert.deepStrictEqual(yield* sql`SELECT thread_id, method FROM computer_use_input_history`, [
         { thread_id: "thread:a", method: "click" },
       ]);
-      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 131 }), []);
+      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 132 }), []);
     }),
   );
 });

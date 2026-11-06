@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as SqlClient from "effect/sql/SqlClient";
 import { runMigrations } from "../Migrations.ts";
-import ChannelLedgerMigration from "./082_ChannelLedger.ts";
+import ChannelLedgerMigration from "./083_ChannelLedger.ts";
 
 const channelTables = [
   "channel_bindings",
@@ -20,12 +20,12 @@ const channelTables = [
 it.effect("adds the channel ledger to a database at schema 65 and keeps existing rows", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    yield* runMigrations({ toMigrationInclusive: 81 });
+    yield* runMigrations({ toMigrationInclusive: 82 });
     yield* sql`INSERT INTO orchestration_v2_projection_provider_threads
       (provider_thread_id, provider, status, updated_at, payload_json)
       VALUES ('existing', 'codex', 'idle', '2026-10-12', '{}')`;
-    assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 82 }), [
-      [82, "ChannelLedger"],
+    assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 83 }), [
+      [83, "ChannelLedger"],
     ]);
     const tables = yield* sql<{ name: string }>`
       SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'channel_%' ORDER BY name`;
@@ -36,14 +36,14 @@ it.effect("adds the channel ledger to a database at schema 65 and keeps existing
     const kept = yield* sql<{ provider_thread_id: string }>`
       SELECT provider_thread_id FROM orchestration_v2_projection_provider_threads`;
     assert.deepStrictEqual(kept, [{ provider_thread_id: "existing" }]);
-    assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 82 }), []);
+    assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 83 }), []);
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
 
 it.effect("runs again over its own schema, as a relocated migration id would", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    yield* runMigrations({ toMigrationInclusive: 82 });
+    yield* runMigrations({ toMigrationInclusive: 83 });
     yield* sql`INSERT INTO channel_runtime_state (key, value_json, updated_at)
       VALUES ('kept', '{}', 'now')`;
     yield* ChannelLedgerMigration;
@@ -55,7 +55,7 @@ it.effect("runs again over its own schema, as a relocated migration id would", (
 it.effect("rejects a second input with the same scoped idempotency key", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    yield* runMigrations({ toMigrationInclusive: 82 });
+    yield* runMigrations({ toMigrationInclusive: 83 });
     yield* sql`INSERT INTO channel_conversations
       (conversation_id, owner_id, kind, connection_id, conversation_key, last_activity_at)
       VALUES ('conv', 'owner', 'slack', 'slack-1', 'T1:C1:1', 'now')`;

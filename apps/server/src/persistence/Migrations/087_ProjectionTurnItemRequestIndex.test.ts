@@ -4,14 +4,14 @@ import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 
 import { runMigrations } from "../Migrations.ts";
-import ProjectionTurnItemRequestIndex from "./086_ProjectionTurnItemRequestIndex.ts";
+import ProjectionTurnItemRequestIndex from "./087_ProjectionTurnItemRequestIndex.ts";
 
 it.effect(
   "indexes existing request bodies on upgrade from 69 and can run again after relocation",
   () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 85 });
+      yield* runMigrations({ toMigrationInclusive: 86 });
       yield* sql`
       INSERT INTO orchestration_v2_projection_turn_items
         (turn_item_id, thread_id, ordinal, type, status, updated_at, payload_json)
@@ -30,45 +30,45 @@ it.effect(
         ('approval', 'thread', 'node', 'command', 'pending', '2026-10-14', '{}')
     `;
 
-      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 120 }), [
-        [86, "ProjectionTurnItemRequestIndex"],
-        [87, "Memory"],
-        [88, "MemoryHubSync"],
-        [89, "MemorySearchCounters"],
-        [90, "MemoryTaskGrantCeiling"],
-        [91, "MemoryImportLineage"],
-        [92, "MemoryCheckpointAccounting"],
-        [93, "MemoryReportLifecycle"],
-        [94, "MemoryUsageCounters"],
-        [95, "MemoryRevertResults"],
-        [96, "HandoffLookupIndex"],
-        [97, "MemoryLastReadySpace"],
-        [98, "MemoryHubAdministered"],
-        [99, "MemoryCheckpointLifecycle"],
-        [100, "FleetGoals"],
-        [101, "FleetHealth"],
-        [102, "ThreadRunObservedChecks"],
-        [103, "RemoteDispatchObservation"],
-        [104, "MemoryRevisionCheckpointSize"],
-        [105, "HubNodes"],
-        [106, "MemorySummaryWorkThreadIndex"],
-        [107, "ThreadHistoryArchives"],
-        [108, "PermissionProfiles"],
-        [109, "DecisionInbox"],
-        [110, "HumanStepRecords"],
-        [111, "McpRequestReservations"],
-        [112, "RemoteReportInboxRunId"],
-        [113, "RemoteReportReceipts"],
-        [114, "PendingAttachmentUploads"],
-        [115, "ScheduledTaskWebhookSecretRef"],
-        [116, "RemoteReportFences"],
-        [117, "HubProvisionedLinks"],
-        [118, "ScheduledTaskRuns"],
-        [119, "ScheduledTaskNotificationPolicy"],
-        [120, "NotificationCursorRepair"],
+      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 121 }), [
+        [87, "ProjectionTurnItemRequestIndex"],
+        [88, "Memory"],
+        [89, "MemoryHubSync"],
+        [90, "MemorySearchCounters"],
+        [91, "MemoryTaskGrantCeiling"],
+        [92, "MemoryImportLineage"],
+        [93, "MemoryCheckpointAccounting"],
+        [94, "MemoryReportLifecycle"],
+        [95, "MemoryUsageCounters"],
+        [96, "MemoryRevertResults"],
+        [97, "HandoffLookupIndex"],
+        [98, "MemoryLastReadySpace"],
+        [99, "MemoryHubAdministered"],
+        [100, "MemoryCheckpointLifecycle"],
+        [101, "FleetGoals"],
+        [102, "FleetHealth"],
+        [103, "ThreadRunObservedChecks"],
+        [104, "RemoteDispatchObservation"],
+        [105, "MemoryRevisionCheckpointSize"],
+        [106, "HubNodes"],
+        [107, "MemorySummaryWorkThreadIndex"],
+        [108, "ThreadHistoryArchives"],
+        [109, "PermissionProfiles"],
+        [110, "DecisionInbox"],
+        [111, "HumanStepRecords"],
+        [112, "McpRequestReservations"],
+        [113, "RemoteReportInboxRunId"],
+        [114, "RemoteReportReceipts"],
+        [115, "PendingAttachmentUploads"],
+        [116, "ScheduledTaskWebhookSecretRef"],
+        [117, "RemoteReportFences"],
+        [118, "HubProvisionedLinks"],
+        [119, "ScheduledTaskRuns"],
+        [120, "ScheduledTaskNotificationPolicy"],
+        [121, "NotificationCursorRepair"],
       ]);
       yield* ProjectionTurnItemRequestIndex;
-      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 120 }), []);
+      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 121 }), []);
 
       const indexes = yield* sql<{ readonly name: string; readonly partial: number }>`
       PRAGMA index_list(orchestration_v2_projection_turn_items)

@@ -10,11 +10,11 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("118_ChannelSessionRe
     () =>
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
-        yield* runMigrations({ toMigrationInclusive: 126 });
+        yield* runMigrations({ toMigrationInclusive: 127 });
         yield* sql`INSERT INTO channel_runtime_state (key, owner_token, value_json, updated_at)
         VALUES ('worker', 'previous-owner', '{}', '2026-10-29T00:00:00.000Z')`;
-        assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 127 }), [
-          [127, "ChannelSessionReceipts"],
+        assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 128 }), [
+          [128, "ChannelSessionReceipts"],
         ]);
         assert.deepStrictEqual(
           yield* sql`SELECT owner_token FROM channel_runtime_state WHERE key = 'worker'`,
@@ -32,7 +32,7 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("118_ChannelSessionRe
         );
         assert.strictEqual(duplicate._tag, "Failure");
         assert.deepStrictEqual(yield* sql`SELECT * FROM channel_session_receipts`, []);
-        assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 127 }), []);
+        assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 128 }), []);
       }),
   );
 });

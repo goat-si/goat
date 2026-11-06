@@ -2,7 +2,7 @@ import { assert, it } from "@effect/vitest";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
-import migration from "./120_NotificationCursorRepair.ts";
+import migration from "./121_NotificationCursorRepair.ts";
 import { runMigrations } from "../Migrations.ts";
 
 const idlePrompt = JSON.stringify({
@@ -14,7 +14,7 @@ const idlePrompt = JSON.stringify({
 // A database as nightly 282 left it: 110's backfill and the live cursor counted idle compactions.
 const seedThroughShipped110 = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
-  yield* runMigrations({ toMigrationInclusive: 118 });
+  yield* runMigrations({ toMigrationInclusive: 119 });
   for (const thread of ["quiet", "only-quiet", "failed", "later", "shared", "healthy"])
     yield* sql`INSERT INTO orchestration_v2_projection_threads (thread_id,project_id,title,default_provider,provider_instance_id,runtime_mode,interaction_mode,created_at,updated_at,payload_json)
       VALUES (${thread},'project','Synthetic','codex','codex','full-access','default','2026-10-15','2026-10-15','{}')`;
@@ -44,8 +44,8 @@ const seedThroughShipped110 = Effect.gen(function* () {
   for (const [index, [event, status, completedAt]] of history.entries())
     yield* sql`INSERT INTO orchestration_events(event_id,aggregate_kind,stream_id,stream_version,event_type,occurred_at,actor_kind,payload_json,metadata_json,application_event_version)
       VALUES (${event},'thread','quiet',${index},'run.updated','2026-10-15','server',${JSON.stringify({ id: "quiet-idle", status, completedAt, userMessageId: "quiet-prompt" })},'{}',2)`;
-  assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 119 }), [
-    [119, "ScheduledTaskNotificationPolicy"],
+  assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 120 }), [
+    [120, "ScheduledTaskNotificationPolicy"],
   ]);
 });
 
@@ -74,8 +74,8 @@ it.effect(
         { thread_id: "quiet", cursor: "2026-10-15T03:00:00.000Z" },
         { thread_id: "shared", cursor: "2026-10-15T03:00:00.000Z" },
       ]);
-      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 120 }), [
-        [120, "NotificationCursorRepair"],
+      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 121 }), [
+        [121, "NotificationCursorRepair"],
       ]);
       assert.deepStrictEqual(yield* cursors, [
         { thread_id: "failed", cursor: "2026-10-15T04:00:00.000Z" },
@@ -94,7 +94,7 @@ it.effect(
 it.effect("leaves a database without idle compaction cursors unchanged", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    yield* runMigrations({ toMigrationInclusive: 119 });
+    yield* runMigrations({ toMigrationInclusive: 120 });
     yield* sql`INSERT INTO orchestration_v2_projection_threads (thread_id,project_id,title,default_provider,provider_instance_id,runtime_mode,interaction_mode,created_at,updated_at,payload_json)
       VALUES ('visited','project','Synthetic','codex','codex','full-access','default','2026-10-15','2026-10-15',
         '{"notificationCompletedAt":"2026-10-15T01:00:00.000Z","lastVisitedAt":"2026-10-15T02:00:00.000Z"}')`;
@@ -103,8 +103,8 @@ it.effect("leaves a database without idle compaction cursors unchanged", () =>
     yield* sql`INSERT INTO orchestration_v2_projection_runs (run_id,thread_id,ordinal,provider,status,requested_at,completed_at,payload_json)
       VALUES ('visited-run','visited',1,'codex','completed','2026-10-15','2026-10-15T01:00:00.000Z','{}')`;
     const before = yield* threadRows;
-    assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 120 }), [
-      [120, "NotificationCursorRepair"],
+    assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 121 }), [
+      [121, "NotificationCursorRepair"],
     ]);
     assert.deepStrictEqual(yield* threadRows, before);
     yield* migration;

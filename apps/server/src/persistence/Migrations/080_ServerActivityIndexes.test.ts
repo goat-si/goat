@@ -14,14 +14,14 @@ import * as ProjectionStore from "../../orchestration-v2/ProjectionStore.ts";
 it.effect("upgrades schema 61 and maintains indexed background roster flags", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    yield* runMigrations({ toMigrationInclusive: 78 });
+    yield* runMigrations({ toMigrationInclusive: 79 });
     yield* sql`INSERT INTO orchestration_v2_projection_provider_threads
     (provider_thread_id, provider, status, updated_at, payload_json) VALUES
     ('active-roster', 'claude', 'idle', '2026-10-11', '{"pendingBackgroundTasks":[{"taskId":"background","kind":"subagent"}]}'),
     ('empty-roster', 'claude', 'idle', '2026-10-11', '{}'),
     ('invalid-roster', 'claude', 'idle', '2026-10-11', 'invalid')`;
-    assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 79 }), [
-      [79, "ServerActivityIndexes"],
+    assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 80 }), [
+      [80, "ServerActivityIndexes"],
     ]);
     const read = () => sql<{ provider_thread_id: string; has_pending_background_work: number }>`
     SELECT provider_thread_id, has_pending_background_work FROM orchestration_v2_projection_provider_threads ORDER BY provider_thread_id`;
@@ -40,8 +40,8 @@ it.effect("upgrades schema 61 and maintains indexed background roster flags", ()
       name: string;
     }>`SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE '%_activity_idx'`;
     assert.strictEqual(indexes.length, 6);
-    yield* runMigrations({ toMigrationInclusive: 79 });
-    assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 79 }), []);
+    yield* runMigrations({ toMigrationInclusive: 80 });
+    assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 80 }), []);
   }).pipe(Effect.provide(NodeSqliteClient.layer({ filename: ":memory:" }))),
 );
 

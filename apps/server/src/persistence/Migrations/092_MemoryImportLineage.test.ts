@@ -19,10 +19,10 @@ it.effect(
   () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 90 });
+      yield* runMigrations({ toMigrationInclusive: 91 });
       yield* sql`INSERT INTO memory_search_counters VALUES ('synthetic','user',7,5,123)`;
-      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 91 }), [
-        [91, "MemoryImportLineage"],
+      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 92 }), [
+        [92, "MemoryImportLineage"],
       ]);
       assert.deepStrictEqual(yield* sql`SELECT * FROM memory_search_counters`, [
         { space: "synthetic", scope_key: "user", eligible: 7, indexed: 5, text_bytes: 123 },
@@ -88,7 +88,7 @@ it.effect.each(["event", "compact", "hubReceipt"] as const)(
   (evidence) =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 90 });
+      yield* runMigrations({ toMigrationInclusive: 91 });
       const space = M.MemorySpaceId.make("00000000-0000-4000-8000-000000000001");
       const memoryId = M.MemoryId.make("00000000-0000-4000-8000-000000000002");
       const environmentId = M.EnvironmentId.make("synthetic-legacy");
@@ -147,9 +147,9 @@ it.effect.each(["event", "compact", "hubReceipt"] as const)(
           },
         );
       }
-      yield* runMigrations({ toMigrationInclusive: 91 });
+      yield* runMigrations({ toMigrationInclusive: 92 });
       // The runtime store exercised below requires later memory schema.
-      yield* runMigrations({ toMigrationInclusive: 120 });
+      yield* runMigrations({ toMigrationInclusive: 121 });
       // A structurally valid staged page isolates the lineage guard from ordinary
       // missing-page refusal. Without the guard publication really advances the floor.
       const page: M.MemoryHubCheckpointPage = {
