@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import { ChildProcessSpawner } from "effect/process";
 import * as GitLabCli from "./GitLabCli.ts";
 import * as GitLabPullRequestCli from "./GitLabPullRequestCli.ts";
+import * as GitLabPullRequestProvider from "./GitLabPullRequestProvider.ts";
 const mockedExecute = vi.fn<GitLabCli.GitLabCli["Service"]["execute"]>();
 const layer = it.layer(
   GitLabPullRequestCli.layer.pipe(
@@ -111,6 +112,31 @@ layer("GitLab branch deletion", (it) => {
       });
       if (result._tag === "Failure")
         expect(result.failure.detail).toBe("Branch kept: cannot verify it is unchanged.");
+      expect(mockedExecute.mock.calls.some(([call]) => call.args.includes("DELETE"))).toBe(false);
+    }),
+  );
+
+  it.effect("reports why the source branch was kept through the provider", () =>
+    Effect.gen(function* () {
+      mockedExecute
+        .mockReturnValueOnce(Effect.succeed(output(sourceBranchJson({}))))
+        .mockReturnValueOnce(
+          Effect.succeed(output(JSON.stringify({ default: false, commit: { id: "head" } }))),
+        );
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+      const provider = yield* GitLabPullRequestProvider.make.pipe(
+        Effect.provideService(GitLabPullRequestCli.GitLabPullRequestCli, cli),
+      );
+      const error = yield* provider
+        .runAction({
+          cwd: "/w",
+          host: "gitlab.com",
+          repository: "acme/web",
+          number: 7,
+          action: "delete-branch",
+        })
+        .pipe(Effect.flip);
+      expect(error.detail).toBe("Branch kept: cannot verify it is unchanged.");
       expect(mockedExecute.mock.calls.some(([call]) => call.args.includes("DELETE"))).toBe(false);
     }),
   );
