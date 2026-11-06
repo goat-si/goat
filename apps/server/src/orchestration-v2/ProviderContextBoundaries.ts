@@ -16,7 +16,7 @@ import {
 import * as DateTime from "effect/DateTime";
 import { cancelledBeforeStart } from "./RestartBackgroundNote.ts";
 
-export function latestStableRun(
+function latestStableRun(
   projection: Pick<OrchestrationV2ThreadProjection, "runs">,
 ): OrchestrationV2Run | null {
   return (
