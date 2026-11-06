@@ -9,6 +9,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import { ChildProcess, ChildProcessSpawner } from "effect/process";
 
 import * as ServerConfig from "../config.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
@@ -17,6 +18,32 @@ import { readWorktreeRoot } from "./worktreeCheckout.ts";
 const layerTest = GitVcsDriver.layer.pipe(
   Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "goat-submodule-worktree-test-" })),
   Layer.provideMerge(NodeServices.layer),
+);
+
+const oldGitSpawner = Layer.effect(
+  ChildProcessSpawner.ChildProcessSpawner,
+  Effect.gen(function* () {
+    const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
+    return ChildProcessSpawner.make((command) =>
+      delegate.spawn(command).pipe(
+        Effect.map((handle) =>
+          ChildProcess.isStandardCommand(command) &&
+          command.args.includes("hook") &&
+          command.args.includes("--ignore-missing")
+            ? ChildProcessSpawner.makeHandle({
+                ...handle,
+                exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(1)),
+              })
+            : handle,
+        ),
+      ),
+    );
+  }),
+).pipe(Layer.provideMerge(NodeServices.layer));
+
+const oldGitLayer = GitVcsDriver.layer.pipe(
+  Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "goat-old-git-worktree-test-" })),
+  Layer.provideMerge(oldGitSpawner),
 );
 
 const git = Effect.fn("test.git")(function* (cwd: string, args: ReadonlyArray<string>) {
@@ -155,6 +182,18 @@ const assertCheckedOutInPlace = Effect.fn("test.assertCheckedOutInPlace")(functi
   assert.equal(yield* git(worktreePath, ["status", "--porcelain"]), "");
   // Nothing was checked out into the git dir.
   assert.isFalse(yield* fileSystem.exists(path.join(input.gitDir, "src")));
+});
+
+it.layer(oldGitLayer)("worktrees without git hook run", (it) => {
+  it.effect("checks out in the right root and runs the source hook", () =>
+    Effect.gen(function* () {
+      const repo = yield* makeSubmoduleCheckout(true);
+      yield* git(repo.checkout, ["config", "extensions.worktreeConfig", "true"]);
+      const worktree = yield* repo.createWorktree("old-git");
+      yield* assertCheckedOutInPlace(worktree, { gitDir: repo.gitDir, sparse: false });
+      assertSamePaths(yield* repo.hookRoots(), [worktree]);
+    }),
+  );
 });
 
 it.layer(layerTest)("worktrees of a submodule checkout", (it) => {
