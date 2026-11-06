@@ -34,6 +34,7 @@ import * as ProjectFaviconResolver from "../project/ProjectFaviconResolver.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import { ASSET_ROUTE_PREFIX, issueAssetUrl, readMcpAppHtml, resolveAsset } from "./AssetAccess.ts";
 import * as NativeAppIconResolver from "./NativeAppIconResolver.ts";
+import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import { fakeSourceControlDriverInstance } from "@goat/source-control-testing/fakeSourceControlDriver";
 import * as BuiltInDrivers from "../sourceControl/builtInDrivers.ts";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
@@ -721,7 +722,6 @@ describe("AssetAccess", () => {
             suffix.slice(separator + 1),
           );
           if (asset?.kind !== "file") throw new Error("Expected a resolved media file");
-
           yield* fs.rename(filePath, savedPath);
           yield* fs.symlink(secretPath, filePath);
           const response = HttpServerResponse.toWeb(yield* assetFileResponse(asset, range));
@@ -733,7 +733,6 @@ describe("AssetAccess", () => {
         }
       }).pipe(Effect.provide(layerTest)),
   );
-
   it.effect.skipIf(!symlinksSupported)(
     "rejects a symlink swapped in after canonical validation but before open",
     () =>
@@ -769,7 +768,6 @@ describe("AssetAccess", () => {
         ).toBeNull();
       }).pipe(Effect.provide(layerTest)),
   );
-
   it.effect.skipIf(!symlinksSupported)(
     "rejects an ancestor symlink race even when canonical path rechecks would pass",
     () =>
@@ -825,7 +823,6 @@ describe("AssetAccess", () => {
         ).toBeNull();
       }).pipe(Effect.provide(layerTest)),
   );
-
   it.effect("versions media by file changes rather than by re-signing", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -843,17 +840,14 @@ describe("AssetAccess", () => {
       };
       const original = yield* issueAssetUrl(input);
       expect(original.fileRevision).toEqual(expect.any(String));
-
       yield* TestClock.adjust("1 minute");
       const renewed = yield* issueAssetUrl(input);
       expect(renewed.relativeUrl).not.toBe(original.relativeUrl);
       expect(renewed.fileRevision).toBe(original.fileRevision);
-
       yield* fs.writeFileString(filePath, "modified");
       yield* Effect.promise(() => NodeFSP.utimes(filePath, 2_000, 2_000));
       const edited = yield* issueAssetUrl(input);
       expect(edited.fileRevision).not.toBe(original.fileRevision);
-
       const replacement = path.join(root, "replacement.mp4");
       yield* fs.writeFileString(replacement, "modified");
       yield* Effect.promise(() => NodeFSP.utimes(replacement, 2_000, 2_000));
@@ -862,7 +856,6 @@ describe("AssetAccess", () => {
       expect(replaced.fileRevision).not.toBe(edited.fileRevision);
     }).pipe(Effect.provide(layerTest)),
   );
-
   it.effect("keeps in-place edits readable but requires a new URL after atomic replacement", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -887,12 +880,10 @@ describe("AssetAccess", () => {
       if (edited?.kind !== "file") throw new Error("Expected the edited media file");
       const editedResponse = HttpServerResponse.toWeb(yield* assetFileResponse(edited));
       expect(yield* Effect.promise(() => editedResponse.text())).toBe("in-place edit");
-
       const replacement = path.join(root, "replacement.mp4");
       yield* fs.writeFileString(replacement, "replacement");
       yield* fs.rename(replacement, filePath);
       expect(yield* resolveAsset(token, name)).toBeNull();
-
       const renewed = yield* issueAssetUrl(input);
       const renewedSuffix = renewed.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
       const renewedSeparator = renewedSuffix.indexOf("/");
@@ -912,7 +903,6 @@ describe("AssetAccess", () => {
       ).toBeNull();
     }).pipe(Effect.provide(layerTest)),
   );
-
   it.effect("issues workspace URLs that resolve the entry file and sibling assets", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -927,7 +917,6 @@ describe("AssetAccess", () => {
       yield* fileSystem.writeFileString(path.join(root, ".env"), "SECRET=value");
       const canonicalHtmlPath = yield* fileSystem.realPath(htmlPath);
       const canonicalCssPath = yield* fileSystem.realPath(cssPath);
-
       const result = yield* issueAssetUrl({
         resource: {
           _tag: "workspace-file",
@@ -939,7 +928,6 @@ describe("AssetAccess", () => {
       const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
       const separatorIndex = suffix.indexOf("/");
       const token = suffix.slice(0, separatorIndex);
-
       expect(yield* resolveAsset(token, "report.html")).toEqual({
         kind: "file",
         path: canonicalHtmlPath,
@@ -1007,7 +995,6 @@ describe("AssetAccess", () => {
       }
     }).pipe(Effect.provide(layerTest)),
   );
-
   it.effect("rejects workspace files outside the authorized root", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -1020,7 +1007,6 @@ describe("AssetAccess", () => {
       });
       const htmlPath = path.join(outside, "report.html");
       yield* fileSystem.writeFileString(htmlPath, "<p>outside</p>");
-
       const error = yield* issueAssetUrl({
         resource: {
           _tag: "workspace-file",
@@ -1041,7 +1027,6 @@ describe("AssetAccess", () => {
       expect(error.cause).toBeInstanceOf(WorkspacePaths.WorkspacePathOutsideRootError);
     }).pipe(Effect.provide(layerTest)),
   );
-
   it.effect("issues exact workspace URLs for every non-HTML preview", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -1112,7 +1097,6 @@ describe("AssetAccess", () => {
       }
     }).pipe(Effect.provide(layerTest)),
   );
-
   it.effect("previews workspace files with literal fragment characters in their paths", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -1120,7 +1104,6 @@ describe("AssetAccess", () => {
       const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "goat-preview-literal-" });
       const directory = path.join(root, "assets#archive");
       yield* fileSystem.makeDirectory(directory);
-
       for (const name of [
         "icon#v2.png",
         "report#draft.pdf",
@@ -1155,13 +1138,11 @@ describe("AssetAccess", () => {
         });
         const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
         const token = suffix.slice(0, suffix.indexOf("/"));
-
         expect(yield* resolveAsset(token, name)).toEqual({ kind: "file", path: canonicalFile });
         if (name.endsWith(".png")) {
           expect(yield* resolveAsset(token, "other.png")).toBeNull();
         }
       }
-
       const disguisedPath = path.join(root, "image.png#notes.txt");
       yield* fileSystem.writeFileString(disguisedPath, "not an image");
       const error = yield* issueAssetUrl({
@@ -1175,7 +1156,6 @@ describe("AssetAccess", () => {
       expect(error).toBeInstanceOf(AssetPreviewTypeValidationError);
     }).pipe(Effect.provide(layerTest)),
   );
-
   it.effect("signs MCP render intent only for inline HTML attachments", () =>
     Effect.gen(function* () {
       const config = yield* ServerConfig.ServerConfig;
@@ -1217,14 +1197,12 @@ describe("AssetAccess", () => {
       }
     }).pipe(Effect.provide(layerTest)),
   );
-
   it.effect("infers playable attachment media from the stored extension", () =>
     Effect.gen(function* () {
       const config = yield* ServerConfig.ServerConfig;
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       yield* fileSystem.makeDirectory(config.attachmentsDir, { recursive: true });
-
       for (const [extension, mimeType, expectedMimeType] of [
         ["mp4", "application/octet-stream", "video/mp4"],
         ["mov", "binary/octet-stream", "video/quicktime"],
@@ -1253,7 +1231,6 @@ describe("AssetAccess", () => {
         });
         if (asset?.kind !== "file") throw new Error("Expected attachment file");
         expect(asset).not.toHaveProperty("download");
-
         const response = HttpServerResponse.toWeb(yield* assetFileResponse(asset, "bytes=1-2"));
         expect(response.status).toBe(206);
         expect(response.headers.get("content-type")).toBe(expectedMimeType);
@@ -1264,7 +1241,6 @@ describe("AssetAccess", () => {
       }
     }).pipe(Effect.provide(layerTest)),
   );
-
   it.effect("keeps explicit non-media types and generic HTML and SVG as downloads", () =>
     Effect.gen(function* () {
       const config = yield* ServerConfig.ServerConfig;
@@ -1605,7 +1581,11 @@ describe("AssetAccess", () => {
   );
 
   it.effect("serves a host's credentialed media through that host's driver", () => {
-    const fetched: Array<{ url: string; headers: Readonly<Record<string, string>> }> = [];
+    const fetched: Array<{
+      url: string;
+      headers: Readonly<Record<string, string>>;
+      repository?: string;
+    }> = [];
     const url = "https://github.com/owner/repo/blob/main/docs/shot.png";
     const media = sourceControlDefinitions.mediaUrl(url)!;
     const layerDrivers = Layer.succeed(BuiltInDrivers.SourceControlDrivers, [
@@ -1624,6 +1604,17 @@ describe("AssetAccess", () => {
         }),
       },
     ]);
+    // Clients that predate `repository` get the checkout's.
+    const layerIdentities = Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
+      resolve: () =>
+        Effect.succeed({
+          canonicalKey: "github.com/owner/repo",
+          locator: { source: "git-remote", remoteName: "origin", remoteUrl: "" },
+          provider: media.definition.kind,
+          owner: "owner",
+          name: "repo",
+        }),
+    });
     return Effect.gen(function* () {
       const decodeAssetCreateUrlInput = Schema.decodeEffect(AssetCreateUrlInput);
 
@@ -1647,12 +1638,21 @@ describe("AssetAccess", () => {
         range: "bytes=0-4",
         cookie: "session",
       });
-      expect(fetched).toEqual([{ url: media.fetchUrl, headers: { range: "bytes=0-4" } }]);
+      expect(fetched).toEqual([
+        { url: media.fetchUrl, headers: { range: "bytes=0-4" }, repository: "owner/repo" },
+      ]);
       expect(response.status).toBe(206);
       // The upstream sent no type, so it comes from the file name the host gave the media.
       expect(response.headers["content-type"]).toBe("image/png");
       expect(response.headers["content-length"]).toBe("5");
-    }).pipe(Effect.provide(Layer.merge(layerTest, layerDrivers)), Effect.scoped);
+
+      // A pull request's own repository wins over the checkout it is shown in.
+      yield* sourceControlMediaResponse({ ...asset, repository: "enterprise/private" }, {});
+      expect(fetched.at(-1)?.repository).toBe("enterprise/private");
+    }).pipe(
+      Effect.provide(Layer.mergeAll(layerTest, layerDrivers, layerIdentities)),
+      Effect.scoped,
+    );
   });
 
   it.effect("refuses media no host keeps behind a credential, without echoing the URL", () =>
