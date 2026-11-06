@@ -202,6 +202,7 @@ export const makePiRpcConnection = Effect.fnUntraced(function* (options: PiRpcSp
         extendEnv: false,
         shell: spawnCommand.shell,
         detached: platform !== "win32",
+        stdin: { stream: "pipe", endOnDone: false },
       }),
     )
     .pipe(Effect.mapError((cause) => new PiRpcError({ operation: "spawn", cause })));
