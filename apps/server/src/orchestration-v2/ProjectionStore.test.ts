@@ -1782,7 +1782,6 @@ it.effect.each([
     yield* createThread({ name: "archived-child", parent: "root", root: "root", archived: true });
     yield* createThread({ name: "other", worktreePath: "/repo" });
     yield* createThread({ name: "other-child", parent: "other", root: "other", worktreePath });
-
     const family = (threadId: ThreadId) =>
       store
         .getShellSnapshot({ location: "active", familyOf: threadId })
@@ -1792,7 +1791,6 @@ it.effect.each([
     assert.sameMembers([...(yield* family(id("root")))], tree);
     assert.sameMembers([...(yield* family(id("grandchild")))], tree);
     assert.deepEqual([...(yield* family(id("missing")))], []);
-
     // Includes another root's idle child on the same path, which a shell may leave out.
     const onWorktree = yield* store.getShellSnapshot({ location: "active", worktreePath });
     assert.sameMembers(
@@ -1810,7 +1808,6 @@ it.effect.each([
     assert.sameMembers([...(yield* family(id("root")))], [id("child"), id("grandchild")]);
   }).pipe(Effect.provide(layer)),
 );
-
 it.effect.each([
   ["memory", ProjectionStore.layerMemory],
   ["SQL", layerTest],
@@ -1825,6 +1822,7 @@ it.effect.each([
       readonly settledDay: number | null;
       readonly project?: string;
       readonly subagent?: boolean;
+      readonly sideChat?: boolean;
       readonly archived?: boolean;
       readonly snoozedUntilDay?: number;
     }) =>
@@ -1852,6 +1850,7 @@ it.effect.each([
             rootThreadId: input.subagent === true ? id("b") : id(input.name),
           },
           forkedFrom: null,
+          ...(input.sideChat ? { sideChatOf: id("b") } : {}),
           createdAt: now,
           updatedAt: now,
           archivedAt: input.archived === true ? now : null,
@@ -1871,6 +1870,7 @@ it.effect.each([
     yield* createThread({ name: "unsettled", settledDay: null });
     yield* createThread({ name: "child", settledDay: 1, subagent: true });
     yield* createThread({ name: "archived", settledDay: 1, archived: true });
+    yield* createThread({ name: "side", settledDay: 1, sideChat: true });
 
     const list = (
       before: { readonly settledAt: string; readonly threadId?: ThreadId },

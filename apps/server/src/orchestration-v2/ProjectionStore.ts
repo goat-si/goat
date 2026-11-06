@@ -7696,7 +7696,6 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
             }
             return [undefined, next] as const;
           });
-
           if (result) {
             return yield* result;
           }
@@ -7807,6 +7806,7 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
               thread.deletedAt !== null ||
               thread.archivedAt !== null ||
               thread.lineage.relationshipToParent === "subagent" ||
+              thread.sideChatOf != null ||
               thread.settledOverride !== "settled" ||
               thread.settledAt === null ||
               (projectIds !== undefined && !projectIds.includes(thread.projectId))
