@@ -696,7 +696,7 @@ it.layer(layerTest, { excludeTestServices: true })("WorkspaceEntries", (it) => {
 
     it.effect("keeps matches past the truncated part of a long line", () =>
       Effect.gen(function* () {
-        const cwd = yield* makeTempDir({ prefix: "t3code-workspace-content-long-line-" });
+        const cwd = yield* makeTempDir({ prefix: "goat-workspace-content-long-line-" });
         yield* writeTextFile(cwd, "dist/app.min.js", `${"x".repeat(600)} needleSuffix\n`);
 
         const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
