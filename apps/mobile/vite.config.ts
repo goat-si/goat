@@ -58,6 +58,7 @@ const reactTests = [
   "src/features/threads/ThreadHeader.memory.test.tsx",
   "src/features/threads/thread-settings-sheet-state.test.ts",
   "src/features/threads/ThreadMarkdownImage.test.tsx",
+  "src/features/threads/useSideChatCommand.test.tsx",
   "src/lib/visible-animations.test.tsx",
 
   "src/components/ui/Dialog.android.test.tsx",

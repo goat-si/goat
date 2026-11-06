@@ -126,6 +126,7 @@ import { enqueueThreadOutboxMessage } from "./thread-outbox";
 import { dispatchingQueuedMessageIdAtom, useThreadOutboxMessages } from "./use-thread-outbox";
 import { threadEnvironment } from "./threads";
 import { useAtomCommand } from "./use-atom-command";
+import { useSideChatCommand } from "../features/threads/useSideChatCommand";
 
 const EMPTY_QUEUE_WORKFLOW_ATOM = Atom.make<null>(null).pipe(
   Atom.withLabel("mobile-thread-queue-workflow:empty"),
@@ -190,6 +191,7 @@ export function useThreadDraftForThread(input: {
 }
 
 export function useThreadComposerState() {
+  const sideChatCommand = useSideChatCommand();
   const {
     selectedThread: selectedThreadShell,
     selectedThreadCreation,
@@ -583,6 +585,17 @@ export function useThreadComposerState() {
     if (text.length === 0 && attachments.length === 0) {
       return null;
     }
+    if (
+      beforeDispatch === undefined &&
+      (await sideChatCommand({
+        thread,
+        threadKey,
+        text: draft.text,
+        hasAttachmentsOrContext: attachments.length > 0 || (draft.context?.records.length ?? 0) > 0,
+        connected: selectedEnvironmentRuntime?.connectionState === "connected",
+      }))
+    )
+      return null;
     // Recovery preserves over-cap attachments; require trimming or outbox delivery would reject indefinitely.
     if (attachments.length > PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
       Dialog.alert(
