@@ -5,13 +5,14 @@ import * as NodePath from "node:path";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import { acquireMemoryImportReader } from "./MemoryImportReader.ts";
+import { parseClaudeMemory } from "./ClaudeMemoryImporter.ts";
 import {
   buildMemoryImportFixture,
   type MemoryImportFixture,
 } from "./MemoryImportFixtures.fixture.ts";
 
 // Runs on Windows CI too: Codex and Claude reads need no Git executable.
-const read = (fixture: MemoryImportFixture) =>
+const snapshot = (fixture: MemoryImportFixture) =>
   Effect.gen(function* () {
     const reader = yield* acquireMemoryImportReader({
       stateDir: fixture.stateDir,
@@ -24,15 +25,34 @@ const read = (fixture: MemoryImportFixture) =>
       NodeFS.readdirSync(NodePath.join(fixture.stateDir, "memory-import", "snapshots")),
       [],
     );
-    return snapshot.files.map((file) => file.selector);
+    return snapshot;
   });
+const read = (fixture: MemoryImportFixture) =>
+  Effect.map(snapshot(fixture), (value) => value.files.map((file) => file.selector));
 const fill = (root: string, folder: string, count: number) => {
   const path = NodePath.join(root, ...folder.split("/"));
   NodeFS.mkdirSync(path, { recursive: true });
   for (let i = 0; i < count; i++) NodeFS.writeFileSync(NodePath.join(path, `${i}.md`), "");
 };
 
-describe("MemoryImportReader traversal", () => {
+describe("MemoryImportReader on Windows sources", () => {
+  it.effect("a Claude metadata topic saved with a byte order mark keeps its profile", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fixture = yield* buildMemoryImportFixture("claude-topic-metadata-v1");
+        const path = NodePath.join(fixture.sourceRoot, "fixture.md");
+        NodeFS.writeFileSync(path, `\uFEFF${NodeFS.readFileSync(path, "utf8")}`);
+        const value = yield* snapshot(fixture);
+        assert.equal(value.profile, "claude-topic-metadata-v1");
+        const rows = yield* parseClaudeMemory(value);
+        assert.deepEqual(
+          rows.map((row) => row.kind),
+          ["candidate"],
+        );
+      }),
+    ),
+  );
+
   it.effect("imports a Codex store beside its rollout summaries, skills and Git history", () =>
     Effect.scoped(
       Effect.gen(function* () {

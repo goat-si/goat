@@ -53,7 +53,7 @@ const LANES = ["all", "server", "memory-growth", "windows", "quick"];
 const WINDOWS_SUITES = [
   "apps/desktop/src/cua/",
   "apps/server/src/cua/",
-  "apps/server/src/memory/imports/MemoryImportReaderTraversal",
+  "apps/server/src/memory/imports/MemoryImportReaderWindows",
   "packages/shared/src/cuaDriver",
   "packages/shared/src/computerUse",
   "packages/shared/src/path",

@@ -939,7 +939,7 @@ export const acquireMemoryImportReader = (config: MemoryImportReaderConfig) =>
                 : PROFILES[1];
             } else
               profile = files.some((file) =>
-                /^---\r?\n(?:(?!---)[^])*?^metadata:[^]*?^---\s*$/m.test(file.text),
+                /^\uFEFF?---\r?\n(?:(?!---)[^])*?^metadata:[^]*?^---\s*$/m.test(file.text),
               )
                 ? PROFILES[3]
                 : PROFILES[2];
