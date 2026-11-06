@@ -1,3 +1,7 @@
+import {
+  BUNDLED_CLAUDE_MODEL_CATALOG,
+  type ClaudeModelCatalog,
+} from "../../provider/ClaudeModelCatalog.ts";
 import { assertPinnedHead, makeTurnsAcrossSilent } from "./ClaudeFork.testkit.ts";
 import {
   CLAUDE_TEST_MODEL_SELECTION,
@@ -16,10 +20,8 @@ import * as MemoryContext from "@goat/provider-core/server/memoryContext";
 import { GOAT_DEVELOPMENT_INSTRUCTIONS } from "@goat/provider-core/server/developmentInstructions";
 import * as NodeEvents from "node:events";
 import * as NodeFS from "node:fs";
-
 import * as NodePath from "node:path";
 import * as NodeStream from "node:stream";
-
 import type {
   ElicitationRequest,
   Query as ClaudeQuery,
@@ -64,7 +66,6 @@ import {
 } from "@goat/contracts";
 import { assert, describe, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
-
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -78,7 +79,6 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
-
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -87,7 +87,6 @@ import { formatClaudeResumeCompactionQuestion } from "@goat/shared/claudeCompact
 import * as HostProcess from "@goat/shared/HostProcess";
 import { getModelSelectionStringOptionValue } from "@goat/shared/model";
 import { SpawnExecutableResolution } from "@goat/shared/shell";
-
 import { attachmentRelativePath } from "../../attachmentStore.ts";
 import { WorkflowAgentTranscriptReadObserver } from "../workflowAgentTranscript.ts";
 import * as ServerConfig from "../../config.ts";
@@ -132,10 +131,8 @@ import {
   materializeFixtureInput,
   projectionFor,
 } from "../testkit/fixtures/shared.ts";
-
 // Only collectors opt into queue capture. A FIFO marker then acknowledges all
 // provider events offered before it, after their collector callbacks finish.
-
 vi.mock("effect/Queue", async (importOriginal) => {
   const actual = await importOriginal<typeof Queue>();
   return {
@@ -154,7 +151,6 @@ vi.mock("@anthropic-ai/claude-agent-sdk", async (importOriginal) => ({
   ...(await importOriginal<typeof ClaudeSdk>()),
   resolveSettings: vi.fn(),
 }));
-
 beforeEach(() => {
   vi.mocked(ClaudeSdk.resolveSettings).mockReset().mockResolvedValue({
     effective: {},
@@ -168,7 +164,6 @@ const layerAdapterTest = Layer.mergeAll(
   McpProviderSessions.layer,
   NodeServices.layer,
 );
-
 const DEFAULT_CLAUDE_SETTINGS = Schema.decodeSync(ClaudeSettings)({});
 const AUTO_COMPACT_CLAUDE_SETTINGS = Schema.decodeSync(ClaudeSettings)({
   autoCompactWindow: "300000",
@@ -200,7 +195,6 @@ const CLAUDE_TEST_RESTART_MODEL_SELECTION = {
   model: "claude-haiku-4-5-20251001",
   options: [{ id: "thinking", value: false }],
 } satisfies ModelSelection;
-
 describe("ClaudeAdapterV2 runtime query policy", () => {
   it("appends the development discipline without GOAT MCP and leaves out orchestration", () => {
     const options = ClaudeAdapterV2.makeClaudeQueryOptions({
@@ -213,7 +207,6 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
     assert.include(append, GOAT_DEVELOPMENT_INSTRUCTIONS);
     assert.notInclude(append, "Use `goat_task_create`");
   });
-
   it.each([
     "-- --thinking-display omitted",
     "--thinking-display summarized -- --thinking-display omitted",
@@ -228,7 +221,6 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
     assert.deepEqual(options.thinking, { type: "adaptive", display: "summarized" });
     assert.equal(options.extraArgs?.["thinking-display"], "summarized");
   });
-
   it.each([
     ["--permission-mode acceptEdits", "acceptEdits"],
     ["--dangerously-skip-permissions", "bypassPermissions"],
@@ -246,7 +238,6 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
     assert.isUndefined(options.extraArgs?.["permission-mode"]);
     assert.isUndefined(options.extraArgs?.["dangerously-skip-permissions"]);
   });
-
   it("passes every --add-dir launch directory to Claude", () => {
     const options = ClaudeAdapterV2.makeClaudeQueryOptions({
       modelSelection: CLAUDE_TEST_MODEL_SELECTION,
@@ -268,7 +259,6 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
     ]);
     assert.isUndefined(options.extraArgs?.["add-dir"]);
   });
-
   it("gives delegated children Claude's subagent prompt cache TTL", () => {
     const lineage = (relationshipToParent: "fork" | "subagent" | null) => ({
       lineage: {
@@ -290,7 +280,6 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
       env,
     );
   });
-
   it("pins Claude's auto tool search on through flag settings", () => {
     const override = ClaudeAdapterV2.claudeToolSearchOverride;
     for (const value of ["auto", "auto:10", "auto:99.5", "auto:x", "auto:Infinity"]) {
@@ -2684,6 +2673,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     readonly subagentLaunchToolUseId?: string;
     readonly nativeSessionId?: string;
     readonly settings?: ClaudeSettings;
+    readonly modelCatalog?: Effect.Effect<ClaudeModelCatalog>;
     readonly freshQueueOnReopen?: boolean;
     readonly setPermissionMode?: ClaudeAdapterV2.ClaudeAgentSdkQuerySession["setPermissionMode"];
     readonly forkSession?: ClaudeAdapterV2.ClaudeAgentSdkQueryRunnerShape["forkSession"];
@@ -2735,6 +2725,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       const adapter = yield* ClaudeAdapterV2.makeClaudeAdapterV2({
         instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
         settings: options?.settings ?? DEFAULT_CLAUDE_SETTINGS,
+        ...(options?.modelCatalog ? { modelCatalog: options.modelCatalog } : {}),
         environment: options?.environment ?? {},
         attachmentsDir,
         fileSystem,
@@ -4634,7 +4625,13 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          const harness = yield* makeWakeHarness;
+          let catalogReads = 0;
+          const harness = yield* makeWakeHarnessWithOptions({
+            modelCatalog: Effect.sync(() => {
+              catalogReads++;
+              return BUNDLED_CLAUDE_MODEL_CATALOG;
+            }),
+          });
           const now = yield* DateTime.now;
           const normal = {
             instanceId: ClaudeAdapterV2.CLAUDE_DEFAULT_INSTANCE_ID,
@@ -4688,6 +4685,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           ]);
           assert.strictEqual(harness.getOpenedOptions(), originalOptions);
           assert.lengthOf(harness.offeredMessages, 4);
+          assert.isAtLeast(catalogReads, 5);
 
           for (const [ordinal, selection] of [
             [5, CLAUDE_TEST_RESTART_MODEL_SELECTION],
