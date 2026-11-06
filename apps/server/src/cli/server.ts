@@ -58,7 +58,11 @@ const runServerCommand = Effect.fn("server.runServerCommand")(function* (
   const originalCwd = (yield* prepareWorkingDirectory()) ?? options?.originalCwd;
   const logLevel = yield* GlobalFlag.LogLevel;
   const selectAutomaticPort = yield* AutomaticPort.make.pipe(Effect.provide(ProcessRunner.layer));
-  const config = yield* resolveServerConfig(flags, logLevel, { ...options, originalCwd, selectAutomaticPort });
+  const config = yield* resolveServerConfig(flags, logLevel, {
+    ...options,
+    originalCwd,
+    selectAutomaticPort,
+  });
   const environment = yield* HostProcess.Environment;
   // Before any layer starts, so nothing in this process can reach another machine first.
   yield* applyDevSshPolicy(config, environment);

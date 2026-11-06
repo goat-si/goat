@@ -1,3 +1,4 @@
+import { isPreviewRefreshShortcut } from "./previewRefresh.ts";
 import { admitAgentPointer, pointerEvent, type AgentPointer } from "./CursorStateOrdering.ts";
 import * as NodeZlib from "node:zlib";
 import {
@@ -437,13 +438,6 @@ export const previewWindowOpenAction = (details: {
     ? "new-tab"
     : "popup";
 };
-
-const isPreviewRefreshShortcut = (input: Electron.Input, platform: NodeJS.Platform): boolean =>
-  input.type === "keyDown" &&
-  input.key.toLowerCase() === "r" &&
-  (platform === "darwin" ? input.meta && !input.control : input.control && !input.meta) &&
-  !input.shift &&
-  !input.alt;
 
 export const isPreviewEditingShortcut = (
   input: Electron.Input,

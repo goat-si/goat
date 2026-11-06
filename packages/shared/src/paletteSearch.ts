@@ -539,9 +539,7 @@ function findMessageToken(
 ): { readonly at: ReadonlyArray<number>; readonly quality: number } | null {
   let quality = 0;
   let at: number[] = [];
-  // The letters-and-digits run around the hit, kept for later hits in the
-  // same run: rescanning it per hit is quadratic in a long run ("0000" in a
-  // hex dump).
+  // Cache the enclosing run to avoid quadratic rescans of long hex dumps.
   let run = { start: 0, end: -1, hex: false };
   for (let index = folded.indexOf(token); index !== -1; index = folded.indexOf(token, index + 1)) {
     if (index + token.length > run.end) {
@@ -599,8 +597,7 @@ export function messageMatcher(query: string): (text: string) => MessageMatch | 
     grades: long.includes(token),
   }));
   const phrase = messagePhrase(query);
-  // Accents typed or left out still read as written together: "cafe open"
-  // in "Café open".
+  // Accents typed or left out still read as written together.
   const foldedPhrase = messagePhrase(
     words.map((word) => foldInPlace(word).replace(COMBINING_MARKS, "")).join(" "),
   );
@@ -616,12 +613,8 @@ export function messageMatcher(query: string): (text: string) => MessageMatch | 
       let found = findMessageToken(text, plain, token, tokens.length === 1);
       // Accents typed or left out: "cafe" finds "Café", also after "cafeteria".
       if (found?.quality !== 1 && foldedToken.length > 0 && (nonAscii || NON_ASCII.test(text))) {
-        found = findMessageToken(
-          text,
-          (folded ??= foldInPlace(text)),
-          foldedToken,
-          tokens.length === 1,
-        );
+        folded ??= foldInPlace(text);
+        found = findMessageToken(text, folded, foldedToken, tokens.length === 1);
       }
       if (found === null) return null;
       if (found.quality === MID_WORD && mustStartWord) return null;
