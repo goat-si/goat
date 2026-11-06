@@ -33,7 +33,22 @@ const Result = Schema.Struct({
 const decodeContracts = Schema.decodeUnknownOption(Schema.fromJsonString(Contracts));
 const decodePlan = Schema.decodeUnknownOption(Schema.fromJsonString(Plan));
 const decodeResult = Schema.decodeUnknownOption(Schema.fromJsonString(Result));
+/** Only the Home outcome; fan-out and Children are ignored, including a Child's optional hint. */
+const SyncDocument = Schema.Struct({
+  schema: Schema.Literal("ocx.sync.fanout/1"),
+  home: Schema.Struct({
+    state: Schema.Literals(["synced", "stale", "skipped", "failed"]),
+    exit: Schema.Number,
+  }),
+});
+const decodeSyncDocument = Schema.decodeUnknownOption(Schema.fromJsonString(SyncDocument));
 const TOKEN = /^[A-Za-z0-9_-]{16,128}$/u;
+
+/** The Home's own result from `ocx sync --json`, which prints its document as the last line. */
+export const syncHomeOf = (stdout: string) => {
+  const last = stdout.trimEnd().split(/\r?\n/u).at(-1) ?? "";
+  return Option.getOrUndefined(decodeSyncDocument(last))?.home;
+};
 
 export const probeContracts = (
   output:

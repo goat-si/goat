@@ -13,7 +13,7 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 import type { McpInvocationScope } from "../mcp/McpInvocationContext.ts";
 import { HubOcx, type HubOcxError, type OcxOutput, SYNC_EXIT } from "./HubOcx.ts";
 import { OpenCodexUpdateHost } from "./OpenCodexUpdateHost.ts";
-import { CONTRACTS_ARGS, OCX_CONTRACT, probeContracts } from "./ocxContracts.ts";
+import { CONTRACTS_ARGS, OCX_CONTRACT, probeContracts, syncHomeOf } from "./ocxContracts.ts";
 import {
   childAliases,
   childNeedsReading,
@@ -66,6 +66,14 @@ export class OpenCodexSync extends Context.Service<
   }
 >()("goat/hub/OpenCodexSync") {}
 
+const synced = (alias: string | null, restartCodex: boolean, stale: boolean) =>
+  ({
+    alias,
+    restartCodex,
+    state: "synced",
+    ...(stale ? { reason: "stale" } : restartCodex ? {} : { reason: "busy" }),
+  }) satisfies OpenCodexSyncMember;
+
 const finished = (
   alias: string | null,
   restartCodex: boolean,
@@ -73,12 +81,7 @@ const finished = (
   device: boolean,
 ): OpenCodexSyncMember => {
   const base = { alias, restartCodex };
-  if (output.code === 0)
-    return {
-      ...base,
-      state: "synced",
-      ...(STALE.test(output.stdout) ? { reason: "stale" } : restartCodex ? {} : { reason: "busy" }),
-    };
+  if (output.code === 0) return synced(alias, restartCodex, STALE.test(output.stdout));
   if (device && output.code === SYNC_EXIT.notConnected)
     return { alias, state: "skipped", restartCodex: false, reason: "not-connected" };
   if (device && output.code === SYNC_EXIT.connectionChanged)
@@ -88,6 +91,19 @@ const finished = (
     state: "failed",
     reason: output.code === 124 ? "timed-out" : `exit-${output.code}`,
   };
+};
+
+/**
+ * With a sync document, the Home is judged on its own result: ocx exits partial (6) for a Child
+ * outcome even after the Home synced. An ocx that prints none is judged by its exit code.
+ */
+const homeFinished = (restartCodex: boolean, output: OcxOutput): OpenCodexSyncMember => {
+  const home = syncHomeOf(output.stdout);
+  if (home === undefined) return finished(null, restartCodex, output, false);
+  if (home.exit !== 0) return finished(null, restartCodex, { ...output, code: home.exit }, false);
+  if (home.state === "synced" || home.state === "stale")
+    return synced(null, restartCodex, home.state === "stale");
+  return { alias: null, restartCodex, state: "failed", reason: `home-${home.state}` };
 };
 
 const unreachable = (
@@ -202,12 +218,15 @@ const make = Effect.gen(function* () {
           restartCodex: false,
           reason: "unreachable",
         } as const;
+      // GOAT syncs each Child itself, under the caller's permits, link reconnects and admission,
+      // so the Home never fans out too; its document then reports the Home alone.
+      const fanout = contracts.contracts.has(OCX_CONTRACT.syncHomeFanout);
       return yield* ocx
         .home(
           [
             "sync",
             ...(restartCodex ? ["--restart-codex"] : []),
-            ...(contracts.contracts.has(OCX_CONTRACT.syncHomeFanout) ? ["--local-only"] : []),
+            ...(fanout ? ["--local-only", "--json"] : []),
           ],
           SYNC_TIMEOUT_MS,
         )
@@ -215,7 +234,7 @@ const make = Effect.gen(function* () {
           Effect.map((output) =>
             output.code === 7 && contracts.contracts.has(OCX_CONTRACT.updateOrchestrated)
               ? { alias: null, state: "skipped" as const, restartCodex: false, reason: "updating" }
-              : finished(null, restartCodex, output, false),
+              : homeFinished(restartCodex, output),
           ),
           Effect.catch((error) => Effect.succeed(unreachable(null, restartCodex, error))),
         );

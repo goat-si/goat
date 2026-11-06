@@ -47,6 +47,7 @@ const makeFleet = () => ({
   onSync: undefined as ((alias: string) => Effect.Effect<void>) | undefined,
   onHomeSync: undefined as Effect.Effect<void> | undefined,
   homeExit: 0,
+  homeStdout: "",
   contracts: { code: 64, stdout: "" } as OcxOutput,
   childContracts: new Map<string, OcxOutput>(),
   deviceOutput: new Map<string, OcxOutput | "unreachable">(),
@@ -122,7 +123,7 @@ const layer = (fleet: Fleet, seen: { latest?: Effect.Effect<unknown> }) =>
                     fleet.linkState.set(alias, fleet.reconnectTo.get(alias) ?? "connected");
                   return { code: 0, stdout: "{}" };
                 }
-                return { code: fleet.homeExit, stdout: "" };
+                return { code: fleet.homeExit, stdout: fleet.homeStdout };
               }),
             ),
           ),
@@ -393,10 +394,55 @@ it.effect("keeps Home sync local only when ocx advertises fanout", () =>
     fleet.contracts = { code: 0, stdout: JSON.stringify({ contracts: ["sync.home-fanout/1"] }) };
     const { sync } = yield* setup(fleet);
     yield* sync.run(scope);
-    expect(fleet.calls[0]).toBe("home sync --restart-codex --local-only");
+    expect(fleet.calls[0]).toBe("home sync --restart-codex --local-only --json");
     yield* sync.beginUpdate("2.91.0");
     yield* sync.syncUpdatedMember(null, scope);
-    expect(fleet.calls.at(-1)).toBe("home sync --restart-codex --local-only");
+    expect(fleet.calls.at(-1)).toBe("home sync --restart-codex --local-only --json");
+  }),
+);
+
+it.effect("judges the Home from ocx's sync document, apart from any Child outcome", () =>
+  Effect.gen(function* () {
+    const fleet = makeFleet();
+    fleet.contracts = { code: 0, stdout: JSON.stringify({ contracts: ["sync.home-fanout/1"] }) };
+    const document = (home: { state: string; exit: number }, children: unknown[] = []) =>
+      `Models synced.\n${JSON.stringify({
+        schema: "ocx.sync.fanout/1",
+        home,
+        fanout: { state: children.length === 0 ? "disabled" : "ran", reason: null },
+        children,
+      })}\n`;
+    const { sync } = yield* setup(fleet);
+    const home = function* () {
+      return rows(yield* sync.run(scope))[0];
+    };
+
+    // A skipped Child makes ocx exit partial; the Home's own catalog still synced.
+    fleet.homeExit = 6;
+    fleet.homeStdout = document({ state: "synced", exit: 0 }, [
+      {
+        linkId: "link-1",
+        alias: "old-child",
+        state: "skipped",
+        reason: "child-ocx-lacks-expect-link",
+        exit: 121,
+        hint: "Update OpenCodex Desktop to >= 2.93.0 on this Child.",
+      },
+    ]);
+    expect(yield* home()).toEqual([null, "synced", undefined]);
+
+    fleet.homeExit = 0;
+    fleet.homeStdout = document({ state: "stale", exit: 0 });
+    expect(yield* home()).toEqual([null, "synced", "stale"]);
+
+    fleet.homeExit = 1;
+    fleet.homeStdout = document({ state: "failed", exit: 1 });
+    expect(yield* home()).toEqual([null, "failed", "exit-1"]);
+
+    // Without a document, the exit code is all there is to judge.
+    fleet.homeExit = 6;
+    fleet.homeStdout = "Models synced.\n";
+    expect(yield* home()).toEqual([null, "failed", "exit-6"]);
   }),
 );
 
