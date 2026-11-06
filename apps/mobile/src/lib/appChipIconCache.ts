@@ -44,16 +44,21 @@ async function download(cacheKey: string, url: string): Promise<string | null> {
   await sweepPartialDownloads(icon);
   tempSequence += 1;
   const temp = new File(directory, `${name}.${tempSequence}.tmp`);
+  // A moved File points at its destination, so only an unmoved temp file is ours to delete.
+  let moved = false;
   try {
     directory.create({ intermediates: true, idempotent: true });
     await File.downloadFileAsync(url, temp, { idempotent: true });
-    if (!file.exists) temp.moveSync(file);
+    if (!file.exists) {
+      temp.moveSync(file);
+      moved = true;
+    }
     return file.uri;
   } catch {
     return file.exists ? file.uri : null;
   } finally {
     try {
-      if (temp.exists) temp.delete();
+      if (!moved && temp.exists) temp.delete();
     } catch {}
   }
 }

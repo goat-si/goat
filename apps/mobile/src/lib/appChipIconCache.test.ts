@@ -34,7 +34,7 @@ vi.mock("expo-file-system", () => {
       mocks.files.add(destination.uri);
       return destination;
     };
-    readonly uri: string;
+    uri: string;
     constructor(source: string | Directory, name?: string) {
       this.uri = typeof source === "string" ? source : `${source.uri}/${name}`;
     }
@@ -47,10 +47,12 @@ vi.mock("expo-file-system", () => {
     delete(): void {
       mocks.files.delete(this.uri);
     }
+    // Like expo-file-system on iOS, a moved File points at its destination afterwards.
     moveSync(destination: File): void {
       if (mocks.files.has(destination.uri)) throw new Error("DestinationAlreadyExists");
       mocks.files.delete(this.uri);
       mocks.files.add(destination.uri);
+      this.uri = destination.uri;
     }
   }
   return { Directory, File, Paths: { cache: new Directory("file:///cache") } };
@@ -102,6 +104,7 @@ describe("app chip icon cache", () => {
     const first = await cache.cachedAppChipIcon(finder, signed(1));
     const second = await cache.cachedAppChipIcon(finder, signed(2));
     expect(first).not.toBeNull();
+    expect(mocks.files.has(first ?? "")).toBe(true);
     expect(second).toBe(first);
     expect(mocks.fetches).toHaveLength(1);
   });
