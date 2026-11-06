@@ -149,3 +149,29 @@ export function goatBotIngestInput(input: {
     ...(input.taskId === undefined ? {} : { taskId: input.taskId }),
   };
 }
+
+/** A bot's editable profile fields, as a person sees them in a form. */
+export interface BotProfileValues {
+  readonly name: string;
+  readonly avatar: string | null;
+  readonly purpose: string;
+}
+
+/** What to send for a bot's profile: every field when creating, else only what changed, trimmed as stored. */
+export function botProfileChanges(
+  mode: "edit" | "create",
+  initial: BotProfileValues,
+  draft: { readonly name: string; readonly avatar: string; readonly purpose: string },
+): Partial<BotProfileValues> {
+  const next = {
+    name: draft.name.trim(),
+    avatar: draft.avatar.trim() === "" ? null : draft.avatar.trim(),
+    purpose: draft.purpose.trim(),
+  };
+  if (mode === "create") return next;
+  return {
+    ...(next.name === initial.name ? {} : { name: next.name }),
+    ...(next.avatar === initial.avatar ? {} : { avatar: next.avatar }),
+    ...(next.purpose === initial.purpose ? {} : { purpose: next.purpose }),
+  };
+}

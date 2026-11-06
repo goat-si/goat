@@ -1,3 +1,4 @@
+import { botProfileChanges, type BotProfileValues } from "@goat/client-runtime/state/channels";
 import { useState, type FormEvent } from "react";
 
 import { Button } from "../ui/button";
@@ -13,40 +14,16 @@ import {
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
 
-export interface GoatBotProfileValues {
-  readonly name: string;
-  readonly avatar: string | null;
-  readonly purpose: string;
-}
-export type GoatBotProfileChanges = Partial<GoatBotProfileValues>;
+export type GoatBotProfileChanges = Partial<BotProfileValues>;
 
 const NAME_MAX = 64;
 const AVATAR_MAX = 16;
 const PURPOSE_MAX = 4000;
 
-/** What to send: every field when creating, otherwise only the fields that changed, as stored. */
-export function profileChanges(
-  mode: "edit" | "create",
-  initial: GoatBotProfileValues,
-  draft: { readonly name: string; readonly avatar: string; readonly purpose: string },
-): GoatBotProfileChanges {
-  const next = {
-    name: draft.name.trim(),
-    avatar: draft.avatar.trim() === "" ? null : draft.avatar.trim(),
-    purpose: draft.purpose.trim(),
-  };
-  if (mode === "create") return next;
-  return {
-    ...(next.name === initial.name ? {} : { name: next.name }),
-    ...(next.avatar === initial.avatar ? {} : { avatar: next.avatar }),
-    ...(next.purpose === initial.purpose ? {} : { purpose: next.purpose }),
-  };
-}
-
 /** Name, avatar and purpose of a GOAT Bot; `onSubmit` resolves to an error to show, or null. */
 export function GoatBotProfileDialog(props: {
   readonly mode: "edit" | "create";
-  readonly initial: GoatBotProfileValues;
+  readonly initial: BotProfileValues;
   readonly canSubmit: boolean;
   readonly onSubmit: (changes: GoatBotProfileChanges) => Promise<string | null>;
   readonly onClose: () => void;
@@ -61,7 +38,7 @@ export function GoatBotProfileDialog(props: {
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (busy || blankName || !props.canSubmit) return;
-    const changes = profileChanges(props.mode, props.initial, { name, avatar, purpose });
+    const changes = botProfileChanges(props.mode, props.initial, { name, avatar, purpose });
     if (Object.keys(changes).length === 0) return props.onClose();
     setBusy(true);
     setError(null);
