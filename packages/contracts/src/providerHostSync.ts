@@ -35,6 +35,7 @@ export const ProviderHostSyncDriver = Schema.Literals([
   "grok",
   "opencode",
   "pi",
+  "omo",
 ]);
 export type ProviderHostSyncDriver = typeof ProviderHostSyncDriver.Type;
 

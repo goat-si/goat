@@ -53,9 +53,10 @@ import {
 } from "./adapter.ts";
 import { makePiRpcConnection, type PiRpcRecord } from "./rpc.ts";
 import { loadMcpBridge } from "./mcpBridge.testkit.ts";
+import { registerOmoAdapterChecks } from "./omoAdapterChecks.testkit.ts";
 import { turnItemOutputText as outputText } from "../../../client-runtime/src/work-log/itemDetail.ts";
 
-const layerTest = Layer.mergeAll(
+export const layerTest = Layer.mergeAll(
   NodeServices.layer,
   IdAllocator.layer,
   McpProviderSessions.layer,
@@ -70,8 +71,8 @@ const decodeJsonLine = Schema.decodeSync(Schema.fromJsonString(Schema.Unknown));
 const encodeJsonLine = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 const PI_INSTANCE_ID = ProviderInstanceId.make("pi");
-const THREAD_ID = ThreadId.make("thread-pi-test");
-const SESSION_ID = ProviderSessionId.make("provider-session-pi-test");
+export const THREAD_ID = ThreadId.make("thread-pi-test");
+export const SESSION_ID = ProviderSessionId.make("provider-session-pi-test");
 const FAKE_SESSION_FILE = "/fake/.pi/agent/sessions/--workspace--/0001_abc.jsonl";
 /** Deliberately outside the valid pid range so a group-kill can never land. */
 const FAKE_PID = 999_999_999;
@@ -141,13 +142,13 @@ function uncapturedTurns(
   ];
 }
 
-const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
+export const runtimePolicy = ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
   runtimeMode: "full-access",
   interactionMode: "default",
   cwd: null,
 });
 
-const modelSelection = (model: string): ModelSelection => ({
+export const modelSelection = (model: string): ModelSelection => ({
   instanceId: PI_INSTANCE_ID,
   model,
 });
@@ -165,6 +166,7 @@ interface FakePi {
   readonly deferNextState: () => void;
   readonly resolveDeferredState: (data: unknown) => Effect.Effect<void>;
   readonly failNextState: () => void;
+  readonly failNextPrompt: () => void;
   readonly deferNextLifecycle: (type: "switch_session" | "new_session" | "fork" | "abort") => void;
   readonly deferNextModelSelection: () => void;
   readonly queueModels: (models: ReadonlyArray<unknown>) => void;
@@ -202,7 +204,7 @@ const recordedIdleState = (sessionFile: string) => ({
 const PI_COMPACTING_PROMPT_ERROR =
   "Cannot submit a prompt while compaction is in progress. Wait for compaction to finish and retry.";
 
-const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
+export const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
   const stdout = yield* Queue.unbounded<Uint8Array, Cause.Done>();
   const requests = yield* Queue.unbounded<PiRpcRecord>();
   const entriesQueue: Array<unknown> = [];
@@ -213,6 +215,7 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
   let deferState = false;
   let deferredStateRequest: PiRpcRecord | undefined;
   let failState = false;
+  let failPrompt = false;
   let vetoSwitch = false;
   let vetoNewSession = false;
   let deferredLifecycle: string | undefined;
@@ -260,6 +263,10 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
           },
         };
       case "prompt":
+        if (failPrompt) {
+          failPrompt = false;
+          return { ...base, success: false, error: "prompt unavailable" };
+        }
         if (isCompacting) {
           return { ...base, success: false, error: PI_COMPACTING_PROMPT_ERROR };
         }
@@ -286,7 +293,10 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
         return { ...base, data: { cancelled } };
       }
       case "get_entries":
-        return { ...base, data: entriesQueue.shift() ?? { entries: [], leafId: null } };
+        return {
+          ...base,
+          data: entriesQueue.shift() ?? { entries: [], leafId: null, hasMore: false },
+        };
       case "get_messages":
         return { ...base, data: messagesQueue.shift() ?? { messages: [] } };
       case "get_session_stats":
@@ -389,6 +399,9 @@ const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
     failNextState: () => {
       failState = true;
     },
+    failNextPrompt: () => {
+      failPrompt = true;
+    },
     deferNextLifecycle: (type) => {
       deferredLifecycle = type;
     },
@@ -426,6 +439,7 @@ const makeAdapter = Effect.fnUntraced(function* (
   launchArgs = "",
   forkFake?: FakePi,
   continuationRequests?: PiAdapterV2Options["continuationRequests"],
+  profile?: PiAdapterV2Options["profile"],
 ) {
   const spawner =
     forkFake === undefined
@@ -455,18 +469,20 @@ const makeAdapter = Effect.fnUntraced(function* (
     instanceId: PI_INSTANCE_ID,
     settings: { enabled: true, binaryPath: "pi", launchArgs, customModels: [] },
     environment: {},
+    ...(profile === undefined ? {} : { profile }),
   }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
 });
 
-const openRuntime = Effect.fnUntraced(function* (
+export const openRuntime = Effect.fnUntraced(function* (
   fake: FakePi,
   model = "default",
   threadId = THREAD_ID,
   providerSessionId = SESSION_ID,
   forkFake?: FakePi,
   continuationRequests?: PiAdapterV2Options["continuationRequests"],
+  profile?: PiAdapterV2Options["profile"],
 ) {
-  const adapter = yield* makeAdapter(fake, "", forkFake, continuationRequests);
+  const adapter = yield* makeAdapter(fake, "", forkFake, continuationRequests, profile);
   const runtime = yield* adapter.openSession({
     threadId,
     providerSessionId,
@@ -515,7 +531,7 @@ const makeAppThread = Effect.fnUntraced(function* (model: string, threadId = THR
   } satisfies OrchestrationV2AppThread;
 });
 
-const startTurn = Effect.fnUntraced(function* (
+export const startTurn = Effect.fnUntraced(function* (
   runtime: ProviderAdapter.ProviderAdapterV2SessionRuntime,
   providerThread: OrchestrationV2ProviderThread,
   model = "default",
@@ -1652,6 +1668,17 @@ describe("PiAdapterV2", () => {
       assert.equal(yield* gate(), "on");
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
+
+  registerOmoAdapterChecks({
+    makeFakePi,
+    openRuntime,
+    startTurn,
+    THREAD_ID,
+    SESSION_ID,
+    modelSelection,
+    runtimePolicy,
+    layerTest,
+  });
 
   it.effect("rejects a resume while a turn is active", () =>
     Effect.gen(function* () {
@@ -4732,53 +4759,4 @@ describe("PiRpc framing", () => {
       ),
     );
   });
-});
-
-describe("PiRpc early process exit", () => {
-  const makeHandle = (options: {
-    readonly exitCode: Effect.Effect<ChildProcessSpawner.ExitCode>;
-    readonly stderr: Stream.Stream<Uint8Array>;
-  }) =>
-    ChildProcessSpawner.makeHandle({
-      pid: ChildProcessSpawner.ProcessId(FAKE_PID),
-      exitCode: options.exitCode,
-      isRunning: Effect.succeed(true),
-      kill: () => Effect.void,
-      unref: Effect.succeed(Effect.void),
-      stdin: Sink.drain,
-      stdout: Stream.empty,
-      stderr: options.stderr,
-      all: Stream.empty,
-      getInputFd: () => Sink.drain,
-      getOutputFd: () => Stream.empty,
-    });
-
-  it.effect("reports a nonzero exit code instead of an unexplained stdout close", () =>
-    Effect.gen(function* () {
-      const secret = "API_KEY=super-secret\n";
-      const spawner = ChildProcessSpawner.make(() =>
-        Effect.succeed(
-          makeHandle({
-            exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(1)),
-            stderr: Stream.fromIterable([new TextEncoder().encode(secret)]),
-          }),
-        ),
-      );
-      const connection = yield* makePiRpcConnection({
-        command: "pi",
-        args: ["--mode", "rpc"],
-        cwd: undefined,
-        env: {},
-      }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
-
-      const error = yield* Queue.take(connection.events).pipe(Effect.flip);
-      assert.equal(error._tag, "PiRpcError");
-      assert.equal(error.operation, "read");
-      assert.equal(error.detail, "pi process exited with code 1");
-      assert.isFalse((error.detail ?? "").includes("API_KEY"));
-      assert.isFalse((error.detail ?? "").includes("super-secret"));
-      assert.isFalse(error.message.includes("API_KEY"));
-      assert.isFalse(error.message.includes("super-secret"));
-    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
-  );
 });

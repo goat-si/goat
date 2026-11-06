@@ -14,7 +14,7 @@ import { FxDriver, type FxDriverEnv } from "@goat/provider-fx/server";
 import { GrokDriver, type GrokDriverEnv } from "@goat/provider-grok/server";
 import { OpenCodeDriver, type OpenCodeDriverEnv } from "@goat/provider-opencode/server";
 import { MuseDriver, type MuseDriverEnv } from "@goat/provider-muse/server";
-import { PiDriver, type PiDriverEnv } from "@goat/provider-pi/server";
+import { OmoDriver, PiDriver, type PiDriverEnv } from "@goat/provider-pi/server";
 import type { AnyProviderDriver, ProviderUsageReaderEnv } from "@goat/provider-core/server/driver";
 import { withProviderHomeRoute, type ProviderHomeDriverEnv } from "./ProviderHomeDriver.ts";
 
@@ -45,6 +45,7 @@ export const BUILT_IN_DRIVERS: ReadonlyArray<AnyProviderDriver<BuiltInDriversEnv
   withProviderHomeRoute("opencode", OpenCodeDriver),
   AntigravityDriver,
   withProviderHomeRoute("pi", PiDriver),
+  OmoDriver,
   MuseDriver,
   AcpRegistryDriver,
   DevinCloudDriver,
@@ -58,6 +59,7 @@ export type BuiltInUsageReadersEnv =
   | ProviderUsageReaderEnv<typeof AntigravityDriver>
   | ProviderUsageReaderEnv<typeof CursorDriver>
   | ProviderUsageReaderEnv<typeof PiDriver>
+  | ProviderUsageReaderEnv<typeof OmoDriver>
   | ProviderUsageReaderEnv<typeof MuseDriver>;
 
 /** Order matters: aggregation keeps the first duplicate record. */
@@ -68,6 +70,7 @@ export const BUILT_IN_USAGE_DRIVERS: ReadonlyArray<
   CodexDriver,
   GrokDriver,
   PiDriver,
+  OmoDriver,
   OpenCodeDriver,
   MuseDriver,
   AntigravityDriver,

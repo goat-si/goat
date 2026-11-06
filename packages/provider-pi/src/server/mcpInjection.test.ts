@@ -10,6 +10,7 @@ import {
   GOAT_SCREEN_CODE_SKILL_GATE_ENV,
 } from "./mcpExtensionSource.ts";
 import { buildPiRpcLaunch, resolvePiLaunchArgs } from "./mcpInjection.ts";
+import { OMO_PROFILE } from "./profile.ts";
 import { legacyEnvName } from "@goat/contracts/legacyT3Names";
 
 const threadId = ThreadId.make("thread-pi-t3-mcp");
@@ -25,6 +26,24 @@ const mcpSession = {
 };
 
 describe("pi GOAT MCP injection", () => {
+  it("lets OmO's detached RPC host exit with every GOAT launch, and leaves Pi alone", () => {
+    const base = {
+      launchArgs: [],
+      mcpSession: undefined,
+      extensionPath: undefined,
+      shortLived: true,
+    };
+    const omo = buildPiRpcLaunch({
+      ...base,
+      environment: { SENPI_RPC_HOST_IDLE_EXIT_MS: "900000" },
+      profile: OMO_PROFILE,
+    });
+    assert.equal(omo.env.SENPI_RPC_HOST_IDLE_EXIT_MS, "1");
+    assert.equal(omo.env.SENPI_RPC_HOST_EMPTY_EXIT_MS, "1");
+    const pi = buildPiRpcLaunch({ ...base, environment: {} });
+    assert.isUndefined(pi.env.SENPI_RPC_HOST_IDLE_EXIT_MS);
+  });
+
   it.each([undefined, false, true])(
     "passes only attached browser availability to the extension, browser=%s",
     (browserToolsAvailable) => {

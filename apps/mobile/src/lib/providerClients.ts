@@ -9,6 +9,7 @@ import { grokClient } from "@goat/provider-grok/client";
 import { museClient } from "@goat/provider-muse/client";
 import { openCodeClient } from "@goat/provider-opencode/client";
 import { piClient } from "@goat/provider-pi/client";
+import { omoClient } from "@goat/provider-pi/omo/client";
 
 const providerClients = makeProviderClientRegistry([
   cursorClient,
@@ -19,6 +20,7 @@ const providerClients = makeProviderClientRegistry([
   museClient,
   openCodeClient,
   piClient,
+  omoClient,
   acpRegistryClient,
   devinCloudClient,
 ]);

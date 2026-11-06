@@ -1,7 +1,9 @@
+// @effect-diagnostics nodeBuiltinImport:off -- Usage discovery reads the configured provider home.
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as NodeFSP from "node:fs/promises";
 
 import { expandHomePath } from "@goat/provider-core/server/pathExpansion";
 import {
@@ -15,6 +17,13 @@ import {
 import * as HostProcess from "@goat/shared/HostProcess";
 import type { PiSettings } from "../settings.ts";
 import { PI_ARGUMENTS_WITH_VALUES, resolvePiLaunchArgs } from "./mcpInjection.ts";
+import {
+  OMO_PROFILE,
+  PI_PROFILE,
+  resolveOmoSessionsDir,
+  resolveOmoAgentDir,
+  type PiRuntimeProfile,
+} from "./profile.ts";
 
 const PiScanState = Schema.Struct({ sessionId: Schema.mutableKey(Schema.String) });
 const Usage = Schema.Struct({
@@ -50,8 +59,13 @@ const Entry = Schema.Union([
   }),
 ]);
 const decodeEntry = Schema.decodeUnknownOption(Entry);
+const decodeSettingsJson = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 
-function parseRecord(parsed: unknown, state: typeof PiScanState.Type): readonly UsageRecord[] {
+function parseRecord(
+  parsed: unknown,
+  state: typeof PiScanState.Type,
+  provider: "pi" | "omo",
+): readonly UsageRecord[] {
   const decoded = decodeEntry(parsed);
   if (Option.isNone(decoded)) return [];
   const entry = decoded.value;
@@ -87,7 +101,7 @@ function parseRecord(parsed: unknown, state: typeof PiScanState.Type): readonly 
   if (totalTokens(totals) === 0 && reportedCostUsd === null) return [];
   return [
     {
-      provider: "pi",
+      provider,
       timestampMs,
       model,
       ...(rateModel === undefined ? {} : { rateModel }),
@@ -96,12 +110,14 @@ function parseRecord(parsed: unknown, state: typeof PiScanState.Type): readonly 
       reportedCostUsd,
       speed: "standard",
       // Forks preserve IDs/timestamps; short random IDs need timestamp/model to avoid cross-session collisions.
-      dedupeKey: JSON.stringify(["pi", entry.id, entry.timestamp, model]),
+      dedupeKey: JSON.stringify([provider, entry.id, entry.timestamp, model]),
     },
   ];
 }
 
-export const piUsageFormat: TranscriptUsageFormat<typeof PiScanState.Type> = {
+const makeUsageFormat = (
+  provider: "pi" | "omo",
+): TranscriptUsageFormat<typeof PiScanState.Type> => ({
   selectFields: {
     type: true,
     id: true,
@@ -119,16 +135,21 @@ export const piUsageFormat: TranscriptUsageFormat<typeof PiScanState.Type> = {
     } catch {
       return [];
     }
-    return parseRecord(parsed, state);
+    return parseRecord(parsed, state, provider);
   },
-  parseProjected: parseRecord,
+  parseProjected: (parsed, state) => parseRecord(parsed, state, provider),
   state: { initial: () => ({ sessionId: "" }), schema: PiScanState },
-};
+});
 
-export const piUsageReader: ProviderUsageReader<PiSettings, Path.Path> = {
+export const piUsageFormat = makeUsageFormat("pi");
+export const omoUsageFormat = makeUsageFormat("omo");
+
+const makeUsageReader = (
+  profile: PiRuntimeProfile,
+): ProviderUsageReader<PiSettings, Path.Path> => ({
   kind: "transcripts",
-  provider: "pi",
-  format: piUsageFormat,
+  provider: profile.driver,
+  format: profile.driver === "pi" ? piUsageFormat : omoUsageFormat,
   directories: Effect.fn("piUsageReader.directories")(function* ({ config, environment }) {
     const path = yield* Path.Path;
     const home = yield* HostProcess.HomeDirectory;
@@ -137,15 +158,44 @@ export const piUsageReader: ProviderUsageReader<PiSettings, Path.Path> = {
     const sessionDirArg = config === undefined ? undefined : piLaunchSessionDir(config.launchArgs);
     const launchDir =
       sessionDirArg === undefined ? undefined : expandHomePath(sessionDirArg, launchHome);
+    const settingsSessionDir =
+      profile.driver === "omo" && !environment.OMO_CODING_AGENT_SESSION_DIR
+        ? yield* Effect.promise(async () => {
+            try {
+              const value = decodeSettingsJson(
+                await NodeFSP.readFile(
+                  path.join(resolveOmoAgentDir(environment, launchHome, path), "settings.json"),
+                  "utf8",
+                ),
+              );
+              return typeof value === "object" &&
+                value !== null &&
+                "sessionDir" in value &&
+                typeof value.sessionDir === "string"
+                ? value.sessionDir
+                : undefined;
+            } catch {
+              return undefined;
+            }
+          })
+        : undefined;
     // --session-dir moves only GOAT-launched sessions; terminal sessions stay in Pi's own directory.
     return [
       ...(launchDir !== undefined && path.isAbsolute(launchDir)
         ? [{ dir: path.resolve(launchDir) }]
         : []),
-      { dir: resolvePiSessionsDir(environment, home, path) },
+      {
+        dir:
+          profile.driver === "pi"
+            ? resolvePiSessionsDir(environment, home, path)
+            : resolveOmoSessionsDir(environment, launchHome, path, settingsSessionDir),
+      },
     ];
   }),
-};
+});
+
+export const piUsageReader = makeUsageReader(PI_PROFILE);
+export const omoUsageReader = makeUsageReader(OMO_PROFILE);
 
 function piLaunchSessionDir(launchArgs: string): string | undefined {
   const resolved = resolvePiLaunchArgs(launchArgs);

@@ -368,6 +368,28 @@ describe("AddProviderInstanceDialog environment routing", () => {
     expect(signInStep()).not.toBeNull();
   });
 
+  it("creates Oh My Pi with its approval arguments on the selected environment", async () => {
+    await using fixture = setup();
+    await fixture.render();
+    await click("Use Oh My Pi");
+    await click("Next");
+    await click("Add and set up");
+    expect(settingsHooks.mutate).toHaveBeenCalledWith({
+      operation: "create",
+      instanceId: "acpRegistry_oh_my_pi",
+      instance: {
+        driver: "acpRegistry",
+        enabled: true,
+        displayName: "Oh My Pi",
+        config: {
+          source: "local",
+          commandPath: "omp",
+          commandArgs: ["acp", "--approval-mode", "always-ask"],
+        },
+      },
+    });
+  });
+
   it("creates a local command in the selected environment, then sets it up", async () => {
     await using fixture = setup();
     const { render } = fixture;

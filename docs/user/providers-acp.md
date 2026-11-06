@@ -41,6 +41,14 @@ credentials and skills remain managed by the installed agent or its wrapper. Mod
 options come from ACP, including model IDs that contain JSON. GOAT launches the executable directly
 without expanding shell expressions.
 
+## Oh My Pi
+
+[Oh My Pi](https://github.com/can1357/oh-my-pi) is a coding agent available as a local ACP
+command. Install and configure it on the GOAT server, then choose **Oh My Pi** in **Settings →
+Providers → Add provider**. The preset requests approval for commands and writes through GOAT;
+read-only tools can run without a prompt. Like other ACP agents, Oh My Pi does not honor GOAT's
+native subagent limit.
+
 ## Where agents run
 
 Registry agents always run on the machine that hosts your GOAT server. That stays true when you

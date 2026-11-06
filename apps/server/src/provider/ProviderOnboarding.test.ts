@@ -401,3 +401,21 @@ it("derives the provider's own command when sign-in cannot run in the app", () =
     signIn: { kind: "command", inApp: false, command: "opencode auth login" },
   });
 });
+
+it("advertises the complete Oh My Pi local preset to agents", () => {
+  const [driver] = Onboarding.buildAddableDrivers(
+    [{ driverKind: "acpRegistry", displayName: "ACP Registry" }],
+    [],
+  );
+  expect(driver?.presets).toEqual([
+    {
+      id: "omp",
+      label: "Oh My Pi",
+      command: "omp",
+      args: ["acp", "--approval-mode", "always-ask"],
+      iconUrl: expect.stringMatching(/^data:image\/svg\+xml,/),
+      installHint: "curl -fsSL https://omp.sh/install | sh",
+      docsUrl: "https://github.com/can1357/oh-my-pi",
+    },
+  ]);
+});

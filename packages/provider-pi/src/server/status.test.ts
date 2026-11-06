@@ -20,6 +20,7 @@ import * as TestClock from "effect/testing/TestClock";
 
 import { vi } from "vite-plus/test";
 import { checkPiProviderStatus, MINIMUM_PI_VERSION } from "./status.ts";
+import { OMO_PROFILE } from "./profile.ts";
 
 const encoder = new TextEncoder();
 const decodeRpcRequest = Schema.decodeSync(
@@ -72,6 +73,7 @@ const piDiscoverySpawner = (
     readonly version?: string;
     readonly state?: unknown;
     readonly authCheck?: string | undefined;
+    readonly versionOutput?: string;
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -107,7 +109,9 @@ const piDiscoverySpawner = (
     return lazyChildProcessSpawner((command) => {
       const args = ChildProcess.isStandardCommand(command) ? command.args : [];
       if (args.includes("--version")) {
-        return Effect.succeed(processHandle({ stdout: `pi ${options.version ?? "0.84.3"}\n` }));
+        return Effect.succeed(
+          processHandle({ stdout: options.versionOutput ?? `pi ${options.version ?? "0.84.3"}\n` }),
+        );
       }
       if (args[0] === "auth") {
         const expected = ["auth", "check", "--provider", "openai", "--json", "--no-refresh"];
@@ -135,6 +139,26 @@ const settings = {
 } as const;
 
 describe("PiProvider", () => {
+  it.effect("probes OmO's version and checks its active model credentials", () =>
+    Effect.gen(function* () {
+      const spawner = yield* piDiscoverySpawner(
+        { models: [{ provider: "anthropic", id: "sonnet" }] },
+        {
+          versionOutput: "omo 5.1.40 (engine: senpi 2026.10.19-2)\n",
+          state: { model: { provider: "openai", id: "gpt-5" } },
+          authCheck: '{"reason":"credentials_not_configured"}',
+        },
+      );
+      const snapshot = yield* checkPiProviderStatus(
+        { ...settings, binaryPath: "omo" },
+        {},
+        undefined,
+        OMO_PROFILE,
+      ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner));
+      assert.equal(snapshot.version, "5.1.40");
+      assert.include(snapshot.message ?? "", "OmO default (openai/gpt-5) has no credentials");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
   it.effect("reports a deleted process cwd as a working directory failure", () =>
     Effect.gen(function* () {
       using _cwd = vi.spyOn(process, "cwd").mockImplementation(() => {

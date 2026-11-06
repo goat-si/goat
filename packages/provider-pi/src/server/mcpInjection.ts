@@ -1,3 +1,4 @@
+import { PI_PROFILE, type PiRuntimeProfile } from "./profile.ts";
 import { tokenizeCliArgs } from "@goat/shared/cliArgs";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -20,6 +21,7 @@ import {
   GOAT_MCP_BEARER_ENV,
   GOAT_MCP_URL_ENV,
   GOAT_PI_RUNTIME_MODE_ENV,
+  GOAT_PI_PROFILE_ENV,
   GOAT_PI_MCP_EXTENSION_PATH_ENV,
 } from "./mcpExtensionSource.ts";
 
@@ -111,7 +113,10 @@ function normalizePiBuiltInEqualsArguments(args: ReadonlyArray<string>): Readonl
   });
 }
 
-export function resolvePiLaunchArgs(launchArgs: string): PiLaunchArgsResolution {
+export function resolvePiLaunchArgs(
+  launchArgs: string,
+  profile: PiRuntimeProfile = PI_PROFILE,
+): PiLaunchArgsResolution {
   // Pi treats equals-form tokens as extension flags; split only known built-ins.
   const args = normalizePiBuiltInEqualsArguments(tokenizeCliArgs(launchArgs));
   let hasProvider = false;
@@ -123,19 +128,22 @@ export function resolvePiLaunchArgs(launchArgs: string): PiLaunchArgsResolution 
     if (reserved !== undefined) {
       return {
         ok: false,
-        message: `Pi launch argument '${reserved}' is controlled by GOAT and cannot be overridden.`,
+        message: `${profile.displayName} launch argument '${reserved}' is controlled by GOAT and cannot be overridden.`,
       };
     }
     if (arg === "--") {
       return {
         ok: false,
-        message: "Pi launch arguments cannot include positional prompts.",
+        message: `${profile.displayName} launch arguments cannot include positional prompts.`,
       };
     }
     if (PI_ARGUMENTS_WITH_VALUES.has(arg)) {
       const value = args[index + 1];
       if (value === undefined) {
-        return { ok: false, message: `Pi launch argument '${arg}' requires a value.` };
+        return {
+          ok: false,
+          message: `${profile.displayName} launch argument '${arg}' requires a value.`,
+        };
       }
       if (arg === "--provider") hasProvider = true;
       if (arg === "--model") hasModel = true;
@@ -157,15 +165,21 @@ export function resolvePiLaunchArgs(launchArgs: string): PiLaunchArgsResolution 
       continue;
     }
     if (arg.startsWith("-")) {
-      return { ok: false, message: `Pi launch argument '${arg}' is not supported by GOAT.` };
+      return {
+        ok: false,
+        message: `${profile.displayName} launch argument '${arg}' is not supported by GOAT.`,
+      };
     }
     return {
       ok: false,
-      message: `Pi launch arguments cannot include positional prompt '${arg}'.`,
+      message: `${profile.displayName} launch arguments cannot include positional prompt '${arg}'.`,
     };
   }
   if (hasProvider && !hasModel) {
-    return { ok: false, message: "Pi launch argument '--provider' requires '--model'." };
+    return {
+      ok: false,
+      message: `${profile.displayName} launch argument '--provider' requires '--model'.`,
+    };
   }
   return { ok: true, args };
 }
@@ -263,6 +277,7 @@ export function buildPiRpcLaunch(input: {
   readonly cuaGatePath?: string | undefined;
   readonly screenSkillGatePath?: string | undefined;
   readonly subagentGatePath?: string | undefined;
+  readonly profile?: PiRuntimeProfile;
 }): {
   readonly args: ReadonlyArray<string>;
   readonly env: NodeJS.ProcessEnv;
@@ -313,6 +328,7 @@ export function buildPiRpcLaunch(input: {
   delete environment[GOAT_BROWSER_TOOLS_ENV];
   delete environment[GOAT_SCREEN_CODE_SKILL_GATE_ENV];
   delete environment[GOAT_SUBAGENT_GATE_ENV];
+  delete environment[GOAT_PI_PROFILE_ENV];
   // The driver reaches Pi only through GOAT's extension bridge, fixed at launch.
   const cuaDriver = hasGoatMcp ? input.mcpSession?.cuaDriver : undefined;
 
@@ -320,6 +336,8 @@ export function buildPiRpcLaunch(input: {
     args,
     env: {
       ...environment,
+      ...(input.profile ?? PI_PROFILE).launchEnvironment,
+      ...(hasGoatExtension ? { [GOAT_PI_PROFILE_ENV]: (input.profile ?? PI_PROFILE).driver } : {}),
       // An extension materialized by an older build reads the legacy names.
       ...withLegacyEnvNames({
         ...(hasGoatExtension && input.extensionPath !== undefined

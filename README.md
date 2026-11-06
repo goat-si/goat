@@ -55,7 +55,7 @@ GOAT began as a fork of [T3 Code](https://github.com/pingdotgg/t3code) and keeps
 
 ## Quick start
 
-1. **Set up a provider** on the machine that will do the work. Claude Code, Codex, Cursor, Grok Build, OpenCode, Antigravity, Pi, Muse Code, fx, ACP agents and the cloud providers are supported. The [provider table](./docs/user/install.md#providers) covers the command-line providers, [ACP providers](./docs/user/providers-acp.md) covers ACP agents, and cloud providers sign in from **Settings → Providers**.
+1. **Set up a provider** on the machine that will do the work. Claude Code, Codex, Cursor, Grok Build, OpenCode, Antigravity, Pi, OmO, Muse Code, fx, ACP agents (including Oh My Pi) and the cloud providers are supported. The [provider table](./docs/user/install.md#providers) covers the command-line providers, [ACP providers](./docs/user/providers-acp.md) covers ACP agents, and cloud providers sign in from **Settings → Providers**.
 2. **Install GOAT.** Download the desktop app for macOS, Windows or Linux from [goat-si/goat-releases](https://github.com/goat-si/goat-releases/releases), or install the `goat` command:
 
    ```bash

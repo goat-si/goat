@@ -12,6 +12,7 @@ export const SYNC_PROVIDERS = [
   { driver: "grok", displayName: "Grok" },
   { driver: "opencode", displayName: "OpenCode" },
   { driver: "pi", displayName: "Pi" },
+  { driver: "omo", displayName: "OmO" },
 ] as const satisfies ReadonlyArray<{ driver: ProviderHostSyncDriver; displayName: string }>;
 
 export function machineColumns(rows: ReadonlyArray<ProviderHostRow>) {
