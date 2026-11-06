@@ -14,6 +14,7 @@ import { assetEnvironment } from "../../state/assets";
 import { useEnvironmentPresentation } from "../../state/presentation";
 import { usePreparedConnection } from "../../state/session";
 import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
+import { playableMediaLabel } from "./live-editor/note-editor-links";
 
 export type NoteFileMint =
   | { readonly ok: true; readonly url: string; readonly expiresAt: number }
@@ -89,6 +90,7 @@ export function useNoteImageSource(
 ): MarkdownImageSourceResolver {
   const { mint } = useNoteFileMint(environmentId);
   return async (image) => {
+    if (playableMediaLabel(image.href, "") !== null) return null;
     if (DIRECT_IMAGE.test(image.href)) return { uri: image.href };
     const path = resolveNoteFilePath(notePath, image.href);
     if (path === null) return null;

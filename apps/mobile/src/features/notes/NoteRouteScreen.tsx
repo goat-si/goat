@@ -12,7 +12,9 @@ import { ScreenScrollView as ScrollView } from "../../components/ui/ScreenScroll
 import { AppText as Text, AppTextInput as TextInput } from "../../components/ui/AppText";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { SelectableMarkdownText } from "../../native/SelectableMarkdownText";
+import type { MarkdownImageRenderer } from "../../native/SelectableMarkdownText.types";
 import { useNoteImageSource, useOpenNoteLink } from "./useNoteFiles";
+import { playableMediaLabel } from "./live-editor/note-editor-links";
 import { useMarkdownPreviewStyles } from "../files/FileMarkdownPreview";
 import { Button } from "../../components/ui/Button";
 import { applyNoteCheckboxEvent, type NoteCheckboxEvent } from "./note-markdown";
@@ -691,12 +693,27 @@ function NoteMarkdown(props: {
 }) {
   const { nativeTextStyle } = useMarkdownPreviewStyles();
   const resolveImageSource = useNoteImageSource(props.environmentId, props.notePath);
+  const { onLink } = props;
+  const renderImage: MarkdownImageRenderer = (image) => {
+    const label = playableMediaLabel(image.href, image.alt ?? "");
+    if (label === null) return null;
+    return (
+      <Text
+        accessibilityRole="link"
+        onPress={() => onLink(image.href)}
+        style={{ color: nativeTextStyle.linkColor }}
+      >
+        {label}
+      </Text>
+    );
+  };
   return (
     <SelectableMarkdownText
       markdown={props.body}
       preserveMarkdownSource
       textStyle={nativeTextStyle}
       resolveImageSource={resolveImageSource}
+      renderImage={renderImage}
       onLinkPress={props.onLink}
       onTaskListItemPress={props.disabled ? undefined : props.onCheckbox}
     />

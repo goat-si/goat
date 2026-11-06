@@ -147,6 +147,9 @@ it("settles read-view images that will never load and throws while offline", asy
   {
     await using page = await setup();
     expect(await page.hooks().source({ href: "images/x.png", alt: null, title: null })).toBeNull();
+    const video = { href: "/.attachments/00000000000000aa.mp4", alt: null, title: null };
+    expect(await page.hooks().source(video)).toBeNull();
+    expect(state.calls).toEqual([]);
     const pending = page.hooks().source({ href: href(1), alt: null, title: null });
     await settleAll(() => fail("AssetWorkspaceAssetNotFoundError"));
     expect(await pending).toBeNull();

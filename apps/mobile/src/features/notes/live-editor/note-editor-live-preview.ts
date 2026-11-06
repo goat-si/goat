@@ -10,7 +10,7 @@ import {
 } from "@codemirror/view";
 import type { SyntaxNodeRef, Tree } from "@lezer/common";
 import { imagesChanged, type NoteImageStore } from "./note-editor-images";
-import { noteLinkDefinitions, normalizeLinkLabel } from "./note-editor-links";
+import { noteLinkDefinitions, normalizeLinkLabel, playableMediaLabel } from "./note-editor-links";
 import { toggleTaskAt } from "./note-editor-state";
 
 /** Where attachment images get their signed URLs; without it they show their labels. */
@@ -99,6 +99,29 @@ class ImageWidget extends WidgetType {
 }
 
 const hiddenMark = Decoration.replace({});
+
+class MediaLinkWidget extends WidgetType {
+  constructor(
+    readonly href: string,
+    readonly label: string,
+  ) {
+    super();
+  }
+  override eq(other: MediaLinkWidget) {
+    return other.href === this.href && other.label === this.label;
+  }
+  toDOM() {
+    const link = document.createElement("span");
+    link.className = "cm-goat-link";
+    link.setAttribute("data-href", this.href);
+    link.textContent = this.label;
+    return link;
+  }
+  override ignoreEvent() {
+    return false;
+  }
+}
+
 const bullet = Decoration.replace({ widget: new BulletWidget() });
 const marks = {
   strong: Decoration.mark({ class: "cm-goat-strong" }),
@@ -227,16 +250,21 @@ function buildDecorations(view: EditorView): DecorationSet {
         }
         const href = doc.sliceString(url.from, url.to);
         if (node.name === "Image") {
+          const alt = doc.sliceString(open.to, close.from);
+          const media = playableMediaLabel(href, alt);
           replace(
             node.from,
             node.to,
             Decoration.replace({
-              widget: new ImageWidget(
-                href,
-                doc.sliceString(open.to, close.from),
-                DIRECT_IMAGE.test(href) ? null : (images?.url(href) ?? null),
-                images,
-              ),
+              widget:
+                media !== null
+                  ? new MediaLinkWidget(href, media)
+                  : new ImageWidget(
+                      href,
+                      alt,
+                      DIRECT_IMAGE.test(href) ? null : (images?.url(href) ?? null),
+                      images,
+                    ),
             }),
           );
           return false;

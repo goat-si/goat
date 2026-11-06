@@ -40,7 +40,6 @@ export function NoteEmbedView(props: NodeViewProps) {
             title={text || `${embed.provider} video`}
             loading="lazy"
             allow="encrypted-media; picture-in-picture; fullscreen"
-            allowFullScreen
             referrerPolicy="strict-origin-when-cross-origin"
             sandbox="allow-scripts allow-same-origin allow-presentation allow-popups"
             className="aspect-video w-full rounded-lg border-0 bg-muted"
