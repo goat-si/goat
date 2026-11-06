@@ -83,7 +83,11 @@ function textFromBlocks(
   if (keys.length === 1 && keys[0] === "content")
     return textFromBlocks(value.content, depth + 1, imageBlocks, omitLinks);
   if (keys.length === 2 && keys.includes("content") && keys.includes("structuredContent")) {
-    if (imageBlocks.length > 0 && Array.isArray(value.content)) {
+    if (
+      imageBlocks.length > 0 &&
+      Array.isArray(value.content) &&
+      toolOutputImageBlocks(value.structuredContent).length === 0
+    ) {
       const structured = formatJsonValue(value.structuredContent);
       if (structured !== null) {
         const remainder = value.content.filter(

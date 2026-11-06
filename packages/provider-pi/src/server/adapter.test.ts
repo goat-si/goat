@@ -2429,7 +2429,7 @@ describe("PiAdapterV2", () => {
           assert.equal(event.turnItem.toolName, tool.name);
           assert.equal(event.turnItem.status, "completed");
           assert.deepEqual(event.turnItem.output, { content, structuredContent: metadata });
-          assert.equal(turnItemOutputText(event.turnItem), "Screenshot captured");
+          assert.equal(turnItemOutputText(event.turnItem), JSON.stringify(metadata, null, 2));
           const image = toolOutputImages(event.turnItem.output)[0];
           assert.equal(image?.mimeType, "image/png");
           assert.deepEqual(Buffer.from(image!.data!, "base64"), pixels);
