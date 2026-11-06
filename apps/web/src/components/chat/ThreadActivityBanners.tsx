@@ -1,6 +1,7 @@
 import type {
   OrchestrationV2PendingBackgroundTask,
   OrchestrationV2ProviderGoal,
+  EnvironmentId,
   ThreadId,
 } from "@goat/contracts";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
@@ -28,7 +29,7 @@ import type { ComposerBannerStackItem } from "./ComposerBannerStack";
 export function childInputBannerItem(input: {
   readonly childThreadInputs: ReadonlyArray<EnvironmentThreadShell>;
   readonly parentAwaitingUser: boolean;
-  readonly onOpenThread: (threadId: ThreadId) => void;
+  readonly onOpenThread: (threadId: ThreadId, options: { environmentId: EnvironmentId }) => void;
 }): ComposerBannerStackItem | null {
   const { childThreadInputs, onOpenThread } = input;
   const first = childThreadInputs[0];
@@ -43,7 +44,10 @@ export function childInputBannerItem(input: {
       <Fragment key={child.id}>
         {index > 0 ? " " : null}
         <span className="whitespace-nowrap">
-          <InlineButton tone="muted" onClick={() => onOpenThread(child.id)}>
+          <InlineButton
+            tone="muted"
+            onClick={() => onOpenThread(child.id, { environmentId: child.environmentId })}
+          >
             {child.title}
           </InlineButton>
           {index < childThreadInputs.length - 1 ? "," : null}
@@ -51,7 +55,11 @@ export function childInputBannerItem(input: {
       </Fragment>
     )),
     actions: (
-      <Button size="xs" variant="ghost" onClick={() => onOpenThread(first.id)}>
+      <Button
+        size="xs"
+        variant="ghost"
+        onClick={() => onOpenThread(first.id, { environmentId: first.environmentId })}
+      >
         {first.hasPendingApprovals ? "Open approval" : "Open question"}
       </Button>
     ),
