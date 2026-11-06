@@ -8,6 +8,7 @@ import * as NodeCrypto from "node:crypto";
 import { canSeeTask } from "./channelBotRecall.ts";
 import type { ChannelRequester, ChannelTask } from "@goat/contracts";
 import type { OrchestrationV2ProviderTurnTokenUsage } from "@goat/contracts";
+import { type BotIdentity, DEFAULT_BOT_IDENTITY } from "./ChannelBotProfiles.ts";
 
 export const SESSION_PREFIX_HEADINGS = [
   "Standing instructions",
@@ -112,3 +113,29 @@ export const formatOpenWork = (tasks: ReadonlyArray<ChannelTask>) =>
   (tasks
     .map((task) => "- " + task.taskId + ": " + task.title + " (" + task.status + ")")
     .join("\n") || "(none)");
+
+/** The bot's identity at the head of a session prefix; empty for the default bot, so its prefix is unchanged. */
+export const identitySection = (identity: BotIdentity) =>
+  identity.name === DEFAULT_BOT_IDENTITY.name && identity.purpose.trim() === ""
+    ? ""
+    : // JSON strings carry no raw newline, so profile text can never start a line or a heading.
+      "## Identity\nThe person named you " +
+      JSON.stringify(identity.name) +
+      ". Where GOAT's instructions say GOAT Bot, they mean you: introduce yourself by that name.\n" +
+      (identity.purpose.trim() === ""
+        ? ""
+        : "Your purpose, in the person's words (a JSON string): " +
+          JSON.stringify(identity.purpose) +
+          "\n") +
+      "\n";
+
+const STANDING_HEADING = "## " + SESSION_PREFIX_HEADINGS[0] + "\n";
+
+/** Whether a frozen prefix was started with this identity: the text before its first heading line matches exactly. */
+export const identityIsCurrent = (prefix: string, identity: BotIdentity) => {
+  const at = prefix.startsWith(STANDING_HEADING) ? 0 : prefix.indexOf("\n" + STANDING_HEADING) + 1;
+  return (
+    (at > 0 || prefix.startsWith(STANDING_HEADING)) &&
+    prefix.slice(0, at) === identitySection(identity)
+  );
+};
