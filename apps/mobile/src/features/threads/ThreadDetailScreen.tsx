@@ -471,8 +471,10 @@ function ThreadDetailBody(
   const threadScope = useRef(new AbortController());
   const {
     height: composerHeight,
+    heightBesidePending: composerHeightBesidePending,
     onSlotHeight: handleComposerSlotHeight,
     onCardsHeight: handleCardsHeight,
+    onPendingHeight: handlePendingCardHeight,
     cancel: cancelComposerHeightSettle,
   } = useSettledComposerHeight();
   const [anchorMessageId, setAnchorMessageId] = useState<MessageId | null>(null);
@@ -981,7 +983,7 @@ function ThreadDetailBody(
       windowHeight: screenAreaHeight,
       keyboardHeight: keyboardStickyEnabled ? -keyboardTranslation.value : 0,
       navigationHeaderHeight,
-      composerOverlapHeight,
+      composerOverlapHeight: composerHeightBesidePending ?? composerOverlapHeight,
     }),
     flexGrow: 0,
   }));
@@ -1651,6 +1653,8 @@ function ThreadDetailBody(
                       />
                     </Animated.View>
                   ) : null}
+                </ComposerCards>
+                <ComposerCards maxWidth={contentMaxWidth} onHeight={handlePendingCardHeight}>
                   {props.activePendingApproval || props.activePendingUserInput ? (
                     <Animated.View
                       className="shrink-0 gap-3 px-4 pb-3"

@@ -14,6 +14,7 @@ const reactTests = [
   "src/features/threads/ThreadWorkspaceBanner.test.tsx",
   "src/features/threads/SecretRequestCard.test.tsx",
   "src/features/threads/work-shimmer-arbiter.test.tsx",
+  "src/features/threads/ComposerSlot.test.tsx",
   "src/features/review/ReviewCommentComposerSheet.test.tsx",
   "src/features/pull-requests/usePullRequestList.test.tsx",
   "src/features/threads/new-task-flow-provider.test.tsx",

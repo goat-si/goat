@@ -50,21 +50,34 @@ export function ComposerSlot(props: {
  */
 export function useSettledComposerHeight() {
   const [height, setHeight] = useState<number | null>(null);
-  const parts = useRef({ cards: 0, slot: null as number | null });
+  // A pending request card caps itself by the room left beside it; counting its own height
+  // there would shrink and grow it on every settle.
+  const [heightBesidePending, setHeightBesidePending] = useState<number | null>(null);
+  const parts = useRef({ cards: 0, pending: 0, slot: null as number | null });
   const settle = useRef<ReturnType<typeof setTimeout> | null>(null);
   const report = useCallback(() => {
     if (parts.current.slot === null) return;
-    const next = parts.current.cards + parts.current.slot;
+    const beside = parts.current.cards + parts.current.slot;
+    const next = beside + parts.current.pending;
     setHeight((current) => current ?? next);
+    setHeightBesidePending((current) => current ?? beside);
     if (settle.current !== null) clearTimeout(settle.current);
     settle.current = setTimeout(() => {
       settle.current = null;
       setHeight(next);
+      setHeightBesidePending(beside);
     }, COMPOSER_HEIGHT_SETTLE_MS);
   }, []);
   const onCardsHeight = useCallback(
     (cards: number) => {
       parts.current.cards = cards;
+      report();
+    },
+    [report],
+  );
+  const onPendingHeight = useCallback(
+    (pending: number) => {
+      parts.current.pending = pending;
       report();
     },
     [report],
@@ -79,5 +92,5 @@ export function useSettledComposerHeight() {
   const cancel = useCallback(() => {
     if (settle.current !== null) clearTimeout(settle.current);
   }, []);
-  return { height, onCardsHeight, onSlotHeight, cancel };
+  return { height, heightBesidePending, onCardsHeight, onPendingHeight, onSlotHeight, cancel };
 }
