@@ -1,6 +1,7 @@
 import { OpenCode, type OpenCodeClient } from "@opencode/client/effect";
 import { OpenCodeEvent } from "@opencode/protocol/groups/event";
 import * as Context from "effect/Context";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -216,7 +217,18 @@ export const make = Effect.gen(function* () {
             Effect.provideService(
               HttpClient.HttpClient,
               HttpClient.mapRequest(authenticated, HttpClientRequest.prependUrl(baseUrl)).pipe(
-                HttpClient.timeout(SUBSCRIPTION_TIMEOUT),
+                HttpClient.transform((response, request) =>
+                  response.pipe(
+                    Effect.timeout(SUBSCRIPTION_TIMEOUT),
+                    Effect.mapError((error) =>
+                      Cause.isTimeoutError(error)
+                        ? new HttpClientError.HttpClientError({
+                            reason: new HttpClientError.TransportError({ request, cause: error }),
+                          })
+                        : error,
+                    ),
+                  ),
+                ),
               ),
             ),
           ),
