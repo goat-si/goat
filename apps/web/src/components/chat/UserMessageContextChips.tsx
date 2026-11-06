@@ -372,6 +372,8 @@ const userMessageContextPresentationRegistry = createContextPresentationRegistry
             capability={record.capability}
             label={record.label}
             app={record.app !== undefined}
+            contextId={record.contextId}
+            environmentId={context.environmentId}
             copyMarkdown={context.copyMarkdown}
           />
         ) : (
