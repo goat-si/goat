@@ -1,3 +1,4 @@
+import { addPullRequestCommentToComposer } from "./pullRequestChatHandoff";
 import { projectChangeRequestUrl } from "@goat/client-runtime/change-request-links";
 import { normalizeThreadPullRequestKey } from "@goat/client-runtime/thread-pull-requests";
 import { useAtomValue } from "@effect/atom-react";
@@ -129,6 +130,7 @@ import {
   canDeletePullRequestBranch,
   resolveBaseFreshness,
   resolvePullRequestMergeMethod,
+  type PullRequestChatSubject,
   type PullRequestFinding,
   shouldRefreshPullRequestActivity,
 } from "./pullRequestDetail.logic";
@@ -997,6 +999,16 @@ export function PullRequestDetailPanel({
     );
   };
 
+  const addCommentToChat = (subject: PullRequestChatSubject) => {
+    if (
+      detail &&
+      attachTarget !== null &&
+      addPullRequestCommentToComposer(detail, attachTarget, subject)
+    ) {
+      toastManager.add({ type: "success", title: "Added to the composer" });
+    }
+  };
+
   const startCheckout = (mode: "worktree" | "local") => {
     if (!handoffSummary) return;
     void startHandoff(`checkout:${mode}`, null, mode);
@@ -1692,6 +1704,7 @@ export function PullRequestDetailPanel({
                   fixFindingLabel={handoffLabels.fixFinding}
                   fixCheckLabel={handoffLabels.fixCheck}
                   {...(canFixFindings ? { onFixFinding: startFixFinding } : {})}
+                  {...(attachTarget === null ? {} : { onAddToChat: addCommentToChat })}
                   onRefresh={refreshDetail}
                   onRefreshChecks={refreshFromHost}
                 />
@@ -1748,6 +1761,7 @@ export function PullRequestDetailPanel({
                     reference={reference}
                     order={timelineOrder}
                     onOpenCommit={openCommit}
+                    {...(attachTarget === null ? {} : { onAddToChat: addCommentToChat })}
                     onRefresh={refreshDetail}
                   />
                 )}
@@ -1771,6 +1785,7 @@ export function PullRequestDetailPanel({
                     pendingFinding={handoff}
                     fixFindingLabel={handoffLabels.fixFinding}
                     {...(canFixFindings ? { onFixFinding: startFixFinding } : {})}
+                    {...(attachTarget === null ? {} : { onAddToChat: addCommentToChat })}
                     onRefresh={refreshDetail}
                     refreshToken={refreshToken}
                     backgroundRefreshToken={turnRefresh ?? 0}

@@ -1,3 +1,6 @@
+import { bounded, reviewThreadContext, visibleBody } from "./pullRequestChatContext";
+export { visibleBody, buildPullRequestCommentContext } from "./pullRequestChatContext";
+export type { PullRequestChatSubject } from "./pullRequestChatContext";
 import {
   capitalizeTerm,
   sourceControlClients,
@@ -37,7 +40,7 @@ import {
   visibleThreadPullRequests,
 } from "@goat/client-runtime/thread-pull-requests";
 
-import { inferReviewCommentFenceLanguage, type ReviewCommentContext } from "~/reviewCommentContext";
+import type { ReviewCommentContext } from "~/reviewCommentContext";
 import { stripInlineContextReferences } from "~/lib/composerContextReferences";
 
 export const PULL_REQUEST_MERGE_METHOD_LABELS: Record<PullRequestMergeMethod, string> = {
@@ -238,9 +241,10 @@ export function threadPullRequestPanelTarget(thread: {
 }
 
 export function pullRequestHandoffLabels(inThisThread: boolean) {
+  // Beside a composer a remark's Fix shares its header with Add to chat.
   return inThisThread
     ? {
-        fixFinding: "Fix in this thread",
+        fixFinding: "Fix",
         fixCheck: "Fix in this thread",
         fixFindings: "Fix findings in this thread",
       }
@@ -509,11 +513,6 @@ export function groupPullRequestTimelineConversations(
   return rows;
 }
 
-/** Marker-only bodies are empty; otherwise retain text, including fenced HTML comments. */
-export function visibleBody(body: string): string | null {
-  return body.replace(/<!--[\s\S]*?-->/gu, "").trim().length === 0 ? null : body.trim();
-}
-
 function commentTimelineEvent(comment: PullRequestComment): PullRequestTimelineEvent {
   return {
     comment,
@@ -733,15 +732,6 @@ export function buildPullRequestTimeline(
 }
 
 const FINDING_LIMIT = 20;
-const FINDING_BODY_MAX_LENGTH = 1_000;
-
-function bounded(value: string): string {
-  const trimmed = value.trim();
-  return trimmed.length <= FINDING_BODY_MAX_LENGTH
-    ? trimmed
-    : `${trimmed.slice(0, FINDING_BODY_MAX_LENGTH - 3)}...`;
-}
-
 function boundedField(value: string): string {
   return bounded(value.replace(/\s+/gu, " "));
 }
@@ -751,34 +741,6 @@ function boundedField(value: string): string {
 function terminologyForUrl(url: string): ChangeRequestTerminology {
   return (sourceControlClients.findByChangeRequestUrl(url) ?? sourceControlClients.get(undefined))
     .changeRequest;
-}
-
-function reviewThreadContext(
-  thread: PullRequestReviewThread,
-  pullRequestNumber: number,
-): ReviewCommentContext {
-  const lineIndex = Math.max(0, (thread.line ?? 1) - 1);
-  return {
-    id: `pull-request-finding:${thread.id}`,
-    sectionId: `pull-request:${pullRequestNumber}`,
-    sectionTitle: `PR #${pullRequestNumber} review`,
-    filePath: thread.path,
-    startIndex: lineIndex,
-    endIndex: lineIndex,
-    rangeLabel:
-      thread.line === null ? "file" : `L${thread.line}${thread.side === "left" ? " (before)" : ""}`,
-    // Strip bot bookkeeping comments before bounding finding text.
-    text: bounded(
-      thread.comments
-        .flatMap((comment) => {
-          const body = visibleBody(comment.body);
-          return body === null ? [] : [`${comment.author?.login ?? "ghost"}: ${body}`];
-        })
-        .join("\n"),
-    ),
-    diff: "",
-    fenceLanguage: inferReviewCommentFenceLanguage(thread.path),
-  };
 }
 
 function handoffPreamble(input: {
@@ -1056,6 +1018,11 @@ export function buildPullRequestReferenceContext(
   const comment = pullRequestContextComment(input, []);
   // Use URLs because repositories can share pull request numbers.
   return { ...comment, id: `pr-reference:${input.url}` };
+}
+
+/** The pull request chip a fix hand-off attaches, so the two dedupe in one draft. */
+export function buildPullRequestContext(input: PullRequestContextMetadata): ReviewCommentContext {
+  return pullRequestContextComment(input, []);
 }
 
 const ANSWER_INSTRUCTIONS = [
