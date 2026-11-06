@@ -139,13 +139,10 @@ diff --git a/lib/Drizzle/Schema.js b/lib/Drizzle/Schema.js
 diff --git a/src/Drizzle/Schema.ts b/src/Drizzle/Schema.ts
 --- a/src/Drizzle/Schema.ts
 +++ b/src/Drizzle/Schema.ts
-@@ -372,7 +372,8 @@ export const SchemaProvider = () =>
-           const dialect = props.dialect ?? "postgres";
- 
+@@ -374,4 +374,5 @@ export const SchemaProvider = () =>
            const kit = yield* loadKit(dialect);
 -          if (!kit.generateDrizzleJson || !kit.generateMigration) {
 +          // Released rc.5 stores differential snapshots; the CLI reconstructs the full chain.
 +          if ("reconstruct" in kit || !kit.generateDrizzleJson || !kit.generateMigration) {
              return yield* detectDriftWithCli(props);
            }
- 
