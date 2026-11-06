@@ -694,7 +694,7 @@ describe("decodeReviewDecisionsJson", () => {
     {
       reading: "Enterprise approval rules met",
       enterprise: true,
-      approval: { approved: true, approvedBy: approvedBy("julius") },
+      approval: { approved: true, approvedBy: approvedBy("alex") },
       decision: "approved",
     },
     {
@@ -706,7 +706,7 @@ describe("decodeReviewDecisionsJson", () => {
     {
       reading: "Community Edition with an approval",
       enterprise: false,
-      approval: { approved: true, approvedBy: approvedBy("julius") },
+      approval: { approved: true, approvedBy: approvedBy("alex") },
       decision: "approved",
     },
     {
@@ -726,7 +726,7 @@ describe("decodeReviewDecisionsJson", () => {
     ]).toEqual([]);
     expect([
       ...decisionsOf(true, [
-        { iid: "7", approved: null, approvedBy: approvedBy("julius") },
+        { iid: "7", approved: null, approvedBy: approvedBy("alex") },
         { iid: "8", approved: true, approvedBy: null },
       ]),
     ]).toEqual([]);

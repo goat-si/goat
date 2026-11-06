@@ -1220,7 +1220,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
   const squashMergedPr = (branch: string, headSha: string): FakeChangeRequest => ({
     number: 217,
     title: "Feature work",
-    url: "https://github.com/pingdotgg/t3code/pull/217",
+    url: "https://github.com/goat-si/goat/pull/217",
     baseRefName: "main",
     headRefName: branch,
     headSha,
@@ -1231,7 +1231,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
 
   it.effect("status reports nothing to ship after a squash merge deleted the remote branch", () =>
     Effect.gen(function* () {
-      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      const repoDir = yield* makeTempDir("goat-git-manager-");
       yield* initRepo(repoDir);
       const remoteDir = yield* createBareRemote();
       yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
@@ -1257,7 +1257,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
 
   it.effect("status reports nothing to ship after a squash merge kept the remote branch", () =>
     Effect.gen(function* () {
-      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      const repoDir = yield* makeTempDir("goat-git-manager-");
       yield* initRepo(repoDir);
       const remoteDir = yield* createBareRemote();
       yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
@@ -1282,7 +1282,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
 
   it.effect("status still reports work to ship for a commit added after a squash merge", () =>
     Effect.gen(function* () {
-      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      const repoDir = yield* makeTempDir("goat-git-manager-");
       yield* initRepo(repoDir);
       const remoteDir = yield* createBareRemote();
       yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
@@ -1307,7 +1307,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
 
   it.effect("status still reports work against main after a merge into another base", () =>
     Effect.gen(function* () {
-      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      const repoDir = yield* makeTempDir("goat-git-manager-");
       yield* initRepo(repoDir);
       const initialSha = (yield* runGit(repoDir, ["rev-parse", "HEAD"])).stdout.trim();
       const remoteDir = yield* createBareRemote();
@@ -1335,7 +1335,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
 
   it.effect("status keeps a squash-merged branch shipped when a later PR lookup fails", () =>
     Effect.gen(function* () {
-      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      const repoDir = yield* makeTempDir("goat-git-manager-");
       yield* initRepo(repoDir);
       const remoteDir = yield* createBareRemote();
       yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
@@ -1367,7 +1367,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
 
   it.effect("status keeps real divergence for a squash-merged branch that tracks its base", () =>
     Effect.gen(function* () {
-      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      const repoDir = yield* makeTempDir("goat-git-manager-");
       yield* initRepo(repoDir);
       const remoteDir = yield* createBareRemote();
       yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
@@ -1392,7 +1392,7 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
 
   it.effect("status reports nothing to ship after a squash merge into a non-origin default", () =>
     Effect.gen(function* () {
-      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      const repoDir = yield* makeTempDir("goat-git-manager-");
       yield* initRepo(repoDir);
       yield* runGit(repoDir, ["branch", "-m", "develop"]);
       const remoteDir = yield* createBareRemote();

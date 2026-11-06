@@ -97,7 +97,7 @@ it.layer(layer)("cascadeRebaseStack", (it) => {
       const repo = yield* setup;
       const fs = yield* FileSystem.FileSystem;
       const { process } = yield* SourceControlHost.SourceControlHost;
-      const scratch = yield* fs.makeTempDirectoryScoped({ prefix: "t3-cascade-squash-" });
+      const scratch = yield* fs.makeTempDirectoryScoped({ prefix: "goat-cascade-squash-" });
       const run = (...args: string[]) =>
         process
           .run({
