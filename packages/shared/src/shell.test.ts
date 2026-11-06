@@ -267,7 +267,7 @@ describe("readEnvironmentFromWindowsShell", () => {
       Effect.gen(function* () {
         const started = Promise.withResolvers<void>();
         const kill = vi.fn(() => true);
-        const child = { kill } as unknown as ReturnType<
+        const child = { kill, unref: vi.fn() } as unknown as ReturnType<
           typeof import("node:child_process").execFile
         >;
         const execFile = nativeProbe.execFile;

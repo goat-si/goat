@@ -535,12 +535,11 @@ function findMessageToken(
   text: string,
   folded: string,
   token: string,
+  firstOnly: boolean,
 ): { readonly at: ReadonlyArray<number>; readonly quality: number } | null {
   let quality = 0;
   let at: number[] = [];
-  // The letters-and-digits run around the hit, kept for later hits in the
-  // same run: rescanning it per hit is quadratic in a long run ("0000" in a
-  // hex dump).
+  // Cache the enclosing run to avoid quadratic rescans of long hex dumps.
   let run = { start: 0, end: -1, hex: false };
   for (let index = folded.indexOf(token); index !== -1; index = folded.indexOf(token, index + 1)) {
     if (index + token.length > run.end) {
@@ -559,7 +558,8 @@ function findMessageToken(
     if (found > quality) {
       quality = found;
       at = [index];
-    } else if (found === quality) {
+      if (firstOnly && quality === 1) return { at, quality };
+    } else if (!firstOnly && found === quality) {
       at.push(index);
     }
   }
@@ -597,8 +597,7 @@ export function messageMatcher(query: string): (text: string) => MessageMatch | 
     grades: long.includes(token),
   }));
   const phrase = messagePhrase(query);
-  // Accents typed or left out still read as written together: "cafe open"
-  // in "Café open".
+  // Accents typed or left out still read as written together.
   const foldedPhrase = messagePhrase(
     words.map((word) => foldInPlace(word).replace(COMBINING_MARKS, "")).join(" "),
   );
@@ -611,10 +610,11 @@ export function messageMatcher(query: string): (text: string) => MessageMatch | 
     let quality = 1;
     const positions: Array<ReadonlyArray<number>> = [];
     for (const { token, folded: foldedToken, nonAscii, mustStartWord, grades } of tokens) {
-      let found = findMessageToken(text, plain, token);
+      let found = findMessageToken(text, plain, token, tokens.length === 1);
       // Accents typed or left out: "cafe" finds "Café", also after "cafeteria".
       if (found?.quality !== 1 && foldedToken.length > 0 && (nonAscii || NON_ASCII.test(text))) {
-        found = findMessageToken(text, (folded ??= foldInPlace(text)), foldedToken);
+        folded ??= foldInPlace(text);
+        found = findMessageToken(text, folded, foldedToken, tokens.length === 1);
       }
       if (found === null) return null;
       if (found.quality === MID_WORD && mustStartWord) return null;

@@ -1,3 +1,4 @@
+import { isPreviewRefreshShortcut } from "./previewRefresh.ts";
 import { admitAgentPointer, pointerEvent, type AgentPointer } from "./CursorStateOrdering.ts";
 import * as NodeZlib from "node:zlib";
 import {
@@ -437,13 +438,6 @@ export const previewWindowOpenAction = (details: {
     ? "new-tab"
     : "popup";
 };
-
-const isPreviewRefreshShortcut = (input: Electron.Input): boolean =>
-  input.type === "keyDown" &&
-  input.key.toLowerCase() === "r" &&
-  (input.meta || input.control) &&
-  !input.shift &&
-  !input.alt;
 
 export const isPreviewEditingShortcut = (
   input: Electron.Input,
@@ -1473,7 +1467,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         if (!input.isAutoRepeat) forwardPreviewCommand(host, forwarded.command);
         return;
       }
-      if (isPreviewRefreshShortcut(input)) {
+      if (isPreviewRefreshShortcut(input, hostPlatform)) {
         event.preventDefault();
         runFork(
           attempt({ operation: "shortcut.refresh", tabId, webContentsId: wc.id }, () =>
