@@ -1,3 +1,7 @@
+import {
+  selectPermissionOptionId,
+  selectAutoApprovedPermissionOption,
+} from "./permissionOptions.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 
 // @effect-diagnostics nodeBuiltinImport:off
@@ -906,29 +910,6 @@ function completedAtForStatus(status: ProjectedToolStatus, now: DateTime.Utc): D
 function isAcpPlanModeId(id: string): boolean {
   const name = id.slice(id.lastIndexOf("#") + 1);
   return name === "plan" || name === "architect";
-}
-
-function selectPermissionOptionId(
-  request: EffectAcpSchema.RequestPermissionRequest,
-  decision: Exclude<ProviderApprovalDecision, "cancel">,
-): string | undefined {
-  const optionIdOfKind = (kind: EffectAcpSchema.PermissionOption["kind"]) =>
-    request.options.find((option) => option.kind === kind)?.optionId.trim() || undefined;
-  if (decision === "acceptForSession") {
-    // Agents may offer only allow_once, and answering "cancelled" would stop the turn the user approved.
-    return optionIdOfKind("allow_always") ?? optionIdOfKind("allow_once");
-  }
-  return optionIdOfKind(decision === "accept" ? "allow_once" : "reject_once");
-}
-
-// Prefer allow-once; allow-always can persist beyond the session.
-function selectAutoApprovedPermissionOption(
-  request: EffectAcpSchema.RequestPermissionRequest,
-): string | undefined {
-  return (
-    selectPermissionOptionId(request, "accept") ??
-    selectPermissionOptionId(request, "acceptForSession")
-  );
 }
 
 function elicitationContent(
