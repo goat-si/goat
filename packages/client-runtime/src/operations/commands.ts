@@ -1,3 +1,9 @@
+import {
+  dispatch,
+  getProjection,
+  supportsServerResolvedCommandContext,
+  validateFreshContext,
+} from "./freshContextSupport.ts";
 import { remapComposerContextAttachments } from "@goat/shared/composerContextReferences";
 import {
   type ThreadLinkedPullRequest,
@@ -184,6 +190,7 @@ export interface StartThreadTurnInput extends ThreadCommandInput {
   readonly bootstrap?: StartThreadBootstrap;
   readonly sourceProposedPlan?: { readonly threadId: ThreadId; readonly planId: PlanId };
   readonly dispatchMode?: "auto" | "queue" | "steer" | "restart" | "start";
+  readonly freshContext?: boolean;
 }
 
 export interface InterruptThreadTurnInput extends ThreadCommandInput {
@@ -279,19 +286,6 @@ const allocateCommandId = Effect.fn("EnvironmentCommands.allocateCommandId")(fun
   if (input.commandId !== undefined) return input.commandId;
   const crypto = yield* Crypto.Crypto;
   return CommandId.make(yield* crypto.randomUUIDv4().pipe(Effect.orDie));
-});
-
-const dispatch = (command: OrchestrationV2Command) =>
-  request(ORCHESTRATION_V2_WS_METHODS.dispatchCommand, command);
-
-const getProjection = (threadId: ThreadId) =>
-  request(ORCHESTRATION_V2_WS_METHODS.getThreadProjection, { threadId });
-
-const supportsServerResolvedCommandContext = Effect.fn(
-  "EnvironmentCommands.supportsServerResolvedCommandContext",
-)(function* () {
-  const config = yield* getInitialServerConfig();
-  return config.environment.capabilities.serverResolvedCommandContext === true;
 });
 
 const persistAttachments = Effect.fn("EnvironmentCommands.persistAttachments")(function* (
@@ -695,6 +689,7 @@ export const setThreadInteractionMode = Effect.fn("EnvironmentCommands.setThread
 export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(function* (
   input: StartThreadTurnInput,
 ) {
+  yield* validateFreshContext(input);
   const commandId = yield* allocateCommandId(input);
   const attachments = yield* persistAttachments(
     input.threadId,
@@ -777,6 +772,7 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
       ...(input.sourceProposedPlan === undefined
         ? {}
         : { sourcePlanRef: input.sourceProposedPlan }),
+      ...(input.freshContext ? { freshContext: true } : {}),
       dispatchMode: { type: "start_immediately" },
     });
   }
@@ -843,6 +839,7 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
     ...(serverResolvesCommandContext && requestedMode !== "queue"
       ? { deliveryIntent: requestedMode }
       : {}),
+    ...(input.freshContext ? { freshContext: true } : {}),
     dispatchMode,
   });
 });
