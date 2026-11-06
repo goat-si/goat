@@ -196,6 +196,7 @@ const RPC_AGGREGATES = {
   [CHANNEL_GATEWAY_WS_METHODS.ensureBot]: "channel",
   [CHANNEL_GATEWAY_WS_METHODS.getBotStatus]: "channel",
   [CHANNEL_GATEWAY_WS_METHODS.listBots]: "channel",
+  [CHANNEL_GATEWAY_WS_METHODS.updateBot]: "channel",
   [CHANNEL_GATEWAY_WS_METHODS.listChildWork]: "channel",
   [CHANNEL_GATEWAY_WS_METHODS.listBotThreads]: "channel",
   [CHANNEL_GATEWAY_WS_METHODS.updateTaskView]: "channel",

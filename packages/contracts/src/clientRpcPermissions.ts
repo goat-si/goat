@@ -158,6 +158,8 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.notesAttach]: AuthOrchestrationOperateScope,
 
   [CHANNEL_GATEWAY_WS_METHODS.ensureBot]: AuthOrchestrationOperateScope,
+  // A standing name and purpose are what ingest already allows: telling the bot what to do.
+  [CHANNEL_GATEWAY_WS_METHODS.updateBot]: AuthOrchestrationOperateScope,
   [CHANNEL_GATEWAY_WS_METHODS.updateTaskView]: AuthOrchestrationOperateScope,
   [CHANNEL_GATEWAY_WS_METHODS.ingest]: AuthOrchestrationOperateScope,
   [CHANNEL_GATEWAY_WS_METHODS.createIdentityLink]: AuthSettingsWriteScope,
