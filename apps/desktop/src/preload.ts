@@ -525,7 +525,10 @@ contextBridge.exposeInMainWorld("desktopBridge", {
         enabled,
       }),
     pickElement: (tabId, voice) =>
-      ipcRenderer.invoke(IpcChannels.PREVIEW_PICK_ELEMENT_CHANNEL, { tabId, voice }),
+      ipcRenderer.invoke(IpcChannels.PREVIEW_PICK_ELEMENT_CHANNEL, {
+        tabId,
+        ...(voice ? { voice } : {}),
+      }),
     annotationVoice: {
       onEvent: (listener) => {
         const onEvent = (_event: Electron.IpcRendererEvent, tabId: unknown, value: unknown) => {
