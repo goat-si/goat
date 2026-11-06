@@ -1253,6 +1253,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         }
       }
 
+      const stageConfig = ["-c", "core.safecrlf=false"];
       let omittedContents = capturedHead === null;
       if (input.strict || capturedHead !== null) {
         // Newly staged paths belong to the snapshot even when ignore rules match them.
@@ -1308,6 +1309,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
                 "--literal-pathspecs",
                 ...indexConfig,
                 ...durableWrite,
+                ...stageConfig,
                 "add",
                 ...(sparseCheckout ? ["--sparse"] : []),
                 "-f",
@@ -1329,6 +1331,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
           args: [
             ...indexConfig,
             ...durableWrite,
+            ...stageConfig,
             "add",
             ...(sparseCheckout ? ["--sparse"] : []),
             workspaceIgnored ? "-u" : "-A",
