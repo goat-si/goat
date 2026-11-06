@@ -184,7 +184,7 @@ const buildEntry = Effect.fn("ProviderInstanceRegistry.buildEntry")(function* <R
       }
       if (!enabled) continue;
       const value = resolveSecret ? yield* resolveSecret(secret).pipe(Effect.option) : undefined;
-      if (value === undefined || value._tag === "None")
+      if (value === undefined || value._tag === "None" || !value.value.trim())
         return { kind: "unreadable" as const, name: variable.name };
       environment.push({ ...plain, value: value.value, sensitive: true });
       resolvedSecrets.push(value.value);

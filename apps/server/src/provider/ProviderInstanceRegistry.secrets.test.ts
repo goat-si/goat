@@ -134,9 +134,9 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
     Layer.provideMerge(layerBase),
   );
 
-  it.effect(
-    "does not launch a provider when its referenced environment secret is unavailable",
-    () =>
+  it.effect.each([undefined, "", " \n\t"])(
+    "does not launch a provider when its referenced environment secret is missing or blank: %s",
+    (secretValue) =>
       Effect.gen(function* () {
         let created = false;
         const driver: typeof CodexDriver = {
@@ -164,6 +164,9 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
         const { registry } = yield* makeProviderInstanceRegistry({
           drivers: [driver],
           configMap: settings,
+          ...(secretValue === undefined
+            ? {}
+            : { resolveSecret: () => Effect.succeed(secretValue) }),
         });
         expect(created).toBe(false);
         expect(yield* registry.getInstance(id)).toBeUndefined();
