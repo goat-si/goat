@@ -482,96 +482,118 @@ here or fetch the remote branch back later.
 SSH worktree creation and fetch-back are available in the desktop app. The remote
 thread can also be followed through an existing web or mobile connection.
 
-### Let an agent start work on another machine
+### Let agents work on other machines
 
-An agent can also start a thread on another computer over SSH. Ask it, for
-example, to "run this in ~/work/api on mini". It lists the hosts in this
-machine's `~/.ssh/config` and `known_hosts`, browses folders and Git worktrees on
-the one you name, and starts a thread there in that folder or in a new worktree.
-The folder becomes a project on that machine, and the thread runs in that
-machine's own GOAT, which is started the same way as above if needed.
-An agent can also move a thread there, uncommitted changes included, when you ask
-it to "continue this on mini"; it does so as the last step of its turn.
+An agent can start threads on your other computers, read them, send them
+messages, and wait for them to finish. It reaches another machine in one of two
+ways, and which one you set up decides what it can do there.
 
-Only SSH keys or a running ssh-agent are used; a host that asks for a password
-is refused. Starting a thread needs a full-access thread or a full-access
-outside agent. To watch the new thread, add the same host under
-**Settings → Connections**, or ask the agent to add it for you. On that machine
-itself, a thread started while the GOAT app is open runs in the app's own server
-and appears in the app like any other thread. Without the app, GOAT starts a
-background server there, and the app lists its threads under **Headless server**
-while that server is running. Each start
-issues a 12-hour sign-in on that machine, listed with its other clients. A
-machine running an older GOAT
-only accepts approval-required threads in folders that are already projects
-there.
+|                                   | SSH                                                                                                      | Link                                                                          |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| Set up                            | The machine is in this computer's `~/.ssh/config` or `known_hosts` and accepts your SSH key or ssh-agent | A person on that machine runs `goat pair` and gives the agent the pairing URL |
+| GOAT there                        | Started for you when needed                                                                              | Already running, for example a headless `goat serve`                          |
+| Start a thread                    | In any folder; it becomes a project there                                                                | Only in folders that are already projects there                               |
+| Browse folders, update GOAT there | Yes                                                                                                      | No                                                                            |
+| Read, send, wait, stop            | Yes                                                                                                      | Yes, within the access chosen when linking                                    |
+| Lasts                             | As long as your SSH key works                                                                            | 30 days, then link again                                                      |
 
-An agent can also list, add, and remove the devices on this hub (see
-[Hub devices](#hub-devices)), including on a headless
-`goat serve` with no desktop app. Adding uses only SSH keys or ssh-agent, never a
-password, and needs a host where GOAT has run before; prepare a new host first.
-Adding a device that is already listed returns it. Adding and removing need a
-full-access thread or a full-access outside agent. While the desktop app runs on
-the same machine, the agent's change is also saved in its
-**Settings → Connections**, so the device's threads show up in the sidebar.
+Use SSH when you can reach the machine over SSH with a key. Use a link when you
+cannot, or when the machine already runs GOAT on its own over Tailscale or your
+LAN. A machine can have both. The agent names a machine by its SSH alias or by
+the name you gave the link.
 
-Adding a host and saving its connection are one step for an agent: it runs the
-same checks as **Add device → SSH**, asks you to approve a new fingerprint, and
-saves the connection once the checks pass. A new fingerprint needs approval in a
-GOAT thread; an outside agent can save an already-trusted host. Without a desktop
-app on that machine, or from an agent without full access, it prepares the host
-and tells you the connection was not saved.
+Starting, changing and stopping threads on another machine needs an agent in a
+full-access thread, or a full-access outside agent, in the default interaction
+mode; a thread in plan mode can only read. The other machine still refuses a
+thread that would run with broader permissions than the agent has.
 
-The agent that started the thread can follow it from here: it waits for the
-thread to finish, reads its messages and the result its agent recorded (outcome,
-pull requests, tests, and commits), sends it follow-ups, or stops it, and it
-can list threads across this machine and the ones it is connected to. The
-remote thread cannot report back on its own, so ask the starting agent to wait
-on it. Sending to or stopping a thread on another machine needs an agent in the
-default interaction mode, and that machine still refuses threads that run with
-broader permissions than the agent has.
+#### Over SSH
 
-**Settings → Connections → Remote launches** lists the threads each connected
-environment started or watches on other machines, grouped by SSH host, even
-when this app runs on a different computer from the one that started them. A
-thread opens from there once this app is also connected to its machine. In the
-desktop app, **Connect** adds the host over SSH using the same host name. A
-thread started from another machine shows **Launched by** with that machine's
-name in its header, also when the launching thread is not open here. A message
-an agent sends to a thread on another machine shows **Sent by** with the sending
-thread's name; it opens that thread while this app is connected to its machine.
-The name is how the sending machine described itself, so treat it as a label,
-not as proof of who sent it.
+Ask, for example, to "run this in ~/work/api on mini". The agent browses folders
+and Git worktrees on that machine and starts the thread there, in the folder or
+in a new worktree. When you ask it to "continue this on mini", it moves the
+current thread there with its uncommitted changes as the last step of its turn.
+A host that asks for a password is refused; run the offered `ssh-copy-id`
+command first (see [A fresh VPS](#a-fresh-vps)).
 
-### Link a GOAT server for agents without SSH
+On that machine, a thread started while the GOAT app is open runs in the app's
+own server and appears there like any other thread. Without the app, GOAT starts
+a background server, and the app lists its threads under **Headless server**
+while it runs. Each start issues a 12-hour sign-in there, listed with its other
+clients. A machine on an older GOAT only accepts approval-required threads in
+folders that are already projects.
 
-When the other machine already runs GOAT on its own, such as a headless server
-kept up with `goat service install`, and this machine reaches it over
-Tailscale or your LAN, agents can use it without SSH. On that
-machine, create a pairing link that can only grant agent access:
+<a id="link-a-goat-server-for-agents-without-ssh"></a>
+
+#### Through a link
+
+On the other machine, create a pairing link that can only grant agent access:
 
 ```sh
 goat pair --tailscale --scope orchestration:read --scope orchestration:operate
 ```
 
 Leave out `--tailscale` when the server already listens on an address this
-machine reaches. Give an agent here the printed pairing URL, for example "link
+machine reaches. Then tell an agent here, for example, "link
 https://mini.tailnet.ts.net/pair#token=… as mini". The code works once and
-expires after five minutes. From then on agents use `mini` as the host for
-projects, threads, worktrees and host status, start threads there, and include
-it when they list threads across machines.
+expires after five minutes. An agent cannot run `goat pair` for you.
 
-A link can do at most what you allow when linking. It is Supervised by default;
-read-only links cannot start or change threads. Agents start threads only in
-folders that are already projects on that machine, so add the project there
-first, for example from the GOAT app connected to it. An agent whose own permission
+A link is Supervised unless you ask for another access when linking. A
+read-only link cannot start or change threads, and an agent whose own permission
 mode is lower than the link's cannot change anything through it. A link cannot
-answer approval requests, and folder browsing and runtime updates still need SSH.
+answer approval requests. To renew it, run `goat pair` again and link with the
+same name and access. Removing a link forgets it here; to end it on the other
+machine at once, revoke **GOAT on …** in that machine's **Settings → Connections
+→ Authorized clients**.
 
-A link lasts 30 days; link again with a new code to renew it. Removing a link
-forgets it here. To end it on the other machine at once, revoke **GOAT on …** in
-that machine's **Settings → Connections → Authorized clients**. To watch its threads yourself, add
-the machine under **Settings → Connections** with a pairing URL from `goat pair`.
+#### Follow the work
+
+The agent that started a thread is woken when it finishes, when it waits on a
+question, or when its machine stops answering, and the remote agent can report
+progress back. Any agent allowed to reach the machine can read its threads,
+list threads across all your machines, send follow-ups, and stop runs. Text
+from another machine is treated as untrusted.
+
+Each machine has its own providers and models. A thread started there uses the
+starting thread's model unless you name another, and that machine must offer
+it; the agent can list the models each machine offers. Approvals on that
+machine's threads are answered from a GOAT client connected to it.
+
+To watch the threads yourself, add the machine under **Settings → Connections**:
+over SSH with the same host name, or with a pairing URL from `goat pair` for a
+linked machine. **Settings → Connections → Remote launches** lists the threads
+each connected environment started or watches on other machines, grouped by
+host, and **Connect** adds that host over SSH in the desktop app. A thread
+started from another machine shows **Launched by** in its header, and a message
+an agent sent shows **Sent by** with the sending thread's name. The name is how
+the sending machine described itself, so treat it as a label, not proof.
+
+An agent can add the machine for you, and can list, add and remove the devices
+on this hub (see [Hub devices](#hub-devices)), including on a headless
+`goat serve`. Adding runs the same checks as **Add device → SSH**, uses only
+SSH keys or ssh-agent, and needs a host where GOAT has run before, so prepare a
+new host first. It needs a full-access thread or outside agent, and a new host
+fingerprint needs your approval in a GOAT thread; an outside agent can add an
+already-trusted host. While the desktop app runs on the same machine, the agent
+also saves the connection in its **Settings → Connections**, so the machine's
+threads show up in the sidebar. Otherwise it prepares the host and tells you the
+connection was not saved. Adding a device that is already listed returns it.
+
+#### When a call fails
+
+The agent's error names the machine and what to do next. The common ones:
+
+| The agent reports                                                     | What to do                                                                                         |
+| --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| The host asked for a password                                         | Add your SSH key to that machine, then ask again                                                   |
+| The host is not in the SSH config or `known_hosts`, and is not linked | Add it to `~/.ssh/config`, or link it                                                              |
+| The machine cannot be reached, or did not answer in time              | Check that it is awake and online; Fleet shows its load. A one-off timeout usually clears on retry |
+| Changing a thread there needs the default interaction mode            | Leave plan mode in the asking thread                                                               |
+| A model is not offered there                                          | Name a model that machine offers, or let the agent pick one from its list                          |
+| The machine no longer accepts the link                                | It expired after 30 days or was revoked; run `goat pair` there and link again                      |
+| A folder is not a project on a linked machine                         | Add the folder as a project there, or use SSH                                                      |
+| The folder is a home directory or another broad folder                | Pick a project folder inside it                                                                    |
+| GOAT there is too old for the request                                 | Update GOAT on that machine                                                                        |
 
 <a id="devices-on-this-hub"></a>
 
