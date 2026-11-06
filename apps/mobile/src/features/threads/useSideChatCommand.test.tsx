@@ -1,4 +1,4 @@
-import { act } from "react";
+import { act, useLayoutEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, it, vi } from "vite-plus/test";
 import * as Cause from "effect/Cause";
@@ -48,7 +48,10 @@ it("creates and opens a scoped side chat, preserving a draft edited during deliv
   test.draft = { text: "/btw question", attachments: [], context: undefined };
   let send: ReturnType<typeof useSideChatCommand> | undefined;
   function Harness() {
-    send = useSideChatCommand();
+    const command = useSideChatCommand();
+    useLayoutEffect(() => {
+      send = command;
+    }, [command]);
     return null;
   }
   const root = createRoot(document.createElement("div"));
@@ -101,7 +104,10 @@ it("does not create or send when the environment scope is missing", async () => 
   test.alert.mockReset();
   let send: ReturnType<typeof useSideChatCommand> | undefined;
   function Harness() {
-    send = useSideChatCommand();
+    const command = useSideChatCommand();
+    useLayoutEffect(() => {
+      send = command;
+    }, [command]);
     return null;
   }
   const root = createRoot(document.createElement("div"));
@@ -143,7 +149,10 @@ it("reuses an existing side chat and keeps the draft when sending fails", async 
   test.draft = { text: "/side question", attachments: [], context: undefined };
   let send: ReturnType<typeof useSideChatCommand> | undefined;
   function Harness() {
-    send = useSideChatCommand();
+    const command = useSideChatCommand();
+    useLayoutEffect(() => {
+      send = command;
+    }, [command]);
     return null;
   }
   const root = createRoot(document.createElement("div"));
