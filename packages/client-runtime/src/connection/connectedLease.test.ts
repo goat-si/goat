@@ -95,6 +95,15 @@ it.effect("a responsive replacement shortens the quiet window after a long resum
   }),
 );
 
+it.effect("retries the first lost live session promptly", () =>
+  Effect.gen(function* () {
+    const h = yield* connected();
+    yield* h.closeLatestSession();
+    yield* TestClock.adjust("250 millis");
+    expect(yield* Ref.get(h.sessionCount)).toBe(2);
+  }),
+);
+
 it.effect("offline arrives during a running check -> kept", () =>
   Effect.gen(function* () {
     const started = yield* Deferred.make<void>();
