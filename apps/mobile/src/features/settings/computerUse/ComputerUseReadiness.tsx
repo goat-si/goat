@@ -37,16 +37,20 @@ export function ComputerUseReadiness({
   readonly details?: boolean;
 }) {
   const result = computerUseReadinessSteps(input);
+  // A host whose screen cannot run computer use says why; its steps hide under Advanced.
+  const noScreen = input.display?.capability === "unavailable" ? input.display.reason : null;
   return (
     <View accessibilityLabel="Computer use readiness" className="gap-4 p-4">
       <Text textRole="body">
-        {result.ready
-          ? "Computer use is ready on this host."
-          : result.startsWithNextTurn
-            ? "Computer use is ready on this host. It starts with the next agent turn."
-            : result.rechecksWithNextTurn
-              ? "Computer use checks itself again before the next agent uses it on this host."
-              : "Computer use setup needs attention."}
+        {noScreen !== null
+          ? noScreen
+          : result.ready
+            ? "Computer use is ready on this host."
+            : result.startsWithNextTurn
+              ? "Computer use is ready on this host. It starts with the next agent turn."
+              : result.rechecksWithNextTurn
+                ? "Computer use checks itself again before the next agent uses it on this host."
+                : "Computer use setup needs attention."}
       </Text>
       {details ? <ComputerUseReadinessDetails result={result} /> : null}
     </View>

@@ -480,4 +480,12 @@ describe("Windows sessions", () => {
     });
     expect(classifyWindows(null).capability).toBe("partial");
   });
+
+  // Windows SSH clients never move to the desktop app's server, so the reason names that way out.
+  it("tells a Session 0 server's user to use the desktop app's environment instead of SSH", () => {
+    const { reason } = classifyWindows({ name: "Services", id: 0 });
+    expect(reason).toContain("opens the GOAT desktop app");
+    expect(reason).toContain("connected directly to it");
+    expect(reason).toContain("over SSH stay on this background server");
+  });
 });

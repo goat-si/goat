@@ -347,7 +347,12 @@ running there without computer use.
 Windows and Linux need someone signed in to the desktop. On Windows, someone at
 that computer may need to respond to a security prompt the first time. GOAT
 started over SSH or as a service runs where Windows has no desktop, so computer
-use cannot turn on there; start GOAT from the signed-in desktop instead.
+use cannot turn on there. Other GOATs that reach a Windows computer over SSH
+keep using that background server even while the desktop app runs, so at that
+computer, sign in and open the GOAT desktop app, connect to the app's
+environment directly from your other GOAT apps, and start threads that need
+computer use there. Threads already on the background server keep running
+without computer use.
 
 On Linux, computer use works best in an X11 session. In a Wayland session it
 works with fewer apps, and your desktop may ask you to approve screen capture.

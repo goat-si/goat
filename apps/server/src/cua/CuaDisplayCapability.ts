@@ -405,6 +405,9 @@ export function withMacGrants<T extends CuaDisplayCapability>(
       };
 }
 
+const WINDOWS_SESSION0_REASON =
+  "GOAT runs in Windows Session 0 (a service or SSH session), which has no desktop. At this computer, a person signs in, opens the GOAT desktop app (installing it first if needed), and starts new threads in that app's environment from a GOAT app connected directly to it; they turn computer use on there in Settings → Computer. GOAT connections over SSH stay on this background server, and threads already here keep running without computer use.";
+
 /** Session name and id from `tasklist /FI "PID eq <pid>" /FO CSV /NH`. */
 export function tasklistSession(
   output: string,
@@ -416,7 +419,11 @@ export function tasklistSession(
   return columns.length >= 4 && Number.isInteger(id) ? { name: columns[2] ?? "", id } : null;
 }
 
-/** OpenSSH and services run in Session 0, which has no desktop for the driver to use. */
+/**
+ * OpenSSH and services run in Session 0, which has no desktop for the driver to use. Windows SSH
+ * clients never move to the desktop app's server (packages/ssh appServer.ts), so the way out is
+ * that app's environment, reached directly.
+ */
 export function classifyWindows(
   session: { readonly name: string; readonly id: number } | null,
 ): CuaDisplayProbe {
@@ -429,8 +436,7 @@ export function classifyWindows(
   if (session.id === 0)
     return {
       capability: "unavailable",
-      reason:
-        "GOAT runs in Windows Session 0 (a service or SSH session), which has no desktop. Start GOAT from the signed-in desktop on this computer to use computer use.",
+      reason: WINDOWS_SESSION0_REASON,
       environment: [],
     };
   return {
