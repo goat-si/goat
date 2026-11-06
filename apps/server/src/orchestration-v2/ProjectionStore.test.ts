@@ -1883,7 +1883,7 @@ it.effect.each([
     assert.sameDeepMembers(
       [...(yield* list(before, 0)).counts],
       [
-        { projectId: ProjectId.make("project:a"), count: 4 },
+        { projectId: ProjectId.make("project:a"), count: 5 },
         { projectId: ProjectId.make("project:b"), count: 1 },
       ],
     );
@@ -1891,13 +1891,13 @@ it.effect.each([
     assert.sameDeepMembers(
       [...(yield* list({ settledAt: DateTime.formatIso(at(4)) }, 0)).counts],
       [
-        { projectId: ProjectId.make("project:a"), count: 1 },
+        { projectId: ProjectId.make("project:a"), count: 2 },
         { projectId: ProjectId.make("project:b"), count: 1 },
       ],
     );
     // The cursor is the last row: the tie on day 4 continues by id.
     const next = yield* list({ settledAt: DateTime.formatIso(at(4)), threadId: id("b") }, 10);
-    assert.deepEqual(next.threadIds, [id("c"), id("d"), id("snoozed")]);
+    assert.deepEqual(next.threadIds, [id("c"), id("d"), id("snoozed"), id("side")]);
     assert.deepEqual(yield* list(before, 25, []), { threadIds: [], counts: [] });
     const scoped = yield* list(before, 0, [ProjectId.make("project:b")]);
     assert.deepEqual(scoped, {

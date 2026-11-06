@@ -143,7 +143,6 @@ export function omitOlderSettledShells(input: {
   const settledTimes = input.threads
     .flatMap((thread) =>
       thread.lineage.relationshipToParent !== "subagent" &&
-      thread.sideChatOf == null &&
       thread.settledOverride === "settled" &&
       thread.settledAt !== null
         ? [DateTime.toEpochMillis(thread.settledAt)]
@@ -164,6 +163,7 @@ export function omitOlderSettledShells(input: {
     counts.set(thread.projectId, (counts.get(thread.projectId) ?? 0) + 1);
     return (
       thread.pinnedAt != null ||
+      thread.sideChatOf != null ||
       (thread.snoozedUntil != null && DateTime.toEpochMillis(thread.snoozedUntil) > nowMs) ||
       isLiveSubagentShell(thread) ||
       ancestorIds.has(thread.id)

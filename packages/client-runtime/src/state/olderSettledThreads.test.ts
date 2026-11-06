@@ -167,13 +167,17 @@ it("counts older threads the client does not hold, once", () => {
     { source: row("recent", { settledDay: 60 }), environmentId },
   ];
   const olderSettled = () => older;
+  local.push({
+    source: { ...row("side-old", { settledDay: 15 }), sideChatOf: ThreadId.make("parent") },
+    environmentId,
+  });
   expect(
     unloadedOlderSettledCount({
       olderSettled,
       scopes: [{ environmentId, projectIds: null }],
       threads: local,
     }),
-  ).toBe(1);
+  ).toBe(0);
   expect(
     unloadedOlderSettledCount({
       olderSettled,

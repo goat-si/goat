@@ -396,13 +396,13 @@ describe("omitOlderSettledShells", () => {
     });
   });
 
-  it("excludes side chats from older settled counts", () => {
+  it("retains older side chats while keeping the legacy settled count", () => {
     const result = omit([
       ...newest,
       row("old", 30),
       row("side", 40, { sideChatOf: ThreadId.make("old") }),
     ]);
-    expect(result.olderSettled.counts).toEqual([{ projectId: "project-a", count: 1 }]);
+    expect(result.olderSettled.counts).toEqual([{ projectId: "project-a", count: 2 }]);
     expect(result.threads.map((thread) => thread.id)).toContain("side");
   });
 
