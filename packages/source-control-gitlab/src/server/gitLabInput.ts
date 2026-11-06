@@ -1,3 +1,4 @@
+import * as Schema from "effect/Schema";
 import type { PullRequestReviewPosition } from "@goat/contracts";
 
 export function diffCursorPage(cursor: string): number | null {
@@ -27,3 +28,7 @@ export function gitLabReviewPositionLines(
       return { old_line: position.oldLine, new_line: position.newLine };
   }
 }
+
+export const encodeLabelWrite = Schema.encodeSync(
+  Schema.fromJsonString(Schema.Record(Schema.String, Schema.String)),
+);

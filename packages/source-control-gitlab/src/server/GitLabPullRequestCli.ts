@@ -15,6 +15,7 @@ import {
 } from "./gitLabPullRequestErrors.ts";
 export * from "./gitLabPullRequestErrors.ts";
 import {
+  encodeLabelWrite,
   diffCursorPage,
   isCommitSha,
   projectPath,
@@ -367,7 +368,11 @@ export class GitLabPullRequestCli extends Context.Service<
       readonly repository: string;
       readonly number: number;
     }) => Effect.Effect<
-      { readonly threads: ReadonlyArray<PullRequestReviewThread>; readonly truncated: boolean },
+      {
+        readonly threads: ReadonlyArray<PullRequestReviewThread>;
+        readonly overviewFindingIds: ReadonlyArray<string>;
+        readonly truncated: boolean;
+      },
       GitLabPullRequestCliError
     >;
 
@@ -425,10 +430,6 @@ export class GitLabPullRequestCli extends Context.Service<
     }) => Effect.Effect<void, GitLabPullRequestCliError>;
   }
 >()("@goat/source-control-gitlab/server/GitLabPullRequestCli") {}
-
-const encodeLabelWrite = Schema.encodeSync(
-  Schema.fromJsonString(Schema.Record(Schema.String, Schema.String)),
-);
 
 /** @public */
 export const make = Effect.gen(function* () {
@@ -701,8 +702,13 @@ export const make = Effect.gen(function* () {
     readonly number: number;
     readonly page: number;
     readonly collected: ReadonlyArray<PullRequestReviewThread>;
+    readonly collectedFindingIds: ReadonlyArray<string>;
   }): Effect.Effect<
-    { readonly threads: ReadonlyArray<PullRequestReviewThread>; readonly truncated: boolean },
+    {
+      readonly threads: ReadonlyArray<PullRequestReviewThread>;
+      readonly overviewFindingIds: ReadonlyArray<string>;
+      readonly truncated: boolean;
+    },
     GitLabPullRequestCliError
   > =>
     api({
@@ -728,13 +734,21 @@ export const make = Effect.gen(function* () {
           );
         }
         const collected = [...input.collected, ...decoded.success.threads];
+        const collectedFindingIds = [
+          ...input.collectedFindingIds,
+          ...decoded.success.overviewFindingIds,
+        ];
+        const done = (truncated: boolean) =>
+          Effect.succeed({
+            threads: collected,
+            overviewFindingIds: collectedFindingIds,
+            truncated,
+          });
         // Plain notes count toward the page size even when no positioned threads survive decoding.
-        if (decoded.success.rawCount < MAX_PAGE_SIZE) {
-          return Effect.succeed({ threads: collected, truncated: false });
-        }
+        if (decoded.success.rawCount < MAX_PAGE_SIZE) return done(false);
         return input.page >= CONVERSATION_PAGES
-          ? Effect.succeed({ threads: collected, truncated: true })
-          : discussionsPage({ ...input, page: input.page + 1, collected });
+          ? done(true)
+          : discussionsPage({ ...input, page: input.page + 1, collected, collectedFindingIds });
       }),
     );
 
@@ -1706,7 +1720,7 @@ export const make = Effect.gen(function* () {
     }),
 
     listDiscussions: Effect.fn("GitLabPullRequestCli.listDiscussions")(function (input) {
-      return discussionsPage({ ...input, page: 1, collected: [] });
+      return discussionsPage({ ...input, page: 1, collected: [], collectedFindingIds: [] });
     }),
 
     submitReview: Effect.fn("GitLabPullRequestCli.submitReview")(function* (input) {
