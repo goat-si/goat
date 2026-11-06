@@ -1,3 +1,6 @@
+import * as Queue from "effect/Queue";
+import * as Effect from "effect/Effect";
+import type * as ServerBrowser from "./ServerBrowser.ts";
 // @effect-diagnostics nodeBuiltinImport:off - a mocked CDP session for ServerBrowser tests; no Effect runtime.
 import * as NodeEvents from "node:events";
 import { vi } from "vite-plus/test";
@@ -113,3 +116,28 @@ export function makeSession(
     }),
   };
 }
+
+export function fileChooserElement(accept: string) {
+  return {
+    getAttribute: async () => accept,
+    evaluate: (probe: (element: { ownerDocument: unknown }) => boolean) =>
+      Promise.resolve(
+        probe({
+          ownerDocument: (globalThis as typeof globalThis & { document?: unknown }).document,
+        }),
+      ),
+  };
+}
+
+// Fills the queue immediately before the caller drives the stalled viewer.
+// @effect-diagnostics effectFnOpportunity:off
+export const stallViewer = (viewer: ServerBrowser.ServerBrowserViewer) => {
+  const output = viewer.output as unknown as Queue.Queue<ServerBrowser.ServerBrowserViewerOutput>;
+  const acked = Promise.withResolvers<void>();
+  let unacked = 0;
+  const ack = Effect.sync(() => {
+    if (--unacked === 0) acked.resolve();
+  });
+  while (Queue.offerUnsafe(output, { _tag: "frame", data: Buffer.alloc(0), ack })) unacked++;
+  return Effect.promise(() => acked.promise);
+};
