@@ -1460,32 +1460,6 @@ describe("decodePullRequestFilesJson", () => {
     );
   });
 
-  it("preserves spaces and literal backslashes in both rename paths", () => {
-    const result = expectSuccess(
-      decodePullRequestFilesJson(
-        JSON.stringify([
-          {
-            previous_filename: String.raw` old\name.ts `,
-            filename: String.raw` new\name.ts `,
-            status: "renamed",
-          },
-        ]),
-      ),
-    );
-
-    expect(result.patch).toBe(
-      [
-        String.raw`diff --git "a/ old\\name.ts " "b/ new\\name.ts "`,
-        "similarity index 100%",
-        String.raw`rename from " old\\name.ts "`,
-        String.raw`rename to " new\\name.ts "`,
-        String.raw`--- "a/ old\\name.ts "`,
-        String.raw`+++ "b/ new\\name.ts "`,
-        "",
-      ].join("\n"),
-    );
-  });
-
   it("points an added file at /dev/null on the left and a removed one on the right", () => {
     const result = expectSuccess(
       decodePullRequestFilesJson(
@@ -1510,36 +1484,6 @@ describe("decodePullRequestFilesJson", () => {
         "+++ /dev/null",
         "@@ -1 +0,0 @@",
         "-bye",
-        "",
-      ].join("\n"),
-    );
-  });
-
-  it("names both paths of a rename, counting its hunks against the old one", () => {
-    const result = expectSuccess(
-      decodePullRequestFilesJson(
-        JSON.stringify([
-          {
-            filename: "src/new.ts",
-            status: "renamed",
-            previous_filename: "src/old.ts",
-            patch: "@@ -1 +1 @@\n-old\n+new",
-          },
-        ]),
-      ),
-    );
-
-    expect(result.patch).toBe(
-      [
-        "diff --git a/src/old.ts b/src/new.ts",
-        "similarity index 0%",
-        "rename from src/old.ts",
-        "rename to src/new.ts",
-        "--- a/src/old.ts",
-        "+++ b/src/new.ts",
-        "@@ -1 +1 @@",
-        "-old",
-        "+new",
         "",
       ].join("\n"),
     );

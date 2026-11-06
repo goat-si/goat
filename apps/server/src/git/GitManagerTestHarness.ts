@@ -105,7 +105,7 @@ export const created = (calls: ReadonlyArray<FakeProviderCall>) =>
 
 export type FakeGitTextGeneration = TextGeneration.TextGeneration["Service"];
 
-export function runGitSyncForFakeCheckout(cwd: string, args: readonly string[]): void {
+function runGitSyncForFakeCheckout(cwd: string, args: readonly string[]): void {
   const result = NodeChildProcess.spawnSync("git", args, {
     cwd,
     env: isolatedGitEnv(),
@@ -147,7 +147,7 @@ export const configureVisibleRemoteUrlWithLocalRewrite = Effect.fn(
   yield* runGit(cwd, ["config", `url.${localRemotePath}.insteadOf`, visibleUrl]);
 });
 
-export function createTextGeneration(
+function createTextGeneration(
   overrides: Partial<FakeGitTextGeneration> = {},
 ): TextGeneration.TextGeneration["Service"] {
   const implementation: FakeGitTextGeneration = {
@@ -429,7 +429,7 @@ export function createFakeSourceControlProvider(scenario: FakeProviderScenario =
  * Reads a template from the base tree the way a host would, without any host's own lookup
  * rules, so tests see which tree GitManager reads it from.
  */
-export const readFakeChangeRequestTemplate = Effect.fnUntraced(function* (input: {
+const readFakeChangeRequestTemplate = Effect.fnUntraced(function* (input: {
   readonly cwd: string;
   readonly treeish: string;
 }) {
