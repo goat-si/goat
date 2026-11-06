@@ -63,8 +63,9 @@ function xml(source: string, odfSpaces = false, htmlEntities = false): XmlNode {
     stack.push(node);
   });
   parser.on("closetag", () => {
-    const node = stack.pop()!;
-    const parent = stack.at(-1)!;
+    const node = stack.pop();
+    const parent = stack.at(-1);
+    if (node === undefined || parent === undefined) throw new Error("Invalid XML nesting");
     // Markup-compatibility fallbacks repeat their mc:Choice content, e.g. Word text boxes.
     // Keep one when no Choice carries text, such as a chart with a VML caption.
     if (node.name === "Fallback" && parent.hasTextChoice) {
@@ -76,7 +77,8 @@ function xml(source: string, odfSpaces = false, htmlEntities = false): XmlNode {
     if (node.name === "Choice") parent.hasTextChoice = true;
   });
   const text = (value: string) => {
-    const node = stack.at(-1)!;
+    const node = stack.at(-1);
+    if (node === undefined) throw new Error("Invalid XML nesting");
     node.children.push(value);
     if (value.trim() !== "") node.hasText = true;
   };
