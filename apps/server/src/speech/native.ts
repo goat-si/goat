@@ -60,9 +60,12 @@ process.on("message", async (message) => {
       const limit = model.capabilities.maxAudioMs;
       const chunkSamples = limit > 0 ? Math.max(4000, Math.floor(limit * 16 / 2)) : message.pcm.length;
       const texts = [];
+      let textLength = 0;
       const transcribe = async (pcm) => {
         try {
           const result = await model.transcribe(pcm, message.options);
+          if (typeof result.text !== "string" || (textLength += result.text.length + 1) > 900_000)
+            throw new Error("Speech response is too large.");
           texts.push(result.text);
         } catch (error) {
           if ((error?.constructor?.name !== "OutputTruncated" &&
