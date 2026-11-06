@@ -21,10 +21,12 @@ export function SecretReferencePicker({
   environmentId,
   value,
   onChange,
+  disabled = false,
 }: {
   readonly environmentId: EnvironmentId;
   readonly value: SecretReference | undefined;
   readonly onChange: (value: SecretReference | undefined) => void;
+  readonly disabled?: boolean;
 }) {
   const providers = useEnvironmentSettings(environmentId, (settings) => settings.secretProviders);
   const config = useAtomValue(serverEnvironment.configValueAtom(environmentId));
@@ -48,6 +50,7 @@ export function SecretReferencePicker({
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-1.5">
       <Select
+        disabled={disabled}
         value={selected}
         onValueChange={(next) => {
           if (typeof next !== "string") return;
@@ -76,6 +79,7 @@ export function SecretReferencePicker({
           size="sm"
           font="mono"
           aria-label="Secret reference"
+          disabled={disabled}
           aria-invalid={invalid || undefined}
           placeholder="op://vault/item/field"
           value={value?.provider === selected ? value.reference : ""}
@@ -92,8 +96,8 @@ export function SecretReferencePicker({
       {invalid ? <span role="alert">Use a reference like op://vault/item/field.</span> : null}
       {missingProvider ? (
         <span role="alert">
-          This secret provider was removed. Add it again with the same name, or choose another
-          source.
+          Secret provider ID {value.provider} was removed. Add a provider with this ID, or choose
+          another source.
         </span>
       ) : null}
     </div>

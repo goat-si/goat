@@ -18,5 +18,7 @@ on that environment, then supply the account and a name for the provider. In sup
 select that provider and enter a reference such as `op://vault/item/field`.
 
 Removing a provider leaves its settings references intact, but they cannot resolve until you add a
-provider with the same name again or choose another source in each affected setting. Removing the
-provider does not delete the secrets in 1Password.
+provider with the original provider ID again or choose another source in each affected setting.
+The missing ID appears beside the reference; enter it in the optional Provider ID field when adding
+the provider. Renaming a provider does not change its ID. Removing the provider does not delete the
+secrets in 1Password.
