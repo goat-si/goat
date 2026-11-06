@@ -1,3 +1,4 @@
+import { settingsSecretLiteral } from "@goat/contracts";
 import {
   type ModelCapabilities,
   type ServerProviderModel,
@@ -825,7 +826,7 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
           directory: cwd,
           serverUrl: openCodeSettings.serverUrl,
           ...(openCodeSettings.serverPassword
-            ? { serverPassword: openCodeSettings.serverPassword }
+            ? { serverPassword: settingsSecretLiteral(openCodeSettings.serverPassword) }
             : {}),
         })
         .pipe(Effect.flatMap(loadInventory), Effect.scoped)

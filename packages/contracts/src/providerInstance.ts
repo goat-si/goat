@@ -1,5 +1,6 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
+import * as SchemaTransformation from "effect/SchemaTransformation";
 import { TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { SecretReference } from "./secretReference.ts";
 
@@ -36,13 +37,23 @@ export const ProviderInstanceEnvironmentVariableName = TrimmedNonEmptyString.che
 export type ProviderInstanceEnvironmentVariableName =
   typeof ProviderInstanceEnvironmentVariableName.Type;
 
-export const ProviderInstanceEnvironmentVariable = Schema.Struct({
+const StoredProviderInstanceEnvironmentVariable = Schema.Struct({
   name: ProviderInstanceEnvironmentVariableName,
   value: Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
   sensitive: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   valueRedacted: Schema.optionalKey(Schema.Boolean),
   secret: Schema.optionalKey(SecretReference),
 });
+export const ProviderInstanceEnvironmentVariable = StoredProviderInstanceEnvironmentVariable.pipe(
+  Schema.decodeTo(
+    Schema.toType(StoredProviderInstanceEnvironmentVariable),
+    SchemaTransformation.transform({
+      decode: (variable) =>
+        variable.secret === undefined ? variable : { ...variable, sensitive: true },
+      encode: (variable) => variable,
+    }),
+  ),
+);
 export type ProviderInstanceEnvironmentVariable = typeof ProviderInstanceEnvironmentVariable.Type;
 
 export const ProviderInstanceEnvironment = Schema.Array(ProviderInstanceEnvironmentVariable);

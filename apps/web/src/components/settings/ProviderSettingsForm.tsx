@@ -4,6 +4,8 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import {
   isSecretSetting,
+  isSecretReference,
+  type EnvironmentId,
   type ProviderSettingsFormAnnotation,
   type ProviderSettingsFormControl,
   type ProviderSettingsFormOption,
@@ -16,6 +18,7 @@ import { Button } from "../ui/button";
 import { DraftInput } from "../ui/draft-input";
 import { Input } from "../ui/input";
 import { SecretInput } from "./SecretInput";
+import { SecretReferencePicker } from "./SecretReferencePicker";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { Textarea } from "../ui/textarea";
@@ -294,6 +297,7 @@ export function nextProviderConfigWithFieldValue(
 
 interface ProviderSettingsFormProps {
   readonly definition: SettingsFormDefinition;
+  readonly environmentId?: EnvironmentId | undefined;
   readonly value: unknown;
   readonly idPrefix: string;
   readonly variant: "card" | "dialog" | "settings";
@@ -353,6 +357,8 @@ function FieldFrame(props: {
 
 interface ProviderSettingsFieldRowProps {
   readonly field: ProviderSettingsFieldModel;
+  readonly environmentId?: EnvironmentId | undefined;
+  readonly allowReference?: boolean;
   readonly value: unknown;
   readonly idPrefix: string;
   readonly variant: ProviderSettingsFormProps["variant"];
@@ -361,6 +367,8 @@ interface ProviderSettingsFieldRowProps {
 
 function ProviderSettingsFieldRow({
   field,
+  environmentId,
+  allowReference,
   value,
   idPrefix,
   variant,
@@ -378,6 +386,11 @@ function ProviderSettingsFieldRow({
 
   if (variant === "settings") {
     const descriptionId = field.description ? `${inputId}-description` : undefined;
+    const raw =
+      value !== null && typeof value === "object"
+        ? (value as Record<string, unknown>)[field.key]
+        : undefined;
+    const reference = isSecretReference(raw) ? raw : undefined;
     const secretConfigured =
       field.secret === true && readProviderConfigString(value, field.key).length > 0;
     const control =
@@ -413,15 +426,27 @@ function ProviderSettingsFieldRow({
         />
       ) : field.secret ? (
         <div className="flex w-full min-w-0 items-center gap-2 @min-[32rem]/settings-row:w-56">
-          <SecretInput
-            id={inputId}
-            aria-describedby={descriptionId}
-            size="sm"
-            className="min-w-0 flex-1"
-            configured={secretConfigured}
-            value=""
-            onCommit={(next) => onChange(nextProviderConfigWithFieldValue(value, field, next))}
-          />
+          {!reference ? (
+            <SecretInput
+              id={inputId}
+              aria-describedby={descriptionId}
+              size="sm"
+              className="min-w-0 flex-1"
+              configured={secretConfigured}
+              value=""
+              onCommit={(next) => onChange(nextProviderConfigWithFieldValue(value, field, next))}
+            />
+          ) : null}
+          {allowReference && environmentId ? (
+            <SecretReferencePicker
+              environmentId={environmentId}
+              value={reference}
+              onChange={(next) => {
+                const config = value !== null && typeof value === "object" ? { ...value } : {};
+                onChange({ ...config, [field.key]: next ?? "" });
+              }}
+            />
+          ) : null}
           {secretConfigured ? (
             <Button
               type="button"
@@ -564,6 +589,7 @@ function ProviderSettingsFieldRow({
 
 export function ProviderSettingsForm({
   definition,
+  environmentId,
   value,
   idPrefix,
   variant,
@@ -591,6 +617,11 @@ export function ProviderSettingsForm({
         <ProviderSettingsFieldRow
           key={field.key}
           field={field}
+          environmentId={environmentId}
+          allowReference={
+            (definition.driverKind === "antigravity" && field.key === "apiKey") ||
+            (definition.driverKind === "opencode" && field.key === "serverPassword")
+          }
           value={value}
           idPrefix={idPrefix}
           variant={variant}

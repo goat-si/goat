@@ -172,6 +172,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv, Path.
           : {
               mcpCredentialRotations: memoryAdmission.value.rotations,
             }),
+        modelCatalog,
       },
     ).pipe(
       Effect.mapError(

@@ -2,23 +2,18 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
-
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Deferred from "effect/Deferred";
-
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
-
 import * as EffectAcpAgent from "effect-acp/agent";
 import * as AcpError from "effect-acp/errors";
 import type * as AcpSchema from "effect-acp/schema";
 import type * as AcpCompat from "effect-acp/compat";
-
 import { mockSessionNotices } from "./acpMockNotices.ts";
 import { mockSessionPage } from "./acpMockSessions.ts";
 import { beginAcpMockPrompt } from "./acpMockCancellationState.ts";
-
 const requestLogPath = process.env.GOAT_ACP_REQUEST_LOG_PATH;
 const exitLogPath = process.env.GOAT_ACP_EXIT_LOG_PATH;
 const antigravityProfile = process.env.GOAT_ACP_ANTIGRAVITY === "1";
@@ -2665,6 +2660,10 @@ const program = Effect.gen(function* () {
     if (method === "_test/finish-cancel") {
       return Deferred.succeed(nativeCancelRelease, undefined).pipe(Effect.as({}));
     }
+    if (method === "_test/emit-update")
+      return agent.client
+        .sessionUpdate(params as AcpSchema.SessionNotification)
+        .pipe(Effect.as({}));
     if (method === "_test/startup-metadata") {
       return Effect.gen(function* () {
         for (const [metadataSessionId, commandName, modeId] of [

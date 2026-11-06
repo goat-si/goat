@@ -2212,7 +2212,6 @@ export default function ChatView(props: ChatViewProps) {
     if (!serverThread) {
       return AsyncResult.success(undefined);
     }
-
     let result: AtomCommandResult<void, unknown> = AsyncResult.success(undefined);
     const metadataUpdate = resolveThreadMetadataUpdateForNextTurn({
       currentModelSelection: serverThread.modelSelection,
@@ -2744,6 +2743,7 @@ export default function ChatView(props: ChatViewProps) {
     activeThreadShell?.latestRun
       ? usageLimitRecoveryBannerItem({
           runId: activeThreadShell.latestRun.runId,
+          errorCode: serverRuntime.lastErrorCode ?? null,
           resetAt: serverRuntime.usageLimitResetAt ?? null,
           stoppedAt: activeThreadShell.latestRun.completedAt ?? activeThreadShell.updatedAt,
           recovery: activeThreadShell.limitRecovery ?? null,

@@ -1,3 +1,4 @@
+import { settingsSecretLiteral } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as FileSystem from "effect/FileSystem";
 import * as Stream from "effect/Stream";
@@ -530,7 +531,7 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
                 directory: input.cwd,
                 serverUrl: openCodeSettings.serverUrl,
                 ...(openCodeSettings.serverPassword
-                  ? { serverPassword: openCodeSettings.serverPassword }
+                  ? { serverPassword: settingsSecretLiteral(openCodeSettings.serverPassword) }
                   : {}),
               })
               .pipe(Effect.flatMap(runAgainstServer), Effect.scoped)

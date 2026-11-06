@@ -74,7 +74,7 @@ import {
 } from "@goat/contracts";
 import { derive } from "@goat/provider-core/server/IdAllocator";
 import { isGoatConnectEnabled } from "@goat/shared/goatConnect";
-import { getProviderOptionCurrentValue } from "@goat/shared/model";
+import { getProviderOptionCurrentValue, withLegacyUltracodeEffort } from "@goat/shared/model";
 import { runRanAfter } from "@goat/shared/orchestrationV2ThreadError";
 import { withTurnCapabilities } from "@goat/shared/turnCapabilities";
 import * as Clock from "effect/Clock";
@@ -1479,7 +1479,7 @@ const make = Effect.gen(function* () {
 
     const descriptors = provider.models.find((candidate) => candidate.slug === model)?.capabilities
       ?.optionDescriptors;
-    const requestedOptions = input.target?.options;
+    const requestedOptions = withLegacyUltracodeEffort(descriptors, input.target?.options);
     if (requestedOptions !== undefined) {
       const invalid = invalidOptionSelections(requestedOptions, descriptors);
       if (invalid.length > 0) {
@@ -1493,7 +1493,12 @@ const make = Effect.gen(function* () {
     const inheritsOptions =
       instanceId === inheritedSelection.instanceId && model === inheritedSelection.model;
     const options = overrideOptionSelections(
-      inheritsOptions ? knownOptions(inheritedSelection.options, descriptors) : undefined,
+      inheritsOptions
+        ? knownOptions(
+            withLegacyUltracodeEffort(descriptors, inheritedSelection.options),
+            descriptors,
+          )
+        : undefined,
       requestedOptions,
     );
     return {

@@ -437,7 +437,7 @@ it.layer(layerTest)("CodexDriver", (it) => {
         expect(restored.auth.email).toBe("account@example.test");
         expect(restored.runtimePaths?.homePath).toBe(sharedHome);
         expect(restored.runtimePaths?.shadowHomePath).toContain(
-          `providers/codex/${instanceId}/shadow`,
+          NodePath.join("providers", "codex", instanceId, "shadow"),
         );
         const scan = yield* instance.snapshotForCwd!(serverConfig.stateDir).pipe(Effect.exit);
         expect(Exit.isFailure(scan)).toBe(true);
@@ -666,7 +666,7 @@ it.layer(layerTest)("CodexDriver", (it) => {
   it.effect("uses each instance's environment CODEX_HOME for continuation", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-codex-driver-" });
+      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "goat-codex-driver-" });
       for (const [index, account] of ["work", "personal", "work "].entries()) {
         const codexHome = NodePath.join(tempDir, account);
         const instance = yield* CodexDriver.create({
