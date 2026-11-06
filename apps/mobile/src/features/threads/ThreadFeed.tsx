@@ -23,6 +23,7 @@ import {
 import { GOAT_CONTEXT_LINK_PROTOCOL } from "@goat/contracts/legacyT3Names";
 import { ThreadContextDivider } from "./thread-context-divider";
 import { StandingInstructionsRow } from "./standing-instructions-row";
+import { expandableRowHitSlop } from "./work-log-layout";
 import { FeedEntryShimmerContext } from "./work-shimmer-arbiter";
 import {
   ThreadHandoffDivider,
@@ -1128,6 +1129,7 @@ function RunFoldButton({
   }, [entry.expanded, anchorsKey, environmentId, threadId]);
   const error = anchorsKey && failed ? "Couldn't load work. Tap to retry." : null;
   const loading = entry.expanded && anchorsKey !== "" && !failed;
+  const foldHeight = Math.max(TURN_FOLD_HEIGHT - 3.5, rowSizing.estimatedRowHeight);
   const toggle = () => {
     setFailed(false);
     if (error && entry.expanded) load();
@@ -1140,9 +1142,9 @@ function RunFoldButton({
         accessibilityRole="button"
         accessibilityState={{ expanded: entry.expanded, busy: loading }}
         onPress={toggle}
-        hitSlop={4}
-        className="min-h-11 min-w-0 flex-1 flex-row items-center gap-2"
-        style={{ minHeight: Math.max(TURN_FOLD_HEIGHT - 3.5, rowSizing.estimatedRowHeight) }}
+        hitSlop={expandableRowHitSlop(foldHeight)}
+        className="min-w-0 flex-1 flex-row items-center gap-2"
+        style={{ minHeight: foldHeight }}
       >
         <Text
           key={rowSizing.textSizeKey}

@@ -1349,6 +1349,7 @@ export function ThreadWorkGroupToggle(props: {
               props.onToggle();
             }}
             rowSizing={props.rowSizing}
+            expandable
           >
             {props.shimmer ? (
               <ShimmeringWorkContent
