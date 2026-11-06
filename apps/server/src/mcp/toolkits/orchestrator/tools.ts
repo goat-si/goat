@@ -94,7 +94,7 @@ const OrchestratorCapabilitiesTool = Tool.make(agentSurfaceRegistry["provider.li
   success: OrchestratorMcpCapabilitiesResult,
   failure: OrchestratorMcpFailure,
   failureMode: "return",
-  dependencies,
+  dependencies: [...dependencies, HostThreadsMcpService.HostThreadsMcpService],
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["provider.list"]));
 
 const DelegateTaskTool = Tool.make(agentSurfaceRegistry["task.create"].name, {

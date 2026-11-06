@@ -116,7 +116,7 @@ it.effect("provider.list with host lists that machine's models, not this one's",
             thread: undefined,
             client: { sessionId: "client", label: "Outside", access: "full-access" },
             issuedAt: 0,
-            capabilities: new Set(["orchestration"]),
+            capabilities: new Set(["orchestration"] as const),
           }),
           Effect.provideService(McpSchema.McpServerClient, client),
         );
