@@ -1,4 +1,13 @@
 import {
+  providerInstanceHistoryForShell,
+  activeProviderGoalForShell,
+} from "./ProjectionShellProvider.ts";
+import {
+  awarenessThread,
+  listedForAwareness,
+  type ProjectionAwarenessReader,
+} from "./ProjectionAwareness.ts";
+import {
   makeMessageLookup,
   sortMessagesByTurnItemOrder,
   type ProjectionMessageLookup,
@@ -539,7 +548,8 @@ export interface OlderSettledThreadsListing {
 export interface ProjectionStoreV2Shape
   extends
     PullRequestSnapshot.PullRequestSnapshotReader<ProjectionStoreV2Error>,
-    ProjectionMessageLookup<ProjectionStoreV2Error> {
+    ProjectionMessageLookup<ProjectionStoreV2Error>,
+    ProjectionAwarenessReader<ProjectionStoreV2Error> {
   readonly searchThreadStream: (
     input: OrchestrationV2SearchThreadInput,
   ) => Stream.Stream<OrchestrationV2SearchThreadResult, ProjectionStoreV2Error>;
@@ -1914,34 +1924,6 @@ export function threadShellFromProjection(
     limitRecovery: projection.thread.limitRecovery ?? null,
     deletedAt: projection.thread.deletedAt,
   };
-}
-
-function providerInstanceHistoryForShell(input: {
-  readonly threadId: ThreadId;
-  readonly providerThreads: ReadonlyArray<
-    OrchestrationV2ThreadProjection["providerThreads"][number]
-  >;
-}): ReadonlyArray<ProviderInstanceId> {
-  const history: Array<ProviderInstanceId> = [];
-  for (const providerThread of input.providerThreads
-    .filter((thread) => thread.appThreadId === input.threadId && thread.ownerNodeId === null)
-    .toSorted(
-      (left, right) =>
-        DateTime.toEpochMillis(left.createdAt) - DateTime.toEpochMillis(right.createdAt) ||
-        left.id.localeCompare(right.id),
-    )) {
-    if (!history.includes(providerThread.providerInstanceId)) {
-      history.push(providerThread.providerInstanceId);
-    }
-  }
-  return history;
-}
-
-function activeProviderGoalForShell(
-  providerThreads: ReadonlyArray<OrchestrationV2ThreadProjection["providerThreads"][number]>,
-  activeProviderThreadId: OrchestrationV2ThreadProjection["thread"]["activeProviderThreadId"],
-): OrchestrationV2ThreadShell["goal"] {
-  return providerThreads.find((thread) => thread.id === activeProviderThreadId)?.goal ?? null;
 }
 
 function isSilentRunForShell(
@@ -7063,14 +7045,15 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       new ProjectionStoreReadError({ threadId: ThreadId.make("thread:shell"), cause });
 
     const readShellSnapshotRows = Effect.fn("ProjectionStore.readShellSnapshotRows")(function* (
-      options: ShellSnapshotOptions | undefined,
+      options: (ShellSnapshotOptions & { readonly listedOnly?: boolean }) | undefined,
+      awarenessOnly = false,
     ) {
       const targetThreadRows = yield* selectShellThreadRows(undefined, options);
       const targetThreadIds = new Set(targetThreadRows.map((row) => ThreadId.make(row.thread_id)));
       const rowsByThreadId = new Map(
         targetThreadRows.map((row) => [ThreadId.make(row.thread_id), row] as const),
       );
-      const pendingSourceIds = targetThreadRows.flatMap((row) =>
+      const pendingSourceIds = (awarenessOnly ? [] : targetThreadRows).flatMap((row) =>
         row.forked_from_run_source_thread_id === null
           ? []
           : [ThreadId.make(row.forked_from_run_source_thread_id)],
@@ -7100,9 +7083,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         providerThreadRows,
         pendingTurnItemRows,
       ] = yield* Effect.all([
-        readForThreadIds(selectShellRunRows, forkSourceIds),
-        readForThreadIds(selectShellRunItemCounts, forkSourceIds),
-        readForThreadIds(selectShellItemCounts),
+        awarenessOnly ? Effect.succeed([]) : readForThreadIds(selectShellRunRows, forkSourceIds),
+        awarenessOnly
+          ? Effect.succeed([])
+          : readForThreadIds(selectShellRunItemCounts, forkSourceIds),
+        awarenessOnly ? Effect.succeed([]) : readForThreadIds(selectShellItemCounts),
         sql<{ readonly snapshot_sequence: number | null }>`
         SELECT MAX(sequence) AS snapshot_sequence
         FROM orchestration_events
@@ -7440,6 +7425,27 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         ),
       ),
       getShellSnapshot: readOnReader(getShellSnapshot),
+      getAgentAwarenessSnapshot: readOnReader(
+        Effect.fn("ProjectionStore.getAgentAwarenessSnapshot")((threadId) =>
+          sql
+            .withTransaction(
+              readShellSnapshotRows(
+                threadId === undefined
+                  ? { location: "active", listedOnly: true }
+                  : { threadIds: [threadId] },
+                true,
+              ),
+            )
+            .pipe(
+              Effect.mapError(shellSnapshotReadError),
+              Effect.flatMap((rows) => decodeShellSnapshot(rows)),
+              Effect.map((snapshot) => ({
+                snapshotSequence: snapshot.snapshotSequence,
+                threads: [...snapshot.threads, ...snapshot.archivedThreads].map(awarenessThread),
+              })),
+            ),
+        ),
+      ),
       listActiveSubagentThreadIds: readOnReader(listActiveSubagentThreadIds),
       countThreads: readOnReader(countThreads),
       listLaunchEdges: readOnReader(() =>
@@ -7682,6 +7688,21 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
         }),
       getPullRequestSnapshot: (options) =>
         PullRequestSnapshot.memoryPullRequestSnapshot(replayState, sequence, options),
+      getAgentAwarenessSnapshot: Effect.fn("ProjectionStore.getAgentAwarenessSnapshot")(
+        (threadId) =>
+          service
+            .getShellSnapshot(
+              threadId === undefined ? { location: "active" } : { threadIds: [threadId] },
+            )
+            .pipe(
+              Effect.map((snapshot) => ({
+                snapshotSequence: snapshot.snapshotSequence,
+                threads: [...snapshot.threads, ...snapshot.archivedThreads]
+                  .filter((thread) => threadId !== undefined || listedForAwareness(thread))
+                  .map(awarenessThread),
+              })),
+            ),
+      ),
       getShellSnapshot: Effect.fn("ProjectionStore.getShellSnapshot")(function* (options) {
         const existing = (yield* Ref.get(replayState)).projections;
         const selectedThreadIds = [...existing.entries()]

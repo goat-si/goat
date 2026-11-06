@@ -1,3 +1,4 @@
+import type { ProjectionAwarenessReader } from "./ProjectionAwareness.ts";
 import { automaticMessageIds as automaticIds } from "./ProjectionMessageLookup.ts";
 import { makeSessionHasBackgroundWork, partitionSwitchSessions } from "./SessionBackgroundWork.ts";
 import {
@@ -395,7 +396,10 @@ export interface OrchestratorV2DispatchResult {
   readonly replayed?: true;
 }
 
-export interface OrchestratorV2Shape extends PullRequestSnapshotReader<OrchestratorV2Error> {
+export interface OrchestratorV2Shape
+  extends
+    PullRequestSnapshotReader<OrchestratorV2Error>,
+    ProjectionAwarenessReader<OrchestratorV2Error> {
   readonly resumeQueuedRuns: Effect.Effect<number, OrchestratorV2Error>;
   readonly recoverDelegatedTasks: Effect.Effect<void>;
   readonly recoverDelegatedTask: (threadId: ThreadId, sourceRunId: RunId) => Effect.Effect<void>;
@@ -13855,6 +13859,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       },
     ),
     ...orchestratorPullRequestSnapshot(projectionStore, shellProjectionError),
+    getAgentAwarenessSnapshot: Effect.fn("OrchestratorV2.getAgentAwarenessSnapshot")((threadId) =>
+      projectionStore
+        .getAgentAwarenessSnapshot(threadId)
+        .pipe(Effect.mapError(shellProjectionError)),
+    ),
     getShellSnapshot: Effect.fn("OrchestratorV2.getShellSnapshot")(function (options) {
       return projectionStore.getShellSnapshot(options).pipe(Effect.mapError(shellProjectionError));
     }),
