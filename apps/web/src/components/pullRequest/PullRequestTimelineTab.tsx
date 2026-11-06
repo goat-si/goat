@@ -35,6 +35,7 @@ import {
   isPullRequestVerdictStale,
   newestPullRequestCommitAt,
   pullRequestReviewOutcome,
+  type PullRequestChatSubject,
   type PullRequestReviewOutcome,
   type PullRequestTimelineEvent,
   type PullRequestTimelineThread,
@@ -62,6 +63,8 @@ import { LegendList, type LegendListRef } from "@legendapp/list/react";
 
 interface ReactionSurface {
   readonly canReact: boolean;
+  /** Absent where there is no composer beside the panel to add a remark to. */
+  readonly onAddToChat?: ((comment: PullRequestComment) => void) | undefined;
   readonly environmentId: EnvironmentId;
   readonly threadRef: ScopedThreadRef | null;
   readonly reference: PullRequestRef;
@@ -169,6 +172,34 @@ function ReviewStateBadge({ state }: { state: string }) {
   );
 }
 
+function AddToChatButton({
+  comment,
+  reactions,
+}: {
+  comment: PullRequestComment;
+  reactions: ReactionSurface;
+}) {
+  const onAddToChat = reactions.onAddToChat;
+  return onAddToChat === undefined ? null : (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            size="icon-xs"
+            variant="ghost-muted"
+            className="-mt-1 shrink-0"
+            aria-label="Add to chat"
+            onClick={() => onAddToChat(comment)}
+          />
+        }
+      >
+        <MessageSquareIcon className="size-3" />
+      </TooltipTrigger>
+      <TooltipPopup>Add to chat</TooltipPopup>
+    </Tooltip>
+  );
+}
+
 function OpenOnHostButton({ url, onOpen }: { url: string | null; onOpen: (url: string) => void }) {
   return url === null ? null : (
     <Button
@@ -190,6 +221,7 @@ function ConversationCard({
   onOpen,
   reactions,
   showPath = true,
+  reply = false,
 }: {
   event: PullRequestTimelineEvent;
   editable: PullRequestComment | null;
@@ -197,6 +229,8 @@ function ConversationCard({
   onOpen: (url: string) => void;
   reactions: ReactionSurface;
   showPath?: boolean;
+  /** A reply goes with its conversation, from the card that heads it. */
+  reply?: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -244,6 +278,9 @@ function ConversationCard({
           </div>
           {editable !== null && !editing ? (
             <PullRequestEditButton aria-label="Edit comment" onClick={() => setEditing(true)} />
+          ) : null}
+          {event.body && event.comment && !reply ? (
+            <AddToChatButton comment={event.comment} reactions={reactions} />
           ) : null}
           {reactions.canReact || event.reactions.length > 0 ? (
             <PullRequestReactionBar
@@ -453,6 +490,7 @@ function ReviewThreadEvent({
                   onOpen={onOpen}
                   reactions={reactions}
                   showPath={false}
+                  reply
                 />
               ))}
             </div>
@@ -603,6 +641,9 @@ function ReviewVerdictEvent({
             </PullRequestMetaLine>
           </div>
         </div>
+        {event.body && event.comment ? (
+          <AddToChatButton comment={event.comment} reactions={reactions} />
+        ) : null}
         {reactions.canReact || event.reactions.length > 0 ? (
           <PullRequestReactionBar
             className="ml-auto justify-end"
@@ -637,6 +678,7 @@ export function PullRequestTimelineTab({
   reference,
   order,
   onOpenCommit,
+  onAddToChat,
   onRefresh,
 }: {
   scrollerRef: (node: HTMLElement | null) => void;
@@ -646,6 +688,7 @@ export function PullRequestTimelineTab({
   reference: PullRequestRef;
   order: "newest" | "oldest";
   onOpenCommit: (oid: string) => void;
+  onAddToChat?: (subject: PullRequestChatSubject) => void;
   onRefresh: () => void;
 }) {
   const events = buildPullRequestTimeline(detail);
@@ -653,6 +696,7 @@ export function PullRequestTimelineTab({
   const newestCommitAt = newestPullRequestCommitAt(detail.commits);
   const reactions: ReactionSurface = {
     canReact: detail.capabilities.reactions === true,
+    onAddToChat: onAddToChat && ((comment) => onAddToChat({ kind: "comment", comment })),
     environmentId,
     threadRef,
     reference,

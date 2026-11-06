@@ -67,6 +67,7 @@ import {
   BACKGROUND_WORK_STOP_RETRY_AFTER_MS,
   type BackgroundWorkStopRequest,
   isBackgroundWorkStopPending,
+  limitRecoveryHoldsSnooze,
   presentPendingBackgroundWork,
   presentProviderGoal,
 } from "@goat/client-runtime/state/thread-execution";
@@ -603,6 +604,8 @@ function ThreadDetailBody(
     return () => clearTimeout(timer);
     // oxlint-disable-next-line react/exhaustive-effect-dependencies -- Re-arm if timer clamping fires before the wake time.
   }, [snoozed, snoozedUntil, lifecycleNow]);
+  const snoozeShown =
+    snoozed && !limitRecoveryHoldsSnooze(props.selectedThread, props.selectedThread.runtime);
   const settled =
     props.serverConfig?.environment.capabilities.threadSettlement === true &&
     props.selectedThread.settledOverride === "settled";
@@ -775,22 +778,22 @@ function ThreadDetailBody(
         },
       };
     }
-    if (contentPresentationKind === "ready" && (snoozed || settled || woke)) {
-      const state = snoozed ? "snoozed" : settled ? "settled" : "woke";
+    if (contentPresentationKind === "ready" && (snoozeShown || settled || woke)) {
+      const state = snoozeShown ? "snoozed" : settled ? "settled" : "woke";
       const label =
-        snoozed && snoozedUntil !== null
+        snoozeShown && snoozedUntil !== null
           ? `Snoozed, wakes in ${snoozeWakeLabel(snoozedUntil, { now: lifecycleNow })}`
           : settled
             ? "Settled"
             : "Woke from snooze";
-      const actionLabel = snoozed ? "Wake now" : settled ? "Un-settle" : "Dismiss";
+      const actionLabel = snoozeShown ? "Wake now" : settled ? "Un-settle" : "Dismiss";
       return {
         kind: "lifecycle",
         state,
         label,
         action: {
           label: statusPending
-            ? snoozed
+            ? snoozeShown
               ? "Waking..."
               : settled
                 ? "Un-settling..."
@@ -798,7 +801,8 @@ function ThreadDetailBody(
             : actionLabel,
           accessibilityLabel: actionLabel,
           disabled: !props.canOperateThread || statusPending,
-          onPress: () => void runStatusAction(snoozed ? "wake" : settled ? "unsettle" : "dismiss"),
+          onPress: () =>
+            void runStatusAction(snoozeShown ? "wake" : settled ? "unsettle" : "dismiss"),
         },
       };
     }

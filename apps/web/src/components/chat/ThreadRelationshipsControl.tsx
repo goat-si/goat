@@ -1,3 +1,4 @@
+import { lineageRowExists, useThreadLineageResolution } from "../../state/threadLineageLookup";
 import { MemoryRunAccessLabel } from "../settings/MemoryRunAccessLabel";
 import { useAtomValue } from "@effect/atom-react";
 import { ThreadDetailsControl } from "./ThreadDetailsControl";
@@ -436,6 +437,15 @@ export function ThreadRelationshipsPanel(props: {
       ? row
       : { ...row, edge: { ...row.edge, status: workflowGroup.workflow.status } };
   });
+  const lineageResolution = useThreadLineageResolution({
+    environmentId: props.environmentId,
+    threadId: props.threadId,
+    rows: relationshipRows,
+    liveIds: new Set(relationshipShells.map((thread) => thread.id)),
+  });
+  const visibleRelationships = relationshipRows.filter((row) =>
+    lineageRowExists(row, lineageResolution),
+  );
   const canMerge = mergeTargetThreadId !== null && latestMergeBackRun !== null;
   const canDetach = projection ? canDetachThreadProviderSession(projection) : false;
 
@@ -443,7 +453,7 @@ export function ThreadRelationshipsPanel(props: {
     related = [],
     active = [],
     previous = [],
-  } = groupBy(relationshipRows, ({ edge }) => {
+  } = groupBy(visibleRelationships, ({ edge }) => {
     if (edge.kind !== "subagent" || isParentThreadRelationship(edge, props.threadId))
       return "related";
     return ["completed", "failed", "error", "cancelled", "interrupted", "idle"].includes(
@@ -463,7 +473,7 @@ export function ThreadRelationshipsPanel(props: {
     ).length ?? 0) + active.filter(({ edge }) => edge.status === "running").length;
 
   if (
-    relationshipRows.length === 0 &&
+    visibleRelationships.length === 0 &&
     runningCount === 0 &&
     launchedBy === undefined &&
     launchedRows.length === 0
@@ -684,6 +694,7 @@ export function ThreadRelationshipsPanel(props: {
               const threadTitle = relationshipThreadTitle({
                 title:
                   workflowGroup?.workflow.workflowName ??
+                  lineageResolution.titles[threadId] ??
                   node?.thread?.title ??
                   agent?.title ??
                   threadId,

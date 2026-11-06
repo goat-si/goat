@@ -8,6 +8,9 @@ const state = vi.hoisted(() => ({
   projection: null as unknown,
   commandSucceeds: false,
   relatedShells: [] as unknown[],
+  archivedThreads: [] as unknown[],
+  checkedIds: [] as string[],
+  titles: {} as Record<string, string>,
 }));
 
 vi.mock(import("@effect/atom-react"), async (original) => ({
@@ -31,7 +34,16 @@ vi.mock(import("../../state/environments"), () => ({
   useEnvironmentProviders: (() => new Map()) as never,
 }));
 vi.mock(import("../../lib/archivedThreadsState"), () => ({
-  useArchivedThreadSnapshots: (() => ({ snapshots: [] })) as never,
+  useArchivedThreadSnapshots: (() => ({
+    snapshots: [{ environmentId: "environment", snapshot: { threads: state.archivedThreads } }],
+  })) as never,
+}));
+vi.mock(import("../../state/threadLineageLookup"), async (original) => ({
+  ...(await original()),
+  useThreadLineageResolution: (() => ({
+    checked: new Set(state.checkedIds),
+    titles: state.titles,
+  })) as never,
 }));
 vi.mock(import("../../state/use-atom-command"), () => ({
   useAtomCommand: (() => async () =>
@@ -51,6 +63,9 @@ const threadId = ThreadId.make("fork");
 function setup() {
   state.commandSucceeds = false;
   state.relatedShells = [];
+  state.archivedThreads = [];
+  state.checkedIds = [];
+  state.titles = {};
   state.projection = {
     thread: {
       id: threadId,
@@ -138,6 +153,7 @@ it("opens an idle child from Lineage when its shell has not been loaded", async 
   setup();
   const projection = makeThreadProjectionFixture();
   const childId = ThreadId.make("omitted-child");
+  state.checkedIds = [childId];
   const environmentId = EnvironmentId.make("local");
   state.projection = {
     ...projection,
@@ -195,4 +211,34 @@ it("shows the full lineage title in its tooltip", async () => {
   await vi.waitFor(() =>
     expect(document.querySelector('[data-slot="tooltip-popup"]')?.textContent).toContain(title),
   );
+});
+
+it("hides a verified deleted fork while retaining omitted and archived forks", async () => {
+  setup();
+  const projection = makeThreadProjectionFixture();
+  state.checkedIds = ["deleted-fork", "unloaded-fork", "archived-fork"];
+  state.titles = { "unloaded-fork": "Unloaded fork", "archived-fork": "Archived fork" };
+  state.archivedThreads = [
+    {
+      ...projection.thread,
+      id: ThreadId.make("archived-fork"),
+      title: "Old title",
+      archivedAt: projection.thread.updatedAt,
+      lineage: { parentThreadId: projection.thread.id, relationshipToParent: "fork" },
+    },
+  ];
+  state.projection = {
+    ...projection,
+    contextTransfers: ["deleted-fork", "unloaded-fork", "archived-fork"].map((id) => ({
+      sourceThreadId: projection.thread.id,
+      targetThreadId: ThreadId.make(id),
+      status: "pending",
+    })),
+  };
+  await using screen = await render(
+    <ThreadRelationshipsPanel environmentId={environmentId} threadId={projection.thread.id} />,
+  );
+  await expect.element(screen.getByText("Unloaded fork", { exact: true })).toBeVisible();
+  await expect.element(screen.getByText("Archived fork", { exact: true })).toBeVisible();
+  await expect.element(screen.getByText("deleted-fork", { exact: true })).not.toBeInTheDocument();
 });

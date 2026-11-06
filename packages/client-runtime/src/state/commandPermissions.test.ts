@@ -11,6 +11,7 @@ import type { RpcSession } from "../rpc/session.ts";
 import { describe, expect, it } from "@effect/vitest";
 import { vi } from "vite-plus/test";
 import {
+  AuthAccessWriteScope,
   AuthEnvironmentMaintainScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
@@ -37,6 +38,7 @@ import { createEnvironmentRpcCommand } from "./runtime.ts";
 import { createServerEnvironmentAtoms } from "./server.ts";
 import { createComputerUseHistoryCommand } from "./computerUseHistory.ts";
 import { createPreviewEnvironmentAtoms } from "./preview.ts";
+import { createAuthEnvironmentAtoms } from "./auth.ts";
 
 vi.mock("./session.ts", () => ({
   createEnvironmentSessionAtoms: () => ({ sessionStateAtom: sessions }),
@@ -891,6 +893,41 @@ it.effect("history command enforces read scope at the destination", () =>
       );
       expect(registry.get(command.permissionAtom(env))).toBe(true);
       expect(registry.get(command.permissionAtom(other))).toBe(false);
+    }),
+  ),
+);
+
+it.effect("guards access mutations using the destination environment's current grant", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const registry = yield* setup;
+      const commands = createAuthEnvironmentAtoms(runtime);
+      registry.set(
+        sessions(env),
+        AsyncResult.success({
+          ...grant(false),
+          scopes: [AuthAccessWriteScope],
+          permissions: [AuthAccessWriteScope],
+        }),
+      );
+      registry.set(sessions(other), AsyncResult.success(grant(false)));
+      for (const command of [
+        commands.createPairing,
+        commands.revokePairing,
+        commands.revokeClient,
+      ]) {
+        expect(registry.get(command.permissionAtom(env))).toBe(true);
+        expect(registry.get(command.permissionAtom(other))).toBe(false);
+      }
+      const result = yield* Effect.promise(() =>
+        commands.createPairing.run(registry, {
+          environmentId: other,
+          input: { scopes: ["orchestration:read"] },
+        }),
+      );
+      expect(result._tag).toBe("Failure");
+      registry.set(sessions(env), AsyncResult.success(grant(false)));
+      expect(registry.get(commands.revokeClient.permissionAtom(env))).toBe(false);
     }),
   ),
 );

@@ -1,4 +1,3 @@
-import type { EnvironmentConnectionPhase } from "@goat/client-runtime/connection";
 import {
   assignEnvironmentHueSlots,
   environmentHueSlot,
@@ -239,27 +238,11 @@ export const animateSidebarLayoutChanges: AnimateLayoutChanges = (args) =>
 
 // Snoozed rows cannot accept drops without a wake time. Working rows only drag out as chat context.
 
-// Keep cached placement during the first connection attempt.
-export function isSidebarEnvironmentDisconnected(
-  phase: EnvironmentConnectionPhase,
-  shellIsLive: boolean,
-): boolean {
-  return phase !== "connecting" && (phase !== "connected" || !shellIsLive);
-}
-
-export function belongsInSidebarWorkingShelf<T extends { readonly environmentId: EnvironmentId }>(
+export function belongsInSidebarWorkingShelf<T>(
   thread: T,
-  input: {
-    readonly enabled: boolean;
-    readonly disconnectedEnvironmentIds: ReadonlySet<EnvironmentId>;
-    readonly isWorking: (thread: T) => boolean;
-  },
+  input: { readonly enabled: boolean; readonly isWorking: (thread: T) => boolean },
 ): boolean {
-  return (
-    input.enabled &&
-    !input.disconnectedEnvironmentIds.has(thread.environmentId) &&
-    input.isWorking(thread)
-  );
+  return input.enabled && input.isWorking(thread);
 }
 
 const SIDEBAR_MARKER_PREFIX = "sidebar-marker-";

@@ -1,4 +1,5 @@
 import { Button } from "../../components/ui/Button";
+import { limitRecoveryOwnsSnooze } from "@goat/client-runtime/state/thread-execution";
 import { squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import { AsyncResult } from "effect/reactivity";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/shell";
@@ -33,6 +34,9 @@ export function UsageLimitRecoveryCard({
   const [error, setError] = useState<string | null>(null);
   const resetAt = thread.runtime?.usageLimitResetAt ?? null;
   const canSchedule =
+    thread.settledOverride !== "settled" &&
+    !thread.hasPendingApprovals &&
+    !thread.hasPendingUserInput &&
     resetAt !== null &&
     Date.parse(resetAt) > Date.parse(thread.latestRun?.completedAt ?? thread.updatedAt);
   const resetPassed = useDeadlinePassed(resetAt === null ? null : Date.parse(resetAt));
@@ -50,12 +54,8 @@ export function UsageLimitRecoveryCard({
   )
     return null;
   const snoozed =
-    recovery?.snooze === true &&
-    recovery.runId === runId &&
-    recovery.resetAt === resetAt &&
-    resetAt !== null &&
-    thread.snoozedUntil !== null &&
-    Date.parse(thread.snoozedUntil) === Date.parse(resetAt);
+    limitRecoveryOwnsSnooze({ runId, resetAt, recovery, snoozedUntil: thread.snoozedUntil }) &&
+    !resetPassed;
   async function toggle(action: "resume" | "snooze") {
     if (!resetAt || !runId || !canSchedule) return;
     if (action === "snooze" && !snoozed && Date.parse(resetAt) <= Date.now()) {

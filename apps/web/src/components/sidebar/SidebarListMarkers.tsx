@@ -58,7 +58,9 @@ export function SidebarSectionPlaceholder(props: {
       marker={props.marker}
       data-testid={`sidebar-${props.marker}`}
       className="relative mx-0.5 -mb-px h-0"
-      revealOverflow={props.marker === "settled-placeholder" && props.showHint}
+      revealOverflow={
+        props.marker === "settled-placeholder" && props.showHint && props.isDropTarget
+      }
     >
       {props.showHint ? (
         <div

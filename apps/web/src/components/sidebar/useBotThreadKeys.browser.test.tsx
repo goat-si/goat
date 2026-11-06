@@ -76,7 +76,6 @@ function SidebarRows() {
     serverConfigs: new Map(),
     optimisticDrop: null,
     workingShelfEnabled: false,
-    disconnectedEnvironmentIds: new Set(),
     clockKey: "",
     globalAgentRef: null,
     goatBotRef: null,

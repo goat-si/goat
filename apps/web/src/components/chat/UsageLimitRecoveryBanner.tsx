@@ -11,6 +11,7 @@ import {
 import { useState } from "react";
 import { type TimestampFormat } from "@goat/contracts/settings";
 import { deadlineStore } from "@goat/client-runtime/clock";
+import { limitRecoveryOwnsSnooze } from "@goat/client-runtime/state/thread-execution";
 
 import { useDeadlinePassed } from "../../hooks/useDeadline";
 import { OpenAI } from "../Icons";
@@ -26,6 +27,8 @@ type RecoveryProps = {
   errorCode: string | null;
   resetAt: string | null;
   stoppedAt: string;
+  settled: boolean;
+  requestPending: boolean;
   snoozedUntil: string | null;
   recovery: OrchestrationV2LimitRecovery | null;
   timestampFormat: TimestampFormat;
@@ -33,8 +36,9 @@ type RecoveryProps = {
 };
 
 export function usageLimitRecoveryBannerItem(props: RecoveryProps): ComposerBannerStackItem {
-  const { runId, errorCode, resetAt, stoppedAt, timestampFormat } = props;
-  const canSchedule = resetAt !== null && Date.parse(resetAt) > Date.parse(stoppedAt);
+  const { runId, errorCode, resetAt, stoppedAt, timestampFormat, settled, requestPending } = props;
+  const canSchedule =
+    !settled && !requestPending && resetAt !== null && Date.parse(resetAt) > Date.parse(stoppedAt);
   const workspaceLimit = errorCode === CHATGPT_WORKSPACE_USAGE_LIMIT_CODE;
   const chatGptLimit = workspaceLimit || errorCode === CHATGPT_USAGE_LIMIT_CODE;
   const recoveryActions = canSchedule ? (
@@ -54,6 +58,7 @@ export function usageLimitRecoveryBannerItem(props: RecoveryProps): ComposerBann
       actions: recoveryActions,
     };
   }
+
   return {
     id: `usage-limit-recovery:${runId}`,
     variant: "warning",
@@ -87,13 +92,7 @@ function RecoveryActions({ runId, resetAt, recovery, snoozedUntil, onChange }: R
   // so a snooze whose reset has passed is no longer active.
   const resetPassed = useDeadlinePassed(resetAt === null ? null : Date.parse(resetAt));
   const snoozed =
-    recovery?.snooze === true &&
-    recovery.runId === runId &&
-    recovery.resetAt === resetAt &&
-    resetAt !== null &&
-    snoozedUntil !== null &&
-    Date.parse(snoozedUntil) === Date.parse(resetAt) &&
-    !resetPassed;
+    limitRecoveryOwnsSnooze({ runId, resetAt, recovery, snoozedUntil }) && !resetPassed;
   async function toggle(action: "resume" | "snooze") {
     if (resetAt === null) return;
     if (action === "snooze" && !snoozed && Date.parse(resetAt) <= Date.now()) {
