@@ -631,7 +631,7 @@ describe("AssetAccess", () => {
       yield* fs.makeDirectory(config.secretsDir, { recursive: true });
       yield* fs.writeFile(stateFile, new Uint8Array(32).fill(7));
       yield* fs.writeFileString(config.dbPath, "SQLite format 3");
-      const root = yield* fs.makeTempDirectoryScoped({ prefix: "t3-media-state-" });
+      const root = yield* fs.makeTempDirectoryScoped({ prefix: "goat-media-state-" });
       const alias = path.join(root, "alias");
       yield* fs.symlink(stateFile, alias);
       const threadId = ThreadId.make("thread-1");
