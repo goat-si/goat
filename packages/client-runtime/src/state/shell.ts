@@ -117,6 +117,8 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
   });
   const awaitingCompletion = yield* Ref.make(false);
   const lastAuthoritativeSession = yield* Ref.make<RpcSession | null>(null);
+  const authoritativeOmission = yield* Ref.make<string | null>(null);
+  const sessionOmissions = new WeakMap<RpcSession, string | null>();
   const latestLiveSnapshot = yield* Ref.make<Option.Option<OrchestrationV2ShellSnapshot>>(
     Option.none(),
   );
@@ -290,7 +292,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
           ? undefined
           : { resolvedRepositoryIdentityRoots: item.resolvedRepositoryIdentityRoots },
       );
-      receivedSnapshot = true;
+      if (authoritative) receivedSnapshot = true;
       next = {
         snapshot: Option.some(nextSnapshot),
         status: waiting ? "synchronizing" : "live",
@@ -316,6 +318,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
       const session = next.authoritativeSession;
       if (session !== null) {
         yield* Ref.set(lastAuthoritativeSession, session);
+        yield* Ref.set(authoritativeOmission, sessionOmissions.get(session) ?? null);
       }
     }
     if (next.snapshot !== initial.snapshot && Option.isSome(next.snapshot)) {
@@ -428,27 +431,41 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
     subscribeDynamicWithSession(
       ORCHESTRATION_V2_WS_METHODS.subscribeShell,
       Effect.fn("EnvironmentShellState.makeSubscribeInput")(function* (session) {
-        const { supportsCompletionMarker, omitIdleSubagents, omitOlderSettled } =
+        const { supportsCompletionMarker, omitIdleSubagents, omitOlderSettled, omissionKey } =
           yield* session.initialConfig.pipe(
-            Effect.map((config) => ({
-              supportsCompletionMarker: config.shellResumeCompletionMarker === true,
-              omitIdleSubagents: config.shellThreadFamilies === true,
-              omitOlderSettled:
-                config.shellOlderSettled === true && config.shellThreadFamilies === true,
-            })),
+            Effect.map((config) => {
+              const omitIdleSubagents = config.shellThreadFamilies === true;
+              const omitOlderSettled = config.shellOlderSettled === true && omitIdleSubagents;
+              const version = config.environment?.serverVersion;
+              return {
+                supportsCompletionMarker: config.shellResumeCompletionMarker === true,
+                omitIdleSubagents,
+                omitOlderSettled,
+                omissionKey: version
+                  ? JSON.stringify([
+                      omitIdleSubagents,
+                      omitOlderSettled,
+                      version,
+                      config.environment.databaseMigration ?? null,
+                    ])
+                  : null,
+              };
+            }),
             Effect.orElseSucceed(() => ({
               supportsCompletionMarker: false,
               omitIdleSubagents: false,
               omitOlderSettled: false,
+              omissionKey: null,
             })),
           );
+        sessionOmissions.set(session, omissionKey);
         yield* Ref.set(awaitingCompletion, supportsCompletionMarker);
         yield* setSynchronizing;
 
-        // Foreground resubscriptions on the same live session can resume from
-        // the in-memory cursor. A new session reloads the authoritative HTTP
-        // snapshot so a valid cursor cannot preserve incomplete cached data.
-        const hasAuthoritativeSnapshot = (yield* Ref.get(lastAuthoritativeSession)) === session;
+        // Resume only from an authoritative snapshot with the same omissions and server build.
+        const hasAuthoritativeSnapshot =
+          (yield* Ref.get(lastAuthoritativeSession)) === session ||
+          (omissionKey !== null && (yield* Ref.get(authoritativeOmission)) === omissionKey);
         let canResume = hasAuthoritativeSnapshot;
         let current = yield* SubscriptionRef.get(state);
         if (!hasAuthoritativeSnapshot || Option.isNone(current.snapshot)) {
