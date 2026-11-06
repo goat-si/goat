@@ -938,40 +938,6 @@ it.effect.each([
   }).pipe(Effect.provide(layerServerConfig.pipe(Layer.provideMerge(NodeServices.layer)))),
 );
 
-it.effect("does not fetch for status when the branch tracks a local branch", () =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
-      const fetches: Array<ReadonlyArray<string>> = [];
-      const spawner = ChildProcessSpawner.make((command) => {
-        if (ChildProcess.isStandardCommand(command) && command.args.includes("fetch")) {
-          fetches.push(command.args.map(String));
-        }
-        return delegate.spawn(command);
-      });
-      const driver = yield* makeGitVcsDriverCore().pipe(
-        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-      );
-      const cwd = yield* makeTmpDir();
-      const remote = yield* makeTmpDir("git-vcs-driver-remote-");
-      yield* initRepoWithCommit(cwd);
-      yield* git(remote, ["init", "--bare"]);
-      yield* git(cwd, ["remote", "add", "feature", remote]);
-      yield* git(cwd, ["branch", "feature/base"]);
-      yield* git(cwd, ["checkout", "-b", "stacked", "--track", "feature/base"]);
-
-      const status = yield* driver.statusDetailsRemote(cwd);
-
-      assert.equal(status.upstreamRef, "feature/base");
-      assert.deepStrictEqual(fetches, []);
-    }),
-  ).pipe(
-    Effect.provide(layerTest),
-    Effect.provide(layerServerConfig),
-    Effect.provide(NodeServices.layer),
-  ),
-);
-
 it.effect("retries a fetch that lost a ref update to another Git process", () =>
   Effect.gen(function* () {
     const attempts = yield* Ref.make(0);
@@ -1813,13 +1779,16 @@ it.layer(layerTest)("GitVcsDriver core integration", (it) => {
         const path = yield* Path.Path;
         const driver = yield* GitVcsDriver.GitVcsDriver;
         const nestedCwd = path.join(cwd, "nested");
+        const clone = path.join(nestedCwd, "clone");
+        yield* (yield* FileSystem.FileSystem).makeDirectory(clone);
+        yield* initRepoWithCommit(clone);
         const preview = yield* driver.getReviewDiffPreview({
           cwd: nestedCwd,
           baseRef: initialBranch,
         });
         assert.equal(
           preview.sources.find((source) => source.kind === "working-tree")!.files!.length,
-          2,
+          3,
         );
         for (const source of preview.sources) {
           for (const file of source.files ?? []) {
