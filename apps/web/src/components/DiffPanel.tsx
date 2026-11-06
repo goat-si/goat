@@ -342,7 +342,9 @@ export default function DiffPanel({
   const selectedPatch = turnPatch ? turnPatch.data?.diff : gitDiff;
   const isSelectedPatchTruncated = isGitSelection && selectedGitSource?.truncated === true;
   const selectedPatchQuery = turnPatch ?? branchDiffPreview;
-  const isLoadingSelectedPatch = selectedPatchQuery.isPending && selectedPatchQuery.data === null;
+  const isLoadingSelectedPatch =
+    selectedPatchQuery.isPending &&
+    (selectedPatchQuery.data === null || (isGitSelection && preview?.incomplete === true));
   const selectedPatchError = selectedPatchQuery.error;
   const hasResolvedPatch = typeof selectedPatch === "string";
   const hasNoNetChanges =
@@ -1035,6 +1037,13 @@ export default function DiffPanel({
             data-glass-layer
             className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background"
           >
+            {isGitSelection && preview?.incomplete && (
+              <p className="shrink-0 border-b border-border/70 bg-muted/40 px-3 py-1.5 text-2xs text-muted-foreground">
+                {selectedPatchError
+                  ? "Could not load untracked changes."
+                  : "Loading untracked changes…"}
+              </p>
+            )}
             {isSelectedPatchTruncated && !lazySource && (
               <p className="shrink-0 border-b border-border/70 bg-muted/40 px-3 py-1.5 text-2xs text-muted-foreground">
                 This preview exceeds the size limit. Changes shown are incomplete.

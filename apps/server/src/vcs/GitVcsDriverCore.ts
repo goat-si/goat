@@ -1,3 +1,4 @@
+import { makeReviewDiffHash } from "./reviewDiffHash.ts";
 import {
   parseReviewNumstat,
   REVIEW_DIFF_ARGS,
@@ -44,7 +45,6 @@ import {
   type GitCommandFailureReason,
   GOAT_PROJECT_FILE_NAME,
   type ReviewDiffFileContentsInput,
-  type ReviewDiffFileStat,
   type ReviewDiffPreviewInput,
   type ReviewDiffPreviewSource,
   type VcsRef,
@@ -3185,6 +3185,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         )
       : [];
     const metadataOnly = input.metadataOnly === true && input.file === undefined;
+    const trackedOnly = metadataOnly && input.trackedOnly === true;
     const patchLimit = input.file
       ? REVIEW_DIFF_FILE_MAX_OUTPUT_BYTES
       : REVIEW_DIFF_PATCH_MAX_OUTPUT_BYTES;
@@ -3270,26 +3271,13 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       );
       return { ...patch, files: stat.files };
     });
-    const hashDiff = (diff: string, files: ReadonlyArray<ReviewDiffFileStat>) =>
-      crypto.digest("SHA-256", new TextEncoder().encode(JSON.stringify([diff, files]))).pipe(
-        Effect.map(Hex.encode),
-        Effect.mapError(
-          (cause) =>
-            new GitCommandError({
-              operation: "GitVcsDriver.getReviewDiffPreview.hash",
-              command: "crypto.digest SHA-256",
-              cwd,
-              detail: "Failed to hash review diff.",
-              cause,
-            }),
-        ),
-      );
+    const hashDiff = yield* makeReviewDiffHash(crypto, cwd, metadataOnly);
     // Index scopes use Git's real index as the boundary. Only Unstaged adds untracked paths
     // to a disposable copy; the real index is never refreshed or written by review reads.
     if (scope === "staged" || scope === "unstaged") {
       const source = yield* Effect.gen(function* () {
         const untracked =
-          scope === "unstaged"
+          scope === "unstaged" && !trackedOnly
             ? yield* prepareUntrackedReviewIndex(cwd, pathArgs, input.file?.path, true)
             : { env: undefined };
         const stat = yield* readStats(
@@ -3326,10 +3314,17 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           ...(untracked === null ? {} : { files: stat.files }),
         } satisfies ReviewDiffPreviewSource;
       }).pipe(Effect.scoped);
-      return { cwd: input.cwd, generatedAt: yield* DateTime.now, sources: [source] };
+      return {
+        cwd: input.cwd,
+        generatedAt: yield* DateTime.now,
+        sources: [source],
+        ...(trackedOnly ? { incomplete: true } : {}),
+      };
     }
     const [dirtyTrackedResult, baseResult] = yield* Effect.gen(function* () {
-      const untracked = yield* prepareUntrackedReviewIndex(cwd, pathArgs, input.file?.path);
+      const untracked = trackedOnly
+        ? { env: undefined }
+        : yield* prepareUntrackedReviewIndex(cwd, pathArgs, input.file?.path);
       const [dirty, base] =
         review.mergeBase === dirtyRef
           ? yield* readTrackedDiff(
@@ -3394,6 +3389,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       generatedAt: yield* DateTime.now,
       sources:
         input.scope === undefined ? sources : sources.filter((source) => source.kind === scope),
+      ...(trackedOnly ? { incomplete: true } : {}),
     };
   });
 
