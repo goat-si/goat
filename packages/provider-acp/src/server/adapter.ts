@@ -5910,6 +5910,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
             readonly sessionUpdates?: boolean;
             readonly terminals?: boolean;
             readonly mcp?: boolean;
+            readonly scope?: Scope.Scope;
           } = {},
         ) {
           yield* targetRuntime.getEvents().pipe(
@@ -5922,7 +5923,7 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                 flavor.onSessionEvent?.(event) ?? Effect.void,
               ).pipe(Effect.asVoid);
             }),
-            Effect.forkIn(runtimeScope ?? sessionScope),
+            Effect.forkIn(handlerOptions.scope ?? runtimeScope ?? sessionScope),
           );
           const requestUserInput = (
             request: AcpAdapterV2UserInputRequest,
@@ -6489,7 +6490,12 @@ export const makeAcpAdapterV2 = Effect.fn("makeAcpAdapterV2")(function* (
                   yield* wireAcpRuntimeHandlers(
                     replacementExit.value.replacementRuntime,
                     replacementGeneration,
-                    { sessionUpdates: false, terminals: false, mcp: false },
+                    {
+                      sessionUpdates: false,
+                      terminals: false,
+                      mcp: false,
+                      scope: replacementScope,
+                    },
                   );
                   const lifecycle = yield* Ref.modify(
                     candidateLifecycle,
