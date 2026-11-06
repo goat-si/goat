@@ -66,7 +66,6 @@ const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(funct
   readonly projectionRequests?: ThreadId[];
   readonly advertiseServerResolvedCommandContext?: boolean;
   readonly advertiseThreadStop?: boolean;
-  readonly advertiseFreshContext?: boolean;
 }) {
   const client = {
     [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command: OrchestrationV2Command) =>
@@ -114,7 +113,6 @@ const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(funct
       environment: {
         capabilities: {
           repositoryIdentity: true,
-          ...(input.advertiseFreshContext ? { freshContext: true } : {}),
           ...(input.advertiseThreadStop === true ? { threadStop: true } : {}),
           ...(input.advertiseServerResolvedCommandContext === false
             ? {}
@@ -140,39 +138,6 @@ const makeSupervisor = Effect.fn("TestEnvironmentCommands.makeSupervisor")(funct
 });
 
 describe("V2 environment commands", () => {
-  it.effect("never sends a fresh context request to a server that cannot honor it", () =>
-    Effect.gen(function* () {
-      for (const supported of [false, true]) {
-        const commands: OrchestrationV2Command[] = [];
-        const supervisor = yield* makeSupervisor({
-          commands,
-          projects: [],
-          advertiseFreshContext: supported,
-        });
-        const result = yield* Effect.result(
-          startThreadTurn({
-            commandId: CommandId.make(`fresh-${supported}`),
-            threadId: v2ThreadId,
-            message: {
-              messageId: MessageId.make(`fresh-${supported}`),
-              role: "user",
-              text: "Next",
-              attachments: [],
-            },
-            runtimeMode: "full-access",
-            interactionMode: "default",
-            freshContext: true,
-            dispatchMode: "auto",
-          }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor)),
-        );
-        expect(result._tag).toBe(supported ? "Success" : "Failure");
-        expect(commands).toHaveLength(supported ? 1 : 0);
-        if (supported)
-          expect(commands[0]).toMatchObject({ type: "message.dispatch", freshContext: true });
-      }
-    }).pipe(Effect.provide(layerTestCrypto)),
-  );
-
   it.effect("distinguishes sending a selected queued message from resuming queue order", () =>
     Effect.gen(function* () {
       const commands: OrchestrationV2Command[] = [];
