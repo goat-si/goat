@@ -1,5 +1,4 @@
 import * as NodeBuffer from "node:buffer";
-
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -1677,6 +1676,7 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
           "--no-color",
           "--no-ext-diff",
           "--no-textconv",
+          "--submodule=short",
           ...PATCH_RENDER_PREFIX_ARGS,
           ...(input.ignoreWhitespace ? ["--ignore-all-space"] : []),
           `${fromRevision}^{commit}`,

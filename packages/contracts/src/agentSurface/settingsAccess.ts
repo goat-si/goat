@@ -99,6 +99,7 @@ export const SETTINGS_ACCESS = {
   newWorktreesStartFromOrigin: agent,
   worktreeSubmodules: agent,
   addProjectBaseDirectory: agent,
+  ghqCloneLayout: agent,
   textGenerationModelSelection: agent,
   threadTitleInstructions: agent,
   branchNamingMode: agent,

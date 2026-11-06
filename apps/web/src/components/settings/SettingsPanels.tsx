@@ -29,6 +29,7 @@ import * as Equal from "effect/Equal";
 import * as Schema from "effect/Schema";
 import { HAS_MOBILE_BETA_LINK, IS_NIGHTLY_BUILD, NightlyMobileBetaRow } from "../NightlyMobileBeta";
 import { AboutVersionTitle } from "./AboutVersionTitle";
+import { GhqCloneLayoutSetting } from "./GhqCloneLayoutSetting";
 import { CliCommandSettingsRow } from "./CliCommandSettingsRow";
 import { MobileAppSettingsRow } from "./MobileAppSettingsRow";
 import {
@@ -146,14 +147,12 @@ function AboutVersionSection() {
   const [isChangingUpdatePolicy, setIsChangingUpdatePolicy] = useState(false);
   const [isChangingUpdateChannel, setIsChangingUpdateChannel] = useState(false);
   const [isUpdateActionPending, setIsUpdateActionPending] = useState(false);
-
   const hasDesktopBridge = typeof window !== "undefined" && Boolean(window.desktopBridge);
   const selectedUpdateChannel = updateState?.channel ?? "latest";
   // Show the beta app links as soon as someone picks Nightly, before the update installs.
   const showNightlyMobileBeta =
     HAS_MOBILE_BETA_LINK &&
     (IS_NIGHTLY_BUILD || (hasDesktopBridge && selectedUpdateChannel === "nightly"));
-
   const handleUpdateChannelChange = (channel: DesktopUpdateChannel) => {
     const bridge = window.desktopBridge;
     if (
@@ -163,7 +162,6 @@ function AboutVersionSection() {
     ) {
       return;
     }
-
     setIsChangingUpdateChannel(true);
     void bridge
       .setUpdateChannel(channel)
@@ -180,13 +178,10 @@ function AboutVersionSection() {
         setIsChangingUpdateChannel(false);
       });
   };
-
   const handleButtonClick = async () => {
     const bridge = window.desktopBridge;
     if (!bridge) return;
-
     const action = updateState ? resolveDesktopUpdateButtonAction(updateState) : "none";
-
     if (action === "download") {
       void bridge.downloadUpdate().catch((error: unknown) => {
         toastManager.add(
@@ -199,7 +194,6 @@ function AboutVersionSection() {
       });
       return;
     }
-
     if (action === "install") {
       if (isUpdateActionPending) return;
       setIsUpdateActionPending(true);
@@ -239,7 +233,6 @@ function AboutVersionSection() {
         .finally(() => setIsUpdateActionPending(false));
       return;
     }
-
     if (typeof bridge.checkForUpdate !== "function") return;
     void bridge
       .checkForUpdate()
@@ -265,14 +258,12 @@ function AboutVersionSection() {
         );
       });
   };
-
   const action = updateState ? resolveDesktopUpdateButtonAction(updateState) : "none";
   const buttonTooltip = updateState ? getDesktopUpdateButtonTooltip(updateState) : null;
   const buttonDisabled =
     action === "none"
       ? !canCheckForUpdate(updateState)
       : isDesktopUpdateButtonDisabled(updateState);
-
   const actionLabel: Record<string, string> = { download: "Download", install: "Install" };
   const statusLabel: Record<string, string> = {
     checking: "Checking…",
@@ -577,6 +568,9 @@ export function useSettingsRestore(onRestored?: () => void) {
     ...(settings.addProjectBaseDirectory !== DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory
       ? ["Add project base directory"]
       : []),
+    ...(settings.ghqCloneLayout !== DEFAULT_UNIFIED_SETTINGS.ghqCloneLayout
+      ? ["Clone into host folders"]
+      : []),
     ...(settings.confirmThreadUnpin !== DEFAULT_UNIFIED_SETTINGS.confirmThreadUnpin
       ? ["Unpin confirmation"]
       : []),
@@ -707,6 +701,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       defaultThreadEnvMode: DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode,
       newWorktreesStartFromOrigin: DEFAULT_UNIFIED_SETTINGS.newWorktreesStartFromOrigin,
       addProjectBaseDirectory: DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory,
+      ghqCloneLayout: DEFAULT_UNIFIED_SETTINGS.ghqCloneLayout,
       confirmThreadArchive: DEFAULT_UNIFIED_SETTINGS.confirmThreadArchive,
       confirmThreadDelete: DEFAULT_UNIFIED_SETTINGS.confirmThreadDelete,
       confirmThreadUnpin: DEFAULT_UNIFIED_SETTINGS.confirmThreadUnpin,
@@ -1395,6 +1390,10 @@ export function GeneralSettingsPanel() {
               aria-label="Add project base directory"
             />
           }
+        />
+        <GhqCloneLayoutSetting
+          checked={settings.ghqCloneLayout}
+          onChange={(value) => updateSettings({ ghqCloneLayout: value })}
         />
       </SettingsSection>
 

@@ -19,7 +19,6 @@ import {
 import { agentSurfaceRegistry } from "@goat/contracts/agentSurface";
 import { Tool, Toolkit } from "effect/ai";
 import * as Schema from "effect/Schema";
-import * as GitWorkflowService from "../../../git/GitWorkflowService.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
 import { agentSurfaceAnnotations } from "../../agentSurface.ts";
@@ -77,7 +76,7 @@ const WorktreeListTool = Tool.make(agentSurfaceRegistry["worktree.list"].name, {
     McpInvocationContext.McpInvocationContext,
     ThreadManagementService.ThreadManagementService,
     ProjectService.ProjectService,
-    GitWorkflowService.GitWorkflowService,
+    WorktreeMcpService.WorktreeMcpService,
   ],
 }).annotateMerge(agentSurfaceAnnotations(agentSurfaceRegistry["worktree.list"]));
 

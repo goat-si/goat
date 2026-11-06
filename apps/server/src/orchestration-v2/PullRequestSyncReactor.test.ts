@@ -945,18 +945,15 @@ describe("PullRequestSyncReactor", () => {
     ),
   );
 
-  it.effect("stops asking the host once a pull request is merged", () =>
+  it.effect.each([
+    { state: "merged" as const, mergedAt: "2026-08-27T00:00:00.000Z" },
+    { state: "closed" as const, closedAt: "2026-08-27T00:00:00.000Z" },
+  ])("skips a $state pull request during sweeps but reads it on explicit refresh", (snapshot) =>
     Effect.scoped(
       Effect.gen(function* () {
         yield* TestClock.setTime(Date.parse(NOW));
         const fixture = yield* makeHarness({
-          snapshot: makeSnapshot([
-            makeThread("merged", {
-              pullRequests: [
-                makeLink(1, { state: "merged", mergedAt: "2026-08-27T00:00:00.000Z" }),
-              ],
-            }),
-          ]),
+          snapshot: makeSnapshot([makeThread("final", { pullRequests: [makeLink(1, snapshot)] })]),
         });
 
         yield* Effect.gen(function* () {

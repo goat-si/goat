@@ -577,6 +577,16 @@ function ServerSettingsDetail(props: {
                       onValueChange={(value) => write({ defaultAutoPull: value })}
                     />
                   </SettingsSection>
+                  <SettingsSection title="Clones">
+                    <SettingsSwitchRow
+                      icon="folder"
+                      label="Clone into host folders"
+                      subtitle="Clones go to github.com/owner/repo under the Add project folder, like ghq."
+                      value={uniform("ghqCloneLayout")}
+                      disabled={disabledFor("ghqCloneLayout")}
+                      onValueChange={(value) => write({ ghqCloneLayout: value })}
+                    />
+                  </SettingsSection>
                   <SettingsSection title="Worktrees">
                     <SettingsSwitchRow
                       icon="arrow.triangle.branch"
