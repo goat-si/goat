@@ -2522,7 +2522,6 @@ export const layerWsRpc = (
             if (input.instanceId === undefined) {
               // A vendor CLI installed after startup is picked up on the next full refresh.
               yield* cloudAutoSetup.apply.pipe(Effect.ignore);
-              yield* usageLimitSources.refresh;
             }
             let providers = yield* input.cwd !== undefined && input.instanceId !== undefined
               ? providerRegistry.refreshWorkspaceSnapshot({
@@ -2535,6 +2534,7 @@ export const layerWsRpc = (
                 : input.instanceId !== undefined
                   ? providerRegistry.refreshInstance(input.instanceId)
                   : providerRegistry.refresh();
+            if (input.instanceId === undefined) yield* usageLimitSources.refresh;
             if (input.refreshModels) {
               const instances = yield* providerInstances.listInstances;
               for (const instance of instances) {
