@@ -527,6 +527,7 @@ const make = Effect.gen(function* () {
       row?.state === "starting" &&
       (row.task_id !== initial.task.taskId || row.task_generation !== initial.task.generation)
     ) {
+      if (read === "unknown") return "deferred" as const;
       const starter = row.task_id === null ? undefined : yield* ledger.getTask(row.task_id);
       const launchedRuns = Option.isSome(records) ? records.value.runs.length : 0;
       if (

@@ -130,6 +130,25 @@ describe("GOAT Bot sessions and the bot's profile", () => {
     }).pipe(Effect.provide(harness.layer));
   });
 
+  it.effect("keeps an unfinished launch it cannot read for another task", () => {
+    const harness = sessionHarness();
+    return Effect.gen(function* () {
+      yield* setupBot;
+      const sql = yield* SqlClient.SqlClient;
+      const first = yield* ask("look: one", "s1");
+      const thread = first.worker!.threadId;
+      // As if the launch had not been marked live, while its thread cannot be read.
+      yield* sql`UPDATE channel_bot_sessions SET state = 'starting' WHERE thread_id = ${thread}`;
+      harness.world.recordFailures.add(thread);
+      const waiting = yield* ask("look: two", "s2");
+      assert.isUndefined(waiting.worker);
+      assert.strictEqual(yield* sessionState(thread), "starting");
+      harness.world.recordFailures.delete(thread);
+      yield* settle;
+      assert.strictEqual(yield* sessionState(thread), "active");
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect("fails a stored request visibly when the profile cannot be read, then recovers", () => {
     const harness = sessionHarness();
     return Effect.gen(function* () {
