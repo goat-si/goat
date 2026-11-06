@@ -982,6 +982,8 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
       label: token.label,
       detail: token.detail,
       icon: icon,
+      // Hold the icon's place while it loads, as Android does, so the label never shifts.
+      reservesIcon: token.iconUri?.isEmpty == false,
       color: color,
       font: chipFont
     )
@@ -1004,6 +1006,7 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
     label: String,
     detail: String?,
     icon: UIImage?,
+    reservesIcon: Bool,
     color: UIColor,
     font: UIFont
   ) -> UIImage {
@@ -1026,7 +1029,7 @@ public final class GoatComposerEditorView: ExpoView, UITextViewDelegate, UITextD
       )
     }
     let iconSide = font.pointSize
-    let iconSlot: CGFloat = icon == nil ? 0 : iconSide * 1.25
+    let iconSlot: CGFloat = icon == nil && !reservesIcon ? 0 : iconSide * 1.25
     let padding: CGFloat = 5
     let height = ceil(font.ascender - font.descender)
     // A long path would otherwise draw a chip wider than the composer and clip. Cap the label
