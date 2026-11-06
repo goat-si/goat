@@ -477,6 +477,7 @@ function AssistantForkButton(props: {
           })
           .finally(() => setBusy(false));
       }}
+      hitSlop={8}
       className="h-7 w-7 items-center justify-center disabled:opacity-40"
       style={
         Platform.OS === "android"
@@ -968,7 +969,6 @@ function useMarkdownStyles(): MarkdownStyleSets {
   ]);
 }
 
-/** Messages from other agents fold to one line so the user's own messages stay easy to find. */
 /** What GOAT put in front of a launched thread's first message, collapsed until tapped. */
 function StandingInstructionsRow(props: { readonly block: StandingInstructionsBlock }) {
   const [open, setOpen] = useState(false);
@@ -991,7 +991,7 @@ function StandingInstructionsRow(props: { readonly block: StandingInstructionsBl
         <Text className="font-goat-medium text-2xs text-foreground-muted">
           Standing instructions
         </Text>
-        <Text className="text-2xs text-foreground-muted opacity-70">{props.block.version}</Text>
+        <Text className="text-2xs text-foreground-tertiary">{props.block.version}</Text>
       </Pressable>
       {open ? (
         <Text selectable className="text-xs text-foreground-muted">
@@ -1527,7 +1527,7 @@ function renderFeedEntry(
             />
           ) : null}
           {presentation.attribution === "t3code" ? (
-            <Text className="mb-1 pr-1 font-goat-medium text-2xs text-foreground-muted opacity-60">
+            <Text className="mb-1 pr-1 font-goat-medium text-2xs text-foreground-muted">
               Sent by GOAT
             </Text>
           ) : null}
