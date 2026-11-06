@@ -173,7 +173,7 @@ export class GitLabPullRequestCli extends Context.Service<
       readonly host?: string | undefined;
       readonly repository: string;
       readonly number: number;
-      /** `false` skips the trigger job read; the permission check before every write does. */
+      /** `false` skips the stage and trigger job reads, as write permission checks do. */
       readonly downstreamChecks?: boolean;
     }) => Effect.Effect<GitLabMergeRequestDetail, GitLabPullRequestCliError>;
 
@@ -1049,7 +1049,8 @@ export const make = Effect.gen(function* () {
 
   const { graphqlListPage, listStatesOf } = makeGitLabListReads(graphqlRead);
 
-  const { labelPermission, supportsGraphqlList } = makeGitLabGraphqlSupport(graphqlRead);
+  const { labelPermission, supportsGraphqlList, pipelineStageChecks } =
+    makeGitLabGraphqlSupport(graphqlRead);
   const { sourceBranch, deleteSourceBranch } = makeGitLabBranchDeletion({ api, graphqlRead });
 
   const mergeRequestStats = (input: {
@@ -1261,6 +1262,8 @@ export const make = Effect.gen(function* () {
                 ),
               };
         if (input.downstreamChecks === false || detail.headPipeline === undefined) return detail;
+        const stages = yield* pipelineStageChecks({ ...input, url: detail.url });
+        if (stages !== null) return { ...detail, checks: stages };
         const downstream = yield* triggerJobChecks({
           ...input,
           pipeline: detail.headPipeline,

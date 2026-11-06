@@ -1,3 +1,8 @@
+import {
+  PIPELINE_STAGES_GRAPHQL_QUERY,
+  decodePipelineStageChecksJson,
+} from "./gitLabPipelineStages.ts";
+import type { PullRequestCheck } from "@goat/contracts";
 import * as Effect from "effect/Effect";
 import type * as Result from "effect/Result";
 import type * as GitLabCli from "./GitLabCli.ts";
@@ -54,5 +59,24 @@ export function makeGitLabGraphqlSupport(
       }),
   );
 
-  return { labelPermission, supportsGraphqlList };
+  // Best-effort: stages that can't be read keep the merge request's single pipeline check.
+  const pipelineStageChecks = (input: {
+    readonly cwd: string;
+    readonly host?: string | undefined;
+    readonly repository: string;
+    readonly number: number;
+    readonly url: string;
+  }): Effect.Effect<ReadonlyArray<PullRequestCheck> | null> =>
+    URL.canParse(input.url)
+      ? graphqlRead({
+          cwd: input.cwd,
+          host: input.host,
+          operation: "getPipelineStageChecks",
+          query: PIPELINE_STAGES_GRAPHQL_QUERY,
+          variables: { fullPath: input.repository, iid: String(input.number) },
+          decode: (raw) => decodePipelineStageChecksJson(raw, new URL(input.url).origin),
+        }).pipe(Effect.orElseSucceed(() => null))
+      : Effect.succeed(null);
+
+  return { labelPermission, supportsGraphqlList, pipelineStageChecks };
 }
