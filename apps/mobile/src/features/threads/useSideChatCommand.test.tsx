@@ -13,12 +13,22 @@ const test = vi.hoisted(() => ({
   open: vi.fn(),
   alert: vi.fn(),
   clear: vi.fn(),
+  listeners: new Set<(threads: never[]) => void>(),
   draft: { text: "/btw question", attachments: [], context: undefined },
 }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => test.shells }));
 vi.mock("../../components/ui/Dialog", () => ({ alert: test.alert }));
 vi.mock("../../lib/uuid", () => ({ uuidv4: () => "new-id" }));
 vi.mock("../../state/session", () => ({ readEnvironmentScope: () => test.allowed }));
+vi.mock("../../state/atom-registry", () => ({
+  appAtomRegistry: {
+    subscribe: (_atom: unknown, listener: (threads: never[]) => void) => {
+      test.listeners.add(listener);
+      return () => test.listeners.delete(listener);
+    },
+    get: () => test.shells,
+  },
+}));
 vi.mock("../../state/threads", () => ({
   environmentThreadShells: { threadShellsAtom: {} },
   threadEnvironment: { forkAsSideChat: "fork", create: "create", startTurn: "start" },
@@ -180,5 +190,194 @@ it("reuses an existing side chat and keeps the draft when sending fails", async 
   );
   expect(test.clear).not.toHaveBeenCalled();
   expect(test.open).toHaveBeenCalledWith({ environmentId: "env", threadId: "existing" });
+  await act(async () => root.unmount());
+});
+
+it("reuses a newly created side chat before its shell reaches this device", async () => {
+  test.allowed = true;
+  test.shells = [];
+  test.fork.mockReset().mockResolvedValue({ _tag: "Success" });
+  test.create.mockReset().mockResolvedValue({ _tag: "Success" });
+  test.start.mockReset().mockResolvedValue({ _tag: "Success" });
+  test.open.mockReset();
+  test.clear.mockReset();
+  let send: ReturnType<typeof useSideChatCommand> | undefined;
+  function Harness() {
+    const command = useSideChatCommand();
+    useLayoutEffect(() => {
+      send = command;
+    }, [command]);
+    return null;
+  }
+  const root = createRoot(document.createElement("div"));
+  await act(async () => root.render(<Harness />));
+  const thread = {
+    id: "parent-race",
+    environmentId: "env-race",
+    projectId: "project",
+    title: "Task",
+    latestRun: {},
+    runtimeMode: "approval-required",
+    lineage: { relationshipToParent: "fork" },
+    sideChatOf: null,
+  } as never;
+  await act(async () => {
+    await send?.({
+      thread,
+      threadKey: "env-race:parent-race",
+      text: "/side one",
+      connected: true,
+      hasAttachmentsOrContext: false,
+    });
+  });
+  await act(async () => root.unmount());
+  const reopened = createRoot(document.createElement("div"));
+  await act(async () => reopened.render(<Harness />));
+  await act(async () => {
+    await send?.({
+      thread,
+      threadKey: "env-race:parent-race",
+      text: "/side two",
+      connected: true,
+      hasAttachmentsOrContext: false,
+    });
+  });
+  expect(test.fork).toHaveBeenCalledTimes(1);
+  expect(test.create).not.toHaveBeenCalled();
+  expect(test.start).toHaveBeenCalledTimes(2);
+  expect(test.start).toHaveBeenNthCalledWith(
+    2,
+    expect.objectContaining({
+      environmentId: "env-race",
+      input: expect.objectContaining({
+        threadId: "new-id",
+        message: expect.objectContaining({ text: "two" }),
+      }),
+    }),
+  );
+  test.shells = [
+    {
+      id: "new-id",
+      environmentId: "env-race",
+      sideChatOf: "parent-race",
+      archivedAt: null,
+      deletedAt: null,
+      createdAt: "2026-01-01",
+    },
+  ];
+  for (const listener of test.listeners) listener(test.shells as never[]);
+  test.shells = [];
+  await act(async () => {
+    await send?.({
+      thread,
+      threadKey: "env-race:parent-race",
+      text: "/side three",
+      connected: true,
+      hasAttachmentsOrContext: false,
+    });
+  });
+  expect(test.fork).toHaveBeenCalledTimes(2);
+  await act(async () => reopened.unmount());
+});
+
+it("does not reuse a pending side chat from another environment", async () => {
+  test.allowed = true;
+  test.shells = [];
+  test.fork.mockReset().mockResolvedValue({ _tag: "Success" });
+  test.create.mockReset().mockResolvedValue({ _tag: "Success" });
+  test.start.mockReset().mockResolvedValue({ _tag: "Success" });
+  let send: ReturnType<typeof useSideChatCommand> | undefined;
+  function Harness() {
+    const command = useSideChatCommand();
+    useLayoutEffect(() => {
+      send = command;
+    }, [command]);
+    return null;
+  }
+  const root = createRoot(document.createElement("div"));
+  await act(async () => root.render(<Harness />));
+  const source = {
+    id: "same-parent",
+    projectId: "project",
+    title: "Task",
+    latestRun: {},
+    runtimeMode: "approval-required",
+    lineage: { relationshipToParent: "fork" },
+    sideChatOf: null,
+  };
+  await act(async () => {
+    await send?.({
+      thread: { ...source, environmentId: "scope-one" } as never,
+      threadKey: "scope-one:same-parent",
+      text: "/side one",
+      connected: true,
+      hasAttachmentsOrContext: false,
+    });
+    await send?.({
+      thread: { ...source, environmentId: "scope-two" } as never,
+      threadKey: "scope-two:same-parent",
+      text: "/side two",
+      connected: true,
+      hasAttachmentsOrContext: false,
+    });
+  });
+  expect(test.fork).toHaveBeenCalledTimes(2);
+  expect(test.fork).toHaveBeenNthCalledWith(
+    2,
+    expect.objectContaining({ environmentId: "scope-two" }),
+  );
+  await act(async () => root.unmount());
+});
+
+it("does not start two forks for the same parent from separate mounted views", async () => {
+  test.allowed = true;
+  test.shells = [];
+  test.alert.mockReset();
+  const forkResult = Promise.withResolvers<{ _tag: "Success" }>();
+  test.fork.mockReset().mockReturnValue(forkResult.promise);
+  test.create.mockReset().mockResolvedValue({ _tag: "Success" });
+  test.start.mockReset().mockResolvedValue({ _tag: "Success" });
+  let first: ReturnType<typeof useSideChatCommand> | undefined;
+  let second: ReturnType<typeof useSideChatCommand> | undefined;
+  function Harness() {
+    const firstCommand = useSideChatCommand();
+    const secondCommand = useSideChatCommand();
+    useLayoutEffect(() => {
+      first = firstCommand;
+      second = secondCommand;
+    }, [firstCommand, secondCommand]);
+    return null;
+  }
+  const root = createRoot(document.createElement("div"));
+  await act(async () => root.render(<Harness />));
+  const thread = {
+    id: "concurrent-parent",
+    environmentId: "concurrent-env",
+    projectId: "project",
+    title: "Task",
+    latestRun: {},
+    runtimeMode: "approval-required",
+    lineage: { relationshipToParent: "fork" },
+    sideChatOf: null,
+  } as never;
+  const input = {
+    thread,
+    threadKey: "concurrent-env:concurrent-parent",
+    text: "/side question",
+    connected: true,
+    hasAttachmentsOrContext: false,
+  };
+  let pending: Promise<boolean> | undefined;
+  await act(async () => {
+    pending = first?.(input);
+    await second?.(input);
+  });
+  expect(test.fork).toHaveBeenCalledTimes(1);
+  expect(test.alert).toHaveBeenCalled();
+  await act(async () => {
+    forkResult.resolve({ _tag: "Success" });
+    await pending;
+  });
+  expect(test.start).toHaveBeenCalledTimes(1);
   await act(async () => root.unmount());
 });

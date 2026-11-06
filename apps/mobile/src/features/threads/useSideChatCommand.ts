@@ -1,4 +1,3 @@
-import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentThreadShell } from "@goat/client-runtime/state/models";
 import {
   isAtomCommandInterrupted,
@@ -9,6 +8,7 @@ import { useRef } from "react";
 import * as Dialog from "../../components/ui/Dialog";
 import { uuidv4 } from "../../lib/uuid";
 import { readEnvironmentScope } from "../../state/session";
+import { appAtomRegistry } from "../../state/atom-registry";
 import { environmentThreadShells, threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import {
@@ -18,8 +18,45 @@ import {
 import { findSideChat, parseSideChatCommand } from "./sideChatCommand";
 import { useOpenLinkedThread } from "./useOpenLinkedThread";
 
+const pendingSideChats = new Map<
+  string,
+  { environmentId: string; parentId: string; targetId: ThreadId }
+>();
+const startingSideChats = new Set<string>();
+let stopWatching: (() => void) | undefined;
+const sideChatKey = (environmentId: string, parentId: string) =>
+  JSON.stringify([environmentId, parentId]);
+
+function reconcilePendingSideChats(threads: ReadonlyArray<EnvironmentThreadShell>) {
+  for (const [key, pending] of pendingSideChats) {
+    if (
+      threads.some(
+        (thread) =>
+          thread.environmentId === pending.environmentId &&
+          thread.id === pending.targetId &&
+          thread.sideChatOf === pending.parentId,
+      )
+    ) {
+      pendingSideChats.delete(key);
+    }
+  }
+  if (pendingSideChats.size === 0) {
+    stopWatching?.();
+    stopWatching = undefined;
+  }
+}
+
+function rememberPendingSideChat(environmentId: string, parentId: string, targetId: ThreadId) {
+  const key = sideChatKey(environmentId, parentId);
+  pendingSideChats.set(key, { environmentId, parentId, targetId });
+  stopWatching ??= appAtomRegistry.subscribe(
+    environmentThreadShells.threadShellsAtom,
+    reconcilePendingSideChats,
+  );
+  reconcilePendingSideChats(appAtomRegistry.get(environmentThreadShells.threadShellsAtom));
+}
+
 export function useSideChatCommand() {
-  const threads = useAtomValue(environmentThreadShells.threadShellsAtom);
   const fork = useAtomCommand(threadEnvironment.forkAsSideChat, { reportFailure: false });
   const create = useAtomCommand(threadEnvironment.create, { reportFailure: false });
   const start = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
@@ -62,9 +99,25 @@ export function useSideChatCommand() {
       return true;
     }
     busy.current = true;
+    let startingKey: string | undefined;
     try {
-      let targetId = findSideChat(threads, thread.environmentId, thread.id)?.id;
+      let targetId =
+        findSideChat(
+          appAtomRegistry.get(environmentThreadShells.threadShellsAtom),
+          thread.environmentId,
+          thread.id,
+        )?.id ?? pendingSideChats.get(sideChatKey(thread.environmentId, thread.id))?.targetId;
       if (targetId === undefined) {
+        const key = sideChatKey(thread.environmentId, thread.id);
+        if (startingSideChats.has(key) || pendingSideChats.size + startingSideChats.size >= 128) {
+          Dialog.alert(
+            "Side chat unavailable",
+            "Wait for the current side chat to finish starting.",
+          );
+          return true;
+        }
+        startingKey = key;
+        startingSideChats.add(key);
         targetId = ThreadId.make(uuidv4());
         const title = `Side chat: ${thread.title}`;
         const forked =
@@ -102,6 +155,7 @@ export function useSideChatCommand() {
             return true;
           }
         }
+        rememberPendingSideChat(thread.environmentId, thread.id, targetId);
       }
       if (command.prompt.length > 0) {
         const result = await start({
@@ -136,6 +190,7 @@ export function useSideChatCommand() {
       open({ environmentId: thread.environmentId, threadId: targetId });
       return true;
     } finally {
+      if (startingKey !== undefined) startingSideChats.delete(startingKey);
       busy.current = false;
     }
   };
