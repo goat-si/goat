@@ -6,11 +6,11 @@ import { isModelSelectionMiss } from "../mcp/ModelSelectionValidation.ts";
 import { SshRemoteDispatchError } from "./dispatchFailure.ts";
 
 /** Where an agent sees what another machine offers; its own provider.list shows this machine's. */
-const remoteCatalogHint = (alias: string, model: string) =>
+const remoteCatalogHint = (alias: string) =>
   `${alias} answered from its own model list, not this machine's. See what it offers with ${goatCallText(
     "provider.list",
-    `{host:${JSON.stringify(alias)}, search:${JSON.stringify(model)}}`,
-  )}, then pass modelSelection with one of those models.`;
+    `{host:${JSON.stringify(alias)}}`,
+  )} (add search to find a model by name), then pass modelSelection with one of those models.`;
 
 /** A destination's own instance or model refusal, kept word for word, plus whose catalog it means. */
 export const withRemoteCatalogHint = <E>(error: E, alias: string, model: string | undefined) =>
@@ -20,7 +20,7 @@ export const withRemoteCatalogHint = <E>(error: E, alias: string, model: string 
   isModelSelectionMiss(error.message)
     ? new SshRemoteDispatchError({
         ...error,
-        message: `${error.message} ${remoteCatalogHint(alias, model)}`,
+        message: `${error.message} ${remoteCatalogHint(alias)}`,
       })
     : error;
 
@@ -40,7 +40,7 @@ export const remoteModelMiss = (
       offer === "missing"
         ? `${selection.instanceId} on ${alias} does not offer ${selection.model}, even after refreshing its model list.`
         : `${alias} has no provider instance ${selection.instanceId}.`
-    } ${remoteCatalogHint(alias, selection.model)}`,
+    } ${remoteCatalogHint(alias)}`,
   });
 
 /**

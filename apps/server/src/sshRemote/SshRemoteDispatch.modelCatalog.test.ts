@@ -6,8 +6,8 @@ import * as SshRemoteDispatch from "./SshRemoteDispatch.ts";
 import { host, withRemote } from "./SshRemoteDispatch.hostCall.testkit.ts";
 import { withLinkedHost } from "./testkit/LinkedHostFixture.ts";
 
-const catalogPointer = (alias: string, model: string) =>
-  `goat_call {path:"provider.list", args:{host:"${alias}", search:"${model}"}}`;
+const catalogPointer = (alias: string) =>
+  `goat_call {path:"provider.list", args:{host:"${alias}"}}`;
 
 const structured = (value: unknown) => ({ result: { structuredContent: value } });
 
@@ -59,7 +59,7 @@ describe("a model another machine lacks", () => {
       });
       const failure = result._tag === "Failure" ? result.failure : undefined;
       expect(failure?.message).toContain(refusal);
-      expect(failure?.message).toContain(catalogPointer("box", "gpt-x"));
+      expect(failure?.message).toContain(catalogPointer("box"));
       expect(failure?.launchMayHaveStarted).toBeUndefined();
     }),
   );
@@ -118,7 +118,7 @@ describe("a model another machine lacks", () => {
         failure: { reason: "remote_refused", remoteCode: "model_unavailable" },
       });
       expect(result._tag === "Failure" ? result.failure.message : "").toContain(
-        catalogPointer(host, "gpt-x"),
+        catalogPointer(host),
       );
       expect(
         record.toolCallArguments.filter((call) => call.tool === "orchestrator_capabilities"),
