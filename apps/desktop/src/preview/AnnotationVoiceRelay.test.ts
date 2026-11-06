@@ -31,6 +31,7 @@ it("forwards only valid events and states from the active annotation session", (
     sequence: 1,
     phase: "idle" as const,
     available: true,
+    destination: "Selected environment",
     error: null,
     draft: null,
   };

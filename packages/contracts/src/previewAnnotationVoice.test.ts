@@ -34,6 +34,7 @@ it("accepts old pick requests and bounds annotation voice messages", () => {
     sequence: 1,
     phase: "idle",
     available: true,
+    destination: "Selected environment",
     error: null,
     draft: {
       text: "done",

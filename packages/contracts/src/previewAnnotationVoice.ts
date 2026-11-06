@@ -27,6 +27,7 @@ export const AnnotationVoiceState = Schema.Struct({
   sequence: Schema.Int.check(Schema.isGreaterThan(0)),
   phase: Schema.Literals(["idle", "preparing", "recording", "transcribing", "error"]),
   available: Schema.Boolean,
+  destination: Schema.NullOr(Schema.String.check(Schema.isMaxLength(200))),
   error: Schema.NullOr(Schema.String.check(Schema.isMaxLength(2048))),
   draft: Schema.NullOr(
     Schema.Struct({

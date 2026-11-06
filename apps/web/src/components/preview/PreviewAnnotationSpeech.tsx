@@ -9,6 +9,7 @@ import { useLayoutEffect, useRef } from "react";
 import { useComposerVoiceController } from "../chat/useComposerVoiceController";
 import { useStableCallback } from "../../hooks/useStableCallback";
 import { useEnvironmentScope, usePreparedConnection } from "../../state/session";
+import { useEnvironment } from "../../state/environments";
 import { useEnvironmentSpeechGrant } from "../../speech/voiceConsent";
 import { previewBridge } from "./previewBridge";
 import { toastManager } from "../ui/toast";
@@ -23,12 +24,17 @@ export function PreviewAnnotationSpeech({
   sessionId: string;
 }) {
   const grant = useEnvironmentSpeechGrant();
-  const selected = grant?.environmentId === environmentId ? grant : null;
-  const hasScope = useEnvironmentScope(environmentId, AuthOrchestrationOperateScope);
-  const connection = usePreparedConnection(environmentId);
+  const selected = grant;
+  const destinationId = selected?.environmentId ?? environmentId;
+  const destinationEnvironment = useEnvironment(destinationId);
+  const destination = selected
+    ? (destinationEnvironment?.label ?? "selected environment").slice(0, 200)
+    : null;
+  const hasScope = useEnvironmentScope(destinationId, AuthOrchestrationOperateScope);
+  const connection = usePreparedConnection(destinationId);
   const proxied =
     Option.isSome(connection) && connection.value.target._tag === "HubProxyConnectionTarget";
-  const available = selected !== null && hasScope && !proxied;
+  const available = selected !== null && hasScope && Option.isSome(connection) && !proxied;
   const draft = useRef({ text: "", cursor: 0, selectionEnd: 0 });
   const pendingDraft = useRef<AnnotationVoiceState["draft"]>(null);
   const notifyDraft = useRef<(() => void) | null>(null);
@@ -48,7 +54,7 @@ export function PreviewAnnotationSpeech({
     cwd: null,
     ownerKey: sessionId,
     locale: typeof navigator === "undefined" ? "en-US" : navigator.language || "en-US",
-    route: { kind: "environment", environmentId },
+    route: { kind: "environment", environmentId: destinationId },
     localModelGrant: selected,
     enabled: available,
     readDraft: () => ({
@@ -87,6 +93,7 @@ export function PreviewAnnotationSpeech({
       tabId,
       sessionId,
       available,
+      destination,
       phase: voice.state.phase,
       error: voice.state.error?.slice(0, 2048) ?? null,
       draft: null,
@@ -115,11 +122,12 @@ export function PreviewAnnotationSpeech({
         tabId,
         sessionId,
         available,
+        destination,
         phase: voice.state.phase,
         error: voice.state.error?.slice(0, 2048) ?? null,
         draft: resultDraft,
       });
     }
-  }, [available, sessionId, tabId, voice.state.phase, voice.state.error, update]);
+  }, [available, destination, sessionId, tabId, voice.state.phase, voice.state.error, update]);
   return null;
 }

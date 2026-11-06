@@ -12,8 +12,11 @@ export interface ComposerVoiceButtonProps {
   readonly environmentSpeech?: {
     readonly label: string;
     readonly selected: boolean;
-    readonly available: boolean;
-    readonly enable: () => void;
+    readonly destinations: ReadonlyArray<{
+      readonly environmentId: EnvironmentId;
+      readonly label: string;
+    }>;
+    readonly enable: (id: EnvironmentId) => void;
     readonly disable: () => void;
     readonly environmentId: EnvironmentId;
     readonly canManage: boolean;
@@ -66,10 +69,21 @@ export function ComposerVoiceButton({
             <span aria-hidden="true">▾</span>
           </MenuTrigger>
           <MenuPopup align="end" side="top">
-            <MenuItem disabled={!environmentSpeech.available} onClick={environmentSpeech.enable}>
-              {environmentSpeech.selected ? "✓ " : ""}Transcribe on {environmentSpeech.label} (sends
-              audio)
-            </MenuItem>
+            {environmentSpeech.destinations.map((destination) => (
+              <MenuItem
+                key={destination.environmentId}
+                onClick={() => environmentSpeech.enable(destination.environmentId)}
+              >
+                {environmentSpeech.selected &&
+                environmentSpeech.environmentId === destination.environmentId
+                  ? "✓ "
+                  : ""}
+                Transcribe on {destination.label} (sends audio)
+              </MenuItem>
+            ))}
+            {environmentSpeech.destinations.length === 0 ? (
+              <MenuItem disabled>No permitted environment connected</MenuItem>
+            ) : null}
             <MenuItem onClick={environmentSpeech.disable}>
               {!environmentSpeech.selected ? "✓ " : ""}Use existing voice input
             </MenuItem>

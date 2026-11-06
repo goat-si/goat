@@ -5,6 +5,7 @@ import { useComposerVoiceController } from "../components/chat/useComposerVoiceC
 import { ComposerVoiceButton } from "../components/chat/ComposerVoiceButton";
 import { Button } from "../components/ui/button";
 import { useEnvironmentScope, usePreparedConnection } from "../state/session";
+import { useEnvironment } from "../state/environments";
 import { useEnvironmentSpeechGrant } from "./voiceConsent";
 
 export function useCommentSpeech(input: {
@@ -16,9 +17,11 @@ export function useCommentSpeech(input: {
 }) {
   const ownerKey = useId();
   const grant = useEnvironmentSpeechGrant();
-  const selected = grant?.environmentId === input.environmentId ? grant : null;
-  const hasScope = useEnvironmentScope(input.environmentId, AuthOrchestrationOperateScope);
-  const connection = usePreparedConnection(input.environmentId);
+  const selected = grant;
+  const destinationId = selected?.environmentId ?? input.environmentId;
+  const destinationLabel = useEnvironment(destinationId)?.label ?? "the selected environment";
+  const hasScope = useEnvironmentScope(destinationId, AuthOrchestrationOperateScope);
+  const connection = usePreparedConnection(destinationId);
   const proxied =
     Option.isSome(connection) && connection.value.target._tag === "HubProxyConnectionTarget";
   const voice = useComposerVoiceController({
@@ -28,9 +31,10 @@ export function useCommentSpeech(input: {
     cwd: null,
     ownerKey,
     locale: typeof navigator === "undefined" ? "en-US" : navigator.language || "en-US",
-    route: { kind: "environment", environmentId: input.environmentId },
+    route: { kind: "environment", environmentId: destinationId },
     localModelGrant: selected,
-    enabled: selected !== null && hasScope && !proxied && !input.disabled,
+    enabled:
+      selected !== null && hasScope && Option.isSome(connection) && !proxied && !input.disabled,
     readDraft: () => {
       const field = input.textareaRef.current;
       const text = field?.value ?? input.text;
@@ -58,7 +62,7 @@ export function useCommentSpeech(input: {
       });
     },
   });
-  return { voice, visible: selected !== null };
+  return { voice, visible: selected !== null, destinationLabel };
 }
 
 export function CommentSpeechControls({ speech }: { speech: ReturnType<typeof useCommentSpeech> }) {
@@ -66,6 +70,7 @@ export function CommentSpeechControls({ speech }: { speech: ReturnType<typeof us
   const { voice } = speech;
   return (
     <span className="inline-flex items-center gap-1">
+      <span className="sr-only">Transcribes on {speech.destinationLabel}</span>
       {voice.isVoiceActive ? (
         <>
           <span role="status">
@@ -73,7 +78,7 @@ export function CommentSpeechControls({ speech }: { speech: ReturnType<typeof us
               ? "Transcribing…"
               : voice.isVoiceStarting
                 ? "Preparing…"
-                : "Recording…"}
+                : `Recording on ${speech.destinationLabel}…`}
           </span>
           <Button type="button" size="xs" variant="outline" onClick={voice.cancel}>
             Cancel recording

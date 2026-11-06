@@ -248,15 +248,14 @@ By default, the desktop app uses this computer's Codex sign-in or OpenCodex to
 transcribe. In a browser, the thread's environment uses its transcription service.
 The recorder shows where transcription runs.
 
-You can instead choose **Transcribe on** the thread's environment from the
-composers' dictation options. This sends recordings to that environment and uses a
+You can instead choose **Transcribe on** a connected environment from the
+composer's dictation options. This sends recordings to that environment and uses a
 speech model installed there. The choice belongs to this device; select **Use
 existing voice input** to turn it off. Someone with voice management permission can
 download, select, or remove models from **Manage voice models** in the same menu.
 Connections through a hub do not currently support this option.
-After choosing an environment, you can also dictate into a pull request comment
-on that environment. In the desktop Browser, the same choice applies to annotation
-comments.
+After choosing an environment, you can also dictate into review and citation
+comments. In the desktop Browser, the same choice applies to annotation comments.
 
 Model management requires the explicit `voice:manage` permission; ordinary pairing
 does not grant it. On the environment's machine, create a pairing with:

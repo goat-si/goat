@@ -84,6 +84,25 @@ function setup(overrides: Partial<ComposerVoiceTarget> = {}) {
 }
 
 describe("composer voice controller", () => {
+  it("keeps the selected voice environment when the thread is on another machine", async () => {
+    const destination = EnvironmentId.make("voice-env-a");
+    chooseEnvironmentSpeech(destination);
+    const grant = readEnvironmentSpeechGrant();
+    if (!grant) throw new Error("Grant was not stored");
+    using session = setup({
+      environmentId: EnvironmentId.make("voice-env-b"),
+      route: { kind: "environment", environmentId: destination },
+      localModelGrant: grant,
+    });
+    await session.controller.start();
+    expect(await session.controller.confirm()).toBe(true);
+    expect(session.transcribe.mock.calls[0]?.[0].route).toEqual({
+      kind: "environment",
+      environmentId: destination,
+    });
+    chooseEnvironmentSpeech(null);
+  });
+
   it("does not send preview chunks to a local speech model", async () => {
     chooseEnvironmentSpeech(EnvironmentId.make("voice-env-a"));
     const grant = readEnvironmentSpeechGrant();

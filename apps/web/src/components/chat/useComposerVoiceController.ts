@@ -26,12 +26,13 @@ import { RemoteEnvironmentAuthorization } from "@goat/client-runtime/authorizati
 import { createRuntimeCommand, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import { useStableCallback } from "../../hooks/useStableCallback";
 import { composerTargetKey, useComposerDraftStore } from "../../composerDraftStore";
-import { useEnvironment, usePrimaryEnvironmentId } from "../../state/environments";
+import { useEnvironment, useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
 import {
   readEnvironmentProxiedByHub,
   readEnvironmentScope,
   useEnvironmentScope,
   usePreparedConnection,
+  useEnvironmentsWithScope,
 } from "../../state/session";
 import {
   chooseEnvironmentSpeech,
@@ -477,21 +478,30 @@ export function useChatComposerVoiceController(
 ) {
   const ownerKey = composerTargetKey(options.draftTarget);
   const grant = useEnvironmentSpeechGrant();
-  const selectedGrant = grant?.environmentId === options.environmentId ? grant : null;
-  const hasScope = useEnvironmentScope(options.environmentId, AuthOrchestrationOperateScope);
-  const connection = usePreparedConnection(options.environmentId);
+  const selectedGrant = grant;
+  const destinationId = selectedGrant?.environmentId ?? options.environmentId;
+  const { environments } = useEnvironments();
+  const permitted = useEnvironmentsWithScope(environments, AuthOrchestrationOperateScope);
+  const destinations = environments.filter(
+    (environment) =>
+      environment.connection.phase === "connected" &&
+      permitted.has(environment.environmentId) &&
+      environment.entry.target._tag !== "HubProxyConnectionTarget",
+  );
+  const hasScope = useEnvironmentScope(destinationId, AuthOrchestrationOperateScope);
+  const connection = usePreparedConnection(destinationId);
   const isProxied =
     Option.isSome(connection) && connection.value.target._tag === "HubProxyConnectionTarget";
-  const environmentLabel = useEnvironment(options.environmentId)?.label ?? "this environment";
+  const environmentLabel = useEnvironment(destinationId)?.label ?? "this environment";
   const canManage = useAtomValue(
-    serverEnvironment.updateSettings.permissionAtom(options.environmentId, {
+    serverEnvironment.updateSettings.permissionAtom(destinationId, {
       patch: { speech: DEFAULT_SPEECH_CONFIGURATION },
     }),
   );
   const localEnvironmentId = usePrimaryEnvironmentId();
   // The desktop app transcribes on its own machine; a browser or phone uses the thread's server.
   const route = selectedGrant
-    ? { kind: "environment" as const, environmentId: options.environmentId }
+    ? { kind: "environment" as const, environmentId: destinationId }
     : resolveVoiceTranscriptionRoute({
         requiresLocalRuntime: typeof window !== "undefined" && window.desktopBridge !== undefined,
         localEnvironmentId,
@@ -502,7 +512,8 @@ export function useChatComposerVoiceController(
     ownerKey,
     route,
     localModelGrant: selectedGrant,
-    enabled: options.enabled && (!selectedGrant || (hasScope && !isProxied)),
+    enabled:
+      options.enabled && (!selectedGrant || (hasScope && Option.isSome(connection) && !isProxied)),
     locale: typeof navigator === "undefined" ? "en-US" : navigator.language || "en-US",
     subscribeDraft: useComposerDraftStore.subscribe,
     readDraft: () => {
@@ -531,11 +542,17 @@ export function useChatComposerVoiceController(
       environmentSpeech: {
         label: environmentLabel,
         selected: selectedGrant !== null,
-        available: hasScope && !isProxied,
-        environmentId: options.environmentId,
-        canManage: canManage && !isProxied,
+        environmentId: destinationId,
+        canManage: canManage && Option.isSome(connection) && !isProxied,
         resolveContext: resolveComposerVoiceContext,
-        enable: () => chooseEnvironmentSpeech(options.environmentId),
+        destinations: destinations.map(({ environmentId, label }) => ({ environmentId, label })),
+        enable: (id: EnvironmentId) => {
+          if (
+            readEnvironmentScope(id, AuthOrchestrationOperateScope) &&
+            !readEnvironmentProxiedByHub(id)
+          )
+            chooseEnvironmentSpeech(id);
+        },
         disable: () => chooseEnvironmentSpeech(null),
       },
     },

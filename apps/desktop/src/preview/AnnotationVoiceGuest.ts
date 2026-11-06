@@ -86,15 +86,18 @@ export function installAnnotationVoice(input: {
       button.textContent = phase === "recording" ? "Insert" : "Dictate";
       button.setAttribute(
         "aria-label",
-        phase === "recording" ? "Insert annotation dictation" : "Start annotation dictation",
+        phase === "recording"
+          ? "Insert annotation dictation"
+          : `Start annotation dictation on ${state.destination ?? "the selected environment"}`,
       );
+      button.title = `Transcribes on ${state.destination ?? "the selected environment"}`;
       cancel.hidden = !busy() && phase !== "error";
       status.textContent =
         state.error ??
         (phase === "preparing"
           ? "Preparing…"
           : phase === "recording"
-            ? "Recording…"
+            ? `Recording on ${state.destination ?? "the selected environment"}…`
             : phase === "transcribing"
               ? "Transcribing…"
               : "");

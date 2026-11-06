@@ -13,6 +13,7 @@ it("discards late state and preserves edits made before transcript insertion", (
     sequence: 3,
     phase: "idle",
     available: true,
+    destination: "Selected environment",
     error: null,
     draft: null,
   };
