@@ -16,11 +16,24 @@ import * as Schema from "effect/Schema";
 import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/http";
 import { TestClock } from "effect/testing";
 import {
+  backgroundServiceRunningMessage,
   repointLauncher,
   resolveLauncherPath,
   resolveNewestRelease,
   resolveNewestVersion,
 } from "./update.ts";
+
+it("reports the running service version accurately while a restart is pending", () => {
+  assert.equal(
+    backgroundServiceRunningMessage("2.0.0", true, "2.0.0"),
+    "  Background service still running the version before 2.0.0. Run `goat service restart` when you are ready to switch it to 2.0.0.",
+  );
+  assert.include(backgroundServiceRunningMessage("1.0.0", false, "2.0.0"), "still running 1.0.0.");
+  assert.include(
+    backgroundServiceRunningMessage(undefined, true, "2.0.0"),
+    "still running an unknown version.",
+  );
+});
 
 it.effect("authenticates each release page until the requested channel is found", () =>
   Effect.gen(function* () {

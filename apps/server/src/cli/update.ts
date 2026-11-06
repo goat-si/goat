@@ -444,6 +444,20 @@ const belongsToBootService = Effect.fn("cli.update.belongs_to_boot_service")(fun
   return false;
 });
 
+export function backgroundServiceRunningMessage(
+  serviceVersion: string | undefined,
+  restartPending: boolean,
+  targetVersion: string,
+): string {
+  const running =
+    serviceVersion === undefined
+      ? "an unknown version"
+      : restartPending
+        ? `the version before ${serviceVersion}`
+        : serviceVersion;
+  return `  Background service still running ${running}. Run \`goat service restart\` when you are ready to switch it to ${targetVersion}.`;
+}
+
 const runUpdate = Effect.fn("cli.update.run")(function* (input: {
   readonly baseDir: string;
   readonly logsDir: string;
@@ -698,7 +712,7 @@ const runUpdate = Effect.fn("cli.update.run")(function* (input: {
     yield* Console.log(`  Background service already on ${targetVersion}`);
   } else if (serviceInstalled) {
     yield* Console.log(
-      `  Background service still running ${serviceVersion ?? "an unknown version"}. Run \`goat service restart\` when you are ready to switch it to ${targetVersion}.`,
+      backgroundServiceRunningMessage(serviceVersion, restartPending, targetVersion),
     );
   } else if (!servesThisHome && (status.installed || status.installedBaseDir !== undefined)) {
     yield* Console.log(
