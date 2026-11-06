@@ -46,6 +46,9 @@ layer("GitLab overview discussions", (it) => {
                         old_path: "src/a.ts",
                         new_line: 12,
                         old_line: null,
+                        base_sha: "base",
+                        start_sha: "start",
+                        head_sha: "head",
                       },
                     },
                     {
@@ -128,7 +131,7 @@ layer("GitLab overview discussions", (it) => {
         );
         const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
 
-        const { threads, overviewFindingIds } = yield* cli.listDiscussions({
+        const { threads, diffRefsByThreadId, overviewFindingIds } = yield* cli.listDiscussions({
           cwd: "/w",
           repository: "acme/web",
           number: 7,
@@ -139,6 +142,9 @@ layer("GitLab overview discussions", (it) => {
           { id: "abc123", path: "src/a.ts", line: 12, side: "right" },
           { id: "file789", path: "src/b.ts", line: null, side: "right" },
           { id: "img012", path: "logo.png", line: null, side: "right" },
+        ]);
+        expect([...diffRefsByThreadId]).toEqual([
+          ["abc123", { baseSha: "base", startSha: "start", headSha: "head" }],
         ]);
         expect(threads[0]).toMatchObject({ isResolved: true });
         assert.strictEqual(threads[0]?.comments.length, 2);
