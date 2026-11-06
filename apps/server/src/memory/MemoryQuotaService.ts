@@ -201,7 +201,8 @@ const make = Effect.gen(function* () {
           // It reuses the live payload dimension so older clients and hub peers can decode it.
           const storeBytes =
             payloadBytes > oldPayloadBytes
-              ? yield* store.measuredMemoryBytes(input.environmentId)
+              ? (yield* store.storeBudgetBytes(input.environmentId, yield* Clock.currentTimeMillis))
+                  .bytes
               : null;
           if (storeBytes !== null && storeBytes >= M.MEMORY_STORE_BUDGET_BYTES)
             return yield* new Store.MemoryCapacityError({
@@ -669,9 +670,9 @@ const make = Effect.gen(function* () {
     sharedMetrics?: { walBytes: number | null },
     alreadyMeasured?: Effect.Success<ReturnType<Store.MemoryStore["Service"]["measureAllocation"]>>,
   ) {
-    const now = yield* Clock.currentTimeMillis;
     const logical = yield* store.logicalBytes;
     const measured = alreadyMeasured ?? (yield* store.measureAllocation());
+    const now = measured.measuredAt;
     const sample = yield* sampleDecode({
       measuredAtUtc: DateTime.formatIso(DateTime.makeUnsafe(now)),
       utcDay: DateTime.formatIsoDateUtc(DateTime.makeUnsafe(now)),
@@ -689,7 +690,10 @@ const make = Effect.gen(function* () {
       freelistBytes: measured.freelistBytes,
       tables: measured.tables,
     }).pipe(Effect.mapError(storageError));
-    const accepted = yield* store.recordSample(environmentId, sample);
+    const accepted = yield* store.recordSample(environmentId, sample, {
+      usedBytes: measured.memoryBytes === null ? null : measured.memoryUsedBytes,
+      historyBytes: measured.memoryHistoryBytes,
+    });
     const previous = yield* readStorageGrowth(environmentId);
     return accepted
       ? previous

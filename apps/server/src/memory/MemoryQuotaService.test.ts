@@ -167,6 +167,39 @@ const sample = (day: number, value = day): M.MemoryStorageSample => {
   };
 };
 describe("MemoryQuotaService", () => {
+  it.effect(
+    "a full allocated sample does not refuse a write once the stored used-minus-history figure fits",
+    () =>
+      Effect.gen(function* () {
+        const store = yield* Store.MemoryStore;
+        const quota = yield* Quota.MemoryQuotaService;
+        const measured = yield* store.measureAllocation();
+        yield* quota.recordStorageSample(env, undefined, {
+          ...measured,
+          memoryBytes: M.MEMORY_STORE_BUDGET_BYTES,
+        });
+        yield* quota.commit(decision(), env, Effect.void);
+      }).pipe(checkUsage, Effect.provide(services)),
+  );
+  it.effect(
+    "a stored figure older than two sample intervals falls back to the allocated sample",
+    () =>
+      Effect.gen(function* () {
+        const store = yield* Store.MemoryStore;
+        const quota = yield* Quota.MemoryQuotaService;
+        const measured = yield* store.measureAllocation();
+        yield* quota.recordStorageSample(env, undefined, {
+          ...measured,
+          memoryBytes: M.MEMORY_STORE_BUDGET_BYTES,
+        });
+        yield* TestClock.adjust(7_200_001);
+        const refusal = yield* Effect.flip(quota.commit(decision(), env, Effect.void));
+        assert.deepInclude(refusal, {
+          _tag: "MemoryCapacityError",
+          current: M.MEMORY_STORE_BUDGET_BYTES,
+        });
+      }).pipe(Effect.provide(services)),
+  );
   it.effect("refuses added content while the measured store is at its budget", () =>
     Effect.gen(function* () {
       const store = yield* Store.MemoryStore;

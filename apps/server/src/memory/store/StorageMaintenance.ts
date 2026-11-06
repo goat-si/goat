@@ -1,8 +1,10 @@
 import * as M from "@goat/contracts";
+import * as Clock from "effect/Clock";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import { decodeFtsState, sampleCodec, stored } from "./StoreCodecs.ts";
 import type { StoreKernel } from "./StoreKernel.ts";
+import { MEMORY_STORE_FIGURE_MAX_AGE_MS } from "../MemoryStorageTiming.ts";
 import { strict } from "./StoreModel.ts";
 import type { MemoryFtsState } from "./StoreModel.ts";
 
@@ -55,16 +57,32 @@ export const makeStorageMaintenance = (kernel: Pick<StoreKernel, "sql" | "transa
     );
   });
   const measureAllocation = Effect.fn("MemoryStore.measureAllocation")(function* () {
+    const measuredAt = yield* Clock.currentTimeMillis;
     const pages = yield* stored("page-count", sql<{ page_count: number }>`PRAGMA page_count`);
     const size = yield* stored("page-size", sql<{ page_size: number }>`PRAGMA page_size`);
     const free = yield* stored("freelist", sql<{ freelist_count: number }>`PRAGMA freelist_count`);
     // The name constraint lets dbstat walk only memory btrees. Unfiltered, it reads every
     // page of the shared database, which takes seconds once orchestration history is large.
-    const tableAllocations = yield* sql<{
-      name: string;
-      bytes: number;
-    }>`SELECT name,sum(pgsize) AS bytes FROM dbstat WHERE name IN (SELECT name FROM sqlite_master WHERE (type='table' AND name LIKE 'memory_%') OR (type='index' AND tbl_name LIKE 'memory_%')) GROUP BY name`.pipe(
-      Effect.option,
+    const { tableAllocations, history } = yield* stored(
+      "budget-measurement",
+      sql.withTransaction(
+        Effect.gen(function* () {
+          const tableAllocations = yield* sql<{
+            name: string;
+            bytes: number;
+            used: number;
+          }>`SELECT name,sum(pgsize) AS bytes,sum(pgsize-unused) AS used FROM dbstat WHERE name IN (SELECT name FROM sqlite_master WHERE (type='table' AND name LIKE 'memory_%') OR (type='index' AND tbl_name LIKE 'memory_%')) GROUP BY name`.pipe(
+            Effect.option,
+          );
+          const history = yield* stored(
+            "budget-history",
+            sql<{
+              bytes: number;
+            }>`SELECT coalesce(sum(length(CAST(p.body_json AS BLOB))),0) AS bytes FROM memory_payloads p WHERE p.purge_eligible_after>${measuredAt} AND p.payload_ref NOT IN (SELECT v.payload_ref FROM memory_items i CROSS JOIN json_each(i.heads_json) h CROSS JOIN memory_revisions v WHERE v.space=i.space AND v.revision_id=h.value AND v.payload_ref IS NOT NULL UNION SELECT v.payload_ref FROM memory_conflicts f CROSS JOIN json_each(f.heads_json) h CROSS JOIN memory_revisions v WHERE f.status!='resolved' AND v.space=f.space AND v.revision_id=h.value AND v.payload_ref IS NOT NULL)`,
+          );
+          return { tableAllocations, history };
+        }),
+      ),
     );
     const allocation = Option.isSome(tableAllocations)
       ? {
@@ -144,6 +162,11 @@ export const makeStorageMaintenance = (kernel: Pick<StoreKernel, "sql" | "transa
     return {
       tables,
       memoryBytes: allocation?.memory_bytes ?? null,
+      memoryUsedBytes: Option.isSome(tableAllocations)
+        ? tableAllocations.value.reduce((sum, row) => sum + row.used, 0)
+        : null,
+      memoryHistoryBytes: history[0]?.bytes ?? 0,
+      measuredAt,
       ftsBytes: allocation?.fts_bytes ?? null,
       dbFileBytes: (pages[0]?.page_count ?? 0) * (size[0]?.page_size ?? 0),
       freelistBytes: (free[0]?.freelist_count ?? 0) * (size[0]?.page_size ?? 0),
@@ -155,16 +178,40 @@ export const makeStorageMaintenance = (kernel: Pick<StoreKernel, "sql" | "transa
       Effect.catch(() => Effect.succeed(false)),
     );
   });
-  const measuredMemoryBytes = Effect.fn("MemoryStore.measuredMemoryBytes")(function* (
+  const storeBudgetBytes = Effect.fn("MemoryStore.storeBudgetBytes")(function* (
     environment: M.EnvironmentId,
+    now: number,
   ) {
     const rows = yield* stored(
       "sample-memory-bytes",
       sql<{
         bytes: number | null;
-      }>`SELECT json_extract(current_sample_json,'$.memoryAllocatedBytes') AS bytes FROM memory_compaction_state WHERE space=${`_environment:${environment}`}`,
+        measured_at: string | null;
+      }>`SELECT json_extract(current_sample_json,'$.memoryAllocatedBytes') AS bytes, json_extract(current_sample_json,'$.measuredAtUtc') AS measured_at FROM memory_compaction_state WHERE space=${`_environment:${environment}`}`,
     );
-    return rows[0]?.bytes ?? null;
+    const counters = yield* stored(
+      "budget-figure",
+      sql<{
+        dimension: string;
+        value: number;
+      }>`SELECT dimension,value FROM memory_quota_counters WHERE space=${`_store:${environment}`} AND scope_key=''`,
+    );
+    const values = new Map(counters.map((row) => [row.dimension, row.value]));
+    const measuredAt = values.get("budget_measured_at");
+    const used = values.get("budget_used_bytes");
+    const history = values.get("budget_history_bytes");
+    const sampleAt = rows[0]?.measured_at;
+    if (
+      sampleAt &&
+      measuredAt !== undefined &&
+      used !== undefined &&
+      history !== undefined &&
+      measuredAt >= Date.parse(sampleAt) &&
+      now - measuredAt <= MEMORY_STORE_FIGURE_MAX_AGE_MS &&
+      measuredAt <= now
+    )
+      return { bytes: Math.max(0, used - history), basis: "used" as const };
+    return { bytes: rows[0]?.bytes ?? null, basis: "allocated" as const };
   });
   // Completion already keeps one completed row per thread and kind. What remains are rows
   // for threads that are gone and cancelled or failed rows behind a newer run. The recovery
@@ -209,6 +256,7 @@ export const makeStorageMaintenance = (kernel: Pick<StoreKernel, "sql" | "transa
   const recordSample = Effect.fn("MemoryStore.recordSample")(function* (
     environment: M.EnvironmentId,
     input: M.MemoryStorageSample,
+    budget?: { readonly usedBytes: number | null; readonly historyBytes: number },
   ) {
     return yield* transact(
       Effect.gen(function* () {
@@ -234,6 +282,18 @@ export const makeStorageMaintenance = (kernel: Pick<StoreKernel, "sql" | "transa
           "sample-current-write",
           sql`INSERT INTO memory_compaction_state (space,current_sample_json) VALUES (${systemSpace},${json}) ON CONFLICT(space) DO UPDATE SET current_sample_json=excluded.current_sample_json`,
         );
+        if (budget?.usedBytes != null) {
+          const now = Date.parse(input.measuredAtUtc);
+          for (const [dimension, value] of [
+            ["budget_used_bytes", budget.usedBytes],
+            ["budget_history_bytes", budget.historyBytes],
+            ["budget_measured_at", now],
+          ] as const)
+            yield* stored(
+              "budget-figure-write",
+              sql`INSERT INTO memory_quota_counters (space,dimension,scope_key,value) VALUES (${`_store:${environment}`},${dimension},'',${value}) ON CONFLICT(space,dimension,scope_key) DO UPDATE SET value=excluded.value`,
+            );
+        }
         yield* stored(
           "sample-evict",
           sql`DELETE FROM memory_storage_samples WHERE environment=${environment} AND utc_day NOT IN (SELECT utc_day FROM memory_storage_samples WHERE environment=${environment} ORDER BY utc_day DESC LIMIT ${M.MEMORY_STORAGE_SAMPLE_MAX_DAYS})`,
@@ -259,7 +319,7 @@ export const makeStorageMaintenance = (kernel: Pick<StoreKernel, "sql" | "transa
     putFtsState,
     measureAllocation,
     mergeFts,
-    measuredMemoryBytes,
+    storeBudgetBytes,
     pruneSettledSummaryWork,
     recordSample,
     samples,
