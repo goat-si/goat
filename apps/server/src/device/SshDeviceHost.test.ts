@@ -370,8 +370,5 @@ it.effect(
       yield* TestClock.adjust("30 seconds");
       expect(forwardSpawns).toBe(2);
       yield* host.stop;
-    }).pipe(
-      Effect.scoped,
-      Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, TestClock.layer())),
-    ),
+    }).pipe(Effect.scoped, Effect.provide(Layer.mergeAll(NodeServices.layer, TestClock.layer()))),
 );
