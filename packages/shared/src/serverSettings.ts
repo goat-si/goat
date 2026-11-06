@@ -785,3 +785,5 @@ export function resolveGoatBotModelSelection(settings: ServerSettings): ModelSel
     settings.textGenerationModelSelection
   );
 }
+
+export { sourceControlTokenPatch } from "./sourceControlHostSettings.ts";

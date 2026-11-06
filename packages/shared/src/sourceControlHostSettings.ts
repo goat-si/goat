@@ -23,3 +23,11 @@ export function mergeSourceControlHostSettings(
       : {}),
   };
 }
+
+export function sourceControlTokenPatch(
+  kind: string,
+  host: string,
+  token: string | import("@goat/contracts").SecretReference,
+) {
+  return { sourceControlHosts: { [kind]: { tokens: { [host]: token } } } };
+}
