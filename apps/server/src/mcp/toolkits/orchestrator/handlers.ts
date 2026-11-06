@@ -1,7 +1,8 @@
-import { OrchestratorMcpFailure } from "@goat/contracts";
+import { OrchestratorMcpCapabilitiesResult, OrchestratorMcpFailure } from "@goat/contracts";
 import { OrchestratorToolkit } from "./tools.ts";
 import type { RunId, ThreadId } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 
 import { isTerminalRunStatus } from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ThreadResultService from "../../../threadResults/ThreadResultService.ts";
@@ -37,13 +38,23 @@ const localResult = (threadId: ThreadId, runId?: RunId | null) =>
     Effect.mapError(unavailable),
   );
 
+const decodeCapabilities = Schema.decodeUnknownEffect(OrchestratorMcpCapabilitiesResult);
+
 const handlers = {
-  orchestrator_capabilities: McpToolAccess.reads((input) =>
-    Effect.gen(function* () {
-      const scope = yield* McpInvocationContext.McpInvocationContext;
-      const service = yield* OrchestratorMcpService.OrchestratorMcpService;
-      return yield* service.capabilities(scope, input);
-    }),
+  orchestrator_capabilities: McpToolAccess.readsOrReachesHost(
+    (input) => input.host !== undefined,
+    ({ host, ...input }) =>
+      Effect.gen(function* () {
+        const scope = yield* McpInvocationContext.McpInvocationContext;
+        if (host !== undefined)
+          return yield* (yield* HostThreadsMcpService.HostThreadsMcpService).readOnHost(
+            scope,
+            { host, tool: "orchestrator_capabilities", arguments: input },
+            decodeCapabilities,
+          );
+        const service = yield* OrchestratorMcpService.OrchestratorMcpService;
+        return yield* service.capabilities(scope, input);
+      }),
   ),
   delegate_task: McpToolAccess.destructive(
     McpToolAccess.actsAsCaller((input) =>

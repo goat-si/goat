@@ -2,6 +2,8 @@ import { OrchestratorMcpScheduledTask } from "./orchestratorMcpScheduledTask.ts"
 export { OrchestratorMcpScheduledTask } from "./orchestratorMcpScheduledTask.ts";
 import * as Lineage from "./orchestratorMcpThreadLineage.ts";
 export * from "./orchestratorMcpThreadLineage.ts";
+import { OrchestratorMcpHost } from "./orchestratorMcpHost.ts";
+export { OrchestratorMcpHost } from "./orchestratorMcpHost.ts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
@@ -113,15 +115,6 @@ export const OrchestratorMcpTargetOptions = Schema.Union([
   OrchestratorMcpTargetOptionsFromRecord,
 ]);
 export type OrchestratorMcpTargetOptions = typeof OrchestratorMcpTargetOptions.Type;
-
-/**
- * Another machine's SSH host alias. Threads are keyed by (host, threadId): a
- * thread id belongs to the environment that created it.
- */
-export const OrchestratorMcpHost = TrimmedNonEmptyString.check(Schema.isMaxLength(255)).annotate({
-  description:
-    "Another machine: an SSH host alias from goat_ssh_host_list, a linked host name from goat_host_link_list, or the host goat_ssh_thread_launch returned. Omit for this environment.",
-});
 
 export const SshLaunchWorkspace = Schema.Union([
   Schema.Struct({ type: Schema.Literal("cwd") }),
@@ -1040,6 +1033,7 @@ export const OrchestratorMcpCapabilitiesInput = Schema.Struct({
       description: "Match model ids and labels. Replaces the short list.",
     }),
   ),
+  host: Schema.optional(OrchestratorMcpHost),
 });
 export type OrchestratorMcpCapabilitiesInput = typeof OrchestratorMcpCapabilitiesInput.Type;
 
@@ -1083,6 +1077,8 @@ export const OrchestratorMcpProviderCapability = Schema.Struct({
 export type OrchestratorMcpProviderCapability = typeof OrchestratorMcpProviderCapability.Type;
 
 export const OrchestratorMcpCapabilitiesResult = Schema.Struct({
+  /** Set when the list came from another machine: its providers and models, not this one's. */
+  host: OrchestratorMcpResultHost,
   parentThreadId: Schema.NullOr(ThreadId),
   inheritedProviderInstanceId: Schema.NullOr(ProviderInstanceId),
   inheritedModel: Schema.NullOr(Schema.String),

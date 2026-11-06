@@ -33,13 +33,17 @@ export const providerEntries = {
     description:
       "List provider instances, a model shortlist, inherited runtime settings, and orchestration features. A missing model may only be omitted from the shortlist; search before treating it as unavailable. goat_task_create can use catalog models outside this shortlist.",
     guide:
-      "The models come from the provider registry also streamed to clients. Without a search, the shortlist includes visible favorite, custom, and caller-selected models, including pinned legacy models. It includes all visible current Codex, Claude, Muse, and Grok models, and the first eight current models of other drivers in the user's model order. Hidden non-custom models are excluded even when pinned. Other visible legacy models are omitted. omittedModels counts visible models excluded from the current response; with a search, it counts unlisted matches. Search matches every term against the model slug, name, and subprovider, keeps exact slug matches above the limit, and otherwise lists up to eight matches. Task creation still checks provider readiness and model options. For a separate top-level thread in a new or existing worktree, call goat_thread_launch with workspaceStrategy.",
+      "The models come from the provider registry also streamed to clients. Without a search, the shortlist includes visible favorite, custom, and caller-selected models, including pinned legacy models. It includes all visible current Codex, Claude, Muse, and Grok models, and the first eight current models of other drivers in the user's model order. Hidden non-custom models are excluded even when pinned. Other visible legacy models are omitted. omittedModels counts visible models excluded from the current response; with a search, it counts unlisted matches. Search matches every term against the model slug, name, and subprovider, keeps exact slug matches above the limit, and otherwise lists up to eight matches. Task creation still checks provider readiness and model options. For a separate top-level thread in a new or existing worktree, call goat_thread_launch with workspaceStrategy.\n\nPass host (an SSH alias or linked host name) to list that machine's providers and models instead; another machine's catalog can differ from this one, and goat_ssh_thread_launch or goat_task_create with that host need a model it offers. The inherited and mode fields then describe this caller's session on that machine.",
     examples: [
       { title: "List providers and the short model list", args: {} },
       { title: "Find a model by name", args: { search: "opus" } },
+      {
+        title: "Check that another machine offers a model",
+        args: { host: "mini", search: "opus" },
+      },
     ],
     effect: "read",
-    hostRoutable: false,
+    hostRoutable: true,
     requires: "either",
     dryRun: "unsupported",
     humanSteps: [],

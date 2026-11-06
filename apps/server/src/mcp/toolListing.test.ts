@@ -245,7 +245,7 @@ it.effect(
       for (const name of ["goat_provider_list", "orchestrator_capabilities"])
         for (const key of ["args", "arguments"])
           expect(yield* refused(name, { [key]: { search: "claude" } }), `${name} ${key}`).toBe(
-            `goat_provider_list does not take ${key}, so nothing ran. It takes search. ` +
+            `goat_provider_list does not take ${key}, so nothing ran. It takes search, host. ` +
               `${key} wraps arguments only for goat_call {path: "provider.list", args: {...}}; ` +
               "call goat_provider_list with its fields at the top level instead.",
           );

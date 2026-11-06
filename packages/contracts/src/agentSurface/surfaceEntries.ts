@@ -43,7 +43,7 @@ const CORE_SIGNATURES = [
   "(pull_request.list :threadId?)",
   "(review_findings.record :taskId :entries[] ...)",
   "(host.status :host? :placement?{...} ...)",
-  "(provider.list :search?)",
+  "(provider.list :search? :host?)",
   "(ssh.thread_launch :host :cwd :title :message? ...)",
   "(schedule.create :prompt :schedule{:type=interval|fixed_time|webhook ...} ...)",
   "(computer_use.request :purpose :apps?[] ...)",
