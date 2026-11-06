@@ -3,13 +3,21 @@ import {
   isAtomCommandInterrupted,
   squashAtomCommandFailure,
 } from "@goat/client-runtime/state/runtime";
-import { AuthOrchestrationOperateScope, MessageId, ThreadId } from "@goat/contracts";
+import {
+  AuthOrchestrationOperateScope,
+  MessageId,
+  ThreadId,
+  type EnvironmentId,
+} from "@goat/contracts";
+import type { EnvironmentShellState } from "@goat/client-runtime/state/shell";
+import * as Option from "effect/Option";
 import { useRef } from "react";
 import * as Dialog from "../../components/ui/Dialog";
 import { uuidv4 } from "../../lib/uuid";
 import { readEnvironmentScope } from "../../state/session";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { environmentThreadShells, threadEnvironment } from "../../state/threads";
+import { environmentShell } from "../../state/shell";
 import { useAtomCommand } from "../../state/use-atom-command";
 import {
   clearComposerDraftContent,
@@ -20,12 +28,35 @@ import { useOpenLinkedThread } from "./useOpenLinkedThread";
 
 const pendingSideChats = new Map<
   string,
-  { environmentId: string; parentId: string; targetId: ThreadId }
+  {
+    environmentId: EnvironmentId;
+    parentId: string;
+    targetId: ThreadId;
+    generation: number;
+    sequence: number;
+  }
 >();
 const startingSideChats = new Set<string>();
 let stopWatching: (() => void) | undefined;
+const environmentWatchers = new Map<EnvironmentId, () => void>();
 const sideChatKey = (environmentId: string, parentId: string) =>
   JSON.stringify([environmentId, parentId]);
+
+function stopIdleWatchers() {
+  const activeEnvironments = new Set(
+    [...pendingSideChats.values()].map((pending) => pending.environmentId),
+  );
+  for (const [environmentId, stop] of environmentWatchers) {
+    if (!activeEnvironments.has(environmentId)) {
+      stop();
+      environmentWatchers.delete(environmentId);
+    }
+  }
+  if (pendingSideChats.size === 0) {
+    stopWatching?.();
+    stopWatching = undefined;
+  }
+}
 
 function reconcilePendingSideChats(threads: ReadonlyArray<EnvironmentThreadShell>) {
   for (const [key, pending] of pendingSideChats) {
@@ -40,20 +71,48 @@ function reconcilePendingSideChats(threads: ReadonlyArray<EnvironmentThreadShell
       pendingSideChats.delete(key);
     }
   }
-  if (pendingSideChats.size === 0) {
-    stopWatching?.();
-    stopWatching = undefined;
-  }
+  stopIdleWatchers();
 }
 
-function rememberPendingSideChat(environmentId: string, parentId: string, targetId: ThreadId) {
+function reconcileEnvironment(environmentId: EnvironmentId, state: EnvironmentShellState) {
+  for (const [key, pending] of pendingSideChats) {
+    if (pending.environmentId !== environmentId) continue;
+    const removedAt = state.removedAt.get(pending.targetId);
+    const newSnapshot = state.generation > pending.generation;
+    if (newSnapshot) pending.generation = state.generation;
+    if (
+      (removedAt !== undefined && removedAt >= pending.sequence) ||
+      (newSnapshot &&
+        Option.isSome(state.snapshot) &&
+        state.snapshot.value.snapshotSequence >= pending.sequence)
+    )
+      pendingSideChats.delete(key);
+  }
+  stopIdleWatchers();
+}
+
+function rememberPendingSideChat(
+  environmentId: EnvironmentId,
+  parentId: string,
+  targetId: ThreadId,
+  sequence: number,
+) {
   const key = sideChatKey(environmentId, parentId);
-  pendingSideChats.set(key, { environmentId, parentId, targetId });
+  const stateAtom = environmentShell.stateValueAtom(environmentId);
+  const generation = appAtomRegistry.get(stateAtom).generation;
+  pendingSideChats.set(key, { environmentId, parentId, targetId, generation, sequence });
+  if (!environmentWatchers.has(environmentId)) {
+    environmentWatchers.set(
+      environmentId,
+      appAtomRegistry.subscribe(stateAtom, (state) => reconcileEnvironment(environmentId, state)),
+    );
+  }
   stopWatching ??= appAtomRegistry.subscribe(
     environmentThreadShells.threadShellsAtom,
     reconcilePendingSideChats,
   );
   reconcilePendingSideChats(appAtomRegistry.get(environmentThreadShells.threadShellsAtom));
+  reconcileEnvironment(environmentId, appAtomRegistry.get(stateAtom));
 }
 
 export function useSideChatCommand() {
@@ -133,6 +192,7 @@ export function useSideChatCommand() {
                 },
               });
         if (forked?._tag === "Failure" && isAtomCommandInterrupted(forked)) return true;
+        let sequence: number;
         if (forked === null || forked._tag === "Failure") {
           const created = await create({
             environmentId: thread.environmentId,
@@ -154,8 +214,9 @@ export function useSideChatCommand() {
               Dialog.alert("Side chat not started", String(squashAtomCommandFailure(created)));
             return true;
           }
-        }
-        rememberPendingSideChat(thread.environmentId, thread.id, targetId);
+          sequence = created.value.sequence;
+        } else sequence = forked.value.sequence;
+        rememberPendingSideChat(thread.environmentId, thread.id, targetId, sequence);
       }
       if (command.prompt.length > 0) {
         const result = await start({

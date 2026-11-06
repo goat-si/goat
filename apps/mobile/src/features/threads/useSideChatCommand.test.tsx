@@ -14,6 +14,8 @@ const test = vi.hoisted(() => ({
   alert: vi.fn(),
   clear: vi.fn(),
   listeners: new Set<(threads: never[]) => void>(),
+  shellStates: new Map<string, unknown>(),
+  shellListeners: new Map<string, Set<(state: never) => void>>(),
   draft: { text: "/btw question", attachments: [], context: undefined },
 }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => test.shells }));
@@ -22,13 +24,27 @@ vi.mock("../../lib/uuid", () => ({ uuidv4: () => "new-id" }));
 vi.mock("../../state/session", () => ({ readEnvironmentScope: () => test.allowed }));
 vi.mock("../../state/atom-registry", () => ({
   appAtomRegistry: {
-    subscribe: (_atom: unknown, listener: (threads: never[]) => void) => {
+    subscribe: (atom: unknown, listener: (threads: never[]) => void) => {
+      if (typeof atom === "string") {
+        const listeners = test.shellListeners.get(atom) ?? new Set();
+        listeners.add(listener);
+        test.shellListeners.set(atom, listeners);
+        return () => listeners.delete(listener);
+      }
       test.listeners.add(listener);
       return () => test.listeners.delete(listener);
     },
-    get: () => test.shells,
+    get: (atom: unknown) =>
+      typeof atom === "string"
+        ? (test.shellStates.get(atom) ?? {
+            generation: 0,
+            snapshot: { _tag: "None" },
+            removedAt: new Map(),
+          })
+        : test.shells,
   },
 }));
+vi.mock("../../state/shell", () => ({ environmentShell: { stateValueAtom: (id: string) => id } }));
 vi.mock("../../state/threads", () => ({
   environmentThreadShells: { threadShellsAtom: {} },
   threadEnvironment: { forkAsSideChat: "fork", create: "create", startTurn: "start" },
@@ -47,8 +63,8 @@ import { useSideChatCommand } from "./useSideChatCommand";
 it("creates and opens a scoped side chat, preserving a draft edited during delivery", async () => {
   test.shells = [];
   test.allowed = true;
-  test.fork.mockReset().mockResolvedValue({ _tag: "Success" });
-  test.create.mockReset().mockResolvedValue({ _tag: "Success" });
+  test.fork.mockReset().mockResolvedValue({ _tag: "Success", value: { sequence: 10 } });
+  test.create.mockReset().mockResolvedValue({ _tag: "Success", value: { sequence: 10 } });
   test.start.mockReset().mockImplementation(async () => {
     test.draft.text = "newer draft";
     return { _tag: "Success" };
@@ -196,8 +212,8 @@ it("reuses an existing side chat and keeps the draft when sending fails", async 
 it("reuses a newly created side chat before its shell reaches this device", async () => {
   test.allowed = true;
   test.shells = [];
-  test.fork.mockReset().mockResolvedValue({ _tag: "Success" });
-  test.create.mockReset().mockResolvedValue({ _tag: "Success" });
+  test.fork.mockReset().mockResolvedValue({ _tag: "Success", value: { sequence: 10 } });
+  test.create.mockReset().mockResolvedValue({ _tag: "Success", value: { sequence: 10 } });
   test.start.mockReset().mockResolvedValue({ _tag: "Success" });
   test.open.mockReset();
   test.clear.mockReset();
@@ -283,8 +299,8 @@ it("reuses a newly created side chat before its shell reaches this device", asyn
 it("does not reuse a pending side chat from another environment", async () => {
   test.allowed = true;
   test.shells = [];
-  test.fork.mockReset().mockResolvedValue({ _tag: "Success" });
-  test.create.mockReset().mockResolvedValue({ _tag: "Success" });
+  test.fork.mockReset().mockResolvedValue({ _tag: "Success", value: { sequence: 10 } });
+  test.create.mockReset().mockResolvedValue({ _tag: "Success", value: { sequence: 10 } });
   test.start.mockReset().mockResolvedValue({ _tag: "Success" });
   let send: ReturnType<typeof useSideChatCommand> | undefined;
   function Harness() {
@@ -333,9 +349,9 @@ it("does not start two forks for the same parent from separate mounted views", a
   test.allowed = true;
   test.shells = [];
   test.alert.mockReset();
-  const forkResult = Promise.withResolvers<{ _tag: "Success" }>();
+  const forkResult = Promise.withResolvers<{ _tag: "Success"; value: { sequence: number } }>();
   test.fork.mockReset().mockReturnValue(forkResult.promise);
-  test.create.mockReset().mockResolvedValue({ _tag: "Success" });
+  test.create.mockReset().mockResolvedValue({ _tag: "Success", value: { sequence: 10 } });
   test.start.mockReset().mockResolvedValue({ _tag: "Success" });
   let first: ReturnType<typeof useSideChatCommand> | undefined;
   let second: ReturnType<typeof useSideChatCommand> | undefined;
@@ -375,9 +391,156 @@ it("does not start two forks for the same parent from separate mounted views", a
   expect(test.fork).toHaveBeenCalledTimes(1);
   expect(test.alert).toHaveBeenCalled();
   await act(async () => {
-    forkResult.resolve({ _tag: "Success" });
+    forkResult.resolve({ _tag: "Success", value: { sequence: 10 } });
     await pending;
   });
   expect(test.start).toHaveBeenCalledTimes(1);
+  await act(async () => root.unmount());
+});
+
+it("forgets a side chat deleted before the next authoritative shell snapshot", async () => {
+  test.allowed = true;
+  test.shells = [];
+  test.fork.mockReset().mockResolvedValue({ _tag: "Success", value: { sequence: 10 } });
+  test.create.mockReset().mockResolvedValue({ _tag: "Success", value: { sequence: 10 } });
+  test.start.mockReset().mockResolvedValue({ _tag: "Success" });
+  test.shellStates.set("deleted-env", {
+    generation: 1,
+    snapshot: { _tag: "Some", value: { snapshotSequence: 8 } },
+    removedAt: new Map(),
+  });
+  let send: ReturnType<typeof useSideChatCommand> | undefined;
+  function Harness() {
+    const command = useSideChatCommand();
+    useLayoutEffect(() => {
+      send = command;
+    }, [command]);
+    return null;
+  }
+  const root = createRoot(document.createElement("div"));
+  await act(async () => root.render(<Harness />));
+  const thread = {
+    id: "deleted-parent",
+    environmentId: "deleted-env",
+    projectId: "project",
+    title: "Task",
+    latestRun: {},
+    runtimeMode: "approval-required",
+    lineage: { relationshipToParent: "fork" },
+    sideChatOf: null,
+  } as never;
+  const input = {
+    thread,
+    threadKey: "deleted-env:deleted-parent",
+    text: "/side question",
+    connected: true,
+    hasAttachmentsOrContext: false,
+  };
+  await act(async () => {
+    await send?.(input);
+  });
+  const stale = {
+    generation: 2,
+    snapshot: { _tag: "Some", value: { snapshotSequence: 9 } },
+    removedAt: new Map(),
+  };
+  test.shellStates.set("deleted-env", stale);
+  for (const listener of test.shellListeners.get("deleted-env") ?? []) listener(stale as never);
+  await act(async () => {
+    await send?.(input);
+  });
+  expect(test.fork).toHaveBeenCalledTimes(1);
+  const laterDelta = { ...stale, snapshot: { _tag: "Some", value: { snapshotSequence: 11 } } };
+  test.shellStates.set("deleted-env", laterDelta);
+  for (const listener of test.shellListeners.get("deleted-env") ?? [])
+    listener(laterDelta as never);
+  await act(async () => {
+    await send?.(input);
+  });
+  expect(test.fork).toHaveBeenCalledTimes(1);
+  const afterDeletion = {
+    generation: 3,
+    snapshot: { _tag: "Some", value: { snapshotSequence: 11 } },
+    removedAt: new Map(),
+  };
+  test.shellStates.set("deleted-env", afterDeletion);
+  for (const listener of test.shellListeners.get("deleted-env") ?? [])
+    listener(afterDeletion as never);
+  expect(test.shellListeners.get("deleted-env")?.size).toBe(0);
+  await act(async () => {
+    await send?.(input);
+  });
+  expect(test.fork).toHaveBeenCalledTimes(2);
+  const oldRemoval = { ...afterDeletion, removedAt: new Map([["new-id", 9]]) };
+  test.shellStates.set("deleted-env", oldRemoval);
+  for (const listener of test.shellListeners.get("deleted-env") ?? [])
+    listener(oldRemoval as never);
+  await act(async () => {
+    await send?.(input);
+  });
+  expect(test.fork).toHaveBeenCalledTimes(2);
+  const removal = { ...afterDeletion, removedAt: new Map([["new-id", 11]]) };
+  test.shellStates.set("deleted-env", removal);
+  for (const listener of test.shellListeners.get("deleted-env") ?? []) listener(removal as never);
+  await act(async () => {
+    await send?.(input);
+  });
+  expect(test.fork).toHaveBeenCalledTimes(3);
+  await act(async () => root.unmount());
+});
+
+it("expires an unforked side chat after a later removal", async () => {
+  test.allowed = true;
+  test.shells = [];
+  test.fork.mockReset();
+  test.create.mockReset().mockResolvedValue({ _tag: "Success", value: { sequence: 20 } });
+  test.start.mockReset().mockResolvedValue({ _tag: "Success" });
+  test.shellStates.set("empty-env", {
+    generation: 1,
+    snapshot: { _tag: "Some", value: { snapshotSequence: 19 } },
+    removedAt: new Map(),
+  });
+  let send: ReturnType<typeof useSideChatCommand> | undefined;
+  function Harness() {
+    const command = useSideChatCommand();
+    useLayoutEffect(() => {
+      send = command;
+    }, [command]);
+    return null;
+  }
+  const root = createRoot(document.createElement("div"));
+  await act(async () => root.render(<Harness />));
+  const thread = {
+    id: "empty-parent",
+    environmentId: "empty-env",
+    projectId: "project",
+    title: "Task",
+    latestRun: null,
+    runtimeMode: "approval-required",
+    lineage: { relationshipToParent: "fork" },
+    sideChatOf: null,
+  } as never;
+  const input = {
+    thread,
+    threadKey: "empty-env:empty-parent",
+    text: "/side question",
+    connected: true,
+    hasAttachmentsOrContext: false,
+  };
+  await act(async () => {
+    await send?.(input);
+  });
+  const removed = {
+    generation: 1,
+    snapshot: { _tag: "Some", value: { snapshotSequence: 21 } },
+    removedAt: new Map([["new-id", 21]]),
+  };
+  test.shellStates.set("empty-env", removed);
+  for (const listener of test.shellListeners.get("empty-env") ?? []) listener(removed as never);
+  await act(async () => {
+    await send?.(input);
+  });
+  expect(test.fork).not.toHaveBeenCalled();
+  expect(test.create).toHaveBeenCalledTimes(2);
   await act(async () => root.unmount());
 });
