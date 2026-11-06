@@ -34,7 +34,11 @@ const expected = [
 ];
 
 const now = DateTime.makeUnsafe(0);
-const project = (output: string | undefined, fileUrls: ReadonlyArray<string> | undefined) => {
+const project = (
+  output: string | undefined,
+  fileUrls: ReadonlyArray<string> | undefined,
+  name = "cua-driver_screenshot",
+) => {
   const item = openCodeToolTurnItem(
     {
       id: TurnItemId.make("item:shot"),
@@ -52,7 +56,7 @@ const project = (output: string | undefined, fileUrls: ReadonlyArray<string> | u
       completedAt: now,
       updatedAt: now,
     },
-    { name: "cua-driver_screenshot", input: {}, output, fileUrls, completedMetadata: {} },
+    { name, input: {}, output, fileUrls, completedMetadata: {} },
   );
   return item.type === "dynamic_tool" ? item.output : undefined;
 };
@@ -88,4 +92,11 @@ describe("OpenCode MCP image output", () => {
     ];
     assert.deepEqual(project("Captured the screen", openCodeFileUris(content)), expected);
   });
+});
+
+it("keeps file-named MCP tools as dynamic output instead of file edits", () => {
+  assert.deepEqual(project("Captured the screen", [files[0]!.url], "mcp__screen__write"), [
+    { type: "text", text: "Captured the screen" },
+    { type: "image", mimeType: "image/png", data: "iVBORw0KGgo=" },
+  ]);
 });

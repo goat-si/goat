@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vite-plus/test";
 import { ChatAttachmentId } from "@goat/contracts";
 import { ATTACHMENT_ONLY_BOOTSTRAP_PROMPT } from "@goat/shared/composerContextReferences";
-import { formatThreadTitleContext } from "./threadTitleContext.ts";
+import { formatThreadTitleContext, limitTitleMessage } from "./threadTitleContext.ts";
+
+it("cuts both ends of a long message without splitting an emoji", () => {
+  expect(limitTitleMessage(`${"a".repeat(9)}🚀${"b".repeat(20)}🚀${"c".repeat(9)}`, 41)).toBe(
+    `${"a".repeat(9)}\n[Content truncated]\n${"c".repeat(9)}`,
+  );
+});
 
 describe("thread title context", () => {
   it.each(["", "Ultrathink:\n"])("keeps attachments without bootstrap text (%j)", (prefix) => {

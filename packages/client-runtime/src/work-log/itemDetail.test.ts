@@ -58,6 +58,34 @@ describe("tool image output parsing", () => {
   );
 });
 
+it("shows structured MCP output with its image and retains resource links", () => {
+  const item = toolItem({
+    content: [
+      { type: "text", text: "fallback" },
+      { type: "image", mimeType: "image/png" },
+      { type: "resource_link", uri: "https://example.com/report", name: "report" },
+    ],
+    structuredContent: { status: "ready" },
+  });
+  expect(turnItemOutputImages(item)).toHaveLength(1);
+  expect(turnItemOutputText(item)).toBe(
+    '{\n  "status": "ready"\n}\nfallback\nhttps://example.com/report',
+  );
+  expect(turnItemOutputText(item, { omitLinks: true })).toBe('{\n  "status": "ready"\n}\nfallback');
+});
+
+it("keeps warnings beside structured MCP output and an image", () => {
+  const item = toolItem({
+    content: [
+      { type: "image", mimeType: "image/png" },
+      { type: "text", text: "Warning: partial result" },
+    ],
+    structuredContent: { status: "ok" },
+  });
+  expect(turnItemOutputImages(item)).toHaveLength(1);
+  expect(turnItemOutputText(item)).toBe('{\n  "status": "ok"\n}\nWarning: partial result');
+});
+
 describe("MCP resource link output", () => {
   const link = { type: "resource_link", uri: "https://example.com/report", name: "report" };
   const uriOnlyResource = { type: "resource", resource: { uri: "file:///tmp/notes.md" } };
