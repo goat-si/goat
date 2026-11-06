@@ -1,4 +1,5 @@
 import { assertDialogHistory, historyMemoryLayer } from "./BrowserHistoryAssertions.testkit.ts";
+import { assertTimedOutOpenClosed } from "./FailedOpenAssertions.testkit.ts";
 import * as NodeEvents from "node:events";
 import * as NodeVM from "node:vm";
 // @effect-diagnostics-next-line nodeBuiltinImport:off - Playwright download mocks perform real file operations outside the Effect runtime.
@@ -581,7 +582,7 @@ it.live("tells the desktop once per thread when its agent turns start and end", 
 it.live("preview_open reports its navigation timeout instead of the request budget", () =>
   Effect.scoped(
     Effect.gen(function* () {
-      const { broker } = yield* ready;
+      const { broker, tabId } = yield* ready;
       initialNavigation = async () => {
         throw Object.assign(new Error("page.goto: Timeout 15000ms exceeded."), {
           name: "TimeoutError",
@@ -600,11 +601,7 @@ it.live("preview_open reports its navigation timeout instead of the request budg
         })
         .pipe(Effect.flip);
 
-      expect(error).toMatchObject({
-        _tag: "PreviewAutomationTimeoutError",
-        timeoutMs: 15_000,
-      });
-      expect(error.message).toBe("Preview automation open timed out after 15000ms.");
+      yield* assertTimedOutOpenClosed(scope.thread.threadId, tabId, error);
     }),
   ).pipe(Effect.provide(layer)),
 );

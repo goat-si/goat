@@ -1,6 +1,6 @@
-import { expect, it } from "vite-plus/test";
+import { expect, it, vi } from "vite-plus/test";
 import { ServerBrowserOperationError } from "./browserOperationError.ts";
-import { unloadedOpen } from "./unloadedOpen.ts";
+import { settleInitialOpen, unloadedOpen } from "./unloadedOpen.ts";
 
 it("names the tab and network error of an open whose page never connected", () => {
   const cause = new ServerBrowserOperationError(
@@ -16,6 +16,20 @@ it("names the tab and network error of an open whose page never connected", () =
   expect(unloadedOpen("tab-2", tls)).toMatchObject({
     detail: { loadError: "ERR_SSL_VERSION_OR_CIPHER_MISMATCH2" },
   });
+});
+
+it("closes failed hidden tabs but keeps recoverable network errors and downloads", async () => {
+  const close = vi.fn(async () => {});
+  const timeout = Object.assign(new Error("net::ERR_TIMED_OUT"), { name: "TimeoutError" });
+  await expect(settleInitialOpen(Promise.reject(timeout), "tab-1", close)).rejects.toBe(timeout);
+  expect(close).toHaveBeenCalledTimes(1);
+  const network = new Error("net::ERR_CONNECTION_REFUSED");
+  await expect(settleInitialOpen(Promise.reject(network), "tab-2", close)).rejects.toMatchObject({
+    detail: { openedTabId: "tab-2" },
+  });
+  const download = new Error("Download is starting");
+  await expect(settleInitialOpen(Promise.reject(download), "tab-3", close)).rejects.toBe(download);
+  expect(close).toHaveBeenCalledTimes(1);
 });
 
 it("passes a timeout or a failure without a network error through unchanged", () => {

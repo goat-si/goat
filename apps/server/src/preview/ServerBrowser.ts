@@ -80,7 +80,7 @@ import * as PreviewBrowserHost from "./PreviewBrowserHost.ts";
 import { presentAsChrome, ServerBrowserContexts } from "./ServerBrowserContexts.ts";
 import { ServerBrowserDiagnostics } from "./ServerBrowserDiagnostics.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
-import { unloadedOpen } from "./unloadedOpen.ts";
+import { settleInitialOpen } from "./unloadedOpen.ts";
 import * as AgentTabState from "./agentTabState.ts";
 import { answerBy, answerCall, queueCaptureBy, waitInput, withCaptureLock } from "./CaptureLock.ts";
 import { recordingEncoderScript } from "./ServerBrowserRecordingScript.ts";
@@ -1719,8 +1719,9 @@ const make = Effect.gen(function* () {
                   );
                 }
               } else {
-                await (tab.initialNavigation ?? Promise.resolve()).catch((cause: unknown) => {
-                  throw unloadedOpen(tab.tabId, cause);
+                await settleInitialOpen(tab.initialNavigation, tab.tabId, async () => {
+                  await runPromise(manager.close({ threadId: tab.threadId, tabId: tab.tabId }));
+                  dropTab(tab, false);
                 });
                 navigationSent = tab.initialNavigationSent;
               }

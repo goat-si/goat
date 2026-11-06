@@ -7,7 +7,9 @@ import { ServerBrowserOperationError } from "./browserOperationError.ts";
 export const unloadedOpen = (tabId: string, cause: unknown): unknown => {
   const loadError = /net::(ERR_[A-Z0-9_]+)/.exec(cause instanceof Error ? cause.message : "")?.[1];
   const timedOut =
-    cause instanceof ServerBrowserOperationError && cause.tag === "PreviewAutomationTimeoutError";
+    (cause instanceof ServerBrowserOperationError &&
+      cause.tag === "PreviewAutomationTimeoutError") ||
+    (cause instanceof Error && cause.name === "TimeoutError");
   if (loadError === undefined || timedOut) return cause;
   return new ServerBrowserOperationError(
     "PreviewAutomationExecutionError",
@@ -15,3 +17,22 @@ export const unloadedOpen = (tabId: string, cause: unknown): unknown => {
     { openedTabId: tabId, loadError },
   );
 };
+
+export async function settleInitialOpen(
+  navigation: Promise<unknown> | undefined,
+  tabId: string,
+  close: () => Promise<void>,
+): Promise<void> {
+  try {
+    await navigation;
+  } catch (cause) {
+    const reported = unloadedOpen(tabId, cause);
+    if (
+      reported === cause &&
+      !(cause instanceof Error && cause.message.includes("Download is starting"))
+    ) {
+      await close();
+    }
+    throw reported;
+  }
+}
