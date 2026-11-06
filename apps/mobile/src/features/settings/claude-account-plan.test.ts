@@ -1,6 +1,10 @@
-import { ProviderDriverKind } from "@goat/contracts";
+import { ProviderDriverKind, ProviderInstanceId } from "@goat/contracts";
 import { describe, expect, it } from "vite-plus/test";
-import { planClaudeAccount } from "./claude-account-plan";
+import {
+  planClaudeAccount,
+  planClaudeAccountEdit,
+  planClaudeAccountRemoval,
+} from "./claude-account-plan";
 
 describe("adding a Claude account", () => {
   it("requires a name and a signed-in folder", () => {
@@ -24,5 +28,31 @@ describe("adding a Claude account", () => {
         },
       },
     });
+  });
+});
+
+describe("editing and removing Claude accounts", () => {
+  it("updates the config directory while preserving other instance settings", () => {
+    const existing = {
+      driver: ProviderDriverKind.make("claudeAgent"),
+      displayName: "Work",
+      config: { homePath: "/old", modelRoute: "opencodex" },
+      enabled: true,
+    };
+    expect(
+      planClaudeAccountEdit(ProviderInstanceId.make("claudeAgent_work"), existing, " /new ", true),
+    ).toEqual({
+      operation: "upsert",
+      instanceId: "claudeAgent_work",
+      expectedInstance: existing,
+      instance: { ...existing, config: { homePath: "/new", modelRoute: "opencodex" } },
+    });
+  });
+  it("allows removing an added instance but keeps the default instance", () => {
+    expect(planClaudeAccountRemoval(ProviderInstanceId.make("claudeAgent_work"))).toEqual({
+      operation: "remove",
+      instanceId: "claudeAgent_work",
+    });
+    expect(planClaudeAccountRemoval(ProviderInstanceId.make("claudeAgent"))).toBeNull();
   });
 });

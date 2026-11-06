@@ -3,6 +3,7 @@ import {
   deriveInstanceId,
 } from "@goat/client-runtime/provider-instance-ids";
 import {
+  defaultInstanceIdForDriver,
   ProviderDriverKind,
   ProviderInstanceId,
   type ProviderInstanceConfig,
@@ -33,4 +34,36 @@ export function planClaudeAccount(
       instance: { driver, enabled: true, displayName: label, config: { homePath } },
     },
   } as const;
+}
+
+export function claudeAccountDirectory(instance: ProviderInstanceConfig): string {
+  const config = instance.config;
+  if (!config || typeof config !== "object" || Array.isArray(config)) return "";
+  return "homePath" in config && typeof config.homePath === "string" ? config.homePath : "";
+}
+
+export function planClaudeAccountEdit(
+  instanceId: ProviderInstanceId,
+  instance: ProviderInstanceConfig,
+  directory: string,
+  supportsPreconditions: boolean,
+) {
+  const config =
+    instance.config && typeof instance.config === "object" && !Array.isArray(instance.config)
+      ? (instance.config as Record<string, unknown>)
+      : {};
+  const { homePath: _old, ...remaining } = config;
+  const homePath = directory.trim();
+  return {
+    operation: "upsert" as const,
+    instanceId,
+    instance: { ...instance, config: homePath ? { ...remaining, homePath } : remaining },
+    ...(supportsPreconditions ? { expectedInstance: instance } : {}),
+  };
+}
+
+export function planClaudeAccountRemoval(instanceId: ProviderInstanceId) {
+  if (instanceId === defaultInstanceIdForDriver(ProviderDriverKind.make("claudeAgent")))
+    return null;
+  return { operation: "remove" as const, instanceId };
 }

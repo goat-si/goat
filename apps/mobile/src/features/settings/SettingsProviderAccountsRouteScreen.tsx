@@ -1,3 +1,4 @@
+import { ClaudeAccountControls } from "./ClaudeAccountControls";
 import { AddClaudeAccount } from "./AddClaudeAccount";
 import {
   resolveProviderInstanceDisplayName,
@@ -161,6 +162,12 @@ export function SettingsProviderAccountsRouteScreen({
                             {routesThroughHome(provider) || !signsInHere(provider) ? null : (
                               <ProviderAccount environment={environment} provider={provider} />
                             )}
+                            {provider.driver === "claudeAgent" ? (
+                              <ClaudeAccountControls
+                                environment={environment}
+                                provider={provider}
+                              />
+                            ) : null}
                             {supportsProviderHome(provider.driver) ? (
                               <CodexHomeRouteStatus
                                 environment={environment}

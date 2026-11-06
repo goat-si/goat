@@ -64,7 +64,7 @@ Add another Claude instance in **Settings > Providers**:
 | Claude Work     | `claude`    | Leave empty            |
 | Claude Personal | `claude`    | `~/.claude_personal`   |
 
-On mobile, choose **Add Claude account** in **Settings > Provider accounts**, then enter the name and signed-in config folder for that environment.
+On mobile, choose **Add Claude account** in **Settings > Provider accounts**, then enter the name and signed-in config folder for that environment. You can edit the folder or remove an added account there; removing it leaves the folder and sign-in on the environment.
 
 An empty config-directory setting uses Claude Code's normal configuration. The
 custom setting changes `CLAUDE_CONFIG_DIR`, leaving `HOME` and the system keychain
