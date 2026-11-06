@@ -30,6 +30,7 @@ import { Button } from "../../components/ui/Button";
 import { usePullRequestReviewDraft } from "./usePullRequestReviewDraft";
 import { usePullRequestFilesViewed } from "./usePullRequestFilesViewed";
 import { usePullRequestPermissions } from "./usePullRequestPermissions";
+import { usePullRequestDescription } from "./usePullRequestDescription";
 import { usePullRequestAction } from "./usePullRequestAction";
 import { annotatePullRequestDiff, reviewPosition } from "./pullRequestDiffComments";
 import { usePullRequestFileFilter } from "./usePullRequestFileFilter";
@@ -48,17 +49,8 @@ import { PullRequestOverviewLoading } from "./PullRequestOverviewLoading";
 import { copyPullRequestLink, sharePullRequestLink } from "./pullRequestLink";
 import { pullRequestStatus } from "./pullRequestStatus";
 import { use, useEffect, useMemo, useRef, useState } from "react";
-import {
-  Linking,
-  Platform,
-  Pressable,
-  RefreshControl,
-  ScrollView,
-  type ScrollViewProps,
-  StyleSheet,
-  View,
-} from "react-native";
-import { NativeScrollViewMarker as ScrollViewMarker } from "../../native/NativeScrollViewMarker";
+import { Linking, Platform, Pressable, RefreshControl, StyleSheet, View } from "react-native";
+import { PullRequestTabScrollView } from "./PullRequestTabScrollView";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AppText as Text } from "../../components/ui/AppText";
@@ -124,14 +116,6 @@ import { usePullRequestEnvironmentFallback } from "./usePullRequestEnvironmentFa
 import { capitalizeTerm, sourceControlClients } from "@goat/client-runtime/source-control-clients";
 
 const EMPTY_IDS: readonly string[] = [];
-
-function PullRequestTabScrollView(props: ScrollViewProps) {
-  return (
-    <ScrollViewMarker style={{ flex: 1 }}>
-      <ScrollView {...props} />
-    </ScrollViewMarker>
-  );
-}
 
 function PullRequestIdentity(props: {
   readonly pr: PullRequestDetail | PullRequestListEntry;
@@ -248,6 +232,7 @@ function PullRequestLabels(props: {
 
 function PullRequestOverview(props: {
   readonly pr: PullRequestDetail;
+  readonly description: ReturnType<typeof usePullRequestDescription>;
   readonly params: PullRequestParams;
   readonly stack: PullRequestStackState;
   readonly onDescriptionLayout: (y: number) => void;
@@ -275,7 +260,8 @@ function PullRequestOverview(props: {
         onLayout={(event) => props.onDescriptionLayout(event.nativeEvent.layout.y)}
       >
         <PullRequestDescription
-          markdown={pr.body}
+          markdown={props.description.body}
+          onTaskListChange={props.description.toggleTask}
           onCollapse={props.onDescriptionCollapse}
           expanded={props.descriptionExpanded}
           onExpandedChange={props.onDescriptionExpandedChange}
@@ -365,6 +351,7 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
   const identity = pr ?? summary;
   const terminology = sourceControlClients.get(identity?.provider).changeRequest;
   const permissions = usePullRequestPermissions(params, pr);
+  const description = usePullRequestDescription(params, pr, permissions.canEditChangeRequest);
   const action = usePullRequestAction(params, pr);
   const maintainerEdits = usePullRequestMaintainerEdits(
     params,
@@ -475,6 +462,8 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
                     {
                       accessibilityLabel: "Edit description",
                       icon: "doc.text" as const,
+                      disabled: description.pending,
+                      subtitle: description.pending ? "Saving…" : undefined,
                       overflowOnly: true,
                       onPress: () =>
                         navigation.navigate("PullRequestEdit", { ...params, field: "body" }),
@@ -580,6 +569,8 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
             {permissions.canEditChangeRequest ? (
               <Toolbar.MenuAction
                 icon="doc.text"
+                disabled={description.pending}
+                subtitle={description.pending ? "Saving…" : undefined}
                 onPress={() => navigation.navigate("PullRequestEdit", { ...params, field: "body" })}
               >
                 <Toolbar.Label>Edit description</Toolbar.Label>
@@ -728,6 +719,7 @@ export function PullRequestRouteScreen({ route }: StaticScreenProps<PullRequestP
                               {pr ? (
                                 <PullRequestOverview
                                   pr={pr}
+                                  description={description}
                                   params={params}
                                   stack={stack}
                                   descriptionExpanded={descriptionExpanded}
