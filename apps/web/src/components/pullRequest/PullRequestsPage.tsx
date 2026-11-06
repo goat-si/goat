@@ -1,3 +1,4 @@
+import { PullRequestFiltersMenuInSidebarOrder } from "./PullRequestFiltersMenuInSidebarOrder";
 import { getShortcutContext } from "./pullRequestShortcutContext";
 import { sourceControlClients } from "@goat/client-runtime/source-control-clients";
 import { applyPullRequestDraftFilterChange } from "@goat/client-runtime/pull-request-query";
@@ -6,7 +7,6 @@ import type { PullRequestSpeedActionResult } from "~/components/pullRequest/Pull
 import { usePullRequestCloseBatch } from "~/components/pullRequest/usePullRequestActions";
 import { SidebarPointerSensor } from "~/components/Sidebar.pointer";
 import { resolveSidebarSweepKeys } from "~/components/Sidebar.logic";
-import { sortProjectsByGroupOrder } from "@goat/client-runtime/state/project-grouping";
 import { resolveEnvironmentMachineKind } from "@goat/contracts";
 import type {
   EnvironmentId,
@@ -17,11 +17,12 @@ import type {
   PullRequestListInput,
   PullRequestListResult,
   PullRequestListState,
+  PullRequestSummary,
 } from "@goat/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { ArrowDownUpIcon, LayersIcon, PlugIcon as Plug2Icon } from "~/components/solar";
-import { useEffect, useEffectEvent, useRef, useState, type ComponentProps } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 
 import {
   collectPullRequestListFacets,
@@ -55,7 +56,6 @@ import {
 import { environmentMachineIcon } from "../EnvironmentMachineIcon";
 import { PullRequestDetailPanel } from "./PullRequestDetailPanel";
 import {
-  PullRequestFiltersMenu,
   PullRequestSearchInput,
   pullRequestHostLabel,
   pullRequestProjectKey,
@@ -97,7 +97,6 @@ import {
   useRightPanelStore,
   type PullRequestSurface,
 } from "~/rightPanelStore";
-import { useSidebarProjectGroups } from "~/hooks/useSidebarProjectGroups";
 import {
   pullRequestEnvironment,
   usePullRequestList,
@@ -402,9 +401,10 @@ export function PullRequestsPage() {
   const overrideEntry = (
     entry: EnvironmentPullRequestEntry,
     action: PullRequestAction,
+    reply?: PullRequestSummary,
   ): number | null => {
     const token = ++overrideToken.current;
-    const override = pullRequestOverrideAfterAction(entry, action, new Date(), token);
+    const override = pullRequestOverrideAfterAction(entry, action, new Date(), token, reply);
     if (override === null) return null;
     setOverrides((current) => new Map(current).set(pullRequestEntryKey(entry), override));
     return token;
@@ -419,13 +419,17 @@ export function PullRequestsPage() {
     });
   };
   const detailOverrideTokens = useRef(new Map<string, number | null>());
-  const onSpeedAction = useStableCallback(({ entry, action }: PullRequestSpeedActionResult) => {
-    // Some hosts accept a merge before it completes. Let the next host read declare it merged.
-    if (action !== "merge") overrideEntry(entry, action);
-  });
-  const onBatchClosed = useStableCallback((entry: EnvironmentPullRequestEntry) => {
-    onSpeedAction({ entry, action: "close" });
-  });
+  const onSpeedAction = useStableCallback(
+    ({ entry, action, reply }: PullRequestSpeedActionResult) => {
+      // Some hosts accept a merge before it completes. Without a reply, let the next read say so.
+      if (reply !== undefined || action !== "merge") overrideEntry(entry, action, reply);
+    },
+  );
+  const onBatchClosed = useStableCallback(
+    (entry: EnvironmentPullRequestEntry, reply: PullRequestSummary | undefined) => {
+      onSpeedAction({ entry, action: "close", reply });
+    },
+  );
   const { close: closeBatch, closingKeys } = usePullRequestCloseBatch(onBatchClosed);
   const [snapshotEnvironmentKey, setSnapshotEnvironmentKey] = useState("");
   if (environmentKey.length > 0 && snapshotEnvironmentKey !== environmentKey) {
@@ -1510,12 +1514,19 @@ export function PullRequestsPage() {
               }
               refreshToken={detailRefreshToken}
               tabOnPage
-              onActed={(action, phase = "done") => {
+              onActed={(action, phase = "done", reply) => {
                 // From every row held, not the ones on screen: a pull request closed from an open
                 // list has left the screen, and reopening it has to find it anyway.
                 const acted = heldPullRequestsBySurface.get(
                   pullRequestListEntryId(renderedPullRequestSurface),
                 );
+                if (reply !== undefined) {
+                  if (acted !== undefined) {
+                    if (action !== undefined) overrideEntry(acted, action, reply);
+                    detailOverrideTokens.current.delete(pullRequestEntryKey(acted));
+                  }
+                  return;
+                }
                 const stateOnly =
                   action !== undefined &&
                   acted !== undefined &&
@@ -1543,12 +1554,4 @@ export function PullRequestsPage() {
       </div>
     </SidebarInset>
   );
-}
-
-function PullRequestFiltersMenuInSidebarOrder(
-  props: ComponentProps<typeof PullRequestFiltersMenu>,
-) {
-  const sidebarProjectGroups = useSidebarProjectGroups();
-  const projects = sortProjectsByGroupOrder(props.projects, sidebarProjectGroups);
-  return <PullRequestFiltersMenu {...props} projects={projects} />;
 }

@@ -1,3 +1,14 @@
+import { isStalePullRequestReply } from "../pullRequestReply.ts";
+
+import {
+  writableQuery,
+  actionReplyPatches,
+  samePullRequest,
+  pickDefined,
+  patchListWithReply,
+  actionPatchedQuery,
+} from "./pullRequestActionCache.ts";
+export { patchPullRequestListEntries } from "./pullRequestActionCache.ts";
 import {
   WS_METHODS,
   PullRequestActivity,
@@ -86,20 +97,7 @@ function writableQueryFamily<A, E>(
   }) => Atom.Atom<AsyncResult.AsyncResult<A, E>>,
 ) {
   const writable = Atom.family((source: Atom.Atom<AsyncResult.AsyncResult<A, E>>) =>
-    Atom.writable(
-      (get) => {
-        const result = get(source);
-        if (result._tag === "Success" && !result.waiting) return result;
-        const previous = get.self<AsyncResult.AsyncResult<A, E>>();
-        const value = Option.flatMap(previous, AsyncResult.value);
-        if (Option.isNone(value)) return result;
-        return result._tag === "Failure"
-          ? AsyncResult.failureWithPrevious(result.cause, { previous, waiting: result.waiting })
-          : AsyncResult.success<A, E>(value.value, result);
-      },
-      (context, value: AsyncResult.AsyncResult<A, E>) => context.setSelf(value),
-      (refresh) => refresh(source),
-    ).pipe(Atom.setIdleTTL(5 * 60_000)),
+    writableQuery(source),
   );
   return normalizePullRequestQuery((target) => writable(family(target)));
 }
@@ -145,18 +143,41 @@ export function createLinkedPullRequestSummaryAtomFamily<R, E>(
   onAnswer?: QueryAnswerHandler<PullRequestRef, PullRequestSummary>,
 ) {
   const routedRequest = createPullRequestRouter();
-  return createEnvironmentRpcQueryAtomFamily(runtime, {
-    label: "environment-data:pull-requests:linked-summary",
-    persistence: persistQuery(PullRequestSummary),
-    tag: WS_METHODS.pullRequestsSummary,
-    execute: (input) => routedRequest(WS_METHODS.pullRequestsSummary, input),
-    staleTimeMs: 60_000,
-    refreshIntervalMs: 60_000,
-    idleTtlMs: LINKED_PULL_REQUEST_IDLE_TTL_MS,
-    refreshTrigger: ({ environmentId }) => refreshes({ environmentId, input: {} }),
-    isFinal: (summary) => summary.state === "merged",
-    ...(onAnswer === undefined ? {} : { onAnswer }),
-  });
+  const label = "environment-data:pull-requests:linked-summary";
+  const persistence = persistQuery(PullRequestSummary);
+  return actionPatchedQuery(
+    createEnvironmentRpcQueryAtomFamily(runtime, {
+      label,
+      persistence,
+      tag: WS_METHODS.pullRequestsSummary,
+      execute: (input) => routedRequest(WS_METHODS.pullRequestsSummary, input),
+      staleTimeMs: 60_000,
+      refreshIntervalMs: 60_000,
+      idleTtlMs: LINKED_PULL_REQUEST_IDLE_TTL_MS,
+      refreshTrigger: ({ environmentId }) => refreshes({ environmentId, input: {} }),
+      isFinal: (summary) => summary.state === "merged",
+      ...(onAnswer === undefined ? {} : { onAnswer }),
+    }),
+    {
+      label,
+      persistence,
+      onAnswer,
+      idleTtlMs: LINKED_PULL_REQUEST_IDLE_TTL_MS,
+      concerns: samePullRequest,
+      // A routed action replies with the destination's project and repository names.
+      patch: (_input, value, _reference, reply) =>
+        isStalePullRequestReply(value, reply)
+          ? value
+          : {
+              ...value,
+              ...reply,
+              projectId: value.projectId,
+              repository: value.repository,
+              number: value.number,
+              ...(value.observedAt === undefined ? {} : { observedAt: value.observedAt }),
+            },
+    },
+  );
 }
 
 /** Lets a client record what each answer says where it lands, rather than watching the data. */
@@ -166,6 +187,8 @@ export interface PullRequestAnswerHandlers {
   readonly detail?: QueryAnswerHandler<PullRequestRef, PullRequestDetail>;
   readonly checks?: QueryAnswerHandler<PullRequestRef, PullRequestChecks | null>;
   readonly reviewGuide?: QueryAnswerHandler<PullRequestRef, PullRequestReviewGuideResult>;
+  /** Once per action reply, after the loaded readers show it; unscoped references only. */
+  readonly actionReply?: QueryAnswerHandler<PullRequestRef, PullRequestSummary>;
 }
 
 export function createPullRequestStackAtomFamily<R, E>(
@@ -230,23 +253,66 @@ export function createPullRequestEnvironmentAtoms<R, E>(
   const detailAnswers = normalizePullRequestQuery((target) =>
     detailAnswerAtoms(JSON.stringify(target)),
   );
-  const detail = writableQueryFamily(
-    createEnvironmentRpcQueryAtomFamily(runtime, {
-      label: "environment-data:pull-requests:detail",
-      persistence: persistQuery(PullRequestDetailSchema),
-      tag: WS_METHODS.pullRequestsDetail,
-      execute: (input) => routedRequest(WS_METHODS.pullRequestsDetail, input),
-      staleTimeMs: 60_000,
-      refreshTrigger: ({ environmentId }) => refreshes({ environmentId, input: {} }),
-      onAnswer: (target, value, registry) =>
-        Effect.sync(() => {
-          // Cache reads bypass onAnswer, and server freshness stays separate from local readbacks.
-          registry.update(detailAnswers(target), (previous) => ({
-            value,
-            version: (previous?.version ?? 0) + 1,
-          }));
-        }).pipe(Effect.andThen(() => onAnswer.detail?.(target, value, registry) ?? Effect.void)),
-    }),
+  const detailLabel = "environment-data:pull-requests:detail";
+  const detailPersistence = persistQuery(PullRequestDetailSchema);
+  const detail = normalizePullRequestQuery(
+    actionPatchedQuery(
+      createEnvironmentRpcQueryAtomFamily(runtime, {
+        label: detailLabel,
+        persistence: detailPersistence,
+        tag: WS_METHODS.pullRequestsDetail,
+        execute: (input) => routedRequest(WS_METHODS.pullRequestsDetail, input),
+        staleTimeMs: 60_000,
+        refreshTrigger: ({ environmentId }) => refreshes({ environmentId, input: {} }),
+        onAnswer: (target, value, registry) =>
+          Effect.sync(() => {
+            // Cache reads bypass onAnswer, and server freshness stays separate from local readbacks.
+            registry.update(detailAnswers(target), (previous) => ({
+              value,
+              version: (previous?.version ?? 0) + 1,
+            }));
+          }).pipe(Effect.andThen(() => onAnswer.detail?.(target, value, registry) ?? Effect.void)),
+      }),
+      {
+        label: detailLabel,
+        persistence: detailPersistence,
+        onAnswer: onAnswer.detail,
+        concerns: samePullRequest,
+        rereadWithoutReply: true,
+        // Reopening or a new head changes branch data and permissions the reply lacks.
+        rereads: (value, reply) =>
+          !isStalePullRequestReply(value, reply) &&
+          ((value.state === "closed" && reply.state === "open") ||
+            (reply.headSha !== undefined && reply.headSha !== value.headSha)),
+        patch: (_input, value, _reference, reply) => {
+          if (isStalePullRequestReply(value, reply)) return value;
+          const patched = {
+            ...value,
+            ...pickDefined(reply, [
+              "title",
+              "url",
+              "author",
+              "state",
+              "isDraft",
+              "mergeability",
+              "additions",
+              "deletions",
+              "changedFiles",
+              "headBranch",
+              "baseBranch",
+              "updatedAt",
+              "mergedAt",
+              "closedAt",
+              "autoMergeEnabled",
+              "autoMergeMethod",
+            ]),
+          };
+          if (reply.autoMergeEnabled !== false) return patched;
+          const { autoMergeMethod: _disarmed, ...withoutAutoMerge } = patched;
+          return withoutAutoMerge;
+        },
+      },
+    ),
   );
   const detailReadVersions = Atom.family((source: ReturnType<typeof detail>) =>
     Atom.family((answer: ReturnType<typeof detailAnswers>) =>
@@ -262,28 +328,48 @@ export function createPullRequestEnvironmentAtoms<R, E>(
   const detailReadVersion = normalizePullRequestQuery((target) =>
     detailReadVersions(detail(target))(detailAnswers(target)),
   );
-  const preview = writableQueryFamily(
-    createEnvironmentRpcQueryAtomFamily(runtime, {
-      label: "environment-data:pull-requests:preview",
-      persistence: persistQuery(PullRequestPreview),
-      tag: WS_METHODS.pullRequestsPreview,
-      execute: (input) => routedRequest(WS_METHODS.pullRequestsPreview, input),
-      staleTimeMs: 60_000,
-      refreshTrigger: ({ environmentId }) => refreshes({ environmentId, input: {} }),
-    }),
-  );
+  const previewPersistence = persistQuery(PullRequestPreview);
+  const previewQuery = (label: string) =>
+    normalizePullRequestQuery(
+      actionPatchedQuery(
+        createEnvironmentRpcQueryAtomFamily(runtime, {
+          label,
+          persistence: previewPersistence,
+          tag: WS_METHODS.pullRequestsPreview,
+          execute: (input) => routedRequest(WS_METHODS.pullRequestsPreview, input),
+          staleTimeMs: 60_000,
+          refreshTrigger: ({ environmentId }) => refreshes({ environmentId, input: {} }),
+        }),
+        {
+          label,
+          persistence: previewPersistence,
+          concerns: samePullRequest,
+          rereadWithoutReply: true,
+          // Servers before action replies send unstamped previews, which only a read can order.
+          patch: (_input, value, _reference, reply) =>
+            value.updatedAt === undefined && value.observedAt === undefined
+              ? "refresh"
+              : isStalePullRequestReply(value, reply)
+                ? value
+                : {
+                    ...value,
+                    ...pickDefined(reply, [
+                      "title",
+                      "url",
+                      "author",
+                      "state",
+                      "isDraft",
+                      "updatedAt",
+                      "observedAt",
+                    ]),
+                  },
+        },
+      ),
+    );
+  const preview = previewQuery("environment-data:pull-requests:preview");
   // Hover cards read their own atoms, so a pending or failed hover read never decides where a
   // click on the same link goes.
-  const previewCard = writableQueryFamily(
-    createEnvironmentRpcQueryAtomFamily(runtime, {
-      label: "environment-data:pull-requests:preview-card",
-      persistence: persistQuery(PullRequestPreview),
-      tag: WS_METHODS.pullRequestsPreview,
-      execute: (input) => routedRequest(WS_METHODS.pullRequestsPreview, input),
-      staleTimeMs: 60_000,
-      refreshTrigger: ({ environmentId }) => refreshes({ environmentId, input: {} }),
-    }),
-  );
+  const previewCard = previewQuery("environment-data:pull-requests:preview-card");
   const labelCandidates = writableQueryFamily(
     createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:pull-requests:label-candidates",
@@ -364,8 +450,36 @@ export function createPullRequestEnvironmentAtoms<R, E>(
       });
       preparedInput = { ...actionInput, mergeMethod };
     }
-    return yield* routedRequest(WS_METHODS.pullRequestsRunAction, preparedInput);
+    return yield* routedRequest(WS_METHODS.pullRequestsRunAction, {
+      ...preparedInput,
+      replyWithSummary: true,
+    });
   });
+  const actionReplyReaders = (registry: AtomRegistry.AtomRegistry) =>
+    Array.from(registry.getNodes().keys()).flatMap((atom) => {
+      const patch = typeof atom === "string" ? undefined : actionReplyPatches.get(atom);
+      return patch === undefined ? [] : [patch];
+    });
+  const readsInFlight = (registry: AtomRegistry.AtomRegistry): ReadonlySet<object> =>
+    new Set(actionReplyReaders(registry).flatMap((reader) => reader.pendingRead(registry) ?? []));
+  const applyActionReply = Effect.fn("PullRequests.applyActionReply")(function* (
+    registry: AtomRegistry.AtomRegistry,
+    environmentId: EnvironmentId,
+    reference: PullRequestRef,
+    reply: PullRequestSummary | undefined,
+    readsBeforeSend: ReadonlySet<object>,
+  ) {
+    for (const reader of actionReplyReaders(registry)) {
+      yield* reader.apply(registry, environmentId, reference, reply, readsBeforeSend);
+    }
+    if (reply !== undefined && reference.expectedAccountId === undefined) {
+      yield* (
+        onAnswer.actionReply?.({ environmentId, input: reference }, reply, registry) ?? Effect.void
+      );
+    }
+  });
+  const listLabel = "environment-data:pull-requests:list";
+  const listPersistence = persistQuery(PullRequestListResult);
 
   return {
     refreshes,
@@ -385,15 +499,32 @@ export function createPullRequestEnvironmentAtoms<R, E>(
       staleTimeMs: 0,
       idleTtlMs: 0,
     }),
-    list: createEnvironmentRpcQueryAtomFamily(runtime, {
-      label: "environment-data:pull-requests:list",
-      persistence: persistQuery(PullRequestListResult),
-      tag: WS_METHODS.pullRequestsList,
-      staleTimeMs: 30_000,
-      refreshTrigger: ({ environmentId, input }) =>
-        input.cursors === undefined ? refreshes({ environmentId, input: {} }) : undefined,
-      ...(onAnswer.list === undefined ? {} : { onAnswer: onAnswer.list }),
-    }),
+    list: actionPatchedQuery(
+      createEnvironmentRpcQueryAtomFamily(runtime, {
+        label: listLabel,
+        persistence: listPersistence,
+        tag: WS_METHODS.pullRequestsList,
+        staleTimeMs: 30_000,
+        refreshTrigger: ({ environmentId, input }) =>
+          input.cursors === undefined ? refreshes({ environmentId, input: {} }) : undefined,
+        ...(onAnswer.list === undefined ? {} : { onAnswer: onAnswer.list }),
+      }),
+      {
+        label: listLabel,
+        persistence: listPersistence,
+        onAnswer: onAnswer.list,
+        // Rows carry no account scope, so a reply read through another account leaves them alone.
+        concerns: (input, reference) =>
+          reference.expectedAccountId === undefined &&
+          (input.projectId === undefined || input.projectId === reference.projectId) &&
+          (input.projectIds === undefined || input.projectIds.includes(reference.projectId)) &&
+          (input.host === undefined ||
+            reference.host === undefined ||
+            input.host.toLowerCase() === reference.host.toLowerCase()),
+        refreshedByServer: (input) => input.cursors === undefined,
+        patch: patchListWithReply,
+      },
+    ),
     /**
      * Its own query because the listing is quicker without them — measured over twelve
      * repositories, ~4.0s against ~7.1s — so the rows arrive first and their stats a moment
@@ -502,11 +633,24 @@ export function createPullRequestEnvironmentAtoms<R, E>(
       // Preparation belongs to the write's lane. Refreshable queries would restart it after
       // every preceding action, and preparing outside the lane could reorder the clicks.
       execute: runAction,
-      onSuccess: ({ environmentId, input }, registry) =>
-        Effect.sync(() => {
-          registry.refresh(preview({ environmentId, input }));
-          registry.refresh(previewCard({ environmentId, input }));
-        }),
+      onStart: (_target, registry) => readsInFlight(registry),
+      // Loaded readers show the reply, or re-read when the host's reply lacked the pull request.
+      onSuccess: ({ environmentId, input }, registry, reply, readsBeforeSend) => {
+        const { projectId, host, repository, number, expectedAccountId } = input;
+        return applyActionReply(
+          registry,
+          environmentId,
+          {
+            projectId,
+            ...(host === undefined ? {} : { host }),
+            repository,
+            number,
+            ...(expectedAccountId === undefined ? {} : { expectedAccountId }),
+          },
+          reply,
+          readsBeforeSend ?? new Set(),
+        );
+      },
       scheduler: commandScheduler,
       concurrency: serialPerEnvironment,
     }),

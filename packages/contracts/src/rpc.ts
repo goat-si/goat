@@ -869,7 +869,6 @@ const WsPreviewSessionsControlRpc = Rpc.make(WS_METHODS.previewSessionsControl, 
   error: Schema.Union([EnvironmentAuthorizationError, HandoffError]),
 });
 
-/** A desktop session's live picture for one viewer, or why there is none (#1370). */
 const WsPreviewSessionsFramesRpc = Rpc.make(WS_METHODS.previewSessionsFrames, {
   payload: PreviewSessionFramesInput,
   success: PreviewSessionFrameEvent,
@@ -1451,7 +1450,8 @@ const WsPullRequestsSetFilesViewedRpc = Rpc.make(WS_METHODS.pullRequestsSetFiles
 
 const WsPullRequestsRunActionRpc = Rpc.make(WS_METHODS.pullRequestsRunAction, {
   payload: PullRequestActionInput,
-  success: Schema.Void,
+  // Undefined unless asked for with replyWithSummary, or when the host's reply lacked it.
+  success: Schema.UndefinedOr(PullRequestSummary),
   error: PullRequestRpcError,
 });
 

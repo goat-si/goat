@@ -1,3 +1,4 @@
+import { toMergeMethod } from "./gitHubMergeMethod.ts";
 import * as Cause from "effect/Cause";
 import * as Exit from "effect/Exit";
 import * as Result from "effect/Result";
@@ -15,9 +16,9 @@ import type {
   PullRequestFileViewedState,
   PullRequestLabel,
   PullRequestMergeCapabilities,
-  PullRequestMergeMethod,
   PullRequestOmittedFileStat,
   PullRequestMergeability,
+  PullRequestMergeMethod,
   PullRequestReaction,
   PullRequestReactionContent,
   PullRequestReviewCommentDraft,
@@ -389,7 +390,7 @@ export interface GitHubPullRequestActivity {
   readonly commits: ReadonlyArray<PullRequestCommit>;
 }
 
-function trimmed(value: string | null | undefined): string | null {
+export function trimmed(value: string | null | undefined): string | null {
   const text = value?.trim() ?? "";
   return text.length > 0 ? text : null;
 }
@@ -412,7 +413,7 @@ function toPullRequestViewerFields(
   return { canUpdate: raw?.viewerCanUpdate !== false, didAuthor: raw?.viewerDidAuthor === true };
 }
 
-function toActor(raw: ActorFields | null | undefined): PullRequestActor | null {
+export function toActor(raw: ActorFields | null | undefined): PullRequestActor | null {
   const login = trimmed(raw?.login);
   return login === null
     ? null
@@ -461,7 +462,7 @@ function toGraphqlCommitActor(raw: {
     : { login, name: trimmed(raw.name), avatarUrl: trimmed(raw.avatarUrl) };
 }
 
-function toState(raw: {
+export function toState(raw: {
   readonly state?: string | null | undefined;
   readonly mergedAt?: string | null | undefined;
 }): PullRequestState {
@@ -480,19 +481,6 @@ function toMergeability(value: string | null | undefined): PullRequestMergeabili
       return "conflicting";
     default:
       return "unknown";
-  }
-}
-
-function toMergeMethod(value: string | null | undefined): PullRequestMergeMethod | undefined {
-  switch (value?.trim().toUpperCase()) {
-    case "MERGE":
-      return "merge";
-    case "SQUASH":
-      return "squash";
-    case "REBASE":
-      return "rebase";
-    default:
-      return undefined;
   }
 }
 

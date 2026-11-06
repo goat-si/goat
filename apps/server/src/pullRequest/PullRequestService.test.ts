@@ -1542,7 +1542,7 @@ it.effect("publishes a merge for immediate settlement only after host confirmati
                       detail: "HTTP 504",
                     }),
                   )
-                : Effect.succeed({ ...changeRequest(1, mergedAt), state }),
+                : Effect.succeed({ ...changeRequest(1, mergedAt), state, mergedAt }),
           }),
         ],
       });
@@ -1551,7 +1551,7 @@ it.effect("publishes a merge for immediate settlement only after host confirmati
         Effect.forkChild({ startImmediately: true }),
       );
 
-      yield* service.runAction({ ...reference, action: "merge" });
+      assert.isUndefined(yield* service.runAction({ ...reference, action: "merge" }));
       const queuedRefresh = Option.getOrThrow(yield* Stream.runHead(service.subscribeRefreshes));
       confirmationFails = true;
       yield* service.runAction({ ...reference, action: "merge" });
@@ -1561,7 +1561,7 @@ it.effect("publishes a merge for immediate settlement only after host confirmati
       );
       confirmationFails = false;
       state = "merged";
-      yield* TestClock.setTime(Date.parse(mergedAt));
+      yield* TestClock.setTime(Date.parse(mergedAt) + 60_000);
       yield* service.runAction({
         ...reference,
         repository: " ACME/WEB ",
