@@ -1,4 +1,9 @@
 import * as RestartCandidates from "./RestartContinuationCandidates.ts";
+import {
+  matchingTimelineRows,
+  memoryTimelinePage,
+  timelineAttachmentOwners,
+} from "./TimelineAttachment.ts";
 import { latestIdleCompactionRun } from "./IdleCompaction.ts";
 import * as LatestAnswer from "./ProjectionLatestAnswer.ts";
 import * as LaunchEdges from "./ProjectionLaunchEdges.ts";
@@ -475,6 +480,7 @@ export type ProjectionRecords<K extends ProjectionRecordField> = Pick<
 >;
 
 export interface ProjectionTimelinePageOptions {
+  readonly attachmentId?: string;
   readonly afterPosition?: number;
   readonly itemId?: TurnItemId;
   readonly view?: "messages" | "activity";
@@ -6482,17 +6488,15 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         .withTransaction(
           Effect.gen(function* () {
             const index = yield* readTimelineIndex(threadId, new Set());
-            const matching = index.visible
-              .map((row, position) => ({ ...row, position }))
-              .filter((row) =>
-                options.itemId === undefined
-                  ? row.position > (options.afterPosition ?? -1) &&
-                    (options.view === "activity" ||
-                      ["user_message", "assistant_message", "proposed_plan"].includes(
-                        row.item.type,
-                      ))
-                  : row.sourceItemId === options.itemId,
-              );
+            const attachmentOwners =
+              options.attachmentId === undefined
+                ? undefined
+                : yield* timelineAttachmentOwners(
+                    sql,
+                    index.visible.map((row) => row.sourceThreadId),
+                    options.attachmentId,
+                  );
+            const matching = matchingTimelineRows(index.visible, options, attachmentOwners);
             const page =
               options.tail === true
                 ? matching.slice(Math.max(0, matching.length - options.limit))
@@ -8783,23 +8787,9 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
           ),
         ),
       getTimelinePage: (threadId, options) =>
-        service.getThreadProjection(threadId).pipe(
-          Effect.map((projection) => {
-            const matching = projection.visibleTurnItems.filter((row) =>
-              options.itemId === undefined
-                ? row.position > (options.afterPosition ?? -1) &&
-                  (options.view === "activity" ||
-                    ["user_message", "assistant_message", "proposed_plan"].includes(row.item.type))
-                : row.sourceItemId === options.itemId,
-            );
-            const start = options.tail === true ? Math.max(0, matching.length - options.limit) : 0;
-            return {
-              items: matching.slice(start, start + options.limit),
-              totalItems: projection.visibleTurnItems.length,
-              hasMore: start + options.limit < matching.length,
-            };
-          }),
-        ),
+        service
+          .getThreadProjection(threadId)
+          .pipe(Effect.map((projection) => memoryTimelinePage(projection, options))),
       getThreadSnapshotWindow: (threadId, options) =>
         service.getThreadSnapshot(threadId).pipe(
           Effect.map((snapshot) => {
