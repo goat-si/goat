@@ -48,3 +48,14 @@ it("leaves a previous grant invalid if updating secure storage fails", async () 
   expect(() => storage.choose(null)).toThrow("unavailable");
   expect(await storage.read()).toBeNull();
 });
+
+it("treats a grant without its device marker as revoked", async () => {
+  const storage = createVoiceGrantStorage({
+    readSecret: async () => JSON.stringify({ id: "kept", environmentId: "env" }),
+    writeSecret: () => {},
+    readMarker: () => null,
+    writeMarker: () => {},
+    newId: () => "unused",
+  });
+  expect(await storage.read()).toBeNull();
+});

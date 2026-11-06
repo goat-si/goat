@@ -11,7 +11,8 @@ const decode = Schema.decodeUnknownSync(Schema.fromJsonString(Grant));
 export function createVoiceGrantStorage(input: {
   readSecret: () => Promise<string | null>;
   writeSecret: (value: string) => void;
-  readMarker: () => string;
+  /** Null when the marker is missing, which revokes the grant. */
+  readMarker: () => string | null;
   writeMarker: (value: string) => void;
   newId: () => string;
 }) {

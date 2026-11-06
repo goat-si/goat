@@ -25,6 +25,7 @@ import { ManagedRelay } from "@goat/client-runtime/relay";
 import { RemoteEnvironmentAuthorization } from "@goat/client-runtime/authorization/service";
 import { createRuntimeCommand, squashAtomCommandFailure } from "@goat/client-runtime/state/runtime";
 import { useStableCallback } from "../../hooks/useStableCallback";
+import { toastManager } from "../ui/toast";
 import { composerTargetKey, useComposerDraftStore } from "../../composerDraftStore";
 import { useEnvironment, useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
 import {
@@ -551,12 +552,21 @@ export function useChatComposerVoiceController(
             readEnvironmentScope(id, AuthOrchestrationOperateScope) &&
             !readEnvironmentProxiedByHub(id)
           )
-            chooseEnvironmentSpeech(id);
+            reportUnsavedVoiceChoice(chooseEnvironmentSpeech(id));
         },
-        disable: () => chooseEnvironmentSpeech(null),
+        disable: () => reportUnsavedVoiceChoice(chooseEnvironmentSpeech(null)),
       },
     },
   };
+}
+
+function reportUnsavedVoiceChoice(saved: boolean) {
+  if (saved) return;
+  toastManager.add({
+    type: "error",
+    title: "Could not save the dictation choice",
+    description: "Environment dictation is off in this tab.",
+  });
 }
 
 const routeKey = (route: VoiceTranscriptionRoute) =>

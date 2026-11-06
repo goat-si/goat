@@ -14,7 +14,11 @@ const marker = () => new File(Paths.document, "goat-voice-grant-id");
 const storage = createVoiceGrantStorage({
   readSecret: () => SecureStore.getItemAsync(key, options),
   writeSecret: (value) => SecureStore.setItem(key, value, options),
-  readMarker: () => marker().textSync(),
+  // iOS can keep keychain items across a reinstall while the app's documents are erased.
+  readMarker: () => {
+    const file = marker();
+    return file.exists ? file.textSync() : null;
+  },
   writeMarker: (value) => marker().writeSync(value),
   newId: uuidv4,
 });
@@ -27,14 +31,20 @@ const stored = Atom.make(
   Effect.tryPromise({
     try: readGrant,
     catch: (cause) => new Error("Could not read voice consent", { cause }),
-  }),
+  }).pipe(
+    Effect.tapError((error) =>
+      Effect.logWarning("Environment dictation stays off: voice consent is unreadable", error),
+    ),
+  ),
 ).pipe(Atom.keepAlive);
 const choice = Atom.make<VoiceGrant | null | undefined>(undefined).pipe(Atom.keepAlive);
 export const voiceGrantAtom = Atom.make((get) => {
   const current = get(choice);
   if (current !== undefined) return current;
   const loaded = get(stored);
-  return AsyncResult.isSuccess(loaded) ? loaded.value : undefined;
+  if (AsyncResult.isSuccess(loaded)) return loaded.value;
+  // An unreadable grant is no grant; staying undefined would also block on-device voice input.
+  return AsyncResult.isFailure(loaded) ? null : undefined;
 }).pipe(Atom.keepAlive);
 
 export function chooseVoiceEnvironment(environmentId: EnvironmentId | null) {
