@@ -5,10 +5,15 @@ import { render } from "../../../test/render";
 const state = vi.hoisted(() => ({ answer: vi.fn() }));
 vi.mock(import("@effect/atom-react"), async (original) => ({
   ...(await original()),
-  useAtomValue: (() => true) as never,
+  useAtomValue: ((atom: unknown) => atom) as never,
 }));
 vi.mock("../../state/server", () => ({
-  serverEnvironment: { openHandoff: {}, answerSecretRequest: { permissionAtom: () => null } },
+  serverEnvironment: {
+    openHandoff: {},
+    answerSecretRequest: { permissionAtom: () => true },
+    settingsValueAtom: () => null,
+    configValueAtom: () => null,
+  },
 }));
 vi.mock("../../state/use-atom-command", () => ({ useAtomCommand: () => state.answer }));
 import { SecretRequestCard } from "./SecretRequestCard";
