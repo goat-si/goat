@@ -61,9 +61,14 @@ export function VoiceModelDialog(props: {
     active.current = controller;
     void Promise.resolve()
       .then(() => refresh(controller.signal))
+      .then(() => {
+        if (!controller.signal.aborted) setBusy(false);
+      })
       .catch((cause: unknown) => {
-        if (!controller.signal.aborted)
+        if (!controller.signal.aborted) {
+          setBusy(false);
           setError(cause instanceof Error ? cause.message : "Could not load voice models.");
+        }
       });
     return () => {
       controller.abort();
