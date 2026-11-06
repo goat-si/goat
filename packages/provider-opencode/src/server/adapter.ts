@@ -472,7 +472,6 @@ export function makeOpenCodeProtocolLogger(input: {
 }): (event: OpenCodeProtocolLogEvent) => Effect.Effect<void, never> {
   return (event) =>
     Effect.gen(function* () {
-      // Per-token deltas; the part's final message.part.updated is still logged.
       if (!input.nativeEventLogger || event.method === "message.part.delta") return;
       const observedAt = DateTime.formatIso(yield* DateTime.now);
       const method = structuralProtocolMethod(event.method);
