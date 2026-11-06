@@ -3,6 +3,7 @@ import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 
 import { ThreadId, TrimmedNonEmptyString, TrimmedString } from "./baseSchemas.ts";
+import { SecretReference } from "./secretReference.ts";
 
 export const DevicePlatform = Schema.Literals(["ios", "android"]);
 export type DevicePlatform = typeof DevicePlatform.Type;
@@ -48,6 +49,7 @@ export const EasDeviceHostConfig = Schema.Struct({
     Schema.withDecodingDefaultKey(Effect.succeed("")),
     Schema.annotateKey({ settingsSecret: true }),
   ),
+  accessTokenReference: Schema.optionalKey(Schema.NullOr(SecretReference)),
   /** EAS allows at most 40 minutes on free accounts and 115 on paid ones. */
   maxSessionMinutes: Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 115 })).pipe(
     Schema.withDecodingDefaultKey(Effect.succeed(30)),
@@ -89,6 +91,7 @@ export const DeviceEasAccountInput = Schema.Struct({
   /** A saved EAS host whose stored token is checked when no new token is given. */
   hostId: Schema.optional(DeviceHostId),
   accessToken: Schema.optional(TrimmedString),
+  accessTokenReference: Schema.optional(SecretReference),
 });
 export type DeviceEasAccountInput = typeof DeviceEasAccountInput.Type;
 

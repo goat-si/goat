@@ -468,6 +468,7 @@ export function applyServerSettingsPatch(
     worktreeCleanup: worktreeCleanupPatch,
     // Merged per entry below; its `null` removals must not reach deepMerge.
     usageLimitSources: usageLimitSourcesPatch,
+    easDeviceHosts: easDeviceHostsPatch,
     secretProviders: secretProvidersPatch,
     sourceControlHosts: sourceControlHostsPatch,
     usagePriceOverrides: usagePriceOverridesPatch,
@@ -678,6 +679,18 @@ export function applyServerSettingsPatch(
           ),
         }
       : {}),
+    ...(easDeviceHostsPatch === undefined
+      ? {}
+      : {
+          easDeviceHosts: easDeviceHostsPatch.map((host) => {
+            const previous = current.easDeviceHosts.find((candidate) => candidate.id === host.id);
+            return host.accessTokenReference === undefined &&
+              (host.accessToken === "" || host.accessToken === "••••••") &&
+              previous?.accessTokenReference != null
+              ? { ...host, accessTokenReference: previous.accessTokenReference }
+              : host;
+          }),
+        }),
     ...(secretProvidersPatch !== undefined
       ? { secretProviders: mergeSettingsEntries(current.secretProviders, secretProvidersPatch) }
       : {}),

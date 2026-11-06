@@ -1850,6 +1850,7 @@ export const layerWsRpc = (
           secretProviderSettings: true,
           secretReferences: true,
           usageLimitSecretReferences: true,
+          easSecretReferences: true,
           ...Option.match(scratchWorkspaceRoot, {
             onNone: () => ({}),
             onSome: (root) => ({ scratchWorkspaceRoot: root }),

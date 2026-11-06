@@ -5,4 +5,5 @@ export const serverCapabilityFields = {
   secretProviderSettings: Schema.optionalKey(Schema.Boolean),
   secretReferences: Schema.optionalKey(Schema.Boolean),
   usageLimitSecretReferences: Schema.optionalKey(Schema.Boolean),
+  easSecretReferences: Schema.optionalKey(Schema.Boolean),
 };

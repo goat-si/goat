@@ -49,7 +49,6 @@ import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import * as SynchronizedRef from "effect/SynchronizedRef";
-import * as HttpClient from "effect/http/HttpClient";
 
 import * as ServerSettings from "../serverSettings.ts";
 import { isLocalSshDeviceHost, remoteSshDeviceHosts } from "./localSshDeviceHost.ts";
@@ -59,7 +58,7 @@ import * as ProcessRunner from "../processRunner.ts";
 import * as DeviceHost from "./DeviceHost.ts";
 import * as SshDeviceHost from "./SshDeviceHost.ts";
 import * as EasDeviceHost from "./EasDeviceHost.ts";
-import { makeExpoApi, resolveExpoCredential } from "./ExpoApi.ts";
+import { checkEasAccount, EasSecretCredentialError, readEasToken } from "./EasSecretCredential.ts";
 import * as Exit from "effect/Exit";
 import * as LocalDeviceHost from "./LocalDeviceHost.ts";
 
@@ -1043,10 +1042,15 @@ export const make = Effect.gen(function* () {
           if (host.kind === "eas") {
             // Closing this scope stops the host's running sessions, so a changed
             // limit or token never leaves a billed session behind.
-            const instance = yield* EasDeviceHost.make(host).pipe(
-              Effect.provideService(Scope.Scope, hostScope),
-              Effect.provide(easContext),
-            );
+            const instance = yield* EasDeviceHost.make(
+              host,
+              settings.getSettings.pipe(
+                Effect.flatMap((value) =>
+                  readEasToken(value, host.accessToken, host.accessTokenReference),
+                ),
+                Effect.mapError(() => new EasSecretCredentialError()),
+              ),
+            ).pipe(Effect.provideService(Scope.Scope, hostScope), Effect.provide(easContext));
             hosts.set(host.id, instance);
             configured.set(host.id, { config: host, scope: hostScope });
             continue;
@@ -1100,34 +1104,8 @@ export const make = Effect.gen(function* () {
       concurrency: 4,
     }),
   );
-  const easAccount: DeviceService["Service"]["easAccount"] = Effect.fn("DeviceService.easAccount")(
-    function* (input) {
-      const saved =
-        input.hostId === undefined
-          ? ""
-          : ((yield* settings.getSettings).easDeviceHosts.find((host) => host.id === input.hostId)
-              ?.accessToken ?? "");
-      const credential = yield* resolveExpoCredential(input.accessToken ?? saved);
-      const viewer = yield* makeExpoApi(yield* HttpClient.HttpClient, credential).viewer;
-      return { signedInAs: viewer.name, credentialSource: credential.source, apps: viewer.apps };
-    },
-    Effect.provide(easContext),
-    // Only bounded text reaches the browser: the credential errors' own
-    // guidance, or a category for what Expo answered, never Expo's text.
-    Effect.mapError(
-      (cause) =>
-        new DeviceEasAccountError({
-          reason:
-            cause._tag === "ExpoApiError"
-              ? cause.status === 401 || cause.status === 403
-                ? `Expo rejected the credential (HTTP ${cause.status}).`
-                : cause.rejected
-                  ? "Expo refused the account check."
-                  : "Could not complete the Expo account check."
-              : cause.message,
-        }),
-    ),
-  );
+  const easAccount: DeviceService["Service"]["easAccount"] = (input) =>
+    checkEasAccount(settings, input).pipe(Effect.provide(easContext));
 
   return {
     ...service,
