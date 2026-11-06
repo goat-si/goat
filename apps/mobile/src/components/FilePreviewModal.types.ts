@@ -26,9 +26,4 @@ export type FilePreviewSource = FilePreviewItem & {
 export interface ResolvedFilePreviewSource extends FilePreviewMetadata {
   readonly uri: string;
   readonly gallery?: readonly (FilePreviewMetadata & { readonly uri: string })[];
-  readonly gallerySlots?: readonly (FilePreviewMetadata & {
-    readonly uri?: string;
-    readonly failed?: boolean;
-  })[];
-  readonly selectedIndex?: number;
 }

@@ -1,6 +1,6 @@
 import * as Dialog from "./ui/Dialog";
 import { requireNativeModule } from "expo";
-import { useEffect, useEffectEvent, useId, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useId } from "react";
 
 import type { ResolvedFilePreviewSource } from "./FilePreviewModal.types";
 
@@ -12,13 +12,12 @@ const NativeControls = requireNativeModule<{
     identifier: string,
   ): Promise<void>;
   presentFiles(
-    uris: readonly (string | null)[],
+    uris: readonly string[],
     names: readonly string[],
     selectedIndex: number,
     sourceIdentifiers: readonly string[],
     identifier: string,
   ): Promise<void>;
-  updateFile(identifier: string, index: number, uri: string | null): Promise<void>;
   dismissFile(identifier: string): Promise<void>;
 }>("GoatNativeControls");
 
@@ -27,9 +26,8 @@ function NativeFilePreview(props: {
   readonly onRequestClose: () => void;
   readonly onOpenError?: (error: unknown) => void;
 }) {
+  const { uri, name, sourceIdentifier, gallery } = props.source;
   const identifier = useId();
-  const [presented] = useState(props.source);
-  const delivered = useRef<(string | null | undefined)[]>([]);
   const onRequestClose = useEffectEvent(props.onRequestClose);
   const onOpenError = useEffectEvent((error: unknown) => {
     if (props.onOpenError) props.onOpenError(error);
@@ -38,17 +36,8 @@ function NativeFilePreview(props: {
 
   useEffect(() => {
     let canceled = false;
-    const { uri, name, sourceIdentifier, gallery, gallerySlots, selectedIndex } = presented;
-    delivered.current = gallerySlots?.map((item) => item.uri) ?? [];
-    const presentation = gallerySlots
-      ? NativeControls.presentFiles(
-          gallerySlots.map((item) => item.uri ?? null),
-          gallerySlots.map((item) => item.name ?? "Preview"),
-          selectedIndex ?? 0,
-          gallerySlots.map((item) => item.sourceIdentifier ?? ""),
-          identifier,
-        )
-      : gallery && gallery.length > 1
+    const presentation =
+      gallery && gallery.length > 1
         ? NativeControls.presentFiles(
             gallery.map((item) => item.uri),
             gallery.map((item) => item.name ?? "Preview"),
@@ -71,18 +60,7 @@ function NativeFilePreview(props: {
       canceled = true;
       void NativeControls.dismissFile(identifier).catch(() => undefined);
     };
-  }, [presented, identifier]);
-
-  const slots = props.source.gallerySlots;
-  // oxlint-disable-next-line goat/react-effect-budget -- deliver resolved gallery items to the native viewer
-  useEffect(() => {
-    slots?.forEach((item, index) => {
-      const uri = item.failed ? null : item.uri;
-      if (uri === undefined || delivered.current[index] === uri) return;
-      delivered.current[index] = uri;
-      void NativeControls.updateFile(identifier, index, uri).catch(() => undefined);
-    });
-  }, [identifier, slots]);
+  }, [uri, name, sourceIdentifier, identifier, gallery]);
 
   return null;
 }

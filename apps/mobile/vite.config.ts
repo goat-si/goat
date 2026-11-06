@@ -4,7 +4,6 @@ import { defineConfig, normalizePath } from "vite-plus";
 import "vite-plus/test/config";
 
 const reactTests = [
-  "src/components/FilePreviewModal.progressive.test.tsx",
   "src/features/threads/CustomAnswerInput.test.tsx",
   "src/features/devices/device-stream.browser.test.ts",
   "src/features/settings/WorktreeCleanupSection.test.tsx",
