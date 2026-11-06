@@ -490,7 +490,7 @@ export function presentMemoryProcessing(
  * Conversations whose summary failed for good, with a reason and action only where they hold for
  * every one of them. Summaries still waiting to be tried again are not failures.
  */
-export function presentMemoryGenerationFailure(failure: MemorySyncStatus["generationFailure"]) {
+function presentMemoryGenerationFailure(failure: MemorySyncStatus["generationFailure"]) {
   if (!failure) return null;
   const subject =
     failure.threads === 1

@@ -10,8 +10,8 @@ export const makeGenerationFailures = (kernel: Pick<StoreKernel, "sql">) => {
   const { sql } = kernel;
   /**
    * Threads whose summary work failed for good, from work rows (report diagnostics are trimmed and
-   * can be refused). Newer work of the thread supersedes a failure by pruneSettledSummaryWork's
-   * rule, so status reads the same before and after pruning. Space as readLocalProcessingStatus.
+   * can be refused). Deleted threads and newer work of the thread drop a failure by
+   * pruneSettledSummaryWork's rules, so status reads the same before and after pruning.
    */
   const readGenerationFailure = Effect.fn("MemoryStore.readGenerationFailure")(function* (input: {
     readonly environmentId: M.EnvironmentId;
@@ -29,6 +29,7 @@ export const makeGenerationFailures = (kernel: Pick<StoreKernel, "sql">) => {
       FROM memory_outbox o
       WHERE o.space=${space} AND o.kind IN ('summary','consolidate') AND o.status='failed' AND o.failure_code IS NOT NULL
         AND json_extract(o.metadata_json,'$.kind')='summary'
+        AND EXISTS (SELECT 1 FROM orchestration_v2_projection_threads t WHERE t.thread_id=json_extract(o.metadata_json,'$.sourceThread.threadId') AND t.deleted_at IS NULL)
         AND NOT EXISTS (SELECT 1 FROM memory_outbox n WHERE n.kind IN ('summary','consolidate')
           AND json_extract(n.metadata_json,'$.sourceThread.threadId')=json_extract(o.metadata_json,'$.sourceThread.threadId')
           AND coalesce(json_extract(n.metadata_json,'$.observedThroughSequence'),json_extract(n.metadata_json,'$.sourceWatermark.throughSequence'))

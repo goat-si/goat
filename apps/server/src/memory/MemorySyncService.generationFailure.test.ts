@@ -4,7 +4,7 @@ import * as SqlClient from "effect/sql/SqlClient";
 import * as Sync from "./MemorySyncService.ts";
 import { fixture, id, local, space } from "./MemorySyncService.testkit.ts";
 
-const work = (key: string, thread: string, status: string, code: string | null, target = space) =>
+const work = (key: string, thread: string, status: string, code: string | null, target = "") =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const metadata = JSON.stringify({
@@ -13,7 +13,8 @@ const work = (key: string, thread: string, status: string, code: string | null, 
       sourceWatermark: { throughSequence: key === "a-newer" ? 9 : 5 },
     });
     yield* sql`INSERT INTO memory_outbox(id,space,kind,status,metadata_json,next_attempt_at,failure_code)
-      VALUES (${key},${target},'consolidate',${status},${metadata},0,${code})`;
+      VALUES (${key},${target || space},'consolidate',${status},${metadata},0,${code})`;
+    yield* sql`INSERT OR IGNORE INTO orchestration_v2_projection_threads(thread_id) VALUES (${thread})`;
   });
 
 it.effect("reports summaries that failed for good only to a request that opts in", () =>
@@ -31,7 +32,8 @@ it.effect("reports summaries that failed for good only to a request that opts in
     const status = () => sync.syncStatus({ includeGenerationFailure: true }, Effect.void);
     // Different reasons: none of them is presented as the reason for all.
     assert.deepStrictEqual((yield* status()).generationFailure, { threads: 2, failureCode: null });
-    yield* sql`DELETE FROM memory_outbox WHERE id='d'`;
+    // A deleted thread's failure is gone before maintenance prunes the row.
+    yield* sql`UPDATE orchestration_v2_projection_threads SET deleted_at='2026-11-07' WHERE thread_id='d'`;
     assert.deepStrictEqual((yield* status()).generationFailure, {
       threads: 1,
       failureCode: "generation_failed",
