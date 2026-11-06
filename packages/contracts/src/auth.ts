@@ -642,9 +642,12 @@ export function requiredScopesForServerSettingsPatch(
 ): ReadonlyArray<AuthEnvironmentScope> {
   let changesProviders = false;
   let changesSettings = false;
+  let changesVoice = false;
   for (const [key, value] of Object.entries(patch)) {
     if (value === undefined) continue;
-    if (
+    if (key === "speech") {
+      changesVoice = true;
+    } else if (
       key === "providers" ||
       key === "providerInstances" ||
       key === "usageLimitSources" ||
@@ -656,10 +659,13 @@ export function requiredScopesForServerSettingsPatch(
     }
   }
   return [
-    ...(changesSettings || !changesProviders || agentTerminalBinding !== undefined
+    ...(changesSettings ||
+    (!changesProviders && !changesVoice) ||
+    agentTerminalBinding !== undefined
       ? [AuthSettingsWriteScope]
       : []),
     ...(changesProviders ? [AuthProvidersManageScope] : []),
+    ...(changesVoice ? [AuthVoiceManageScope] : []),
     ...(agentTerminalBinding !== undefined ? [AuthAccessWriteScope] : []),
   ];
 }
