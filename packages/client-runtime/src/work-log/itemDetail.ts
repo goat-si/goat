@@ -90,12 +90,11 @@ function textFromBlocks(
     ) {
       const structured = formatJsonValue(value.structuredContent);
       if (structured !== null) {
-        const remainder = value.content.filter(
-          (block) => isRecord(block) && (block.type === "image" || outputLink(block) !== null),
-        );
-        return [structured, textFromBlocks(remainder, depth + 1, imageBlocks, omitLinks)]
-          .filter(Boolean)
-          .join("\n");
+        const content = value.content.flatMap((block) => {
+          const text = textFromBlocks(block, depth + 1, imageBlocks, omitLinks);
+          return text?.trim() ? [text] : [];
+        });
+        return [structured, ...content].join("\n");
       }
     }
     const text = textFromBlocks(value.content, depth + 1, imageBlocks, omitLinks);

@@ -68,8 +68,22 @@ it("shows structured MCP output with its image and retains resource links", () =
     structuredContent: { status: "ready" },
   });
   expect(turnItemOutputImages(item)).toHaveLength(1);
-  expect(turnItemOutputText(item)).toBe('{\n  "status": "ready"\n}\nhttps://example.com/report');
-  expect(turnItemOutputText(item, { omitLinks: true })).toBe('{\n  "status": "ready"\n}');
+  expect(turnItemOutputText(item)).toBe(
+    '{\n  "status": "ready"\n}\nfallback\nhttps://example.com/report',
+  );
+  expect(turnItemOutputText(item, { omitLinks: true })).toBe('{\n  "status": "ready"\n}\nfallback');
+});
+
+it("keeps warnings beside structured MCP output and an image", () => {
+  const item = toolItem({
+    content: [
+      { type: "image", mimeType: "image/png" },
+      { type: "text", text: "Warning: partial result" },
+    ],
+    structuredContent: { status: "ok" },
+  });
+  expect(turnItemOutputImages(item)).toHaveLength(1);
+  expect(turnItemOutputText(item)).toBe('{\n  "status": "ok"\n}\nWarning: partial result');
 });
 
 describe("MCP resource link output", () => {

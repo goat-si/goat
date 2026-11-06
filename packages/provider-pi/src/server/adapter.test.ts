@@ -53,7 +53,7 @@ import {
 } from "./adapter.ts";
 import { makePiRpcConnection, type PiRpcRecord } from "./rpc.ts";
 import { loadMcpBridge } from "./mcpBridge.testkit.ts";
-import { turnItemOutputText } from "../../../client-runtime/src/work-log/itemDetail.ts";
+import { turnItemOutputText as outputText } from "../../../client-runtime/src/work-log/itemDetail.ts";
 
 const layerTest = Layer.mergeAll(
   NodeServices.layer,
@@ -2268,8 +2268,8 @@ describe("PiAdapterV2", () => {
                 ? [{ mimeType: "image/png", data: image.data }]
                 : [],
             );
-            if (index === 0) assert.equal(turnItemOutputText(event.turnItem), note);
-            if (index === 5) assert.equal(turnItemOutputText(event.turnItem), "first\nsecond");
+            if (index === 0) assert.equal(outputText(event.turnItem), note);
+            if (index === 5) assert.equal(outputText(event.turnItem), "first\nsecond");
             if (index === 2) {
               assert.deepEqual(compactDynamicToolOutput(event.turnItem.output), {
                 threadId: "child-thread",
@@ -2324,7 +2324,7 @@ describe("PiAdapterV2", () => {
             return yield* Effect.die("Expected a tool item");
           assert.equal(event.turnItem.status, "failed");
           assert.notProperty(event.turnItem.output, "structuredContent");
-          const displayed = turnItemOutputText(event.turnItem);
+          const displayed = outputText(event.turnItem);
           if (index === 0) {
             assert.equal(event.turnItem.output, text);
             assert.equal(displayed, text);
@@ -2351,7 +2351,7 @@ describe("PiAdapterV2", () => {
           content,
           structuredContent: { path: "read.ts", ready: true },
         });
-        assert.equal(turnItemOutputText(event.turnItem), text);
+        assert.equal(outputText(event.turnItem), text);
         const note = "Read image file [image/png]";
         const image = { type: "image", data: "AAAA", mimeType: "image/png" };
         const imageContent = [{ type: "text", text: note }, image];
@@ -2372,7 +2372,7 @@ describe("PiAdapterV2", () => {
           if (event.type !== "turn_item.updated" || event.turnItem.type !== "dynamic_tool")
             return yield* Effect.die("Expected a read image tool item");
           assert.deepEqual(event.turnItem.output, { content: imageContent, structuredContent });
-          assert.equal(turnItemOutputText(event.turnItem), note);
+          assert.equal(outputText(event.turnItem), note);
         }
       }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
@@ -2398,13 +2398,13 @@ describe("PiAdapterV2", () => {
             { type: "text", text: "Screenshot captured" },
             { type: "image", data, mimeType: "image/png" },
           ];
-          const metadata = { screenshot: { width: 1200, height: 800 }, ready: true };
+          const meta = { screenshot: { width: 1200, height: 800 }, ready: true };
           const bridge = yield* Effect.promise(() =>
-            loadMcpBridge({ modern: true, result: { content, structuredContent: metadata } }),
+            loadMcpBridge({ modern: true, result: { content, structuredContent: meta } }),
           );
           const tool = bridge.tools.find((tool) => tool.name.endsWith("__goat_preview_snapshot"))!;
           const result = yield* Effect.promise(() => tool.execute("screenshot", {}));
-          assert.deepEqual(result.structuredContent, { content, structuredContent: metadata });
+          assert.deepEqual(result.structuredContent, { content, structuredContent: meta });
           yield* fake.emit(
             {
               type: "tool_execution_end",
@@ -2426,11 +2426,11 @@ describe("PiAdapterV2", () => {
           );
           if (event.type !== "turn_item.updated" || event.turnItem.type !== "dynamic_tool")
             return yield* Effect.die("Expected a screenshot tool item");
-          assert.equal(event.turnItem.toolName, tool.name);
-          assert.equal(event.turnItem.status, "completed");
-          assert.deepEqual(event.turnItem.output, { content, structuredContent: metadata });
-          assert.equal(turnItemOutputText(event.turnItem), JSON.stringify(metadata, null, 2));
-          const image = toolOutputImages(event.turnItem.output)[0];
+          const item = event.turnItem;
+          assert.deepEqual([item.toolName, item.status], [tool.name, "completed"]);
+          assert.deepEqual(item.output, { content, structuredContent: meta });
+          assert.equal(outputText(item), `${JSON.stringify(meta, null, 2)}\nScreenshot captured`);
+          const image = toolOutputImages(item.output)[0];
           assert.equal(image?.mimeType, "image/png");
           assert.deepEqual(Buffer.from(image!.data!, "base64"), pixels);
           yield* takeEvent(
