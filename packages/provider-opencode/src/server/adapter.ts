@@ -98,6 +98,7 @@ import {
   subagentThreadTitle,
 } from "@goat/provider-core/server/subagentProjection";
 import {
+  openCodeToolStatus,
   openCodeToolOutputWithImages,
   openCodeToolStateResult,
   openCodeToolTurnItem,
@@ -552,22 +553,6 @@ export function openCodeBoundaryAfterProviderTurn(
     .toSorted((left, right) => left.ordinal - right.ordinal)
     .map((turn) => turn.nativeTurnRef?.nativeId)
     .find((nativeId): nativeId is string => nativeId !== null && nativeId !== undefined);
-}
-
-function toolStatus(part: ToolPart): {
-  readonly node: OrchestrationV2ExecutionNode["status"];
-  readonly item: OrchestrationV2TurnItem["status"];
-} {
-  switch (part.state.status) {
-    case "pending":
-      return { node: "pending", item: "pending" };
-    case "running":
-      return { node: "running", item: "running" };
-    case "completed":
-      return { node: "completed", item: "completed" };
-    case "error":
-      return { node: "failed", item: "failed" };
-  }
 }
 
 function toolInput(part: ToolPart): Record<string, unknown> {
@@ -1280,7 +1265,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           }
           const { output } = openCodeToolStateResult(part.state);
           if (part.state.status === "completed" && output !== undefined) context.result = output;
-          const status = toolStatus(part);
+          const status = openCodeToolStatus(part);
           const completedAt = toolCompletedAt(part, now);
           const subagentStatus: OrchestrationV2Subagent["status"] =
             status.item === "failed"
@@ -1379,7 +1364,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           }
           if (normalizedTool === "question") return;
           const now = yield* DateTime.now;
-          const status = toolStatus(part);
+          const status = openCodeToolStatus(part);
           const startedAt = toolStartedAt(part, now);
           const completedAt = toolCompletedAt(part, now);
           const nativeItemRef = providerRef(part.id);

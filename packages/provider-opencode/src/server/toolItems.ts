@@ -1,4 +1,4 @@
-import type { OrchestrationV2TurnItem } from "@goat/contracts";
+import type { OrchestrationV2ExecutionNode, OrchestrationV2TurnItem } from "@goat/contracts";
 import { resolveGoatMcpToolId } from "@goat/shared/goatMcpToolPresentation";
 import { formatReadToolLabel, formatSearchToolLabel } from "@goat/shared/toolActivity";
 import { imageBlockFromDataUrl, MAX_TOOL_OUTPUT_IMAGES } from "@goat/shared/toolOutput";
@@ -120,6 +120,16 @@ function nativeReadOutput(output: string): string {
   return envelope === null ? output : envelope[1] + body.slice(envelope[0].length);
 }
 
+/** OpenCode's shell tool succeeds when the command exits non-zero. */
+export function openCodeCommandFailed(toolName: string, completedMetadata: unknown): boolean {
+  const exitCode = recordNumber(completedMetadata, "exit", "exitCode");
+  return (
+    openCodeToolProjectionKind(toolName) === "command_execution" &&
+    exitCode !== undefined &&
+    exitCode !== 0
+  );
+}
+
 export function openCodeToolTurnItem(
   base: ToolItemBase,
   tool: {
@@ -213,5 +223,23 @@ export function openCodeToolTurnItem(
         ...(cleanedOutput === undefined ? {} : { output: cleanedOutput }),
       };
     }
+  }
+}
+
+export function openCodeToolStatus(part: ToolPart): {
+  readonly node: OrchestrationV2ExecutionNode["status"];
+  readonly item: OrchestrationV2TurnItem["status"];
+} {
+  switch (part.state.status) {
+    case "pending":
+      return { node: "pending", item: "pending" };
+    case "running":
+      return { node: "running", item: "running" };
+    case "completed":
+      return openCodeCommandFailed(part.tool, part.state.metadata)
+        ? { node: "failed", item: "failed" }
+        : { node: "completed", item: "completed" };
+    case "error":
+      return { node: "failed", item: "failed" };
   }
 }
