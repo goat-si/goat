@@ -14,7 +14,7 @@ export function visibleBody(body: string): string | null {
  * bookkeeping would otherwise use up the bound before the remark got any of it. Comments in code
  * are source the remark is showing, so they stay. Null for a body with no words.
  */
-export function readableBody(raw: string): string | null {
+function readableBody(raw: string): string | null {
   if (visibleBody(raw) === null) return null;
   const body = raw.replace(/\r\n?/gu, "\n");
   const cuts: Array<[number, number]> = [];

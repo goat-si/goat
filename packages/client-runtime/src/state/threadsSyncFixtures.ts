@@ -157,7 +157,7 @@ export const PENDING_QUESTION = {
   resolvedAt: null,
 };
 
-export const QUESTION_CARD: OrchestrationV2TurnItem = {
+const QUESTION_CARD: OrchestrationV2TurnItem = {
   id: TurnItemId.make("question-card"),
   threadId: THREAD_ID,
   runId: null,

@@ -1,8 +1,4 @@
 export {
-  PIPELINE_STAGES_GRAPHQL_QUERY,
-  decodePipelineStageChecksJson,
-} from "./gitLabPipelineStages.ts";
-export {
   LIST_ITEM_GRAPHQL_FIELDS,
   LIST_STATES_GRAPHQL_QUERY,
   SERVER_VERSION_GRAPHQL_QUERY,

@@ -13,7 +13,7 @@ import { LocalEnvironmentSetting } from "./LocalEnvironmentSetting";
 import { HeadlessServerSetting } from "./HeadlessServerSetting";
 import { CloudLinkRow } from "./SavedEnvironmentRows";
 
-export function SavedEnvironmentAccessSection({
+function SavedEnvironmentAccessSection({
   environments,
 }: {
   environments: ReadonlyArray<EnvironmentPresentation>;
