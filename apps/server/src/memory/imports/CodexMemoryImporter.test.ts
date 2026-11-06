@@ -346,6 +346,10 @@ describe("Codex memory pure profiles", () => {
             }),
             "unsupported_format",
           );
+          yield* failure(
+            files(adHoc.snapshot, { [note]: '\uFEFF{"type":"session_meta","payload":{}}' }),
+            "unsupported_format",
+          );
           const blank = yield* parseCodexMemory(files(adHoc.snapshot, { [note]: " \n " }));
           assert.deepEqual(blank, [
             {

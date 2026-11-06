@@ -123,7 +123,7 @@ export const parseCodexMemory: MemoryImportParser = (input) =>
       };
       if (input.profile === "codex-ad-hoc-v1") {
         // JSON/JSONL transcript envelopes are never Markdown-note fallback inputs.
-        if (file.text.split(/\r?\n/u).some(transcriptEnvelope))
+        if (withoutByteOrderMark(file.text).split(/\r?\n/u).some(transcriptEnvelope))
           return yield* fail("unsupported_format");
         const issue = add(`${file.selector}#body`, file.text);
         if (issue) return yield* fail(issue);
