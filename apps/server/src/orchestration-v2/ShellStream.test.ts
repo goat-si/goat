@@ -396,6 +396,16 @@ describe("omitOlderSettledShells", () => {
     });
   });
 
+  it("excludes side chats from older settled counts", () => {
+    const result = omit([
+      ...newest,
+      row("old", 30),
+      row("side", 40, { sideChatOf: ThreadId.make("old") }),
+    ]);
+    expect(result.olderSettled.counts).toEqual([{ projectId: "project-a", count: 1 }]);
+    expect(result.threads.map((thread) => thread.id)).toContain("side");
+  });
+
   it("keeps threads tied with the 25th newest", () => {
     const result = omit([...newest, row("tie", 2.4), row("older", 2.5)]);
     expect(result.threads.map((thread) => thread.id).slice(25)).toEqual(["tie"]);

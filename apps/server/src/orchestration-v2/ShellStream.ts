@@ -143,6 +143,7 @@ export function omitOlderSettledShells(input: {
   const settledTimes = input.threads
     .flatMap((thread) =>
       thread.lineage.relationshipToParent !== "subagent" &&
+      thread.sideChatOf == null &&
       thread.settledOverride === "settled" &&
       thread.settledAt !== null
         ? [DateTime.toEpochMillis(thread.settledAt)]

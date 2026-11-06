@@ -2269,7 +2269,6 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   deletedAt: Schema.NullOr(Schema.DateTimeUtc),
 });
 export type OrchestrationV2ThreadShell = typeof OrchestrationV2ThreadShell.Type;
-
 const LIVE_SHELL_STATUSES: ReadonlySet<OrchestrationV2ShellThreadStatus> = new Set([
   "queued",
   "preparing",
@@ -2277,7 +2276,6 @@ const LIVE_SHELL_STATUSES: ReadonlySet<OrchestrationV2ShellThreadStatus> = new S
   "running",
   "waiting",
 ]);
-
 /**
  * A subagent child that can still need the user or hold its parent. Shells that omit idle children
  * keep these, so every reader of live child rows (pending requests, working parents, background
@@ -2296,17 +2294,19 @@ export function isLiveSubagentShell(
     (thread.pendingBackgroundTasks?.length ?? 0) > 0
   );
 }
-
 /**
  * A settled top-level thread settled before `beforeMs`. Shells that omit older settled threads
  * count every such thread, so the server and clients share this one rule.
  */
 export function isOlderSettledThreadShell(
-  thread: Pick<OrchestrationV2ThreadShell, "lineage" | "settledOverride" | "settledAt">,
+  thread: Pick<OrchestrationV2ThreadShell, "lineage" | "settledOverride" | "settledAt"> & {
+    readonly sideChatOf?: ThreadId | null;
+  },
   beforeMs: number,
 ): boolean {
   return (
     thread.lineage.relationshipToParent !== "subagent" &&
+    thread.sideChatOf == null &&
     thread.settledOverride === "settled" &&
     thread.settledAt !== null &&
     DateTime.toEpochMillis(thread.settledAt) < beforeMs
