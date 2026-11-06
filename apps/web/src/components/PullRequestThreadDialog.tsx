@@ -86,8 +86,11 @@ export function PullRequestThreadDialog({
   const terminology = sourceControlPresentation.terminology;
   const SourceControlIcon = sourceControlPresentation.Icon;
 
-  const parsedReference = parsePullRequestReference(reference);
-  const parsedDebouncedReference = parsePullRequestReference(debouncedReference);
+  const parsedReference = parsePullRequestReference(reference, gitStatus?.sourceControlProvider);
+  const parsedDebouncedReference = parsePullRequestReference(
+    debouncedReference,
+    gitStatus?.sourceControlProvider,
+  );
   const pullRequestResolution = usePullRequestResolution({
     environmentId,
     cwd,

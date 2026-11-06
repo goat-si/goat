@@ -155,6 +155,20 @@ describe("resolveLinkPullRequestInput", () => {
 });
 
 describe("parsePullRequestReference", () => {
+  it("accepts Enterprise pull requests only on the current GitHub host", () => {
+    const provider = {
+      kind: "github",
+      name: "GitHub Enterprise",
+      baseUrl: "https://code.example.com",
+    };
+    const url = "https://code.example.com/owner/repo/pull/42";
+    expect(parsePullRequestReference(url, provider)).toBe(url);
+    expect(parsePullRequestReference(url)).toBeNull();
+    expect(
+      parsePullRequestReference("https://other.example.com/owner/repo/pull/42", provider),
+    ).toBeNull();
+    expect(parsePullRequestReference(url, { ...provider, kind: "gitlab" })).toBeNull();
+  });
   it("accepts legacy Azure DevOps pull request URLs", () => {
     expect(
       parsePullRequestReference("https://acme.visualstudio.com/project/_git/t3code/pullrequest/42"),
