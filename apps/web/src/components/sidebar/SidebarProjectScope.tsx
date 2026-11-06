@@ -4,7 +4,6 @@ import { FolderIcon, ListFilterIcon, SettingsIcon } from "~/components/solar";
 import {
   useReducer,
   useRef,
-  type RefObject,
   type MouseEvent as ReactMouseEvent,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
@@ -37,7 +36,6 @@ export function SidebarProjectScope(props: {
   readonly showProjectEnvironments: boolean;
   readonly primaryEnvironmentId: EnvironmentId | null;
   readonly environmentMachineById: ReadonlyMap<EnvironmentId, EnvironmentMachineKind>;
-  readonly headerSearchRef: RefObject<HTMLDivElement | null>;
 }) {
   const {
     projectGroups,
@@ -48,7 +46,6 @@ export function SidebarProjectScope(props: {
     showProjectEnvironments,
     primaryEnvironmentId,
     environmentMachineById,
-    headerSearchRef,
   } = props;
   const [projectScopeMenuState, dispatchProjectScopeMenu] = useReducer(
     reduceSidebarProjectScopeMenuState,
@@ -157,12 +154,8 @@ export function SidebarProjectScope(props: {
       <ComboboxPopup
         finalFocus={(closeType) => closeType === "keyboard"}
         align="start"
-        // Anchored to the search field, not the 28px trigger: the
-        // popup opens under the field, is at least as wide as it,
-        // and grows to fit project names up to a cap, past which
-        // the rows truncate.
-        anchor={headerSearchRef}
-        className="max-w-[min(18rem,var(--available-width))] overflow-hidden"
+        collisionAvoidance={{ side: "flip", align: "shift" }}
+        className="w-[min(18rem,var(--available-width))] overflow-hidden"
       >
         <ComboboxSearchInput
           aria-label="Search projects"

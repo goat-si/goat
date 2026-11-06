@@ -877,7 +877,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const setPersistedProjectScopeKeys = useUiStateStore((store) => store.setSidebarProjectScopeKeys);
   const allProjectSnapshotsReady = useAllEnvironmentProjectSnapshotsReady();
   const allProjectConfigsReady = useAtomValue(environmentProjects.projectConfigsReadyAtom);
-  const headerSearchRef = useRef<HTMLDivElement | null>(null);
   // Hold dropped rows until server placement is confirmed; block another pickup from replacing the hold.
   const [optimisticDrop, setOptimisticDrop] = useState<SidebarOptimisticDrop | null>(null);
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
@@ -2836,7 +2835,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             <GoatBotSidebarTabs />
             <SidebarGroup hidden={botSelected} className="z-[1]">
               <SidebarThreadHeader
-                searchFieldRef={headerSearchRef}
                 hasProjects={projectGroups.length > 0}
                 projectScope={
                   <SidebarProjectScope
@@ -2848,7 +2846,6 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                     showProjectEnvironments={showProjectEnvironments}
                     primaryEnvironmentId={primaryEnvironmentId}
                     environmentMachineById={environmentMachineById}
-                    headerSearchRef={headerSearchRef}
                   />
                 }
                 onNewProject={openAddProjectCommandPalette}
