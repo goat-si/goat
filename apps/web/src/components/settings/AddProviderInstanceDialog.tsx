@@ -1,3 +1,4 @@
+import { deriveInstanceId } from "@goat/client-runtime/provider-instance-ids";
 import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 
 import { useAtomValue } from "@effect/atom-react";
@@ -59,21 +60,6 @@ import { resolveOfficialAcpRegistryIconUrl } from "./AcpRegistryIcon";
 import { AddManagedCodexAccountDialog } from "./CodexSetupSection";
 import { MultipleAccountsNote } from "./MultipleAccountsNote";
 import { ProviderEnvironmentSection } from "./ProviderInstanceCard";
-
-/** Limit the slug to 48 chars so the composed ProviderInstanceId fits its 64-char cap. */
-function slugifyLabel(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .slice(0, 48);
-}
-
-function deriveInstanceId(driver: ProviderDriverKind, label: string): string {
-  const slug = slugifyLabel(label);
-  return slug ? `${driver}_${slug}` : "";
-}
 
 const INSTANCE_ID_PATTERN = /^[a-zA-Z][a-zA-Z0-9_-]*$/;
 const DEFAULT_DRIVER_KIND = ProviderDriverKind.make("codex");

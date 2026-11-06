@@ -1,3 +1,5 @@
+import { ClaudeAccountControls } from "./ClaudeAccountControls";
+import { AddClaudeAccount } from "./AddClaudeAccount";
 import {
   resolveProviderInstanceDisplayName,
   supportsProviderHome,
@@ -160,6 +162,12 @@ export function SettingsProviderAccountsRouteScreen({
                             {routesThroughHome(provider) || !signsInHere(provider) ? null : (
                               <ProviderAccount environment={environment} provider={provider} />
                             )}
+                            {provider.driver === "claudeAgent" ? (
+                              <ClaudeAccountControls
+                                environment={environment}
+                                provider={provider}
+                              />
+                            ) : null}
                             {supportsProviderHome(provider.driver) ? (
                               <CodexHomeRouteStatus
                                 environment={environment}
@@ -169,9 +177,10 @@ export function SettingsProviderAccountsRouteScreen({
                             ) : null}
                           </ProviderAccountFrame>
                         ))}
+                        <AddClaudeAccount environment={environment} />
                         {accounts.length === 0 && !prompt ? (
                           <Text className="p-4 text-foreground-muted">
-                            Configure a provider with in-app sign-in in web or desktop Settings.
+                            Other providers can be configured in web or desktop Settings.
                           </Text>
                         ) : null}
                       </>

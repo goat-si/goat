@@ -30,7 +30,7 @@ import {
   AuthOrchestrationOperateScope,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
-  type MessageId,
+  MessageId,
 } from "@goat/contracts";
 import { buildTemporaryWorktreeBranchName } from "@goat/shared/git";
 import { AsyncResult } from "effect/reactivity";
@@ -272,6 +272,35 @@ export function createThreadOutboxDelivery(): {
       settings,
       currentConfig.providers,
     );
+    if (queuedMessage.compactBeforeSend === true) {
+      if (!hasAccess()) return true;
+      const compactionResult = await runDeliveryCommand(threadEnvironment.startTurn, {
+        environmentId: queuedMessage.environmentId,
+        input: {
+          commandId: settingsCommandId(queuedMessage, "compact"),
+          creationSource: "mobile",
+          threadId: queuedMessage.threadId,
+          message: {
+            messageId: MessageId.make(`${queuedMessage.messageId}:compact`),
+            role: "user",
+            text: "/compact",
+            attachments: [],
+            idleCompaction: "onReturn",
+          },
+          modelSelection: sendSettings.modelSelection,
+          runtimeMode: sendSettings.runtimeMode,
+          interactionMode: sendSettings.interactionMode,
+          createdAt: queuedMessage.createdAt,
+          dispatchMode: "queue",
+        },
+      });
+      if (AsyncResult.isFailure(compactionResult) && !hasAccess()) return true;
+      const compactionFailure = reportCommandFailure(queuedMessage, compactionResult, "start-turn");
+      if (compactionFailure?.action === "retry") return false;
+      if (compactionFailure?.action === "restore")
+        return restoreQueuedMessage(persistedMessage, compactionFailure.message);
+      if (!isQueuedMessagePayloadCurrent(persistedMessage, deliveryRevision)) return true;
+    }
     if (!hasAccess()) return true;
     const deliveryResult = await runDeliveryCommand(threadEnvironment.startTurn, {
       environmentId: queuedMessage.environmentId,
