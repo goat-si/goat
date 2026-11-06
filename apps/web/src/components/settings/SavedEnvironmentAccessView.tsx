@@ -135,7 +135,7 @@ export function SavedEnvironmentAccessView(props: {
   ): Promise<AuthPairingCredentialResult> => {
     setError(null);
     props.onBusyChange?.(1);
-    try {
+    return (async () => {
       const { label, ...rest } = input;
       const trimmedLabel = label?.trim();
       const result = await createPairing({
@@ -144,43 +144,45 @@ export function SavedEnvironmentAccessView(props: {
       });
       if (result._tag === "Success") return result.value;
       throw squashAtomCommandFailure(result);
-    } finally {
-      props.onBusyChange?.(-1);
-    }
+    })().finally(() => props.onBusyChange?.(-1));
   };
   const revokeLink = async (id: string) => {
     setError(null);
     setRevokingPairingId(id);
     props.onBusyChange?.(1);
-    try {
-      const result = await revokePairing({ environmentId, input: { id } });
-      if (result._tag === "Failure") {
-        const cause = squashAtomCommandFailure(result);
+    await (async () => {
+      try {
+        const result = await revokePairing({ environmentId, input: { id } });
+        if (result._tag === "Failure") {
+          const cause = squashAtomCommandFailure(result);
+          setError(cause instanceof Error ? cause.message : "Could not revoke the pairing link.");
+        } else if (!result.value.revoked) setError("That pairing link is no longer available.");
+      } catch (cause) {
         setError(cause instanceof Error ? cause.message : "Could not revoke the pairing link.");
-      } else if (!result.value.revoked) setError("That pairing link is no longer available.");
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not revoke the pairing link.");
-    } finally {
+      }
+    })().finally(() => {
       setRevokingPairingId(null);
       props.onBusyChange?.(-1);
-    }
+    });
   };
   const revokeSession = async (sessionId: AuthSessionId) => {
     setError(null);
     setRevokingClientId(sessionId);
     props.onBusyChange?.(1);
-    try {
-      const result = await revokeClient({ environmentId, input: { sessionId } });
-      if (result._tag === "Failure") {
-        const cause = squashAtomCommandFailure(result);
+    await (async () => {
+      try {
+        const result = await revokeClient({ environmentId, input: { sessionId } });
+        if (result._tag === "Failure") {
+          const cause = squashAtomCommandFailure(result);
+          setError(cause instanceof Error ? cause.message : "Could not revoke the client.");
+        } else if (!result.value.revoked) setError("That client is no longer available.");
+      } catch (cause) {
         setError(cause instanceof Error ? cause.message : "Could not revoke the client.");
-      } else if (!result.value.revoked) setError("That client is no longer available.");
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not revoke the client.");
-    } finally {
+      }
+    })().finally(() => {
       setRevokingClientId(null);
       props.onBusyChange?.(-1);
-    }
+    });
   };
   return (
     <>
