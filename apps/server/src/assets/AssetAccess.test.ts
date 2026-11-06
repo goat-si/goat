@@ -1564,8 +1564,8 @@ describe("AssetAccess", () => {
         url: "https://github.com/user-attachments/assets/1a1842fb-6383-492f-873c-57aa0033fa6c",
         repository: "enterprise/private",
       };
-      const input = yield* decodeAssetCreateUrlInput({ resource });
-      const issued = yield* issueAssetUrl(input);
+      const { resource: res } = yield* decodeAssetCreateUrlInput({ resource });
+      const issued = yield* issueAssetUrl({ resource: res._tag === "note-file" ? resource : res });
       const suffix = issued.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
       const separator = suffix.indexOf("/");
       const resolved = yield* resolveAsset(suffix.slice(0, separator), suffix.slice(separator + 1));
