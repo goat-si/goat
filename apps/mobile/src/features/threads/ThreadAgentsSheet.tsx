@@ -145,6 +145,15 @@ export function ThreadAgentsSheet({ route }: StaticScreenProps<AgentsTarget>) {
             <NativeHeader
               backgroundColor="rgba(0,0,0,0)"
               tintColorClassName="accent-foreground"
+              headerRightBarButtonItems={[
+                {
+                  type: "button",
+                  icon: { name: "xmark", type: "sfSymbol" },
+                  accessibilityLabel: "Close agents",
+                  identifier: "thread-agents-close",
+                  onPress: () => navigation.goBack(),
+                },
+              ]}
               hideBackButton
               hideShadow={false}
               title="Agents"

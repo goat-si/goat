@@ -1,4 +1,9 @@
-import { type TerminalAttachStreamEvent, type TerminalEvent, WS_METHODS } from "@goat/contracts";
+import {
+  ORCHESTRATION_V2_WS_METHODS,
+  type TerminalAttachStreamEvent,
+  type TerminalEvent,
+  WS_METHODS,
+} from "@goat/contracts";
 import type * as Arr from "effect/Array";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
@@ -12,31 +17,50 @@ const isFull = (sizes: number[]) =>
   sizes.length >= MAX_PENDING_CHUNKS ||
   sizes.reduce((total, size) => total + size, 0) >= MAX_PENDING_BYTES;
 
+const BYTE_WINDOWED_STREAMS: ReadonlySet<string> = new Set([
+  WS_METHODS.terminalAttach,
+  WS_METHODS.terminalObserve,
+  WS_METHODS.subscribeTerminalEvents,
+]);
+const COUNT_WINDOWED_STREAMS: ReadonlySet<string> = new Set([
+  WS_METHODS.subscribeServerConfig,
+  ORCHESTRATION_V2_WS_METHODS.subscribeShell,
+  ORCHESTRATION_V2_WS_METHODS.subscribeThread,
+]);
+const MAX_WINDOWS = 1024;
+
 export function withTerminalOutputWindow(
   protocol: RpcServer.Protocol["Service"],
 ): RpcServer.Protocol["Service"] {
-  const windows = new Map<string, number[]>();
+  const windows = new Map<string, { clientId: number; bytes: boolean; sizes: number[] }>();
   let receive: Parameters<RpcServer.Protocol["Service"]["run"]>[0];
+  const open = Effect.fnUntraced(function* (clientId: number, requestId: string, bytes: boolean) {
+    const connected = yield* protocol.clientIds;
+    for (const [key, window] of windows) if (!connected.has(window.clientId)) windows.delete(key);
+    const key = `${clientId}:${requestId}`;
+    if (!windows.has(key) && windows.size < MAX_WINDOWS) {
+      windows.set(key, { clientId, bytes, sizes: [] });
+    }
+  });
   return {
     ...protocol,
     run: (write) => {
       receive = write;
       return protocol.run((clientId, message) =>
         Effect.suspend(() => {
-          if (
-            message._tag === "Request" &&
-            (message.tag === WS_METHODS.terminalAttach ||
-              message.tag === WS_METHODS.terminalObserve ||
-              message.tag === WS_METHODS.subscribeTerminalEvents)
-          ) {
-            const key = `${clientId}:${message.id}`;
-            if (!windows.has(key)) windows.set(key, []);
+          if (message._tag === "Request") {
+            const bytes = BYTE_WINDOWED_STREAMS.has(message.tag);
+            if (bytes || COUNT_WINDOWED_STREAMS.has(message.tag)) {
+              return open(clientId, String(message.id), bytes).pipe(
+                Effect.andThen(write(clientId, message)),
+              );
+            }
           } else if (message._tag === "Ack") {
             const window = windows.get(`${clientId}:${message.requestId}`);
             if (window) {
-              const wasFull = isFull(window);
-              window.shift();
-              if (!wasFull || isFull(window)) return Effect.void;
+              const wasFull = isFull(window.sizes);
+              window.sizes.shift();
+              if (!wasFull || isFull(window.sizes)) return Effect.void;
             }
           }
           return write(clientId, message);
@@ -52,15 +76,12 @@ export function withTerminalOutputWindow(
           const window = windows.get(`${clientId}:${response.requestId}`);
           if (window) {
             // @effect-diagnostics-next-line preferSchemaOverJson:off
-            const size = Buffer.byteLength(JSON.stringify(response));
-            window.push(size);
-            if (!isFull(window)) {
+            const size = window.bytes ? Buffer.byteLength(JSON.stringify(response)) : 0;
+            window.sizes.push(size);
+            if (!isFull(window.sizes)) {
               return send.pipe(
                 Effect.andThen(() =>
-                  receive(clientId, {
-                    _tag: "Ack",
-                    requestId: response.requestId,
-                  }),
+                  receive(clientId, { _tag: "Ack", requestId: response.requestId }),
                 ),
               );
             }

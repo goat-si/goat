@@ -2,7 +2,6 @@ import { formatFilePathForClipboard } from "@goat/client-runtime/media-actions";
 import { resolvePathLinkTarget } from "@goat/shared/fileLinks";
 import { resolveFilesystemReadAccess } from "@goat/client-runtime/state/filesystem";
 import { environmentSession } from "../../state/session";
-import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { StackActions, useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { useEffect, useId, useRef, useState } from "react";
 import { Platform, View } from "react-native";
@@ -54,6 +53,7 @@ import { SourceFileSurface } from "./SourceFileSurface";
 import { useNativeColumnLayoutMetrics } from "../../native/native-layout-metrics";
 import { ThreadFileNavigatorPane } from "./thread-file-navigator-pane";
 import { AppBar } from "../../components/ui/AppBar";
+import { FilesUnavailable } from "./FilesUnavailable";
 import { WorkspaceFileImagePreview } from "./WorkspaceFileImagePreview";
 import { WorkspaceFilePreviewError } from "./WorkspaceFilePreviewError";
 import { WorkspaceFileVideoPreview } from "./WorkspaceFileVideoPreview";
@@ -389,19 +389,6 @@ function useThreadFilesWorkspace(params: {
   };
 }
 
-function FilesUnavailable({
-  detail = "This thread does not have an active workspace path.",
-}: {
-  detail?: string;
-}) {
-  return (
-    <View className="flex-1 items-center justify-center bg-sheet px-6">
-      <NativeStackScreenOptions options={{ title: "Files" }} />
-      <EmptyState title="Files unavailable" detail={detail} />
-    </View>
-  );
-}
-
 function FilesToolbarBottomFade() {
   const sheetColor = String(useUniwindTheme()["--color-sheet"]);
 
@@ -538,11 +525,14 @@ export function ThreadFilesTreeScreen(props: ThreadFilesRouteScreenProps) {
       return <LoadingScreen message="Checking file access..." messagePlacement="above-spinner" />;
     }
     return (
-      <FilesUnavailable detail={fileAccess.error ?? "This connection cannot read host files."} />
+      <FilesUnavailable
+        detail={fileAccess.error ?? "This connection cannot read host files."}
+        onBack={handleReturnToThread}
+      />
     );
   }
   if (cwd === null) {
-    return <FilesUnavailable />;
+    return <FilesUnavailable onBack={handleReturnToThread} />;
   }
 
   if (hasFileInspector) {
@@ -911,19 +901,23 @@ export function ThreadFileScreen(props: ThreadFileRouteScreenProps) {
       return <LoadingScreen message="Checking file access..." messagePlacement="above-spinner" />;
     }
     return (
-      <FilesUnavailable detail={fileAccess.error ?? "This connection cannot read host files."} />
+      <FilesUnavailable
+        detail={fileAccess.error ?? "This connection cannot read host files."}
+        onBack={handleBack}
+      />
     );
   }
   if (cwd === null) {
-    return <FilesUnavailable />;
+    return <FilesUnavailable onBack={handleBack} />;
   }
 
   if (relativePath === null) {
     return (
-      <View className="flex-1 items-center justify-center bg-sheet px-6">
-        <NativeStackScreenOptions options={{ title: "Files" }} />
-        <EmptyState title="File unavailable" detail="This file path is invalid." />
-      </View>
+      <FilesUnavailable
+        title="File unavailable"
+        detail="This file path is invalid."
+        onBack={handleBack}
+      />
     );
   }
 

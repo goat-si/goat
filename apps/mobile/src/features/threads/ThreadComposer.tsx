@@ -547,6 +547,7 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     selectedProviderStatus,
     serverConfig: props.serverConfig,
     hasThread: !props.isDraft,
+    offersSideChat: props.canOperateThread && queuedEdit === null,
     hasCompactableConversation: props.hasCompactableConversation,
     onChangeDraftMessage: props.onChangeDraftMessage,
     onUpdateInteractionMode:
@@ -799,7 +800,6 @@ export const ThreadComposer = function ThreadComposer(props: ThreadComposerProps
     [navigation, settingsSheetPresentation.onStackTransitionsFinished],
   );
 
-  // Removable attachments: inside the card, or above the focused one-row composer.
   const editingAttachments = hasEditingAttachments ? (
     <>
       {queuedEdit !== null && queuedEdit.existingAttachments.length > 0 ? (

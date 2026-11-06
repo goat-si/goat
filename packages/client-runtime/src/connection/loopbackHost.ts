@@ -63,7 +63,12 @@ export function loopbackBudget(loopback: boolean, remoteBudget: Duration.Input) 
 }
 
 /** Jittered exponential backoff, capped low for this device's own server. */
-export function retryDelayMs(failureCount: number, random: number, loopback = false): number {
+export function retryDelayMs(
+  failureCount: number,
+  random: number,
+  loopback = false,
+  established = false,
+): number {
   const step =
     Number.isNaN(failureCount) || failureCount <= 0
       ? 0
@@ -71,6 +76,7 @@ export function retryDelayMs(failureCount: number, random: number, loopback = fa
         ? 9
         : Math.trunc(failureCount);
   const clampedRandom = Number.isNaN(random) ? 0 : Math.min(1, Math.max(0, random));
+  if (established && step === 0) return Math.round(125 + 125 * clampedRandom);
   const ceiling = Math.min(
     loopback ? LOOPBACK_RETRY_MAX_DELAY_MS : RETRY_MAX_DELAY_MS,
     RETRY_BASE_DELAY_MS * 2 ** (step + 1),

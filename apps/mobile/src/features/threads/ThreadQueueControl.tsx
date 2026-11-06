@@ -521,6 +521,15 @@ export function ThreadQueueSheet({ route }: StaticScreenProps<QueueTarget>) {
               <ScreenStackHeaderConfig
                 backgroundColor="rgba(0,0,0,0)"
                 color={theme["--color-foreground"]}
+                headerRightBarButtonItems={[
+                  {
+                    type: "button",
+                    icon: { name: "xmark", type: "sfSymbol" },
+                    accessibilityLabel: "Close queued messages",
+                    identifier: "thread-queue-close",
+                    onPress: () => navigation.goBack(),
+                  },
+                ]}
                 hideBackButton
                 hideShadow={false}
                 title="Queued"

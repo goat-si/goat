@@ -104,6 +104,7 @@ export function buildComposerSlashCommandItems(input: {
   readonly hasThread: boolean;
   readonly hasCompactableConversation?: boolean;
   readonly offersUsageLimits?: boolean;
+  readonly offersSideChat?: boolean;
   readonly allowInteractionMode: boolean;
   readonly selectedProviderStatus: Pick<
     ServerProvider,
@@ -143,6 +144,18 @@ export function buildComposerSlashCommandItems(input: {
   // Providers expand commands only at the start of a message. GOAT commands
   // change local state and do not have this restriction.
   if (!input.atMessageStart) return items;
+  if (input.offersSideChat) {
+    for (const command of ["side", "btw"] as const) {
+      if (command.includes(query))
+        items.push({
+          id: `cmd:${command}`,
+          type: "slash-command",
+          command,
+          label: `/${command}`,
+          description: command === "side" ? "Ask a side question" : "Same as /side",
+        });
+    }
+  }
   for (const command of input.selectedProviderStatus?.slashCommands ?? []) {
     if (!command.name.toLowerCase().includes(query)) continue;
     if (command.name === "compact" && !input.hasCompactableConversation) continue;
@@ -219,6 +232,7 @@ export function useComposerCommandMenu({
   hasThread,
   hasCompactableConversation,
   offersUsageLimits = false,
+  offersSideChat = false,
   enabled = true,
   onChangeDraftMessage,
   onUpdateInteractionMode,
@@ -229,10 +243,10 @@ export function useComposerCommandMenu({
   readonly environmentId: EnvironmentId | null;
   readonly threadShells?: ReadonlyArray<EnvironmentThreadShell>;
   /** The composer's thread, with the draft's unsent settings such as plan mode applied. */
-  readonly thread?: Pick<
-    EnvironmentThreadShell,
-    "id" | "projectId" | "pullRequests" | "interactionMode"
-  > | null;
+  readonly thread?:
+    | (Pick<EnvironmentThreadShell, "id" | "projectId" | "pullRequests" | "interactionMode"> &
+        Partial<Pick<EnvironmentThreadShell, "sideChatOf" | "lineage">>)
+    | null;
   readonly projectCwd: string | null;
   readonly pullRequestProjectId?: ProjectId | null;
   readonly pullRequestRepositoryIdentity?: RepositoryIdentity | null;
@@ -253,6 +267,7 @@ export function useComposerCommandMenu({
   readonly hasThread: boolean;
   readonly hasCompactableConversation: boolean;
   readonly offersUsageLimits?: boolean;
+  readonly offersSideChat?: boolean;
   readonly enabled?: boolean;
   readonly onChangeDraftMessage: (value: string) => void;
   readonly onUpdateInteractionMode?: (mode: ProviderInteractionMode) => void;
@@ -391,6 +406,11 @@ export function useComposerCommandMenu({
         atMessageStart: trigger.rangeStart === 0,
         hasThread,
         hasCompactableConversation,
+        offersSideChat:
+          offersSideChat &&
+          hasThread &&
+          thread?.sideChatOf == null &&
+          thread?.lineage?.relationshipToParent !== "subagent",
         offersUsageLimits,
         allowInteractionMode: onUpdateInteractionMode !== undefined,
         selectedProviderStatus: selectedProviderStatus
