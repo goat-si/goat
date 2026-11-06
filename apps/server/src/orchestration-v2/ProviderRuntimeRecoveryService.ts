@@ -31,7 +31,7 @@ import * as CodexSurvivors from "../provider/CodexSurvivors.ts";
 import * as CodexDetached from "../provider/CodexDetachedAppServerLive.ts";
 import * as Option from "effect/Option";
 import { restartContinuationRun } from "./RestartContinuation.ts";
-import { isBufferedProviderNotification } from "./NotificationMailbox.ts";
+import { recoverUnstartedQueue } from "./RecoveryUnstartedQueue.ts";
 import {
   endOrphanedNativeSubagent,
   endRunlessRootTurns,
@@ -274,7 +274,7 @@ export const make = Effect.gen(function* () {
             : [],
         ),
       );
-      const runs = [] as Array<OrchestrationV2ThreadProjection["runs"][number]>;
+      let runs = [] as Array<OrchestrationV2ThreadProjection["runs"][number]>;
       for (const run of nonterminalRuns(projection)) {
         if (run.status === "starting" && preservedRunIds.has(run.id)) continue;
         if (run.status === "waiting") {
@@ -389,43 +389,21 @@ export const make = Effect.gen(function* () {
           cancelledBackgroundNativeIds.add(item.nativeItemRef.nativeId);
         }
       };
-      const queuedRuns = projection.runs.filter((run) => run.status === "queued");
-      const queuedMessages =
-        queuedRuns.length === 0
-          ? []
-          : (yield* projections
-              .getThreadRecords(projection.thread.id, ["messages"], {
-                messageIds: queuedRuns.map((run) => run.userMessageId),
-              })
-              .pipe(
-                Effect.mapError(
-                  (cause) =>
-                    new ProviderRuntimeRecoveryError({
-                      operation: "read-projections",
-                      threadId: projection.thread.id,
-                      cause,
-                    }),
-                ),
-              )).messages;
-      const bufferedMessageIds = new Set(
-        queuedMessages.filter(isBufferedProviderNotification).map((message) => message.id),
-      );
-      for (const run of queuedRuns) {
-        if (bufferedMessageIds.has(run.userMessageId)) {
-          runs.push(run);
-          continue;
-        }
-        if (run.queueHeld === true) continue;
-        events.push({
-          id: yield* allocateEventId(),
-          type: "run.updated",
-          threadId: projection.thread.id,
-          runId: run.id,
-          providerInstanceId: run.providerInstanceId,
-          occurredAt: now,
-          payload: { ...run, queueHeld: true },
-        });
-      }
+      const recoveredQueue = yield* recoverUnstartedQueue({
+        projection,
+        runs,
+        projections,
+        now,
+        allocateEventId,
+        readError: (cause) =>
+          new ProviderRuntimeRecoveryError({
+            operation: "read-projections",
+            threadId: projection.thread.id,
+            cause,
+          }),
+      });
+      runs = recoveredQueue.runs;
+      events.push(...recoveredQueue.events);
       for (const question of questions) {
         events.push({
           id: yield* allocateEventId(),
