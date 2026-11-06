@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { makeGitVcsDriverCore } from "./GitVcsDriverCore.ts";
 import {
@@ -39,8 +40,8 @@ it.effect("does not fetch for status when the branch tracks a local branch", () 
       assert.deepStrictEqual(fetches, []);
     }),
   ).pipe(
-    Effect.provide(layerTest),
-    Effect.provide(layerServerConfig),
-    Effect.provide(NodeServices.layer),
+    Effect.provide(
+      Layer.merge(layerTest, layerServerConfig.pipe(Layer.provide(NodeServices.layer))),
+    ),
   ),
 );
