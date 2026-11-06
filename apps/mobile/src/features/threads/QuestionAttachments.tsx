@@ -2,12 +2,12 @@ import { settlePromise, squashAtomCommandFailure } from "@goat/client-runtime/st
 import { AsyncResult } from "effect/reactivity";
 import * as Dialog from "../../components/ui/Dialog";
 import { TextInputWrapper } from "expo-paste-input";
-import { AppTextInput as TextInput } from "../../components/ui/AppText";
+import { CustomAnswerInput } from "./CustomAnswerInput";
 import { useNativePaste } from "../../lib/useNativePaste";
 import { convertPastedImagesToAttachments } from "../../lib/composerImages";
 import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS, type UserInputQuestion } from "@goat/contracts";
 import { useAtomValue } from "@effect/atom-react";
-import { View, type TextInputInstance } from "react-native";
+import { View } from "react-native";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { ComposerAttachmentButton } from "./ComposerAttachmentButton";
 import { ComposerAttachmentStrip } from "../../components/ComposerAttachmentStrip";
@@ -58,16 +58,6 @@ export function QuestionAttachments(props: {
     if (focusedRef.current) onInputFocusChange?.(false);
   });
   useEffect(() => () => releaseFocus(), []);
-  const inputRef = useRef<TextInputInstance>(null);
-  const [initialText] = useState(props.value);
-  const nativeText = useRef(props.value);
-  // Keep native autocorrection intact while applying external clears.
-  // oxlint-disable-next-line goat/react-effect-budget -- synchronize external clears with the native input
-  useEffect(() => {
-    if (props.value !== "" || nativeText.current === "") return;
-    nativeText.current = "";
-    inputRef.current?.clear();
-  }, [props.value]);
   const pickerScope = useRef<{ key: string; active: boolean } | null>(null);
   useEffect(() => {
     const scope = { key: scopeKey, active: true };
@@ -211,16 +201,11 @@ export function QuestionAttachments(props: {
       <FilePreviewModal source={previewFile} onRequestClose={() => setPreviewFile(null)} />
       <VideoPreviewModal source={previewVideo} onRequestClose={() => setPreviewVideo(null)} />
       <TextInputWrapper onPaste={paste}>
-        <TextInput
-          ref={inputRef}
-          defaultValue={initialText}
+        <CustomAnswerInput
+          value={props.value}
           multiline={props.question.initialAnswer !== undefined}
-          submitBehavior={props.question.initialAnswer !== undefined ? "newline" : undefined}
-          editable={!props.disabled}
-          onChangeText={(text) => {
-            nativeText.current = text;
-            props.onChangeText(text);
-          }}
+          disabled={props.disabled}
+          onChangeText={props.onChangeText}
           onFocus={() => {
             focusedRef.current = true;
             onInputFocusChange?.(true);
@@ -229,8 +214,6 @@ export function QuestionAttachments(props: {
             focusedRef.current = false;
             onInputFocusChange?.(false);
           }}
-          placeholder="Or type a custom answer"
-          className="min-h-[54px] rounded-2xl border border-input-border bg-input px-3.5 py-3 font-sans text-base text-foreground"
         />
       </TextInputWrapper>
     </View>
