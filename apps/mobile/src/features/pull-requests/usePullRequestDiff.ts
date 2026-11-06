@@ -1,5 +1,10 @@
 import type { ChangeRequestTerminology } from "@goat/client-runtime/source-control-clients";
-import { EnvironmentId, ProjectId, type PullRequestListEntry } from "@goat/contracts";
+import {
+  EnvironmentId,
+  ProjectId,
+  type PullRequestListEntry,
+  type PullRequestSummary,
+} from "@goat/contracts";
 import { useAtomRefresh } from "@effect/atom-react";
 import { useCallback, useLayoutEffect, useMemo, useState } from "react";
 
@@ -18,7 +23,7 @@ export type PullRequestParams = {
   readonly repository: string;
   readonly number: number;
   readonly host?: string;
-  readonly initialSummary?: PullRequestListEntry;
+  readonly initialSummary?: PullRequestListEntry | PullRequestSummary;
 };
 
 export type PullRequestDiffParams = PullRequestParams & { readonly commit?: string };

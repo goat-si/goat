@@ -11,8 +11,10 @@ import { useCallback, useEffect, useMemo } from "react";
 import { connectionAtomRuntime } from "../connection/runtime";
 import { appAtomRegistry } from "./atom-registry";
 import { serverEnvironment } from "./server";
+import { environmentThreadShells } from "./threads";
 import { useEnvironmentQuery } from "./query";
 import {
+  knownPullRequestSummary,
   resolveThreadPrSource,
   presentThreadPr,
   type ThreadPrPresentation,
@@ -37,6 +39,33 @@ export {
   type ThreadPr,
   type ThreadPrPresentation,
 } from "./thread-pr-presentation";
+
+/** Seeds a pull request page with a summary already in memory, never another pull request's. */
+export function withKnownPullRequestSummary<
+  Params extends {
+    readonly environmentId: string;
+    readonly projectId: string;
+    readonly host?: string;
+    readonly repository: string;
+    readonly number: number;
+  },
+>(params: Params) {
+  const initialSummary =
+    params.host === undefined
+      ? undefined
+      : knownPullRequestSummary(
+          { host: params.host, repository: params.repository, number: params.number },
+          appAtomRegistry
+            .get(environmentThreadShells.threadShellsAtom)
+            .filter(
+              (thread) =>
+                thread.environmentId === params.environmentId &&
+                thread.projectId === params.projectId,
+            ),
+          [],
+        );
+  return initialSummary === undefined ? params : { ...params, initialSummary };
+}
 
 export function useThreadPr(thread: EnvironmentThreadShell): ThreadPrPresentation | null {
   const supportsLinks = useAtomValue(
