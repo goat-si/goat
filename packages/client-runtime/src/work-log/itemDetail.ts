@@ -83,6 +83,17 @@ function textFromBlocks(
   if (keys.length === 1 && keys[0] === "content")
     return textFromBlocks(value.content, depth + 1, imageBlocks, omitLinks);
   if (keys.length === 2 && keys.includes("content") && keys.includes("structuredContent")) {
+    if (imageBlocks.length > 0 && Array.isArray(value.content)) {
+      const structured = formatJsonValue(value.structuredContent);
+      if (structured !== null) {
+        const remainder = value.content.filter(
+          (block) => isRecord(block) && (block.type === "image" || outputLink(block) !== null),
+        );
+        return [structured, textFromBlocks(remainder, depth + 1, imageBlocks, omitLinks)]
+          .filter(Boolean)
+          .join("\n");
+      }
+    }
     const text = textFromBlocks(value.content, depth + 1, imageBlocks, omitLinks);
     if (text?.trim()) return text;
     // Content that was only links is fully shown by the link list; skip the JSON fallback.
@@ -121,6 +132,10 @@ function formatToolValue(
   if (hasImagePreview && isRecord(value) && value.type === "image") return null;
   const text = textFromBlocks(value, 0, toolOutputImageBlocks(value), omitLinks);
   if (text !== null) return text.trim() ? prettyJsonText(text) : null;
+  return formatJsonValue(value);
+}
+
+function formatJsonValue(value: unknown): string | null {
   let json: string | undefined;
   try {
     json = JSON.stringify(value, null, 2);
