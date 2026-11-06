@@ -115,6 +115,39 @@ describe("work shimmer arbiter", () => {
     expect(moving()).toEqual([]);
   });
 
+  it("keeps the latest entry moving when loading earlier history shifts every index", async () => {
+    const { Label, Entry, moving } = setup();
+    await using screen = await renderScreen(createWorkShimmerArbiter());
+    const feed = (offset: number, appended: boolean, history = false) => (
+      <>
+        {history ? (
+          <Entry index={10}>
+            <Label name="loaded history row" />
+          </Entry>
+        ) : null}
+        <Entry index={offset + 1}>
+          <Label name="older live row" />
+        </Entry>
+        <Entry index={offset + 2}>
+          <Label name="latest live row" />
+        </Entry>
+        {appended ? (
+          <Entry index={offset + 3}>
+            <Label name="new row" />
+          </Entry>
+        ) : null}
+      </>
+    );
+    await screen.render(feed(0, false));
+    expect(moving()).toEqual(["latest live row"]);
+    await screen.render(feed(40, false));
+    expect(moving()).toEqual(["latest live row"]);
+    await screen.render(feed(40, false, true));
+    expect(moving()).toEqual(["latest live row"]);
+    await screen.render(feed(40, true, true));
+    expect(moving()).toEqual(["new row"]);
+  });
+
   it("tells listeners only when the owner changes", () => {
     const arbiter = createWorkShimmerArbiter();
     const listener = vi.fn();
