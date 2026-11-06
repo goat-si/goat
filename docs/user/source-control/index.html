@@ -115,6 +115,10 @@ are in place. A toast tracks progress and lets you cancel; if the clone fails, r
 toast or from the banner above the composer. When the host refuses the machine’s SSH key, GOAT
 clones over HTTPS with Git’s credentials for that host instead, and the project’s remote uses the
 HTTPS URL.</p>
+<p>To lay clones out like <a href="https://github.com/x-motemen/ghq">ghq</a>, turn on <strong>Clone into host folders</strong>
+under <strong>Settings → Threads</strong> (or <strong>Source control</strong> on mobile). Clones then default to
+<code>&lt;host&gt;/&lt;owner&gt;/&lt;repo&gt;</code> under <strong>Add project starts in</strong>, so set that to <code>~/ghq</code> to share ghq’s
+folders. You can still change the destination before cloning.</p>
 <p>For a local Git repository without a remote, <strong>Publish Repository</strong> creates a hosted repository,
 adds it as <code>origin</code>, and pushes your commits. If there are no commits yet, it creates the remote;
 make your first commit before pushing.</p>
@@ -130,6 +134,8 @@ uses the project’s instructions and recent commit subjects.</p>
 <h2 id="review-and-merge">Review and merge</h2>
 <p>Open <strong>Pull requests</strong> to review changes and comments, request reviewers, check out a branch,
 or merge. You can edit review titles and descriptions and your own comments where the host allows it.
+Where you can edit a description, you can also tick its checkboxes from the Summary tab
+(the Overview tab on mobile).
 GitLab calls these merge requests.</p>
 <p>For a fork whose checkout also has an <code>upstream</code> remote, the list shows pull requests from the
 fork’s own <code>origin</code> repository. Turn on <strong>Include upstream repos</strong> in the filters to add the
