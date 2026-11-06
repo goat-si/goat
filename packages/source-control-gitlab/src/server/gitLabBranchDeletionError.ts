@@ -12,6 +12,7 @@ export class GitLabBranchDeletionRefusedError extends Schema.TaggedError<GitLabB
       "source-unavailable",
       "default-branch",
       "head-changed",
+      "cannot-verify",
     ]),
   },
 ) {
@@ -27,6 +28,8 @@ export class GitLabBranchDeletionRefusedError extends Schema.TaggedError<GitLabB
         return "The source branch is its project's default branch and cannot be deleted here.";
       case "head-changed":
         return "The source branch has new commits and was not deleted.";
+      case "cannot-verify":
+        return "Branch kept: cannot verify it is unchanged.";
     }
   }
 

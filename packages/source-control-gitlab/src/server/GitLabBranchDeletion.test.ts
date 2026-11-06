@@ -86,41 +86,32 @@ layer("GitLab branch deletion", (it) => {
     }),
   );
 
-  it.effect("deletes the source branch in the source project once its head is the merged one", () =>
+  it.effect("keeps the branch when GitLab cannot atomically check its head", () =>
     Effect.gen(function* () {
       mockedExecute
         .mockReturnValueOnce(
           Effect.succeed(output(sourceBranchJson({ sourceProject: { fullPath: "fork/web" } }))),
         )
         .mockReturnValueOnce(
-          Effect.succeed(
-            output(
-              JSON.stringify({
-                default: false,
-                commit: { id: "head", authored_date: "2026-11-03T20:29:40.000-07:00" },
-              }),
-            ),
-          ),
+          Effect.succeed(output(JSON.stringify({ default: false, commit: { id: "head" } }))),
         )
         .mockReturnValueOnce(Effect.succeed(output("")));
       const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
-
-      yield* cli.runMergeRequestAction({
-        cwd: "/w",
-        repository: "acme/web",
-        number: 7,
-        action: "delete-branch",
+      const result = yield* Effect.result(
+        cli.runMergeRequestAction({
+          cwd: "/w",
+          repository: "acme/web",
+          number: 7,
+          action: "delete-branch",
+        }),
+      );
+      expect(result).toMatchObject({
+        _tag: "Failure",
+        failure: { _tag: "GitLabBranchDeletionRefusedError", reason: "cannot-verify" },
       });
-
-      expect(argsOfCall(1)).toEqual(["api", "projects/fork%2Fweb/repository/branches/feat%2Fpage"]);
-      expect(argsOfCall(2)).toEqual([
-        "api",
-        "projects/fork%2Fweb/repository/branches/feat%2Fpage",
-        "--method",
-        "DELETE",
-        "--header",
-        "If-Unmodified-Since: Wed, 04 Nov 2026 03:29:40 GMT",
-      ]);
+      if (result._tag === "Failure")
+        expect(result.failure.detail).toBe("Branch kept: cannot verify it is unchanged.");
+      expect(mockedExecute.mock.calls.some(([call]) => call.args.includes("DELETE"))).toBe(false);
     }),
   );
 

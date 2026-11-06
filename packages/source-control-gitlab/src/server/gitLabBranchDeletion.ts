@@ -1,6 +1,4 @@
-import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import type * as GitLabCli from "./GitLabCli.ts";
 import { GitLabBranchDeletionRefusedError } from "./gitLabBranchDeletionError.ts";
@@ -91,24 +89,7 @@ export function makeGitLabBranchDeletion(options: {
       );
       if (branch.isDefault) return yield* refuse("default-branch");
       if (branch.headSha !== source.headSha) return yield* refuse("head-changed");
-      // GitLab's branch delete takes no expected SHA. It answers 412 when the head's authored
-      // date is newer than If-Unmodified-Since, which catches a commit pushed after this read but
-      // not a force-push of an older-dated commit (a rebase keeps author dates).
-      const authoredAt =
-        branch.headAuthoredDate === null ? Option.none() : DateTime.make(branch.headAuthoredDate);
-      yield* api({
-        cwd: input.cwd,
-        host: input.host,
-        path,
-        method: "DELETE",
-        ...(Option.isNone(authoredAt)
-          ? {}
-          : {
-              headers: [
-                `If-Unmodified-Since: ${DateTime.toDateUtc(authoredAt.value).toUTCString()}`,
-              ],
-            }),
-      });
+      return yield* refuse("cannot-verify");
     },
   );
 
