@@ -167,7 +167,6 @@ import {
 } from "../rightPanelStore";
 import { getLatestThreadForProject, sortThreads } from "../lib/threadSort";
 import {
-  cn,
   getLocalFileManagerName,
   isMacPlatform,
   isWindowsPlatform,
@@ -222,6 +221,8 @@ import {
 } from "./CommandPalette.logic";
 import { resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
 import { CommandPaletteContent } from "./CommandPaletteContent";
+import { CommandPaletteDialogFrame } from "./CommandPaletteDialogFrame";
+import { captureBrowseSelection, type PendingInputSelection } from "./CommandPaletteSelection";
 import {
   selectCommandPaletteClientSettings,
   useEnvironmentLookups,
@@ -261,11 +262,11 @@ import { toggleThemeEditorForTheme } from "./settings/themeEditorStore";
 import { settingsForThisPlatform, SETTINGS_SECTION_LABELS } from "./settings/settingsSearch";
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { resolveShortcutCommand, threadJumpIndexFromCommand } from "../keybindings";
-import { CommandDialog, CommandDialogPopup, CommandFooterAction } from "./ui/command";
+import { CommandDialog, CommandFooterAction } from "./ui/command";
 import { Button } from "./ui/button";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
-import { ComposerHandleContext, useComposerHandleContext } from "../composerHandleContext";
+import { ComposerHandleContext } from "../composerHandleContext";
 import type { ChatComposerHandle } from "./chat/ChatComposer";
 import { pickableProjectGroups } from "@goat/client-runtime/state/project-grouping";
 import { buildSidebarProjectPickerEntries } from "../sidebarProjectGrouping";
@@ -456,30 +457,8 @@ function CommandPaletteDialog(props: {
   readonly initialContext: CommandPaletteReturnContext | undefined;
   readonly clearOpenIntent: () => void;
 }) {
-  const composerHandleRef = useComposerHandleContext();
   return (
-    <CommandDialogPopup
-      aria-label={
-        props.mode === "files"
-          ? "File picker"
-          : props.mode === "content"
-            ? "Search project contents"
-            : "Command palette"
-      }
-      className={cn("overflow-hidden", props.mode === "content" && "h-105")}
-      data-command-palette="true"
-      data-palette-mode={props.mode}
-      data-testid="command-palette"
-      finalFocus={() => {
-        const composer = composerHandleRef?.current;
-        if (!composer) return true;
-        composer.focusAtEnd();
-        return false;
-      }}
-      onBackdropPointerDown={() => {
-        props.setOpen(false);
-      }}
-    >
+    <CommandPaletteDialogFrame mode={props.mode} setOpen={props.setOpen}>
       {props.mode === "files" ? (
         <ProjectFilePicker setOpen={props.setOpen} />
       ) : props.mode === "content" ? (
@@ -493,7 +472,7 @@ function CommandPaletteDialog(props: {
           clearOpenIntent={props.clearOpenIntent}
         />
       )}
-    </CommandDialogPopup>
+    </CommandPaletteDialogFrame>
   );
 }
 function OpenCommandPaletteDialog(props: {
@@ -530,6 +509,7 @@ function OpenCommandPaletteDialog(props: {
   const [highlightedItemValue, setHighlightedItemValue] = useState<string | null>(null);
   const resultListRef = useRef<LegendListRef | null>(null);
   const highlightClearedRef = useRef(false);
+  const remountSelectionRef = useRef<PendingInputSelection | null>(null);
   function clearTypedHighlight(): void {
     highlightClearedRef.current = true;
     setHighlightedItemValue(null);
@@ -1000,10 +980,20 @@ function OpenCommandPaletteDialog(props: {
     dispatchSearch({ type: "back" });
     setHighlightedItemValue(null);
   }
-  function handleQueryChange(nextQuery: string): void {
+  function handleQueryChange(nextQuery: string, source: EventTarget | null): void {
     browseNavigation.invalidate();
     clearTypedHighlight();
-    setQuery(canBrowsePaths ? resolvePastedPath(query, nextQuery) : nextQuery);
+    const resolvedQuery = canBrowsePaths ? resolvePastedPath(query, nextQuery) : nextQuery;
+    captureBrowseSelection(
+      remountSelectionRef,
+      source,
+      nextQuery,
+      resolvedQuery,
+      browseEnvironmentPlatform,
+      canBrowsePaths,
+      isBrowsing,
+    );
+    setQuery(resolvedQuery);
     if (nextQuery === "" && currentView?.initialQuery) {
       popView();
     }
@@ -3021,7 +3011,8 @@ function OpenCommandPaletteDialog(props: {
           scrollCommandPaletteRowIntoView(resultListRef.current, rowIndex);
         }
       }}
-      onValueChange={handleQueryChange}
+      onValueChange={(nextQuery, { event }) => handleQueryChange(nextQuery, event.target)}
+      pendingSelectionRef={remountSelectionRef}
       showBackHint={isSubmenu}
       value={query}
     >
