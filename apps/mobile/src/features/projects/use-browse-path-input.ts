@@ -23,13 +23,14 @@ export function useBrowsePathInput(
     readonly platform: string;
   } | null,
   pinnedDirectoryName = "",
+  cloneDirectoryPath = pinnedDirectoryName,
 ) {
   const environmentId = environment?.environmentId ?? null;
   const environmentBaseDirectory = environment?.baseDirectory ?? null;
   const clonePathCaseSensitive = !isWindowsPlatform(environment?.platform ?? "");
   const seedPath = getCloneDestinationPath(
     getAddProjectInitialQuery(environmentBaseDirectory),
-    pinnedDirectoryName,
+    cloneDirectoryPath,
   );
   // Each host keeps the path last typed or browsed for it, and shows its own default until then,
   // so switching hosts and back loses nothing. With no host selected (one dropping out briefly),

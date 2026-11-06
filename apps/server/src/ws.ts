@@ -468,6 +468,7 @@ function filesystemBrowseFailureContext(error: WorkspaceEntries.WorkspaceEntries
   readonly failure: FilesystemBrowseFailure;
   readonly parentPath?: string;
   readonly platform?: string;
+  readonly pathMissing?: boolean;
 } {
   switch (error._tag) {
     case "WorkspaceEntriesWindowsPathUnsupportedError":
@@ -475,7 +476,11 @@ function filesystemBrowseFailureContext(error: WorkspaceEntries.WorkspaceEntries
     case "WorkspaceEntriesCurrentProjectRequiredError":
       return { failure: "current_project_required" };
     case "WorkspaceEntriesReadDirectoryError":
-      return { failure: "read_directory_failed", parentPath: error.parentPath };
+      return {
+        failure: "read_directory_failed",
+        parentPath: error.parentPath,
+        ...(error.pathMissing ? { pathMissing: true } : {}),
+      };
     default:
       return unexpectedCompatibilityError(error);
   }
@@ -688,7 +693,6 @@ function readClientAnalyticsProps(request: HttpServerRequest.HttpServerRequest) 
   if (Option.isNone(url)) {
     return {};
   }
-
   const surface = url.value.searchParams.get("clientSurface");
   const appVersion = url.value.searchParams.get("clientAppVersion")?.trim() ?? "";
   const deviceType = url.value.searchParams.get("clientDeviceType");
@@ -704,7 +708,6 @@ function readClientAnalyticsProps(request: HttpServerRequest.HttpServerRequest) 
     isMobile && rawOsMajorVersion !== "" && Number.isInteger(osMajorVersion) && osMajorVersion > 0;
   const hasDeviceModel =
     isMobile && deviceModel !== "" && deviceModel.length <= MAX_CLIENT_DEVICE_MODEL_LENGTH;
-
   return {
     ...(isClientSurface(surface) ? { surface } : {}),
     ...(appVersion !== "" && appVersion.length <= MAX_CLIENT_APP_VERSION_LENGTH
@@ -755,7 +758,6 @@ const canReplayPersistedRange = Effect.fnUntraced(function* (
   maxGap: number,
 ) {
   const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
-
   const replayGap = headSequence - afterSequence;
   if (replayGap < 0 || replayGap > maxGap) {
     return false;
@@ -821,7 +823,6 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
     const dedupeBodies = input.acceptDedupedBodies === true;
     const withLiveDedupe = withLiveWireTransforms(input);
     const applicationEvents = yield* OrchestrationEventStore.OrchestrationEventStore;
-
     yield* Effect.annotateCurrentSpan({
       "orchestration_v2.thread_id": input.threadId,
     });
@@ -835,7 +836,6 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
           }),
       ),
     );
-
     const eventStreamFrom = (afterSequence: number) =>
       threadManagement
         .streamStoredEventsFrom({
@@ -858,7 +858,6 @@ export const subscribeOrchestrationV2Thread = Effect.fn("ws.orchestrationV2.subs
               }),
           ),
         );
-
     const loadReplayThrough = (afterSequence: number, throughSequence: number) =>
       applicationEvents
         .readAgentEvents({
