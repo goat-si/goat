@@ -1,3 +1,22 @@
+import { stateParam, involvementParams, filterParams, searchParams, query } from "./gitLabQuery.ts";
+import {
+  GitLabMergeRequestReadError,
+  GitLabViewerUnavailableError,
+  GitLabDiffCursorError,
+  GitLabDiffCommitError,
+  GitLabDiffCommitParentUnavailableError,
+  GitLabDiffFileContentsUnavailableError,
+  GitLabUnknownLabelError,
+} from "./gitLabPullRequestErrors.ts";
+export {
+  GitLabMergeRequestReadError,
+  GitLabViewerUnavailableError,
+  GitLabDiffCursorError,
+  GitLabDiffCommitError,
+  GitLabDiffCommitParentUnavailableError,
+  GitLabDiffFileContentsUnavailableError,
+  GitLabUnknownLabelError,
+} from "./gitLabPullRequestErrors.ts";
 import { diffCursorPage, isCommitSha } from "./gitLabInput.ts";
 import { gitLabActionSummary } from "./gitLabActionSummary.ts";
 import { actionArgs } from "./gitLabActionArgs.ts";
@@ -13,7 +32,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import { resolvePullRequestAuthorFilter, VcsProcessExitError } from "@goat/contracts";
+import { VcsProcessExitError } from "@goat/contracts";
 import type {
   PullRequestAction,
   PullRequestActor,
@@ -22,6 +41,7 @@ import type {
   PullRequestCommit,
   PullRequestInvolvement,
   PullRequestLabel,
+  PullRequestLabelCandidateList,
   PullRequestListFilters,
   PullRequestListState,
   PullRequestMergeCapabilities,
@@ -44,6 +64,8 @@ import {
   decodeCommitsJson,
   decodeDiffRefsJson,
   decodeDiscussionsJson,
+  decodeLabelNameJson,
+  decodeLabelPermissionJson,
   decodeMergeRequestDetailJson,
   decodeMergeRequestDiffsJson,
   decodeMergeRequestChangesJson,
@@ -60,6 +82,7 @@ import {
   decodeTriggerJobChecksJson,
   decodeViewerJson,
   gitLabAwardName,
+  LABEL_PERMISSION_GRAPHQL_QUERY,
   MERGE_REQUEST_FILE_STATS_GRAPHQL_QUERY,
   MERGE_REQUEST_STATS_GRAPHQL_QUERY,
   REPOSITORY_BLOBS_GRAPHQL_QUERY,
@@ -75,114 +98,12 @@ import type {
   ProviderListCursor,
 } from "@goat/source-control-core/server/PullRequestProvider";
 
-export class GitLabMergeRequestReadError extends Schema.TaggedError<GitLabMergeRequestReadError>()(
-  "GitLabMergeRequestReadError",
-  {
-    command: Schema.Literal("glab"),
-    cwd: Schema.String,
-    operation: Schema.String,
-    cause: Schema.Defect(),
-  },
-) {
-  get detail(): string {
-    return `GitLab CLI returned an unreadable ${this.operation} response.`;
-  }
-
-  override get message(): string {
-    return `GitLab CLI failed in ${this.operation}: ${this.detail}`;
-  }
-}
-
-export class GitLabViewerUnavailableError extends Schema.TaggedError<GitLabViewerUnavailableError>()(
-  "GitLabViewerUnavailableError",
-  {
-    command: Schema.Literal("glab"),
-    cwd: Schema.String,
-  },
-) {
-  get detail(): string {
-    return "GitLab CLI returned no username for the authenticated account.";
-  }
-
-  override get message(): string {
-    return `GitLab CLI failed in getViewerUsername: ${this.detail}`;
-  }
-}
-
-export class GitLabDiffCursorError extends Schema.TaggedError<GitLabDiffCursorError>()(
-  "GitLabDiffCursorError",
-  {
-    command: Schema.Literal("glab"),
-    cwd: Schema.String,
-  },
-) {
-  get detail(): string {
-    return "The diff cursor was not one this merge request handed out.";
-  }
-
-  override get message(): string {
-    return `GitLab CLI failed in getMergeRequestDiff: ${this.detail}`;
-  }
-}
-
-export class GitLabDiffCommitError extends Schema.TaggedError<GitLabDiffCommitError>()(
-  "GitLabDiffCommitError",
-  {
-    command: Schema.Literal("glab"),
-    cwd: Schema.String,
-  },
-) {
-  get detail(): string {
-    return "The named commit was not a commit sha.";
-  }
-
-  override get message(): string {
-    return `GitLab CLI failed in getMergeRequestDiff: ${this.detail}`;
-  }
-}
-
-export class GitLabDiffCommitParentUnavailableError extends Schema.TaggedError<GitLabDiffCommitParentUnavailableError>()(
-  "GitLabDiffCommitParentUnavailableError",
-  {
-    command: Schema.Literal("glab"),
-    cwd: Schema.String,
-    commit: Schema.String,
-  },
-) {
-  get detail(): string {
-    return `Commit ${this.commit} reported no parent revision.`;
-  }
-
-  override get message(): string {
-    return `GitLab CLI failed in getMergeRequestDiffFileContents: ${this.detail}`;
-  }
-}
-
-export class GitLabDiffFileContentsUnavailableError extends Schema.TaggedError<GitLabDiffFileContentsUnavailableError>()(
-  "GitLabDiffFileContentsUnavailableError",
-  {
-    command: Schema.Literal("glab"),
-    cwd: Schema.String,
-    path: Schema.String,
-    reason: Schema.Literals(["oversized", "binary"]),
-  },
-) {
-  get detail(): string {
-    return this.reason === "oversized"
-      ? `The diff file '${this.path}' exceeds the 1 MB expansion limit.`
-      : `The diff file '${this.path}' is binary.`;
-  }
-
-  override get message(): string {
-    return `GitLab CLI failed in getMergeRequestDiffFileContents: ${this.detail}`;
-  }
-}
-
 export type GitLabPullRequestCliError =
   | GitLabCli.GitLabCliError
   | GitLabPinnedRebaseError
   | GitLabPinnedAutoMergeError
   | GitLabMergeRequestReadError
+  | GitLabUnknownLabelError
   | GitLabDiffCursorError
   | GitLabDiffCommitError
   | GitLabDiffCommitParentUnavailableError
@@ -355,6 +276,22 @@ export class GitLabPullRequestCli extends Context.Service<
       GitLabPullRequestCliError
     >;
 
+    readonly listLabelCandidates: (input: {
+      readonly cwd: string;
+      readonly host?: string | undefined;
+      readonly repository: string;
+      readonly number: number;
+    }) => Effect.Effect<PullRequestLabelCandidateList, GitLabPullRequestCliError>;
+
+    readonly setLabels: (input: {
+      readonly cwd: string;
+      readonly host?: string | undefined;
+      readonly repository: string;
+      readonly number: number;
+      readonly labels: ReadonlyArray<string>;
+      readonly applied: boolean;
+    }) => Effect.Effect<void, GitLabPullRequestCliError>;
+
     readonly listProjectUsers: (input: {
       readonly cwd: string;
       readonly host?: string | undefined;
@@ -495,67 +432,9 @@ function gitLabReviewPositionLines(
   }
 }
 
-function stateParam(state: PullRequestListState): string {
-  return state === "open" ? "opened" : state;
-}
-
-function involvementParams(input: {
-  readonly involvement: PullRequestInvolvement;
-  readonly viewer: string;
-}): ReadonlyArray<readonly [string, string]> {
-  switch (input.involvement) {
-    case "authored":
-      return [["author_username", input.viewer]];
-    case "reviewing":
-      return [["reviewer_username", input.viewer]];
-    case "all":
-      return [];
-  }
-}
-
-/**
- * GitLab's `labels` asks for every label it names, so only groups of one go to it; a group of
- * alternatives is left for the service to narrow. A comma would split a name in two, and `None`
- * and `Any` mean "unlabeled" and "labeled" to GitLab rather than labels of those names.
- */
-function filterParams(input: {
-  readonly filters?: PullRequestListFilters | undefined;
-  readonly involvement: PullRequestInvolvement;
-  readonly viewer: string;
-}): ReadonlyArray<readonly [string, string]> {
-  const filters = input.filters;
-  if (filters === undefined) return [];
-  const listable = (names: ReadonlyArray<string>) =>
-    names.filter((name) => !name.includes(",") && !/^(?:none|any)$/iu.test(name.trim()));
-  const required = listable(
-    (filters.labels ?? []).flatMap((group) => (group.length === 1 ? group : [])),
-  );
-  const excluded = listable(filters.excludedLabels ?? []);
-  return [
-    ...(required.length === 0 ? [] : [["labels", required.join(",")] as const]),
-    ...(excluded.length === 0 ? [] : [["not[labels]", excluded.join(",")] as const]),
-    ...(filters.author === undefined || input.involvement === "authored"
-      ? []
-      : [
-          [
-            "author_username",
-            resolvePullRequestAuthorFilter(filters.author, input.viewer),
-          ] as const,
-        ]),
-    ...(filters.draft === undefined
-      ? []
-      : [["wip", filters.draft === "only" ? "yes" : "no"] as const]),
-  ];
-}
-
-function searchParams(search: string | undefined): ReadonlyArray<readonly [string, string]> {
-  const trimmed = search?.trim() ?? "";
-  return trimmed.length === 0 ? [] : [["search", trimmed]];
-}
-
-function query(params: ReadonlyArray<readonly [string, string]>): string {
-  return params.map(([key, value]) => `${key}=${encodeURIComponent(value)}`).join("&");
-}
+const encodeLabelWrite = Schema.encodeSync(
+  Schema.fromJsonString(Schema.Record(Schema.String, Schema.String)),
+);
 
 /** @public */
 export const make = Effect.gen(function* () {
@@ -1099,6 +978,39 @@ export const make = Effect.gen(function* () {
   /** The stats connection hands back one page, so a repository's rows are asked for 100 at a time. */
   const STAT_IIDS_PER_REQUEST = 100;
 
+  const projectLabels = (input: {
+    readonly cwd: string;
+    readonly host?: string | undefined;
+    readonly repository: string;
+    readonly search?: string | undefined;
+  }) =>
+    api({
+      cwd: input.cwd,
+      host: input.host,
+      path: `projects/${projectPath(input.repository)}/labels?${query([
+        ["per_page", String(MAX_PAGE_SIZE)],
+        ["include_ancestor_groups", "true"],
+        ...searchParams(input.search),
+      ])}`,
+    }).pipe(
+      Effect.flatMap((result) => {
+        const decoded = decodeProjectLabelsJson(result.stdout.trim());
+        return Result.isSuccess(decoded)
+          ? Effect.succeed({
+              labels: decoded.success.labels,
+              truncated: decoded.success.rawCount >= MAX_PAGE_SIZE,
+            })
+          : Effect.fail(
+              new GitLabMergeRequestReadError({
+                command: "glab",
+                cwd: input.cwd,
+                operation: "listProjectLabels",
+                cause: decoded.failure,
+              }),
+            );
+      }),
+    );
+
   const graphqlRead = <A>(input: {
     readonly cwd: string;
     readonly host?: string | undefined;
@@ -1127,6 +1039,30 @@ export const make = Effect.gen(function* () {
               }),
             );
       }),
+    );
+
+  const labelPermission = (input: {
+    readonly cwd: string;
+    readonly host?: string | undefined;
+    readonly repository: string;
+    readonly number: number;
+  }) =>
+    graphqlRead({
+      cwd: input.cwd,
+      host: input.host,
+      operation: "getLabelPermission",
+      query: LABEL_PERMISSION_GRAPHQL_QUERY,
+      variables: { fullPath: input.repository, iid: String(input.number) },
+      decode: decodeLabelPermissionJson,
+    }).pipe(
+      // The answer gates one optional control; an unusable CLI or account still surfaces.
+      Effect.catchIf(
+        (cause) =>
+          cause._tag !== "GitLabCliUnavailableError" &&
+          cause._tag !== "GitLabCliAuthenticationError" &&
+          cause._tag !== "GitLabCliRateLimitError",
+        () => Effect.succeed(false),
+      ),
     );
 
   const mergeRequestStats = (input: {
@@ -1316,7 +1252,11 @@ export const make = Effect.gen(function* () {
 
     getMergeRequestDetail: Effect.fn("GitLabPullRequestCli.getMergeRequestDetail")(
       function* (input) {
-        const detail = yield* mergeRequestDetail(input);
+        const [read, viewerCanEditLabels] = yield* Effect.all(
+          [mergeRequestDetail(input), labelPermission(input)],
+          { concurrency: 2 },
+        );
+        const detail = { ...read, viewerCanEditLabels };
         if (input.downstreamChecks === false || detail.headPipeline === undefined) return detail;
         const downstream = yield* triggerJobChecks({
           ...input,
@@ -1523,31 +1463,85 @@ export const make = Effect.gen(function* () {
     ),
 
     listProjectLabels: Effect.fn("GitLabPullRequestCli.listProjectLabels")(function (input) {
-      return api({
+      return projectLabels(input).pipe(
+        Effect.map(({ labels, truncated }) => ({
+          items: labels.map(({ name, color }) => ({ name, color })),
+          truncated,
+        })),
+      );
+    }),
+
+    listLabelCandidates: Effect.fn("GitLabPullRequestCli.listLabelCandidates")(function* (input) {
+      const [mergeRequest, project] = yield* Effect.all(
+        [mergeRequestDetail(input), projectLabels(input)],
+        { concurrency: 2 },
+      );
+      const applied = new Set(mergeRequest.labels.map((label) => label.name));
+      const listed = new Set(project.labels.map((label) => label.name));
+      return {
+        // GitLab's own picker hides archived labels. Applied ones stay so they can be removed,
+        // as do applied labels past the project's first page.
+        candidates: [
+          ...mergeRequest.labels
+            .filter((label) => !listed.has(label.name))
+            .map((label) => ({ ...label, description: null, isApplied: true })),
+          ...project.labels
+            .filter((label) => !label.archived || applied.has(label.name))
+            .map(({ archived: _archived, ...label }) => ({
+              ...label,
+              isApplied: applied.has(label.name),
+            })),
+        ],
+        truncated: project.truncated,
+      };
+    }),
+
+    setLabels: Effect.fn("GitLabPullRequestCli.setLabels")(function* (input) {
+      if (input.applied) {
+        // GitLab creates any label it is asked to add that the project does not have yet.
+        const found = yield* Effect.forEach(
+          input.labels,
+          (label) =>
+            api({
+              cwd: input.cwd,
+              host: input.host,
+              path: `projects/${projectPath(input.repository)}/labels/${encodeURIComponent(label)}?${query(
+                [["include_ancestor_groups", "true"]],
+              )}`,
+            }).pipe(
+              // The lookup also matches a numeric id, so the returned name must be the one asked for.
+              Effect.map((result) => {
+                const decoded = decodeLabelNameJson(result.stdout.trim());
+                return Result.isSuccess(decoded) && decoded.success === label;
+              }),
+              Effect.catchTags({
+                GitLabCliCommandError: (error) =>
+                  isVcsProcessExitError(error.cause) && error.cause.failureKind === "not-found"
+                    ? Effect.succeed(false)
+                    : Effect.fail(error),
+              }),
+            ),
+          { concurrency: 4 },
+        );
+        const unknown = input.labels.filter((_, index) => !found[index]);
+        if (unknown.length > 0) {
+          return yield* new GitLabUnknownLabelError({
+            command: "glab",
+            cwd: input.cwd,
+            labels: unknown,
+          });
+        }
+      }
+      yield* api({
         cwd: input.cwd,
         host: input.host,
-        path: `projects/${projectPath(input.repository)}/labels?${query([
-          ["per_page", String(MAX_PAGE_SIZE)],
-          ...searchParams(input.search),
-        ])}`,
-      }).pipe(
-        Effect.flatMap((result) => {
-          const decoded = decodeProjectLabelsJson(result.stdout.trim());
-          return Result.isSuccess(decoded)
-            ? Effect.succeed({
-                items: decoded.success.labels,
-                truncated: decoded.success.rawCount >= MAX_PAGE_SIZE,
-              })
-            : Effect.fail(
-                new GitLabMergeRequestReadError({
-                  command: "glab",
-                  cwd: input.cwd,
-                  operation: "listProjectLabels",
-                  cause: decoded.failure,
-                }),
-              );
+        path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}`,
+        method: "PUT",
+        // GitLab label names cannot contain a comma.
+        stdin: encodeLabelWrite({
+          [input.applied ? "add_labels" : "remove_labels"]: input.labels.join(","),
         }),
-      );
+      });
     }),
 
     listProjectUsers: Effect.fn("GitLabPullRequestCli.listProjectUsers")(function (input) {

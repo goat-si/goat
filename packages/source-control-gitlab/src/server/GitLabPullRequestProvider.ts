@@ -42,6 +42,7 @@ const CAPABILITIES: PullRequestCapabilities = {
     verdicts: ["comment", "approve"],
   },
   reviewers: { request: true, listCandidates: true },
+  labels: true,
   edit: { changeRequest: true, comment: true },
 };
 
@@ -66,6 +67,7 @@ const MERGE_ACTIONS: ReadonlySet<string> = new Set([
 /** Authors may close/reopen/change draft state regardless of role; REST omits authorship. */
 export function gitLabViewerPermissions(input: {
   readonly viewerCanMerge: boolean;
+  readonly viewerCanEditLabels?: boolean | undefined;
 }): PullRequestViewerPermissions {
   return {
     actions: CAPABILITIES.actions.filter(
@@ -75,6 +77,7 @@ export function gitLabViewerPermissions(input: {
     resolve: true,
     verdicts: CAPABILITIES.review.verdicts,
     requestReviewers: true,
+    labels: input.viewerCanEditLabels === true,
     ...(input.viewerCanMerge ? { updateMethods: CAPABILITIES.updateMethods } : {}),
   };
 }
@@ -414,6 +417,29 @@ export const make = Effect.gen(function* () {
           number: input.number,
         })
         .pipe(Effect.mapError(fail("listReviewerCandidates"))),
+
+    listLabelCandidates: (input) =>
+      cli
+        .listLabelCandidates({
+          cwd: input.cwd,
+          host: input.host,
+          repository: input.repository,
+          number: input.number,
+        })
+        .pipe(Effect.mapError(fail("listLabelCandidates"))),
+
+    setLabels: writing((input) =>
+      cli
+        .setLabels({
+          cwd: input.cwd,
+          host: input.host,
+          repository: input.repository,
+          number: input.number,
+          labels: input.labels,
+          applied: input.applied,
+        })
+        .pipe(Effect.mapError(fail("setLabels"))),
+    ),
 
     listRepositoryLabels: (input) =>
       cli

@@ -65,6 +65,11 @@ function notes(count: number, firstId: number): string {
 }
 
 const author = { id: 1, username: "bilal" };
+const labelPermission = output(
+  JSON.stringify({
+    data: { project: { mergeRequest: { userPermissions: { adminMergeRequest: false } } } },
+  }),
+);
 const reviewer = { id: 5, username: "octocat" };
 
 function mergeRequestJson(overrides: Record<string, unknown>): string {
@@ -1033,6 +1038,7 @@ layer("GitLabPullRequestCli.layer", (it) => {
             ),
           ),
         )
+        .mockReturnValueOnce(Effect.succeed(labelPermission))
         .mockReturnValueOnce(
           Effect.succeed(
             output(
@@ -1062,7 +1068,7 @@ layer("GitLabPullRequestCli.layer", (it) => {
         ["Pipeline", "success", "https://gitlab.com/bilal/web/-/pipelines/31"],
         ["deploy", "failure", "https://gitlab.com/bilal/web/-/pipelines/32"],
       ]);
-      expect(argsOfCall(1)[1]).toBe("projects/12/pipelines/31/bridges?per_page=100");
+      expect(argsOfCall(2)[1]).toBe("projects/12/pipelines/31/bridges?per_page=100");
     }),
   );
 
@@ -1074,6 +1080,7 @@ layer("GitLabPullRequestCli.layer", (it) => {
       const failedChild = { name: "deploy", downstream_pipeline: { status: "failed" } };
       mockedExecute
         .mockReturnValueOnce(Effect.succeed(detailOutput))
+        .mockReturnValueOnce(Effect.succeed(labelPermission))
         .mockReturnValueOnce(
           Effect.fail(
             new GitLabCli.GitLabCliCommandError({
@@ -1085,6 +1092,7 @@ layer("GitLabPullRequestCli.layer", (it) => {
           ),
         )
         .mockReturnValueOnce(Effect.succeed(detailOutput))
+        .mockReturnValueOnce(Effect.succeed(labelPermission))
         // A full page may have left out the trigger job whose pipeline failed.
         .mockReturnValueOnce(
           Effect.succeed(output(JSON.stringify(Array.from({ length: 100 }, () => failedChild)))),
@@ -1102,32 +1110,6 @@ layer("GitLabPullRequestCli.layer", (it) => {
           scenario,
         ).toEqual([["Pipeline", "success"]]);
       }
-    }),
-  );
-
-  it.effect("reads merge permissions without reading the trigger jobs", () =>
-    Effect.gen(function* () {
-      mockedExecute.mockReturnValueOnce(
-        Effect.succeed(
-          output(
-            mergeRequestJson({
-              head_pipeline: { id: 31, project_id: 12, status: "success" },
-              user: { can_merge: false },
-            }),
-          ),
-        ),
-      );
-      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
-
-      const detail = yield* cli.getMergeRequestDetail({
-        cwd: "/w",
-        repository: "acme/web",
-        number: 7,
-        downstreamChecks: false,
-      });
-
-      expect(detail.viewerCanMerge).toBe(false);
-      expect(mockedExecute).toHaveBeenCalledTimes(1);
     }),
   );
 

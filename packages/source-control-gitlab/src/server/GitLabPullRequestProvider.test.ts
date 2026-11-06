@@ -44,6 +44,7 @@ it.effect.each(["merge", "disable-auto-merge"] as const)(
                               ],
                             },
                             mergeRequest: {
+                              userPermissions: { adminMergeRequest: true },
                               diffStatsSummary: { fileCount: 1 },
                               diffStats: [{ path: "src/a.ts", additions: 2, deletions: 1 }],
                             },
@@ -138,7 +139,7 @@ it.effect.each(["merge", "disable-auto-merge"] as const)(
 
 describe("gitLabViewerPermissions", () => {
   it("offers everything to a viewer GitLab says can merge", () => {
-    expect(gitLabViewerPermissions({ viewerCanMerge: true })).toEqual({
+    expect(gitLabViewerPermissions({ viewerCanMerge: true, viewerCanEditLabels: true })).toEqual({
       actions: [
         "merge",
         "ready",
@@ -153,6 +154,7 @@ describe("gitLabViewerPermissions", () => {
       resolve: true,
       verdicts: ["comment", "approve"],
       requestReviewers: true,
+      labels: true,
       updateMethods: ["rebase"],
     });
   });
@@ -164,6 +166,7 @@ describe("gitLabViewerPermissions", () => {
       resolve: true,
       verdicts: ["comment", "approve"],
       requestReviewers: true,
+      labels: false,
     });
   });
 });
@@ -364,6 +367,7 @@ describe("merge request reads", () => {
               return { merge: true, squash: true, rebase: true };
             }),
           runMergeRequestAction: () => Effect.void,
+          setLabels: () => Effect.void,
         }),
       ),
     );
@@ -403,12 +407,23 @@ describe("merge request reads", () => {
     }),
   );
 
-  it.effect("reads a merge request again after a write to it", () =>
+  it.effect.each([
+    {
+      write: "runAction",
+      run: (provider: Effect.Success<typeof make>) =>
+        provider.runAction({ ...reference, action: "ready" }),
+    },
+    {
+      write: "setLabels",
+      run: (provider: Effect.Success<typeof make>) =>
+        provider.setLabels?.({ ...reference, labels: ["bug"], applied: true }) ?? Effect.void,
+    },
+  ])("reads a merge request again after $write", ({ run }) =>
     Effect.gen(function* () {
       const { provider, checks, calls } = yield* countingProvider;
 
       yield* provider.getChangeRequest(reference);
-      yield* provider.runAction({ ...reference, action: "ready" });
+      yield* run(provider);
       yield* checks(reference);
 
       expect(calls.detail).toBe(2);
