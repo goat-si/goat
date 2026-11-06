@@ -161,10 +161,10 @@ const loaderEntry = `
 const discoveryEntry = `
   const { getAvailableBackends } = await loadSpeechModule(moduleUrl);
   process.send(getAvailableBackends().filter((device) =>
-    device.deviceType === "gpu" || device.deviceType === "igpu").map((device) => ({
+    device.deviceType === "gpu" || device.deviceType === "igpu").slice(0, 128).map((device) => ({
       id: JSON.stringify([device.kind, device.deviceId ?? device.name]),
-      name: device.description || device.name,
-    })));
+      name: (device.description || device.name).slice(0, 1024),
+    })).filter((device) => device.id.length <= 1024));
 `;
 
 export async function runNativeSpeechWorker(mode: "discover" | "model", moduleUrl?: string) {

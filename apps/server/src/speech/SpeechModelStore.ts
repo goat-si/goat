@@ -84,10 +84,16 @@ const make = Effect.gen(function* () {
   const digestMatches = Effect.fn("SpeechModelStore.digest")(
     function* (model: SpeechModel, file: string) {
       const hash = NodeCrypto.createHash("sha256");
-      yield* fs
-        .stream(file)
-        .pipe(Stream.runForEach((chunk) => Effect.sync(() => void hash.update(chunk))));
-      return hash.digest("hex") === model.sha256;
+      let bytesRead = 0;
+      yield* fs.stream(file).pipe(
+        Stream.runForEach((chunk) => {
+          bytesRead += chunk.byteLength;
+          return bytesRead > model.size
+            ? Effect.fail(new SpeechModelDownloadError({ modelId: model.id, reason: "size" }))
+            : Effect.sync(() => void hash.update(chunk));
+        }),
+      );
+      return bytesRead === model.size && hash.digest("hex") === model.sha256;
     },
     Effect.orElseSucceed(() => false),
   );
