@@ -4,7 +4,6 @@ import {
   CommandId,
   type GoatclawCeilingAdvice,
   isOrchestrationV2WorkActive,
-  isProviderAvailable,
   MessageId,
   ModelSelection,
   NodeId,
@@ -110,6 +109,7 @@ import * as SshRemoteDispatch from "../sshRemote/SshRemoteDispatch.ts";
 import { cloudTaskForRun } from "./cloudTaskView.ts";
 import { hostFailure } from "./hostFailure.ts";
 import { listCapabilityModels } from "./OrchestratorMcpCapabilities.ts";
+import { providerConstraints, providerForCaller } from "./ProviderConstraints.ts";
 import { overrideOptionSelections } from "./modelOptionOverrides.ts";
 import { invalidOptionSelections, knownOptions } from "./ModelSelectionValidation.ts";
 
@@ -480,33 +480,6 @@ function capabilityModelOption(descriptor: ProviderOptionDescriptor): Orchestrat
       descriptor.type === "boolean" ? [false, true] : descriptor.options.map((choice) => choice.id),
     ...(defaultValue === undefined ? {} : { default: defaultValue }),
   };
-}
-
-function providerConstraints(
-  provider: ServerProvider | undefined,
-  supportsOrchestrationV2: boolean,
-): ReadonlyArray<string> {
-  const constraints: Array<string> = [];
-  if (!supportsOrchestrationV2) {
-    constraints.push("No V2 provider adapter is registered.");
-  }
-  if (provider === undefined) return constraints;
-  if (!isProviderAvailable(provider)) {
-    constraints.push(provider.unavailableReason ?? "Provider driver is unavailable.");
-  }
-  if (!provider.enabled) {
-    constraints.push("Provider instance is disabled.");
-    // Disabled snapshots contain placeholders for installation, health, and auth.
-    return constraints;
-  }
-  if (!provider.installed) constraints.push("Provider executable is not installed.");
-  if (provider.status === "error" || provider.status === "disabled") {
-    constraints.push(provider.message ?? `Provider status is ${provider.status}.`);
-  }
-  if (provider.auth.status === "unauthenticated") {
-    constraints.push("Provider is not authenticated.");
-  }
-  return constraints;
 }
 
 /** Reads a remote host's advertised options in either the current or the older descriptor shape. */
@@ -2364,7 +2337,7 @@ const make = Effect.gen(function* () {
               : Option.none();
             const caps = Option.getOrUndefined(maybeCapabilities);
             const constraints = providerConstraints(
-              provider,
+              providerForCaller(provider, settings, parent?.thread.projectId),
               orchestrationCapableInstanceIds.has(provider.instanceId) && caps !== undefined,
             );
             const { listed, omitted } = listCapabilityModels({
