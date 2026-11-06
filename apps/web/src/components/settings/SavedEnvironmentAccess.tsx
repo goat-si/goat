@@ -1,3 +1,4 @@
+import { SavedEnvironmentAccessView } from "./SavedEnvironmentAccessView";
 import { AuthAccessReadScope, type EnvironmentId } from "@goat/contracts";
 import { useState } from "react";
 import type { EnvironmentPresentation } from "../../state/environments";
@@ -18,6 +19,7 @@ export function SavedEnvironmentAccessSection({
   environments: ReadonlyArray<EnvironmentPresentation>;
 }) {
   const [selectedId, setSelectedId] = useState<EnvironmentId | null>(null);
+  const [pendingChanges, setPendingChanges] = useState(0);
   const candidates = environments.filter((environment) => environment.entry.enabled);
   const selected =
     candidates.find((environment) => environment.environmentId === selectedId) ??
@@ -30,6 +32,7 @@ export function SavedEnvironmentAccessSection({
       headerAction={
         candidates.length > 1 ? (
           <Select
+            disabled={pendingChanges > 0}
             value={selected.environmentId}
             onValueChange={(value) => {
               if (value !== null) setSelectedId(value);
@@ -54,6 +57,7 @@ export function SavedEnvironmentAccessSection({
         environmentId={selected.environmentId}
         label={selected.label}
         connected={selected.connection.phase === "connected"}
+        onBusyChange={(delta) => setPendingChanges((count) => count + delta)}
       />
     </SettingsSection>
   );
@@ -63,10 +67,12 @@ export function SavedEnvironmentAccess({
   environmentId,
   label,
   connected,
+  onBusyChange,
 }: {
   environmentId: EnvironmentId;
   label: string;
   connected: boolean;
+  onBusyChange?: (delta: 1 | -1) => void;
 }) {
   const canRead = useEnvironmentScope(environmentId, AuthAccessReadScope);
   const session = useEnvironmentSessionState(environmentId);
@@ -81,44 +87,23 @@ export function SavedEnvironmentAccess({
         description="Connect this environment to view its service access."
       />
     );
-  if (session.isPending) return <SettingsRow title={label} description="Loading service access…" />;
-  if (session.hasError)
+  if (session.isPending && session.data === null)
+    return <SettingsRow title={label} description="Loading service access…" />;
+  if (session.hasError && session.data === null)
     return (
       <SettingsRow title={label} description="Could not read this connection's permissions." />
     );
-  if (!canRead)
-    return (
-      <SettingsRow
-        title={label}
-        description="This connection does not have permission to view service access."
-      />
-    );
-  if (access.error) return <SettingsRow title={label} description={access.error} />;
-  if (!snapshot) return <SettingsRow title={label} description="Loading service access…" />;
   return (
-    <>
-      <SettingsRow
-        title={label}
-        description="Access is shown for this environment. Manage pairing links and clients on that environment."
-      />
-      {snapshot.pairingLinks.map((link) => (
-        <SettingsRow
-          key={link.id}
-          title={link.label ?? "Pairing link"}
-          description="Pairing link"
-        />
-      ))}
-      {snapshot.clientSessions.map(({ sessionId, client, subject, connected }) => (
-        <SettingsRow
-          key={sessionId}
-          title={client.label ?? subject}
-          description={connected ? "Connected client" : "Authorized client"}
-        />
-      ))}
-      {snapshot.pairingLinks.length === 0 && snapshot.clientSessions.length === 0 ? (
-        <SettingsRow title="No authorized clients or pairing links" />
-      ) : null}
-    </>
+    <SavedEnvironmentAccessView
+      environmentId={environmentId}
+      label={label}
+      session={session.data}
+      canRead={canRead}
+      snapshot={snapshot}
+      error={access.error}
+      isPending={access.isPending}
+      {...(onBusyChange ? { onBusyChange } : {})}
+    />
   );
 }
 

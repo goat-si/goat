@@ -1,3 +1,4 @@
+import * as AccessRpc from "./auth/AccessRpc.ts";
 import { makeOmittableShellReaders } from "./orchestration-v2/ThreadFamilyLookup.ts";
 import * as ChannelBotThreads from "./channels/ChannelBotThreads.ts";
 import * as Fiber from "effect/Fiber";
@@ -1453,6 +1454,7 @@ export const layerWsRpc = (
         ),
       );
       const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      const accessRpc = yield* AccessRpc.make(currentSession);
       const sourceControlDiscovery = yield* SourceControlDiscovery.SourceControlDiscovery;
       const otlpEndpointCheck = yield* OtlpEndpointCheck.OtlpEndpointCheck;
       const sourceControlRepositories =
@@ -3521,6 +3523,7 @@ export const layerWsRpc = (
           lifecycleEvents.stream.pipe(
             Stream.filter((event) => event.type !== "runtimeDrain" || input.runtimeDrain === true),
           ),
+        ...accessRpc,
         [WS_METHODS.subscribeAuthAccess]: (_input) =>
           Stream.unwrap(
             Effect.gen(function* () {

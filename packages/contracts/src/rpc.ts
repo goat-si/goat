@@ -1,3 +1,4 @@
+import * as AuthAccessRpc from "./authAccessRpc.ts";
 import { WsComputerUseHistoryRpc, WsComputerUseStatusChangesRpc } from "./computerUseHistoryRpc.ts";
 import * as StorageCleanupRpcs from "./storageCleanupRpcs.ts";
 import {
@@ -126,12 +127,7 @@ import {
   MemoryImportRpcs,
 } from "./memoryRpc.ts";
 import { HUB_NODES_WS_METHODS, HubNodesRpcs } from "./hubNodesRpc.ts";
-import {
-  AuthAccessStreamError,
-  AuthAccessStreamEvent,
-  AgentTerminalBinding,
-  EnvironmentAuthorizationError,
-} from "./auth.ts";
+import { AgentTerminalBinding, EnvironmentAuthorizationError } from "./auth.ts";
 import {
   BackgroundPolicySnapshot,
   ClientActivityReportInput,
@@ -788,7 +784,7 @@ export const WS_METHODS = {
   subscribeDeviceState: "subscribeDeviceState",
   subscribeServerConfig: "subscribeServerConfig",
   subscribeServerLifecycle: "subscribeServerLifecycle",
-  subscribeAuthAccess: "subscribeAuthAccess",
+  ...AuthAccessRpc.AUTH_ACCESS_WS_METHODS,
   subscribeBackgroundPolicy: "subscribeBackgroundPolicy",
   subscribeResourceTelemetry: "subscribeResourceTelemetry",
 
@@ -2462,13 +2458,6 @@ const WsScheduledTasksGetWebhookDeliveryRpc = Rpc.make(
   },
 );
 
-const WsSubscribeAuthAccessRpc = Rpc.make(WS_METHODS.subscribeAuthAccess, {
-  payload: Schema.Struct({}),
-  success: AuthAccessStreamEvent,
-  error: Schema.Union([AuthAccessStreamError, EnvironmentAuthorizationError]),
-  stream: true,
-});
-
 const WsSubscribeBackgroundPolicyRpc = Rpc.make(WS_METHODS.subscribeBackgroundPolicy, {
   payload: Schema.Struct({}),
   success: BackgroundPolicySnapshot,
@@ -2741,7 +2730,10 @@ export const WsCoreWorkspaceRpcGroup = RpcGroup.make(
   WsSubscribeDeviceStateRpc,
   WsSubscribeServerConfigRpc,
   WsSubscribeServerLifecycleRpc,
-  WsSubscribeAuthAccessRpc,
+  AuthAccessRpc.Subscribe,
+  AuthAccessRpc.CreatePairing,
+  AuthAccessRpc.RevokePairing,
+  AuthAccessRpc.RevokeClient,
   WsSubscribeBackgroundPolicyRpc,
   WsSubscribeResourceTelemetryRpc,
   WsOrchestrationV2DispatchCommandRpc,
