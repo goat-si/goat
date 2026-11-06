@@ -1,3 +1,10 @@
+import {
+  cancelledAppOwnedTask,
+  mayStartSubagentFollowup,
+  isBlockingRun,
+  isLiveRun,
+  hasLiveRun,
+} from "./goat/OrchestratorRunState.ts";
 import type { ProjectionAwarenessReader } from "./ProjectionAwareness.ts";
 import { automaticMessageIds as automaticIds } from "./ProjectionMessageLookup.ts";
 import { makeSessionHasBackgroundWork, partitionSwitchSessions } from "./SessionBackgroundWork.ts";
@@ -717,49 +724,6 @@ function withoutPreparationResult(
 ) {
   const { output: _output, exitCode: _exitCode, outputIndicatesFailure: _failure, ...rest } = item;
   return rest;
-}
-
-/** Stop ended this task, so its result is not delivered to the parent agent. */
-function cancelledAppOwnedTask(
-  task: OrchestrationV2Subagent,
-  now: DateTime.Utc,
-): OrchestrationV2Subagent {
-  return {
-    ...task,
-    status: "cancelled",
-    completedAt: now,
-    updatedAt: now,
-    completionDelivery: { state: "disposed", observedByRunId: null },
-  };
-}
-
-// Provider wakes can start follow-up work; monitor updates only report progress.
-// Dispatch takes the parent's lock for follow-ups because intake writes the parent.
-function mayStartSubagentFollowup(
-  command: Extract<OrchestrationV2Command, { readonly type: "message.dispatch" }>,
-): boolean {
-  if (command.scheduledTaskId !== undefined || command.restartContinuationOfRunId !== undefined)
-    return false;
-  if (command.notification !== undefined) return command.notification.source.kind !== "monitor";
-  return command.createdBy === "user" || command.creationSource === "mcp";
-}
-
-function isBlockingRun(run: OrchestrationV2Run): boolean {
-  return (
-    run.status === "preparing" ||
-    run.status === "starting" ||
-    run.status === "running" ||
-    run.status === "waiting"
-  );
-}
-
-/** Waiting runs only drain post-terminal output; their agent turn is over and still needs a wake. */
-function isLiveRun(run: OrchestrationV2Run): boolean {
-  return run.status === "preparing" || run.status === "starting" || run.status === "running";
-}
-
-function hasLiveRun(projection: Pick<OrchestrationV2ThreadProjection, "runs">): boolean {
-  return projection.runs.some(isLiveRun);
 }
 
 function withPullRequestWatch(
@@ -2711,6 +2675,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     readonly now: DateTime.Utc;
     readonly cancelQueuedDelivery?: boolean;
     readonly terminationCause?: OrchestrationV2RunTerminationCause["kind"];
+    readonly interruptedWakeTaskIds?: ReadonlyArray<NodeId>;
   }) {
     const parentRun = input.projection.runs.find((candidate) => candidate.id === input.parentRunId);
     if (parentRun === undefined) {
@@ -2724,12 +2689,26 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       return;
     }
     const emitEvent = emit(input.events, input.command);
-    const nextDisposition = cohort?.disposition === "disposed" ? "disposed" : input.disposition;
-    const nextCohort = {
-      disposition: nextDisposition,
-      nextGeneration: cohort?.nextGeneration ?? 1,
-      delivery: null,
-    } as const;
+    const carried = input.interruptedWakeTaskIds;
+    const kept =
+      carried !== undefined && cohort?.disposition === "open"
+        ? tasks.filter(
+            (task) =>
+              !carried.includes(task.id) &&
+              !["acknowledged", "delivered", "disposed"].includes(
+                task.completionDelivery?.state ?? "",
+              ),
+          )
+        : [];
+    const nextCohort =
+      kept.length > 0 && cohort !== undefined
+        ? cohort
+        : {
+            disposition:
+              cohort?.disposition === "disposed" ? ("disposed" as const) : input.disposition,
+            nextGeneration: cohort?.nextGeneration ?? 1,
+            delivery: null,
+          };
     yield* emitEvent({
       type: "run.updated",
       threadId: parentRun.threadId,
@@ -2742,9 +2721,16 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         delegatedCompletion: nextCohort,
       },
     });
-    yield* disposeTaskCompletionDeliveries({ ...input, tasks });
+    yield* disposeTaskCompletionDeliveries({
+      ...input,
+      tasks: tasks.filter((task) => !kept.includes(task)),
+    });
     const deliveryRun = completionDeliveryRun(input.projection, cohort?.delivery ?? null);
-    if (input.cancelQueuedDelivery !== false && deliveryRun?.status === "queued") {
+    if (
+      kept.length === 0 &&
+      input.cancelQueuedDelivery !== false &&
+      deliveryRun?.status === "queued"
+    ) {
       yield* emitQueuedRunCancellation({
         command: input.command,
         events: input.events,
@@ -11046,6 +11032,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                 cohortRunIds: [],
                 stopsDelegatedTasks: false,
                 now,
+              });
+            }
+            if (completionMessage?.delegatedCompletion !== undefined) {
+              yield* disposeDelegatedCompletionCohort({
+                command,
+                events,
+                projection,
+                parentRunId: completionCohortRunId,
+                disposition: "stopped",
+                now,
+                interruptedWakeTaskIds: completionMessage.delegatedCompletion.taskIds,
               });
             }
             yield* disposeTaskCompletionDeliveries({ command, events, tasks: waitTasks, now });
