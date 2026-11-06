@@ -27,10 +27,8 @@ export const PullRequestMediaContext = createContext<PullRequestMediaLocation | 
 
 export function usePullRequestMediaUrl(url: string) {
   const context = useContext(PullRequestMediaContext);
-  const resource = useMemo(() => {
-    const source = pullRequestMediaSource(url, context);
-    return "resource" in source ? (source.resource ?? null) : null;
-  }, [url, context]);
+  const source = useMemo(() => pullRequestMediaSource(url, context), [url, context]);
+  const resource = "resource" in source ? (source.resource ?? null) : null;
   const asset = useAssetUrlState(context?.environmentId ?? null, resource);
   const refresh = useRefreshAssetUrl(context?.environmentId ?? null, resource);
   return {
