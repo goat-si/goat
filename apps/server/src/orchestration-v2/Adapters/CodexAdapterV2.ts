@@ -1,3 +1,4 @@
+import { codexResumeError, forkCodexThread } from "./CodexResumeError.ts";
 import { makeSurvivorSettlement } from "./CodexSurvivorSettlement.ts";
 import { buildCodexAssistantArtifacts } from "./CodexAssistantArtifacts.ts";
 import * as Survivor from "./CodexSurvivorContinuation.ts";
@@ -7435,14 +7436,13 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
             },
             (effect, threadInput) =>
               effect.pipe(
-                Effect.mapError(
-                  (cause) =>
-                    new ProviderAdapter.ProviderAdapterResumeThreadError({
-                      driver: CODEX_PROVIDER,
-                      providerSessionId: input.providerSessionId,
-                      providerThreadId: threadInput.providerThread.id,
-                      cause: normalizeCodexCause(cause),
-                    }),
+                Effect.mapError((cause) =>
+                  codexResumeError(
+                    cause,
+                    input.providerSessionId,
+                    threadInput.providerThread.id,
+                    normalizeCodexCause(cause),
+                  ),
                 ),
               ),
           ),
@@ -8329,7 +8329,7 @@ export const makeCodexAdapterV2 = Effect.fn("makeCodexAdapterV2")(function* (
               });
               const response = yield* ensureInitialized.pipe(
                 Effect.andThen(
-                  client.request("thread/fork", {
+                  forkCodexThread(client, {
                     threadId,
                     ...(boundary.lastTurnId === undefined
                       ? {}

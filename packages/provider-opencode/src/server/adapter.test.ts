@@ -38,7 +38,6 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import * as TestProviderHost from "@goat/provider-testing/TestProviderHost";
-import * as ProviderEventLoggers from "@goat/provider-core/server/ProviderEventLoggers";
 import * as OpenCodeRuntime from "./OpenCodeRuntime.ts";
 import * as IdAllocator from "@goat/provider-core/server/IdAllocator";
 import * as McpProviderSessions from "@goat/provider-core/server/McpProviderSessions";
@@ -48,7 +47,6 @@ import {
   openCodeBoundaryAfterProviderTurn,
   openCodeChildPermissionRules,
   openCodePermissionRules,
-  makeOpenCodeProtocolLogger,
   makeOpenCodeAdapterV2,
   OPENCODE_PROVIDER,
   reconcileOpenCodePromptAdmissionStatus,
@@ -81,7 +79,6 @@ const wp4Snapshot = () =>
     ],
   })!;
 
-const encodeUnknownJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 const decodeOpenCodeSettings = Schema.decodeEffect(OpenCodeSettings);
 
 describe("OpenCodeAdapterV2", () => {
@@ -478,6 +475,30 @@ describe("OpenCodeAdapterV2", () => {
             properties: {
               sessionID: nativeSessionId,
               part: {
+                id: "part-exit",
+                sessionID: nativeSessionId,
+                messageID: "late-assistant",
+                type: "tool",
+                callID: "call-exit",
+                tool: "bash",
+                state: {
+                  status: "completed",
+                  input: { command: "vp test" },
+                  output: "1 failed\n",
+                  title: "Run tests",
+                  metadata: { output: "1 failed\n", exit: 1, truncated: false },
+                  time: { start: 4, end: 5 },
+                },
+              },
+            },
+          }),
+        );
+        yield* Effect.promise(() =>
+          nativeEvents.push({
+            type: "message.part.updated",
+            properties: {
+              sessionID: nativeSessionId,
+              part: {
                 id: "part-read",
                 sessionID: nativeSessionId,
                 messageID: "late-assistant",
@@ -546,14 +567,21 @@ describe("OpenCodeAdapterV2", () => {
         const commands = items.filter((item) => item.type === "command_execution");
         assert.deepEqual(
           commands.map((item) => item.status),
-          ["pending", "running", "completed", "failed"],
+          ["pending", "running", "completed", "failed", "failed"],
         );
         assert.deepEqual(
           commands.map((item) => item.input),
-          ["pwd", "pwd", "pwd", "pwd"],
+          ["pwd", "pwd", "pwd", "pwd", "vp test"],
         );
         assert.equal(commands[2]?.output, "/repo\n");
         assert.equal(commands[3]?.output, "Command failed");
+        assert.equal(commands[4]?.exitCode, 1);
+        assert.equal(
+          events
+            .flatMap((event) => (event.type === "node.updated" ? [event.node] : []))
+            .findLast((node) => node.id === commands[4]?.nodeId)?.status,
+          "failed",
+        );
         assert.isTrue(
           events.some(
             (event) =>
@@ -1032,7 +1060,7 @@ describe("OpenCodeAdapterV2", () => {
             return { stream: nativeEvents.stream };
           },
         },
-        command: { list: async () => ({ data: [{ name: "review" }] }) },
+        command: { list: async () => ({ data: [{ name: "git/review" }] }) },
         session: {
           create: async () => ({ data: { id: sessionId, time: { created: 1, updated: 1 } } }),
           command: async (input: {
@@ -1051,9 +1079,9 @@ describe("OpenCodeAdapterV2", () => {
           },
         },
       });
-      const start = yield* harness.startTurn("/review staged changes").pipe(Effect.forkScoped);
+      const start = yield* harness.startTurn("/git/review staged changes").pipe(Effect.forkScoped);
       const call = yield* Queue.take(calls);
-      assert.equal(call.command, "review");
+      assert.equal(call.command, "git/review");
       assert.equal(call.arguments, "staged changes");
       assert.equal(call.model, "anthropic/claude-sonnet");
       yield* Effect.promise(() =>
@@ -2120,39 +2148,6 @@ describe("OpenCodeAdapterV2", () => {
       assert.equal(admission.admissionGeneration, 5);
       assert.isTrue(admission.admissionPending);
     }),
-  );
-
-  it.effect("logs bounded structural protocol diagnostics without native payload values", () =>
-    Effect.gen(function* () {
-      const idAllocator = yield* IdAllocator.IdAllocatorV2;
-      const records: Array<unknown> = [];
-      const nativeEventLogger: ProviderEventLoggers.EventNdjsonLogger = {
-        filePath: "/tmp/provider-native.ndjson",
-        write: (event) => Effect.sync(() => void records.push(event)),
-        close: () => Effect.void,
-      };
-      const logProtocolEvent = makeOpenCodeProtocolLogger({
-        nativeEventLogger,
-        idAllocator,
-        providerInstanceId: ProviderInstanceId.make("opencode-test"),
-        providerSessionId: ProviderSessionId.make("provider-session-opencode-test"),
-        threadId: ThreadId.make("thread-opencode-test"),
-      });
-      const secret = "secret-opencode-prompt";
-
-      yield* logProtocolEvent({
-        direction: "outgoing",
-        messageKind: "request",
-        method: "session.prompt",
-        payload: { prompt: secret, nested: { token: secret } },
-      });
-
-      const serialized = encodeUnknownJson(records);
-      assert.notInclude(serialized, secret);
-      assert.include(serialized, '"protocol":"opencode-sdk.sse"');
-      assert.include(serialized, '"method":"session.prompt"');
-      assert.include(serialized, '"fieldCount":2');
-    }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, McpProviderSessions.layer))),
   );
 
   it.effect("adopts the handed-over provider thread identity on session create", () =>

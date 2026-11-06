@@ -94,13 +94,38 @@ export class OpenCodeTextGenerationPromptResponseError extends Schema.TaggedErro
   {
     ...openCodePromptErrorContext,
     providerErrorName: Schema.optional(Schema.String),
-    providerMessage: Schema.String,
+    statusCode: Schema.optional(Schema.Int),
+    cause: Schema.Defect(),
   },
 ) {
   override get message(): string {
     const providerError = this.providerErrorName ? ` ${this.providerErrorName}` : "";
-    return `OpenCode prompt${providerError} failed for ${this.operation} in ${this.cwd} using ${this.providerId}/${this.modelId} (session ${this.sessionId}): ${this.providerMessage}`;
+    const status = this.statusCode === undefined ? "" : `, HTTP ${this.statusCode}`;
+    return `OpenCode prompt${providerError} failed for ${this.operation} in ${this.cwd} using ${this.providerId}/${this.modelId} (session ${this.sessionId}${status}).`;
   }
+}
+
+function openCodePromptResponseErrorDetail(error: OpenCodeTextGenerationPromptResponseError) {
+  if (
+    error.providerErrorName === "ProviderAuthError" ||
+    error.statusCode === 401 ||
+    error.statusCode === 403
+  ) {
+    return "The model provider rejected the credentials. Check the provider's sign-in or API key in OpenCode.";
+  }
+  if (error.statusCode === 429) {
+    return "The model provider's usage or rate limit was reached. Try again later.";
+  }
+  if (error.providerErrorName === "ContextOverflowError") {
+    return "The prompt is too long for the selected model's context window.";
+  }
+  if (error.providerErrorName === "MessageAbortedError") {
+    return "OpenCode stopped the generation.";
+  }
+  if (error.statusCode !== undefined) {
+    return `The model provider failed the request (HTTP ${error.statusCode}).`;
+  }
+  return "OpenCode could not generate the text.";
 }
 
 export class OpenCodeTextGenerationEmptyOutputError extends Schema.TaggedError<OpenCodeTextGenerationEmptyOutputError>()(
@@ -118,7 +143,7 @@ export class OpenCodeTextGenerationEmptyOutputError extends Schema.TaggedError<O
 
 interface OpenCodePromptFailure {
   readonly name?: string;
-  readonly message: string;
+  readonly statusCode?: number;
 }
 
 interface OpenCodeTextPart {
@@ -135,26 +160,21 @@ function getOpenCodePromptFailure(error: unknown): OpenCodePromptFailure | null 
     "name" in error && typeof error.name === "string" && error.name.trim().length > 0
       ? error.name.trim()
       : undefined;
-  const message =
-    "data" in error &&
-    error.data &&
-    typeof error.data === "object" &&
-    "message" in error.data &&
-    typeof error.data.message === "string"
-      ? error.data.message.trim()
-      : "";
-  if (message.length > 0) {
-    return {
-      ...(name ? { name } : {}),
-      message,
-    };
+  const data = "data" in error && error.data && typeof error.data === "object" ? error.data : {};
+  const statusCode =
+    "statusCode" in data && typeof data.statusCode === "number" && Number.isInteger(data.statusCode)
+      ? data.statusCode
+      : undefined;
+  const hasMessage =
+    "message" in data && typeof data.message === "string" && data.message.trim().length > 0;
+  if (!name && statusCode === undefined && !hasMessage) {
+    return null;
   }
 
-  if (name) {
-    return { name, message: name };
-  }
-
-  return null;
+  return {
+    ...(name ? { name } : {}),
+    ...(statusCode !== undefined ? { statusCode } : {}),
+  };
 }
 
 function isOpenCodeTextPart(part: unknown): part is OpenCodeTextPart {
@@ -421,12 +441,16 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
           if (memory && (yield* Deferred.isDone(rejected))) return yield* Deferred.await(rejected);
           if (memory && result.data?.parts.some((part) => part.type === "tool"))
             return yield* reject().pipe(Effect.andThen(Deferred.await(rejected)));
-          const promptFailure = getOpenCodePromptFailure(result.data?.info?.error);
+          const promptError = result.data?.info?.error;
+          const promptFailure = getOpenCodePromptFailure(promptError);
           if (promptFailure) {
             return yield* new OpenCodeTextGenerationPromptResponseError({
               ...promptContext,
               ...(promptFailure.name ? { providerErrorName: promptFailure.name } : {}),
-              providerMessage: promptFailure.message,
+              ...(promptFailure.statusCode !== undefined
+                ? { statusCode: promptFailure.statusCode }
+                : {}),
+              cause: promptError,
             });
           }
           if (
@@ -476,7 +500,7 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
             Effect.fail(
               new TextGenerationError({
                 operation: cause.operation,
-                detail: cause.providerMessage,
+                detail: openCodePromptResponseErrorDetail(cause),
                 cause,
               }),
             ),

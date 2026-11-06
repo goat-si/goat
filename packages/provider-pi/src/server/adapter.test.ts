@@ -1571,7 +1571,6 @@ describe("PiAdapterV2", () => {
       assert.equal(itemIds.size, 4);
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
-
   it.effect("injects the GOAT MCP extension and bearer when a session exists", () =>
     Effect.gen(function* () {
       yield* (yield* McpProviderSessions.McpProviderSessions).set({
@@ -1591,6 +1590,8 @@ describe("PiAdapterV2", () => {
         arg === "--extension" ? [spawn.args[index + 1]] : [],
       );
       assert.isFalse(spawn.args.includes("--no-extensions"));
+      assert.notInclude(spawn.args, "--offline");
+      assert.isUndefined(spawn.env.PI_OFFLINE);
       assert.isTrue(extensions.some((path) => path?.endsWith("pi-goat-mcp-extension.ts")));
       assert.equal(spawn.env.GOAT_MCP_URL, "http://127.0.0.1:43123/mcp");
       assert.equal(spawn.env.GOAT_MCP_BEARER_TOKEN, "secret-pi-token");
@@ -1943,8 +1944,7 @@ describe("PiAdapterV2", () => {
       assert.equal(source.nativeThreadRef?.nativeId, FAKE_SESSION_FILE);
       const args = forkFake.lastSpawn().args;
       assert.equal(args[args.indexOf("--fork") + 1], FAKE_SESSION_FILE);
-      assert.include(args, "--no-extensions");
-      assert.include(args, "--no-tools");
+      assert.includeMembers([...args], ["--no-extensions", "--no-tools", "--offline"]);
       assert.notInclude(args, "--no-session");
       assert.deepEqual(
         forkFake

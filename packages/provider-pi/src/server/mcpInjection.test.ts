@@ -175,6 +175,7 @@ describe("pi GOAT MCP injection", () => {
       extensionPath: "/tmp/cache/pi-goat-mcp-extension.ts",
       sessionPath: "/fake/persisted.jsonl",
       ephemeral: true,
+      shortLived: true,
       disableExtensions: true,
       disableTools: true,
     });
@@ -184,6 +185,7 @@ describe("pi GOAT MCP injection", () => {
       "--no-session",
       "--provider",
       "anthropic",
+      "--offline",
       "--no-extensions",
       "--no-tools",
     ]);

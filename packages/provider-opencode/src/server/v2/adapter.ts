@@ -1,3 +1,4 @@
+import { commandOf, reportOutcome } from "./adapterHelpers.ts";
 import * as NodeURL from "node:url";
 
 import {
@@ -94,7 +95,12 @@ import {
 import * as ProviderAdapter from "@goat/provider-core/server/ProviderAdapter";
 import { turnScopedSelectionTransition } from "@goat/provider-core/server/selectionTransition";
 import { OPENCODE_PROVIDER, openCodePermissionRequestKind } from "../adapter.ts";
-import { openCodeFileUris, openCodeToolTurnItem, type OpenCodeToolResult } from "../toolItems.ts";
+import {
+  openCodeCommandFailed,
+  openCodeFileUris,
+  openCodeToolTurnItem,
+  type OpenCodeToolResult,
+} from "../toolItems.ts";
 import { goatRemoteMcpConfig } from "../goatMcpConfig.ts";
 
 const OpenCode2ProviderCapabilities = {
@@ -499,15 +505,6 @@ const stringField = (record: Readonly<Record<string, unknown>> | undefined, key:
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 };
 
-const reportOutcome = (state: string | undefined) =>
-  state === "completed"
-    ? ("completed" as const)
-    : state === "error"
-      ? ("failed" as const)
-      : state === "cancelled"
-        ? ("cancelled" as const)
-        : ("unknown" as const);
-
 const subagentOutput = (text: string) =>
   /^<subagent\b[^>]*>\n?([\s\S]*?)\n?<\/subagent>$/.exec(text.trim())?.[1] ?? text;
 
@@ -619,11 +616,6 @@ const sameModel = (left: ModelRef, right: ModelRef | undefined) =>
 
 const agentFor = (input: ProviderAdapter.ProviderAdapterV2TurnInput) =>
   input.runtimePolicy.interactionMode === "plan" ? "plan" : "build";
-
-const commandOf = (text: string) => {
-  const match = /^\/([^\s/]+)(?:\s+([\s\S]*))?$/.exec(text.trim());
-  return match === null ? undefined : { name: match[1]!, text: match[2] ?? "" };
-};
 
 const skillMentions = (text: string) => [
   ...new Set([...text.matchAll(SKILL_MENTION_PATTERN)].flatMap((match) => match[2] ?? [])),
@@ -1002,12 +994,16 @@ export const make = Effect.fn("OpenCode2Adapter.make")(function* (instanceId: Pr
       const startedAt = turn.startedAt.get(id) ?? updatedAt;
       const completedAt = status === "running" ? null : updatedAt;
       const nativeId = `${turn.scope}${id}`;
-      yield* emitNode(state, turn, nativeId, "tool_call", status, startedAt, completedAt);
+      const settled =
+        status === "completed" && openCodeCommandFailed(tool.name, result?.metadata)
+          ? "failed"
+          : status;
+      yield* emitNode(state, turn, nativeId, "tool_call", settled, startedAt, completedAt);
       yield* emit({
         type: "turn_item.updated",
         driver,
         turnItem: openCodeToolTurnItem(
-          itemBase(state, turn, nativeId, status, startedAt, completedAt, updatedAt),
+          itemBase(state, turn, nativeId, settled, startedAt, completedAt, updatedAt),
           {
             name: tool.name,
             input: tool.input,
