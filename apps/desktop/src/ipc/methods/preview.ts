@@ -1,4 +1,6 @@
 import {
+  AnnotationVoicePickInput,
+  AnnotationVoiceState,
   DesktopPreviewAnnotationSendEnabledInputSchema,
   DesktopPreviewAnnotationThemeInputSchema,
   DesktopPreviewArtifactInputSchema,
@@ -406,11 +408,21 @@ const setAnnotationTheme = DesktopIpc.makeIpcMethod({
 
 const pickElement = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.PREVIEW_PICK_ELEMENT_CHANNEL,
-  payload: DesktopPreviewTabInputSchema,
+  payload: AnnotationVoicePickInput,
   result: Schema.NullOr(PreviewAnnotationSubmissionResultSchema),
-  handler: Effect.fn("desktop.ipc.preview.pickElement")(function* ({ tabId }) {
+  handler: Effect.fn("desktop.ipc.preview.pickElement")(function* ({ tabId, voice }) {
     const manager = yield* PreviewManager.PreviewManager;
-    return yield* manager.pickElement(tabId);
+    return yield* manager.pickElement(tabId, voice);
+  }),
+});
+
+const updateAnnotationVoice = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_ANNOTATION_VOICE_STATE_CHANNEL,
+  payload: AnnotationVoiceState,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.preview.annotationVoice")(function* (state) {
+    const manager = yield* PreviewManager.PreviewManager;
+    yield* manager.updateAnnotationVoice(state);
   }),
 });
 
@@ -493,6 +505,7 @@ export const methods = [
   setAnnotationTheme,
   setAnnotationSendEnabled,
   pickElement,
+  updateAnnotationVoice,
   cancelPickElement,
   captureScreenshot,
   revealArtifact,

@@ -17,6 +17,8 @@ allowBuilds:
   electron: false
   electron-winstaller: false
   esbuild: true
+  # Loads its @koromix prebuild directly; its install script only rebuilds from source.
+  koffi: false
   msgpackr-extract: true
   msw: false
   node-pty: true

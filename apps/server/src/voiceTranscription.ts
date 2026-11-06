@@ -65,7 +65,7 @@ const upstreamError = (code: VoiceTranscriptionErrorCode = "upstream-failed", re
         ? "The selected voice account rejected its credentials. Sign in again."
         : "Voice transcription could not be completed.",
   });
-const invalidAudio = () =>
+export const invalidAudio = () =>
   new VoiceTranscriptionBadRequestError({
     code: "invalid-audio",
     message: "Expected a valid 24 kHz mono PCM16 WAV and matching duration.",
@@ -275,7 +275,7 @@ function boundedText<E, R, E2>(
   });
 }
 
-const readBoundedJsonRequestBody = Effect.fn("voice.readBoundedJsonRequestBody")(function* (
+export const readBoundedJsonRequestBody = Effect.fn("voice.readBoundedJsonRequestBody")(function* (
   request: HttpServerRequest.HttpServerRequest,
   maxBytes: number,
 ) {
@@ -441,7 +441,7 @@ const transcribe = Effect.fn("voice.transcribe")(
   Effect.catchTags({ TimeoutError: () => Effect.fail(upstreamError("upstream-timeout")) }),
 );
 
-const authorize = Effect.gen(function* () {
+export const authorize = Effect.gen(function* () {
   const principal = yield* EnvironmentAuthenticatedPrincipal;
   if (!principal.scopes.has(AuthOrchestrationOperateScope))
     return yield* new EnvironmentHttpForbiddenError({

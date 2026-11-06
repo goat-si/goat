@@ -2218,9 +2218,9 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       // macOS keeps only the helper's driver; Linux still uses the native SDK.
       const cuaNativeUnpack = [
         "**/node_modules/@trycua/cua-driver-*/**/*.{node,so,dylib,dll}",
-        "**/node_modules/@ubjs/node-*/**/*.node",
+        "**/node_modules/{@ubjs/node-*/**/*.node,@transcribe-cpp/**/*.{dylib,so,so.*}}",
       ];
-      assert.deepStrictEqual(mac.asarUnpack, ["**/node_modules/@ubjs/node-*/**/*.node"]);
+      assert.deepStrictEqual(mac.asarUnpack, cuaNativeUnpack.slice(1));
       assert.deepStrictEqual(linux.asarUnpack, cuaNativeUnpack);
       assert.deepStrictEqual(win.asar, { smartUnpack: false });
       assert.deepStrictEqual(win.asarUnpack, [WINDOWS_NATIVE_ASAR_UNPACK_GLOB]);

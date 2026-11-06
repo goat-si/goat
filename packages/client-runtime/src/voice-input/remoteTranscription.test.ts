@@ -18,6 +18,10 @@ import {
   validateCanonicalVoiceWav,
 } from "./wavEncoding.ts";
 import { VoiceTranscriptionError } from "./transcription.ts";
+import {
+  transcribeLocalModelEffect,
+  listEnvironmentSpeechModelsEffect,
+} from "./environmentSpeech.ts";
 
 function wav() {
   return encodeMonoPcm16Wav([new Float32Array(24_000).fill(0.5)], 24_000)!;
@@ -152,6 +156,73 @@ describe("canonical WAV encoding and validation", () => {
 });
 
 describe("remote voice environment authorization", () => {
+  it.effect("sends local-model audio only to the authorized environment without redirects", () =>
+    Effect.gen(function* () {
+      const h = harness(() => Response.json({ text: "local model" }));
+      const result = yield* transcribeLocalModelEffect(h.context, payload(), () => true).pipe(
+        Effect.provide(h.layer),
+      );
+      expect(result.text).toBe("local model");
+      expect(h.calls[0]!.url).toBe(
+        "https://current.test/hub/nodes/environment-a/api/voice/environment/transcribe",
+      );
+      expect(h.calls[0]!.init.redirect).toBe("error");
+      expect(h.proofs[0]!.url).toBe(h.calls[0]!.url);
+    }),
+  );
+
+  it.effect("does not send audio after the device grant is revoked", () =>
+    Effect.gen(function* () {
+      const h = harness();
+      yield* transcribeLocalModelEffect(h.context, payload(), () => false).pipe(
+        Effect.provide(h.layer),
+        Effect.exit,
+      );
+      expect(h.calls).toHaveLength(0);
+    }),
+  );
+
+  it.effect("keeps cookie credentials and refuses redirects for local-model audio", () =>
+    Effect.gen(function* () {
+      const h = harness(() => Response.json({ text: "ok" }));
+      const context = {
+        ...h.context,
+        prepared: { ...h.context.prepared, httpAuthorization: null },
+      };
+      yield* transcribeLocalModelEffect(context, payload(), () => true).pipe(
+        Effect.provide(h.layer),
+      );
+      expect(h.calls[0]!.init.credentials).toBe("include");
+      expect(h.calls[0]!.init.redirect).toBe("error");
+    }),
+  );
+
+  it.effect("does not retry audio when consent is revoked after an authorization failure", () =>
+    Effect.gen(function* () {
+      let allowed = true;
+      const h = harness(() => {
+        allowed = false;
+        return rejected();
+      });
+      yield* transcribeLocalModelEffect(h.context, payload(), () => allowed).pipe(
+        Effect.provide(h.layer),
+        Effect.exit,
+      );
+      expect(h.calls).toHaveLength(1);
+    }),
+  );
+
+  it.effect("uses the selected environment for model listing", () =>
+    Effect.gen(function* () {
+      const h = harness(() => Response.json({ models: [] }));
+      expect(
+        yield* listEnvironmentSpeechModelsEffect(h.context).pipe(Effect.provide(h.layer)),
+      ).toEqual({ models: [] });
+      expect(h.calls[0]!.url).toBe(
+        "https://current.test/hub/nodes/environment-a/api/voice/environment/models",
+      );
+    }),
+  );
   it.effect.each(["transcribe", "prewarm"])(
     "renews current authorization and preserves the hub prefix for %s",
     (kind) =>

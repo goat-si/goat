@@ -3110,7 +3110,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
             ...(platform === "linux"
               ? ["**/node_modules/@trycua/cua-driver-*/**/*.{node,so,dylib,dll}"]
               : []),
-            "**/node_modules/@ubjs/node-*/**/*.node",
+            "**/node_modules/{@ubjs/node-*/**/*.node,@transcribe-cpp/**/*.{dylib,so,so.*}}",
           ],
         }),
     extraResources: [

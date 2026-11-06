@@ -19,7 +19,24 @@ import {
   sessionGrantsScope,
 } from "./auth.ts";
 
+const decodeEnvironmentScopes = Schema.decodeSync(AuthEnvironmentScopes);
+const decodeGrantScopes = Schema.decodeSync(AuthGrantScopes);
+
 describe("authorization grants", () => {
+  it("requires an explicit voice management grant", () => {
+    expect(decodeEnvironmentScopes(["voice:manage"])).toEqual(["voice:manage"]);
+    expect(decodeGrantScopes(["voice:manage"])).toEqual(["voice:manage"]);
+    expect(AuthStandardClientScopes).not.toContain("voice:manage");
+    expect(
+      sessionGrantsScope(
+        { authenticated: true, scopes: ["orchestration:operate"] },
+        "voice:manage",
+      ),
+    ).toBe(false);
+    expect(
+      sessionGrantsScope({ authenticated: true, permissions: ["voice:manage"] }, "voice:manage"),
+    ).toBe(true);
+  });
   it("decodes legacy review credentials without offering them in new grants", () => {
     const decodeAuthEnvironmentScopes = Schema.decodeSync(AuthEnvironmentScopes);
 

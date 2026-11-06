@@ -1,0 +1,341 @@
+// @effect-diagnostics nodeBuiltinImport:off globalTimers:off - native inference and IPC cleanup need killable Promise boundaries outside the Effect runtime.
+import * as NodeChildProcess from "node:child_process";
+import * as NodeSea from "node:sea";
+import { guardChild } from "@goat/shared/errorGuards";
+
+type SpeechStreamText = { readonly committed: string; readonly tentative: string };
+
+// Inline the small child entry so the packaged CLI does not need a separate worker artifact.
+const entry = `
+const sendReply = (message) => {
+  if (JSON.stringify(message).length > 1_000_000) throw new Error("Speech response is too large.");
+  process.send(message);
+};
+let model;
+let session;
+let stream;
+process.on("message", async (message) => {
+  try {
+    if (message.kind === "load") {
+      const { TranscribeModel, getAvailableBackends } = await loadSpeechModule(message.moduleUrl);
+      const device = message.acceleration.startsWith("gpu:")
+        ? getAvailableBackends().find((item) =>
+            (item.deviceType === "gpu" || item.deviceType === "igpu") &&
+            JSON.stringify([item.kind, item.deviceId ?? item.name]) === message.acceleration.slice(4))
+        : undefined;
+      if (message.acceleration.startsWith("gpu:") && !device)
+        throw new Error("The selected speech GPU is unavailable.");
+      model = await TranscribeModel.load(message.path, device
+        ? { device }
+        : { backend: message.acceleration });
+      sendReply({ type: "goat-speech-reply", ok: true, backend: model.backend,
+        supportsStreaming: model.capabilities.supportsStreaming,
+        supportsTranslation: model.capabilities.supportsTranslate,
+        supportsVocabulary: model.supports("vocabulary") });
+    } else if (message.kind === "begin") {
+      session = model.createSession();
+      stream = await session.stream({ timestamps: "none", language: message.language,
+        vocabulary: message.vocabulary });
+      sendReply({ type: "goat-speech-reply", ok: true });
+    } else if (message.kind === "feed") {
+      const update = await stream.feed(message.pcm);
+      const text = update.committedChanged || update.tentativeChanged ? stream.text : null;
+      sendReply({ type: "goat-speech-reply", ok: true, revision: update.revision,
+        preview: text ? { committed: text.committed, tentative: text.tentative } : null });
+    } else if (message.kind === "finish") {
+      await stream.finalize();
+      const text = stream.text.full;
+      stream.reset();
+      session.dispose();
+      stream = session = undefined;
+      sendReply({ type: "goat-speech-reply", ok: true, text });
+    } else if (message.kind === "reset") {
+      stream.reset();
+      session.dispose();
+      stream = session = undefined;
+      sendReply({ type: "goat-speech-reply", ok: true });
+    } else if (message.kind === "transcribe" || message.kind === "transcribeWav") {
+      let pcm = message.pcm;
+      if (message.kind === "transcribeWav") {
+        const input = new DataView(message.pcm.buffer, message.pcm.byteOffset, message.pcm.byteLength);
+        const count = input.byteLength / 2;
+        pcm = new Float32Array(Math.max(1, Math.floor(count * 2 / 3)));
+        for (let i = 0; i < pcm.length; i++) {
+          const index = i * 3 / 2;
+          const left = Math.floor(index);
+          const a = input.getInt16(left * 2, true) / 32768;
+          const b = input.getInt16(Math.min(left + 1, count - 1) * 2, true) / 32768;
+          pcm[i] = a + (b - a) * (index - left);
+        }
+      }
+      // Leave unbounded models alone. Use headroom for output-bound models:
+      // maxAudioMs is an estimate, so dense speech may still need smaller pieces.
+      const limit = model.capabilities.maxAudioMs;
+      const chunkSamples = limit > 0 ? Math.max(4000, Math.floor(limit * 16 / 2)) : pcm.length;
+      const texts = [];
+      let textLength = 0;
+      const transcribe = async (pcm) => {
+        try {
+          const result = await model.transcribe(pcm, message.options);
+          if (typeof result.text !== "string" || (textLength += result.text.length + 1) > 900_000)
+            throw new Error("Speech response is too large.");
+          texts.push(result.text);
+        } catch (error) {
+          if ((error?.constructor?.name !== "OutputTruncated" &&
+               error?.constructor?.name !== "InputTooLong") || pcm.length <= 4000) throw error;
+          const middle = Math.floor(pcm.length / 2);
+          await transcribe(pcm.subarray(0, middle));
+          await transcribe(pcm.subarray(middle));
+        }
+      };
+      let offset = 0;
+      while (offset < pcm.length) {
+        let end = Math.min(offset + chunkSamples, pcm.length);
+        if (end < pcm.length) {
+          // Prefer the quietest 20 ms frame in the final quarter of the window.
+          let quietest = Infinity;
+          const windowEnd = end;
+          for (let start = offset + Math.floor(chunkSamples * 0.75); start + 320 <= windowEnd; start += 320) {
+            let energy = 0;
+            for (let i = start; i < start + 320; i++) energy += pcm[i] ** 2;
+            if (energy < quietest) {
+              quietest = energy;
+              end = start + 160;
+            }
+          }
+        }
+        await transcribe(pcm.subarray(offset, end));
+        offset = end;
+      }
+      sendReply({ type: "goat-speech-reply", ok: true, text: texts.join(" ").trim() });
+    }
+  } catch (error) {
+    sendReply({
+      type: "goat-speech-reply",
+      ok: false,
+      error: error instanceof Error ? error.stack ?? error.message : String(error),
+    });
+  }
+});
+process.on("disconnect", () => process.exit(0));
+`;
+
+type Reply = {
+  readonly type: "goat-speech-reply";
+  readonly ok: boolean;
+  readonly text?: string;
+  readonly error?: string;
+  readonly supportsStreaming?: boolean;
+  readonly supportsTranslation?: boolean;
+  readonly supportsVocabulary?: boolean;
+  readonly backend?: string;
+  readonly revision?: number;
+  readonly preview?: SpeechStreamText | null;
+};
+
+// transcribe-cpp has an import-only export. Load its disk entry with require so
+// Node SEA can reach it, including its native dependencies.
+const loaderEntry = `
+  const { createRequire, findPackageJSON } = await import("node:module");
+  const { dirname, join } = await import("node:path");
+  const loadSpeechModule = async (moduleUrl) => {
+    let speech;
+    if (moduleUrl) speech = await import(moduleUrl);
+    else {
+      const packagePath = findPackageJSON("transcribe-cpp", baseUrl);
+      if (!packagePath) throw new Error("The native speech package is unavailable.");
+      speech = createRequire(packagePath)(join(dirname(packagePath), "dist/index.js"));
+    }
+    if (process.versions.electron && !process.env.TRANSCRIBE_LIBRARY) {
+      const directory = speech.artifactDir();
+      const unpacked = directory.replace(/\\.asar([\\\\/])/g, ".asar.unpacked$1");
+      // Koffi opens native libraries outside Electron's ASAR-aware filesystem.
+      if (unpacked !== directory) process.env.TRANSCRIBE_LIBRARY = join(unpacked,
+        process.platform === "win32" ? "transcribe.dll"
+          : process.platform === "darwin" ? "libtranscribe.dylib" : "libtranscribe.so");
+    }
+    return speech;
+  };
+`;
+
+export async function runNativeSpeechWorker() {
+  if (!process.send) throw new Error("Speech workers require an IPC channel.");
+  const run = new Function("baseUrl", `return (async () => {${loaderEntry}${entry}})();`) as (
+    baseUrl: string,
+  ) => Promise<void>;
+  await run(import.meta.url);
+}
+
+function speechWorkerArgs() {
+  if (NodeSea.isSea()) return ["__speech-worker", "model"];
+  // Normal Node and Electron hosts can evaluate the same entry without a sibling artifact.
+  const loader = `const baseUrl = ${JSON.stringify(import.meta.url)};${loaderEntry}`;
+  return ["--input-type=module", "-e", loader + entry];
+}
+
+/** Loads a model in an isolated process. "auto" retries on the CPU when GPU setup fails. */
+export async function loadNativeSpeechModel(
+  path: string,
+  signal: AbortSignal,
+  moduleUrl?: string,
+  acceleration = "auto",
+) {
+  try {
+    return await loadNativeSpeechModelOnce(path, signal, moduleUrl, acceleration);
+  } catch (error) {
+    if (acceleration !== "auto" || signal.aborted) throw error;
+    return await loadNativeSpeechModelOnce(path, signal, moduleUrl, "cpu");
+  }
+}
+
+async function loadNativeSpeechModelOnce(
+  path: string,
+  signal: AbortSignal,
+  moduleUrl?: string,
+  acceleration = "auto",
+) {
+  signal.throwIfAborted();
+  let stopped = false;
+  let pending: ReturnType<typeof Promise.withResolvers<Reply>> | undefined;
+  const exited = Promise.withResolvers<void>();
+  const fail = (error: Error) => {
+    stopped = true;
+    pending?.reject(error);
+    pending = undefined;
+  };
+  const child = guardChild(
+    NodeChildProcess.spawn(process.execPath, speechWorkerArgs(), {
+      stdio: ["ignore", "ignore", "inherit", "ipc"],
+      serialization: "advanced",
+      env: {
+        ...process.env,
+        ELECTRON_RUN_AS_NODE: "1",
+        ...(acceleration === "cpu" ? { TRANSCRIBE_BACKENDS: "cpu" } : {}),
+      },
+    }),
+    (error) => {
+      fail(error);
+      exited.resolve();
+    },
+  );
+  child.on("exit", (code, exitSignal) => {
+    fail(new Error(`Speech process exited (${exitSignal ?? code}).`));
+    signal.removeEventListener("abort", stop);
+    exited.resolve();
+  });
+  child.on("message", (message: unknown) => {
+    if (
+      typeof message !== "object" ||
+      message === null ||
+      !("type" in message) ||
+      message.type !== "goat-speech-reply"
+    )
+      return;
+    const reply = message as Reply;
+    const request = pending;
+    pending = undefined;
+    if (reply.ok) request?.resolve(reply);
+    else request?.reject(new Error(reply.error ?? "Native speech failed."));
+  });
+  function stop() {
+    fail(new Error("Speech process stopped."));
+    // Never call native dispose while inference is active. The OS owns cleanup of the isolated process.
+    child.kill("SIGKILL");
+  }
+  signal.addEventListener("abort", stop, { once: true });
+  if (signal.aborted) stop();
+  const send = (message: object) => {
+    if (stopped) return Promise.reject(new Error("Speech process stopped."));
+    if (pending) return Promise.reject(new Error("Speech process is busy."));
+    const request = Promise.withResolvers<Reply>();
+    pending = request;
+    child.send(message, (error) => {
+      if (error) {
+        request.reject(error);
+        if (pending === request) pending = undefined;
+      }
+    });
+    return request.promise;
+  };
+  const dispose = async () => {
+    stop();
+    await exited.promise;
+  };
+  let loaded: Reply;
+  try {
+    loaded = await send({ kind: "load", path, moduleUrl, acceleration });
+  } catch (error) {
+    await dispose();
+    throw error;
+  }
+  return {
+    backend: loaded.backend ?? "unknown",
+    supportsStreaming: loaded.supportsStreaming === true,
+    supportsTranslation: loaded.supportsTranslation === true,
+    supportsVocabulary: loaded.supportsVocabulary === true,
+    begin: async (language?: string, vocabulary?: readonly string[]) => {
+      await send({ kind: "begin", language, vocabulary });
+    },
+    feed: async (pcm: Float32Array) => {
+      if (pcm.byteLength === 0 || pcm.byteLength > 16_000 * 4 * 10)
+        throw new Error("Invalid speech chunk length.");
+      const reply = await send({ kind: "feed", pcm });
+      if (typeof reply.revision !== "number" || reply.preview === undefined)
+        throw new Error("Invalid speech stream response.");
+      return { revision: reply.revision, text: reply.preview };
+    },
+    finish: async () => {
+      const reply = await send({ kind: "finish" });
+      if (typeof reply.text !== "string") throw new Error("Invalid speech stream response.");
+      return reply.text;
+    },
+    reset: async () => {
+      const inFlight = pending?.promise;
+      if (inFlight) {
+        let timeout: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            inFlight.catch(() => undefined),
+            new Promise<never>((_, reject) => {
+              timeout = setTimeout(
+                () => reject(new Error("Speech stream reset timed out.")),
+                1_000,
+              );
+            }),
+          ]);
+        } finally {
+          clearTimeout(timeout);
+        }
+      }
+      await send({ kind: "reset" });
+    },
+    transcribe: async (
+      pcm: Float32Array,
+      options: {
+        readonly timestamps: "none";
+        readonly task?: "translate";
+        readonly targetLanguage?: "en";
+        readonly language?: string;
+        readonly vocabulary?: readonly string[];
+      },
+    ) => {
+      if (pcm.byteLength === 0 || pcm.byteLength > 16_000 * 4 * 300)
+        throw new Error("Invalid speech audio length.");
+      const result = await send({ kind: "transcribe", pcm, options });
+      if (typeof result.text !== "string") throw new Error("Invalid speech process response.");
+      return { text: result.text };
+    },
+    transcribeWav: async (pcm: Uint8Array, language?: string) => {
+      if (pcm.byteLength === 0 || pcm.byteLength > 24_000 * 2 * 300 || pcm.byteLength % 2 !== 0)
+        throw new Error("Invalid speech audio length.");
+      const result = await send({
+        kind: "transcribeWav",
+        pcm,
+        options: { timestamps: "none", language },
+      });
+      if (typeof result.text !== "string") throw new Error("Invalid speech process response.");
+      return result.text;
+    },
+    dispose,
+  };
+}

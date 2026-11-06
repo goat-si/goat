@@ -11,6 +11,7 @@ import { Button } from "../ui/button";
 import { Select, SelectItem, SelectPopup, SelectTrigger } from "../ui/select";
 import { toastManager } from "../ui/toast";
 import { readableFailure } from "./pullRequestDetail.logic";
+import { CommentSpeechControls, useCommentSpeech } from "../../speech/useCommentSpeech";
 import {
   pullRequestReviewKey,
   usePendingReviewComments,
@@ -77,6 +78,13 @@ export function PullRequestReviewForm({
   const body = usePullRequestReviewStore((store) => store.summaries[reviewKey] ?? "");
   const removeComments = usePullRequestReviewStore((store) => store.removeComments);
   const setSummary = usePullRequestReviewStore((store) => store.setSummary);
+  const speech = useCommentSpeech({
+    environmentId,
+    textareaRef,
+    text: body,
+    onTextChange: (text) => setSummary(reviewKey, text),
+    disabled: pending,
+  });
   const clearSummary = usePullRequestReviewStore((store) => store.clearSummary);
   const submitReview = useAtomCommand(pullRequestEnvironment.submitReview, {
     reportFailure: false,
@@ -87,7 +95,7 @@ export function PullRequestReviewForm({
     offered.find((verdict) => verdict.value === requestedVerdict) ?? offered[0];
 
   const submit = async (verdict: (typeof VERDICTS)[number]) => {
-    if (pending) return;
+    if (pending || speech.voice.blocksSubmission()) return;
     const submittedBody = body;
     const submittedComments = comments;
     onPendingChange(true);
@@ -145,7 +153,8 @@ export function PullRequestReviewForm({
         aria-label="Review summary"
         onValueChange={(next) => setSummary(reviewKey, next)}
       />
-      <div className="mt-2 flex justify-end gap-2">
+      <div className="mt-2 flex flex-wrap justify-end gap-2">
+        <CommentSpeechControls speech={speech} />
         {offered.length > 1 ? (
           <Select
             value={selectedVerdict?.value ?? null}
@@ -175,7 +184,10 @@ export function PullRequestReviewForm({
         <Button
           size="xs"
           disabled={
-            pending || selectedVerdict === undefined || !canSubmit(selectedVerdict.value, body)
+            pending ||
+            speech.voice.blocksSubmission() ||
+            selectedVerdict === undefined ||
+            !canSubmit(selectedVerdict.value, body)
           }
           onClick={() => {
             if (selectedVerdict !== undefined) void submit(selectedVerdict);

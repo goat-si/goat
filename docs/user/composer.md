@@ -211,13 +211,12 @@ and use **Attach again** or remove the missing file before sending.
 
 ## Voice input on iPhone
 
-On supported iPhones with iOS 26 or later, use the composer's microphone to record,
-then confirm to transcribe. Text is inserted where your selection was when
-recording started, ready for you to review and edit before sending.
+On iPhone, use the composer's microphone to record, then confirm to transcribe.
+Text is inserted where your selection was when recording started, ready for you
+to review and edit before sending.
 
-Voice input depends on Apple's on-device speech transcription. On a device without
-it, the composer has no microphone button and **Settings → Microphone** says voice
-input isn't available.
+Apple's on-device speech transcription requires a supported device with iOS 26
+or later. When it is unavailable, GOAT can use an environment to transcribe instead.
 
 The first use may download Apple's speech model and needs a network connection.
 Later transcription works offline for that language. Recordings can be up to five
@@ -232,22 +231,44 @@ for example, put **Other Bluetooth** above your AirPods so a new headset is pref
 while the AirPods microphone stays low. By default, CarPlay comes after the built-in
 microphone.
 
-Transcription runs on your iPhone when Apple's speech model supports your
-language. Otherwise the recording is transcribed by the environment the thread
-belongs to, and the composer names it while you record. GOAT deletes the
+By default, transcription runs on your iPhone when Apple's speech model supports
+your language. Otherwise the thread's environment transcribes it. You can choose
+a paired environment and manage its speech models in **Settings → Microphone**;
+that device-only choice sends recordings to the selected environment. The composer
+names the destination while you record. GOAT deletes the
 temporary audio after transcription or cancellation; only the message text is
 sent when you submit.
+Model management needs the explicit permission described in [Voice input on desktop and web](#voice-input-on-desktop-and-web).
+
+On Android, GOAT cannot yet record for environment dictation. You can still manage
+models on a connected environment in **Settings → Microphone**.
 
 ## Voice input on desktop and web
 
 Click the composer's microphone to record, then confirm to insert the text or send it.
 
-The desktop app transcribes on this computer, even when the thread runs on another
-machine: the recording goes to the transcription service through this computer's
-Codex sign-in or OpenCodex, and never to the other machine. If you
-turned off **Local environment** in **Settings › Connections**, desktop voice input
-is unavailable until you turn it back on. In a browser, the environment you are
-connected to transcribes. The recorder shows which device transcribes.
+By default, the desktop app uses this computer's Codex sign-in or OpenCodex to
+transcribe. In a browser, the thread's environment uses its transcription service.
+The recorder shows where transcription runs.
+
+You can instead choose **Transcribe on** a connected environment from the
+composer's dictation options. This sends recordings to that environment and uses a
+speech model installed there. The choice belongs to this device; select **Use
+existing voice input** to turn it off. Someone with voice management permission can
+download, select, or remove models from **Manage voice models** in the same menu.
+Connections through a hub do not currently support this option.
+After choosing an environment, you can also dictate into review and citation
+comments. In the desktop Browser, the same choice applies to annotation comments.
+
+Model management requires the explicit `voice:manage` permission; ordinary pairing
+does not grant it. On the environment's machine, create a pairing with:
+
+```sh
+goat pair --scope orchestration:read --scope orchestration:operate --scope voice:manage
+```
+
+Using `--scope` replaces the default grant, so add any other permissions that
+device needs.
 
 The first time on a Mac, macOS asks whether GOAT may use the microphone. If you
 declined, or turned GOAT off later, the composer says so and offers **Open System

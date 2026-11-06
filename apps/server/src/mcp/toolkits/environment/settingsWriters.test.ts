@@ -26,6 +26,8 @@ const SETTINGS_WRITERS: Readonly<Record<string, string>> = {
   "memory/MemorySettingsService.ts": "Versioned memory settings transitions.",
   "provider/ProjectSettingsOverrideSweep.ts": "Removes overrides for deleted provider instances.",
   "project/ProjectService.ts": "Keeps project overrides in step with project records.",
+  "speech/SpeechManagement.ts":
+    "Selects a catalog speech model while holding the lock that downloads and transcription share.",
 };
 
 const isTestSource = (file: string) =>

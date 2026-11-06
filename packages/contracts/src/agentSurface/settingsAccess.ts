@@ -21,6 +21,7 @@ const GRANTS_AGENTS = "It widens what agents may do; a person grants that.";
 const HOLDS_SECRETS = "It holds credentials; a person enters them in Settings.";
 
 export const SETTINGS_ACCESS = {
+  speech: person("A person controls local speech model configuration."),
   setModelFavorites: agent,
   setModelsHidden: agent,
   setProviderModelOrder: agent,

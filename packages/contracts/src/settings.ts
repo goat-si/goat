@@ -1,4 +1,5 @@
 import { GoatBotSettingsFields, GoatBotSettingsPatchFields } from "./goatBotSessionRouting.ts";
+import { SpeechSettingsFields, SpeechSettingsPatchFields } from "./speech.ts";
 import {
   SidebarProjectSortOrder,
   DEFAULT_SIDEBAR_PROJECT_SORT_ORDER,
@@ -1283,8 +1284,8 @@ export function newGoatBotHomeClaim({
     claimId: randomId(),
   };
 }
-
 export const ServerSettings = Schema.Struct({
+  ...SpeechSettingsFields,
   ...AgentMemoryLimitSettingsFields,
   agentWorkspaceAccess: AgentWorkspaceAccess.pipe(
     Schema.withDecodingDefault(Effect.succeed("off")),
@@ -1749,14 +1750,13 @@ export const DEFAULT_UNIFIED_SETTINGS: UnifiedSettings = {
   ...DEFAULT_SERVER_SETTINGS,
   ...DEFAULT_CLIENT_SETTINGS,
 };
-
 const ModelSelectionPatch = Schema.Struct({
   instanceId: Schema.optionalKey(ProviderInstanceId),
   model: Schema.optionalKey(TrimmedNonEmptyString),
   options: Schema.optionalKey(ProviderOptionSelections),
 });
-
 const ServerSettingsPatchFields = Schema.Struct({
+  ...SpeechSettingsPatchFields,
   ...AgentMemoryLimitSettingsPatchFields,
   agentWorkspaceAccess: Schema.optionalKey(AgentWorkspaceAccess),
   agentTerminalAccess: Schema.optionalKey(AgentTerminalAccess),

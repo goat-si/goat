@@ -83,7 +83,13 @@
       // The Vite+ web build prerequisite.
       // Native and disk-loaded provider packages stay external to the bundle; the
       // CLI archive and desktop sidecar stage them from this manifest.
-      "ignoreDependencies": ["@effect/platform-node-shared", "@goat/web", "@napi-rs/keyring"],
+      // The speech worker loads transcribe-cpp from generated source.
+      "ignoreDependencies": [
+        "@effect/platform-node-shared",
+        "@goat/web",
+        "@napi-rs/keyring",
+        "transcribe-cpp",
+      ],
     },
     "apps/desktop": {
       // Electron loads these bundles by filename rather than importing them.

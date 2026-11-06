@@ -41,6 +41,7 @@ export function AssistantCitationChip({
   citation: AssistantCitation;
   composer?: boolean;
   commentEditor?: {
+    environmentId?: import("@goat/contracts").EnvironmentId | null | undefined;
     open: boolean;
     sourceAnchor?: AssistantCitationSourceAnchor | undefined;
     onOpenChange: (open: boolean) => void;
@@ -212,6 +213,7 @@ export function AssistantCitationChip({
               onPointerDown={(event) => event.stopPropagation()}
             >
               <AssistantCitationCommentEditor
+                environmentId={commentEditor.environmentId}
                 key={serializeAssistantCitation(citation)}
                 citation={citation}
                 inputRef={commentInputRef}

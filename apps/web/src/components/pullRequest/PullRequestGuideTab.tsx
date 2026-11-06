@@ -63,6 +63,7 @@ export function PullRequestGuideTab({
     !canComment && onAskAboutLines === null
       ? null
       : {
+          environmentId,
           canComment,
           rangeComments,
           mentionScope,
