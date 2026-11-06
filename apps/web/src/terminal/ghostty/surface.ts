@@ -5,7 +5,6 @@ import {
   terminalLinkAtPositionWithRange,
   type TerminalLinkWithRange,
 } from "./surfaceLinks";
-export { terminalLinkAtPositionWithRange } from "./surfaceLinks";
 import {
   ensureTerminalSymbolsFont,
   terminalFontFamily,

@@ -10,7 +10,7 @@ export function touchesMarkdownSource(state: EditorState, from: number, to: numb
   return [$pos.nodeBefore, $pos.nodeAfter].some((node) => node && type.isInSet(node.marks));
 }
 
-export function styleMarks(marks: readonly Mark[]): readonly Mark[] {
+function styleMarks(marks: readonly Mark[]): readonly Mark[] {
   return marks.filter((mark) => mark.type.name !== MARKDOWN_SOURCE_MARK);
 }
 
