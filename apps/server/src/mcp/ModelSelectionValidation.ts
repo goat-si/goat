@@ -9,6 +9,16 @@ import * as Effect from "effect/Effect";
 
 import type * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 
+const NO_INSTANCE = "This GOAT has no provider instance";
+const NO_MODEL = "does not offer model";
+
+/**
+ * Whether a refusal is this check's instance or model miss. Another machine forwards such a
+ * refusal word for word, so the forwarding side can say whose catalog it means.
+ */
+export const isModelSelectionMiss = (message: string) =>
+  message.includes(NO_INSTANCE) || message.includes(NO_MODEL);
+
 /** Models without descriptors skip descriptor checks, but duplicate ids always fail. */
 export function invalidOptionSelections(
   selections: ReadonlyArray<ProviderOptionSelection>,
@@ -55,7 +65,7 @@ export const checkModelSelection = Effect.fn("McpModelSelection.check")(function
   if (provider === undefined)
     return yield* new OrchestratorMcpFailure({
       code: "invalid_request",
-      message: `This GOAT has no provider instance ${selection.instanceId}; it has ${
+      message: `${NO_INSTANCE} ${selection.instanceId}; it has ${
         providers.map((entry) => entry.instanceId).join(", ") || "none"
       }. ${goatCallText("provider.list")} lists providers and models.`,
     });
@@ -70,7 +80,7 @@ export const checkModelSelection = Effect.fn("McpModelSelection.check")(function
     if (misses(provider))
       return yield* new OrchestratorMcpFailure({
         code: "invalid_request",
-        message: `Provider ${selection.instanceId} here does not offer model ${selection.model}, even after refreshing its model list. Pick one ${goatCallText("provider.list")} lists for it, or fix the provider's catalog and check it with ${goatCallText("provider.diagnose", `{instanceId:"${selection.instanceId}"}`)}.`,
+        message: `Provider ${selection.instanceId} here ${NO_MODEL} ${selection.model}, even after refreshing its model list. Pick one ${goatCallText("provider.list")} lists for it, or fix the provider's catalog and check it with ${goatCallText("provider.diagnose", `{instanceId:"${selection.instanceId}"}`)}.`,
       });
   }
   if (selection.options !== undefined) {

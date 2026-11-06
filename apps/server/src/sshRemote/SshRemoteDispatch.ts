@@ -76,7 +76,7 @@ import {
   shouldRetryOtherDatabase,
   pendingRuntimeMessage,
 } from "./sshEnvironmentRoute.ts";
-import { remoteModelOffer } from "./remoteModelOffer.ts";
+import * as RemoteModel from "./remoteModelOffer.ts";
 import {
   describe,
   failure,
@@ -1210,9 +1210,9 @@ const make = Effect.gen(function* () {
         failure("remote_refused", "The remote returned no valid environment identity."),
       ),
     );
-    const offer = yield* remoteModelOffer({
+    const offer = yield* RemoteModel.remoteModelOffer({
       selection: input.modelSelection,
-      capabilities: call("orchestrator_capabilities").pipe(
+      capabilities: call("orchestrator_capabilities", { search: input.modelSelection.model }).pipe(
         Effect.flatMap(decodeRemoteCapabilities),
         Effect.mapError((error) =>
           error instanceof SshRemoteDispatchError
@@ -1223,14 +1223,7 @@ const make = Effect.gen(function* () {
       refresh: call("goat_provider_diagnose", { instanceId: input.modelSelection.instanceId }),
     });
     if (offer !== "offered")
-      return yield* new SshRemoteDispatchError({
-        reason: "remote_refused",
-        remoteCode: "model_unavailable",
-        message:
-          offer === "missing"
-            ? `${input.modelSelection.instanceId} on ${input.target.alias} does not offer ${input.modelSelection.model}, even after refreshing its model list.`
-            : "The selected provider instance or model is unavailable on the remote GOAT.",
-      });
+      return yield* RemoteModel.remoteModelMiss(offer, input.modelSelection, input.target.alias);
     return environment;
   });
 
@@ -1574,6 +1567,9 @@ const make = Effect.gen(function* () {
                 return result;
               })
             : Effect.fail(error),
+        ),
+        Effect.mapError((error) =>
+          RemoteModel.withRemoteCatalogHint(error, target.alias, input.modelSelection?.model),
         ),
       );
       const launched = yield* decodeRemoteThread(rawLaunched).pipe(
