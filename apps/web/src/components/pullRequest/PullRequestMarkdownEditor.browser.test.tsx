@@ -121,7 +121,7 @@ it("completes an @mention on Enter and closes the list on Escape until the next 
   permissions.allowed.add(secondary);
   await using screen = await openEditor({ value: "" });
   const textarea = screen.container.querySelector("textarea")!;
-  await userEvent.type(textarea, "Thanks @ju");
+  await userEvent.type(textarea, "Thanks @al");
   await expect.element(page.getByRole("option", { name: /alex/ })).toBeVisible();
   expect(permissions.mentionTargets).toContainEqual(
     expect.objectContaining({
@@ -144,7 +144,7 @@ it("completes an @mention on Enter and closes the list on Escape until the next 
   await expect.element(page.getByRole("listbox")).not.toBeInTheDocument();
   expect(onCancel).not.toHaveBeenCalled();
 
-  await userEvent.type(textarea, "t");
+  await userEvent.type(textarea, "s");
   await expect.element(page.getByRole("option", { name: /sam/ })).toBeVisible();
   expect(onSave).not.toHaveBeenCalled();
 });
