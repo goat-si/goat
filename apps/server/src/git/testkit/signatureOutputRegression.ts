@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off effectFnOpportunity:off - Git integration test fixture.
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 import * as NodeChildProcess from "node:child_process";
