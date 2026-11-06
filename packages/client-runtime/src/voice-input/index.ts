@@ -33,6 +33,15 @@ export {
   type RemoteVoiceTranscriberOptions,
 } from "./remoteTranscription.ts";
 export {
+  transcribeLocalModel,
+  transcribeLocalModelEffect,
+  listEnvironmentSpeechModelsEffect,
+  getEnvironmentSpeechConfigurationEffect,
+  downloadEnvironmentSpeechModelEffect,
+  removeEnvironmentSpeechModelEffect,
+  configureEnvironmentSpeechEffect,
+} from "./environmentSpeech.ts";
+export {
   resolveVoiceTranscriptionRoute,
   voiceTranscriptionRequest,
   type VoiceTranscriptionLocation,

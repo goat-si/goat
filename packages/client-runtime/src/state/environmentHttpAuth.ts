@@ -44,9 +44,15 @@ export function withOrchestrationProtocolHeader(
 const withEnvironmentCredentials = <A, E, R>(
   authorization: PreparedHttpAuthorization | null,
   request: Effect.Effect<A, E, R>,
+  requestInit?: RequestInit,
 ): Effect.Effect<A, E, R> =>
-  authorization === null
-    ? request.pipe(Effect.provideService(FetchHttpClient.RequestInit, { credentials: "include" }))
+  authorization === null || requestInit !== undefined
+    ? request.pipe(
+        Effect.provideService(FetchHttpClient.RequestInit, {
+          ...requestInit,
+          ...(authorization === null ? { credentials: "include" as const } : {}),
+        }),
+      )
     : request;
 
 export const buildEnvironmentAuthHeaders = Effect.fn(
@@ -122,6 +128,7 @@ const executeEnvironmentRequest = Effect.fnUntraced(function* <
    */
   readonly url: (urls: ReturnType<typeof makeEnvironmentHttpApiUrlBuilder>[Group]) => string;
   readonly timeoutMs: number;
+  readonly requestInit?: RequestInit;
   readonly group: Group;
   readonly request: (input: {
     readonly client: Effect.Success<ReturnType<typeof makeEnvironmentHttpApiGroupClient<Group>>>;
@@ -195,7 +202,11 @@ const executeEnvironmentRequest = Effect.fnUntraced(function* <
       const result = yield* executeEnvironmentHttpRequest(
         requestUrl,
         input.timeoutMs,
-        withEnvironmentCredentials(authorization, input.request({ client, headers })),
+        withEnvironmentCredentials(
+          authorization,
+          input.request({ client, headers }),
+          input.requestInit,
+        ),
       ).pipe(Effect.result);
 
       if (Result.isFailure(result)) {
