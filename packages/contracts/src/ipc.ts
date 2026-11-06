@@ -27,6 +27,7 @@ import type { EditorId } from "./editor.ts";
 import type { PreviewForwardedShortcut } from "./keybindings.ts";
 import type { DesktopPreviewCaptureEvent, DesktopPreviewCursorEvent } from "./desktopBrowser.ts";
 import { DesktopPreviewTabIdSchema } from "./desktopBrowser.ts";
+import type { AnnotationVoiceBridge, AnnotationVoicePick } from "./previewAnnotationVoice.ts";
 export { DesktopPreviewTabIdSchema } from "./desktopBrowser.ts";
 
 import type {
@@ -1334,8 +1335,7 @@ export interface DesktopBridge extends DesktopBridgeParts {
 
 /** Renderer callback invoked by Electron with a fresh user gesture before display-media capture. */
 export const DESKTOP_PREVIEW_RECORDING_CAPTURE_TRIGGER = "__t3DesktopPreviewRecordingCapture";
-
-export interface DesktopPreviewBridge {
+export interface DesktopPreviewBridge extends AnnotationVoiceBridge {
   setForwardedShortcuts?: (shortcuts: ReadonlyArray<PreviewForwardedShortcut>) => Promise<void>;
   createTab: (tabId: string, defaults?: DesktopPreviewTabDefaults) => Promise<void>;
   closeTab: (tabId: string) => Promise<void>;
@@ -1375,7 +1375,7 @@ export interface DesktopPreviewBridge {
   setAnnotationTheme: (theme: DesktopPreviewAnnotationTheme) => Promise<void>;
   setAnnotationSendEnabled: (tabId: string, enabled: boolean) => Promise<void>;
   /** Resolves with the annotation and attach/send intent, or null on cancellation. Rejects if activation fails. */
-  pickElement: (tabId: string) => Promise<PreviewAnnotationSubmissionResult | null>;
+  pickElement: AnnotationVoicePick;
   cancelPickElement: (tabId: string) => Promise<void>;
   captureScreenshot: (
     tabId: string,

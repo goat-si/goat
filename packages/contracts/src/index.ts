@@ -7,6 +7,7 @@ export * from "./background.ts";
 export * from "./acpRegistry.ts";
 export * from "./auth.ts";
 export * from "./speech.ts";
+export * from "./previewAnnotationVoice.ts";
 export * from "./agentWorkspace.ts";
 export * from "./agentTerminal.ts";
 export * from "./environment.ts";
