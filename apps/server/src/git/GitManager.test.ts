@@ -1,3 +1,4 @@
+import { signatureOutputRegression } from "./testkit/signatureOutputRegression.ts";
 import { makeTempDir, removePath, makeDirectory } from "./testkit/fileFixtures.ts";
 import { runGit, initRepo } from "./testkit/gitRepository.ts";
 import { makeSetupHookFixture } from "../project/testkit/SetupHookFixture.ts";
@@ -2379,7 +2380,6 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
           ],
         },
       });
-
       const status = yield* manager.status({ cwd: repoDir });
       expect(status.refName).toBe("feature/status-open-over-merged");
       expect(status.pr).toEqual({
@@ -2393,7 +2393,6 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       });
     }),
   );
-
   it.effect("status keeps the last known PR when a later lookup fails", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("goat-git-manager-");
@@ -2402,7 +2401,6 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       const remoteDir = yield* createBareRemote();
       yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
       yield* runGit(repoDir, ["push", "-u", "origin", "feature/pr-sticky"]);
-
       const existingPr = {
         number: 214,
         title: "Sticky PR",
@@ -2417,16 +2415,13 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
           failAfterCalls: 1,
         },
       });
-
       const first = yield* manager.status({ cwd: repoDir });
       expect(first.pr?.number).toBe(214);
-
       yield* manager.invalidateStatus(repoDir);
       const second = yield* manager.status({ cwd: repoDir });
       expect(second.pr?.number).toBe(214);
     }),
   );
-
   it.effect(
     "status does not reuse a stale PR after the branch is retargeted to a different upstream",
     () =>
@@ -2434,11 +2429,9 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
         const repoDir = yield* makeTempDir("goat-git-manager-");
         yield* initRepo(repoDir);
         yield* runGit(repoDir, ["checkout", "-b", "feature/pr-retarget"]);
-
         const originRemote = yield* createBareRemote();
         yield* runGit(repoDir, ["remote", "add", "origin", originRemote]);
         yield* runGit(repoDir, ["push", "-u", "origin", "feature/pr-retarget"]);
-
         const existingPr = {
           number: 214,
           title: "Sticky PR",
@@ -2453,10 +2446,8 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
             failAfterCalls: 1,
           },
         });
-
         const first = yield* manager.status({ cwd: repoDir });
         expect(first.pr?.number).toBe(214);
-
         const forkRemote = yield* createBareRemote();
         yield* runGit(repoDir, ["remote", "add", "fork", forkRemote]);
         yield* runGit(repoDir, ["push", "fork", "feature/pr-retarget"]);
@@ -2465,20 +2456,17 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
           "--set-upstream-to=fork/feature/pr-retarget",
           "feature/pr-retarget",
         ]);
-
         yield* manager.invalidateStatus(repoDir);
         const second = yield* manager.status({ cwd: repoDir });
         expect(second.pr).toBeNull();
       }),
   );
-
   it.effect("creates a commit when working tree is dirty", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("goat-git-manager-");
       yield* initRepo(repoDir);
       NodeFS.writeFileSync(NodePath.join(repoDir, "README.md"), "hello\nworld\n");
       let generatedPolicy: TextGeneration.CommitMessageGenerationInput["policy"] = undefined;
-
       const { manager } = yield* makeManager({
         serverSettings: {
           sourceControlWritingStyle: {
@@ -2497,7 +2485,6 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
         cwd: repoDir,
         action: "commit",
       });
-
       expect(result.branch.status).toBe("skipped_not_requested");
       expect(result.commit.status).toBe("created");
       expect(result.push.status).toBe("skipped_not_requested");
@@ -2521,7 +2508,6 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       ).toBe("Implement stacked git actions");
     }),
   );
-
   it.effect("includes CLAUDE.md for Claude writers only when it differs from AGENTS.md", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("goat-git-manager-");
@@ -2530,7 +2516,6 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       NodeFS.copyFileSync(NodePath.join(repoDir, "AGENTS.md"), NodePath.join(repoDir, "CLAUDE.md"));
       NodeFS.writeFileSync(NodePath.join(repoDir, "README.md"), "hello\n");
       const commitInstructions: Array<string | undefined> = [];
-
       const { manager } = yield* makeManager({
         serverSettings: {
           textGenerationModelSelection: {
@@ -2545,7 +2530,6 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
           },
         },
       });
-
       yield* runStackedAction(manager, { cwd: repoDir, action: "commit" });
 
       NodeFS.writeFileSync(NodePath.join(repoDir, "CLAUDE.md"), "Mention the Claude provider.\n");
@@ -2556,6 +2540,22 @@ it.layer(layerGitManagerTest)("GitManager", (it) => {
       expect(commitInstructions[0]).not.toContain("Local CLAUDE.md:");
       expect(commitInstructions[1]).toContain("Local CLAUDE.md:\nMention the Claude provider.");
     }),
+  );
+
+  it.effect("keeps signature output out of recent commit subjects", () =>
+    signatureOutputRegression((repoDir, capture) =>
+      Effect.gen(function* () {
+        const { manager } = yield* makeManager({
+          textGeneration: {
+            generateCommitMessage: (input) => {
+              capture(input.policy?.commitInstructions);
+              return Effect.succeed({ subject: "Update readme", body: "" });
+            },
+          },
+        });
+        yield* runStackedAction(manager, { cwd: repoDir, action: "commit" });
+      }),
+    ),
   );
 
   it.effect("falls back when the dedicated source control writer is unavailable", () =>

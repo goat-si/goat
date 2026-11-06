@@ -1,3 +1,10 @@
+import {
+  stagedSummaryArgs,
+  stagedPatchArgs,
+  rangeLogArgs,
+  rangeStatArgs,
+  rangePatchArgs,
+} from "./gitGeneratedContextArgs.ts";
 import { GOAT_PRE_REFRESH_REF } from "@goat/contracts/legacyT3Names";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
@@ -2483,8 +2490,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           const stagedSummary = yield* runGitStdoutWithOptions(
             "GitVcsDriver.prepareCommitContext.stagedSummary",
             cwd,
-            // cwd can be a subdirectory; diff.relative would hide changes outside it.
-            ["-c", "diff.relative=false", "diff", "--cached", "--name-status"],
+            stagedSummaryArgs,
             { env, maxOutputBytes: REVIEW_METADATA_MAX_OUTPUT_BYTES },
           ).pipe(Effect.map((stdout) => stdout.trim()));
           if (stagedSummary.length === 0) {
@@ -2497,17 +2503,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           const stagedPatch = yield* runGitStdoutWithOptions(
             "GitVcsDriver.prepareCommitContext.stagedPatch",
             cwd,
-            [
-              "-c",
-              "diff.relative=false",
-              "diff",
-              "--no-color",
-              "--no-ext-diff",
-              "--no-textconv",
-              "--cached",
-              "--patch",
-              "--minimal",
-            ],
+            stagedPatchArgs,
             {
               env,
               maxOutputBytes: PREPARED_COMMIT_PATCH_MAX_OUTPUT_BYTES,
@@ -2894,7 +2890,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         runGitStdoutWithOptions(
           "GitVcsDriver.readRangeContext.log",
           cwd,
-          ["log", "--oneline", "--no-color", "--end-of-options", commitRange],
+          rangeLogArgs(commitRange),
           {
             maxOutputBytes: RANGE_COMMIT_SUMMARY_MAX_OUTPUT_BYTES,
             appendTruncationMarker: true,
@@ -2903,15 +2899,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         runGitStdoutWithOptions(
           "GitVcsDriver.readRangeContext.diffStat",
           cwd,
-          [
-            "-c",
-            "diff.relative=false",
-            "diff",
-            "--stat",
-            "--no-color",
-            "--end-of-options",
-            diffRange,
-          ],
+          rangeStatArgs(diffRange),
           {
             maxOutputBytes: RANGE_DIFF_SUMMARY_MAX_OUTPUT_BYTES,
             appendTruncationMarker: true,
@@ -2920,18 +2908,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         runGitStdoutWithOptions(
           "GitVcsDriver.readRangeContext.diffPatch",
           cwd,
-          [
-            "-c",
-            "diff.relative=false",
-            "diff",
-            "--no-color",
-            "--no-ext-diff",
-            "--no-textconv",
-            "--patch",
-            "--minimal",
-            "--end-of-options",
-            diffRange,
-          ],
+          rangePatchArgs(diffRange),
           {
             maxOutputBytes: RANGE_DIFF_PATCH_MAX_OUTPUT_BYTES,
             appendTruncationMarker: true,
