@@ -8,9 +8,9 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("119_BrowserSiteNotes
   it.effect("upgrades existing databases and enforces note authors and unique origins", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 127 });
-      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 128 }), [
-        [128, "BrowserSiteNotes"],
+      yield* runMigrations({ toMigrationInclusive: 128 });
+      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 129 }), [
+        [129, "BrowserSiteNotes"],
       ]);
       yield* sql`INSERT INTO browser_site_notes (origin, text, author, updated_at)
         VALUES ('https://example.com', 'note', 'person', '2026-10-30T00:00:00Z')`;
@@ -23,7 +23,7 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))("119_BrowserSiteNotes
       const duplicate = yield* sql`INSERT INTO browser_site_note_seed_hidden (origin)
         VALUES ('https://example.com')`.pipe(Effect.result);
       assert.strictEqual(duplicate._tag, "Failure");
-      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 128 }), []);
+      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 129 }), []);
     }),
   );
 });

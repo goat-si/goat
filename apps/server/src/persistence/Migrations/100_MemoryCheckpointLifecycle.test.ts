@@ -7,7 +7,7 @@ import {
   refreshCheckpointAccounting,
 } from "../../memory/MemoryCheckpointAccounting.ts";
 import { runMigrations } from "../Migrations.ts";
-import migration from "./099_MemoryCheckpointLifecycle.ts";
+import migration from "./100_MemoryCheckpointLifecycle.ts";
 
 const database = NodeSqliteClient.layer({ filename: ":memory:" });
 const space = "00000000-0000-4000-8000-000000000001";
@@ -105,35 +105,35 @@ it.effect("083 ignores ordinary total updates, unchanged markers and unrelated c
 it.effect("083 participates in the migration ledger and leaves healthy spaces unqueued", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
-    yield* runMigrations({ toMigrationInclusive: 98 });
+    yield* runMigrations({ toMigrationInclusive: 99 });
     yield* sql`INSERT INTO memory_quota_counters VALUES (${space},'checkpoint_initialized','',1),(${space},'hub_snapshot_bytes','',0),(${space},'hub_snapshot_rows','',0)`;
-    assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 120 }), [
-      [99, "MemoryCheckpointLifecycle"],
-      [100, "FleetGoals"],
-      [101, "FleetHealth"],
-      [102, "ThreadRunObservedChecks"],
-      [103, "RemoteDispatchObservation"],
-      [104, "MemoryRevisionCheckpointSize"],
-      [105, "HubNodes"],
-      [106, "MemorySummaryWorkThreadIndex"],
-      [107, "ThreadHistoryArchives"],
-      [108, "PermissionProfiles"],
-      [109, "DecisionInbox"],
-      [110, "HumanStepRecords"],
-      [111, "McpRequestReservations"],
-      [112, "RemoteReportInboxRunId"],
-      [113, "RemoteReportReceipts"],
-      [114, "PendingAttachmentUploads"],
-      [115, "ScheduledTaskWebhookSecretRef"],
-      [116, "RemoteReportFences"],
-      [117, "HubProvisionedLinks"],
-      [118, "ScheduledTaskRuns"],
-      [119, "ScheduledTaskNotificationPolicy"],
-      [120, "NotificationCursorRepair"],
+    assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 121 }), [
+      [100, "MemoryCheckpointLifecycle"],
+      [101, "FleetGoals"],
+      [102, "FleetHealth"],
+      [103, "ThreadRunObservedChecks"],
+      [104, "RemoteDispatchObservation"],
+      [105, "MemoryRevisionCheckpointSize"],
+      [106, "HubNodes"],
+      [107, "MemorySummaryWorkThreadIndex"],
+      [108, "ThreadHistoryArchives"],
+      [109, "PermissionProfiles"],
+      [110, "DecisionInbox"],
+      [111, "HumanStepRecords"],
+      [112, "McpRequestReservations"],
+      [113, "RemoteReportInboxRunId"],
+      [114, "RemoteReportReceipts"],
+      [115, "PendingAttachmentUploads"],
+      [116, "ScheduledTaskWebhookSecretRef"],
+      [117, "RemoteReportFences"],
+      [118, "HubProvisionedLinks"],
+      [119, "ScheduledTaskRuns"],
+      [120, "ScheduledTaskNotificationPolicy"],
+      [121, "NotificationCursorRepair"],
     ]);
     assert.deepStrictEqual(yield* pending, []);
     yield* sql.withTransaction(refreshCheckpointAccounting());
-    assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 120 }), []);
+    assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 121 }), []);
     assert.deepStrictEqual(yield* pending, []);
   }).pipe(Effect.provide(database)),
 );

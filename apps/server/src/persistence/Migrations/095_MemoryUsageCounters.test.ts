@@ -12,11 +12,11 @@ import migration, {
   memoryUsageSummary,
   memoryUsagePayloadLive,
   memoryUsageRevisionItemMatch,
-} from "./094_MemoryUsageCounters.ts";
+} from "./095_MemoryUsageCounters.ts";
 import * as Store from "../../memory/MemoryStore.ts";
 import { assertUsageCounters } from "../../memory/MemoryUsageScan.testkit.ts";
 
-const database = Layer.effectDiscard(runMigrations({ toMigrationInclusive: 93 })).pipe(
+const database = Layer.effectDiscard(runMigrations({ toMigrationInclusive: 94 })).pipe(
   Layer.provideMerge(NodeSqliteClient.layer({ filename: ":memory:" })),
 );
 const live = Store.layer.pipe(Layer.provideMerge(database));
@@ -48,37 +48,37 @@ it.effect(
         yield* sql`SELECT * FROM memory_quota_counters ORDER BY space,dimension,scope_key`,
         before,
       );
-      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 120 }), [
-        [94, "MemoryUsageCounters"],
-        [95, "MemoryRevertResults"],
-        [96, "HandoffLookupIndex"],
-        [97, "MemoryLastReadySpace"],
-        [98, "MemoryHubAdministered"],
-        [99, "MemoryCheckpointLifecycle"],
-        [100, "FleetGoals"],
-        [101, "FleetHealth"],
-        [102, "ThreadRunObservedChecks"],
-        [103, "RemoteDispatchObservation"],
-        [104, "MemoryRevisionCheckpointSize"],
-        [105, "HubNodes"],
-        [106, "MemorySummaryWorkThreadIndex"],
-        [107, "ThreadHistoryArchives"],
-        [108, "PermissionProfiles"],
-        [109, "DecisionInbox"],
-        [110, "HumanStepRecords"],
-        [111, "McpRequestReservations"],
-        [112, "RemoteReportInboxRunId"],
-        [113, "RemoteReportReceipts"],
-        [114, "PendingAttachmentUploads"],
-        [115, "ScheduledTaskWebhookSecretRef"],
-        [116, "RemoteReportFences"],
-        [117, "HubProvisionedLinks"],
-        [118, "ScheduledTaskRuns"],
-        [119, "ScheduledTaskNotificationPolicy"],
-        [120, "NotificationCursorRepair"],
+      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 121 }), [
+        [95, "MemoryUsageCounters"],
+        [96, "MemoryRevertResults"],
+        [97, "HandoffLookupIndex"],
+        [98, "MemoryLastReadySpace"],
+        [99, "MemoryHubAdministered"],
+        [100, "MemoryCheckpointLifecycle"],
+        [101, "FleetGoals"],
+        [102, "FleetHealth"],
+        [103, "ThreadRunObservedChecks"],
+        [104, "RemoteDispatchObservation"],
+        [105, "MemoryRevisionCheckpointSize"],
+        [106, "HubNodes"],
+        [107, "MemorySummaryWorkThreadIndex"],
+        [108, "ThreadHistoryArchives"],
+        [109, "PermissionProfiles"],
+        [110, "DecisionInbox"],
+        [111, "HumanStepRecords"],
+        [112, "McpRequestReservations"],
+        [113, "RemoteReportInboxRunId"],
+        [114, "RemoteReportReceipts"],
+        [115, "PendingAttachmentUploads"],
+        [116, "ScheduledTaskWebhookSecretRef"],
+        [117, "RemoteReportFences"],
+        [118, "HubProvisionedLinks"],
+        [119, "ScheduledTaskRuns"],
+        [120, "ScheduledTaskNotificationPolicy"],
+        [121, "NotificationCursorRepair"],
       ]);
       yield* assertUsageCounters;
-      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 120 }), []);
+      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 121 }), []);
       yield* assertUsageCounters;
       yield* sql`DELETE FROM memory_compact_receipts`;
       yield* assertUsageCounters;
@@ -91,7 +91,7 @@ it.effect(
 
 it.effect("actual trigger expressions and runtime usage queries use complete lookup keys", () =>
   Effect.gen(function* () {
-    yield* runMigrations({ toMigrationInclusive: 94 });
+    yield* runMigrations({ toMigrationInclusive: 95 });
     const sql = yield* SqlClient.SqlClient;
     const store = yield* Store.MemoryStore;
     const explain = (query: string, params: ReadonlyArray<unknown> = []) =>

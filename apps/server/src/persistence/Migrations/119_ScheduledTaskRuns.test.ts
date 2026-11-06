@@ -3,22 +3,22 @@ import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/sql/SqlClient";
 import { runMigrations } from "../Migrations.ts";
-import migration from "./118_ScheduledTaskRuns.ts";
+import migration from "./119_ScheduledTaskRuns.ts";
 
 it.effect(
   "upgrades legacy tasks without inventing outcomes and preserves populated receipts when the body reruns",
   () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 117 });
+      yield* runMigrations({ toMigrationInclusive: 118 });
       for (const status of ["never", "running", "succeeded", "failed"]) {
         yield* sql`INSERT INTO scheduled_tasks (task_id,title,prompt,enabled,schedule_json,project_id,workspace_strategy_json,model_selection_json,runtime_mode,interaction_mode,created_by,creation_source,created_at,updated_at,last_run_status,run_count)
         VALUES (${status},'Synthetic','Synthetic',1,'{}','project','{}','{}','full-access','default','user','web','2026-10-15','2026-10-15',${status},3)`;
       }
-      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 120 }), [
-        [118, "ScheduledTaskRuns"],
-        [119, "ScheduledTaskNotificationPolicy"],
-        [120, "NotificationCursorRepair"],
+      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 121 }), [
+        [119, "ScheduledTaskRuns"],
+        [120, "ScheduledTaskNotificationPolicy"],
+        [121, "NotificationCursorRepair"],
       ]);
       assert.deepStrictEqual(yield* sql`SELECT DISTINCT last_firing_id FROM scheduled_tasks`, [
         { last_firing_id: null },
@@ -35,7 +35,7 @@ it.effect(
         yield* sql`SELECT * FROM scheduled_task_runs ORDER BY firing_id`,
         before,
       );
-      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 120 }), []);
+      assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 121 }), []);
       const objects = yield* sql<{
         readonly name: string;
       }>`SELECT name FROM sqlite_master WHERE name LIKE 'scheduled_task_runs_%'`;

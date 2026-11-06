@@ -1,5 +1,5 @@
-import lineageMigration from "./091_MemoryImportLineage.ts";
-import checkpointMigration from "./092_MemoryCheckpointAccounting.ts";
+import lineageMigration from "./092_MemoryImportLineage.ts";
+import checkpointMigration from "./093_MemoryCheckpointAccounting.ts";
 import { assert, it } from "@effect/vitest";
 import * as M from "@goat/contracts";
 import * as NodeSqliteClient from "@goat/shared/nodeSqliteClient";
@@ -8,9 +8,9 @@ import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/sql/SqlClient";
 import { runMigrations } from "../Migrations.ts";
 import * as Store from "../../memory/MemoryStore.ts";
-import migration from "./089_MemorySearchCounters.ts";
+import migration from "./090_MemorySearchCounters.ts";
 
-const database = Layer.effectDiscard(runMigrations({ toMigrationInclusive: 88 })).pipe(
+const database = Layer.effectDiscard(runMigrations({ toMigrationInclusive: 89 })).pipe(
   Layer.provideMerge(NodeSqliteClient.layer({ filename: ":memory:" })),
 );
 const live = Store.layer.pipe(Layer.provideMerge(database));

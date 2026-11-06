@@ -27,7 +27,7 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))(
       () =>
         Effect.gen(function* () {
           const sql = yield* SqlClient.SqlClient;
-          yield* runMigrations({ toMigrationInclusive: 125 });
+          yield* runMigrations({ toMigrationInclusive: 126 });
           // One memory failed on every retry; 150 others failed once; one real delivery is queued.
           for (let attempt = 0; attempt < 5; attempt++)
             yield* report(`retry-${attempt}`, "retried", 1000 + attempt);
@@ -39,8 +39,8 @@ it.layer(NodeSqliteClient.layer({ filename: ":memory:" }))(
               value: number;
             }>`SELECT value FROM memory_quota_counters WHERE space=${space} AND dimension='report_items' AND scope_key=''`;
           assert.strictEqual((yield* counted())[0]?.value, 156);
-          assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 126 }), [
-            [126, "MemoryGenerationReportBacklog"],
+          assert.deepStrictEqual(yield* runMigrations({ toMigrationInclusive: 127 }), [
+            [127, "MemoryGenerationReportBacklog"],
           ]);
           const kept = yield* sql<{
             report_id: string;

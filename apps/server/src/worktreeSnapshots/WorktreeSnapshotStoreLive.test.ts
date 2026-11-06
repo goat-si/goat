@@ -8,7 +8,7 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as SqlClient from "effect/sql/SqlClient";
 import * as ServerConfig from "../config.ts";
-import migration from "../persistence/Migrations/133_WorktreeSnapshots.ts";
+import migration from "../persistence/Migrations/134_WorktreeSnapshots.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import { WorktreeSnapshotStore } from "./WorktreeSnapshotStore.ts";
 import * as Live from "./WorktreeSnapshotStoreLive.ts";
