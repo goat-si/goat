@@ -99,7 +99,15 @@ function rememberPendingSideChat(
 ) {
   const key = sideChatKey(environmentId, parentId);
   const stateAtom = environmentShell.stateValueAtom(environmentId);
-  const generation = appAtomRegistry.get(stateAtom).generation;
+  const state = appAtomRegistry.get(stateAtom);
+  if (
+    state.generation > 0 &&
+    Option.isSome(state.snapshot) &&
+    state.snapshot.value.snapshotSequence >= sequence &&
+    !state.snapshot.value.threads.some((thread) => thread.id === targetId)
+  )
+    return;
+  const generation = state.generation;
   pendingSideChats.set(key, { environmentId, parentId, targetId, generation, sequence });
   if (!environmentWatchers.has(environmentId)) {
     environmentWatchers.set(
