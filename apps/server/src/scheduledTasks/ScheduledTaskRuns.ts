@@ -53,6 +53,7 @@ export class ScheduledTaskRuns extends Context.Service<
       readonly acceptedRun: OrchestrationV2Run | null;
       readonly at: string;
       readonly dispatchEvidence: "rejected" | "unresolved";
+      readonly dispatchError?: string | null;
     }) => Effect.Effect<ScheduledTaskRun, ScheduledTaskError>;
     readonly resolveAttribution: (input: {
       readonly firingId: CommandId;
@@ -530,6 +531,10 @@ export const make = Effect.fn("ScheduledTaskRuns.make")(function* (
           ]);
           yield* advanceOccurrence(row, input.at);
           const snapshot = yield* readSnapshot(yield* readRow(input.firingId));
+          if (snapshot.dispatchStatus === "failed" && input.dispatchError) {
+            yield* sql`UPDATE scheduled_tasks SET last_run_error=${input.dispatchError}
+              WHERE task_id=${row.task_id} AND created_at=${row.task_created_at} AND last_firing_id=${row.firing_id}`;
+          }
           yield* prune(row);
           return snapshot;
         }),
