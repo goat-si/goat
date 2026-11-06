@@ -1,4 +1,4 @@
-import { AntigravitySettings, ServerSettings } from "@goat/contracts";
+import { AntigravitySettings, ProviderInstanceId, ServerSettings } from "@goat/contracts";
 import { OpenCodeSettings } from "@goat/provider-opencode/settings";
 import * as Schema from "effect/Schema";
 import { expect, it } from "vite-plus/test";
@@ -19,6 +19,10 @@ it("keeps credential references intact in settings and continues to decode liter
     },
   });
   const mapped = mapSettingsSecrets(settings, (secret) => secret);
-  expect(mapped.providerInstances.antigravity?.config).toEqual({ apiKey: reference });
-  expect(mapped.providerInstances.opencode?.config).toEqual({ serverPassword: reference });
+  expect(mapped.providerInstances[ProviderInstanceId.make("antigravity")]?.config).toEqual({
+    apiKey: reference,
+  });
+  expect(mapped.providerInstances[ProviderInstanceId.make("opencode")]?.config).toEqual({
+    serverPassword: reference,
+  });
 });
