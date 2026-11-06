@@ -253,7 +253,7 @@ export const make = Effect.gen(function* () {
     (pubsub) => PubSub.shutdown(pubsub),
   );
   const branchChangesPubSub = yield* Effect.acquireRelease(
-    PubSub.sliding<{ readonly cwd: string; readonly refName: string | null }>(256),
+    PubSub.bounded<{ readonly cwd: string; readonly refName: string | null }>(256),
     (pubsub) => PubSub.shutdown(pubsub),
   );
   const broadcasterScope = yield* Effect.acquireRelease(Scope.make(), (scope) =>
@@ -277,21 +277,27 @@ export const make = Effect.gen(function* () {
   const updateCachedLocalStatus = Effect.fn("VcsStatusBroadcaster.updateCachedLocalStatus")(
     function* (cwd: string, local: VcsStatusLocalResult, options?: { publish?: boolean }) {
       const nextLocal = { fingerprint: fingerprintStatusPart(local), value: local };
-      const [localChanged, branchChanged, remoteCleared] = yield* Ref.modify(cacheRef, (cache) => {
-        const previous = cache.get(cwd) ?? { local: null, remote: null };
-        const remote = previous.remote?.branch === local.refName ? previous.remote : null;
-        return [
-          [
-            previous.local?.fingerprint !== nextLocal.fingerprint,
-            previous.local?.value.refName !== local.refName,
-            previous.remote !== remote,
-          ],
-          new Map(cache).set(cwd, { local: nextLocal, remote }),
-        ] as const;
-      });
-      if (branchChanged && local.isRepo) {
-        yield* PubSub.publish(branchChangesPubSub, { cwd, refName: local.refName });
-      }
+      // Once cached, a branch change must reach reconciliation even if its caller is cancelled.
+      const [localChanged, remoteCleared] = yield* Effect.uninterruptible(
+        Effect.gen(function* () {
+          const [changed, branchChanged, cleared] = yield* Ref.modify(cacheRef, (cache) => {
+            const previous = cache.get(cwd) ?? { local: null, remote: null };
+            const remote = previous.remote?.branch === local.refName ? previous.remote : null;
+            return [
+              [
+                previous.local?.fingerprint !== nextLocal.fingerprint,
+                previous.local?.value.refName !== local.refName,
+                previous.remote !== remote,
+              ],
+              new Map(cache).set(cwd, { local: nextLocal, remote }),
+            ] as const;
+          });
+          if (branchChanged && local.isRepo) {
+            yield* PubSub.publish(branchChangesPubSub, { cwd, refName: local.refName });
+          }
+          return [changed, cleared] as const;
+        }),
+      );
       if (options?.publish && remoteCleared) {
         yield* PubSub.publish(changesPubSub, {
           cwd,
