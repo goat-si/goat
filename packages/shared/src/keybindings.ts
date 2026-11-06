@@ -240,6 +240,7 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+alt+n", command: "chat.newWithoutProject", when: "!terminalFocus" },
   // After chat.new: resolution walks backwards, so on the Notes page this rule wins.
   { key: "mod+n", command: "notes.new", when: "notesPageOpen && !terminalFocus" },
+  { key: "mod+\\", command: "notes.toggleList", when: "notesPageOpen && !terminalFocus" },
   { key: "mod+f", command: "chat.find", when: "!terminalFocus && !previewFocus" },
   { key: "mod+shift+m", command: "modelPicker.toggle", when: "!terminalFocus" },
   { key: "mod+shift+h", command: "composer.host", when: "!terminalFocus" },
