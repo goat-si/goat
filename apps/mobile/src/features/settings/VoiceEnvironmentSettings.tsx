@@ -224,32 +224,39 @@ function VoiceModels({ environmentId }: { environmentId: EnvironmentId }) {
       setError("The environment is not connected.");
       return;
     }
+    const operation =
+      action === "download"
+        ? downloadEnvironmentSpeechModelEffect(current, modelId)
+        : action === "remove"
+          ? removeEnvironmentSpeechModelEffect(current, modelId)
+          : config
+            ? configureEnvironmentSpeechEffect(current, { ...config, modelId })
+            : null;
+    if (!operation) {
+      setError("The voice configuration is unavailable.");
+      return;
+    }
     setBusy(true);
     setError(null);
-    try {
-      const operation =
-        action === "download"
-          ? downloadEnvironmentSpeechModelEffect(current, modelId)
-          : action === "remove"
-            ? removeEnvironmentSpeechModelEffect(current, modelId)
-            : config
-              ? configureEnvironmentSpeechEffect(current, { ...config, modelId })
-              : null;
-      if (!operation) throw new Error("The voice configuration is unavailable.");
-      await runMobileSpeechRequest(operation, signal);
-      const [list, nextConfig] = await Promise.all([
-        runMobileSpeechRequest(listEnvironmentSpeechModelsEffect(current), signal),
-        runMobileSpeechRequest(getEnvironmentSpeechConfigurationEffect(current), signal),
-      ]);
-      signal.throwIfAborted();
-      setModels(list.models);
-      setConfig(nextConfig);
-    } catch (cause) {
-      if (!signal.aborted)
-        setError(cause instanceof Error ? cause.message : "Could not update voice models.");
-    } finally {
-      if (!signal.aborted) setBusy(false);
-    }
+    // A promise chain instead of try/finally keeps this component compiled by React Compiler.
+    const failure = await runMobileSpeechRequest(operation, signal)
+      .then(() =>
+        Promise.all([
+          runMobileSpeechRequest(listEnvironmentSpeechModelsEffect(current), signal),
+          runMobileSpeechRequest(getEnvironmentSpeechConfigurationEffect(current), signal),
+        ]),
+      )
+      .then(([list, nextConfig]) => {
+        signal.throwIfAborted();
+        setModels(list.models);
+        setConfig(nextConfig);
+        return null;
+      })
+      .catch((cause: unknown) => cause ?? new Error("Could not update voice models."));
+    if (signal.aborted) return;
+    if (failure !== null)
+      setError(failure instanceof Error ? failure.message : "Could not update voice models.");
+    setBusy(false);
   }
   if (!canManage)
     return (

@@ -40,7 +40,7 @@ export function ComposerVoiceButton({
 }: ComposerVoiceButtonProps) {
   const [modelsOpen, setModelsOpen] = useState(false);
   return (
-    <span className="inline-flex items-center">
+    <>
       <Tooltip>
         <TooltipTrigger
           render={
@@ -116,6 +116,6 @@ export function ComposerVoiceButton({
           resolveContext={environmentSpeech.resolveContext}
         />
       ) : null}
-    </span>
+    </>
   );
 }

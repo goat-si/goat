@@ -90,19 +90,22 @@ export function VoiceModelDialog(props: {
       return;
     setBusy(true);
     setError(null);
-    try {
-      const context = await props.resolveContext(props.environmentId);
-      signal.throwIfAborted();
-      if (!context || !readEnvironmentScope(props.environmentId, AuthVoiceManageScope))
-        throw new Error("Voice management permission is no longer available.");
-      await operation(context, signal);
-      await refresh(signal);
-    } catch (cause) {
-      if (!signal.aborted)
-        setError(cause instanceof Error ? cause.message : "Could not update the voice model.");
-    } finally {
-      if (!signal.aborted) setBusy(false);
-    }
+    // A promise chain instead of try/finally keeps this component compiled by React Compiler.
+    const failure = await props
+      .resolveContext(props.environmentId)
+      .then(async (context) => {
+        signal.throwIfAborted();
+        if (!context || !readEnvironmentScope(props.environmentId, AuthVoiceManageScope))
+          throw new Error("Voice management permission is no longer available.");
+        await operation(context, signal);
+        await refresh(signal);
+        return null;
+      })
+      .catch((cause: unknown) => cause ?? new Error("Could not update the voice model."));
+    if (signal.aborted) return;
+    if (failure !== null)
+      setError(failure instanceof Error ? failure.message : "Could not update the voice model.");
+    setBusy(false);
   }
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
