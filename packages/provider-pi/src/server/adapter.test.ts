@@ -166,6 +166,7 @@ interface FakePi {
   readonly deferNextState: () => void;
   readonly resolveDeferredState: (data: unknown) => Effect.Effect<void>;
   readonly failNextState: () => void;
+  readonly failNextPrompt: () => void;
   readonly deferNextLifecycle: (type: "switch_session" | "new_session" | "fork" | "abort") => void;
   readonly deferNextModelSelection: () => void;
   readonly queueModels: (models: ReadonlyArray<unknown>) => void;
@@ -214,6 +215,7 @@ export const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
   let deferState = false;
   let deferredStateRequest: PiRpcRecord | undefined;
   let failState = false;
+  let failPrompt = false;
   let vetoSwitch = false;
   let vetoNewSession = false;
   let deferredLifecycle: string | undefined;
@@ -261,6 +263,10 @@ export const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
           },
         };
       case "prompt":
+        if (failPrompt) {
+          failPrompt = false;
+          return { ...base, success: false, error: "prompt unavailable" };
+        }
         if (isCompacting) {
           return { ...base, success: false, error: PI_COMPACTING_PROMPT_ERROR };
         }
@@ -393,6 +399,9 @@ export const makeFakePi: Effect.Effect<FakePi> = Effect.gen(function* () {
     failNextState: () => {
       failState = true;
     },
+    failNextPrompt: () => {
+      failPrompt = true;
+    },
     deferNextLifecycle: (type) => {
       deferredLifecycle = type;
     },
@@ -522,7 +531,7 @@ const makeAppThread = Effect.fnUntraced(function* (model: string, threadId = THR
   } satisfies OrchestrationV2AppThread;
 });
 
-const startTurn = Effect.fnUntraced(function* (
+export const startTurn = Effect.fnUntraced(function* (
   runtime: ProviderAdapter.ProviderAdapterV2SessionRuntime,
   providerThread: OrchestrationV2ProviderThread,
   model = "default",
@@ -1663,6 +1672,7 @@ describe("PiAdapterV2", () => {
   registerOmoAdapterChecks({
     makeFakePi,
     openRuntime,
+    startTurn,
     THREAD_ID,
     SESSION_ID,
     modelSelection,

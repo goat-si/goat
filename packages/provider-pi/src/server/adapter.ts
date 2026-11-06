@@ -1553,8 +1553,17 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
           }
         }
         yield* cancelPendingPrompts(completedAt);
+        // The turn is already detached from state, so a history read failure must not skip its terminal event.
         const treeRefs =
-          turn.stopTreeRefs !== undefined ? turn.stopTreeRefs : yield* captureTurnTreeRefs();
+          turn.stopTreeRefs !== undefined
+            ? turn.stopTreeRefs
+            : yield* captureTurnTreeRefs().pipe(
+                Effect.catch((cause) =>
+                  Effect.logWarning("Pi turn history could not be read at completion", {
+                    cause,
+                  }).pipe(Effect.as(null)),
+                ),
+              );
         const tokenUsage = readUsage
           ? yield* readTokenUsage(turn.latestCompactionAfterTokens, completedAt)
           : undefined;
@@ -2781,10 +2790,15 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
               yield* sessionEventPermit.withPermits(1)(
                 Effect.gen(function* () {
                   if (threadState?.activeTurn === turn && turn.stopTreeRefs === undefined) {
-                    turn.stopTreeRefs = yield* captureTurnTreeRefs(2_000);
+                    turn.stopTreeRefs = yield* captureTurnTreeRefs(2_000).pipe(
+                      Effect.catch((cause) =>
+                        Effect.logWarning("Pi turn history could not be read before stop", {
+                          cause,
+                        }).pipe(Effect.as(null)),
+                      ),
+                    );
                   }
-                  yield* connection.terminate;
-                }),
+                }).pipe(Effect.ensuring(connection.terminate)),
               );
               return;
             }
@@ -2997,7 +3011,14 @@ export const makePiAdapterV2 = Effect.fn("makePiAdapterV2")(function* (
                   if (recordField(forkData, "cancelled") === true)
                     return yield* protocolError("A Pi extension cancelled the session fork");
                   if (profile.driver === "omo") {
-                    yield* lifecycleRequest({ type: "prompt", message: "/computer off" });
+                    // The fork already moved the native session; never keep the old binding on failure.
+                    yield* lifecycleRequest({ type: "prompt", message: "/computer off" }).pipe(
+                      Effect.onError(() =>
+                        Effect.sync(() => {
+                          threadState = null;
+                        }),
+                      ),
+                    );
                   }
                   const forkState = yield* request({ type: "get_state" }).pipe(
                     Effect.onError(() =>
