@@ -84,7 +84,7 @@ export function evaluatePullRequestWatch(
     if (mode === "react") changes.push(change);
     else if (mode === "keep_as_context") held.push(change);
   };
-  const headSha = detail.headSha ?? null;
+  const headSha = detail.headSha ?? watch.headSha;
   const headMoved = headSha !== watch.headSha;
 
   // Hosts can return no checks on read failure; preserve prior state.
@@ -184,7 +184,8 @@ export function evaluatePullRequestWatch(
     ...atLatest.map((remark) => remark.id),
   ];
 
-  if (detail.mergeability === "conflicting" && !watch.conflicting) {
+  const toldConflict = !headMoved && watch.conflicting;
+  if (detail.mergeability === "conflicting" && !toldConflict) {
     // A base push can conflict every open pull request; a thread nobody touched for days stays
     // asleep. The watch still records the conflict, so it is not reported later either.
     const idle =
@@ -194,7 +195,7 @@ export function evaluatePullRequestWatch(
   }
   // "unknown" is a host still computing after a push; only a clean answer clears a conflict.
   const conflicting =
-    detail.mergeability === "unknown" ? watch.conflicting : detail.mergeability === "conflicting";
+    detail.mergeability === "unknown" ? toldConflict : detail.mergeability === "conflicting";
 
   const commentsOnly = changes.length > 0 && changes.every((change) => change.kind === "remarks");
   const progress = headMoved || [...changes, ...held].some((change) => change.kind !== "remarks");

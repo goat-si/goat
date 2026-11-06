@@ -369,6 +369,15 @@ describe("evaluatePullRequestWatch", () => {
     const conflicting = detail({ mergeability: "conflicting" });
     const first = evaluate(watch(), conflicting, noRemarks);
     assert.deepEqual(first.changes, [{ kind: "conflicting" }]);
+    const { headSha: _unreadHead, ...headUnread } = conflicting;
+    const unread = evaluate(first.next, headUnread, noRemarks);
+    assert.deepEqual(evaluate(unread.next, conflicting, noRemarks).changes, []);
+    const pushed = detail({ headSha: "bbbbbbbbbb", mergeability: "unknown" });
+    const recomputed = evaluate(first.next, pushed, noRemarks);
+    assert.deepEqual(
+      evaluate(recomputed.next, { ...pushed, mergeability: "conflicting" }, noRemarks).changes,
+      [{ kind: "conflicting" }],
+    );
     // GitHub answers "unknown" while it recomputes after a push; that is not a resolution.
     const recomputing = evaluate(first.next, detail({ mergeability: "unknown" }), noRemarks);
     assert.deepEqual(evaluate(recomputing.next, conflicting, noRemarks).changes, []);
