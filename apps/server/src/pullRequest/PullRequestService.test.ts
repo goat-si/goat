@@ -3970,53 +3970,6 @@ it.effect("hands a host's own resume position back on the next read", () =>
   }),
 );
 
-it.effect("judges the review filter only on a host that summarises its reviews", () =>
-  Effect.gen(function* () {
-    const service = yield* makeService({
-      projects: [
-        project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" }),
-        project({
-          id: "p2",
-          title: "on gitlab",
-          workspaceRoot: "/b",
-          repository: "group/project",
-          provider: SourceControlProviderKind.make("gitlab"),
-        }),
-      ],
-      providers: [
-        fakePullRequestProvider(SourceControlProviderKind.make("github"), {
-          listChangeRequests: () =>
-            Effect.succeed({
-              items: [
-                { ...changeRequest(1, "2026-07-02T00:00:00Z"), reviewDecision: null },
-                {
-                  ...changeRequest(2, "2026-07-02T00:00:00Z"),
-                  reviewDecision: "approved" as const,
-                },
-              ],
-              truncated: false,
-              continues: true,
-            }),
-        }),
-        fakePullRequestProvider(SourceControlProviderKind.make("gitlab"), {
-          listChangeRequests: () =>
-            Effect.succeed({
-              items: [changeRequest(3, "2026-07-02T00:00:00Z")],
-              truncated: false,
-              continues: true,
-            }),
-        }),
-      ],
-    });
-
-    const none = yield* service.list({ state: "open", filters: { review: "none" } });
-    assert.deepStrictEqual(none.entries.map((entry) => entry.number).toSorted(), [1, 3]);
-
-    const approved = yield* service.list({ state: "open", filters: { review: "approved" } });
-    assert.deepStrictEqual(approved.entries.map((entry) => entry.number).toSorted(), [2, 3]);
-  }),
-);
-
 it.effect("partial host viewed writes invalidate marks but keep the diff cached", () =>
   Effect.gen(function* () {
     let diffReads = 0;

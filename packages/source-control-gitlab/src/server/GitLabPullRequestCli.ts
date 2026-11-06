@@ -1,3 +1,6 @@
+import { makeGitLabViewer } from "./gitLabViewer.ts";
+import { makeGitLabGraphqlSupport } from "./gitLabGraphqlSupport.ts";
+import { makeGitLabListReads } from "./gitLabListReads.ts";
 import { makeGitLabBranchDeletion } from "./gitLabBranchDeletion.ts";
 import { GitLabBranchDeletionRefusedError } from "./gitLabBranchDeletionError.ts";
 import { stateParam, involvementParams, filterParams, searchParams, query } from "./gitLabQuery.ts";
@@ -48,7 +51,6 @@ import type {
   PullRequestReaction,
   PullRequestReactionContent,
   PullRequestReviewCommentDraft,
-  PullRequestReviewDecision,
   PullRequestReviewThread,
   PullRequestReviewVerdict,
   PullRequestReviewerCandidateList,
@@ -63,7 +65,6 @@ import {
   decodeDiffRefsJson,
   decodeDiscussionsJson,
   decodeLabelNameJson,
-  decodeLabelPermissionJson,
   decodeMergeRequestDetailJson,
   decodeMergeRequestDiffsJson,
   decodeMergeRequestChangesJson,
@@ -76,18 +77,15 @@ import {
   decodeProjectLabelsJson,
   decodeProjectUsersJson,
   decodeRepositoryBlobsJson,
-  decodeReviewDecisionsJson,
   decodeTriggerJobChecksJson,
-  decodeViewerJson,
   gitLabAwardName,
-  LABEL_PERMISSION_GRAPHQL_QUERY,
   MERGE_REQUEST_FILE_STATS_GRAPHQL_QUERY,
   MERGE_REQUEST_STATS_GRAPHQL_QUERY,
   REPOSITORY_BLOBS_GRAPHQL_QUERY,
-  REVIEW_DECISIONS_GRAPHQL_QUERY,
   type GitLabDiffRefs,
   type GitLabMergeRequestDetail,
   type GitLabMergeRequestListItem,
+  type GitLabMergeRequestListState,
   type GitLabProjectUsers,
 } from "./gitLabMergeRequestJson.ts";
 import type {
@@ -131,6 +129,10 @@ export interface GitLabMergeRequestListBatch {
   readonly items: ReadonlyArray<GitLabMergeRequestListItem>;
   readonly truncated: boolean;
   readonly cursorAdvance: number;
+  /** GitLab's GraphQL cursor past the last row, when the page was read through GraphQL. */
+  readonly resumeAfter?: string;
+  /** Present when the read already carried each row's approval and pipeline state. */
+  readonly listStates?: ReadonlyMap<number, GitLabMergeRequestListState>;
 }
 
 export interface GitLabMergeRequestDiffSlice {
@@ -158,7 +160,18 @@ export class GitLabPullRequestCli extends Context.Service<
       readonly query?: string | undefined;
       readonly cursor?: ProviderListCursor | undefined;
       readonly filters?: PullRequestListFilters | undefined;
+      /**
+       * Read a first page through GraphQL, which narrows more filters; see `supportsGraphqlList`.
+       * A cursor keeps the API that handed it out.
+       */
+      readonly graphql?: boolean;
     }) => Effect.Effect<GitLabMergeRequestListBatch, GitLabPullRequestCliError>;
+
+    /** Whether this host's GraphQL list takes every filter the REST list does. */
+    readonly supportsGraphqlList: (input: {
+      readonly cwd: string;
+      readonly host?: string | undefined;
+    }) => Effect.Effect<boolean, GitLabPullRequestCliError>;
 
     readonly getMergeRequestDetail: (input: {
       readonly cwd: string;
@@ -169,13 +182,14 @@ export class GitLabPullRequestCli extends Context.Service<
       readonly downstreamChecks?: boolean;
     }) => Effect.Effect<GitLabMergeRequestDetail, GitLabPullRequestCliError>;
 
-    readonly getReviewDecisions: (input: {
+    /** Approval and head pipeline state, read in one GraphQL request per 100 merge requests. */
+    readonly getListStates: (input: {
       readonly cwd: string;
       readonly host?: string | undefined;
       readonly repository: string;
       readonly numbers: ReadonlyArray<number>;
     }) => Effect.Effect<
-      ReadonlyMap<number, PullRequestReviewDecision | null>,
+      ReadonlyMap<number, GitLabMergeRequestListState>,
       GitLabPullRequestCliError
     >;
 
@@ -1028,30 +1042,9 @@ export const make = Effect.gen(function* () {
       }),
     );
 
-  const labelPermission = (input: {
-    readonly cwd: string;
-    readonly host?: string | undefined;
-    readonly repository: string;
-    readonly number: number;
-  }) =>
-    graphqlRead({
-      cwd: input.cwd,
-      host: input.host,
-      operation: "getLabelPermission",
-      query: LABEL_PERMISSION_GRAPHQL_QUERY,
-      variables: { fullPath: input.repository, iid: String(input.number) },
-      decode: decodeLabelPermissionJson,
-    }).pipe(
-      // The answer gates one optional control; an unusable CLI or account still surfaces.
-      Effect.catchIf(
-        (cause) =>
-          cause._tag !== "GitLabCliUnavailableError" &&
-          cause._tag !== "GitLabCliAuthenticationError" &&
-          cause._tag !== "GitLabCliRateLimitError",
-        () => Effect.succeed(false),
-      ),
-    );
+  const { graphqlListPage, listStatesOf } = makeGitLabListReads(graphqlRead);
 
+  const { labelPermission, supportsGraphqlList } = makeGitLabGraphqlSupport(graphqlRead);
   const { sourceBranch, deleteSourceBranch } = makeGitLabBranchDeletion({ api, graphqlRead });
 
   const mergeRequestStats = (input: {
@@ -1192,43 +1185,7 @@ export const make = Effect.gen(function* () {
           }),
         );
 
-  const reviewDecisionsOf = (input: {
-    readonly cwd: string;
-    readonly host?: string | undefined;
-    readonly repository: string;
-    readonly numbers: ReadonlyArray<number>;
-  }): Effect.Effect<
-    ReadonlyMap<number, PullRequestReviewDecision | null>,
-    GitLabPullRequestCliError
-  > =>
-    graphqlRead({
-      cwd: input.cwd,
-      host: input.host,
-      operation: "getReviewDecisions",
-      query: REVIEW_DECISIONS_GRAPHQL_QUERY,
-      variables: { fullPath: input.repository, iids: input.numbers.map(String) },
-      decode: decodeReviewDecisionsJson,
-    });
-
-  const viewerUsername = (input: { readonly cwd: string; readonly host?: string | undefined }) =>
-    api({ cwd: input.cwd, host: input.host, path: "user" }).pipe(
-      Effect.flatMap((result): Effect.Effect<string, GitLabPullRequestCliError> => {
-        const decoded = decodeViewerJson(result.stdout.trim());
-        if (!Result.isSuccess(decoded)) {
-          return Effect.fail(
-            new GitLabMergeRequestReadError({
-              command: "glab",
-              cwd: input.cwd,
-              operation: "getViewerUsername",
-              cause: decoded.failure,
-            }),
-          );
-        }
-        return decoded.success === null
-          ? Effect.fail(new GitLabViewerUnavailableError({ command: "glab", cwd: input.cwd }))
-          : Effect.succeed(decoded.success);
-      }),
-    );
+  const viewerUsername = makeGitLabViewer(api);
 
   return GitLabPullRequestCli.of({
     getViewerUsername: viewerUsername,
@@ -1236,8 +1193,41 @@ export const make = Effect.gen(function* () {
     listMergeRequests: Effect.fn("GitLabPullRequestCli.listMergeRequests")(function (input) {
       const perPage = Math.min(input.limit + 1, MAX_PAGE_SIZE);
       const page = Math.floor((input.cursor?.delivered ?? 0) / perPage) + 1;
-      return listPage({ ...input, page, collected: [], cursorAdvance: 0 });
+      const rest = Effect.suspend(() =>
+        listPage({ ...input, page, collected: [], cursorAdvance: 0 }),
+      );
+      // A cursor's offset means something only to the API that handed it out.
+      const viaGraphql =
+        input.cursor === undefined
+          ? input.graphql === true
+          : input.cursor.resumeAfter !== undefined;
+      if (!viaGraphql) return rest;
+      const graphql = graphqlListPage({
+        ...input,
+        after: input.cursor?.resumeAfter,
+        collected: [],
+        states: new Map(),
+        cursorAdvance: 0,
+        reads: Math.ceil(input.limit / MAX_PAGE_SIZE) + 1,
+      });
+      // GraphQL counts only filtered rows, so its `delivered` is no REST offset once resumed.
+      if (input.cursor !== undefined) return graphql;
+      return graphql.pipe(
+        Effect.catchIf(
+          (cause) =>
+            cause._tag !== "GitLabCliUnavailableError" &&
+            cause._tag !== "GitLabCliAuthenticationError" &&
+            cause._tag !== "GitLabCliRateLimitError",
+          (cause) =>
+            Effect.logWarning("GitLab GraphQL merge request list failed; reading REST instead", {
+              repository: input.repository,
+              reason: cause._tag,
+            }).pipe(Effect.andThen(rest)),
+        ),
+      );
     }),
+
+    supportsGraphqlList,
 
     getMergeRequestDetail: Effect.fn("GitLabPullRequestCli.getMergeRequestDetail")(
       function* (input) {
@@ -1276,12 +1266,12 @@ export const make = Effect.gen(function* () {
       },
     ),
 
-    getReviewDecisions: Effect.fn("GitLabPullRequestCli.getReviewDecisions")(function (input) {
+    getListStates: Effect.fn("GitLabPullRequestCli.getListStates")(function (input) {
       const batches: Array<ReadonlyArray<number>> = [];
       for (let at = 0; at < input.numbers.length; at += MAX_PAGE_SIZE) {
         batches.push(input.numbers.slice(at, at + MAX_PAGE_SIZE));
       }
-      return Effect.forEach(batches, (numbers) => reviewDecisionsOf({ ...input, numbers }), {
+      return Effect.forEach(batches, (numbers) => listStatesOf({ ...input, numbers }), {
         concurrency: 2,
       }).pipe(Effect.map((pages) => new Map(pages.flatMap((page) => [...page]))));
     }),

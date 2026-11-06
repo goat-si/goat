@@ -1,3 +1,13 @@
+export {
+  LIST_ITEM_GRAPHQL_FIELDS,
+  LIST_STATES_GRAPHQL_QUERY,
+  SERVER_VERSION_GRAPHQL_QUERY,
+  decodeListStatesJson,
+  decodeMergeRequestGraphqlListJson,
+  decodeGraphqlListSupportJson,
+  type GitLabMergeRequestListState,
+  type GitLabMergeRequestGraphqlPage,
+} from "./gitLabListState.ts";
 import { gitLabAwardName } from "./gitLabAwardEmoji.ts";
 export {
   gitLabAwardName,
@@ -21,7 +31,6 @@ import type {
   PullRequestMergeCapabilities,
   PullRequestMergeMethod,
   PullRequestReactionContent,
-  PullRequestReviewDecision,
   PullRequestReviewThread,
   PullRequestReviewerCandidate,
   PullRequestState,
@@ -222,12 +231,12 @@ export interface GitLabMergeRequestDetail extends GitLabMergeRequestListItem {
   readonly headPipeline?: { readonly id: number; readonly projectId: number };
 }
 
-function trimmed(value: string | null | undefined): string | null {
+export function trimmed(value: string | null | undefined): string | null {
   const text = value?.trim() ?? "";
   return text.length > 0 ? text : null;
 }
 
-function toActor(raw: Schema.Schema.Type<typeof RawUserSchema> | null | undefined) {
+export function toActor(raw: Schema.Schema.Type<typeof RawUserSchema> | null | undefined) {
   const login = trimmed(raw?.username);
   return login === null
     ? null
@@ -239,7 +248,9 @@ function toActor(raw: Schema.Schema.Type<typeof RawUserSchema> | null | undefine
       };
 }
 
-function toState(raw: Schema.Schema.Type<typeof RawMergeRequestSchema>): PullRequestState {
+export function toState(
+  raw: Pick<Schema.Schema.Type<typeof RawMergeRequestSchema>, "state" | "merged_at">,
+): PullRequestState {
   if (trimmed(raw.merged_at) !== null) return "merged";
   switch (raw.state?.trim().toLowerCase()) {
     case "merged":
@@ -251,8 +262,8 @@ function toState(raw: Schema.Schema.Type<typeof RawMergeRequestSchema>): PullReq
   }
 }
 
-function toMergeability(
-  raw: Schema.Schema.Type<typeof RawMergeRequestSchema>,
+export function toMergeability(
+  raw: Pick<Schema.Schema.Type<typeof RawMergeRequestSchema>, "has_conflicts" | "merge_status">,
 ): PullRequestMergeability {
   if (raw.has_conflicts === true) return "conflicting";
   switch (raw.merge_status?.trim().toLowerCase()) {
@@ -265,7 +276,9 @@ function toMergeability(
   }
 }
 
-function toLabels(raw: ReadonlyArray<string> | null | undefined): ReadonlyArray<PullRequestLabel> {
+export function toLabels(
+  raw: ReadonlyArray<string> | null | undefined,
+): ReadonlyArray<PullRequestLabel> {
   return (raw ?? []).flatMap((label) => {
     const name = trimmed(label);
     return name === null ? [] : [{ name, color: null }];
@@ -277,7 +290,7 @@ function toChangedFiles(value: string | null | undefined): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
-function toPipelineStatus(value: string | null | undefined): PullRequestCheckStatus {
+export function toPipelineStatus(value: string | null | undefined): PullRequestCheckStatus {
   switch (value?.trim().toLowerCase()) {
     case "success":
       return "success";
@@ -872,92 +885,6 @@ export function decodeRepositoryBlobsJson(
   return Result.succeed(blobs);
 }
 
-export const REVIEW_DECISIONS_GRAPHQL_QUERY = `query($fullPath: ID!, $iids: [String!]) {
-  metadata { enterprise }
-  project(fullPath: $fullPath) {
-    mergeRequests(iids: $iids, first: 100) {
-      nodes { iid approved approvedBy(first: 1) { nodes { username } } }
-    }
-  }
-}`;
-
-const RawReviewDecisionsSchema = Schema.Struct({
-  data: Schema.Struct({
-    metadata: Schema.optional(
-      Schema.NullOr(Schema.Struct({ enterprise: Schema.optional(Schema.NullOr(Schema.Boolean)) })),
-    ),
-    project: Schema.NullOr(
-      Schema.Struct({
-        mergeRequests: Schema.optional(
-          Schema.NullOr(
-            Schema.Struct({
-              nodes: Schema.Array(
-                Schema.NullOr(
-                  Schema.Struct({
-                    iid: Schema.String,
-                    approved: Schema.optional(Schema.NullOr(Schema.Boolean)),
-                    approvedBy: Schema.optional(
-                      Schema.NullOr(
-                        Schema.Struct({
-                          nodes: Schema.optional(Schema.NullOr(Schema.Array(Schema.Unknown))),
-                        }),
-                      ),
-                    ),
-                  }),
-                ),
-              ),
-            }),
-          ),
-        ),
-      }),
-    ),
-  }),
-});
-
-const decodeReviewDecisions = decodeJsonResult(RawReviewDecisionsSchema);
-
-/**
- * Only Enterprise Edition holds `approved` to the project's approval rules, so an unapproved
- * merge request there still needs review even when someone, such as a bot, approved it.
- * Community Edition reports `approved` once anyone approves and requires no review.
- */
-export function decodeReviewDecisionsJson(
-  raw: string,
-): Result.Result<ReadonlyMap<number, PullRequestReviewDecision | null>, DecodeFailure> {
-  const decoded = decodeReviewDecisions(raw);
-  if (!Result.isSuccess(decoded)) {
-    return Result.fail(decoded.failure);
-  }
-  const enterprise = decoded.success.data.metadata?.enterprise;
-  const decisions = new Map<number, PullRequestReviewDecision | null>();
-  for (const node of decoded.success.data.project?.mergeRequests?.nodes ?? []) {
-    const number = Number(node?.iid);
-    if (
-      node === null ||
-      !Number.isSafeInteger(number) ||
-      node.approved == null ||
-      node.approvedBy?.nodes == null
-    )
-      continue;
-    const approvals = node.approvedBy.nodes.length;
-    if (node.approved === false && approvals === 0 && enterprise == null) continue;
-    decisions.set(
-      number,
-      node.approved === false && (enterprise || approvals > 0)
-        ? "review-required"
-        : approvals > 0
-          ? "approved"
-          : null,
-    );
-  }
-  return Result.succeed(decisions);
-}
-
-/**
- * Line counts for merge requests of one project. The REST listing carries no line counts, and
- * reading each diff to count them would cost a request per row, so GraphQL's per-merge-request
- * summary is asked for in one read instead.
- */
 export const MERGE_REQUEST_STATS_GRAPHQL_QUERY = `query($fullPath: ID!, $iids: [String!]) {
   project(fullPath: $fullPath) {
     mergeRequests(iids: $iids, first: 100) {

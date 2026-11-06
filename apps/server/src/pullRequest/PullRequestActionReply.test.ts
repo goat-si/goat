@@ -250,3 +250,61 @@ it.effect("returns the host's merged reply as a summary and trusts it without an
     }),
   ),
 );
+
+it.effect("judges review and checks filters only on a host that summarises them", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" }),
+        project({
+          id: "p2",
+          title: "on gitlab",
+          workspaceRoot: "/b",
+          repository: "group/project",
+          provider: SourceControlProviderKind.make("gitlab"),
+        }),
+      ],
+      providers: [
+        fakePullRequestProvider(SourceControlProviderKind.make("github"), {
+          listChangeRequests: () =>
+            Effect.succeed({
+              items: [
+                {
+                  ...changeRequest(1, "2026-07-02T00:00:00Z"),
+                  reviewDecision: null,
+                  checksState: "failing" as const,
+                },
+                {
+                  ...changeRequest(2, "2026-07-02T00:00:00Z"),
+                  reviewDecision: "approved" as const,
+                  checksState: null,
+                },
+              ],
+              truncated: false,
+              continues: true,
+            }),
+        }),
+        fakePullRequestProvider(SourceControlProviderKind.make("gitlab"), {
+          listChangeRequests: () =>
+            Effect.succeed({
+              items: [changeRequest(3, "2026-07-02T00:00:00Z")],
+              truncated: false,
+              continues: true,
+            }),
+        }),
+      ],
+    });
+
+    const none = yield* service.list({ state: "open", filters: { review: "none" } });
+    assert.deepStrictEqual(none.entries.map((entry) => entry.number).toSorted(), [1, 3]);
+
+    const approved = yield* service.list({ state: "open", filters: { review: "approved" } });
+    assert.deepStrictEqual(approved.entries.map((entry) => entry.number).toSorted(), [2, 3]);
+
+    const failing = yield* service.list({ state: "open", filters: { checks: "failing" } });
+    assert.deepStrictEqual(failing.entries.map((entry) => entry.number).toSorted(), [1, 3]);
+
+    const passing = yield* service.list({ state: "open", filters: { checks: "passing" } });
+    assert.deepStrictEqual(passing.entries.map((entry) => entry.number).toSorted(), [3]);
+  }),
+);
