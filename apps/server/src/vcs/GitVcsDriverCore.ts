@@ -1,4 +1,13 @@
 import {
+  parseReviewNumstat,
+  REVIEW_DIFF_ARGS,
+  REVIEW_DIFF_PATCH_MAX_OUTPUT_BYTES,
+  REVIEW_METADATA_MAX_OUTPUT_BYTES,
+  REVIEW_UNTRACKED_MAX_FILES,
+  REVIEW_DIFF_FILE_MAX_OUTPUT_BYTES,
+} from "./reviewDiffArgs.ts";
+export { PATCH_RENDER_PREFIX_ARGS } from "./reviewDiffArgs.ts";
+import {
   stagedSummaryArgs,
   stagedPatchArgs,
   rangeLogArgs,
@@ -111,24 +120,6 @@ const PREPARED_COMMIT_PATCH_MAX_OUTPUT_BYTES = 49_000;
 const RANGE_COMMIT_SUMMARY_MAX_OUTPUT_BYTES = 19_000;
 const RANGE_DIFF_SUMMARY_MAX_OUTPUT_BYTES = 19_000;
 const RANGE_DIFF_PATCH_MAX_OUTPUT_BYTES = 59_000;
-const REVIEW_DIFF_PATCH_MAX_OUTPUT_BYTES = 120_000;
-const REVIEW_METADATA_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
-// Temporary-index git add scales poorly (50k files took ~30 s); report incomplete totals above this cap.
-const REVIEW_UNTRACKED_MAX_FILES = 5_000;
-const REVIEW_DIFF_FILE_MAX_OUTPUT_BYTES = 1024 * 1024;
-// Client patch parsers require a/ and b/ prefixes; override user diff prefix settings.
-export const PATCH_RENDER_PREFIX_ARGS = ["--src-prefix=a/", "--dst-prefix=b/"] as const;
-// Client patch parsers drop blank context lines that diff.suppressBlankEmpty prints without a space.
-const REVIEW_DIFF_ARGS = [
-  "-c",
-  "diff.suppressBlankEmpty=false",
-  "diff",
-  "--find-renames",
-  "--no-color",
-  "--no-ext-diff",
-  "--no-textconv",
-  ...PATCH_RENDER_PREFIX_ARGS,
-];
 const STATUS_UPSTREAM_REFRESH_INTERVAL = Duration.seconds(15);
 const STATUS_UPSTREAM_REFRESH_TIMEOUT = Duration.seconds(5);
 const STATUS_UPSTREAM_FETCH_TIMEOUT = Duration.minutes(5);
@@ -234,25 +225,6 @@ interface ExecuteGitOptions {
   progress?: GitVcsDriver.ExecuteGitProgress | undefined;
   writesSharedConfig?: boolean | undefined;
   retryConfigLock?: boolean | undefined;
-}
-
-function parseReviewNumstat(stdout: string): ReviewDiffFileStat[] {
-  const fields = stdout.split("\0");
-  const files: ReviewDiffFileStat[] = [];
-  for (let index = 0; index < fields.length; index++) {
-    const field = fields[index]!;
-    const match = /^(\d+|-)\t(\d+|-)\t([\s\S]*)$/.exec(field);
-    if (!match) continue;
-    const previousPath = match[3] === "" ? fields[++index]! : null;
-    const path = previousPath !== null ? fields[++index]! : match[3]!;
-    files.push({
-      path,
-      previousPath,
-      additions: match[1] === "-" ? 0 : Number(match[1]),
-      deletions: match[2] === "-" ? 0 : Number(match[2]),
-    });
-  }
-  return files;
 }
 
 // Space-separated fields precede the path in each porcelain v2 record type. The path itself
@@ -3212,6 +3184,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           (path) => `:(top,literal)${path}`,
         )
       : [];
+    const metadataOnly = input.metadataOnly === true && input.file === undefined;
     const patchLimit = input.file
       ? REVIEW_DIFF_FILE_MAX_OUTPUT_BYTES
       : REVIEW_DIFF_PATCH_MAX_OUTPUT_BYTES;
@@ -3283,10 +3256,12 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     const readTrackedDiff = Effect.fn("GitVcsDriver.getReviewDiffPreview.tracked")(function* (
       ref: string | null,
       env?: NodeJS.ProcessEnv,
+      deferPatch = false,
     ) {
       if (ref === null) return { stdout: "", stdoutTruncated: false, files: [] };
       const stat = yield* readStats(ref, env);
-      if (stat.files.length === 0) return { stdout: "", stdoutTruncated: false, files: [] };
+      if (deferPatch || stat.files.length === 0)
+        return { stdout: "", stdoutTruncated: false, files: stat.files };
       const patch = yield* executeGit(
         "GitVcsDriver.getReviewDiffPreview.patch",
         cwd,
@@ -3323,7 +3298,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           scope === "staged",
         );
         const patch =
-          stat.files.length === 0
+          (metadataOnly && untracked !== null) || stat.files.length === 0
             ? { stdout: "", stdoutTruncated: false }
             : yield* executeGit(
                 "GitVcsDriver.getReviewDiffPreview.patch",
@@ -3347,6 +3322,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           diff: patch.stdout,
           diffHash: yield* hashDiff(patch.stdout, stat.files),
           truncated: patch.stdoutTruncated || untracked === null,
+          ...(metadataOnly && untracked !== null ? { patchesDeferred: true } : {}),
           ...(untracked === null ? {} : { files: stat.files }),
         } satisfies ReviewDiffPreviewSource;
       }).pipe(Effect.scoped);
@@ -3356,13 +3332,19 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       const untracked = yield* prepareUntrackedReviewIndex(cwd, pathArgs, input.file?.path);
       const [dirty, base] =
         review.mergeBase === dirtyRef
-          ? yield* readTrackedDiff(dirtyRef, untracked?.env).pipe(
-              Effect.map((result) => [result, result] as const),
-            )
+          ? yield* readTrackedDiff(
+              dirtyRef,
+              untracked?.env,
+              metadataOnly && untracked !== null,
+            ).pipe(Effect.map((result) => [result, result] as const))
           : yield* Effect.all(
               [
-                readTrackedDiff(dirtyRef, untracked?.env),
-                readTrackedDiff(review.mergeBase, untracked?.env),
+                readTrackedDiff(dirtyRef, untracked?.env, metadataOnly && untracked !== null),
+                readTrackedDiff(
+                  review.mergeBase,
+                  untracked?.env,
+                  metadataOnly && untracked !== null,
+                ),
               ],
               { concurrency: 2 },
             );
@@ -3391,6 +3373,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         ...(dirtyFiles === undefined ? {} : { files: dirtyFiles }),
         diffHash: dirtyDiffHash,
         truncated: dirtyTrackedResult.stdoutTruncated,
+        ...(metadataOnly && dirtyFiles !== undefined ? { patchesDeferred: true } : {}),
       },
       {
         id: "branch-range",
@@ -3402,6 +3385,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         ...(baseFiles === undefined ? {} : { files: baseFiles }),
         diffHash: baseDiffHash,
         truncated: baseResult.stdoutTruncated,
+        ...(metadataOnly && baseFiles !== undefined ? { patchesDeferred: true } : {}),
       },
     ];
 
