@@ -1,12 +1,19 @@
 import { expect, it, vi } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 import { ServerSettings } from "@goat/contracts";
-import { resolveHostSecrets } from "./sourceControlHostSecrets.ts";
+import { resolveHostSecrets, writeSecretFieldValues } from "./sourceControlHostSecrets.ts";
 import { HostCredentialSettings } from "@goat/source-control-core/shared/definition";
 import { makeSecretResolver } from "../secrets/secretResolver.ts";
 
 const decodeSettings = Schema.decodeUnknownSync(ServerSettings);
 const decodeHostCredentialSettings = Schema.decodeUnknownSync(HostCredentialSettings);
+
+it("normalizes saved reference hosts when writing literal secrets", () => {
+  const reference = { provider: "vault", reference: "op://work/item/one" };
+  expect(writeSecretFieldValues({ " GitHub.com ": reference }, [["github.com", "new"]])).toEqual({
+    "github.com": "new",
+  });
+});
 
 it("retains keyed token references alongside literal host tokens", () => {
   const reference = { provider: "vault", reference: "op://work/item/one" };

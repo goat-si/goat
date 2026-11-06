@@ -1892,7 +1892,7 @@ const ServerSettingsPatchFields = Schema.Struct({
       otlpLogsUrl: Schema.optionalKey(TrimmedString),
     }),
   ),
-  /** Merges per host, replacing patched fields whole; redaction markers retain secrets, empty or omitted secrets remove them. */
+  /** Merges per host; redaction markers retain secrets. Non-empty token maps preserve omitted hosts, and empty maps clear all tokens. */
   sourceControlHosts: Schema.optionalKey(Schema.Record(Schema.String, SourceControlHostSettings)),
   /**
    * An empty secret clears it; an omitted one keeps what the server has. `targets` merges per

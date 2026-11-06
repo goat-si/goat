@@ -1,4 +1,5 @@
 import { olderSettledMemoryCounts, olderSettledSqlCounts } from "./olderSettledCounts.ts";
+import * as PullRequestSnapshot from "./pullRequestSnapshot.ts";
 import * as RestartCandidates from "./RestartContinuationCandidates.ts";
 import * as LatestAnswer from "./ProjectionLatestAnswer.ts";
 import * as LaunchEdges from "./ProjectionLaunchEdges.ts";
@@ -523,7 +524,7 @@ export interface OlderSettledThreadsListing {
   readonly sideChatCounts?: ReadonlyArray<OrchestrationV2OlderSettledCount>;
 }
 
-export interface ProjectionStoreV2Shape {
+export interface ProjectionStoreV2Shape extends PullRequestSnapshot.PullRequestSnapshotReader<ProjectionStoreV2Error> {
   readonly searchThreadStream: (
     input: OrchestrationV2SearchThreadInput,
   ) => Stream.Stream<OrchestrationV2SearchThreadResult, ProjectionStoreV2Error>;
@@ -1227,14 +1228,6 @@ export interface ProjectionReplayState {
   readonly projections: Map<ThreadId, OrchestrationV2ThreadProjection>;
   readonly providerSessionThreadIds: Map<ProviderSessionId, ReadonlySet<ThreadId>>;
   readonly providerThreadInstanceIds: Map<ProviderThreadId, ProviderInstanceId>;
-}
-
-function makeProjectionReplayState(): ProjectionReplayState {
-  return {
-    projections: new Map(),
-    providerSessionThreadIds: new Map(),
-    providerThreadInstanceIds: new Map(),
-  };
 }
 
 function applyToProjectionReplayState(
@@ -7464,6 +7457,11 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           ),
         ),
       getReviewLedgerEntries,
+      getPullRequestSnapshot: readOnReader((options) =>
+        PullRequestSnapshot.readPullRequestSnapshot(sql, options).pipe(
+          Effect.mapError(shellSnapshotReadError),
+        ),
+      ),
       getShellSnapshot: readOnReader(getShellSnapshot),
       listActiveSubagentThreadIds: readOnReader(listActiveSubagentThreadIds),
       countThreads: readOnReader(countThreads),
@@ -7613,7 +7611,7 @@ function replayActivityBlockers(
 export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
   ProjectionStoreV2,
   Effect.gen(function* () {
-    const replayState = yield* Ref.make(makeProjectionReplayState());
+    const replayState = yield* Ref.make(PullRequestSnapshot.makeProjectionReplayState());
     const sequence = yield* Ref.make(0);
     const openedAt = yield* Clock.currentTimeMillis;
     const blockers = Effect.fn("ProjectionStore.getServerActivityBlockers")(function* (
@@ -7704,6 +7702,8 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
           }
           yield* Ref.update(sequence, (current) => current + 1);
         }),
+      getPullRequestSnapshot: (options) =>
+        PullRequestSnapshot.memoryPullRequestSnapshot(replayState, sequence, options),
       getShellSnapshot: Effect.fn("ProjectionStore.getShellSnapshot")(function* (options) {
         const existing = (yield* Ref.get(replayState)).projections;
         const selectedThreadIds = [...existing.entries()]

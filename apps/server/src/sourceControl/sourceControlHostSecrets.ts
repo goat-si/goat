@@ -53,13 +53,20 @@ export function writeSecretFieldValues(
     original !== null && typeof original === "object" && !Array.isArray(original)
       ? Object.entries(original).flatMap(([host, value]) =>
           isSecretReference(value)
-            ? [[host, { provider: value.provider, reference: value.reference }] as const]
+            ? [
+                [
+                  host.trim().toLowerCase(),
+                  { provider: value.provider, reference: value.reference },
+                ] as const,
+              ]
             : [],
         )
       : [];
   return Object.fromEntries([
     ...references,
-    ...values.map(([serverHost, value]) => [serverHost ?? "", value] as const),
+    ...values.map(
+      ([serverHost, value]) => [serverHost?.trim().toLowerCase() ?? "", value] as const,
+    ),
   ]);
 }
 

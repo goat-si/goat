@@ -20,7 +20,7 @@ import type {
   PullRequestState,
 } from "@goat/contracts";
 import { TrimmedNonEmptyString } from "@goat/contracts";
-import { quoteGitPatchPath } from "@goat/shared/gitPatchPath";
+import { gitRenameHeaders, quoteGitPatchPath } from "@goat/shared/gitPatchPath";
 import { decodeJsonResult } from "@goat/shared/schemaJson";
 
 /** Unknown pipeline or merge status values must not fail the whole payload. */
@@ -726,12 +726,12 @@ function mergeRequestPatch(entries: ReadonlyArray<unknown>): GitLabMergeRequestP
       `diff --git ${quoteGitPatchPath(`a/${value.old_path}`)} ${quoteGitPatchPath(`b/${value.new_path}`)}`,
       ...(value.new_file === true ? [`new file mode ${value.b_mode ?? "100644"}`] : []),
       ...(value.deleted_file === true ? [`deleted file mode ${value.a_mode ?? "100644"}`] : []),
-      ...(value.renamed_file === true
-        ? [
-            `rename from ${quoteGitPatchPath(value.old_path)}`,
-            `rename to ${quoteGitPatchPath(value.new_path)}`,
-          ]
-        : []),
+      ...gitRenameHeaders(
+        value.renamed_file === true,
+        value.old_path,
+        value.new_path,
+        hunks.length > 0 || value.too_large === true || value.collapsed === true,
+      ),
       `--- ${from}`,
       `+++ ${to}`,
     ].join("\n");

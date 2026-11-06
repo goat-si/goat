@@ -33,7 +33,7 @@ import type {
   PullRequestState,
   PullRequestThreadComment,
 } from "@goat/contracts";
-import { quoteGitPatchPath } from "@goat/shared/gitPatchPath";
+import { gitRenameHeaders, quoteGitPatchPath } from "@goat/shared/gitPatchPath";
 import { decodeJsonResult } from "@goat/shared/schemaJson";
 import { dedupeChecks } from "@goat/source-control-core/server/pullRequestChecks";
 
@@ -1678,12 +1678,12 @@ function toFilesPatch(entries: ReadonlyArray<unknown>): GitHubPullRequestFilesPa
       `diff --git ${quoteGitPatchPath(`a/${oldPath}`)} ${quoteGitPatchPath(`b/${value.filename}`)}`,
       ...(status === "added" ? ["new file mode 100644"] : []),
       ...(status === "removed" ? ["deleted file mode 100644"] : []),
-      ...(status === "renamed"
-        ? [
-            `rename from ${quoteGitPatchPath(oldPath)}`,
-            `rename to ${quoteGitPatchPath(value.filename)}`,
-          ]
-        : []),
+      ...gitRenameHeaders(
+        status === "renamed",
+        oldPath,
+        value.filename,
+        hunks.length > 0 || (value.additions ?? 0) + (value.deletions ?? 0) > 0,
+      ),
       `--- ${status === "added" ? "/dev/null" : quoteGitPatchPath(`a/${oldPath}`)}`,
       `+++ ${status === "removed" ? "/dev/null" : quoteGitPatchPath(`b/${value.filename}`)}`,
     ].join("\n");
