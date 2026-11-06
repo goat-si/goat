@@ -29,11 +29,11 @@ it("offers the picker for multiple projects even when last work exists", async (
       latestUserMessageAt: "2026-10-10T10:00:00Z",
       worktreePath: null,
     },
-  ] as ReturnType<typeof entities.readThreadShells>);
+  ] as unknown as ReturnType<typeof entities.readThreadShells>);
   const handleNewThread = vi.fn();
   using _context = vi.spyOn(context, "readNewThreadContext").mockReturnValue({
     activeDraftThread: null,
-    activeThread: null,
+    activeThread: undefined,
     defaultProjectRef: null,
     handleNewThread,
   } as ReturnType<typeof context.readNewThreadContext>);
