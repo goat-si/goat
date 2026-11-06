@@ -656,6 +656,11 @@ describe("planRun", () => {
         "test-windows",
       ),
     );
+    assert.ok(
+      (
+        await plan(pr(), labels([]), ["apps/server/src/memory/imports/MemoryImportReader.ts"])
+      ).tasks.includes("test-windows"),
+    );
     assert.ok(!(await plan(pr(), labels([]))).tasks.includes("test-windows"));
     const labelled = await plan(pr(), labels([WINDOWS_LABEL]));
     assert.equal(labelled.reasons.get("test-windows"), WINDOWS_LABEL + " label");

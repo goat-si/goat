@@ -65,6 +65,11 @@ const WINDOWS_SUITES = [
   "scripts/lib/changed-tests",
   "scripts/build-computer-use-helper",
 ];
+/** Sources whose changes also select test-windows, without filtering in their POSIX-only suites. */
+const WINDOWS_TRIGGERS = [
+  "apps/server/src/memory/imports/MemoryImportReader",
+  "apps/server/src/memory/imports/gitSupport",
+];
 const WINDOWS_TASK = "test-windows";
 /** Every workspace package suite no other task owns, listed by packageSuites. */
 const PACKAGES_TASK = "test-packages";
@@ -219,7 +224,8 @@ const BUILD_ONLY_EDGES = [["apps/server", "apps/web"]];
 /** Directories outside apps/ and packages/ that only typecheck and lint cover. */
 const TYPECHECK_ONLY_RE = /^(?:infra\/(?!relay\/)[^/]+|oxlint-plugin-goat)\//;
 
-const isWindowsSensitive = (file) => WINDOWS_SUITES.some((suite) => file.startsWith(suite));
+const isWindowsSensitive = (file) =>
+  [...WINDOWS_SUITES, ...WINDOWS_TRIGGERS].some((prefix) => file.startsWith(prefix));
 const isLinuxComputerUse = (file) =>
   LINUX_COMPUTER_USE_PATHS.some((prefix) => file.startsWith(prefix));
 

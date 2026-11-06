@@ -951,6 +951,18 @@ describe("memoryImportIssueReason", () => {
       "User memory count limit reached: 1",
       "Forget memories you no longer need in Settings → Memory to free space, then preview again",
     ]);
+    // Forgetting does not lower lifetime identifiers, so that limit gets no forget advice.
+    expect(
+      memoryImportRequestFailureMessage(
+        new M.MemoryImportRpcError({
+          issue: "capacity_exceeded",
+          capacity: { ...capacity, dimension: "lifetime_ids" },
+        }),
+      ),
+    ).toBe("Memory storage is full: Memory identifier limit reached (500 of 500).");
+    expect(
+      memoryImportResultLines({ outcomes: {}, issues: {}, capacity: { lifetime_ids: 1 } }),
+    ).toEqual(["Memory identifier limit reached: 1"]);
   });
 
   it("shows a typed refusal and leaves other failures unnamed", () => {

@@ -68,7 +68,7 @@ export function memoryImportIssueReason(
     case "operation_id_reused":
       return "This import request was already used. Preview again.";
     case "capacity_exceeded":
-      return "Memory storage is full. Forget memories you no longer need in Settings → Memory, then preview again.";
+      return "Memory storage is full.";
   }
 }
 
@@ -109,12 +109,40 @@ const memoryCapacityLabels: Record<MemoryCapacityDimension, string> = {
   import_lineage_records: "Import history count limit reached",
   import_lineage_bytes: "Import history storage limit reached",
 };
-const capacityNextStep =
+const forgetToFree =
   "Forget memories you no longer need in Settings → Memory to free space, then preview again";
+const waitToFree = "GOAT frees this as pending work and syncing finish; try again later";
+// Only limits a person can free get a next step; the rest stay a plain limit message.
+const capacityNextSteps: Partial<Record<MemoryCapacityDimension, string>> = {
+  body: "Shorten this memory, then try again",
+  user_items: forgetToFree,
+  project_items: forgetToFree,
+  thread_summaries: forgetToFree,
+  thread_items: forgetToFree,
+  space_live_items: forgetToFree,
+  environment_live_items: forgetToFree,
+  live_payload_bytes: forgetToFree,
+  import_live_items: forgetToFree,
+  import_live_bytes: forgetToFree,
+  fts_indexed_text: forgetToFree,
+  import_session_items: "Import fewer memories at a time",
+  import_session_bytes: "Import fewer memories at a time",
+  work_items: waitToFree,
+  work_bytes: waitToFree,
+  report_items: waitToFree,
+  report_bytes: waitToFree,
+  log_tail_rows: waitToFree,
+  log_tail_bytes: waitToFree,
+  relay_environment: waitToFree,
+  relay_hub: waitToFree,
+  checkpoint_staging: waitToFree,
+  members: "Remove a device in the hub's Memory settings before adding another",
+};
 
 /** What is full and how to free it, from a capacity refusal. */
 function memoryImportCapacityMessage(capacity: MemoryCapacityExceeded): string {
-  return `Memory storage is full: ${memoryCapacityLabels[capacity.dimension]} (${capacity.current} of ${capacity.limit}). ${capacityNextStep}.`;
+  const next = capacityNextSteps[capacity.dimension];
+  return `Memory storage is full: ${memoryCapacityLabels[capacity.dimension]} (${capacity.current} of ${capacity.limit}).${next ? ` ${next}.` : ""}`;
 }
 
 /** The typed refusal's reason, or null when the failure is not a memory-import error. */
@@ -166,7 +194,12 @@ export function memoryImportResultLines(counts: MemoryImportCounts): readonly st
     ...lines(memoryImportOutcomeLabels, counts.outcomes),
     ...lines(memoryImportIssueLabels, counts.issues),
     ...capacity,
-    ...(capacity.length ? [capacityNextStep] : []),
+    ...new Set(
+      (Object.keys(counts.capacity) as MemoryCapacityDimension[]).flatMap((dimension) => {
+        const next = counts.capacity[dimension] ? capacityNextSteps[dimension] : undefined;
+        return next ? [next] : [];
+      }),
+    ),
   ];
 }
 
