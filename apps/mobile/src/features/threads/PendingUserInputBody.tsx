@@ -94,7 +94,7 @@ export function PendingUserInputBody(props: BodyProps) {
           <View key={question.id} className="gap-2 pt-1">
             <Text
               style={proseDirectionStyle(question.header, setDirection)}
-              className="font-goat-bold text-xs uppercase tracking-[1px] text-foreground-muted"
+              className="font-goat-medium text-xs text-foreground-muted"
             >
               {question.header}
             </Text>

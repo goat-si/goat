@@ -102,7 +102,7 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
       pointerEvents={props.collapsed ? "auto" : "none"}
       accessibilityElementsHidden={!props.collapsed}
       importantForAccessibility={props.collapsed ? "auto" : "no-hide-descendants"}
-      className="flex-row items-center gap-2 rounded-full border border-border bg-card-alt py-1.5 pl-4 pr-1.5"
+      className="flex-row items-center gap-2 rounded-full border border-border bg-card-alt py-1 pl-4 pr-1"
     >
       <Pressable
         accessibilityRole="button"
@@ -112,7 +112,13 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
         onPress={props.onToggleCollapsed}
         className="min-h-10 flex-1 flex-row items-center gap-2 active:opacity-70"
       >
-        <Text className="font-goat-bold text-2xs uppercase tracking-[1.1px] text-foreground-secondary">
+        <SymbolView
+          name="questionmark.bubble"
+          size={13}
+          tintColorClassName="accent-foreground-secondary"
+          type="monochrome"
+        />
+        <Text className="font-goat-medium text-xs text-foreground-secondary">
           User input needed
         </Text>
         <Text className="font-sans text-xs text-foreground-muted">
@@ -131,7 +137,6 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
           accessibilityLabel="Stop"
           icon="stop.fill"
           variant="danger"
-          className="h-9 w-9"
           disabled={!props.canOperateThread}
           onPress={props.onStopThread}
         />
@@ -144,7 +149,7 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
       pointerEvents={props.collapsed ? "none" : "auto"}
       accessibilityElementsHidden={props.collapsed}
       importantForAccessibility={props.collapsed ? "no-hide-descendants" : "auto"}
-      className="overflow-hidden gap-2.5 rounded-[20px] border border-border bg-card-alt p-4"
+      className="overflow-hidden gap-3 rounded-[20px] border border-border bg-card-alt p-4"
       style={cardAnimatedStyle}
     >
       <Pressable
@@ -153,10 +158,18 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
         onPress={props.onToggleCollapsed}
         className="flex-row items-start gap-2"
       >
-        <View className="flex-1 gap-2.5">
-          <Text className="font-goat-bold text-2xs uppercase tracking-[1.1px] text-foreground-secondary">
-            User input needed
-          </Text>
+        <View className="flex-1 gap-1.5">
+          <View className="flex-row items-center gap-1.5">
+            <SymbolView
+              name="questionmark.bubble"
+              size={13}
+              tintColorClassName="accent-foreground-secondary"
+              type="monochrome"
+            />
+            <Text className="font-goat-medium text-xs text-foreground-secondary">
+              User input needed
+            </Text>
+          </View>
           <Text className="font-goat-bold text-lg text-foreground">
             Fill in the pending answers
           </Text>
