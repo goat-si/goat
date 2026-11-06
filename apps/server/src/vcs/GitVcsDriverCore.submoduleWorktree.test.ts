@@ -118,13 +118,18 @@ const makeSubmoduleCheckout = Effect.fn("test.makeSubmoduleCheckout")(function* 
   // A setup hook would install dependencies into whatever root it sees. Like this
   // repository's, the hooks directory is relative, generated and untracked.
   const hookLog = path.join(root, "post-checkout-roots");
+  const hookArgs = path.join(root, "post-checkout-args");
   const hook = path.join(checkout, ".hooks", "post-checkout");
   yield* git(checkout, ["config", "core.hooksPath", ".hooks"]);
   yield* fileSystem.writeFileString(path.join(gitDir, "info", "exclude"), ".hooks/\n");
   yield* fileSystem.makeDirectory(path.dirname(hook), { recursive: true });
   yield* fileSystem.writeFileString(
     hook,
-    "#!/bin/sh\ngit rev-parse --show-toplevel >> '" + hookLog.replaceAll("\\", "/") + "'\n",
+    "#!/bin/sh\ngit rev-parse --show-toplevel >> '" +
+      hookLog.replaceAll("\\", "/") +
+      '\'\nprintf \'%s %s %s\\n\' "$1" "$2" "$3" >> \'' +
+      hookArgs.replaceAll("\\", "/") +
+      "'\n",
   );
   yield* fileSystem.chmod(hook, 0o755);
   const hookRoots = () =>
@@ -166,6 +171,8 @@ const makeSubmoduleCheckout = Effect.fn("test.makeSubmoduleCheckout")(function* 
     readConfig,
     sharedRoot,
     hookRoots,
+    hookArgs,
+    head,
     returnedPaths,
   };
 });
@@ -192,6 +199,25 @@ it.layer(oldGitLayer)("worktrees without git hook run", (it) => {
       const worktree = yield* repo.createWorktree("old-git");
       yield* assertCheckedOutInPlace(worktree, { gitDir: repo.gitDir, sparse: false });
       assertSamePaths(yield* repo.hookRoots(), [worktree]);
+      const fs = yield* FileSystem.FileSystem;
+      assert.equal(
+        (yield* fs.readFileString(repo.hookArgs)).trim(),
+        `${"0".repeat(repo.head.length)} ${repo.head} 1`,
+      );
+    }),
+  );
+  it.effect.each(["missing", "not executable"] as const)("skips a %s source hook", (state) =>
+    Effect.gen(function* () {
+      const repo = yield* makeSubmoduleCheckout(true);
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const hook = path.join(repo.checkout, ".hooks", "post-checkout");
+      yield* git(repo.checkout, ["config", "extensions.worktreeConfig", "true"]);
+      if (state === "missing") yield* fs.remove(hook);
+      else yield* fs.chmod(hook, 0o644);
+      const worktree = yield* repo.createWorktree("no-hook");
+      yield* assertCheckedOutInPlace(worktree, { gitDir: repo.gitDir, sparse: false });
+      assert.deepStrictEqual(yield* repo.hookRoots(), []);
     }),
   );
 });

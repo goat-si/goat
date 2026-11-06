@@ -78,7 +78,7 @@ import {
   missingWindowsCheckoutSettings,
   pinWorktreeRoot,
   readWorktreeRoot,
-  sourceHooksConfig,
+  replayPostCheckout,
   WINDOWS_CHECKOUT_SETTINGS,
   worktreeFolderName,
   worktreeSparseCheckoutPatterns,
@@ -4218,8 +4218,13 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     // progress. Git runs post-checkout only after the worktree is complete and unlocked, so
     // a post-checkout hook that goes silent costs the hook, not the checkout. Earlier hooks,
     // such as reference-transaction while the branch is created, run before any file lands.
-    const runCheckoutCommand = (operation: string, cwd: string, commandArgs: string[]) => {
-      let postCheckoutStarted = false;
+    const runCheckoutCommand = (
+      operation: string,
+      cwd: string,
+      commandArgs: string[],
+      hook?: string,
+    ) => {
+      let postCheckoutStarted = hook !== undefined;
       return executeGitWithStableDiagnostics(
         operation,
         cwd,
@@ -4241,6 +4246,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
             // Git only prints checkout progress when stderr is a tty or the delay
             // elapsed. GIT_PROGRESS_DELAY=0 forces it through the pipe.
             GIT_PROGRESS_DELAY: "0",
+            ...(hook === undefined ? {} : { GOAT_POST_CHECKOUT_HOOK: hook }),
             ...(options?.skipSetupHook ? { GOAT_WORKTREE_SETUP: "0" } : {}),
           },
           progress: {
@@ -4315,30 +4321,23 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         // same-commit switch. Hooks are off for it, then post-checkout runs with the
         // all-zero previous HEAD a new worktree gets, which is how hooks tell one apart.
         yield* runCheckoutCommand("GitVcsDriver.createWorktree.checkout", targetPath, [
-          ...(canReplayHook
-            ? ["-c", `core.hooksPath=${path.join(targetPath, ".git-goat-no-hooks")}`]
-            : yield* sourceHooksConfig(executeGit, path, input.cwd)),
+          "-c",
+          `core.hooksPath=${hostPlatform === "win32" ? "NUL" : "/dev/null"}`,
           "checkout",
           "-f",
           "--progress",
         ]);
         if (sparse && progress?.onSparseCheckout) yield* progress.onSparseCheckout(sparse.excluded);
-        if (!canReplayHook) return;
-        const head = (yield* runGitStdout("GitVcsDriver.createWorktree.head", targetPath, [
-          "rev-parse",
-          "HEAD",
-        ])).trim();
-        yield* runCheckoutCommand("GitVcsDriver.createWorktree.postCheckout", targetPath, [
-          ...(yield* sourceHooksConfig(executeGit, path, input.cwd)),
-          "hook",
-          "run",
-          "--ignore-missing",
-          "post-checkout",
-          "--",
-          "0".repeat(head.length),
-          head,
-          "1",
-        ]);
+        yield* replayPostCheckout({
+          git: executeGit,
+          fileSystem,
+          path,
+          cwd: input.cwd,
+          target: targetPath,
+          canReplayHook,
+          run: runCheckoutCommand,
+          onStarted: () => progress?.onHookStarted?.("post-checkout") ?? Effect.void,
+        });
       }).pipe(
         Effect.andThen(
           Effect.gen(function* () {

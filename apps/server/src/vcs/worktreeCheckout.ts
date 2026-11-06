@@ -1,5 +1,8 @@
+// @effect-diagnostics nodeBuiltinImport:off - Effect's filesystem access API does not expose X_OK.
+import * as NodeFS from "node:fs";
 import { GitCommandError } from "@goat/contracts";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import type * as FileSystem from "effect/FileSystem";
 import type * as Path from "effect/Path";
 import { isWindowsReservedFileName, normalizeProjectPathForComparison } from "@goat/shared/path";
@@ -156,14 +159,139 @@ export const readWorktreeRoot = Effect.fn("GitVcsDriver.createWorktree.readWorkt
  * `git worktree add` runs post-checkout from. A relative `core.hooksPath`, such as a
  * generated and untracked one, would otherwise resolve inside the new worktree.
  */
-export const sourceHooksConfig = Effect.fn("GitVcsDriver.createWorktree.sourceHooksConfig")(
-  function* (git: WorktreeGit, path: Path.Path, cwd: string) {
-    const hooks = (yield* git("GitVcsDriver.createWorktree.sourceHooksConfig", cwd, [
+const sourceHooksConfig = Effect.fn("GitVcsDriver.createWorktree.sourceHooksConfig")(function* (
+  git: WorktreeGit,
+  path: Path.Path,
+  cwd: string,
+) {
+  const hooks = (yield* git("GitVcsDriver.createWorktree.sourceHooksConfig", cwd, [
+    "rev-parse",
+    "--git-path",
+    "hooks",
+  ])).stdout.trim();
+  return ["-c", `core.hooksPath=${path.resolve(cwd, hooks)}`];
+});
+
+const sourcePostCheckout = Effect.fn("GitVcsDriver.createWorktree.sourcePostCheckout")(function* (
+  git: WorktreeGit,
+  fileSystem: FileSystem.FileSystem,
+  path: Path.Path,
+  cwd: string,
+) {
+  const operation = "GitVcsDriver.createWorktree.sourcePostCheckout";
+  const resolved = (yield* git(operation, cwd, [
+    "rev-parse",
+    "--git-path",
+    "hooks/post-checkout",
+  ])).stdout.trim();
+  const hook = path.resolve(cwd, resolved);
+  const info = yield* fileSystem.stat(hook).pipe(
+    Effect.asSome,
+    Effect.catchIf(
+      (error) => error.reason._tag === "NotFound",
+      () => Effect.succeedNone,
+    ),
+    Effect.mapError(
+      (cause) =>
+        new GitCommandError({
+          operation,
+          command: "stat",
+          cwd,
+          detail: "Failed to inspect post-checkout hook.",
+          cause,
+        }),
+    ),
+  );
+  if (Option.isNone(info) || info.value.type !== "File" || (info.value.mode & 0o111) === 0)
+    return null;
+  const executable = yield* Effect.tryPromise({
+    try: async () => {
+      try {
+        await NodeFS.promises.access(hook, NodeFS.constants.X_OK);
+        return true;
+      } catch (cause) {
+        if (
+          typeof cause === "object" &&
+          cause !== null &&
+          "code" in cause &&
+          (cause.code === "ENOENT" || cause.code === "EACCES")
+        )
+          return false;
+        throw cause;
+      }
+    },
+    catch: (cause) =>
+      new GitCommandError({
+        operation,
+        command: "access",
+        cwd,
+        detail: "Failed to inspect post-checkout hook.",
+        cause,
+      }),
+  });
+  return executable ? hook.replaceAll("\\", "/") : null;
+});
+
+export const replayPostCheckout = Effect.fn("GitVcsDriver.createWorktree.replayPostCheckout")(
+  function* ({
+    git,
+    fileSystem,
+    path,
+    cwd,
+    target,
+    canReplayHook,
+    run,
+    onStarted,
+  }: {
+    git: WorktreeGit;
+    fileSystem: FileSystem.FileSystem;
+    path: Path.Path;
+    cwd: string;
+    target: string;
+    canReplayHook: boolean;
+    run: (
+      operation: string,
+      cwd: string,
+      args: string[],
+      hook?: string,
+    ) => Effect.Effect<void, GitCommandError>;
+    onStarted: () => Effect.Effect<void>;
+  }) {
+    const head = (yield* git("GitVcsDriver.createWorktree.head", target, [
       "rev-parse",
-      "--git-path",
-      "hooks",
+      "HEAD",
     ])).stdout.trim();
-    return ["-c", `core.hooksPath=${path.resolve(cwd, hooks)}`];
+    if (canReplayHook) {
+      yield* run("GitVcsDriver.createWorktree.postCheckout", target, [
+        ...(yield* sourceHooksConfig(git, path, cwd)),
+        "hook",
+        "run",
+        "--ignore-missing",
+        "post-checkout",
+        "--",
+        "0".repeat(head.length),
+        head,
+        "1",
+      ]);
+      return;
+    }
+    const hook = yield* sourcePostCheckout(git, fileSystem, path, cwd);
+    if (hook === null) return;
+    yield* onStarted();
+    // Git's shell dispatch handles extensionless scripts on Windows as well as Unix.
+    yield* run(
+      "GitVcsDriver.createWorktree.postCheckout",
+      target,
+      [
+        "-c",
+        'alias.goat-post-checkout=!exec "$GOAT_POST_CHECKOUT_HOOK"',
+        "goat-post-checkout",
+        "0".repeat(head.length),
+        head,
+        "1",
+      ],
+      hook,
+    );
   },
 );
 
