@@ -1,3 +1,4 @@
+import { OpenCodeSettings } from "@goat/provider-opencode/settings";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as CodexInstallation from "./CodexInstallation.ts";
 import * as CodexManagedTokenBroker from "./CodexManagedTokenBroker.ts";
@@ -6,6 +7,8 @@ import { describe, expect, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   DEFAULT_OPENCODEX_BASE_URL,
+  AntigravitySettings,
+  ProviderDriverKind,
   EnvironmentId,
   type CodexSettings,
   ProviderInstanceConfigMap,
@@ -204,6 +207,65 @@ describe("ProviderInstanceRegistry — multi-instance codex slice", () => {
       });
       expect(yield* registry.getInstance(id)).toBeDefined();
       expect(received).toEqual([{ name: "API_KEY", value: "fixture-secret", sensitive: true }]);
+    }).pipe(Effect.scoped, Effect.provide(layerTest)),
+  );
+
+  it.effect.each([
+    { driverName: "antigravity", field: "apiKey", schema: AntigravitySettings },
+    { driverName: "opencode", field: "serverPassword", schema: OpenCodeSettings },
+  ])("resolves and refreshes $driverName credential references", ({ driverName, field, schema }) =>
+    Effect.gen(function* () {
+      let secret = "first";
+      let available = false;
+      let invalidations = 0;
+      const received: unknown[] = [];
+      const driver = {
+        ...CodexDriver,
+        driverKind: ProviderDriverKind.make(driverName),
+        configSchema: schema,
+        create: (input: Parameters<typeof CodexDriver.create>[0]) => {
+          received.push(input.config);
+          return CodexDriver.create({ ...input, config: makeCodexConfig({ enabled: true }) });
+        },
+      } as unknown as typeof CodexDriver;
+      const id = ProviderInstanceId.make("secret_test");
+      const configMap = decodeProviderInstanceConfigMap({
+        [id]: {
+          driver: driverName,
+          config: {
+            enabled: true,
+            [field]: { provider: "vault", reference: "op://work/item/password" },
+          },
+        },
+      });
+      const { registry, mutator } = yield* makeProviderInstanceRegistry({
+        drivers: [driver],
+        configMap,
+        resolveSecret: () =>
+          available
+            ? Effect.succeed(secret)
+            : Effect.fail(
+                new ProviderDriverError({
+                  driver: driver.driverKind,
+                  instanceId: id,
+                  detail: "locked",
+                }),
+              ),
+        invalidateSecrets: () => {
+          invalidations++;
+        },
+      });
+      expect(yield* registry.getInstance(id)).toBeUndefined();
+      expect(received).toHaveLength(0);
+      available = true;
+      yield* mutator.reloadSecrets?.(id) ?? Effect.void;
+      expect(received).toMatchObject([{ [field]: "first" }]);
+      secret = "second";
+      yield* mutator.reconcile(configMap);
+      expect(received).toHaveLength(1);
+      yield* mutator.reloadSecrets?.(id) ?? Effect.void;
+      expect(received).toMatchObject([{ [field]: "first" }, { [field]: "second" }]);
+      expect(invalidations).toBe(2);
     }).pipe(Effect.scoped, Effect.provide(layerTest)),
   );
 

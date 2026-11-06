@@ -5,6 +5,7 @@ import {
   makeProviderSettingsSchema,
   ProviderHomeRouteFields,
   secretSetting,
+  SettingsSecretValue,
   TrimmedString,
 } from "@goat/contracts";
 import * as Effect from "effect/Effect";
@@ -38,7 +39,7 @@ export const OpenCodeSettings = makeProviderSettingsSchema(
         },
       }),
     ),
-    serverPassword: TrimmedString.pipe(
+    serverPassword: SettingsSecretValue.pipe(
       secretSetting,
       Schema.withDecodingDefault(Effect.succeed("")),
       Schema.annotateKey({

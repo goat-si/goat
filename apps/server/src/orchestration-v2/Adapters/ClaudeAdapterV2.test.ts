@@ -299,7 +299,6 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
     ]) {
       assert.isUndefined(override(value), String(value));
     }
-
     const options = ClaudeAdapterV2.makeClaudeQueryOptions({
       modelSelection: CLAUDE_TEST_MODEL_SELECTION,
       nativeThreadId: "native-tool-search",
@@ -313,7 +312,6 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
       ENABLE_TOOL_SEARCH: "true",
     });
   });
-
   it("projects AskUserQuestion input with question text as the answer key", () => {
     const preview = "\n  **Proposed change**\n\n```ts\n\tconst enabled = true;\n```\n  ";
     assert.deepEqual(
@@ -356,7 +354,6 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
       ClaudeAdapterV2.ClaudeProviderCapabilitiesV2.planning.supportsStructuredQuestions,
     );
   });
-
   it("maps canonical read-only never policy to Claude dontAsk with read-only tools", () => {
     const queryPolicy = ClaudeAdapterV2.claudeRuntimeQueryPolicyForRuntimePolicy(
       ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
@@ -371,7 +368,6 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
         },
       }),
     );
-
     assert.deepEqual(queryPolicy, {
       permissionMode: "dontAsk",
       tools: ClaudeAdapterV2.CLAUDE_READ_ONLY_ALLOWED_TOOLS,
@@ -379,7 +375,6 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
       installPermissionCallback: false,
     });
   });
-
   it("does not auto-allow reads for canonical restricted read-only never policy", () => {
     const queryPolicy = ClaudeAdapterV2.claudeRuntimeQueryPolicyForRuntimePolicy(
       ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
@@ -398,14 +393,12 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
         },
       }),
     );
-
     assert.deepEqual(queryPolicy, {
       permissionMode: "dontAsk",
       tools: ClaudeAdapterV2.CLAUDE_READ_ONLY_ALLOWED_TOOLS,
       installPermissionCallback: false,
     });
   });
-
   it("maps default full-access policy to Claude bypass permissions", () => {
     const queryPolicy = ClaudeAdapterV2.claudeRuntimeQueryPolicyForRuntimePolicy(
       ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
@@ -414,7 +407,6 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
         cwd: "/workspace",
       }),
     );
-
     assert.deepEqual(queryPolicy, {
       permissionMode: "bypassPermissions",
       allowDangerouslySkipPermissions: true,
@@ -428,7 +420,6 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
       cwd: "/workspace",
       approvalPolicy: "never",
     });
-
     assert.deepEqual(
       ClaudeAdapterV2.claudeRuntimeQueryPolicyForRuntimePolicy(runtimePolicy, {
         bypassDisabled: true,
@@ -444,7 +435,6 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
       { permissionMode: "default", installPermissionCallback: true },
     );
   });
-
   it("keeps approval-required mode interactive with danger-full-access sandboxing", () => {
     const queryPolicy = ClaudeAdapterV2.claudeRuntimeQueryPolicyForRuntimePolicy(
       ProviderAdapter.ProviderAdapterV2RuntimePolicy.make({
@@ -456,14 +446,12 @@ describe("ClaudeAdapterV2 runtime query policy", () => {
         },
       }),
     );
-
     assert.deepEqual(queryPolicy, {
       permissionMode: "default",
       installPermissionCallback: true,
     });
   });
 });
-
 describe("ClaudeAdapterV2 MCP query overrides", () => {
   const GOAT_MCP_SERVERS = {
     goat: {
@@ -476,7 +464,6 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
     },
   } as const;
   const GOAT_MCP_ENVIRONMENT = { NO_PROXY: "127.0.0.1" } as const;
-
   const mcpSessionFor = (
     threadId: ThreadId,
     authorizationHeader = "Bearer secret-claude-token",
@@ -489,11 +476,9 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
     authorizationHeader,
     browserToolsAvailable: true,
   });
-
   it("keeps the goat endpoint off any configured proxy without dropping existing exemptions", () => {
     const bypass = ClaudeAdapterV2.claudeMcpProxyBypassEnvironment;
     const endpoint = "http://127.0.0.1:43123/mcp";
-
     assert.deepEqual(bypass(endpoint, {}), { NO_PROXY: "127.0.0.1" });
     assert.deepEqual(bypass(endpoint, { NO_PROXY: "corp.internal, .example.com" }), {
       NO_PROXY: "corp.internal,.example.com,127.0.0.1",
@@ -505,7 +490,6 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
     assert.deepEqual(bypass(endpoint, { NO_PROXY: "localhost,127.0.0.1" }), {});
     assert.deepEqual(bypass(endpoint, { NO_PROXY: "*" }), {});
     assert.deepEqual(bypass("http://[::1]:43123/mcp", {}), { NO_PROXY: "::1" });
-
     const overrides = ClaudeAdapterV2.claudeMcpQueryOverrides({
       mcpSession: mcpSessionFor(ThreadId.make("thread-claude-mcp-proxy-bypass")),
       readOnlySandbox: false,
@@ -513,7 +497,6 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
     });
     assert.deepEqual(overrides.mcpEnvironment, { NO_PROXY: "corp.internal,127.0.0.1" });
   });
-
   it("pre-approves all goat tools when attaching an MCP session without an allowlist", () => {
     const threadId = ThreadId.make("thread-claude-mcp-no-allowlist");
     const mcpSession = mcpSessionFor(threadId);
@@ -521,14 +504,12 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
       mcpSession,
       readOnlySandbox: false,
     });
-
     assert.deepEqual(overrides, {
       allowedTools: [ClaudeAdapterV2.CLAUDE_GOAT_MCP_TOOL_WILDCARD],
       mcpServers: GOAT_MCP_SERVERS,
       mcpEnvironment: GOAT_MCP_ENVIRONMENT,
     });
   });
-
   it("takes the cua-driver name for an unattended turn without a lease, approving nothing", () => {
     const mcpSession = {
       ...mcpSessionFor(ThreadId.make("thread-claude-cua-blocked")),
@@ -547,7 +528,6 @@ describe("ClaudeAdapterV2 MCP query overrides", () => {
       ClaudeAdapterV2.CLAUDE_GOAT_MCP_TOOL_WILDCARD,
     ]);
   });
-
   it("routes a leased turn's cua-driver name to GOAT's proxy", () => {
     const proxy: M.CuaDriverMcpConfiguration = {
       command: "/goat/node",
@@ -4625,12 +4605,27 @@ describe("ClaudeAdapterV2 background wake turns", () => {
     () =>
       Effect.scoped(
         Effect.gen(function* () {
-          let catalogReads = 0;
+          let catalog: ClaudeModelCatalog = {
+            models: BUNDLED_CLAUDE_MODEL_CATALOG.models.map((entry) =>
+              entry.model.slug !== "claude-opus-5-5"
+                ? entry
+                : {
+                    ...entry,
+                    model: {
+                      ...entry.model,
+                      capabilities: {
+                        ...entry.model.capabilities,
+                        optionDescriptors:
+                          entry.model.capabilities?.optionDescriptors?.filter(
+                            (option) => option.id !== "ultracode",
+                          ) ?? [],
+                      },
+                    },
+                  },
+            ),
+          };
           const harness = yield* makeWakeHarnessWithOptions({
-            modelCatalog: Effect.sync(() => {
-              catalogReads++;
-              return BUNDLED_CLAUDE_MODEL_CATALOG;
-            }),
+            modelCatalog: Effect.sync(() => catalog),
           });
           const now = yield* DateTime.now;
           const normal = {
@@ -4665,6 +4660,7 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           yield* settle;
           assert.deepEqual(harness.liveSelectionChanges, []);
 
+          catalog = BUNDLED_CLAUDE_MODEL_CATALOG;
           yield* harness.runtime.startTurn(
             turn(3, {
               ...normal,
@@ -4685,7 +4681,6 @@ describe("ClaudeAdapterV2 background wake turns", () => {
           ]);
           assert.strictEqual(harness.getOpenedOptions(), originalOptions);
           assert.lengthOf(harness.offeredMessages, 4);
-          assert.isAtLeast(catalogReads, 5);
 
           for (const [ordinal, selection] of [
             [5, CLAUDE_TEST_RESTART_MODEL_SELECTION],

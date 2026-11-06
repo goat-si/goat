@@ -1,3 +1,4 @@
+import { settingsSecretLiteral } from "@goat/contracts";
 import { ProviderDriverKind, TextGenerationError } from "@goat/contracts";
 import { OpenCodeSettings } from "../settings.ts";
 import * as Crypto from "effect/Crypto";
@@ -248,6 +249,7 @@ export const OpenCodeDriver: ProviderDriver<
     const effectiveConfig = {
       ...config,
       enabled,
+      serverPassword: settingsSecretLiteral(config.serverPassword),
       binaryPath: expandHomePath(config.binaryPath, yield* HostProcess.HomeDirectory),
     } satisfies OpenCodeSettings;
     const runtimeProbe = yield* makeOpenCodeRuntimeProbe(

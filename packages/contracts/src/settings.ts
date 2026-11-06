@@ -115,10 +115,14 @@ import { CuaSettingsFields, CuaSettingsPatchFields } from "./computerUseSettings
 import { SnoozeSettingsFields, SnoozeSettingsPatchFields } from "./snoozePresets.ts";
 import { BuiltInSkillProjectOverrideFields } from "./builtinSkills.ts";
 import * as BlockedBrowser from "./blockedBrowserHosts.ts";
-import { SecretProviderId, SecretProviderSlug, SecretReference } from "./secretReference.ts";
+import {
+  SecretProviderId,
+  SecretProviderSlug,
+  SecretReference,
+  SettingsSecretValue,
+} from "./secretReference.ts";
 export { SecretProviderId } from "./secretReference.ts";
 import * as Restart from "./codexTurnSurvival.ts";
-
 export * from "./settingsFontSizes.ts";
 export {
   CODEX_APP_SERVER_ISOLATION_DEFAULT,
@@ -131,7 +135,6 @@ const DEFAULT_TIMESTAMP_FORMAT: TimestampFormat = "locale";
 export const DiffLayout = Schema.Literals(["stacked", "split"]);
 export type DiffLayout = typeof DiffLayout.Type;
 const DEFAULT_DIFF_LAYOUT: DiffLayout = "stacked";
-
 export const SnapShotKeyChord = KeybindingShortcut.check(
   Schema.makeFilter(
     (shortcut) =>
@@ -156,21 +159,17 @@ export type SnapShotShortcut = typeof SnapShotShortcut.Type;
 export const SnapShotSound = Schema.Literals(["soft-pop", "camera-shutter"]);
 export type SnapShotSound = typeof SnapShotSound.Type;
 const DEFAULT_SNAP_SHOT_SOUND: SnapShotSound = "soft-pop";
-
 export type SnapShotModifierPairShortcut = Extract<SnapShotShortcut, { readonly kind: string }>;
-
 export function isModifierPairShortcut(
   shortcut: SnapShotShortcut,
 ): shortcut is SnapShotModifierPairShortcut {
   return "kind" in shortcut;
 }
-
 export function snapShotShortcutModifierPair(
   shortcut: SnapShotModifierPairShortcut,
 ): SnapShotModifier {
   return shortcut.kind === "both-shift-keys" ? "shift" : shortcut.modifier;
 }
-
 const APPLE_MODIFIER_LABELS: Record<SnapShotModifier, string> = {
   shift: "Shift",
   meta: "Command",
@@ -790,7 +789,7 @@ export const AntigravitySettings = makeProviderSettingsSchema(
         },
       }),
     ),
-    apiKey: TrimmedString.pipe(
+    apiKey: SettingsSecretValue.pipe(
       secretSetting,
       Schema.withDecodingDefault(Effect.succeed("")),
       Schema.annotateKey({

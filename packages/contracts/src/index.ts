@@ -66,7 +66,13 @@ export * from "./server.ts";
 export * from "./automationHold.ts";
 export * from "./settings.ts";
 export * from "./worktreeRetention.ts";
-export { SecretReference, isSecretReference, isOnePasswordReference } from "./secretReference.ts";
+export {
+  SecretReference,
+  isSecretReference,
+  isOnePasswordReference,
+  SettingsSecretValue,
+  settingsSecretLiteral,
+} from "./secretReference.ts";
 export * from "./blockedBrowserHosts.ts";
 export * from "./git.ts";
 export * from "./vcs.ts";

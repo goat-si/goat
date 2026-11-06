@@ -1,3 +1,4 @@
+import { settingsSecretLiteral } from "@goat/contracts";
 import { ProviderInstanceId, TextGenerationError } from "@goat/contracts";
 import * as M from "@goat/contracts";
 import type { MemoryGenerationRunnerContext } from "@goat/provider-core/server/memoryGenerationRunner";
@@ -80,7 +81,9 @@ function withOpenCodeTextGeneration<A, E, R>(
     const serverOwner = yield* OpenCodeServerOwner.make({
       binaryPath: settings.binaryPath,
       directory: process.cwd(),
-      ...(settings.serverPassword ? { serverPassword: settings.serverPassword } : {}),
+      ...(settings.serverPassword
+        ? { serverPassword: settingsSecretLiteral(settings.serverPassword) }
+        : {}),
       ...(environment ? { environment } : {}),
     });
     const textGeneration = yield* OpenCodeTextGeneration.makeOpenCodeTextGeneration(settings, {

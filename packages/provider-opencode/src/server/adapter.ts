@@ -1,3 +1,4 @@
+import { settingsSecretLiteral } from "@goat/contracts";
 import type {
   Event as OpenCodeEvent,
   Message as OpenCodeMessage,
@@ -20,7 +21,6 @@ import {
   type OpenCodePermissionRequestKind,
 } from "./permissionRules.ts";
 import { recordString, recordValue } from "./records.ts";
-
 export {
   openCodeChildPermissionRules,
   openCodePermissionRequestKind,
@@ -67,7 +67,6 @@ import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-
 import * as ProviderHost from "@goat/provider-core/server/ProviderHost";
 import { mcpToolPresentation } from "@goat/provider-core/server/mcpToolPresentation";
 import * as McpProviderSession from "@goat/provider-core/server/mcpSession";
@@ -747,7 +746,7 @@ export const makeOpenCodeAdapterV2 = Effect.fn("makeOpenCodeAdapterV2")(function
           directory: cwd,
           serverUrl: options.settings.serverUrl,
           ...(options.settings.serverPassword
-            ? { serverPassword: options.settings.serverPassword }
+            ? { serverPassword: settingsSecretLiteral(options.settings.serverPassword) }
             : {}),
           environment: options.environment,
         });
