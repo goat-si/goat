@@ -206,6 +206,32 @@ it.effect("refuses wait:false without a clientRequestId, which the next call wou
   ),
 );
 
+it.effect("a declined secret tells the agent not to ask another way", () =>
+  withRunningTurn(({ orchestrator, requestSecret }) =>
+    Effect.gen(function* () {
+      yield* requestSecret(scope, input);
+      const card = (yield* orchestrator.getThreadProjection(threadId)).turnItems.find(
+        (item) => item.type === "secret_request",
+      )!;
+      yield* orchestrator.dispatch({
+        type: "secret_request.record",
+        commandId: CommandId.make("secret-declined"),
+        threadId,
+        runId: card.runId!,
+        nodeId: card.nodeId!,
+        turnItemId: card.id,
+        label: input.label,
+        reason: input.reason,
+        secretStatus: "declined",
+      });
+      expect(yield* requestSecret(scope, input)).toMatchObject({
+        status: "declined",
+        note: "The user declined. Do not ask in chat or another way; explain what is blocked and continue without it.",
+      });
+    }),
+  ),
+);
+
 it.effect("closes a card nobody collects once its run ends", () =>
   withRunningTurn(({ orchestrator, worker, handoffs, requestSecret }) =>
     Effect.gen(function* () {
