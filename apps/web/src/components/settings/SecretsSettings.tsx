@@ -197,8 +197,9 @@ function RemoveSecretProviderButton({
           <AlertDialogHeader>
             <AlertDialogTitle>Remove {label}?</AlertDialogTitle>
             <AlertDialogDescription>
-              Provider variables that read from {label} stop resolving until a provider with the
-              same name is added again. The secrets themselves are untouched.
+              Settings that read from {label} keep their references but stop resolving until a
+              provider with the same name is added again or another source is selected. The secrets
+              themselves are untouched.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

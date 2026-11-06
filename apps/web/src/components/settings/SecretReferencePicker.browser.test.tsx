@@ -26,6 +26,21 @@ vi.mock(import("../../state/server"), async (original) => {
 import { SecretReferencePicker } from "./SecretReferencePicker";
 
 describe("secret source", () => {
+  it("shows how to repair a reference whose provider was removed", async () => {
+    const onChange = vi.fn();
+    await using screen = await render(
+      <SecretReferencePicker
+        environmentId={EnvironmentId.make("fixture")}
+        value={{ provider: "removed" as never, reference: "op://work/item/token" }}
+        onChange={onChange}
+      />,
+    );
+    await expect.element(screen.getByRole("alert")).toBeVisible();
+    await userEvent.click(screen.getByRole("combobox", { name: "Secret source" }));
+    await userEvent.click(screen.getByRole("option", { name: "Stored value" }));
+    expect(onChange).toHaveBeenCalledWith(undefined);
+  });
+
   it("validates a 1Password reference before saving its selected source", async () => {
     const onChange = vi.fn();
     await using screen = await render(

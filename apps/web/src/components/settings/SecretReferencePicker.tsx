@@ -44,6 +44,7 @@ export function SecretReferencePicker({
     selected === stored
       ? "Stored value"
       : (providers[selected as SecretProviderId]?.label ?? selected);
+  const missingProvider = value !== undefined && providers[value.provider] === undefined;
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-1.5">
       <Select
@@ -89,6 +90,12 @@ export function SecretReferencePicker({
         />
       ) : null}
       {invalid ? <span role="alert">Use a reference like op://vault/item/field.</span> : null}
+      {missingProvider ? (
+        <span role="alert">
+          This secret provider was removed. Add it again with the same name, or choose another
+          source.
+        </span>
+      ) : null}
     </div>
   );
 }
