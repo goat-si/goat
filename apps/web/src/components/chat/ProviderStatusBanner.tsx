@@ -110,15 +110,13 @@ export const ProviderStatusBanner = memo(function ProviderStatusBanner({
     if (!status || !canRefresh || refreshingRef.current) return;
     refreshingRef.current = true;
     setIsRefreshing(true);
-    try {
-      await refreshProviders({
-        environmentId,
-        input: { instanceId: status.instanceId, refreshModels: true },
-      });
-    } finally {
+    await refreshProviders({
+      environmentId,
+      input: { instanceId: status.instanceId, refreshModels: true },
+    }).finally(() => {
       refreshingRef.current = false;
       setIsRefreshing(false);
-    }
+    });
   };
 
   if (!status || getProviderStatusBannerKey(status) === null) {
