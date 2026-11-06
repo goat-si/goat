@@ -1,6 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import type { EasDeviceHostConfig } from "@goat/contracts";
+import { SecretProviderId, type EasDeviceHostConfig } from "@goat/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -15,6 +15,7 @@ import { HttpClient, HttpClientResponse } from "effect/http";
 import * as ServerConfig from "../config.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as EasDeviceHost from "./EasDeviceHost.ts";
+import { EasSecretCredentialError } from "./EasSecretCredential.ts";
 
 const APP_ID = "d763fcb8-d37c-41ea-a773-b54a0ab4a454";
 
@@ -218,13 +219,45 @@ const makeHost = (
   expo: ReturnType<typeof fakeExpo>,
   hostConfig: EasDeviceHostConfig,
   scope: Scope.Scope,
+  resolveToken?: Effect.Effect<string, EasSecretCredentialError>,
 ) =>
-  EasDeviceHost.make(hostConfig).pipe(
+  EasDeviceHost.make(hostConfig, resolveToken).pipe(
     Effect.provideService(HttpClient.HttpClient, expo.http),
     Effect.provideService(Scope.Scope, scope),
   );
 
 describe("EAS Simulator host", () => {
+  it.effect("stops a billed session after its token reference becomes unavailable", () =>
+    Effect.gen(function* () {
+      const expo = fakeExpo();
+      const scope = yield* Scope.make();
+      let available = true;
+      const token = Effect.suspend(() =>
+        available ? Effect.succeed("expo-token") : Effect.fail(new EasSecretCredentialError()),
+      );
+      const host = yield* makeHost(
+        expo,
+        config({
+          accessToken: "",
+          accessTokenReference: {
+            provider: SecretProviderId.make("personal"),
+            reference: "op://vault/item/field",
+          },
+        }),
+        scope,
+        token,
+      );
+      const ready = yield* host.ensureReady(() => Effect.void);
+      const [device] = (yield* ready.devices.list).devices;
+      expect(yield* ready.devices.boot(device!)).toBe("session-1");
+      available = false;
+      yield* ready.devices.shutdown({ ...device!, id: "session-1" });
+      expect(expo.named("GoatStopEasSimulatorSession").map((call) => call.variables.id)).toEqual([
+        "session-1",
+      ]);
+      yield* Scope.close(scope, Exit.void);
+    }).pipe(Effect.scoped, Effect.provide(layer)),
+  );
   it.effect("starts a bounded session and routes its stream and agent to that session", () =>
     Effect.gen(function* () {
       const expo = fakeExpo();

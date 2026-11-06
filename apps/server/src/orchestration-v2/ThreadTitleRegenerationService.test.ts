@@ -14,6 +14,7 @@ import {
 } from "@goat/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import { ATTACHMENT_ONLY_BOOTSTRAP_PROMPT } from "@goat/shared/composerContextReferences";
@@ -98,6 +99,10 @@ function makeHarness(
         layerProjectedProjects,
         Layer.mock(TextGeneration.TextGeneration)({ generateThreadTitle }),
         layerServerSettings,
+        Layer.succeed(
+          FileSystem.FileSystem,
+          FileSystem.makeNoop({ exists: (path) => Effect.succeed(path === "/existing-worktree") }),
+        ),
       ),
     ),
   );
@@ -113,7 +118,11 @@ function makeHarness(
   };
 }
 
-function createThread(input: { readonly command: string; readonly thread: string }) {
+function createThread(input: {
+  readonly command: string;
+  readonly thread: string;
+  readonly worktreePath?: string;
+}) {
   return Effect.gen(function* () {
     const threads = yield* ThreadManagement.ThreadManagementService;
     const threadId = ThreadId.make(input.thread);
@@ -127,7 +136,7 @@ function createThread(input: { readonly command: string; readonly thread: string
       runtimeMode: "full-access",
       interactionMode: "default",
       branch: null,
-      worktreePath: null,
+      worktreePath: input.worktreePath ?? null,
       createdBy: "user",
       creationSource: "web",
     });
@@ -397,6 +406,7 @@ describe("ThreadTitleRegenerationService", () => {
         const threadId = yield* createThread({
           command: "command:title:landing:create",
           thread: "thread:title:landing",
+          worktreePath: "/removed-worktree",
         });
         yield* dispatchUserMessage({
           command: "command:title:landing:message",
@@ -414,6 +424,26 @@ describe("ThreadTitleRegenerationService", () => {
         const projection = yield* threads.getThreadProjection(threadId);
         assert.equal(projection.thread.title, "Fresh title");
         assert.isNotOk(projection.thread.titleRegeneration);
+        const existingId = yield* createThread({
+          command: "command:title:existing:create",
+          thread: "thread:title:existing",
+          worktreePath: "/existing-worktree",
+        });
+        yield* dispatchUserMessage({
+          command: "command:title:existing:message",
+          threadId: existingId,
+          text: "Continue",
+        });
+        const existingRequest = yield* armRegeneration({
+          command: "command:title:existing:1",
+          threadId: existingId,
+        });
+        yield* titleRegeneration.execute({
+          threadId: existingId,
+          requestId: existingRequest,
+          kind: { type: "regenerate" },
+        });
+        assert.equal(harness.generateThreadTitle.mock.calls[1]?.[0]?.cwd, "/existing-worktree");
       }).pipe(Effect.provide(harness.layer));
     }),
   );

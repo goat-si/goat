@@ -1,4 +1,5 @@
-import type { EnvironmentId, UnifiedSettings } from "@goat/contracts";
+import type { EnvironmentId, SecretReference, UnifiedSettings } from "@goat/contracts";
+import { useAtomValue } from "@effect/atom-react";
 import { useState } from "react";
 
 import { useUpdateEnvironmentSettings } from "../../hooks/useSettings";
@@ -15,6 +16,8 @@ import {
 import { Input } from "../ui/input";
 import { sourceIdFromUrl } from "./AddUsageLimitSourceDialog.logic";
 import { SecretInput } from "./SecretInput";
+import { SecretReferencePicker } from "./SecretReferencePicker";
+import { serverEnvironment } from "../../state/server";
 import { Label } from "../ui/label";
 
 /** Send the management key once to server secret storage; settings retain only a redaction marker. */
@@ -35,13 +38,17 @@ export function AddUsageLimitSourceDialog({
   const [label, setLabel] = useState("");
   const [url, setUrl] = useState("");
   const [managementKey, setManagementKey] = useState("");
+  const [reference, setReference] = useState<SecretReference>();
+  const config = useAtomValue(serverEnvironment.configValueAtom(environmentId));
   const trimmedUrl = url.trim();
-  const canSave = trimmedUrl.length > 0 && managementKey.trim().length > 0;
+  const canSave =
+    trimmedUrl.length > 0 && (reference !== undefined || managementKey.trim().length > 0);
 
   const reset = () => {
     setLabel("");
     setUrl("");
     setManagementKey("");
+    setReference(undefined);
   };
 
   const save = () => {
@@ -53,7 +60,8 @@ export function AddUsageLimitSourceDialog({
           kind: "cliproxy",
           ...(label.trim() ? { label: label.trim() } : {}),
           url: trimmedUrl,
-          managementKey: managementKey.trim(),
+          managementKey: reference === undefined ? managementKey.trim() : "",
+          ...(reference === undefined ? {} : { managementKeyReference: reference }),
           enabled: true,
         },
       },
@@ -98,11 +106,20 @@ export function AddUsageLimitSourceDialog({
             </div>
             <div className="grid gap-1.5">
               <Label htmlFor="usage-source-key">Management key</Label>
-              <SecretInput
-                id="usage-source-key"
-                value={managementKey}
-                onChange={(event) => setManagementKey(event.target.value)}
-              />
+              {reference === undefined && (
+                <SecretInput
+                  id="usage-source-key"
+                  value={managementKey}
+                  onChange={(event) => setManagementKey(event.target.value)}
+                />
+              )}
+              {config?.usageLimitSecretReferences === true && (
+                <SecretReferencePicker
+                  environmentId={environmentId}
+                  value={reference}
+                  onChange={setReference}
+                />
+              )}
             </div>
             <div className="grid gap-1.5">
               <Label htmlFor="usage-source-label">Label (optional)</Label>

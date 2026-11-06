@@ -5,8 +5,11 @@ import * as FileSystem from "effect/FileSystem";
 import * as Schema from "effect/Schema";
 import * as ChildProcess from "effect/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/process/ChildProcessSpawner";
+import { resolveRootCliCommand } from "../cli/invocation.ts";
 
 export const SETUP_SUBCOMMAND = "browser setup";
+export const setupCommand = (baseDir: string) =>
+  resolveRootCliCommand(SETUP_SUBCOMMAND, ["--base-dir", baseDir]);
 
 export const NO_SANDBOX_SIGNATURE = "No usable sandbox";
 

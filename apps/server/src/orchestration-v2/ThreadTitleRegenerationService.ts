@@ -13,6 +13,7 @@ import {
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schedule from "effect/Schedule";
@@ -51,6 +52,7 @@ const make = Effect.gen(function* () {
   const projects = yield* ProjectStore.ProjectStoreV2;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const textGeneration = yield* TextGeneration.TextGeneration;
+  const fileSystem = yield* FileSystem.FileSystem;
 
   const complete = (input: {
     readonly threadId: ThreadId;
@@ -161,8 +163,10 @@ const make = Effect.gen(function* () {
         yield* serverSettings.getSettings,
         projection.thread.projectId,
       ).settings;
+      const worktreePath = projection.thread.worktreePath;
+      const worktreeExists = worktreePath !== null && (yield* fileSystem.exists(worktreePath));
       const result = yield* textGeneration.generateThreadTitle({
-        cwd: projection.thread.worktreePath ?? project.value.workspaceRoot,
+        cwd: worktreeExists ? worktreePath : project.value.workspaceRoot,
         message: context.message,
         attachments: context.attachments,
         ...(input.kind.type === "regenerate" ? { previousTitle: projection.thread.title } : {}),

@@ -1,3 +1,4 @@
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { projectId, modelSelection } from "./threadLaunchInput.ts";
 import * as WorktreeSetupTracker from "../../project/WorktreeSetupTracker.ts";
 import * as ProjectCloneTracker from "../../project/ProjectCloneTracker.ts";
@@ -279,7 +280,9 @@ export function makeHarness(options: HarnessOptions = {}) {
   });
   const layerTitleRegeneration = ThreadTitleRegeneration.layer.pipe(
     Layer.provide(
-      Layer.mergeAll(layerThreadManagement, layerProjectedProjects, layerExternalServices),
+      Layer.mergeAll(layerThreadManagement, layerProjectedProjects, layerExternalServices).pipe(
+        Layer.provideMerge(NodeServices.layer),
+      ),
     ),
   );
   return {

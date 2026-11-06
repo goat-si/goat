@@ -733,6 +733,55 @@ describe("LinkedHosts", () => {
     }),
   );
 
+  it.live(
+    "refreshes a verified host name while preserving explicit labels and identity fences",
+    () =>
+      Effect.gen(function* () {
+        const { result } = yield* withHost((hostAuth) =>
+          Effect.gen(function* () {
+            const links = yield* LinkedHosts.LinkedHosts;
+            for (const [name, label] of [
+              ["automatic", undefined],
+              ["custom", "My box"],
+            ] as const) {
+              yield* links.link({
+                name,
+                url: `https://${HOST}`,
+                code: yield* pairingCode(hostAuth),
+                access: "read-only",
+                clientName: "GOAT",
+                ...(label === undefined ? {} : { label }),
+                beforeSave: Effect.void,
+              });
+            }
+            yield* links.refreshLabel({
+              name: "automatic",
+              baseUrl: `https://${HOST}`,
+              environmentId: "wrong",
+              label: "Impostor",
+            });
+            yield* links.refreshLabel({
+              name: "automatic",
+              baseUrl: `https://${HOST}`,
+              environmentId: "env-box",
+              label: "Renamed",
+            });
+            yield* links.refreshLabel({
+              name: "custom",
+              baseUrl: `https://${HOST}`,
+              environmentId: "env-box",
+              label: "Renamed",
+            });
+            return yield* links.list;
+          }),
+        );
+        expect(result.map(({ name, label }) => [name, label])).toEqual([
+          ["automatic", "Renamed"],
+          ["custom", "My box"],
+        ]);
+      }),
+  );
+
   it.live("replaces a link by name and forgets it on unlink", () =>
     Effect.gen(function* () {
       const { result } = yield* withHost((hostAuth) =>

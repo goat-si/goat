@@ -55,6 +55,7 @@ it.effect("learns a running cloud machine's identity on the check that prepares 
             list: Effect.succeed([]),
             names: Effect.succeed([]),
             find: () => Effect.succeedNone,
+            refreshLabel: () => Effect.void,
             link: unused,
             unlink: unused,
           }),

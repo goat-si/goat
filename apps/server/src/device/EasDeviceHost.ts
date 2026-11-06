@@ -35,6 +35,7 @@ import * as ServerConfig from "../config.ts";
 import * as DeviceHost from "./DeviceHost.ts";
 import { findEasProjectId } from "./easProjectId.ts";
 import { type ExpoApi, makeExpoApi, resolveExpoCredential } from "./ExpoApi.ts";
+import { EasSecretCredentialError } from "./EasSecretCredential.ts";
 
 const POLL_INTERVAL = Duration.seconds(5);
 // How stale a running session's status may get before listing rechecks it.
@@ -139,7 +140,10 @@ const decodePathSegment = (segment: string): string | null => {
   }
 };
 
-export const make = Effect.fn("EasDeviceHost.make")(function* (config: EasDeviceHostConfig) {
+export const make = Effect.fn("EasDeviceHost.make")(function* (
+  config: EasDeviceHostConfig,
+  resolveToken?: Effect.Effect<string, EasSecretCredentialError>,
+) {
   const http = yield* HttpClient.HttpClient;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -197,12 +201,24 @@ export const make = Effect.fn("EasDeviceHost.make")(function* (config: EasDevice
       ...(cause === undefined ? {} : { cause }),
     });
 
-  const api: Effect.Effect<ExpoApi, DeviceHostUnavailableError> = resolveExpoCredential(
-    config.accessToken,
+  let lastApi: ExpoApi | undefined;
+  const api: Effect.Effect<ExpoApi, DeviceHostUnavailableError> = (
+    config.accessTokenReference == null
+      ? Effect.succeed(config.accessToken)
+      : (resolveToken ?? Effect.fail(new EasSecretCredentialError()))
   ).pipe(
+    Effect.flatMap(resolveExpoCredential),
     Effect.map((credential) => makeExpoApi(http, credential)),
+    Effect.tap((expo) =>
+      Effect.sync(() => {
+        lastApi = expo;
+      }),
+    ),
     Effect.provide(services),
     Effect.mapError((error) => unavailable(error.message, error)),
+  );
+  const apiForStop = api.pipe(
+    Effect.catch((error) => (lastApi === undefined ? Effect.fail(error) : Effect.succeed(lastApi))),
   );
 
   /** A missing ledger is empty; an unreadable one is an error, never an empty list. */
@@ -625,7 +641,7 @@ export const make = Effect.fn("EasDeviceHost.make")(function* (config: EasDevice
     if (stale.length === 0 && unresolved.size === 0 && uncertain.size === 0 && !reapDue) return;
     const reap = reapDue || uncertain.size > 0;
     if (reap) reapedAt = now;
-    const expo = yield* api.pipe(
+    const expo = yield* apiForStop.pipe(
       // Without a credential no sweep can look; a record Expo would have
       // listed by now still stops counting, so the limit is not held forever.
       Effect.tapError(() =>
@@ -722,7 +738,7 @@ export const make = Effect.fn("EasDeviceHost.make")(function* (config: EasDevice
       Option.match(sessionFor(device.id), {
         onNone: () => Effect.void,
         onSome: (session) =>
-          api.pipe(
+          apiForStop.pipe(
             Effect.flatMap((expo) => stopTracked(expo, session)),
             Effect.asVoid,
             Effect.mapError(
@@ -846,7 +862,7 @@ export const make = Effect.fn("EasDeviceHost.make")(function* (config: EasDevice
     // Interrupted starts stop the sessions they created before this returns.
     yield* FiberSet.clear(starts);
     yield* FiberSet.clear(background);
-    const expo = yield* api;
+    const expo = yield* apiForStop;
     yield* Effect.forEach(
       [...sessions.values()],
       (session) => stopTracked(expo, session).pipe(Effect.ignore),

@@ -1,6 +1,12 @@
 import { olderSettledMemoryCounts, olderSettledSqlCounts } from "./olderSettledCounts.ts";
 import * as PullRequestSnapshot from "./pullRequestSnapshot.ts";
 import * as RestartCandidates from "./RestartContinuationCandidates.ts";
+import {
+  matchingTimelineRows,
+  memoryTimelinePage,
+  timelineAttachmentOwners,
+} from "./TimelineAttachment.ts";
+import { latestIdleCompactionRun } from "./IdleCompaction.ts";
 import * as LatestAnswer from "./ProjectionLatestAnswer.ts";
 import * as LaunchEdges from "./ProjectionLaunchEdges.ts";
 import * as RunNotification from "./ProjectionRunNotification.ts";
@@ -476,6 +482,7 @@ export type ProjectionRecords<K extends ProjectionRecordField> = Pick<
 >;
 
 export interface ProjectionTimelinePageOptions {
+  readonly attachmentId?: string;
   readonly afterPosition?: number;
   readonly itemId?: TurnItemId;
   readonly view?: "messages" | "activity";
@@ -3790,7 +3797,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   : sql`AND (status IN (SELECT value FROM json_each(${encodeIdList(filter.runStatuses)}))
                     OR (${filter.includeLatestRun === true ? 1 : 0} = 1 AND run_id = (
                       SELECT run_id FROM orchestration_v2_projection_runs
-                      WHERE thread_id = ${threadId}
+                      WHERE thread_id = ${threadId} AND (status <> 'cancelled' OR json_extract(payload_json, '$.startedAt') IS NOT NULL)
                       ORDER BY ordinal DESC
                       LIMIT 1
                     )))`
@@ -4620,6 +4627,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                   json_extract(child.payload_json, '$.lineage.relationshipToParent') = 'subagent'
                   AND json_extract(child.payload_json, '$.lineage.parentThreadId') IS NOT NULL
                   AND json_extract(child.payload_json, '$.forkedFrom.type') = 'node'
+                  ELSE 0 END
                   AND (EXISTS (
                     SELECT 1 FROM orchestration_v2_projection_runs AS requested
                     JOIN orchestration_v2_projection_subagents AS task
@@ -4642,7 +4650,6 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
                       AND target_thread_id = json_extract(child.payload_json, '$.lineage.parentThreadId')
                       AND type = 'subagent_result'
                   )))
-                  ELSE 0 END
               `;
             case "runtime":
             case "runtime-cleanup":
@@ -5043,7 +5050,14 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         effect.pipe(Effect.mapError((cause) => new ProjectionStoreReadError({ threadId, cause }))),
     );
     const getThreadProjection: ProjectionStoreV2Shape["getThreadProjection"] = (threadId) =>
-      readProjection(threadId, new Set()).pipe(Effect.map(({ projection }) => projection));
+      sql.withTransaction(readProjection(threadId, new Set())).pipe(
+        Effect.map(({ projection }) => projection),
+        Effect.mapError((cause) =>
+          isProjectionStoreThreadNotFoundError(cause) || isProjectionStoreReadError(cause)
+            ? cause
+            : new ProjectionStoreReadError({ threadId, cause }),
+        ),
+      );
 
     const getRuntimeRecoveryProjection: ProjectionStoreV2Shape["getRuntimeRecoveryProjection"] =
       Effect.fn("ProjectionStore.getRuntimeRecoveryProjection")(
@@ -5292,14 +5306,14 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               WHERE thread_id = ${threadId} AND status = 'pending'
               ORDER BY created_at ASC, runtime_request_id ASC
             `,
+            // CROSS JOIN keeps empty run cohorts out of message history; the run index bounds each lookup.
             sql<PayloadRow>`
-              SELECT message.payload_json FROM orchestration_v2_projection_messages AS message
-              WHERE message.thread_id = ${threadId} AND message.streaming = 1
-                AND message.run_id IN (
-                  SELECT run_id FROM orchestration_v2_projection_runs
-                  WHERE thread_id = ${threadId}
-                    AND status IN ('queued', 'preparing', 'starting', 'running', 'waiting')
-                )
+              SELECT message.payload_json FROM orchestration_v2_projection_runs AS run
+              CROSS JOIN orchestration_v2_projection_messages AS message
+                INDEXED BY orchestration_v2_projection_messages_run_idx ON message.run_id = run.run_id
+              WHERE run.thread_id = ${threadId}
+                AND run.status IN ('queued', 'preparing', 'starting', 'running', 'waiting')
+                AND message.thread_id = ${threadId} AND message.streaming = 1
               ORDER BY message.created_at ASC, message.message_id ASC
             `,
             sql<PayloadRow>`
@@ -6476,17 +6490,15 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         .withTransaction(
           Effect.gen(function* () {
             const index = yield* readTimelineIndex(threadId, new Set());
-            const matching = index.visible
-              .map((row, position) => ({ ...row, position }))
-              .filter((row) =>
-                options.itemId === undefined
-                  ? row.position > (options.afterPosition ?? -1) &&
-                    (options.view === "activity" ||
-                      ["user_message", "assistant_message", "proposed_plan"].includes(
-                        row.item.type,
-                      ))
-                  : row.sourceItemId === options.itemId,
-              );
+            const attachmentOwners =
+              options.attachmentId === undefined
+                ? undefined
+                : yield* timelineAttachmentOwners(
+                    sql,
+                    index.visible.map((row) => row.sourceThreadId),
+                    options.attachmentId,
+                  );
+            const matching = matchingTimelineRows(index.visible, options, attachmentOwners);
             const page =
               options.tail === true
                 ? matching.slice(Math.max(0, matching.length - options.limit))
@@ -7478,7 +7490,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       getThreadWorktreePaths: readOnReader(getThreadWorktreePaths),
       getQuestionEscalationCandidates,
       getLaunchedPendingQuestions,
-      getThreadProjection,
+      getThreadProjection: readOnReader(getThreadProjection),
       getTurnStartContext: readOnReader(getTurnStartContext),
       getTurnStartHistory: readOnReader(getTurnStartHistory),
       getRuntimeRecoveryProjection: readOnReader(getRuntimeRecoveryProjection),
@@ -8252,10 +8264,7 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
           const projection = (yield* Ref.get(replayState)).projections.get(threadId);
           if (projection === undefined)
             return yield* new ProjectionStoreThreadNotFoundError({ threadId });
-          const latestRun = projection.runs.reduce<OrchestrationV2Run | undefined>(
-            (latest, run) => (latest === undefined || run.ordinal > latest.ordinal ? run : latest),
-            undefined,
-          );
+          const latestRun = latestIdleCompactionRun(projection.runs);
           const matchingTurns = projection.providerTurns.filter(
             (row) =>
               (filter?.providerTurnAttemptIds === undefined ||
@@ -8783,23 +8792,9 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
           ),
         ),
       getTimelinePage: (threadId, options) =>
-        service.getThreadProjection(threadId).pipe(
-          Effect.map((projection) => {
-            const matching = projection.visibleTurnItems.filter((row) =>
-              options.itemId === undefined
-                ? row.position > (options.afterPosition ?? -1) &&
-                  (options.view === "activity" ||
-                    ["user_message", "assistant_message", "proposed_plan"].includes(row.item.type))
-                : row.sourceItemId === options.itemId,
-            );
-            const start = options.tail === true ? Math.max(0, matching.length - options.limit) : 0;
-            return {
-              items: matching.slice(start, start + options.limit),
-              totalItems: projection.visibleTurnItems.length,
-              hasMore: start + options.limit < matching.length,
-            };
-          }),
-        ),
+        service
+          .getThreadProjection(threadId)
+          .pipe(Effect.map((projection) => memoryTimelinePage(projection, options))),
       getThreadSnapshotWindow: (threadId, options) =>
         service.getThreadSnapshot(threadId).pipe(
           Effect.map((snapshot) => {

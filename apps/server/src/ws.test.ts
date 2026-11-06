@@ -1,3 +1,4 @@
+import { makeWorkspaceProviderFixture } from "./wsProviderFixture.testkit.ts";
 import * as ShellSnapshotLoads from "./orchestration-v2/ShellSnapshotLoads.ts";
 import * as DecisionService from "./goatclaw/DecisionService.ts";
 import * as ChannelBotDirectory from "./channels/ChannelBotDirectory.ts";
@@ -36,8 +37,6 @@ import {
   SshWorkspaceLaunchInput,
   SshWorkspaceLaunchResult,
   ThreadId,
-  ProviderDriverKind,
-  ProviderInstanceId,
   WS_METHODS,
   WsRpcGroup,
   WsSubscribeServerConfigRpc,
@@ -1138,31 +1137,10 @@ it.effect(
 
 it.effect("on-demand clients get provider config without workspace snapshots", () =>
   Effect.gen(function* () {
-    const instanceId = ProviderInstanceId.make("claudeAgent");
-    const snapshotFor = (cwd: string, checkedAt: string) => ({
-      cwd,
-      checkedAt,
-      slashCommands: [{ name: `${cwd.slice(1)}-command` }],
-      skills: [],
-    });
-    const provider: ServerProvider = {
-      instanceId,
-      driver: ProviderDriverKind.make("claudeAgent"),
-      enabled: true,
-      installed: true,
-      version: "1.0.0",
-      status: "ready",
-      auth: { status: "authenticated" },
-      checkedAt: "2026-10-25T00:00:00.000Z",
-      models: [],
-      slashCommands: [{ name: "machine-command" }],
-      skills: [],
-      workspaceSnapshots: [
-        snapshotFor("/a", "2026-10-25T00:00:00.000Z"),
-        snapshotFor("/b", "2026-10-25T00:00:00.000Z"),
-      ],
-    };
+    const { instanceId, snapshotFor, provider } = makeWorkspaceProviderFixture();
     const providerChanges = yield* Queue.unbounded<ReadonlyArray<ServerProvider>>();
+    let secretGeneration = 0;
+    let observedUsageGeneration = -1;
     const pulled = yield* Queue.unbounded<void>();
     const responses = yield* Queue.unbounded<unknown>();
     const configRpcServices = Layer.mergeAll(
@@ -1178,9 +1156,17 @@ it.effect("on-demand clients get provider config without workspace snapshots", (
           Stream.tap(() => Queue.offer(pulled, undefined)),
         ),
         refreshWorkspaceSnapshot: () => Effect.succeed([provider]),
+        reloadSecretsAndRefresh: () =>
+          Effect.sync(() => {
+            secretGeneration++;
+            return [provider];
+          }),
       }),
       Layer.mock(UsageLimitSources.UsageLimitSources)({
         current: Effect.succeed([]),
+        refresh: Effect.sync(() => {
+          observedUsageGeneration = secretGeneration;
+        }),
         streamChanges: Stream.make([]),
         projectProviders: (providers) => Effect.succeed(providers),
       }),
@@ -1284,6 +1270,15 @@ it.effect("on-demand clients get provider config without workspace snapshots", (
       refreshed.providers.map((entry) => [entry.workspaceSnapshots, entry.slashCommands]),
       [[[snapshotFor("/b", "2026-10-25T00:00:00.000Z")], []]],
     );
+    yield* server.write(0, {
+      _tag: "Request",
+      id: RpcMessage.RequestId("refresh-secrets"),
+      tag: WS_METHODS.serverRefreshProviders,
+      payload: { reloadSecrets: true },
+      headers: Headers.empty,
+    });
+    yield* Queue.take(responses);
+    assert.equal(observedUsageGeneration, 1);
     yield* server.write(0, { _tag: "Interrupt", requestId: configRequest, interruptors: [] });
   }).pipe(
     Effect.provide(

@@ -1,3 +1,4 @@
+import { assertPinnedHead, makeTurnsAcrossSilent } from "./ClaudeFork.testkit.ts";
 import {
   CLAUDE_TEST_MODEL_SELECTION,
   CLAUDE_TEST_RUNTIME_POLICY,
@@ -5588,9 +5589,15 @@ describe("ClaudeAdapterV2 background wake turns", () => {
 
   it.effect("never records a subagent uuid for a turn with no main-thread assistant message", () =>
     Effect.gen(function* () {
+      const forkCalls: Array<ClaudeAdapterV2.ClaudeAgentSdkSessionForkInput> = [];
       const harness = yield* makeWakeHarnessWithOptions({
         close: (sdkMessages) => Queue.shutdown(sdkMessages),
         freshQueueOnReopen: true,
+        forkSession: (input) =>
+          Effect.sync(() => {
+            forkCalls.push(input);
+            return { sessionId: "forked-after-compact-rollback" };
+          }),
       });
       const now = yield* DateTime.now;
       const subagentUuid = "00000000-0000-4000-8000-000000000644";
@@ -5646,31 +5653,23 @@ describe("ClaudeAdapterV2 background wake turns", () => {
       assert.instanceOf(error, ProviderAdapter.ProviderAdapterRollbackThreadError);
       assert.include(String(error.cause), "no SDK assistant message cursor");
       const earlierCursor = "00000000-0000-4000-8000-000000000648";
-      const turnsAcrossSilent = [
-        {
-          ...providerTurn,
-          id: ProviderTurnId.make("provider-turn-claude-cursor-earlier"),
-          ordinal: providerTurn.ordinal - 1,
-          nativeTurnRef: {
-            driver: ClaudeAdapterV2.CLAUDE_PROVIDER,
-            nativeId: earlierCursor,
-            strength: "weak",
-          },
-        },
+      const turnsAcrossSilent = makeTurnsAcrossSilent(
         providerTurn,
-        {
-          ...providerTurn,
-          id: ProviderTurnId.make("provider-turn-claude-cursor-next"),
-          ordinal: providerTurn.ordinal + 1,
-        },
-      ] satisfies ReadonlyArray<typeof providerTurn>;
+        earlierCursor,
+        ClaudeAdapterV2.CLAUDE_PROVIDER,
+      );
       const semanticError = yield* rollbackTo(turnsAcrossSilent).pipe(Effect.flip);
       assert.instanceOf(semanticError, ProviderAdapter.ProviderAdapterRollbackThreadError);
       const pastSilentTurn = yield* rollbackTo(turnsAcrossSilent, "/compact");
-      assert.equal(
-        pastSilentTurn.providerThread.nativeConversationHeadRef?.nativeId,
-        earlierCursor,
-      );
+      assertPinnedHead(pastSilentTurn.providerThread, earlierCursor);
+      // Forks omit rolled-back turns, which Claude's transcript still holds past the pinned head.
+      yield* harness.runtime.forkThread({
+        sourceProviderThread: pastSilentTurn.providerThread,
+        sourceProviderTurns: turnsAcrossSilent.slice(0, 2),
+        providerTurnId: providerTurn.id,
+        targetThreadId: ThreadId.make("thread-claude-fork-after-compact-rollback"),
+      });
+      assert.equal(forkCalls[0]?.options.upToMessageId, earlierCursor);
       const interruptedBeforeCompact = yield* rollbackTo(
         [
           {

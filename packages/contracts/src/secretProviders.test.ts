@@ -54,6 +54,36 @@ it("keeps environment secret references beside an empty value for older clients"
   expect(encodeServerSettings(decoded).providerInstances).toEqual({ codex: instance });
 });
 
+it("keeps a usage source secret reference beside the legacy string key", () => {
+  const source = {
+    kind: "cliproxy",
+    url: "https://hub.example.test",
+    managementKey: "",
+    managementKeyReference: { provider: "personal", reference: "op://vault/item/field" },
+    enabled: true,
+  };
+  expect(
+    encodeServerSettings(decodeServerSettings({ usageLimitSources: { hub: source } }))
+      .usageLimitSources,
+  ).toEqual({ hub: source });
+});
+
+it("keeps an EAS token reference beside the legacy token string", () => {
+  const host = {
+    kind: "eas",
+    id: "cloud",
+    label: "Cloud",
+    accessToken: "",
+    accessTokenReference: { provider: "personal", reference: "op://vault/item/field" },
+    maxSessionMinutes: 30,
+    idleMinutes: 10,
+    maxConcurrentSessions: 2,
+  };
+  expect(
+    encodeServerSettings(decodeServerSettings({ easDeviceHosts: [host] })).easDeviceHosts,
+  ).toEqual([host]);
+});
+
 it("accepts only 1Password read references without control or template characters", () => {
   expect(isOnePasswordReference("op://vault/item/field")).toBe(true);
   for (const value of [

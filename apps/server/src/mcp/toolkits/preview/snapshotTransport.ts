@@ -10,8 +10,11 @@ export const MAX_SNAPSHOT_IDENTIFIER_CHARS = 2_048;
 
 const encodeJsonText = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const utf8Length = (text: string) => Buffer.byteLength(text, "utf8");
-export const cutText = (text: string, max: number) =>
-  text.length > max ? `${text.slice(0, max)}…` : text;
+export const cutText = (text: string, max: number) => {
+  if (text.length <= max) return text;
+  const last = text.charCodeAt(max - 1);
+  return `${text.slice(0, last >= 0xd800 && last <= 0xdbff ? max - 1 : max)}…`;
+};
 
 const cutEntryStrings = <A>(entry: A): A =>
   typeof entry === "object" && entry !== null

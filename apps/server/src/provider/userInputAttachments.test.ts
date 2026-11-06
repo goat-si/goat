@@ -1,3 +1,8 @@
+import {
+  documentAlternateContentFixtures,
+  documentHiddenTextFixtures,
+  documentLineBreakFixtures,
+} from "./documentTextFixtures.testkit.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
@@ -554,6 +559,7 @@ describe("question answer paths", () => {
           expected: ["Start", "[Extracted text truncated at document extraction limits.]"],
           absent: ["Unneeded"],
         },
+        ...documentAlternateContentFixtures,
         {
           ext: "docx",
           bounded: true,
@@ -563,15 +569,8 @@ describe("question answer paths", () => {
           },
           expected: ["## Report & totals", "North\t12 34", "Before Inner After\tNeighbor"],
         },
-        {
-          ext: "docx",
-          bounded: true,
-          parts: {
-            "word/document.xml":
-              '<w:document xmlns:w="urn:w"><w:body><w:p><w:r><w:t>First</w:t><w:cr/><w:t>Second</w:t><w:br/><w:t>Third</w:t></w:r></w:p></w:body></w:document>',
-          },
-          expected: ["First\nSecond\nThird"],
-        },
+        ...documentLineBreakFixtures,
+        ...documentHiddenTextFixtures,
         {
           ext: "docx",
           bounded: true,

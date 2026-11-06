@@ -16,7 +16,7 @@ import * as Stream from "effect/Stream";
 
 import { forkParked } from "../serverActivation.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { idleCompactionWindow } from "./IdleCompaction.ts";
+import { idleCompactionWindow, latestIdleCompactionRun } from "./IdleCompaction.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 
@@ -90,10 +90,7 @@ export const make = Effect.gen(function* () {
           )
         )
           return;
-        const latestRun = records.runs.reduce<(typeof records.runs)[number] | undefined>(
-          (latest, run) => (latest === undefined || run.ordinal > latest.ordinal ? run : latest),
-          undefined,
-        );
+        const latestRun = latestIdleCompactionRun(records.runs);
         // A late update for an earlier run replaced the latest run's timer, so take it over.
         if (latestRun?.status === "completed" && latestRun.id !== runId) {
           runId = latestRun.id;

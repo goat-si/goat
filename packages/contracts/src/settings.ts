@@ -115,7 +115,7 @@ import { CuaSettingsFields, CuaSettingsPatchFields } from "./computerUseSettings
 import { SnoozeSettingsFields, SnoozeSettingsPatchFields } from "./snoozePresets.ts";
 import { BuiltInSkillProjectOverrideFields } from "./builtinSkills.ts";
 import * as BlockedBrowser from "./blockedBrowserHosts.ts";
-import { SecretProviderId, SecretProviderSlug } from "./secretReference.ts";
+import { SecretProviderId, SecretProviderSlug, SecretReference } from "./secretReference.ts";
 export { SecretProviderId } from "./secretReference.ts";
 import * as Restart from "./codexTurnSurvival.ts";
 
@@ -846,6 +846,7 @@ export const UsageLimitSourceConfig = Schema.Struct({
   label: Schema.optional(TrimmedNonEmptyString),
   url: TrimmedNonEmptyString,
   managementKey: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed("")), secretSetting),
+  managementKeyReference: Schema.optionalKey(Schema.NullOr(SecretReference)),
   enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
 });
 export type UsageLimitSourceConfig = typeof UsageLimitSourceConfig.Type;

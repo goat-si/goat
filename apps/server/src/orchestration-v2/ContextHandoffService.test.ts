@@ -125,6 +125,49 @@ it.layer(layerTest)("ContextHandoffService legacy import", (it) => {
     }),
   );
 
+  it.effect("includes all changed paths in merge-back context", () =>
+    Effect.gen(function* () {
+      const service = yield* ContextHandoffService.ContextHandoffServiceV2;
+      const handoff = yield* service.prepareForkDelta({
+        sourceThreadId: ThreadId.make("thread:source"),
+        targetThreadId: ThreadId.make("thread:target"),
+        targetRunId: RunId.make("run:target"),
+        transferId: ContextTransferId.make("transfer:patch"),
+        fromProviderThreadIds: [],
+        toProviderThreadId: ProviderThreadId.make("provider-thread:target"),
+        fromProviderInstanceId: ProviderInstanceId.make("codex"),
+        toProviderInstanceId: ProviderInstanceId.make("codex"),
+        coveredRunOrdinals: { from: 1, to: 1 },
+        deltaItems: [
+          {
+            id: TurnItemId.make("turn-item:patch"),
+            threadId: ThreadId.make("thread:source"),
+            runId: null,
+            nodeId: null,
+            providerThreadId: null,
+            providerTurnId: null,
+            nativeItemRef: null,
+            parentItemId: null,
+            ordinal: 1,
+            status: "completed",
+            title: null,
+            startedAt: null,
+            completedAt: null,
+            updatedAt: DateTime.makeUnsafe(0),
+            type: "file_change",
+            fileName: "src/a.ts",
+            changes: [
+              { operation: "update", path: "src/a.ts" },
+              { operation: "add", path: "src/b.ts" },
+            ],
+          },
+        ],
+        createdAt: DateTime.makeUnsafe("2026-01-02T00:00:00Z"),
+      });
+      assert.include(handoff.summaryText, "File change: src/a.ts, src/b.ts");
+    }),
+  );
+
   it.effect("preserves role attribution when truncating imported history", () =>
     Effect.gen(function* () {
       const service = yield* ContextHandoffService.ContextHandoffServiceV2;

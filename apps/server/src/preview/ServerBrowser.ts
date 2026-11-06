@@ -67,7 +67,6 @@ import * as NodePath from "node:path";
 import type { CDPSession, Dialog, Download, FileChooser, Frame, Page } from "playwright-core";
 
 import { PENDING_ATTACHMENT_THREAD_SEGMENT } from "../attachmentStore.ts";
-import { resolveRootCliCommand } from "../cli/invocation.ts";
 import * as ServerConfig from "../config.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as PreviewAutomationBroker from "../mcp/PreviewAutomationBroker.ts";
@@ -81,7 +80,7 @@ import * as PreviewBrowserHost from "./PreviewBrowserHost.ts";
 import { presentAsChrome, ServerBrowserContexts } from "./ServerBrowserContexts.ts";
 import { ServerBrowserDiagnostics } from "./ServerBrowserDiagnostics.ts";
 import * as ServerBrowserPage from "./ServerBrowserPage.ts";
-import { unloadedOpen } from "./unloadedOpen.ts";
+import { settleInitialOpen } from "./unloadedOpen.ts";
 import * as AgentTabState from "./agentTabState.ts";
 import { answerBy, answerCall, queueCaptureBy, waitInput, withCaptureLock } from "./CaptureLock.ts";
 import { recordingEncoderScript } from "./ServerBrowserRecordingScript.ts";
@@ -358,7 +357,7 @@ const make = Effect.gen(function* () {
   const blockedTabs = yield* makeBlockedTabFence();
   const openRuns = makeOpenRunSignals();
   const launchServices = yield* Effect.context<ChildProcessSpawner.ChildProcessSpawner>();
-  const setupCommand = yield* resolveRootCliCommand(PreviewBrowserHost.SETUP_SUBCOMMAND);
+  const setupCommand = yield* PreviewBrowserHost.setupCommand(config.baseDir);
   const readReadiness = yield* ServerBrowserReadiness.makeReadinessReader;
 
   const tabs = new Map<string, ServerTab>();
@@ -1720,8 +1719,9 @@ const make = Effect.gen(function* () {
                   );
                 }
               } else {
-                await (tab.initialNavigation ?? Promise.resolve()).catch((cause: unknown) => {
-                  throw unloadedOpen(tab.tabId, cause);
+                await settleInitialOpen(tab.initialNavigation, tab.tabId, async () => {
+                  await runPromise(manager.close({ threadId: tab.threadId, tabId: tab.tabId }));
+                  dropTab(tab, false);
                 });
                 navigationSent = tab.initialNavigationSent;
               }
