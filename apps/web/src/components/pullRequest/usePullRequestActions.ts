@@ -11,6 +11,7 @@ import type {
   PullRequestDetail,
   PullRequestMergeMethod,
   PullRequestRef,
+  ScopedThreadRef,
 } from "@goat/contracts";
 import { useRef, useState } from "react";
 import {
@@ -39,8 +40,7 @@ import { toastManager } from "../ui/toast";
 import { offHeadPullRequestCheckoutToast } from "./pullRequestCheckoutToast";
 import {
   checkoutFailureDescription,
-  handoffPrompt,
-  handoffReviewComments,
+  appendHandoff,
   readableFailure,
 } from "./pullRequestDetail.logic";
 import { pullRequestEntryKey, type EnvironmentPullRequestEntry } from "./pullRequestList.logic";
@@ -246,7 +246,19 @@ export type PullRequestHandoffDetail = Pick<
   "projectId" | "workspaceRoot" | "url"
 >;
 
-const lastHandoffPromptByDraft = new Map<DraftId, string>();
+export function writeHandoffToComposer(
+  target: ScopedThreadRef | DraftId,
+  task: PullRequestThreadTask,
+) {
+  const store = useComposerDraftStore.getState();
+  const draft = store.getComposerDraft(target);
+  const next = appendHandoff(
+    { prompt: draft?.prompt ?? "", reviewComments: draft?.reviewComments ?? [] },
+    task,
+  );
+  store.setPrompt(target, next.prompt);
+  store.setReviewComments(target, next.reviewComments);
+}
 
 export function usePullRequestHandoffs({
   environmentId,
@@ -281,24 +293,7 @@ export function usePullRequestHandoffs({
         () => null,
       ));
     if (session === null) return null;
-    const store = useComposerDraftStore.getState();
-    if (task === null) return session;
-    const draft = store.getComposerDraft(session.draftId);
-    const existingComments = draft?.reviewComments ?? [];
-    const prompt = handoffPrompt(
-      {
-        prompt: draft?.prompt ?? "",
-        lastHandoffPrompt: lastHandoffPromptByDraft.get(session.draftId),
-      },
-      task.prompt,
-    );
-    // Track only the handoff contribution so later handoffs preserve user text.
-    lastHandoffPromptByDraft.set(session.draftId, task.prompt);
-    store.setPrompt(session.draftId, prompt);
-    store.setReviewComments(
-      session.draftId,
-      handoffReviewComments(existingComments, task.reviewComments ?? []),
-    );
+    if (task !== null) writeHandoffToComposer(session.draftId, task);
     return session;
   };
 
