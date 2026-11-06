@@ -52,3 +52,46 @@ export function isLiveRun(run: OrchestrationV2Run): boolean {
 export function hasLiveRun(projection: Pick<OrchestrationV2ThreadProjection, "runs">): boolean {
   return projection.runs.some(isLiveRun);
 }
+
+export function isTerminalDelegatedTaskStatus(status: OrchestrationV2Subagent["status"]): boolean {
+  return (
+    status === "completed" ||
+    status === "failed" ||
+    status === "cancelled" ||
+    status === "interrupted"
+  );
+}
+
+export function delegatedTaskTerminalStatus(
+  status: OrchestrationV2Run["status"],
+): OrchestrationV2Subagent["status"] | null {
+  switch (status) {
+    case "completed":
+    case "failed":
+    case "cancelled":
+    case "interrupted":
+      return status;
+    case "rolled_back":
+      return "cancelled";
+    case "preparing":
+    case "queued":
+    case "starting":
+    case "running":
+    case "waiting":
+      return null;
+  }
+}
+
+/** Failed worktree setup keeps the queue held so queued messages cannot start in the project checkout. */
+export function worktreeSetupPending(
+  projection: Pick<OrchestrationV2ThreadProjection, "thread" | "runs">,
+): boolean {
+  return (
+    projection.thread.worktreePath === null &&
+    projection.runs.some(
+      (run) =>
+        (run.status === "failed" || run.status === "interrupted") &&
+        run.workspacePreparation?.type === "worktree",
+    )
+  );
+}

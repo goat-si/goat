@@ -207,7 +207,7 @@ export const makeShellThreadRows = (sql: SqlClient.SqlClient) => {
                   WHERE request.thread_id = t.thread_id
                     AND request.status = 'pending'
                     AND request.kind NOT IN ('auth_refresh', 'dynamic_tool_call')
-                  ORDER BY request.created_at DESC, request.runtime_request_id DESC
+                  ORDER BY (request.kind = 'user_input') ASC, request.created_at DESC, request.runtime_request_id DESC
                   LIMIT 1
                 ),
                 (
@@ -215,7 +215,7 @@ export const makeShellThreadRows = (sql: SqlClient.SqlClient) => {
                   FROM orchestration_v2_projection_runtime_requests request
                   WHERE request.thread_id = t.thread_id
                     AND request.status = 'pending'
-                  ORDER BY request.created_at DESC, request.runtime_request_id DESC
+                  ORDER BY (request.kind = 'user_input') ASC, request.created_at DESC, request.runtime_request_id DESC
                   LIMIT 1
                 )
               ) AS pending_request_payload_json,

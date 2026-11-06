@@ -1,4 +1,8 @@
 import {
+  pendingRuntimeRequestSummary,
+  secretRequestAsPendingInput,
+} from "./ProjectionPendingRequest.ts";
+import {
   providerInstanceHistoryForShell,
   activeProviderGoalForShell,
 } from "./ProjectionShellProvider.ts";
@@ -1714,31 +1718,6 @@ function buildVisibleTurnItems(input: {
   );
 }
 
-function pendingRuntimeRequestSummary(
-  request: OrchestrationV2ThreadProjection["runtimeRequests"][number] | null,
-): OrchestrationV2PendingRuntimeRequestSummary | null {
-  if (request === null) return null;
-  return {
-    id: request.id,
-    kind: request.kind,
-    createdAt: request.createdAt,
-    blocking: request.responseCapability.type !== "message",
-  };
-}
-
-function secretRequestAsPendingInput(
-  item: OrchestrationV2TurnItem | null,
-): OrchestrationV2PendingRuntimeRequestSummary | null {
-  if ((item?.type !== "secret_request" && item?.type !== "human_handoff") || item.nodeId === null)
-    return null;
-  return {
-    id: RuntimeRequestId.make(item.id),
-    kind: "user_input",
-    createdAt: item.startedAt ?? item.updatedAt,
-    blocking: true,
-  };
-}
-
 export function threadShellFromProjection(
   projection: OrchestrationV2ThreadProjection,
 ): OrchestrationV2ThreadShell {
@@ -1770,6 +1749,7 @@ export function threadShellFromProjection(
     .filter((request) => request.status === "pending")
     .toSorted((left, right) => {
       const byTime =
+        Number(left.kind === "user_input") - Number(right.kind === "user_input") ||
         DateTime.toEpochMillis(right.createdAt) - DateTime.toEpochMillis(left.createdAt);
       return byTime !== 0 ? byTime : left.id < right.id ? 1 : left.id > right.id ? -1 : 0;
     });
@@ -1780,23 +1760,29 @@ export function threadShellFromProjection(
       pendingRuntimeRequests[0] ??
       null,
   );
-  if (pendingRuntimeRequest === null || pendingRuntimeRequest.blocking === false) {
-    pendingRuntimeRequest =
-      secretRequestAsPendingInput(
-        projection.turnItems
-          .filter(
-            (item) =>
-              item.status === "waiting" &&
-              (item.type === "human_handoff" ||
-                (item.type === "secret_request" &&
-                  item.runId !== null &&
-                  liveRunIds.has(item.runId))),
-          )
-          .toSorted(
-            (left, right) =>
-              DateTime.toEpochMillis(right.updatedAt) - DateTime.toEpochMillis(left.updatedAt),
-          )[0] ?? null,
-      ) ?? pendingRuntimeRequest;
+  if (pendingRuntimeRequest === null || pendingRuntimeRequest.kind === "user_input") {
+    const waitingCard = secretRequestAsPendingInput(
+      projection.turnItems
+        .filter(
+          (item) =>
+            item.status === "waiting" &&
+            (item.type === "human_handoff" ||
+              (item.type === "secret_request" &&
+                item.runId !== null &&
+                liveRunIds.has(item.runId))),
+        )
+        .toSorted(
+          (left, right) =>
+            DateTime.toEpochMillis(right.updatedAt) - DateTime.toEpochMillis(left.updatedAt),
+        )[0] ?? null,
+    );
+    if (
+      waitingCard !== null &&
+      (pendingRuntimeRequest === null ||
+        DateTime.toEpochMillis(waitingCard.createdAt) >=
+          DateTime.toEpochMillis(pendingRuntimeRequest.createdAt))
+    )
+      pendingRuntimeRequest = waitingCard;
   }
   const userMessages = projection.messages
     .filter((message) => message.role === "user" && idleCompactionOf(message) === undefined)
@@ -6904,13 +6890,19 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
               )
             : null;
         if (
-          (pendingRuntimeRequest === null || pendingRuntimeRequest.blocking === false) &&
+          (pendingRuntimeRequest === null || pendingRuntimeRequest.kind === "user_input") &&
           row.pending_secret_request_payload_json !== null
         ) {
-          pendingRuntimeRequest =
-            secretRequestAsPendingInput(
-              yield* decodeTurnItemPayload(row.pending_secret_request_payload_json),
-            ) ?? pendingRuntimeRequest;
+          const waitingCard = secretRequestAsPendingInput(
+            yield* decodeTurnItemPayload(row.pending_secret_request_payload_json),
+          );
+          if (
+            waitingCard !== null &&
+            (pendingRuntimeRequest === null ||
+              DateTime.toEpochMillis(waitingCard.createdAt) >=
+                DateTime.toEpochMillis(pendingRuntimeRequest.createdAt))
+          )
+            pendingRuntimeRequest = waitingCard;
         }
         let terminalFailureItem =
           row.terminal_failure_payload_json === null
