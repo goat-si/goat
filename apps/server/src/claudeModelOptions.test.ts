@@ -116,3 +116,16 @@ describe("compileClaudeModelSelection", () => {
     ).toBeUndefined();
   });
 });
+
+it("enables Ultracode with the selected effort on Sonnet and Haiku 5.5", () => {
+  for (const model of ["claude-sonnet-5-5", "claude-haiku-5-5"]) {
+    expect(
+      compileClaudeModelSelection(
+        selection(model, [
+          { id: "effort", value: "high" },
+          { id: "ultracode", value: true },
+        ]),
+      ),
+    ).toMatchObject({ effort: "high", settings: { ultracode: true } });
+  }
+});
