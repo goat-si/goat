@@ -42,6 +42,7 @@ export function makeCapacity<T extends CapacityTab>(options: {
         tab.control.controller === null &&
         tab.control.handoffReason === null &&
         !tab.control.isPrivate &&
+        !tab.control.isAgentStopped &&
         !tab.control.hasAgentWork &&
         !tab.agentOperating &&
         !tab.closing &&

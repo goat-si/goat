@@ -23,6 +23,7 @@ it.effect("reclaims the oldest idle hidden tab while protecting active and visib
       ]),
     );
     const removed: string[] = [];
+    tabs.get("2")?.control.stopAgents();
     const capacity = makeCapacity({
       tabs,
       pending: new Map(),
@@ -37,7 +38,7 @@ it.effect("reclaims the oldest idle hidden tab while protecting active and visib
     yield* capacity.reclaim("agent-0");
     expect(removed).toEqual([]);
     yield* capacity.reclaim("new-agent");
-    expect(removed).toEqual(["2"]);
+    expect(removed).toEqual(["3"]);
     expect(capacity.atLimit("new-agent")).toBe(false);
   }),
 );
