@@ -22,6 +22,8 @@ import {
   serverOwnerTag,
   SSH_REPLACEMENT_ID_ENV,
 } from "../serverOwnerLock.ts";
+import * as ProcessRunner from "../processRunner.ts";
+import * as AutomaticPort from "./automaticPort.ts";
 import { type CliServerFlags, resolveServerConfig, sharedServerCommandFlags } from "./config.ts";
 import {
   recoverServerWorkingDirectory,
@@ -55,7 +57,8 @@ const runServerCommand = Effect.fn("server.runServerCommand")(function* (
   const { runServer } = yield* Effect.promise(() => import("../server.ts"));
   const originalCwd = (yield* prepareWorkingDirectory()) ?? options?.originalCwd;
   const logLevel = yield* GlobalFlag.LogLevel;
-  const config = yield* resolveServerConfig(flags, logLevel, { ...options, originalCwd });
+  const selectAutomaticPort = yield* AutomaticPort.make.pipe(Effect.provide(ProcessRunner.layer));
+  const config = yield* resolveServerConfig(flags, logLevel, { ...options, originalCwd, selectAutomaticPort });
   const environment = yield* HostProcess.Environment;
   // Before any layer starts, so nothing in this process can reach another machine first.
   yield* applyDevSshPolicy(config, environment);
