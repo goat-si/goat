@@ -25,7 +25,11 @@ interface HubReclaim {
 export class MemoryStoreReclaim extends Context.Service<
   MemoryStoreReclaim,
   {
-    readonly reclaim: (environmentId: M.EnvironmentId) => Effect.Effect<MemoryStoreReclaimResult>;
+    /** A reclaim that finished at or after requestedAt is reused rather than repeated. */
+    readonly reclaim: (
+      environmentId: M.EnvironmentId,
+      requestedAt: number,
+    ) => Effect.Effect<MemoryStoreReclaimResult>;
     /** The hub composition binds its compactor once this environment hosts a ready hub. */
     readonly bindHub: (hub: Option.Option<HubReclaim>) => Effect.Effect<void>;
   }
@@ -40,13 +44,25 @@ export const makeStoreReclaim = Effect.fnUntraced(function* (
 ) {
   const hub = yield* Ref.make(Option.none<HubReclaim>());
   const lock = yield* Semaphore.make(1);
+  // Writes that queued behind a reclaim reuse its result instead of compacting again.
+  const latest = yield* Ref.make(
+    Option.none<{ readonly at: number; readonly result: MemoryStoreReclaimResult }>(),
+  );
   const failed = (stage: string) => (error: { readonly _tag: string }) =>
     Effect.logWarning("Memory store reclaim failed", { stage, errorTag: error._tag }).pipe(
       Effect.as(false),
     );
   const reclaim = Effect.fn("MemoryStoreReclaim.reclaim")(function* (
     environmentId: M.EnvironmentId,
+    requestedAt: number,
   ) {
+    const previous = yield* Ref.get(latest);
+    if (Option.isSome(previous) && previous.value.at >= requestedAt) return previous.value.result;
+    const result = yield* reclaimNow(environmentId);
+    yield* Ref.set(latest, Option.some({ at: yield* Clock.currentTimeMillis, result }));
+    return result;
+  }, lock.withPermits(1));
+  const reclaimNow = Effect.fnUntraced(function* (environmentId: M.EnvironmentId) {
     const bound = yield* Ref.get(hub);
     const compacted = Option.isNone(bound)
       ? true
@@ -73,7 +89,7 @@ export const makeStoreReclaim = Effect.fnUntraced(function* (
       eligibleLogicalBytes: Option.isSome(eligibility) ? eligibility.value.eligibleLogicalBytes : 0,
       nextEligibleAtMs: Option.isSome(eligibility) ? eligibility.value.nextEligibleAtMs : null,
     } satisfies MemoryStoreReclaimResult;
-  }, lock.withPermits(1));
+  });
   const bindHub = Effect.fn("MemoryStoreReclaim.bindHub")((next: Option.Option<HubReclaim>) =>
     Ref.set(hub, next),
   );
@@ -94,6 +110,7 @@ export const withStoreReclaim =
     self.pipe(
       Effect.catch((error: E) =>
         Effect.gen(function* () {
+          const refusedAt = yield* Clock.currentTimeMillis;
           if (
             !isCapacityError(error) ||
             error.budget !== "store" ||
@@ -102,7 +119,7 @@ export const withStoreReclaim =
             return yield* Effect.fail(error);
           const service = yield* Effect.serviceOption(MemoryStoreReclaim);
           if (Option.isNone(service)) return yield* error;
-          const result = yield* service.value.reclaim(environmentId);
+          const result = yield* service.value.reclaim(environmentId, refusedAt);
           return yield* self.pipe(
             Effect.mapError((retry: E) =>
               isCapacityError(retry) && retry.budget === "store"

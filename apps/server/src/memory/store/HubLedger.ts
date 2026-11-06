@@ -607,7 +607,7 @@ export const makeHubLedger = (
       "hub-compact-next-eligible",
       sql<{
         at: number | null;
-      }>`SELECT min(committed_at) AS at FROM memory_hub_operations WHERE space=${space} AND hub_sequence<=${retention.retentionFloor} AND committed_at>${logCutoff(now, true)}`,
+      }>`SELECT min(committed_at) AS at FROM memory_hub_operations WHERE space=${space} AND hub_sequence<=${retention.retentionFloor} AND committed_at>${logCutoff(now, true)} AND operation_id NOT IN (SELECT json_extract(o.metadata_json,'$.operationId') FROM memory_outbox o WHERE o.space=${space} AND o.status IN ('pending','running','retry') AND json_extract(o.metadata_json,'$.operationId') IS NOT NULL)`,
     );
     const next = waiting[0]?.at;
     return {

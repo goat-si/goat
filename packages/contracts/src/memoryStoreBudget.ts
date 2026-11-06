@@ -38,7 +38,7 @@ export const memoryStoreFullMessage = (input: {
     input.reclaim === "unsupported"
       ? "This machine does not host the memory hub, so it cannot clean the shared memory log."
       : input.nextEligibleAtMs !== null
-        ? `Automatic cleanup already ran and frees more space after ${DateTime.formatIso(DateTime.makeUnsafe(input.nextEligibleAtMs))}; try again then.`
+        ? `Automatic cleanup already ran; its next chance to free space is after ${DateTime.formatIso(DateTime.makeUnsafe(input.nextEligibleAtMs))}; try again then.`
         : "Automatic cleanup already ran and cannot free more space now; sync records expire 30 days after they complete.",
     "Forgetting a memory frees only its own text, so it helps only when many memories are no longer needed (Settings → Memory, or memory_forget). memory_sync_status shows what uses the space.",
   ]
