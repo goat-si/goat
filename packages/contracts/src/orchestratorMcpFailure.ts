@@ -113,6 +113,8 @@ export const OrchestratorMcpFailureReason = Schema.Union([
   Schema.Literal("duplicate_task"),
   // A pending upload's file could not be removed; the caller still owns it.
   Schema.Literal("attachment_remove_failed"),
+  // Memory storage is full after its automatic cleanup; a person must free space first.
+  Schema.Literal("memory_store_full"),
 ]);
 export type OrchestratorMcpFailureReason = typeof OrchestratorMcpFailureReason.Type;
 

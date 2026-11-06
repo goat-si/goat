@@ -128,6 +128,8 @@ export const FAILURE_CLASSES: Readonly<Record<string, FailureClass>> = {
   host_pressure: before("resource_exhausted"),
   // A channel workstream's descendant budget is full; admission refused before any launch.
   capacity_exceeded: before("resource_exhausted"),
+  // Automatic memory cleanup already ran; repeating fails until a person frees space.
+  memory_store_full: before("failed_precondition"),
   invalid_request: before("invalid_request"),
   target_required: before("invalid_request"),
   orchestration_error: c("internal"),

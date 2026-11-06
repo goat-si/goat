@@ -84,10 +84,7 @@ export const make = Effect.gen(function* () {
           !force &&
           previous.checkpointId !== null &&
           lastRun !== null &&
-          now - Date.parse(lastRun) <
-            (pressure
-              ? M.MEMORY_STORE_PRESSURE_CHECKPOINT_INTERVAL_MS
-              : M.MEMORY_CHECKPOINT_INTERVAL_MS) &&
+          now - Date.parse(lastRun) < M.MEMORY_CHECKPOINT_INTERVAL_MS &&
           usage.tailRows < M.MEMORY_CHECKPOINT_TRIGGER_TAIL_ROWS &&
           usage.tailBytes < M.MEMORY_CHECKPOINT_TRIGGER_TAIL_BYTES
         )
@@ -196,14 +193,7 @@ export const make = Effect.gen(function* () {
         const lastRun = retained.compaction.lastRunAtUtc;
         const deadline =
           lastRun === null ? now : Date.parse(lastRun) + M.MEMORY_CHECKPOINT_INTERVAL_MS;
-        // Wake at least hourly so a store that crosses its target while idle is cleaned; the
-        // sweep's own gate decides whether that wake runs anything.
-        yield* Effect.sleep(
-          Math.max(
-            0,
-            Math.min(deadline, now + M.MEMORY_STORE_PRESSURE_CHECKPOINT_INTERVAL_MS) - now,
-          ),
-        );
+        yield* Effect.sleep(Math.max(0, deadline - now));
         yield* sweep;
       }).pipe(
         Effect.catch((error) =>

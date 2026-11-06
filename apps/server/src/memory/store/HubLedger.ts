@@ -515,16 +515,29 @@ export const makeHubLedger = (
     });
     return yield* readHubRetentionTx(input.memorySpaceId);
   });
+  // Decoding a published snapshot costs seconds on a real store, and reclaim reads it once per
+  // bounded pass. Pages change only by publication or forget redaction, which moves their bytes.
+  let coveredCache: { readonly key: string; readonly covered: ReadonlySet<string> } | undefined;
   const coveredOperationsTx = Effect.fnUntraced(function* (
     space: M.MemorySpaceId,
     checkpointId: string,
   ) {
+    const bytes = yield* stored(
+      "hub-compact-snapshot-bytes",
+      sql<{
+        bytes: number;
+      }>`SELECT coalesce(sum(length(CAST(metadata_json AS BLOB))),0) AS bytes FROM memory_inbox_pending WHERE space=${space} AND reason='hub_snapshot' AND checkpoint_id=${snapshotId(checkpointId)}`,
+    );
+    const key = `${space}:${checkpointId}:${bytes[0]?.bytes ?? 0}`;
+    if (coveredCache?.key === key) return coveredCache.covered;
     const pages = yield* snapshotPages(space, checkpointId);
     if (!M.validateMemoryCheckpointRecords(pages))
       return yield* new MemoryStoreConflict({ code: "bootstrap_required" });
-    return new Set<string>(
+    const covered = new Set<string>(
       pages.flatMap((p) => p.compactReceipts.map((r) => r.receipt.operationId)),
     );
+    coveredCache = { key, covered };
+    return covered;
   });
   // Candidates are paged by key and filtered by the checkpoint's covered set afterwards, so a
   // page of uncovered rows cannot hide covered rows behind it.
@@ -545,7 +558,7 @@ export const makeHubLedger = (
           hub_sequence: number;
           operation_id: string;
           bytes: number;
-        }>`SELECT hub_sequence,operation_id,length(CAST(entry_json AS BLOB)) AS bytes FROM memory_hub_operations WHERE space=${input.space} AND hub_sequence>${cursor} AND hub_sequence<=${input.floor} AND committed_at<=${input.cutoff} AND NOT EXISTS (SELECT 1 FROM memory_outbox o WHERE o.space=memory_hub_operations.space AND json_extract(o.metadata_json,'$.operationId')=memory_hub_operations.operation_id AND o.status IN ('pending','running','retry')) ORDER BY hub_sequence LIMIT ${page}`,
+        }>`SELECT hub_sequence,operation_id,length(CAST(entry_json AS BLOB)) AS bytes FROM memory_hub_operations WHERE space=${input.space} AND hub_sequence>${cursor} AND hub_sequence<=${input.floor} AND committed_at<=${input.cutoff} AND operation_id NOT IN (SELECT json_extract(o.metadata_json,'$.operationId') FROM memory_outbox o WHERE o.space=${input.space} AND o.status IN ('pending','running','retry') AND json_extract(o.metadata_json,'$.operationId') IS NOT NULL) ORDER BY hub_sequence LIMIT ${page}`,
       );
       for (const row of rows)
         if (input.covered.has(row.operation_id) && operations.length < input.maxRows)
@@ -561,7 +574,7 @@ export const makeHubLedger = (
           sequence: number;
           operation_id: string;
           bytes: number;
-        }>`SELECT e.sequence,e.operation_id,length(CAST(e.metadata_json AS BLOB))+length(CAST(e.receipt_json AS BLOB)) AS bytes FROM memory_events e JOIN memory_compact_receipts c ON c.space=e.memory_space_id AND c.operation_id=e.operation_id WHERE e.memory_space_id=${input.space} AND e.sequence>${cursor} AND c.hub_sequence<=${input.floor} AND e.created_at<=${input.cutoff} AND NOT EXISTS (SELECT 1 FROM memory_outbox o WHERE o.space=e.memory_space_id AND json_extract(o.metadata_json,'$.operationId')=e.operation_id AND o.status IN ('pending','running','retry')) AND NOT EXISTS (SELECT 1 FROM memory_inbox_pending p WHERE p.space=e.memory_space_id AND p.operation_id=e.operation_id) AND NOT EXISTS (SELECT 1 FROM memory_report_outbox r WHERE r.space=e.memory_space_id AND r.operation_id=e.operation_id AND r.state='pending') ORDER BY e.sequence LIMIT ${page}`,
+        }>`SELECT e.sequence,e.operation_id,length(CAST(e.metadata_json AS BLOB))+length(CAST(e.receipt_json AS BLOB)) AS bytes FROM memory_events e JOIN memory_compact_receipts c ON c.space=e.memory_space_id AND c.operation_id=e.operation_id WHERE e.memory_space_id=${input.space} AND e.sequence>${cursor} AND c.hub_sequence<=${input.floor} AND e.created_at<=${input.cutoff} AND e.operation_id NOT IN (SELECT json_extract(o.metadata_json,'$.operationId') FROM memory_outbox o WHERE o.space=${input.space} AND o.status IN ('pending','running','retry') AND json_extract(o.metadata_json,'$.operationId') IS NOT NULL) AND NOT EXISTS (SELECT 1 FROM memory_inbox_pending p WHERE p.space=e.memory_space_id AND p.operation_id=e.operation_id) AND e.operation_id NOT IN (SELECT r.operation_id FROM memory_report_outbox r WHERE r.space=${input.space} AND r.state='pending') ORDER BY e.sequence LIMIT ${page}`,
       );
       for (const row of rows)
         if (
@@ -650,6 +663,8 @@ export const makeHubLedger = (
       snapshotId(retention.checkpointId),
       ...liveHandles.map((h) => snapshotId(h.checkpointId)),
     ]);
+    // Candidates are narrowed by the cheap clauses first and the published snapshot is parsed
+    // once: evaluated per revision, those checks took over 30 s on a 3,845-revision store.
     const revisions = yield* stored(
       "hub-compact-revisions",
       sql<{
@@ -658,16 +673,19 @@ export const makeHubLedger = (
         payload_ref: string;
         payload_bytes: number;
         bytes: number;
-      }>`SELECT r.revision_id,r.operation_id,r.payload_ref,coalesce(length(CAST(p.body_json AS BLOB)),0) AS payload_bytes,coalesce(length(CAST(p.body_json AS BLOB)),0)+length(CAST(r.parents_json AS BLOB))+length(CAST(r.provenance_json AS BLOB))+length(CAST(r.scope_json AS BLOB)) AS bytes FROM memory_revisions r JOIN memory_compact_receipts c ON c.space=r.space AND c.operation_id=r.operation_id LEFT JOIN memory_payloads p ON p.space=r.space AND p.payload_ref=r.payload_ref WHERE r.space=${input.memorySpaceId} AND c.hub_sequence<=${input.expectedFloor} AND (p.purge_eligible_after<=${input.now} OR p.payload_ref IS NULL AND r.created_at<=${input.now - M.MEMORY_LOG_RETENTION_MS})
+      }>`WITH candidates AS MATERIALIZED (SELECT r.space,r.revision_id,r.operation_id,r.payload_ref,r.created_at,p.payload_ref AS present_payload,p.purge_eligible_after,coalesce(length(CAST(p.body_json AS BLOB)),0) AS payload_bytes,coalesce(length(CAST(p.body_json AS BLOB)),0)+length(CAST(r.parents_json AS BLOB))+length(CAST(r.provenance_json AS BLOB))+length(CAST(r.scope_json AS BLOB)) AS bytes FROM memory_revisions r JOIN memory_compact_receipts c ON c.space=r.space AND c.operation_id=r.operation_id LEFT JOIN memory_payloads p ON p.space=r.space AND p.payload_ref=r.payload_ref WHERE r.space=${input.memorySpaceId} AND c.hub_sequence<=${input.expectedFloor} AND (p.purge_eligible_after<=${input.now} OR p.payload_ref IS NULL AND r.created_at<=${input.now - M.MEMORY_LOG_RETENTION_MS})),
+      snapshot_revisions AS MATERIALIZED (SELECT json_extract(j.value,'$.revision.revisionId') AS revision_id FROM memory_inbox_pending b CROSS JOIN json_each(b.metadata_json,'$.revisions') j WHERE EXISTS (SELECT 1 FROM candidates) AND b.space=${input.memorySpaceId} AND b.reason='hub_snapshot' AND b.checkpoint_id IN (SELECT value FROM json_each(${keep})) AND json_type(j.value,'$.payload')!='null')
+      SELECT r.revision_id,r.operation_id,r.payload_ref,r.payload_bytes,r.bytes FROM candidates r WHERE 1
       AND NOT EXISTS (SELECT 1 FROM memory_items i JOIN json_each(i.heads_json) h WHERE i.space=r.space AND h.value=r.revision_id)
       AND NOT EXISTS (SELECT 1 FROM memory_conflicts f JOIN json_each(f.heads_json) h WHERE f.space=r.space AND f.status!='resolved' AND h.value=r.revision_id)
       AND NOT EXISTS (SELECT 1 FROM memory_resolutions v JOIN json_each(v.input_revision_ids_json) h WHERE v.space=r.space AND v.revert_deadline>${input.now} AND h.value=r.revision_id)
       AND NOT EXISTS (SELECT 1 FROM memory_revert_intents v WHERE v.space=r.space AND (v.restored_revision_id=r.revision_id OR v.payload_ref=r.payload_ref))
       AND NOT EXISTS (SELECT 1 FROM memory_outbox o WHERE o.space=r.space AND o.status IN ('pending','running','retry') AND (o.payload_ref=r.payload_ref OR instr(o.metadata_json,r.revision_id)>0 OR instr(coalesce(o.ticket_json,''),r.revision_id)>0 OR instr(coalesce(o.frozen_claim_json,''),r.revision_id)>0))
-      AND NOT EXISTS (SELECT 1 FROM memory_inbox_pending b WHERE b.space=r.space AND (b.payload_ref=r.payload_ref OR b.reason='hub_snapshot' AND b.checkpoint_id IN (SELECT value FROM json_each(${keep})) AND EXISTS (SELECT 1 FROM json_each(b.metadata_json,'$.revisions') j WHERE json_extract(j.value,'$.revision.revisionId')=r.revision_id AND json_type(j.value,'$.payload')!='null')))
-      AND (p.payload_ref IS NOT NULL OR (NOT EXISTS (SELECT 1 FROM memory_payloads d, json_each(d.dependencies_json) dep WHERE d.space=r.space AND dep.value=r.revision_id)
+      AND NOT EXISTS (SELECT 1 FROM memory_inbox_pending b WHERE b.space=r.space AND b.payload_ref=r.payload_ref)
+      AND r.revision_id NOT IN (SELECT revision_id FROM snapshot_revisions WHERE revision_id IS NOT NULL)
+      AND (r.present_payload IS NOT NULL OR (NOT EXISTS (SELECT 1 FROM memory_payloads d, json_each(d.dependencies_json) dep WHERE d.space=r.space AND dep.value=r.revision_id)
         AND NOT EXISTS (SELECT 1 FROM memory_outbox o,json_each(o.metadata_json,'$.revisions') dep WHERE o.space='_worker' AND json_extract(o.metadata_json,'$.kind')='threadLineage' AND json_extract(o.metadata_json,'$.memorySpaceId')=r.space AND dep.value=r.revision_id)))
-      ORDER BY coalesce(p.purge_eligible_after,r.created_at),r.revision_id LIMIT ${Math.max(0, limit - removedRows)}`,
+      ORDER BY coalesce(r.purge_eligible_after,r.created_at),r.revision_id LIMIT ${Math.max(0, limit - removedRows)}`,
     );
     for (const revision of revisions) {
       if (!covered.has(M.MemoryOperationId.make(revision.operation_id))) continue;
@@ -741,13 +759,15 @@ export const makeHubLedger = (
     });
     removedRows += purgedReports.removedRows;
     reclaimedLogicalBytes += purgedReports.reclaimedLogicalBytes;
+    // A full pass means another follows, so only its next page is counted (a lower bound); the
+    // last, short pass counts everything still eligible.
     const remaining = input.pressure
       ? yield* coveredLogRowsTx({
           space: input.memorySpaceId,
           floor: input.expectedFloor,
           cutoff: logCutoff(input.now, true),
           covered,
-          maxRows: Number.POSITIVE_INFINITY,
+          maxRows: removedRows >= limit ? limit : Number.POSITIVE_INFINITY,
         })
       : { operations: [], events: [] };
     const status: M.MemoryCompactionStatus = {

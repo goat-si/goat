@@ -122,30 +122,6 @@ describe("MemoryCompactor pressure", () => {
       }).pipe(Effect.provide(Layer.fresh(core)));
     }).pipe(checkUsage, Effect.provide(live)),
   );
-  it.effect("an idle hub over target compacts after the pressure interval without writes", () =>
-    Effect.gen(function* () {
-      yield* seed;
-      const store = yield* Store.MemoryStore;
-      const observed = Store.MemoryStore.of({
-        ...store,
-        storeBudgetBytes: () =>
-          Effect.succeed({ bytes: M.MEMORY_STORE_TARGET_BYTES, basis: "used" as const }),
-      });
-      const compactor = yield* Compactor.make.pipe(
-        Effect.provideService(Store.MemoryStore, observed),
-        Effect.provideService(Hub.MemoryHubConfiguration, {
-          read: Effect.succeed({ memorySpaceId: space, hubEnvironmentId: hubEnv }),
-        }),
-      );
-      yield* compactor.start(principal());
-      const before = yield* store.transact(store.readHubRetentionTx(space));
-      yield* TestClock.adjust(3_600_000);
-      assert.notStrictEqual(
-        (yield* store.transact(store.readHubRetentionTx(space))).checkpointId,
-        before.checkpointId,
-      );
-    }).pipe(Effect.scoped, checkUsage, Effect.provide(live)),
-  );
   it.effect("a page of uncovered candidates does not hide covered rows behind it", () =>
     Effect.gen(function* () {
       yield* seed;
@@ -175,34 +151,6 @@ describe("MemoryCompactor pressure", () => {
           count: number;
         }>`SELECT count(*) AS count FROM memory_hub_operations WHERE space=${space}`)[0]!.count,
         256,
-      );
-    }).pipe(checkUsage, Effect.provide(live)),
-  );
-  it.effect("pressure refreshes the checkpoint at most hourly", () =>
-    Effect.gen(function* () {
-      yield* seed;
-      const store = yield* Store.MemoryStore;
-      const observed = Store.MemoryStore.of({
-        ...store,
-        storeBudgetBytes: () =>
-          Effect.succeed({ bytes: M.MEMORY_STORE_TARGET_BYTES, basis: "used" as const }),
-      });
-      const compactor = yield* Compactor.make.pipe(
-        Effect.provideService(Store.MemoryStore, observed),
-        Effect.provideService(Hub.MemoryHubConfiguration, {
-          read: Effect.succeed({ memorySpaceId: space, hubEnvironmentId: hubEnv }),
-        }),
-      );
-      const first = yield* compactor.compact(principal());
-      yield* TestClock.adjust(3_599_999);
-      assert.strictEqual(
-        (yield* compactor.compactIfNeeded(principal())).checkpointId,
-        first.checkpointId,
-      );
-      yield* TestClock.adjust(1);
-      assert.notStrictEqual(
-        (yield* compactor.compactIfNeeded(principal())).checkpointId,
-        first.checkpointId,
       );
     }).pipe(checkUsage, Effect.provide(live)),
   );
@@ -246,65 +194,6 @@ describe("MemoryCompactor pressure", () => {
       assert.strictEqual(status.compaction.removedRows, 0);
       assert.lengthOf(yield* sql`SELECT 1 FROM memory_hub_operations WHERE space=${space}`, 1);
     }).pipe(checkUsage, Effect.provide(live)),
-  );
-  it.effect(
-    "a hub that goes over target while the timer sleeps compacts within the pressure interval",
-    () =>
-      Effect.gen(function* () {
-        yield* seed;
-        const store = yield* Store.MemoryStore;
-        let pressured = false;
-        const observed = Store.MemoryStore.of({
-          ...store,
-          storeBudgetBytes: () =>
-            Effect.sync(() => ({
-              bytes: pressured ? M.MEMORY_STORE_TARGET_BYTES : 0,
-              basis: "used" as const,
-            })),
-        });
-        const compactor = yield* Compactor.make.pipe(
-          Effect.provideService(Store.MemoryStore, observed),
-          Effect.provideService(Hub.MemoryHubConfiguration, {
-            read: Effect.succeed({ memorySpaceId: space, hubEnvironmentId: hubEnv }),
-          }),
-        );
-        yield* compactor.start(principal());
-        const before = yield* store.transact(store.readHubRetentionTx(space));
-        pressured = true;
-        yield* TestClock.adjust(3_600_000);
-        const after = yield* store.transact(store.readHubRetentionTx(space));
-        assert.notStrictEqual(after.checkpointId, before.checkpointId);
-      }).pipe(Effect.scoped, checkUsage, Effect.provide(live)),
-  );
-  it.effect("repeated wakes without pressure sleep a full pressure interval each time", () =>
-    Effect.gen(function* () {
-      yield* seed;
-      const store = yield* Store.MemoryStore;
-      let reads = 0;
-      const observed = Store.MemoryStore.of({
-        ...store,
-        storeBudgetBytes: () =>
-          Effect.sync(() => {
-            reads++;
-            return { bytes: 0, basis: "used" as const };
-          }),
-      });
-      const compactor = yield* Compactor.make.pipe(
-        Effect.provideService(Store.MemoryStore, observed),
-        Effect.provideService(Hub.MemoryHubConfiguration, {
-          read: Effect.succeed({ memorySpaceId: space, hubEnvironmentId: hubEnv }),
-        }),
-      );
-      yield* compactor.start(principal());
-      const before = yield* store.transact(store.readHubRetentionTx(space));
-      for (let i = 0; i < 3; i++) yield* TestClock.adjust(3_600_000);
-      assert.isAtLeast(reads, 3);
-      assert.isAtMost(reads, 5);
-      assert.strictEqual(
-        (yield* store.transact(store.readHubRetentionTx(space))).checkpointId,
-        before.checkpointId,
-      );
-    }).pipe(Effect.scoped, checkUsage, Effect.provide(live)),
   );
   it.effect(
     "over target, pressure compaction removes covered day-old operations and keeps current state",

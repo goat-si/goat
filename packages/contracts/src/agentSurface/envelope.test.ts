@@ -285,6 +285,33 @@ describe("fromToolResult", () => {
         ),
       ),
     ).toMatchObject({ code: "resource_exhausted", reason: "no_capacity", retryable: true });
+    // Memory cleanup already ran, so repeating the write cannot succeed until space is freed.
+    expect(
+      errorOf(
+        fromToolResult(
+          {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  _tag: "OrchestratorMcpFailure",
+                  code: "capacity_exceeded",
+                  reason: "memory_store_full",
+                  message: "Memory storage limit reached: 112.3 MiB of 100.0 MiB used.",
+                }),
+              },
+            ],
+            isError: true,
+          },
+          write,
+        ),
+      ),
+    ).toMatchObject({
+      code: "failed_precondition",
+      reason: "memory_store_full",
+      message: "Memory storage limit reached: 112.3 MiB of 100.0 MiB used.",
+      retryable: false,
+    });
     expect(
       errorOf(
         fromToolResult(
